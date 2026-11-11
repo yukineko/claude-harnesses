@@ -25,6 +25,21 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'managed な使い捨て場所での working-tree 破棄の Allow': SafeRoots::is_linked_worktree_checkout and its Known(true)/Known(false)/Undetermined contract."
 
 [[spec]]
+path = "crates/blastguard/src/scope/deletion_roots.rs"
+doc = "docs/specs/blastguard.md"
+reason = "module list bullet `scope/deletion_roots`: deletion_roots builds the temp/cache DELETION roots (spec 3aa215e1 class 2/3) with the NEVER_A_ROOT / system-dir / home-containment exclusions; moved out of scope.rs unchanged (file-growth cap)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/tests/file_ops.rs"
+doc = "docs/specs/blastguard.md"
+reason = "module list bullet `detect/tests/file_ops`: unit tests for the file tools and the entry-boundary unreadable-operand Ask; moved out of detect/tests.rs unchanged (file-growth cap)."
+
+[[spec]]
+path = "crates/blastguard/src/scope/case_fold.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '大文字小文字だけ違う綴りは symlink ではない（#1630）': is_case_only_same_entry (same parent, neither lstat a symlink, same dev+ino) used by SafeRoots::no_symlink_below."
+
+[[spec]]
 path = "crates/blastguard/src/detect.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'module 責務' detect and the whole '振る舞い' section (detect_write, detect_bash, split_segments, analyze_segment, analyze_rm/git/find, disarm-by-non-write rules)."
@@ -98,6 +113,11 @@ reason = "'振る舞い' bullets 'コマンド別 deny 規則' (analyze_git arms
 path = "crates/blastguard/src/detect/hookspath_read_tests.rs"
 doc = "docs/specs/blastguard.md"
 reason = "Unit-test submodule of detect/git.rs's config arm; it pins the '振る舞い' bullet '`core.hooksPath` の付け替えは Deny' (read-mode flag counts only in the option prefix, backlog e103cd56; the one-positional and `get` reads are Allow, user ruling 2026-11-08, backlog 8fe3a5c3)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/restore_content_tests.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Unit-test submodule of detect/git.rs's restore arm (restore_discard_verdict); it pins the 'コマンド別 deny 規則' text on working-tree `git restore` judged by what it discards (user ruling 2026-11-08, issue #1604)."
 
 [[spec]]
 path = "crates/blastguard/src/detect/executors.rs"
@@ -468,6 +488,16 @@ reason = "Section subagent registry と per-agent liveness (overwatch subagents)
 path = "crates/blastguard/src/detect/verdict_acc.rs"
 doc = "docs/specs/blastguard.md"
 reason = "module list bullet `detect/verdict_acc`: VerdictAcc folds sub-verdicts Deny > Ask > Allow via Verdict::worst_of; moved out of detect.rs unchanged (file-growth cap)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/file_tool.rs"
+doc = "docs/specs/blastguard.md"
+reason = "module list bullet `detect/file_tool` and '振る舞い' bullet 'Write の deny（detect_write）': extract_path / detect_write / detect_edit / file_tool_system_block; moved out of detect.rs unchanged (file-growth cap)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/budget.rs"
+doc = "docs/specs/blastguard.md"
+reason = "module list bullet `detect/budget`: MAX_SHELL_DEPTH + depth_exhausted (depth cap -> Ask) and MAX_ANALYSIS_NODES / ANALYSIS_BUDGET / take_budget (per-command node budget); moved out of detect.rs unchanged (file-growth cap)."
 
 [[spec]]
 path = "crates/blastguard/src/detect/readings.rs"

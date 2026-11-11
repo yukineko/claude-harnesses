@@ -192,7 +192,6 @@ fn control_scratchpad_log_redirect_existing_same_case_allows() {
 /// On a case-sensitive filesystem `mergemain.log` is a different, absent file,
 /// which is Allow, so this test passes there; it bites on the dev machines.
 #[test]
-#[ignore = "blastguard FP: RED, remove ignore when fixed"]
 fn scratchpad_log_redirect_existing_file_with_case_only_difference_allows() {
     let f = Fx::new("case");
     std::fs::write(f.scratch.join("mergeMain.log"), "old\n").unwrap();

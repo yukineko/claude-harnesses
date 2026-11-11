@@ -241,6 +241,88 @@ passed around or stored) — blastguard cannot follow what it will run"
     pending.unwrap_or(Decision::Allow)
 }
 
+/// Standard-library modules an inline Python program may import and still
+/// have its string literals read as data by
+/// [`python_strings_never_reach_a_shell`]: none of them runs a process or
+/// loads code from a string (`os` is the exception that is admitted only
+/// because every process-starting name of it is refused by
+/// [`sem::references_runner`]). An allowlist: any other import — `ctypes`,
+/// `importlib`, `multiprocessing`, a third-party module — keeps the program
+/// out of that reading.
+const DATA_ONLY_MODULES: &[&str] = &[
+    "sys",
+    "os",
+    "json",
+    "re",
+    "glob",
+    "fnmatch",
+    "pathlib",
+    "collections",
+    "itertools",
+    "functools",
+    "datetime",
+    "time",
+    "math",
+    "textwrap",
+    "string",
+    "csv",
+    "hashlib",
+    "difflib",
+    "statistics",
+    "typing",
+    "dataclasses",
+    "enum",
+    "unicodedata",
+    "pprint",
+    "tomllib",
+    "struct",
+    "operator",
+    "heapq",
+    "bisect",
+];
+
+/// True ONLY when the inline Python `program` (the text after `python3 -c`)
+/// verifiably never hands one of its strings to a shell or a process, so a
+/// shell `>` spelled inside one of them is data, not a redirect (#1626, user
+/// ruling 2026-11-07). Every condition is read with the Python tokenizer, not
+/// guessed from the shell spelling:
+///   * the program tokenises ([`code_view`]): string and comment boundaries
+///     are known. A program that does not tokenise answers `false`;
+///   * no [`super::CODE_BUILDING`] marker in the raw text or in the code view
+///     (`exec(`, `eval(`, `getattr(`, `__import__`, …);
+///   * no relative import and no star import from a runner module, and every
+///     imported module is in [`DATA_ONLY_MODULES`];
+///   * with aliases resolved ([`sem::bindings`] / [`sem::rewrite`]), the code
+///     references no process-starting name ([`sem::references_runner`]).
+///
+/// The caller additionally requires that no layer-0 payload carries a
+/// shell-string or dynamic-execution marker anywhere (strings included).
+pub(super) fn python_strings_never_reach_a_shell(program: &str) -> bool {
+    let Some(code) = code_view(program) else {
+        return false;
+    };
+    if code_building_marker(program).is_some() || code_building_marker(&code).is_some() {
+        return false;
+    }
+    let names = sem::bindings(&code);
+    if names.relative
+        || names.star_runner.is_some()
+        || names
+            .imported
+            .iter()
+            .any(|m| !DATA_ONLY_MODULES.contains(&m.as_str()))
+    {
+        return false;
+    }
+    sem::references_runner(&sem::rewrite(&code, &names)).is_none()
+}
+
+/// True when `program` tokenises as Python ([`code_view`] is `Some`): every
+/// string is closed and every bracket balanced.
+pub(super) fn python_program_tokenises(program: &str) -> bool {
+    code_view(program).is_some()
+}
+
 fn reason(d: &Decision) -> &str {
     match d {
         Decision::Deny(r) | Decision::Ask(r) => r,

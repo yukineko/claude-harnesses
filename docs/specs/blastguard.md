@@ -82,7 +82,20 @@ forge・condukt のスケジューラが再利用）。
   `git diff --cached --quiet -- <path>` exit 0（HEAD と異なる staged 版無し）を全て観測したときだけ Allow、
   exit 1（staged 版を上書きする）は Deny、それ以外（repo 外・git 失敗・`:` で始まる pathspec magic・
   `--*-pathspecs` global）は Ask（tests/checkout_absent_path_fp_20261108.rs）。`GIT_ICASE_PATHSPECS` 等の
-  環境変数は見ていない（open）。日常操作を blanket deny しない）、
+  環境変数は見ていない（open）。日常操作を blanket deny しない）。**working tree を書き戻す `git restore`**
+  （`--staged` 単独以外。managed worktree checkout 内は下記のとおり Allow）は**失うもので判定する**（ユーザー裁定
+  2026-11-08、issue #1604、`detect/git.rs` の `restore_discard_verdict`）: 保護パス operand は先に Deny
+  （content が commit 済みでも `--source` で古い無力化版を戻せるため）。それ以外は全 pathspec について
+  `reversible::probe_restore_content` が「index blob と working tree の raw bytes
+  （`git hash-object --no-filters`）の両方が、ref から到達可能な commit に有る」を観測したときだけ Allow。
+  到達性は `git cat-file -e <id>` ＋ `git log --all -n1 --find-object=<id> -- <path>`（path 限定の
+  commit walk。`rev-list --objects --all` は全 tree を歩くので採らない。2026-11-08 本 repo 6219 commit で
+  0.3 s 実測）で見る。別 path にだけ commit された blob・merge の解決でだけ入った blob は見つからず
+  Deny 側に倒れる。どれかが commit に無ければ Deny、判定不能（subcommand 前の global option・
+  モデル外の option〈`--patch`・`--pathspec-from-file` 等〉・pathspec 無し・literal でない path・
+  `:` magic・directory・untracked/absent・index entry が `H`/stage 0/通常 mode の 1 件でない・git 失敗・
+  timeout・probe 無し）も Deny（tests/backlog_git_restore_content_in_commit_fp_20261107.rs）。
+  file mode の差は content とみなさない、
   `find`（`analyze_find`: `-delete`、`-exec`/`-execdir` の直後が shell または `rm`）、
   `truncate`/`shred`/`dd of=`/`mkfs*`、再帰 `chmod`/`chown`（`-R`/`--recursive`）、
   `sort`/`uniq`（read-only ではない: `sort -o <保護パス>`／`uniq <in> <保護パス>` は出力ファイルを
@@ -162,9 +175,16 @@ forge・condukt のスケジューラが再利用）。
   `mkdir -p` は対象外（2026-11-07 ユーザー裁定）。未知の option・verb が取る数を超える operand・literal でない
   作成先・relative の基点不明・`..` はすべて `Ask`（判定不能は制限側）。この規則は `Allow` を `Ask` に上げるだけで、
   他の規則の `Deny`/`Ask` はそのまま。cp/mv/install/ln の option 解析は getopt 形式の共通 parser に一本化した
-  （`-t <dir>` の clustered 形を含む）。location model の無い library 入口（`SafeRoots::none`、`detect::detect`）には
-  適用しない — その入口の契約は location model 導入前の判定のままで、condukt `gate_exec.rs`/`verify.rs`・specguard
-  `forge/implement.rs`・daily の呼び出しはこの規則の外にある（未解決として残す）。
+  （`-t <dir>` の clustered 形を含む）。library 入口 `detect::detect` にも適用する（GitHub #1637、blastguard
+  0.2.434）。以前はこの入口（`SafeRoots::none`）だけ規則を飛ばして `Allow` を返し、無人で `sh -c` に渡す condukt
+  `verify.rs`（`launch_and_reflux`/`launch_server_and_probe`/`launch_in_container`）・specguard `forge/implement.rs`・
+  daily の呼び出しが hook より寛容な判定を得ていた（fail-open）。現在は、他の規則には `SafeRoots::none` のまま、
+  この規則だけ**プロセス**の管理された場所（process cwd — これらの呼び出しの `sh -c` が走る場所 — ・
+  `CLAUDE_PROJECT_DIR`・`HOME`・`TMPDIR`、hook と同じ `SafeRoots::new` の導出規則と実 path 解決）で判定する
+  （`SafeRoots::with_managed_places`、`scratch_place::process_place_model`）。外側・判定不能は `Ask` で、呼び出し側は
+  `.hardened()` で `Deny` に倒すので起動前に拒否される。location model が全く無い scope（裸の `SafeRoots::none` を
+  `detect_scoped` に渡す）では作成先を示せないので、tree を作る `git clone`/`cp -r` はすべて `Ask`。何も作らない形
+  （repository 無しの `git clone`、operand 1 個の `cp -r`）の判定は変わらない。
 - **bash 3.2 の読みも判定する（`detect/readings.rs` の `detect_bash_every_reading`、blastguard 0.2.305）** —
   macOS の `/bin/bash` 3.2 と `/bin/sh` は `$(…)` 内の here-document 本文を command text として読むので、
   本文中の `)` が substitution を早く閉じ、続く text が実行されうる（2026-11-07 に harmless marker で観測:
@@ -386,6 +406,37 @@ forge・condukt のスケジューラが再利用）。
   （`\r` 等）を含む、1 行目の quote 不均衡・行末 `\`・`<<` が（quote を見ずに数えて）ちょうど 1 個でない、
   delimiter が unquoted または空、stage が `<<` を含まないか 1 行目の部分文字列でない、終端行が無い、
   終端行より後に `<<` が（文字列として）1 つでもある。
+- **inline Python program の文字列中の `>` は data（#1626、ユーザー裁定 2026-11-07）** —
+  `python3 -c '…'`（`python`/`python3`/`python3.N` の inline-eval のみ）の program text に対する
+  shell pass で、truncating redirect の target が**判定可能**なものは recoverability による Deny を
+  出さない（`detect/interpreter.rs` の `ProgramTextSink::redirects_are_data`）。条件は全 payload が:
+  Python tokenizer で tokenise できる（`python_file.rs` の `code_view`）・`CODE_BUILDING` marker
+  （`exec(`/`eval(`/`getattr(`/`__import__` 等）が raw にも code view にも無い・相対 import／runner
+  module からの star import が無く import は全て `DATA_ONLY_MODULES`（sys/os/json/re/glob/pathlib 等の
+  allowlist）・alias 解決後の code が process を起こす名前を参照しない（`python_semantics.rs` の
+  `references_runner`: `RUNNERS`、裸の runner module、`subprocess`/`pty`/`commands`/`asyncio` の属性、
+  最終成分が `system`/`popen`/`exec*`/`spawn*`/`posix_spawn*`/`fork` 等の名前。`ctypes.CDLL(None).execl`
+  のような呼び出し結果の属性も含む）・`SHELL_STRING_EXEC_MARKERS` と動的実行 marker が文字列を含め
+  どこにも無い。`python3 -c 'import sys; s="> F"; print(s)'` は Allow。判定不能な target は従来どおり
+  R2 の Ask、redirect arm の先行する拒否（保護パス・system directory・置けない target）はそのまま。
+  条件外の program は従来どおり判定する。program 語（`-c` の直後の語）が Python として tokenise
+  できない（閉じない文字列・triple quote・括弧の不均衡）ときは、他に Deny が無ければ Ask（Allow しない）。
+- **大文字小文字だけ違う綴りは symlink ではない（#1630）** — `SafeRoots::no_symlink_below` は、
+  root 以下の component の realpath が `<親の real>/<綴った名前>` と**大文字小文字だけ**違うとき、
+  同じ親・両名の `lstat` がどちらも symlink でない・`(st_dev, st_ino)` が一致する、を全て観測した場合に
+  限り同じ entry とみなす（`scope/case_fold.rs` の `is_case_only_same_entry`。case-insensitive APFS で
+  on-disk `mergeMain.log` に `> mergemain.log` と書いた scratchpad redirect が Allow になる）。
+  観測できなければ従来どおり「root 以下の symlink」（Allow しない）。本物の symlink は `lstat` で落ちる。
+- **chain された行の worktree checkout への redirect（#1625）** — git で復元できる tracked file への
+  truncating redirect の whose-tree 判定（`Ctx::in_worktree_checkout_for_redirect`、保護パス免除には
+  使わない）は、単一 plain command に加え、redirect を含む segment までが行頭から `&&` だけで繋がり、
+  それより前の segment が `cd <literal 絶対 dir>`（先頭のみ）・literal 代入（`PATH`/`IFS`/`CDPATH`/
+  `BASH*`/`LD_*`/`DYLD_*` 等の shell 挙動変数と、hook の環境に既にある名前は不可）・
+  `cp`（option 無し、`$NAME` は同じ prefix で代入済みの値に置換して `-` 始まりや glob が無いこと）/
+  `echo`/`printf`/`true`/`pwd`/`ls`/`cat`/`test`（quote・`>` 無し）だけで、どの segment にも
+  `` ` ``・`(`・`)`・`{`・`}`・`<`・`\`・`&`・改行が無く、write segment の後が `|`/`&` でないときも、
+  target が worktree storage root 下の linked worktree checkout 内（symlink 無し）なら session の tree と
+  みなす（`detect/rm.rs` の `write_prefix_cannot_relink`）。それ以外は従来どおり拒否。
 - **非 shell・非 Python のコードファイルへ書く quoted here-document の本文は shell 行として読まない
   （user ruling 2026-11-08、issue #1602、tests/backlog_cd_redirect_fp_20261107.rs）** — `detect_bash` の
   手順 0c。`heredoc::non_shell_code_file_here_document` が、`.py` の手順 0b と同じ形（前行は
@@ -518,7 +569,7 @@ forge・condukt のスケジューラが再利用）。
 
 - **`main`** — CLI エントリ。version/help 短絡 → `hook::run_hook(run)`。`run` が stdin parse →
   `detect` → deny 時のみ `deny_json` を print。ターン非破壊契約の実装点。
-- **`detect`** — 純粋な破壊操作検出器。`detect`（tool 名で dispatch）、`detect_write`、`detect_bash`、
+- **`detect`** — 純粋な破壊操作検出器。`detect`（tool 名で dispatch）、`detect_write`（`detect/file_tool`）、`detect_bash`、
   segment 分割（`split_segments`）、redirect 解析（`single_redirect_target`/`is_angle_placeholder_close`/
   `redirect_target_is_safe`）、shell-eval 再帰展開（`command_index`/`is_shell`/`dash_c_payload`/
   `strip_wrapping_quotes`）、コマンド別 analyzer（`analyze_rm`/`analyze_git`/`analyze_find`）。I/O なし。
@@ -537,6 +588,18 @@ forge・condukt のスケジューラが再利用）。
   共有する `VerdictAcc`。`Deny > Ask > Allow` の順位で畳み、`Deny` は即座に返し、`Ask` は最初の 1 件を保持して
   走査を続ける（後続の `Deny` を `Ask` が隠さない）。順位は `harness_core::verdict::Verdict::worst_of` そのもので、
   `Decision`↔`Verdict` の変換は境界の 2 関数だけが行う。
+- **`detect/file_tool`** — file tool（Write / Edit / MultiEdit / NotebookEdit）の判定。`extract_path`
+  （`file_path`/`notebook_path`/`path`）・`detect_write`・`detect_edit`・`file_tool_system_block`。
+  `detect.rs` から挙動を変えずに移した（file-growth cap）。
+- **`detect/budget`** — `detect_bash` の再帰の 2 つの上限。深さ上限 `MAX_SHELL_DEPTH` に達したら
+  `depth_exhausted`（Ask: 解析未完了）、1 コマンドあたりの node 訪問予算 `MAX_ANALYSIS_NODES` を
+  `ANALYSIS_BUDGET` から `take_budget` で消費する。`detect.rs` から挙動を変えずに移した（file-growth cap）。
+- **`detect/tests/file_ops`** — `detect/tests` の子 module。file tool（Write / Edit / MultiEdit /
+  NotebookEdit）の unit test と、entry-boundary の「読めない operand は Ask、管轄外 tool は Allow」test。
+  `detect/tests.rs` から変えずに移した（file-growth cap）。
+- **`scope/deletion_roots`** — `SafeRoots` の temp / cache DELETION root（spec 3aa215e1 class 2/3）を組み立てる
+  `deletion_roots` と `DELETION_TEMP_ROOTS`・`DELETION_CACHE_ROOTS`・`OS_TEMP_PARENTS` および除外判定
+  （`contains_home`・`below_home`・`system_root`）。`scope.rs` から挙動を変えずに移した（file-growth cap）。
 - **`hookio`** — PreToolUse `deny` の単一行 JSON 生成（`deny_json`）。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。

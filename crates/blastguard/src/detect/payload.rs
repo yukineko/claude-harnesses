@@ -146,6 +146,7 @@ blastguard cannot read it",
                 depth,
                 ctx,
                 !here_document_delimiter_is_quoted(cmd),
+                false,
             )) {
                 return deny;
             }
@@ -424,6 +425,7 @@ unquote — it cannot tell what text the shell will run",
             depth,
             ctx,
             !span.single_quoted,
+            false,
         );
         if let Some(deny) = acc.record(verdict) {
             return deny;

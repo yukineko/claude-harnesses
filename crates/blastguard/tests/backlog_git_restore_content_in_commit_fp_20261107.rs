@@ -109,7 +109,6 @@ fn verdict(cwd: &Path, command: &str) -> (String, String) {
 }
 
 #[test]
-#[ignore = "RED: git restore of content already in a commit is denied 2026-11-07"]
 fn restore_of_content_already_in_a_commit_is_allowed() {
     let dir = fresh_repo("incommit");
     // Commit the "work" content on another branch, then return to main and make

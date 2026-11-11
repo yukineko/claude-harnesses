@@ -739,6 +739,210 @@ pub(crate) fn probe_absent_path_with_timeout(
     }
 }
 
+/// Whether what `git restore --staged --worktree -- <path>` would discard at
+/// one path is already held by a commit (issue #1604, user ruling 2026-11-08):
+/// the index blob AND the raw working-tree bytes of the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RestoreContent {
+    /// Both the index blob and the working-tree blob were observed in some
+    /// commit reachable from a ref: the restore loses no content.
+    InCommits,
+    /// At least one of them is in no commit that blastguard found; the
+    /// string names which (`index` / `working tree`) for the reason text.
+    NotInAnyCommit(String),
+}
+
+/// The injected form of [`probe_restore_content`], carried by
+/// [`crate::scope::SafeRoots`] (attached only by the hook binary through
+/// [`crate::scope::SafeRoots::with_git_restore_probe`]). The argument is the
+/// canonical absolute path of one literal `git restore` pathspec.
+pub type GitRestoreProbe = fn(&str) -> Determination<RestoreContent>;
+
+/// Parse `git ls-files -z -s -v -- <path>` output that must describe exactly
+/// ONE ordinary file entry at `rel`: tag `H`, mode `100644`/`100755`, stage
+/// `0`. Returns the index blob id. `None` for anything else (no entry, more
+/// than one — `<path>` named a directory —, a different path, a gitlink or
+/// symlink mode, an unmerged stage, an assume-unchanged / skip-worktree tag,
+/// a malformed record).
+pub(crate) fn parse_single_file_entry(stdout: &str, rel: &str) -> Option<String> {
+    let mut recs = stdout.split('\0').filter(|f| !f.is_empty());
+    let rec = recs.next()?;
+    if recs.next().is_some() {
+        return None;
+    }
+    let (meta, path) = rec.split_once('\t')?;
+    let parts: Vec<&str> = meta.split(' ').collect();
+    let [tag, mode, sha, stage] = parts.as_slice() else {
+        return None;
+    };
+    if *tag != "H" || !matches!(*mode, "100644" | "100755") || *stage != "0" || path != rel {
+        return None;
+    }
+    is_object_id(sha).then(|| (*sha).to_string())
+}
+
+/// A full hexadecimal object id (SHA-1 or SHA-256 length).
+fn is_object_id(s: &str) -> bool {
+    matches!(s.len(), 40 | 64) && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// The wired [`GitRestoreProbe`]. Real filesystem and subprocess I/O.
+///
+/// `Known(InCommits)` ONLY when ALL of these were observed:
+///
+///   * `lstat` on `path` reports a regular file (absent, a symlink, a
+///     directory, or an `lstat` failure: `Undetermined`);
+///   * `git rev-parse --show-toplevel`, run in its parent, exits 0 with an
+///     absolute root that `path` lies strictly inside;
+///   * `git ls-files -z -s -v -- <path>` reports exactly one entry, at that
+///     path, tag `H`, mode `100644`/`100755`, stage `0`
+///     ([`parse_single_file_entry`]);
+///   * `git hash-object --no-filters -- <path>` prints an object id — the id
+///     of the RAW working-tree bytes, so a clean/smudge filter or `autocrlf`
+///     can only make the bytes look uncommitted (restrictive), never the
+///     reverse;
+///   * for the index id and the working-tree id: `git cat-file -e <id>` exits
+///     0, and `git log --all -n1 --format=%H --find-object=<id> -- <rel>`
+///     exits 0 and prints a commit id.
+///
+/// `cat-file -e` exiting 1 (no such object) or `log` printing nothing is
+/// `Known(NotInAnyCommit)`. Any other exit, a timeout or unparseable output is
+/// `Undetermined`.
+///
+/// Why this check, and what it does not prove: `git rev-list --objects --all`
+/// would answer "is this blob reachable from any ref" exactly but walks every
+/// tree of every commit (too slow on large repositories). `log --find-object`
+/// limited to the path walks commits only and diffs just that path (commit
+/// graph changed-path filters make it cheap; measured 0.3 s on this
+/// repository's 6219 commits, 2026-11-08). It finds a commit in which the blob
+/// appears or disappears AT THIS PATH, and such a commit (or its parent) holds
+/// the blob. It misses a blob committed only under a different path, or only
+/// introduced by a merge commit's resolution (merges are not diffed) — both
+/// read as `NotInAnyCommit`, the restrictive side. File mode is not compared:
+/// a changed executable bit is not content. Every call is bounded by
+/// [`TREE_GIT_TIMEOUT`]; a repository too large to answer inside it is
+/// `Undetermined`.
+pub fn probe_restore_content(path: &str) -> Determination<RestoreContent> {
+    probe_restore_content_with_timeout(std::ffi::OsStr::new("git"), path, TREE_GIT_TIMEOUT)
+}
+
+/// [`probe_restore_content`] with the `git` program and the per-invocation
+/// bound named explicitly (the test seam; production passes `git` and
+/// [`TREE_GIT_TIMEOUT`]).
+pub(crate) fn probe_restore_content_with_timeout(
+    git: &std::ffi::OsStr,
+    path: &str,
+    timeout: Duration,
+) -> Determination<RestoreContent> {
+    let p = Path::new(path);
+    match std::fs::symlink_metadata(p) {
+        Ok(m) if m.file_type().is_file() => {}
+        Ok(_) => {
+            return Determination::undetermined(format!("`{path}` is not a regular file"));
+        }
+        Err(e) => {
+            return Determination::undetermined(format!("`{path}` could not be examined ({e})"))
+        }
+    }
+    let Some(dir) = p.parent() else {
+        return Determination::undetermined("path has no parent directory");
+    };
+    let toplevel = match run_tree_git(
+        tree_git(git, dir, true).args(["rev-parse", "--show-toplevel"]),
+        &[0],
+        timeout,
+    ) {
+        Determination::Known((_, out)) => out.trim().to_string(),
+        Determination::Undetermined(u) => return Determination::Undetermined(u),
+    };
+    if !toplevel.starts_with('/') {
+        return Determination::undetermined("git printed a work-tree root that is not absolute");
+    }
+    let top_prefix = format!("{}/", toplevel.trim_end_matches('/'));
+    let Some(rel) = path.strip_prefix(&top_prefix).filter(|r| !r.is_empty()) else {
+        return Determination::undetermined("the path is not inside the work tree git reported");
+    };
+    let top = Path::new(&toplevel);
+    let ls_out = match run_tree_git(
+        tree_git(git, top, true)
+            .args(["ls-files", "-z", "-s", "-v", "--"])
+            .arg(rel),
+        &[0],
+        timeout,
+    ) {
+        Determination::Known((_, out)) => out,
+        Determination::Undetermined(u) => return Determination::Undetermined(u),
+    };
+    let Some(index_id) = parse_single_file_entry(&ls_out, rel) else {
+        return Determination::undetermined(
+            "the index does not hold exactly one ordinary, merged, unflagged file entry there",
+        );
+    };
+    let worktree_id = match run_tree_git(
+        tree_git(git, top, false)
+            .args(["hash-object", "--no-filters", "--"])
+            .arg(rel),
+        &[0],
+        timeout,
+    ) {
+        Determination::Known((_, out)) => out.trim().to_string(),
+        Determination::Undetermined(u) => return Determination::Undetermined(u),
+    };
+    if !is_object_id(&worktree_id) {
+        return Determination::undetermined("git hash-object printed no object id");
+    }
+    let mut checks = vec![("index", index_id)];
+    if checks[0].1 != worktree_id {
+        checks.push(("working tree", worktree_id));
+    }
+    for (which, id) in checks {
+        match run_tree_git(
+            tree_git(git, top, false).args(["cat-file", "-e", &id]),
+            &[0, 1],
+            timeout,
+        ) {
+            Determination::Known((0, _)) => {}
+            Determination::Known((1, _)) => {
+                return Determination::known(RestoreContent::NotInAnyCommit(which.to_string()))
+            }
+            Determination::Known((code, _)) => {
+                return Determination::undetermined(format!("git cat-file -e exited {code}"))
+            }
+            Determination::Undetermined(u) => return Determination::Undetermined(u),
+        }
+        let found = match run_tree_git(
+            tree_git(git, top, true)
+                .args([
+                    "-c",
+                    "log.showSignature=false",
+                    "log",
+                    "--all",
+                    "-n1",
+                    "--format=%H",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                ])
+                .arg(format!("--find-object={id}"))
+                .arg("--")
+                .arg(rel),
+            &[0],
+            timeout,
+        ) {
+            Determination::Known((_, out)) => out.trim().to_string(),
+            Determination::Undetermined(u) => return Determination::Undetermined(u),
+        };
+        if found.is_empty() {
+            return Determination::known(RestoreContent::NotInAnyCommit(which.to_string()));
+        }
+        if !is_object_id(&found) {
+            return Determination::undetermined(
+                "git log printed something that is not a commit id",
+            );
+        }
+    }
+    Determination::known(RestoreContent::InCommits)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1156,6 +1360,501 @@ mod tests {
             probe_real(&r("nope"), &[]),
             Determination::Undetermined(_)
         ));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // --- issue #1604: probe_restore_content / parse_single_file_entry ---
+    // Written by an independent test writer, not the implementer.
+
+    const OID_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const OID_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn entry(tag: &str, mode: &str, oid: &str, stage: &str, path: &str) -> String {
+        format!("{tag} {mode} {oid} {stage}\t{path}\0")
+    }
+
+    #[test]
+    fn parse_single_file_entry_accepts_only_one_ordinary_merged_entry_at_the_path() {
+        // Controls: the two accepted shapes.
+        let ok = entry("H", "100644", OID_A, "0", "a.sh");
+        assert_eq!(
+            parse_single_file_entry(&ok, "a.sh"),
+            Some(OID_A.to_string())
+        );
+        let exe = entry("H", "100755", OID_A, "0", "d/a.sh");
+        assert_eq!(
+            parse_single_file_entry(&exe, "d/a.sh"),
+            Some(OID_A.to_string())
+        );
+        let sha256 = "c".repeat(64);
+        assert_eq!(
+            parse_single_file_entry(&entry("H", "100644", &sha256, "0", "a"), "a"),
+            Some(sha256.clone())
+        );
+        // No entry at all (untracked / absent).
+        assert_eq!(parse_single_file_entry("", "a.sh"), None);
+        // Two records: the pathspec named a directory (or matched twice).
+        let two = format!(
+            "{}{}",
+            entry("H", "100644", OID_A, "0", "d/a"),
+            entry("H", "100644", OID_B, "0", "d/b")
+        );
+        assert_eq!(parse_single_file_entry(&two, "d/a"), None);
+        // Unmerged stages, singly and as the usual 1/2/3 triple.
+        for stage in ["1", "2", "3"] {
+            let un = entry("H", "100644", OID_A, stage, "a.sh");
+            assert_eq!(parse_single_file_entry(&un, "a.sh"), None, "stage {stage}");
+        }
+        let triple = format!(
+            "{}{}{}",
+            entry("H", "100644", OID_A, "1", "a.sh"),
+            entry("H", "100644", OID_B, "2", "a.sh"),
+            entry("H", "100644", OID_A, "3", "a.sh")
+        );
+        assert_eq!(parse_single_file_entry(&triple, "a.sh"), None);
+        // Flag tags: skip-worktree `S`, assume-unchanged lowercase, others.
+        for tag in ["S", "h", "s", "M", "R", "C", "K", "?"] {
+            let t = entry(tag, "100644", OID_A, "0", "a.sh");
+            assert_eq!(parse_single_file_entry(&t, "a.sh"), None, "tag {tag}");
+        }
+        // Symlink and gitlink modes, and other non-file modes.
+        for mode in ["120000", "160000", "040000", "100664", "644"] {
+            let m = entry("H", mode, OID_A, "0", "a.sh");
+            assert_eq!(parse_single_file_entry(&m, "a.sh"), None, "mode {mode}");
+        }
+        // A record for a different path (prefix, suffix, case).
+        for path in ["a.sh.bak", "b/a.sh", "A.sh", "a", ""] {
+            let p = entry("H", "100644", OID_A, "0", path);
+            assert_eq!(parse_single_file_entry(&p, "a.sh"), None, "path {path:?}");
+        }
+        // Malformed: short oid, non-hex oid, missing tab, extra field.
+        assert_eq!(
+            parse_single_file_entry(&entry("H", "100644", "abc", "0", "a.sh"), "a.sh"),
+            None
+        );
+        let nonhex = "g".repeat(40);
+        assert_eq!(
+            parse_single_file_entry(&entry("H", "100644", &nonhex, "0", "a.sh"), "a.sh"),
+            None
+        );
+        assert_eq!(
+            parse_single_file_entry(&format!("H 100644 {OID_A} 0 a.sh\0"), "a.sh"),
+            None
+        );
+        assert_eq!(
+            parse_single_file_entry(&format!("H 100644 {OID_A} 0 x\ta.sh\0"), "a.sh"),
+            None
+        );
+        assert_eq!(parse_single_file_entry("garbage\0", "a.sh"), None);
+    }
+
+    /// Real git under [`ANSWERING_GIT_TIMEOUT`].
+    fn restore_probe_real(path: &str) -> Determination<RestoreContent> {
+        probe_restore_content_with_timeout(std::ffi::OsStr::new("git"), path, ANSWERING_GIT_TIMEOUT)
+    }
+
+    /// Fixture git with hooks disabled, so a global hooksPath cannot run
+    /// anything inside the temp repository.
+    fn rgit(dir: &std::path::Path, args: &[&str]) -> String {
+        let mut cmd = std::process::Command::new("git");
+        let out = harness_core::git_env::scrub(&mut cmd)
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgSign=false",
+            ])
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// A fresh repo `<tmp>/bg-restore-<tag>-<pid>/r` with `a.sh` = "base\n"
+    /// committed. Returns (scratch base, canonical repo).
+    fn restore_repo(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let base = std::env::temp_dir().join(format!("bg-restore-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let repo = base.join("r");
+        std::fs::create_dir_all(&repo).unwrap();
+        rgit(&repo, &["init", "-q"]);
+        std::fs::write(repo.join("a.sh"), "base\n").unwrap();
+        rgit(&repo, &["add", "a.sh"]);
+        rgit(&repo, &["commit", "-qm", "base"]);
+        let repo = repo.canonicalize().unwrap();
+        (base, repo)
+    }
+
+    fn at(repo: &std::path::Path, rel: &str) -> String {
+        format!("{}/{rel}", repo.display())
+    }
+
+    fn assert_undetermined(d: &Determination<RestoreContent>, what: &str) {
+        assert!(
+            matches!(d, Determination::Undetermined(_)),
+            "{what}: expected Undetermined, got {d:?}"
+        );
+    }
+
+    #[test]
+    fn restore_probe_clean_committed_file_is_in_commits() {
+        let (base, repo) = restore_repo("clean");
+        assert_eq!(
+            restore_probe_real(&at(&repo, "a.sh")),
+            Determination::known(RestoreContent::InCommits)
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn restore_probe_uncommitted_worktree_change_is_not_in_any_commit() {
+        let (base, repo) = restore_repo("wtdirty");
+        // Index still == HEAD; only the working tree holds new bytes.
+        std::fs::write(repo.join("a.sh"), "edited, never committed\n").unwrap();
+        assert_eq!(
+            restore_probe_real(&at(&repo, "a.sh")),
+            Determination::known(RestoreContent::NotInAnyCommit("working tree".to_string()))
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn restore_probe_staged_but_never_committed_is_not_in_any_commit() {
+        let (base, repo) = restore_repo("staged");
+        std::fs::write(repo.join("a.sh"), "staged, never committed\n").unwrap();
+        rgit(&repo, &["add", "a.sh"]);
+        // The blob now EXISTS in the object store (cat-file -e succeeds), but
+        // no commit holds it.
+        assert_eq!(
+            restore_probe_real(&at(&repo, "a.sh")),
+            Determination::known(RestoreContent::NotInAnyCommit("index".to_string()))
+        );
+        // Staged one version, then edited the worktree again: the index is
+        // the first thing in no commit.
+        std::fs::write(repo.join("a.sh"), "edited again\n").unwrap();
+        assert!(
+            matches!(
+                restore_probe_real(&at(&repo, "a.sh")),
+                Determination::Known(RestoreContent::NotInAnyCommit(_))
+            ),
+            "staged + further edited must not be InCommits"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn restore_probe_staged_committed_content_with_dirty_worktree_is_not_in_any_commit() {
+        // The index holds content that IS committed (an older version), but
+        // the working tree holds bytes no commit has: still NotInAnyCommit.
+        let (base, repo) = restore_repo("idxold");
+        std::fs::write(repo.join("a.sh"), "v2\n").unwrap();
+        rgit(&repo, &["commit", "-qam", "v2"]);
+        rgit(&repo, &["checkout", "-q", "HEAD~1", "--", "a.sh"]);
+        std::fs::write(repo.join("a.sh"), "uncommitted\n").unwrap();
+        assert_eq!(
+            restore_probe_real(&at(&repo, "a.sh")),
+            Determination::known(RestoreContent::NotInAnyCommit("working tree".to_string()))
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn restore_probe_content_from_an_older_overwritten_commit_is_in_commits() {
+        let (base, repo) = restore_repo("history");
+        std::fs::write(repo.join("a.sh"), "v2\n").unwrap();
+        rgit(&repo, &["commit", "-qam", "v2"]);
+        std::fs::write(repo.join("a.sh"), "v3\n").unwrap();
+        rgit(&repo, &["commit", "-qam", "v3"]);
+        // Index AND worktree back to the base bytes (only in the first commit,
+        // overwritten twice since).
+        std::fs::write(repo.join("a.sh"), "base\n").unwrap();
+        rgit(&repo, &["add", "a.sh"]);
+        assert_eq!(
+            restore_probe_real(&at(&repo, "a.sh")),
+            Determination::known(RestoreContent::InCommits)
+        );
+        // Index at v2 (middle commit), worktree at base (first commit).
+        std::fs::write(repo.join("a.sh"), "v2\n").unwrap();
+        rgit(&repo, &["add", "a.sh"]);
+        std::fs::write(repo.join("a.sh"), "base\n").unwrap();
+        assert_eq!(
+            restore_probe_real(&at(&repo, "a.sh")),
+            Determination::known(RestoreContent::InCommits)
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn restore_probe_content_on_another_branch_is_in_commits() {
+        let (base, repo) = restore_repo("branch");
+        let main = rgit(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+        rgit(&repo, &["checkout", "-q", "-b", "other"]);
+        std::fs::write(repo.join("a.sh"), "on other\n").unwrap();
+        rgit(&repo, &["commit", "-qam", "other"]);
+        rgit(&repo, &["checkout", "-q", main.trim()]);
+        std::fs::write(repo.join("a.sh"), "on other\n").unwrap();
+        rgit(&repo, &["add", "a.sh"]);
+        assert_eq!(
+            restore_probe_real(&at(&repo, "a.sh")),
+            Determination::known(RestoreContent::InCommits)
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn restore_probe_content_only_in_an_unreachable_commit_is_not_in_any_commit() {
+        // Committed, then amended away: the commit survives only in the
+        // reflog, which is not a ref. The ruling requires a commit reachable
+        // from a ref.
+        let (base, repo) = restore_repo("amended");
+        std::fs::write(repo.join("a.sh"), "amended away\n").unwrap();
+        rgit(&repo, &["commit", "-qam", "tmp"]);
+        std::fs::write(repo.join("a.sh"), "replacement\n").unwrap();
+        rgit(&repo, &["commit", "-q", "--amend", "-am", "tmp2"]);
+        std::fs::write(repo.join("a.sh"), "amended away\n").unwrap();
+        rgit(&repo, &["add", "a.sh"]);
+        assert!(
+            matches!(
+                restore_probe_real(&at(&repo, "a.sh")),
+                Determination::Known(RestoreContent::NotInAnyCommit(_))
+            ),
+            "content held only by a reflog entry must not count as committed"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn restore_probe_untracked_directory_absent_symlink_and_flagged_are_undetermined() {
+        use std::os::unix::fs::symlink;
+        let (base, repo) = restore_repo("undet");
+        std::fs::write(repo.join("untracked.sh"), "u\n").unwrap();
+        assert_undetermined(&restore_probe_real(&at(&repo, "untracked.sh")), "untracked");
+
+        std::fs::create_dir_all(repo.join("d")).unwrap();
+        std::fs::write(repo.join("d/x"), "x\n").unwrap();
+        rgit(&repo, &["add", "d/x"]);
+        rgit(&repo, &["commit", "-qm", "d"]);
+        assert_undetermined(&restore_probe_real(&at(&repo, "d")), "directory");
+
+        assert_undetermined(&restore_probe_real(&at(&repo, "nope.sh")), "absent");
+        // Tracked, then deleted from the working tree.
+        std::fs::remove_file(repo.join("d/x")).unwrap();
+        assert_undetermined(&restore_probe_real(&at(&repo, "d/x")), "deleted tracked");
+
+        symlink("a.sh", repo.join("l")).unwrap();
+        rgit(&repo, &["add", "l"]);
+        rgit(&repo, &["commit", "-qm", "l"]);
+        assert_undetermined(&restore_probe_real(&at(&repo, "l")), "tracked symlink");
+
+        rgit(&repo, &["update-index", "--skip-worktree", "a.sh"]);
+        assert_undetermined(&restore_probe_real(&at(&repo, "a.sh")), "skip-worktree");
+        rgit(&repo, &["update-index", "--no-skip-worktree", "a.sh"]);
+        rgit(&repo, &["update-index", "--assume-unchanged", "a.sh"]);
+        assert_undetermined(&restore_probe_real(&at(&repo, "a.sh")), "assume-unchanged");
+        rgit(&repo, &["update-index", "--no-assume-unchanged", "a.sh"]);
+        // Control: the same file without the flag answers.
+        assert_eq!(
+            restore_probe_real(&at(&repo, "a.sh")),
+            Determination::known(RestoreContent::InCommits)
+        );
+
+        // Outside any repository.
+        let plain = base.join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::write(plain.join("f"), "f\n").unwrap();
+        let plain = plain.canonicalize().unwrap();
+        assert_undetermined(&restore_probe_real(&at(&plain, "f")), "not a repository");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn restore_probe_unmerged_path_is_undetermined() {
+        let (base, repo) = restore_repo("unmerged");
+        let main = rgit(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+        rgit(&repo, &["checkout", "-q", "-b", "side"]);
+        std::fs::write(repo.join("a.sh"), "side\n").unwrap();
+        rgit(&repo, &["commit", "-qam", "side"]);
+        rgit(&repo, &["checkout", "-q", main.trim()]);
+        std::fs::write(repo.join("a.sh"), "main\n").unwrap();
+        rgit(&repo, &["commit", "-qam", "main"]);
+        // Expected to conflict; ignore its exit status.
+        let mut cmd = std::process::Command::new("git");
+        let _ = harness_core::git_env::scrub(&mut cmd)
+            .arg("-C")
+            .arg(&repo)
+            .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+            .args(["-c", "core.hooksPath=/dev/null", "merge", "-q", "side"])
+            .output();
+        let ls = rgit(&repo, &["ls-files", "-s", "--", "a.sh"]);
+        assert!(ls.lines().count() > 1, "fixture must be unmerged: {ls}");
+        assert_undetermined(&restore_probe_real(&at(&repo, "a.sh")), "unmerged");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A fake git answering every step of the restore probe. Each argument is
+    /// the shell body for that step; the defaults (see
+    /// [`restore_fake_clean`]) make the probe answer `InCommits`.
+    struct FakeSteps {
+        rev_parse: String,
+        ls_files: String,
+        hash_object: String,
+        cat_file: String,
+        log: String,
+    }
+
+    fn restore_fake_clean(top: &str) -> FakeSteps {
+        FakeSteps {
+            rev_parse: format!("echo '{top}'"),
+            ls_files: format!("printf 'H 100644 {OID_A} 0\\ta.sh\\000'"),
+            hash_object: format!("echo {OID_A}"),
+            cat_file: "exit 0".to_string(),
+            log: format!("echo {OID_B}"),
+        }
+    }
+
+    fn write_fake_git(bin: &std::path::Path, name: &str, s: &FakeSteps) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let script = format!(
+            "#!/bin/sh\ncase \"$*\" in\n  *rev-parse*) {} ;;\n  *ls-files*) {} ;;\n  *hash-object*) {} ;;\n  *cat-file*) {} ;;\n  *\" log \"*) {} ;;\n  *) exit 97 ;;\nesac\n",
+            s.rev_parse, s.ls_files, s.hash_object, s.cat_file, s.log
+        );
+        let p = bin.join(name);
+        std::fs::write(&p, script).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p.to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn restore_probe_failing_garbage_or_hanging_git_is_never_in_commits() {
+        let base = std::env::temp_dir().join(format!("bg-restore-fake-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let repo = base.join("r");
+        let bin = base.join("bin");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(repo.join("a.sh"), "x\n").unwrap();
+        let repo = repo.canonicalize().unwrap();
+        let top = repo.to_str().unwrap().to_string();
+        let file = at(&repo, "a.sh");
+        let probe = |git: &str, timeout: Duration| {
+            probe_restore_content_with_timeout(std::ffi::OsStr::new(git), &file, timeout)
+        };
+
+        // Control: the fake answers every step -> InCommits, so each variant
+        // below differs from a reaching fixture in exactly one step.
+        let clean = write_fake_git(&bin, "git-clean", &restore_fake_clean(&top));
+        assert_eq!(
+            probe(&clean, ANSWERING_GIT_TIMEOUT),
+            Determination::known(RestoreContent::InCommits)
+        );
+        // Control: worktree hash differs from the index id -> both checked;
+        // still InCommits when both are found.
+        let other_hash = format!("echo {OID_B}");
+        let mut s = restore_fake_clean(&top);
+        s.hash_object = other_hash.clone();
+        let two = write_fake_git(&bin, "git-two", &s);
+        assert_eq!(
+            probe(&two, ANSWERING_GIT_TIMEOUT),
+            Determination::known(RestoreContent::InCommits)
+        );
+
+        // (step, shell body) — each variant replaces ONE step of the clean
+        // fake with a failure, garbage or a hang.
+        let partial_log = format!("printf '{OID_B}'; exit 128");
+        let undetermined: Vec<(&str, &str, &str)> = vec![
+            ("rev-parse exits 128", "rev_parse", "exit 128"),
+            ("rev-parse relative", "rev_parse", "echo relative/top"),
+            (
+                "rev-parse other root",
+                "rev_parse",
+                "echo /definitely/not/top",
+            ),
+            ("rev-parse hangs", "rev_parse", "exec sleep 5"),
+            ("ls-files exits 128", "ls_files", "exit 128"),
+            ("ls-files garbage", "ls_files", "printf garbage"),
+            ("ls-files empty", "ls_files", "exit 0"),
+            ("hash-object exits 128", "hash_object", "exit 128"),
+            ("hash-object garbage", "hash_object", "echo nope"),
+            ("hash-object empty", "hash_object", "exit 0"),
+            ("cat-file exits 128", "cat_file", "exit 128"),
+            ("cat-file exits 2", "cat_file", "exit 2"),
+            ("cat-file hangs", "cat_file", "exec sleep 5"),
+            ("log exits 128", "log", "exit 128"),
+            ("log exits 1", "log", "exit 1"),
+            ("log garbage", "log", "echo not-a-commit"),
+            ("log prints then fails", "log", &partial_log),
+            ("log hangs", "log", "exec sleep 5"),
+        ];
+        for (i, (name, step, body)) in undetermined.iter().enumerate() {
+            let mut s = restore_fake_clean(&top);
+            let slot = match *step {
+                "rev_parse" => &mut s.rev_parse,
+                "ls_files" => &mut s.ls_files,
+                "hash_object" => &mut s.hash_object,
+                "cat_file" => &mut s.cat_file,
+                _ => &mut s.log,
+            };
+            *slot = (*body).to_string();
+            let git = write_fake_git(&bin, &format!("git-u{i}"), &s);
+            let timeout = if name.contains("hangs") {
+                Duration::from_millis(300)
+            } else {
+                ANSWERING_GIT_TIMEOUT
+            };
+            assert_undetermined(&probe(&git, timeout), name);
+        }
+
+        // Known negatives the fake can express: no such object, no commit.
+        let mut s = restore_fake_clean(&top);
+        s.cat_file = "exit 1".to_string();
+        let no_obj = write_fake_git(&bin, "git-noobj", &s);
+        assert_eq!(
+            probe(&no_obj, ANSWERING_GIT_TIMEOUT),
+            Determination::known(RestoreContent::NotInAnyCommit("index".to_string()))
+        );
+        let mut s = restore_fake_clean(&top);
+        s.log = "exit 0".to_string();
+        let no_commit = write_fake_git(&bin, "git-nocommit", &s);
+        assert_eq!(
+            probe(&no_commit, ANSWERING_GIT_TIMEOUT),
+            Determination::known(RestoreContent::NotInAnyCommit("index".to_string()))
+        );
+        // Index found, worktree id (different) not found: names the worktree.
+        let mut s = restore_fake_clean(&top);
+        s.hash_object = other_hash.clone();
+        s.cat_file = format!("case \"$*\" in *{OID_B}*) exit 1 ;; *) exit 0 ;; esac");
+        let wt = write_fake_git(&bin, "git-wt", &s);
+        assert_eq!(
+            probe(&wt, ANSWERING_GIT_TIMEOUT),
+            Determination::known(RestoreContent::NotInAnyCommit("working tree".to_string()))
+        );
+        let mut s = restore_fake_clean(&top);
+        s.hash_object = other_hash;
+        s.log = format!("case \"$*\" in *{OID_B}*) exit 0 ;; *) echo {OID_B} ;; esac");
+        let wtl = write_fake_git(&bin, "git-wtl", &s);
+        assert_eq!(
+            probe(&wtl, ANSWERING_GIT_TIMEOUT),
+            Determination::known(RestoreContent::NotInAnyCommit("working tree".to_string()))
+        );
+        // A git program that does not exist at all.
+        assert_undetermined(
+            &probe(
+                bin.join("no-such-git").to_str().unwrap(),
+                ANSWERING_GIT_TIMEOUT,
+            ),
+            "missing git",
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }

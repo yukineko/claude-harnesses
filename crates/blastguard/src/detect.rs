@@ -60,10 +60,12 @@ use crate::model::Decision;
 use crate::scope::{Placement, SafeRoots};
 use harness_core::verdict::Determination;
 
+mod budget;
 mod compound;
 mod cwd;
 mod denoise;
 mod executors;
+mod file_tool;
 mod fileops;
 mod find_xargs;
 mod gh;
@@ -92,7 +94,12 @@ mod words;
 
 use verdict_acc::VerdictAcc;
 
+#[cfg(test)]
+use budget::VISIT_PROBE;
+use budget::{depth_exhausted, take_budget, ANALYSIS_BUDGET, MAX_ANALYSIS_NODES, MAX_SHELL_DEPTH};
+
 use denoise::denoised_eval_rescan;
+use file_tool::{detect_edit, detect_write};
 use gh::analyze_gh;
 use readings::detect_bash_every_reading;
 
@@ -237,10 +244,12 @@ pub fn detect_scoped(tool_name: &str, tool_input: Option<&Value>, scope: &SafeRo
 /// [`crate::scope`] existed, because [`SafeRoots::none`] makes every placement
 /// question `Undetermined`. This is the entry point for every library consumer
 /// that hands commands to `sh -c` with no human present (condukt's check
-/// runner, specguard's forge, daily's task runner): they get the strict gate,
-/// unchanged.
+/// runner, specguard's forge, daily's task runner): they get the strict gate.
+/// Except the scratch-place rule, judged against the PROCESS's managed places
+/// (env + filesystem; `detect/scratch_place.rs`, GitHub #1637).
 pub fn detect(tool_name: &str, tool_input: Option<&Value>) -> Decision {
-    detect_scoped(tool_name, tool_input, &SafeRoots::none())
+    let scope = SafeRoots::none().with_managed_places(scratch_place::process_place_model());
+    detect_scoped(tool_name, tool_input, &scope)
 }
 
 /// The location model, plus the working directory the CURRENT segment resolves
@@ -276,6 +285,8 @@ struct Ctx<'a> {
     rewritten_base: Option<&'a str>,
     /// Base for operands that rewrite left alone. `None` = not known.
     raw_base: Option<String>,
+    /// The scratch-place rule's bases ([`scratch_place::PlaceBases`]).
+    places: scratch_place::PlaceBases<'a>,
     /// Whether the TOP-LEVEL command may use the worktree-storage `Allow` at
     /// all — see [`worktree_rm_eligible`]. Computed once from the whole command
     /// line in [`Ctx::new`] and carried unchanged into every derived context.
@@ -307,8 +318,8 @@ struct Ctx<'a> {
     /// Deny. In program text such a `>` is far more often an operator inside a
     /// string or expression (`print(1 > 0)`, `'x > \`y\`'`) than a redirect,
     /// but it cannot be shown NOT to be one, so it is never cleared to Allow.
-    /// `None` everywhere else: an ordinary command line keeps today's Deny.
-    program_text_redirects: Option<&'a std::cell::RefCell<Vec<String>>>,
+    /// `None` everywhere else (today's Deny). See [`interpreter::ProgramTextSink`] (#1626).
+    program_text_redirects: Option<&'a interpreter::ProgramTextSink>,
     /// `cd <dir> && ` that [`analyze_shell_payload`] puts before its payload: the
     /// directory a here-document's Python program runs in (`python_file_body_verdict`).
     cwd_prefix: Option<String>,
@@ -358,6 +369,7 @@ impl<'a> Ctx<'a> {
             scope,
             rewritten_base: scope.session_cwd(),
             raw_base: scope.session_cwd().map(str::to_string),
+            places: scratch_place::PlaceBases::new(scope),
             worktree_rm_eligible: eligible(worktree_rm_eligible),
             deletion_rm_eligible: DeletionEligibility::of(eligible(deletion_rm_eligible), eligible),
             checkout_exempt_eligible: eligible(checkout_exempt_eligible),
@@ -380,6 +392,7 @@ impl<'a> Ctx<'a> {
             scope: self.scope,
             rewritten_base: self.rewritten_base,
             raw_base,
+            places: self.places.after_cd(dir),
             worktree_rm_eligible: self.worktree_rm_eligible,
             deletion_rm_eligible: self.deletion_rm_eligible,
             checkout_exempt_eligible: self.checkout_exempt_eligible,
@@ -398,6 +411,7 @@ impl<'a> Ctx<'a> {
             scope: self.scope,
             rewritten_base: None,
             raw_base: None,
+            places: scratch_place::PlaceBases::unknown(),
             worktree_rm_eligible: self.worktree_rm_eligible,
             deletion_rm_eligible: self.deletion_rm_eligible,
             checkout_exempt_eligible: self.checkout_exempt_eligible,
@@ -635,161 +649,8 @@ fn unreadable_operand(tool: &str, field: &str) -> Decision {
 }
 
 // ---------------------------------------------------------------------------
-// File-write handling
-// ---------------------------------------------------------------------------
-
-fn extract_path(ti: Option<&Value>) -> Option<String> {
-    let v = ti?;
-    for key in ["file_path", "notebook_path", "path"] {
-        if let Some(p) = v.get(key).and_then(|p| p.as_str()) {
-            if !p.is_empty() {
-                return Some(p.to_string());
-            }
-        }
-    }
-    None
-}
-
-fn detect_write(ti: Option<&Value>, ctx: &Ctx<'_>) -> Decision {
-    let path = match extract_path(ti) {
-        Some(p) => p,
-        None => return unreadable_operand("Write", "file_path"),
-    };
-    // Git internals first: a whole-file Write over `.git/<x>` has always been a
-    // flat Deny. `.git/config` (and `.git/hooks/**`) are ALSO protected paths,
-    // whose verdict is the weaker Ask — checking the protected list first would
-    // downgrade that Deny (backlog 03885f11). The stricter verdict wins.
-    if exclude::is_git_internal(&path) {
-        return Decision::deny(format!(
-            "Write would overwrite git internals ({path}) — refusing"
-        ));
-    }
-    // BEFORE the config-file allowlist, not after: `.claude/**`, `*.toml` and
-    // `settings.local.json` are all matched by `is_config_file`, so the
-    // exemption used to swallow exactly the paths that decide whether the gates
-    // run at all. "It is a config file" is the reason to look harder here, not
-    // the reason to stop looking.
-    if let Some(deny) = protected_path_block(ctx, "Write", &path) {
-        return deny;
-    }
-    // Also before the config-file allowlist: `/etc/<x>.toml` is a config file
-    // by name and a system-directory drop-in by location.
-    if let Some(deny) = file_tool_system_block(ctx, "Write", &path) {
-        return deny;
-    }
-    if exclude::is_config_file(&path) {
-        return Decision::Allow;
-    }
-    let content = ti
-        .and_then(|v| v.get("content"))
-        .and_then(|c| c.as_str())
-        .unwrap_or("");
-    if content.trim().is_empty() {
-        return Decision::deny(format!(
-            "Write would replace {path} with empty content, wiping the file"
-        ));
-    }
-    Decision::Allow
-}
-
-/// Edit / MultiEdit / NotebookEdit: a partial edit of an ordinary file is
-/// allowed, but a partial edit of a protected gate/hook/policy path is exactly
-/// how a guard gets switched off, and an edit inside a system directory is the
-/// same payload as a redirect there ([`file_tool_system_block`]), so the target
-/// is classified rather than assumed harmless. `NotebookEdit` addresses its
-/// target via `notebook_path`, which `extract_path` already covers.
-fn detect_edit(ti: Option<&Value>, ctx: &Ctx<'_>) -> Decision {
-    let path = match extract_path(ti) {
-        Some(p) => p,
-        None => return unreadable_operand("Edit", "file_path/notebook_path"),
-    };
-    if let Some(deny) = protected_path_block(ctx, "Edit", &path) {
-        return deny;
-    }
-    if let Some(deny) = file_tool_system_block(ctx, "Edit", &path) {
-        return deny;
-    }
-    Decision::Allow
-}
-
-/// The system-directory axis for the file tools (Write / Edit / MultiEdit /
-/// NotebookEdit), user ruling 2026-11-01: the same rule, reason and directory
-/// set as a Bash redirect — [`system_path_block`] on the path as written, then
-/// [`real_system_path_block`] on the path the kernel really writes, so a
-/// dangling file symlink, a chain of them, or a directory symlink into `/etc`
-/// is the same Deny as the direct spelling. The `confined_root` exemption in
-/// [`system_path_block`] applies unchanged (a project checked out under `/opt`).
-///
-/// When the landing cannot be resolved (a symlink loop, an `lstat`/`read_link`
-/// error other than "does not exist") the answer is Ask, never Allow: "could
-/// not resolve" is not "not a system directory" (CLAUDE.md §3).
-fn file_tool_system_block(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
-    if let Some(deny) = system_path_block(action, path, ctx) {
-        return Some(deny);
-    }
-    match real_system_path_block(action, path, ctx) {
-        Ok(verdict) => verdict,
-        Err(why) => Some(Decision::ask(format!(
-            "{action} target ({path}) could not be resolved through its symlinks ({why}) — \
-blastguard cannot tell whether it lands in a system directory, so it refuses to guess"
-        ))),
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Bash handling
 // ---------------------------------------------------------------------------
-
-/// How deep we recurse into shell-evaluation wrappers (`eval`, `sh -c`, …)
-/// before giving up. Bounds work and guards against pathological nesting; no
-/// realistic command line wraps a destructive payload this many layers deep.
-const MAX_SHELL_DEPTH: usize = 8;
-
-/// Total number of `detect_bash` invocations allowed for ONE top-level command.
-///
-/// D4 (verified availability defect, fixed): a depth cap alone does NOT bound
-/// the work, because the re-analysis arms FAN OUT. `analyze_find` loops over
-/// every `-exec` position and re-analyses the whole remaining tail, which still
-/// contains the other `-exec` tokens, so the branching factor is the number of
-/// `-exec` tokens and the tree is O(N^MAX_SHELL_DEPTH). Measured on a single
-/// invocation of `find . ` + `-exec find . `×N + `-exec echo {} ` + `+ `×(N+1):
-/// N=20 → 2.2s, N=24 → 8.2s, N=28 → 30s, N=32 (a 503-byte command) → >60s,
-/// killed. blastguard is a PreToolUse hook, so that hangs the user's turn.
-///
-/// This caps total NODE VISITS across the whole recursion tree, not just its
-/// depth. Ordinary commands use fewer than a dozen visits; the cap is three
-/// orders of magnitude above that, so it cannot be reached by real work.
-const MAX_ANALYSIS_NODES: u32 = 2_000;
-
-thread_local! {
-    /// Remaining node budget for the top-level command currently being analysed.
-    static ANALYSIS_BUDGET: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-thread_local! {
-    /// Test-only work probe: when installed, counts EVERY `detect_bash` entry
-    /// (admitted or budget-rejected) on this thread. It is an atomic shared via
-    /// `Arc` so a watcher thread can observe the count while the analysis is
-    /// still running, and fail on an unbounded tree instead of hanging. It is
-    /// deliberately independent of `ANALYSIS_BUDGET`: removing the budget must
-    /// make this count explode, not leave it untouched.
-    static VISIT_PROBE: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicU64>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Consume one unit of the analysis budget. Returns false when it is exhausted.
-fn take_budget() -> bool {
-    ANALYSIS_BUDGET.with(|b| {
-        let left = b.get();
-        if left == 0 {
-            false
-        } else {
-            b.set(left - 1);
-            true
-        }
-    })
-}
 
 /// Re-analyse a payload string that a shell-evaluation position will EXECUTE
 /// (`sh -c <payload>`, `eval <payload>`, `flock -c <payload>`).
@@ -821,29 +682,6 @@ fn analyze_shell_payload(payload: &str, depth: usize, ctx: &Ctx<'_>) -> Decision
         ));
     }
     Decision::Allow
-}
-
-/// The recursion cap was reached, so analysis DID NOT FINISH. That is the same
-/// condition as budget exhaustion a few lines up (`detect_bash`'s D4 guard) —
-/// "we did not finish looking, so we have no verdict" — and it gets the same
-/// answer: an Ask, which `Decision::hardened` turns into the pre-existing Deny
-/// whenever no human is available to answer.
-///
-/// Every one of the five depth-capped sites used to resolve to `Allow`, either
-/// by returning it outright or by skipping the recursion and falling through to
-/// `acc.finish()`. A destructive payload nested past the cap was therefore
-/// waved through *unanalysed* — the exact fail-open this module exists to
-/// prevent, sitting one line away from the sibling condition that handles it
-/// correctly.
-///
-/// The reason deliberately differs from the budget ask so the two unfinished-
-/// analysis causes stay distinguishable in the logs.
-fn depth_exhausted() -> Decision {
-    Decision::ask(
-        "command nests shell/wrapper invocations deeper than blastguard analyses \
-         (recursion depth limit) — analysis did not finish, so blastguard cannot \
-         vouch for it either way",
-    )
 }
 
 fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
@@ -1072,12 +910,11 @@ whether it lands in a system directory"
                 // 2026-10-03: refusing edits inside a worktree is itself the
                 // defect), even when the session runs in the main tree and the
                 // checkout is therefore not one of its safe roots. Judged by
-                // `Ctx::in_worktree_checkout`: absolute target, one plain
-                // command, placement observed with no symlink below the
-                // checkout.
+                // `Ctx::in_worktree_checkout_for_redirect`: absolute target, one plain command
+                // or an inert `&&` prefix (#1625), no symlink below the checkout.
                 crate::reversible::Recovery::RecoverableFromGit => {
                     ctx.confined_root("redirect", &[target.as_str()]).is_some()
-                        || ctx.in_worktree_checkout(&target)
+                        || ctx.in_worktree_checkout_for_redirect(&target, rcmd, seg_idx)
                 }
                 // An existing file whose bytes git does not hold, but which
                 // sits in a fixed temp root (`/tmp`, `/private/tmp`; never
@@ -1152,8 +989,11 @@ overwrite this session's to make",
                 if matches!(recovery, crate::reversible::Recovery::Undetermined(_))
                     && redirect_target_undeterminable(&target, ctx.raw_base.as_deref())
                 {
-                    sink.borrow_mut().push(reason);
+                    sink.rows.borrow_mut().push(reason);
                     continue;
+                }
+                if sink.redirects_are_data {
+                    continue; // #1626: Python data, see `ProgramTextSink`
                 }
             }
             // The same ruling at LINE level (4a1cf1ad): this `>` sits in the
@@ -2327,3 +2167,6 @@ mod heredoc_subst_tests;
 
 #[cfg(test)]
 mod hookspath_read_tests;
+
+#[cfg(test)]
+mod restore_content_tests;

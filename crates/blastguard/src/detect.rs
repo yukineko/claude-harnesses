@@ -2321,3 +2321,6 @@ mod heredoc_subst_tests;
 
 #[cfg(test)]
 mod hookspath_read_tests;
+
+#[cfg(test)]
+mod restore_content_tests;

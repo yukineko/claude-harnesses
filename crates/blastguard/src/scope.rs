@@ -613,6 +613,8 @@ pub struct SafeRoots {
     /// Ask. Set only by the hook binary through
     /// [`SafeRoots::with_git_absent_probe`].
     git_absent_probe: Option<crate::reversible::GitAbsentProbe>,
+    /// #1604 content-in-a-commit probe; `None` keeps working-tree `git restore` denied.
+    pub(crate) git_restore_probe: Option<crate::reversible::GitRestoreProbe>,
     /// The "is this directory a linked git worktree checkout" probe behind
     /// [`SafeRoots::classify_worktree_checkout`] and
     /// [`SafeRoots::is_linked_worktree_checkout`] (module doc, "Protected-named
@@ -645,6 +647,7 @@ impl SafeRoots {
             home_real: None,
             git_tree_probe: None,
             git_absent_probe: None,
+            git_restore_probe: None,
             checkout_probe: None,
         }
     }
@@ -752,6 +755,7 @@ impl SafeRoots {
             home_real,
             git_tree_probe: None,
             git_absent_probe: None,
+            git_restore_probe: None,
             checkout_probe: resolver.map(|_| is_linked_checkout as CheckoutProbe),
         }
     }
@@ -783,6 +787,13 @@ impl SafeRoots {
     /// The attached absent-path index probe, if any.
     pub(crate) fn git_absent_probe(&self) -> Option<crate::reversible::GitAbsentProbe> {
         self.git_absent_probe
+    }
+
+    /// Attach [`crate::reversible::probe_restore_content`] (only the hook binary does).
+    #[must_use]
+    pub fn with_git_restore_probe(mut self, p: crate::reversible::GitRestoreProbe) -> Self {
+        self.git_restore_probe = Some(p);
+        self
     }
 
     /// The canonical home directory, if known.

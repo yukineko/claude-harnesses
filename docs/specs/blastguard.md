@@ -82,7 +82,20 @@ forge・condukt のスケジューラが再利用）。
   `git diff --cached --quiet -- <path>` exit 0（HEAD と異なる staged 版無し）を全て観測したときだけ Allow、
   exit 1（staged 版を上書きする）は Deny、それ以外（repo 外・git 失敗・`:` で始まる pathspec magic・
   `--*-pathspecs` global）は Ask（tests/checkout_absent_path_fp_20261108.rs）。`GIT_ICASE_PATHSPECS` 等の
-  環境変数は見ていない（open）。日常操作を blanket deny しない）、
+  環境変数は見ていない（open）。日常操作を blanket deny しない）。**working tree を書き戻す `git restore`**
+  （`--staged` 単独以外。managed worktree checkout 内は下記のとおり Allow）は**失うもので判定する**（ユーザー裁定
+  2026-11-08、issue #1604、`detect/git.rs` の `restore_discard_verdict`）: 保護パス operand は先に Deny
+  （content が commit 済みでも `--source` で古い無力化版を戻せるため）。それ以外は全 pathspec について
+  `reversible::probe_restore_content` が「index blob と working tree の raw bytes
+  （`git hash-object --no-filters`）の両方が、ref から到達可能な commit に有る」を観測したときだけ Allow。
+  到達性は `git cat-file -e <id>` ＋ `git log --all -n1 --find-object=<id> -- <path>`（path 限定の
+  commit walk。`rev-list --objects --all` は全 tree を歩くので採らない。2026-11-08 本 repo 6219 commit で
+  0.3 s 実測）で見る。別 path にだけ commit された blob・merge の解決でだけ入った blob は見つからず
+  Deny 側に倒れる。どれかが commit に無ければ Deny、判定不能（subcommand 前の global option・
+  モデル外の option〈`--patch`・`--pathspec-from-file` 等〉・pathspec 無し・literal でない path・
+  `:` magic・directory・untracked/absent・index entry が `H`/stage 0/通常 mode の 1 件でない・git 失敗・
+  timeout・probe 無し）も Deny（tests/backlog_git_restore_content_in_commit_fp_20261107.rs）。
+  file mode の差は content とみなさない、
   `find`（`analyze_find`: `-delete`、`-exec`/`-execdir` の直後が shell または `rm`）、
   `truncate`/`shred`/`dd of=`/`mkfs*`、再帰 `chmod`/`chown`（`-R`/`--recursive`）、
   `sort`/`uniq`（read-only ではない: `sort -o <保護パス>`／`uniq <in> <保護パス>` は出力ファイルを

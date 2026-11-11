@@ -401,6 +401,13 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains("is not a command blastguard recognises") {
         return "unrecognised-wrapper";
     }
+    // 12ba5845: a `condukt` invocation that turns autonomy on (`state
+    // autonomy-set on`, or an autonomy env-assignment prefix). Keyed on the
+    // phrase `detect::condukt` puts in every reason it emits, imported rather
+    // than retyped so the two cannot drift apart.
+    if reason.contains(crate::detect::AUTONOMY_SELF_GRANT) {
+        return "autonomy-self-grant";
+    }
 
     // The analyser itself crashed. Distinct from every rule above: it says
     // nothing about the command, only that blastguard failed. A recurring one of
@@ -631,6 +638,15 @@ mod tests {
                 "Bash",
                 json!({ "command": "perl -i -pe 's/a/b/' .githooks/pre-commit" }),
             ),
+            // autonomy-self-grant (12ba5845): the agent flipping its own autonomy.
+            (
+                "Bash",
+                json!({ "command": "condukt state autonomy-set on" }),
+            ),
+            (
+                "Bash",
+                json!({ "command": "CONDUKT_AUTONOMOUS=1 condukt policy answer --id q1 --choice yes" }),
+            ),
         ];
 
         for (tool, input) in cases {
@@ -639,6 +655,22 @@ mod tests {
             assert_ne!(
                 id, "unknown",
                 "reason {reason:?} (from {tool} {input}) did not classify to a stable rule id"
+            );
+        }
+    }
+
+    #[test]
+    fn autonomy_self_grant_gets_its_own_id_not_unknown() {
+        // The loop test above only proves "not unknown"; pin the id itself.
+        for command in [
+            "condukt state autonomy-set on",
+            "CONDUKT_AUTONOMOUS=1 condukt policy answer --id q1 --choice yes",
+        ] {
+            let reason = deny_reason("Bash", json!({ "command": command }));
+            assert_eq!(
+                rule_id(&reason),
+                "autonomy-self-grant",
+                "command: {command:?}, reason: {reason:?}"
             );
         }
     }

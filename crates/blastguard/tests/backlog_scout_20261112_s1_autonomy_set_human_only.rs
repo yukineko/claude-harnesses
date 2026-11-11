@@ -84,25 +84,21 @@ fn check(command: &str, subagent: bool, want_deny: bool) {
 }
 
 #[test]
-#[ignore = "scout 2026-11-12 S1: RED, open defect. Remove the ignore when fixed"]
 fn s1_autonomy_set_on_interactive_is_not_allowed() {
     check(ON, false, false);
 }
 
 #[test]
-#[ignore = "scout 2026-11-12 S1: RED, open defect. Remove the ignore when fixed"]
 fn s1_autonomy_set_on_subagent_is_denied() {
     check(ON, true, true);
 }
 
 #[test]
-#[ignore = "scout 2026-11-12 S1: RED, open defect. Remove the ignore when fixed"]
 fn s1_env_autonomous_policy_answer_interactive_is_not_allowed() {
     check(ENV_ANSWER, false, false);
 }
 
 #[test]
-#[ignore = "scout 2026-11-12 S1: RED, open defect. Remove the ignore when fixed"]
 fn s1_env_autonomous_policy_answer_subagent_is_denied() {
     check(ENV_ANSWER, true, true);
 }

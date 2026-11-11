@@ -1,43 +1,44 @@
-//! RED repro for GitHub issue #1553 (reading (a), defect: the issue's own
-//! "Distinguish" paragraph notes the sum over days exceeding real spend is
-//! justified by no reading). budgetguard's Stop hook calls
-//! `ledger.record(session_id, today, session_usd)` with the session's
-//! CUMULATIVE cost. A session that crosses local midnight therefore keeps its
-//! pre-midnight part under yesterday AND its full cumulative cost under today.
-//! Observed: session 4a9031bf had 24.18 under 2026-11-05 and 49.06 (cumulative)
-//! under 2026-11-06.
+//! RED repro (backlog): a session that crosses local midnight is counted twice.
+//!
+//! budgetguard records the session's CUMULATIVE cost (whole transcript) under
+//! today's date key (`gate.rs`: `ledger.record(session_id, today, session_usd)`).
+//! A session alive across midnight therefore keeps its pre-midnight spend in
+//! yesterday's entry AND carries it again inside today's cumulative value.
+//! Observed 2026-11-06 in ~/.budgetguard/state/ledger.json: session 4a9031bf
+//! has 24.18 on 2026-11-05 and 49.06 (cumulative) on 2026-11-06; 2 sessions
+//! appear on both days. The inflated day totals also feed derive_limits (Tukey
+//! fence over past days), which raises the derived limits — a loosening.
+//!
+//! Invariant pinned: the sum of day totals over all days equals what was
+//! actually spent (the session's final cumulative cost), and today's total
+//! holds only today's spend.
 
 use harness_core::ledger::Ledger;
 
-const EPS: f64 = 1e-9;
+#[test]
+#[ignore = "backlog: midnight double count (RED repro)"]
+fn session_crossing_midnight_is_not_double_counted() {
+    let mut l = Ledger::default();
+    // 23:50 on day 1: the session has spent 10 so far.
+    l.record("s", "2026-11-05", 10.0);
+    // 00:10 on day 2: cumulative spend of the same session is 15.
+    let day2 = l.record("s", "2026-11-06", 15.0);
 
-fn total_across_days(l: &Ledger) -> f64 {
-    l.days.keys().map(|d| l.day_total(d)).sum()
+    let all: f64 = l.days.values().map(|d| d.total()).sum();
+    assert!(
+        (all - 15.0).abs() < 1e-9,
+        "sum over days must equal real spend 15, got {all} (pre-midnight 10 counted twice)"
+    );
+    assert!(
+        (day2 - 5.0).abs() < 1e-9,
+        "day 2 must hold only day-2 spend 5, got {day2}"
+    );
 }
 
-/// Control (passes today): a session within one day is counted once.
 #[test]
-fn control_single_day_session_counted_once() {
+fn control_single_day_session_is_unchanged() {
     let mut l = Ledger::default();
     l.record("s", "2026-11-06", 10.0);
-    l.record("s", "2026-11-06", 30.0);
-    assert!((total_across_days(&l) - 30.0).abs() < EPS);
-}
-
-#[test]
-#[ignore = "#1553 RED: cumulative session cost is recorded under each day key, double-counting across midnight"]
-fn session_crossing_midnight_total_across_days_equals_cumulative_cost() {
-    let mut l = Ledger::default();
-    // Stop before midnight: cumulative 24.18 recorded under yesterday.
-    l.record("4a9031bf", "2026-11-05", 24.18);
-    // Stop after midnight: cumulative 49.06 (includes the 24.18 above).
-    l.record("4a9031bf", "2026-11-06", 49.06);
-    let total = total_across_days(&l);
-    assert!(
-        (total - 49.06).abs() < 1e-6,
-        "sum over days = {total}, but the session's real cumulative spend is 49.06 \
-         (yesterday {}, today {})",
-        l.day_total("2026-11-05"),
-        l.day_total("2026-11-06")
-    );
+    let t = l.record("s", "2026-11-06", 15.0);
+    assert!((t - 15.0).abs() < 1e-9, "same-day updates replace, got {t}");
 }

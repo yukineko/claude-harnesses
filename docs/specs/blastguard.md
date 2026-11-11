@@ -163,7 +163,7 @@ forge・condukt のスケジューラが再利用）。
   作成先・relative の基点不明・`..` はすべて `Ask`（判定不能は制限側）。この規則は `Allow` を `Ask` に上げるだけで、
   他の規則の `Deny`/`Ask` はそのまま。cp/mv/install/ln の option 解析は getopt 形式の共通 parser に一本化した
   （`-t <dir>` の clustered 形を含む）。library 入口 `detect::detect` にも適用する（GitHub #1637、blastguard
-  0.2.433）。以前はこの入口（`SafeRoots::none`）だけ規則を飛ばして `Allow` を返し、無人で `sh -c` に渡す condukt
+  0.2.434）。以前はこの入口（`SafeRoots::none`）だけ規則を飛ばして `Allow` を返し、無人で `sh -c` に渡す condukt
   `verify.rs`（`launch_and_reflux`/`launch_server_and_probe`/`launch_in_container`）・specguard `forge/implement.rs`・
   daily の呼び出しが hook より寛容な判定を得ていた（fail-open）。現在は、他の規則には `SafeRoots::none` のまま、
   この規則だけ**プロセス**の管理された場所（process cwd — これらの呼び出しの `sh -c` が走る場所 — ・

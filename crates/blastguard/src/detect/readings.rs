@@ -1,5 +1,5 @@
 use super::shell_lex::{bash32_lexed_reading, shell_lexed_reading, Bash32Lexed, ShellLexed};
-use super::substitution::under_bash32_reading;
+use super::substitution::{assuming_comment_hides_quotes, under_bash32_reading};
 use super::{
     detect_bash, Ctx, Decision, SafeRoots, VerdictAcc, ANALYSIS_BUDGET, MAX_ANALYSIS_NODES,
 };
@@ -36,6 +36,11 @@ use super::{
 /// hid the next line. [`bash32_lexed_reading`] spells the command the way
 /// bash 3.2 tokenises it, and that text is judged under
 /// [`under_bash32_reading`] too; a shape that lexer does not model is Ask.
+///
+/// When either bash 3.2 pass is undetermined, the answer is at least Ask, and
+/// both passes run once more under a candidate parse of the unmodelled
+/// comment-with-quote shape ([`bash32_comment_candidate`], issue #1614): a
+/// Deny there is returned, anything else leaves the Ask standing.
 ///
 /// D4: each pass starts from a full per-command node budget, so a later
 /// reading cannot be starved by an earlier one; budget exhaustion in any pass
@@ -86,6 +91,13 @@ pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision 
         }
     }
     if undetermined {
+        // Issue #1614: an undetermined bash 3.2 parse is Ask, but a candidate
+        // parse of it may expose a harmful command; that is Deny, the more
+        // restrictive answer. The candidate's own verdict only adds — the Ask
+        // below is recorded whatever it says.
+        if let Some(deny) = bash32_comment_candidate(c, scope, &mut acc) {
+            return deny;
+        }
         // An Ask never short-circuits, so there is nothing to return here.
         let _ = acc.record(Decision::ask(
             "macOS /bin/bash 3.2 and /bin/sh read a here-document inside `$(...)` as command \
@@ -95,4 +107,30 @@ pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision 
         ));
     }
     acc.finish()
+}
+
+/// The bash 3.2 passes of [`detect_bash_every_reading`] (plain and lexed)
+/// re-run under [`assuming_comment_hides_quotes`]: a comment whose line holds
+/// a quote is read as hiding it (observed to run what follows the early close
+/// in D1-D3 of `tests/heredoc_paren_bash32_verifier_20261107.rs`). Each
+/// verdict is recorded into `acc`; a Deny is returned. The passes' own
+/// undetermined flags are ignored on purpose: the caller has already decided
+/// the command is undetermined and records that Ask itself.
+fn bash32_comment_candidate(c: &str, scope: &SafeRoots, acc: &mut VerdictAcc) -> Option<Decision> {
+    assuming_comment_hides_quotes(|| {
+        ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
+        let (plain, _) = under_bash32_reading(|| detect_bash(c, 0, &Ctx::new(scope, c)));
+        if let Some(deny) = acc.record(plain) {
+            return Some(deny);
+        }
+        if let Bash32Lexed::Text(lexed) = bash32_lexed_reading(c) {
+            ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
+            let (verdict, _) =
+                under_bash32_reading(|| detect_bash(&lexed, 0, &Ctx::new(scope, &lexed)));
+            if let Some(deny) = acc.record(verdict) {
+                return Some(deny);
+            }
+        }
+        None
+    })
 }

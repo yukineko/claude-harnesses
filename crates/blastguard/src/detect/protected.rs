@@ -141,7 +141,7 @@ const MAX_SYMLINK_HOPS: usize = 40;
 /// `None` = not a path this can place (an unexpanded `$`/backtick, or relative
 /// with no absolute base). `Undetermined` = the filesystem could not answer: a
 /// symlink loop, a `read_link`/`lstat` error other than "does not exist".
-fn physical_landing(target: &str, base: Option<&str>) -> Option<Determination<String>> {
+pub(super) fn physical_landing(target: &str, base: Option<&str>) -> Option<Determination<String>> {
     use std::path::{Component, Path, PathBuf};
     if target.is_empty() || target.contains('$') || target.contains('`') {
         return None;

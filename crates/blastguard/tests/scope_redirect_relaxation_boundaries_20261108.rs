@@ -624,7 +624,6 @@ fn wt_hostile(fx: &Fx, cmd: &str, strict: bool) {
 /// confined-root arm judges the placement at hook time), so this is a
 /// pre-existing RED, not one of the #1625 relaxation's.
 #[test]
-#[ignore = "pre-existing RED (allow on main 6972be32): relink before a write inside the cwd's own tree; needs a ruling, remove ignore when fixed"]
 fn wt_relink_prefix_from_linked_worktree_cwd_pre_existing() {
     let fx = Fx::new("wt-ln-wtcwd");
     let cmd = format!(

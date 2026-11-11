@@ -60,6 +60,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'rm 以外のシステムファイル変更コマンドも system-harm Deny': system_mutation_verdict's per-command file lists, unquoting, home expansion and the Ask on unresolved expansions (backlog 3c750df2)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/relink.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '同じ行で relink された redirect target は実際の着地点で判定する': redirect_landing, the modelled relinking verbs, the segment selection, the physical landing substitution and the Ask cases."
+
+[[spec]]
 path = "crates/blastguard/src/detect/interpreter/inert_literal.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'inert literal の Deny→Ask 降格': inert_literal_bodies proof conditions, DYNAMIC_EXECUTION_MARKERS (incl. string-executing APIs, b4c03877), real-call Deny precedence (backlog 27795e6e)."

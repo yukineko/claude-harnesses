@@ -1,158 +1,100 @@
 #!/usr/bin/env python3
-"""RED acceptance tests for GitHub #1551: .githooks/pre-commit per-phase timing.
+"""RED repro (backlog): .githooks/pre-commit records no timing at all.
 
-Pins (a) "missing observability": pre-push appends one JSON line per run to
-<git-common-dir>/prepush-timing.jsonl and prints a `pre-push timing:` summary;
-pre-commit must do the same with precommit-timing.jsonl / `pre-commit timing:`.
+.githooks/pre-push times every phase and appends one JSON line per run to
+<git-common-dir>/prepush-timing.jsonl (see scripts/test_prepush_timing.py).
+pre-commit has no equivalent, so how long a commit spends in its gates cannot
+be observed. Measured 2026-11-06 at main b2f2cbd1: grepping .githooks/pre-commit
+for time/date/SECONDS/elapsed/duration finds only prose ("Commit time is ..."),
+and .git/ holds no precommit-timing.jsonl.
 
-Run:  python3 -m pytest scripts/test_precommit_timing.py
+What this pins (observability only — the timing must not change any verdict):
+  1. A clean run appends exactly one JSON line to
+     <git-common-dir>/precommit-timing.jsonl with `exit` == hook rc (0) and a
+     non-empty `phases` list whose entries carry `phase`, `secs` and `rc`
+     (the gate's own exit status), one entry per gate label, in run order.
+  2. A blocking run (one scanner exits 1) still appends one line, with `exit`
+     equal to the (non-zero) hook rc — timing must not swallow the block.
+  2b. Per-gate verdicts: on that blocking run the phase of the failing gate has
+      rc 1 and every other gate rc 0, so which gate spoke is recoverable from
+      the log alone (the input for deciding which gates must run per commit).
+  3. stderr carries one `pre-commit timing: ... total Ns (exit RC)` summary.
 
-Reuses HookHarness (stub-scanner throwaway repo) from test_precommit_hook.py;
-nothing touches the real repo, scanners or index.
-
-Controls (normal tests, pass today): a clean run exits 0; a blocking run still
-blocks with the same rc.  They prove the harness itself works, so an xfail
-failing means "feature missing", not "setup broken".
-
-Strict xfails (RED: GitHub #1551) pin the feature.  They become XPASS(strict)
-=> failure the moment the feature lands, forcing the marker's removal.
+Run: `python3 scripts/test_precommit_timing.py` (stdlib `unittest` only).
+Reuses HookHarness from scripts/test_precommit_hook.py; set
+PRECOMMIT_HOOK_UNDER_TEST to point it at another copy of the hook.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import unittest
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from test_precommit_hook import (  # noqa: E402
     EXPECTED_SCANNERS,
-    LABELS,
-    HookHarness,
+    HookTestCase,
+    _which,
 )
 
-RED = pytest.mark.xfail(strict=True, reason="RED: GitHub #1551")
-BLOCKER = "check-doc-duplication.py"
-LOG_NAME = "precommit-timing.jsonl"
+_SUMMARY_RE = re.compile(
+    r"^pre-commit timing: .*; total (\d+|\?)s \(exit (\d+)\)$", re.MULTILINE
+)
 
 
-class TimingCase(unittest.TestCase):
-    def harness(self, **kwargs):
-        h = HookHarness(**kwargs)
-        self.addCleanup(h.cleanup)
-        return h
+class PrecommitTiming(HookTestCase):
+    def timed_harness(self, **kw):
+        h = self.harness(**kw)
+        link = h.bindir / "date"
+        if not link.exists():
+            os.symlink(_which("date"), link)
+        return h, h.root / ".git" / "precommit-timing.jsonl"
 
-    @staticmethod
-    def log_path(h):
-        return h.root / ".git" / LOG_NAME
-
-    def read_lines(self, h):
-        p = self.log_path(h)
-        self.assertTrue(p.is_file(), "%s was not written under the git common dir" % LOG_NAME)
-        return [json.loads(ln) for ln in p.read_text().splitlines() if ln.strip()]
-
-
-class Controls(TimingCase):
-    def test_clean_run_exits_zero(self):
-        proc = self.harness().run()
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-
-    def test_blocking_run_still_blocks_with_same_rc(self):
-        baseline = self.harness(exits={BLOCKER: 1}).run()
-        self.assertNotEqual(baseline.returncode, 0, baseline.stderr)
-        self.assertEqual(baseline.returncode, 1, baseline.stderr)
-        again = self.harness(exits={BLOCKER: 1}).run()
-        self.assertEqual(again.returncode, baseline.returncode)
-
-    def test_unwritable_log_location_does_not_change_clean_rc(self):
-        h = self.harness()
-        self.log_path(h).mkdir()  # a directory where the log file would go
-        self.assertEqual(h.run().returncode, 0)
-
-
-class TimingLog(TimingCase):
-    @RED
-    def test_one_json_line_per_run_with_phases_and_rc(self):
-        h = self.harness()
-        self.assertEqual(h.run().returncode, 0)
-        h.run()
-        lines = self.read_lines(h)
-        self.assertEqual(len(lines), 2, "exactly one JSON line per run")
-        rec = lines[0]
-        self.assertEqual(rec["exit"], 0)
-        self.assertIsInstance(rec["total"], (int, float))
-        phases = {p["phase"]: p for p in rec["phases"]}
-        for scanner in EXPECTED_SCANNERS:
-            self.assertIn(LABELS[scanner], phases, "no phase for %s" % scanner)
-            self.assertIsInstance(phases[LABELS[scanner]]["secs"], (int, float))
-
-    @RED
-    def test_blocking_run_logs_its_nonzero_rc(self):
-        h = self.harness(exits={BLOCKER: 1})
-        proc = h.run()
-        self.assertEqual(proc.returncode, 1)
-        rec = self.read_lines(h)[-1]
-        self.assertEqual(rec["exit"], proc.returncode)
-
-
-class TimingSummary(TimingCase):
-    @RED
-    def test_stderr_summary_has_total_and_exit(self):
-        proc = self.harness().run()
-        m = re.search(r"pre-commit timing: .*total \S+ \(exit 0\)", proc.stderr)
-        self.assertIsNotNone(m, "no `pre-commit timing: ... total ... (exit 0)` in:\n" + proc.stderr)
-
-    @RED
-    def test_stderr_summary_reports_blocking_rc(self):
-        proc = self.harness(exits={BLOCKER: 1}).run()
-        self.assertIn("(exit %d)" % proc.returncode, proc.stderr)
-        self.assertIn("pre-commit timing:", proc.stderr)
-
-
-class TimingNeverChangesVerdict(TimingCase):
-    def _active_and_same_rc(self, code, want_rc):
-        h = self.harness(exits={BLOCKER: code})
-        proc = h.run()
-        self.assertEqual(proc.returncode, want_rc, proc.stderr)
-        self.assertEqual(self.read_lines(h)[-1]["exit"], proc.returncode)
-
-    def _unwritable(self, code):
-        expected = self.harness(exits={BLOCKER: code}).run().returncode
-        h = self.harness(exits={BLOCKER: code})
-        self.log_path(h).mkdir()  # append to a directory fails
-        proc = h.run()
-        self.assertEqual(proc.returncode, expected, proc.stderr)
-        self.assertRegex(
-            proc.stderr,
-            r"pre-commit timing: could not append to .*" + re.escape(LOG_NAME),
+    def _lines(self, log):
+        self.assertTrue(
+            log.exists(), "pre-commit wrote no %s (no timing is recorded)" % log
         )
+        return [json.loads(x) for x in log.read_text().splitlines() if x.strip()]
 
-    # Timing must be ACTIVE (log written) AND rc unchanged for every outcome
-    # class: clean (0), finding (1), undetermined (2).
-    @RED
-    def test_active_and_rc_unchanged_clean(self):
-        self._active_and_same_rc(0, 0)
+    def test_clean_run_appends_one_timing_line(self):
+        h, log = self.timed_harness()
+        proc = h.run()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        lines = self._lines(log)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertEqual(lines[0].get("exit"), 0)
+        phases = lines[0].get("phases")
+        self.assertTrue(phases, "phases must be non-empty: %r" % lines[0])
+        for p in phases:
+            self.assertIn("phase", p)
+            self.assertIn("secs", p)
+            self.assertEqual(p.get("rc"), 0, p)
 
-    @RED
-    def test_active_and_rc_unchanged_finding(self):
-        self._active_and_same_rc(1, 1)
+    def test_blocking_run_still_logs_with_nonzero_exit(self):
+        h, log = self.timed_harness(exits={EXPECTED_SCANNERS[0]: 1})
+        proc = h.run()
+        self.assertNotEqual(proc.returncode, 0, "control: a finding must block")
+        lines = self._lines(log)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertEqual(lines[0].get("exit"), proc.returncode)
+        rcs = {p.get("phase"): p.get("rc") for p in lines[0].get("phases", [])}
+        self.assertEqual(rcs.get("injectguard"), 1, rcs)
+        others = {k: v for k, v in rcs.items() if k != "injectguard"}
+        self.assertTrue(others, "other gates must be logged too: %r" % rcs)
+        self.assertTrue(all(v == 0 for v in others.values()), rcs)
 
-    @RED
-    def test_active_and_rc_unchanged_undetermined(self):
-        self._active_and_same_rc(2, 1)
-
-    @RED
-    def test_unwritable_log_warns_and_keeps_rc_clean(self):
-        self._unwritable(0)
-
-    @RED
-    def test_unwritable_log_warns_and_keeps_rc_blocking(self):
-        self._unwritable(1)
+    def test_stderr_has_one_summary_line(self):
+        h, _ = self.timed_harness()
+        proc = h.run()
+        found = _SUMMARY_RE.findall(proc.stderr)
+        self.assertEqual(len(found), 1, proc.stderr)
+        self.assertEqual(found[0][1], str(proc.returncode))
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__]))
+    unittest.main()

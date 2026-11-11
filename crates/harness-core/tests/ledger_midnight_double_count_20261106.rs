@@ -16,7 +16,6 @@
 use harness_core::ledger::Ledger;
 
 #[test]
-#[ignore = "backlog: midnight double count (RED repro)"]
 fn session_crossing_midnight_is_not_double_counted() {
     let mut l = Ledger::default();
     // 23:50 on day 1: the session has spent 10 so far.

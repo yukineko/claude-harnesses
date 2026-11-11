@@ -537,7 +537,10 @@ mod tests {
         let mut l = harness_core::ledger::Ledger::default();
         for (date, sessions) in days {
             for (i, usd) in sessions.iter().enumerate() {
-                l.record(&format!("s{i}"), date, *usd);
+                // Distinct sessions per day: `record` stores a session's
+                // increment over its earlier days (#1553), so reusing one id
+                // across days would record differences, not these values.
+                l.record(&format!("{date}-s{i}"), date, *usd);
             }
         }
         l

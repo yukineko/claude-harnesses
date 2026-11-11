@@ -123,7 +123,9 @@ fn evaluate_with_store(
         }
     };
 
-    // Update the daily ledger with this session's latest cost. Serialize the
+    // Update the daily ledger with this session's latest cumulative cost
+    // (`Ledger::record` stores today's increment over the session's earlier
+    // days, so a session crossing midnight is not double-counted). Serialize the
     // whole load → record → save against other concurrent sessions so a
     // simultaneous Stop can't clobber our entry (lost update).
     let _guard = crate::lock::LedgerLock::acquire(&cfg.state_dir);

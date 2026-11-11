@@ -11,11 +11,11 @@ Reuses HookHarness (stub-scanner throwaway repo) from test_precommit_hook.py;
 nothing touches the real repo, scanners or index.
 
 Controls (normal tests, pass today): a clean run exits 0; a blocking run still
-blocks with the same rc.  They prove the harness itself works, so an xfail
-failing means "feature missing", not "setup broken".
+blocks with the same rc.  They prove the harness itself works, so a feature
+test failing means "feature missing", not "setup broken".
 
-Strict xfails (RED: GitHub #1551) pin the feature.  They become XPASS(strict)
-=> failure the moment the feature lands, forcing the marker's removal.
+The remaining tests pin the feature (GitHub #1551). They were strict xfails
+while RED; the markers were removed when the feature landed.
 """
 
 from __future__ import annotations
@@ -35,7 +35,6 @@ from test_precommit_hook import (  # noqa: E402
     HookHarness,
 )
 
-RED = pytest.mark.xfail(strict=True, reason="RED: GitHub #1551")
 BLOCKER = "check-doc-duplication.py"
 LOG_NAME = "precommit-timing.jsonl"
 
@@ -75,7 +74,6 @@ class Controls(TimingCase):
 
 
 class TimingLog(TimingCase):
-    @RED
     def test_one_json_line_per_run_with_phases_and_rc(self):
         h = self.harness()
         self.assertEqual(h.run().returncode, 0)
@@ -90,7 +88,6 @@ class TimingLog(TimingCase):
             self.assertIn(LABELS[scanner], phases, "no phase for %s" % scanner)
             self.assertIsInstance(phases[LABELS[scanner]]["secs"], (int, float))
 
-    @RED
     def test_blocking_run_logs_its_nonzero_rc(self):
         h = self.harness(exits={BLOCKER: 1})
         proc = h.run()
@@ -100,13 +97,11 @@ class TimingLog(TimingCase):
 
 
 class TimingSummary(TimingCase):
-    @RED
     def test_stderr_summary_has_total_and_exit(self):
         proc = self.harness().run()
         m = re.search(r"pre-commit timing: .*total \S+ \(exit 0\)", proc.stderr)
         self.assertIsNotNone(m, "no `pre-commit timing: ... total ... (exit 0)` in:\n" + proc.stderr)
 
-    @RED
     def test_stderr_summary_reports_blocking_rc(self):
         proc = self.harness(exits={BLOCKER: 1}).run()
         self.assertIn("(exit %d)" % proc.returncode, proc.stderr)
@@ -133,23 +128,18 @@ class TimingNeverChangesVerdict(TimingCase):
 
     # Timing must be ACTIVE (log written) AND rc unchanged for every outcome
     # class: clean (0), finding (1), undetermined (2).
-    @RED
     def test_active_and_rc_unchanged_clean(self):
         self._active_and_same_rc(0, 0)
 
-    @RED
     def test_active_and_rc_unchanged_finding(self):
         self._active_and_same_rc(1, 1)
 
-    @RED
     def test_active_and_rc_unchanged_undetermined(self):
         self._active_and_same_rc(2, 1)
 
-    @RED
     def test_unwritable_log_warns_and_keeps_rc_clean(self):
         self._unwritable(0)
 
-    @RED
     def test_unwritable_log_warns_and_keeps_rc_blocking(self):
         self._unwritable(1)
 

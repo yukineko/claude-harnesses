@@ -55,6 +55,13 @@
   `Blocking waiting for file lock` は記録しない: hook の cargo 呼び出しはすべて `--quiet`
   （または stderr を捕捉して失敗時にしか出さない `check-compile-fail.py` 経由）で、cargo はその
   status 行を `--quiet` で抑止するため、拾うには利用者に見える出力を変える必要がある。
+- **pre-commit のゲート別計時（observability のみ、#1551）** — `.githooks/pre-commit` も同じ方式で
+  ゲート（scanner）ごとに 1 フェーズを測り、EXIT trap で `pre-commit timing: <label> <N>s, ...; total <N>s (exit <rc>)`
+  の 1 行を stderr に出し、`$(git rev-parse --git-common-dir)/precommit-timing.jsonl` に 1 回 1 行の JSON
+  （`start` / `phases`〈`phase` / `secs` / `rc`=そのゲート自身の終了コード、scanner 欠落時は `null`〉/ `total` / `exit`）を追記する。
+  時計は開始時に `date +%s` が使えればそれ、使えなければ shell の `$SECONDS`（bash/ksh/zsh）、どちらも無ければ
+  秒数は `?`（JSON では `null`）。ログを書けない時は 1 行の警告だけ。**判定を持たない**（下流消費者は
+  stderr と jsonl を読む人間だけ）: block/allow・exit code・ゲート順は変えない。
 - **pre-commit / pre-push の範囲（2026-11-08 ユーザー裁定）** — hook は他の worktree に干渉せず、
   検査はその時の変更範囲に限る。pre-commit の全リポジトリ走査型スキャナは `--staged` で stage された
   差分だけを見る（または差分が入力に触れたときだけ走る。`scripts/staged_scope.py`）。pre-push は

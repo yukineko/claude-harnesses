@@ -19,7 +19,7 @@ harness-core ships no `plugin.json`, no hooks, and no binary.
 - `estimate`: `estimate_transcript_cost` returns the same cost as `usage::aggregate` followed by `pricing::session_cost`; an unknown model makes the cost undetermined. `estimate_transcript_cost` is re-exported at the crate root.
 - `metrics`: Append-only JSONL metrics sink that writes one line per `emit`.
 - `pricing`: Model-to-USD cost table with cache read/write multipliers; an unrecognized model with usage is undetermined, not $0.
-- `ledger`: Daily spend ledger: a session's cost is summed into the day total and re-recording the same session overwrites it; a corrupt file is an error and is preserved. The default state dir is `~/.budgetguard/state`, holding `ledger.json`.
+- `ledger`: Daily spend ledger: a session's cost is summed into the day total and re-recording the same session overwrites it; each day holds only that day's increment for a session (its cumulative cost minus its earlier days' entries), so a session crossing midnight is not double-counted, and `session_cost` sums a session's entries across days; a corrupt file is an error and is preserved. The default state dir is `~/.budgetguard/state`, holding `ledger.json`.
 - `daily`: Once-per-calendar-day guard: runs on first use, not again after `mark_done`, and again on a new date.
 - `inject`: Layered config for context-injection hooks: project overrides global overrides default, and a character budget caps what is admitted.
 - `inject_metrics`: UserPromptSubmit injection-size metrics; its `turn_key` is stable and changes with the session or the prompt.

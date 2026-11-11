@@ -1180,6 +1180,7 @@ cannot tell whether it is a protected gate/config file or a system directory"
     let mut walks = CwdWalks::new(cmd, &views);
     // `for`/`select` variables bound so far on this line; see `loop_variants`.
     let mut bindings: Vec<LoopBinding> = Vec::new();
+    let line_cwds = segment_cwd_states(cmd);
     for (seg_idx, seg) in split_segments(cmd).into_iter().enumerate() {
         let walk = walks.walk_for(seg_idx);
         let cwd = walk.cwd.clone();
@@ -1258,6 +1259,14 @@ through it, and refuses to guess"
             if let Some(deny) = acc.record(extra_decision) {
                 return deny;
             }
+        }
+        // Target operands another segment relinks, judged where they land
+        // (relink.rs); first, so a landing's Deny names that landing.
+        let landed = relink::operand_landing_verdict(
+            command, cmd, seg_idx, &line_cwds, depth, ctx, &seg_ctx,
+        );
+        if let Some(deny) = acc.record(landed) {
+            return deny;
         }
         if let Some(deny) = acc.record(analyze_segment(
             &effective_seg,

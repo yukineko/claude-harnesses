@@ -455,7 +455,18 @@ forge・condukt のスケジューラが再利用）。
   `ditto`/`symlink`/`rename` 等）と、target の path 成分または非 literal な語を両方含む — は Ask（Allow しない）。
   `/dev/null`・`/dev/stdout`・`/dev/stderr` は対象外。**RESIDUAL**: relink 語も target も文面に現れない
   command による relink（archive 展開・build script・tracked symlink の `git checkout`）は model しない。
-  redirect 以外の write verb（`cp` の destination 等）にはこの model を適用していない。
+- **同じ行で relink された command operand も実際の着地点で判定する（tests/relink_shapes_20261111.rs の
+  r4/r5/r8）** — `detect_bash` の per-segment loop で、segment をそのまま判定する前に
+  `relink::operand_landing_verdict` が上と同じ relink model（同じ segment 範囲・同じ判定不能条件）を path で
+  判定される operand に適用する: `cp`/`mv`/`install`/`ln` の destination（`-t`/`--target-directory=` 含む）、
+  `mv` の source、`rm`/`unlink`/`rmdir`・`tee`/`touch`/`truncate`/`shred`/`chmod`/`chown`/`chgrp` の operand、
+  `sed -i` の file、`sort -o` の出力、`uniq` の出力 operand。最後の成分を辿らない operand（`rm`/`unlink`/`rmdir`・
+  `mv` の source・`-T` か `ln -n`/`-h` の destination。末尾 `/` は除く）は親 directory だけを着地点へ解決し
+  名前を付け足す（`ln -s /etc d && rm d` は link を消すだけなので不変）。それ以外は path 全体を解決する。
+  着地点が hook 時点の物理 path と異なる operand をその物理着地点へ書き換えた segment を、全 rule で**追加で**
+  判定する（書いたままの判定は残るので verdict は厳しくなる方向にしか動かない）。`ln -sfn /etc src/d &&
+  rm -rf src/d/hosts`・`… && cp src/a.rs src/d/hosts`・`… && tee d/hosts` は着地点（macOS では
+  `/private/etc/hosts`）の system directory Deny。判定不能は Ask。relink 語を含まない行では何もしない。
 - **非 shell・非 Python のコードファイルへ書く quoted here-document の本文は shell 行として読まない
   （user ruling 2026-11-08、issue #1602、tests/backlog_cd_redirect_fp_20261107.rs）** — `detect_bash` の
   手順 0c。`heredoc::non_shell_code_file_here_document` が、`.py` の手順 0b と同じ形（前行は

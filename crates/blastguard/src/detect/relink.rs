@@ -1,4 +1,9 @@
-//! Redirect targets RELINKED by another command of the same line.
+//! Redirect targets — and the target operands of path-judged commands —
+//! RELINKED by another command of the same line.
+//!
+//! [`operand_landing_verdict`] applies the same model to command operands
+//! (`cp`/`mv`/`install`/`ln` destinations, `rm` targets, `tee`, `touch`, …):
+//! `ln -sfn /etc d && rm -rf d/hosts` is judged as `rm -rf /private/etc/hosts`.
 //!
 //! Every redirect axis observes the target's placement (symlinks included)
 //! when the hook runs. `ln -sf /etc/hosts a.rs && echo x > a.rs` then judged
@@ -29,8 +34,8 @@
 //! archive extraction, a build script, `git checkout` of a tracked symlink).
 
 use super::{
-    compound_views, first_shell_word, has_glob_meta, has_unresolvable_expansion, is_assignment,
-    normalized_command, positional_operands, protected_path_block_at,
+    analyze_segment, compound_views, first_shell_word, has_glob_meta, has_unresolvable_expansion,
+    is_assignment, normalized_command, positional_operands, protected_path_block_at,
     split_segments_with_separators, Ctx, CwdState, SegmentSep,
 };
 use crate::exclude;
@@ -71,7 +76,8 @@ pub(super) fn redirect_landing(
     } else {
         "redirect"
     };
-    match relinked(line, seg_idx, seg_cwds, &target, ctx.raw_base.as_deref()) {
+    let base = ctx.raw_base.as_deref();
+    match relinked(line, seg_idx, seg_cwds, &target, &CwdState::Root, base) {
         Ok(None) => Step::Judge(target, physical),
         Ok(Some(real)) => match protected_path_block_at(ctx, action, &real, &real) {
             Some(d) => Step::Decided(d),
@@ -82,6 +88,203 @@ pub(super) fn redirect_landing(
 lands on"
         ))),
     }
+}
+
+/// How a path-judged command reaches one of its operands.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    /// The file the path names: every symlink of it is followed (a `cp`
+    /// destination, a `tee`/`touch`/`truncate`/`chmod` target).
+    Follows,
+    /// The directory entry itself: a symlink in the LAST component is the
+    /// thing removed or renamed, not followed (`rm`, a `mv` source, `ln -n`).
+    Entry,
+}
+
+/// Operands of a command blastguard judges by target path, as `(index into
+/// rest, value prefix, reach)`; empty for every other command (reads included).
+fn path_operands(head: &str, rest: &[&str]) -> Vec<(usize, &'static str, Reach)> {
+    let index = |w: &str| rest.iter().position(|r| std::ptr::eq(*r, w));
+    let all = |reach| {
+        positional_operands(rest, &[])
+            .into_iter()
+            .filter_map(|w| index(w).map(|j| (j, "", reach)))
+            .collect::<Vec<_>>()
+    };
+    let short = |c: char| {
+        rest.iter()
+            .take_while(|w| **w != "--")
+            .any(|w| !w.starts_with("--") && w.starts_with('-') && w.contains(c))
+    };
+    let long = |name: &str| rest.iter().take_while(|w| **w != "--").any(|w| *w == name);
+    // `sort`'s output file (`-o F`, `-oF`, `--output=F`).
+    let sort_output = || {
+        rest.iter().enumerate().find_map(|(j, w)| {
+            if *w == "-o" || *w == "--output" {
+                (j + 1 < rest.len()).then_some((j + 1, ""))
+            } else if w.len() > 2 && w.starts_with("-o") {
+                Some((j, "-o"))
+            } else {
+                w.starts_with("--output=").then_some((j, "--output="))
+            }
+        })
+    };
+    match head {
+        "rm" | "unlink" | "rmdir" => all(Reach::Entry),
+        "tee" | "touch" | "truncate" | "shred" | "chmod" | "chown" | "chgrp" => all(Reach::Follows),
+        // `sed -i`: the files after the script (the first operand, unless the
+        // script comes from `-e`/`-f`).
+        "sed" | "gsed" if short('i') || rest.iter().any(|w| w.starts_with("--in-place")) => {
+            let ops = positional_operands(rest, &["-e", "-f", "--expression", "--file"]);
+            let script_given = short('e') || short('f') || long("--expression") || long("--file");
+            ops.into_iter()
+                .skip(usize::from(!script_given))
+                .filter_map(|w| index(w).map(|j| (j, "", Reach::Follows)))
+                .collect()
+        }
+        "sort" => sort_output()
+            .map(|(j, p)| (j, p, Reach::Follows))
+            .into_iter()
+            .collect(),
+        // `uniq IN OUT`: the second operand is written.
+        "uniq" => positional_operands(rest, &["-f", "-s", "-w"])
+            .get(1)
+            .and_then(|w| index(w))
+            .map(|j| (j, "", Reach::Follows))
+            .into_iter()
+            .collect(),
+        "cp" | "gcp" | "mv" | "gmv" | "install" | "ginstall" | "ln" | "gln" => {
+            let is_ln = matches!(head, "ln" | "gln");
+            let dest_reach = if short('T')
+                || long("--no-target-directory")
+                || (is_ln && (short('n') || short('h') || long("--no-dereference")))
+            {
+                Reach::Entry
+            } else {
+                Reach::Follows
+            };
+            let mut sources: Vec<usize> =
+                positional_operands(rest, super::fileops::COPY_VALUE_FLAGS)
+                    .into_iter()
+                    .filter_map(index)
+                    .collect();
+            let target_dir = rest.iter().enumerate().find_map(|(j, w)| match *w {
+                "-t" | "--target-directory" => Some((j + 1, "")),
+                _ if w.starts_with("--target-directory=") => Some((j, "--target-directory=")),
+                _ => None,
+            });
+            let dest = match target_dir {
+                Some((j, prefix)) => (j < rest.len()).then_some((j, prefix)),
+                None => sources.pop().map(|j| (j, "")),
+            };
+            // A source is read (`cp`, `install`) or is link text (`ln`); only
+            // a `mv` source is an entry the command changes.
+            if !matches!(head, "mv" | "gmv") {
+                sources.clear();
+            }
+            let mut ops: Vec<(usize, &'static str, Reach)> =
+                sources.into_iter().map(|j| (j, "", Reach::Entry)).collect();
+            ops.extend(dest.map(|(j, prefix)| (j, prefix, dest_reach)));
+            ops
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The verdict for segment `seg_idx` of `line` (its simple command
+/// `command`) on the paths its target operands REALLY reach when another
+/// command of the line relinks them or a parent of them — the mirror of
+/// [`redirect_landing`] for command operands (`cp`/`mv`/`install`/`ln`
+/// destinations, `rm`/`unlink`/`rmdir` targets, `tee`, `touch`, `truncate`,
+/// `shred`, `chmod`, `chown`, `sed`, `sort`, `uniq`).
+///
+/// Each relinked operand is replaced by its landing and the segment is judged
+/// once more with every rule (`seg_ctx`), IN ADDITION to the judgement of the
+/// text as written — so this can only add verdicts. An [`Reach::Entry`]
+/// operand is resolved through its PARENT only (`rm d` after `ln -s /etc d`
+/// removes the link). An operand whose landing cannot be determined is an
+/// `Ask` (CLAUDE.md §3).
+pub(super) fn operand_landing_verdict(
+    command: &str,
+    line: &str,
+    seg_idx: usize,
+    seg_cwds: &[CwdState],
+    depth: usize,
+    ctx: &Ctx<'_>,
+    seg_ctx: &Ctx<'_>,
+) -> Decision {
+    // Fast path: `parse` finds no relinking command on a line naming no
+    // relinking verb.
+    if !plain_words(line).into_iter().any(is_relink_word) {
+        return Decision::Allow;
+    }
+    let words = plain_words(command);
+    let start = command_start(&words);
+    let Some(head) = words.get(start).map(|w| normalized_command(w)) else {
+        return Decision::Allow;
+    };
+    let rest = &words[start + 1..];
+    let base = ctx.raw_base.as_deref();
+    let cwd = seg_cwds.get(seg_idx).cloned().unwrap_or(CwdState::Unknown);
+    let mut out: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+    let mut changed = false;
+    for (j, prefix, reach) in path_operands(&head, rest) {
+        let word = unquote(&rest[j][prefix.len()..]);
+        let ask = |why: &str| {
+            Decision::ask(format!(
+                "`{head}` operand `{word}`: {why}, so blastguard cannot tell which file the \
+command really reaches"
+            ))
+        };
+        let real = match operand_landing(&word, reach, line, seg_idx, seg_cwds, &cwd, base) {
+            Ok(None) => continue,
+            Ok(Some(real)) if !real.contains(char::is_whitespace) => real,
+            Ok(Some(_)) => return ask("its landing cannot be re-spelled as one word"),
+            Err(why) => return ask(&why),
+        };
+        out[start + 1 + j] = format!("{prefix}{real}");
+        changed = true;
+    }
+    if changed {
+        analyze_segment(&out.join(" "), depth, line, seg_idx, seg_ctx)
+    } else {
+        Decision::Allow
+    }
+}
+
+/// The physical path `word` (an operand of segment `seg_idx`, run in `cwd`)
+/// really reaches, when another command of `line` relinks it or a parent of
+/// it and that differs from where it resolves now; see [`relinked`].
+fn operand_landing(
+    word: &str,
+    reach: Reach,
+    line: &str,
+    seg_idx: usize,
+    seg_cwds: &[CwdState],
+    cwd: &CwdState,
+    base: Option<&str>,
+) -> Result<Option<String>, String> {
+    let at =
+        |path: &str, from: &CwdState| relinked(line, Some(seg_idx), seg_cwds, path, from, base);
+    let Some(t) = absolute(word, cwd, base) else {
+        // Unplaceable: harmless unless some command of the line relinks.
+        return at(word, cwd);
+    };
+    // A trailing `/` makes even `rm` follow a symlink in the last component.
+    let (parent, name) = match t.rsplit_once('/') {
+        Some((p, n)) if reach == Reach::Entry && !word.ends_with('/') && !n.is_empty() => {
+            (if p.is_empty() { "/" } else { p }, n)
+        }
+        _ => {
+            return Ok(
+                at(&t, &CwdState::Root)?.filter(|real| physical(&t).ok().as_ref() != Some(real))
+            )
+        }
+    };
+    let join = |p: String| format!("{}/{name}", p.trim_end_matches('/'));
+    Ok(at(parent, &CwdState::Root)?
+        .map(join)
+        .filter(|real| physical(parent).ok().map(join).as_ref() != Some(real)))
 }
 
 /// How a modelled command makes its destination name another file.
@@ -121,14 +324,15 @@ enum Parsed {
     Unmodelled,
 }
 
-/// `Ok(None)` when no command of `line` relinks `target`; `Ok(Some(real))`
-/// with the physical landing when exactly one modelled command does;
-/// `Err(why)` when that cannot be determined.
+/// `Ok(None)` when no command of `line` relinks `target` (placed from
+/// `target_cwd`); `Ok(Some(real))` with the physical landing when exactly one
+/// modelled command does; `Err(why)` when that cannot be determined.
 fn relinked(
     line: &str,
     seg_idx: Option<usize>,
     seg_cwds: &[CwdState],
     target: &str,
+    target_cwd: &CwdState,
     base: Option<&str>,
 ) -> Result<Option<String>, String> {
     let segs = split_segments_with_separators(line);
@@ -164,7 +368,7 @@ fn relinked(
     if ops.is_empty() && unmodelled.is_empty() {
         return Ok(None);
     }
-    let t = absolute(target, &CwdState::Root, base).ok_or_else(|| {
+    let t = absolute(target, target_cwd, base).ok_or_else(|| {
         "a command that may relink it runs first and the path cannot be placed".to_string()
     })?;
     if let Some(cmd) = unmodelled.iter().find(|c| mentions(c, &t, base)) {
@@ -225,29 +429,8 @@ fn copies_plainly(spelling: &str, real: &str) -> bool {
 /// exec wrappers are skipped; any other command that names a relinking verb
 /// is [`Parsed::Unmodelled`].
 fn parse(command: &str, cwd: CwdState) -> Parsed {
-    let words: Vec<&str> = command
-        .split_whitespace()
-        .map(|w| w.trim_start_matches('(').trim_end_matches(')'))
-        .collect();
-    let mut i = 0;
-    while let Some(w) = words.get(i) {
-        if is_assignment(w) {
-            i += 1;
-        } else if matches!(
-            normalized_command(w).as_str(),
-            "sudo" | "doas" | "env" | "command" | "nohup" | "time" | "nice" | "exec" | "builtin"
-        ) {
-            i += 1;
-            while words
-                .get(i)
-                .is_some_and(|w| w.starts_with('-') || is_assignment(w))
-            {
-                i += 1;
-            }
-        } else {
-            break;
-        }
-    }
+    let words = plain_words(command);
+    let i = command_start(&words);
     let Some(head) = words.get(i).map(|w| normalized_command(w)) else {
         return Parsed::Inert;
     };
@@ -322,6 +505,39 @@ fn parse(command: &str, cwd: CwdState) -> Parsed {
             || long(&["--no-dereference", "--no-target-directory"]),
         cwd,
     })
+}
+
+/// The whitespace words of `command`, subshell parentheses stripped.
+fn plain_words(command: &str) -> Vec<&str> {
+    command
+        .split_whitespace()
+        .map(|w| w.trim_start_matches('(').trim_end_matches(')'))
+        .collect()
+}
+
+/// The index of the command word: leading assignments and the plain exec
+/// wrappers (with their options) skipped.
+fn command_start(words: &[&str]) -> usize {
+    let mut i = 0;
+    while let Some(w) = words.get(i) {
+        if is_assignment(w) {
+            i += 1;
+        } else if matches!(
+            normalized_command(w).as_str(),
+            "sudo" | "doas" | "env" | "command" | "nohup" | "time" | "nice" | "exec" | "builtin"
+        ) {
+            i += 1;
+            while words
+                .get(i)
+                .is_some_and(|w| w.starts_with('-') || is_assignment(w))
+            {
+                i += 1;
+            }
+        } else {
+            break;
+        }
+    }
+    i
 }
 
 /// A word naming a command (or a library call) able to create or rename a

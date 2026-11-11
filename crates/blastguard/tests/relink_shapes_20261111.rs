@@ -235,13 +235,11 @@ fn r3_hard_link_etc_hosts_then_redirect() {
 
 /// Known-open hole: a `cp` destination through a relinked directory.
 #[test]
-#[ignore = "RED: allow, empty stdout; cp destination src/d/hosts not judged through the relinked src/d -> /etc (2026-11-11)"]
 fn r4_ln_sfn_dir_to_etc_then_cp_destination_through_it() {
     expect_deny("r4", "ln -sfn /etc src/d && cp src/a.rs src/d/hosts");
 }
 
 #[test]
-#[ignore = "RED: ask 'recursive rm (-r) is confined to <linked worktree> ... every target (src/d/hosts) resolved to a real path strictly inside it'; resolved at hook time, before ln -sfn relinks src/d -> /etc (2026-11-11)"]
 fn r5_ln_sfn_dir_to_etc_then_rm_rf_through_it() {
     expect_deny("r5", "ln -sfn /etc src/d && rm -rf src/d/hosts");
 }

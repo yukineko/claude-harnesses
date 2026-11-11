@@ -45,7 +45,8 @@ How each value is obtained
 * Gates are the `run <scanner> <label> <args>` lines of the CLONE's
   .githooks/pre-commit (so a newly wired gate appears automatically, with
   fires "undetermined" until it gets a fixture), plus `test-weakening` (run by
-  .githooks/commit-msg) and the RETIRED gates listed below.
+  .githooks/commit-msg).  Only gates the hooks run NOW are measured (user
+  ruling 2026-11-11); a gate removed from the hooks drops out of the report.
 * Baseline: every scanner is run in the clean linked worktree with nothing
   staged, exactly as the hook runs it (a missing scanner file blocks, as the
   hook's `run` does).  A gate whose baseline already blocks cannot have a
@@ -102,16 +103,6 @@ from typing import Callable
 # per-commit regardless of the measurement.  "e.g. injectguard, secret-guard";
 # extend ONLY by human declaration, never by inference from the data.
 SECURITY_RELEVANT = frozenset({"injectguard", "secret-guard"})
-
-# Gates the hooks no longer run, kept in the report so their removal is
-# measured (fires=false) rather than silently dropped.
-RETIRED = {
-    "main-tree-guard": (
-        "`condukt guard main-tree` was removed from .githooks/pre-commit in "
-        "432f3a40 (user ruling 2026-11-08: 'condukt guard main-treeは廃止'); "
-        "no hook runs it"
-    ),
-}
 
 ZERO = "0" * 40
 DEFAULT_LAYER_TIMEOUT = 1800
@@ -371,7 +362,6 @@ FIXTURES: dict[str, Fixture] = {
     "projkey-classification": Fixture("first count in scripts/projkey-store-classification.toml raised by one", _fx_projkey),
     "file-growth": Fixture("new scripts/*.py of 2002 lines (cap 2000)", _fx_file_growth),
     "test-weakening": Fixture("first self.assert* line of scripts/test_check_worktree_isolation.py replaced by pass", _fx_test_weakening),
-    "main-tree-guard": Fixture("non-merge commit of a neutral docs file from the primary checkout", _fx_location, where="primary"),
 }
 
 
@@ -384,7 +374,7 @@ class Gate:
     label: str
     scanner: str
     args: list[str]
-    layer: str  # "pre-commit" | "commit-msg" | "retired"
+    layer: str  # "pre-commit" | "commit-msg"
 
 
 def parse_hook_gates(tree: Path) -> list[Gate]:
@@ -557,9 +547,6 @@ class Probe:
     def gate_list(self) -> list[Gate]:
         gates = parse_hook_gates(self.wt)
         gates.append(Gate("test-weakening", "check-test-weakening.py", [], "commit-msg"))
-        for name in RETIRED:
-            if name not in {g.label for g in gates}:
-                gates.append(Gate(name, "", [], "retired"))
         return gates
 
     def run(self) -> dict:
@@ -573,7 +560,7 @@ class Probe:
             selected = [g for g in all_gates if g.label in self.gates_wanted]
         else:
             selected = all_gates
-        layers = [g for g in all_gates if g.layer != "retired"]
+        layers = all_gates
 
         self.reset(self.wt)
         log("baseline: every scanner on the clean linked worktree")
@@ -595,8 +582,6 @@ class Probe:
             "security_relevant": g.label in SECURITY_RELEVANT,
             "fixture": fx.description if fx else "(none defined)",
         }
-        if g.layer == "retired":
-            entry["retired"] = RETIRED[g.label]
         log(f"probing {g.label}")
 
         def undetermined(reason: str) -> dict:
@@ -633,21 +618,18 @@ class Probe:
             elif rc != 0:
                 caught.append(name)
 
-        if g.layer == "retired":
-            fires: object = False
-            entry["fires_detail"] = "no hook runs this gate"
+        fires: object
+        rc, base_rc, out = own
+        if base_rc != 0:
+            fires = "undetermined"
+            entry["reason"] = (f"the gate already blocks with nothing staged (rc={base_rc}), so a block "
+                               f"cannot be attributed to the fixture: {baseline[g.label][1][-300:]}")
+        elif rc is None:
+            fires = "undetermined"
+            entry["reason"] = f"the gate did not finish on the fixture: {out}"
         else:
-            rc, base_rc, out = own
-            if base_rc != 0:
-                fires = "undetermined"
-                entry["reason"] = (f"the gate already blocks with nothing staged (rc={base_rc}), so a block "
-                                   f"cannot be attributed to the fixture: {baseline[g.label][1][-300:]}")
-            elif rc is None:
-                fires = "undetermined"
-                entry["reason"] = f"the gate did not finish on the fixture: {out}"
-            else:
-                fires = rc != 0
-                entry["fires_detail"] = f"rc={rc}"
+            fires = rc != 0
+            entry["fires_detail"] = f"rc={rc}"
 
         crates = touched_crates(paths)
         if self.commit_layers_only:

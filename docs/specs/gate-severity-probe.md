@@ -13,15 +13,16 @@ CLI: `python3 scripts/gate-severity-probe.py --json [--repo PATH] [--gate NAME].
 
 - `--repo PATH` — 対象 (caller) repo。省略時は cwd。読むだけ（`rev-parse`）。
 - `--gate NAME` — 繰り返し可。指定した gate だけ測る。未知の名前は exit 2（空結果や clean に見せない）。
-  gate 名は `.githooks/pre-commit` が表示するラベル (`launcher-exec-bit` 等)、`test-weakening`（commit-msg）、
-  退役 gate（`main-tree-guard`）。
+  gate 名は `.githooks/pre-commit` が表示するラベル (`launcher-exec-bit` 等) と `test-weakening`（commit-msg）。
 - `--commit-layers-only` — pre-push と cargo-test を走らせない。走らせなかった層は `undetermined_layers` に
   入り、他層が止めない違反の `leak` は `"undetermined"`（benign な値に畳まない）。
 - `--layer-timeout` — pre-push / cargo-test 1 回の上限秒（既定 1800）。timeout は undetermined。
 - 成功時は exit 0 で stdout に JSON のみ。probe 自体が走れない（未知 gate・git repo でない・clone 失敗）ときは
   exit 2 で JSON を出さない。
 
-gate 一覧は clone 側 `.githooks/pre-commit` の `run <scanner> <label> <args>` 行 + `test-weakening` + 退役 gate。
+gate 一覧は clone 側 `.githooks/pre-commit` の `run <scanner> <label> <args>` 行 + `test-weakening`。
+今 hook が走らせている gate だけを測る（ユーザー裁定 2026-11-11。hook から外した gate は一覧から消える。
+例: `main-tree-guard` は `432f3a40` で撤去済みなので測らない）。
 fixture の無い新 gate は `fires: "undetermined"`（理由付き）で現れる。
 
 ## 出力
@@ -37,7 +38,7 @@ fixture の無い新 gate は `fires: "undetermined"`（理由付き）で現れ
 | `leak` | `"local-commit"` / `"push"` / `"rollout"` / `"undetermined"` / `null` | `caught_by` が空のとき違反が到達する最遠点。他層が止めるなら `null` |
 | `security_relevant` | bool | 人間宣言の一覧 `SECURITY_RELEVANT`（2026-11-06: injectguard, secret-guard）に入るか。推論しない |
 | `undetermined_layers` | 文字列のリスト | control で既に止まる・timeout・起動不能・未実行の層。`caught_by` には入れない |
-| `layer`, `fixture`, `fires_detail`, `reason`, `layer_notes`, `retired`, `secs` | — | 補助情報 |
+| `layer`, `fixture`, `fires_detail`, `reason`, `layer_notes`, `secs` | — | 補助情報 |
 
 `leak` の決め方（`caught_by` が空のとき）: `fires` か層のどれかが undetermined ⇒ `"undetermined"`。それ以外で
 fixture が plugin crate か harness-core の配下（`rollout-plugins.sh` が配布する）⇒ `"rollout"`、他は `"push"`。
@@ -47,8 +48,7 @@ probe は常に pre-push まで走らせるので `"local-commit"` は現状出�
 
 1. `caught_by` が非空 ⇒ `leak` は `null`。`caught_by` が空 ⇒ `leak` は名前付きの水準（`null` ではない）。
    `leak` はその gate を外したときの到達点なので `fires` に依存しない。
-   （注: `scripts/test_gate_severity_probe.py::test_entry_schema` は `fires == true` でも `leak` を `null` と要求しており、
-   この不変条件および `test_gate_severity_probe_b.py` と矛盾する。未解決 — 人間の裁定待ち。）
+   （ユーザー裁定 2026-11-11 で確定。`test_gate_severity_probe.py` も bf0d8359 でこれに合わせた。）
 2. **undetermined は畳まない。** 判定不能 ⇒ `fires == "undetermined"`、他層も止めなければ `leak == "undetermined"`
    （他層が実測で止めたなら、漏れないことは観測済みなので 1. により `null`）。`false` や `null` に潰さない（CLAUDE.md §3）。
    判定不能の例: 違反を注入しない baseline 実行ですでにその gate がブロックする
@@ -56,9 +56,6 @@ probe は常に pre-push まで走らせるので `"local-commit"` は現状出�
 3. gate ごとに代表 fixture を 1 つ持つ。`launcher-exec-bit` は `crates/<c>/bin/<name>` を index 上 100644 にする。
    plugin crate を触る fixture は version 系 gate 以外で lockstep bump を同梱する（bump-on-change が
    「bump すれば通る」違反を見かけ上捕まえるのを防ぐ）。
-4. 退役 gate（hook がもう走らせない gate。`main-tree-guard` は `432f3a40` で撤去）は `fires: false` と
-   `retired` を付けて残し、その違反を今止める層を `caught_by` に測る。
-
 各層の測り方: pre-commit gate は scanner を hook と同じ引数で 1 本ずつ走らせる（1 gate を外した hook と等価）。
 `commit-msg` は `check-test-weakening.py --pending-msg`。`pre-push` は fixture を commit して clone の
 `.githooks/pre-push` をその 1 commit に走らせ、同じ crate dir を触る neutral commit を control にする。

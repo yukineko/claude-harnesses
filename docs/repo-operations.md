@@ -171,8 +171,7 @@ python3 scripts/gate-severity-probe.py --json --cargo-target-dir ~/.cache/gsp-ta
 - **fixture の作り方**: plugin crate を触る fixture は lockstep bump も同時に入れる（version 系 gate を除く）。
   そうしないと bump-on-change が全部を「捕まえて」しまい、bump すれば通る違反を見誤る。
   fixture の anchor が消えた（ファイル改名等）ときは skip ではなく `fires: "undetermined"` と理由を出す。
-- **退役 gate**: hook から外した gate（現在 `main-tree-guard`、`432f3a40`）は `retired` 付きで
-  `fires: false` として残し、その違反を今どの層が止めるかを測る。
+- **対象**: 今 hook が走らせている gate だけ（ユーザー裁定 2026-11-11）。hook から外した gate は一覧から消える。
 - **所要時間**（実測。2026-11-11、rev `cf954b43`、開発機 Mac 1 台、cargo target は空から）:
   `--commit-layers-only` の全 gate 82 秒、全層の全 gate 546 秒（約 9 分。最長は crossx-constants の
   235 秒＝backlog の cargo test）。`--gate launcher-exec-bit` 単体の全層は約 2 分。

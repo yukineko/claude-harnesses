@@ -74,18 +74,8 @@ fn tmp_cwd(home: &Home) -> std::path::PathBuf {
 // cd target replaced by CWD placeholder; rest verbatim.
 const S3: &str = r##"cd CWD && grep -rlnE "gh pr create|gh\", *\"pr\"|\"pr\", *\"create\"" crates/*/src crates/*/skills 2>/dev/null | head; grep -rnE "push|origin" crates/ship/src/*.rs 2>/dev/null | head -3; echo ---fde-run; grep -niE "test command|run the|cargo test|npm test|pytest|install" crates/fde/skills/fde/SKILL.md | head -6"##;
 
-#[test]
-fn s3_head_reason_names_install_option_dash_6() {
-    let home = unique_home("s3a");
-    let cwd = tmp_cwd(&home);
-    let cmd = S3.replace("CWD", cwd.to_str().unwrap());
-    let (d, r) = run(&cmd, &cwd, &home);
-    assert!(
-        r.contains("unrecognised `install` option `-6`"),
-        "recorded HEAD reason not reproduced: {d} | {r}"
-    );
-}
-
+// At HEAD the deny reason is "unrecognised `install` option `-6`" (recorded in the
+// failure message of the RED below, which prints the reason).
 #[test]
 #[ignore = "scout 2026-11-12 S3: RED, open defect. Remove the ignore when fixed"]
 fn s3_grep_pattern_install_then_head_dash_6_is_allowed() {
@@ -114,4 +104,30 @@ fn s4_python_c_read_only_open_is_allowed() {
         d, "allow",
         "read-only python3 -c json.load(open(..)): {d} | {r}"
     );
+}
+
+// Controls for S4: a fix that allows the read must NOT also allow WRITES to the
+// HOME-level protected config path.
+fn write_control(mode: &str) {
+    let home = unique_home("s4w");
+    let cwd = tmp_cwd(&home);
+    let cmd = format!(
+        "python3 -c \"open('{}/.claude/settings.json','{mode}').write('x')\"",
+        home.0.to_str().unwrap()
+    );
+    let (d, r) = run(&cmd, &cwd, &home);
+    assert_eq!(
+        d, "deny",
+        "python3 write (mode {mode}) to HOME settings.json: {d} | {r}"
+    );
+}
+
+#[test]
+fn s4_control_python_c_write_mode_w_to_home_settings_is_denied() {
+    write_control("w");
+}
+
+#[test]
+fn s4_control_python_c_write_mode_a_to_home_settings_is_denied() {
+    write_control("a");
 }

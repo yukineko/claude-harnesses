@@ -14,11 +14,16 @@ measure for EACH pre-commit gate, by injecting one representative violation:
 Contract pinned here for `python3 scripts/gate-severity-probe.py --json`:
   * exit 0, stdout one JSON object {"rev": <sha>, "gates": [...]}.
   * `gates` covers EVERY gate label the hook runs: each `run <scanner> <label>`
-    line in .githooks/pre-commit, plus main-tree-guard and test-weakening.
+    line in .githooks/pre-commit, plus test-weakening (run from commit-msg).
     A gate missing from the report is an unmeasured gate, not a safe one.
+    User ruling 2026-11-11 ("Drop it from the test"): main-tree-guard is not
+    expected — `condukt guard main-tree` was removed from pre-commit in 432f3a40.
   * each entry: gate (str), fixture (non-empty str: what was injected),
     fires (true | false | "undetermined"), caught_by (list[str]),
-    leak (null when fires or caught_by non-empty, else one of the four values).
+    leak: measured with ONLY that gate disabled, independent of `fires`
+    (user ruling 2026-11-11, "Follow B and the spec": leak follows invariant
+    (3) above). caught_by empty => leak is one of the four values, never null;
+    caught_by non-empty => leak is null.
   * anti-vacuity control: gates observed blocking real commits in
     2026-10-08..11-06 transcripts (bump-on-change 60, file-growth 12,
     fail-open-diff 14, secret-guard 5) must report fires == true. A probe that
@@ -46,7 +51,9 @@ _KNOWN_FIRING = ("bump-on-change", "file-growth", "fail-open-diff", "secret-guar
 
 def _expected_gates():
     labels = re.findall(r"^run check-[\w.-]+\.py\s+([\w-]+)", _HOOK.read_text(), re.M)
-    return set(labels) | {"main-tree-guard", "test-weakening"}
+    # main-tree-guard dropped per user ruling 2026-11-11 (retired from
+    # pre-commit in 432f3a40); no retired-gate expectation replaces it.
+    return set(labels) | {"test-weakening"}
 
 
 def _status():
@@ -80,9 +87,13 @@ class GateSeverityProbe(unittest.TestCase):
             self.assertTrue(g.get("fixture"), g)
             self.assertIn(g.get("fires"), (True, False, "undetermined"), g)
             self.assertIsInstance(g.get("caught_by"), list, g)
-            if g["fires"] is True or g["caught_by"]:
+            # User ruling 2026-11-11 ("Follow B and the spec"): leak is
+            # measured with only this gate disabled, so it depends on
+            # caught_by alone — a firing gate with no backstop still leaks.
+            if g["caught_by"]:
                 self.assertIsNone(g.get("leak"), g)
             else:
+                self.assertIsNotNone(g.get("leak"), g)
                 self.assertIn(g.get("leak"), _LEAKS, g)
 
     def test_known_firing_gates_fire(self):

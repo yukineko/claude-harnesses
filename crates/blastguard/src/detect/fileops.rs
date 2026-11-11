@@ -410,7 +410,7 @@ pub(super) fn positional_operands<'a>(rest: &[&'a str], value_flags: &[&str]) ->
 /// only options that genuinely consume the next token (see
 /// [`positional_operands`]). `-Z`/`--context` are omitted because their value is
 /// optional and `=`-attached — listing them would eat an operand.
-const COPY_VALUE_FLAGS: &[&str] = &[
+pub(super) const COPY_VALUE_FLAGS: &[&str] = &[
     "-t",
     "--target-directory",
     "-S",

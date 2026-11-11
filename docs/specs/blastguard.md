@@ -437,6 +437,25 @@ forge・condukt のスケジューラが再利用）。
   `` ` ``・`(`・`)`・`{`・`}`・`<`・`\`・`&`・改行が無く、write segment の後が `|`/`&` でないときも、
   target が worktree storage root 下の linked worktree checkout 内（symlink 無し）なら session の tree と
   みなす（`detect/rm.rs` の `write_prefix_cannot_relink`）。それ以外は従来どおり拒否。
+- **同じ行で relink された redirect target は実際の着地点で判定する（tests/scope_redirect_relaxation_boundaries_20261108.rs
+  の `wt_relink_prefix_from_linked_worktree_cwd_pre_existing`）** — `>`/`>>` の target（`place_redirect_target`
+  で配置済み）について、保護パス判定の直後に `detect/relink.rs` の `redirect_landing` が行の他 segment を見る。
+  対象は write より前の segment、`|`/`&` で並行する後続 segment、loop（`done` を含む行）なら全 segment。
+  model する command（先頭の代入と `sudo`/`env`/`command`/`nohup`/`time`/`nice`/`exec`/`builtin` は読み飛ばす）:
+  `ln -s`/`cp -s`（symlink、相対 source は link の親から解決）・`ln`/`link`（hard link）・`mv`・
+  link を保つ `cp`（`-R`/`-r`/`-a`/`-P`/`-d` 等。copy 部分に symlink が無ければ copy 先＝target のまま）。
+  option 無しの `cp` と `install`（`-l` 以外）は symlink を作らないので inert。これらが target かその祖先を
+  作る／置き換えるとき、target を「source ＋ 残りの path」の物理着地点（既存 prefix の symlink を全て解決）に
+  置き換え、以後の全 axis（保護パス・system directory・recoverability・whose-tree）をその path で判定する。
+  直接その path に書いたのと同じ判定になる（`cd <wt> && ln -sf <他 project の tracked file> F && git show HEAD:F > F`
+  は whose-tree の Deny、`ln -sf /etc/hosts F && echo x > F` は system directory の Deny）。tree 内を指す
+  link は tree 内で判定されるので従来の Allow のまま。判定不能 — 非 literal な source/destination・Unknown cwd・
+  `rsync`/`install -l`・source 自体が同じ行で relink される連鎖・2 つ以上の command が同じ target を relink・
+  model しない command（`sh -c`・`python3 -c`・`git mv` 等）が relink 語（`ln`/`mv`/`cp`/`rsync`/`install`/
+  `ditto`/`symlink`/`rename` 等）と、target の path 成分または非 literal な語を両方含む — は Ask（Allow しない）。
+  `/dev/null`・`/dev/stdout`・`/dev/stderr` は対象外。**RESIDUAL**: relink 語も target も文面に現れない
+  command による relink（archive 展開・build script・tracked symlink の `git checkout`）は model しない。
+  redirect 以外の write verb（`cp` の destination 等）にはこの model を適用していない。
 - **非 shell・非 Python のコードファイルへ書く quoted here-document の本文は shell 行として読まない
   （user ruling 2026-11-08、issue #1602、tests/backlog_cd_redirect_fp_20261107.rs）** — `detect_bash` の
   手順 0c。`heredoc::non_shell_code_file_here_document` が、`.py` の手順 0b と同じ形（前行は

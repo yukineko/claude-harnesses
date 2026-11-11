@@ -83,6 +83,7 @@ mod protected;
 mod readings;
 mod readonly;
 mod redirect;
+mod relink;
 mod rm;
 mod scratch_place;
 mod segment;
@@ -830,6 +831,17 @@ primitive, not a filesystem path",
         if let Some(deny) = protected_path_block_at(ctx, "redirect", &target, &physical) {
             return deny;
         }
+        // Relinked earlier on the line: judge where it really lands (relink.rs).
+        let landing =
+            relink::redirect_landing(ctx, ">", rcmd, seg_idx, &seg_cwds, target, physical);
+        let (target, physical) = match landing {
+            relink::Step::Judge(t, p) => (t, p),
+            relink::Step::Decided(d) => return d,
+            relink::Step::Ask(a) => {
+                line_level_asks.push(a);
+                continue;
+            }
+        };
         if !redirect_target_is_safe(&target, ctx) {
             // SYSTEM-DIRECTORY axis, checked BEFORE recoverability for the same
             // reason the protected-path axis above is: the recoverability probe
@@ -1052,6 +1064,16 @@ does not parse that body, but blastguard cannot show the program does not use it
         if let Some(deny) = protected_path_block_at(ctx, "append redirect", &target, &physical) {
             return deny;
         }
+        let landing =
+            relink::redirect_landing(ctx, ">>", rcmd, seg_idx, &seg_cwds, target, physical);
+        let (target, physical) = match landing {
+            relink::Step::Judge(t, p) => (t, p),
+            relink::Step::Decided(d) => return d,
+            relink::Step::Ask(a) => {
+                line_level_asks.push(a);
+                continue;
+            }
+        };
         // The system-directory axis does not care about the truncate/append
         // distinction either: `>>` is how a `paths.d` entry or an
         // `authorized_keys` line gets added, and one appended line is the

@@ -534,37 +534,6 @@ FAILED scripts/test_prepush_checks_test_targets_20261111.py::PrePushChecksTestTa
 ============================== 1 failed in 35.42s =============================="""
 
 [[task]]
-id = "f5b4d0a1"
-title = "circuit breaker: 壊れた budget ledger を $0 と読んで trip しない fail-open を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "scout",
-    "L5",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "scout 2026-11-12, RED observed at 656b1c38, verified (independent verifier, no re-run). F1: crates/condukt/src/circuit.rs:628-636 + harness-core/src/ledger.rs:83-87 read a corrupt ledger as $0 => verdict continue. Core property: exit 1 && verdict trip. CAVEAT (verifier): the test reads a not-yet-existing field 'budget_unknown_reason' and requires a reason containing 'budget' — that part is a proxy; the fixer may re-anchor it to the chosen field contract."
-created_at = 1794434267
-updated_at = 1794434267
-weight = 0.0
-issue_number = 1643
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1643"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_scout_20261112_f1_circuit_corrupt_ledger -- --ignored"
-rev = "9c71a19fed28cf0f1a46f8909076f5bcb60e67ed"
-observed_at = 1794434267
-detail = """
-exit 101: Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.34s
-     Running tests/backlog_scout_20261112_f1_circuit_corrupt_ledger.rs (target/debug/deps/backlog_scout_20261112_f1_circuit_corrupt_ledger-821e36718f8854fe)
-error: test failed, to rerun pass `-p condukt --test backlog_scout_20261112_f1_circuit_corrupt_ledger`"""
-
-[[task]]
 id = "c96f571a"
 title = "fde: 批准済み evidence CMD が target root の外へ書き込めるのを止める"
 project = "/Users/yuki/src/harness"

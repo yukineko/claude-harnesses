@@ -72925,3 +72925,65 @@ rev = "79647500b11482859a8b51fdecaaeb1d4da1aa2c"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "f5b4d0a1"
+title = "circuit breaker: 壊れた budget ledger を $0 と読んで trip しない fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "scout",
+    "L5",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "scout 2026-11-12, RED observed at 656b1c38, verified (independent verifier, no re-run). F1: crates/condukt/src/circuit.rs:628-636 + harness-core/src/ledger.rs:83-87 read a corrupt ledger as $0 => verdict continue. Core property: exit 1 && verdict trip. CAVEAT (verifier): the test reads a not-yet-existing field 'budget_unknown_reason' and requires a reason containing 'budget' — that part is a proxy; the fixer may re-anchor it to the chosen field contract."
+created_at = 1794434267
+updated_at = 1794438067
+weight = 0.0
+issue_number = 1643
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1643"
+issue_closed_at = 1794438070
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_scout_20261112_f1_circuit_corrupt_ledger -- --ignored"
+rev = "9c71a19fed28cf0f1a46f8909076f5bcb60e67ed"
+observed_at = 1794434267
+detail = """
+exit 101: Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.34s
+     Running tests/backlog_scout_20261112_f1_circuit_corrupt_ledger.rs (target/debug/deps/backlog_scout_20261112_f1_circuit_corrupt_ledger-821e36718f8854fe)
+error: test failed, to rerun pass `-p condukt --test backlog_scout_20261112_f1_circuit_corrupt_ledger`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_scout_20261112_f1_circuit_corrupt_ledger"
+exit = 0
+passed = 1
+rev = "407f10d423e0dcca492ef9490986a8e3050a44cb"
+observed_at = 1794438056
+output_digest = "sha256:2b988a5475823ecdc99077dc788b162b15c969e29c809b003c723c25ea2201b7"
+excerpt = """
+
+running 1 test
+test corrupt_budget_ledger_trips_instead_of_reading_as_zero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+
+   Compiling blastguard v0.2.462 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+   Compiling condukt v0.7.383 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.67s
+     Running tests/backlog_scout_20261112_f1_circuit_corrupt_ledger.rs (target/debug/deps/backlog_scout_20261112_f1_circuit_corrupt_ledger-2f8ae1c3f360164c)
+"""
+
+[task.closure.red]
+rev = "761f602909e59c28724d038e42c885c86f7dfdb0"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

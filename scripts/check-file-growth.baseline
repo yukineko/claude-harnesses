@@ -7,7 +7,7 @@
 2245 crates/backlog/src/main.rs
 6606 crates/backlog/src/store.rs
 2967 crates/backlog/tests/cli_contract.rs
-2330 crates/blastguard/src/detect.rs
+2228 crates/blastguard/src/detect.rs
 5021 crates/blastguard/src/detect/tests.rs
 2480 crates/blastguard/src/scope.rs
 4095 crates/condukt/src/claim.rs

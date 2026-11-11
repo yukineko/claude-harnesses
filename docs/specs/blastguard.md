@@ -497,7 +497,7 @@ forge・condukt のスケジューラが再利用）。
 
 - **`main`** — CLI エントリ。version/help 短絡 → `hook::run_hook(run)`。`run` が stdin parse →
   `detect` → deny 時のみ `deny_json` を print。ターン非破壊契約の実装点。
-- **`detect`** — 純粋な破壊操作検出器。`detect`（tool 名で dispatch）、`detect_write`、`detect_bash`、
+- **`detect`** — 純粋な破壊操作検出器。`detect`（tool 名で dispatch）、`detect_write`（`detect/file_tool`）、`detect_bash`、
   segment 分割（`split_segments`）、redirect 解析（`single_redirect_target`/`is_angle_placeholder_close`/
   `redirect_target_is_safe`）、shell-eval 再帰展開（`command_index`/`is_shell`/`dash_c_payload`/
   `strip_wrapping_quotes`）、コマンド別 analyzer（`analyze_rm`/`analyze_git`/`analyze_find`）。I/O なし。
@@ -516,6 +516,9 @@ forge・condukt のスケジューラが再利用）。
   共有する `VerdictAcc`。`Deny > Ask > Allow` の順位で畳み、`Deny` は即座に返し、`Ask` は最初の 1 件を保持して
   走査を続ける（後続の `Deny` を `Ask` が隠さない）。順位は `harness_core::verdict::Verdict::worst_of` そのもので、
   `Decision`↔`Verdict` の変換は境界の 2 関数だけが行う。
+- **`detect/file_tool`** — file tool（Write / Edit / MultiEdit / NotebookEdit）の判定。`extract_path`
+  （`file_path`/`notebook_path`/`path`）・`detect_write`・`detect_edit`・`file_tool_system_block`。
+  `detect.rs` から挙動を変えずに移した（file-growth cap）。
 - **`hookio`** — PreToolUse `deny` の単一行 JSON 生成（`deny_json`）。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。

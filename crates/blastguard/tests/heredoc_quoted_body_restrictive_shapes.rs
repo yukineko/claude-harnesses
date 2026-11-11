@@ -14,6 +14,14 @@
 //! body provably reached the redirect scan (the test is not vacuous).
 //!
 //! Written by a disinterested author (CLAUDE.md §2(a)); `src/` untouched.
+//!
+//! Re-anchored per the user ruling of 2026-11-08 (GitHub #1602): a quoted
+//! heredoc body is judged by its target language, and a `.rs` target that is
+//! not run in the same command is data (Allow when the later commands are
+//! read-only). The shapes this file guards are therefore run against targets
+//! the ruling still judges as shell: a `.sh` file and an extension-less file.
+//! Shapes that must stay non-Allow for a `.rs` target as well (unquoted
+//! delimiter, unterminated body) keep the `.rs` target in addition.
 
 #[path = "support/bounded.rs"]
 mod bounded;
@@ -21,17 +29,14 @@ mod bounded;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-fn fresh_project(tag: &str) -> PathBuf {
+fn fresh_project(tag: &str, target: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "blastguard-heredoc-restrictive-{}-{tag}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("crates/overwatch/src")).expect("mkdir project");
-    assert!(
-        !dir.join("crates/overwatch/src/presence.rs").exists(),
-        "target must not exist"
-    );
+    assert!(!dir.join(target).exists(), "target must not exist");
     dir
 }
 
@@ -80,7 +85,33 @@ fn verdict(cwd: &std::path::Path, command: &str) -> (String, String) {
     (decision, reason)
 }
 
-const TARGET: &str = "crates/overwatch/src/presence.rs";
+/// A `.rs` target: data under the #1602 ruling unless the shape itself keeps
+/// it non-Allow (unquoted delimiter, unterminated body).
+const RS_TARGET: &str = "crates/overwatch/src/presence.rs";
+
+/// Targets the #1602 ruling still judges as shell.
+const SHELL_TARGETS: [&str; 2] = [
+    "crates/overwatch/src/presence.sh",
+    "crates/overwatch/src/presence",
+];
+
+/// The shell targets plus the `.rs` target, for shapes that must be non-Allow
+/// whatever the target language.
+const ALL_TARGETS: [&str; 3] = [
+    "crates/overwatch/src/presence.sh",
+    "crates/overwatch/src/presence",
+    RS_TARGET,
+];
+
+/// A per-target tag so every target gets its own temp project.
+fn target_tag(tag: &str, target: &str) -> String {
+    let leaf = target
+        .rsplit('/')
+        .next()
+        .unwrap_or(target)
+        .replace('.', "-");
+    format!("{tag}-{leaf}")
+}
 
 const PROSE_BODY: &str = "//! Presence ledger.\n\
 /// Reads the ledger.\n\
@@ -100,9 +131,10 @@ fn is_blocking(d: &str) -> bool {
 /// so the caller can assert whether the body changed the decision.
 fn assert_prose_not_allowed(
     tag: &str,
+    target: &str,
     shape: impl Fn(&str) -> String,
 ) -> ((String, String), (String, String)) {
-    let proj = fresh_project(tag);
+    let proj = fresh_project(tag, target);
     let prose = verdict(&proj, &shape(PROSE_BODY));
     let control = verdict(&proj, &shape(PLAIN_BODY));
     assert!(
@@ -129,25 +161,33 @@ fn assert_body_was_read(tag: &str, prose: &(String, String), control: &(String, 
 
 #[test]
 fn unquoted_delimiter_keeps_reading_body() {
-    // Unquoted `<<EOF`: the shell expands the body, so it must stay scanned.
-    let (prose, control) =
-        assert_prose_not_allowed("unquoted", |b| format!("cat > {TARGET} <<EOF\n{b}\nEOF"));
-    assert_body_was_read("unquoted", &prose, &control);
+    // Unquoted `<<EOF`: the shell expands the body, so it must stay scanned
+    // whatever the target language (the #1602 ruling covers quoted bodies).
+    for target in ALL_TARGETS {
+        let tag = target_tag("unquoted", target);
+        let (prose, control) =
+            assert_prose_not_allowed(&tag, target, |b| format!("cat > {target} <<EOF\n{b}\nEOF"));
+        assert_body_was_read(&tag, &prose, &control);
+    }
 }
 
 #[test]
 fn trailing_command_after_heredoc_keeps_reading_body() {
-    let (prose, control) = assert_prose_not_allowed("trailing", |b| {
-        format!("cat > {TARGET} <<'EOF'\n{b}\nEOF\necho done")
-    });
-    assert_body_was_read("trailing", &prose, &control);
+    for target in SHELL_TARGETS {
+        let tag = target_tag("trailing", target);
+        let (prose, control) = assert_prose_not_allowed(&tag, target, |b| {
+            format!("cat > {target} <<'EOF'\n{b}\nEOF\necho done")
+        });
+        assert_body_was_read(&tag, &prose, &control);
+    }
 }
 
 #[test]
 fn reader_piped_into_sh_keeps_reading_body() {
     // The body is a program for `sh` here; it is not inert data.
-    let (prose, control) =
-        assert_prose_not_allowed("pipe-sh", |b| format!("cat <<'EOF' | sh\n{b}\nEOF"));
+    let (prose, control) = assert_prose_not_allowed("pipe-sh", RS_TARGET, |b| {
+        format!("cat <<'EOF' | sh\n{b}\nEOF")
+    });
     // Restrictive regardless of the body: piping text into a shell is
     // never allowed, so the control may match; only the NOT-allow part is
     // the claim for this shape.
@@ -156,23 +196,32 @@ fn reader_piped_into_sh_keeps_reading_body() {
 
 #[test]
 fn and_chain_keeps_reading_body() {
-    let (prose, control) = assert_prose_not_allowed("and-chain", |b| {
-        format!("cat > {TARGET} <<'EOF'\n{b}\nEOF\n") + "&& echo done"
-    });
-    assert_body_was_read("and-chain", &prose, &control);
+    for target in SHELL_TARGETS {
+        let tag = target_tag("and-chain", target);
+        let (prose, control) = assert_prose_not_allowed(&tag, target, |b| {
+            format!("cat > {target} <<'EOF'\n{b}\nEOF\n") + "&& echo done"
+        });
+        assert_body_was_read(&tag, &prose, &control);
+    }
 }
 
 #[test]
 fn unterminated_body_keeps_reading_body() {
-    let (prose, control) =
-        assert_prose_not_allowed("unterminated", |b| format!("cat > {TARGET} <<'EOF'\n{b}"));
-    assert_body_was_read("unterminated", &prose, &control);
+    // An unterminated body is not closed data, so it must stay non-Allow
+    // whatever the target language.
+    for target in ALL_TARGETS {
+        let tag = target_tag("unterminated", target);
+        let (prose, control) =
+            assert_prose_not_allowed(&tag, target, |b| format!("cat > {target} <<'EOF'\n{b}"));
+        assert_body_was_read(&tag, &prose, &control);
+    }
 }
 
 #[test]
 fn python3_reader_keeps_reading_body() {
     // The body is Python source, executed. Restrictive regardless of the body.
-    let (prose, control) =
-        assert_prose_not_allowed("python3", |b| format!("python3 - <<'EOF'\n{b}\nEOF"));
+    let (prose, control) = assert_prose_not_allowed("python3", RS_TARGET, |b| {
+        format!("python3 - <<'EOF'\n{b}\nEOF")
+    });
     let _ = (prose, control);
 }

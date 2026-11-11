@@ -72799,3 +72799,63 @@ rev = "bfd504a7bfe544fe5612b76b9c5804b16cfa0cdc"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "46635843"
+title = "condukt resolve-merge -X theirs: 45s timeout leaves staged half-merge with no MERGE_HEAD, unannounced"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = '''Observed 2026-11-08 at cb6755f4 (run run-20261108-185146-6010 t1 worktree). Verbatim: 'observation: .git/index.lock present = false, .git/MERGE_HEAD present = false' / panic 'timed-out merge left the target tree HALF-APPLIED and unannounced: staged="shared.txt\ntask.txt", MERGE_HEAD present=false; stderr="condukt: merge -X theirs of runT/b1 into main failed: ... timed out after 45s and was killed"'. Same hazard as 8ada7ad9 (fixed only for the final merge path in worktree.rs::merge). -s ours path: worker reported no RED reproducible (stages HEAD tree, no driver) — UNVERIFIED by verifier.'''
+created_at = 1794133215
+updated_at = 1794435089
+weight = 0.0
+issue_number = 1639
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1639"
+issue_closed_at = 1794435090
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_merge_timeout_other_paths_20261108 timed_out_resolve_theirs_merge_is_not_left_silently_half_applied -- --ignored"
+rev = "cb6755f4b9e07999812de7c36a4bdfbdb17016ae"
+observed_at = 1794133215
+detail = """
+exit 101: AILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 46.77s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_merge_timeout_other_paths_20261108.rs (target/debug/deps/backlog_merge_timeout_other_paths_20261108-a0fa0e39fe78ac69)
+error: test failed, to rerun pass `-p condukt --test backlog_merge_timeout_other_paths_20261108`"""
+
+[task.closure]
+reason = "already-fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_merge_timeout_other_paths_20261108 timed_out_resolve_theirs_merge_is_not_left_silently_half_applied"
+exit = 0
+passed = 1
+rev = "b1064a8ad67b5a6dfd571ad1c0991a817ce5cec2"
+observed_at = 1794435041
+output_digest = "sha256:8544f29ecb155003777e5f83bdac2399c70ad2ea70e478b23abc5ef06d937e8a"
+excerpt = """
+
+running 1 test
+test timed_out_resolve_theirs_merge_is_not_left_silently_half_applied ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 47.04s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_merge_timeout_other_paths_20261108.rs (target/debug/deps/backlog_merge_timeout_other_paths_20261108-def56562a40eaab0)
+"""
+
+[task.closure.red]
+rev = "bfd504a7bfe544fe5612b76b9c5804b16cfa0cdc"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

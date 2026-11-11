@@ -505,37 +505,6 @@ exit 101: sult: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered ou
 error: test failed, to rerun pass `-p blastguard --test heredoc_python_triple_quote_fp_20261107`"""
 
 [[task]]
-id = "46635843"
-title = "condukt resolve-merge -X theirs: 45s timeout leaves staged half-merge with no MERGE_HEAD, unannounced"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = '''Observed 2026-11-08 at cb6755f4 (run run-20261108-185146-6010 t1 worktree). Verbatim: 'observation: .git/index.lock present = false, .git/MERGE_HEAD present = false' / panic 'timed-out merge left the target tree HALF-APPLIED and unannounced: staged="shared.txt\ntask.txt", MERGE_HEAD present=false; stderr="condukt: merge -X theirs of runT/b1 into main failed: ... timed out after 45s and was killed"'. Same hazard as 8ada7ad9 (fixed only for the final merge path in worktree.rs::merge). -s ours path: worker reported no RED reproducible (stages HEAD tree, no driver) — UNVERIFIED by verifier.'''
-created_at = 1794133215
-updated_at = 1794133215
-weight = 0.0
-issue_number = 1639
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1639"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_merge_timeout_other_paths_20261108 timed_out_resolve_theirs_merge_is_not_left_silently_half_applied -- --ignored"
-rev = "cb6755f4b9e07999812de7c36a4bdfbdb17016ae"
-observed_at = 1794133215
-detail = """
-exit 101: AILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 46.77s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
-     Running tests/backlog_merge_timeout_other_paths_20261108.rs (target/debug/deps/backlog_merge_timeout_other_paths_20261108-a0fa0e39fe78ac69)
-error: test failed, to rerun pass `-p condukt --test backlog_merge_timeout_other_paths_20261108`"""
-
-[[task]]
 id = "38a44b30"
 title = "pre-push cargo check lets test-target compile errors through"
 project = "/Users/yuki/src/harness"

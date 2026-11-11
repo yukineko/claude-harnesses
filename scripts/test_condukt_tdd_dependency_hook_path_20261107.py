@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RED repro: condukt's tests need a `tdd` binary on ambient PATH, so the donegate
+"""Regression guard (was RED repro, fixed by 5468a60e; GitHub #1593): condukt's tests need a `tdd` binary on ambient PATH, so the donegate
 Stop hook (Claude Code app env, no plugin-cache bin dirs on PATH) fails them with
 `DEPENDENCY MISSING: no `tdd` binary on PATH` although this workspace builds the
 `tdd` crate (crates/tdd).
@@ -51,7 +51,7 @@ class CondukTddDependencyUnderHookPath(unittest.TestCase):
         self.assertFalse(_has_tdd(_hook_like_path()),
                          "control: simulated hook PATH must not already hold tdd")
 
-    @unittest.expectedFailure  # backlog 214ebb1f: open defect, remove when fixed
+    # GitHub #1593 / backlog 214ebb1f: fixed by 5468a60e (find_tdd builds the workspace tdd); regression guard now.
     def test_condukt_control_test_passes_without_ambient_tdd(self):
         env = dict(os.environ)
         env["PATH"] = _hook_like_path()

@@ -902,6 +902,11 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
             };
         }
     }
+    // 0c. A QUOTED body written only to non-shell code files (`.rs`, …) is not
+    // shell lines (user ruling 2026-11-08, #1602); no later line may run it.
+    if let Some(rest) = heredoc::non_shell_code_file_here_document(cmd) {
+        return detect_bash(&rest, depth, ctx);
+    }
     detect_bash_rules(cmd, depth, ctx)
 }
 

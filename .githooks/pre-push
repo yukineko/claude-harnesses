@@ -3,10 +3,12 @@
 #
 #     git config core.hooksPath .githooks
 #
-# This hook has three advisory nudges plus five blocking checks (the bypass
+# This hook has three advisory nudges plus six blocking checks (the bypass
 # ledger below, `cargo check` over the crates each pushed range touches, the
 # trybuild compile-fail type contracts via scripts/check-compile-fail.py,
-# `specguard map gate-check` over each pushed range, and a final re-check that
+# `specguard map gate-check` over each pushed range, the fail-open mutation
+# harness (scripts/check-fail-open-mutation.py) over the gate crates each
+# pushed range touches, and a final re-check that
 # each pushed ref still names the sha those checks judged — see the end of this
 # file; over https that re-check narrows but does not close the window, a
 # residual window remains). Every check is scoped to THIS push's range, runs in
@@ -45,7 +47,7 @@
 # degrade to silence when their prerequisite (python3, the script, the registry)
 # is absent. They never block.
 #
-# The FIRST of the five blocking checks: the first thing this hook does is look
+# The FIRST of the six blocking checks: the first thing this hook does is look
 # for an ungated commit outstanding in the bypass ledger (`scripts/gate-bypass.py`). That is the
 # consequence half of closing the `--no-verify` hole — the bypass cannot be
 # prevented at commit time, so it is instead made to stop the next push until the
@@ -901,6 +903,66 @@ EOF
             fi
             record_pass "$tree" "$sg_id"
         fi
+        phase_end
+    fi
+
+    # --- blocking check 5: fail-open mutation over the range's gate crates ---
+    # scripts/check-fail-open-mutation.py applies each gate crate's registered
+    # fail-open mutation, runs `cargo test -p <crate>`, requires RED, and
+    # reverts (byte-identity verified). Nothing at commit time runs it, so it
+    # runs here (backlog 4f19b628 / issue #1584).
+    #
+    # SCOPE: per crate, only the gate crates whose crates/<gate>/ this range
+    # touches. A range that cannot be computed, or a change to the mutation
+    # script itself, runs every gate crate. A root cargo-file change alone
+    # (Cargo.toml/Cargo.lock/toolchain) does NOT select any gate crate: it
+    # widens `cargo check` above, but it is not a change to a gate crate's own
+    # range, so it is not measured here (user ruling 2026-11-08: range only). Granularity is the crate, NOT the
+    # individual changed Undetermined arm: the script's interface is `--crate`
+    # and has no per-arm selector; a changed arm with no registered scenario
+    # is not measured here.
+    #
+    # FAIL-CLOSED: any nonzero exit (NOT CAUGHT, inconclusive, setup error,
+    # revert failure, crash) blocks; so does a tree without the script or a
+    # missing python3. A pass is recorded per crate for this tree.
+    fm_crates=""
+    fm_all="$range_wide"
+    if printf '%s\n' "$range_files" | grep -qx 'scripts/check-fail-open-mutation.py'; then
+        fm_all=1
+    fi
+    for _g in blastguard propguard specguard stuckguard mutategate overwatch parallelguard; do
+        if [ "$fm_all" -eq 1 ] || printf '%s\n' "$range_files" | grep -q "^crates/$_g/"; then
+            fm_crates="$fm_crates $_g"
+        fi
+    done
+    if [ -n "$fm_crates" ]; then
+        phase_begin fail-open-mutation "$sha"
+        for _g in $fm_crates; do
+            fm_id="fail-open-mutation:$_g"
+            if recorded_pass "$tree" "$fm_id"; then
+                echo "pre-push: $fm_id already passed for tree $(printf '%.12s' "$tree") — not rerun" >&2
+                continue
+            fi
+            require_in_place "$fm_id" "$sha"
+            require_cargo "$fm_id"
+            if ! command -v python3 >/dev/null 2>&1 || [ ! -f "$REPO/scripts/check-fail-open-mutation.py" ]; then
+                echo "" >&2
+                echo "pre-push: BLOCKED — python3 or scripts/check-fail-open-mutation.py is" >&2
+                echo "missing at $short, so the $_g fail-open mutation cannot be measured." >&2
+                exit 1
+            fi
+            echo "pre-push: fail-open mutation for $_g at $short (scripts/check-fail-open-mutation.py --crate $_g)..." >&2
+            ( cd "$REPO" && python3 scripts/check-fail-open-mutation.py --crate "$_g" --keep-going ) >&2
+            fm_rc=$?
+            if [ "$fm_rc" -ne 0 ]; then
+                echo "" >&2
+                echo "pre-push: BLOCKED — fail-open mutation check for $_g at $short exited" >&2
+                echo "$fm_rc (a mutation was NOT CAUGHT, inconclusive, errored, or did not" >&2
+                echo "revert). See the output above; run git status before anything else." >&2
+                exit 1
+            fi
+            record_pass "$tree" "$fm_id"
+        done
         phase_end
     fi
 done

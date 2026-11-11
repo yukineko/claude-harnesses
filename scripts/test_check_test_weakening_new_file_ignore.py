@@ -106,6 +106,53 @@ class NewFileIgnore(unittest.TestCase):
                          f"coverage weakened; rc={rc} output={out!r}")
         self.assertEqual(rc, 0, out)
 
+    def test_new_file_with_bare_ignore_still_blocks(self) -> None:
+        new = self.repo / "crates" / "c" / "tests" / "bare.rs"
+        new.write_text(RS_NEW_REPRO.replace('"backlog deadbeef: intentional RED repro"', '"flaky"'))
+        self.git("add", "-A")
+        rc, out = self.scan()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("ignore-added", out)
+
+    def test_new_file_mixed_backlog_and_bare_ignore_still_blocks(self) -> None:
+        new = self.repo / "crates" / "c" / "tests" / "mixed.rs"
+        new.write_text(RS_NEW_REPRO + "\n#[test]\n#[ignore]\nfn bare() {}\n")
+        self.git("add", "-A")
+        rc, out = self.scan()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("ignore-added", out)
+
+    def test_commented_backlog_ignore_does_not_hide_bare_ignore(self) -> None:
+        new = self.repo / "crates" / "c" / "tests" / "commented.rs"
+        new.write_text('// #[ignore = "backlog deadbeef: prose"]\n#[test]\n#[ignore]\nfn bare() {}\n')
+        self.git("add", "-A")
+        rc, out = self.scan()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("ignore-added", out)
+
+    def test_backlog_ignore_added_to_existing_file_still_blocks(self) -> None:
+        self.existing.write_text(RS_BASE.replace(
+            "#[test]\n", '#[test]\n#[ignore = "backlog deadbeef: skipped"]\n'))
+        self.git("add", "-A")
+        rc, out = self.scan()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("ignore-added", out)
+
+    def test_unreadable_base_blob_is_undetermined_not_new_file(self) -> None:
+        # The base blob is in the tree but its object is gone: `git show` fails
+        # while `ls-tree` still lists it. That is a failure to observe, so the
+        # scan must exit 2 (block), never be read as "new file" and never clean.
+        sha = self.git("rev-parse", "main:crates/c/tests/existing.rs").strip()
+        loose = self.repo / ".git" / "objects" / sha[:2] / sha[2:]
+        self.assertTrue(loose.is_file(), "anti-vacuity: base blob is a loose object")
+        loose.unlink()
+        self.existing.write_text(RS_BASE.replace(
+            "#[test]\n", '#[test]\n#[ignore = "backlog deadbeef: skipped"]\n'))
+        self.git("add", "-A")
+        rc, out = self.scan()
+        self.assertEqual(rc, 2, out)
+        self.assertIn("undetermined", out.lower())
+
 
 if __name__ == "__main__":
     unittest.main()

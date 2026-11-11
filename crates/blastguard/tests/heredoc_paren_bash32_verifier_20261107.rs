@@ -261,7 +261,6 @@ fn red_c_zsh_unquoted_heredoc_expansion_after_stray_quote() {
 }
 
 #[test]
-#[ignore = "backlog d328ea88: open defect, remove ignore when fixed"]
 fn red_d_comment_with_quote_is_ask_but_deny_wanted() {
     run_all(
         "d",

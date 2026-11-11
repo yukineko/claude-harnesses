@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.49"
+version = "0.1.50"
 dependencies = [
  "anyhow",
  "chrono",
@@ -713,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.96"
+version = "0.2.97"
 dependencies = [
  "anyhow",
  "chrono",

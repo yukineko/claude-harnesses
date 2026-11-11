@@ -1,9 +1,10 @@
 //! Persistent daily spend ledger, shared across the harness plugins.
 //!
 //! `~/.budgetguard/state/ledger.json` maps `YYYY-MM-DD` →
-//! `{ sessions: { <id>: <cost_usd> } }`. budgetguard owns the *write* path (its
-//! Stop hook overwrites the current session's entry and recomputes the day
-//! total); other plugins (harness-status) *read* the same type instead of
+//! `{ sessions: { <id>: <cost_usd> } }`, where `<cost_usd>` is the session's
+//! spend attributed to that day (its increment, not its cumulative cost).
+//! budgetguard owns the *write* path (its Stop hook overwrites the current
+//! session's entry for today and recomputes the day total); other plugins (harness-status) *read* the same type instead of
 //! re-declaring a mirror struct that could drift.
 
 use std::collections::BTreeMap;
@@ -13,7 +14,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct DayEntry {
-    /// session_id → latest cost for that session on this day.
+    /// session_id → that session's spend attributed to this day (its latest
+    /// cumulative cost minus what earlier days hold for it; see
+    /// [`Ledger::record`]).
     pub sessions: BTreeMap<String, f64>,
 }
 
@@ -108,25 +111,67 @@ impl Ledger {
         Ok(())
     }
 
-    /// Update the session entry for `today`, return the updated day total.
-    pub fn record(&mut self, session_id: &str, today: &str, cost: f64) -> f64 {
+    /// Record `session_id`'s CUMULATIVE cost (its whole spend so far, as the
+    /// Stop hook measures it) and return the updated `today` total.
+    ///
+    /// Each day holds only that day's increment for the session (#1553): the
+    /// `today` entry is set to `cumulative` minus what days EARLIER than
+    /// `today` already hold for the same session, so a session that crosses
+    /// local midnight is not counted once under yesterday and again, in
+    /// full, under today. Re-recording the same session on the same day
+    /// overwrites its `today` entry (latest cumulative wins), never adds.
+    /// Entries for days later than `today` are not subtracted.
+    ///
+    /// Fail-closed: when the earlier-day amount cannot be trusted as the
+    /// session's prior spend — an earlier entry is negative or not finite,
+    /// `cumulative` is not finite, or the earlier days hold MORE than
+    /// `cumulative` — the `today` entry is the full `cumulative`. That
+    /// over-counts today (the restrictive side for today's verdict) rather
+    /// than under-counting it.
+    pub fn record(&mut self, session_id: &str, today: &str, cumulative: f64) -> f64 {
+        let today_cost = match self.earlier_days_cost(session_id, today) {
+            Some(earlier) if cumulative.is_finite() && earlier <= cumulative => {
+                cumulative - earlier
+            }
+            _ => cumulative,
+        };
         let entry = self.days.entry(today.to_string()).or_default();
-        entry.sessions.insert(session_id.to_string(), cost);
+        entry.sessions.insert(session_id.to_string(), today_cost);
         entry.total()
+    }
+
+    /// Sum of `session_id`'s entries on days strictly before `today`.
+    /// `None` when any of them is negative or not finite (the sum would not be
+    /// a usable prior spend).
+    fn earlier_days_cost(&self, session_id: &str, today: &str) -> Option<f64> {
+        let mut sum = 0.0;
+        use std::ops::Bound;
+        let earlier = (Bound::Unbounded, Bound::Excluded(today));
+        for (_, day) in self.days.range::<str, _>(earlier) {
+            if let Some(&usd) = day.sessions.get(session_id) {
+                if !(usd.is_finite() && usd >= 0.0) {
+                    return None;
+                }
+                sum += usd;
+            }
+        }
+        sum.is_finite().then_some(sum)
     }
 
     pub fn day_total(&self, date: &str) -> f64 {
         self.days.get(date).map(|e| e.total()).unwrap_or(0.0)
     }
 
-    /// The most recently recorded cost for `session_id` across all days, if any.
-    /// Lets a reader reuse budgetguard's authoritative per-session USD instead
-    /// of recomputing cost from tokens with a different override set.
+    /// The session's recorded cost: the sum of its per-day entries across all
+    /// days (each day holds only that day's increment, see [`Ledger::record`]),
+    /// or `None` when it has no entry. Lets a reader reuse budgetguard's
+    /// authoritative per-session USD instead of recomputing cost from tokens
+    /// with a different override set.
     pub fn session_cost(&self, session_id: &str) -> Option<f64> {
         self.days
             .values()
             .filter_map(|d| d.sessions.get(session_id).copied())
-            .next_back()
+            .reduce(|a, b| a + b)
     }
 }
 

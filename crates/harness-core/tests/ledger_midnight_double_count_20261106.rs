@@ -25,7 +25,6 @@ fn control_single_day_session_counted_once() {
 }
 
 #[test]
-#[ignore = "#1553 RED: cumulative session cost is recorded under each day key, double-counting across midnight"]
 fn session_crossing_midnight_total_across_days_equals_cumulative_cost() {
     let mut l = Ledger::default();
     // Stop before midnight: cumulative 24.18 recorded under yesterday.

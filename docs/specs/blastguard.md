@@ -591,6 +591,25 @@ forge・condukt のスケジューラが再利用）。
   （`.sh`・拡張子なし・未知の拡張子・literal でない target）は常に判定する。判定は `analyze_shell_payload`
   （Deny > Ask > Allow）。書く shell が展開・unquote する operand（`$`/backtick を含む double-quoted か bare、
   quote/`\` を含む bare）は内容が読めないので Ask。`cat > x.rs <<< 'rm -rf ~' && sh x.rs` は Deny。
+- **`echo`/`printf` がファイルへ書いた literal を、同じ command の別の部分がそのファイルを実行しうるとき shell
+  script として判定する（tests/script_write_then_run_harm_20261111.rs H1–H3、`detect/echo_script_file.rs`。
+  `payload::analyze_interpreter_stdin_exec` の先頭で呼ぶ）** — writer は command 語（exec-wrapper の後ろも
+  `command_candidates` で見る）が `echo`/`printf` の pipe stage で、stdout を `>`・`>>`・`>|`・`&>`・`1>`
+  （語に glue されていても）で、または直後の `| tee FILE…` / `| cat > FILE` stage でファイルへ書くもの。
+  同じファイル（先頭 `./` は無視）への書き込みは command の順に積み上げ（`>` は置換、`>>` は追記）、書き込み
+  ごとの内容をすべて判定する。target 区分（data file 等）では除外しない。判定するのは別の stage がその
+  ファイルを実行しうるときだけ: command 語がそのファイルを指す stage（`./x.sh`）、またはそのファイルを指す語と
+  shell・`.`・`source` の語をどこかに持つ pipeline（`sh x.sh`・`. x.sh`・`sh < x.sh`・`cat x.sh | sh`）。
+  「指す」は literal 値の basename 一致、展開を含む語は basename の部分一致か glob 文字を含むこと。literal で
+  ない書き込み先は、shell・`.`・`source` の語か `$`/backtick を含む command 語を持つ pipeline があれば実行
+  されうるとみなす。判定は `analyze_shell_payload`（Deny > Ask > Allow）。再現できない内容は Ask: `$`・
+  backtick・`\`・glob/brace 文字・bare の演算子文字・先頭以外の `~` を含む引数（先頭の `~`/`~/` は `~` のまま
+  読む）、`\` を含む `echo` 出力（dash/zsh の `echo` は escape を展開する）、`%%` 以外の `%` 変換・`\n`/`\t`/
+  `\\` 以外の escape・`-` で始まる format・format 後の引数を持つ `printf`。`echo 'rm -rf ~' > x.rs && sh x.rs`
+  は Deny、`echo 'echo hi' > x.sh && sh x.sh` と `echo 'hello' > x.txt && cat x.txt` は Allow。
+  **RESIDUAL**（コード読解による記述。これらの形を突くテストは未作成）: 実行が別の Bash 呼び出しにある場合、
+  `>>` が追記する前の既存内容、別種の writer（here-document・here-string・`cp`）と `echo` の書き込みの連結、
+  code interpreter（`python3 x.py`）が実行するファイルは、この判定の外。
 
 ### module 責務
 

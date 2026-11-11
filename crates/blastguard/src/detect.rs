@@ -64,6 +64,7 @@ mod budget;
 mod compound;
 mod cwd;
 mod denoise;
+mod echo_script_file;
 mod executors;
 mod file_tool;
 mod fileops;

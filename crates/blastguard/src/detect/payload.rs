@@ -43,6 +43,12 @@ fn stage_has_program_operand(rest: &[&str]) -> bool {
 pub(super) fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let heredoc_open = opens_here_document(cmd);
     let mut acc = VerdictAcc::default();
+    // What `echo`/`printf` write to a file another stage runs
+    // (`echo 'rm -rf ~' > x.rs && sh x.rs`); see `echo_script_file`.
+    let echoed = super::echo_script_file::echoed_script_verdict(cmd, depth, ctx);
+    if let Some(deny) = acc.record(echoed) {
+        return deny;
+    }
     for statement in split_statements_into_pipe_stages(cmd) {
         for (i, stage) in statement.iter().enumerate() {
             // The here-string mirror (`bash <<< 'rm -rf ~'`), judged before

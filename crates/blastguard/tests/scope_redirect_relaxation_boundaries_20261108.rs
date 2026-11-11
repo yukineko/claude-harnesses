@@ -474,13 +474,8 @@ py_hostile!(
     "__import__(\"os\").execl(\"/bin/sh\",\"sh\",\"-c\",\"echo x > TARGET\")"
 );
 py_hostile!(py_os_popen, "import os; os.popen(\"echo x > TARGET\")");
+py_hostile!(py_unterminated_string, "import sys; s=\"> TARGET; print(s)");
 py_hostile!(
-    #[ignore = "pre-existing RED: also allow on main 6972be32, not caused by #1626; remove ignore when fixed"]
-    py_unterminated_string,
-    "import sys; s=\"> TARGET; print(s)"
-);
-py_hostile!(
-    #[ignore = "pre-existing RED: also allow on main 6972be32, not caused by #1626; remove ignore when fixed"]
     py_unterminated_triple_quote,
     "import sys; s=\"\"\"> TARGET; print(s)"
 );
@@ -603,23 +598,45 @@ fn wt_control_intended_chain_is_not_whose_tree_refusal() {
 /// Run `cmd` from the session worktree and require not-allow; additionally
 /// require the whose-tree refusal text when `strict` (the relaxation must not
 /// have fired at all).
+///
+/// Only the session worktree, as this doc says: with cwd INSIDE the linked
+/// worktree that tree is a safe root, the line is decided by the confined-root
+/// arm before `write_prefix_cannot_relink` is consulted, and main 6972be32
+/// gives the same allow — a pre-existing class, pinned separately by
+/// `wt_relink_prefix_from_linked_worktree_cwd_pre_existing`.
 fn wt_hostile(fx: &Fx, cmd: &str, strict: bool) {
-    for cwd in [fx.sess.clone(), fx.wt.clone()] {
-        let r = fx.bash(&cwd, cmd);
-        assert_restrictive(&format!("cwd {}: {cmd}", cwd.display()), &r);
-        if strict {
-            assert!(
-                r.1.contains(WHOSE_TREE),
-                "cwd {}: relaxation must not have fired (expected whose-tree refusal): {:?}",
-                cwd.display(),
-                r.1.trim()
-            );
-        }
+    let cwd = &fx.sess;
+    let r = fx.bash(cwd, cmd);
+    assert_restrictive(&format!("cwd {}: {cmd}", cwd.display()), &r);
+    if strict {
+        assert!(
+            r.1.contains(WHOSE_TREE),
+            "cwd {}: relaxation must not have fired (expected whose-tree refusal): {:?}",
+            cwd.display(),
+            r.1.trim()
+        );
     }
 }
 
+/// The second cwd the original `wt_hostile` loop used: the session runs INSIDE
+/// the linked worktree. The prefix relinks the tracked target to a file outside
+/// the tree before the write opens it. Allowed on main 6972be32 as well (the
+/// confined-root arm judges the placement at hook time), so this is a
+/// pre-existing RED, not one of the #1625 relaxation's.
 #[test]
-#[ignore = "pre-existing RED: fails on main 6972be32 too (cwd inside the worktree, a safe root); remove ignore when fixed"]
+#[ignore = "pre-existing RED (allow on main 6972be32): relink before a write inside the cwd's own tree; needs a ruling, remove ignore when fixed"]
+fn wt_relink_prefix_from_linked_worktree_cwd_pre_existing() {
+    let fx = Fx::new("wt-ln-wtcwd");
+    let cmd = format!(
+        "cd {wt} && ln -sf {t} {REL} && git show HEAD:{REL} > {REL}",
+        wt = fx.wt.display(),
+        t = fx.t()
+    );
+    let r = fx.bash(&fx.wt, &cmd);
+    assert_restrictive(&format!("cwd {}: {cmd}", fx.wt.display()), &r);
+}
+
+#[test]
 fn wt_ln_s_in_prefix_relinks_target() {
     let fx = Fx::new("wt-ln");
     let cmd = format!(
@@ -631,7 +648,6 @@ fn wt_ln_s_in_prefix_relinks_target() {
 }
 
 #[test]
-#[ignore = "pre-existing RED: fails on main 6972be32 too (cwd inside the worktree, a safe root); remove ignore when fixed"]
 fn wt_mv_in_prefix_relinks_target() {
     let fx = Fx::new("wt-mv");
     symlink(fx.t(), fx.wt.join("lnk")).unwrap();
@@ -643,7 +659,6 @@ fn wt_mv_in_prefix_relinks_target() {
 }
 
 #[test]
-#[ignore = "pre-existing RED: fails on main 6972be32 too (cwd inside the worktree, a safe root); remove ignore when fixed"]
 fn wt_cp_s_in_prefix_relinks_target() {
     let fx = Fx::new("wt-cps");
     let cmd = format!(
@@ -655,7 +670,6 @@ fn wt_cp_s_in_prefix_relinks_target() {
 }
 
 #[test]
-#[ignore = "pre-existing RED: fails on main 6972be32 too (cwd inside the worktree, a safe root); remove ignore when fixed"]
 fn wt_cp_capital_r_of_symlink_in_prefix() {
     let fx = Fx::new("wt-cpR");
     symlink(fx.t(), fx.wt.join("lnk")).unwrap();
@@ -667,7 +681,6 @@ fn wt_cp_capital_r_of_symlink_in_prefix() {
 }
 
 #[test]
-#[ignore = "pre-existing RED: fails on main 6972be32 too (cwd inside the worktree, a safe root); remove ignore when fixed"]
 fn wt_cp_with_variable_holding_flag() {
     let fx = Fx::new("wt-cpX");
     let cmd = format!(
@@ -679,7 +692,6 @@ fn wt_cp_with_variable_holding_flag() {
 }
 
 #[test]
-#[ignore = "pre-existing RED: fails on main 6972be32 too (cwd inside the worktree, a safe root); remove ignore when fixed"]
 fn wt_cp_with_unassigned_variable() {
     let fx = Fx::new("wt-cpU");
     symlink(fx.t(), fx.wt.join("lnk")).unwrap();
@@ -691,7 +703,6 @@ fn wt_cp_with_unassigned_variable() {
 }
 
 #[test]
-#[ignore = "pre-existing RED: fails on main 6972be32 too (cwd inside the worktree, a safe root); remove ignore when fixed"]
 fn wt_semicolon_before_write() {
     let fx = Fx::new("wt-semi");
     let cmd = format!(
@@ -703,7 +714,6 @@ fn wt_semicolon_before_write() {
 }
 
 #[test]
-#[ignore = "pre-existing RED: fails on main 6972be32 too (cwd inside the worktree, a safe root); remove ignore when fixed"]
 fn wt_semicolon_between_benign_prefix_and_write() {
     let fx = Fx::new("wt-semi2");
     let cmd = format!(
@@ -714,7 +724,6 @@ fn wt_semicolon_between_benign_prefix_and_write() {
 }
 
 #[test]
-#[ignore = "pre-existing RED: fails on main 6972be32 too (cwd inside the worktree, a safe root); remove ignore when fixed"]
 fn wt_or_before_write() {
     let fx = Fx::new("wt-or");
     let cmd = format!(
@@ -726,7 +735,6 @@ fn wt_or_before_write() {
 }
 
 #[test]
-#[ignore = "pre-existing RED: fails on main 6972be32 too (cwd inside the worktree, a safe root); remove ignore when fixed"]
 fn wt_benign_prefix_then_or_write() {
     let fx = Fx::new("wt-or2");
     let cmd = format!(
@@ -737,7 +745,6 @@ fn wt_benign_prefix_then_or_write() {
 }
 
 #[test]
-#[ignore = "pre-existing RED: fails on main 6972be32 too (cwd inside the worktree, a safe root); remove ignore when fixed"]
 fn wt_pipe_after_write() {
     let fx = Fx::new("wt-pipe");
     let cmd = format!(
@@ -749,7 +756,6 @@ fn wt_pipe_after_write() {
 }
 
 #[test]
-#[ignore = "pre-existing RED: fails on main 6972be32 too (cwd inside the worktree, a safe root); remove ignore when fixed"]
 fn wt_background_after_write() {
     let fx = Fx::new("wt-bg");
     let cmd = format!(
@@ -761,7 +767,6 @@ fn wt_background_after_write() {
 }
 
 #[test]
-#[ignore = "pre-existing RED: fails on main 6972be32 too (cwd inside the worktree, a safe root); remove ignore when fixed"]
 fn wt_command_substitution_in_write_segment() {
     let fx = Fx::new("wt-subst");
     let cmd = format!(
@@ -773,7 +778,6 @@ fn wt_command_substitution_in_write_segment() {
 }
 
 #[test]
-#[ignore = "pre-existing RED: fails on main 6972be32 too (cwd inside the worktree, a safe root); remove ignore when fixed"]
 fn wt_backtick_in_write_segment() {
     let fx = Fx::new("wt-bt");
     let cmd = format!(
@@ -787,7 +791,6 @@ fn wt_backtick_in_write_segment() {
 /// PATH assigned by a literal NAME=value prefix word, then `cp` resolves to
 /// an untracked executable in the worktree that relinks the target.
 #[test]
-#[ignore = "pre-existing RED: fails on main 6972be32 too (cwd inside the worktree, a safe root); remove ignore when fixed"]
 fn wt_path_assignment_hijacks_cp() {
     let fx = Fx::new("wt-path");
     let bin = fx.wt.join("evilbin");

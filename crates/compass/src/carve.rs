@@ -73,6 +73,29 @@ pub fn save(root: &Path, state: &CarveState) -> Result<()> {
     crate::outcome::write_atomic(&path, &json)
 }
 
+/// Locked read-modify-write of `.compass/carve-state.json` (backlog 03e655dc).
+///
+/// Takes [`lock`], then loads the current state, hands it to `f`, and writes
+/// the state `f` returns via [`save`], all while the lock is held — so
+/// concurrent `compass apply` / `compass evaluate` runs serialize instead of
+/// overwriting each other's answers.
+///
+/// Fail-closed: if the lock cannot be acquired, or the existing file cannot be
+/// read or parsed ([`load`] returns `Err`), this returns that `Err` without
+/// calling `f` and without writing. Only a missing file reaches `f` as `None`.
+/// If `f` returns `Err`, nothing is written. Callers must NOT already hold
+/// [`lock`] (the lock is not re-entrant).
+pub fn update<T>(
+    root: &Path,
+    f: impl FnOnce(Option<CarveState>) -> Result<(CarveState, T)>,
+) -> Result<T> {
+    let _lock = lock(root)?;
+    let current = load(root)?;
+    let (state, out) = f(current)?;
+    save(root, &state)?;
+    Ok(out)
+}
+
 /// Clear the persisted carve state (start fresh). Idempotent: a missing file is
 /// not an error. Takes the carve lock itself so it cannot race a concurrent
 /// `apply`/`evaluate` load-modify-save; callers must NOT already hold [`lock`]
@@ -163,6 +186,101 @@ mod tests {
         assert!(load(root).expect("load present").is_some());
         reset(root).expect("reset present");
         assert!(load(root).expect("load after reset").is_none());
+    }
+
+    #[test]
+    fn update_on_corrupt_state_is_err_and_leaves_file_untouched() {
+        let tmp = temp_root();
+        let root = tmp.path();
+        let path = state_path(root);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"{ not json").unwrap();
+
+        let mut called = false;
+        let res: Result<()> = update(root, |_| {
+            called = true;
+            Ok((CarveState::new(Bundle::default(), 1), ()))
+        });
+        assert!(res.is_err(), "corrupt state must be Err, got Ok");
+        assert!(!called, "f must not run on an undeterminable state");
+        assert_eq!(std::fs::read(&path).unwrap(), b"{ not json");
+        // The lock is released even on the error path.
+        assert!(!path.with_extension("json.lock").exists());
+    }
+
+    #[test]
+    fn update_on_unreadable_state_is_err() {
+        let tmp = temp_root();
+        let root = tmp.path();
+        let path = state_path(root);
+        // A directory where the file should be: read_to_string fails with a
+        // non-NotFound error, which must not be read as "no carve".
+        std::fs::create_dir_all(&path).unwrap();
+        let mut called = false;
+        let res: Result<()> = update(root, |_| {
+            called = true;
+            Ok((CarveState::new(Bundle::default(), 1), ()))
+        });
+        assert!(res.is_err(), "unreadable state must be Err, got Ok");
+        assert!(!called, "f must not run on an unreadable state");
+    }
+
+    #[test]
+    fn update_when_lock_held_is_err_and_does_not_write() {
+        let tmp = temp_root();
+        let root = tmp.path();
+        let path = state_path(root);
+        let held = crate::outcome::lock_store(&path).expect("take lock");
+        let mut called = false;
+        let res: Result<()> = update(root, |_| {
+            called = true;
+            Ok((CarveState::new(Bundle::default(), 1), ()))
+        });
+        assert!(res.is_err(), "held lock must be Err, got Ok");
+        assert!(!called);
+        assert!(!path.exists(), "nothing may be written without the lock");
+        drop(held);
+    }
+
+    #[test]
+    fn update_passes_missing_as_none_and_persists_result() {
+        let tmp = temp_root();
+        let root = tmp.path();
+        let got = update(root, |cur| {
+            assert!(cur.is_none());
+            let mut s = CarveState::new(Bundle::default(), 3);
+            s.round = 1;
+            Ok((s, 7u32))
+        })
+        .expect("update");
+        assert_eq!(got, 7);
+        let round = update(root, |cur| {
+            let mut s = cur.expect("present after first update");
+            s.round += 1;
+            let r = s.round;
+            Ok((s, r))
+        })
+        .expect("update 2");
+        assert_eq!(round, 2);
+        assert_eq!(load(root).unwrap().unwrap().round, 2);
+        let names: Vec<_> = std::fs::read_dir(root.join(".compass"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["carve-state.json".to_string()],
+            "no tmp/lock left"
+        );
+    }
+
+    #[test]
+    fn update_err_from_f_writes_nothing() {
+        let tmp = temp_root();
+        let root = tmp.path();
+        let res: Result<()> = update(root, |_| anyhow::bail!("boom"));
+        assert!(res.is_err());
+        assert!(load(root).unwrap().is_none());
     }
 
     #[test]

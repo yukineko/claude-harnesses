@@ -1600,6 +1600,25 @@ pub(super) fn analyze_code_interpreter(
             true,
             strip_version_suffix(cmd) == "python",
         );
+        if verdict.is_deny() {
+            return verdict;
+        }
+        // A Python program that does not tokenise (an unterminated string or
+        // triple quote, an unbalanced bracket) has no known string/code
+        // boundary, so nothing in it can be shown to be data: Ask, never Allow
+        // (#1626). Judged on the program word only — the words after it are
+        // `sys.argv`, not code.
+        if strip_version_suffix(cmd) == "python"
+            && payloads
+                .first()
+                .is_some_and(|p| !python_file::python_program_tokenises(p))
+        {
+            return Decision::ask(format!(
+                "`{cmd}` is invoked with an inline-eval flag, and its program cannot be tokenised \
+as Python (an unterminated string or an unbalanced bracket) — blastguard cannot tell its code \
+from its strings, so it cannot vouch for it"
+            ));
+        }
         if !matches!(verdict, Decision::Allow) {
             return verdict;
         }

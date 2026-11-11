@@ -394,7 +394,8 @@ forge・condukt のスケジューラが再利用）。
   のような呼び出し結果の属性も含む）・`SHELL_STRING_EXEC_MARKERS` と動的実行 marker が文字列を含め
   どこにも無い。`python3 -c 'import sys; s="> F"; print(s)'` は Allow。判定不能な target は従来どおり
   R2 の Ask、redirect arm の先行する拒否（保護パス・system directory・置けない target）はそのまま。
-  tokenise できない program や条件外の program は従来どおり判定する。
+  条件外の program は従来どおり判定する。program 語（`-c` の直後の語）が Python として tokenise
+  できない（閉じない文字列・triple quote・括弧の不均衡）ときは、他に Deny が無ければ Ask（Allow しない）。
 - **大文字小文字だけ違う綴りは symlink ではない（#1630）** — `SafeRoots::no_symlink_below` は、
   root 以下の component の realpath が `<親の real>/<綴った名前>` と**大文字小文字だけ**違うとき、
   同じ親・両名の `lstat` がどちらも symlink でない・`(st_dev, st_ino)` が一致する、を全て観測した場合に
@@ -404,7 +405,8 @@ forge・condukt のスケジューラが再利用）。
 - **chain された行の worktree checkout への redirect（#1625）** — git で復元できる tracked file への
   truncating redirect の whose-tree 判定（`Ctx::in_worktree_checkout_for_redirect`、保護パス免除には
   使わない）は、単一 plain command に加え、redirect を含む segment までが行頭から `&&` だけで繋がり、
-  それより前の segment が `cd <literal 絶対 dir>`（先頭のみ）・literal 代入（`IFS` 以外）・
+  それより前の segment が `cd <literal 絶対 dir>`（先頭のみ）・literal 代入（`PATH`/`IFS`/`CDPATH`/
+  `BASH*`/`LD_*`/`DYLD_*` 等の shell 挙動変数と、hook の環境に既にある名前は不可）・
   `cp`（option 無し、`$NAME` は同じ prefix で代入済みの値に置換して `-` 始まりや glob が無いこと）/
   `echo`/`printf`/`true`/`pwd`/`ls`/`cat`/`test`（quote・`>` 無し）だけで、どの segment にも
   `` ` ``・`(`・`)`・`{`・`}`・`<`・`\`・`&`・改行が無く、write segment の後が `|`/`&` でないときも、

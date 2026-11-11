@@ -268,6 +268,12 @@ pub(super) fn python_strings_never_reach_a_shell(program: &str) -> bool {
     sem::references_runner(&sem::rewrite(&code, &names)).is_none()
 }
 
+/// True when `program` tokenises as Python ([`code_view`] is `Some`): every
+/// string is closed and every bracket balanced.
+pub(super) fn python_program_tokenises(program: &str) -> bool {
+    code_view(program).is_some()
+}
+
 fn reason(d: &Decision) -> &str {
     match d {
         Decision::Deny(r) | Decision::Ask(r) => r,

@@ -31,39 +31,6 @@ FAILED scripts/test_precommit_timing.py::PrecommitTiming::test_stderr_has_one_su
 ============================== 3 failed in 0.97s ==============================="""
 
 [[task]]
-id = "dfa2c9d3"
-title = "gate-severity-probe: measure per pre-commit gate whether it fires, which other layers catch the same violation, and how far it leaks"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "observability",
-    "precommit",
-    "gate-severity",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "User direction 2026-11-06: decide which gates run on every commit only after measuring (a) per-gate timing/verdict (433ca3be) and (b) severity when a gate breaks, defined by the user as: fires (does it block an injected violation now), caught_by (with only that gate disabled, which remaining layers stop it: other pre-commit gates, commit-msg, pre-push, cargo test), leak (local-commit|push|rollout|undetermined when nothing catches it). Not in scope: time-to-detect. Motivation data: transcripts 2026-10-08..11-06 show 0 blocks for injectguard, doc-duplication, version-lockstep, fault-injection-adoption, worktree-isolation, gate-crates-sync, gate-protection, crossx-constants, launcher-exec-bit, clippy-lints, backlog-store, projkey-classification; 0 blocks cannot distinguish unneeded / caught upstream / dark. Build scripts/gate-severity-probe.py --json: one representative fixture per gate, applied in throwaway worktrees only (never the caller's tree/index); undetermined never folded into fires=false or leak=null. Repro: python3 -m pytest scripts/test_gate_severity_probe.py (4 RED: probe missing). Tiering policy for using the result (user 2026-11-06): minor issues may move from per-commit to a periodic audit (cost vs effect and speed are key metrics; perfectionism can be harmful); security-relevant gates (e.g. injectguard, secret-guard) stay per-commit regardless of the data — harm must not be let in. So the report should mark each gate security-relevant or not (human-declared list, not inferred)."
-created_at = 1793926370
-updated_at = 1793926398
-weight = 0.0
-issue_number = 1552
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1552"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_gate_severity_probe.py"
-rev = "a9682edfd03944196ecad90571148db0e2a92bf1"
-observed_at = 1793926370
-detail = """
-exit 1: rity_probe.py::GateSeverityProbe::test_caller_tree_untouched
-FAILED scripts/test_gate_severity_probe.py::GateSeverityProbe::test_covers_every_gate
-FAILED scripts/test_gate_severity_probe.py::GateSeverityProbe::test_entry_schema
-FAILED scripts/test_gate_severity_probe.py::GateSeverityProbe::test_known_firing_gates_fire
-============================== 4 failed in 0.11s ==============================="""
-
-[[task]]
 id = "93341bd5"
 title = "budgetguard ledger double-counts a session that crosses local midnight (cumulative session cost recorded under each day key)"
 project = "/home/hiroyuki_nakayama/src/harness"

@@ -180,6 +180,95 @@
 
 set -u
 
+# --- phase timing (observability only; GitHub #1551) -------------------------
+# Ported from .githooks/pre-push's _tm_* helpers. Each gate below is one phase.
+# At EXIT (also when a gate blocks, or the hook exits early) one summary line
+#   pre-commit timing: <label> Ns, ...; total Ns (exit RC)
+# goes to stderr, and one JSON line
+#   {"start":..,"phases":[{"phase":..,"secs":..,"rc":..},..],"total":..,"exit":RC}
+# is appended to "$(git rev-parse --git-common-dir)/precommit-timing.jsonl".
+# `rc` is the gate's own exit status (null when its scanner file is missing).
+#
+# NOT A VERDICT. Downstream consumers: a human reading the stderr line, and a
+# human (or ad-hoc jq) reading the jsonl log to see which gates a commit spends
+# its time in. No gate, script or check reads either one, so it must never
+# change a block/allow decision, the exit code, or the gate order: the EXIT trap
+# re-exits with the status it was entered with, and a log that cannot be
+# written produces a one-line warning and nothing else. If that log ever
+# becomes the input of another check, this exemption lapses (CLAUDE.md 1).
+#
+# Clock: wall-clock seconds via `date +%s`; when `date` is unavailable at start,
+# the shell's $SECONDS (bash/ksh/zsh; elapsed whole seconds) is used instead.
+# The clock is chosen once so start and end readings come from the same source.
+# With neither, secs/total are null in the log and `?` in the summary.
+_tm_clock=""
+_tm_v="$(date +%s 2>/dev/null)"
+case "$_tm_v" in
+    '' | *[!0-9]*)
+        case "${SECONDS:-}" in
+            '' | *[!0-9]*) ;;
+            *) _tm_clock="seconds" ;;
+        esac
+        ;;
+    *) _tm_clock="date" ;;
+esac
+_tm_now() {
+    _tm_v=""
+    case "$_tm_clock" in
+        date) _tm_v="$(date +%s 2>/dev/null)" ;;
+        seconds) _tm_v="${SECONDS:-}" ;;
+    esac
+    case "$_tm_v" in '' | *[!0-9]*) _tm_v="" ;; esac
+}
+_tm_now; _tm_total_t0="$_tm_v"
+_tm_start_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+case "$_tm_start_iso" in '' | *[!0-9TZ:-]*) _tm_start_iso="" ;; esac
+_tm_name=""; _tm_t0=""; _tm_sum=""; _tm_json=""
+# _tm_secs <t0>: elapsed seconds since t0 into _tm_s ("" when unknown).
+_tm_secs() {
+    _tm_now
+    if [ -n "$1" ] && [ -n "$_tm_v" ]; then _tm_s=$((_tm_v - $1)); else _tm_s=""; fi
+}
+# Builtins only: a label that is not plain is replaced, so nothing unescaped
+# ever reaches the JSON line.
+_tm_labelonly() {
+    case "$1" in '' | *[!A-Za-z0-9_:.-]*) printf 'invalid' ;; *) printf '%s' "$1" ;; esac
+}
+phase_begin() {
+    _tm_name="$(_tm_labelonly "$1")"
+    _tm_now; _tm_t0="$_tm_v"
+}
+# phase_end <gate rc, or "" when the gate never ran>
+phase_end() {
+    [ -n "$_tm_name" ] || return 0
+    _tm_secs "$_tm_t0"
+    _tm_entry="{\"phase\":\"$_tm_name\",\"secs\":${_tm_s:-null},\"rc\":${1:-null}}"
+    _tm_sum="${_tm_sum:+$_tm_sum, }$_tm_name ${_tm_s:-?}s"
+    _tm_json="${_tm_json:+$_tm_json,}$_tm_entry"
+    _tm_name=""
+}
+precommit_timing_report() {
+    _tm_secs "$_tm_total_t0"
+    _tm_total="$_tm_s"
+    echo "pre-commit timing: ${_tm_sum:-(no phase reached)}; total ${_tm_total:-?}s (exit $1)" >&2
+    if [ -n "$_tm_start_iso" ]; then _tm_start="\"$_tm_start_iso\""; else _tm_start="null"; fi
+    _tm_line="{\"start\":$_tm_start,\"phases\":[$_tm_json],\"total\":${_tm_total:-null},\"exit\":$1}"
+    _tm_dir="$(git rev-parse --git-common-dir 2>/dev/null)"
+    case "$_tm_dir" in
+        "" | /*) ;;
+        *) _tm_dir="$(cd "$_tm_dir" 2>/dev/null && pwd)" ;;
+    esac
+    if [ -z "$_tm_dir" ] || ! { printf '%s\n' "$_tm_line" >>"$_tm_dir/precommit-timing.jsonl"; } 2>/dev/null; then
+        echo "pre-commit timing: could not append to ${_tm_dir:-<git common dir>}/precommit-timing.jsonl (timing not logged; the commit decision is unaffected)" >&2
+    fi
+}
+precommit_on_exit() {
+    _tm_rc=$?
+    precommit_timing_report "$_tm_rc"
+    exit "$_tm_rc"
+}
+trap precommit_on_exit EXIT
+
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || {
     echo "pre-commit: not inside a git work tree — refusing to certify this commit" >&2
     exit 1
@@ -207,8 +296,10 @@ run() {
     label="$2"
     shift 2
     path="$REPO/scripts/$scanner"
+    phase_begin "$label"
 
     if [ ! -f "$path" ]; then
+        phase_end ""
         echo "" >&2
         echo "$label: scripts/$scanner is missing — cannot determine, so blocking." >&2
         echo "  (restore the file, or bypass deliberately with --no-verify)" >&2
@@ -218,6 +309,7 @@ run() {
 
     python3 "$path" "$@"
     status=$?
+    phase_end "$status"
     [ "$status" -eq 0 ] && return
 
     echo "" >&2

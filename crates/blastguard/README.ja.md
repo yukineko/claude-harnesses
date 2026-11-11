@@ -584,6 +584,12 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   本文を読む。引用無しの区切り・閉じていない本文・インタプリタ/シェルの読み手・
 >   here-document の後のコマンドがあれば従来通り本文も走査する
 >   （`src/detect/heredoc.rs` の `redirect_view_without_quoted_here_document_body`）。
+>   例外（user ruling 2026-11-08、issue #1602）: 引用付き区切りの本文を `cat`/`tee` が**全て**非 shell の
+>   コードファイル（`.rs`・`.go`・`.c`・`.ts`・`.js` 等。`.sh`・拡張子無し・`.py` は含まない）へ書き、
+>   後続行が `ls`・`cat`・`wc`・`grep` 等の閉じた一覧のコマンドだけ（書いたファイルを実行・source・build
+>   しうるものが無い）なら、後続コマンドがあっても本文は shell 行として走査しない
+>   （`non_shell_code_file_here_document`。`cat > x.rs <<'EOF'` / `` ` `` / `EOF` / `ls` は allow）。
+>   `cargo test`・`sh x.rs` 等が後続にあれば従来通り本文も走査する。
 >   例外（backlog ffce9c59）: 読み手が `git commit -F -` で区切りが引用付きのとき、opener 行の
 >   `|`・`;`・`&&`・`||` 以降（`2>&1 | grep …; git log -1` 等）は git の stdout を受けるか本文を
 >   見ない別コマンドなので、本文は data として全ルールから外す。後続部分は本文から独立した

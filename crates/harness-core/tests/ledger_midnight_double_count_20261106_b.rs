@@ -29,7 +29,6 @@ fn control_distinct_sessions_sum() {
 /// RED: one session whose cumulative cost is 49.06 (24.18 spent before
 /// midnight) must total 49.06 across all days, not 73.24.
 #[test]
-#[ignore = "RED: GitHub #1553 ledger.record stores cumulative session cost under each day key"]
 fn session_crossing_midnight_is_not_double_counted() {
     let mut l = Ledger::default();
     l.record("4a9031bf", "2026-11-05", 24.18);

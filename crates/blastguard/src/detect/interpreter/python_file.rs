@@ -1,6 +1,8 @@
 //! The Python judge for a QUOTED here-document body that `cat`/`tee` writes
 //! to a literal `.py` file (user ruling 2026-11-08; the shape rule is
-//! [`super::super::heredoc::python_file_here_document`]). Kept apart from
+//! [`super::super::heredoc::python_file_here_document`]), and the
+//! Python-tokenised redirect view of a body `python3 -` runs as its program
+//! ([`python_redirect_view`]). Kept apart from
 //! `interpreter.rs` for the file-size cap.
 //!
 //! Such a body is CODE (a later `python3 edit.py` runs it), so it is not data;
@@ -17,6 +19,7 @@
 //! statically is an Ask. The Python reading never decides alone when the body
 //! may also be read as shell (see [`PythonFileVerdict::also_shell`]).
 
+use super::super::heredoc::HereDocumentParts;
 use super::super::{is_assignment, normalized_command, quote_aware_words, split_segments};
 use super::{code_building_marker, python_semantics as sem, shell_calls, Ctx, Decision};
 
@@ -76,13 +79,24 @@ pub(in crate::detect) struct PythonFileVerdict {
 /// docstring that names `git stash clear` is Allow. A file written here and run
 /// by a LATER, separate tool call is judged on that call's own text, as for
 /// data files.
+///
+/// Relative paths are placed where the program runs: every command the judge
+/// derives from the program (`rm p`, `: > p`, an `os.system` line) is judged
+/// with `cd <dir> && ` before it (`Ctx::cwd_prefix`), so the shell rules'
+/// own `cd` tracking places it (tests/subagent_heredoc_fp_20261108.rs added
+/// the `cd <wt>;` head; before this a `cd /etc && … os.remove('hosts')` body
+/// was judged as `rm hosts` in the session's directory and allowed). Only ONE
+/// absolute `cd` operand with no `.` / `..` component, `~` or glob is
+/// followed; any other `cd` before the reader, and any directory change on a
+/// later line ([`later_lines_change_dir`]), puts [`UNPLACED_CWD`] there
+/// instead, a `cd` the shell rules cannot resolve, so a relative path is
+/// judged as after `cd "$X"` (the restrictive side).
 pub(in crate::detect) fn python_file_body_verdict(
-    body: &str,
-    after: &str,
-    targets: &[String],
+    parts: &HereDocumentParts,
     depth: usize,
     ctx: &Ctx<'_>,
 ) -> Option<PythonFileVerdict> {
+    let (body, after, targets) = (&parts.body, &parts.after, &parts.targets);
     let first = body.lines().next().unwrap_or("");
     if first.starts_with("#!") && !first.contains("python") {
         return None;
@@ -90,9 +104,44 @@ pub(in crate::detect) fn python_file_body_verdict(
     let also_shell = targets.iter().any(|t| !t.ends_with(".py"))
         || !later_lines_run_only_with_python(after, targets);
     let argv = script_argv(after, targets);
+    let prefix = match parts.cds_before.as_slice() {
+        _ if later_lines_change_dir(after) => Some(UNPLACED_CWD.to_string()),
+        [] => None,
+        [dir] if plain_absolute_dir(dir) => Some(format!("cd {dir} && ")),
+        _ => Some(UNPLACED_CWD.to_string()),
+    };
+    let placed = prefix.map(|p| Ctx {
+        cwd_prefix: Some(p),
+        ..ctx.clone()
+    });
     Some(PythonFileVerdict {
-        verdict: python_program_verdict(body, argv.as_ref(), depth, ctx),
+        verdict: python_program_verdict(body, argv.as_ref(), depth, placed.as_ref().unwrap_or(ctx)),
         also_shell,
+    })
+}
+
+/// The `cd` the Python judge puts before its derived commands when the
+/// directory the program runs in is not known: an unset variable, which the
+/// shell rules' `cd` tracking cannot resolve.
+const UNPLACED_CWD: &str = "cd \"$BLASTGUARD_UNPLACED_CWD\" && ";
+
+/// True for an absolute directory spelled with no `..` / `.` component, `~`,
+/// glob or expansion: the one `cd` operand [`python_file_body_verdict`] follows.
+fn plain_absolute_dir(dir: &str) -> bool {
+    dir.starts_with('/')
+        && !dir.contains(['~', '*', '?', '[', '$', '`', '\\', '\'', '"'])
+        && dir.split('/').all(|c| c != ".." && c != ".")
+}
+
+/// True when a word of `after` (the lines after a written file's closing
+/// delimiter) may change the directory a later run of the file starts in:
+/// `cd`, `pushd` or `popd` (also after a `(` / `{`), or a `-C` / `--chdir`
+/// option (`env -C`, `git -C`). A closed, restrictive check: such a run's
+/// relative paths are then not placed at all.
+fn later_lines_change_dir(after: &str) -> bool {
+    quote_aware_words(after).iter().any(|w| {
+        let w = w.trim_start_matches(['(', '{']);
+        matches!(w, "cd" | "pushd" | "popd") || w.starts_with("-C") || w.starts_with("--chdir")
     })
 }
 
@@ -303,8 +352,47 @@ fn later_lines_run_only_with_python(after: &str, targets: &[String]) -> bool {
             .filter(|(_, w)| names.iter().any(|n| w.contains(n)) || w.contains(['*', '?', '[']))
             .map(|(k, _)| k)
             .collect();
-        refs.is_empty() || (refs.len() == 1 && python_script_word(&words) == Some(refs[0]))
+        refs.is_empty()
+            || (refs.len() == 1
+                && (python_script_word(&words) == Some(refs[0])
+                    || pytest_file_word(&words) == Some(refs[0])))
     })
+}
+
+/// The index of the file word of a segment that runs pytest on ONE file
+/// through a python interpreter: [`python_script_word`]'s head (assignments,
+/// `env`, `python3`, flag-only options), then `-m pytest`, then only the
+/// option words `-q`/`-v`/`-x`/`-s` (combined, e.g. `-qx`) and
+/// `--no-header`, and exactly one other word, the file. pytest imports that
+/// file as a Python module, so its body is read as Python, never as shell.
+/// `None` for every other shape (an option taking a value, two files, …).
+fn pytest_file_word(words: &[String]) -> Option<usize> {
+    let k = python_head_end(words)?;
+    if words.get(k).map(String::as_str) != Some("-m")
+        || words.get(k + 1).map(String::as_str) != Some("pytest")
+    {
+        return None;
+    }
+    // An fd duplication (`2>&1`) names no file; any other redirect word counts
+    // as a file word, so the segment is refused.
+    let fd_dup = |w: &str| {
+        let rest = w.strip_prefix(|c: char| c.is_ascii_digit()).unwrap_or(w);
+        rest.strip_prefix(">&")
+            .is_some_and(|n| n.len() == 1 && n.chars().all(|c| c.is_ascii_digit()))
+    };
+    let option = |w: &str| {
+        fd_dup(w)
+            || w == "--no-header"
+            || w.strip_prefix('-')
+                .is_some_and(|f| !f.is_empty() && f.chars().all(|c| "qvxs".contains(c)))
+    };
+    let files: Vec<usize> = (k + 2..words.len())
+        .filter(|&j| !option(&words[j]))
+        .collect();
+    match files.as_slice() {
+        [file] if !words[*file].starts_with('-') => Some(*file),
+        _ => None,
+    }
 }
 
 /// The index of the script word of a segment that runs a python interpreter
@@ -313,6 +401,17 @@ fn later_lines_run_only_with_python(after: &str, targets: &[String]) -> bool {
 /// directory), then only flag-only options (`-u`, `-B`, …; never `-c`, `-m`,
 /// `-W`, `-X` or `-`), then the script word. `None` for every other shape.
 fn python_script_word(words: &[String]) -> Option<usize> {
+    let k = python_head_end(words)?;
+    let script = words.get(k)?;
+    (!script.starts_with('-')).then_some(k)
+}
+
+/// The index just past the interpreter head of a python run: leading
+/// `NAME=value` assignments, optionally `env` with only assignments after it,
+/// `python` / `python3` / `python3.N` (any directory), then flag-only options
+/// (`-u`, `-B`, …). Stops at the first word that is not such an option; an
+/// option outside the flag-only set other than `-m` answers `None`.
+fn python_head_end(words: &[String]) -> Option<usize> {
     let mut k = 0;
     while words.get(k).is_some_and(|w| is_assignment(w)) {
         k += 1;
@@ -338,13 +437,15 @@ fn python_script_word(words: &[String]) -> Option<usize> {
         let Some(flags) = w.strip_prefix('-') else {
             break;
         };
+        if flags == "m" {
+            break;
+        }
         if flags.is_empty() || !flags.chars().all(|c| "bBdEiIOPqsSuvR".contains(c)) {
             return None;
         }
         k += 1;
     }
-    let script = words.get(k)?;
-    (!script.starts_with('-')).then_some(k)
+    Some(k)
 }
 
 /// `src` with `#` comments removed and the contents of plain string literals
@@ -429,6 +530,76 @@ fn code_view(src: &str) -> Option<String> {
         return None;
     }
     out.push_str(&fields);
+    Some(out)
+}
+
+/// `src` (a Python program) with the text of every string literal and `#`
+/// comment, and the literal's quote delimiters, replaced by spaces, newlines
+/// kept, prefixes and all code kept as is, EXCEPT a literal or comment for
+/// whose text `keep` answers true: that text is kept, but with each `'`, `"`
+/// and `\` in it replaced by a space. An f-string is a literal here too (its fields
+/// are Python code, never shell). `None` when `src` does not tokenise
+/// ([`code_view`]'s rule: an unclosed string, an unbalanced bracket), so the
+/// caller keeps the raw body. Used only for the redirect view of a body that
+/// `python3 -` runs ([`super::super::heredoc::python_stdin_redirect_view`]).
+pub(in crate::detect) fn python_redirect_view(
+    src: &str,
+    keep: impl Fn(&str) -> bool,
+) -> Option<String> {
+    code_view(src)?;
+    let chars: Vec<char> = src.chars().collect();
+    let mut out = String::with_capacity(src.len());
+    // A kept text loses its quote and backslash characters (each becomes a
+    // space): they mean nothing to the shell here, and an apostrophe left in
+    // (`# don't > \`x\``) would open a shell quote that swallows the lines
+    // after the body, a real `> /etc/hosts` included.
+    let blank = |text: &[char], out: &mut String| {
+        let kept = keep(&text.iter().collect::<String>());
+        out.extend(text.iter().map(|&c| match c {
+            '\n' => '\n',
+            '\'' | '"' | '\\' => ' ',
+            c if kept => c,
+            _ => ' ',
+        }));
+    };
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '#' {
+            let start = i;
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
+            blank(&chars[start..i], &mut out);
+            continue;
+        }
+        if c != '\'' && c != '"' {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let triple = chars.get(i + 1) == Some(&c) && chars.get(i + 2) == Some(&c);
+        let q = if triple { 3 } else { 1 };
+        out.extend(std::iter::repeat_n(' ', q));
+        i += q;
+        let start = i;
+        loop {
+            // `code_view` accepted `src`, so every literal closes.
+            let d = *chars.get(i)?;
+            if d == '\\' {
+                i += 2;
+                continue;
+            }
+            if d == c && (!triple || (chars.get(i + 1) == Some(&c) && chars.get(i + 2) == Some(&c)))
+            {
+                break;
+            }
+            i += 1;
+        }
+        blank(&chars[start..i], &mut out);
+        out.extend(std::iter::repeat_n(' ', q));
+        i += q;
+    }
     Some(out)
 }
 

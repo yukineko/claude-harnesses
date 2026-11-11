@@ -401,6 +401,13 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains("is not a command blastguard recognises") {
         return "unrecognised-wrapper";
     }
+    // 12ba5845: a `condukt` invocation that turns autonomy on (`state
+    // autonomy-set on`, or an autonomy env-assignment prefix). Keyed on the
+    // phrase `detect::condukt` puts in every reason it emits, imported rather
+    // than retyped so the two cannot drift apart.
+    if reason.contains(crate::detect::AUTONOMY_SELF_GRANT) {
+        return "autonomy-self-grant";
+    }
 
     // The analyser itself crashed. Distinct from every rule above: it says
     // nothing about the command, only that blastguard failed. A recurring one of

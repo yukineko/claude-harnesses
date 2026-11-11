@@ -62,6 +62,7 @@ use harness_core::verdict::Determination;
 
 mod budget;
 mod compound;
+mod condukt;
 mod cwd;
 mod denoise;
 mod echo_script_file;
@@ -101,6 +102,7 @@ use verdict_acc::VerdictAcc;
 use budget::VISIT_PROBE;
 use budget::{depth_exhausted, take_budget, ANALYSIS_BUDGET, MAX_ANALYSIS_NODES, MAX_SHELL_DEPTH};
 
+pub(crate) use condukt::AUTONOMY_SELF_GRANT;
 use denoise::denoised_eval_rescan;
 use file_tool::{detect_edit, detect_write};
 use gh::analyze_gh;
@@ -1864,6 +1866,10 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         "-exec" | "-execdir" | "-ok" | "-okdir" => analyze_find(&tokens[idx..], depth, ctx),
         "rm" => analyze_rm(rest, ctx),
         "gh" => analyze_gh(rest),
+        // 12ba5845: granting autonomy is human-only. `tokens[..idx]` carries the
+        // env-assignment prefix (`CONDUKT_AUTONOMOUS=1 condukt …`) that
+        // `command_candidates` skipped to reach this command word.
+        "condukt" => condukt::analyze_condukt(&tokens[..idx], rest),
         "git" => {
             // daf7611b: `git -c core.pager="rm -rf ~/x" log` — command-valued
             // config set for this one command. Either side's Deny wins.

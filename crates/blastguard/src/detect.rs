@@ -60,6 +60,7 @@ use crate::model::Decision;
 use crate::scope::{Placement, SafeRoots};
 use harness_core::verdict::Determination;
 
+mod budget;
 mod compound;
 mod cwd;
 mod denoise;
@@ -92,6 +93,10 @@ mod verdict_acc;
 mod words;
 
 use verdict_acc::VerdictAcc;
+
+#[cfg(test)]
+use budget::VISIT_PROBE;
+use budget::{depth_exhausted, take_budget, ANALYSIS_BUDGET, MAX_ANALYSIS_NODES, MAX_SHELL_DEPTH};
 
 use denoise::denoised_eval_rescan;
 use file_tool::{detect_edit, detect_write};
@@ -634,57 +639,6 @@ fn unreadable_operand(tool: &str, field: &str) -> Decision {
 // Bash handling
 // ---------------------------------------------------------------------------
 
-/// How deep we recurse into shell-evaluation wrappers (`eval`, `sh -c`, …)
-/// before giving up. Bounds work and guards against pathological nesting; no
-/// realistic command line wraps a destructive payload this many layers deep.
-const MAX_SHELL_DEPTH: usize = 8;
-
-/// Total number of `detect_bash` invocations allowed for ONE top-level command.
-///
-/// D4 (verified availability defect, fixed): a depth cap alone does NOT bound
-/// the work, because the re-analysis arms FAN OUT. `analyze_find` loops over
-/// every `-exec` position and re-analyses the whole remaining tail, which still
-/// contains the other `-exec` tokens, so the branching factor is the number of
-/// `-exec` tokens and the tree is O(N^MAX_SHELL_DEPTH). Measured on a single
-/// invocation of `find . ` + `-exec find . `×N + `-exec echo {} ` + `+ `×(N+1):
-/// N=20 → 2.2s, N=24 → 8.2s, N=28 → 30s, N=32 (a 503-byte command) → >60s,
-/// killed. blastguard is a PreToolUse hook, so that hangs the user's turn.
-///
-/// This caps total NODE VISITS across the whole recursion tree, not just its
-/// depth. Ordinary commands use fewer than a dozen visits; the cap is three
-/// orders of magnitude above that, so it cannot be reached by real work.
-const MAX_ANALYSIS_NODES: u32 = 2_000;
-
-thread_local! {
-    /// Remaining node budget for the top-level command currently being analysed.
-    static ANALYSIS_BUDGET: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-thread_local! {
-    /// Test-only work probe: when installed, counts EVERY `detect_bash` entry
-    /// (admitted or budget-rejected) on this thread. It is an atomic shared via
-    /// `Arc` so a watcher thread can observe the count while the analysis is
-    /// still running, and fail on an unbounded tree instead of hanging. It is
-    /// deliberately independent of `ANALYSIS_BUDGET`: removing the budget must
-    /// make this count explode, not leave it untouched.
-    static VISIT_PROBE: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicU64>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Consume one unit of the analysis budget. Returns false when it is exhausted.
-fn take_budget() -> bool {
-    ANALYSIS_BUDGET.with(|b| {
-        let left = b.get();
-        if left == 0 {
-            false
-        } else {
-            b.set(left - 1);
-            true
-        }
-    })
-}
-
 /// Re-analyse a payload string that a shell-evaluation position will EXECUTE
 /// (`sh -c <payload>`, `eval <payload>`, `flock -c <payload>`).
 ///
@@ -713,29 +667,6 @@ fn analyze_shell_payload(payload: &str, depth: usize, ctx: &Ctx<'_>) -> Decision
         ));
     }
     Decision::Allow
-}
-
-/// The recursion cap was reached, so analysis DID NOT FINISH. That is the same
-/// condition as budget exhaustion a few lines up (`detect_bash`'s D4 guard) —
-/// "we did not finish looking, so we have no verdict" — and it gets the same
-/// answer: an Ask, which `Decision::hardened` turns into the pre-existing Deny
-/// whenever no human is available to answer.
-///
-/// Every one of the five depth-capped sites used to resolve to `Allow`, either
-/// by returning it outright or by skipping the recursion and falling through to
-/// `acc.finish()`. A destructive payload nested past the cap was therefore
-/// waved through *unanalysed* — the exact fail-open this module exists to
-/// prevent, sitting one line away from the sibling condition that handles it
-/// correctly.
-///
-/// The reason deliberately differs from the budget ask so the two unfinished-
-/// analysis causes stay distinguishable in the logs.
-fn depth_exhausted() -> Decision {
-    Decision::ask(
-        "command nests shell/wrapper invocations deeper than blastguard analyses \
-         (recursion depth limit) — analysis did not finish, so blastguard cannot \
-         vouch for it either way",
-    )
 }
 
 fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {

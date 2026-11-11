@@ -64,6 +64,14 @@
   `scripts/test-pass-record.py`（`<git common dir>/test-pass-record/`）に記録し、記録があれば再実行しない。
   記録が無い・壊れている・tree が違うときは実行し、その場で実行できないなら block する。
   `gate-bypass.py` の到達判定はこの worktree の HEAD だけを見る（他 worktree の HEAD は見ない）。
+- **pre-push の fail-open mutation（issue #1584 / backlog 4f19b628）** — push される range が
+  `crates/<gate>/`（GATE_CRATES の 7 crate）を触ったとき、その gate crate ごとに
+  `scripts/check-fail-open-mutation.py --crate <gate> --keep-going` をその場で実行する（test id
+  `fail-open-mutation:<gate>`、同じ tree で pass 記録があれば再実行しない）。range が計算できない時と
+  スクリプト自身が変わった時は全 gate crate。root の Cargo.toml / Cargo.lock だけの変更では走らない。
+  粒度は crate であって、変更された個々の `Undetermined` arm ではない（スクリプトに arm 単位の選択子は
+  無く、scenario が登録されていない arm はここでは測られない）。非0終了（NOT CAUGHT / inconclusive /
+  error / revert 失敗 / crash）・スクリプト不在・python3 不在はすべて block。
 
 ## 記録そのものの定期監査 — `scripts/record-audit.py`（backlog 0f55003a）
 

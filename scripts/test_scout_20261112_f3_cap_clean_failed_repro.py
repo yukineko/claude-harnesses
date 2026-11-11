@@ -5,9 +5,11 @@ cap-target-dir.sh runs `cargo clean || true` and then unconditionally writes
 HAPPENED (test-changed-crates.sh reads it to tell "binary deleted under my run"
 from a genuine failure), so a failed clean must not leave it.
 
-Run: RUN_BACKLOG_REPROS=1 python3 scripts/test_scout_20261112_f3_cap_clean_failed_repro.py
-Remove the skip decorator in the commit that fixes the defect. Stdlib only;
-`cargo` is a PATH stub, nothing touches a real target dir.
+Run: python3 -m pytest --runxfail scripts/test_scout_20261112_f3_cap_clean_failed_repro.py
+(the backlog repro). Without --runxfail the RED reports as xfailed; strict=True
+turns it into a failure (XPASS) once the defect is fixed, so remove the xfail
+mark in the commit that fixes it. `cargo` is a PATH stub, nothing touches a
+real target dir.
 """
 
 from __future__ import annotations
@@ -19,12 +21,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE / "cap-target-dir.sh"
 
-OPEN = unittest.skipUnless(
-    os.environ.get("RUN_BACKLOG_REPROS"),
-    "scout 2026-11-12 F3: open defect, set RUN_BACKLOG_REPROS=1 to run; remove skip when fixed",
+OPEN = pytest.mark.xfail(
+    strict=True,
+    reason="scout 2026-11-12 F3: open defect; remove this mark when fixed",
 )
 
 

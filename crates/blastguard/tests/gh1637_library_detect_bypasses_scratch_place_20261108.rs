@@ -34,14 +34,23 @@ const INSIDE: &str = "git clone https://example.invalid/r.git /tmp/clone";
 #[test]
 fn control_scoped_model_refuses_clone_outside_managed_places() {
     let d = detect_scoped("Bash", Some(&bash(OUTSIDE)), &model());
-    assert!(!matches!(d, Decision::Allow), "control: expected Ask/Deny, got {d:?}");
+    assert!(
+        !matches!(d, Decision::Allow),
+        "control: expected Ask/Deny, got {d:?}"
+    );
 }
 
 /// CONTROL (passes): a clone inside a managed place is Allow under both entries.
 #[test]
 fn control_clone_inside_managed_place_allowed_both_entries() {
-    assert!(matches!(detect_scoped("Bash", Some(&bash(INSIDE)), &model()), Decision::Allow));
-    assert!(matches!(detect("Bash", Some(&bash(INSIDE))), Decision::Allow));
+    assert!(matches!(
+        detect_scoped("Bash", Some(&bash(INSIDE)), &model()),
+        Decision::Allow
+    ));
+    assert!(matches!(
+        detect("Bash", Some(&bash(INSIDE))),
+        Decision::Allow
+    ));
 }
 
 /// RED: the library entry must not be weaker than the scoped one for the same command.

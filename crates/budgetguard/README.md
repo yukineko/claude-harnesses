@@ -5,7 +5,9 @@
    re-parsing the transcript (JSONL), including sub-agent spend;
 2. estimates the USD cost using the built-in pricing table;
 3. updates a local **daily ledger** (`~/.budgetguard/state/ledger.json`) with
-   this session's latest cost (not a sum over stops), under a ledger lock: while
+   this session's latest cost (not a sum over stops; today's entry is that
+   cost minus what earlier days already hold for the session, so a session
+   crossing local midnight is not counted twice), under a ledger lock: while
    another session holds the lock the ledger is not written and the day total
    is unmeasured; the day key is the **local** date;
 4. checks the session total and the day's cumulative total against configured

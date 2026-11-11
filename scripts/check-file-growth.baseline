@@ -14,7 +14,7 @@
 7271 crates/condukt/src/main.rs
 6322 crates/condukt/src/state.rs
 4892 crates/condukt/src/verify.rs
-5254 crates/condukt/src/worktree.rs
+5189 crates/condukt/src/worktree.rs
 2699 crates/condukt/src/wt_reconcile.rs
 2176 crates/fugu-router/src/main.rs
 3647 crates/overwatch/src/store.rs

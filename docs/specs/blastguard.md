@@ -451,11 +451,28 @@ forge・condukt のスケジューラが再利用）。
   は whose-tree の Deny、`ln -sf /etc/hosts F && echo x > F` は system directory の Deny）。tree 内を指す
   link は tree 内で判定されるので従来の Allow のまま。判定不能 — 非 literal な source/destination・Unknown cwd・
   `rsync`/`install -l`・source 自体が同じ行で relink される連鎖・2 つ以上の command が同じ target を relink・
-  model しない command（`sh -c`・`python3 -c`・`git mv` 等）が relink 語（`ln`/`mv`/`cp`/`rsync`/`install`/
+  model しない command（`sh -c`・`python3 -c`・`git -C D mv` 等）が relink 語（`ln`/`mv`/`cp`/`rsync`/`install`/
   `ditto`/`symlink`/`rename` 等）と、target の path 成分または非 literal な語を両方含む — は Ask（Allow しない）。
   `/dev/null`・`/dev/stdout`・`/dev/stderr` は対象外。**RESIDUAL**: relink 語も target も文面に現れない
   command による relink（archive 展開・build script・tracked symlink の `git checkout`）は model しない。
-  redirect 以外の write verb（`cp` の destination 等）にはこの model を適用していない。
+- **同じ行で relink された command operand も実際の着地点で判定する（tests/relink_shapes_20261111.rs の
+  r4/r5/r8）** — `detect_bash` の per-segment loop で、segment をそのまま判定する前に
+  `relink::operand_landing_verdict` が上と同じ relink model（同じ segment 範囲・同じ判定不能条件）を path で
+  判定される operand に適用する: `cp`/`mv`/`install`/`ln` の destination（`-t`/`--target-directory=` 含む）、
+  `mv` の source、`rm`/`unlink`/`rmdir`・`tee`/`touch`/`truncate`/`shred`/`chmod`/`chown`/`chgrp` の operand、
+  `sed -i` の file、`sort -o` の出力、`uniq` の出力 operand。最後の成分を辿らない operand（`rm`/`unlink`/`rmdir`・
+  `mv` の source・`-T` か `ln -n`/`-h` の destination。末尾 `/` は除く）は親 directory だけを着地点へ解決し
+  名前を付け足す（`ln -s /etc d && rm d` は link を消すだけなので不変）。それ以外は path 全体を解決する。
+  着地点が hook 時点の物理 path と異なる write operand（削除・`mv` の source 以外）は、まず着地点そのものを
+  redirect と同じ保護パス axis と system directory axis（`'<verb> target <着地点>' writes into a system
+  directory`）で判定する — verb 自身の rule に system path axis が無い `sort -o`・`touch`・`truncate` も
+  着地点を名指しで Deny する（tests/relink_operands_20261112.rs の h2/h4/h6）。次に、その operand をその物理着地点へ書き換えた segment を、全 rule で**追加で**
+  判定する（書いたままの判定は残るので verdict は厳しくなる方向にしか動かない）。`ln -sfn /etc src/d &&
+  rm -rf src/d/hosts`・`… && cp src/a.rs src/d/hosts`・`… && tee d/hosts` は着地点（macOS では
+  `/private/etc/hosts`）の system directory Deny。判定不能は Ask。relink 語を含まない行では何もしない。
+  `git mv SRC… DEST`（`git` と `mv` の間に option が無い形）は `mv` として model する（redirect 側も同じ）。
+  model しない relink 語扱いにすると、同じ path 成分を含む無関係な operand まで Ask になる
+  （`git mv src/a.rs src/b.rs && rm src/c.rs` は Allow のまま。k4）。`git -C D mv` 等は従来どおり model しない。
 - **非 shell・非 Python のコードファイルへ書く quoted here-document の本文は shell 行として読まない
   （user ruling 2026-11-08、issue #1602、tests/backlog_cd_redirect_fp_20261107.rs）** — `detect_bash` の
   手順 0c。`heredoc::non_shell_code_file_here_document` が、`.py` の手順 0b と同じ形（前行は

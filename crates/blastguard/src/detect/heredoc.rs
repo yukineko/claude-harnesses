@@ -622,6 +622,12 @@ pub(super) enum OutputTargets {
     /// Used ONLY by [`non_shell_code_file_here_document`], whose body is then
     /// judged by no shell rule; lines after the close are checked there.
     NonShellCodeFiles,
+    /// NO output target: the reader is a Python interpreter that runs the body
+    /// as its program (`python3 - <<'EOF'`, `python3 <<'EOF'`), with a QUOTED
+    /// delimiter. Used ONLY by [`python_stdin_redirect_view`], whose body is
+    /// then tokenised as Python for the redirect view; lines after the close
+    /// are allowed and stay in the view.
+    PythonStdin,
 }
 
 /// A here-document split by [`here_document_body_parts`].
@@ -635,6 +641,14 @@ pub(super) struct HereDocumentParts {
     /// The files the reader writes the body to, quotes removed (only for
     /// [`OutputTargets::PythonFiles`]; empty otherwise).
     pub(super) targets: Vec<String>,
+    /// The byte length of the text before the body in `without_body` (every
+    /// line up to and including the opener line).
+    pub(super) head_len: usize,
+    /// The operand of every `cd` that runs before the reader, in order: a
+    /// permitted `cd <literal>` line before the opener, or a `cd <literal>`
+    /// head peeled off the opener line. The body's relative paths are relative
+    /// to where these lead, not to the session's directory.
+    pub(super) cds_before: Vec<String>,
 }
 
 /// User ruling 2026-11-08 (narrows the extension part of 6cf12ce9): a QUOTED
@@ -659,8 +673,95 @@ pub(super) struct HereDocumentParts {
 /// as shell. An empty body answers
 /// `None` (nothing to judge), as does every other shape: the body then stays in
 /// the command and is judged as shell lines, exactly as before.
+///
+/// The opener line may also carry `cd <literal>` heads joined by `;`
+/// (`cd <wt>; cat > scripts/x.py <<'EOF'`, tests/subagent_heredoc_fp_20261108.rs;
+/// [`python_reader_consumer`]). `cds_before` lists every `cd` operand that
+/// runs before the reader, so the judge places the body's relative paths there.
 pub(super) fn python_file_here_document(cmd: &str) -> Option<HereDocumentParts> {
     here_document_body_parts(cmd, OutputTargets::PythonFiles).filter(|p| !p.body.is_empty())
+}
+
+/// The redirect view ([`redirect_view_without_quoted_here_document_body`]) of a
+/// command whose QUOTED here-document body a Python interpreter runs as its
+/// program (`cd <wt> && python3 - <<'EOF'`, tests/subagent_heredoc_fp_20261108.rs:
+/// the Rust text `Ok(how) => anyhow!(` inside a Python triple-quoted string
+/// was read as the relative redirect `> anyhow!(`). The shape is
+/// [`python_file_here_document`]'s with [`OutputTargets::PythonStdin`]: the
+/// reader is `python`, `python3` or `python3.N` spelled bare, with only
+/// flag-only options (never `-c`, `-m`), at most a `-` operand and no
+/// redirect ([`python_stdin_reader`]); any lines may follow the close.
+///
+/// The body is tokenised as Python ([`super::interpreter::python_redirect_view`])
+/// and the text of each string literal and comment is blanked (newlines kept),
+/// so a `>` there is not read as a shell redirect, EXCEPT a literal or comment
+/// whose own text holds a `>` AND a `$` or a backtick (a superset of the `>`
+/// whose target carries an expansion): that text is kept (its `'`, `"` and `\`
+/// blanked, so it cannot open a shell quote over later lines) and its `>` is
+/// judged as before (user ruling R2, 2026-10-14: an undeterminable `>` in
+/// program text is an Ask, never Allow). The literals' quote delimiters are
+/// blanked too. Code outside
+/// literals is kept as is. A body that does not tokenise answers `None`, and
+/// the view keeps the body. Only the line-level redirect scans read this view;
+/// every other rule (the interpreter scans included) still reads the full body.
+pub(super) fn python_stdin_redirect_view(cmd: &str) -> Option<String> {
+    let parts = here_document_body_parts(cmd, OutputTargets::PythonStdin)?;
+    let keep = |text: &str| text.contains('>') && text.contains(['$', '`']);
+    let body = super::interpreter::python_redirect_view(&parts.body, keep)?;
+    let (head, tail) = parts.without_body.split_at(parts.head_len);
+    Some(format!("{head}{body}{tail}"))
+}
+
+/// [`opener_consumer`], then further `cd <literal>` heads ([`permitted_prefix_line`])
+/// followed by `;` are peeled too, for the two Python shapes
+/// ([`python_file_here_document`], [`python_stdin_redirect_view`]) only. A
+/// `cd` runs before the reader and never sees the body; the opener line, `cd`
+/// included, stays in the command and is judged by every shell rule, and the
+/// `cd` operand goes into `cds_before`.
+fn python_reader_consumer(line: &str) -> &str {
+    let mut rest = opener_consumer(line);
+    while let Some((head, tail)) = rest.split_once(';') {
+        let words = quote_aware_words(head);
+        if !(words.first().is_some_and(|w| w == "cd") && permitted_prefix_line(head)) {
+            break;
+        }
+        rest = opener_consumer(tail);
+    }
+    rest
+}
+
+/// The `cd` operands of `heads` (text split at `&&` / `;`), in order: only
+/// heads [`permitted_prefix_line`] accepts as `cd <literal>`.
+fn cd_operands(heads: &str) -> Vec<String> {
+    heads
+        .split([';', '&'])
+        .filter_map(|h| match quote_aware_words(h).as_slice() {
+            [cd, dir] if cd == "cd" && permitted_prefix_line(h) => Some(dir.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// True when `words` (the reader text, quote-aware, redirects and the
+/// here-document opener removed) are a bare Python interpreter that runs its
+/// stdin: `python`, `python3` or `python3.N`, then only flag-only options
+/// (`-u`, `-B`, …; never `-c`, `-m`, `-W`, `-X`), then at most `-`.
+fn python_stdin_reader(words: &[&str]) -> bool {
+    let Some((head, rest)) = words.split_first() else {
+        return false;
+    };
+    let versioned = head.strip_prefix("python").is_some_and(|v| {
+        v.is_empty()
+            || v == "3"
+            || v.strip_prefix("3.")
+                .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+    });
+    let rest = rest.strip_suffix(&["-"]).unwrap_or(rest);
+    versioned
+        && rest.iter().all(|w| {
+            w.strip_prefix('-')
+                .is_some_and(|f| !f.is_empty() && f.chars().all(|c| "bBdEiIOPqsSuvR".contains(c)))
+        })
 }
 
 /// User ruling 2026-11-08 (issue #1602, the non-Python half of the ruling
@@ -803,10 +904,16 @@ pub(super) fn is_python_file_target(target: &str) -> bool {
 ///
 /// Every other rule (the per-segment loop, the interpreter and egress scans)
 /// still reads the full text, body included.
+///
+/// When that shape does not apply, a QUOTED body run by `python3 -` gets the
+/// Python-tokenised view of [`python_stdin_redirect_view`] instead.
 pub(super) fn redirect_view_without_quoted_here_document_body(
     cmd: &str,
 ) -> std::borrow::Cow<'_, str> {
-    strip_here_document_body(cmd, OutputTargets::AnyTarget)
+    match here_document_body_parts(cmd, OutputTargets::AnyTarget) {
+        Some(parts) => std::borrow::Cow::Owned(parts.without_body),
+        None => python_stdin_redirect_view(cmd).map_or(std::borrow::Cow::Borrowed(cmd), Into::into),
+    }
 }
 
 /// The shared shape rule of [`strip_data_here_document_bodies`] and
@@ -867,11 +974,24 @@ fn here_document_body_parts(cmd: &str, targets: OutputTargets) -> Option<HereDoc
     // command text so every rule still judges them; `$` / backtick are then
     // refused only in the remaining reader text. [`opener_consumer`]'s own
     // contract is unchanged.
+    let python_reader = matches!(
+        targets,
+        OutputTargets::PythonFiles | OutputTargets::PythonStdin
+    );
     let consumer = if redirect_view_of_quoted {
         redirect_view_consumer(&opener_line)
+    } else if python_reader {
+        python_reader_consumer(&opener_line)
     } else {
         opener_consumer(&opener_line)
     };
+    let mut cds_before: Vec<String> = lines[..idx]
+        .iter()
+        .flat_map(|l| cd_operands(&text(l)))
+        .collect();
+    cds_before.extend(cd_operands(
+        &opener_line[..opener_line.len() - consumer.len()],
+    ));
     // Backlog ffce9c59: `git commit -F - <<'EOF' | cat` / `<<'EOF'; git log`.
     // The body is git's stdin only; the tail stays in the text and is judged.
     let git_reader = if here_document_delimiter_is_quoted(&opener_line) {
@@ -906,12 +1026,13 @@ fn here_document_body_parts(cmd: &str, targets: OutputTargets) -> Option<HereDoc
     // and every redirect rule still judges them; only the body leaves.
     // The Python-file split keeps every later line too: the body is judged as
     // Python whether or not a later line runs it, and the later lines are
-    // judged as shell.
+    // judged as shell. So does the Python-stdin redirect view: its later lines
+    // stay in the view.
     // The non-shell-code split checks its later lines itself
     // ([`non_shell_code_file_here_document`]).
     let later_commands_ok = matches!(
         targets,
-        OutputTargets::PythonFiles | OutputTargets::NonShellCodeFiles
+        OutputTargets::PythonFiles | OutputTargets::PythonStdin | OutputTargets::NonShellCodeFiles
     ) || (targets == OutputTargets::AnyTarget
         && here_document_reader_stores_nothing(consumer));
     if lines[close + 1..]
@@ -921,6 +1042,7 @@ fn here_document_body_parts(cmd: &str, targets: OutputTargets) -> Option<HereDoc
         return None;
     }
     let mut out: String = lines[..=idx].concat();
+    let head_len = out.len();
     out.push_str(&lines[close..].concat());
     Some(HereDocumentParts {
         without_body: out,
@@ -931,6 +1053,8 @@ fn here_document_body_parts(cmd: &str, targets: OutputTargets) -> Option<HereDoc
         } else {
             Vec::new()
         },
+        head_len,
+        cds_before,
     })
 }
 
@@ -1396,6 +1520,9 @@ pub(super) fn strip_output_redirect_operator(word: &str) -> Option<&str> {
 /// (only from [`python_file_here_document`]) accepts ONLY `cat` or `tee`, and
 /// only when every redirect target and `tee` operand is a literal path and at
 /// least one of them is a `.py` file ([`is_python_file_target`]).
+/// [`OutputTargets::PythonStdin`] (only from [`python_file_here_document`]) accepts
+/// ONLY a bare Python interpreter running its stdin ([`python_stdin_reader`])
+/// with no redirect at all.
 pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets) -> bool {
     let raw = quote_aware_words(line);
     let mut words: Vec<&str> = Vec::new();
@@ -1445,6 +1572,8 @@ pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets)
                     is_data_file_target_shape(unquote_data_file_target(target))
                 }
                 OutputTargets::NonShellCodeFiles => is_non_shell_code_file_target(target),
+                // The interpreter's own output is not the body; no redirect.
+                OutputTargets::PythonStdin => false,
             };
             if !target_ok {
                 return false;
@@ -1487,6 +1616,9 @@ pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets)
             }
             _ => false,
         };
+    }
+    if targets == OutputTargets::PythonStdin {
+        return python_stdin_reader(&words);
     }
     if targets == OutputTargets::PythonFiles {
         return match words.first().copied() {

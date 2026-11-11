@@ -309,6 +309,9 @@ struct Ctx<'a> {
     /// but it cannot be shown NOT to be one, so it is never cleared to Allow.
     /// `None` everywhere else: an ordinary command line keeps today's Deny.
     program_text_redirects: Option<&'a std::cell::RefCell<Vec<String>>>,
+    /// `cd <dir> && ` that [`analyze_shell_payload`] puts before its payload: the
+    /// directory a here-document's Python program runs in (`python_file_body_verdict`).
+    cwd_prefix: Option<String>,
 }
 
 /// Marker every Ask produced under the user's 2026-10-14 rulings R1/R2 carries
@@ -361,6 +364,7 @@ impl<'a> Ctx<'a> {
             git_eligible_rest: git_worktree_eligible(command)
                 .or_else(|| tied_rest.and_then(git_worktree_eligible)),
             program_text_redirects: None,
+            cwd_prefix: None,
         }
     }
 
@@ -381,6 +385,7 @@ impl<'a> Ctx<'a> {
             checkout_exempt_eligible: self.checkout_exempt_eligible,
             git_eligible_rest: self.git_eligible_rest.clone(),
             program_text_redirects: self.program_text_redirects,
+            cwd_prefix: self.cwd_prefix.clone(),
         }
     }
 
@@ -398,6 +403,7 @@ impl<'a> Ctx<'a> {
             checkout_exempt_eligible: self.checkout_exempt_eligible,
             git_eligible_rest: self.git_eligible_rest.clone(),
             program_text_redirects: self.program_text_redirects,
+            cwd_prefix: self.cwd_prefix.clone(),
         }
     }
 
@@ -803,6 +809,8 @@ fn take_budget() -> bool {
 pub(super) const EXPANSION_HEAD_TAIL: &str = " is an expansion whose value only exists at run time — blastguard cannot tell what program this runs";
 
 fn analyze_shell_payload(payload: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+    let prefixed = ctx.cwd_prefix.as_ref().map(|p| format!("{p}{payload}"));
+    let payload = prefixed.as_deref().unwrap_or(payload);
     let d = detect_bash(payload, depth + 1, ctx);
     if d.is_blocking() {
         return d;
@@ -878,14 +886,7 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // included. `None` keeps the body in the text. See
     // `heredoc::python_file_here_document`.
     if let Some(parts) = heredoc::python_file_here_document(cmd) {
-        let judged = interpreter::python_file_body_verdict(
-            &parts.body,
-            &parts.after,
-            &parts.targets,
-            depth,
-            ctx,
-        );
-        if let Some(py) = judged {
+        if let Some(py) = interpreter::python_file_body_verdict(&parts, depth, ctx) {
             if py.verdict.is_deny() {
                 return py.verdict;
             }

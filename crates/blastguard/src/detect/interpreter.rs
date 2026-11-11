@@ -19,7 +19,7 @@ use comments::strip_hash_comments;
 use inert_literal::{has_dynamic_code_execution, inert_literal_bodies};
 use osascript::osascript_app_delete;
 pub(super) use osascript::osascript_program_delete;
-pub(super) use python_file::python_file_body_verdict;
+pub(super) use python_file::{python_file_body_verdict, python_redirect_view};
 pub(super) use shell_calls::python_body_segment_verdict;
 
 /// Non-shell interpreters that run an inline program supplied as a string

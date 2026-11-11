@@ -226,8 +226,7 @@ macro_rules! case {
 case!(
     target_cd_python_stdin_rust_arrow_in_string,
     assert_allow_both,
-    "cd {WT} && python3 - <<'EOF'\ns=open('a.rs').read()\ns=s.replace('''            ),\n            Err(d) => bail!(''','''/// return the error to report (always an error; see that function's doc).\n        Ok(how) => anyhow!(\n''')\nopen('a.rs','w').write(s)\nEOF",
-    ignore = "RED 2026-11-08: subagent denied with \"'> anyhow!(' is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve\" (a `>` inside a Python string is not a shell redirect)"
+    "cd {WT} && python3 - <<'EOF'\ns=open('a.rs').read()\ns=s.replace('''            ),\n            Err(d) => bail!(''','''/// return the error to report (always an error; see that function's doc).\n        Ok(how) => anyhow!(\n''')\nopen('a.rs','w').write(s)\nEOF"
 );
 
 // Bisect: the same body without the leading `cd`, and the same cd with a
@@ -268,8 +267,7 @@ case!(
 case!(
     target_cat_py_shebang_dot_git_fixture_path_not_run,
     assert_allow_both,
-    "cd {WT}; cat > scripts/test_precommit_timing.py <<'EOF'\n#!/usr/bin/env python3\nfrom pathlib import Path\nlog_path = Path('.') / \".git\" / \"precommit-timing.jsonl\"\nprint(log_path.is_file())\nEOF",
-    ignore = "RED 2026-11-08: subagent denied with \"`#!/usr/bin/env python3` takes its program from stdin, and that program names `.git`, a protected gate/config path\" (the body is data written to a .py file, not run)"
+    "cd {WT}; cat > scripts/test_precommit_timing.py <<'EOF'\n#!/usr/bin/env python3\nfrom pathlib import Path\nlog_path = Path('.') / \".git\" / \"precommit-timing.jsonl\"\nprint(log_path.is_file())\nEOF"
 );
 
 // As observed: the file is then run via pytest in the same command. The
@@ -278,8 +276,7 @@ case!(
 case!(
     target_cat_py_shebang_dot_git_fixture_path_then_pytest,
     assert_allow_both,
-    "cd {WT}; cat > scripts/test_precommit_timing.py <<'EOF'\n#!/usr/bin/env python3\nfrom pathlib import Path\nlog_path = Path('.') / \".git\" / \"precommit-timing.jsonl\"\nprint(log_path.is_file())\nEOF\npython3 -m pytest scripts/test_precommit_timing.py 2>&1 | tail -2",
-    ignore = "RED 2026-11-08: same observed block as above; the Python only reads .git/precommit-timing.jsonl and never writes under .git"
+    "cd {WT}; cat > scripts/test_precommit_timing.py <<'EOF'\n#!/usr/bin/env python3\nfrom pathlib import Path\nlog_path = Path('.') / \".git\" / \"precommit-timing.jsonl\"\nprint(log_path.is_file())\nEOF\npython3 -m pytest scripts/test_precommit_timing.py 2>&1 | tail -2"
 );
 
 // Bisect: without the shebang line the verdict is still non-Allow (measured:
@@ -289,8 +286,7 @@ case!(
 case!(
     target_cat_py_no_shebang_dot_git_fixture_path_not_run,
     assert_allow_both,
-    "cd {WT}; cat > scripts/test_precommit_timing.py <<'EOF'\nfrom pathlib import Path\nlog_path = Path('.') / \".git\" / \"precommit-timing.jsonl\"\nprint(log_path.is_file())\nEOF",
-    ignore = "RED 2026-11-08: Ask/subagent-Deny \"`log_path` is a command blastguard has no rule for, and .git is a protected gate/config path\" (a .py heredoc body, not run, is data)"
+    "cd {WT}; cat > scripts/test_precommit_timing.py <<'EOF'\nfrom pathlib import Path\nlog_path = Path('.') / \".git\" / \"precommit-timing.jsonl\"\nprint(log_path.is_file())\nEOF"
 );
 
 // Fail-open guards: Python that really writes under .git, when run, must not

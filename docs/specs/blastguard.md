@@ -427,7 +427,9 @@ forge・condukt のスケジューラが再利用）。
 - **`.py` へ書く quoted here-document の本文は Python として判定する（user ruling 2026-11-08、
   tests/quoted_heredoc_backtick_fp_20261108.rs）** — `detect_bash` の手順 0b。
   `heredoc::python_file_here_document` が、data strip と同じ形（前行は `permitted_prefix_line`、opener 行は
-  1 個の here-document・`$`/backtick 無し・quote 均衡、本文は終端行で閉じる、奇妙な空白無し）で、
+  1 個の here-document・`$`/backtick 無し・quote 均衡、本文は終端行で閉じる、奇妙な空白無し。opener 行の
+  先頭の `cd <literal> &&` に加え `cd <literal>;` も剥がす＝`python_reader_consumer`、
+  tests/subagent_heredoc_fp_20261108.rs）で、
   区切りが**引用付き**、読み手が `cat`/`tee` で書き込み先（redirect 先と `tee` operand）が全て literal path で
   うち 1 個以上が `.py`、本文が空でないときだけ本文を切り出す（書き込み先は `targets` に返す）。終端後の行は
   何行あってもよく、本文を除いた command text（`without_body`）に残って shell の全規則で判定される。
@@ -482,16 +484,35 @@ forge・condukt のスケジューラが再利用）。
   - Python として token 化できない本文は Ask。
   最終判定は Deny > Ask > Allow で `without_body` の判定と合成する。ただし **書き込み先に `.py` 以外が
   ある**か、**終端後の行が書き込み先を python interpreter（`python`/`python3`/`python3.N`、`env` 経由可）の
-  直接の script 引数以外で参照する**（`find -exec`・`xargs`・`sh x.py`・`./x.py`・未知の command。
+  直接の script 引数、または `python3 -m pytest` の唯一の file 引数（option は `-q`/`-v`/`-x`/`-s` の組と
+  `--no-header`、fd 複製 `2>&1` のみ。`pytest_file_word`）以外で参照する**（`find -exec`・`xargs`・`sh x.py`・`./x.py`・未知の command。
   参照 = file 名を含む語か glob 文字を含む語。allowlist であり列挙ではない）ときは、本文込みの command 全体も
   shell 規則で判定して合成する（Python の判定だけで決めない）。1 行目が python を含まない `#!` 行のときは
   `None` で従来どおり本文を shell 行としてのみ判定する。`.sh`・拡張子無し・他の言語の拡張子のみの書き込みは
   従来どおり shell 判定。
   **未対応（RESIDUAL）**: 静的解析の外にある効果（`sys.modules`・`globals()` 経由の参照、
   `loop.subprocess_shell` 等の method 経由の spawner、`os.rename`/`shutil.move` の宛先が home 等の場合）は
-  拾えない。python 実行時の cwd が `cd` で変わる場合の相対 path は hook の cwd で判定される。Python として
+  拾えない。Python として
   不正な本文（裸の `git stash clear` 行など）は python では実行されないので Allow。後続の別 tool call で
   `sh x.py` されたら、その call の text だけで判定される（data file と同じ residual）。
+  **実行時の cwd**: 本文から導いた command（`rm p`・`: > p`・`os.system` の行）は、opener より前の `cd`
+  （`cds_before`）が絶対 path 1 個（`.`/`..` component・`~`・glob 無し）なら `cd <dir> && ` を前置して
+  （`Ctx::cwd_prefix`）shell 規則の `cd` 追跡で置き場所を判定する。それ以外の `cd`、または終端後の行に
+  `cd`/`pushd`/`popd`/`-C`/`--chdir` がある場合は解決不能な `cd "$BLASTGUARD_UNPLACED_CWD" && ` を前置し、
+  相対 path は `cd "$X"` 後と同じく制限側（以前は hook の cwd で判定され、`cd /etc && … os.remove('hosts')`
+  が Allow だった）。
+- **`python3 -` が実行する quoted here-document の本文は、行単位 redirect scan では Python として
+  token 化して読む（tests/subagent_heredoc_fp_20261108.rs）** — `redirect_view_without_quoted_here_document_body`
+  の data 形が当たらないとき `heredoc::python_stdin_redirect_view`。形は上と同じ（読み手は素の
+  `python`/`python3`/`python3.N`、flag のみの option、`-` 以外の operand・redirect 無し。終端後の行は任意で
+  view に残る）。`interpreter::python_redirect_view` が本文を token 化し、string literal と `#` comment の
+  中身と literal の引用符を空白に置き換える（改行は保持）。ただし中身に `>` と `$`/backtick の両方を含む
+  literal・comment は残し（`'`・`"`・`\` だけ空白化）、user ruling R2（2026-10-14: program text 中の判定不能
+  な `>` は Ask、Allow にしない）を従来どおり適用する。token 化できない本文は view に本文を残す。
+  この view を読むのは行単位の `>`/`>>` scan だけで、interpreter scan 等の他の規則は本文全体を読む
+  （stdin の program を Python 判定器だけで判定することはしない: 判定器は `shutil.copy2` 等を拾わない）。
+  **RESIDUAL**: `cd /etc && python3 - <<'EOF'` の `open('hosts','w')` は既存の interpreter scan で Allow の
+  まま（本変更の前後で同じ。測定 2026-11-11）。
 
 ### module 責務
 

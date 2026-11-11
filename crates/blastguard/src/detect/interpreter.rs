@@ -19,7 +19,9 @@ use comments::strip_hash_comments;
 use inert_literal::{has_dynamic_code_execution, inert_literal_bodies};
 use osascript::osascript_app_delete;
 pub(super) use osascript::osascript_program_delete;
-pub(super) use python_file::{python_file_body_verdict, python_redirect_view};
+pub(super) use python_file::{
+    python_file_body_verdict, python_redirect_view, python_stdin_body_reading,
+};
 pub(super) use shell_calls::python_body_segment_verdict;
 
 /// Non-shell interpreters that run an inline program supplied as a string
@@ -889,7 +891,9 @@ pub(super) struct ProgramTextSink {
 /// program (one that does not tokenise, imports a module outside the
 /// allowlist, or references a runner) is judged exactly as before; an
 /// undeterminable target still resolves to the R2 Ask; every other check is
-/// unchanged.
+/// unchanged. `strings_are_data` (only from the `python3 - <<'EOF'` audit,
+/// [`python_file::python_stdin_body_reading`]) stops the descent at layer 0:
+/// the parser showed no string of that program reaches a shell or a process.
 pub(super) fn interpreter_code_verdict(
     shape: &str,
     payloads: &[String],
@@ -897,6 +901,7 @@ pub(super) fn interpreter_code_verdict(
     ctx: &Ctx<'_>,
     expansion_possible: bool,
     python: bool,
+    strings_are_data: bool,
 ) -> Decision {
     let redirects = ProgramTextSink {
         rows: std::cell::RefCell::new(Vec::new()),
@@ -919,7 +924,7 @@ pub(super) fn interpreter_code_verdict(
         depth,
         ctx,
         &program_ctx,
-        expansion_possible,
+        (expansion_possible, strings_are_data),
         &mentions,
     );
     // A destructive spelling that `inert_literal_bodies` showed sits only inside
@@ -1046,7 +1051,7 @@ fn interpreter_program_verdict(
     depth: usize,
     ctx: &Ctx<'_>,
     program_ctx: &Ctx<'_>,
-    expansion_possible: bool,
+    (expansion_possible, strings_are_data): (bool, bool),
     mentions: &Mentions,
 ) -> Decision {
     // Descend through nested quoting rather than stopping at the first layer.
@@ -1091,7 +1096,8 @@ fn interpreter_program_verdict(
     }
     let mut layer: Vec<String> = payloads.to_vec();
     for depth_of_layer in 0..MAX_QUOTE_LAYERS {
-        if layer.is_empty() {
+        // Deeper layers are string contents: not code when `strings_are_data`.
+        if layer.is_empty() || (strings_are_data && depth_of_layer > 0) {
             break;
         }
         let mut next = Vec::new();
@@ -1599,6 +1605,7 @@ pub(super) fn analyze_code_interpreter(
             ctx,
             true,
             strip_version_suffix(cmd) == "python",
+            false,
         );
         if verdict.is_deny() {
             return verdict;
@@ -1705,6 +1712,7 @@ from its strings, so it cannot vouch for it"
         depth,
         ctx,
         !here_document_delimiter_is_quoted(&text),
+        false,
         false,
     );
     if matches!(verdict, Decision::Allow) {

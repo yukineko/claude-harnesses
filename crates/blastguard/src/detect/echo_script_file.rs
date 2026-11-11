@@ -8,8 +8,21 @@
 //! A writer is a pipe stage whose command (behind any exec-wrapper,
 //! [`command_candidates`]) is `echo` or `printf`, writing its stdout to a file
 //! through `>`, `>>`, `>|`, `&>`, `1>` (glued or not), or through a following
-//! `| tee FILE…` / `| cat > FILE` stage. Writes to the same file (leading `./`
-//! ignored) accumulate in command order: `>` replaces, `>>` appends.
+//! `| tee FILE…` / `| cat > FILE` stage. A writer may stand behind a reserved
+//! word (`do echo …`, `then echo …`, `{ echo …`) or inside a subshell word or
+//! a substitution the shell runs (`(echo … > x.sh)`, `$(echo … > x.sh)`)
+//! (tests/echo_script_variants_20261111.rs F2 / F6). Writes to the same file
+//! (leading `./` ignored) accumulate in command order: `>` replaces, `>>`
+//! appends; the content after EVERY write is judged, so neither a later
+//! overwrite (which may fail: an inherited `noclobber`, `set -C`, a `chmod`;
+//! user ruling 2026-11-11 "Back to Deny", V16) nor a split across two
+//! `printf`s hides a script that ran.
+//!
+//! `echo` output is followed through every shell's reading of it (user ruling
+//! 2026-11-11 "Deny", V13; [`echo_content`]): bash (escapes only under `-e`),
+//! zsh or bash `xpg_echo` (escapes unless `-E`), dash (only a first `-n` is an
+//! option, escapes always). Every reading is judged, so the verdict is Deny
+//! when any reading is, and Ask when none is but one cannot be reproduced.
 //!
 //! The file is judged only when some OTHER stage of the command may run it:
 //!   * a stage whose command word names the file (`./x.sh`, `/p/x.sh`, a word
@@ -19,50 +32,44 @@
 //!     `. x.sh`, `sh < x.sh`, `cat x.sh | sh`, `find . -exec sh {} \;`);
 //!   * the same, read as a Python program, for a pipeline that names the file
 //!     and holds a `python` / `python3` / `python3.N` word (`python3 x.py`);
+//!   * the same, read as that interpreter's program, for a pipeline that
+//!     names the file and holds another code-interpreter word
+//!     (`is_code_interpreter`: `node x.js`, `perl x.pl`, …; F7);
 //!   * any of these inside a subshell word (`(sh x.sh)`) or a substitution the
 //!     shell runs (`$(sh x.sh)`, `<(…)`), searched in those bodies as in a
-//!     statement of their own (tests/echo_script_variants_20261111.rs V9).
+//!     statement of their own (V9).
 //!
 //! A word names the file when its literal value has the file's basename
 //! (`sh /tmp/x.sh` names `x.sh`), or, when the word holds an expansion, when
 //! its text contains that basename. A written path that is not a literal
 //! (`> "$F"`) is run by any pipeline holding a shell, `.` or `source` word, or
-//! a command word with `$` or a backtick (and by any holding a python word, as
-//! a Python program). These over-approximate on purpose: a false match only
-//! means the written text is read as a program.
-//!
-//! What is judged is the content the file may hold when a statement runs it
-//! (V12 / C1). When the statements run once each in written order
-//! (`runs_in_written_order`: joined only by `;`/newlines or only by `&&`, no
-//! `||`, `&`, grouping, substitution, here-document, loop, branch, `cd`,
-//! `set`, … ), that is the content after the last write before the running
-//! statement, any write in the running statement itself, and every earlier
-//! content a statement between it and that last write may have left in place
-//! (a statement that is not made of writer stages alone, which might make the
-//! overwrite fail); a write after the run is not what ran. Otherwise every
-//! content after every write is judged, so neither a later overwrite nor a
-//! split across two `printf`s hides a script that ran in between.
+//! a command word with `$` or a backtick (and by any holding a python or other
+//! code-interpreter word, as that program). These over-approximate on purpose:
+//! a false match only means the written text is read as a program.
 //!
 //! Judged means a shell run's content goes through every shell rule
-//! (`analyze_shell_payload`) and a Python run's through the Python judge of
-//! the `.py` here-document twin (`python_written_program_verdict`, its full
-//! verdict), Deny over Ask over Allow. Content blastguard cannot reproduce is
-//! an Ask, never Allow:
+//! (`analyze_shell_payload`); a Python run's through the Python judge of the
+//! `.py` here-document twin (`python_written_program_verdict`, its full
+//! verdict); another interpreter's through the program audit its inline-eval
+//! flag gets (`interpreter_code_verdict`, as for `node -e '<content>'`, whose
+//! destructive-call list includes `rmSync`); Deny over Ask over Allow.
+//! Content blastguard cannot reproduce is an Ask, never Allow:
 //!   * an argument with `$`, a backtick, a backslash, a glob or brace
 //!     character, a bare operator character, or a `~` other than a leading
 //!     `~` / `~/` (kept as `~`, which the shell rules read as home, the same
 //!     path the writing shell would put there);
-//!   * `echo` output holding a backslash (dash's and zsh's `echo` expand
-//!     escapes, bash's does under `-e` or `xpg_echo`);
+//!   * an `echo` reading that expands an escape other than `\\`, `\a`, `\b`,
+//!     `\c`, `\f`, `\n`, `\r`, `\t`, `\v`;
+//!   * more than [`MAX_READINGS`] readings after appends;
 //!   * a `printf` format with any `%` directive other than `%%`, any escape
 //!     other than `\n`, `\t`, `\\`, a format starting with `-`, or arguments
 //!     after the format (format reuse is not modelled).
 
 use super::words::basename;
 use super::{
-    analyze_shell_payload, command_candidates, executed_substitution_payloads, is_shell,
-    normalized_command, quote_aware_words, scan_balanced, split_statements_into_pipe_stages, Ctx,
-    Decision, Stop, VerdictAcc,
+    analyze_shell_payload, command_candidates, executed_substitution_payloads,
+    interpreter_code_verdict, is_code_interpreter, is_shell, normalized_command, quote_aware_words,
+    scan_balanced, split_statements_into_pipe_stages, Ctx, Decision, Stop, VerdictAcc,
 };
 
 /// A file an `echo`/`printf` stage writes: its literal path (leading `./`
@@ -105,14 +112,21 @@ struct Write {
     append: bool,
 }
 
-/// The text a writer puts on its stdout, or why it cannot be reproduced.
-type Content = Result<String, String>;
+/// One text a writer may put on its stdout (one shell's reading of it), or
+/// why that text cannot be reproduced.
+type Reading = Result<String, String>;
 
-/// One file written in the command: every content it holds after a write,
-/// with the index of the statement that wrote it.
+/// The readings of one writer's stdout, or of a file's content after a write.
+type Content = Vec<Reading>;
+
+/// The most readings a file's content is followed through; past it the rest
+/// are replaced by one unreproducible reading (an Ask).
+const MAX_READINGS: usize = 16;
+
+/// One file written in the command: every content it holds after a write.
 struct WrittenFile {
     target: Target,
-    snapshots: Vec<(usize, Content)>,
+    snapshots: Vec<Content>,
     writer: String,
 }
 
@@ -120,12 +134,12 @@ struct WrittenFile {
 /// of `cmd` may run; Allow when there are none. See the module documentation.
 pub(super) fn echoed_script_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let statements = split_statements_into_pipe_stages(cmd);
-    let (files, writer_stages) = written_files(&statements);
-    let linear = runs_in_written_order(cmd, &statements);
+    let mut files: Vec<WrittenFile> = Vec::new();
+    let mut writer_stages: Vec<(usize, usize)> = Vec::new();
+    collect_writes(&statements, &mut files, &mut writer_stages);
     let mut acc = VerdictAcc::default();
     for file in &files {
-        // Each (snapshot, reader) pair is judged once.
-        let mut judged: Vec<(usize, bool)> = Vec::new();
+        let mut runs = Runs::default();
         for (s, stages) in statements.iter().enumerate() {
             let others: Vec<&str> = stages
                 .iter()
@@ -133,21 +147,19 @@ pub(super) fn echoed_script_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> D
                 .filter(|(i, _)| !writer_stages.contains(&(s, *i)))
                 .map(|(_, st)| st.as_str())
                 .collect();
-            let runs = statement_may_run(&others, &file.target);
-            if !runs.shell && !runs.python {
-                continue;
+            runs.add(statement_may_run(&others, &file.target));
+        }
+        let mut readings: Vec<&Reading> = Vec::new();
+        for reading in file.snapshots.iter().flatten() {
+            if !readings.contains(&reading) {
+                readings.push(reading);
             }
-            for k in contents_at_run(file, s, linear, &statements, &writer_stages) {
-                for (python, wanted) in [(false, runs.shell), (true, runs.python)] {
-                    if !wanted || judged.contains(&(k, python)) {
-                        continue;
-                    }
-                    judged.push((k, python));
-                    let verdict =
-                        judge_content(file, &file.snapshots[k].1, python, cmd, depth, ctx);
-                    if let Some(deny) = acc.record(verdict) {
-                        return deny;
-                    }
+        }
+        for reader in runs.readers() {
+            for reading in &readings {
+                let verdict = judge_content(file, reading, &reader, cmd, depth, ctx);
+                if let Some(deny) = acc.record(verdict) {
+                    return deny;
                 }
             }
         }
@@ -155,158 +167,102 @@ pub(super) fn echoed_script_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> D
     acc.finish()
 }
 
-/// The verdict on one content of `file`, read as a shell script or, when
-/// `python`, as the Python program a Python interpreter runs.
+/// What runs a written file.
+enum Reader {
+    Shell,
+    Python,
+    /// Another code interpreter (`node`, `perl`, …), by its normalized name.
+    Code(String),
+}
+
+/// The verdict on one reading of `file`'s content, read by `reader`.
 fn judge_content(
     file: &WrittenFile,
-    content: &Content,
-    python: bool,
+    reading: &Reading,
+    reader: &Reader,
     cmd: &str,
     depth: usize,
     ctx: &Ctx<'_>,
 ) -> Decision {
+    let (how, what) = match reader {
+        Reader::Shell => (String::new(), "shell script".to_string()),
+        Reader::Python => (" with Python".to_string(), "Python program".to_string()),
+        Reader::Code(name) => (format!(" with `{name}`"), format!("`{name}` program")),
+    };
     let shape = format!(
-        "`{}` writes `{}`, and another part of this command may run that file{}, so the \
-written text is judged as the {} it is",
+        "`{}` writes `{}`, and another part of this command may run that file{how}, so the \
+written text is judged as the {what} it is",
         file.writer,
         file.target.shown(),
-        if python { " with Python" } else { "" },
-        if python {
-            "Python program"
-        } else {
-            "shell script"
-        }
     );
-    match content {
+    match reading {
         Err(why) => Decision::ask(format!(
             "{shape}; {why}, so blastguard cannot see the program the file will hold"
         )),
         Ok(text) if text.trim().is_empty() => Decision::Allow,
-        Ok(text) if python => {
-            super::interpreter::python_written_program_verdict(&shape, text, cmd, depth, ctx)
-        }
-        Ok(text) => match analyze_shell_payload(text, depth, ctx) {
-            Decision::Ask(r) => Decision::ask(format!("{shape}: {r}")),
-            d => d,
+        Ok(text) => match reader {
+            Reader::Python => {
+                super::interpreter::python_written_program_verdict(&shape, text, cmd, depth, ctx)
+            }
+            Reader::Code(_) => interpreter_code_verdict(
+                &shape,
+                std::slice::from_ref(text),
+                depth,
+                ctx,
+                false,
+                false,
+                false,
+            ),
+            Reader::Shell => match analyze_shell_payload(text, depth, ctx) {
+                Decision::Ask(r) => Decision::ask(format!("{shape}: {r}")),
+                d => d,
+            },
         },
     }
 }
 
-/// The indices into `file.snapshots` of the contents the file may hold when
-/// statement `s` runs it. Every snapshot when `!linear`. Otherwise the
-/// snapshots statement `s` itself writes (its stages run at once) and every
-/// one the last statement writing before it wrote (likewise), plus every
-/// earlier one that a statement
-/// between it and that last write may have left in place: a write is dropped
-/// only when every statement after it, up to and including the one that
-/// wrote the last snapshot, is made of writer stages alone, and only for a
-/// literal path (an expansion may name another file each time). A snapshot
-/// written after `s` is not what `s` runs.
-fn contents_at_run(
-    file: &WrittenFile,
-    s: usize,
-    linear: bool,
+/// Every reading of `prev` followed by every reading of `add` (an append).
+fn appended(prev: &Content, add: &Content) -> Content {
+    let mut out: Content = Vec::new();
+    for p in prev {
+        for a in add {
+            let r = match (p, a) {
+                (Ok(p), Ok(a)) => Ok(format!("{p}{a}")),
+                (Err(why), _) | (_, Err(why)) => Err(why.clone()),
+            };
+            if !out.contains(&r) {
+                out.push(r);
+            }
+        }
+    }
+    if out.len() > MAX_READINGS {
+        out.truncate(MAX_READINGS);
+        out.push(Err(format!(
+            "its appends combine into more than {MAX_READINGS} readings, more than blastguard \
+follows"
+        )));
+    }
+    out
+}
+
+/// Adds to `files` every file the `echo` / `printf` writers of `statements`
+/// write, in command order, and to `writer_stages` the (statement, stage) of
+/// every writer stage (a `tee` / `cat` stage that writes a writer's pipe
+/// included). A writer inside a subshell word, a `{ …; }` group, a loop or
+/// branch body, or a substitution the shell runs ([`nested_bodies`]) writes
+/// its file too (tests/echo_script_variants_20261111.rs F2 / F6); its stage
+/// is not a top-level writer stage.
+fn collect_writes(
     statements: &[Vec<String>],
-    writer_stages: &[(usize, usize)],
-) -> Vec<usize> {
-    let all = 0..file.snapshots.len();
-    if !linear {
-        return all.collect();
-    }
-    let at_or_before: Vec<usize> = all.filter(|&k| file.snapshots[k].0 <= s).collect();
-    let Some(&last) = at_or_before
-        .iter()
-        .rev()
-        .find(|&&k| file.snapshots[k].0 < s)
-    else {
-        return at_or_before;
-    };
-    if matches!(file.target, Target::Opaque(_)) {
-        return at_or_before;
-    }
-    let last_stmt = file.snapshots[last].0;
-    let pure = |t: usize| (0..statements[t].len()).all(|i| writer_stages.contains(&(t, i)));
-    at_or_before
-        .into_iter()
-        .filter(|&k| {
-            let stmt = file.snapshots[k].0;
-            // The stages of one pipeline write at once, in no fixed order:
-            // a snapshot of the last writing statement is kept as well.
-            stmt >= last_stmt || !(stmt + 1..=last_stmt).all(pure)
-        })
-        .collect()
-}
-
-/// Reserved words, grouping words and builtins after which the statements of
-/// a command need not run once each in written order with the files they
-/// write left as written: a loop or branch, a `cd` (a literal path names
-/// another file), `set` (`set -C` makes a later `>` fail and keep the earlier
-/// content), `trap`, `eval`, a sourced file, a function.
-const NONLINEAR_WORDS: &[&str] = &[
-    "if", "then", "elif", "else", "fi", "while", "until", "for", "do", "done", "case", "esac",
-    "select", "function", "{", "}", "cd", "pushd", "popd", "set", "trap", "eval", ".", "source",
-    "exec", "alias",
-];
-
-/// True when every statement of `cmd` runs at most once, in written order,
-/// each later one only after every earlier one has run: statements joined by
-/// `;` / newlines only, or by `&&` only, with no `||`, background `&`,
-/// here-document, subshell, substitution, comment, or [`NONLINEAR_WORDS`]
-/// word. Only then may a write hide an earlier one from a later run
-/// ([`contents_at_run`]); anything else keeps every content.
-fn runs_in_written_order(cmd: &str, statements: &[Vec<String>]) -> bool {
-    let chars: Vec<char> = cmd.chars().collect();
-    let (mut in_s, mut in_d) = (false, false);
-    let (mut and, mut semi) = (false, false);
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        let next = chars.get(i + 1).copied();
-        i += 1;
-        if in_s {
-            in_s = c != '\'';
-            continue;
-        }
-        match c {
-            '\\' => {
-                i += 1;
-                continue;
-            }
-            '"' => in_d = !in_d,
-            '$' | '`' if in_d && (c == '`' || next == Some('(')) => return false,
-            _ if in_d => {}
-            '\'' => in_s = true,
-            '(' | ')' | '`' | '#' => return false,
-            '<' if next == Some('<') => return false,
-            '|' if next == Some('|') => return false,
-            '&' if next == Some('&') => {
-                and = true;
-                i += 1;
-            }
-            '&' if next == Some('>') || (i >= 2 && matches!(chars[i - 2], '>' | '<')) => {}
-            '&' => return false,
-            ';' | '\n' => semi = true,
-            _ => {}
-        }
-    }
-    if in_s || in_d || (and && semi) {
-        return false;
-    }
-    !statements.iter().flatten().any(|stage| {
-        stage_words(stage)
-            .iter()
-            .any(|w| NONLINEAR_WORDS.contains(&w.as_str()))
-    })
-}
-
-/// Every file the `echo` / `printf` writers of `statements` write, and the
-/// (statement, stage) of every writer stage (a `tee` / `cat` stage that
-/// writes a writer's pipe included).
-fn written_files(statements: &[Vec<String>]) -> (Vec<WrittenFile>, Vec<(usize, usize)>) {
-    let mut files: Vec<WrittenFile> = Vec::new();
-    let mut writer_stages: Vec<(usize, usize)> = Vec::new();
+    files: &mut Vec<WrittenFile>,
+    writer_stages: &mut Vec<(usize, usize)>,
+) {
     for (s, stages) in statements.iter().enumerate() {
         for (i, stage) in stages.iter().enumerate() {
+            for body in nested_bodies(stage) {
+                let inner = split_statements_into_pipe_stages(&body);
+                collect_writes(&inner, files, &mut Vec::new());
+            }
             let words = stage_words(stage);
             let Some(mut writer) = echo_writer(&words) else {
                 continue;
@@ -336,15 +292,13 @@ fn written_files(statements: &[Vec<String>]) -> (Vec<WrittenFile>, Vec<(usize, u
                 };
                 let file = &mut files[idx];
                 let next = match (w.append, file.snapshots.last()) {
-                    (true, Some((_, Ok(prev)))) => content.clone().map(|c| format!("{prev}{c}")),
-                    (true, Some((_, Err(why)))) => Err(why.clone()),
+                    (true, Some(prev)) => appended(prev, &content),
                     _ => content.clone(),
                 };
-                file.snapshots.push((s, next));
+                file.snapshots.push(next);
             }
         }
     }
-    (files, writer_stages)
 }
 
 /// An `echo` / `printf` stage: its name, its argument words (quotes still on),
@@ -359,9 +313,21 @@ struct EchoWriter {
 
 fn echo_writer(words: &[String]) -> Option<EchoWriter> {
     let tokens: Vec<&str> = words.iter().map(String::as_str).collect();
-    let idx = command_candidates(&tokens)
-        .into_iter()
-        .find(|&i| matches!(normalized_command(tokens[i]).as_str(), "echo" | "printf"))?;
+    // A loop or branch body (`do echo …`, `then echo …`) or a group
+    // (`{ echo …`) starts with a reserved word.
+    let start = tokens
+        .iter()
+        .position(|t| !LEADING_KEYWORDS.contains(t))
+        .unwrap_or(tokens.len());
+    let idx = start
+        + command_candidates(&tokens[start..])
+            .into_iter()
+            .find(|&i| {
+                matches!(
+                    normalized_command(tokens[start + i]).as_str(),
+                    "echo" | "printf"
+                )
+            })?;
     let name = normalized_command(tokens[idx]);
     let mut args = Vec::new();
     let mut writes = Vec::new();
@@ -511,35 +477,99 @@ fn literal_args(args: &[String]) -> Result<Vec<String>, String> {
         .collect()
 }
 
+/// Every text `echo` may print for `args`, one per shell reading (user ruling
+/// 2026-11-11, tests/echo_script_variants_20261111.rs V13):
+///   * bash: leading `-n` / `-e` / `-E` words are options; escapes are
+///     expanded only under `-e`;
+///   * zsh, or bash under `xpg_echo`: the same options; escapes are expanded
+///     unless `-E`;
+///   * dash / POSIX `sh`: only a first `-n` is an option; escapes are always
+///     expanded.
 fn echo_content(args: &[String]) -> Content {
-    let lits = literal_args(args)?;
+    let lits = match literal_args(args) {
+        Ok(lits) => lits,
+        Err(why) => return vec![Err(why)],
+    };
     let mut newline = true;
+    let mut escapes: Option<bool> = None;
     let mut start = 0;
     for lit in &lits {
-        let flag = lit
+        let Some(flags) = lit
             .strip_prefix('-')
-            .is_some_and(|f| !f.is_empty() && f.chars().all(|c| matches!(c, 'n' | 'e' | 'E')));
-        if !flag {
+            .filter(|f| !f.is_empty() && f.chars().all(|c| matches!(c, 'n' | 'e' | 'E')))
+        else {
             break;
-        }
-        if lit.contains('n') {
-            newline = false;
+        };
+        for c in flags.chars() {
+            match c {
+                'n' => newline = false,
+                'e' => escapes = Some(true),
+                _ => escapes = Some(false),
+            }
         }
         start += 1;
     }
-    let mut text = lits[start..].join(" ");
-    if text.contains('\\') {
-        return Err(format!(
-            "its text (`{text}`) holds a backslash, which `echo` may expand as an escape"
-        ));
+    let text = lits[start..].join(" ");
+    let dash_n = lits.first().is_some_and(|l| l == "-n");
+    let dash_text = lits[usize::from(dash_n)..].join(" ");
+    let mut out: Content = Vec::new();
+    for reading in [
+        echo_reading(&text, escapes == Some(true), newline),
+        echo_reading(&text, escapes != Some(false), newline),
+        echo_reading(&dash_text, true, !dash_n),
+    ] {
+        if !out.contains(&reading) {
+            out.push(reading);
+        }
+    }
+    out
+}
+
+/// What `echo` prints for `text`, its escapes expanded when `expand`: `\\`,
+/// `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, and `\c` (nothing more is
+/// printed, not even the newline). Any other escape is not modelled.
+fn echo_reading(text: &str, expand: bool, newline: bool) -> Reading {
+    let mut out = String::new();
+    if expand {
+        let mut chars = text.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            out.push(match chars.next() {
+                Some('\\') => '\\',
+                Some('a') => '\x07',
+                Some('b') => '\x08',
+                Some('f') => '\x0c',
+                Some('n') => '\n',
+                Some('r') => '\r',
+                Some('t') => '\t',
+                Some('v') => '\x0b',
+                Some('c') => return Ok(out),
+                other => {
+                    return Err(format!(
+                        "its text (`{text}`) holds the escape `\\{}`, whose expansion by `echo` \
+is not modelled",
+                        other.map(String::from).unwrap_or_default()
+                    ))
+                }
+            });
+        }
+    } else {
+        out.push_str(text);
     }
     if newline {
-        text.push('\n');
+        out.push('\n');
     }
-    Ok(text)
+    Ok(out)
 }
 
 fn printf_content(args: &[String]) -> Content {
+    vec![printf_reading(args)]
+}
+
+fn printf_reading(args: &[String]) -> Reading {
     let lits = literal_args(args)?;
     let Some(format) = lits.first() else {
         return Ok(String::new());
@@ -618,12 +648,39 @@ const LEADING_KEYWORDS: &[&str] = &[
     "{", "(", "!", "if", "then", "elif", "else", "do", "while", "until", "time",
 ];
 
-/// How a statement may run a written file: as a shell script, as a Python
-/// program, or both.
+/// How a command may run a written file: as a shell script, as a Python
+/// program, as another code interpreter's program, or several of these.
 #[derive(Default)]
 struct Runs {
     shell: bool,
     python: bool,
+    /// The first non-Python code interpreter ([`is_code_interpreter`]) that
+    /// may run it.
+    code: Option<String>,
+}
+
+impl Runs {
+    fn add(&mut self, other: Runs) {
+        self.shell |= other.shell;
+        self.python |= other.python;
+        if self.code.is_none() {
+            self.code = other.code;
+        }
+    }
+
+    fn readers(self) -> Vec<Reader> {
+        let mut out = Vec::new();
+        if self.shell {
+            out.push(Reader::Shell);
+        }
+        if self.python {
+            out.push(Reader::Python);
+        }
+        if let Some(name) = self.code {
+            out.push(Reader::Code(name));
+        }
+        out
+    }
 }
 
 /// True for `python`, `python3` or `python3.N` (path and wrapper removed by
@@ -662,15 +719,14 @@ fn statement_may_run(stages: &[&str], target: &Target) -> Runs {
     let mut names = false;
     let mut runner_word = false;
     let mut python_word = false;
+    let mut code_word: Option<String> = None;
     let mut expansion_head = false;
     let mut runs = Runs::default();
     for stage in stages {
         for body in nested_bodies(stage) {
             for statement in split_statements_into_pipe_stages(&body) {
                 let inner: Vec<&str> = statement.iter().map(String::as_str).collect();
-                let r = statement_may_run(&inner, target);
-                runs.shell |= r.shell;
-                runs.python |= r.python;
+                runs.add(statement_may_run(&inner, target));
             }
         }
         let words = stage_words(stage);
@@ -698,20 +754,22 @@ fn statement_may_run(stages: &[&str], target: &Target) -> Runs {
                 runner_word = true;
             }
             python_word |= is_python(&n);
+            if code_word.is_none() && !is_python(&n) && is_code_interpreter(&n) {
+                code_word = Some(n.clone());
+            }
             if let Target::Literal(path) = target {
                 names |= word_names(w, path);
             }
         }
     }
-    match target {
-        Target::Literal(_) => {
-            runs.shell |= names && runner_word;
-            runs.python |= names && python_word;
-        }
-        Target::Opaque(_) => {
-            runs.shell |= runner_word || expansion_head;
-            runs.python |= python_word;
-        }
+    let ran = match target {
+        Target::Literal(_) => names,
+        Target::Opaque(_) => true,
+    };
+    runs.shell |= (ran && runner_word) || (matches!(target, Target::Opaque(_)) && expansion_head);
+    runs.python |= ran && python_word;
+    if ran && runs.code.is_none() {
+        runs.code = code_word;
     }
     runs
 }

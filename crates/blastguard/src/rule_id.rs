@@ -638,6 +638,15 @@ mod tests {
                 "Bash",
                 json!({ "command": "perl -i -pe 's/a/b/' .githooks/pre-commit" }),
             ),
+            // autonomy-self-grant (12ba5845): the agent flipping its own autonomy.
+            (
+                "Bash",
+                json!({ "command": "condukt state autonomy-set on" }),
+            ),
+            (
+                "Bash",
+                json!({ "command": "CONDUKT_AUTONOMOUS=1 condukt policy answer --id q1 --choice yes" }),
+            ),
         ];
 
         for (tool, input) in cases {
@@ -646,6 +655,22 @@ mod tests {
             assert_ne!(
                 id, "unknown",
                 "reason {reason:?} (from {tool} {input}) did not classify to a stable rule id"
+            );
+        }
+    }
+
+    #[test]
+    fn autonomy_self_grant_gets_its_own_id_not_unknown() {
+        // The loop test above only proves "not unknown"; pin the id itself.
+        for command in [
+            "condukt state autonomy-set on",
+            "CONDUKT_AUTONOMOUS=1 condukt policy answer --id q1 --choice yes",
+        ] {
+            let reason = deny_reason("Bash", json!({ "command": command }));
+            assert_eq!(
+                rule_id(&reason),
+                "autonomy-self-grant",
+                "command: {command:?}, reason: {reason:?}"
             );
         }
     }

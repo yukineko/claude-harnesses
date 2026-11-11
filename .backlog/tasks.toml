@@ -996,3 +996,36 @@ exit 101: t: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
      Running tests/backlog_scout_20261112_s3_s4_readonly_fp.rs (target/debug/deps/backlog_scout_20261112_s3_s4_readonly_fp-f628a472411e6d50)
 error: test failed, to rerun pass `-p blastguard --test backlog_scout_20261112_s3_s4_readonly_fp`"""
+
+[[task]]
+id = "0afbb200"
+title = "cap-target-dir.sh: cargo clean 失敗でも cleaned マーカーを書く"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "scout",
+    "L5",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "scout 2026-11-12, RED observed at 656b1c38, verified (independent verifier). F3 (disk): scripts/cap-target-dir.sh:107 'cargo clean || true' then marker at :113, so a failed clean is recorded as done. Control: successful clean still writes the marker. Remove the xfail(strict) mark when fixed."
+created_at = 1794434385
+updated_at = 1794434385
+weight = 0.0
+issue_number = 1652
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1652"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_scout_20261112_f3_cap_clean_failed_repro.py"
+rev = "f0864fd875a4d28381a5ad2d2f87505dbe43ea22"
+observed_at = 1794434385
+detail = """
+exit 1: | true` then unconditional marker write)
+
+scripts/test_scout_20261112_f3_cap_clean_failed_repro.py:80: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_scout_20261112_f3_cap_clean_failed_repro.py::CapCleanMarker::test_failed_clean_must_not_write_marker
+========================= 1 failed, 1 passed in 0.77s =========================="""

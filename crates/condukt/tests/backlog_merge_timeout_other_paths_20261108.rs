@@ -11,7 +11,8 @@
 //!   after a recorded `theirs` resolution).
 //!
 //! Each test takes ~50s because the timeout is a non-injectable const in the
-//! binary. Written without a fix; run with `-- --ignored`.
+//! binary. Written without a fix (RED observed on bfd504a7); un-ignored with the
+//! fix for GH #1638 / #1639.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -166,7 +167,6 @@ fn assert_not_silently_half_applied(repo: &Path, head_before: &str, out: &Output
 /// merge) and sleeps past the timeout on the second (the store-diff path's own
 /// `git merge --no-commit --no-ff`).
 #[test]
-#[ignore = "RED: store-diff merge timeout leaves stale index.lock, reports 'aborted' 2026-11-08"]
 fn timed_out_store_diff_merge_is_not_left_silently_half_applied() {
     let f = fixture("a\nmain\nc\n", "a\nb\ntask\n");
     let marker = f.base.join("driver-called-once");
@@ -225,7 +225,6 @@ fn timed_out_store_diff_merge_is_not_left_silently_half_applied() {
 /// merge-commit step is slowed past the timeout by a `pre-merge-commit` hook
 /// (git has by then applied the merge result to index + work tree).
 #[test]
-#[ignore = "RED: resolve-merge -X theirs timeout leaves staged half-merge 2026-11-08"]
 fn timed_out_resolve_theirs_merge_is_not_left_silently_half_applied() {
     let f = fixture("a\nmain\nc\n", "a\ntask\nc\n");
     let out = condukt(

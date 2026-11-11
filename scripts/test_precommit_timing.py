@@ -1,19 +1,28 @@
 #!/usr/bin/env python3
-"""RED repro for GitHub issue #1551: the pre-commit hook records no per-phase
-timing, while the pre-push hook appends one JSON line per run to a timing log in
-the git common dir and prints a `pre-push timing:` summary.
+"""RED repro (backlog): .githooks/pre-commit records no timing at all.
 
-Contract pinned here (reading (a), missing observability):
-  * one JSON line per run appended to <git-common-dir>/precommit-timing.jsonl;
-  * one stderr line `pre-commit timing: ...; total Ns (exit RC)`;
-  * observability only: the hook's exit code does not change (allow and block).
+.githooks/pre-push times every phase and appends one JSON line per run to
+<git-common-dir>/prepush-timing.jsonl (see scripts/test_prepush_timing.py).
+pre-commit has no equivalent, so how long a commit spends in its gates cannot
+be observed. Measured 2026-11-06 at main b2f2cbd1: grepping .githooks/pre-commit
+for time/date/SECONDS/elapsed/duration finds only prose ("Commit time is ..."),
+and .git/ holds no precommit-timing.jsonl.
 
-Fixture: reuses HookHarness from test_precommit_hook.py (a throwaway repo with a
-copy of the hook and STUB scanners), so the real scanners never run.
+What this pins (observability only — the timing must not change any verdict):
+  1. A clean run appends exactly one JSON line to
+     <git-common-dir>/precommit-timing.jsonl with `exit` == hook rc (0) and a
+     non-empty `phases` list whose entries carry `phase`, `secs` and `rc`
+     (the gate's own exit status), one entry per gate label, in run order.
+  2. A blocking run (one scanner exits 1) still appends one line, with `exit`
+     equal to the (non-zero) hook rc — timing must not swallow the block.
+  2b. Per-gate verdicts: on that blocking run the phase of the failing gate has
+      rc 1 and every other gate rc 0, so which gate spoke is recoverable from
+      the log alone (the input for deciding which gates must run per commit).
+  3. stderr carries one `pre-commit timing: ... total Ns (exit RC)` summary.
 
-Run: `python3 -m pytest scripts/test_precommit_timing.py`. The RED tests carry
-`unittest.expectedFailure`; set PRECOMMIT_TIMING_RED=1 to run them unmarked and
-observe the real failure.
+Run: `python3 scripts/test_precommit_timing.py` (stdlib `unittest` only).
+Reuses HookHarness from scripts/test_precommit_hook.py; set
+PRECOMMIT_HOOK_UNDER_TEST to point it at another copy of the hook.
 """
 
 from __future__ import annotations
@@ -27,68 +36,64 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from test_precommit_hook import HookHarness, HookTestCase, _which  # noqa: E402
+from test_precommit_hook import (  # noqa: E402
+    EXPECTED_SCANNERS,
+    HookTestCase,
+    _which,
+)
 
 _SUMMARY_RE = re.compile(
-    r"^pre-commit timing: .*total (?:\d+|\?)s \(exit (?P<rc>\d+)\)$", re.MULTILINE
+    r"^pre-commit timing: .*; total (\d+|\?)s \(exit (\d+)\)$", re.MULTILINE
 )
 
 
-def red_1551(fn):
-    """RED for #1551. PRECOMMIT_TIMING_RED=1 runs the test unmarked."""
-    if os.environ.get("PRECOMMIT_TIMING_RED") == "1":
-        return fn
-    return unittest.expectedFailure(fn)
-
-
-class TimedHarness(HookHarness):
-    def __init__(self, **kw):
-        super().__init__(**kw)
-        link = self.bindir / "date"
+class PrecommitTiming(HookTestCase):
+    def timed_harness(self, **kw):
+        h = self.harness(**kw)
+        link = h.bindir / "date"
         if not link.exists():
             os.symlink(_which("date"), link)
-        self.log_path = self.root / ".git" / "precommit-timing.jsonl"
+        return h, h.root / ".git" / "precommit-timing.jsonl"
 
-
-class PrecommitTiming(HookTestCase):
-    def harness(self, **kw):
-        h = TimedHarness(**kw)
-        self.addCleanup(h.cleanup)
-        return h
-
-    def test_control_exit_codes_unchanged(self):
-        """Control (passes today): clean -> 0, a failing scanner -> non-zero."""
-        self.assertEqual(self.harness().run().returncode, 0)
-        self.assertNotEqual(
-            self.harness(exits={"check-fail-open.py": 1}).run().returncode, 0
+    def _lines(self, log):
+        self.assertTrue(
+            log.exists(), "pre-commit wrote no %s (no timing is recorded)" % log
         )
+        return [json.loads(x) for x in log.read_text().splitlines() if x.strip()]
 
-    @red_1551
-    def test_allow_appends_one_json_line_and_prints_summary(self):
-        h = self.harness()
+    def test_clean_run_appends_one_timing_line(self):
+        h, log = self.timed_harness()
         proc = h.run()
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertTrue(
-            h.log_path.is_file(), "no precommit-timing.jsonl written at %s" % h.log_path
-        )
-        lines = [ln for ln in h.log_path.read_text().splitlines() if ln]
+        lines = self._lines(log)
         self.assertEqual(len(lines), 1, lines)
-        self.assertEqual(json.loads(lines[0]).get("exit"), 0)
-        m = _SUMMARY_RE.search(proc.stderr)
-        self.assertIsNotNone(m, "no 'pre-commit timing:' summary on stderr:\n" + proc.stderr)
-        self.assertEqual(m.group("rc"), "0")
+        self.assertEqual(lines[0].get("exit"), 0)
+        phases = lines[0].get("phases")
+        self.assertTrue(phases, "phases must be non-empty: %r" % lines[0])
+        for p in phases:
+            self.assertIn("phase", p)
+            self.assertIn("secs", p)
+            self.assertEqual(p.get("rc"), 0, p)
 
-    @red_1551
-    def test_block_records_timing_and_keeps_nonzero_exit(self):
-        h = self.harness(exits={"check-fail-open.py": 1})
+    def test_blocking_run_still_logs_with_nonzero_exit(self):
+        h, log = self.timed_harness(exits={EXPECTED_SCANNERS[0]: 1})
         proc = h.run()
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertTrue(h.log_path.is_file(), "no precommit-timing.jsonl on a block")
-        rec = json.loads([ln for ln in h.log_path.read_text().splitlines() if ln][-1])
-        self.assertEqual(rec.get("exit"), proc.returncode)
-        m = _SUMMARY_RE.search(proc.stderr)
-        self.assertIsNotNone(m, "no 'pre-commit timing:' summary on stderr:\n" + proc.stderr)
-        self.assertEqual(m.group("rc"), str(proc.returncode))
+        self.assertNotEqual(proc.returncode, 0, "control: a finding must block")
+        lines = self._lines(log)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertEqual(lines[0].get("exit"), proc.returncode)
+        rcs = {p.get("phase"): p.get("rc") for p in lines[0].get("phases", [])}
+        self.assertEqual(rcs.get("injectguard"), 1, rcs)
+        others = {k: v for k, v in rcs.items() if k != "injectguard"}
+        self.assertTrue(others, "other gates must be logged too: %r" % rcs)
+        self.assertTrue(all(v == 0 for v in others.values()), rcs)
+
+    def test_stderr_has_one_summary_line(self):
+        h, _ = self.timed_harness()
+        proc = h.run()
+        found = _SUMMARY_RE.findall(proc.stderr)
+        self.assertEqual(len(found), 1, proc.stderr)
+        self.assertEqual(found[0][1], str(proc.returncode))
 
 
 if __name__ == "__main__":

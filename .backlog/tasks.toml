@@ -1,4 +1,139 @@
 [[task]]
+id = "433ca3be"
+title = "pre-commit: per-gate timing and verdict are not recorded (pre-push has prepush-timing.jsonl, pre-commit has nothing)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "observability",
+    "precommit",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-06 at main b2f2cbd1: .githooks/pre-push times each phase via date +%s and appends one JSON line per run to <git-common-dir>/prepush-timing.jsonl (9 lines; latest b2f2cbd1 typecheck 46s). .githooks/pre-commit (555 lines) has no timing code and no log. Purpose (user 2026-11-06): decide which gates must run on EVERY commit vs path-triggered vs pre-push, from data. Transcript count 2026-10-08..11-06 found 12 of 18 pre-commit gates with 0 blocks; scanner wall time with empty stage: projkey-classification 6.1s, all others <=0.7s. Fix: port pre-push _tm_* helpers; one phase per gate label (incl. main-tree-guard and commit-msg test-weakening if feasible) with secs and rc; append one JSON line to precommit-timing.jsonl; one stderr summary 'pre-commit timing: ... total Ns (exit RC)'. Observability only: no verdict/exit change; unwritable log warns, same rc. Repro: python3 -m pytest scripts/test_precommit_timing.py."
+created_at = 1793925984
+updated_at = 1793926329
+weight = 0.0
+issue_number = 1551
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1551"
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_precommit_timing.py"
+rev = "51785391bdc9913f5b6a75a72e7a9d6ee199d12d"
+observed_at = 1793926328
+detail = """
+exit 1: ==========================
+FAILED scripts/test_precommit_timing.py::PrecommitTiming::test_blocking_run_still_logs_with_nonzero_exit
+FAILED scripts/test_precommit_timing.py::PrecommitTiming::test_clean_run_appends_one_timing_line
+FAILED scripts/test_precommit_timing.py::PrecommitTiming::test_stderr_has_one_summary_line
+============================== 3 failed in 0.97s ==============================="""
+
+[[task]]
+id = "dfa2c9d3"
+title = "gate-severity-probe: measure per pre-commit gate whether it fires, which other layers catch the same violation, and how far it leaks"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "observability",
+    "precommit",
+    "gate-severity",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "User direction 2026-11-06: decide which gates run on every commit only after measuring (a) per-gate timing/verdict (433ca3be) and (b) severity when a gate breaks, defined by the user as: fires (does it block an injected violation now), caught_by (with only that gate disabled, which remaining layers stop it: other pre-commit gates, commit-msg, pre-push, cargo test), leak (local-commit|push|rollout|undetermined when nothing catches it). Not in scope: time-to-detect. Motivation data: transcripts 2026-10-08..11-06 show 0 blocks for injectguard, doc-duplication, version-lockstep, fault-injection-adoption, worktree-isolation, gate-crates-sync, gate-protection, crossx-constants, launcher-exec-bit, clippy-lints, backlog-store, projkey-classification; 0 blocks cannot distinguish unneeded / caught upstream / dark. Build scripts/gate-severity-probe.py --json: one representative fixture per gate, applied in throwaway worktrees only (never the caller's tree/index); undetermined never folded into fires=false or leak=null. Repro: python3 -m pytest scripts/test_gate_severity_probe.py (4 RED: probe missing). Tiering policy for using the result (user 2026-11-06): minor issues may move from per-commit to a periodic audit (cost vs effect and speed are key metrics; perfectionism can be harmful); security-relevant gates (e.g. injectguard, secret-guard) stay per-commit regardless of the data — harm must not be let in. So the report should mark each gate security-relevant or not (human-declared list, not inferred)."
+created_at = 1793926370
+updated_at = 1793926398
+weight = 0.0
+issue_number = 1552
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1552"
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_gate_severity_probe.py"
+rev = "a9682edfd03944196ecad90571148db0e2a92bf1"
+observed_at = 1793926370
+detail = """
+exit 1: rity_probe.py::GateSeverityProbe::test_caller_tree_untouched
+FAILED scripts/test_gate_severity_probe.py::GateSeverityProbe::test_covers_every_gate
+FAILED scripts/test_gate_severity_probe.py::GateSeverityProbe::test_entry_schema
+FAILED scripts/test_gate_severity_probe.py::GateSeverityProbe::test_known_firing_gates_fire
+============================== 4 failed in 0.11s ==============================="""
+
+[[task]]
+id = "93341bd5"
+title = "budgetguard ledger double-counts a session that crosses local midnight (cumulative session cost recorded under each day key)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "budgetguard",
+    "ledger",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-06 (JST 10:05) in ~/.budgetguard/state/ledger.json at main fe604377: session 4a9031bf has 24.18 under 2026-11-05 and 49.06 (cumulative) under 2026-11-06; 2 sessions appear on both days. Cause: gate.rs records the session's CUMULATIVE cost via ledger.record(session_id, today, session_usd) under today's key; the pre-midnight part stays in yesterday's entry too. Day boundary itself is LOCAL time (chrono::Local, system TZ Asia/Tokyo => JST midnight), intentional per main.rs today_str comment. Effects: (1) today's day_usd is over-counted (restrictive side); (2) past day totals are inflated and feed derive_limits (Tukey fence), raising derived limits = loosening. Readings: (a) defect; (b) intentional 'attribute whole session to last day'. Distinguish: (b) would not also keep the value in the earlier day; the sum over days exceeds real spend, which no reading justifies. Fix direction: store per-day delta (cumulative minus the session's cost already recorded on earlier days). Repro: cargo test -p harness-core --test ledger_midnight_double_count_20261106 -- --ignored."
+created_at = 1793927294
+updated_at = 1793927294
+weight = 0.0
+issue_number = 1553
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1553"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test ledger_midnight_double_count_20261106 -- --ignored"
+rev = "9dd3f7c9d178d1d0632ffde5b0649a1a29d9bbb6"
+observed_at = 1793927294
+detail = """
+exit 101: e v0.2.92 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-4a9031bf/crates/harness-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.74s
+     Running tests/ledger_midnight_double_count_20261106.rs (target/debug/deps/ledger_midnight_double_count_20261106-f255a7977d4f29cb)
+error: test failed, to rerun pass `-p harness-core --test ledger_midnight_double_count_20261106`"""
+
+[[task]]
+id = "10ce8e01"
+title = "blastguard test backlog_2287ebae fails in condukt worktrees on /mnt/c (v9fs ignores chmod 000; NotFound instead of PermissionDenied)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-06: donegate test-changed blocked the condukt worktree run-20261106-100625-7376-blastguard-heredoc-body-fp: crates/blastguard/tests/backlog_2287ebae.rs:201 'fixture: the locked ancestor must make resolution fail with EACCES (running as root?)' left Some(NotFound) right Some(PermissionDenied). Same test at 3cdfd72e passes with target on ext4 (/home) and fails with CARGO_TARGET_DIR on /mnt/c (stat -f: v9fs). Fixture uses CARGO_TARGET_TMPDIR, which lives under the worktree target on /mnt/c. Effect: every blastguard change made in a condukt worktree fails donegate though the code equals main. Readings: (a) defect in the fixture's environment assumption (should place its fixture on a POSIX-enforcing fs or report inconclusive distinctly); (b) intentional fail-closed precondition (an unverifiable fixture must not pass). Distinguish: (b) is right that it must not PASS silently; the question is whether 'fixture cannot be built here' should be a test failure or a skip-with-reason; ask before choosing. Also consider moving condukt worktrees off /mnt/c. Repro: bash scripts/tests/blastguard-2287ebae-v9fs-target.sh."
+created_at = 1793928977
+updated_at = 1793928977
+weight = 0.0
+issue_number = 1554
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1554"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/blastguard-2287ebae-v9fs-target.sh"
+rev = "ffc801c431d382e7b4435546a209d556b8a9af42"
+observed_at = 1793928977
+detail = """
+exit 101: n fail with EACCES (running as root?)
+  left: Some(NotFound)
+ right: Some(PermissionDenied)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    unresolvable_real_landing_is_not_allowed
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+
+error: test failed, to rerun pass `-p blastguard --test backlog_2287ebae`"""
+
+[[task]]
 id = "04f53dbe"
 title = "context-governor injector dedup keys on the hook input session_id, not env"
 project = "/Users/yuki/src/harness"

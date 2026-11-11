@@ -251,7 +251,6 @@ fn h1_sed_in_place_through_relinked_dir() {
 }
 
 #[test]
-#[ignore = "RED: sort -o through a dir relinked to /etc is allow on 0.2.454, must be deny (2026-11-12)"]
 fn h2_sort_output_through_relinked_dir() {
     expect_deny_at_etc("h2", "ln -sfn /etc src/d && sort -o src/d/hosts src/a.rs");
 }
@@ -277,7 +276,6 @@ fn h3b_cp_target_directory_into_relinked_dir() {
 }
 
 #[test]
-#[ignore = "RED: touch through a dir relinked to /etc is allow on 0.2.454, must be deny (2026-11-12)"]
 fn h4_touch_through_relinked_dir() {
     expect_deny_at_etc("h4", "ln -sfn /etc src/d && touch src/d/newfile");
 }
@@ -288,7 +286,6 @@ fn h5_chmod_through_relinked_dir() {
 }
 
 #[test]
-#[ignore = "RED: truncate through a dir relinked to /etc is deny on 0.2.454 but the reason does not name the /etc landing (2026-11-12)"]
 fn h6_truncate_through_relinked_dir() {
     expect_deny_at_etc("h6", "ln -sfn /etc src/d && truncate -s0 src/d/hosts");
 }
@@ -329,7 +326,6 @@ fn k3_in_tree_dir_relink_then_rm_through_it() {
 
 /// `rm` targets a path the `git mv` never touches. Main: allow.
 #[test]
-#[ignore = "RED: FP regression - allow on main 517a4951, ask on 0.2.454 (`git mv ... may create or rename an entry on this path`) though rm src/c.rs is not a git mv operand (2026-11-12)"]
 fn k4_git_mv_then_rm_other_file() {
     expect_allow("k4", "git mv src/a.rs src/b.rs && rm src/c.rs");
 }

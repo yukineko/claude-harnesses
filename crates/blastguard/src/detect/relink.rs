@@ -96,9 +96,13 @@ enum Reach {
     /// The file the path names: every symlink of it is followed (a `cp`
     /// destination, a `tee`/`touch`/`truncate`/`chmod` target).
     Follows,
-    /// The directory entry itself: a symlink in the LAST component is the
-    /// thing removed or renamed, not followed (`rm`, a `mv` source, `ln -n`).
+    /// The directory entry itself, written: a symlink in the LAST component
+    /// is replaced, not followed (a `-T` or `ln -n` destination).
     Entry,
+    /// The directory entry itself, removed or renamed away (`rm`, `unlink`,
+    /// `rmdir`, a `mv` source): resolved like [`Reach::Entry`], but it is not
+    /// a write, so the system-directory WRITE axis is not applied to it.
+    Removed,
 }
 
 /// Operands of a command blastguard judges by target path, as `(index into
@@ -130,7 +134,7 @@ fn path_operands(head: &str, rest: &[&str]) -> Vec<(usize, &'static str, Reach)>
         })
     };
     match head {
-        "rm" | "unlink" | "rmdir" => all(Reach::Entry),
+        "rm" | "unlink" | "rmdir" => all(Reach::Removed),
         "tee" | "touch" | "truncate" | "shred" | "chmod" | "chown" | "chgrp" => all(Reach::Follows),
         // `sed -i`: the files after the script (the first operand, unless the
         // script comes from `-e`/`-f`).
@@ -182,8 +186,10 @@ fn path_operands(head: &str, rest: &[&str]) -> Vec<(usize, &'static str, Reach)>
             if !matches!(head, "mv" | "gmv") {
                 sources.clear();
             }
-            let mut ops: Vec<(usize, &'static str, Reach)> =
-                sources.into_iter().map(|j| (j, "", Reach::Entry)).collect();
+            let mut ops: Vec<(usize, &'static str, Reach)> = sources
+                .into_iter()
+                .map(|j| (j, "", Reach::Removed))
+                .collect();
             ops.extend(dest.map(|(j, prefix)| (j, prefix, dest_reach)));
             ops
         }
@@ -198,7 +204,10 @@ fn path_operands(head: &str, rest: &[&str]) -> Vec<(usize, &'static str, Reach)>
 /// destinations, `rm`/`unlink`/`rmdir` targets, `tee`, `touch`, `truncate`,
 /// `shred`, `chmod`, `chown`, `sed`, `sort`, `uniq`).
 ///
-/// Each relinked operand is replaced by its landing and the segment is judged
+/// A relinked WRITE operand (not a [`Reach::Removed`] one) is first judged on
+/// its landing with the protected-path and system-directory axes, as a
+/// redirect onto that landing is. Then each relinked operand is replaced by
+/// its landing and the segment is judged
 /// once more with every rule (`seg_ctx`), IN ADDITION to the judgement of the
 /// text as written — so this can only add verdicts. An [`Reach::Entry`]
 /// operand is resolved through its PARENT only (`rm d` after `ln -s /etc d`
@@ -242,6 +251,20 @@ command really reaches"
             Ok(Some(_)) => return ask("its landing cannot be re-spelled as one word"),
             Err(why) => return ask(&why),
         };
+        // A WRITE is judged on the landing itself first, as a redirect onto it
+        // is, so the verdict names the landing whatever the verb's own rule
+        // checks (`sort -o`, `touch`, `truncate` have no system-path axis).
+        if reach != Reach::Removed {
+            let action = format!("{head} target");
+            if let Some(d) = protected_path_block_at(ctx, &action, &real, &real) {
+                return d;
+            }
+            match super::real_system_path_block(&action, &real, ctx) {
+                Ok(Some(d)) => return d,
+                Ok(None) => {}
+                Err(why) => return ask(&why),
+            }
+        }
         out[start + 1 + j] = format!("{prefix}{real}");
         changed = true;
     }
@@ -272,7 +295,7 @@ fn operand_landing(
     };
     // A trailing `/` makes even `rm` follow a symlink in the last component.
     let (parent, name) = match t.rsplit_once('/') {
-        Some((p, n)) if reach == Reach::Entry && !word.ends_with('/') && !n.is_empty() => {
+        Some((p, n)) if reach != Reach::Follows && !word.ends_with('/') && !n.is_empty() => {
             (if p.is_empty() { "/" } else { p }, n)
         }
         _ => {
@@ -433,6 +456,15 @@ fn parse(command: &str, cwd: CwdState) -> Parsed {
     let i = command_start(&words);
     let Some(head) = words.get(i).map(|w| normalized_command(w)) else {
         return Parsed::Inert;
+    };
+    // `git mv SRC… DEST` (no git option before `mv`) renames entries in the
+    // work tree exactly as `mv` does, so it is modelled as `mv` — not left as
+    // an unmodelled relink verb that asks about every path sharing a
+    // component with it.
+    let (head, i) = if head == "git" && words.get(i + 1) == Some(&"mv") {
+        ("mv".to_string(), i + 1)
+    } else {
+        (head, i)
     };
     let rest: Vec<&str> = words[i + 1..].to_vec();
     let opts: Vec<&str> = rest

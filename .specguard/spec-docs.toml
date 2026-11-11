@@ -100,6 +100,11 @@ doc = "docs/specs/blastguard.md"
 reason = "Unit-test submodule of detect/git.rs's config arm; it pins the '振る舞い' bullet '`core.hooksPath` の付け替えは Deny' (read-mode flag counts only in the option prefix, backlog e103cd56; the one-positional and `get` reads are Allow, user ruling 2026-11-08, backlog 8fe3a5c3)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/restore_content_tests.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Unit-test submodule of detect/git.rs's restore arm (restore_discard_verdict); it pins the 'コマンド別 deny 規則' text on working-tree `git restore` judged by what it discards (user ruling 2026-11-08, issue #1604)."
+
+[[spec]]
 path = "crates/blastguard/src/detect/executors.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'git の exec-capable 形は一律 Deny': git_config_command (command-valued git config keys) and is_safe_command_value (fixed known-safe value list, ruling 2026-11-07) used by the ban (backlog fb338793)."

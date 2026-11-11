@@ -368,6 +368,115 @@ them first.",
     ))
 }
 
+/// The fixed prefix of every working-tree `git restore` Deny.
+const RESTORE_DISCARD_REASON: &str = "git restore discards working-tree changes";
+
+/// The working-tree `git restore` verdict (user ruling 2026-11-08, issue
+/// #1604): when the index content AND the working-tree content of every path
+/// the restore would discard are already held by a commit
+/// ([`crate::reversible::probe_restore_content`]), nothing is lost and the
+/// verdict is Allow. Everything else is Deny:
+///
+///   * a protected operand (same classification as the `checkout` arm) — even
+///     when its content is committed, `--source` can bring back an older,
+///     disarmed version;
+///   * content in no commit ([`crate::reversible::RestoreContent::NotInAnyCommit`]);
+///   * anything blastguard cannot determine: a global option before `restore`
+///     (`-C`, `--git-dir`, `--*-pathspecs`, …), an option outside the modelled
+///     set (`--patch`, `--pathspec-from-file`, `--merge`, `--ours`, …), no
+///     pathspec, a pathspec that is not a literal path (glob characters, `:`
+///     magic, a directory, an untracked or absent file — the probe needs
+///     exactly one ordinary index entry), no probe in this session model, or a
+///     git that fails or times out.
+fn restore_discard_verdict(ctx: &Ctx<'_>, rest: &[&str], idx: usize) -> Decision {
+    let refuse = |why: &str| Decision::deny(format!("{RESTORE_DISCARD_REASON} ({why})"));
+    if idx > 0 {
+        return refuse(
+            "a git global option before `restore` changes how its paths are found, so blastguard \
+cannot tell whether their content is in a commit",
+        );
+    }
+    let args = &rest[idx + 1..];
+    let mut paths: Vec<&str> = Vec::new();
+    let mut after_dd = false;
+    let mut i = 0;
+    while i < args.len() {
+        let t = args[i];
+        i += 1;
+        if after_dd {
+            paths.push(t);
+            continue;
+        }
+        match t {
+            "--" => after_dd = true,
+            "--staged" | "--worktree" | "-q" | "--quiet" | "--progress" | "--no-progress" => {}
+            "-s" | "--source" => {
+                if i >= args.len() {
+                    return refuse("`--source` has no value");
+                }
+                i += 1;
+            }
+            _ if t.starts_with("--source=") || (t.starts_with("-s") && t.len() > 2) => {}
+            _ if t.len() > 1
+                && t.starts_with('-')
+                && !t.starts_with("--")
+                && t[1..].chars().all(|c| matches!(c, 'S' | 'W' | 'q')) => {}
+            _ if t.starts_with('-') => {
+                return refuse(&format!(
+                    "option `{t}` is outside what blastguard models for this check"
+                ));
+            }
+            _ => paths.push(t),
+        }
+    }
+    if paths.is_empty() {
+        return refuse("no pathspec");
+    }
+    for op in &paths {
+        if let Some(deny) = protected_disarm_deny(ctx, "git restore", op) {
+            return deny;
+        }
+        if let Some(deny) = protected_tree_deny(ctx, "git restore", op) {
+            return deny;
+        }
+        if let Some(deny) = protected_glob_deny("git restore operand", op) {
+            return deny;
+        }
+    }
+    let Some(probe) = ctx.scope.git_restore_probe else {
+        return refuse("no git probe in this session model");
+    };
+    for op in paths {
+        if op.starts_with(':') {
+            return refuse(&format!("`{op}` uses pathspec magic"));
+        }
+        let lexical = match ctx.scope.lexical_absolute(op, ctx.base_for("git")) {
+            Determination::Known(l) => l,
+            Determination::Undetermined(_) => {
+                return refuse(&format!("`{op}` is not a placeable literal path"))
+            }
+        };
+        let Some(real) = ctx.scope.resolve(&lexical) else {
+            return refuse(&format!("`{op}` could not be resolved"));
+        };
+        match probe(&real) {
+            Determination::Known(crate::reversible::RestoreContent::InCommits) => {}
+            Determination::Known(crate::reversible::RestoreContent::NotInAnyCommit(which)) => {
+                return Decision::deny(format!(
+                    "{RESTORE_DISCARD_REASON}: the {which} content of `{op}` is in no commit, so \
+restoring it loses that content. Commit or stash it first."
+                ));
+            }
+            Determination::Undetermined(u) => {
+                return refuse(&format!(
+                    "blastguard cannot tell whether the content of `{op}` is in a commit: {u}"
+                ))
+            }
+        }
+    }
+    Decision::Allow
+}
+
 /// Reason for the head-brace Ask: an unexpanded brace list among the words up
 /// to and including the git subcommand word.
 const HEAD_BRACE_REASON: &str = "blastguard cannot determine which git subcommand this runs: \
@@ -1240,13 +1349,15 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
             // `git restore --staged <path>` (without `--worktree`) only unstages
             // and leaves the working tree intact, so it stays allowed. Inside a
             // managed linked worktree checkout every form is allowed (user
-            // ruling 2026-11-07, `managed_worktree_git`).
+            // ruling 2026-11-07, `managed_worktree_git`). Every other form is
+            // judged by what it discards (user ruling 2026-11-08, issue
+            // #1604): see `restore_discard_verdict`.
             let staged = rest.contains(&"--staged") || has_short(rest, 'S');
             let worktree = rest.contains(&"--worktree") || has_short(rest, 'W');
             if (staged && !worktree) || managed {
                 Decision::Allow
             } else {
-                Decision::deny("git restore discards working-tree changes")
+                restore_discard_verdict(ctx, rest, idx)
             }
         }
         "config" => {

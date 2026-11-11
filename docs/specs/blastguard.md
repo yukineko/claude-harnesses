@@ -596,20 +596,43 @@ forge・condukt のスケジューラが再利用）。
   `payload::analyze_interpreter_stdin_exec` の先頭で呼ぶ）** — writer は command 語（exec-wrapper の後ろも
   `command_candidates` で見る）が `echo`/`printf` の pipe stage で、stdout を `>`・`>>`・`>|`・`&>`・`1>`
   （語に glue されていても）で、または直後の `| tee FILE…` / `| cat > FILE` stage でファイルへ書くもの。
-  同じファイル（先頭 `./` は無視）への書き込みは command の順に積み上げ（`>` は置換、`>>` は追記）、書き込み
-  ごとの内容をすべて判定する。target 区分（data file 等）では除外しない。判定するのは別の stage がその
+  同じファイル（先頭 `./` は無視）への書き込みは command の順に積み上げる（`>` は置換、`>>` は追記）。
+  target 区分（data file 等）では除外しない。判定するのは別の stage がその
   ファイルを実行しうるときだけ: command 語がそのファイルを指す stage（`./x.sh`）、またはそのファイルを指す語と
   shell・`.`・`source` の語をどこかに持つ pipeline（`sh x.sh`・`. x.sh`・`sh < x.sh`・`cat x.sh | sh`）。
+  そのファイルを指す語と `python`/`python3`/`python3.N` の語を持つ pipeline は、そのファイルを Python program
+  として実行しうるとみなす。subshell 語（`(sh x.sh)`）と shell が実行する substitution（`$(…)`・backtick・
+  `<(…)`/`>(…)`）の本体も、それぞれ独立した statement として同じように探す
+  （tests/echo_script_variants_20261111.rs V9）。
   「指す」は literal 値の basename 一致、展開を含む語は basename の部分一致か glob 文字を含むこと。literal で
-  ない書き込み先は、shell・`.`・`source` の語か `$`/backtick を含む command 語を持つ pipeline があれば実行
-  されうるとみなす。判定は `analyze_shell_payload`（Deny > Ask > Allow）。再現できない内容は Ask: `$`・
+  ない書き込み先は、shell・`.`・`source` の語か `$`/backtick を含む command 語を持つ pipeline があれば shell
+  script として、python の語を持つ pipeline があれば Python program として実行されうるとみなす。
+  判定する内容は、実行する statement の時点でファイルが持ちうる内容（V12・C1）。command の statement が
+  書いた順にそれぞれ一度だけ走るとき（`runs_in_written_order`: 区切りが `;`/改行だけ、または `&&` だけで、
+  `||`・background `&`・括弧・substitution・here-document/here-string・`#`・ループ/分岐の予約語・`{`/`}`・
+  `cd`/`pushd`/`popd`・`set`・`trap`・`eval`・`.`/`source`・`exec`・`alias` の語を含まない）は、実行する
+  statement より前で最後に書き込んだ statement の各書き込み後の内容（一つの pipeline の stage は同時に書くので
+  すべて）、実行する statement 自身の書き込みの内容、および、それより前の内容の
+  うち、その書き込みから最後の書き込みまでの間に writer stage だけでできていない statement がある（上書きを
+  失敗させうる）もの。literal でない書き込み先は前の内容を一つも落とさない。実行より後の書き込みは判定しない
+  （`echo 'rm -rf ~' > x.sh; echo 'echo hi' > x.sh; sh x.sh` は Allow、`…; sh x.sh; echo hi > x.sh` は
+  Deny、`printf 'rm -rf ' > x; printf '~' >> x; sh x` は Deny）。それ以外の command では、書き込みごとの
+  内容をすべて判定する。判定は、shell の実行には `analyze_shell_payload`、Python の実行には `.py`
+  here-document と同じ Python judge（`interpreter::python_written_program_verdict`。full verdict を使う。
+  command のどこかに `cd`/`pushd`/`popd`/`-C`/`--chdir` の語があれば相対 path を置き場所不明として判定）
+  （Deny > Ask > Allow）。`echo "import shutil; shutil.rmtree('/etc')" > x.py && python3 x.py` は Deny
+  （V15）。再現できない内容は Ask: `$`・
   backtick・`\`・glob/brace 文字・bare の演算子文字・先頭以外の `~` を含む引数（先頭の `~`/`~/` は `~` のまま
   読む）、`\` を含む `echo` 出力（dash/zsh の `echo` は escape を展開する）、`%%` 以外の `%` 変換・`\n`/`\t`/
   `\\` 以外の escape・`-` で始まる format・format 後の引数を持つ `printf`。`echo 'rm -rf ~' > x.rs && sh x.rs`
   は Deny、`echo 'echo hi' > x.sh && sh x.sh` と `echo 'hello' > x.txt && cat x.txt` は Allow。
   **RESIDUAL**（コード読解による記述。これらの形を突くテストは未作成）: 実行が別の Bash 呼び出しにある場合、
   `>>` が追記する前の既存内容、別種の writer（here-document・here-string・`cp`）と `echo` の書き込みの連結、
-  code interpreter（`python3 x.py`）が実行するファイルは、この判定の外。
+  Python 以外の code interpreter（`node x.js`・`perl x.pl` 等）が実行するファイル、subshell・group・
+  substitution の内側にある writer（`(echo 'rm -rf ~' > x.sh) && sh x.sh`）は、この判定の外。
+  上書きによる内容の置換は、呼び出し元の shell で `noclobber` が既に有効な場合（command 内の `set` は検出して
+  置換しない）に上書きが失敗して前の内容が実行される経路を見ない。`runs_in_written_order` が false に倒す
+  形（`||`・ループ・`set -C`・間に writer 以外の statement を挟む上書き等）を突く独立テストは未作成。
 
 ### module 責務
 

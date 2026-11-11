@@ -186,6 +186,26 @@ pub(in crate::detect) fn python_stdin_body_reading(
     })
 }
 
+/// The Python judge's verdict on `body`, the program an `echo` / `printf`
+/// writes to a file that a Python interpreter of the same command `cmd` may run
+/// (`echo "import shutil; shutil.rmtree('/etc')" > x.py && python3 x.py`,
+/// tests/echo_script_variants_20261111.rs V15; see
+/// `super::super::echo_script_file`). The reading is
+/// [`python_file_body_verdict`]'s, with no script arguments known. Relative
+/// paths are placed in the session's directory, or not placed at all
+/// ([`UNPLACED_CWD`]) when any word of `cmd` may change the directory
+/// ([`later_lines_change_dir`]), wherever it stands.
+pub(in crate::detect) fn python_written_program_verdict(
+    shape: &str,
+    body: &str,
+    cmd: &str,
+    depth: usize,
+    ctx: &Ctx<'_>,
+) -> Decision {
+    let placed = placed_ctx(&[], later_lines_change_dir(cmd), ctx);
+    python_program_verdict(shape, body, None, depth, placed.as_ref().unwrap_or(ctx))
+}
+
 /// The `cd` the Python judge puts before its derived commands when the
 /// directory the program runs in is not known: an unset variable, which the
 /// shell rules' `cd` tracking cannot resolve.

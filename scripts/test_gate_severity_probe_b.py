@@ -137,7 +137,6 @@ class Controls(ProbeCase):
 
 
 class ContractShape(ProbeCase):
-    @RED
     def test_entry_has_fires_caught_by_leak(self):
         e = entry_for(self, probe_json(self, self.caller, "--gate", GATE))
         self.assertIn(e["fires"], (True, False, "undetermined"))
@@ -145,12 +144,10 @@ class ContractShape(ProbeCase):
         self.assertTrue(all(isinstance(x, str) for x in e["caught_by"]))
         self.assertTrue(e["leak"] is None or e["leak"] in LEAKS, e["leak"])
 
-    @RED
     def test_representative_violation_fires_the_gate(self):
         e = entry_for(self, probe_json(self, self.caller, "--gate", GATE))
         self.assertIs(e["fires"], True)
 
-    @RED
     def test_caught_by_never_lists_the_disabled_gate_and_leak_follows_it(self):
         e = entry_for(self, probe_json(self, self.caller, "--gate", GATE))
         self.assertNotIn(GATE, e["caught_by"], "gate was disabled in that run")
@@ -159,7 +156,6 @@ class ContractShape(ProbeCase):
         else:
             self.assertIn(e["leak"], LEAKS, "nothing catches it => a named leak level")
 
-    @RED
     def test_gate_filter_returns_only_that_gate_and_unknown_gate_is_rejected(self):
         doc = probe_json(self, self.caller, "--gate", GATE)
         self.assertEqual([g["gate"] for g in doc["gates"]], [GATE])
@@ -182,7 +178,6 @@ class UndeterminedIsNeverFolded(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.root, ignore_errors=True)
 
-    @RED
     def test_unattributable_block_is_undetermined_not_false_and_not_null(self):
         e = entry_for(self, probe_json(self, self.caller, "--gate", GATE))
         self.assertEqual(e["fires"], "undetermined")
@@ -192,7 +187,6 @@ class UndeterminedIsNeverFolded(unittest.TestCase):
 
 
 class NeverTouchesCaller(ProbeCase):
-    @RED
     def test_head_index_status_and_worktrees_unchanged_with_dirty_caller(self):
         # Give the caller real in-flight state: a staged change plus an
         # untracked file.  The probe must preserve both byte for byte.
@@ -212,7 +206,6 @@ class NeverTouchesCaller(ProbeCase):
             for n in ("staged-note.txt", "untracked-note.txt"):
                 (self.caller / n).unlink(missing_ok=True)
 
-    @RED
     def test_throwaway_worktrees_are_removed_and_no_sibling_is_consulted(self):
         sibling = self.root / "sibling"
         git(self.caller, "worktree", "add", "-q", "-b", "sibling-wt", str(sibling))

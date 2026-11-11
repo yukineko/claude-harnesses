@@ -138,6 +138,48 @@ linked worktree から走らせると**全次元が 0 を返す**（存在しな
 `record_audit.record_root()` が `git rev-parse --git-common-dir` で main worktree を解決してそこを読む。
 解決できなければ REPO へフォールバックせず **undetermined** にする。テストは
 `scripts/test_record_audit.py`（45 ケース。13 の fail-open 変異がそれぞれ名前の付いたテストで殺されることを確認済み）。
+
+## gate が壊れたら何が漏れるか — `scripts/gate-severity-probe.py`（GitHub #1552 / backlog dfa2c9d3）
+
+「どの gate を毎 commit で回すか」を決める前に、gate ごとの重大度を**実測**する道具（判断材料であって
+ゲートではない。pre-commit / pre-push には配線しない）。gate ごとに代表違反 fixture を 1 つ注入し、
+ユーザー定義（2026-11-06）の 3 指標を出す。time-to-detect は対象外。契約は
+`docs/specs/gate-severity-probe.md`。
+
+```sh
+python3 scripts/gate-severity-probe.py --json                          # 全 gate・全層（遅い。下記）
+python3 scripts/gate-severity-probe.py --json --gate launcher-exec-bit # 指定 gate だけ（繰り返し可）
+python3 scripts/gate-severity-probe.py --json --commit-layers-only     # pre-push / cargo-test を省く（約 1.5 分）
+python3 scripts/gate-severity-probe.py --json --cargo-target-dir ~/.cache/gsp-target  # cargo 成果物を再利用
+```
+
+| key | 意味 |
+|---|---|
+| `fires` | gate 単体で代表違反を今ブロックするか（`true` / `false` / `"undetermined"`） |
+| `caught_by` | その gate **だけ**を外したとき、なお止める層（他の pre-commit gate のラベル・`commit-msg`・`pre-push`・`cargo-test`） |
+| `leak` | `caught_by` が空のときの到達点（`push` / `rollout` / `undetermined`）。他層が止めるなら `null` |
+| `security_relevant` | **人間が宣言した**一覧（`SECURITY_RELEVANT`。現在 injectguard / secret-guard）に入っているか。データから推論しない |
+| `undetermined_layers` | control（違反なし）で既に止まる・timeout・起動不能だった層。`caught_by` には入れず、未捕捉なら `leak` を `undetermined` にする |
+
+- **隔離**: caller repo には `rev-parse` しかしない。caller の HEAD を temp dir へ `git clone --shared`
+  した私有 clone とその中の linked worktree だけで fixture を適用・commit し、終了時に丸ごと消す
+  （caller の作業ツリー・index・HEAD・worktree 一覧・bypass ledger・pass 記録は不変。caller の staged /
+  untracked 変更は測定対象外）。
+- **帰属**: 各 scanner をまず違反なし（何も stage しない）で走らせ、そこで既に止まる gate のブロックは
+  fixture に帰属できないので `fires: "undetermined"`。pre-push と cargo-test も同じ crate dir を触る
+  neutral commit / clean HEAD を control にする。
+- **fixture の作り方**: plugin crate を触る fixture は lockstep bump も同時に入れる（version 系 gate を除く）。
+  そうしないと bump-on-change が全部を「捕まえて」しまい、bump すれば通る違反を見誤る。
+  fixture の anchor が消えた（ファイル改名等）ときは skip ではなく `fires: "undetermined"` と理由を出す。
+- **退役 gate**: hook から外した gate（現在 `main-tree-guard`、`432f3a40`）は `retired` 付きで
+  `fires: false` として残し、その違反を今どの層が止めるかを測る。
+- **所要時間**（実測。2026-11-11、rev `cf954b43`、開発機 Mac 1 台、cargo target は空から）:
+  `--commit-layers-only` の全 gate 82 秒、全層の全 gate 546 秒（約 9 分。最長は crossx-constants の
+  235 秒＝backlog の cargo test）。`--gate launcher-exec-bit` 単体の全層は約 2 分。
+  数字は継承せず、使う前に測り直すこと。
+- exit 0 = JSON を出した。exit 2 = probe 自体が走れなかった（未知の `--gate`、caller が git repo でない、
+  clone 失敗）で、JSON は出さない（空の clean レポートに見せない）。
+
 ## ビルド成果物ディレクトリの上限（`scripts/cap-target-dir.sh`）
 
 `.cargo/config.toml`（`/.cargo/` は gitignore 済みの machine-local 設定）で `target-dir` を

@@ -137,7 +137,6 @@ impl Fixture {
 }
 
 #[test]
-#[ignore = "scout 2026-11-12 F1: RED, open defect. Remove the ignore when fixed"]
 fn corrupt_budget_ledger_trips_instead_of_reading_as_zero() {
     let fx = Fixture::new();
     let run = "flow-scout-f1";

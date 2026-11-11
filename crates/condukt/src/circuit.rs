@@ -69,6 +69,10 @@ pub enum CircuitReason {
     /// [`CircuitReason::IdleUnmeasured`]: an uncountable streak is not a streak
     /// of 0, so it trips, under its own label (backlog cccc9c43).
     StreakUnmeasured,
+    /// A budget cap is set but budgetguard's day-usage ledger is present and
+    /// unreadable or corrupt: the day total cannot be determined, which is not
+    /// `$0`, so it trips under its own label (backlog f5b4d0a1).
+    BudgetUnmeasured,
     /// The owning session's transcript holds at least `max_compactions`
     /// `compact_boundary` lines: the session has been compacted that many
     /// times, and a long-lived session replays its whole (compacted) context on
@@ -82,7 +86,7 @@ pub enum CircuitReason {
 impl CircuitReason {
     /// A stable lowercase slug for journaling (`"failure_streak"` /
     /// `"budget_over_cap"` / `"stall"` / `"idle_unmeasured"` /
-    /// `"streak_unmeasured"` / `"session_compacted"`).
+    /// `"streak_unmeasured"` / `"budget_unmeasured"` / `"session_compacted"`).
     pub fn as_str(&self) -> &'static str {
         match self {
             CircuitReason::FailureStreak => "failure_streak",
@@ -90,6 +94,7 @@ impl CircuitReason {
             CircuitReason::Stall => "stall",
             CircuitReason::IdleUnmeasured => "idle_unmeasured",
             CircuitReason::StreakUnmeasured => "streak_unmeasured",
+            CircuitReason::BudgetUnmeasured => "budget_unmeasured",
             CircuitReason::SessionCompacted => "session_compacted",
         }
     }
@@ -511,7 +516,9 @@ impl TranscriptAxes<'_> {
 ///
 /// The budget axis is off unless `--budget-cap-usd` is supplied, and an absent
 /// budget ledger is not an over-cap observation (`/flow` passes no cap, so its
-/// budget axis is disabled — stated, not hidden).
+/// budget axis is disabled — stated, not hidden). With a cap set, a present
+/// but unreadable/corrupt ledger trips [`CircuitReason::BudgetUnmeasured`]
+/// (JSON `budget_over_cap: null` plus `budget_unknown_reason`).
 ///
 /// The streak axis is counted from the run state's task statuses; for a run
 /// whose run state is ABSENT (a stateless `/flow` driver) it is the trailing
@@ -624,17 +631,24 @@ pub fn run_circuit_check(
     //    coupling — we do NOT add a `budgetguard = { path }` dependency (and
     //    budgetguard is a binary-only crate with no lib target to depend on
     //    anyway), and we do NOT parse budgetguard's private config. The cap is
-    //    injected via `--budget-cap-usd`; an absent/<=0 cap, or an unavailable/
-    //    absent ledger, fail-softs to `false` (non-trip). No network calls.
-    let budget_over_cap = match budget_cap_usd {
+    //    injected via `--budget-cap-usd`; an absent/<=0 cap switches the axis
+    //    off (`false`). With a cap set, a MISSING ledger is a genuine $0 day
+    //    (`load_checked` → default), but a present-and-unreadable/corrupt one
+    //    is cannot-determine: `budget_unknown_reason` is set and the breaker
+    //    trips `budget_unmeasured` (CLAUDE.md §3). No network calls.
+    let (budget_over_cap, budget_unknown_reason) = match budget_cap_usd {
         Some(cap) if cap > 0.0 => {
             let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-            let day_usd =
-                harness_core::ledger::Ledger::load(&harness_core::ledger::default_state_dir())
-                    .day_total(&today);
-            day_usd >= cap
+            let dir = harness_core::ledger::default_state_dir();
+            match harness_core::ledger::Ledger::load_checked(&dir) {
+                Ok(l) => (l.day_total(&today) >= cap, None),
+                Err(e) => (
+                    false,
+                    Some(format!("budget ledger in {}: {e:?}", dir.display())),
+                ),
+            }
         }
-        _ => false,
+        _ => (false, None),
     };
 
     // 3. idle — now minus the run's most-recent progress, as a TRI-STATE, so
@@ -688,6 +702,9 @@ pub fn run_circuit_check(
         CircuitVerdict::Trip(CircuitReason::BudgetOverCap) => {
             CircuitVerdict::Trip(CircuitReason::BudgetOverCap)
         }
+        _ if budget_unknown_reason.is_some() => {
+            CircuitVerdict::Trip(CircuitReason::BudgetUnmeasured)
+        }
         _ if streak_cap > 0 && streak_unknown_reason.is_some() => {
             CircuitVerdict::Trip(CircuitReason::StreakUnmeasured)
         }
@@ -740,6 +757,13 @@ pub fn run_circuit_check(
         );
         if streak_unknown_reason.is_some() {
             obj.insert("streak".to_string(), serde_json::Value::Null);
+        }
+        obj.insert(
+            "budget_unknown_reason".to_string(),
+            serde_json::json!(budget_unknown_reason),
+        );
+        if budget_unknown_reason.is_some() {
+            obj.insert("budget_over_cap".to_string(), serde_json::Value::Null);
         }
     }
     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());

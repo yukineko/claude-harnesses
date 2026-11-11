@@ -71,6 +71,19 @@
   `scripts/test-pass-record.py`（`<git common dir>/test-pass-record/`）に記録し、記録があれば再実行しない。
   記録が無い・壊れている・tree が違うときは実行し、その場で実行できないなら block する。
   `gate-bypass.py` の到達判定はこの worktree の HEAD だけを見る（他 worktree の HEAD は見ない）。
+- **pre-push の crate 単独 typecheck（issue #1641 / backlog 38a44b30）** — `typecheck` フェーズは
+  range に応じた `cargo check --all-targets`（`--workspace` または `-p a -p b ...`）の後に、range が触った
+  各 `crates/<dir>`（push される sha に `Cargo.toml` があるもの）を `cargo check --all-targets --quiet -p <crate>`
+  で **1 crate ずつ単独に**検査する。複数 package を 1 回で検査すると Cargo が共有依存（harness-core の
+  `fault-injection` 等）の feature を統合するため、自分の manifest に feature が欠けた crate のテスト
+  target（例: tdd の E0432）が通ってしまうからである。Cargo.lock を触る range（lockstep bump のたび）で
+  `--workspace` に広がった場合も同様に走る。どれか 1 つでも失敗すれば `typecheck` フェーズ内で block。
+  test id は crate ごとの `cargo-check:<dir>` で、その tree にその id の pass があるときだけ再実行しない
+  （`cargo-check:workspace` や複数 crate の id の pass ではスキップしない。単一 crate の狭い range では
+  前段の検査がまさに同じコマンド・同じ id なので二重に走らせない）。range が計算できないときは crate 集合が
+  不明なので全 workspace member を単独検査する。dir が 1 package に対応しない・metadata が読めないときは block。
+  追加コスト（2026-11-11 実測、rev 329b4700 + 本修正、warm な共有 target dir）: `--workspace` 検査直後の
+  `cargo check --all-targets --quiet -p blastguard` 1 回目 8.9s、2 回目 0.16s。
 - **pre-push の fail-open mutation（issue #1584 / backlog 4f19b628）** — push される range が
   `crates/<gate>/`（GATE_CRATES の 7 crate）を触ったとき、その gate crate ごとに
   `scripts/check-fail-open-mutation.py --crate <gate> --keep-going` をその場で実行する（test id

@@ -58,10 +58,11 @@ clone's, i.e. HEAD's), or the real push transport.
 Control (both scenarios): `cargo check --all-targets -p tdd` exits nonzero on
 the fixture tree, so the injection really breaks tdd's test target.
 
-Strict xfail => remove the marker when pre-push blocks these pushes.
+GREEN since pre-push checks each touched crate alone (`cargo check
+--all-targets -p <crate>`) after the combined check; the strict xfail markers
+were removed then.
 
 Run:  python3 -m pytest scripts/test_prepush_checks_test_targets_20261111.py
-RED:  python3 -m pytest --runxfail scripts/test_prepush_checks_test_targets_20261111.py
 """
 
 from __future__ import annotations
@@ -75,16 +76,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import pytest
-
 REPO = Path(__file__).resolve().parent.parent
 HOOK = REPO / ".githooks" / "pre-push"
-RED = pytest.mark.xfail(
-    strict=True,
-    reason="RED: pre-push's typecheck stage passes a range whose tdd test target "
-    "does not compile, because harness-core features are unified across the "
-    "selected packages (#1641)",
-)
 
 FEATURE_DEP = 'harness-core = { path = "../harness-core", features = ["fault-injection"] }'
 PLAIN_DEP = 'harness-core = { path = "../harness-core" }'
@@ -212,7 +205,6 @@ class PrePushTypecheckBlocksTestTargetBreak(unittest.TestCase):
                       f"the typecheck block is not tdd's test-target compile error\n{tail}")
 
     # --- scenarios ----------------------------------------------------------
-    @RED
     def test_W_cargo_lock_range_typecheck_blocks_tdd_test_target_break(self):
         base = self._git("rev-parse", "HEAD").stdout.strip()
         self._drop_feature()
@@ -222,7 +214,6 @@ class PrePushTypecheckBlocksTestTargetBreak(unittest.TestCase):
         self.assertIn("Cargo.lock", files, "scenario W must widen via Cargo.lock")
         self._assert_typecheck_blocks(sha, base)
 
-    @RED
     def test_N_narrow_range_typecheck_blocks_tdd_test_target_break(self):
         # The bumps (and so the Cargo.lock change) sit in the base: a range that
         # contains any version bump touches Cargo.lock and widens.

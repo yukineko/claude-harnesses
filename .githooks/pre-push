@@ -538,6 +538,11 @@ fi
 #     changed crate) is not caught here: that coverage was dropped
 #     deliberately (user ruling 2026-11-08; the periodic audit runs only the
 #     gate tests on main, not a workspace check).
+#   * Then each touched crates/<dir> is also checked ALONE (`cargo check
+#     --all-targets -p <crate>`), in the wide and the narrow path alike: a
+#     multi-package check unifies dependency features across the packages, which
+#     hides a crate whose own manifest lacks a feature its tests need (#1641).
+#     An uncomputable range checks every workspace member alone.
 #   * Dedupe: each check has a test id; before running it the hook asks
 #     scripts/test-pass-record.py whether that id already passed for the EXACT
 #     tree of S. Only an exit 0 skips; a missing, unreadable, corrupt or
@@ -645,6 +650,51 @@ cargo_meta() {
     fi
 }
 
+# pkg_args <crate dir>...: "-p <name>" per dir from $CARGO_META; exits nonzero
+# (after a reason on stderr) when metadata is unparseable or a dir does not map
+# to exactly one workspace package.
+pkg_args() {
+    printf '%s' "$CARGO_META" | python3 -c '
+import json, os, sys
+root = os.path.realpath(sys.argv[1])
+try:
+    by_dir = {}
+    for p in json.load(sys.stdin)["packages"]:
+        d = os.path.relpath(os.path.dirname(os.path.realpath(p["manifest_path"])), root)
+        by_dir.setdefault(d, []).append(p["name"])
+except (ValueError, KeyError, TypeError) as e:
+    print("pre-push: cargo metadata not parseable: %r" % (e,), file=sys.stderr)
+    sys.exit(2)
+out = []
+for d in sys.argv[2:]:
+    names = by_dir.get(d, [])
+    if len(names) != 1:
+        print("pre-push: %s maps to %d workspace packages" % (d, len(names)), file=sys.stderr)
+        sys.exit(2)
+    out += ["-p", names[0]]
+print(" ".join(out))
+' "$REPO" "$@"
+}
+
+# member_dirs: the directory (relative to the repo root) of every workspace
+# member in $CARGO_META, one per line; nonzero when none can be listed.
+member_dirs() {
+    printf '%s' "$CARGO_META" | python3 -c '
+import json, os, sys
+root = os.path.realpath(sys.argv[1])
+try:
+    dirs = sorted({os.path.relpath(os.path.dirname(os.path.realpath(p["manifest_path"])), root)
+                   for p in json.load(sys.stdin)["packages"]})
+except (ValueError, KeyError, TypeError) as e:
+    print("pre-push: cargo metadata not parseable: %r" % (e,), file=sys.stderr)
+    sys.exit(2)
+if not dirs:
+    print("pre-push: cargo metadata lists no workspace member", file=sys.stderr)
+    sys.exit(2)
+print("\n".join(dirs))
+' "$REPO"
+}
+
 for sha in $pushed_shas; do
     short="$(git rev-parse --short "$sha" 2>/dev/null)" || short="$sha"
     tree="$(git rev-parse --verify --quiet "$sha^{tree}" 2>/dev/null)"
@@ -727,26 +777,7 @@ EOF
             cc_args="--workspace"
         else
             cargo_meta
-            cc_args="$(printf '%s' "$CARGO_META" | python3 -c '
-import json, os, sys
-root = os.path.realpath(sys.argv[1])
-try:
-    by_dir = {}
-    for p in json.load(sys.stdin)["packages"]:
-        d = os.path.relpath(os.path.dirname(os.path.realpath(p["manifest_path"])), root)
-        by_dir.setdefault(d, []).append(p["name"])
-except (ValueError, KeyError, TypeError) as e:
-    print("pre-push: cargo metadata not parseable: %r" % (e,), file=sys.stderr)
-    sys.exit(2)
-out = []
-for d in sys.argv[2:]:
-    names = by_dir.get(d, [])
-    if len(names) != 1:
-        print("pre-push: %s maps to %d workspace packages" % (d, len(names)), file=sys.stderr)
-        sys.exit(2)
-    out += ["-p", names[0]]
-print(" ".join(out))
-' "$REPO" $cc_dirs)" || cc_args=""
+            cc_args="$(pkg_args $cc_dirs)" || cc_args=""
             if [ -z "$cc_args" ]; then
                 echo "" >&2
                 echo "pre-push: BLOCKED — the crates of $short ($cc_id) could not be mapped to" >&2
@@ -763,6 +794,77 @@ print(" ".join(out))
             exit 1
         fi
         record_pass "$tree" "$cc_id"
+    fi
+
+    # --- blocking check 2b: each touched crate on its own (#1641) ------------
+    # One `cargo check` over several packages (--workspace, or -p a -p b) unifies
+    # the features of a shared dependency across them, so a crate whose OWN
+    # manifest lacks a feature its test targets need (tdd without harness-core's
+    # `fault-injection`) compiles there and fails in `cargo test -p tdd`. Each
+    # touched crate is therefore also checked alone, in both the wide and the
+    # narrow path. This runs whether or not the combined check above was rerun
+    # or skipped from its record: every crate has its own test id,
+    # `cargo-check:<dir>`, and only a pass recorded for THAT id on THIS tree
+    # skips it. That id is deliberately the one the combined check above uses
+    # for a narrow range of exactly one crate, because there the combined check
+    # IS `cargo check --all-targets -p <crate>` (the same command, so not rerun).
+    # A multi-crate id (`cargo-check:crates/a,crates/b`) or
+    # `cargo-check:workspace` never equals a single-crate id, so neither skips
+    # this step.
+    #   * Touched crates: the crates/<dir> in the range that have a Cargo.toml at
+    #     S (a dir without one is no package; it already widened the check
+    #     above). A range git could not compute has no known crate set, so every
+    #     workspace member is checked alone (fail closed).
+    #   * A dir that maps to no single package, or member metadata that cannot
+    #     be read, blocks.
+    if [ -n "$cc_id" ]; then
+        pc_dirs=""
+        if [ "$range_wide" -eq 1 ]; then
+            require_in_place "cargo-check (every member alone)" "$sha"
+            require_cargo "cargo-check (every member alone)"
+            cargo_meta
+            pc_dirs="$(member_dirs)" || pc_dirs=""
+            if [ -z "$pc_dirs" ]; then
+                echo "" >&2
+                echo "pre-push: BLOCKED — the range of $short is unknown and the workspace members" >&2
+                echo "could not be listed, so no crate can be checked on its own (see above)." >&2
+                exit 1
+            fi
+        else
+            for _d in $cc_dirs; do
+                git cat-file -e "$sha:$_d/Cargo.toml" 2>/dev/null && pc_dirs="$pc_dirs $_d"
+            done
+        fi
+        for _d in $(printf '%s\n' $pc_dirs | sort -u); do
+            pc_id="cargo-check:$_d"
+            # Narrow single-crate range: the combined check above already was
+            # this exact check (same id, same command), run or skipped by its
+            # record; a failure there has already blocked.
+            [ "$pc_id" = "$cc_id" ] && continue
+            if recorded_pass "$tree" "$pc_id"; then
+                echo "pre-push: $pc_id already passed for tree $(printf '%.12s' "$tree") — not rerun" >&2
+                continue
+            fi
+            require_in_place "$pc_id" "$sha"
+            require_cargo "$pc_id"
+            cargo_meta
+            pc_args="$(pkg_args "$_d")" || pc_args=""
+            if [ -z "$pc_args" ]; then
+                echo "" >&2
+                echo "pre-push: BLOCKED — $_d of $short could not be mapped to one workspace" >&2
+                echo "package (see above)." >&2
+                exit 1
+            fi
+            echo "pre-push: type-checking $short crate $_d alone (cargo check --all-targets $pc_args)..." >&2
+            if ! cargo check --all-targets --quiet $pc_args >&2; then
+                echo "" >&2
+                echo "pre-push: BLOCKED — $_d of commit $short does not type-check on its own" >&2
+                echo "(errors above). Checked together with other crates it may compile only" >&2
+                echo "because Cargo unified a dependency feature this crate's manifest lacks." >&2
+                exit 1
+            fi
+            record_pass "$tree" "$pc_id"
+        done
     fi
     phase_end
 

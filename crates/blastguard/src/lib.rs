@@ -16,7 +16,10 @@
 //! rest on ([`reversible::GitTreeProbe`], attached with
 //! [`scope::SafeRoots::with_git_tree_probe`]): only the binary attaches it.
 //! (Detection is not entirely I/O-free even so: the redirect/`tee` rules call
-//! [`reversible::probe`] directly.)
+//! [`reversible::probe`] directly, and [`detect::detect`] reads the process
+//! environment and resolves paths to build the managed-places model the
+//! scratch-place rule alone consults — GitHub #1637; every other rule on that
+//! entry stays location-blind.)
 //!
 //! [`approve`] is the one module that owns state rather than a judgment: the
 //! trust-on-first-use memory of which effects a human has already approved. Its

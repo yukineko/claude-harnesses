@@ -72,7 +72,6 @@ fn control_hook_side_asks_for_clone_outside_managed_places() {
 }
 
 #[test]
-#[ignore = "#1637 RED: library entry detect() bypasses the scratch-place rule (SafeRoots::none)"]
 fn library_entry_does_not_allow_clone_outside_managed_places() {
     let input = serde_json::json!({ "command": command() });
     let d = detect("Bash", Some(&input));

@@ -55,7 +55,6 @@ fn control_clone_inside_managed_place_allowed_both_entries() {
 
 /// RED: the library entry must not be weaker than the scoped one for the same command.
 #[test]
-#[ignore = "RED: GitHub #1637 detect::detect (SafeRoots::none) skips the scratch-place rule"]
 fn library_detect_applies_scratch_place_rule_like_scoped() {
     let d = detect("Bash", Some(&bash(OUTSIDE)));
     assert!(

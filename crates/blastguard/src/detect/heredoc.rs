@@ -723,9 +723,15 @@ pub(super) fn non_shell_code_file_here_document(cmd: &str) -> Option<String> {
 /// reads or lists files, or prints its arguments, and none runs, sources or
 /// builds a file. The program word must be spelled exactly so (no path, no
 /// assignment, no wrapper). A CLOSED list: an unlisted command keeps the body.
+///
+/// Only tools with NO option that runs a program are listed, so no per-option
+/// check is needed. Deliberately absent: `rg` (`--pre <cmd>` and
+/// `--hostname-bin <cmd>` run a program of the caller's choice, `-z` runs
+/// decompressors; tests/non_shell_code_heredoc_failopen_probe_20261111.rs),
+/// `diff` (macOS `diff -l` pipes through `pr`) and `file` (`-z` may run
+/// decompressors). Adding a tool here needs the same check of its options.
 pub(super) const INERT_LATER_COMMANDS: &[&str] = &[
-    "ls", "cat", "head", "tail", "wc", "grep", "rg", "diff", "cmp", "stat", "file", "pwd", "echo",
-    "printf", "true",
+    "ls", "cat", "head", "tail", "wc", "grep", "cmp", "stat", "pwd", "echo", "printf", "true",
 ];
 
 /// Extensions of source files no shell runs as a script and that are not

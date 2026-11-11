@@ -394,8 +394,9 @@ forge・condukt のスケジューラが再利用）。
   literal path で拡張子が `NON_SHELL_CODE_EXTENSIONS`（`rs`・`go`・`c`・`h`・`cc`・`cpp`・`hpp`・`java`・
   `kt`・`swift`・`ts`・`tsx`・`js`・`jsx`）のとき本文を除く。さらに本文 1 行目が `#!` 行でない（`#![`
   は Rust の inner attribute なので可）、終端後の各行は空行・行頭 comment・または `INERT_LATER_COMMANDS`
-  （`ls`・`cat`・`head`・`tail`・`wc`・`grep`・`rg`・`diff`・`cmp`・`stat`・`file`・`pwd`・`echo`・
-  `printf`・`true`）を先頭語とする simple command の並びで、`$`・backtick・`\`・`(`・`)`・`{`・`}`・`<`・
+  （`ls`・`cat`・`head`・`tail`・`wc`・`grep`・`cmp`・`stat`・`pwd`・`echo`・`printf`・`true`。
+  program を起動する option を持つ tool は載せない: `rg` は `--pre`/`--hostname-bin` で任意 program を
+  実行するので除外〈tests/non_shell_code_heredoc_failopen_probe_20261111.rs〉、`diff`・`file` も除外）を先頭語とする simple command の並びで、`$`・backtick・`\`・`(`・`)`・`{`・`}`・`<`・
   `>`・`#`・不均衡 quote を含まないこと。書いたファイルを実行・source・build しうる後続
   （`cargo test`・`rustc x.rs`・`sh x.rs`・未知の語）が 1 つでもあれば本文は従来どおり shell 行として判定する。
   `.sh`・拡張子無し・他の拡張子は従来どおり shell 判定。opener 行と後続行は本文を除いた text で全規則が判定する。

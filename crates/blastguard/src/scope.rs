@@ -304,8 +304,10 @@
 
 use harness_core::verdict::Determination;
 
+mod case_fold;
 mod checkout;
 
+use case_fold::is_case_only_same_entry;
 use checkout::{is_linked_checkout, CheckoutProbe};
 
 /// A function that maps a lexically-normalised absolute path to its REAL path,
@@ -1055,7 +1057,12 @@ is not decided by where it is spelled"
     /// resolve to exactly `<real path of its parent>/<its own name>` — a
     /// component that is a symlink resolves somewhere else and fails that.
     /// The binary's resolver re-attaches non-existent tail components by name,
-    /// so a path that does not exist yet passes.
+    /// so a path that does not exist yet passes. A component whose real path
+    /// differs from the expected one ONLY in letter case is accepted when it is
+    /// verifiably the same non-symlink entry ([`is_case_only_same_entry`]:
+    /// same parent, `lstat` of neither name is a symlink, same device and
+    /// inode) — a case-insensitive filesystem reporting the on-disk spelling
+    /// (#1630). A genuine symlink still fails.
     ///
     /// `Known(false)`: a symlink below the root. `Undetermined`: a prefix that
     /// does not resolve, or no prefix that resolves to `root` (the spelling
@@ -1075,7 +1082,7 @@ is not decided by where it is spelled"
             if found {
                 let parent = prev_real.as_deref().unwrap_or("");
                 let expected = format!("{}/{comp}", parent.trim_end_matches('/'));
-                if real != expected {
+                if real != expected && !is_case_only_same_entry(&expected, &real) {
                     return Determination::known(false);
                 }
             } else if real == root {

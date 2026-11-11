@@ -354,6 +354,70 @@ pub(super) fn rewrite(src: &str, b: &Bindings) -> String {
     out
 }
 
+/// Last dotted components that start a process or hand a line to a shell,
+/// whatever object they are reached through (`os.execv`, `posix.execv`,
+/// `ctypes.CDLL(None).execl`, `pty.spawn`, …). Used by [`references_runner`].
+const PROCESS_STARTING_ATTRS: &[&str] = &[
+    "system",
+    "popen",
+    "getoutput",
+    "getstatusoutput",
+    "spawn",
+    "fork",
+    "forkpty",
+    "startfile",
+    "create_subprocess_shell",
+    "create_subprocess_exec",
+    "Popen",
+    "execv",
+    "execve",
+    "execl",
+    "execle",
+    "execlp",
+    "execlpe",
+    "execvp",
+    "execvpe",
+    "spawnl",
+    "spawnle",
+    "spawnlp",
+    "spawnlpe",
+    "spawnv",
+    "spawnve",
+    "spawnvp",
+    "spawnvpe",
+    "posix_spawn",
+    "posix_spawnp",
+];
+
+/// The first name in `code` (a code view with aliases rewritten, see
+/// [`rewrite`]) through which a string of the program could reach a process
+/// or a shell — called or not: a [`RUNNERS`] callable (or an attribute of
+/// one), a bare [`RUNNER_MODULES`] module used as a value, any attribute of
+/// `subprocess` / `pty` / `commands` / `asyncio`, or any name whose last
+/// dotted component is in [`PROCESS_STARTING_ATTRS`] (an attribute reached
+/// through a call result, `ctypes.CDLL(None).execl`, included). `None` when
+/// no token is one of those. Read with the Python lexer ([`lex`]), so a name
+/// spelled inside a string literal or a comment is not a reference.
+pub(super) fn references_runner(code: &str) -> Option<String> {
+    for t in lex(code) {
+        let Tok::Name { text: n, .. } = t else {
+            continue;
+        };
+        let last = n.rsplit('.').next().unwrap_or(&n);
+        let runner = RUNNERS
+            .iter()
+            .any(|r| n == *r || n.strip_prefix(r).is_some_and(|x| x.starts_with('.')));
+        if runner
+            || RUNNER_MODULES.contains(&n.as_str())
+            || ["subprocess", "pty", "commands", "asyncio"].contains(&top(&n))
+            || PROCESS_STARTING_ATTRS.contains(&last)
+        {
+            return Some(n);
+        }
+    }
+    None
+}
+
 /// The first command-running callable or runner module that `code`
 /// (rewritten) references without calling it directly, outside the
 /// statements that bind it (`import …`, `from … import …`, and the

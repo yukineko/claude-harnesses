@@ -834,6 +834,24 @@ pub(super) fn quoted_string_literals(payload: &str) -> Vec<String> {
     out
 }
 
+/// What [`Ctx::program_text_redirects`] points at while
+/// [`interpreter_code_verdict`] runs its shell pass over program text.
+pub(super) struct ProgramTextSink {
+    /// The R2 rows: truncating redirects whose target cannot be determined,
+    /// recorded instead of denied (see [`Ctx::program_text_redirects`]).
+    pub(super) rows: std::cell::RefCell<Vec<String>>,
+    /// True ONLY for an inline PYTHON program the Python tokenizer showed never
+    /// hands a string to a shell or a process (#1626, user ruling 2026-11-07;
+    /// see "PYTHON STRINGS ARE DATA" on [`interpreter_code_verdict`]). Then a
+    /// truncating redirect with a DETERMINABLE target, which the redirect arm
+    /// would otherwise deny on its recoverability, is not denied: it is a `>`
+    /// inside a Python string, or Python's comparison operator. Undeterminable
+    /// targets still become R2 rows (an Ask), and every earlier refusal of the
+    /// redirect arm (protected path, system directory, unplaceable target)
+    /// still applies.
+    pub(super) redirects_are_data: bool,
+}
+
 /// Judge interpreter code that this command will execute.
 ///
 /// The arm this replaces returned a flat `Deny` on the SHAPE of the invocation,
@@ -858,14 +876,38 @@ pub(super) fn quoted_string_literals(payload: &str) -> Vec<String> {
 /// still wins. When another Ask is the result, the redirect finding and the
 /// marker are appended to it, so the downgrade never disappears from the
 /// reason.
+///
+/// PYTHON STRINGS ARE DATA (#1626, user ruling 2026-11-07). `python` is true
+/// only for an inline-eval PYTHON program (`python3 -c '…'`). When, in
+/// addition, every payload passes
+/// [`python_file::python_strings_never_reach_a_shell`] (read with the Python
+/// tokenizer) and no payload carries a [`SHELL_STRING_EXEC_MARKERS`] or
+/// dynamic-execution marker anywhere, the shell pass runs with
+/// [`ProgramTextSink::redirects_are_data`]: a `>` whose target IS determinable is
+/// not denied, because in that program it is a string's contents or Python's
+/// comparison operator — `python3 -c 's="> F"; print(s)'` is Allow. Any other
+/// program (one that does not tokenise, imports a module outside the
+/// allowlist, or references a runner) is judged exactly as before; an
+/// undeterminable target still resolves to the R2 Ask; every other check is
+/// unchanged.
 pub(super) fn interpreter_code_verdict(
     shape: &str,
     payloads: &[String],
     depth: usize,
     ctx: &Ctx<'_>,
     expansion_possible: bool,
+    python: bool,
 ) -> Decision {
-    let redirects = std::cell::RefCell::new(Vec::new());
+    let redirects = ProgramTextSink {
+        rows: std::cell::RefCell::new(Vec::new()),
+        redirects_are_data: python
+            && !payloads.is_empty()
+            && payloads.iter().all(|p| {
+                !runs_shell_strings(p)
+                    && !has_dynamic_code_execution(p)
+                    && python_file::python_strings_never_reach_a_shell(p)
+            }),
+    };
     let program_ctx = Ctx {
         program_text_redirects: Some(&redirects),
         ..ctx.clone()
@@ -926,7 +968,7 @@ files or directories outright) is not called"
             }
         }
     };
-    let redirects = redirects.into_inner();
+    let redirects = redirects.rows.into_inner();
     let Some(first) = redirects.first() else {
         return verdict;
     };
@@ -1137,11 +1179,13 @@ files or directories outright if that string is run as code; blastguard cannot s
             // the program text itself (layer 0) keeps them, and a Deny from the
             // literal still returns below. A program that hands strings to a
             // shell keeps every row.
-            let sink_rows = program_ctx.program_text_redirects.map(|s| s.borrow().len());
+            let sink_rows = program_ctx
+                .program_text_redirects
+                .map(|s| s.rows.borrow().len());
             let verdict = super::detect_bash(payload, depth + 1, program_ctx);
             if depth_of_layer > 0 && !shell_strings {
                 if let (Some(sink), Some(rows)) = (program_ctx.program_text_redirects, sink_rows) {
-                    sink.borrow_mut().truncate(rows);
+                    sink.rows.borrow_mut().truncate(rows);
                 }
             }
             match verdict {
@@ -1554,6 +1598,7 @@ pub(super) fn analyze_code_interpreter(
             depth,
             ctx,
             true,
+            strip_version_suffix(cmd) == "python",
         );
         if !matches!(verdict, Decision::Allow) {
             return verdict;
@@ -1641,6 +1686,7 @@ pub(super) fn analyze_code_interpreter(
         depth,
         ctx,
         !here_document_delimiter_is_quoted(&text),
+        false,
     );
     if matches!(verdict, Decision::Allow) {
         if let Some(ask) = in_place_ask {

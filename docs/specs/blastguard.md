@@ -381,6 +381,35 @@ forge・condukt のスケジューラが再利用）。
   （`\r` 等）を含む、1 行目の quote 不均衡・行末 `\`・`<<` が（quote を見ずに数えて）ちょうど 1 個でない、
   delimiter が unquoted または空、stage が `<<` を含まないか 1 行目の部分文字列でない、終端行が無い、
   終端行より後に `<<` が（文字列として）1 つでもある。
+- **inline Python program の文字列中の `>` は data（#1626、ユーザー裁定 2026-11-07）** —
+  `python3 -c '…'`（`python`/`python3`/`python3.N` の inline-eval のみ）の program text に対する
+  shell pass で、truncating redirect の target が**判定可能**なものは recoverability による Deny を
+  出さない（`detect/interpreter.rs` の `ProgramTextSink::redirects_are_data`）。条件は全 payload が:
+  Python tokenizer で tokenise できる（`python_file.rs` の `code_view`）・`CODE_BUILDING` marker
+  （`exec(`/`eval(`/`getattr(`/`__import__` 等）が raw にも code view にも無い・相対 import／runner
+  module からの star import が無く import は全て `DATA_ONLY_MODULES`（sys/os/json/re/glob/pathlib 等の
+  allowlist）・alias 解決後の code が process を起こす名前を参照しない（`python_semantics.rs` の
+  `references_runner`: `RUNNERS`、裸の runner module、`subprocess`/`pty`/`commands`/`asyncio` の属性、
+  最終成分が `system`/`popen`/`exec*`/`spawn*`/`posix_spawn*`/`fork` 等の名前。`ctypes.CDLL(None).execl`
+  のような呼び出し結果の属性も含む）・`SHELL_STRING_EXEC_MARKERS` と動的実行 marker が文字列を含め
+  どこにも無い。`python3 -c 'import sys; s="> F"; print(s)'` は Allow。判定不能な target は従来どおり
+  R2 の Ask、redirect arm の先行する拒否（保護パス・system directory・置けない target）はそのまま。
+  tokenise できない program や条件外の program は従来どおり判定する。
+- **大文字小文字だけ違う綴りは symlink ではない（#1630）** — `SafeRoots::no_symlink_below` は、
+  root 以下の component の realpath が `<親の real>/<綴った名前>` と**大文字小文字だけ**違うとき、
+  同じ親・両名の `lstat` がどちらも symlink でない・`(st_dev, st_ino)` が一致する、を全て観測した場合に
+  限り同じ entry とみなす（`scope/case_fold.rs` の `is_case_only_same_entry`。case-insensitive APFS で
+  on-disk `mergeMain.log` に `> mergemain.log` と書いた scratchpad redirect が Allow になる）。
+  観測できなければ従来どおり「root 以下の symlink」（Allow しない）。本物の symlink は `lstat` で落ちる。
+- **chain された行の worktree checkout への redirect（#1625）** — git で復元できる tracked file への
+  truncating redirect の whose-tree 判定（`Ctx::in_worktree_checkout_for_redirect`、保護パス免除には
+  使わない）は、単一 plain command に加え、redirect を含む segment までが行頭から `&&` だけで繋がり、
+  それより前の segment が `cd <literal 絶対 dir>`（先頭のみ）・literal 代入（`IFS` 以外）・
+  `cp`（option 無し、`$NAME` は同じ prefix で代入済みの値に置換して `-` 始まりや glob が無いこと）/
+  `echo`/`printf`/`true`/`pwd`/`ls`/`cat`/`test`（quote・`>` 無し）だけで、どの segment にも
+  `` ` ``・`(`・`)`・`{`・`}`・`<`・`\`・`&`・改行が無く、write segment の後が `|`/`&` でないときも、
+  target が worktree storage root 下の linked worktree checkout 内（symlink 無し）なら session の tree と
+  みなす（`detect/rm.rs` の `write_prefix_cannot_relink`）。それ以外は従来どおり拒否。
 - **quoted here-document body の `>` は data（tests/heredoc_body_gt_fp_20261107.rs）** —
   (a) program の文字列 literal（layer > 0）の shell pass が R2 side channel（`Ctx::program_text_redirects`）に
   積む「判定不能な redirect」行は、program が `SHELL_STRING_EXEC_MARKERS` を 1 つも含まないとき捨てる

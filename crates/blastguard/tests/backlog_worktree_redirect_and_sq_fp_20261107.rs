@@ -159,7 +159,6 @@ const WHOSE_TREE: &str = "not one of this session's trees";
 /// fixture). The target file is tracked in a linked worktree under
 /// `$HOME/.condukt/worktrees`; git can restore it.
 #[test]
-#[ignore = "blastguard FP: RED, remove ignore when fixed"]
 fn case1_overwrite_of_tracked_file_in_session_created_worktree_is_not_whose_tree_refusal() {
     let fx = Fx::new("case1");
     let wt = fx.wt.display();
@@ -189,7 +188,6 @@ session's tree, but got decision {d}: {out}",
 /// is in a git worktree that is NOT one of the session's trees (a second repo
 /// outside every safe root), so attribution is irrelevant: the text is data.
 #[test]
-#[ignore = "blastguard FP: RED, remove ignore when fixed"]
 fn case3_gt_path_inside_single_quoted_python_program_is_not_a_redirect() {
     let fx = Fx::new("case3");
     // Another project entirely, tracked file present.

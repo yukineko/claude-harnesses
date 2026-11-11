@@ -308,7 +308,8 @@ struct Ctx<'a> {
     /// string or expression (`print(1 > 0)`, `'x > \`y\`'`) than a redirect,
     /// but it cannot be shown NOT to be one, so it is never cleared to Allow.
     /// `None` everywhere else: an ordinary command line keeps today's Deny.
-    program_text_redirects: Option<&'a std::cell::RefCell<Vec<String>>>,
+    /// See [`interpreter::ProgramTextSink`] for its `redirects_are_data` (#1626).
+    program_text_redirects: Option<&'a interpreter::ProgramTextSink>,
 }
 
 /// Marker every Ask produced under the user's 2026-10-14 rulings R1/R2 carries
@@ -1066,12 +1067,12 @@ whether it lands in a system directory"
                 // 2026-10-03: refusing edits inside a worktree is itself the
                 // defect), even when the session runs in the main tree and the
                 // checkout is therefore not one of its safe roots. Judged by
-                // `Ctx::in_worktree_checkout`: absolute target, one plain
-                // command, placement observed with no symlink below the
-                // checkout.
+                // `Ctx::in_worktree_checkout_for_redirect`: absolute target, one
+                // plain command or an inert `&&` prefix (#1625), placement
+                // observed with no symlink below the checkout.
                 crate::reversible::Recovery::RecoverableFromGit => {
                     ctx.confined_root("redirect", &[target.as_str()]).is_some()
-                        || ctx.in_worktree_checkout(&target)
+                        || ctx.in_worktree_checkout_for_redirect(&target, rcmd, seg_idx)
                 }
                 // An existing file whose bytes git does not hold, but which
                 // sits in a fixed temp root (`/tmp`, `/private/tmp`; never
@@ -1146,8 +1147,11 @@ overwrite this session's to make",
                 if matches!(recovery, crate::reversible::Recovery::Undetermined(_))
                     && redirect_target_undeterminable(&target, ctx.raw_base.as_deref())
                 {
-                    sink.borrow_mut().push(reason);
+                    sink.rows.borrow_mut().push(reason);
                     continue;
+                }
+                if sink.redirects_are_data {
+                    continue; // #1626: Python data, see `ProgramTextSink`
                 }
             }
             // The same ruling at LINE level (4a1cf1ad): this `>` sits in the

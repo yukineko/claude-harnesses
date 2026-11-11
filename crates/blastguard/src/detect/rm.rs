@@ -1,7 +1,8 @@
 use super::{
     confined_ask, dotgit_link_deny, exclude, glob_literal_prefix, has_glob_meta,
-    has_unresolvable_expansion, home_asset_deny, is_short_flag, protected_disarm_deny,
-    protected_tree_deny, Ctx, Decision, Determination, Placement, SafeRoots,
+    has_unresolvable_expansion, home_asset_deny, is_assignment, is_short_flag,
+    protected_disarm_deny, protected_tree_deny, split_segments_with_separators, Ctx, Decision,
+    Determination, Placement, SafeRoots, SegmentSep,
 };
 
 mod operand_words;
@@ -516,6 +517,186 @@ impl Ctx<'_> {
             | Determination::Undetermined(_) => false,
         }
     }
+
+    /// [`Ctx::in_worktree_checkout`] for ONE question only: is the
+    /// git-recoverable file a truncating redirect overwrites this session's
+    /// tree (the whose-tree check of the redirect arm, #1625)? Never used to
+    /// lift the protected-path rule.
+    ///
+    /// True when [`Ctx::in_worktree_checkout`] is, or — for a chained line
+    /// that is not one plain command — when ALL of these hold:
+    ///   * the redirect sits in segment `seg_idx` of `line` and nothing that
+    ///     runs before it, or with it, can change which file the path names
+    ///     ([`write_prefix_cannot_relink`]): the placement observed at judge
+    ///     time is then the one the redirect opens;
+    ///   * `path` is absolute, with no glob or unresolvable expansion;
+    ///   * [`SafeRoots::classify_worktree_checkout`] places it
+    ///     [`Placement::Inside`] a linked worktree checkout under a worktree
+    ///     storage root, no symlink below the checkout.
+    ///
+    /// Every other answer, `seg_idx` unknown included, is `false`.
+    pub(in crate::detect) fn in_worktree_checkout_for_redirect(
+        &self,
+        path: &str,
+        line: &str,
+        seg_idx: Option<usize>,
+    ) -> bool {
+        if self.in_worktree_checkout(path) {
+            return true;
+        }
+        let Some(idx) = seg_idx else {
+            return false;
+        };
+        if !path.starts_with('/')
+            || has_glob_meta(path)
+            || has_unresolvable_expansion(path)
+            || !write_prefix_cannot_relink(line, idx)
+        {
+            return false;
+        }
+        matches!(
+            self.scope.classify_worktree_checkout(path, None),
+            Determination::Known(Placement::Inside { .. })
+        )
+    }
+}
+
+/// Verbs [`write_prefix_cannot_relink`] admits before the write: none of them
+/// creates, renames or removes a directory entry, and `cp` (admitted only
+/// with no option word) writes regular files and never creates a symlink.
+const PREFIX_INERT_VERBS: &[&str] = &["cp", "echo", "printf", "true", "pwd", "ls", "cat", "test"];
+
+/// True ONLY when no command of `line` that runs before, or concurrently
+/// with, segment `idx` (the one holding a truncating redirect) can create,
+/// move or remove a directory entry — so the target's placement observed when
+/// the hook runs is the file the redirect opens. A refusal is the restrictive
+/// direction: the whose-tree refusal then stands exactly as before.
+///
+/// `line` must start with segments `0..=idx` joined by `&&` alone (no `;`,
+/// `||`, `|`, `&` or newline before the write, so each runs only after the
+/// previous one succeeded, in the same shell and in order), and segment `idx`
+/// must not be followed by `|` or `&` (a later stage would run concurrently).
+/// No segment of `0..=idx` contains `` ` ``, `(`, `)`, `{`, `}`, `<`, `\`,
+/// `&` or a line break (no substitution, subshell, group, here-doc or fd
+/// trick). Each segment before `idx` is one of:
+///   * segment 0 only: `cd D`, `D` absolute and spelled with alphanumerics and
+///     `/ . _ - + , @ %` only, no `.`/`..` component;
+///   * only `NAME=value` words, no quote, `$`, glob, and no `NAME` that can
+///     change how a later command runs ([`shell_behaviour_variable`]: `PATH`,
+///     `IFS`, `LD_*`, any name already in the environment, …);
+///   * a [`PREFIX_INERT_VERBS`] command with no quote and no `>`. For `cp`,
+///     every `$NAME` must name a value assigned by an earlier prefix segment
+///     and, after substituting it, no word may start with `-` or carry a glob.
+pub(super) fn write_prefix_cannot_relink(line: &str, idx: usize) -> bool {
+    let segs = split_segments_with_separators(line);
+    let Some(write) = segs.get(idx) else {
+        return false;
+    };
+    if matches!(write.sep_after, SegmentSep::Pipe | SegmentSep::Background) {
+        return false;
+    }
+    let joined: Vec<&str> = segs[..=idx].iter().map(|s| s.text.as_str()).collect();
+    if !line.starts_with(&joined.join("&&")) {
+        return false;
+    }
+    let mut assigned: Vec<(String, String)> = Vec::new();
+    for (k, seg) in segs[..=idx].iter().enumerate() {
+        let text = seg.text.as_str();
+        if text.contains(['`', '(', ')', '{', '}', '<', '\\', '&', '\n', '\r']) {
+            return false;
+        }
+        if k == idx {
+            break;
+        }
+        if text.contains(['\'', '"', '>']) {
+            return false;
+        }
+        let words: Vec<&str> = text.split_whitespace().collect();
+        let Some(&head) = words.first() else {
+            return false;
+        };
+        let dir_ok = |d: &str| {
+            d.starts_with('/')
+                && d.chars().all(|c| {
+                    c.is_alphanumeric()
+                        || matches!(c, '/' | '.' | '_' | '-' | '+' | ',' | '@' | '%')
+                })
+                && !d.split('/').any(|c| c == "." || c == "..")
+        };
+        if head == "cd" {
+            if k != 0 || words.len() != 2 || !dir_ok(words[1]) {
+                return false;
+            }
+        } else if words.iter().all(|w| is_assignment(w)) {
+            for w in &words {
+                let (name, value) = w.split_once('=').unwrap_or((w, ""));
+                if shell_behaviour_variable(name) || value.contains('$') || has_glob_meta(value) {
+                    return false;
+                }
+                assigned.retain(|(n, _)| n != name);
+                assigned.push((name.to_string(), value.to_string()));
+            }
+        } else if !PREFIX_INERT_VERBS.contains(&head) {
+            return false;
+        } else if head == "cp" {
+            for w in &words[1..] {
+                let Some(w) = substitute_prefix_vars(w, &assigned) else {
+                    return false;
+                };
+                if w.starts_with('-') || has_glob_meta(&w) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+/// True when assigning `name` in the prefix may change what a later prefix
+/// command runs or how the shell splits and resolves it: a shell special
+/// variable (`PATH` picks the `cp` binary, `IFS` splits words, `CDPATH`,
+/// `BASH_ENV`, `ENV`, `GLOBIGNORE`, `SHELLOPTS`, `BASHOPTS`, `HOME`,
+/// `POSIXLY_CORRECT`), a loader variable (`LD_*`, `DYLD_*`), or any name the
+/// hook's own environment already holds — assigning an exported name changes
+/// the environment of every later child. Only a fresh, unexported name such
+/// as `S=<dir>` is a plain shell variable that affects nothing but `$S`.
+fn shell_behaviour_variable(name: &str) -> bool {
+    const SPECIAL: &[&str] = &[
+        "PATH",
+        "IFS",
+        "CDPATH",
+        "BASH_ENV",
+        "ENV",
+        "GLOBIGNORE",
+        "SHELLOPTS",
+        "BASHOPTS",
+        "HOME",
+        "POSIXLY_CORRECT",
+    ];
+    SPECIAL.contains(&name)
+        || name.starts_with("LD_")
+        || name.starts_with("DYLD_")
+        || name.starts_with("BASH")
+        || std::env::var_os(name).is_some()
+}
+
+/// `word` with every `$NAME` replaced by its value from `assigned`, or `None`
+/// when a `$` is not followed by a name assigned there.
+fn substitute_prefix_vars(word: &str, assigned: &[(String, String)]) -> Option<String> {
+    let mut out = String::new();
+    let mut rest = word;
+    while let Some(at) = rest.find('$') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let len = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(after.len());
+        let (_, value) = assigned.iter().find(|(n, _)| n == &after[..len])?;
+        out.push_str(value);
+        rest = &after[len..];
+    }
+    out.push_str(rest);
+    Some(out)
 }
 
 /// Whole-command precondition for [`Ctx::in_worktree_checkout`]: may a

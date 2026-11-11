@@ -688,3 +688,32 @@ exit 101: AILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; fini
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
      Running tests/backlog_merge_timeout_other_paths_20261108.rs (target/debug/deps/backlog_merge_timeout_other_paths_20261108-a0fa0e39fe78ac69)
 error: test failed, to rerun pass `-p condukt --test backlog_merge_timeout_other_paths_20261108`"""
+
+[[task]]
+id = "38a44b30"
+title = "pre-push cargo check lets test-target compile errors through"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Root cause: lockstep bump touches Cargo.lock -> pre-push widens to cargo check --all-targets --workspace -> feature unification enables harness-core/fault-injection for tdd via other members' dev-deps, masking tdd's missing feature (cargo check --all-targets -p tdd exits 101, --workspace exits 0). Branch red-prepush-test-compile @ 6ddc3ead. Observed by gate-severity-probe 2026-11-11 cf954b43."
+created_at = 1794394700
+updated_at = 1794394700
+weight = 0.0
+issue_number = 1641
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1641"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_prepush_checks_test_targets_20261111.py"
+rev = "6ddc3ead4cba720aea28b50459615fc05fb4e9e4"
+observed_at = 1794394700
+detail = """
+exit 1: p tdd` exited 101
+
+scripts/test_prepush_checks_test_targets_20261111.py:133: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_prepush_checks_test_targets_20261111.py::PrePushChecksTestTargets::test_prepush_cargo_check_fails_on_test_target_compile_error
+============================== 1 failed in 35.42s =============================="""

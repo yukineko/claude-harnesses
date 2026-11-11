@@ -176,7 +176,6 @@ class RefuseWhileCargoTestIsLive(unittest.TestCase):
             _mutants_runs(log), f"another worktree's cargo test must not block: {p.stdout}"
         )
 
-    @unittest.expectedFailure  # #1581: open defect
     def test_check_workspace_tests_refuses_while_cargo_test_is_live_in_same_worktree(self):
         repo = T._fixture_repo(os.path.join(self.tmp, "ws"))
         self._with_live(cwd=repo)
@@ -190,7 +189,6 @@ class RefuseWhileCargoTestIsLive(unittest.TestCase):
         )
         self.assertNotEqual(rc, cws.RC_OK, f"out={out}\nerr={err}")
 
-    @unittest.expectedFailure  # #1581: open defect
     def test_mutation_gate_refuses_while_cargo_test_is_live_in_same_worktree(self):
         root, env, log = _mutation_gate_fixture(self.tmp)
         self._with_live(cwd=str(root))

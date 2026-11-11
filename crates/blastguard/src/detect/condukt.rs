@@ -50,9 +50,10 @@ const AUTONOMY_ENV: [&str; 2] = ["HARNESS_AUTONOMOUS", "CONDUKT_AUTONOMOUS"];
 /// * An autonomy env assignment in `prefix` whose value is not a literal
 ///   false spelling (`0`/`false`/`no`/`off`) or empty is Ask. A value holding
 ///   an unresolved `$`/backtick expansion is Ask, because it may be truthy.
-/// * `state autonomy-set <mode>` is Ask unless `<mode>` is literally `off`.
-///   A missing, non-literal (`$X`), or unrecognised mode is Ask: the gate
-///   cannot tell it is not `on`.
+/// * `state autonomy-set <mode>` is Ask unless `<mode>` is literally `off`,
+///   or no mode is given and a `--help`/`-h` flag is present (clap prints
+///   help and exits without writing). Any other missing, non-literal (`$X`),
+///   or unrecognised mode is Ask: the gate cannot tell it is not `on`.
 /// * A `condukt` subcommand or `state` action that is not literal text is
 ///   Ask, for the same reason: it may be `state autonomy-set on`.
 /// * Everything else is Allow.

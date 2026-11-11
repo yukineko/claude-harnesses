@@ -70,6 +70,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'stdin here-document の program text は body だけ': first_line_quoted_here_document_body and its fall-back conditions (backlog aafeaa05)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/here_string_file.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'cat/tee が here-string（<<<）をファイルへ書くとき、その operand をファイルの内容として shell 規則で判定する': written_here_string_verdict and its target classes (case E of tests/heredoc_system_harm_holes_20261111.rs)."
+
+[[spec]]
 path = "crates/blastguard/src/detect/payload.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'stdin here-document の program text は body だけ': analyze_interpreter_stdin_exec's program-text selection for a stage fed a here-document (backlog aafeaa05)."

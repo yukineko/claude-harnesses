@@ -51,6 +51,13 @@ pub(super) fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<
             if let Some(deny) = acc.record(shell_here_string_verdict(stage, depth, ctx)) {
                 return deny;
             }
+            // A here-string `cat`/`tee` writes to a file a shell may run
+            // (`cat > x.rs <<< 'rm -rf ~' && sh x.rs`); see `here_string_file`.
+            let written =
+                super::here_string_file::written_here_string_verdict(cmd, stage, depth, ctx);
+            if let Some(deny) = acc.record(written) {
+                return deny;
+            }
             let tokens: Vec<&str> = stage.split_whitespace().collect();
             // The interpreter may sit behind an exec-wrapper (`env sh`,
             // `env -i bash`, `/usr/bin/env python3`, `command sh`): reading
@@ -140,6 +147,7 @@ blastguard cannot read it",
             // A reason must name what was observed about THIS program.
             let program_texts = stdin_program_texts(cmd, stage, &statement, i, heredoc_open);
             let shape = format!("`{}` takes its program from stdin", stage.trim());
+            let python = python_stdin_reading(cmd, tokens[idx], &program_texts, depth, ctx);
             if let Some(deny) = acc.record(interpreter_code_verdict(
                 &shape,
                 &program_texts,
@@ -147,8 +155,16 @@ blastguard cannot read it",
                 ctx,
                 !here_document_delimiter_is_quoted(cmd),
                 false,
+                python.as_ref().is_some_and(|(_, data)| *data),
             )) {
                 return deny;
+            }
+            // The Python judge's reading of the same body adds its SYSTEM-HARM
+            // Deny only (user ruling 2026-11-07: system harm is Deny through
+            // any wrapper); every other verdict stays the scan's above (see
+            // `python_stdin_reading`).
+            if let Some((verdict, _)) = python.filter(|(v, _)| v.is_system_harm()) {
+                return verdict;
             }
             // The quoted literals above are NOT everything the upstream stage
             // emits: an UNQUOTED expansion beside them (`echo "a" $(ls) | sh`)
@@ -193,6 +209,50 @@ the command line, so blastguard cannot read the program",
         }
     }
     acc.finish()
+}
+
+/// The Python judge's reading of a QUOTED here-document body that `head` (a
+/// bare `python` / `python3` / `python3.N`) runs as its program
+/// ([`super::heredoc::python_stdin_here_document`]'s shape), as
+/// `(verdict, strings_are_data)`; `None` for any other stage or shape, or a
+/// body that does not tokenise as Python (then only the program-text scan
+/// judges it, exactly as before).
+///
+/// The verdict ([`super::interpreter::python_stdin_body_reading`]) places
+/// the body's relative paths after the `cd` that runs before the reader, so
+/// `cd /etc && python3 - <<'EOF'` / `open('hosts','w')` is judged as
+/// `cd /etc && : > hosts` (tests/heredoc_system_harm_holes_20261111.rs case
+/// A); the program-text scan reads no `cd`. The caller takes that verdict
+/// only when it is a system-harm Deny ([`Decision::is_system_harm`]): a write
+/// into a tracked file of another work tree, which the shell rules deny as
+/// out of scope, stays the program-text scan's to judge
+/// (tests/subagent_heredoc_fp_20261108.rs `control_cd_python_stdin_no_arrow`
+/// pins Allow there). `strings_are_data` is true only
+/// when `program_texts` is exactly that body and the parser showed none of
+/// its strings reaches a shell or a process (case G).
+fn python_stdin_reading(
+    cmd: &str,
+    head: &str,
+    program_texts: &[String],
+    depth: usize,
+    ctx: &Ctx<'_>,
+) -> Option<(Decision, bool)> {
+    let python = normalized_command(head)
+        .strip_prefix("python")
+        .is_some_and(|v| {
+            v.is_empty()
+                || v == "3"
+                || v.strip_prefix("3.")
+                    .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        });
+    if !python {
+        return None;
+    }
+    let parts = super::heredoc::python_stdin_here_document(cmd)?;
+    let reading = super::interpreter::python_stdin_body_reading(&parts, depth, ctx)?;
+    let body = parts.body.strip_suffix('\n').unwrap_or(&parts.body);
+    let exact = matches!(program_texts, [only] if only == body);
+    Some((reading.verdict, exact && reading.strings_are_data))
 }
 
 /// The program text an interpreter stage receives on stdin: the
@@ -425,6 +485,7 @@ unquote — it cannot tell what text the shell will run",
             depth,
             ctx,
             !span.single_quoted,
+            false,
             false,
         );
         if let Some(deny) = acc.record(verdict) {

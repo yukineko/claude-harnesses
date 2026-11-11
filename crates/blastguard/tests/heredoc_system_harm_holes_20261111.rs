@@ -180,16 +180,14 @@ macro_rules! case {
 case!(
     harm_a_cd_etc_python_stdin_writes_hosts,
     assert_deny_both,
-    "cd /etc && python3 - <<'EOF'\nopen('hosts','w').write('x')\nEOF",
-    ignore = "RED: observed Allow (empty reason), want Deny: relative open('hosts','w') after cd /etc in python3 stdin heredoc (2026-11-11)"
+    "cd /etc && python3 - <<'EOF'\nopen('hosts','w').write('x')\nEOF"
 );
 
 // B. Python script written by a heredoc, then run, copies over /etc/hosts.
 case!(
     harm_b_heredoc_py_file_copy2_to_etc_hosts,
     assert_deny_both,
-    "cat > /tmp/x.py <<'EOF'\nimport shutil\nshutil.copy2('a','/etc/hosts')\nEOF\npython3 /tmp/x.py",
-    ignore = "RED: observed Allow (empty reason), want Deny: shutil.copy2 to /etc/hosts in heredoc-written .py then run (2026-11-11)"
+    "cat > /tmp/x.py <<'EOF'\nimport shutil\nshutil.copy2('a','/etc/hosts')\nEOF\npython3 /tmp/x.py"
 );
 
 // C. Same, after `cd /etc`, the script removes the relative `hosts`.
@@ -211,8 +209,7 @@ case!(
 case!(
     harm_e_here_string_rm_rf_home_run_by_sh,
     assert_deny_both,
-    "cat > x.rs <<< 'rm -rf ~' && sh x.rs",
-    ignore = "RED: observed Allow (empty reason), want Deny: here-string body written to a file then run by sh (2026-11-11)"
+    "cat > x.rs <<< 'rm -rf ~' && sh x.rs"
 );
 
 // F. The git words are only a Python list literal that is printed.
@@ -227,8 +224,7 @@ case!(
 case!(
     fp_g_python_prints_copy2_etc_hosts_literal,
     assert_allow_both,
-    "python3 - <<'EOF'\ns = \"shutil.copy2('a','/etc/hosts')\"\nprint(s)\nEOF",
-    ignore = "RED: observed Deny (python3 stdin program judged to write /etc/hosts via shutil.copy2), want Allow: the text is only a printed string literal (2026-11-11)"
+    "python3 - <<'EOF'\ns = \"shutil.copy2('a','/etc/hosts')\"\nprint(s)\nEOF"
 );
 
 // G2. Same, after `cd /etc`, with a relative `open('hosts','w')` literal.

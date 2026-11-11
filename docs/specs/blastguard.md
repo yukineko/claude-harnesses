@@ -496,7 +496,9 @@ forge・condukt のスケジューラが再利用）。
     （`computed_shell_call`）と `CODE_BUILDING` marker は Ask。
   - **filesystem 破壊**: `shutil.rmtree(p)` → `rm -rf p`、`os.remove`/`os.unlink`/`os.rmdir`/`os.removedirs`/
     `Path.unlink()`/`.rmdir()` → `rm p`、`open(p,'w'|'x'|…)`・`Path.open('w')`・`write_text`/`write_bytes`
-    → `: > p`（`a`/`+` は `: >> p`）、`os.open` の書き込み flag も同様として shell 規則で判定（home・`/`・
+    → `: > p`（`a`/`+` は `: >> p`）、`shutil.copy`/`copy2`/`copyfile`/`copytree`/`move`・
+    `os.rename`/`replace`/`renames` の転送先（第 2 引数 / `dst`）→ `: > dst`（move が消す転送元は判定しない。
+    tests/heredoc_system_harm_holes_20261111.rs B）、`os.open` の書き込み flag も同様として shell 規則で判定（home・`/`・
     dotfile は shell と同じ Deny/Ask、repo 相対は Allow）。path は literal・`expanduser`・`Path.home()`・
     `os.path.join`・`/`・`joinpath` と、単純代入 `name = …` だけで束縛される名前（全代入の値を全部判定）から
     静的に解決し、解決できない path・literal でない mode/flag は Ask。
@@ -561,9 +563,34 @@ forge・condukt のスケジューラが再利用）。
   literal・comment は残し（`'`・`"`・`\` だけ空白化）、user ruling R2（2026-10-14: program text 中の判定不能
   な `>` は Ask、Allow にしない）を従来どおり適用する。token 化できない本文は view に本文を残す。
   この view を読むのは行単位の `>`/`>>` scan だけで、interpreter scan 等の他の規則は本文全体を読む
-  （stdin の program を Python 判定器だけで判定することはしない: 判定器は `shutil.copy2` 等を拾わない）。
-  **RESIDUAL**: `cd /etc && python3 - <<'EOF'` の `open('hosts','w')` は既存の interpreter scan で Allow の
-  まま（本変更の前後で同じ。測定 2026-11-11）。
+  （stdin の program を Python 判定器だけで判定することはしない）。
+- **`python3 -` が実行する quoted here-document の本文は、stdin-program scan に加えて Python 判定器でも読む
+  （tests/heredoc_system_harm_holes_20261111.rs A / G）** — 形は上と同じ（`heredoc::python_stdin_here_document`）。
+  `payload::analyze_interpreter_stdin_exec` が `interpreter::python_stdin_body_reading` を呼ぶ。token 化
+  できない本文はこの読みを持たず、従来どおり interpreter scan だけで判定する。
+  - **system harm は Deny**: 判定器（`.py` 本文と同じ `python_program_verdict`）の verdict が system-harm Deny
+    （`Decision::is_system_harm`）のときだけ採用する。相対 path は reader の前の `cd` に置く（`.py` 本文と同じ
+    `cds_before` 規則。終端後の行は program より後に走るので見ない）ので、`cd /etc && python3 - <<'EOF'` の
+    `open('hosts','w')` は `cd /etc && : > hosts` として Deny。それ以外の verdict（Ask、別 work tree の tracked
+    file への書き込みのような scope の Deny）は採用せず interpreter scan の判定のまま
+    （tests/subagent_heredoc_fp_20261108.rs `control_cd_python_stdin_no_arrow` が Allow を固定）。
+  - **string literal は data**: 本文全体が token 化でき、`SHELL_STRING_EXEC_MARKERS`・dynamic-execution marker
+    を（string 内も含め）持たず、`python_strings_never_reach_a_shell` を満たし、stdin-program scan の program
+    text がちょうどその本文のとき、interpreter scan（`interpreter_code_verdict` の `strings_are_data`）は
+    layer 0（program text そのもの）だけを読み、string literal の中身（layer 1 以降）を code として降りない。
+    `print` するだけの `"shutil.copy2('a','/etc/hosts')"` は Allow。layer 0 の判定（literal を path として
+    見る recoverability / system-directory probe、破壊的 call、shell pass）は変わらない。
+  **RESIDUAL**: 書き込み call の検出（`interpreter_write_call`）は文字列の部分一致のままなので、string 内に
+  write call の綴りがあり、別の literal が path のとき、その path は layer 0 で probe される（制限側。
+  コード読解による記述で、この形を突くテストは未作成）。
+- **`cat`/`tee` が here-string（`<<<`）をファイルへ書くとき、その operand をファイルの内容として shell 規則で
+  判定する（tests/heredoc_system_harm_holes_20261111.rs E、`detect/here_string_file.rs`）** — here-document
+  の本文と同じ target 区分: 全 target が data file・`/dev/null` なら判定しない。全 target が `.py` または
+  非 shell の code file（`.rs` 等）なら、command の他の segment がすべて `INERT_LATER_COMMANDS` で始まり
+  `$`・backtick・`\`・括弧・波括弧・`<`・`>`・`#`・不均衡な quote を含まないときだけ判定しない。それ以外
+  （`.sh`・拡張子なし・未知の拡張子・literal でない target）は常に判定する。判定は `analyze_shell_payload`
+  （Deny > Ask > Allow）。書く shell が展開・unquote する operand（`$`/backtick を含む double-quoted か bare、
+  quote/`\` を含む bare）は内容が読めないので Ask。`cat > x.rs <<< 'rm -rf ~' && sh x.rs` は Deny。
 
 ### module 責務
 

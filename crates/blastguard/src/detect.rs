@@ -73,6 +73,7 @@ mod git;
 mod git_stage;
 mod git_unmerged;
 mod harm_mark;
+mod here_string_file;
 mod heredoc;
 mod high_blast;
 mod interpreter;

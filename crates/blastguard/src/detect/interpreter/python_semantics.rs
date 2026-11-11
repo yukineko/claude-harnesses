@@ -1067,7 +1067,10 @@ fn literal_mode(ev: &Eval<'_>, span: Option<(usize, usize)>) -> Option<Option<Ef
 
 /// The verdict on the paths `src` (rewritten) removes or writes:
 /// `shutil.rmtree(p)` as `rm -rf p`; `os.remove` / `os.unlink` / `os.rmdir` /
-/// `os.removedirs` and `Path.unlink()` / `Path.rmdir()` as `rm p`;
+/// `os.removedirs` and `Path.unlink()` / `Path.rmdir()` as `rm p`; the
+/// destination of `shutil.copy` / `copy2` / `copyfile` / `copytree` / `move`
+/// and `os.rename` / `replace` / `renames` as `: > dst` (the source a move
+/// removes is not judged);
 /// `open(p, 'w'|'x'|…)`, `Path.open('w')`, `Path.write_text` / `write_bytes`
 /// as `: > p`, and an append or `+` mode as `: >> p`; `os.open` with a write
 /// flag likewise. Each command is judged by the shell rules, so home, `/` and
@@ -1103,6 +1106,14 @@ pub(super) fn filesystem_verdict(
             "shutil.rmtree" if !attr => (Effect::Remove { recursive: true }, path_arg(0, "path")),
             "os.remove" | "os.unlink" | "os.rmdir" | "os.removedirs" if !attr => {
                 (Effect::Remove { recursive: false }, path_arg(0, "path"))
+            }
+            // The destination of a copy or a move is overwritten, as by
+            // `open(dst, 'w')` (tests/heredoc_system_harm_holes_20261111.rs B).
+            "shutil.copy" | "shutil.copy2" | "shutil.copyfile" | "shutil.copytree"
+            | "shutil.move" | "os.rename" | "os.replace" | "os.renames"
+                if !attr =>
+            {
+                (Effect::Write { append: false }, path_arg(1, "dst"))
             }
             "open" | "io.open" | "codecs.open" | "builtins.open" if !attr => {
                 match literal_mode(&ev, ev.arg(open, 1, "mode")) {

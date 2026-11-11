@@ -104,19 +104,85 @@ pub(in crate::detect) fn python_file_body_verdict(
     let also_shell = targets.iter().any(|t| !t.ends_with(".py"))
         || !later_lines_run_only_with_python(after, targets);
     let argv = script_argv(after, targets);
-    let prefix = match parts.cds_before.as_slice() {
-        _ if later_lines_change_dir(after) => Some(UNPLACED_CWD.to_string()),
+    let placed = placed_ctx(&parts.cds_before, later_lines_change_dir(after), ctx);
+    Some(PythonFileVerdict {
+        verdict: python_program_verdict(
+            "the here-document writes a Python file",
+            body,
+            argv.as_ref(),
+            depth,
+            placed.as_ref().unwrap_or(ctx),
+        ),
+        also_shell,
+    })
+}
+
+/// `ctx` with [`Ctx::cwd_prefix`] set to where a here-document's Python
+/// program runs: `None` (the session's directory) when no `cd` runs before
+/// the reader; `cd <dir> && ` for ONE [`plain_absolute_dir`] operand; and
+/// [`UNPLACED_CWD`] for any other `cd` list, or when `unplaced` (a later line
+/// may change the directory a later run starts in).
+fn placed_ctx<'a>(cds_before: &[String], unplaced: bool, ctx: &Ctx<'a>) -> Option<Ctx<'a>> {
+    let prefix = match cds_before {
+        _ if unplaced => Some(UNPLACED_CWD.to_string()),
         [] => None,
         [dir] if plain_absolute_dir(dir) => Some(format!("cd {dir} && ")),
         _ => Some(UNPLACED_CWD.to_string()),
     };
-    let placed = prefix.map(|p| Ctx {
+    prefix.map(|p| Ctx {
         cwd_prefix: Some(p),
         ..ctx.clone()
-    });
-    Some(PythonFileVerdict {
-        verdict: python_program_verdict(body, argv.as_ref(), depth, placed.as_ref().unwrap_or(ctx)),
-        also_shell,
+    })
+}
+
+/// The Python reading of a QUOTED here-document body a bare Python
+/// interpreter runs as its program (`python3 - <<'EOF'`; the shape is
+/// [`super::super::heredoc::python_stdin_here_document`]'s), for the
+/// stdin-program audit of `payload::analyze_interpreter_stdin_exec`.
+pub(in crate::detect) struct PythonStdinReading {
+    /// [`python_file_body_verdict`]'s Python reading of the body, with its
+    /// relative paths placed after the `cd` that runs before the reader
+    /// (tests/heredoc_system_harm_holes_20261111.rs case A:
+    /// `cd /etc && python3 - <<'EOF'` / `open('hosts','w')` is `: > hosts`
+    /// in `/etc`).
+    pub(in crate::detect) verdict: Decision,
+    /// True ONLY when the parser shows no string of the program can reach a
+    /// shell or a process: the body holds no [`super::SHELL_STRING_EXEC_MARKERS`]
+    /// entry or dynamic-execution marker anywhere (strings included), and
+    /// passes [`python_strings_never_reach_a_shell`]. The contents of its
+    /// string literals are then data, not program text, so the caller's
+    /// program-text scan (`interpreter_code_verdict`) does not descend into
+    /// them as code (case G: a printed `"shutil.copy2('a','/etc/hosts')"`
+    /// literal was denied as a write of `/etc/hosts`). The program text
+    /// itself, literals as written included, is still scanned.
+    pub(in crate::detect) strings_are_data: bool,
+}
+
+/// See [`PythonStdinReading`]. `None` when the body does not tokenise as
+/// Python: string boundaries are unknown, so nothing changes and the caller
+/// judges the raw body exactly as before.
+pub(in crate::detect) fn python_stdin_body_reading(
+    parts: &HereDocumentParts,
+    depth: usize,
+    ctx: &Ctx<'_>,
+) -> Option<PythonStdinReading> {
+    let body = &parts.body;
+    code_view(body)?;
+    // The program runs before any later line, so only the `cd`s before the
+    // reader place it.
+    let placed = placed_ctx(&parts.cds_before, false, ctx);
+    let verdict = python_program_verdict(
+        "the here-document feeds a Python program on stdin",
+        body,
+        None,
+        depth,
+        placed.as_ref().unwrap_or(ctx),
+    );
+    Some(PythonStdinReading {
+        verdict,
+        strings_are_data: !super::runs_shell_strings(body)
+            && !super::has_dynamic_code_execution(body)
+            && python_strings_never_reach_a_shell(body),
     })
 }
 
@@ -173,12 +239,12 @@ fn script_argv(after: &str, targets: &[String]) -> Option<sem::Argv> {
 
 /// The Python reading of [`python_file_body_verdict`].
 fn python_program_verdict(
+    shape: &str,
     body: &str,
     argv: Option<&sem::Argv>,
     depth: usize,
     ctx: &Ctx<'_>,
 ) -> Decision {
-    let shape = "the here-document writes a Python file";
     let refuse = || {
         Decision::ask(format!(
             "{shape}, and its program cannot be tokenised as Python (an unterminated string or an \

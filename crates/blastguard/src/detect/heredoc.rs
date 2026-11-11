@@ -705,11 +705,21 @@ pub(super) fn python_file_here_document(cmd: &str) -> Option<HereDocumentParts> 
 /// the view keeps the body. Only the line-level redirect scans read this view;
 /// every other rule (the interpreter scans included) still reads the full body.
 pub(super) fn python_stdin_redirect_view(cmd: &str) -> Option<String> {
-    let parts = here_document_body_parts(cmd, OutputTargets::PythonStdin)?;
+    let parts = python_stdin_here_document(cmd)?;
     let keep = |text: &str| text.contains('>') && text.contains(['$', '`']);
     let body = super::interpreter::python_redirect_view(&parts.body, keep)?;
     let (head, tail) = parts.without_body.split_at(parts.head_len);
     Some(format!("{head}{body}{tail}"))
+}
+
+/// The QUOTED here-document whose body a bare Python interpreter runs as its
+/// program, split as [`python_stdin_redirect_view`] reads it
+/// ([`OutputTargets::PythonStdin`]); `cds_before` lists the `cd`s that run
+/// before the reader. Also read by the stdin-program audit
+/// (`payload::analyze_interpreter_stdin_exec`), which judges the body with the
+/// Python judge ([`super::interpreter::python_stdin_body_reading`]).
+pub(super) fn python_stdin_here_document(cmd: &str) -> Option<HereDocumentParts> {
+    here_document_body_parts(cmd, OutputTargets::PythonStdin)
 }
 
 /// [`opener_consumer`], then further `cd <literal>` heads ([`permitted_prefix_line`])
@@ -1062,8 +1072,9 @@ fn here_document_body_parts(cmd: &str, targets: OutputTargets) -> Option<HereDoc
 /// removed: every output-redirect target and every `tee` operand other than
 /// `-a` / `--append`. Only meaningful for a line
 /// [`here_document_consumer_is_data`] accepted under
-/// [`OutputTargets::PythonFiles`].
-fn here_document_write_targets(line: &str) -> Vec<String> {
+/// [`OutputTargets::PythonFiles`], or a `cat`/`tee` here-string writer
+/// ([`super::here_string_file`], here-strings removed from `line`).
+pub(super) fn here_document_write_targets(line: &str) -> Vec<String> {
     let raw = quote_aware_words(line);
     let mut out = Vec::new();
     let (mut head_seen, mut tee) = (false, false);

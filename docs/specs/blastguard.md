@@ -162,9 +162,16 @@ forge・condukt のスケジューラが再利用）。
   `mkdir -p` は対象外（2026-11-07 ユーザー裁定）。未知の option・verb が取る数を超える operand・literal でない
   作成先・relative の基点不明・`..` はすべて `Ask`（判定不能は制限側）。この規則は `Allow` を `Ask` に上げるだけで、
   他の規則の `Deny`/`Ask` はそのまま。cp/mv/install/ln の option 解析は getopt 形式の共通 parser に一本化した
-  （`-t <dir>` の clustered 形を含む）。location model の無い library 入口（`SafeRoots::none`、`detect::detect`）には
-  適用しない — その入口の契約は location model 導入前の判定のままで、condukt `gate_exec.rs`/`verify.rs`・specguard
-  `forge/implement.rs`・daily の呼び出しはこの規則の外にある（未解決として残す）。
+  （`-t <dir>` の clustered 形を含む）。library 入口 `detect::detect` にも適用する（GitHub #1637、blastguard
+  0.2.433）。以前はこの入口（`SafeRoots::none`）だけ規則を飛ばして `Allow` を返し、無人で `sh -c` に渡す condukt
+  `verify.rs`（`launch_and_reflux`/`launch_server_and_probe`/`launch_in_container`）・specguard `forge/implement.rs`・
+  daily の呼び出しが hook より寛容な判定を得ていた（fail-open）。現在は、他の規則には `SafeRoots::none` のまま、
+  この規則だけ**プロセス**の管理された場所（process cwd — これらの呼び出しの `sh -c` が走る場所 — ・
+  `CLAUDE_PROJECT_DIR`・`HOME`・`TMPDIR`、hook と同じ `SafeRoots::new` の導出規則と実 path 解決）で判定する
+  （`SafeRoots::with_managed_places`、`scratch_place::process_place_model`）。外側・判定不能は `Ask` で、呼び出し側は
+  `.hardened()` で `Deny` に倒すので起動前に拒否される。location model が全く無い scope（裸の `SafeRoots::none` を
+  `detect_scoped` に渡す）では作成先を示せないので、tree を作る `git clone`/`cp -r` はすべて `Ask`。何も作らない形
+  （repository 無しの `git clone`、operand 1 個の `cp -r`）の判定は変わらない。
 - **bash 3.2 の読みも判定する（`detect/readings.rs` の `detect_bash_every_reading`、blastguard 0.2.305）** —
   macOS の `/bin/bash` 3.2 と `/bin/sh` は `$(…)` 内の here-document 本文を command text として読むので、
   本文中の `)` が substitution を早く閉じ、続く text が実行されうる（2026-11-07 に harmless marker で観測:

@@ -622,6 +622,9 @@ pub struct SafeRoots {
     /// `None` (always for [`SafeRoots::none`]) means no operand is ever placed
     /// inside a checkout.
     checkout_probe: Option<CheckoutProbe>,
+    /// The model only the scratch-place rule consults; `None` = `self`. See
+    /// `detect/scratch_place.rs` (GitHub #1637).
+    pub(crate) managed_places: Option<std::sync::Arc<SafeRoots>>,
 }
 
 impl SafeRoots {
@@ -629,10 +632,10 @@ impl SafeRoots {
     /// `Undetermined`, so every caller keeps the verdict it had before this
     /// module existed.
     ///
-    /// This is what [`crate::detect::detect`] uses, which is why the library
-    /// consumers that hand commands to `sh -c` with no human present (condukt's
-    /// check runner, specguard's forge, daily's task runner) are unaffected by
-    /// this whole feature.
+    /// This is what [`crate::detect::detect`] uses for every rule except the
+    /// scratch-place rule (which gets a process model, GitHub #1637), so the
+    /// library consumers that hand commands to `sh -c` with no human present
+    /// (condukt, specguard's forge, daily) get no placement-based `Allow`.
     pub fn none() -> SafeRoots {
         SafeRoots {
             roots: Vec::new(),
@@ -646,6 +649,7 @@ impl SafeRoots {
             git_tree_probe: None,
             git_absent_probe: None,
             checkout_probe: None,
+            managed_places: None,
         }
     }
 
@@ -753,6 +757,7 @@ impl SafeRoots {
             git_tree_probe: None,
             git_absent_probe: None,
             checkout_probe: resolver.map(|_| is_linked_checkout as CheckoutProbe),
+            managed_places: None,
         }
     }
 
@@ -1147,11 +1152,10 @@ is not decided by where it is spelled"
     /// (a resolver was supplied). [`SafeRoots::none`] — the no-model entry
     /// [`crate::detect::detect`] uses for library consumers — answers `false`.
     ///
-    /// The scratch-place rule ([`SafeRoots::classify_managed_place`]) applies
-    /// only when this is `true`: the no-model entry keeps the verdict it had
-    /// before that rule existed (its contract, see [`SafeRoots::none`]). A
-    /// model WITH a resolver whose roots all failed to resolve is still a
-    /// model, so there every landing is `Undetermined` and the rule asks.
+    /// When `false`, the scratch-place rule asks for every landing (GitHub
+    /// #1637; before, it answered `Allow`). A model WITH a resolver whose
+    /// roots all failed to resolve is still a model, so there every landing
+    /// is `Undetermined` and the rule asks too.
     pub(crate) fn has_location_model(&self) -> bool {
         self.resolver.is_some()
     }

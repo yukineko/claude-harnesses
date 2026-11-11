@@ -237,10 +237,12 @@ pub fn detect_scoped(tool_name: &str, tool_input: Option<&Value>, scope: &SafeRo
 /// [`crate::scope`] existed, because [`SafeRoots::none`] makes every placement
 /// question `Undetermined`. This is the entry point for every library consumer
 /// that hands commands to `sh -c` with no human present (condukt's check
-/// runner, specguard's forge, daily's task runner): they get the strict gate,
-/// unchanged.
+/// runner, specguard's forge, daily's task runner): they get the strict gate.
+/// Except the scratch-place rule, judged against the PROCESS's managed places
+/// (env + filesystem; `detect/scratch_place.rs`, GitHub #1637).
 pub fn detect(tool_name: &str, tool_input: Option<&Value>) -> Decision {
-    detect_scoped(tool_name, tool_input, &SafeRoots::none())
+    let scope = SafeRoots::none().with_managed_places(scratch_place::process_place_model());
+    detect_scoped(tool_name, tool_input, &scope)
 }
 
 /// The location model, plus the working directory the CURRENT segment resolves
@@ -276,6 +278,8 @@ struct Ctx<'a> {
     rewritten_base: Option<&'a str>,
     /// Base for operands that rewrite left alone. `None` = not known.
     raw_base: Option<String>,
+    /// The scratch-place rule's bases ([`scratch_place::PlaceBases`]).
+    places: scratch_place::PlaceBases<'a>,
     /// Whether the TOP-LEVEL command may use the worktree-storage `Allow` at
     /// all — see [`worktree_rm_eligible`]. Computed once from the whole command
     /// line in [`Ctx::new`] and carried unchanged into every derived context.
@@ -355,6 +359,7 @@ impl<'a> Ctx<'a> {
             scope,
             rewritten_base: scope.session_cwd(),
             raw_base: scope.session_cwd().map(str::to_string),
+            places: scratch_place::PlaceBases::new(scope),
             worktree_rm_eligible: eligible(worktree_rm_eligible),
             deletion_rm_eligible: DeletionEligibility::of(eligible(deletion_rm_eligible), eligible),
             checkout_exempt_eligible: eligible(checkout_exempt_eligible),
@@ -376,6 +381,7 @@ impl<'a> Ctx<'a> {
             scope: self.scope,
             rewritten_base: self.rewritten_base,
             raw_base,
+            places: self.places.after_cd(dir),
             worktree_rm_eligible: self.worktree_rm_eligible,
             deletion_rm_eligible: self.deletion_rm_eligible,
             checkout_exempt_eligible: self.checkout_exempt_eligible,
@@ -393,6 +399,7 @@ impl<'a> Ctx<'a> {
             scope: self.scope,
             rewritten_base: None,
             raw_base: None,
+            places: scratch_place::PlaceBases::unknown(),
             worktree_rm_eligible: self.worktree_rm_eligible,
             deletion_rm_eligible: self.deletion_rm_eligible,
             checkout_exempt_eligible: self.checkout_exempt_eligible,

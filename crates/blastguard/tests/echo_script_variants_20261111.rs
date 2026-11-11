@@ -15,8 +15,8 @@
 //!   a printf format). Undeterminable resolves to the restrictive side
 //!   (CLAUDE.md §3), so anything except Allow passes; Ask or Deny are both
 //!   acceptable.
-//! - `ctl_*`: harmless (the harmful text is overwritten before it runs, never
-//!   run, or never written as code). Must be Allow; non-Allow is a false
+//! - `ctl_*`: harmless (the harmful text is never run, or never written as
+//!   code). Must be Allow; non-Allow is a false
 //!   positive.
 //!
 //! Each command runs through the real binary as the main agent AND as a
@@ -296,7 +296,7 @@ case!(
     harm_v13_echo_e_newline,
     deny_both,
     "echo -e 'rm -rf ~\\n' > x.sh && sh x.sh",
-    ignore = "RED: observed ask (text holds a backslash echo may expand) for the main agent (2026-11-11)"
+    ignore = "RED: observed ask (text holds a backslash echo may expand); USER RULING 2026-11-11 \"Deny\": if any plausible shell interpretation is system harm, it is Deny (2026-11-11)"
 );
 
 // V14. Non-.sh file name run by sh.
@@ -311,6 +311,72 @@ case!(
     harm_v15_echo_python_rmtree_etc,
     deny_both,
     "echo \"import shutil; shutil.rmtree('/etc')\" > x.py && python3 x.py"
+);
+
+/// V16. Harmful text "overwritten" with a harmless script before it runs.
+///
+/// USER RULING (2026-11-11): "Back to Deny". Inherited noclobber can make
+/// the second `>` fail, so the harmful content can still be what runs, and
+/// system harm is Deny. (Formerly `ctl_c01_overwritten_before_run`, Allow.)
+#[test]
+#[ignore = "RED: observed allow (empty stdout) for the main agent; USER RULING 2026-11-11 \"Back to Deny\" (2026-11-11)"]
+fn harm_v16_overwritten_before_run_noclobber() {
+    Fixture::new("harm_v16_overwritten_before_run_noclobber")
+        .deny_both("echo 'rm -rf ~' > x.sh; echo 'echo hi' > x.sh; sh x.sh");
+}
+
+// ---- harm: fallback paths (overwrite may fail / write is scoped) -------
+
+// F1. Write failure is swallowed with `|| true`; the script still runs.
+case!(
+    harm_f01_or_true_then_run,
+    deny_both,
+    "echo 'rm -rf ~' > x.sh || true; sh x.sh"
+);
+
+// F2. Written inside a for loop body.
+case!(
+    harm_f02_for_loop_write,
+    deny_both,
+    "for i in 1; do echo 'rm -rf ~' > x.sh; done; sh x.sh",
+    ignore = "RED: observed allow (empty stdout) for the main agent (2026-11-11)"
+);
+
+// F3. `set -C` makes the harmless overwrite fail; the harmful script runs.
+case!(
+    harm_f03_set_noclobber_overwrite_fails,
+    deny_both,
+    "set -C; echo 'rm -rf ~' > x.sh; echo hi > x.sh; sh x.sh"
+);
+
+// F4. `chmod 000` can make the harmless overwrite fail.
+case!(
+    harm_f04_chmod_000_overwrite_fails,
+    deny_both,
+    "echo 'rm -rf ~' > x.sh; chmod 000 x.sh; echo hi > x.sh; sh x.sh"
+);
+
+// F5. Both writes in one pipeline: their order is a race.
+case!(
+    harm_f05_pipeline_write_race,
+    deny_both,
+    "echo 'rm -rf ~' > x.sh | echo hi > x.sh; sh x.sh"
+);
+
+// F6. Written inside a subshell, run outside it.
+case!(
+    harm_f06_subshell_write,
+    deny_both,
+    "(echo 'rm -rf ~' > x.sh) && sh x.sh",
+    ignore = "RED: observed allow (empty stdout) for the main agent (2026-11-11)"
+);
+
+// F7. Echoed node script that recursively deletes $HOME.
+case!(
+    harm_f07_echo_node_rmsync_home,
+    deny_both,
+    "echo \"require('fs').rmSync(process.env.HOME,{recursive:true})\" > x.js && node x.js",
+    ignore = "RED: observed allow (empty stdout) for the main agent (2026-11-11)"
 );
 
 // ---- undeterminable content: not Allow ---------------------------------
@@ -330,13 +396,6 @@ case!(
 );
 
 // ---- controls: Allow ---------------------------------------------------
-
-// C1. Harmful text is overwritten with a harmless script before it runs.
-case!(
-    ctl_c01_overwritten_before_run,
-    allow_both,
-    "echo 'rm -rf ~' > x.sh; echo 'echo hi' > x.sh; sh x.sh"
-);
 
 // C2. Harmful text used as a commit message, never run.
 case!(

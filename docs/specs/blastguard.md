@@ -535,6 +535,12 @@ forge・condukt のスケジューラが再利用）。
 - **`detect/budget`** — `detect_bash` の再帰の 2 つの上限。深さ上限 `MAX_SHELL_DEPTH` に達したら
   `depth_exhausted`（Ask: 解析未完了）、1 コマンドあたりの node 訪問予算 `MAX_ANALYSIS_NODES` を
   `ANALYSIS_BUDGET` から `take_budget` で消費する。`detect.rs` から挙動を変えずに移した（file-growth cap）。
+- **`detect/tests/file_ops`** — `detect/tests` の子 module。file tool（Write / Edit / MultiEdit /
+  NotebookEdit）の unit test と、entry-boundary の「読めない operand は Ask、管轄外 tool は Allow」test。
+  `detect/tests.rs` から変えずに移した（file-growth cap）。
+- **`scope/deletion_roots`** — `SafeRoots` の temp / cache DELETION root（spec 3aa215e1 class 2/3）を組み立てる
+  `deletion_roots` と `DELETION_TEMP_ROOTS`・`DELETION_CACHE_ROOTS`・`OS_TEMP_PARENTS` および除外判定
+  （`contains_home`・`below_home`・`system_root`）。`scope.rs` から挙動を変えずに移した（file-growth cap）。
 - **`hookio`** — PreToolUse `deny` の単一行 JSON 生成（`deny_json`）。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。

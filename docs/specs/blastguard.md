@@ -176,8 +176,13 @@ forge・condukt のスケジューラが再利用）。
   modern の終端で再判定する。bash 3.2 の parse をモデル化できない場合は少なくとも Ask（判定不能を Allow に
   丸めない）。各 pass は満額の node budget から始める（D4）。**残余（未対応、RED を `#[ignore]` で固定）**:
   早期 close 後の text の読み違い（escape した quote、quote を含む `#` comment、`<(`。backlog 089bedd4）、
-  zsh が unquoted `<<EOF` 本文を展開する形（backlog 5916d385）、bash 3.2
-  の読みで quote・backtick・backslash を含む comment 行が Deny ではなく Ask（backlog d328ea88）。
+  zsh が unquoted `<<EOF` 本文を展開する形（backlog 5916d385）。
+  bash 3.2 の読みで quote・backtick・backslash を含む comment 行（unquoted `$(` 内）は parse をモデル化
+  できないので Ask のままだが、その comment が quote を隠すと仮定した**候補の読み**
+  （`substitution::assuming_comment_hides_quotes`、`readings::bash32_comment_candidate`。D1-D3 で
+  /bin/bash 3.2・/bin/sh が早期 close 後の command を実行することを観測）でも両 bash 3.2 pass を
+  再判定し、そこで Deny なら Deny を返す（issue #1614、backlog d328ea88）。候補の読みは判定を足すだけで、
+  Allow でも Ask は消えない。
 - **shell の字句どおりの読みも判定する（`detect/shell_lex.rs` の `shell_lexed_reading`、backlog e2b9ffb1、
   blastguard 0.2.379）** — segment 分割器と line-level scan は quote を素朴に追うだけで `#` comment も
   backslash escape も知らないため、comment 中の quote（`echo $HOME #e"`）や escape した quote（`x\'a`）が
@@ -381,6 +386,19 @@ forge・condukt のスケジューラが再利用）。
   （`\r` 等）を含む、1 行目の quote 不均衡・行末 `\`・`<<` が（quote を見ずに数えて）ちょうど 1 個でない、
   delimiter が unquoted または空、stage が `<<` を含まないか 1 行目の部分文字列でない、終端行が無い、
   終端行より後に `<<` が（文字列として）1 つでもある。
+- **非 shell・非 Python のコードファイルへ書く quoted here-document の本文は shell 行として読まない
+  （user ruling 2026-11-08、issue #1602、tests/backlog_cd_redirect_fp_20261107.rs）** — `detect_bash` の
+  手順 0c。`heredoc::non_shell_code_file_here_document` が、`.py` の手順 0b と同じ形（前行は
+  `permitted_prefix_line`、opener 行は 1 個の here-document・`$`/backtick 無し・quote 均衡、区切りは
+  **引用付き**、本文は終端行で閉じ空でない、奇妙な空白無し）で、読み手が `cat`/`tee`、書き込み先が**全て**
+  literal path で拡張子が `NON_SHELL_CODE_EXTENSIONS`（`rs`・`go`・`c`・`h`・`cc`・`cpp`・`hpp`・`java`・
+  `kt`・`swift`・`ts`・`tsx`・`js`・`jsx`）のとき本文を除く。さらに本文 1 行目が `#!` 行でない（`#![`
+  は Rust の inner attribute なので可）、終端後の各行は空行・行頭 comment・または `INERT_LATER_COMMANDS`
+  （`ls`・`cat`・`head`・`tail`・`wc`・`grep`・`rg`・`diff`・`cmp`・`stat`・`file`・`pwd`・`echo`・
+  `printf`・`true`）を先頭語とする simple command の並びで、`$`・backtick・`\`・`(`・`)`・`{`・`}`・`<`・
+  `>`・`#`・不均衡 quote を含まないこと。書いたファイルを実行・source・build しうる後続
+  （`cargo test`・`rustc x.rs`・`sh x.rs`・未知の語）が 1 つでもあれば本文は従来どおり shell 行として判定する。
+  `.sh`・拡張子無し・他の拡張子は従来どおり shell 判定。opener 行と後続行は本文を除いた text で全規則が判定する。
 - **quoted here-document body の `>` は data（tests/heredoc_body_gt_fp_20261107.rs）** —
   (a) program の文字列 literal（layer > 0）の shell pass が R2 side channel（`Ctx::program_text_redirects`）に
   積む「判定不能な redirect」行は、program が `SHELL_STRING_EXEC_MARKERS` を 1 つも含まないとき捨てる

@@ -617,6 +617,11 @@ pub(super) enum OutputTargets {
     /// by [`python_file_here_document`], whose body is then judged as Python;
     /// lines after the close are allowed and stay judged as shell.
     PythonFiles,
+    /// Only literal non-shell code files ([`is_non_shell_code_file_target`]:
+    /// `.rs`, `.go`, `.c`, …), by `cat` or `tee`, with a QUOTED delimiter.
+    /// Used ONLY by [`non_shell_code_file_here_document`], whose body is then
+    /// judged by no shell rule; lines after the close are checked there.
+    NonShellCodeFiles,
 }
 
 /// A here-document split by [`here_document_body_parts`].
@@ -658,9 +663,95 @@ pub(super) fn python_file_here_document(cmd: &str) -> Option<HereDocumentParts> 
     here_document_body_parts(cmd, OutputTargets::PythonFiles).filter(|p| !p.body.is_empty())
 }
 
+/// User ruling 2026-11-08 (issue #1602, the non-Python half of the ruling
+/// [`python_file_here_document`] implements): a QUOTED here-document body that
+/// `cat`/`tee` writes ONLY to literal non-shell code files
+/// ([`is_non_shell_code_file_target`]: `.rs`, `.go`, `.c`, …) is not shell
+/// lines. With a quoted delimiter the shell neither expands nor parses that
+/// body — it is the reader's stdin, byte for byte — so a lone backtick or a
+/// `git stash clear` in a Rust comment is not a command. Answers the command
+/// with the body removed (opener and delimiter lines kept, so the opener's
+/// targets and every later line are still judged by every shell rule), or
+/// `None` to keep the body in the text, judged as shell lines exactly as
+/// before.
+///
+/// The shape rule is [`python_file_here_document`]'s (permitted lines before
+/// the opener, one opener line with no `$`/backtick, a quoted delimiter, a
+/// CLOSED non-empty body, no odd whitespace), plus:
+///   * EVERY target is a non-shell code file (a `.sh`, extension-less or other
+///     target keeps the body; so does a `.py` one, which is step 0b's);
+///   * the body's first line is not a `#!` interpreter line (`#![…]`, a Rust
+///     inner attribute, is not one): a script for an interpreter is shell-run
+///     code;
+///   * every line after the close is blank, a whole-line comment, or a list of
+///     simple commands each headed by a word on [`INERT_LATER_COMMANDS`]
+///     (`ls`, `cat`, `wc`, …, read-only tools that run no file), with no `$`,
+///     backtick, `\`, `(`, `)`, `{`, `}`, `<`, `>`, `#` or unbalanced quote on
+///     the line. Any later command that could run, source or build the written
+///     file — `cargo test`, `rustc x.rs`, `node x.js`, `sh x.rs`, `make`, an
+///     unknown word — keeps the body judged.
+///
+/// RESIDUAL, as for data files: a LATER, separate tool call that builds or
+/// runs the file is judged on its own text; this gate never re-reads the file.
+pub(super) fn non_shell_code_file_here_document(cmd: &str) -> Option<String> {
+    let parts = here_document_body_parts(cmd, OutputTargets::NonShellCodeFiles)?;
+    let first = parts.body.lines().next()?;
+    if first.starts_with("#!") && !first.starts_with("#![") {
+        return None;
+    }
+    let mut commands = String::new();
+    for line in parts.after.lines() {
+        let t = line.trim_matches([' ', '\t']);
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        if t.contains(['$', '`', '\\', '(', ')', '{', '}', '<', '>', '#']) || !quotes_balance(t) {
+            return None;
+        }
+        commands.push_str(t);
+        commands.push('\n');
+    }
+    let inert = split_segments_with_separators(&commands).iter().all(|s| {
+        quote_aware_words(&s.text)
+            .first()
+            .is_none_or(|w| INERT_LATER_COMMANDS.contains(&w.as_str()))
+    });
+    inert.then_some(parts.without_body)
+}
+
+/// Commands [`non_shell_code_file_here_document`] accepts after the close: each
+/// reads or lists files, or prints its arguments, and none runs, sources or
+/// builds a file. The program word must be spelled exactly so (no path, no
+/// assignment, no wrapper). A CLOSED list: an unlisted command keeps the body.
+pub(super) const INERT_LATER_COMMANDS: &[&str] = &[
+    "ls", "cat", "head", "tail", "wc", "grep", "rg", "diff", "cmp", "stat", "file", "pwd", "echo",
+    "printf", "true",
+];
+
+/// Extensions of source files no shell runs as a script and that are not
+/// Python (`.py` is [`python_file_here_document`]'s): the targets whose
+/// quoted here-document body [`non_shell_code_file_here_document`] keeps out
+/// of the shell rules. `.sh` and extension-less names are deliberately absent
+/// (user ruling 2026-11-08: those bodies are judged as shell).
+pub(super) const NON_SHELL_CODE_EXTENSIONS: &[&str] = &[
+    "rs", "go", "c", "h", "cc", "cpp", "hpp", "java", "kt", "swift", "ts", "tsx", "js", "jsx",
+];
+
+/// True when `target` (one shell word, quotes still on) is a literal path
+/// whose extension is on [`NON_SHELL_CODE_EXTENSIONS`].
+pub(super) fn is_non_shell_code_file_target(target: &str) -> bool {
+    let inner = unquote_data_file_target(target);
+    is_data_file_target_shape(inner)
+        && std::path::Path::new(inner)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| NON_SHELL_CODE_EXTENSIONS.contains(&e))
+}
+
 /// `.py` files whose here-document body [`python_file_here_document`] judges
-/// as Python. `.sh`, extension-less and every other code extension stay
-/// shell-judged.
+/// as Python. `.sh` and extension-less targets stay shell-judged; the
+/// [`NON_SHELL_CODE_EXTENSIONS`] are [`non_shell_code_file_here_document`]'s,
+/// and every other extension stays shell-judged.
 pub(super) fn is_python_file_target(target: &str) -> bool {
     let inner = unquote_data_file_target(target);
     is_data_file_target_shape(inner)
@@ -810,8 +901,13 @@ fn here_document_body_parts(cmd: &str, targets: OutputTargets) -> Option<HereDoc
     // The Python-file split keeps every later line too: the body is judged as
     // Python whether or not a later line runs it, and the later lines are
     // judged as shell.
-    let later_commands_ok = targets == OutputTargets::PythonFiles
-        || (targets == OutputTargets::AnyTarget && here_document_reader_stores_nothing(consumer));
+    // The non-shell-code split checks its later lines itself
+    // ([`non_shell_code_file_here_document`]).
+    let later_commands_ok = matches!(
+        targets,
+        OutputTargets::PythonFiles | OutputTargets::NonShellCodeFiles
+    ) || (targets == OutputTargets::AnyTarget
+        && here_document_reader_stores_nothing(consumer));
     if lines[close + 1..]
         .iter()
         .any(|l| odd_whitespace(&text(l)) || !(later_commands_ok || inert(&text(l))))
@@ -1170,7 +1266,9 @@ pub(super) fn permitted_prefix_line(line: &str) -> bool {
 /// A `.sh` or extension-less body is judged as shell lines. A `.py` body
 /// written by `cat`/`tee` under a QUOTED delimiter is judged as Python instead
 /// (user ruling 2026-11-08, [`python_file_here_document`]): still code, never
-/// data, but not shell either.
+/// data, but not shell either. A body written only to non-shell code files
+/// (`.rs`, …) is likewise not read as shell lines when nothing later in the
+/// command can run it ([`non_shell_code_file_here_document`]).
 ///
 /// This is a statement about the NAME only. Any file can be executed
 /// (`sh notes.txt`). Within one command that is covered by the shape rule in
@@ -1340,6 +1438,7 @@ pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets)
                 OutputTargets::PythonFiles => {
                     is_data_file_target_shape(unquote_data_file_target(target))
                 }
+                OutputTargets::NonShellCodeFiles => is_non_shell_code_file_target(target),
             };
             if !target_ok {
                 return false;
@@ -1364,6 +1463,25 @@ pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets)
     // file, every target a literal path (a `tee` operand counts as a target).
     // A non-`.py` target is allowed here; the caller then judges the body as
     // shell lines too ([`python_file_here_document`]).
+    // [`OutputTargets::NonShellCodeFiles`]: `cat`/`tee` writing ONLY non-shell
+    // code files, at least one (a `tee` operand counts as a target).
+    if targets == OutputTargets::NonShellCodeFiles {
+        let redirects = raw
+            .iter()
+            .filter(|w| strip_output_redirect_operator(w).is_some());
+        return match words.first().copied() {
+            Some("cat") => redirects.count() > 0 && words[1..].iter().all(|w| *w == "-"),
+            Some("tee") => {
+                let files: Vec<&&str> = words[1..]
+                    .iter()
+                    .filter(|w| !matches!(**w, "-a" | "--append"))
+                    .collect();
+                redirects.count() + files.len() > 0
+                    && files.iter().all(|w| is_non_shell_code_file_target(w))
+            }
+            _ => false,
+        };
+    }
     if targets == OutputTargets::PythonFiles {
         return match words.first().copied() {
             Some("cat") => python_targets > 0 && words[1..].iter().all(|w| *w == "-"),

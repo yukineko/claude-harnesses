@@ -862,3 +862,34 @@ Deny / Ask は出力（stdout）を出した**後に**1行だけ、overwatch の
 これらを持たない古い行は「未記録＝**不明**」であり、`false` や「該当なし」ではない。
 **コマンドはそのまま保存され、秘密情報を含みうる。** 台帳は `$HOME` 配下のローカルにあり、
 マスキング（redaction）はしない。
+
+### `blastguard log` — 台帳の読み取り専用一覧
+
+```
+blastguard log [--decision deny|ask] [--rule <id>] [--since <RFC3339|Ns|Nm|Nh|Nd>]
+               [--system-harm] [--subagent | --interactive] [--json]
+```
+
+カレントディレクトリのプロジェクトの `violations.jsonl` から `source=blastguard` の行だけを
+**ファイル順**に出す。stdin は読まず、台帳は変更しない（他 source の行は読み飛ばす）。
+`--since` は RFC3339（UTC の `Z` 付きのみ）か「N 秒/分/時間/日前」。
+
+- テキスト: 1 行 1 件、`decision=<v> actor=<v> system_harm=<v> rule=<id> tool=<v> cwd=<v>` の後に
+  `command=<v>`（Bash）または `target=<v>`（ファイルツール）が続く。tool が不明な行は
+  `command=unknown target=unknown` を両方出す。記録されていないフィールドは `unknown`
+  （`false` / `interactive` / `deny` に推測しない）。
+  値はエスケープされる: `\n` `\r` `\t` は 2 文字のエスケープ、その他の 0x20 未満と 0x7f は
+  `\xHH`（小文字 16 進）、バックスラッシュは `\\`。クォートはしない。これにより 1 件は常に 1 行になる。
+  **限界**: 値はクォートされず、空白と `=` もエスケープされないため、` key=...` を含む値
+  （例: cwd が `/tmp/x command=ls`）は同じ行内の別トークンに見えうる。C1 制御文字
+  （U+0080〜U+009F）、U+2028/2029、bidi 制御文字はそのまま出力される。
+  曖昧さのない厳密なパースには `--json` を使う。
+- `--json`: 1 行 1 オブジェクト。キーは `ts, rule, decision, tool, command, target, cwd, actor, system_harm`。
+  未記録は `null`。
+- **フィルタは不明なフィールドに決してマッチしない。** 古い行（コンテキスト欄なし）は
+  フィルタ対象の欄が不明なので除外され、除外件数が stderr に `N entries excluded ...` と出る。
+- 終了コード: `0` 成功（該当 0 件も成功。台帳が無いときは stderr に `no ledger at <path>`）/
+  `2` 使い方の誤り（未知フラグ・値の欠落/不正・不正な `--since`・`--subagent` と `--interactive` の併用）/
+  `3` 台帳のパス解決または読み取り不能（stdout は空、stderr にパスとエラー）、
+  パースできない行がある（stderr に `line <N>`、読めた行は出力する）、または stdout への書き込み失敗。
+- **コマンドはそのまま出力され、秘密情報を含みうる**（台帳は `$HOME` 配下のローカル）。

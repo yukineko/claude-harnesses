@@ -25,7 +25,9 @@ pub struct Config {
     pub default_branch: String,
     /// Globs that force a touching task to run serially (never in parallel).
     pub shared_globs: Vec<String>,
-    /// Soft cap on concurrent workers (advisory; the skill honors it).
+    /// Hard cap on LIVE worktrees per run, enforced by `condukt worktree create
+    /// --run <id>`: it refuses (non-zero exit) when the run already has this many
+    /// live worktrees, or when the live count cannot be determined.
     pub max_parallel: usize,
     /// Where run-state files are stored.
     pub state_dir: PathBuf,

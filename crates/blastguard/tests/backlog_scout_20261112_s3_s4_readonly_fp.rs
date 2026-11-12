@@ -77,7 +77,6 @@ const S3: &str = r##"cd CWD && grep -rlnE "gh pr create|gh\", *\"pr\"|\"pr\", *\
 // At HEAD the deny reason is "unrecognised `install` option `-6`" (recorded in the
 // failure message of the RED below, which prints the reason).
 #[test]
-#[ignore = "scout 2026-11-12 S3: RED, open defect. Remove the ignore when fixed"]
 fn s3_grep_pattern_install_then_head_dash_6_is_allowed() {
     let home = unique_home("s3b");
     let cwd = tmp_cwd(&home);

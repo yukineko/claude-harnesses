@@ -22,8 +22,9 @@ use super::{
 /// A third pass (backlog e2b9ffb1) judges the SHELL-LEXED spelling of the
 /// text — `#` comments removed, backslash-escaped quotes spelt `_` — whenever
 /// it differs from the text, because the splitters track quotes without
-/// knowing comments or escapes, and a quote in a comment or an escaped quote
-/// hid the next line from them. The same pass spells the literal `'`/`"` of
+/// knowing comments (and the other line-level quote trackers know neither
+/// comments nor escapes), and a quote in a comment or an escaped quote hid
+/// the next line from them. The same pass spells the literal `'`/`"` of
 /// an UNQUOTED here-document body `_` and lexes its `$(...)`/backtick spans as
 /// the live code they are, so a stray quote in such a body no longer hides a
 /// later substitution (backlog 5916d385); an unquoted body whose expansion the

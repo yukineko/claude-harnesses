@@ -565,68 +565,6 @@ exit 101: Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/fde)
 error: test failed, to rerun pass `-p fde --test backlog_scout_20261112_s2_evidence_cmd_escapes_root`"""
 
 [[task]]
-id = "a04b2b87"
-title = "backlog next / next --claim が fix commit 済みの pending を配る"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "scout",
-    "L5",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "scout 2026-11-12, RED observed at 656b1c38, verified (independent verifier, no re-run). F2: after 'fix: ... (backlog <X>)' is in HEAD, next hands out X and next --claim leases it. Done: Y handed out (exit 0) or refusal naming X; --claim leaves X pending and claims Y. The Y/claim-state asserts were not reached at HEAD (they run only once X stops being dispatched)."
-created_at = 1794434291
-updated_at = 1794434291
-weight = 0.0
-issue_number = 1645
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1645"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test backlog_scout_20261112_f2_dispatch_fixed_pending -- --ignored"
-rev = "9c71a19fed28cf0f1a46f8909076f5bcb60e67ed"
-observed_at = 1794434291
-detail = """
-exit 101: /Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.70s
-     Running tests/backlog_scout_20261112_f2_dispatch_fixed_pending.rs (target/debug/deps/backlog_scout_20261112_f2_dispatch_fixed_pending-2972efd6b8fbfaab)
-error: test failed, to rerun pass `-p backlog --test backlog_scout_20261112_f2_dispatch_fixed_pending`"""
-
-[[task]]
-id = "e843a6b4"
-title = "CONDUKT_MAX_PARALLEL を advisory でなく実際の上限にする"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "scout",
-    "L5",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "scout 2026-11-12, RED observed at 656b1c38, verified (independent verifier, no re-run). F3a: crates/condukt/src/config.rs:28-29 — with MAX_PARALLEL=1 a second live worktree in the same run is created (exit 0). Control: first create succeeds."
-created_at = 1794434297
-updated_at = 1794434297
-weight = 0.0
-issue_number = 1646
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1646"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_scout_20261112_f3_max_parallel -- --ignored max_parallel_one_refuses_a_second_live_worktree_in_the_same_run"
-rev = "9c71a19fed28cf0f1a46f8909076f5bcb60e67ed"
-observed_at = 1794434297
-detail = """
-exit 101:   Compiling condukt v0.7.382 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
-     Running tests/backlog_scout_20261112_f3_max_parallel.rs (target/debug/deps/backlog_scout_20261112_f3_max_parallel-6196e7ac86e86462)
-error: test failed, to rerun pass `-p condukt --test backlog_scout_20261112_f3_max_parallel`"""
-
-[[task]]
 id = "d039872d"
 title = "不正な CONDUKT_MAX_PARALLEL / CONDUKT_STUCK_TTL_SECS を黙って無視しない"
 project = "/Users/yuki/src/harness"

@@ -89,7 +89,6 @@ fn r2_cmd_can_read_outside_root() {
 /// R3 (observable half): the CMD sees a private per-invocation TMPDIR, not
 /// the parent's.
 #[test]
-#[ignore = "RED: spec fde-evidence-confine R3 — remove the ignore when fixed"]
 fn r3_cmd_tmpdir_is_not_parent_tmpdir() {
     let e = Engagement::ratified(&[("R1", "first")]);
     let parent = TempPlace::new("fde-parent-tmp-");
@@ -134,7 +133,6 @@ fn r4_cmd_can_write_root_and_its_tmpdir() {
 /// R4: $TMPDIR inside the CMD is a directory that exists while it runs and is
 /// not the parent's.
 #[test]
-#[ignore = "RED: spec fde-evidence-confine R4 — remove the ignore when fixed"]
 fn r4_private_tmpdir_exists_during_cmd_and_differs_from_parent() {
     let e = Engagement::ratified(&[("R1", "first")]);
     let parent = TempPlace::new("fde-parent-tmp-");
@@ -182,7 +180,6 @@ fn r5_record_has_no_confinement_key_and_schema_is_2() {
 /// R6: a write denied by the confinement is just a non-zero exit, so
 /// `evidence red` records RED with a non-zero exit_code.
 #[test]
-#[ignore = "RED: spec fde-evidence-confine R6 — remove the ignore when fixed"]
 fn r6_denied_outside_write_records_red_nonzero_exit() {
     let e = Engagement::ratified(&[("R1", "first")]);
     let home = TempPlace::new("fde-home-");
@@ -207,7 +204,6 @@ fn r6_denied_outside_write_records_red_nonzero_exit() {
 
 /// R7: the private TMPDIR is gone once `fde evidence red` returns.
 #[test]
-#[ignore = "RED: spec fde-evidence-confine R7 — remove the ignore when fixed"]
 fn r7_private_tmpdir_removed_after_cmd() {
     let e = Engagement::ratified(&[("R1", "first")]);
     let parent = TempPlace::new("fde-parent-tmp-");
@@ -239,7 +235,6 @@ fn r7_private_tmpdir_removed_after_cmd() {
 /// below are plausible guesses; the property is that an outside write is
 /// still denied with them all set.
 #[test]
-#[ignore = "RED: spec fde-evidence-confine R8 — remove the ignore when fixed"]
 fn r8_plausible_env_overrides_do_not_disable_confinement() {
     let e = Engagement::ratified(&[("R1", "first")]);
     let home = TempPlace::new("fde-home-");

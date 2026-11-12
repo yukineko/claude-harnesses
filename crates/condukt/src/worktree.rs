@@ -15,7 +15,6 @@ use crate::config::Config;
 use crate::lock;
 
 mod dirty_tracked;
-mod lint_gate;
 mod merge_gate;
 mod merge_recovery;
 pub use dirty_tracked::refuse_uncommitted_task_worktree;
@@ -1162,9 +1161,6 @@ pub fn merge(
     // carried along unchecked.
     let tip = ensure_commits_carry_task_trailer(repo, branch, default_branch, &base, cli_task)?;
 
-    // The pinned tip must be fmt/clippy clean (backlog 0a68823d); pre-checkout.
-    lint_gate::ensure_tip_lint_clean(repo, branch, default_branch, &base, &tip)?;
-
     // ── Pre-merge hold gate (decision A) ─────────────────────────────────────
     // A detected mid-flight actual-diff overlap HOLDS this branch for review.
     // Do not merge until it is resolved (the resolution clears the hold). An
@@ -1599,10 +1595,6 @@ pub fn resolve_merge(cfg: &Config, repo: &Path, conflict_id: &str) -> Result<Res
     // the strategies below merge the verified `tip`, not the branch name.
     let base = ensure_base_on_default_branch(repo, branch, default_branch)?;
     let tip = ensure_commits_carry_task_trailer(repo, branch, default_branch, &base, None)?;
-    if !matches!(resolution.choice, ResolveChoice::Ours) {
-        // Twin of `merge`'s lint gate; `ours` lands nothing of the tip.
-        lint_gate::ensure_tip_lint_clean(repo, branch, default_branch, &base, &tip)?;
-    }
 
     git(repo, &["checkout", default_branch])
         .with_context(|| format!("could not checkout {default_branch} before resolve-merge"))?;

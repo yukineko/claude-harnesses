@@ -147,7 +147,6 @@ const SHAPES: &[(&str, &str, &str)] = &[
 // test-weakening-justified: new RED for an unfixed fail-open family (backlog
 // c619b13f, 2026-11-13); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: backlog-pending c619b13f 2026-11-13 newline-collapse: a comment hides a system-harm call on other entry paths — remove the ignore when fixed"]
 fn comment_before_system_harm_call_is_not_allowed_on_other_entry_paths() {
     let home = unique_home("red");
     let mut failures = Vec::new();

@@ -40,6 +40,7 @@ mod replan;
 mod review_brief;
 mod review_order;
 mod review_worthiness;
+mod run_cap;
 mod run_policy;
 mod runtime_conflict;
 mod schedule;
@@ -3586,6 +3587,9 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
     let repo = worktree::toplevel(cwd)?;
     match action {
         WtAction::Create { topic, branch, run } => {
+            if let Some(r) = run.as_deref() {
+                run_cap::enforce_run_cap(&repo, r, cfg.max_parallel)?;
+            }
             let path = worktree::create_namespaced(
                 &repo,
                 &cfg.worktree_base,
@@ -6381,7 +6385,7 @@ fn init(cfg: &Config) -> Result<()> {
          worktree_base = \"{}\"\n\
          # Branch completed work merges back into.\n\
          default_branch = \"{}\"\n\
-         # Soft cap on concurrent workers (advisory; the skill honors it).\n\
+         # Hard cap on live worktrees per run; `condukt worktree create --run <id>` refuses when exceeded or undeterminable.\n\
          max_parallel = {}\n\
          # Globs that force a touching task to run serially (never in parallel),\n\
          # e.g. [\"**/models.py\", \"**/migrations/**\", \"docs/glossary.md\"].\n\

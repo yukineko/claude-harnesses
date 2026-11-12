@@ -107,7 +107,6 @@ fn show(out: &Output) -> String {
 /// F3a: with `CONDUKT_MAX_PARALLEL=1`, a second live worktree in the same run
 /// must be refused.
 #[test]
-#[ignore = "scout 2026-11-12 F3: RED, open defect. Remove the ignore when fixed"]
 fn max_parallel_one_refuses_a_second_live_worktree_in_the_same_run() {
     let fx = Fixture::new();
     let cap = [("CONDUKT_MAX_PARALLEL", "1")];

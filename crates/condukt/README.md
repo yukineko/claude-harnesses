@@ -176,7 +176,7 @@ Remove with `condukt uninstall`.
 ```toml
 worktree_base  = "~/.condukt/worktrees"  # MUST be outside any repo
 default_branch = "main"
-max_parallel   = 4                        # advisory soft cap on concurrent workers
+max_parallel   = 4                        # enforced cap on live worktrees per run (worktree create --run)
 shared_globs   = []                       # globs that force a touching task to run serially
 autonomous     = false                    # when true, degrade human gates (Phase 3 agreement) to deterministic defaults.
                                           #   Lowest layer but one: the shared switch file (condukt state
@@ -239,7 +239,7 @@ All config file keys can be overridden at runtime with environment variables.
 |---|---|---|
 | `CONDUKT_WORKTREE_BASE` | `~/.condukt/worktrees` | Directory where worktrees are created (must be outside any repo). |
 | `CONDUKT_DEFAULT_BRANCH` | `main` | Branch completed work is merged back into. |
-| `CONDUKT_MAX_PARALLEL` | `4` | Advisory soft cap on concurrent workers. |
+| `CONDUKT_MAX_PARALLEL` | `4` | Enforced cap on live worktrees per run: `condukt worktree create --run <id>` exits non-zero once the run already has this many (live = registered worktrees on a branch namespaced under the run, or sitting in `worktree_base` as `<run>-*` even if detached; an undeterminable count also refuses). A create without `--run` is not capped, and the schedule batch width does not use it. |
 | `CONDUKT_DISABLE` | _(unset)_ | Set to exactly `1` to make the `restore`, `statusline`, `editgate` and `subagent-stop` hooks no-op. Note this switches the edit-time compile gate OFF (edits are no longer checked). `session-heartbeat` ignores it. |
 | `CONDUKT_CONSENSUS` | `false` | Set to `1`/`true` to enable multi-sample self-consistency fan-out (overrides `[consensus] enabled`). Opt-in cost guard; off by default. |
 | `CONDUKT_ADVERSARIAL` | `false` | Set to `1`/`true` to enable the adversarial refutation panel (overrides `[adversarial] enabled`). Opt-in cost guard; off by default. This switch (or `[adversarial] enabled`) is the only way to engage the panel; a GATE-crate-touching change does not force it. |

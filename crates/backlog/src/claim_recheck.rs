@@ -138,21 +138,44 @@ pub(crate) fn fix_landed(cand: &task::Task) -> std::result::Result<bool, String>
 }
 
 /// Plain `next` (no claim): like `store::next_excluding`, but a candidate whose
-/// fix already landed ([`fix_landed`]) is skipped with a stderr notice and the
-/// next candidate is considered. If landing cannot be determined for the
-/// candidate, the command is REFUSED (an error), never a silent hand-out.
+/// fix already landed is skipped with a stderr notice and the next candidate
+/// is considered.
+///
+/// `store_root` is the repo holding the store (`StoreLocation::project_root`).
+/// With a repo store, the landed-fix set is `evidence::fixed_task_ids` of that
+/// repo's HEAD, computed ONCE before the loop; the ticket's `project` label is
+/// never consulted (a label naming another machine's path must not refuse the
+/// queue). If that set cannot be determined, the command is REFUSED. With a
+/// pinned (multi-project) store (`None`), each candidate is checked by
+/// [`fix_landed`] at the location [`rerun_dir`] picks, refusing when that is
+/// undetermined. Never a silent hand-out of a possibly-fixed ticket.
 pub(crate) fn next_unfixed(
     tasks_path: &Path,
     tag: Option<&str>,
     project: Option<&str>,
     leased: &HashSet<String>,
+    store_root: Option<&Path>,
 ) -> Result<Option<task::Task>> {
+    let repo_fixed = match store_root {
+        Some(root) => Some(evidence::fixed_task_ids(root).map_err(|why| {
+            anyhow::anyhow!(
+                "backlog next REFUSED (this is NOT \"no pending tasks\"): which fixes already \
+                 landed in {} could not be determined: {why}",
+                root.display()
+            )
+        })?),
+        None => None,
+    };
     let mut excluded: HashSet<String> = leased.clone();
     loop {
         let Some(cand) = store::next_excluding(tasks_path, tag, project, &excluded)? else {
             return Ok(None);
         };
-        match fix_landed(&cand) {
+        let landed = match &repo_fixed {
+            Some(ids) => Ok(ids.contains(&cand.id)),
+            None => fix_landed(&cand),
+        };
+        match landed {
             Ok(false) => return Ok(Some(cand)),
             Ok(true) => {
                 eprintln!(

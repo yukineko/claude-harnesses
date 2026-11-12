@@ -161,6 +161,11 @@ enum Command {
 
     /// Show the next highest-priority pending task. Scoped, by default, to the
     /// project this checkout resolves to — the same default `list` uses.
+    /// A task whose fix landed (a commit subject containing `(backlog <id>)`
+    /// reachable from HEAD of the repo holding the store; per ticket project
+    /// root for a pinned store) is skipped with a stderr notice. When that
+    /// cannot be determined (git fails, corrupt ref; an unborn HEAD counts as
+    /// no fixes) `next` is REFUSED non-zero, not "no pending tasks".
     Next {
         /// Filter by tag
         #[arg(long)]
@@ -1265,6 +1270,7 @@ fn run(cli: Cli) -> Result<()> {
                     tag.as_deref(),
                     effective_project.as_deref(),
                     &leased,
+                    location.project_root(),
                 )?
             };
             match task {

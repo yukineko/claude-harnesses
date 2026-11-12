@@ -148,7 +148,6 @@ fn control_sequential_second_create_is_refused_under_cap_one() {
 
 /// C2: two concurrent creates must not both succeed under cap 1.
 #[test]
-#[ignore = "RED: audit 2026-11-13 C2 — remove the ignore when fixed"]
 fn concurrent_creates_under_cap_one_do_not_both_succeed() {
     for attempt in 0..ATTEMPTS {
         let fx = Fixture::new();

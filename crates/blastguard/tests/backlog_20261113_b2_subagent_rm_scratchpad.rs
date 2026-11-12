@@ -16,13 +16,24 @@
 //! to <sbx> — a safe root for this session ..." (subagent hardening of Ask).
 //! The REDs below therefore use those spellings.
 //!
+//! CONFLICT WITH DOCUMENTED BEHAVIOUR: these REDs conflict with the documented
+//! `.`/`..` operand refusal in `crates/blastguard/src/deletion.rs` (module doc:
+//! "cannot determine is never an Allow"): a `.`/`..`-spelled operand is
+//! deliberately not placed lexically. Whether the ruling should override that is
+//! a human decision; this file only records the observed verdict. A possible,
+//! UNTESTED alternative cause of the original audit observation is a
+//! non-canonical cwd (`/tmp/...` vs `/private/tmp/...`); it is not exercised.
+//!
 //! The RED asserts verdict != deny. Allow is what the ruling says; Ask is
 //! tolerated here only because the defect filed is the hardening to Deny.
 //!
 //! DOES NOT PROVE: that the verdict is Allow (Ask passes), nor anything about
-//! main-session payloads, nor non-scratchpad temp dirs, nor operands outside
-//! the scratchpad. The control only pins that system harm (`rm -rf /usr/lib`)
-//! stays Deny in the same subagent payload.
+//! non-scratchpad temp dirs or operands outside the scratchpad. The non-ignored
+//! witness pins that the payload really is hardened as a subagent (same command:
+//! Ask without `agent_id`, Deny with it); the system-harm control pins
+//! `rm -rf /usr/lib` stays Deny. macOS only: the fixture lives under
+//! `/private/tmp/claude-502`.
+#![cfg(target_os = "macos")]
 
 #[path = "support/bounded.rs"]
 mod bounded;
@@ -30,39 +41,55 @@ mod bounded;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+const CLAUDE_TMP: &str = "/private/tmp/claude-502";
+
 struct Scratch {
     top: PathBuf,
     home: PathBuf,
     cwd: PathBuf,
+    created_claude_tmp: bool,
 }
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.top);
         let _ = std::fs::remove_dir_all(&self.home);
+        if self.created_claude_tmp {
+            // Fails (harmlessly) if another test/session still uses it.
+            let _ = std::fs::remove_dir(CLAUDE_TMP);
+        }
     }
 }
 
 fn scratch(tag: &str) -> Scratch {
+    let created_claude_tmp = !Path::new(CLAUDE_TMP).exists();
     let uniq = format!("bgtest-b2-{tag}-{}", std::process::id());
-    let top = Path::new("/private/tmp/claude-502").join(&uniq);
+    let top = Path::new(CLAUDE_TMP).join(&uniq);
     let cwd = top.join("3f2c1b0a-1111-4222-8333-444455556666/scratchpad/sbx");
     std::fs::create_dir_all(cwd.join("proj/target/debug")).unwrap();
     std::fs::write(cwd.join("proj/target/debug/x.o"), "x").unwrap();
     let home = std::env::temp_dir().join(format!("bg-b2-home-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&home).unwrap();
-    Scratch { top, home, cwd }
+    Scratch {
+        top,
+        home,
+        cwd,
+        created_claude_tmp,
+    }
 }
 
-/// Subagent PreToolUse hook; returns (decision, reason). Empty stdout = allow.
-fn run(command: &str, s: &Scratch) -> (String, String) {
-    let p = serde_json::json!({
+/// PreToolUse hook; returns (decision, reason). Empty stdout with exit 0 =
+/// allow; a non-zero exit fails the test (never read as allow).
+fn run_as(command: &str, s: &Scratch, subagent: bool) -> (String, String) {
+    let mut p = serde_json::json!({
         "session_id": "b2-20261113",
         "cwd": s.cwd,
-        "agent_id": "test-subagent",
         "hook_event_name": "PreToolUse",
         "tool_name": "Bash",
         "tool_input": {"command": command},
     });
+    if subagent {
+        p["agent_id"] = "test-subagent".into();
+    }
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_blastguard"));
     cmd.env_clear()
         .env("HOME", &s.home)
@@ -75,6 +102,12 @@ fn run(command: &str, s: &Scratch) -> (String, String) {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let out = bounded::run_bounded(&mut cmd, p.to_string().as_bytes(), bounded::HOOK_DEADLINE);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "hook must exit 0; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     if stdout.trim().is_empty() {
         return ("allow".into(), String::new());
@@ -88,6 +121,10 @@ fn run(command: &str, s: &Scratch) -> (String, String) {
             .unwrap_or("")
             .to_string(),
     )
+}
+
+fn run(command: &str, s: &Scratch) -> (String, String) {
+    run_as(command, s, true)
 }
 
 #[test]
@@ -111,6 +148,17 @@ fn b2_subagent_rm_rf_dotdot_spelling_inside_scratchpad_is_not_denied() {
         d, "deny",
         "subagent `rm -rf ../sbx/proj/target` (same dir as proj/target) must not be Deny; reason: {reason}"
     );
+}
+
+/// Witness (not ignored): the payload is hardened as a subagent. The same
+/// command is a confined Ask for the main session and a Deny with `agent_id`.
+#[test]
+fn b2_witness_subagent_hardening_ask_to_deny() {
+    let s = scratch("witness");
+    let (main_d, main_r) = run_as("rm -rf ./proj/target", &s, false);
+    let (sub_d, sub_r) = run_as("rm -rf ./proj/target", &s, true);
+    assert_eq!(main_d, "ask", "main session must be Ask; reason: {main_r}");
+    assert_eq!(sub_d, "deny", "subagent must be Deny; reason: {sub_r}");
 }
 
 /// Control (not ignored): the bare relative spelling named in the audit is

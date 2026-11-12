@@ -4,9 +4,9 @@
 //! for the file-size cap; the helpers it calls stay there.
 
 use super::super::{
-    here_document_delimiter_is_quoted, here_string_operands, inline_command_payloads,
-    interpreter_payloads_after, interpreter_stdin_operand, is_short_flag, opens_here_document,
-    process_substitution_payloads, Ctx, Decision,
+    faithful_tail, here_document_delimiter_is_quoted, here_string_operands,
+    inline_command_payloads, interpreter_payloads_after, interpreter_stdin_operand, is_short_flag,
+    opens_here_document, process_substitution_payloads, word_separators_lost, Ctx, Decision,
 };
 use super::{
     interpreter_code_verdict, interpreter_edits_in_place, interpreter_eval_flag_letters,
@@ -41,9 +41,36 @@ use super::{
 /// `ruby -i -n s.rb <file>`): its operands are files it rewrites, so they go
 /// through the same [`protected_operand_ask`] check as the inline-eval arm, and
 /// a protected gate/config operand asks.
+///
+/// `source` is the string `rest` was whitespace-split from. The program text
+/// is read off it — the exact argument the shell hands the interpreter, with
+/// its newlines and runs of blanks ([`faithful_tail`]; backlog 2026-11-13: the
+/// space re-join let a `#` comment swallow the system-harm call on the next
+/// line, and the program was Allowed). When the text cannot be read off a
+/// source and a word spans several tokens, the program that was judged is not
+/// the one that runs, so an Allow becomes an Ask ([`word_separators_lost`]).
 pub(in crate::detect) fn analyze_code_interpreter(
     cmd: &str,
     rest: &[&str],
+    source: Option<&str>,
+    depth: usize,
+    ctx: &Ctx<'_>,
+) -> Decision {
+    let verdict = judge_invocation(cmd, rest, source, depth, ctx);
+    if matches!(verdict, Decision::Allow) && word_separators_lost(source, rest, 0) {
+        return Decision::ask(format!(
+            "`{cmd}`'s program could not be read with its line breaks intact — blastguard \
+cannot tell what the interpreter would run, so it cannot vouch for it"
+        ));
+    }
+    verdict
+}
+
+/// [`analyze_code_interpreter`] before its undetermined-text check.
+fn judge_invocation(
+    cmd: &str,
+    rest: &[&str],
+    source: Option<&str>,
     depth: usize,
     ctx: &Ctx<'_>,
 ) -> Decision {
@@ -53,16 +80,17 @@ pub(in crate::detect) fn analyze_code_interpreter(
         }
     }
     if let Some(pos) = interpreter_inline_eval_pos(cmd, rest) {
-        let mut payloads = interpreter_payloads_after(rest, pos);
+        let mut payloads = interpreter_payloads_after(rest, pos, source);
         // Glued forms, where the program is in the SAME token as the flag:
         // short `-c<payload>` and long `--eval=<payload>`.
         let flag = rest[pos];
         if let Some((_, value)) = flag.split_once('=') {
-            payloads.extend(inline_command_payloads(rest, pos, value));
+            payloads.extend(inline_command_payloads(rest, pos, value, source));
         } else if is_short_flag(flag) {
             let letters = interpreter_eval_flag_letters(cmd);
             if let Some(idx) = flag[1..].find(|c: char| letters.contains(c)) {
-                payloads.extend(inline_command_payloads(rest, pos, &flag[1 + idx + 1..]));
+                let inline = &flag[1 + idx + 1..];
+                payloads.extend(inline_command_payloads(rest, pos, inline, source));
             }
         }
         let verdict = interpreter_code_verdict(
@@ -106,11 +134,13 @@ from its strings, so it cannot vouch for it"
         return Decision::Allow;
     }
 
-    // `analyze_command_at` is handed TOKENS, not the raw segment, so the
-    // operand text is reassembled here. Whitespace-joining is lossless for the
-    // purpose of auditing: the here-document body, the here-string and the
-    // process-substitution payload all survive as text.
-    let text = rest.join(" ");
+    // The operand text is read off `source` so the here-string and the
+    // process-substitution payload keep their newlines. Whitespace-joining
+    // the tokens is NOT lossless: it collapsed `python3 <<< "import os # x
+    // os.chmod(…)"` into one commented-out line and Allowed it (backlog
+    // 2026-11-13). Without a source the re-join remains, and
+    // `analyze_code_interpreter` refuses to Allow when that loses separators.
+    let text = faithful_tail(source, rest, 0).map_or_else(|| rest.join(" "), str::to_string);
     let stdin_operand = interpreter_stdin_operand(rest);
     let opens_heredoc = opens_here_document(&text);
     let mut payloads: Vec<String> = here_string_operands(&text)

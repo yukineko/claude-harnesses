@@ -603,11 +603,20 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   等）で `>` で終わる本文行（`Co-Authored-By: … <…>`）の次の区切り行が `> EOF` と読まれ、
 >   unplaceable な相対リダイレクトとして deny されていた。
 > - **code-interpreter-inline-eval**: 「形」での一律 deny は廃止され、プログラム本文を
->   監査する（`analyze_code_interpreter` / `interpreter_code_verdict`、`src/detect/interpreter.rs`）。破壊的な呼び出し
+>   監査する（`analyze_code_interpreter` は `src/detect/interpreter/invocation.rs`、
+>   `interpreter_code_verdict` は `src/detect/interpreter.rs`）。破壊的な呼び出し
 >   や破壊的なシェル行を含めば `deny`、保護パスを名指しすれば `ask`、
 >   `python3 -c "print(1)"` のような無害なものは allow（0.2.59）。stdin からプログラムを
 >   読む形（`… | python3 -`、`python3 /dev/stdin`、here-doc）は判定を拒否する。
 >   rule id も所見に応じたもの（例: `rm-recursive`）になる。
+>   0.2.481 以降（backlog 2026-11-13）、監査するプログラム本文（`-c`/`-e` の引数、
+>   `sh -c`・`eval`・`xargs` の内側、here-string・プロセス置換）は、空白で割ったトークンを
+>   空白 1 個で繋ぎ直したものではなく、**コマンド行の原文から読んだ引数そのもの**
+>   （改行・連続空白を保つ。`src/detect/payload.rs` の `faithful_tail`）である。以前は改行が
+>   空白に潰れ、`python3 -c "import os # x<改行>os.chmod('/etc/…',0)"` の `#` コメントが
+>   次行の呼び出しを飲み込んで allow になっていた。原文が読めず、かつ語が複数トークンに
+>   またがる（＝区切りが失われた）ときは allow せず ask に倒す（`word_separators_lost`）。
+>   `env -S` の引数はこの変更の対象外で、従来どおり空白 1 個で繋ぎ直す（未検証）。
 
 当時、overwatch の continuous-audit 再発トラッカー（`overwatch violations --json`）が
 `blastguard:truncating-redirect` と `blastguard:code-interpreter-inline-eval` を

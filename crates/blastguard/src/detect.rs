@@ -145,9 +145,9 @@ use interpreter::{
 };
 
 use payload::{
-    analyze_interpreter_stdin_exec, dash_c_payloads, inline_command_payloads,
+    analyze_interpreter_stdin_exec, dash_c_payloads, faithful_tail, inline_command_payloads,
     interpreter_payloads_after, interpreter_stdin_operand, payloads_after,
-    split_substitution_opening_assignments, strip_wrapping_quotes,
+    split_substitution_opening_assignments, strip_wrapping_quotes, word_separators_lost,
 };
 
 use compound::{
@@ -1323,14 +1323,14 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
                 let rest = &tokens[i + 1..];
                 // Both spellings of flock's command flag: the short `-c` (via
                 // `dash_c_payloads`) and the long `--command`/`--command=…`.
-                let mut payloads = dash_c_payloads(rest);
+                let mut payloads = dash_c_payloads(rest, Some(seg));
                 if let Some(pos) = rest
                     .iter()
                     .position(|t| *t == "--command" || t.starts_with("--command="))
                 {
                     // Detached long form `--command <payload>`: payload is the
                     // token(s) AFTER the flag.
-                    payloads.extend(payloads_after(rest, pos));
+                    payloads.extend(payloads_after(rest, pos, Some(seg)));
                     // Attached long form `--command=<payload>`: the value is
                     // glued to the flag token by `=`. Reconstruct it so the
                     // same candidate logic applies — otherwise the inline value
@@ -1338,7 +1338,7 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
                     // stayed Allow at depth 0 (138607bc).
                     if let Some(eq) = rest[pos].find('=') {
                         let inline = &rest[pos][eq + 1..];
-                        payloads.extend(inline_command_payloads(rest, pos, inline));
+                        payloads.extend(inline_command_payloads(rest, pos, inline, Some(seg)));
                     }
                 }
                 for payload in payloads {
@@ -1806,7 +1806,8 @@ fn analyze_command_at(
         // ASK-1: this is a shell-EVALUATION position, so `eval "$CMD"` asks
         // rather than falling through unanalysed.
         if matches!(cmd, "eval" | "exec" | "source" | ".") && !rest.is_empty() {
-            let joined = rest.join(" ");
+            // Read off `seg` so a quoted program keeps its newlines.
+            let joined = faithful_tail(seg, rest, 0).map_or_else(|| rest.join(" "), str::to_string);
             let inline = strip_wrapping_quotes(&joined);
             if let Some(deny) = acc.record(analyze_shell_payload(inline, depth, ctx)) {
                 return deny;
@@ -1820,11 +1821,21 @@ fn analyze_command_at(
         // `sh -c "<payload>"` and friends evaluate the `-c` argument.
         // ASK-1: likewise a shell-evaluation position — `bash -c "$CMD"` asks.
         if is_shell(cmd) {
-            for payload in dash_c_payloads(rest) {
+            for payload in dash_c_payloads(rest, seg) {
                 if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth, ctx)) {
                     return deny;
                 }
             }
+        }
+        // The `eval`/`-c` text lost its newlines (no source to read it off):
+        // what runs is not what was judged. See `word_separators_lost`.
+        let evaluates = is_shell(cmd) || matches!(cmd, "eval" | "exec" | "source" | ".");
+        if evaluates && word_separators_lost(seg, rest, 0) {
+            let _ = acc.record(Decision::ask(format!(
+                "`{cmd}`'s command string could not be read with its line breaks intact"
+            )));
+        }
+        if is_shell(cmd) {
             // daf7611b: a shell whose language this module cannot parse. The
             // POSIX pass above may still Deny; if it did not, that is a
             // failure to analyse, not a clean result (CLAUDE.md §3).
@@ -1863,7 +1874,7 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         // denied. Recognising a segment whose command word is an exec predicate
         // and routing it back through `analyze_find` restores the multi-exec
         // scan for the `\;` form without depending on where the split fell.
-        "-exec" | "-execdir" | "-ok" | "-okdir" => analyze_find(&tokens[idx..], depth, ctx),
+        "-exec" | "-execdir" | "-ok" | "-okdir" => analyze_find(&tokens[idx..], seg, depth, ctx),
         "rm" => analyze_rm(rest, ctx),
         "gh" => analyze_gh(rest),
         // 12ba5845: granting autonomy is human-only. `tokens[..idx]` carries the
@@ -1917,8 +1928,8 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         "sort" => analyze_sort(rest, ctx),
         "uniq" => analyze_uniq(rest, ctx),
         "sed" => analyze_sed(rest, ctx),
-        "find" => analyze_find(rest, depth, ctx),
-        "xargs" => analyze_xargs(rest, depth, ctx),
+        "find" => analyze_find(rest, seg, depth, ctx),
+        "xargs" => analyze_xargs(rest, seg, depth, ctx),
         // Both of these were location-blind: `truncate -s 0 target/log.txt`
         // and `truncate -s 0 /usr/lib/libc.so` were the same verdict. The
         // target list is computed the same way every other rule computes one
@@ -2124,7 +2135,7 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         // `find -exec`/`-ok` (handled in analyze_find). Judge it here too, not
         // only inside the find-exec path — and judge the PROGRAM, not the shape
         // of the invocation. See `analyze_code_interpreter`.
-        cmd if is_code_interpreter(cmd) => analyze_code_interpreter(cmd, rest, depth, ctx),
+        cmd if is_code_interpreter(cmd) => analyze_code_interpreter(cmd, rest, seg, depth, ctx),
         other => {
             if other.starts_with("mkfs") {
                 Decision::deny("mkfs formats a filesystem, destroying all data")

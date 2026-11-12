@@ -599,14 +599,17 @@ pub(super) fn strip_wrapping_quotes(s: &str) -> &str {
 /// from any suffix of `rest` — e.g. the payload arrives through a variable
 /// (`bash -c "$CMD"`) or is assembled at runtime. That is unchanged by this fix
 /// and out of reach of any static analysis of the command line.
-pub(super) fn dash_c_payloads(rest: &[&str]) -> Vec<String> {
+///
+/// `source` is the string `rest` was whitespace-split from; every candidate is
+/// read off it (see [`faithful_tail`]), so the payload keeps its newlines.
+pub(super) fn dash_c_payloads(rest: &[&str], source: Option<&str>) -> Vec<String> {
     let Some(pos) = rest
         .iter()
         .position(|t| is_short_flag(t) && t.contains('c'))
     else {
         return Vec::new();
     };
-    let mut out = payloads_after(rest, pos);
+    let mut out = payloads_after(rest, pos, source);
     // Glued short form `-c<payload>` (value in the SAME token, after `c`):
     // `payloads_after` only sees LATER tokens, so `flock /l -c'rm -rf /'` left
     // the payload unanalysed — the twin of the `--command=` attached-form
@@ -614,23 +617,86 @@ pub(super) fn dash_c_payloads(rest: &[&str]) -> Vec<String> {
     // is last in a short bundle, so everything after the first `c` is its value.
     if let Some(cidx) = rest[pos].find('c') {
         let inline = &rest[pos][cidx + 1..];
-        out.extend(inline_command_payloads(rest, pos, inline));
+        out.extend(inline_command_payloads(rest, pos, inline, source));
     }
     out
+}
+
+/// Byte offset of `tok` inside `source` when `tok` IS a slice of `source` (the
+/// same bytes in memory, not merely equal text). `None` otherwise.
+fn slice_offset(source: &str, tok: &str) -> Option<usize> {
+    let off = tok.as_ptr().addr().checked_sub(source.as_ptr().addr())?;
+    let within = source.get(off..off.checked_add(tok.len())?)?;
+    std::ptr::eq(within.as_ptr(), tok.as_ptr()).then_some(off)
+}
+
+/// The command-line text from `rest[from]` to the end of `rest`, exactly as it
+/// stands in `source` — the string `rest` was whitespace-split from. `None`
+/// when there is no source, `from` is out of range, or the tokens are not
+/// slices of it.
+///
+/// Backlog 2026-11-13 (CRITICAL fail-open): the payload extractors used to
+/// rebuild a `-c`/`-e` program by joining the whitespace-split tokens with ONE
+/// space, so every newline inside the quoted program became a space.
+/// `python3 -c "import os # x<NL>os.chmod('/etc/…',0)"` was then judged as a
+/// single line whose `#` comment swallowed the call, and was Allowed, while
+/// the same program without the comment was denied. Reading the words off the
+/// source keeps the exact argument bytes — newlines and runs of blanks — that
+/// the shell hands the interpreter after unquoting ([`first_shell_word`]).
+pub(super) fn faithful_tail<'s>(
+    source: Option<&'s str>,
+    rest: &[&str],
+    from: usize,
+) -> Option<&'s str> {
+    let source = source?;
+    let first = rest.get(from)?;
+    let last = rest.last()?;
+    let start = slice_offset(source, first)?;
+    let end = slice_offset(source, last)?.checked_add(last.len())?;
+    source.get(start..end)
+}
+
+/// `rest[from..]` as text: [`faithful_tail`] when it can be read, otherwise the
+/// whitespace re-join, in which newlines and runs of blanks are lost (see
+/// [`word_separators_lost`] for when that loss makes the reading undetermined).
+fn tail_text(source: Option<&str>, rest: &[&str], from: usize) -> String {
+    faithful_tail(source, rest, from).map_or_else(|| rest[from..].join(" "), str::to_string)
+}
+
+/// Whether reading the shell words from `rest[from]` on needs whitespace the
+/// split discarded and [`faithful_tail`] cannot recover: `source` does not hold
+/// the tokens, and some word spans more than one token or never closes its
+/// quote. The re-join then turns a newline inside the word into a space, so a
+/// program judged on it is not the program that runs (a `#` comment swallows
+/// the line after it) — the reading is undetermined, and a caller must not
+/// Allow on it.
+pub(super) fn word_separators_lost(source: Option<&str>, rest: &[&str], from: usize) -> bool {
+    if from >= rest.len() || faithful_tail(source, rest, from).is_some() {
+        return false;
+    }
+    let mut at = from;
+    while at < rest.len() {
+        match shell_word_token_span(rest, at) {
+            Some(1) => at += 1,
+            _ => return true,
+        }
+    }
+    false
 }
 
 /// The `dash_c_payloads` candidate set for a command-string flag already located
 /// at index `pos`. Split out so callers with a different spelling of the flag
 /// (e.g. flock's long form `--command`) reuse the identical candidate logic
-/// rather than duplicating it.
-pub(super) fn payloads_after(rest: &[&str], pos: usize) -> Vec<String> {
+/// rather than duplicating it. Each candidate is read off `source` when it
+/// holds the tokens ([`faithful_tail`]); `None` keeps the whitespace re-join.
+pub(super) fn payloads_after(rest: &[&str], pos: usize, source: Option<&str>) -> Vec<String> {
     let mut out = Vec::new();
     let mut push_first_word = |from: usize| {
         if from >= rest.len() {
             return;
         }
-        let joined = rest[from..].join(" ");
-        if let Some(word) = first_shell_word(&joined) {
+        let text = tail_text(source, rest, from);
+        if let Some(word) = first_shell_word(&text) {
             // The `!word.is_empty()` guard matters: `sh -c ''` yields
             // `Some("")`, which must not be re-analysed as an empty command.
             if !word.is_empty() && !out.contains(&word) {
@@ -646,8 +712,8 @@ pub(super) fn payloads_after(rest: &[&str], pos: usize) -> Vec<String> {
         push_first_word(from);
     }
 
-    // Candidate 2: legacy join-then-peel, unchanged.
-    let joined = rest[pos + 1..].join(" ");
+    // Candidate 2: legacy join-then-peel, read off the source like candidate 1.
+    let joined = tail_text(source, rest, pos + 1);
     let legacy = strip_wrapping_quotes(&joined);
     if !legacy.is_empty() && !out.iter().any(|p| p == legacy) {
         out.push(legacy.to_string());
@@ -696,38 +762,49 @@ pub(super) fn shell_word_token_span(rest: &[&str], from: usize) -> Option<usize>
 /// a wildcard" — a command line that exists nowhere: no process ever receives
 /// that text as an argument.
 ///
-/// Not handled HERE: a program whose assignment value holds a space and is
-/// followed by a NEWLINE, `python3 -c "x='recursive rm'
-/// y=a[:1]"`. `rest` was split on all whitespace, so the newline is gone and
-/// the shell pass over the whole program reads one statement; its command
-/// word was `rm'` until `command_candidates` learned to skip a quoted
-/// assignment's whole word (`literal_assignment_span`, backlog ce04adeb).
+/// A program whose assignment value holds a space and is followed by a
+/// NEWLINE, `python3 -c "x='recursive rm'
+/// y=a[:1]"`: its command word was `rm'` until `command_candidates` learned to
+/// skip a quoted assignment's whole word (`literal_assignment_span`, backlog
+/// ce04adeb), back when the program reached this function with its newlines
+/// collapsed into spaces.
 /// Positions strictly INSIDE a word whose quotes all close are
 /// therefore not candidates; the word's whole text still is (and is read by the
 /// full program analysis: shell pass, literal descent, destructive calls).
+///
+/// Each word's text is read off `source` — the string `rest` was
+/// whitespace-split from — so the program keeps its newlines and runs of
+/// blanks ([`faithful_tail`], backlog 2026-11-13: a collapsed newline let a
+/// `#` comment swallow the system-harm call after it). Without a source the
+/// tokens are re-joined by a space as before; the caller must then treat the
+/// reading as undetermined wherever [`word_separators_lost`] says so.
 ///
 /// Every word BOUNDARY after the flag stays a candidate — a later
 /// `-e 'system "rm -rf /"'` (perl/ruby/node accept several) is still judged.
 /// Undetermined stays on the widening side: from the first word whose quote
 /// never closes, every remaining position is a candidate exactly as before.
-pub(super) fn interpreter_payloads_after(rest: &[&str], pos: usize) -> Vec<String> {
+pub(super) fn interpreter_payloads_after(
+    rest: &[&str],
+    pos: usize,
+    source: Option<&str>,
+) -> Vec<String> {
     let mut keep: Vec<String> = Vec::new();
     let mut boundary = pos + 1;
     while boundary < rest.len() {
         let Some(span) = shell_word_token_span(rest, boundary) else {
             // Undetermined word end: every position, as before.
-            return payloads_after(rest, pos);
+            return payloads_after(rest, pos, source);
         };
-        if let Some(word) = first_shell_word(&rest[boundary..].join(" ")) {
+        if let Some(word) = first_shell_word(&tail_text(source, rest, boundary)) {
             if !word.is_empty() && !keep.contains(&word) {
                 keep.push(word);
             }
         }
         boundary += span;
     }
-    // The legacy join-then-peel candidate is kept unchanged: it is not a
-    // mid-word fragment.
-    let joined = rest[pos + 1..].join(" ");
+    // The legacy join-then-peel candidate is kept: it is not a mid-word
+    // fragment.
+    let joined = tail_text(source, rest, pos + 1);
     let legacy = strip_wrapping_quotes(&joined);
     if !legacy.is_empty() && !keep.iter().any(|p| p == legacy) {
         keep.push(legacy.to_string());
@@ -744,8 +821,14 @@ pub(super) fn interpreter_payloads_after(rest: &[&str], pos: usize) -> Vec<Strin
 /// inline remainder back in front of `rest[pos + 1..]` and reuse the identical
 /// candidate logic. `payloads_after` alone only inspects tokens strictly AFTER
 /// the flag, so without this the inline value was never analysed — the
-/// depth-0 Allow bypass this closes (138607bc).
-pub(super) fn inline_command_payloads(rest: &[&str], pos: usize, inline: &str) -> Vec<String> {
+/// depth-0 Allow bypass this closes (138607bc). `inline` is a slice of
+/// `rest[pos]`, so with `source` the spliced text is still read off it.
+pub(super) fn inline_command_payloads(
+    rest: &[&str],
+    pos: usize,
+    inline: &str,
+    source: Option<&str>,
+) -> Vec<String> {
     // An empty inline means the value is NOT glued (`--command`, `-c`, or a
     // bundle like `-nc` with the value in the next token) — `payloads_after`
     // already covers that, so there is nothing extra to reconstruct here.
@@ -757,7 +840,7 @@ pub(super) fn inline_command_payloads(rest: &[&str], pos: usize, inline: &str) -
     // operand token.
     let mut synthetic = vec!["--x", inline];
     synthetic.extend_from_slice(&rest[pos + 1..]);
-    payloads_after(&synthetic, 0)
+    payloads_after(&synthetic, 0, source)
 }
 
 /// Split a leading assignment whose value OPENS a command substitution that

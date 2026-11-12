@@ -123,7 +123,6 @@ const SHAPES: &[(&str, &str)] = &[
 // test-weakening-justified: new RED for an unfixed CRITICAL fail-open (backlog
 // pending, 2026-11-13); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: <backlog-pending> 2026-11-13 python -c newline collapse lets a # comment hide a system-harm call — remove the ignore when fixed"]
 fn comment_before_system_harm_call_does_not_allow_it() {
     let home = unique_home("red");
     let mut failures = Vec::new();

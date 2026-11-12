@@ -51,8 +51,14 @@ It matches `Bash`, `Edit`, `Write`, `MultiEdit`, and `NotebookEdit`.
 
 Inline-eval interpreters (`python3`/`perl`/`ruby`/`node`/`php`/`lua` with
 `-c`/`-e`/…) are no longer denied for their **shape**: the program text is
-audited (`analyze_code_interpreter` / `interpreter_code_verdict` in
-`src/detect/interpreter.rs`). A program that demonstrably deletes something, or whose
+audited (`analyze_code_interpreter` in `src/detect/interpreter/invocation.rs`,
+`interpreter_code_verdict` in `src/detect/interpreter.rs`). Since 0.2.481 the
+audited text is the argument read off the command line as written — newlines
+and runs of blanks kept (`faithful_tail` in `src/detect/payload.rs`) — not the
+whitespace-split tokens re-joined by one space, which let a `#` comment swallow
+the call on the next line (`python3 -c "import os # x<NL>os.chmod(…)"` was
+allowed). A re-join that cannot be checked against the source and has lost a
+word's separators is an ask, never an allow. A program that demonstrably deletes something, or whose
 embedded shell line is destructive, is a deny; one that names a protected
 gate/config path is an ask; a benign program such as `python3 -c "print(1)"`
 is allowed (0.2.59). Running a script **file** (`python3 app.py`,

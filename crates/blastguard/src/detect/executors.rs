@@ -1081,6 +1081,11 @@ fn git_env_config_verdict(what: &str, assignment: &str, depth: usize, ctx: &Ctx<
 /// `-C DIR` and `-P PATH` consuming their value; the first plain word is the
 /// command and ends env's options. Bundled short flags are read getopt-style:
 /// once a value-taking letter appears the rest of the token is its value.
+///
+/// The payload is still rebuilt by re-joining the whitespace-split tokens
+/// (`source` = `None`): the faithful-text change of backlog 2026-11-13 was
+/// applied to `-c`/`-e` payloads only, and how `env -S` itself treats a
+/// newline or `#` inside its operand was not examined.
 pub(super) fn env_split_string_payloads(rest: &[&str]) -> Vec<String> {
     let mut out = Vec::new();
     let mut i = 0;
@@ -1092,7 +1097,7 @@ pub(super) fn env_split_string_payloads(rest: &[&str]) -> Vec<String> {
         }
         match t {
             "-S" | "--split-string" => {
-                out.extend(payloads_after(rest, i));
+                out.extend(payloads_after(rest, i, None));
                 break;
             }
             "-u" | "--unset" | "-C" | "--chdir" | "-P" => {
@@ -1103,7 +1108,7 @@ pub(super) fn env_split_string_payloads(rest: &[&str]) -> Vec<String> {
             _ => {}
         }
         if let Some(v) = t.strip_prefix("--split-string=") {
-            out.extend(inline_command_payloads(rest, i, v));
+            out.extend(inline_command_payloads(rest, i, v, None));
             break;
         }
         if t.starts_with("--") {
@@ -1118,9 +1123,9 @@ pub(super) fn env_split_string_payloads(rest: &[&str]) -> Vec<String> {
                 if c == 'S' {
                     let inline = &t[1 + k + 1..];
                     if inline.is_empty() {
-                        out.extend(payloads_after(rest, i));
+                        out.extend(payloads_after(rest, i, None));
                     } else {
-                        out.extend(inline_command_payloads(rest, i, inline));
+                        out.extend(inline_command_payloads(rest, i, inline, None));
                     }
                     return out;
                 }

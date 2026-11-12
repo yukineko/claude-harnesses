@@ -579,7 +579,7 @@ pub fn registered_branch(repo: &Path, path: &Path) -> Determination<Option<Strin
 /// exists, join the rest" shape used in `harness-core::store::write_note_named`
 /// so a raw (non-canonical) prefix — a symlinked temp dir, a WSL/DrvFs mount —
 /// can't make an identity/prefix check disagree with what git will actually see.
-fn canonicalize_prefix(path: &Path) -> PathBuf {
+pub(crate) fn canonicalize_prefix(path: &Path) -> PathBuf {
     if let Ok(c) = path.canonicalize() {
         return c;
     }

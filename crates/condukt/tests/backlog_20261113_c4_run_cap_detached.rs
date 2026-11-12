@@ -110,7 +110,6 @@ fn show(out: &Output) -> String {
 
 /// C4: a detached worktree of run R still occupies R's cap slot.
 #[test]
-#[ignore = "RED: audit 2026-11-13 C4 — remove the ignore when fixed"]
 fn detached_worktree_of_the_run_still_counts_against_the_cap() {
     let fx = Fixture::new();
     let run = "run-c4";

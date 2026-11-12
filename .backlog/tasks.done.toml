@@ -74128,3 +74128,65 @@ rev = "6ddc3ead4cba720aea28b50459615fc05fb4e9e4"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "c619b13f"
+title = "blastguard: python -c の改行潰れで # コメント後の system-harm 呼び出しが allow になる fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "CRITICAL fail-open observed on main d37ae072 2026-11-13 (main and subagent mode): python3 -c programs whose system-harm call follows a # comment are ALLOWED with empty reason (12 programs, e.g. import os # x<NL>os.chmod('/etc/hosts',0); comment-only line; dedent variant; os.rename). Same programs without the comment are denied as system harm. Cause: crates/blastguard/src/detect/payload.rs ~713 interpreter_payloads_after rebuilds the -c program from whitespace-split words, so newlines collapse and the comment swallows the call. RED 13e3e779 (non-implementer); observed: 12 program(s) whose system-harm call follows a # comment were ALLOWED / 1 passed; 1 failed. Control control_same_programs_without_comment_are_denied non-ignored. Fix: pass the faithful -c text; split interpreter.rs first if needed, do not raise the cap. Blocks 758debfd (parked)."
+created_at = 1794524559
+updated_at = 1794526362
+weight = 0.0
+issue_number = 1668
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1668"
+issue_closed_at = 1794526366
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_payload_newline_comment_hides_call comment_before_system_harm_call_does_not_allow_it -- --include-ignored"
+rev = "f1cadb771b362bfba3a6a3d2242c7a2a2fc6df83"
+observed_at = 1794524559
+detail = """
+exit 101: /.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.18s
+     Running tests/backlog_20261113_payload_newline_comment_hides_call.rs (target/debug/deps/backlog_20261113_payload_newline_comment_hides_call-5132d9edd3d69fa1)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_payload_newline_comment_hides_call`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261113_payload_newline_comment_hides_call comment_before_system_harm_call_does_not_allow_it"
+exit = 0
+passed = 1
+rev = "f1f5c24e9a843d8f0e50460f2ba0d3ddc071e91c"
+observed_at = 1794526356
+output_digest = "sha256:3f1d78c2e708789ea4af530b03cff9e76f1d5311f3ff309e55092f97d55fd68c"
+excerpt = """
+
+running 1 test
+test comment_before_system_harm_call_does_not_allow_it ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.69s
+
+   Compiling blastguard v0.2.485 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.17s
+     Running tests/backlog_20261113_payload_newline_comment_hides_call.rs (target/debug/deps/backlog_20261113_payload_newline_comment_hides_call-4f101fb74c5efbe4)
+"""
+
+[task.closure.red]
+rev = "13e3e7793be3f865be3af6874e78a2816116593f"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

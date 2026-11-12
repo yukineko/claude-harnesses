@@ -61,7 +61,7 @@
 use blastguard::model::Decision;
 use blastguard::rule_id::INTERNAL_ERROR_REASON;
 use blastguard::scope::SafeRoots;
-use blastguard::{approve, detect, hookio, interactive, retro, rule_id};
+use blastguard::{approve, detect, hookio, interactive, log, retro, rule_id};
 use harness_core::hook::{self, HookInput};
 use std::process::exit;
 
@@ -89,6 +89,9 @@ fn main() {
             }
             "retro" => {
                 exit(run_retro(&args[i + 1..]));
+            }
+            "log" => {
+                exit(log::run_log(&args[i + 1..]));
             }
             "record-approval" => {
                 // PostToolUse. This path has NO verdict: it prints nothing and
@@ -264,7 +267,8 @@ fn print_help() {
     println!(
         "blastguard {ver}\n\
 A Claude Code PreToolUse hook that denies project-destroying operations.\n\n\
-USAGE:\n  blastguard                  read a PreToolUse payload from stdin (normal mode)\n  blastguard record-approval  read a PostToolUse payload from stdin and record\n                              that this exact effect was approved\n  blastguard --protects       print what this gate protects, from what, and why\n  blastguard --version        print version\n  blastguard --help           this help\n\n\
+USAGE:\n  blastguard                  read a PreToolUse payload from stdin (normal mode)\n  blastguard record-approval  read a PostToolUse payload from stdin and record\n                              that this exact effect was approved\n  blastguard log [OPTIONS]    list decision/command history from violation ledger\n  blastguard --protects       print what this gate protects, from what, and why\n  blastguard --version        print version\n  blastguard --help           this help\n\n\
+blastguard log lists blastguard lines from overwatch's violations.jsonl ledger:\n  blastguard log                           list all entries in file order\n  blastguard log --decision deny|ask       filter by decision (default: all)\n  blastguard log --rule <id>               filter by rule ID (default: all)\n  blastguard log --since <RFC3339|Ns|Nm|Nh|Nd>  filter by timestamp\n  blastguard log --system-harm             show only system-harm lines\n  blastguard log --subagent                show only subagent lines\n  blastguard log --interactive             show only interactive lines\n  blastguard log --json                    output JSON instead of text\n\nExit codes: 0=success, 2=usage error, 3=ledger unreadable/unparsable.\nText format prints: decision actor system_harm rule command target.\nAbsent fields print as 'unknown' (text) or null (JSON).\n\n\
 It denies recursive/wildcard rm, git reset --hard, git clean -fdx, truncate,\n\
 shred, mkfs, dd of=, recursive chmod/chown, find -delete, and single-> file\n\
 overwrites — while exempting repo CONFIG files (.claude/** config, *.toml,\n\

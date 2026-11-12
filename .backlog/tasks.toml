@@ -787,39 +787,6 @@ exit 101: ates/blastguard)
 error: test failed, to rerun pass `-p condukt --test backlog_20261113_c2_run_cap_race`"""
 
 [[task]]
-id = "df055fa4"
-title = "condukt: run cap が detached HEAD の worktree を数えず上限を超えて create できる問題を直す（仕様裁定要）"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "audit-20261113",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "C4. run_cap counts only worktrees with Some(branch). RED (verbatim): CONDUKT_MAX_PARALLEL=1 must refuse a second worktree of run-c4 while A (.../wts/run-c4-a) is live but detached; got exit=Some(0). Two readings: (a) defect - a detached worktree at <worktree_base>/<run>-<topic> is still the run's live worktree, so the cap undercounts (fail-open); (b) intended - run_cap.rs docstring defines live as 'branch namespaced under run'. Tell apart by user ruling on what 'live worktree of the run' means; if (b), close won't-do. Verifier note: the RED only checks non-zero exit, not the max-parallel message. source: audit 2026-11-13 (condukt run run-20261112-072718-37987 follow-ups; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."
-created_at = 1794516630
-updated_at = 1794516630
-weight = 0.0
-issue_number = 1654
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1654"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261113_c4_run_cap_detached -- --ignored detached_worktree_of_the_run_still_counts_against_the_cap"
-rev = "99e1d092f0fe8213c94668b9757b20be93d0a46d"
-observed_at = 1794516630
-detail = """
-exit 101: 32s
-
-   Compiling condukt v0.7.387 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
-     Running tests/backlog_20261113_c4_run_cap_detached.rs (target/debug/deps/backlog_20261113_c4_run_cap_detached-d170f34c5e6be993)
-error: test failed, to rerun pass `-p condukt --test backlog_20261113_c4_run_cap_detached`"""
-
-[[task]]
 id = "da84db1c"
 title = "condukt: budget 未計測時に circuit journal が budget_over_cap=false と記録する fail-open を直す"
 project = "/Users/yuki/src/harness"
@@ -1040,37 +1007,6 @@ exit 101: d v0.2.473 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_b2_subagent_rm_scratchpad`"""
 
 [[task]]
-id = "81cd7f45"
-title = "blastguard: log のテキスト出力で bidi・U+2028/2029・C1 制御文字をエスケープしない問題を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "audit-20261113",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """O3. log.rs escape_text (350-372) escapes only <0x20, 0x7f and backslash. RED (verbatim): raw control chars reached blastguard log text output: ["U+202E", "U+2028", "U+2029", "U+0085"]. Two readings: (a) defect - a ledger value can visually reorder or forge a line; (b) accepted limit - log.rs:18, :356-357, README.md:577-578 and README.ja.md:885 document these as printed as-is with --json as the unambiguous form. Tell apart by user ruling; if (a), the fix must change all prose sites in the same commit; if (b), close won't-do. source: audit 2026-11-13 (main-session observation / condukt run run-20261113-044355-24760 decision log; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."""
-created_at = 1794516872
-updated_at = 1794516872
-weight = 0.0
-issue_number = 1662
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1662"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261113_o3_log_text_unicode_controls -- --ignored o3_log_text_escapes_unicode_line_and_bidi_controls"
-rev = "6cf45c7fb994159111d94aeff598cd476093a22f"
-observed_at = 1794516872
-detail = """
-exit 101: 3 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
-     Running tests/backlog_20261113_o3_log_text_unicode_controls.rs (target/debug/deps/backlog_20261113_o3_log_text_unicode_controls-befd1e5b6b341d17)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261113_o3_log_text_unicode_controls`"""
-
-[[task]]
 id = "7a960841"
 title = "blastguard: log テキストで rule 欠落と rule=unknown が同じ表示になる曖昧さを直す"
 project = "/Users/yuki/src/harness"
@@ -1100,3 +1036,34 @@ exit 101: /Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
      Running tests/backlog_20261113_o5_log_rule_unknown_ambiguous.rs (target/debug/deps/backlog_20261113_o5_log_rule_unknown_ambiguous-70bc371fe619f438)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_o5_log_rule_unknown_ambiguous`"""
+
+[[task]]
+id = "e70b6a71"
+title = "blastguard: quoted-heredoc commit message with backticks is Ask/Deny (command-word expansion FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "audit-20261113",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "git commit -q -F - <<'EOF' whose quoted body contains backtick spans (e.g. blastguard log in backticks) gets: the command word ``blastguard` is an expansion whose value only exists at run time — blastguard cannot tell what program this runs. Quoted heredoc bodies are not expanded. RED: crates/blastguard/tests/backlog_20261113_commit_heredoc_backtick_fp.rs (dc6b8ce0). Controls for unquoted heredocs are live."
+created_at = 1794519412
+updated_at = 1794519412
+weight = 0.0
+issue_number = 1664
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1664"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_commit_heredoc_backtick_fp -- --ignored quoted_heredoc_commit_message_with_backticks_is_not_denied_or_asked"
+rev = "8e3817c2b58e0deb83abc9f67ea085e7a6ab3256"
+observed_at = 1794519412
+detail = """
+exit 101: 0.2.475 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s
+     Running tests/backlog_20261113_commit_heredoc_backtick_fp.rs (target/debug/deps/backlog_20261113_commit_heredoc_backtick_fp-f62566408a5777c8)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_commit_heredoc_backtick_fp`"""

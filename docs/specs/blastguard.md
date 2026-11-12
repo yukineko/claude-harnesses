@@ -720,8 +720,9 @@ forge・condukt のスケジューラが再利用）。
   フィルタは `--decision deny|ask`・`--rule`・`--since`（RFC3339 または期間）・`--system-harm`・
   `--subagent` / `--interactive`（排他）、`--json` で JSON 出力。旧形式の行に無いフィールドは UNKNOWN
   （text `unknown` / JSON `null`）で、そのフィールドへのフィルタには一致せず除外件数を stderr に出す。
-  text 出力は C0 制御文字・DEL・backslash を escape して 1 entry = 1 行を保証するが、曖昧さは無くさない
-  （値は quote されず、C1 / U+2028/2029 / bidi 制御はそのまま）。厳密な解析は `--json` を使う。
+  text 出力は C0 制御文字・DEL・backslash を escape し、C1 制御（U+0080〜U+009F）・U+2028/U+2029・
+  bidi 制御（U+061C / U+200E / U+200F / U+202A〜U+202E / U+2066〜U+2069）を `\u{XXXX}` に escape して
+  1 entry = 1 行と表示順の不変を保証するが、曖昧さは無くさない（値は quote されない）。厳密な解析は `--json` を使う。
   exit: 0 = 成功（一致なし・ledger 不在を含み、不在は stderr に `no ledger at <path>`）、2 = 使い方の誤り、
   3 = ledger を特定・読めない／不正な行がある（有効な entry は出力したうえで `line <N>`）／stdout 書き込み失敗。
 - **`hookio`** — PreToolUse `deny` の単一行 JSON 生成（`deny_json`）。

@@ -126,7 +126,6 @@ impl Fixture {
 }
 
 #[test]
-#[ignore = "RED: O3 — remove the ignore when fixed"]
 fn o3_log_text_escapes_unicode_line_and_bidi_controls() {
     let f = Fixture::new("o3");
     let cmd = "echo a\u{202e}b\u{2028}c\u{2029}d\u{0085}e";

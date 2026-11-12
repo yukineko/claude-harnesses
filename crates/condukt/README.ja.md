@@ -186,7 +186,7 @@ cp -r skills/condukt ~/.claude/skills/        # agents/ も ~/.claude/agents/ �
 ```toml
 worktree_base  = "~/.condukt/worktrees"  # リポジトリの外でなければならない
 default_branch = "main"
-max_parallel   = 4                        # 同時ワーカー数のアドバイザリーソフトキャップ
+max_parallel   = 4                        # run あたりの live worktree 数の強制上限（worktree create --run）
 shared_globs   = []                       # このグロブに触れるタスクを強制的に直列実行させる
 autonomous     = false                    # true にすると人間ゲート（Phase 3 の合意）を決定論的な既定へ縮退する。
                                           #   共有スイッチファイル（condukt state autonomy-set）がこれを上書きし、

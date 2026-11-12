@@ -16,34 +16,54 @@
 //!   expression, an f-string, a `*args`/`**kwargs` splat, a call whose
 //!   argument list does not close — is write-capable (CLAUDE.md §3: cannot
 //!   determine resolves to the restrictive side);
+//! - an integer in a mode/flags position is read as `os.open` flags (the
+//!   provenance of a bare `open` is not proven, `from os import open` makes
+//!   `open(p, 1)` a write): `0` is read-only, any other integer is a write;
 //! - an absent mode is the default `'r'` and is NOT write-capable, so a plain
 //!   read (`open(p)`, `open(p,'rb')`, `open(p, mode='rt')`) adds nothing.
+//!
+//! A CALL is a recognised name, then optional whitespace (newlines
+//! included), then `(` — `open ('/etc/hosts','a')` and `open\n(…)` are the
+//! same call as `open(…)` (backlog 6cac93af rework, RED 123e5d91).
+//!
+//! PROVENANCE. Any occurrence of `open` / `fdopen` / `opensync` as a whole
+//! identifier that is NOT followed by `(` — `from io import open as o`,
+//! `from os import open`, `o = open`, `partial(open, …)`, `'open'` in a
+//! `getattr` — means the program can reach an open through a name this module
+//! does not follow. The whole program is then undetermined, i.e.
+//! write-capable, rather than judged call by call.
 //!
 //! Which operand is the mode depends on the call shape, all case-folded:
 //!
 //! - bare `open(` / `opensync(` / `fdopen(` (and `.open(` on a receiver whose
 //!   first argument is a path or descriptor: `io`, `codecs`, `gzip`, `bz2`,
-//!   `lzma`, `tarfile`, `fs`, Ruby `file`, `image`, `webbrowser`, `builtins`,
-//!   and any `fdopen(`)
-//!   — the SECOND positional operand, or `mode=` / `flags=`;
+//!   `lzma`, `tarfile`, `fs`, `promises`, Ruby `file`, `image`, `webbrowser`,
+//!   `builtins`, and any `fdopen(`), and the mode-taking FILE CLASSES
+//!   (`FileIO`, `ZipFile`, `PyZipFile`, `GzipFile`, `TarFile`, `BZ2File`,
+//!   `LZMAFile`) — the SECOND positional operand, or `mode=` / `flags=`;
 //! - `os.open(` / `posix.open(` — the second positional operand or `flags=`
 //!   is a flag expression; it is read-only iff every `|`-joined term is a
 //!   read-only flag (`O_RDONLY`, `O_CLOEXEC`, `O_NONBLOCK`, …) or the integer
-//!   `0`. Anything else (`O_WRONLY`, `O_APPEND`, `O_CREAT`, a variable, a
-//!   missing operand) is write-capable;
+//!   `0`. Anything else (`O_WRONLY`, `O_APPEND`, `O_CREAT`, a non-zero
+//!   integer, a variable, a missing operand) is write-capable;
+//! - `shelve.open(` / `dbm.open(` (and `dbm.gnu`/`ndbm`/`dumb`) — the second
+//!   operand or `flag=`: only the literal `'r'` is read-only; anything else is
+//!   write-capable, and an absent flag is `shelve`'s default `'c'` (a write)
+//!   or `dbm`'s default `'r'` (a read);
 //! - `.open(` on any OTHER receiver is read as `pathlib.Path.open(mode, …)`,
 //!   whose FIRST operand is the mode: a literal made only of mode letters
 //!   (`rwaxbtu+`) is judged by the rule above, any other literal (a member
 //!   name such as `zf.open('a.txt')`) is not a mode, and a non-literal first
 //!   operand is undetermined → write-capable. The second operand is judged
-//!   too when it is a string literal (`zipfile`'s `zf.open(name, 'w')`) or a
-//!   non-literal (it cannot be told from a mode).
+//!   too (`zipfile`'s `zf.open(name, 'w')`; it cannot be told from a mode).
 //!
 //! What this does NOT decide: which literal the call writes (the caller's
-//! recoverability / system-path probes do that), and calls that are not
-//! spelled `open(` at all (`Path.write_text`, Perl two-argument
-//! `open(FH, ">$p")`, `open my $fh, '>>', $p` without parentheses). Those are
-//! not made write-capable here.
+//! recoverability / system-path probes do that), and writes not spelled as
+//! one of these calls (`Path.write_text`, Node `appendFileSync`, Perl
+//! two-argument `open(FH, ">$p")`, `open my $fh, '>>', $p` without
+//! parentheses). Those are not made write-capable here. The identifier scan
+//! does not skip string literals or comments, so the word `open` in prose
+//! also makes a program undetermined (restrictive side).
 
 /// Label reported as the write call when a literal mode is write-capable.
 pub(super) const WRITE_MODE_LABEL: &str = "open() in a write-capable mode";
@@ -64,7 +84,26 @@ const PATH_FIRST_RECEIVERS: &[&str] = &[
     "image",
     "webbrowser",
     "builtins",
+    "promises",
 ];
+
+/// Identifiers that name an open function. A non-call occurrence of one of
+/// these is an alias/import whose calls are not followed: undetermined.
+const OPEN_NAMES: &[&str] = &["open", "fdopen", "opensync"];
+
+/// File classes constructed as `Class(path, mode)` (case-folded).
+const MODE_CLASSES: &[&str] = &[
+    "fileio",
+    "zipfile",
+    "pyzipfile",
+    "gzipfile",
+    "tarfile",
+    "bz2file",
+    "lzmafile",
+];
+
+/// Receivers whose `.open(path, flag)` is a dbm-style flag (`'r'` read-only).
+const DBM_RECEIVERS: &[&str] = &["dbm", "gnu", "ndbm", "dumb"];
 
 /// `os.open` flags that do not make the descriptor writable.
 const READ_ONLY_FLAGS: &[&str] = &[
@@ -96,6 +135,9 @@ enum Shape {
     OsFlags,
     /// Mode is the first positional operand (`pathlib.Path.open(mode)`).
     ModeFirst,
+    /// dbm-style flag second (`dbm.open(p, 'c')`); `default_write` is what an
+    /// absent flag means (`shelve` defaults to `'c'`).
+    DbmFlag { default_write: bool },
 }
 
 /// One argument of a parsed call.
@@ -123,14 +165,36 @@ enum Operand<'a> {
 pub(super) fn write_capable_open(lowered: &str) -> Option<&'static str> {
     let bytes = lowered.as_bytes();
     let mut undetermined = false;
-    let mut from = 0usize;
-    while let Some(rel) = lowered[from..].find("open") {
-        let at = from + rel;
-        from = at + 1;
-        let Some((shape, args_start)) = call_shape(lowered, bytes, at) else {
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if !is_ident(bytes[i]) {
+            i += 1;
             continue;
-        };
-        match judge_call(&lowered[args_start..], shape) {
+        }
+        let start = i;
+        while i < bytes.len() && is_ident(bytes[i]) {
+            i += 1;
+        }
+        let name = &lowered[start..i];
+        let is_open = OPEN_NAMES.contains(&name);
+        if !is_open && !MODE_CLASSES.contains(&name) {
+            continue;
+        }
+        // A call is the name, optional whitespace (newlines included), `(`.
+        let mut j = i;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        if bytes.get(j) != Some(&b'(') {
+            // `from io import open as o`, `o = open`, `getattr(b, 'open')`:
+            // an open reachable through a name not followed here.
+            if is_open {
+                undetermined = true;
+            }
+            continue;
+        }
+        let shape = call_shape(lowered, bytes, start, name);
+        match judge_call(&lowered[j + 1..], shape) {
             Judged::Read => {}
             Judged::Write => return Some(WRITE_MODE_LABEL),
             Judged::Undetermined => undetermined = true,
@@ -143,48 +207,43 @@ fn is_ident(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
 }
 
-/// Classify the `open` occurrence at byte `at`; returns the shape and the
-/// index just past its `(`. `None` when it is not an open-family call.
-fn call_shape(lowered: &str, bytes: &[u8], at: usize) -> Option<(Shape, usize)> {
-    let rest = &lowered[at..];
-    let (name_len, fdopen_or_sync) = if rest.starts_with("opensync(") {
-        ("opensync".len(), true)
-    } else if rest.starts_with("open(") {
-        ("open".len(), false)
-    } else {
-        return None;
-    };
-    let mut start = at;
-    let mut shape_hint_fd = fdopen_or_sync;
-    // `fdopen(` / `os.fdopen(`: the identifier ends in `open` after `fd`.
-    if start >= 2 && &bytes[start - 2..start] == b"fd" {
-        start -= 2;
-        shape_hint_fd = true;
+/// Classify the call of `name` whose identifier starts at byte `start`.
+fn call_shape(lowered: &str, bytes: &[u8], start: usize, name: &str) -> Shape {
+    if MODE_CLASSES.contains(&name) || name != "open" {
+        // File classes, `fdopen(fd, mode)`, `openSync(path, flags)`.
+        return Shape::PathFirst;
     }
-    let args_start = at + name_len + 1;
-    let prev = start.checked_sub(1).map(|i| bytes[i]);
-    match prev {
-        Some(b'.') => {
-            // Receiver identifier immediately before the dot.
-            let dot = start - 1;
-            let mut r = dot;
-            while r > 0 && is_ident(bytes[r - 1]) {
-                r -= 1;
-            }
-            let receiver = &lowered[r..dot];
-            if shape_hint_fd {
-                return Some((Shape::PathFirst, args_start));
-            }
-            if receiver == "os" || receiver == "posix" {
-                return Some((Shape::OsFlags, args_start));
-            }
-            if PATH_FIRST_RECEIVERS.contains(&receiver) {
-                return Some((Shape::PathFirst, args_start));
-            }
-            Some((Shape::ModeFirst, args_start))
+    // Receiver: the identifier before a `.` (whitespace around it skipped).
+    let mut k = start;
+    while k > 0 && bytes[k - 1].is_ascii_whitespace() {
+        k -= 1;
+    }
+    if k == 0 || bytes[k - 1] != b'.' {
+        return Shape::PathFirst;
+    }
+    let mut dot = k - 1;
+    while dot > 0 && bytes[dot - 1].is_ascii_whitespace() {
+        dot -= 1;
+    }
+    let mut r = dot;
+    while r > 0 && is_ident(bytes[r - 1]) {
+        r -= 1;
+    }
+    let receiver = &lowered[r..dot];
+    if receiver == "os" || receiver == "posix" {
+        Shape::OsFlags
+    } else if receiver == "shelve" {
+        Shape::DbmFlag {
+            default_write: true,
         }
-        Some(b) if is_ident(b) => None,
-        _ => Some((Shape::PathFirst, args_start)),
+    } else if DBM_RECEIVERS.contains(&receiver) {
+        Shape::DbmFlag {
+            default_write: false,
+        }
+    } else if PATH_FIRST_RECEIVERS.contains(&receiver) {
+        Shape::PathFirst
+    } else {
+        Shape::ModeFirst
     }
 }
 
@@ -200,11 +259,17 @@ fn judge_call(args_text: &str, shape: Shape) -> Judged {
     };
     let mut verdicts = Vec::new();
     let mut positional = 0usize;
+    let mut flag_given = false;
     for arg in &args {
         match arg {
             Arg::Splat => verdicts.push(Judged::Undetermined),
             Arg::Keyword(name, op) => {
-                if *name == "mode" || *name == "flags" {
+                if let Shape::DbmFlag { .. } = shape {
+                    if *name == "flag" {
+                        flag_given = true;
+                        verdicts.push(judge_dbm_flag(op));
+                    }
+                } else if *name == "mode" || *name == "flags" {
                     verdicts.push(judge_operand(op, shape, name == &"flags"));
                 }
             }
@@ -212,18 +277,27 @@ fn judge_call(args_text: &str, shape: Shape) -> Judged {
                 match (shape, positional) {
                     (Shape::PathFirst, 1) => verdicts.push(judge_operand(op, shape, false)),
                     (Shape::OsFlags, 1) => verdicts.push(judge_operand(op, shape, true)),
+                    (Shape::DbmFlag { .. }, 1) => {
+                        flag_given = true;
+                        verdicts.push(judge_dbm_flag(op));
+                    }
                     (Shape::ModeFirst, 0) => match op {
                         Operand::Str(s) if !is_mode_alphabet(s) => {}
                         _ => verdicts.push(judge_operand(op, shape, false)),
                     },
-                    (Shape::ModeFirst, 1) => match op {
-                        Operand::Int(_) => {}
-                        _ => verdicts.push(judge_operand(op, shape, false)),
-                    },
+                    (Shape::ModeFirst, 1) => verdicts.push(judge_operand(op, shape, false)),
                     _ => {}
                 }
                 positional += 1;
             }
+        }
+    }
+    if let Shape::DbmFlag {
+        default_write: true,
+    } = shape
+    {
+        if !flag_given {
+            verdicts.push(Judged::Write);
         }
     }
     // `os.open(path)` with no flags at all cannot be read as read-only.
@@ -251,17 +325,37 @@ fn is_mode_alphabet(s: &str) -> bool {
 fn judge_operand(op: &Operand<'_>, shape: Shape, flags: bool) -> Judged {
     if flags || shape == Shape::OsFlags {
         return match op {
-            Operand::Int(n) if *n == "0" => Judged::Read,
-            Operand::Int(_) => Judged::Undetermined,
+            Operand::Int(n) => judge_int_flags(n),
             Operand::Str(s) => judge_mode_str(s),
             Operand::Other(text) => judge_flags_expr(text),
         };
     }
     match op {
         Operand::Str(s) => judge_mode_str(s),
-        // An integer is not a mode string; Python raises before opening.
-        Operand::Int(_) => Judged::Read,
+        // Builtin `open` rejects an integer mode, but the provenance of the
+        // name is not proven (`from os import open`), so the integer is read
+        // as `os.open` flags.
+        Operand::Int(n) => judge_int_flags(n),
         Operand::Other(_) => Judged::Undetermined,
+    }
+}
+
+/// An integer as `os.open` flags: `0` (`O_RDONLY`) is read-only, any other
+/// value can carry a write bit.
+fn judge_int_flags(n: &str) -> Judged {
+    if n.bytes().all(|b| b == b'0') {
+        Judged::Read
+    } else {
+        Judged::Write
+    }
+}
+
+/// A dbm/shelve flag: only the literal `'r'` is read-only.
+fn judge_dbm_flag(op: &Operand<'_>) -> Judged {
+    match op {
+        Operand::Str(s) if *s == "r" => Judged::Read,
+        Operand::Str(_) => Judged::Write,
+        _ => Judged::Undetermined,
     }
 }
 

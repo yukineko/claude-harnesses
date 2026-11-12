@@ -96,7 +96,6 @@ const SHAPES: &[&str] = &[
 // test-weakening-justified: new RED for an unfixed fail-open; the ignore is
 // removed in the fixing commit.
 #[test]
-#[ignore = "RED: python open() write shapes (space/newline before paren, aliased open, os.open int flags, io.FileIO, zipfile.ZipFile) on a system path are Allow"]
 fn python_open_call_shapes_on_system_path_are_not_allowed() {
     let home = unique_home("red");
     let mut failures = Vec::new();

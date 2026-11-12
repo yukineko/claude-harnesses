@@ -626,7 +626,13 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   モード（変数・式・`*args`/`**kwargs`）は書き込みとみなし（判定不能は制限側）、
 >   モード無し・読み取り専用モード（`'r'`・`'rb'`・`'rt'`）は書き込みではない。`os.open` の
 >   フラグは、全項が読み取り専用フラグ（`O_RDONLY`・`O_CLOEXEC` 等）でない限り書き込み。
->   これにより `open('/etc/hosts','a')`・`'r+'`・`'x'`・`mode='a'` も `'w'` と同様に deny
+>   モード／フラグ位置の整数は `0` 以外なら書き込み。0.2.485 以降、呼び出しは「名前・
+>   任意の空白（改行含む）・`(`」で認識し（`open ('/etc/hosts','a')`）、モードを取る
+>   ファイルクラス（`FileIO`・`ZipFile`・`GzipFile`・`TarFile`・`BZ2File`・`LZMAFile`）と
+>   `shelve`/`dbm` の `open` も同じ規則で判定する（dbm のフラグは `'r'` だけが読み取り、
+>   `shelve` の既定 `'c'` は書き込み）。名前 `open` の呼び出し以外の出現（`from io import
+>   open as o`・`from os import open`・`o = open`）があればプログラム全体を判定不能＝
+>   書き込みとみなす。これにより `open('/etc/hosts','a')`・`'r+'`・`'x'`・`mode='a'` も `'w'` と同様に deny
 >   される。`Path.write_text` や Node の `appendFileSync` はこの規則の対象外（未対応）。
 
 当時、overwatch の continuous-audit 再発トラッカー（`overwatch violations --json`）が

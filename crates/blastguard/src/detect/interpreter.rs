@@ -375,8 +375,10 @@ fn names_unwritable_directory(
 /// [`INTERPRETER_WRITE_CALLS`], and the STRUCTURAL mode judgement of every
 /// `open(...)`-family call in [`open_mode::write_capable_open`] (backlog
 /// 6cac93af) — a literal mode containing `w`/`a`/`x`/`+` (or Perl's `>`) is
-/// write-capable, and a mode that cannot be determined statically is treated
-/// as write-capable; an absent or read-only mode (`'r'`, `'rb'`, `'rt'`) is not.
+/// write-capable, a non-zero integer mode/flags is write-capable, a mode that
+/// cannot be determined statically is treated as write-capable, and so is any
+/// program that uses the name `open` other than as a call (an import or
+/// alias); an absent or read-only mode (`'r'`, `'rb'`, `'rt'`) is not.
 fn interpreter_write_call(payload: &str) -> Option<&'static str> {
     let lowered = payload.to_ascii_lowercase();
     INTERPRETER_WRITE_CALLS

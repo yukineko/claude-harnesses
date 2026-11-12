@@ -71,9 +71,16 @@ literal mode containing `w`, `a`, `x`, `+` (or Perl's `>`) is a write, a mode
 that cannot be determined statically (variable, expression, `*args`/`**kwargs`)
 is treated as a write, and an absent or read-only mode (`'r'`, `'rb'`, `'rt'`)
 is not. `os.open` flags are a write unless every term is a read-only flag
-(`O_RDONLY`, `O_CLOEXEC`, …). So `open('/etc/hosts','a')`, `'r+'`, `'x'` and
-`mode='a'` are denied like `'w'` was; `Path.write_text` and Node
-`appendFileSync` are not covered by this rule. Running a script **file** (`python3 app.py`,
+(`O_RDONLY`, `O_CLOEXEC`, …); an integer mode/flags operand is a write unless
+it is `0`. Since 0.2.485 a call is the name, optional whitespace or newline,
+then `(` (`open ('/etc/hosts','a')`); the mode-taking file classes (`FileIO`,
+`ZipFile`, `GzipFile`, `TarFile`, `BZ2File`, `LZMAFile`) and `shelve`/`dbm`
+`open` follow the same rule (dbm flag: only `'r'` is a read; `shelve`'s
+default `'c'` is a write); and any non-call use of the name `open`
+(`from io import open as o`, `from os import open`, `o = open`) makes the
+whole program undetermined, i.e. a write. So `open('/etc/hosts','a')`,
+`'r+'`, `'x'` and `mode='a'` are denied like `'w'` was; `Path.write_text` and
+Node `appendFileSync` are not covered by this rule. Running a script **file** (`python3 app.py`,
 `python3 -m …`) is not judged. A `>` in program text whose "target" cannot be
 determined (`print(1 > 0)`, a backticked `` `<k(r)>/x.json` `` in a comment) is
 an `ask` marked "Recommended: do not run this." — never a deny, never an allow

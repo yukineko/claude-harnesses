@@ -6385,7 +6385,7 @@ fn init(cfg: &Config) -> Result<()> {
          worktree_base = \"{}\"\n\
          # Branch completed work merges back into.\n\
          default_branch = \"{}\"\n\
-         # Soft cap on concurrent workers (advisory; the skill honors it).\n\
+         # Hard cap on live worktrees per run; `condukt worktree create --run <id>` refuses when exceeded or undeterminable.\n\
          max_parallel = {}\n\
          # Globs that force a touching task to run serially (never in parallel),\n\
          # e.g. [\"**/models.py\", \"**/migrations/**\", \"docs/glossary.md\"].\n\

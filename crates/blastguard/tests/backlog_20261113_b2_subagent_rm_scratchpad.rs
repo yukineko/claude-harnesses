@@ -29,8 +29,8 @@
 //!
 //! DOES NOT PROVE: that the verdict is Allow (Ask passes), nor anything about
 //! non-scratchpad temp dirs or operands outside the scratchpad. The non-ignored
-//! witness pins that the payload really is hardened as a subagent (same command:
-//! Ask without `agent_id`, Deny with it); the system-harm control pins
+//! witness pins that the payload really is hardened as a subagent (`git clean -fd`,
+//! a command the B2 fix does not touch: Ask without `agent_id`, Deny with it); the system-harm control pins
 //! `rm -rf /usr/lib` stays Deny. macOS only: the fixture lives under
 //! `/private/tmp/claude-502`.
 #![cfg(target_os = "macos")]
@@ -150,13 +150,25 @@ fn b2_subagent_rm_rf_dotdot_spelling_inside_scratchpad_is_not_denied() {
     );
 }
 
-/// Witness (not ignored): the payload is hardened as a subagent. The same
-/// command is a confined Ask for the main session and a Deny with `agent_id`.
+/// Witness (not ignored): the payload is hardened as a subagent. It uses a
+/// command the B2 fix (`rm` operand spelling) does not touch: `git clean -fd`
+/// in a git repo inside the scratchpad is a confined Ask for the main session
+/// and a Deny with `agent_id`. Observed at HEAD 09dd0c8c: main=ask, sub=deny.
 #[test]
 fn b2_witness_subagent_hardening_ask_to_deny() {
     let s = scratch("witness");
-    let (main_d, main_r) = run_as("rm -rf ./proj/target", &s, false);
-    let (sub_d, sub_r) = run_as("rm -rf ./proj/target", &s, true);
+    let g = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(s.cwd.join("proj"))
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .status()
+        .unwrap();
+    assert!(g.success(), "fixture: git init failed");
+    std::fs::write(s.cwd.join("proj/untracked.txt"), "u").unwrap();
+    let c = "git -C proj clean -fd";
+    let (main_d, main_r) = run_as(c, &s, false);
+    let (sub_d, sub_r) = run_as(c, &s, true);
     assert_eq!(main_d, "ask", "main session must be Ask; reason: {main_r}");
     assert_eq!(sub_d, "deny", "subagent must be Deny; reason: {sub_r}");
 }

@@ -890,3 +890,67 @@ exit 101: harness-worktrees/red4-bg-payload/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.76s
      Running tests/backlog_20261113_python_adjacent_literal_concat_path.rs (target/debug/deps/backlog_20261113_python_adjacent_literal_concat_path-7b71dce495db7bff)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_python_adjacent_literal_concat_path`"""
+
+[[task]]
+id = "569b9b9d"
+title = "blastguard: pathlib write_text/write_bytes, node fs.appendFile(Sync), shutil.copy による system パス書き込みが allow になる fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "System-harm fail-open, RED 4d61aac2 by a non-implementer at main f0854f26 2026-11-13: 10 interpreter write(s) to a system path were ALLOWED (main and subagent): pathlib.Path(sys path).write_text / write_bytes, node require(fs).appendFileSync / appendFile, shutil.copy(src, sys path). Not Allow: perl 2-arg open, perl open my fh without parens, os.replace. Control control_python_open_w_on_system_path_is_denied non-ignored. Found by the 6cac93af implementer's manual probe."
+created_at = 1794527093
+updated_at = 1794527093
+weight = 0.0
+issue_number = 1673
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1673"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_interpreter_write_api_system_path interpreter_write_apis_on_system_path_are_not_allowed -- --include-ignored"
+rev = "02d939d31bcb908052fe61e1c516b122efcc6cfa"
+observed_at = 1794527093
+detail = """
+exit 101: ers/yuki/src/.harness-worktrees/red6-bg/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/backlog_20261113_interpreter_write_api_system_path.rs (target/debug/deps/backlog_20261113_interpreter_write_api_system_path-89f9d42151d9a4dd)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_interpreter_write_api_system_path`"""
+
+[[task]]
+id = "4880afab"
+title = "blastguard FP: heredoc 本文のデータ中の symlink 作成文言を実コマンドとしてモデルし、後続の redirect を deny する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed live 3 times 2026-11-13 in subagents (backlog add with a long notes argument; a cat append heredoc probe; and the orchestrator's own backlog add while filing this very item): a redirect target was denied because quoted/data text describing a symlink-then-create sequence was modelled as executed (reason: may create or rename an entry on this path and is not modelled). RED 02d939d3 by a non-implementer: minimal repro is a heredoc body holding that sentence as data followed by a line with a redirect; single-line quoted arguments are Allow (green control). Control: a real symlink into /etc then create stays not-Allow. Same family as c619b13f. A separate deny of a double-quoted command-substitution argument (reason: the command word dollar-paren-cat is an expansion) did not reproduce in tests; not filed."
+created_at = 1794527104
+updated_at = 1794527104
+weight = 0.0
+issue_number = 1674
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1674"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_quoted_arg_text_read_as_command_fp -- --include-ignored"
+rev = "02d939d31bcb908052fe61e1c516b122efcc6cfa"
+observed_at = 1794527104
+detail = """
+exit 101: ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_quoted_arg_text_read_as_command_fp.rs (target/debug/deps/backlog_20261113_quoted_arg_text_read_as_command_fp-571a5a0477c1f04d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_quoted_arg_text_read_as_command_fp`"""

@@ -113,13 +113,16 @@ fn r3_cmd_tmpdir_is_not_parent_tmpdir() {
     );
 }
 
-/// R4 control: in-root write and a write into the CMD's own $TMPDIR succeed.
+/// R4 control (as amended by human ruling esc-6dee8ed4): in-root write, a write
+/// into the CMD's own $TMPDIR, and `mktemp -p "$TMPDIR"` succeed. Bare `mktemp`
+/// (no template) is not required: on macOS it writes to /var/folders/<user>/T,
+/// which R1 denies (R1 unchanged).
 #[test]
 fn r4_cmd_can_write_root_and_its_tmpdir() {
     let e = Engagement::ratified(&[("R1", "first")]);
     let out = red(
         &e,
-        "touch \"$TMPDIR/x\" && test -f \"$TMPDIR/x\" && mktemp >/dev/null && touch in-root && false",
+        "touch \"$TMPDIR/x\" && test -f \"$TMPDIR/x\" && mktemp -p \"$TMPDIR\" >/dev/null && touch in-root && false",
         &[],
     );
     assert_eq!(code(&out), Some(0), "{}", show(&out));

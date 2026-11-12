@@ -753,3 +753,350 @@ scripts/test_scout_20261112_f3_cap_clean_failed_repro.py:80: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_scout_20261112_f3_cap_clean_failed_repro.py::CapCleanMarker::test_failed_clean_must_not_write_marker
 ========================= 1 failed, 1 passed in 0.77s =========================="""
+
+[[task]]
+id = "32b69400"
+title = "condukt: run cap の判定と worktree 作成の間にロックが無く、並行 create で MAX_PARALLEL を超える問題を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "audit-20261113",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "C2. run_cap.rs enforce_run_cap and main.rs ~3590 create_namespaced have no lock between check and create. RED (verbatim): attempt 0: CONDUKT_MAX_PARALLEL=1 but two concurrent creates for run-c2 produced successes=2, live worktrees=2 (cap 1). Race test: 20 attempts; a pass does not prove absence of the race. source: audit 2026-11-13 (condukt run run-20261112-072718-37987 follow-ups; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."
+created_at = 1794516617
+updated_at = 1794516617
+weight = 0.0
+issue_number = 1653
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1653"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261113_c2_run_cap_race -- --ignored concurrent_creates_under_cap_one_do_not_both_succeed"
+rev = "99e1d092f0fe8213c94668b9757b20be93d0a46d"
+observed_at = 1794516617
+detail = """
+exit 101: ates/blastguard)
+   Compiling condukt v0.7.387 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.63s
+     Running tests/backlog_20261113_c2_run_cap_race.rs (target/debug/deps/backlog_20261113_c2_run_cap_race-4e128417c8c1a893)
+error: test failed, to rerun pass `-p condukt --test backlog_20261113_c2_run_cap_race`"""
+
+[[task]]
+id = "df055fa4"
+title = "condukt: run cap が detached HEAD の worktree を数えず上限を超えて create できる問題を直す（仕様裁定要）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "audit-20261113",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "C4. run_cap counts only worktrees with Some(branch). RED (verbatim): CONDUKT_MAX_PARALLEL=1 must refuse a second worktree of run-c4 while A (.../wts/run-c4-a) is live but detached; got exit=Some(0). Two readings: (a) defect - a detached worktree at <worktree_base>/<run>-<topic> is still the run's live worktree, so the cap undercounts (fail-open); (b) intended - run_cap.rs docstring defines live as 'branch namespaced under run'. Tell apart by user ruling on what 'live worktree of the run' means; if (b), close won't-do. Verifier note: the RED only checks non-zero exit, not the max-parallel message. source: audit 2026-11-13 (condukt run run-20261112-072718-37987 follow-ups; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."
+created_at = 1794516630
+updated_at = 1794516630
+weight = 0.0
+issue_number = 1654
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1654"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261113_c4_run_cap_detached -- --ignored detached_worktree_of_the_run_still_counts_against_the_cap"
+rev = "99e1d092f0fe8213c94668b9757b20be93d0a46d"
+observed_at = 1794516630
+detail = """
+exit 101: 32s
+
+   Compiling condukt v0.7.387 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/backlog_20261113_c4_run_cap_detached.rs (target/debug/deps/backlog_20261113_c4_run_cap_detached-d170f34c5e6be993)
+error: test failed, to rerun pass `-p condukt --test backlog_20261113_c4_run_cap_detached`"""
+
+[[task]]
+id = "da84db1c"
+title = "condukt: budget 未計測時に circuit journal が budget_over_cap=false と記録する fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "audit-20261113",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = 'C5. gatelog.rs CircuitRecord.budget_over_cap: bool; circuit.rs:643-647 maps a ledger load failure to (false, Some(reason)) and circuit.rs:796 journals false. RED (verbatim): the circuit journal records "budget_over_cap":false for a corrupt (unmeasured) budget ledger; journal={"verdict":"trip","reason":"budget_unmeasured",...,"budget_over_cap":false,...}. Fix shape is free (null / omit); a fix that keeps false plus a separate field would not pass this RED. source: audit 2026-11-13 (condukt run run-20261112-072718-37987 follow-ups; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13.'
+created_at = 1794516634
+updated_at = 1794516634
+weight = 0.0
+issue_number = 1655
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1655"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261113_c5_c6_circuit_budget_unmeasured -- --ignored journal_does_not_record_unmeasured_budget_as_not_over_cap"
+rev = "99e1d092f0fe8213c94668b9757b20be93d0a46d"
+observed_at = 1794516634
+detail = """
+exit 101: /Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running tests/backlog_20261113_c5_c6_circuit_budget_unmeasured.rs (target/debug/deps/backlog_20261113_c5_c6_circuit_budget_unmeasured-c6ed3d07a4e141db)
+error: test failed, to rerun pass `-p condukt --test backlog_20261113_c5_c6_circuit_budget_unmeasured`"""
+
+[[task]]
+id = "eeeb2ed3"
+title = "condukt: budget_unmeasured が stall の trip 理由を上書きして隠す問題を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "audit-20261113",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """C6. circuit.rs ~705 '_ if budget_unknown_reason.is_some() => Trip(BudgetUnmeasured)' matches before Trip(Stall). RED (verbatim): a 2h-stalled run with a corrupt budget ledger must still report the stall (alone or together with budget_unmeasured); got reason="budget_unmeasured". Covers the stall axis only, not the failure-streak axis. source: audit 2026-11-13 (condukt run run-20261112-072718-37987 follow-ups; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."""
+created_at = 1794516638
+updated_at = 1794516638
+weight = 0.0
+issue_number = 1656
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1656"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261113_c5_c6_circuit_budget_unmeasured -- --ignored unmeasured_budget_does_not_relabel_a_measured_stall"
+rev = "99e1d092f0fe8213c94668b9757b20be93d0a46d"
+observed_at = 1794516638
+detail = """
+exit 101: 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.77s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_c5_c6_circuit_budget_unmeasured.rs (target/debug/deps/backlog_20261113_c5_c6_circuit_budget_unmeasured-c6ed3d07a4e141db)
+error: test failed, to rerun pass `-p condukt --test backlog_20261113_c5_c6_circuit_budget_unmeasured`"""
+
+[[task]]
+id = "32d9232c"
+title = "backlog: next --claim が他プロジェクトパスの 1 件で queue 全体を拒否する問題を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "audit-20261113",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """K1. claim_recheck.rs rerun_dir: undetermined project identity refuses the whole claim. RED (verbatim): Error: backlog next --claim REFUSED to claim ... the re-run of candidate 18480a75's stored repro could not be determined (cmd: bash tests/repro_yes.sh): the project identity of its project root "/some/old/root" cannot be determined. The fixture rewrites X's project line (backlog add refuses a nonexistent project), a state a moved repo produces. Two fix readings: (a) skip X and claim Y (what the RED expects); (b) like 97d5f45c, re-run in the store's own repo and claim X - would fail this RED. 'skip X, claim Y' is a design choice: ask the user before choosing (b). A single-candidate store must still refuse, not report empty. source: audit 2026-11-13 (condukt run run-20261112-072718-37987 follow-ups; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."""
+created_at = 1794516640
+updated_at = 1794516640
+weight = 0.0
+issue_number = 1657
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1657"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_k1_claim_foreign_project -- --ignored next_claim_hands_out_valid_ticket_despite_foreign_project_on_another"
+rev = "99e1d092f0fe8213c94668b9757b20be93d0a46d"
+observed_at = 1794516640
+detail = """
+exit 101: ng backlog v0.3.110 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.17s
+     Running tests/backlog_20261113_k1_claim_foreign_project.rs (target/debug/deps/backlog_20261113_k1_claim_foreign_project-bcb762cbc9a84c04)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_k1_claim_foreign_project`"""
+
+[[task]]
+id = "536e2811"
+title = "backlog: fix コミット件名の (backlog <id> wave 2) / (backlog <id>; x) 形式を修正済みと認識しない問題を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "audit-20261113",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "K2. evidence.rs:303-309 takes rest[..j].trim() so ids become '<id> wave 2' / '<id>; y'. RED (verbatim, both tests): backlog next handed out X (4daacf35) although its fix commit names it; expected Y (6e56a66b). Fix hazard: history has '(backlog 38a44b30 RED repro)' and '(backlog 0fbfe00d, e34eb0be; 0.2.395)'; a naive first-token fix would count a RED-repro commit as a fix and silently drop the ticket. Add a negative case before/with the fix. source: audit 2026-11-13 (condukt run run-20261112-072718-37987 follow-ups; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."
+created_at = 1794516646
+updated_at = 1794516646
+weight = 0.0
+issue_number = 1658
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1658"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_k2_fixed_subject_variants -- --ignored subject_with_"
+rev = "99e1d092f0fe8213c94668b9757b20be93d0a46d"
+observed_at = 1794516646
+detail = """
+exit 101: backlog v0.3.110 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running tests/backlog_20261113_k2_fixed_subject_variants.rs (target/debug/deps/backlog_20261113_k2_fixed_subject_variants-06451842777c5f4f)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_k2_fixed_subject_variants`"""
+
+[[task]]
+id = "2072023d"
+title = "backlog: shallow clone で履歴が切れると修正済みタスクを next が払い出す問題を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "audit-20261113",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "K4. A git clone --depth 1 hides the non-tip fix commit. RED (verbatim): next in a shallow clone handed out X (83e1e353) although its fix commit (backlog 83e1e353) exists in the full history; expected Y (1360d831) or a refusal. Non-ignored control: full clone with the same copied store hands out Y. A fix may hand out Y or refuse naming shallow/truncated. source: audit 2026-11-13 (condukt run run-20261112-072718-37987 follow-ups; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."
+created_at = 1794516649
+updated_at = 1794516649
+weight = 0.0
+issue_number = 1659
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1659"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_k4_shallow_clone_fix -- --ignored next_in_shallow_clone_does_not_dispatch_fixed_task"
+rev = "99e1d092f0fe8213c94668b9757b20be93d0a46d"
+observed_at = 1794516649
+detail = """
+exit 101: 
+
+   Compiling backlog v0.3.110 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running tests/backlog_20261113_k4_shallow_clone_fix.rs (target/debug/deps/backlog_20261113_k4_shallow_clone_fix-870ba509d3c0bcec)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_k4_shallow_clone_fix`"""
+
+[[task]]
+id = "9352d929"
+title = "blastguard: クリーンな linked worktree での git reset --hard を deny する誤検知を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "audit-20261113",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = 'B1 (FP). detect/git.rs:1194-1199 denies --hard by shape outside managed roots; cleanliness is never consulted. Observed in /Users/yuki/.condukt/worktrees/run-20261113-044355-24760-t1 (main session, Deny). RED (verbatim): git reset --hard in a CLEAN linked worktree discards nothing and must not be Deny; got {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"git reset --hard discards working-tree changes"}}. RED uses HEAD as <rev>; it does not prove other revs. Non-ignored control: dirty linked worktree stays not-Allow. source: audit 2026-11-13 (main-session observation / condukt run run-20261113-044355-24760 decision log; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13.'
+created_at = 1794516861
+updated_at = 1794516861
+weight = 0.0
+issue_number = 1660
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1660"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_b1_reset_hard_clean_worktree -- --ignored b1_reset_hard_in_clean_linked_worktree_is_not_denied"
+rev = "6cf45c7fb994159111d94aeff598cd476093a22f"
+observed_at = 1794516861
+detail = """
+exit 101: 3 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.55s
+     Running tests/backlog_20261113_b1_reset_hard_clean_worktree.rs (target/debug/deps/backlog_20261113_b1_reset_hard_clean_worktree-b01651fe64ccd9ca)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_b1_reset_hard_clean_worktree`"""
+
+[[task]]
+id = "f70e5164"
+title = "blastguard: subagent が scratchpad 内で ./ や ../ 綴りの rm -rf を deny される誤検知を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "audit-20261113",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "B2 (FP). The audit's literal shape (subagent rm -rf proj/target, cwd in the session scratchpad) is Allow at HEAD; the same target spelled ./proj/target or ../sbx/proj/target is Ask hardened to Deny for a subagent. RED (verbatim): subagent rm -rf ./proj/target inside the session scratchpad must not be Deny (ruling: scratch in managed places is allowed); reason: blastguard: this call was made inside a subagent, where nobody can answer a permission prompt, so it is denied instead of asked. Conflict: deletion.rs documents '.'/'..' operands as undetermined ('cannot determine is never an Allow'); a fix must change that prose, and '..' needs physical resolution. Untested alternative cause of the original observation: a non-canonical cwd (/tmp vs /private/tmp). Controls: subagent rm -rf /usr/lib stays Deny; witness git -C proj clean -fd main=ask/sub=deny. macOS-only test. source: audit 2026-11-13 (main-session observation / condukt run run-20261113-044355-24760 decision log; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."
+created_at = 1794516869
+updated_at = 1794516869
+weight = 0.0
+issue_number = 1661
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1661"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_b2_subagent_rm_scratchpad -- --ignored b2_subagent_rm_rf_"
+rev = "6cf45c7fb994159111d94aeff598cd476093a22f"
+observed_at = 1794516869
+detail = """
+exit 101: d v0.2.473 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/backlog_20261113_b2_subagent_rm_scratchpad.rs (target/debug/deps/backlog_20261113_b2_subagent_rm_scratchpad-14c325f83eaa5364)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_b2_subagent_rm_scratchpad`"""
+
+[[task]]
+id = "81cd7f45"
+title = "blastguard: log のテキスト出力で bidi・U+2028/2029・C1 制御文字をエスケープしない問題を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "audit-20261113",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """O3. log.rs escape_text (350-372) escapes only <0x20, 0x7f and backslash. RED (verbatim): raw control chars reached blastguard log text output: ["U+202E", "U+2028", "U+2029", "U+0085"]. Two readings: (a) defect - a ledger value can visually reorder or forge a line; (b) accepted limit - log.rs:18, :356-357, README.md:577-578 and README.ja.md:885 document these as printed as-is with --json as the unambiguous form. Tell apart by user ruling; if (a), the fix must change all prose sites in the same commit; if (b), close won't-do. source: audit 2026-11-13 (main-session observation / condukt run run-20261113-044355-24760 decision log; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."""
+created_at = 1794516872
+updated_at = 1794516872
+weight = 0.0
+issue_number = 1662
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1662"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_o3_log_text_unicode_controls -- --ignored o3_log_text_escapes_unicode_line_and_bidi_controls"
+rev = "6cf45c7fb994159111d94aeff598cd476093a22f"
+observed_at = 1794516872
+detail = """
+exit 101: 3 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/backlog_20261113_o3_log_text_unicode_controls.rs (target/debug/deps/backlog_20261113_o3_log_text_unicode_controls-befd1e5b6b341d17)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_o3_log_text_unicode_controls`"""
+
+[[task]]
+id = "7a960841"
+title = "blastguard: log テキストで rule 欠落と rule=unknown が同じ表示になる曖昧さを直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "audit-20261113",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "O5. log.rs:263-267 strips 'blastguard:' so signature blastguard:unknown becomes rule unknown, and format_text_line prints unknown for None (log.rs:382-385). RED (verbatim): absent rule and a rule literally named unknown render identically (rule=unknown). log.rs:9 and --help ('Absent fields print as unknown (text) or null (JSON)') document the current behaviour; a fix must change that prose too. source: audit 2026-11-13 (main-session observation / condukt run run-20261113-044355-24760 decision log; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."
+created_at = 1794516875
+updated_at = 1794516875
+weight = 0.0
+issue_number = 1663
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1663"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_o5_log_rule_unknown_ambiguous -- --ignored o5_log_text_distinguishes_absent_rule_from_rule_named_unknown"
+rev = "6cf45c7fb994159111d94aeff598cd476093a22f"
+observed_at = 1794516875
+detail = """
+exit 101: /Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
+     Running tests/backlog_20261113_o5_log_rule_unknown_ambiguous.rs (target/debug/deps/backlog_20261113_o5_log_rule_unknown_ambiguous-70bc371fe619f438)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_o5_log_rule_unknown_ambiguous`"""

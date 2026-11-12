@@ -1,0 +1,15 @@
+{
+  "name": "answerlang",
+  "version": "0.1.0",
+  "description": "Keeps answers and conclusions in the user's language: injects the target language and blocks a Stop whose final answer is in another script.",
+  "author": {
+    "name": "yukineko"
+  },
+  "keywords": [
+    "hooks",
+    "language",
+    "i18n",
+    "stop-gate",
+    "rust"
+  ]
+}

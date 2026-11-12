@@ -31,6 +31,7 @@
 
 | クレート | 分類 | 一言 |
 |---|---|---|
+| answerlang | always-on | 回答・結論をユーザーの言語で出させる。SessionStart/UserPromptSubmit で対象言語を注入し、Stop で最終回答の文字体系比率が閾値未満ならブロック（再入は有界） |
 | autoflow | always-on | Stop で `/record`→`/condukt` を回すセッション終了オートフローゲート |
 | backlog | manual | クロスプロジェクト・タスクキュー（`/backlog` skill + SessionStart 通知 + binary） |
 | beacon | always-on | ターン完了・入力待ちをデスクトップ/Slack/webhook 通知する |

@@ -62,7 +62,6 @@ fn assert_not_dispatched(o: &common::Out, x: &str, y: &str, what: &str) {
 }
 
 #[test]
-#[ignore = "scout 2026-11-12 F2: RED, open defect. Remove the ignore when fixed"]
 fn next_does_not_dispatch_task_whose_fix_commit_is_in_head() {
     let (fx, x, y) = setup("f2-next");
     // Control: before the fix commit, X is the next task.
@@ -80,7 +79,6 @@ fn next_does_not_dispatch_task_whose_fix_commit_is_in_head() {
 }
 
 #[test]
-#[ignore = "scout 2026-11-12 F2: RED, open defect. Remove the ignore when fixed"]
 fn next_claim_does_not_dispatch_task_whose_fix_commit_is_in_head() {
     let (fx, x, y) = setup("f2-next-claim");
     land_fix(&fx, &x);

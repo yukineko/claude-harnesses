@@ -126,10 +126,60 @@ fn project_root(cand: &task::Task) -> std::result::Result<PathBuf, String> {
     Ok(root)
 }
 
+/// Whether the fix commit of `cand` (a commit reachable from HEAD whose subject
+/// contains `(backlog <id>)`) has already landed (backlog a04b2b87). HEAD is
+/// the one of the location [`rerun_dir`] picks, NOT the process cwd, so a
+/// `next` run from a non-git cwd still looks at the ticket's project root.
+/// `Err` when that location or git's answer cannot be determined; the caller
+/// refuses rather than hand out a possibly-fixed ticket.
+pub(crate) fn fix_landed(cand: &task::Task) -> std::result::Result<bool, String> {
+    let root = rerun_dir(cand)?;
+    Ok(evidence::fixed_task_ids(&root)?.contains(&cand.id))
+}
+
+/// Plain `next` (no claim): like `store::next_excluding`, but a candidate whose
+/// fix already landed ([`fix_landed`]) is skipped with a stderr notice and the
+/// next candidate is considered. If landing cannot be determined for the
+/// candidate, the command is REFUSED (an error), never a silent hand-out.
+pub(crate) fn next_unfixed(
+    tasks_path: &Path,
+    tag: Option<&str>,
+    project: Option<&str>,
+    leased: &HashSet<String>,
+) -> Result<Option<task::Task>> {
+    let mut excluded: HashSet<String> = leased.clone();
+    loop {
+        let Some(cand) = store::next_excluding(tasks_path, tag, project, &excluded)? else {
+            return Ok(None);
+        };
+        match fix_landed(&cand) {
+            Ok(false) => return Ok(Some(cand)),
+            Ok(true) => {
+                eprintln!(
+                    "backlog next: NOT handing out {}: a commit `(backlog {})` is already an \
+                     ancestor of HEAD, so it is likely fixed; verify and close it. Considering \
+                     the next candidate.",
+                    cand.id, cand.id
+                );
+                excluded.insert(cand.id.clone());
+            }
+            Err(why) => {
+                return Err(anyhow::anyhow!(
+                    "backlog next REFUSED (this is NOT \"no pending tasks\"): whether the fix \
+                     of candidate {} already landed could not be determined: {why}",
+                    cand.id
+                ));
+            }
+        }
+    }
+}
+
 /// `next --claim` with the stored repro RE-RUN before the ticket is handed out
 /// (backlog 78cee053, audit B item 6: a RED ticket is often already fixed).
 ///
-/// Each round: peek the top candidate (a pure read, NO lock held), re-run its
+/// Each round: peek the top candidate (a pure read, NO lock held); if its fix
+/// commit already landed ([`fix_landed`]) it joins `skip` with a stderr notice
+/// (undetermined: REFUSED); otherwise re-run its
 /// stored repro at HEAD of the location [`rerun_dir`] picks (the cwd checkout
 /// when it belongs to the ticket's project, else the ticket's project root; an
 /// undetermined identity or an unusable root refuses the claim) via `evidence::run_repro`
@@ -184,6 +234,26 @@ pub(crate) fn claim_rechecked(
                 ));
             }
         };
+        match fix_landed(&cand) {
+            Ok(false) => {}
+            Ok(true) => {
+                eprintln!(
+                    "backlog next --claim: NOT handing out {}: a commit `(backlog {})` is \
+                     already an ancestor of HEAD, so it is likely fixed; verify and close it. \
+                     Considering the next candidate.",
+                    cand.id, cand.id
+                );
+                skip.insert(cand.id.clone());
+                continue;
+            }
+            Err(why) => {
+                return Err(anyhow::anyhow!(
+                    "{REFUSED}: whether the fix of candidate {} already landed could not be \
+                     determined: {why}",
+                    cand.id
+                ));
+            }
+        }
         let rerun = evidence::run_repro(&root, &stored.cmd, store::now_unix());
         let rev = rerun.rev.as_deref().unwrap_or("<unresolved>");
         match rerun.outcome.as_str() {

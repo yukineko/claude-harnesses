@@ -1257,7 +1257,10 @@ fn run(cli: Cli) -> Result<()> {
                 // the project-wide ledger (claimed in this or any other
                 // checkout) is not handed out. An unreadable ledger refused
                 // above (backlog f09db5ce).
-                store::next_excluding(
+                // A task whose fix commit `(backlog <id>)` is already an
+                // ancestor of HEAD is skipped; undetermined ancestry refuses
+                // (backlog a04b2b87).
+                claim_recheck::next_unfixed(
                     &tasks_path,
                     tag.as_deref(),
                     effective_project.as_deref(),

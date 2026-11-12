@@ -265,6 +265,29 @@ pub fn is_ancestor(root: &Path, ancestor: &str, descendant: &str) -> Result<bool
     }
 }
 
+/// Task ids named by a `(backlog <id>)` marker in the subject of any commit
+/// reachable from HEAD (backlog a04b2b87): the fix commit of such a task has
+/// already landed, so `next` must not hand it out again. `Err` when git cannot
+/// answer (no repo, no HEAD, timeout, abnormal exit): an unanswered question is
+/// not "nothing is fixed" -- the caller refuses (CLAUDE.md section 3).
+pub fn fixed_task_ids(root: &Path) -> Result<std::collections::HashSet<String>, String> {
+    let subjects = git_ok(root, &["log", "HEAD", "--format=%s"])?;
+    let mut ids = std::collections::HashSet::new();
+    for line in subjects.lines() {
+        let mut rest = line;
+        while let Some(i) = rest.find("(backlog ") {
+            rest = &rest[i + "(backlog ".len()..];
+            if let Some(j) = rest.find(')') {
+                let id = rest[..j].trim();
+                if !id.is_empty() {
+                    ids.insert(id.to_string());
+                }
+            }
+        }
+    }
+    Ok(ids)
+}
+
 /// Refuse unless the working tree (outside `.backlog`) is clean, untracked
 /// files included: a test run against uncommitted content is not evidence
 /// about any commit.

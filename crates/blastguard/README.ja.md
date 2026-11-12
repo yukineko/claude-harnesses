@@ -874,8 +874,13 @@ blastguard log [--decision deny|ask] [--rule <id>] [--since <RFC3339|Ns|Nm|Nh|Nd
 **ファイル順**に出す。stdin は読まず、台帳は変更しない（他 source の行は読み飛ばす）。
 `--since` は RFC3339（UTC の `Z` 付きのみ）か「N 秒/分/時間/日前」。
 
-- テキスト: 1 行 1 件、`decision=<v> actor=<v> system_harm=<v> rule=<id>` に command / target が続く。
-  記録されていないフィールドは `unknown`（`false` / `interactive` / `deny` に推測しない）。
+- テキスト: 1 行 1 件、`decision=<v> actor=<v> system_harm=<v> rule=<id> tool=<v> cwd=<v>` の後に
+  `command=<v>`（Bash）または `target=<v>`（ファイルツール）が続く。tool が不明な行は
+  `command=unknown target=unknown` を両方出す。記録されていないフィールドは `unknown`
+  （`false` / `interactive` / `deny` に推測しない）。
+  値はエスケープされる: `\n` `\r` `\t` は 2 文字のエスケープ、その他の 0x20 未満と 0x7f は
+  `\xHH`（小文字 16 進）、バックスラッシュは `\\`。クォートはしない。これにより 1 件は常に 1 行で、
+  値がトークンや端末制御列を偽造できない。
 - `--json`: 1 行 1 オブジェクト。キーは `ts, rule, decision, tool, command, target, cwd, actor, system_harm`。
   未記録は `null`。
 - **フィルタは不明なフィールドに決してマッチしない。** 古い行（コンテキスト欄なし）は

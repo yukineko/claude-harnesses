@@ -564,9 +564,14 @@ blastguard log [--decision deny|ask] [--rule <id>] [--since <RFC3339|Ns|Nm|Nh|Nd
 ```
 
 Lists the `source=blastguard` lines of the current project's `violations.jsonl`
-in file order. Never reads stdin, never modifies the ledger. Text mode prints
-`decision=<v> actor=<v> system_harm=<v> rule=<id>` plus the command/target;
-`--json` prints one object per line (`ts, rule, decision, tool, command,
+in file order. Never reads stdin, never modifies the ledger. `--since` takes
+`<digits>s|m|h|d` ago or an RFC3339 timestamp in UTC `Z` form only (offsets
+such as `+09:00` are rejected). Text mode prints
+`decision=<v> actor=<v> system_harm=<v> rule=<id> tool=<v> cwd=<v>` followed by
+`command=<v>` (Bash) or `target=<v>` (file tools); a line with unknown tool
+prints both as `unknown`. Values are escaped: `\n` `\r` `\t` as two-char
+escapes, other chars below 0x20 and 0x7f as `\xHH` (lowercase), backslash as
+`\\`, no quoting, so one entry is always one line. `--json` prints one object per line (`ts, rule, decision, tool, command,
 target, cwd, actor, system_harm`). A field missing from an old ledger line is
 `unknown` (text) / `null` (JSON), never guessed. **A filter never matches an
 unknown field**; such entries are dropped and stderr reports how many were

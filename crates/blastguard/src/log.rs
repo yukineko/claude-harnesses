@@ -10,6 +10,9 @@
 //! (JSON), and a filter on that field never matches it: the entry is dropped
 //! and the number of such drops is reported on stderr ("excluded").
 //!
+//! Text mode escapes every recorded value (see `escape_text`) so one entry is
+//! always one line and a value cannot forge tokens or terminal sequences.
+//!
 //! Exit codes:
 //! - 0: success (including "no matches" and an absent ledger, which says
 //!   `no ledger at <path>` on stderr)
@@ -340,27 +343,63 @@ fn apply_filters(entries: Vec<LogEntry>, f: &Filters) -> (Vec<LogEntry>, usize) 
     (kept, excluded)
 }
 
+/// Escape a recorded value for one-line text output: `\n` `\r` `\t` as
+/// two-char escapes, any other char below 0x20 and 0x7f as `\xHH` (lowercase
+/// hex), a backslash as `\\`. Everything else is verbatim (no quoting). This
+/// keeps one entry on one line and stops a value from forging tokens or
+/// terminal control sequences.
+fn escape_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// One text line per entry:
+/// `decision=<v> actor=<v> system_harm=<v> rule=<id> tool=<v> cwd=<v>` then
+/// `command=<v>` (Bash, or whenever a command is recorded) and/or `target=<v>`
+/// (a file tool, or whenever a target is recorded). When the tool is unknown
+/// both `command=` and `target=` are printed. Absent values print `unknown`.
+/// All free-text values are escaped by [`escape_text`].
 fn format_text_line(entry: &LogEntry) -> String {
-    let unk = |o: &Option<String>| o.clone().unwrap_or_else(|| "unknown".to_string());
+    let unk = |o: &Option<String>| match o {
+        Some(v) => escape_text(v),
+        None => "unknown".to_string(),
+    };
     let system_harm = match entry.system_harm {
         Some(true) => "true",
         Some(false) => "false",
         None => "unknown",
     };
     let mut line = format!(
-        "decision={} actor={} system_harm={} rule={}",
+        "decision={} actor={} system_harm={} rule={} tool={} cwd={}",
         unk(&entry.decision),
         unk(&entry.actor),
         system_harm,
-        unk(&entry.rule)
+        unk(&entry.rule),
+        unk(&entry.tool),
+        unk(&entry.cwd)
     );
-    if let Some(cmd) = &entry.command {
-        line.push(' ');
-        line.push_str(cmd);
+    let (want_cmd, want_target) = match entry.tool.as_deref() {
+        None => (true, true),
+        Some("Bash") => (true, false),
+        Some(_) => (false, true),
+    };
+    if want_cmd || entry.command.is_some() {
+        line.push_str(&format!(" command={}", unk(&entry.command)));
     }
-    if let Some(target) = &entry.target {
-        line.push(' ');
-        line.push_str(target);
+    if want_target || entry.target.is_some() {
+        line.push_str(&format!(" target={}", unk(&entry.target)));
     }
     line
 }

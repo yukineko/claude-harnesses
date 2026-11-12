@@ -161,6 +161,11 @@ enum Command {
 
     /// Show the next highest-priority pending task. Scoped, by default, to the
     /// project this checkout resolves to — the same default `list` uses.
+    /// A task whose fix landed (a commit subject containing `(backlog <id>)`
+    /// reachable from HEAD of the repo holding the store; per ticket project
+    /// root for a pinned store) is skipped with a stderr notice. When that
+    /// cannot be determined (git fails, corrupt ref; an unborn HEAD counts as
+    /// no fixes) `next` is REFUSED non-zero, not "no pending tasks".
     Next {
         /// Filter by tag
         #[arg(long)]
@@ -1257,11 +1262,15 @@ fn run(cli: Cli) -> Result<()> {
                 // the project-wide ledger (claimed in this or any other
                 // checkout) is not handed out. An unreadable ledger refused
                 // above (backlog f09db5ce).
-                store::next_excluding(
+                // A task whose fix commit `(backlog <id>)` is already an
+                // ancestor of HEAD is skipped; undetermined ancestry refuses
+                // (backlog a04b2b87).
+                claim_recheck::next_unfixed(
                     &tasks_path,
                     tag.as_deref(),
                     effective_project.as_deref(),
                     &leased,
+                    location.project_root(),
                 )?
             };
             match task {

@@ -57,7 +57,7 @@
     {
       "name": "blastguard",
       "description": "PreToolUse hook that denies or asks before project-destroying Bash commands and file operations, as a single self-contained Rust binary.",
-      "version": "0.2.462",
+      "version": "0.2.463",
       "category": "security",
       "keywords": [
         "hooks",
@@ -800,7 +800,7 @@
     {
       "name": "overwatch",
       "description": "Lease and event store for condukt task orchestration that manages the claim registry, heartbeat lifecycle and runtime state so parallel sessions do not duplicate work.",
-      "version": "0.2.118",
+      "version": "0.2.119",
       "category": "observability",
       "keywords": [
         "pdo",

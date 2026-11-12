@@ -19,7 +19,8 @@ Forward Deployed Engineer 用の harness。外部の target リポジトリに�
 stderr の警告だけで判定と記録は変えない)・`/dev/null`・`/dev/tty`・`$CARGO_TARGET_DIR`(設定時)・
 `$CARGO_HOME/{registry,git}`(未設定なら `$HOME/.cargo/{registry,git}`)・`$RUSTUP_HOME`(未設定なら
 `$HOME/.rustup`)だけで、それ以外(親の `$TMPDIR`・`/private/tmp`・`/private/var/folders`・`$HOME` など)への
-書き込みは拒否される。読み取りとネットワークは制限しない。拒否された書き込みは CMD の環境の一部として扱い、
+書き込みは拒否される。CMD 内の一時ファイルは `mktemp -p "$TMPDIR"` で作る(素の `mktemp` は macOS では
+`/var/folders/<user>/T` に書くため拒否される)。読み取りとネットワークは制限しない。拒否された書き込みは CMD の環境の一部として扱い、
 CMD の終了ステータスを通常どおり判定する。CMD の前に毎回 `sandbox-exec -p <profile> /usr/bin/true` で preflight を
 行い、sandbox-exec が無い・起動できない・probe が非 0・macOS 以外のときは CMD を実行せず、何も記録せずに
 exit 2(判定不能、理由は stderr)とする。したがって **evidence red/green/pass は macOS でしか記録できない**。

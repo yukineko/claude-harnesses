@@ -954,3 +954,35 @@ exit 101: ignored; 0 measured; 0 filtered out; finished in 0.45s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
      Running tests/backlog_20261113_quoted_arg_text_read_as_command_fp.rs (target/debug/deps/backlog_20261113_quoted_arg_text_read_as_command_fp-571a5a0477c1f04d)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_quoted_arg_text_read_as_command_fp`"""
+
+[[task]]
+id = "e4523bfd"
+title = "blastguard: 未知 wrapper / env -S / relink 同一 segment で python -c の # コメント後の system-harm 呼び出しが allow になる残存 fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Residual newline-collapse sites left after c619b13f (verifier list). RED 1c56efd4 by a non-implementer at main 4cf135cd 2026-11-13: 6 of 6 (shape x mode) runs whose system-harm call follows a comment were ALLOWED (main and subagent): unknown-wrapper tail (myrunner python3 -c ...; detect.rs re-join), env -S (re-join, documented unexamined), relink-operand-same-segment (artificial shape; see the test file). Without the comment all three are not Allow. Not Allow at HEAD: unresolvable command word PY -c, find -exec sh -c, ANSI-C dollar-quote (deny, but the reason shows a collapsed name xnos.chmod: the escaped newline is not decoded)."
+created_at = 1794527241
+updated_at = 1794527241
+weight = 0.0
+issue_number = 1675
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1675"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_payload_collapse_residual_paths comment_before_system_harm_call_is_not_allowed_on_residual_collapse_paths -- --include-ignored"
+rev = "46ab7b39307a580a2e62217f3c8a6f8d25c8ed4a"
+observed_at = 1794527241
+detail = """
+exit 101: /yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.92s
+     Running tests/backlog_20261113_payload_collapse_residual_paths.rs (target/debug/deps/backlog_20261113_payload_collapse_residual_paths-e7fe16b6ea062a14)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_payload_collapse_residual_paths`"""

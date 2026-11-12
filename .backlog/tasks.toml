@@ -732,3 +732,35 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
      Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-d10a0f2b109334d2)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_heredoc_body_fp`"""
+
+[[task]]
+id = "e787b168"
+title = "backlog sync: open-local/closed-remote の食い違いを検出・解消しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "issue-sync",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794521535
+updated_at = 1794521535
+weight = 0.0
+issue_number = 1667
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1667"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_sync_detects_closed_remote_open_local -- --include-ignored"
+rev = "5633a31d3de3acbb470bbe8fa5096c4a4c6c776c"
+observed_at = 1794521535
+detail = """
+exit 101: d; 0 measured; 0 filtered out; finished in 0.65s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261113_sync_detects_closed_remote_open_local.rs (target/debug/deps/backlog_20261113_sync_detects_closed_remote_open_local-8fab923a3b589cee)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_sync_detects_closed_remote_open_local`"""

@@ -842,3 +842,23 @@ Deny が 0 件であることは弱い保証ではあるが事実である — �
 **正しく拒否している**）、`"$D/bin/tool"` のように参照へテキストが貼り付いた head 9
 （残る機会。backlog `2fb05132`）、前置代入 1、条件付き 1。
 **見積りの数字を実測として転記しない** — この節が置かれている理由がそれである。
+
+## violation 台帳（overwatch）に残る文脈
+
+Deny / Ask は出力（stdout）を出した**後に**1行だけ、overwatch の
+`~/.overwatch/<project-key>/overwatch/violations.jsonl` へ追記される（失敗は stderr の
+警告のみで、判定は変わらない）。各行は次の任意フィールドを持つ:
+
+| フィールド | 内容 |
+|---|---|
+| `decision` | 実際に出力した最終判定 `deny` / `ask` |
+| `tool` | ツール名（`Bash` 等） |
+| `command` | Bash コマンド（そのまま） |
+| `target` | Write/Edit/MultiEdit/NotebookEdit の対象パス |
+| `cwd` | payload の cwd（そのまま） |
+| `actor` | `subagent` / `interactive` / `headless` |
+| `system_harm` | system-harm の Deny のとき `true`（Ask は `false`） |
+
+これらを持たない古い行は「未記録＝**不明**」であり、`false` や「該当なし」ではない。
+**コマンドはそのまま保存され、秘密情報を含みうる。** 台帳は `$HOME` 配下のローカルにあり、
+マスキング（redaction）はしない。

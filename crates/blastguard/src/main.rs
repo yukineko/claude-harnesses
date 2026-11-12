@@ -369,7 +369,7 @@ fn emit(decision: Decision, input: Option<&HookInput>, subagent: bool) {
     if subagent {
         // The repeat-deny downgrade is skipped on purpose: inside a subagent
         // its `Ask` would stall exactly like any other. A repeat stays a deny.
-        emit_line(harden_for_subagent(decision), input);
+        emit_line(harden_for_subagent(decision), input, "subagent");
         return;
     }
 
@@ -377,10 +377,16 @@ fn emit(decision: Decision, input: Option<&HookInput>, subagent: bool) {
     // or agent-driven session it is not a pause, it is a block the agent cannot
     // clear — so it is hardened to a deny instead. Never to an allow: "ask に
     // できないときは fail".
-    let decision = if interactive::ask_available() {
+    let interactive_session = interactive::ask_available();
+    let decision = if interactive_session {
         decision
     } else {
         decision.hardened()
+    };
+    let actor = if interactive_session {
+        "interactive"
+    } else {
+        "headless"
     };
 
     // Operator ruling 2026-09-18 —「ユーザの指示を2度やぶるgateはいらない。
@@ -391,12 +397,12 @@ fn emit(decision: Decision, input: Option<&HookInput>, subagent: bool) {
     // Subagents are the one exception (user ruling 2026-11-01, handled above).
     let decision = downgrade_on_repeat(input, decision);
 
-    emit_line(decision, input);
+    emit_line(decision, input, actor);
 }
 
 /// Print the decision, then record telemetry (see [`emit`] for why the order
 /// is the invariant).
-fn emit_line(decision: Decision, input: Option<&HookInput>) {
+fn emit_line(decision: Decision, input: Option<&HookInput>, actor: &str) {
     let Some(line) = hookio::decision_line(&decision) else {
         return; // Allow → print nothing.
     };
@@ -412,8 +418,10 @@ fn emit_line(decision: Decision, input: Option<&HookInput>) {
     // simply not recorded; inventing a task key for it would pollute the
     // recurrence signature with a synthetic one.
     if let (Some(input), Decision::Deny(reason) | Decision::Ask(reason)) = (input, &decision) {
+        let kind = if decision.is_deny() { "deny" } else { "ask" };
+        let system_harm = decision.is_system_harm();
         let _ = hook::catch_and_log("blastguard-violation-record", || {
-            record_violation(input, reason)
+            record_violation(input, reason, kind, actor, system_harm)
         });
     }
 }
@@ -637,7 +645,7 @@ fn real_path(path: &str) -> Option<String> {
 /// reported on stderr rather than dropped. `reason` is free text (may embed a
 /// variable path/target) — `rule_id::rule_id` normalizes it to a stable
 /// discriminator before it becomes the violation signature.
-fn record_violation(input: &HookInput, reason: &str) {
+fn record_violation(input: &HookInput, reason: &str, kind: &str, actor: &str, system_harm: bool) {
     let target = input.target();
     let task_key = match &target {
         Some(t) => format!("{}:{}", input.tool_name, t),
@@ -646,6 +654,16 @@ fn record_violation(input: &HookInput, reason: &str) {
     let raw = overwatch::violation::RawViolation {
         rule_id: Some(rule_id::rule_id(reason)),
         ..Default::default()
+    };
+    let command = if input.tool_name == "Bash" {
+        input
+            .tool_input
+            .as_ref()
+            .and_then(|ti| ti.get("command"))
+            .and_then(|c| c.as_str())
+            .map(str::to_string)
+    } else {
+        None
     };
     let event = overwatch::violation::build_event(
         overwatch::violation::ViolationSource::Blastguard,
@@ -657,7 +675,14 @@ fn record_violation(input: &HookInput, reason: &str) {
     );
     let cwd = input.cwd_or_current();
     match event {
-        Some(event) => {
+        Some(mut event) => {
+            event.decision = Some(kind.to_string());
+            event.tool = Some(input.tool_name.clone());
+            event.command = command;
+            event.target = input.target();
+            event.cwd = Some(input.cwd.clone());
+            event.actor = Some(actor.to_string());
+            event.system_harm = Some(system_harm);
             // The verdict itself is unaffected, but a lost record must not be
             // silent: overwatch reads this ledger as "what blastguard denied"
             // (backlog f738a79a).

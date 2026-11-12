@@ -543,3 +543,13 @@ reason = "Same bullet, sub-bullet 'alias 解決（interpreter/python_semantics.r
 path = "crates/blastguard/src/detect/interpreter/python_semantics/values.rs"
 doc = "docs/specs/blastguard.md"
 reason = "Same bullet, sub-bullet '計算される書き込み path（user ruling 2026-11-08、interpreter/python_semantics/values.rs）': Allow only when provably repo-scoped (repo-relative iteration, sys.argv[N] with repo-relative literal runs, self.attr), everything else Ask."
+
+[[spec]]
+path = "crates/blastguard/src/detect/condukt.rs"
+doc = "docs/specs/blastguard.md"
+reason = "module list bullet `detect/condukt`: autonomy-set on / HARNESS_AUTONOMOUS / CONDUKT_AUTONOMOUS prefixed to condukt resolve to Ask (Deny in a subagent via harden_for_subagent); matching on parsed argv only (backlog 12ba5845)."
+
+[[spec]]
+path = "crates/blastguard/src/log.rs"
+doc = "docs/specs/blastguard.md"
+reason = "module list bullet `log`: read-only `blastguard log` over overwatch violations.jsonl, filters, UNKNOWN fields, text escaping limits, exit codes 0/2/3."

@@ -710,6 +710,20 @@ forge・condukt のスケジューラが再利用）。
 - **`scope/deletion_roots`** — `SafeRoots` の temp / cache DELETION root（spec 3aa215e1 class 2/3）を組み立てる
   `deletion_roots` と `DELETION_TEMP_ROOTS`・`DELETION_CACHE_ROOTS`・`OS_TEMP_PARENTS` および除外判定
   （`contains_home`・`below_home`・`system_root`）。`scope.rs` から挙動を変えずに移した（file-growth cap）。
+- **`detect/condukt`** — 自律の付与は人間だけが決める（backlog 12ba5845）。`condukt state autonomy-set on` と、
+  `condukt` 呼び出しに前置された `HARNESS_AUTONOMOUS=…` / `CONDUKT_AUTONOMOUS=…` 代入（`env` 経由も含む）を
+  `Ask` にする。subagent からの payload では `main.rs` の `harden_for_subagent` が `Deny` に固める。照合は
+  parse 済みの command word と argv token だけで行い、生のコマンド文字列は見ない（`echo "condukt …"` は対象外）。
+  前の文での `export CONDUKT_AUTONOMOUS=1; condukt …` は見ない。
+- **`log`** — `blastguard log`: overwatch の violations ledger（`overwatch::store::violations_path`）から
+  `source == "blastguard"` の行だけを file 順に列挙する read-only の照会コマンド。stdin を読まず ledger へ書かない。
+  フィルタは `--decision deny|ask`・`--rule`・`--since`（RFC3339 または期間）・`--system-harm`・
+  `--subagent` / `--interactive`（排他）、`--json` で JSON 出力。旧形式の行に無いフィールドは UNKNOWN
+  （text `unknown` / JSON `null`）で、そのフィールドへのフィルタには一致せず除外件数を stderr に出す。
+  text 出力は C0 制御文字・DEL・backslash を escape して 1 entry = 1 行を保証するが、曖昧さは無くさない
+  （値は quote されず、C1 / U+2028/2029 / bidi 制御はそのまま）。厳密な解析は `--json` を使う。
+  exit: 0 = 成功（一致なし・ledger 不在を含み、不在は stderr に `no ledger at <path>`）、2 = 使い方の誤り、
+  3 = ledger を特定・読めない／不正な行がある（有効な entry は出力したうえで `line <N>`）／stdout 書き込み失敗。
 - **`hookio`** — PreToolUse `deny` の単一行 JSON 生成（`deny_json`）。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。

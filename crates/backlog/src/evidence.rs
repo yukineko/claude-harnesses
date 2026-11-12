@@ -265,6 +265,114 @@ pub fn is_ancestor(root: &Path, ancestor: &str, descendant: &str) -> Result<bool
     }
 }
 
+/// Task ids named by a `(backlog <id>)` marker in the subject of any commit
+/// reachable from HEAD (backlog a04b2b87): the fix commit of such a task has
+/// already landed, so `next` must not hand it out again.
+///
+/// HEAD is first checked with `git rev-parse --verify -q HEAD`: exit 0 proceeds
+/// to `git log --format=%s HEAD --`. An UNBORN HEAD (a valid repo with no
+/// commits yet) is `Ok(empty)` -- a known-empty history -- but only when it is
+/// positively observed as unborn ([`head_is_unborn`]): `rev-parse` exited 1,
+/// HEAD is a symbolic ref, and its target ref is absent (no loose ref file,
+/// nothing listed by `for-each-ref`, nothing on its stderr). A corrupt branch
+/// ref also makes `rev-parse` exit 1, and is NOT unborn. Everything else --
+/// no repo, a corrupt or undeterminable ref, timeout, abnormal exit -- is
+/// `Err`: an unanswered question is not "nothing is fixed", and the caller
+/// refuses (CLAUDE.md section 3).
+pub fn fixed_task_ids(root: &Path) -> Result<std::collections::HashSet<String>, String> {
+    match git_out(root, &["rev-parse", "--verify", "-q", "HEAD"], &[0, 1]) {
+        Determination::Known((0, _)) => {}
+        Determination::Known((_, _)) => {
+            head_is_unborn(root).map_err(|why| {
+                format!(
+                    "HEAD of {} does not resolve to a commit and is not a verifiably unborn \
+                     branch: {why}",
+                    root.display()
+                )
+            })?;
+            return Ok(std::collections::HashSet::new());
+        }
+        Determination::Undetermined(why) => {
+            return Err(format!("git rev-parse --verify -q HEAD failed: {why}"));
+        }
+    }
+    let subjects = git_ok(root, &["log", "--format=%s", "HEAD", "--"])?;
+    let mut ids = std::collections::HashSet::new();
+    for line in subjects.lines() {
+        let mut rest = line;
+        while let Some(i) = rest.find("(backlog ") {
+            rest = &rest[i + "(backlog ".len()..];
+            if let Some(j) = rest.find(')') {
+                let id = rest[..j].trim();
+                if !id.is_empty() {
+                    ids.insert(id.to_string());
+                }
+            }
+        }
+    }
+    Ok(ids)
+}
+
+/// `Ok(())` only when HEAD is positively observed to be an unborn branch:
+/// `git symbolic-ref -q HEAD` exits 0 naming a ref, no loose ref file exists
+/// at that ref's path, and `git for-each-ref` exits 0 listing nothing and
+/// writing nothing to stderr (git warns about a broken ref there). Any other
+/// observation -- detached HEAD, an existing-but-unreadable ref file, a broken
+/// packed entry, a git failure -- is `Err`, never "unborn".
+fn head_is_unborn(root: &Path) -> Result<(), String> {
+    let refname = match git_out(root, &["symbolic-ref", "-q", "HEAD"], &[0]) {
+        Determination::Known((_, s)) => s.trim().to_string(),
+        Determination::Undetermined(why) => {
+            return Err(format!(
+                "HEAD is not a symbolic ref (git symbolic-ref -q HEAD): {why}"
+            ));
+        }
+    };
+    if !refname.starts_with("refs/") || refname.len() <= "refs/".len() {
+        return Err(format!("HEAD names {refname:?}, which is not a branch ref"));
+    }
+    let loose = git_ok(root, &["rev-parse", "--git-path", &refname])?;
+    let loose = root.join(loose.trim());
+    match loose.symlink_metadata() {
+        Ok(_) => {
+            return Err(format!(
+                "the ref {refname} exists ({}) but does not resolve to a commit",
+                loose.display()
+            ));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(format!("cannot inspect {}: {e}", loose.display()));
+        }
+    }
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(root)
+        .args(["for-each-ref", "--format=%(refname)", &refname])
+        .stdin(Stdio::null());
+    let out = match boundary::run_with_timeout(&mut cmd, GIT_TIMEOUT) {
+        Determination::Known(out) => out,
+        Determination::Undetermined(why) => {
+            return Err(format!("git for-each-ref {refname} failed: {why}"));
+        }
+    };
+    let stderr = out.stderr().trim().to_string();
+    let listed = match out.stdout_allowing(&[0]) {
+        Determination::Known(s) => s,
+        Determination::Undetermined(why) => {
+            return Err(format!("git for-each-ref {refname} failed: {why}"));
+        }
+    };
+    if !listed.trim().is_empty() || !stderr.is_empty() {
+        return Err(format!(
+            "the ref {refname} is present or broken (for-each-ref listed {:?}, stderr {:?})",
+            listed.trim(),
+            stderr
+        ));
+    }
+    Ok(())
+}
+
 /// Refuse unless the working tree (outside `.backlog`) is clean, untracked
 /// files included: a test run against uncommitted content is not evidence
 /// about any commit.

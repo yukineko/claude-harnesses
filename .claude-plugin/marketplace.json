@@ -1172,6 +1172,30 @@
         "path": "crates/hostaudit",
         "ref": "main"
       }
+    },
+    {
+      "name": "answerlang",
+      "description": "Keeps answers and conclusions in the user's language: injects the target language and blocks a Stop whose final answer is in another script.",
+      "version": "0.1.0",
+      "category": "quality",
+      "keywords": [
+        "hooks",
+        "language",
+        "i18n",
+        "stop-gate",
+        "rust"
+      ],
+      "license": "MIT",
+      "homepage": "https://github.com/yukineko/claude-harnesses/tree/main/crates/answerlang",
+      "author": {
+        "name": "yukineko"
+      },
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/yukineko/claude-harnesses.git",
+        "path": "crates/answerlang",
+        "ref": "main"
+      }
     }
   ]
 }

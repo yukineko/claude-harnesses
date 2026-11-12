@@ -1,0 +1,24 @@
+[package]
+name = "answerlang"
+version = "0.1.0"
+edition = "2021"
+rust-version.workspace = true
+license = "MIT"
+description = "Keeps answers and conclusions in the user's language: injects the target language and blocks a Stop whose final answer is in another script."
+
+[[bin]]
+name = "answerlang"
+path = "src/main.rs"
+
+[dependencies]
+harness-core = { path = "../harness-core" }
+serde_json = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

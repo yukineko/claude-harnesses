@@ -1,0 +1,146 @@
+[spec]
+id = "fde-evidence-confine"
+title = "fde: 批准済み evidence CMD の書き込みを target root 内に閉じ込める"
+status = "ratified"
+provenance_commit = "a1fdc67427f1ce61f276af6888152c763e6b0656"
+date = "2026-11-13"
+canon = []
+
+[spec.ratification]
+canon_commit = "a1fdc67427f1ce61f276af6888152c763e6b0656"
+date = "2026-11-13"
+reason = "user ratified 2026-11-13: all open points decided by the human; cargo allow-set and nested sandbox measured on this host"
+fingerprint = "ec1e39b4ac73841c"
+
+[[requirement]]
+id = "R1"
+statement = "While an evidence CMD runs under `fde evidence red|green|pass`, file writes succeed only inside this allow-set: the target root; fde's private per-invocation TMPDIR; /dev/null and /dev/tty; $CARGO_TARGET_DIR when set; and cargo/rustup's registry, git and toolchain dirs (from $CARGO_HOME / $RUSTUP_HOME, or $HOME/.cargo/{registry,git} and $HOME/.rustup when those are unset). Every other write is denied, including /private/tmp, /private/var/folders and the parent $TMPDIR outside the root and the private TMPDIR."
+acceptance = [
+    "With `#[ignore]` removed and the file otherwise unchanged, `cargo test -p fde --test backlog_scout_20261112_s2_evidence_cmd_escapes_root` passes on macOS: `touch <home tempdir>/escaped-marker` (a tempfile dir outside the target root) leaves no file behind.",
+    "An evidence CMD that writes under the real parent $TMPDIR (outside the target root and outside the private TMPDIR) leaves no file there.",
+    "An evidence CMD that writes to a file in a temp HOME outside the root leaves no file there.",
+    "An evidence CMD can write to /dev/null (`echo x > /dev/null` exits 0).",
+    "With CARGO_TARGET_DIR set to a directory outside the root, an evidence CMD that writes into it succeeds.",
+    "With CARGO_HOME / RUSTUP_HOME set to temp dirs, a CMD can write under $CARGO_HOME/registry, $CARGO_HOME/git and $RUSTUP_HOME but not under $CARGO_HOME/bin.",
+    "With CARGO_HOME and RUSTUP_HOME unset, a CMD can write under $HOME/.cargo/registry but not under $HOME/.cargo/bin or directly in $HOME.",
+    "The generated profile string contains `(deny file-write*)` and an allow rule for each allow-set entry present in the environment, and no others.",
+]
+canon = [
+    'crates/fde/src/evidence.rs:751-755 (Command::new("/bin/sh") ... .current_dir(root) — the exec site to confine)',
+    'crates/fde/tests/backlog_scout_20261112_s2_evidence_cmd_escapes_root.rs:38-56 ("evidence CMD wrote outside the target root")',
+    "Request R1 (human ruling 2026-11-13; measured: cargo test under this allow-set rc=0, a write to $HOME denied rc=1)",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R2"
+statement = "The confinement does not restrict reads or network access by an evidence CMD."
+acceptance = [
+    "An evidence CMD that reads (`cat`) a file outside the target root and outside the allow-set exits 0, and its output is the file's content.",
+    "The generated profile contains no `deny` rule other than `(deny file-write*)`: no `deny file-read*` and no `deny network*`.",
+]
+canon = ["Request R2 (human ruling 2026-11-13: reads and network out of scope)"]
+falsifiable = true
+
+[[requirement]]
+id = "R3"
+statement = "fde runs each evidence CMD through macOS `sandbox-exec -p <generated profile>`. Before each CMD it runs a preflight `sandbox-exec -p <profile> /usr/bin/true`. If sandbox-exec is missing, the probe exits non-zero or cannot be spawned, or the host is not macOS, the CMD is not run, nothing is recorded, and the command exits 2 with the reason on stderr."
+acceptance = [
+    "On macOS, the CMD's process is started as a child of sandbox-exec with the generated profile. Observable: R1's outside-root write is denied while an in-root write succeeds.",
+    "In a unit test where the sandbox-exec path points to a missing file: the CMD's side-effect file is not created, the result is Undetermined (exit 2 through main.rs verdict_exit), the reason names sandbox-exec, and the ledger is unchanged.",
+    "In a unit test where the profile is invalid (sandbox-exec exits 65 on the probe): the CMD is not run, the result is Undetermined/exit 2, the reason is on stderr, and the ledger is unchanged.",
+    "The probe runs before every CMD invocation, not once per process: two consecutive records each run the probe.",
+    'On a non-macOS build the code path returns Undetermined without spawning the CMD; this is compile-checked via `#[cfg(not(target_os = "macos"))]`.',
+    "No branch special-cases nested sandboxing: running fde inside sandbox-exec and recording RED for a failing in-root CMD still records it (probe rc=0).",
+]
+canon = [
+    'crates/fde/src/main.rs:256 ("Map a verdict to the CLI exit code: 0 clean / 1 violation / 2 undetermined.")',
+    'crates/fde/src/evidence.rs:783-789 ("`Undetermined` — ... `cmd` could not be run to an exit code ... Nothing is recorded.")',
+    'CLAUDE.md §3 ("判定不能 — IO 失敗 / ロック取得失敗 / subprocess の異常終了 / パース不能 / panic / 空集合 — は clean ではない。必ず block か ask に解決する。" — cannot-determine never resolves to clean)',
+    "Request R3 (human ruling 2026-11-13; measured: a profile that fails to load exits 65, nested sandbox-exec rc=0)",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R4"
+statement = "Under the confinement, an evidence CMD can still write inside the target root and into the private TMPDIR that fde exports for it."
+acceptance = [
+    "The control half of the S2 test passes: `touch <root>/control-marker` creates the file.",
+    'An evidence CMD `touch "$TMPDIR/x" && test -f "$TMPDIR/x"` exits 0, and so does `mktemp`.',
+    "Inside the CMD, $TMPDIR is a directory other than the parent process's $TMPDIR and exists while the CMD runs.",
+]
+canon = [
+    'crates/fde/tests/backlog_scout_20261112_s2_evidence_cmd_escapes_root.rs:21-35 ("control: CMD must have run (inside-root marker missing)")',
+    "Request R4 (human ruling 2026-11-13)",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R5"
+statement = "A refusal (the R3 paths) is reported only through stderr and exit code 2 and records nothing. The ledger schema and record fields are unchanged; confinement is not recorded."
+acceptance = [
+    "After any R3 refusal, the ledger file is byte-identical to its state before the call (or still absent).",
+    "SCHEMA stays 2, and the Record struct gains no field: the serialized keys of a record written after this change are the same set as before.",
+    "No new key appears in any record (e.g. no 'sandbox' or 'confined' key) after a successful record.",
+]
+canon = [
+    'crates/fde/src/evidence.rs:779-789 (record(): "Nothing is recorded." for Violation and Undetermined)',
+    'crates/fde/src/evidence.rs:10-11 (ledger shape `{"schema": 2, "records": [...]}`)',
+    "Request R5 (human ruling 2026-11-13)",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R6"
+statement = "A write denied by the confinement is treated as part of the CMD's environment: the CMD's exit status is judged as usual, so a non-zero exit is recorded as RED for `evidence red`, and makes `evidence green|pass` a Violation (exit 1)."
+acceptance = [
+    "`fde evidence red --cmd 'touch <outside path>'` exits 0, and the ledger gains one RED record whose exit_code is non-zero (touch denied).",
+    "`fde evidence green --cmd 'touch <outside path>'` (after a RED with that cmd) exits 1, records nothing, and the outside file does not exist.",
+    "A denied write does not produce Undetermined/exit 2 unless the CMD itself exits 126/127 or is signalled (existing rules).",
+]
+canon = [
+    'crates/fde/src/evidence.rs:83-87 ("The **exit status** decides: RED needs a non-zero exit, GREEN and PASS need exit 0; the other outcome is `Violation`.")',
+    "Request R6 (human ruling 2026-11-13)",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R7"
+statement = "fde removes the private TMPDIR after the CMD finishes. If removal fails, fde warns on stderr, and the exit code and any record are unchanged."
+acceptance = [
+    "After `fde evidence red` returns, the TMPDIR path the CMD saw (captured by the CMD into an in-root file) no longer exists.",
+    "In a unit test where removal is made to fail: stderr contains a warning naming the dir, and the verdict/exit code and the appended record are the same as when removal succeeds.",
+]
+canon = ["Request R7 (human ruling 2026-11-13)"]
+falsifiable = true
+
+[[requirement]]
+id = "R8"
+statement = "The overrides for the sandbox-exec path and profile exist only under #[cfg(test)], so release binaries offer no env var or CLI flag to change or skip the confinement. The non-macOS refusal path is documented as unobserved on this host."
+acceptance = [
+    "The tests for missing sandbox-exec and probe failure are unit tests in crates/fde/src (they cannot be integration tests, which do not see #[cfg(test)] items), and they pass.",
+    "Every definition and use of the override is under #[cfg(test)]; `cargo build -p fde --release` succeeds with no reference to it.",
+    "Running the release binary with any new env var or flag does not disable confinement: the S2 RED test passes regardless of environment (no override env exists to set). The fde CLI help lists no new flag.",
+    "The module docs (evidence.rs step 6) or the README state that the non-macOS refusal path is unobserved on this host.",
+]
+canon = [
+    'CLAUDE.md §2 (b) ("落ちることを確認していないテストは、何も証明しない。" — a test never seen to fail proves nothing)',
+    "Request R8 (human ruling 2026-11-13)",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R9"
+statement = "Docs describing how the evidence CMD runs are updated in the same commit to describe confinement, so the docs don't contradict the code."
+acceptance = [
+    'crates/fde/src/evidence.rs module docs step 6 no longer say only "runs as `/bin/sh -c CMD` with cwd = the target root"; they state the sandbox-exec confinement, the allow-set, the private TMPDIR, and refusal → Undetermined.',
+    'crates/fde/README.ja.md:16 ("CMD は `/bin/sh -c` で実行する" — the CMD is run with `/bin/sh -c`) is updated to mention the sandbox-exec confinement.',
+    "The run_cmd doc comment (evidence.rs:747-748) states that refusal by the preflight probe is Undetermined.",
+    "In the S2 test doc comment, `gate.rs:697` is corrected to the exec site in evidence.rs (backlog note), and `#[ignore]` is removed.",
+]
+canon = [
+    'crates/fde/src/evidence.rs:81 ("`CMD` runs as `/bin/sh -c CMD` with cwd = the target root")',
+    "crates/fde/README.ja.md:16",
+    'CLAUDE.md §4 ("実装を変えたら同じコミットで記述も直す。" — when the implementation changes, fix the description in the same commit)',
+]
+falsifiable = true

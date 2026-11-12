@@ -571,11 +571,13 @@ such as `+09:00` are rejected). Text mode prints
 `command=<v>` (Bash) or `target=<v>` (file tools); a line with unknown tool
 prints both as `unknown`. Values are escaped: `\n` `\r` `\t` as two-char
 escapes, other chars below 0x20 and 0x7f as `\xHH` (lowercase), backslash as
-`\\`, no quoting, so one entry is always one line. Limits: values are not
-quoted and spaces / `=` are not escaped, so a value containing ` key=...`
-(e.g. a cwd `/tmp/x command=ls`) can look like an extra token on the same
-line; C1 controls (U+0080-U+009F), U+2028/2029 and bidi controls are printed
-as-is. Use `--json` for exact, unambiguous parsing. `--json` prints one
+`\\`, and C1 controls (U+0080-U+009F), U+2028/U+2029 and bidi controls
+(U+061C, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069) as `\u{XXXX}`
+(uppercase hex), no quoting, so one entry is always one line and a value
+cannot visually reorder it. Limits: values are not quoted and spaces / `=`
+are not escaped, so a value containing ` key=...` (e.g. a cwd
+`/tmp/x command=ls`) can look like an extra token on the same line. Use
+`--json` for exact, unambiguous parsing. `--json` prints one
 object per line (`ts, rule, decision, tool, command, target, cwd, actor,
 system_harm`). A field missing from an old ledger line is
 `unknown` (text) / `null` (JSON), never guessed. **A filter never matches an

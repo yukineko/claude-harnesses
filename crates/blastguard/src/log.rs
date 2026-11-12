@@ -11,12 +11,14 @@
 //! and the number of such drops is reported on stderr ("excluded").
 //!
 //! Text mode escapes every recorded value (see `escape_text`): C0 controls
-//! (below 0x20), DEL and backslash. That guarantees one entry is always one
+//! (below 0x20), DEL, backslash, C1 controls (U+0080-U+009F), the Unicode
+//! line/paragraph separators U+2028/U+2029 and the bidi controls (U+061C,
+//! U+200E, U+200F, U+202A-U+202E, U+2066-U+2069). That guarantees one entry is
+//! always one line, and that a recorded value cannot visually reorder the
 //! line. It does NOT make the text unambiguous: values are not quoted and
 //! spaces / `=` are not escaped, so a value containing ` key=...` (e.g. a cwd
-//! `/tmp/x command=ls`) can look like an extra token on the same line; C1
-//! controls (U+0080-U+009F), U+2028/2029 and bidi controls are printed as-is.
-//! Use `--json` for exact, unambiguous parsing.
+//! `/tmp/x command=ls`) can look like an extra token on the same line. Use
+//! `--json` for exact, unambiguous parsing.
 //!
 //! Exit codes:
 //! - 0: success (including "no matches" and an absent ledger, which says
@@ -350,11 +352,14 @@ fn apply_filters(entries: Vec<LogEntry>, f: &Filters) -> (Vec<LogEntry>, usize) 
 
 /// Escape a recorded value for one-line text output: `\n` `\r` `\t` as
 /// two-char escapes, any other char below 0x20 and 0x7f as `\xHH` (lowercase
-/// hex), a backslash as `\\`. Everything else is verbatim (no quoting). This
-/// keeps one entry on one line. Limits: values are not quoted and spaces / `=`
-/// are not escaped (a value containing ` key=...` can look like an extra
-/// token); C1 controls (U+0080-U+009F), U+2028/2029 and bidi controls are
-/// printed as-is. `--json` is the unambiguous form.
+/// hex), a backslash as `\\`, and every char matched by
+/// [`is_unicode_line_or_bidi_control`] (C1 controls U+0080-U+009F, U+2028,
+/// U+2029, bidi controls) as `\u{XXXX}` (uppercase hex, at least 4 digits).
+/// Everything else is verbatim (no quoting). This keeps one entry on one line
+/// and stops a recorded value from reordering the displayed line
+/// (Trojan-Source style). Limits: values are not quoted and spaces / `=` are
+/// not escaped (a value containing ` key=...` can look like an extra token).
+/// `--json` is the unambiguous form.
 fn escape_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -366,10 +371,25 @@ fn escape_text(s: &str) -> String {
             c if (c as u32) < 0x20 || c as u32 == 0x7f => {
                 out.push_str(&format!("\\x{:02x}", c as u32));
             }
+            c if is_unicode_line_or_bidi_control(c) => {
+                out.push_str(&format!("\\u{{{:04X}}}", c as u32));
+            }
             c => out.push(c),
         }
     }
     out
+}
+
+/// Chars above ASCII that [`escape_text`] escapes as `\u{XXXX}`: C1 controls
+/// (U+0080-U+009F, includes U+0085 NEXT LINE), the line / paragraph separators
+/// U+2028 / U+2029, and the bidi formatting controls — ALM U+061C, LRM U+200E,
+/// RLM U+200F, the embeddings/overrides U+202A-U+202E and the isolates
+/// U+2066-U+2069.
+fn is_unicode_line_or_bidi_control(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x80..=0x9f | 0x2028 | 0x2029 | 0x061c | 0x200e | 0x200f | 0x202a..=0x202e | 0x2066..=0x2069
+    )
 }
 
 /// One text line per entry:

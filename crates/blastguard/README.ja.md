@@ -879,10 +879,11 @@ blastguard log [--decision deny|ask] [--rule <id>] [--since <RFC3339|Ns|Nm|Nh|Nd
   `command=unknown target=unknown` を両方出す。記録されていないフィールドは `unknown`
   （`false` / `interactive` / `deny` に推測しない）。
   値はエスケープされる: `\n` `\r` `\t` は 2 文字のエスケープ、その他の 0x20 未満と 0x7f は
-  `\xHH`（小文字 16 進）、バックスラッシュは `\\`。クォートはしない。これにより 1 件は常に 1 行になる。
+  `\xHH`（小文字 16 進）、バックスラッシュは `\\`、C1 制御文字（U+0080〜U+009F）・U+2028/U+2029・
+  bidi 制御文字（U+061C、U+200E、U+200F、U+202A〜U+202E、U+2066〜U+2069）は `\u{XXXX}`（大文字 16 進）。
+  クォートはしない。これにより 1 件は常に 1 行になり、記録された値が行の表示順を入れ替えることもない。
   **限界**: 値はクォートされず、空白と `=` もエスケープされないため、` key=...` を含む値
-  （例: cwd が `/tmp/x command=ls`）は同じ行内の別トークンに見えうる。C1 制御文字
-  （U+0080〜U+009F）、U+2028/2029、bidi 制御文字はそのまま出力される。
+  （例: cwd が `/tmp/x command=ls`）は同じ行内の別トークンに見えうる。
   曖昧さのない厳密なパースには `--json` を使う。
 - `--json`: 1 行 1 オブジェクト。キーは `ts, rule, decision, tool, command, target, cwd, actor, system_harm`。
   未記録は `null`。

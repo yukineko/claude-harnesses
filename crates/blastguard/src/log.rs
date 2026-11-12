@@ -10,8 +10,13 @@
 //! (JSON), and a filter on that field never matches it: the entry is dropped
 //! and the number of such drops is reported on stderr ("excluded").
 //!
-//! Text mode escapes every recorded value (see `escape_text`) so one entry is
-//! always one line and a value cannot forge tokens or terminal sequences.
+//! Text mode escapes every recorded value (see `escape_text`): C0 controls
+//! (below 0x20), DEL and backslash. That guarantees one entry is always one
+//! line. It does NOT make the text unambiguous: values are not quoted and
+//! spaces / `=` are not escaped, so a value containing ` key=...` (e.g. a cwd
+//! `/tmp/x command=ls`) can look like an extra token on the same line; C1
+//! controls (U+0080-U+009F), U+2028/2029 and bidi controls are printed as-is.
+//! Use `--json` for exact, unambiguous parsing.
 //!
 //! Exit codes:
 //! - 0: success (including "no matches" and an absent ledger, which says
@@ -346,8 +351,10 @@ fn apply_filters(entries: Vec<LogEntry>, f: &Filters) -> (Vec<LogEntry>, usize) 
 /// Escape a recorded value for one-line text output: `\n` `\r` `\t` as
 /// two-char escapes, any other char below 0x20 and 0x7f as `\xHH` (lowercase
 /// hex), a backslash as `\\`. Everything else is verbatim (no quoting). This
-/// keeps one entry on one line and stops a value from forging tokens or
-/// terminal control sequences.
+/// keeps one entry on one line. Limits: values are not quoted and spaces / `=`
+/// are not escaped (a value containing ` key=...` can look like an extra
+/// token); C1 controls (U+0080-U+009F), U+2028/2029 and bidi controls are
+/// printed as-is. `--json` is the unambiguous form.
 fn escape_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {

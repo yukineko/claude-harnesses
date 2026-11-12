@@ -879,8 +879,11 @@ blastguard log [--decision deny|ask] [--rule <id>] [--since <RFC3339|Ns|Nm|Nh|Nd
   `command=unknown target=unknown` を両方出す。記録されていないフィールドは `unknown`
   （`false` / `interactive` / `deny` に推測しない）。
   値はエスケープされる: `\n` `\r` `\t` は 2 文字のエスケープ、その他の 0x20 未満と 0x7f は
-  `\xHH`（小文字 16 進）、バックスラッシュは `\\`。クォートはしない。これにより 1 件は常に 1 行で、
-  値がトークンや端末制御列を偽造できない。
+  `\xHH`（小文字 16 進）、バックスラッシュは `\\`。クォートはしない。これにより 1 件は常に 1 行になる。
+  **限界**: 値はクォートされず、空白と `=` もエスケープされないため、` key=...` を含む値
+  （例: cwd が `/tmp/x command=ls`）は同じ行内の別トークンに見えうる。C1 制御文字
+  （U+0080〜U+009F）、U+2028/2029、bidi 制御文字はそのまま出力される。
+  曖昧さのない厳密なパースには `--json` を使う。
 - `--json`: 1 行 1 オブジェクト。キーは `ts, rule, decision, tool, command, target, cwd, actor, system_harm`。
   未記録は `null`。
 - **フィルタは不明なフィールドに決してマッチしない。** 古い行（コンテキスト欄なし）は

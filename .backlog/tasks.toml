@@ -9,14 +9,16 @@ tags = [
     "p2",
 ]
 touched_files = []
-status = "pending"
-notes = "Observed 2026-11-06: donegate test-changed blocked the condukt worktree run-20261106-100625-7376-blastguard-heredoc-body-fp: crates/blastguard/tests/backlog_2287ebae.rs:201 'fixture: the locked ancestor must make resolution fail with EACCES (running as root?)' left Some(NotFound) right Some(PermissionDenied). Same test at 3cdfd72e passes with target on ext4 (/home) and fails with CARGO_TARGET_DIR on /mnt/c (stat -f: v9fs). Fixture uses CARGO_TARGET_TMPDIR, which lives under the worktree target on /mnt/c. Effect: every blastguard change made in a condukt worktree fails donegate though the code equals main. Readings: (a) defect in the fixture's environment assumption (should place its fixture on a POSIX-enforcing fs or report inconclusive distinctly); (b) intentional fail-closed precondition (an unverifiable fixture must not pass). Distinguish: (b) is right that it must not PASS silently; the question is whether 'fixture cannot be built here' should be a test failure or a skip-with-reason; ask before choosing. Also consider moving condukt worktrees off /mnt/c. Repro: bash scripts/tests/blastguard-2287ebae-v9fs-target.sh."
+status = "ruled-deferred"
+notes = """
+Observed 2026-11-06: donegate test-changed blocked the condukt worktree run-20261106-100625-7376-blastguard-heredoc-body-fp: crates/blastguard/tests/backlog_2287ebae.rs:201 'fixture: the locked ancestor must make resolution fail with EACCES (running as root?)' left Some(NotFound) right Some(PermissionDenied). Same test at 3cdfd72e passes with target on ext4 (/home) and fails with CARGO_TARGET_DIR on /mnt/c (stat -f: v9fs). Fixture uses CARGO_TARGET_TMPDIR, which lives under the worktree target on /mnt/c. Effect: every blastguard change made in a condukt worktree fails donegate though the code equals main. Readings: (a) defect in the fixture's environment assumption (should place its fixture on a POSIX-enforcing fs or report inconclusive distinctly); (b) intentional fail-closed precondition (an unverifiable fixture must not pass). Distinguish: (b) is right that it must not PASS silently; the question is whether 'fixture cannot be built here' should be a test failure or a skip-with-reason; ask before choosing. Also consider moving condukt worktrees off /mnt/c. Repro: bash scripts/tests/blastguard-2287ebae-v9fs-target.sh.
+ruling (defer): backlog を defer にする（推奨） — 2026-11-13: v9fs (/mnt/c) でしか再現せず、この環境では実行できない。GitHub #1554 は not_planned で close 済み"""
 created_at = 1793928977
-updated_at = 1793928977
+updated_at = 1794521455
 weight = 0.0
 issue_number = 1554
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1554"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

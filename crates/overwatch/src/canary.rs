@@ -486,6 +486,13 @@ mod tests {
             session_id: session.to_string(),
             ts,
             detail: None,
+            decision: None,
+            tool: None,
+            command: None,
+            target: None,
+            cwd: None,
+            actor: None,
+            system_harm: None,
         }
     }
 

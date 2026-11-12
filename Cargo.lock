@@ -137,7 +137,7 @@ dependencies = [
 
 [[package]]
 name = "benchkit"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "anyhow",
  "clap",
@@ -170,7 +170,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.463"
+version = "0.2.464"
 dependencies = [
  "globset",
  "harness-core",
@@ -312,7 +312,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.385"
+version = "0.7.386"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -957,7 +957,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.119"
+version = "0.2.120"
 dependencies = [
  "anyhow",
  "clap",

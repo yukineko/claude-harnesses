@@ -543,3 +543,15 @@ Two things the report deliberately does not claim: an approval does **not**
 establish that stopping was wrong (only that nothing was prevented), and a
 command the agent rephrased and re-ran is **not** detected — so prevention
 counts are an upper bound. Both qualifiers are printed with the numbers.
+
+## Context recorded in the violation ledger (overwatch)
+
+Each Deny/Ask appends one line to overwatch's
+`~/.overwatch/<project-key>/overwatch/violations.jsonl` after the decision has
+been printed (a failed append only warns on stderr; the decision is unchanged).
+Optional fields: `decision` (final `deny`/`ask`), `tool`, `command` (Bash,
+verbatim), `target` (file-tool path), `cwd` (as given), `actor`
+(`subagent`/`interactive`/`headless`), `system_harm` (`true` only for a
+system-harm deny). Older lines lack these fields, which means **unknown**, not
+false. Commands are stored verbatim and may contain secrets; the ledger is
+local under `$HOME` and there is no redaction.

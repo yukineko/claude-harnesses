@@ -1919,14 +1919,14 @@ mod tests {
     use super::*;
 
     fn viol_event(sig: &str, ts: i64) -> ViolationEvent {
-        ViolationEvent {
-            source: crate::violation::ViolationSource::Blastguard,
-            signature: sig.to_string(),
-            task_key: "task-key".to_string(),
-            session_id: "session".to_string(),
-            ts,
-            detail: None,
-        }
+        serde_json::from_value(serde_json::json!({
+            "source": "blastguard",
+            "signature": sig,
+            "task_key": "task-key",
+            "session_id": "session",
+            "ts": ts,
+        }))
+        .unwrap()
     }
 
     fn scan_test_home() -> (std::path::PathBuf, Option<std::ffi::OsString>) {

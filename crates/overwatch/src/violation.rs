@@ -100,6 +100,32 @@ pub struct ViolationEvent {
     /// for signature matching — only for human-readable audit trails.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    // ---- Optional audit context (blastguard records these) ----
+    // Every field below is `None` for "not recorded" — an older writer or a
+    // non-blastguard source — which means UNKNOWN, never "false"/"absent".
+    // They are omitted on write when `None` and defaulted on read, so old
+    // ledger lines still parse. No `deny_unknown_fields`.
+    /// Final decision printed by the gate: `"deny"` or `"ask"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    /// Tool name the payload carried (e.g. `Bash`, `Write`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// The Bash command, verbatim (may contain secrets; no redaction).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// File path of a Write/Edit/MultiEdit/NotebookEdit call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// The payload `cwd` as given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// Who was acting: `"subagent"`, `"interactive"` or `"headless"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<String>,
+    /// Whether the refusal was a system-harm deny.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_harm: Option<bool>,
 }
 
 /// Raw identifying fields used to derive a signature, before normalization.
@@ -206,6 +232,13 @@ pub fn build_event(
         session_id,
         ts,
         detail,
+        decision: None,
+        tool: None,
+        command: None,
+        target: None,
+        cwd: None,
+        actor: None,
+        system_harm: None,
     })
 }
 
@@ -579,6 +612,13 @@ mod tests {
             session_id: session.to_string(),
             ts,
             detail: None,
+            decision: None,
+            tool: None,
+            command: None,
+            target: None,
+            cwd: None,
+            actor: None,
+            system_harm: None,
         }
     }
 

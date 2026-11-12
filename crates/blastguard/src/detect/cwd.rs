@@ -123,6 +123,11 @@ pub(super) fn is_relative_operand(tok: &str) -> bool {
 /// rewrite is meant to reproduce the direct-path form exactly, not a
 /// direct-path-form-plus-punctuation that only some protected globs (the
 /// wildcard-terminated ones) are lenient enough to still match.
+///
+/// The whitespace BETWEEN tokens is copied from `seg` as it stands, not
+/// replaced by one space: a quoted `-c` program keeps its newlines (backlog
+/// 2026-11-13 — the single-space re-join made `cd /x && python3 -c "import os
+/// # x<NL>os.chmod('/etc/…',0)"` one commented-out line, and it was Allowed).
 pub(super) fn rewrite_relative_operands(seg: &str, dir: &str) -> String {
     let tokens: Vec<&str> = seg.split_whitespace().collect();
     let Some((head_tok, rest)) = tokens.split_first() else {
@@ -131,8 +136,16 @@ pub(super) fn rewrite_relative_operands(seg: &str, dir: &str) -> String {
     let head = normalized_command(strip_edge_parens(head_tok));
     let targets = verb_targets(&head, rest);
     let mut out = String::from(*head_tok);
+    // `seg` from just past the token already copied.
+    let mut tail = seg.trim_start().get(head_tok.len()..).unwrap_or("");
     for t in rest {
-        out.push(' ');
+        let gap = tail.len() - tail.trim_start().len();
+        match gap {
+            // Unreachable while `tail` tracks `seg`; keeps the tokens apart.
+            0 => out.push(' '),
+            _ => out.push_str(&tail[..gap]),
+        }
+        tail = tail[gap..].get(t.len()..).unwrap_or("");
         if targets.contains(t) {
             let clean = strip_edge_parens(t);
             if !clean.is_empty() && is_relative_operand(clean) && !has_unresolvable_expansion(clean)

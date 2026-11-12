@@ -929,7 +929,9 @@ fn first_shell_word_trailing_lone_backslash() {
 fn first_shell_word_empty_quoted_word_is_some_empty() {
     assert_eq!(first_shell_word("''").as_deref(), Some(""));
     assert_eq!(first_shell_word(r#""""#).as_deref(), Some(""));
-    assert!(dash_c_payloads(&["-c", "''"]).iter().all(|p| !p.is_empty()));
+    assert!(dash_c_payloads(&["-c", "''"], None)
+        .iter()
+        .all(|p| !p.is_empty()));
 }
 
 /// CA-blastguard-014 (fail-open): a shell parses its own OPTIONS before the

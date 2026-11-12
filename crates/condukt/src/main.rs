@@ -3588,7 +3588,7 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
     match action {
         WtAction::Create { topic, branch, run } => {
             if let Some(r) = run.as_deref() {
-                run_cap::enforce_run_cap(&repo, r, cfg.max_parallel)?;
+                run_cap::enforce_run_cap(&repo, &cfg.worktree_base, r, cfg.max_parallel)?;
             }
             let path = worktree::create_namespaced(
                 &repo,

@@ -176,7 +176,6 @@ impl Fixture {
 }
 
 #[test]
-#[ignore = "scout 2026-11-12 QA1: RED, open defect. Remove the ignore when fixed"]
 fn worktree_merge_runs_no_cargo_fmt_or_clippy() {
     let f = Fixture::new();
     let branch = f.task_branch();

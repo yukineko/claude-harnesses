@@ -161,8 +161,54 @@ fn substitution_end_with(
     }
 }
 
+/// When the backslash at `chars[i]` is one the shell reads as ESCAPING a
+/// character that would otherwise change the quote state, the two-char pair
+/// it forms (the backslash and the escaped character). `None` otherwise.
+///
+/// Backlog 9a2f5a08: the splitters tracked `'`/`"` without knowing backslash
+/// escapes, so an escaped quote inside a double-quoted grep pattern
+/// (`grep -E "gh\", *\"pr\""`) flipped their quote state. Every later quoted
+/// span was then read inside-out: the `|` that the shell reads as text inside
+/// `"…|install"` cut the line, and the fragment `install" f | head -6` was
+/// judged as an `install` command with the unknown option `-6`. The same flip
+/// also worked the other way (`echo \"; <cmd>` hid `<cmd>` from this reading;
+/// only the shell-lexed reading of [`super::shell_lex`] judged it).
+///
+/// The rules are the shell's (POSIX 2.2.1-2.2.3), restricted to the
+/// characters that affect quote tracking:
+///   * inside single quotes a backslash is literal (never an escape);
+///   * inside double quotes it escapes `"`, `\` and `` ` `` (it also escapes
+///     `$` and newline, which do not change quote state and are left as
+///     before);
+///   * unquoted, it escapes `'`, `"`, `\` and `` ` ``.
+///
+/// A doubled backslash is consumed as a pair so `"a\\"` still closes at its
+/// last `"`. An unquoted backslash before `;`, `|`, `&` or a newline is NOT
+/// treated as an escape here: the splitters keep cutting there, which can only
+/// produce more segments to judge (the pre-existing, conservative reading).
+/// An escaped backtick is the same one [`closed_substitution_end`] already
+/// refuses to open, so substitution spans are unchanged.
+pub(super) fn quote_escape_pair(
+    chars: &[char],
+    i: usize,
+    in_s: bool,
+    in_d: bool,
+) -> Option<&[char]> {
+    if in_s || chars[i] != '\\' {
+        return None;
+    }
+    let next = *chars.get(i + 1)?;
+    let escapes = if in_d {
+        matches!(next, '"' | '\\' | '`')
+    } else {
+        matches!(next, '\'' | '"' | '\\' | '`')
+    };
+    escapes.then(|| &chars[i..i + 2])
+}
+
 /// Quote-aware split of a command line into individual simple-command segments
-/// on `;`, newline, `&&`, `||`, `|`, `&`.
+/// on `;`, newline, `&&`, `||`, `|`, `&`. Backslash-escaped quotes do not
+/// change the quote state (see [`quote_escape_pair`]).
 ///
 /// An `&` that is part of a redirection operator (`2>&1`, `>&2`) does NOT end a
 /// segment — see [`ampersand_is_redirect_operator`].
@@ -194,6 +240,12 @@ pub(super) fn split_segments(cmd: &str) -> Vec<String> {
             cur.push(c);
             line_code.push(c);
             i += 1;
+            continue;
+        }
+        if let Some(pair) = quote_escape_pair(&chars, i, in_s, in_d) {
+            cur.extend(pair);
+            line_code.extend(pair);
+            i += 2;
             continue;
         }
         if !in_s {
@@ -298,6 +350,12 @@ pub(super) fn split_segments_paren_aware(cmd: &str) -> Vec<String> {
             cur.push(c);
             line_code.push(c);
             i += 1;
+            continue;
+        }
+        if let Some(pair) = quote_escape_pair(&chars, i, in_s, in_d) {
+            cur.extend(pair);
+            line_code.extend(pair);
+            i += 2;
             continue;
         }
         // Backtick bodies too (paren depth does not see them); see
@@ -451,6 +509,12 @@ pub(super) fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment>
             cur.push(c);
             line_code.push(c);
             i += 1;
+            continue;
+        }
+        if let Some(pair) = quote_escape_pair(&chars, i, in_s, in_d) {
+            cur.extend(pair);
+            line_code.extend(pair);
+            i += 2;
             continue;
         }
         // Same substitution span as `split_segments`, so the two stay

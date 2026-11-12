@@ -1,67 +1,4 @@
 [[task]]
-id = "433ca3be"
-title = "pre-commit: per-gate timing and verdict are not recorded (pre-push has prepush-timing.jsonl, pre-commit has nothing)"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "observability",
-    "precommit",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-06 at main b2f2cbd1: .githooks/pre-push times each phase via date +%s and appends one JSON line per run to <git-common-dir>/prepush-timing.jsonl (9 lines; latest b2f2cbd1 typecheck 46s). .githooks/pre-commit (555 lines) has no timing code and no log. Purpose (user 2026-11-06): decide which gates must run on EVERY commit vs path-triggered vs pre-push, from data. Transcript count 2026-10-08..11-06 found 12 of 18 pre-commit gates with 0 blocks; scanner wall time with empty stage: projkey-classification 6.1s, all others <=0.7s. Fix: port pre-push _tm_* helpers; one phase per gate label (incl. main-tree-guard and commit-msg test-weakening if feasible) with secs and rc; append one JSON line to precommit-timing.jsonl; one stderr summary 'pre-commit timing: ... total Ns (exit RC)'. Observability only: no verdict/exit change; unwritable log warns, same rc. Repro: python3 -m pytest scripts/test_precommit_timing.py."
-created_at = 1793925984
-updated_at = 1793926329
-weight = 0.0
-issue_number = 1551
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1551"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_precommit_timing.py"
-rev = "51785391bdc9913f5b6a75a72e7a9d6ee199d12d"
-observed_at = 1793926328
-detail = """
-exit 1: ==========================
-FAILED scripts/test_precommit_timing.py::PrecommitTiming::test_blocking_run_still_logs_with_nonzero_exit
-FAILED scripts/test_precommit_timing.py::PrecommitTiming::test_clean_run_appends_one_timing_line
-FAILED scripts/test_precommit_timing.py::PrecommitTiming::test_stderr_has_one_summary_line
-============================== 3 failed in 0.97s ==============================="""
-
-[[task]]
-id = "93341bd5"
-title = "budgetguard ledger double-counts a session that crosses local midnight (cumulative session cost recorded under each day key)"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "budgetguard",
-    "ledger",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-06 (JST 10:05) in ~/.budgetguard/state/ledger.json at main fe604377: session 4a9031bf has 24.18 under 2026-11-05 and 49.06 (cumulative) under 2026-11-06; 2 sessions appear on both days. Cause: gate.rs records the session's CUMULATIVE cost via ledger.record(session_id, today, session_usd) under today's key; the pre-midnight part stays in yesterday's entry too. Day boundary itself is LOCAL time (chrono::Local, system TZ Asia/Tokyo => JST midnight), intentional per main.rs today_str comment. Effects: (1) today's day_usd is over-counted (restrictive side); (2) past day totals are inflated and feed derive_limits (Tukey fence), raising derived limits = loosening. Readings: (a) defect; (b) intentional 'attribute whole session to last day'. Distinguish: (b) would not also keep the value in the earlier day; the sum over days exceeds real spend, which no reading justifies. Fix direction: store per-day delta (cumulative minus the session's cost already recorded on earlier days). Repro: cargo test -p harness-core --test ledger_midnight_double_count_20261106 -- --ignored."
-created_at = 1793927294
-updated_at = 1793927294
-weight = 0.0
-issue_number = 1553
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1553"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p harness-core --test ledger_midnight_double_count_20261106 -- --ignored"
-rev = "9dd3f7c9d178d1d0632ffde5b0649a1a29d9bbb6"
-observed_at = 1793927294
-detail = """
-exit 101: e v0.2.92 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-4a9031bf/crates/harness-core)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.74s
-     Running tests/ledger_midnight_double_count_20261106.rs (target/debug/deps/ledger_midnight_double_count_20261106-f255a7977d4f29cb)
-error: test failed, to rerun pass `-p harness-core --test ledger_midnight_double_count_20261106`"""
-
-[[task]]
 id = "10ce8e01"
 title = "blastguard test backlog_2287ebae fails in condukt worktrees on /mnt/c (v9fs ignores chmod 000; NotFound instead of PermissionDenied)"
 project = "/home/hiroyuki_nakayama/src/harness"
@@ -72,14 +9,16 @@ tags = [
     "p2",
 ]
 touched_files = []
-status = "pending"
-notes = "Observed 2026-11-06: donegate test-changed blocked the condukt worktree run-20261106-100625-7376-blastguard-heredoc-body-fp: crates/blastguard/tests/backlog_2287ebae.rs:201 'fixture: the locked ancestor must make resolution fail with EACCES (running as root?)' left Some(NotFound) right Some(PermissionDenied). Same test at 3cdfd72e passes with target on ext4 (/home) and fails with CARGO_TARGET_DIR on /mnt/c (stat -f: v9fs). Fixture uses CARGO_TARGET_TMPDIR, which lives under the worktree target on /mnt/c. Effect: every blastguard change made in a condukt worktree fails donegate though the code equals main. Readings: (a) defect in the fixture's environment assumption (should place its fixture on a POSIX-enforcing fs or report inconclusive distinctly); (b) intentional fail-closed precondition (an unverifiable fixture must not pass). Distinguish: (b) is right that it must not PASS silently; the question is whether 'fixture cannot be built here' should be a test failure or a skip-with-reason; ask before choosing. Also consider moving condukt worktrees off /mnt/c. Repro: bash scripts/tests/blastguard-2287ebae-v9fs-target.sh."
+status = "ruled-deferred"
+notes = """
+Observed 2026-11-06: donegate test-changed blocked the condukt worktree run-20261106-100625-7376-blastguard-heredoc-body-fp: crates/blastguard/tests/backlog_2287ebae.rs:201 'fixture: the locked ancestor must make resolution fail with EACCES (running as root?)' left Some(NotFound) right Some(PermissionDenied). Same test at 3cdfd72e passes with target on ext4 (/home) and fails with CARGO_TARGET_DIR on /mnt/c (stat -f: v9fs). Fixture uses CARGO_TARGET_TMPDIR, which lives under the worktree target on /mnt/c. Effect: every blastguard change made in a condukt worktree fails donegate though the code equals main. Readings: (a) defect in the fixture's environment assumption (should place its fixture on a POSIX-enforcing fs or report inconclusive distinctly); (b) intentional fail-closed precondition (an unverifiable fixture must not pass). Distinguish: (b) is right that it must not PASS silently; the question is whether 'fixture cannot be built here' should be a test failure or a skip-with-reason; ask before choosing. Also consider moving condukt worktrees off /mnt/c. Repro: bash scripts/tests/blastguard-2287ebae-v9fs-target.sh.
+ruling (defer): backlog を defer にする（推奨） — 2026-11-13: v9fs (/mnt/c) でしか再現せず、この環境では実行できない。GitHub #1554 は not_planned で close 済み"""
 created_at = 1793928977
-updated_at = 1793928977
+updated_at = 1794521455
 weight = 0.0
 issue_number = 1554
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1554"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -136,41 +75,6 @@ exit 101: ed in 0.00s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.16s
      Running tests/audit_b11_injector_session.rs (target/debug/deps/audit_b11_injector_session-b6edd85e362a07e4)
 error: test failed, to rerun pass `-p context-governor --test audit_b11_injector_session`"""
-
-[[task]]
-id = "4b8e8cb0"
-title = "check-workspace-tests.py / mutation-gate.sh refuse to start while a live cargo test exists"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 8 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: liveness-and-observability (formerly killed-task-leaves-orphan-loop).
-Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): check-workspace-tests launched `cargo test --workspace` while another `cargo test` was live (rc=0); the measurement is void / mutation-gate.sh started `cargo mutants` while another `cargo test` was live (rc=2): ... (exit status 70: not a completed mutation run
-Audit said 'exit 2', but in check-workspace-tests exit 2 already means PYTHON_FAILURE, so the test requires 'non-zero and cargo not launched' there; mutation-gate.sh must exit 2. Fix picks ENVIRONMENT (5) or a new class. Caveat: after the fix, the controls see any real cargo test from another session on the machine.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998459
-updated_at = 1794001891
-weight = 0.0
-issue_number = 1581
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1581"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_audit_b_live_cargo_refusal.py"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998944
-detail = """
-exit 1: rt test summary info ============================
-FAILED scripts/test_audit_b_live_cargo_refusal.py::RefuseWhileCargoTestIsLive::test_check_workspace_tests_refuses_while_cargo_test_is_live
-FAILED scripts/test_audit_b_live_cargo_refusal.py::RefuseWhileCargoTestIsLive::test_mutation_gate_refuses_while_cargo_test_is_live
-========================= 2 failed, 2 passed in 6.22s =========================="""
 
 [[task]]
 id = "4620134f"
@@ -248,44 +152,6 @@ exit 101: 0 ignored; 0 measured; 0 filtered out; finished in 3.25s
 error: test failed, to rerun pass `-p autoflow --test audit_b_flow_bypass`"""
 
 [[task]]
-id = "4f19b628"
-title = "pre-push runs check-fail-open-mutation.py per changed Undetermined arm"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 18 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: fail-open-review-checklist (formerly forwarding-arms-have-zero-kill-rate).
-Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): AssertionError: [] is not true : .githooks/pre-push never executes scripts/check-fail-open-mutation.py; forwarding Undetermined arms stay unmeasured
-Test checks wiring only; 'per changed arm' needs an interface the fix defines and must pin with its own test - this RED goes green on wiring alone. Depends on audit B item 19 (mutate by deletion).
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998487
-updated_at = 1794001897
-weight = 0.0
-issue_number = 1584
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1584"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_audit_b_mutation_prepush.py"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998961
-detail = """
-exit 1: ason))
-E           _pytest.outcomes.XFailed
-
-../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
-=========================== short test summary info ============================
-FAILED scripts/test_audit_b_mutation_prepush.py::MutationHarnessWiredInPrePush::test_pre_push_runs_fail_open_mutation
-========================= 1 failed, 1 passed in 0.06s =========================="""
-
-[[task]]
 id = "d425cfc3"
 title = "check-fail-open-mutation.py: mutate by deleting the construct, not if false"
 project = "/Users/yuki/src/harness"
@@ -359,179 +225,6 @@ exit 1: it_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_if_fals
 FAILED scripts/test_audit_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_if_false_block_is_refused
 FAILED scripts/test_audit_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_while_false_is_refused
 ========================= 3 failed, 2 passed in 12.26s ========================="""
-
-[[task]]
-id = "d328ea88"
-title = "blastguard: bash 3.2 reading — comment line with quote/backtick/backslash gives Ask where Deny is wanted"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Found 2026-11-07 by the bg32 verifier (observed in /bin/bash 3.2, /bin/sh, /bin/zsh with harmless markers). Fail-closed (Ask) today; Deny wanted for harmful targets. User ruling 2026-11-07: fix in a later session. Remove the #[ignore] when fixed."
-created_at = 1794032629
-updated_at = 1794032629
-weight = 0.0
-issue_number = 1614
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1614"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_d_comment_with_quote_is_ask_but_deny_wanted -- --include-ignored"
-rev = "64ae2a2320d93179c1f9b810f78375c47601851d"
-observed_at = 1794032629
-detail = """
-exit 101: ng blastguard v0.2.308 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.79s
-     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-38355bb113e5f23c)
-error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""
-
-[[task]]
-id = "214ebb1f"
-title = "condukt tests need ambient tdd on PATH: donegate Stop hook (no plugin bin dirs) fails 4 controls with DEPENDENCY MISSING"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-07: scripts/test-changed-crates.sh (donegate Stop) runs cargo test -p condukt; find_tdd (crates/condukt/tests/backlog_records_lost_at_teardown_20261107.rs:57) scans only ambient PATH and panics DEPENDENCY MISSING; hook env has no plugin cache bin dirs. Every condukt change blocked for an env reason. Test: scripts/test_condukt_tdd_dependency_hook_path_20261107.py (expectedFailure; repro uses --runxfail; remove marker when fixed). Readings: (a) DEFECT - test/script should use workspace-built target/debug/tdd (crates/tdd is in the workspace, obtainable without PATH); fix in find_tdd or test-changed-crates.sh. (b) INTENDED - hook env must provide plugin PATH; fix in donegate/hook env. Tell apart: repro already simulates hook PATH; if maintainer rules tests may depend on installed plugins -> (b), else (a). Only a ruling decides. Do not skip the gate meanwhile."
-created_at = 1794014300
-updated_at = 1794014300
-weight = 0.0
-issue_number = 1593
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1593"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail -q scripts/test_condukt_tdd_dependency_hook_path_20261107.py"
-rev = "bb4c2cb10b7dd12baf9fb86c8619d9685397cece"
-observed_at = 1794014300
-detail = """
-exit 1:       xfail(str(reason))
-E           _pytest.outcomes.XFailed
-
-../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
-=========================== short test summary info ============================
-FAILED scripts/test_condukt_tdd_dependency_hook_path_20261107.py::CondukTddDependencyUnderHookPath::test_condukt_control_test_passes_without_ambient_tdd
-1 failed, 1 passed in 0.51s"""
-
-[[task]]
-id = "f9bc1da8"
-title = "blastguard: git restore --staged --worktree denied even when file content is byte-identical to a blob already in a commit (FP)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Measured at worktree HEAD 8010c820 (main 56764042), 2026-11-07. Subagent Bash 'cd /Users/yuki/src/harness && git restore --staged --worktree -- scripts/lint-changed-crates.sh scripts/test-changed-crates.sh && ...' blocked verbatim 'PreToolUse:Bash hook error: git restore discards working-tree changes' although staged+worktree content was byte-identical to commit 3087c5e6; user approved, blastguard blocked twice, user ran it themselves. Rule: crates/blastguard/src/detect/git.rs 'restore' arm (denies unless --staged-only or managed worktree). RED test crates/blastguard/tests/backlog_git_restore_content_in_commit_fp_20261107.rs (content on other branch => got deny, want allow); control (content in no commit stays blocked) passes. Two readings, undetermined: (a) FP to fix by checking blob reachability (content in any commit => nothing lost => Allow); (b) intended by design: rule classifies command shape only, not blast radius, and the deny cannot be approved in a subagent. Per false-positives-not-tolerated, (a) unless owner rules (b)."
-created_at = 1794022498
-updated_at = 1794022498
-weight = 0.0
-issue_number = 1604
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1604"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_git_restore_content_in_commit_fp_20261107 -- --ignored"
-rev = "8010c8206e283a92ff904df484ccf5acd97e8023"
-observed_at = 1794022498
-detail = """
-exit 101: /worktrees/run-20261107-114313-25739-fileB/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.02s
-     Running tests/backlog_git_restore_content_in_commit_fp_20261107.rs (target/debug/deps/backlog_git_restore_content_in_commit_fp_20261107-3ce13a81332f8e0f)
-error: test failed, to rerun pass `-p blastguard --test backlog_git_restore_content_in_commit_fp_20261107`"""
-
-[[task]]
-id = "a63ee085"
-title = "blastguard: 引用付き heredoc 本文の孤立バッククォートで Ask になる誤検知"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = 'Split from 547cf2f6 (user ruling 2026-11-07). Shape: cd <literal abs dir> && cat > crates/condukt/tests/x.rs with a quoted heredoc whose body is a lone backtick, plus one trailing line (ls) after EOF. RED at clean b5e9c16d: assertion left==right failed: quoted body is data  left: "deny" (subagent-hardened Ask)  right: "allow". Implementer measured the underlying verdict as Ask("the command word ` is an expansion whose value only exists at run time ..."). The Ask comes from the body-as-code scan the README documents (a command after the heredoc keeps the body scanned), not from cd resolution, so fixing it requires a ruling to change that documented scan. Do NOT weaken the test to pass; remove the ignore marker when fixed.'
-created_at = 1794021465
-updated_at = 1794021465
-weight = 0.0
-issue_number = 1602
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1602"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_cd_redirect_fp_20261107 -- --include-ignored lone_backtick_in_quoted_body_with_trailing_line_is_allow"
-rev = "b5e9c16d988dd6c4a35c30c0922ee74e0141f144"
-observed_at = 1794021465
-detail = """
-exit 101: d; 0 ignored; 0 measured; 6 filtered out; finished in 0.71s
-
-    Blocking waiting for file lock on build directory
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.01s
-     Running tests/backlog_cd_redirect_fp_20261107.rs (target/debug/deps/backlog_cd_redirect_fp_20261107-7e2be18d741cbb2f)
-error: test failed, to rerun pass `-p blastguard --test backlog_cd_redirect_fp_20261107`"""
-
-[[task]]
-id = "7d615bf0"
-title = "blastguard: => inside a python triple-quoted literal in a quoted heredoc is read as a redirect (Ask)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "gate-fp",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-07 in session bf349dd5 (subagent editing crates/backlog). Verbatim reason: the program text contains a `>` that a shell would read as a redirect whose target cannot be determined. RED committed at bb0811e9: crates/blastguard/tests/heredoc_python_triple_quote_fp_20261107.rs target_python_triple_quoted_fat_arrow (control: same shape with real > /etc/hosts stays non-Allow). Do NOT weaken the test; remove the ignore marker when fixed."
-created_at = 1794040969
-updated_at = 1794040969
-weight = 0.0
-issue_number = 1618
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1618"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test heredoc_python_triple_quote_fp_20261107 -- --include-ignored"
-rev = "bb0811e93f1a65cf659598dc1079c4cbc4f561c3"
-observed_at = 1794040969
-detail = """
-exit 101: sult: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
-     Running tests/heredoc_python_triple_quote_fp_20261107.rs (target/debug/deps/heredoc_python_triple_quote_fp_20261107-aa64d1a056fa3fe1)
-error: test failed, to rerun pass `-p blastguard --test heredoc_python_triple_quote_fp_20261107`"""
-
-[[task]]
-id = "38a44b30"
-title = "pre-push cargo check lets test-target compile errors through"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Root cause: lockstep bump touches Cargo.lock -> pre-push widens to cargo check --all-targets --workspace -> feature unification enables harness-core/fault-injection for tdd via other members' dev-deps, masking tdd's missing feature (cargo check --all-targets -p tdd exits 101, --workspace exits 0). Branch red-prepush-test-compile @ 6ddc3ead. Observed by gate-severity-probe 2026-11-11 cf954b43."
-created_at = 1794394700
-updated_at = 1794394700
-weight = 0.0
-issue_number = 1641
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1641"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_prepush_checks_test_targets_20261111.py"
-rev = "6ddc3ead4cba720aea28b50459615fc05fb4e9e4"
-observed_at = 1794394700
-detail = """
-exit 1: p tdd` exited 101
-
-scripts/test_prepush_checks_test_targets_20261111.py:133: AssertionError
-=========================== short test summary info ============================
-FAILED scripts/test_prepush_checks_test_targets_20261111.py::PrePushChecksTestTargets::test_prepush_cargo_check_fails_on_test_target_compile_error
-============================== 1 failed in 35.42s =============================="""
 
 [[task]]
 id = "c96f571a"
@@ -628,68 +321,6 @@ exit 101: ng condukt v0.7.382 (/Users/yuki/src/.harness-worktrees/session-8cca7e
 error: test failed, to rerun pass `-p condukt --test backlog_scout_20261112_f4_stale_open_runs`"""
 
 [[task]]
-id = "46e6839f"
-title = "condukt worktree merge の per-merge lint (fmt/clippy) を撤去し push 段へ移す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "scout",
-    "L4",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "scout 2026-11-12, RED observed at 656b1c38, verified (independent verifier, no re-run). QA1: user ruling 2026-11-12 retracted backlog 0a68823d's per-merge lint; lint moves to the push tier for touched crates only. crates/condukt/src/worktree.rs:1166,1604 still run cargo fmt/clippy on every merge (stub cargo argv log)."
-created_at = 1794434306
-updated_at = 1794434306
-weight = 0.0
-issue_number = 1649
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1649"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_scout_20261112_qa1_merge_runs_lint -- --ignored"
-rev = "9c71a19fed28cf0f1a46f8909076f5bcb60e67ed"
-observed_at = 1794434306
-detail = """
-exit 101: condukt v0.7.382 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
-     Running tests/backlog_scout_20261112_qa1_merge_runs_lint.rs (target/debug/deps/backlog_scout_20261112_qa1_merge_runs_lint-fc425879f3e39751)
-error: test failed, to rerun pass `-p condukt --test backlog_scout_20261112_qa1_merge_runs_lint`"""
-
-[[task]]
-id = "9a2f5a08"
-title = "blastguard FP: grep パターン中の install と head -6 を install コマンドと誤読して deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "scout",
-    "L2",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "scout 2026-11-12, RED observed at 656b1c38, verified (independent verifier, no re-run). S3: verbatim read-only grep chain denied: 'cannot determine the operands of this install (unrecognised install option -6)'. Should allow."
-created_at = 1794434311
-updated_at = 1794434311
-weight = 0.0
-issue_number = 1650
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1650"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_scout_20261112_s3_s4_readonly_fp -- --ignored s3_grep_pattern_install_then_head_dash_6_is_allowed"
-rev = "9c71a19fed28cf0f1a46f8909076f5bcb60e67ed"
-observed_at = 1794434311
-detail = """
-exit 101: stguard v0.2.458 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
-     Running tests/backlog_scout_20261112_s3_s4_readonly_fp.rs (target/debug/deps/backlog_scout_20261112_s3_s4_readonly_fp-f628a472411e6d50)
-error: test failed, to rerun pass `-p blastguard --test backlog_scout_20261112_s3_s4_readonly_fp`"""
-
-[[task]]
 id = "758debfd"
 title = "blastguard FP: ~/.claude/settings.json を読むだけの python3 -c を deny"
 project = "/Users/yuki/src/harness"
@@ -753,38 +384,6 @@ scripts/test_scout_20261112_f3_cap_clean_failed_repro.py:80: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_scout_20261112_f3_cap_clean_failed_repro.py::CapCleanMarker::test_failed_clean_must_not_write_marker
 ========================= 1 failed, 1 passed in 0.77s =========================="""
-
-[[task]]
-id = "32b69400"
-title = "condukt: run cap の判定と worktree 作成の間にロックが無く、並行 create で MAX_PARALLEL を超える問題を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "audit-20261113",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "C2. run_cap.rs enforce_run_cap and main.rs ~3590 create_namespaced have no lock between check and create. RED (verbatim): attempt 0: CONDUKT_MAX_PARALLEL=1 but two concurrent creates for run-c2 produced successes=2, live worktrees=2 (cap 1). Race test: 20 attempts; a pass does not prove absence of the race. source: audit 2026-11-13 (condukt run run-20261112-072718-37987 follow-ups; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."
-created_at = 1794516617
-updated_at = 1794516617
-weight = 0.0
-issue_number = 1653
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1653"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261113_c2_run_cap_race -- --ignored concurrent_creates_under_cap_one_do_not_both_succeed"
-rev = "99e1d092f0fe8213c94668b9757b20be93d0a46d"
-observed_at = 1794516617
-detail = """
-exit 101: ates/blastguard)
-   Compiling condukt v0.7.387 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.63s
-     Running tests/backlog_20261113_c2_run_cap_race.rs (target/debug/deps/backlog_20261113_c2_run_cap_race-4e128417c8c1a893)
-error: test failed, to rerun pass `-p condukt --test backlog_20261113_c2_run_cap_race`"""
 
 [[task]]
 id = "da84db1c"
@@ -1067,3 +666,101 @@ exit 101: 0.2.475 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/bl
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s
      Running tests/backlog_20261113_commit_heredoc_backtick_fp.rs (target/debug/deps/backlog_20261113_commit_heredoc_backtick_fp-f62566408a5777c8)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_commit_heredoc_backtick_fp`"""
+
+[[task]]
+id = "a2d36aa2"
+title = "blastguard FP: deny reason quotes heredoc body text '> t,' as a relative redirect (unresolvable cd)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Repro: cargo test -p blastguard --test backlog_20261113_heredoc_body_fp -- --ignored a_unresolvable_cd_reason_does_not_quote_heredoc_body_as_redirect (commit 611d5c58). Does not reproduce with a resolvable cd."
+created_at = 1794520706
+updated_at = 1794520706
+weight = 0.0
+issue_number = 1665
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1665"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_heredoc_body_fp -- --ignored a_unresolvable_cd_reason_does_not_quote_heredoc_body_as_redirect"
+rev = "611d5c58fb18fbf61e530ef04235aa734d7f642d"
+observed_at = 1794520706
+detail = """
+exit 101: _as_redirect
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.42s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-d10a0f2b109334d2)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_heredoc_body_fp`"""
+
+[[task]]
+id = "b8344e33"
+title = "blastguard FP: python3 quoted heredoc with wildcard-rm text in a string literal denied as recursive rm"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Repro: cargo test -p blastguard --test backlog_20261113_heredoc_body_fp -- --ignored b_python_string_literal_with_rm_text_is_data_not_a_command (commit 611d5c58). Same program without the text is only an ask."
+created_at = 1794520708
+updated_at = 1794520708
+weight = 0.0
+issue_number = 1666
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1666"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_heredoc_body_fp -- --ignored b_python_string_literal_with_rm_text_is_data_not_a_command"
+rev = "611d5c58fb18fbf61e530ef04235aa734d7f642d"
+observed_at = 1794520708
+detail = """
+exit 101: ot_a_command
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.52s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-d10a0f2b109334d2)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_heredoc_body_fp`"""
+
+[[task]]
+id = "e787b168"
+title = "backlog sync: open-local/closed-remote の食い違いを検出・解消しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "issue-sync",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794521535
+updated_at = 1794521535
+weight = 0.0
+issue_number = 1667
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1667"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_sync_detects_closed_remote_open_local -- --include-ignored"
+rev = "5633a31d3de3acbb470bbe8fa5096c4a4c6c776c"
+observed_at = 1794521535
+detail = """
+exit 101: d; 0 measured; 0 filtered out; finished in 0.65s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261113_sync_detects_closed_remote_open_local.rs (target/debug/deps/backlog_20261113_sync_detects_closed_remote_open_local-8fab923a3b589cee)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_sync_detects_closed_remote_open_local`"""

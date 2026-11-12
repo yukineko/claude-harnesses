@@ -9,6 +9,11 @@
 //! (observed in /bin/bash 3.2, /bin/sh and /bin/zsh, see
 //! `tests/heredoc_paren_bash32_verifier_20261107.rs`).
 //!
+//! Since backlog 9a2f5a08 the three segment splitters themselves honour
+//! backslash-escaped quotes ([`super::segment::quote_escape_pair`]); they
+//! still know no `#` comments, and the other line-level quote trackers of
+//! [`super::detect_bash`] know neither, so this reading is still needed.
+//!
 //! [`shell_lexed_reading`] re-spells the line the way the shell tokenises it,
 //! so that the naive trackers read it correctly: every `#` comment is removed
 //! (its newline kept) and every backslash-escaped `'`/`"`/`` ` `` — one the

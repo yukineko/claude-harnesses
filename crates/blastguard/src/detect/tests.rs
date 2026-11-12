@@ -4812,3 +4812,41 @@ fn mutkill_temp_disposable_refuses_git_and_protected_spellings() {
     t.file(".claude/notes.txt");
     assert!(temp_disposable_redirect_target("notes.txt", &ctx2));
 }
+
+/// Backlog 9a2f5a08: the splitters now honour backslash-escaped quotes
+/// (`quote_escape_pair`). These are the still-refused side of that change:
+/// an escape that the shell does NOT read as one must not hide a real command.
+#[test]
+fn escaped_quote_splitting_does_not_hide_real_commands() {
+    // A genuine unknown-option `install` is still refused, alone and after an
+    // escaped quote in an earlier segment.
+    for cmd in [
+        "install -6 a b",
+        r#"grep -E "a\"b" x; install -6 a b"#,
+        // Unquoted `\"` is a literal quote, so `;` still separates.
+        r#"echo \"; install -6 a b"#,
+        // `\\` is an escaped backslash: the `"` after it closes the string.
+        r#"echo "a\\"; install -6 a b"#,
+        // Inside single quotes a backslash is literal: `'a\'` closes there.
+        r#"echo 'a\'; install -6 a b"#,
+    ] {
+        assert!(bash(cmd).is_blocking(), "must not be Allow: {cmd}");
+    }
+    // A protected-path write after an escaped quote is still judged.
+    for cmd in [
+        r#"grep -E "a\"b" x; install src .claude/settings.json"#,
+        r#"echo \"; install src .claude/settings.json"#,
+        r#"echo "a\\"; install src .claude/settings.json"#,
+    ] {
+        assert!(bash(cmd).is_blocking(), "protected write not gated: {cmd}");
+    }
+    // The segmentation itself: the escaped quote stays inside the string, so
+    // the `|` in it is text and the real pipe still cuts.
+    assert_eq!(
+        split_segments(r#"grep -E "a\"b|install" f | head -6"#),
+        vec![
+            r#"grep -E "a\"b|install" f "#.to_string(),
+            " head -6".into()
+        ]
+    );
+}

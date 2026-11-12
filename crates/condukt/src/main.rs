@@ -3587,9 +3587,18 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
     let repo = worktree::toplevel(cwd)?;
     match action {
         WtAction::Create { topic, branch, run } => {
-            if let Some(r) = run.as_deref() {
-                run_cap::enforce_run_cap(&repo, &cfg.worktree_base, r, cfg.max_parallel)?;
-            }
+            // The run-cap lock is held across the cap check AND the create
+            // (dropped at the end of this arm), so two concurrent creates for
+            // the same run cannot both pass the check (backlog 32b69400).
+            // Cannot-acquire refuses the create (fail-closed).
+            let _cap_lock = match run.as_deref() {
+                Some(r) => {
+                    let guard = run_cap::acquire_run_cap_lock(cfg, &repo, r)?;
+                    run_cap::enforce_run_cap(&repo, &cfg.worktree_base, r, cfg.max_parallel)?;
+                    Some(guard)
+                }
+                None => None,
+            };
             let path = worktree::create_namespaced(
                 &repo,
                 &cfg.worktree_base,

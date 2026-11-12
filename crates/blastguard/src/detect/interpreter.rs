@@ -7,6 +7,7 @@ use crate::exclude;
 mod comments;
 mod inert_literal;
 mod invocation;
+mod open_mode;
 mod osascript;
 mod python_file;
 mod python_semantics;
@@ -303,11 +304,16 @@ const INTERPRETER_WRITE_CALLS: &[&str] = &[
     "o_rdwr",
     "o_trunc",
     "o_creat",
+    "o_append",
     "writefilesync(",
     "createwritestream(",
     "file.write(",
-    // `open(path, 'w')` and friends. The mode operand is matched WITH its
-    // quotes and closing paren so an identifier ending in `w` cannot match.
+    // `open(path, <mode>)` is NOT decided by these spellings any more: every
+    // `open(`-family call's mode is parsed by `open_mode::write_capable_open`
+    // (append/update/create/keyword/undetermined modes included, backlog
+    // 6cac93af). The `'w'` spellings below stay as a net for non-`open` calls
+    // taking a mode operand (`zipfile.ZipFile(p,'w')`). They are matched WITH
+    // their quotes so an identifier ending in `w` cannot match.
     ",'w')",
     ", 'w')",
     ",\"w\")",
@@ -364,12 +370,20 @@ fn names_unwritable_directory(
 
 /// The overwrite-shaped call in `payload`, if any. Case-folded for the same
 /// reason as [`interpreter_destructive_call`].
+///
+/// Two sources, either one suffices: the fixed spellings in
+/// [`INTERPRETER_WRITE_CALLS`], and the STRUCTURAL mode judgement of every
+/// `open(...)`-family call in [`open_mode::write_capable_open`] (backlog
+/// 6cac93af) — a literal mode containing `w`/`a`/`x`/`+` (or Perl's `>`) is
+/// write-capable, and a mode that cannot be determined statically is treated
+/// as write-capable; an absent or read-only mode (`'r'`, `'rb'`, `'rt'`) is not.
 fn interpreter_write_call(payload: &str) -> Option<&'static str> {
     let lowered = payload.to_ascii_lowercase();
     INTERPRETER_WRITE_CALLS
         .iter()
         .find(|needle| lowered.contains(**needle))
         .copied()
+        .or_else(|| open_mode::write_capable_open(&lowered))
 }
 
 /// Whether EVERY occurrence of `literal` in `payload` is positively a

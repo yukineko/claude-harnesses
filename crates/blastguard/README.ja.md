@@ -617,6 +617,17 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   次行の呼び出しを飲み込んで allow になっていた。原文が読めず、かつ語が複数トークンに
 >   またがる（＝区切りが失われた）ときは allow せず ask に倒す（`word_separators_lost`）。
 >   `env -S` の引数はこの変更の対象外で、従来どおり空白 1 個で繋ぎ直す（未検証）。
+>   0.2.483 以降（backlog 6cac93af）、プログラムが**書き込むか**（パスリテラルへの
+>   回復可能性／システムディレクトリ判定を起動するか）は、`'w'` 系の綴りの列挙ではなく、
+>   `open(` 系呼び出し（`open`・`io.open`・`codecs.open`・`os.fdopen`・`pathlib.Path.open`・
+>   Node の `fs.open`/`openSync`・Ruby の `File.open`・Perl の 3 引数 `open`）のモードを
+>   構文的に読んで決める（`src/detect/interpreter/open_mode.rs`）。リテラルのモードが
+>   `w`・`a`・`x`・`+`（または Perl の `>`）のいずれかを含めば書き込み、静的に決まらない
+>   モード（変数・式・`*args`/`**kwargs`）は書き込みとみなし（判定不能は制限側）、
+>   モード無し・読み取り専用モード（`'r'`・`'rb'`・`'rt'`）は書き込みではない。`os.open` の
+>   フラグは、全項が読み取り専用フラグ（`O_RDONLY`・`O_CLOEXEC` 等）でない限り書き込み。
+>   これにより `open('/etc/hosts','a')`・`'r+'`・`'x'`・`mode='a'` も `'w'` と同様に deny
+>   される。`Path.write_text` や Node の `appendFileSync` はこの規則の対象外（未対応）。
 
 当時、overwatch の continuous-audit 再発トラッカー（`overwatch violations --json`）が
 `blastguard:truncating-redirect` と `blastguard:code-interpreter-inline-eval` を

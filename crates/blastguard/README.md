@@ -61,7 +61,19 @@ allowed). A re-join that cannot be checked against the source and has lost a
 word's separators is an ask, never an allow. A program that demonstrably deletes something, or whose
 embedded shell line is destructive, is a deny; one that names a protected
 gate/config path is an ask; a benign program such as `python3 -c "print(1)"`
-is allowed (0.2.59). Running a script **file** (`python3 app.py`,
+is allowed (0.2.59). Since 0.2.483 (backlog 6cac93af) whether a program
+**writes** — which turns on the recoverability / system-directory probe of its
+path literals — is decided for every `open(`-family call (`open`, `io.open`,
+`codecs.open`, `os.fdopen`, `pathlib.Path.open`, Node `fs.open`/`openSync`,
+Ruby `File.open`, Perl three-argument `open`) by parsing its mode
+(`src/detect/interpreter/open_mode.rs`), not by listing `'w'` spellings: a
+literal mode containing `w`, `a`, `x`, `+` (or Perl's `>`) is a write, a mode
+that cannot be determined statically (variable, expression, `*args`/`**kwargs`)
+is treated as a write, and an absent or read-only mode (`'r'`, `'rb'`, `'rt'`)
+is not. `os.open` flags are a write unless every term is a read-only flag
+(`O_RDONLY`, `O_CLOEXEC`, …). So `open('/etc/hosts','a')`, `'r+'`, `'x'` and
+`mode='a'` are denied like `'w'` was; `Path.write_text` and Node
+`appendFileSync` are not covered by this rule. Running a script **file** (`python3 app.py`,
 `python3 -m …`) is not judged. A `>` in program text whose "target" cannot be
 determined (`print(1 > 0)`, a backticked `` `<k(r)>/x.json` `` in a comment) is
 an `ask` marked "Recommended: do not run this." — never a deny, never an allow

@@ -92,7 +92,6 @@ const WRITING_MODES: &[&str] = &[
 // test-weakening-justified: new RED for an unfixed CRITICAL fail-open (backlog
 // pending, 2026-11-13); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: <backlog-pending> 2026-11-13 python open() in append/update/create mode on a system path is allowed — remove the ignore when fixed"]
 fn python_open_writing_modes_on_system_path_are_not_allowed() {
     let home = unique_home("red");
     let mut failures = Vec::new();

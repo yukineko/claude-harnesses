@@ -555,3 +555,23 @@ verbatim), `target` (file-tool path), `cwd` (as given), `actor`
 system-harm deny). Older lines lack these fields, which means **unknown**, not
 false. Commands are stored verbatim and may contain secrets; the ledger is
 local under `$HOME` and there is no redaction.
+
+### `blastguard log` — read-only ledger listing
+
+```
+blastguard log [--decision deny|ask] [--rule <id>] [--since <RFC3339|Ns|Nm|Nh|Nd>]
+               [--system-harm] [--subagent | --interactive] [--json]
+```
+
+Lists the `source=blastguard` lines of the current project's `violations.jsonl`
+in file order. Never reads stdin, never modifies the ledger. Text mode prints
+`decision=<v> actor=<v> system_harm=<v> rule=<id>` plus the command/target;
+`--json` prints one object per line (`ts, rule, decision, tool, command,
+target, cwd, actor, system_harm`). A field missing from an old ledger line is
+`unknown` (text) / `null` (JSON), never guessed. **A filter never matches an
+unknown field**; such entries are dropped and stderr reports how many were
+`excluded`. Exit codes: `0` success (an absent ledger prints `no ledger at
+<path>` on stderr), `2` usage error, `3` ledger path/read failure (stdout empty),
+unparsable line (`line <N>` on stderr; valid entries are still printed) or
+stdout write failure. Commands are printed verbatim and may contain secrets
+(the ledger is local under `$HOME`).

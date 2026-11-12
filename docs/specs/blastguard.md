@@ -393,6 +393,15 @@ forge・condukt のスケジューラが再利用）。
   `compile`/`subprocess`/… および文字列引数を実行する `timeit`/`cprofile`/`profile.run`/`pdb.run`/
   `settimeout`/`setinterval`/`vm.run`/`new function`）を 1 つでも含めば降格しない（substring
   heuristic なので false hit は Deny 側に倒れる）。program 内の別の実呼び出しが出す Deny は降格に優先する。
+- **inline program は原文のまま判定する（`detect/payload.rs` の `faithful_tail`、
+  `detect/interpreter/invocation.rs` の `analyze_code_interpreter`、backlog c619b13f、blastguard 0.2.481）** —
+  python / node / perl / ruby / php / deno の `-c`/`-e`（くっついた `-c"…"`、`--eval=` を含む）の inline program、here-string・
+  プロセス置換で interpreter に渡る program、`sh -c`／`bash -c`／`flock -c`／`eval`／`exec`／`source`／`.`、
+  `find -exec`／`xargs` 経由の同等形、`cd X && …` の書き換え後の行は、空白分割した語を空白で繋ぎ直した文字列
+  ではなく、segment 原文から切り出した**改行・連続空白を保った原文**（shell の quote を外したもの）で判定する。
+  繋ぎ直しでは改行が潰れ、`#` コメントが次行の system-harm 呼び出しを飲み込んで Allow になっていた
+  （critical fail-open）。原文が切り出せず語が複数トークンにまたがる場合（`word_separators_lost`）は Allow を Ask に
+  倒す（判定不能は制限側）。`env -S` は従来どおり繋ぎ直しで、原文化は未検証。
 - **stdin here-document の program text は body だけ（`detect/payload.rs` の
   `analyze_interpreter_stdin_exec`、`detect/heredoc.rs` の `first_line_quoted_here_document_body`、
   backlog aafeaa05）** — `python3 - <<'PY'` 等で stdin から program を受け取る stage の program text

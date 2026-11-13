@@ -76533,3 +76533,185 @@ rev = "9e5bfaf26154954c8dc50288bc1018861b4ef992"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "036067bf"
+title = "blastguard: system-harm program piped into a subshell/brace-group/source reader (printf 'chmod 777 /etc/hosts' | (bash)) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-14 by an independent verifier on blastguard 0.2.530 (branch commit 0e726e66) and main build 144906a1; re-observed at main 4139f1d2 (0.2.539): all Allow in main and subagent mode: printf/echo 'chmod 777 /etc/hosts' piped into (bash), { bash; }, . /dev/stdin, source /dev/stdin. Control: piping into bare bash is Deny. RED commit fa080792 on branch test/bg-red-pipe-reader-and-py-argv."
+created_at = 1794601310
+updated_at = 1794612085
+weight = 0.0
+issue_number = 1734
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1734"
+issue_closed_at = 1794612088
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_into_subshell_brace_source_reader -- --include-ignored"
+rev = "fa080792966cccefbe3e040a53de25b6add39720"
+observed_at = 1794601310
+detail = """
+exit 101: -pipe-reader-and-py-argv/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.02s
+     Running tests/backlog_20261114_pipe_into_subshell_brace_source_reader.rs (target/debug/deps/backlog_20261114_pipe_into_subshell_brace_source_reader-efad5afd787342ac)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_into_subshell_brace_source_reader`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_into_subshell_brace_source_reader"
+exit = 0
+passed = 2
+rev = "407aa044d9ff262f399135d4589cac31a1bc83b9"
+observed_at = 1794612084
+output_digest = "sha256:c8959ee9806dcce1b5e6459ba1e7300d76e281b89d04049795493d617127f9ee"
+excerpt = """
+
+running 2 tests
+test control_pipe_into_bare_bash_is_deny ... ok
+test pipe_into_subshell_brace_or_source_reader_is_deny ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+
+   Compiling blastguard v0.2.557 (/Users/yuki/.condukt/worktrees/run-20261114-075136-6996-t4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/backlog_20261114_pipe_into_subshell_brace_source_reader.rs (target/debug/deps/backlog_20261114_pipe_into_subshell_brace_source_reader-e5ee398aedbd785a)
+"""
+
+[task.closure.red]
+rev = "e4a1e763ed252a35bd1f24b46b435ea00677da39"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "de914866"
+title = "blastguard: system-harm program piped to a shell with value-taking flags or -s args (echo 'chmod 777 /etc/hosts' | bash -o pipefail) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-14 by t2 implementer on builds 0e726e66 and aa47d220; re-observed on 0.2.540 worktree build: allow/allow (main/subagent) for: echo 'chmod 777 /etc/hosts' | bash -o pipefail ; | bash -s a b ; | bash -O extglob ; | bash --rcfile f ; | sh -s a b ; | sh -o pipefail. Deny/deny: | bash, | bash -e, | bash -s. Suspected (unverified) cause: detect/payload.rs stage_has_program_operand treats a flag value or -s positionals as a script file. RED commit 0ab93794 on branch test/bg-red-pipe-reader-and-py-argv (ignored RED + non-ignored control)."
+created_at = 1794604275
+updated_at = 1794612095
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_shell_with_value_flags_or_s_args -- --include-ignored"
+rev = "0ab93794b711e8c74d0dfaed9183824ac6493d90"
+observed_at = 1794604275
+detail = """
+exit 101: eader-and-py-argv/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.50s
+     Running tests/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args.rs (target/debug/deps/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args-74dc82015cfb998f)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_shell_with_value_flags_or_s_args`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_shell_with_value_flags_or_s_args"
+exit = 0
+passed = 2
+rev = "407aa044d9ff262f399135d4589cac31a1bc83b9"
+observed_at = 1794612093
+output_digest = "sha256:c27cac9bd30005e66c855b301dea3499feb932534ca0ca39f37d4027c1708314"
+excerpt = """
+
+running 2 tests
+test control_harmful_program_piped_to_plain_shell_is_deny ... ok
+test harmful_program_piped_to_shell_with_value_flag_or_s_args_is_deny ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+   Compiling blastguard v0.2.557 (/Users/yuki/.condukt/worktrees/run-20261114-075136-6996-t4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args.rs (target/debug/deps/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args-1a1cb20b57ebe210)
+"""
+
+[task.closure.red]
+rev = "fa81bc1c5e5b929af47b34c6394b09239913b274"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "72872200"
+title = "blastguard system-harm fail-open: shell program fed by procsub / pipe / fd 3 / zsh `=()` is Allow inside compound commands (subshell, brace group, if/while/for body)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "RED by a non-implementer agent on branch test/bg-red-pipe-reader-and-py-argv (merged to main 2601e70c), finding E of the run-20261114-035331-33292 t2 verifier rounds. Test file crates/blastguard/tests/backlog_20261114_compound_wrapped_or_cross_stage_shell_program.rs (#[ignore] RED + control)."
+created_at = 1794605297
+updated_at = 1794612097
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_compound_wrapped_or_cross_stage_shell_program -- --include-ignored"
+rev = "2601e70c0b56dc8b21d7ac14e00edae73f8cf8a8"
+observed_at = 1794605297
+detail = """
+exit 101: cf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.85s
+     Running tests/backlog_20261114_compound_wrapped_or_cross_stage_shell_program.rs (target/debug/deps/backlog_20261114_compound_wrapped_or_cross_stage_shell_program-0508ab66e52c7b88)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_compound_wrapped_or_cross_stage_shell_program`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_compound_wrapped_or_cross_stage_shell_program"
+exit = 0
+passed = 2
+rev = "407aa044d9ff262f399135d4589cac31a1bc83b9"
+observed_at = 1794612095
+output_digest = "sha256:f4d75105cf138dedd10c432289497c67c4dff49476a0d670e858ed0cfdc41c41"
+excerpt = """
+
+running 2 tests
+test control_bare_pipe_to_bash_and_subshell_chmod_are_deny ... ok
+test compound_wrapped_or_cross_stage_shell_program_is_deny ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/backlog_20261114_compound_wrapped_or_cross_stage_shell_program.rs (target/debug/deps/backlog_20261114_compound_wrapped_or_cross_stage_shell_program-d5814b61f52ca1cb)
+"""
+
+[task.closure.red]
+rev = "b31308706c3e9e758822c47be599851787d8b168"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

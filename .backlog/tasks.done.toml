@@ -74190,3 +74190,66 @@ rev = "13e3e7793be3f865be3af6874e78a2816116593f"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "6cac93af"
+title = "blastguard: python open() の a/a+/ab/r+/x/mode='a' による system パス書き込みが allow になる fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "CRITICAL system-harm fail-open observed on main d37ae072 2026-11-13 (main and subagent mode): python3 -c open('/etc/hosts', 'a'|'a+'|'ab'|'r+'), 'x' on /etc/blastguard-red-x, and mode='a' are ALLOWED; 'w'/'w+' are denied. Cause: INTERPRETER_WRITE_CALLS only spells w-family modes. RED f1cadb77 (non-implementer); observed: 12 python open() write(s) to a system path were ALLOWED / test result: FAILED. Control control_w_mode_on_system_path_is_denied non-ignored."
+created_at = 1794524573
+updated_at = 1794530467
+weight = 0.0
+issue_number = 1669
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1669"
+issue_closed_at = 1794530469
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_python_open_nonw_mode_system_path python_open_writing_modes_on_system_path_are_not_allowed -- --include-ignored"
+rev = "f1cadb771b362bfba3a6a3d2242c7a2a2fc6df83"
+observed_at = 1794524573
+detail = """
+exit 101: src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running tests/backlog_20261113_python_open_nonw_mode_system_path.rs (target/debug/deps/backlog_20261113_python_open_nonw_mode_system_path-1b26efc81c96b0da)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_python_open_nonw_mode_system_path`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261113_python_open_nonw_mode_system_path"
+exit = 0
+passed = 2
+rev = "75070a369d59c9319e760d5dcab82bbde3f64061"
+observed_at = 1794530460
+output_digest = "sha256:ed88066826bc3f5f6cd738f1d8b42f902683f2c185ffd3be9f75850e3fd16662"
+excerpt = """
+
+running 2 tests
+test control_w_mode_on_system_path_is_denied ... ok
+test python_open_writing_modes_on_system_path_are_not_allowed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s
+
+   Compiling blastguard v0.2.493 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.04s
+     Running tests/backlog_20261113_python_open_nonw_mode_system_path.rs (target/debug/deps/backlog_20261113_python_open_nonw_mode_system_path-6633c9ec53f98acd)
+"""
+
+[task.closure.red]
+rev = "f1cadb771b362bfba3a6a3d2242c7a2a2fc6df83"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

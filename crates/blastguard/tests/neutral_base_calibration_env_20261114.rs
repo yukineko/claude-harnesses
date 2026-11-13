@@ -89,7 +89,6 @@ fn run_child(extra: &[(&str, &str)]) -> (bool, String) {
 }
 
 #[test]
-#[ignore = "RED: neutral_base calibration depends on the caller's CLAUDECODE env (backlog done clears it)"]
 fn neutral_base_works_under_backlog_done_env() {
     let (ok, text) = run_child(&[]);
     assert!(

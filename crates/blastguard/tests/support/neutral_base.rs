@@ -100,6 +100,18 @@
 //!     `/private/var/folders`), which would make every Deny assertion pass
 //!     for the wrong reason and every Allow assertion fail.
 //!
+//! Calibration env: the probe runs the hook with `env_clear()` plus `PATH`
+//! (for `git`), and sets exactly `HOME=<calib>/home`,
+//! `CLAUDE_PROJECT_DIR=<cwd>`, `BLASTGUARD_APPROVALS_DIR=<calib>/store`,
+//! `CLAUDE_CODE_ENTRYPOINT=cli` and `CLAUDECODE=1`. So `BLASTGUARD_ASK`,
+//! `TMPDIR`, `CLAUDE_CODE_SESSION_ID`, `HARNESS_SANDBOX_HOME`, `GIT_*` and
+//! every other caller variable are absent. The two mode variables are both
+//! required: `interactive::ask_available()` needs `CLAUDECODE=1` AND
+//! `CLAUDE_CODE_ENTRYPOINT=cli`, else the confined Ask of probe 2 is hardened
+//! to Deny and every candidate is rejected. Observed 2026-11-14 under the env
+//! `backlog done` gives its test command (INHERITED_ENV only, no `CLAUDECODE`):
+//! RED `tests/neutral_base_calibration_env_20261114.rs`.
+//!
 //! A location that fails either probe is rejected with the hook's output. When
 //! no candidate calibrates, this PANICS with every rejection — the tests fail
 //! loudly rather than run somewhere their assertions stop observing the
@@ -427,6 +439,13 @@ fn run_probe(calib: &Path, proj: &Path, home: &Path, target: &Path) -> Result<St
     })
     .to_string();
     let mut hook = Command::new(env!("CARGO_BIN_EXE_blastguard"));
+    // The probe's environment is PINNED, not inherited (module docs,
+    // "Calibration env"): only PATH passes through; everything the hook reads
+    // to pick its mode or its roots is set or absent here.
+    hook.env_clear();
+    if let Some(path) = std::env::var_os("PATH") {
+        hook.env("PATH", path);
+    }
     hook.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -434,9 +453,7 @@ fn run_probe(calib: &Path, proj: &Path, home: &Path, target: &Path) -> Result<St
         .env("BLASTGUARD_APPROVALS_DIR", calib.join("store"))
         .env("HOME", home)
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
-        .env_remove("BLASTGUARD_ASK")
-        .env_remove("TMPDIR")
-        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env("CLAUDECODE", "1")
         .current_dir(calib);
     // Bounded (support/bounded.rs): a spawn failure, a `try_wait` failure or
     // a hook that does not exit within the deadline PANICS here rather than

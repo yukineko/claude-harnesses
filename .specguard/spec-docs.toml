@@ -165,6 +165,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'inline program は原文のまま判定する': analyze_code_interpreter (moved unchanged out of interpreter.rs for the file-size cap, 4b21587b) judges the faithful -c/-e program text and turns Allow into Ask when word separators were lost (backlog c619b13f)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/interpreter/open_mode.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'open() 系呼び出しの mode は構文で判定する': parses the mode operand of open/fdopen/opensync calls (write iff w/a/x/+/>, undetermined = write, int flags 0 = read), lexer-scoped code tokens for known python, non-ASCII fail-closed (backlog 6cac93af)."
+
+[[spec]]
 path = "crates/blastguard/src/detect/interpreter/osascript.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '埋め込み shell 文字列の Ask と osascript の削除': osascript_app_delete / osascript_program_delete (Finder / System Events delete, empty or move to trash, or an application target that is not one plain literal, is a system-harm Deny however the program arrives; backlog 0fefcd3b, 3c750df2)."

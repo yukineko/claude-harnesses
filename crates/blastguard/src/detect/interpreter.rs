@@ -7,6 +7,7 @@ use crate::exclude;
 mod comments;
 mod inert_literal;
 mod invocation;
+mod open_mode;
 mod osascript;
 mod python_file;
 mod python_semantics;
@@ -303,11 +304,16 @@ const INTERPRETER_WRITE_CALLS: &[&str] = &[
     "o_rdwr",
     "o_trunc",
     "o_creat",
+    "o_append",
     "writefilesync(",
     "createwritestream(",
     "file.write(",
-    // `open(path, 'w')` and friends. The mode operand is matched WITH its
-    // quotes and closing paren so an identifier ending in `w` cannot match.
+    // `open(path, <mode>)` is NOT decided by these spellings any more: every
+    // `open(`-family call's mode is parsed by `open_mode::write_capable_open`
+    // (append/update/create/keyword/undetermined modes included, backlog
+    // 6cac93af). The `'w'` spellings below stay as a net for non-`open` calls
+    // taking a mode operand (`zipfile.ZipFile(p,'w')`). They are matched WITH
+    // their quotes so an identifier ending in `w` cannot match.
     ",'w')",
     ", 'w')",
     ",\"w\")",
@@ -364,12 +370,24 @@ fn names_unwritable_directory(
 
 /// The overwrite-shaped call in `payload`, if any. Case-folded for the same
 /// reason as [`interpreter_destructive_call`].
-fn interpreter_write_call(payload: &str) -> Option<&'static str> {
+///
+/// Two sources, either one suffices: the fixed spellings in
+/// [`INTERPRETER_WRITE_CALLS`], and the STRUCTURAL mode judgement of every
+/// `open(...)`-family call in [`open_mode::write_capable_open`] (backlog
+/// 6cac93af) — a literal mode containing `w`/`a`/`x`/`+` (or Perl's `>`) is
+/// write-capable, a non-zero integer mode/flags is write-capable, a mode that
+/// cannot be determined statically is treated as write-capable, and so is any
+/// program that uses the name `open` other than as a call (an import or
+/// alias); an absent or read-only mode (`'r'`, `'rb'`, `'rt'`) is not.
+/// `python_code` says `payload` is known Python program text, which lets that
+/// judgement look only at code tokens (see the module doc of `open_mode`).
+fn interpreter_write_call(payload: &str, python_code: bool) -> Option<&'static str> {
     let lowered = payload.to_ascii_lowercase();
     INTERPRETER_WRITE_CALLS
         .iter()
         .find(|needle| lowered.contains(**needle))
         .copied()
+        .or_else(|| open_mode::write_capable_open(payload, python_code))
 }
 
 /// Whether EVERY occurrence of `literal` in `payload` is positively a
@@ -924,7 +942,7 @@ pub(super) fn interpreter_code_verdict(
         depth,
         ctx,
         &program_ctx,
-        (expansion_possible, strings_are_data),
+        (expansion_possible, strings_are_data, python),
         &mentions,
     );
     // A destructive spelling that `inert_literal_bodies` showed sits only inside
@@ -1051,7 +1069,7 @@ fn interpreter_program_verdict(
     depth: usize,
     ctx: &Ctx<'_>,
     program_ctx: &Ctx<'_>,
-    (expansion_possible, strings_are_data): (bool, bool),
+    (expansion_possible, strings_are_data, python): (bool, bool, bool),
     mentions: &Mentions,
 ) -> Decision {
     // Descend through nested quoting rather than stopping at the first layer.
@@ -1257,7 +1275,9 @@ files or directories outright if that string is run as code; blastguard cannot s
                     return Decision::Deny(reason);
                 }
             }
-            let write_call = interpreter_write_call(payload);
+            // Only the layer-0 text of a `python` invocation is known to be
+            // Python, so only it is read with the Python lexer.
+            let write_call = interpreter_write_call(payload, python && depth_of_layer == 0);
             let mut probed = 0usize;
             for literal in &literals {
                 let candidate = literal.trim();

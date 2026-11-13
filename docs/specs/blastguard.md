@@ -402,6 +402,19 @@ forge・condukt のスケジューラが再利用）。
   繋ぎ直しでは改行が潰れ、`#` コメントが次行の system-harm 呼び出しを飲み込んで Allow になっていた
   （critical fail-open）。原文が切り出せず語が複数トークンにまたがる場合（`word_separators_lost`）は Allow を Ask に
   倒す（判定不能は制限側）。`env -S` は従来どおり繋ぎ直しで、原文化は未検証。
+- **`open()` 系呼び出しの mode は構文で判定する（`detect/interpreter/open_mode.rs`、backlog 6cac93af、
+  blastguard 0.2.493）** — inline program 中の `open` / `fdopen` / `opensync`（`io.` / `codecs.` / `os.` 等の
+  receiver 付きを含む）の呼び出しについて、mode operand を位置引数・`mode=` から取り出し、literal が
+  `w` / `a` / `x` / `+` / `>` のいずれかを含めば書き込みとして書き込み先 probe に掛ける（`'a'`・`'ab'`・`'r+'`・
+  `'x'`・`mode='a'` を含む）。mode が静的に決まらない（変数・式・f-string・splat・閉じない引数列）なら書き込み扱い、
+  整数は `os.open` flags として `0` のみ読み取り、mode 省略は読み取り。呼び出しでない `open` の出現
+  （alias・`partial(open, …)` 等）は program 全体を判定不能＝書き込み扱いにする。既知の python（layer 0、
+  `exec`/`eval`/`getattr` 系の動的実行印も f-string も無い）は Python lexer でコードトークンだけを数え、
+  文字列・`#` コメント中の `open` は数えない。コードトークンに非 ASCII 文字があれば判定不能（NFKC 正規化で
+  `ｏｐｅｎ` が `open` になるため）。それ以外は原文走査で、どこかに非 ASCII 英数字があれば判定不能。
+  shell の quote 除去（`detect/words.rs` の `first_shell_word`）は POSIX の行継続を実装し、unquoted と
+  double quote 内の `\`＋改行を取り除く（single quote 内は保持）。トップレベルのコマンド語・引数の行継続と
+  Python 文字列 literal 内の行継続は未対応（RED 06143f1b、別 backlog）。
 - **stdin here-document の program text は body だけ（`detect/payload.rs` の
   `analyze_interpreter_stdin_exec`、`detect/heredoc.rs` の `first_line_quoted_here_document_body`、
   backlog aafeaa05）** — `python3 - <<'PY'` 等で stdin から program を受け取る stage の program text

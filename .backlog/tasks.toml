@@ -886,38 +886,6 @@ exit 101: 0.06s
 error: test failed, to rerun pass `-p condukt --test worktree_remove_orphan_leftover`"""
 
 [[task]]
-id = "47b20647"
-title = "blastguard: python 文字列 literal 内の行継続 (backslash+LF) で組んだ system パスへの open 書き込みが allow になる fail-open を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "system-harm",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "System-harm fail-open found by the 6cac93af round-4 independent verifier probe; RED 06143f1b by a non-implementer, observed on main 47ec0a2e and identical at 02553aa8, still failing on c6532fe0: 6 of 6 (shape x mode) BN-in-literal runs were ALLOWED. Python removes backslash+LF inside a non-raw string literal, so '/etc/ho<BN>sts' names /etc/hosts: single-quoted -c, double-quoted -c with an escaped backslash, and via an assigned variable. Controls with a plain path are Deny; the raw-string negative control is printed only."
-created_at = 1794530734
-updated_at = 1794530734
-weight = 0.0
-issue_number = 1677
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1677"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261113_python_string_literal_line_continuation -- --include-ignored"
-rev = "5563f65575df39437ee2299a1f5faf3a7a78a58d"
-observed_at = 1794530734
-detail = """
-exit 101: rees/session-8cca7ef5/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
-     Running tests/backlog_20261113_python_string_literal_line_continuation.rs (target/debug/deps/backlog_20261113_python_string_literal_line_continuation-392be96f8ef05a27)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261113_python_string_literal_line_continuation`"""
-
-[[task]]
 id = "8a85894b"
 title = "backlog merge-driver --install pins a versioned plugin-cache path that prune-plugin-cache.py later deletes, so .backlog/tasks.toml merges fall back to conflict"
 project = "/home/hiroyuki_nakayama/src/harness"

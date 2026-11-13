@@ -110,7 +110,6 @@ const SHAPES: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: 2026-11-14 system-harm program fed to a shell inside a compound command / via fd 3 / zsh =() / subshell pipe is Allow — remove the ignore when fixed"]
 fn compound_wrapped_or_cross_stage_shell_program_is_deny() {
     let home = unique_home("red");
     let mut bad = Vec::new();

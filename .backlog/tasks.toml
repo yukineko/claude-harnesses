@@ -1734,6 +1734,8 @@ notes = "Observed 2026-11-14 in a subagent. A command that runs one command, the
 created_at = 1794603914
 updated_at = 1794603914
 weight = 0.0
+issue_number = 1739
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1739"
 rev = 0
 
 [task.repro]

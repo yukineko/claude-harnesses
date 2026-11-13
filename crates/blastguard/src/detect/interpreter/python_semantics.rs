@@ -35,7 +35,12 @@ pub(super) enum Tok {
 }
 
 /// Lex `src`. `#` comments are dropped, a backslash-newline joins lines, and
-/// a string prefix (`r`, `b`, `f`, `rb`, …) belongs to its string. An
+/// a string prefix (`r`, `b`, `f`, `rb`, …) belongs to its string. A
+/// non-raw string's text is its value with escapes decoded
+/// ([`super::python_escape::decode_non_raw`]); a raw string's text, and a
+/// non-raw body that cannot be decoded statically (`\N{…}`), is its body with
+/// every backslash pair `\X` read as `X` (not Python's value for a raw string:
+/// Python keeps the backslash). An
 /// unterminated string runs to the end of the text (the caller has already
 /// refused a body that does not tokenise).
 pub(super) fn lex(src: &str) -> Vec<Tok> {
@@ -64,13 +69,15 @@ pub(super) fn lex(src: &str) -> Vec<Tok> {
             continue;
         }
         if c == '\'' || c == '"' {
-            let mut fstring = false;
+            let (mut fstring, mut raw, mut bytes) = (false, false, false);
             if let Some(Tok::Name { text, end, .. }) = out.last() {
                 if *end == byte_at(i)
                     && text.len() <= 2
                     && text.chars().all(|p| "rRbBuUfF".contains(p))
                 {
                     fstring = text.contains(['f', 'F']);
+                    raw = text.contains(['r', 'R']);
+                    bytes = text.contains(['b', 'B']);
                     out.pop();
                 }
             }
@@ -78,6 +85,8 @@ pub(super) fn lex(src: &str) -> Vec<Tok> {
                 && chars.get(i + 2).map(|p| p.1) == Some(c);
             let q = if triple { 3 } else { 1 };
             i += q;
+            let body_start = byte_at(i);
+            let mut body_end = src.len();
             let mut s = String::new();
             while i < chars.len() {
                 let d = chars[i].1;
@@ -93,11 +102,23 @@ pub(super) fn lex(src: &str) -> Vec<Tok> {
                         || (chars.get(i + 1).map(|p| p.1) == Some(c)
                             && chars.get(i + 2).map(|p| p.1) == Some(c)))
                 {
+                    body_end = byte_at(i);
                     i += q;
                     break;
                 }
                 s.push(d);
                 i += 1;
+            }
+            // A non-raw literal's value is its body with escapes decoded the
+            // way Python does — notably a backslash-newline is REMOVED, so
+            // `'/etc/ho\<LF>sts'` is `/etc/hosts` (backlog 47b20647). A raw
+            // literal, or a body `decode_non_raw` cannot decode statically
+            // (`\N{…}`), keeps the reading above.
+            if !raw {
+                let body = src.get(body_start..body_end.max(body_start)).unwrap_or("");
+                if let Some(decoded) = super::python_escape::decode_non_raw(body, bytes) {
+                    s = decoded;
+                }
             }
             out.push(Tok::Str { text: s, fstring });
             continue;

@@ -233,6 +233,18 @@ forge・condukt のスケジューラが再利用）。
   `tests/backlog_20261113_bn_shell_stdin_payload.rs`・
   `tests/line_continuation_deny_and_controls_20261113.rs`（system-harm は main・subagent とも Deny、
   無害な行継続コマンドは Allow のまま）。
+- **Python の非 raw 文字列 literal は escape を decode した値でも判定する（backlog 47b20647、
+  `detect/interpreter/python_escape.rs` の `decode_non_raw`）** — Python は非 raw literal
+  （`'…'`・`"…"`・三重引用・`b''`・`f''`）の中の `\`＋改行を取り除くので、`open('/etc/ho\<LF>sts','w')`
+  は `/etc/hosts` に書く。literal 本文（改行を含むので候補 path から外れていた）だけを見ていたため Allow
+  になっていた。Python lexer（`python_semantics::lex`）の非 raw 文字列の text を Python と同じ decode
+  （`\`＋LF／CRLF の除去、`\\` `\'` `\"` `\a` `\b` `\f` `\n` `\r` `\t` `\v`、8 進、`\xHH`、str のみ
+  `\uXXXX`/`\UXXXXXXXX`、それ以外の `\` 対はそのまま）にし、`python -c` の layer-0 program では
+  その decode 値も `interpreter_code_verdict` の literal 集合に**追加**して判定する（置き換えない）。
+  `\N{…}` など静的に decode できない本文は従来の読みのまま。raw literal（`r'…'`、Python は `\` と改行を残す）
+  は decode しない。テストは `tests/backlog_20261113_python_string_literal_line_continuation.rs`・
+  `tests/python_literal_line_continuation_deny_20261113.rs`（system-harm 形は main・subagent とも Deny、
+  `print('a\<LF>b')`・`open('/tmp/x\<LF>y','w')`・raw 形は Allow のまま）。
 - **git の exec-capable 形は一律 Deny（backlog fb338793、ユーザー裁定 2026-11-07「git bisectでいろいろ
   構文を処理できてしまうくらいなら使用を禁止した方がいいのでは?」）** — git が呼び出し側の選んだコマンドを
   実行する形は、埋め込みコマンドの中身に関わらず Deny（`detect/git.rs` の `git_exec_ban`。

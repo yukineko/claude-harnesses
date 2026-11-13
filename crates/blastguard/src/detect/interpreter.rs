@@ -9,6 +9,7 @@ mod inert_literal;
 mod invocation;
 mod open_mode;
 mod osascript;
+mod python_escape;
 mod python_file;
 mod python_semantics;
 mod shell_calls;
@@ -1227,7 +1228,24 @@ files or directories outright if that string is run as code; blastguard cannot s
                 }
                 Decision::Ask(_) | Decision::Allow => {}
             }
-            let literals = quoted_string_literals(payload);
+            let mut literals = quoted_string_literals(payload);
+            // PYTHON LITERAL VALUES (backlog 47b20647). The bodies above are
+            // the text between the quotes; Python's value of a non-raw literal
+            // decodes its escapes and REMOVES a backslash-newline, so
+            // `open('/etc/ho\<LF>sts','w')` writes `/etc/hosts` while its body
+            // holds an LF the candidate loop below skips as whitespace. The
+            // layer-0 text of a `python` invocation is read with the Python
+            // lexer and every decoded value that differs from the bodies is
+            // judged as well — an added reading, never a replacement.
+            if python && depth_of_layer == 0 {
+                for t in python_semantics::lex(payload) {
+                    if let python_semantics::Tok::Str { text, .. } = t {
+                        if !text.trim().is_empty() && !literals.contains(&text) {
+                            literals.push(text);
+                        }
+                    }
+                }
+            }
             // GATE-DISABLING axis, checked on the OBJECTS rather than the verbs.
             //
             // `perl -e "unlink q{.githooks/pre-commit}"` reached Allow while

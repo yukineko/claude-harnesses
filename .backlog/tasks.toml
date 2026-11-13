@@ -1714,3 +1714,36 @@ exit 101: ukt/worktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-wtscope/crates
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
      Running tests/backlog_7483e85b_twin_pending_ask_20261107.rs (target/debug/deps/backlog_7483e85b_twin_pending_ask_20261107-f96b304257c29984)
 error: test failed, to rerun pass `-p blastguard --test backlog_7483e85b_twin_pending_ask_20261107`"""
+
+[[task]]
+id = "ab2097c5"
+title = "blastguard: wait with the last-background-PID argument inside sh -c is judged as a command word (FP; bare form is Allow)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 in a subagent: a sh -c script with a background subshell followed by wait and the last-background-PID parameter was blocked with the reason that the command word is an expansion whose value only exists at run time. The real command word is wait; the parameter is only its argument. Reproduced at c4336b61 on 2026-11-14: the bare form (sleep 1 in background, then wait with that parameter) is Allow, but the same text wrapped in /bin/sh -c is Ask with that reason. Controls stay non-Allow: the parameter as a real command word, and wait followed by a destructive rm of /etc. Test file: crates/blastguard/tests/wait_bang_argument_fp_20261114.rs (r2 is the ignored RED). Second shape, UNVERIFIED: the same family blocked this very backlog add (rev 3feeb8bc, 2026-11-14) when its quoted title contained the text wait backslash-dollar-bang; the block said wait is not a command blastguard recognises and the following token parses as a destructive command line. Not isolated into a test."
+created_at = 1794602089
+updated_at = 1794602089
+weight = 0.0
+issue_number = 1737
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1737"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test wait_bang_argument_fp_20261114 -- --ignored"
+rev = "ccd48c0bf99a794e7a1c88104a968cd2e9800ca1"
+observed_at = 1794602089
+detail = """
+exit 101: d out; finished in 1.09s
+
+   Compiling blastguard v0.2.543 (/Users/yuki/src/harness-wt-fp-wait-bang/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.71s
+     Running tests/wait_bang_argument_fp_20261114.rs (target/debug/deps/wait_bang_argument_fp_20261114-3e368ab0dd0b3bd6)
+error: test failed, to rerun pass `-p blastguard --test wait_bang_argument_fp_20261114`"""

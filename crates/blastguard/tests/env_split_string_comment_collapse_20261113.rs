@@ -96,3 +96,44 @@ fn control_harmless_env_split_string_stays_allowed() {
     let home = unique_home("ctl");
     assert_eq!(decide("env -S 'ls -la'", &home, false), "allow");
 }
+
+// --- Added 2026-11-14 by the flow-8cca7ef5 orchestrator (non-implementer) ---
+// Probe of the 8262cfd4 fix (scratchpad run/e45-adv-out.txt), measured with
+// the hook binary on branch and main d84e8cab:
+//   env -S '... # x\nos.chmod(...)'  (env's own `\n` escape inside double
+//   quotes)  -> branch allow/allow, main allow/allow   (R2 not met)
+//   env -S 'ls   -la'                -> branch ask/deny, main allow/allow
+//                                       (false positive introduced by 8262cfd4)
+// DOES NOT PROVE: other env -S escapes (\t, \c, \_, ${VAR}); GNU vs BSD env
+// differences beyond `\n` inside double quotes.
+
+/// env -S turns `\n` inside a double-quoted part into a newline, so python
+/// receives two lines and runs os.chmod; R2 requires not Allow.
+const ENV_ESCAPED_NEWLINE: &str =
+    "env -S 'python3 -c \"import os # x\\nos.chmod(\\\"/etc/hosts\\\",0)\"'";
+
+#[test]
+#[ignore = "RED: env -S backslash-n escape hides the call (R2); removed by the fixing commit"]
+fn env_split_string_escaped_newline_payload_is_not_allowed() {
+    let home = unique_home("esc");
+    let main = decide(ENV_ESCAPED_NEWLINE, &home, false);
+    let sub = decide(ENV_ESCAPED_NEWLINE, &home, true);
+    assert!(
+        main == "ask" || main == "deny",
+        "main session must be Ask or Deny, got {main}: {ENV_ESCAPED_NEWLINE:?}"
+    );
+    assert_eq!(
+        sub, "deny",
+        "subagent must be Deny, got {sub}: {ENV_ESCAPED_NEWLINE:?}"
+    );
+}
+
+/// A harmless env -S whose quoted operand has a run of spaces is split by env
+/// into `ls` `-la`; it was Allow at main d84e8cab and must stay Allow.
+#[test]
+#[ignore = "RED: false positive introduced on the e4523bfd branch; removed by the fixing commit"]
+fn harmless_env_split_string_with_space_runs_stays_allowed() {
+    let home = unique_home("spc");
+    assert_eq!(decide("env -S 'ls   -la'", &home, false), "allow");
+    assert_eq!(decide("env -S 'ls   -la'", &home, true), "allow");
+}

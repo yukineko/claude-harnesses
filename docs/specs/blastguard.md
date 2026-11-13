@@ -50,6 +50,14 @@ forge・condukt のスケジューラが再利用）。
   `**/package.json`, `*.toml`/`*.yaml`/`*.yml`/`*.lock`, `.config/**` 等の glob）に一致するパスは、
   破壊的な形（空内容 Write、再帰/ワイルドカード rm、truncating redirect target）でも allow。
   `exclude::normalize` がクォート除去・`\`→`/`・先頭 `./` 除去を行う。
+- **テスト fixture（git repo を含む）は workspace の `target/` 配下に作らない** — blastguard の integration
+  test が作る fixture（とりわけ `git init` / `git worktree add` した repo）が `target/`（`CARGO_TARGET_TMPDIR`
+  / `<workspace>/target`）に残ると、その worktree は無視されたビルド出力ディレクトリ内に入れ子の `.git`
+  を持ち、forced な worktree 撤去が正しく Ask（subagent は Deny）になって撤去できなくなる
+  （観測: 842 個の `.git`）。`support/neutral_base.rs` の `neutral_base()` の実パスが `target/` 配下に
+  ならないこと、および `target/` 配下に git repo を作るテストファイルが無いことを
+  `tests/fixtures_outside_target_20261114.rs` が固定する（RED、fix 待ちで `#[ignore]`）。`/tmp` 系の
+  safe root も避ける（fixture の場所が判定を左右しない）こと自体は引き続き要件。
 
 ## 振る舞い
 

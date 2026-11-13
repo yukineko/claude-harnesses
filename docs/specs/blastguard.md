@@ -860,6 +860,18 @@ forge・condukt のスケジューラが再利用）。
   Ask（subagent では Deny）になる。`\$PY ...` の部分を除いた同形は Allow（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_printf_operand_judged_as_command_fp.rs`
   （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の system-harm fail-open の RED（2026-11-14、subshell / brace group / source reader への pipe。修正は未実装）** —
+  `printf 'chmod 777 /etc/hosts' | (bash)`・`| { bash; }`・`| . /dev/stdin`・`| source /dev/stdin`、および `echo ... | (bash)`・
+  `echo ... | { bash; }` は main・subagent のどちらでも Allow（0.2.539 で再観測。独立 verifier が 0.2.530 / main 144906a1 で観測）。
+  素の `| bash` は Deny（control）。system harm は常に Deny であるべき。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_pipe_into_subshell_brace_source_reader.rs`
+  （`#[ignore]` の RED 1 本 + control。独立 test author が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の false positive の RED（2026-11-14、printf で書いたファイルを python の data 引数に渡す形。修正は未実装）** —
+  `printf '%s\n' a b > d.txt && python3 s.py d.txt` が、`d.txt` を python の program として判定して Ask（subagent では Deny）になる
+  （printf の format-reuse が未モデルのため）。`d.txt` は `s.py` の argv であって program ではない。単一 conversion の printf は Allow。
+  `> s.py && python3 s.py`（ファイルが program）は non-Allow のまま（control）。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_printf_file_as_python_data_arg_fp.rs`
+  （`#[ignore]` の RED 1 本 + control。独立 test author が書いた。証明しない範囲はファイル冒頭の doc comment）。
 - **CR で終わる python コメントの system-harm fail-open（2026-11-14、flow-8cca7ef5、backlog a66c115c で修正済み）** —
   CPython は program を字句解析する前に `\r\n` と裸の CR（`\r`）を `\n` に変換する（3.12.11 で `python3 -c`・stdin・
   ファイル・`compile` のいずれでも観測: CR は `#` コメントを終え、文を区切り、`\` の行継続になり、三重引用符内では値 `\n`、

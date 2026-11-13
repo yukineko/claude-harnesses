@@ -628,3 +628,13 @@ reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-1
 path = "crates/blastguard/tests/backlog_20261114_heredoc_rs_body_match_arrow_fp.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14。修正は未実装）': a quoted heredoc .rs body with a match arrow (=>) followed by a python3 heredoc statement is denied as a redirect; RED test plus real-redirect and executed-heredoc controls."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_pipe_into_subshell_brace_source_reader.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-14、subshell / brace group / source reader への pipe。修正は未実装）': a program piped into (bash), { bash; }, . /dev/stdin or source /dev/stdin is Allow in main and subagent mode; RED test plus a bare `| bash` Deny control."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_printf_file_as_python_data_arg_fp.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14、printf で書いたファイルを python の data 引数に渡す形。修正は未実装）': a printf-with-format-reuse file passed as argv to a python script is Ask (subagent Deny) as if it were the program; RED test plus file-is-the-program controls."

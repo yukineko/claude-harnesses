@@ -79,12 +79,20 @@ fn run_tool(env: &Env, tool: &str, cmd: &str, cwd: &Path) -> (Option<i32>, Strin
         .write_all(payload.to_string().as_bytes())
         .unwrap();
     let out = child.wait_with_output().unwrap();
-    (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned())
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
 }
 
 /// Asserts DENY and returns the reason.
 fn assert_deny(res: &(Option<i32>, String), what: &str) -> String {
-    assert_eq!(res.0, Some(0), "{what}: exit must be 0 (stdout={:?})", res.1);
+    assert_eq!(
+        res.0,
+        Some(0),
+        "{what}: exit must be 0 (stdout={:?})",
+        res.1
+    );
     let v: serde_json::Value = serde_json::from_str(&res.1)
         .unwrap_or_else(|e| panic!("{what}: stdout not JSON ({e}): {:?}", res.1));
     let h = &v["hookSpecificOutput"];
@@ -95,8 +103,17 @@ fn assert_deny(res: &(Option<i32>, String), what: &str) -> String {
 }
 
 fn assert_allow(res: &(Option<i32>, String), what: &str) {
-    assert_eq!(res.0, Some(0), "{what}: exit must be 0 (stdout={:?})", res.1);
-    assert!(res.1.trim().is_empty(), "{what}: expected empty stdout, got {:?}", res.1);
+    assert_eq!(
+        res.0,
+        Some(0),
+        "{what}: exit must be 0 (stdout={:?})",
+        res.1
+    );
+    assert!(
+        res.1.trim().is_empty(),
+        "{what}: expected empty stdout, got {:?}",
+        res.1
+    );
 }
 
 fn deny_cases_in_repo(cmds: &[&str]) {

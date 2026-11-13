@@ -618,3 +618,8 @@ reason = "'振る舞い' bullet '未修正の RED（2026-11-14、flow-8cca7ef5�
 path = "crates/blastguard/tests/backlog_20261114_procsub_list_quote_output_fp.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14、t2 実装者の観測。修正は未実装）: procsub list の出力に引用符': a statically harmless echo list in a process substitution fed to a shell is Ask/Deny only because its output holds a quote; RED test plus a system-harm twin control that stays Deny."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_procsub_rcfile_init_file.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の RED（2026-11-14、orchestrator の観測。修正は未実装）: procsub を --rcfile / --init-file に渡す': an interactive bash sources a process substitution given as --rcfile / --init-file as a program, yet it is Allow although it runs a system-file re-permission; RED test plus a harmless-twin control that stays Allow."

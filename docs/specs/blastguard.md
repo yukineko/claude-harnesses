@@ -850,6 +850,14 @@ forge・condukt のスケジューラが再利用）。
   control: 同じ引用符入り list の 2 つ目の echo が system file の re-permission を出力する形は main / subagent とも Deny のまま。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_procsub_list_quote_output_fp.rs`
   （`#[ignore]` の RED 1 本 + control。独立 author が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の RED（2026-11-14、orchestrator の観測。修正は未実装）: procsub を `--rcfile` / `--init-file` に渡す** —
+  interactive bash は `--rcfile` / `--init-file` の引数を program として source する。その値が process substitution で、
+  出力が `/etc/hosts` の re-permission のとき（`bash --init-file <(…) -i` / `bash --rcfile <(…) -i` /
+  `bash --rcfile <(…)` / `bash -i --rcfile <(…)` / `bash --rcfile=<(…) -i`）、実行されるのに main / subagent とも Allow。
+  procsub 側が option の値を判定せず消費しているため。system harm は常に Deny。
+  control: 無害な `bash --rcfile <(echo hi) -i` / `bash --init-file <(echo hi) -i` は Allow のまま。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_procsub_rcfile_init_file.rs`
+  （`#[ignore]` の RED 1 本 + control。独立 author が書いた。証明しない範囲はファイル冒頭の doc comment）。
 
 ### module 責務
 

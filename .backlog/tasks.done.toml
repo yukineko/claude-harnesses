@@ -75557,3 +75557,66 @@ rev = "675b6d8a5083aaa516888b4ceae51e3a042eea19"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "d3f7a4af"
+title = "backlog: repo-store row identity follows the filer's absolute path, so same-repo rows filed on another machine are never claimed (next --claim/recheck)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "fail-closed",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "User ruling 2026-11-14: 本質的というのは問題の質は通常パスでゆらぐものではない. RED c4702fad (tests/backlog_20261114_repo_store_identity_not_path.rs a/b/d; K1/32d9232c other-repo cases ignored). 18 rows with project=/home/hiroyuki_nakayama/src/harness are skipped forever on this Mac by claim_recheck::rerun_dir. Also: a label naming an existing different repo is re-run there and auto-cancelled instead of skipped."
+created_at = 1794596566
+updated_at = 1794597151
+weight = 0.0
+issue_number = 1726
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1726"
+issue_closed_at = 1794597153
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261114_repo_store_identity_not_path -- --ignored"
+rev = "c4702fadb6dca37780949690869a48c168d849e4"
+observed_at = 1794596566
+detail = """
+exit 101: g backlog v0.3.119 (/Users/yuki/src/harness-wt-repo-identity/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.58s
+     Running tests/backlog_20261114_repo_store_identity_not_path.rs (target/debug/deps/backlog_20261114_repo_store_identity_not_path-4c18206575601db7)
+error: test failed, to rerun pass `-p backlog --test backlog_20261114_repo_store_identity_not_path`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261114_repo_store_identity_not_path"
+exit = 0
+passed = 4
+rev = "144906a1c2ca84e430cff6676b8095c70c28f239"
+observed_at = 1794597149
+output_digest = "sha256:7f1d671173ea5597972b6ac35f78217c5fe7cd1e98f4dcd602ac97c7038c5c9c"
+excerpt = """
+
+running 4 tests
+test c_list_project_includes_old_root_row ... ok
+test b_repro_rerun_happens_in_this_checkout ... ok
+test d_sole_old_root_candidate_is_claimed_not_refused ... ok
+test a_claim_takes_same_repo_row_with_nonexistent_label ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.14s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/backlog_20261114_repo_store_identity_not_path.rs (target/debug/deps/backlog_20261114_repo_store_identity_not_path-1bb97ab2a7f40c59)
+"""
+
+[task.closure.red]
+rev = "c4702fadb6dca37780949690869a48c168d849e4"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

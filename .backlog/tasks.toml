@@ -1279,41 +1279,6 @@ test result: FAILED. 0 passed; 11 failed; 0 ignored; 0 measured; 0 filtered out;
 error: test failed, to rerun pass `-p blastguard --test tmp_truncation_recoverable`"""
 
 [[task]]
-id = "2711e9e1"
-title = "blastguard: bounded_helper test-support timeout/kill fails on Linux at 8dedad41 (3 tests)"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "linux-baseline",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-13 at main 8dedad41 and 1fd747e9, Linux WSL2, /bin/sh is dash, kill on PATH is /usr/bin/kill from procps-ng 4.0.4. Deterministic: same 3 failures with default threads and with test-threads=1 (so not parallelism). Failures verbatim: (1) timeout_kills_the_child_and_its_descendants: after a timeout neither the stub nor its sleep child may stay alive; still alive: [both pids]; the helper's panic says sent SIGTERM to process group N (kill: Ok(ExitStatus 0)). (2) slow_stdin_read_then_overrun_is_cut_at_the_deadline: the single 3s deadline was not honoured: run_bounded took 8.01s. (3) exit_after_slow_read_with_stdin_held_by_a_grandchild_is_cut_at_the_deadline: expected a timeout panic naming the stdin write, got stdin write of 1048576 bytes to /bin/sh failed: Broken pipe (exit status 0). Root cause 1 (tests 1 and 2), observed by probe: tests/support/bounded.rs timed_out spawns kill with args -TERM then -PGID (no double-dash separator). procps-ng kill exits 0 and signals NOTHING for that argv (all 3 processes of the group still alive 0.5s later); with a double-dash before -PGID the group dies. BSD kill on macOS accepts the form, so this only bites on Linux. Root cause 2 (test 3), observed by probe: the stub runs sleep in the background with stdin dup'd from fd 0; under dash an async list gets /dev/null as stdin before its own redirections, so the grandchild's fd 0 is /dev/null, not the pipe (bash keeps the pipe). The pipe therefore has no reader once the stub exits and the 1MB write gets EPIPE instead of blocking. Reading (a) product defect: not applicable, run_bounded is test support only; product kill calls (harness-core run_lock, overwatch/hypothesis lock) use kill -0 PID with a positive pid. Reading (b) test/env assumption: confirmed for both causes. Side effect worth noting: on Linux every blastguard integration test that hits the run_bounded deadline leaks the hung hook process group instead of killing it. tests/log_subcommand_20261113.rs also uses the same kill form (currently not failing)."
-created_at = 1794547764
-updated_at = 1794547764
-weight = 0.0
-issue_number = 1698
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1698"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test bounded_helper"
-rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
-observed_at = 1794547764
-detail = """
-exit 101: _at_the_deadline
-    timeout_kills_the_child_and_its_descendants
-
-test result: FAILED. 6 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.17s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.40s
-     Running tests/bounded_helper.rs (target/debug/deps/bounded_helper-66b2010f75e1b41c)
-error: test failed, to rerun pass `-p blastguard --test bounded_helper`"""
-
-[[task]]
 id = "99c1a088"
 title = "blastguard: no_unbounded_child_wait source-scan lint fails at 8dedad41 (3 tests, not Linux-specific)"
 project = "/home/hiroyuki_nakayama/src/harness"

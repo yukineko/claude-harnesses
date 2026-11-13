@@ -658,3 +658,28 @@ reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-1
 path = "crates/blastguard/tests/backlog_20261114_heredoc_rs_body_match_arrow_fp.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14。修正は未実装）': a quoted heredoc .rs body with a match arrow (=>) followed by a python3 heredoc statement is denied as a redirect; RED test plus real-redirect and executed-heredoc controls."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_pipe_into_subshell_brace_source_reader.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-14、subshell / brace group / source reader への pipe。修正は未実装）': a program piped into (bash), { bash; }, . /dev/stdin or source /dev/stdin is Allow in main and subagent mode; RED test plus a bare `| bash` Deny control."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_printf_file_as_python_data_arg_fp.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14、printf で書いたファイルを python の data 引数に渡す形。修正は未実装）': a printf-with-format-reuse file passed as argv to a python script is Ask (subagent Deny) as if it were the program; RED test plus file-is-the-program controls."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-14、value-taking flag / -s 引数付き shell への pipe。修正は未実装）': a system-path chmod program piped to bash -o pipefail / bash -s a b / bash -O extglob / bash --rcfile f / sh -s a b / sh -o pipefail is Allow in main and subagent mode; RED test plus bare / -e / -s Deny controls."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_zsh_c_literal_echo_dash_fp.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14、shell -c の literal program 内の echo - foo。修正は未実装）': zsh/bash -c with a literal program containing a lone-dash echo operand is refused as a stdin program; RED test plus harmless-variant Allow and harmful -c Deny controls."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_compound_wrapped_or_cross_stage_shell_program.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-14、compound command 内 / fd 3 / zsh =() / subshell pipe で shell に渡る program。修正は未実装）': a system-path program fed to a shell via process substitution inside (), { }, if/while/for bodies, via fd 3, zsh =( ) or a pipe inside a subshell is Allow in main and subagent mode; RED test plus bare pipe-to-shell and subshell Deny controls."

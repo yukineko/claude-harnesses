@@ -899,6 +899,39 @@ forge・condukt のスケジューラが再利用）。
   Ask（subagent では Deny）になる。`\$PY ...` の部分を除いた同形は Allow（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_printf_operand_judged_as_command_fp.rs`
   （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の system-harm fail-open の RED（2026-11-14、subshell / brace group / source reader への pipe。修正は未実装）** —
+  `printf 'chmod 777 /etc/hosts' | (bash)`・`| { bash; }`・`| . /dev/stdin`・`| source /dev/stdin`、および `echo ... | (bash)`・
+  `echo ... | { bash; }` は main・subagent のどちらでも Allow（0.2.539 で再観測。独立 verifier が 0.2.530 / main 144906a1 で観測）。
+  素の `| bash` は Deny（control）。system harm は常に Deny であるべき。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_pipe_into_subshell_brace_source_reader.rs`
+  （`#[ignore]` の RED 1 本 + control。独立 test author が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の false positive の RED（2026-11-14、printf で書いたファイルを python の data 引数に渡す形。修正は未実装）** —
+  `printf '%s\n' a b > d.txt && python3 s.py d.txt` が、`d.txt` を python の program として判定して Ask（subagent では Deny）になる
+  （printf の format-reuse が未モデルのため）。`d.txt` は `s.py` の argv であって program ではない。単一 conversion の printf は Allow。
+  `> s.py && python3 s.py`（ファイルが program）は non-Allow のまま（control）。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_printf_file_as_python_data_arg_fp.rs`
+  （`#[ignore]` の RED 1 本 + control。独立 test author が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の system-harm fail-open の RED（2026-11-14、value-taking flag / `-s` 引数付き shell への pipe。修正は未実装）** —
+  system file（/etc 配下の hosts）を world-writable にする program を `echo` で `bash -o pipefail` / `bash -s a b` /
+  `bash -O extglob` / `bash --rcfile f` / `sh -s a b` / `sh -o pipefail` に pipe すると main・subagent とも Allow になる
+  （flag の値や `-s` 以降の位置引数を script ファイルと見なして stdin を検査しない疑い。未検証）。素の `| bash`・`| bash -e`・
+  `| bash -s` は Deny のまま（control）。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args.rs`
+  （`#[ignore]` の RED 1 本 + control。独立 test author が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の system-harm fail-open の RED（2026-11-14、compound command 内 / fd 3 / zsh `=()` / subshell 内 pipe で shell に渡る program。修正は未実装）** —
+  system file（/etc 配下の hosts）を world-writable にする program を、process substitution 経由で shell に渡す形が
+  subshell `( )`・brace group・`if` / `while` / `for` の本体に入っていると main・subagent とも Allow になる。同じく fd 3 に
+  process substitution を開いて次の文で shell が fd 3 を stdin として読む形、`zsh =( ... )`、subshell 内の pipe 先 shell も Allow
+  （この main 由来の build では素の process substitution 形も Allow。0.2.541 で観測、独立 verifier は 0e726e66 / 572cc1c3 で観測）。
+  素の pipe-to-shell と subshell 内の直接実行は Deny のまま（control）。system harm は常に Deny であるべき。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_compound_wrapped_or_cross_stage_shell_program.rs`
+  （`#[ignore]` の RED 1 本 + control。独立 test author が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の false positive の RED（2026-11-14、shell `-c` の literal program 内の `echo - foo`。修正は未実装）** —
+  `zsh -c 'echo - foo'` / `bash -c 'echo - foo'` が「program は stdin から取る」と誤判定されて Ask（subagent では Deny）になる。
+  program は command line 上にある。`echo -- x` / `echo -nE a` / `echo -x y` は Allow で、引き金は単独の `-` operand。
+  harmless な変種は Allow、harmful な `zsh -c` program（system hosts file を world-writable にする）は Deny のまま（control）。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_zsh_c_literal_echo_dash_fp.rs`
+  （`#[ignore]` の RED 1 本 + control。独立 test author が書いた。証明しない範囲はファイル冒頭の doc comment）。
 - **RED（2026-11-14、flow-8cca7ef5。backlog 6df87a5c・blastguard 0.2.533 で修正済み。`#[ignore]` は外した）: procsub operand と list の twin** — (1) system-harm
   fail-open: シェルに渡す process substitution が先頭 operand でないとき（`bash <(echo '…') foo` の script 引数、
   `bash -x` / `-o pipefail` / `-O extglob` / `--rcfile f` の値取りフラグ、`bash <&3 3< <(…)` の fd dup、

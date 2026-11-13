@@ -1776,3 +1776,32 @@ exit 1: rce.py::MidBuild::test_d2_mutate_then_revert_during_build_is_not_deploye
 FAILED scripts/test_rollout_refuses_dirty_source.py::MidBuild::test_d_source_mutated_during_build_is_not_deployed
 FAILED scripts/test_rollout_refuses_dirty_source.py::MutationMarker::test_f_evaluate_scenario_brackets_mutation_with_marker_and_seq
 ========================= 6 failed, 1 passed in 10.08s ========================="""
+
+[[task]]
+id = "32b414d2"
+title = "blastguard: zsh -c / bash -c with literal program containing 'echo - foo' is refused as a stdin program"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 (subagent refusal: program is taken from stdin and is not on the command line); reproduced on 0.2.540 worktree build: ask/deny (main/subagent) for zsh -c 'echo - foo', bash -c 'echo - foo', and the longer multi-echo shapes. Allow for zsh -c 'echo hi', 'echo -- x', 'echo -nE a', 'echo -x y'; zsh -c 'chmod 777 /etc/hosts' is Deny. Trigger is the lone dash operand. RED commit 0ab93794 on branch test/bg-red-pipe-reader-and-py-argv."
+created_at = 1794604359
+updated_at = 1794604359
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_zsh_c_literal_echo_dash_fp -- --include-ignored"
+rev = "0ab93794b711e8c74d0dfaed9183824ac6493d90"
+observed_at = 1794604359
+detail = """
+exit 101: s/yuki/src/.harness-worktrees/bg-red-pipe-reader-and-py-argv/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.52s
+     Running tests/backlog_20261114_zsh_c_literal_echo_dash_fp.rs (target/debug/deps/backlog_20261114_zsh_c_literal_echo_dash_fp-5e83884faa4461ec)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_zsh_c_literal_echo_dash_fp`"""

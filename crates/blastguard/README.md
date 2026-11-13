@@ -58,10 +58,39 @@ and runs of blanks kept (`faithful_tail` in `src/detect/payload.rs`) — not the
 whitespace-split tokens re-joined by one space, which let a `#` comment swallow
 the call on the next line (`python3 -c "import os # x<NL>os.chmod(…)"` was
 allowed). A re-join that cannot be checked against the source and has lost a
-word's separators is an ask, never an allow. A program that demonstrably deletes something, or whose
+word's separators is an ask, never an allow. Since 0.2.491 the word is
+dequoted with POSIX line continuation (`first_shell_word` in
+`src/detect/words.rs`): a backslash-newline is removed when unquoted or inside
+double quotes — `python3 -c "o\<NL>pen('/etc/hosts','a')"` is judged as the
+`open('/etc/hosts','a')` python receives — and kept literally inside single
+quotes (and `$'…'`); a real newline is never joined. A program that demonstrably deletes something, or whose
 embedded shell line is destructive, is a deny; one that names a protected
 gate/config path is an ask; a benign program such as `python3 -c "print(1)"`
-is allowed (0.2.59). Running a script **file** (`python3 app.py`,
+is allowed (0.2.59). Since 0.2.483 (backlog 6cac93af) whether a program
+**writes** — which turns on the recoverability / system-directory probe of its
+path literals — is decided for every `open(`-family call (`open`, `io.open`,
+`codecs.open`, `os.fdopen`, `pathlib.Path.open`, Node `fs.open`/`openSync`,
+Ruby `File.open`, Perl three-argument `open`) by parsing its mode
+(`src/detect/interpreter/open_mode.rs`), not by listing `'w'` spellings: a
+literal mode containing `w`, `a`, `x`, `+` (or Perl's `>`) is a write, a mode
+that cannot be determined statically (variable, expression, `*args`/`**kwargs`)
+is treated as a write, and an absent or read-only mode (`'r'`, `'rb'`, `'rt'`)
+is not. `os.open` flags are a write unless every term is a read-only flag
+(`O_RDONLY`, `O_CLOEXEC`, …); an integer mode/flags operand is a write unless
+it is `0`. Since 0.2.485 a call is the name, optional whitespace or newline,
+then `(` (`open ('/etc/hosts','a')`); the mode-taking file classes (`FileIO`,
+`ZipFile`, `GzipFile`, `TarFile`, `BZ2File`, `LZMAFile`) and `shelve`/`dbm`
+`open` follow the same rule (dbm flag: only `'r'` is a read; `shelve`'s
+default `'c'` is a write); and any non-call use of the name `open`
+(`from io import open as o`, `from os import open`, `o = open`) makes the
+whole program undetermined, i.e. a write. Since 0.2.489 a known-Python
+program (no `exec`/`eval`/`getattr`-style marker, no f-string) is read with the
+Python lexer, so `open` in a string or `#` comment counts for nothing, and a
+non-ASCII character in a code token (full-width `ｏｐｅｎ`, which Python
+NFKC-normalises to `open`) makes it undetermined; other program text is scanned
+raw, where any non-ASCII letter is undetermined. So `open('/etc/hosts','a')`,
+`'r+'`, `'x'` and `mode='a'` are denied like `'w'` was; `Path.write_text` and
+Node `appendFileSync` are not covered by this rule. Running a script **file** (`python3 app.py`,
 `python3 -m …`) is not judged. A `>` in program text whose "target" cannot be
 determined (`print(1 > 0)`, a backticked `` `<k(r)>/x.json` `` in a comment) is
 an `ask` marked "Recommended: do not run this." — never a deny, never an allow

@@ -2720,17 +2720,15 @@ fn a_reassignment_is_unknowable_when_the_last_reaching_one_is_guarded() {
         resolve_first_expansion_word("BIN=/bin/a; foo && BIN=/bin/b; $BIN x"),
         CommandWordOrigin::AssignedButUnknowable
     );
-    // The mirror image, pinned to make the rule's coarseness visible rather
-    // than leaving it to be discovered. Here `BIN=/bin/b` follows a `;`, so
-    // the shell really does run it on both branches and `/bin/b` really is
-    // the program. This function still refuses, because it asks whether a
-    // conditional appears ANYWHERE earlier on the line rather than tracking
-    // where each and-or list ends (see
-    // `assignment_execution_is_unconditional`). That costs a resolution;
-    // it never invents one.
+    // The mirror image. Here the `;` after `BIN=/bin/a` closes the and-or list
+    // that `&&` guards, so `BIN=/bin/b` stands in a NEW and-or list with no
+    // conditional in it: the shell runs it on both branches, and `/bin/b`
+    // really is the program. The `&&` is only checked within the winning
+    // assignment's own and-or list (see
+    // `assignment_execution_is_unconditional`), so this resolves.
     assert_eq!(
         resolve_first_expansion_word("foo && BIN=/bin/a; BIN=/bin/b; $BIN x"),
-        CommandWordOrigin::AssignedButUnknowable
+        CommandWordOrigin::Literal("/bin/b".to_string())
     );
 }
 

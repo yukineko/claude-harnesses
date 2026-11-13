@@ -53,8 +53,9 @@ pub(super) enum CommandWordOrigin {
     NoReachingAssignment,
     /// (3) An assignment DOES reach this use, but the text still does not name
     /// a program. Every way that happens:
-    ///   * its execution is guarded — by a `&&`/`||`, or by a compound command
-    ///     or subshell opened earlier on the line — so whether it ran in THIS
+    ///   * its execution is guarded — by a `&&`/`||` earlier in its own and-or
+    ///     list, or by a compound command or subshell opened anywhere earlier
+    ///     on the line — so whether it ran in THIS
     ///     shell is a run-time fact the text does not contain (see
     ///     [`assignment_execution_is_unconditional`]). This case differs from
     ///     the others below in that the VALUE may be perfectly readable; the
@@ -426,8 +427,13 @@ pub(super) fn referenced_variable_name(word: &str) -> Option<String> {
 /// The LAST such assignment wins, since each later one overwrites the earlier.
 ///
 /// One further condition applies to that winner alone, and it is about
-/// EXECUTION rather than scope: no `&&`/`||` may stand before it
-/// ([`assignment_execution_is_unconditional`]). A guarded winner answers
+/// EXECUTION rather than scope: no `&&`/`||` may stand before it within its
+/// OWN and-or list, and no compound command, subshell or unclosed
+/// here-document may be opened anywhere before it on the line
+/// ([`assignment_execution_is_unconditional`]). A `&&`/`||` in an earlier
+/// and-or list already closed by `;`, `&` or a newline does not guard it:
+/// `foo && BIN=/bin/a; BIN=/bin/b; $BIN x` resolves to `/bin/b`. A guarded
+/// winner answers
 /// `AssignedButUnknowable` however readable its value is — including when an
 /// earlier UNGUARDED assignment to the same name exists, because then the two
 /// branches genuinely run two different programs and the text does not say

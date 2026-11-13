@@ -127,7 +127,6 @@ fn assert_not_allow(f: &Fx, command: &str) {
 // ---------------------------------------------------------------- RED ----
 
 #[test]
-#[ignore = "RED: and-or list closed by ; still treated as guarding later assignments (2026-11-13)"]
 fn r1_redirect_after_closed_and_list() {
     let f = Fx::new("r1");
     let p = f.out_log();
@@ -140,7 +139,6 @@ fn r1_redirect_after_closed_and_list() {
 }
 
 #[test]
-#[ignore = "RED: and-or list closed by ; still treated as guarding later assignments (2026-11-13)"]
 fn r2_redirect_after_closed_or_list_and_append() {
     let f = Fx::new("r2");
     let p = f.out_log();
@@ -159,7 +157,6 @@ fn r2_redirect_after_closed_or_list_and_append() {
 }
 
 #[test]
-#[ignore = "RED: and-or list closed by ; still treated as guarding later assignments (2026-11-13)"]
 fn r3_redirect_after_closed_cd_and_list() {
     let f = Fx::new("r3");
     let p = f.out_log();
@@ -173,7 +170,6 @@ fn r3_redirect_after_closed_cd_and_list() {
 }
 
 #[test]
-#[ignore = "RED: and-or list closed by ; still treated as guarding later assignments (2026-11-13)"]
 fn r4_command_word_after_closed_list_resolves_to_deny() {
     let f = Fx::new("r4");
     // Baseline without any and-or list: Deny today.
@@ -188,7 +184,6 @@ fn r4_command_word_after_closed_list_resolves_to_deny() {
 }
 
 #[test]
-#[ignore = "RED: and-or list closed by ; still treated as guarding later assignments (2026-11-13)"]
 fn r5_protected_target_through_variable_after_closed_list() {
     let f = Fx::new("r5");
     let literal = "true && true; echo x > .githooks/pre-commit";

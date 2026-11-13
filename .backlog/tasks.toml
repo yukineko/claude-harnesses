@@ -766,38 +766,6 @@ exit 101: d; 0 measured; 0 filtered out; finished in 0.65s
 error: test failed, to rerun pass `-p backlog --test backlog_20261113_sync_detects_closed_remote_open_local`"""
 
 [[task]]
-id = "6cac93af"
-title = "blastguard: python open() の a/a+/ab/r+/x/mode='a' による system パス書き込みが allow になる fail-open を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "system-harm",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "CRITICAL system-harm fail-open observed on main d37ae072 2026-11-13 (main and subagent mode): python3 -c open('/etc/hosts', 'a'|'a+'|'ab'|'r+'), 'x' on /etc/blastguard-red-x, and mode='a' are ALLOWED; 'w'/'w+' are denied. Cause: INTERPRETER_WRITE_CALLS only spells w-family modes. RED f1cadb77 (non-implementer); observed: 12 python open() write(s) to a system path were ALLOWED / test result: FAILED. Control control_w_mode_on_system_path_is_denied non-ignored."
-created_at = 1794524573
-updated_at = 1794524573
-weight = 0.0
-issue_number = 1669
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1669"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261113_python_open_nonw_mode_system_path python_open_writing_modes_on_system_path_are_not_allowed -- --include-ignored"
-rev = "f1cadb771b362bfba3a6a3d2242c7a2a2fc6df83"
-observed_at = 1794524573
-detail = """
-exit 101: src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
-     Running tests/backlog_20261113_python_open_nonw_mode_system_path.rs (target/debug/deps/backlog_20261113_python_open_nonw_mode_system_path-1b26efc81c96b0da)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261113_python_open_nonw_mode_system_path`"""
-
-[[task]]
 id = "b2330a21"
 title = "blastguard FP: quoted python heredoc 本文の >> `y` を append redirect と誤読する"
 project = "/Users/yuki/src/harness"

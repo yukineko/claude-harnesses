@@ -5,13 +5,15 @@
 ## サブコマンドを使うこと
 
 - `add` — `--repro-test` のコミット済みテストが HEAD で落ちた時だけタスクを追加する
-- `list` — store のタスク一覧: `--tag` / `--status`（`pending` / `done` / `failed` / `cancelled` / `claimed` / `ruled-deferred`、`claimed` は導出値、`open` は status ではない）/ `--json`。repo store では `--project` は絞り込みではなく **assertion**（下の「スコープ」参照）
+- `list` — store のタスク一覧: `--tag` / `--status`（`pending` / `done` / `failed` / `cancelled` / `claimed` / `ruled-deferred`（旧 `defer` が書いた legacy 行。新規には書かれない）、`claimed` は導出値、`open` は status ではない）/ `--json`。repo store では `--project` は絞り込みではなく **assertion**（下の「スコープ」参照）
 - `next` — reproduced な repro を持つ pending タスクのうち最高優先度のものを JSON で出力する（`--claim` で予約）
+  - `--claim` は払い出す前に候補の保存済み repro を HEAD で再実行する（下の「保留は無い」参照）。再現すれば払い出し、再現しない・実証されないなら**自動で cancel** して次の候補へ進み、インフラ要因で判定不能なら claim を拒否する（非 0、行は触らない）
 - `done <id>` — タスクを**証拠付きで**完了マークする: `--test CMD --red-rev REV`（`--reason fixed|already-fixed|obsolete`）・`--doc-only COMMIT`・`--duplicate-of ID`。この 3 形式のちょうど 1 つが必要。素の `done <id>` は拒否される
   - **`done` は RED を実行しない**（ユーザー裁定 2026-11-08「backlog doneのRED実行はそもそも全面廃止でいい」）。一時 worktree も、HEAD テストファイルの上書きも、`--red-rev` での実行も無い。実行するのは HEAD での GREEN だけで、その終了ステータス・`<N> passed` 判定・判定不能時の拒否は従来どおり。`--red-rev` は依然必須で、commit に解決できない・HEAD の祖先でない場合は（ビルド無しで）拒否する。解決した rev は**主張された rev としてのみ** `closure.red` に `rev` / `executed = false` / `kind = "not-executed"` / `note`（裁定の引用）で記録され、`exit` は記録されない。この closure は「RED を検証済み」とは読めない: `audit-closures` は `green-only`、`list` は `closed:green` と表示する。`--red-overlay` は削除した（上書きそのものが無くなったため。渡すと usage エラー）。旧形式の closure（`exit` と `kind = "behavioural"` を持つ実測 RED）はそのまま読める。
 - `fail <id>` — タスクを失敗マークする (`--reason`)。再実行を 2 日先送りする
 - `cancel <id> --reason R` — 「やらないと決めた」としてテスト無しで閉じ、`discard` closure として記録する
-- `defer <id> --ruling QUOTE` — ユーザー裁定（見送り）を記録する: status は `ruled-deferred` になり、`next` / `next --claim` は決して払い出さず、再キューもされない。裁定は notes に追記される。`fail` と `edit --status` はキューへ戻すことを拒否し、`add` は同じ内容の再起票を `--force` なしでは拒否する。抜け出す経路は `cancel` / `done` だけ
+- `defer <id>` — **廃止**（ユーザー裁定 2026-11-13「保留はありえない実証されないならclose,実証されたらopen」）。常に非 0 で拒否し、何も書かない。保留状態は存在しない
+- `recheck [--id ID]` — open 行（`pending` / `failed` / legacy `ruled-deferred`、生きた lease 中の行は除く）の保存済み repro を再実行して解決する: reproduced → open のまま（legacy `ruled-deferred` は `pending` に戻る）／ not-reproduced・not-demonstrated・repro 記録なし → 自動 cancel（`discard` closure に判定・cmd・rev・exit code・出力末尾を逐語記録し、mirror の issue を `cancel` と同じく close）／ undeterminable → 行は触らず stderr に名指しし、残りを処理した後に非 0 終了。行ごとに `<verdict>\t<action>\t<id>` を 1 行出力する
 - `audit-closures` — 全終端行の closure 証拠を read-only で分類する（`--json`）。store は書かない
 - `overlap` — キュー中のタスクを宣言された `touched_files` scope でグループ化する（advisory、未宣言は別に列挙）
 - `edit <id>` — タスクの title / tags / notes / status を更新する。`--repro-test CMD` で pending タスクの repro を差し替える（「テストが無ければ起票しない」参照）
@@ -25,12 +27,12 @@
 
 ### store 書き込みは linked worktree で
 
-`add` / `done` / `fail` / `edit` / `cancel` / `defer` / `sync --apply` は、store が git リポジトリの **primary（main）作業ツリー**内にある場合
+`add` / `done` / `fail` / `edit` / `cancel` / `recheck` / `sync --apply` は、store が git リポジトリの **primary（main）作業ツリー**内にある場合
 **拒否**される（非 0 終了・何も書かない）。
 linked worktree から実行すること。
 git が checkout の種別を答えられない場合も `add` を拒否する。
 `list` は primary でも動く。
-`next --claim` も primary で許可され、`git status` は clean のまま。
+`next --claim` も primary で許可され、`git status` は clean のまま。ただし候補の repro が再現しない（自動 cancel が必要な）場合、primary では store を書けないので claim を拒否し（非 0、何も書かない）、linked worktree から `next --claim` か `recheck --id` を実行するよう名指しする。
 SessionStart フックは primary では requeue をスキップし、その旨を表示する。
 
 プラグインの `hooks/hooks.json` が SessionStart フック（`backlog session-start`）を登録する。登録されたフックの timeout は 10 秒。`backlog install` は standalone（cargo）利用向けで、`SessionStart` グループを `~/.claude/settings.json` にマージする（冪等・所有権マーク付き）。`install` / `uninstall` は `--dry-run` で書き込まず結果だけ表示できる。
@@ -73,6 +75,18 @@ backlog uninstall                                            # 再び除去す�
   `passed + failed` の合計が 0 の場合（`-- --ignored` 無しの `#[ignore]` テスト = `0 passed; 1 ignored`、
   何にも一致しないフィルタ = `filtered out`）と、`test result:` 行の無い `cargo test` の exit 0 がこれに当たる。
   libtest 形式でない pytest / スクリプトの出力は従来どおり exit code で判定する。
+
+### 保留は無い — 実証されたら open、されなければ close
+
+ユーザー裁定（2026-11-13）:「保留はありえない実証されないならclose,実証されたらopen」「起票しますか?というのはもう聞かないこと。実証されたら起票、そうでないなら破棄。それは自動で実行していくこと。それを仕組みとしていれて」。
+
+- open 行は保存済み repro が**今も再現する間だけ** open である。`next --claim`（払い出す候補）と `recheck`（全 open 行）が再実行して判定する。
+- 再実行の判定は 4 値（`evidence::RecheckVerdict`）:
+  - **reproduced** — 振る舞いとしての失敗（cargo の `test result: FAILED`、pytest exit 1、script の exit 1 と 3..=125）。open のまま。
+  - **not-reproduced** — exit 0 で 1 件以上のテストが走った。自動 cancel。
+  - **not-demonstrated**（環境 unavailable / 起動すらできない）— script の exit 2（この repo の script 規約で「環境が無い」。例: `scripts/tests/blastguard-2287ebae-v9fs-target.sh` の `no v9fs dir`）・exit 126/127、exit 0 だがテストが 0 件（`0 passed; 0 failed`・何にも一致しないフィルタ・`test result:` 行の無い cargo）、pytest exit 4/5、保存済み cmd がパースできない／allowlist 外、script が HEAD で追跡されていない。自動 cancel。
+  - **undeterminable**（インフラ要因）— timeout（cargo lock 待ちを含む）、シグナル終了（script の exit ≥128 または exit code 無し）、spawn 失敗、git 問い合わせ失敗、作業ツリーが dirty、不正な `BACKLOG_TEST_TIMEOUT_SECS`、build/compile 失敗（壊れた HEAD がチケットを一斉に close しないため）、`test result: FAILED` も build marker も無い cargo の非 0、pytest の exit 2/3 や build marker。**自動 cancel しない**: `next --claim` は拒否（非 0、行は触らない）、`recheck` は行を残して非 0 終了（CLAUDE.md §3）。
+- 起票側も同じ境界: `add --repro-test` / `edit --repro-test` は reproduced の時だけ書く。script の exit 2 は（以前は RED 扱いだったが）not-demonstrated として拒否される（＝破棄）。
 
 `add` はタイトルと project から求めた **content hashkey** (`title` を trim → Unicode NFKC → 小文字化 →
 連続空白の1個への圧縮 → 前後の記号除去 したものと project を FNV-1a 64bit で畳み込んだ 16 桁 hex)
@@ -187,8 +201,8 @@ store は意図的に checkout に追従する (`<repo root>/.backlog/tasks.toml
 
 #### lease はトラックされた store に書かない — `claimed` は導出値
 
-claim が書くのは **ledger だけ** である。`next --claim` はトラックされた `.backlog/tasks.toml` を
-変更しない。SessionStart の requeue も claim を
+claim（lease）が書くのは **ledger だけ** である。`next --claim` は lease のためにトラックされた `.backlog/tasks.toml` を
+変更しない（唯一の例外は再現しなくなった候補の自動 cancel で、これは `cancel` と同じ store 書き込みであり linked worktree でだけ行われる。その store 変更は commit すること）。SessionStart の requeue も claim を
 理由に行を書き換えない。したがって claim しても git worktree は汚れない。`claimed` は **導出**
 ステータスで、行ごとに保存されたステータスと生きた lease (あれば) から決まる:
 

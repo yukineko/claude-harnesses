@@ -5,13 +5,15 @@
 //! claim is refused: the ticket is NOT handed out, the exit is non-zero and the
 //! reason is printed (CLAUDE.md §3: undetermined resolves to the restrictive side).
 //!
-//! The undetermined trigger is `evidence::preflight`: `run_repro` returns
-//! `undetermined(e, Some(head))` when
-//! `tracked_at(root, head, script)` is false ("script {script} is not committed
-//! at HEAD ({head}); only a git-tracked, committed test script is evidence").
-//! The script is committed when the ticket is filed (so `add` sees RED) and is
-//! then removed in a later commit, so the tree stays clean and the only cause
-//! is the missing committed script.
+//! The undetermined trigger is an INFRASTRUCTURE one: the re-run is killed by
+//! a signal (no exit code), which `evidence::run_repro_classified` classifies
+//! as `undeterminable`. The script is RED when the ticket is filed and, after
+//! a committed state flip, kills itself with SIGKILL at the re-run, so the tree
+//! stays clean and the only cause is the signal. (Until 2026-11-13 the trigger
+//! was a repro script removed from HEAD; user ruling 2026-11-13
+//! 「保留はありえない実証されないならclose,実証されたらopen」 reclassified that as
+//! NOT DEMONSTRATED, which auto-cancels instead of refusing. The property
+//! pinned here — an undeterminable re-run is refused — is unchanged.)
 
 mod common;
 
@@ -20,8 +22,12 @@ use common::Fixture;
 #[test]
 fn next_claim_refuses_a_ticket_whose_repro_rerun_is_undetermined() {
     let f = Fixture::new("b78cee053");
-    f.write_script("tests/repro_gone.sh", "echo 'bug present'; exit 1");
-    f.commit_paths(&["tests/repro_gone.sh"], "add repro");
+    f.write("src/mode.txt", "red\n");
+    f.write_script(
+        "tests/repro_gone.sh",
+        "grep -q '^kill$' src/mode.txt && kill -KILL $$\necho 'bug present'; exit 1",
+    );
+    f.commit_paths(&["src/mode.txt", "tests/repro_gone.sh"], "add repro");
 
     let p = f.project();
     let o = f.run(&[
@@ -41,8 +47,9 @@ fn next_claim_refuses_a_ticket_whose_repro_rerun_is_undetermined() {
     );
     let id = common::parse_added(&o.stdout);
 
-    // The committed script disappears from HEAD: the re-run is undetermined.
-    f.commit_rm("tests/repro_gone.sh", "drop repro");
+    // The re-run is now killed by a signal: undeterminable (infrastructure).
+    f.write("src/mode.txt", "kill\n");
+    f.commit_paths(&["src/mode.txt"], "re-run is killed");
 
     let c = f.run(&["next", "--claim"]);
     assert_ne!(
@@ -57,8 +64,15 @@ fn next_claim_refuses_a_ticket_whose_repro_rerun_is_undetermined() {
         c.both()
     );
     assert!(
-        c.stderr.contains("not committed") || c.stdout.contains("not committed"),
-        "the refusal must print the reason (script not committed at HEAD): {}",
+        c.stderr.contains("signal") || c.stdout.contains("signal"),
+        "the refusal must print the reason (the re-run was killed by a signal): {}",
+        c.both()
+    );
+
+    assert_eq!(
+        f.status(&id),
+        "pending",
+        "an undeterminable re-run must NOT auto-cancel {id}: {}",
         c.both()
     );
 

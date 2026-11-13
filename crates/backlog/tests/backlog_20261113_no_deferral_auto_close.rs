@@ -143,7 +143,6 @@ fn set_store_status(f: &Fixture, id: &str, from: &str, to: &str) {
 // ---------------------------------------------------------------- (a)
 
 #[test]
-#[ignore = "RED: backlog no-deferral auto-close (user ruling 2026-11-13)"]
 fn a_defer_is_refused_and_writes_nothing() {
     let f = Fixture::new("nd-a");
     let id = f.add("would be deferred");
@@ -166,7 +165,6 @@ fn a_defer_is_refused_and_writes_nothing() {
 // ---------------------------------------------------------------- (b)
 
 #[test]
-#[ignore = "RED: backlog no-deferral auto-close (user ruling 2026-11-13)"]
 fn b_claim_auto_cancels_green_top_candidate_and_closes_issue() {
     let f = Fixture::new("nd-b");
     let log = gh_stub(&f);
@@ -203,7 +201,6 @@ fn b_claim_auto_cancels_green_top_candidate_and_closes_issue() {
 // ---------------------------------------------------------------- (c)
 
 #[test]
-#[ignore = "RED: backlog no-deferral auto-close (user ruling 2026-11-13)"]
 fn c_claim_auto_cancels_env_unavailable_exit_2_candidate() {
     let f = Fixture::new("nd-c");
     setup_flip(&f);
@@ -276,7 +273,6 @@ fn e_control_signal_kill_is_undeterminable_never_closed() {
 // ---------------------------------------------------------------- (f)
 
 #[test]
-#[ignore = "RED: backlog no-deferral auto-close (user ruling 2026-11-13)"]
 fn f_add_with_exit_2_repro_writes_nothing() {
     let f = Fixture::new("nd-f");
     f.write_script("tests/repro_env.sh", "echo 'no v9fs dir'; exit 2");
@@ -308,7 +304,6 @@ fn cargo_row(f: &Fixture) -> String {
 }
 
 #[test]
-#[ignore = "RED: backlog no-deferral auto-close (user ruling 2026-11-13)"]
 fn g_cargo_zero_tests_at_head_is_auto_cancelled() {
     let f = Fixture::new("nd-g1");
     let id = cargo_row(&f);
@@ -334,7 +329,6 @@ fn g_control_cargo_compile_failure_at_head_refuses_claim() {
 // ---------------------------------------------------------------- (h)
 
 #[test]
-#[ignore = "RED: backlog no-deferral auto-close (user ruling 2026-11-13)"]
 fn h_recheck_cancels_green_and_keeps_red() {
     let f = Fixture::new("nd-h1");
     setup_flip(&f);
@@ -348,7 +342,6 @@ fn h_recheck_cancels_green_and_keeps_red() {
 }
 
 #[test]
-#[ignore = "RED: backlog no-deferral auto-close (user ruling 2026-11-13)"]
 fn h_recheck_resolves_legacy_ruled_deferred_rows() {
     let f = Fixture::new("nd-h2");
     setup_flip(&f);
@@ -366,27 +359,36 @@ fn h_recheck_resolves_legacy_ruled_deferred_rows() {
 }
 
 #[test]
-#[ignore = "RED: backlog no-deferral auto-close (user ruling 2026-11-13)"]
 fn h_recheck_leaves_undeterminable_row_untouched_and_fails() {
     let f = Fixture::new("nd-h3");
-    f.write_script("tests/repro_gone.sh", "echo 'bug present'; exit 1");
-    f.commit_paths(&["tests/repro_gone.sh"], "add repro");
-    let id = add_cmd(&f, "repro vanishes", "bash tests/repro_gone.sh");
-    f.commit_rm("tests/repro_gone.sh", "drop repro");
-    let before = f.store_bytes();
+    setup_flip(&f);
+    // Infrastructure-undeterminable: the repro is killed by SIGKILL.
+    let id = add_cmd(&f, "killed by signal", FLIP);
+    let green = add_cmd(&f, "went green", FLIP2);
+    set_state(&f, "src/state.txt", "kill");
+    set_state(&f, "src/state2.txt", "fixed");
+    let before = f.row(&id);
     let o = f.run(&["recheck"]);
     assert_ne!(o.code, 0, "undeterminable row => non-zero: {}", o.both());
+    // Non-vacuity: a real recheck ran, named the row and a word of the cause.
+    let err = o.stderr.to_lowercase();
     assert!(
-        o.both().contains("not committed"),
-        "non-vacuity: the refusal must come from a real recheck naming the cause: {}",
+        err.contains(&id)
+            && (err.contains("signal") || err.contains("kill") || err.contains("undetermin")),
+        "recheck must name the row {id} and the cause on stderr: {}",
         o.both()
     );
     assert_untouched_pending(&f, &id);
-    assert_eq!(f.store_bytes(), before);
+    assert_eq!(
+        f.row(&id),
+        before,
+        "the undeterminable row must be unchanged"
+    );
+    // The other row is still processed.
+    assert_discarded(&f, &green, &["exit 0", TOKEN]);
 }
 
 #[test]
-#[ignore = "RED: backlog no-deferral auto-close (user ruling 2026-11-13)"]
 fn h_recheck_id_touches_only_that_row() {
     let f = Fixture::new("nd-h4");
     setup_flip(&f);
@@ -403,7 +405,6 @@ fn h_recheck_id_touches_only_that_row() {
 // ---------------------------------------------------------------- (i)
 
 #[test]
-#[ignore = "RED: backlog no-deferral auto-close (user ruling 2026-11-13)"]
 fn i_claim_from_primary_tree_with_green_repro_writes_nothing() {
     let f = Fixture::new("nd-i");
     setup_flip(&f);

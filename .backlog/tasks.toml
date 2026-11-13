@@ -1696,3 +1696,32 @@ exit 101: -c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 3.22s
      Running tests/backlog_20261114_printf_operand_judged_as_command_fp.rs (target/debug/deps/backlog_20261114_printf_operand_judged_as_command_fp-90eba1c145325263)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_printf_operand_judged_as_command_fp`"""
+
+[[task]]
+id = "d3f7a4af"
+title = "backlog: repo-store row identity follows the filer's absolute path, so same-repo rows filed on another machine are never claimed (next --claim/recheck)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "fail-closed",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "User ruling 2026-11-14: 本質的というのは問題の質は通常パスでゆらぐものではない. RED c4702fad (tests/backlog_20261114_repo_store_identity_not_path.rs a/b/d; K1/32d9232c other-repo cases ignored). 18 rows with project=/home/hiroyuki_nakayama/src/harness are skipped forever on this Mac by claim_recheck::rerun_dir. Also: a label naming an existing different repo is re-run there and auto-cancelled instead of skipped."
+created_at = 1794596566
+updated_at = 1794596566
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261114_repo_store_identity_not_path -- --ignored"
+rev = "c4702fadb6dca37780949690869a48c168d849e4"
+observed_at = 1794596566
+detail = """
+exit 101: g backlog v0.3.119 (/Users/yuki/src/harness-wt-repo-identity/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.58s
+     Running tests/backlog_20261114_repo_store_identity_not_path.rs (target/debug/deps/backlog_20261114_repo_store_identity_not_path-4c18206575601db7)
+error: test failed, to rerun pass `-p backlog --test backlog_20261114_repo_store_identity_not_path`"""

@@ -60,7 +60,10 @@ fn rm_is_recursive(rest: &[&str]) -> bool {
 ///     (`rm $(echo /etc/passwd)`).
 ///
 /// Every other expansion is left unresolved here (and so stays an Ask in
-/// [`analyze_rm`]); this function only ever adds a Deny.
+/// [`analyze_rm`]). For `rm` and the mutators this function only ever adds a
+/// Deny; the exception is a `cp` / `mv` / `install` DESTINATION spelled through
+/// an expansion (backlog 21b3faad), which `analyze_copy_move` never judged: a
+/// resolvable one gets the literal verdict, an unresolvable one is an Ask.
 ///
 /// The non-`rm` system-file mutators (`unlink`, `rmdir`, `mv`, `sed -i`,
 /// `perl -i`, `chmod`, `chown`, `chgrp`, `rsync`) get the same resolution for
@@ -86,6 +89,13 @@ pub(super) fn known_path_harm(
     for idx in super::words::command_candidates(tokens) {
         let cmd = super::words::normalized_command(tokens[idx]);
         let rest = &tokens[idx + 1..];
+        if matches!(cmd.as_str(), "cp" | "mv" | "install") {
+            // Backlog 21b3faad: the DESTINATION may be spelled through a variable.
+            let verdict = super::fileops::analyze_copy_move_expanded(&cmd, rest, ctx, &resolve);
+            if !matches!(verdict, Decision::Allow) {
+                return verdict;
+            }
+        }
         if cmd != "rm" {
             let deny = super::system_paths::known_mutation_harm(&cmd, rest, ctx, &resolve);
             if deny.is_deny() {

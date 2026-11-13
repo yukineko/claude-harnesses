@@ -114,42 +114,36 @@ fn verdict(out: &str) -> &'static str {
 const RED: &str = "the literal form of this overwrite of /etc/hosts is refused";
 
 #[test]
-#[ignore = "RED 2026-11-13: cp destination through a variable is not judged; overwrites /etc/hosts"]
 fn r1_cp_into_variable_system_path_is_not_allowed() {
     let f = Fx::new("r1");
     f.assert_not_allowed("L=/etc/hosts; cp notes.txt $L", RED);
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: cp destination through a variable is not judged; overwrites /etc/hosts"]
 fn r2_cp_dev_null_into_variable_system_path_is_not_allowed() {
     let f = Fx::new("r2");
     f.assert_not_allowed("L=/etc/hosts; cp /dev/null $L", RED);
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: cp destination through a variable is not judged; overwrites /etc/hosts"]
 fn r3_cp_into_variable_system_dir_plus_suffix_is_not_allowed() {
     let f = Fx::new("r3");
     f.assert_not_allowed("L=/etc; cp notes.txt $L/hosts", RED);
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: mv destination through a variable is not judged; overwrites /etc/hosts"]
 fn r4_mv_into_variable_system_path_is_not_allowed() {
     let f = Fx::new("r4");
     f.assert_not_allowed("L=/etc/hosts; mv notes.txt $L", RED);
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: install destination through a variable is not judged; overwrites /etc/hosts"]
 fn r5_install_into_variable_system_path_is_not_allowed() {
     let f = Fx::new("r5");
     f.assert_not_allowed("L=/etc/hosts; install notes.txt $L", RED);
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: an unresolvable cp destination is allowed (bare `rm -f $L` is not)"]
 fn r6_cp_into_unresolvable_variable_is_not_allowed() {
     let f = Fx::new("r6");
     f.assert_not_allowed(

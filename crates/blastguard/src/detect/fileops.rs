@@ -1,3 +1,4 @@
+use super::has_unresolvable_expansion;
 use super::{
     basename, exclude, is_bare_redirect_op, is_redirect_token, is_short_flag,
     protected_disarm_deny, protected_glob_deny, protected_landing_block, protected_path_block,
@@ -773,6 +774,66 @@ tell which path it writes (or, for mv, removes) and refuses to guess"
         );
     }
     verdict
+}
+
+/// Backlog 21b3faad: the verdict for a `cp` / `mv` / `install` whose DESTINATION
+/// is spelled through an expansion (`L=/etc/hosts; cp x $L`). `analyze_copy_move`
+/// judges the destination token as typed, so `$L` matched no system or protected
+/// path and the line was Allow while the literal spelling is Deny.
+///
+/// `resolve` is the line's own resolution (see `rm::known_path_harm`). A
+/// resolved destination is substituted back into the argv and judged by
+/// [`analyze_copy_move`] itself, so the literal and the variable spelling cannot
+/// disagree. A destination that cannot be resolved is an Ask, never an Allow
+/// (CLAUDE.md section 3). A destination with no expansion is not this
+/// function's: it returns `Allow` and leaves the literal verdict to
+/// [`analyze_copy_move`].
+pub(super) fn analyze_copy_move_expanded(
+    cmd: &str,
+    rest: &[&str],
+    ctx: &Ctx<'_>,
+    resolve: &dyn Fn(&str) -> Option<Vec<String>>,
+) -> Decision {
+    if !matches!(cmd, "cp" | "mv" | "install") {
+        return Decision::Allow;
+    }
+    // A split failure is `analyze_copy_move`'s Ask/Deny.
+    let Ok(args) = parse_copy_args(cmd, rest) else {
+        return Decision::Allow;
+    };
+    let dest = match args.target_dir.clone() {
+        Some(d) => d,
+        None if args.operands.len() >= 2 => match args.operands.last() {
+            Some(l) => (*l).to_string(),
+            None => return Decision::Allow,
+        },
+        None => return Decision::Allow,
+    };
+    if !has_unresolvable_expansion(&dest) {
+        return Decision::Allow;
+    }
+    let paths = match resolve(&dest) {
+        Some(p) if !p.is_empty() => p,
+        _ => {
+            return Decision::ask(format!(
+                "the destination `{dest}` of this `{cmd}` is spelled through an expansion \
+blastguard cannot resolve, so it cannot tell which path is written and refuses to guess"
+            ))
+        }
+    };
+    let mut worst = Decision::Allow;
+    for path in paths {
+        let swapped: Vec<String> = rest.iter().map(|t| t.replace(&dest, &path)).collect();
+        let swapped: Vec<&str> = swapped.iter().map(String::as_str).collect();
+        let verdict = analyze_copy_move(cmd, &swapped, ctx);
+        if verdict.is_deny() {
+            return verdict;
+        }
+        if matches!(worst, Decision::Allow) {
+            worst = verdict;
+        }
+    }
+    worst
 }
 
 /// The protected-path / system-directory verdict of [`analyze_copy_move`],

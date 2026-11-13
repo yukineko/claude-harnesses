@@ -14,8 +14,8 @@ use crate::task::{
     new_id, Closure, Repro, Status, Task, STATUS_DONE, STATUS_FAILED, STATUS_PENDING,
 };
 
-/// The stored "a user ruled this out for now" status (backlog b3f5e3af),
-/// written only by [`mark_ruled_deferred`].
+/// Legacy "ruled out for now" status (b3f5e3af); its writer `defer` is abolished
+/// (ruling 2026-11-13). Still parsed; `backlog recheck` resolves such rows.
 pub(crate) const STATUS_RULED_DEFERRED: Status = Status::RuledDeferred;
 
 /// The DERIVED claim status (backlog f09db5ce). It is never written to the
@@ -85,12 +85,20 @@ fn read_tasks_file(path: &Path) -> Result<Option<(String, Vec<Task>)>> {
             return Err(anyhow::Error::new(e).context(format!("failed to read {}", path.display())))
         }
     };
-    let file: TasksFile = match toml::from_str(&text) {
+    let tasks = parse_tasks_text(&text, &path.display().to_string())?;
+    Ok(Some((text, tasks)))
+}
+
+/// Parse one store document exactly as [`load`] parses a file (same
+/// `deny_unknown_fields` rows, same row-naming error); `origin` names where
+/// the text came from in the error (a path, or `<rev>:<path>` for a blob).
+pub(crate) fn parse_tasks_text(text: &str, origin: &str) -> Result<Vec<Task>> {
+    let file: TasksFile = match toml::from_str(text) {
         Ok(f) => f,
         Err(e) => {
             let row = e
                 .span()
-                .and_then(|sp| row_id_at(&text, sp.start))
+                .and_then(|sp| row_id_at(text, sp.start))
                 .map(|id| format!(" (task {id})"))
                 .unwrap_or_default();
             let at = e
@@ -105,13 +113,12 @@ fn read_tasks_file(path: &Path) -> Result<Option<(String, Vec<Task>)>> {
             // The deserialize error itself is the reason (for a removed status:
             // serde's "unknown variant `needs-ruling`, expected one of ...").
             let why = e.message().to_string();
-            return Err(anyhow::Error::new(e).context(format!(
-                "failed to parse {}{at}{row}: {why}",
-                path.display()
-            )));
+            return Err(
+                anyhow::Error::new(e).context(format!("failed to parse {origin}{at}{row}: {why}"))
+            );
         }
     };
-    Ok(Some((text, file.task)))
+    Ok(file.task)
 }
 
 /// The `id` of the `[[task]]` row whose text contains byte `offset` of `text`
@@ -2418,243 +2425,10 @@ pub fn mark_cancelled(path: &Path, id: &str, reason: &str) -> Result<()> {
 #[cfg(test)]
 pub use crate::edit_repro::edit;
 
-/// Like [`add_with_weight`], but additionally attempts a fail-soft, one-way
-/// push of the new task to GitHub as an issue (Phase 1: `backlog add` ->
-/// `gh issue create`), recording `issue_number`/`issue_url` on the persisted
-/// `Task` when it succeeds.
-///
-/// `remote_url` is the project's git remote URL (or `""`/anything
-/// non-github.com to skip the push entirely — see
-/// [`crate::github::is_github_remote`]). `run` is the SAME kind of injectable
-/// command runner `crate::github::decide_issue_create` expects
-/// (`Fn(&[&str]) -> Option<(bool, String)>`); the real `gh` spawn belongs at
-/// the IO boundary in `main.rs`, never here, so this function stays fully
-/// unit-testable with a fake closure and never spawns a process itself.
-///
-/// Fail-soft is mandatory: whatever `crate::github::decide_issue_create`
-/// decides — non-GitHub remote, `gh` absent, or `gh issue create` failing
-/// (non-zero exit) — `add_with_weight`'s local-only add still succeeds; only
-/// a `Created{url}` outcome additionally sets `issue_number`/`issue_url`
-/// (parsed via [`crate::github::parse_issue_number`]) before the SAME save.
-/// All of `add_with_weight`'s guards (bare-label ambiguity rejection,
-/// duplicate-content guard) are reused unchanged, and the GitHub push is folded
-/// into the same critical section before `save`.
-///
-/// Locking differs from `add_with_weight` (backlog bd6d81df) and this is the
-/// production `add` path, so this is the behaviour that matters: an `Ok(id)`
-/// here is what makes `main.rs` print `added: {id}` and exit 0, so it must mean
-/// the record is in the store. Two independent belts enforce that:
-///   1. FAIL CLOSED on mutual exclusion: the critical section runs under
-///      [`with_tasks_lock_aware`] and returns `Err` when the lock was not
-///      acquired within the bounded budget, instead of performing the
-///      read-modify-write unprotected. An unprotected RMW is what let a
-///      concurrent degraded writer save a stale snapshot over a just-added
-///      task while its adder had already reported success.
-///   2. VERIFY THE WRITE: after `save`, the store is RELOADED FROM DISK and the
-///      new id must be present ([`confirm_added_id_is_on_disk`]). This catches
-///      a clobber (or a save that did not land) that happened anyway, and means
-///      success is never reported from the in-memory `Vec` alone.
-///
-/// Both errors name what actually happened so the caller can retry; neither is
-/// collapsed into a bool.
-///
-/// Test-only since the close-evidence change: it files the task straight into
-/// the workable queue (`pending`) with a FIXTURE `reproduced` repro (no test
-/// is run), so `next` hands it out as it would a real reproduced finding. The production entry point is
-/// [`add_finding`], which takes the [`Intake`] (status + observed repro)
-/// decided by `main.rs`; this wrapper exists so the locking/verify-the-write
-/// tests above keep driving that SAME body.
+mod add;
 #[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>(
-    path: &Path,
-    title: &str,
-    project: &str,
-    tags: Vec<String>,
-    notes: &str,
-    weight: f64,
-    force: bool,
-    now: i64,
-    remote_url: &str,
-    run: R,
-) -> Result<String> {
-    add_finding(
-        path,
-        title,
-        project,
-        tags,
-        notes,
-        weight,
-        force,
-        now,
-        remote_url,
-        run,
-        Intake {
-            status: STATUS_PENDING,
-            repro: Some(fixture_reproduced_repro(now)),
-        },
-    )
-}
-
-/// Where a new finding lands and what was observed about it.
-///
-/// Only a `reproduced` repro outcome may be filed at all (user rulings
-/// 2026-10-04: 「testがないなら起票してはならない」). Every other outcome is NOT a
-/// task and nothing is written for it (user ruling 2026-10-15). [`Intake::reproduced`] is the only production
-/// constructor and returns `None` for anything that did not reproduce.
-pub struct Intake {
-    pub status: Status,
-    pub repro: Option<Repro>,
-}
-
-impl Intake {
-    /// `Some(pending)` exactly when `repro` observed the problem; `None`
-    /// otherwise (not reproduced, or undetermined) — such a finding is not
-    /// filed.
-    pub fn reproduced(repro: Repro) -> Option<Self> {
-        (repro.outcome == crate::task::REPRO_REPRODUCED).then_some(Intake {
-            status: STATUS_PENDING,
-            repro: Some(repro),
-        })
-    }
-}
-
-/// The production `add` (see [`add_with_weight_and_github_push`]'s docs for
-/// the two bd6d81df belts, which live here). The task is written with
-/// `intake.status` and `intake.repro`.
-#[allow(clippy::too_many_arguments)]
-pub fn add_finding<R: Fn(&[&str]) -> Option<(bool, String)>>(
-    path: &Path,
-    title: &str,
-    project: &str,
-    tags: Vec<String>,
-    notes: &str,
-    weight: f64,
-    force: bool,
-    now: i64,
-    remote_url: &str,
-    run: R,
-    intake: Intake,
-) -> Result<String> {
-    let is_bare =
-        !(project.starts_with('/') || project.starts_with('.') || project.starts_with('~'));
-    let CanonicalProject {
-        label: project,
-        unresolved: project_unresolved,
-    } = canonicalize_project_with_marker(project);
-    let project = &project;
-    with_tasks_lock_aware(path, |locked| {
-        // Belt 1 (backlog bd6d81df): without the exclusive lock this add's
-        // read-modify-write can be clobbered by a concurrent degraded writer
-        // and nothing downstream can tell. "Could not establish mutual
-        // exclusion" is not "added", so refuse and say so.
-        if !locked {
-            return Err(anyhow!(
-                "backlog add refused: the tasks-file lock {} could not be acquired within {}s, \
-                 so this add's read-modify-write would run without mutual exclusion and could \
-                 be silently lost; nothing was added — retry. If this persists, read that \
-                 lockfile: it holds the process id of its owner. A lock is reclaimed \
-                 automatically ONLY when that pid is provably gone, so it is kept forever when \
-                 the file is empty (written by a backlog older than 0.2.27, or a failed write), \
-                 when the body is not a pid, or when the pid has been reused by an unrelated \
-                 live process. Check whether that process is really a running backlog; if it is \
-                 not, remove the lockfile by hand.",
-                tasks_lock_path(path).display(),
-                TASKS_LOCK_BUDGET.as_secs_f32(),
-            ));
-        }
-        let mut tasks = load(path)?;
-        if is_bare {
-            reject_ambiguous_bare_label(&tasks, project)?;
-        }
-        if !force {
-            check_duplicate(&tasks, title, project)?;
-        }
-        let id = new_id(title, now);
-        let mut task = Task {
-            id: id.clone(),
-            title: title.to_string(),
-            project: project.to_string(),
-            // Same marker as `add_with_weight`: every write path records the
-            // undetermined-scope degrade, otherwise the binary's real entry
-            // point (this one) would be the fail-open hole.
-            project_unresolved,
-            tags,
-            status: intake.status,
-            notes: notes.to_string(),
-            created_at: now,
-            updated_at: now,
-            defer_until: None,
-            weight,
-            issue_number: None,
-            issue_url: None,
-            issue_closed_at: None,
-            issue_body_synced_rev: None,
-            rev: 0,
-            repro: intake.repro,
-            closure: None,
-            touched_files: Vec::new(),
-        };
-
-        // Fail-soft GitHub push: never abort the add on a non-GitHub remote,
-        // an absent `gh`, or a failed `gh issue create` — only a genuine
-        // `Created{url}` populates issue_number/issue_url. On a GitHub remote a
-        // degraded outcome is SAID on stderr: the task exists locally but the
-        // mirror the caller expects does not, and silence would read as
-        // "mirrored". A non-GitHub remote is the expected local-only case.
-        match crate::github::decide_issue_create(remote_url, title, notes, &run) {
-            crate::github::IssueOutcome::Created { url } => {
-                task.issue_number = crate::github::parse_issue_number(&url);
-                task.issue_url = Some(url);
-            }
-            crate::github::IssueOutcome::DegradedLocalOnly { reason } => {
-                if crate::github::is_github_remote(remote_url) {
-                    eprintln!(
-                        "backlog add: GitHub issue NOT created for task {id} ({reason}); \
-                         the task is local-only until `backlog sync --apply` mirrors it"
-                    );
-                }
-            }
-        }
-
-        tasks.push(task);
-        save(path, &tasks)?;
-        // Belt 2: report success only about what a fresh read of the file
-        // actually shows. Done while the lock is still held, so a well-behaved
-        // concurrent writer cannot have moved the file underneath the check.
-        confirm_added_id_is_on_disk(path, &id)?;
-        Ok(id)
-    })
-}
-
-/// Reload the store FROM DISK and require `id` to be present, so `add` can only
-/// report success about a write that is observable to the next reader.
-///
-/// Returns `Err` both when the reload itself fails and when the reload succeeds
-/// but does not contain `id` (the measured backlog bd6d81df shape: the record
-/// was saved, then a concurrent degraded writer's stale snapshot replaced it).
-/// A load failure is NOT treated as "probably fine": an unverifiable write is
-/// reported as unverified, naming the store path and what was seen.
-fn confirm_added_id_is_on_disk(path: &Path, id: &str) -> Result<()> {
-    let reloaded = load(path).with_context(|| {
-        format!(
-            "backlog add saved task {id} to {} but the store could not be re-read to confirm it; \
-             treat the add as unconfirmed and re-check before retrying",
-            path.display()
-        )
-    })?;
-    if reloaded.iter().any(|t| t.id == id) {
-        return Ok(());
-    }
-    Err(anyhow!(
-        "backlog add saved task {id} to {} but a fresh load of that file does not contain it — \
-         the write did not survive (a concurrent writer replaced the file), so the task is NOT \
-         in the store as of that read; retry. Store now holds {} task(s): {:?}",
-        path.display(),
-        reloaded.len(),
-        reloaded.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
-    ))
-}
+pub use add::add_with_weight_and_github_push;
+pub use add::{add_finding, Intake};
 
 /// タスク一覧を返す。フィルタは all None で全件。
 ///

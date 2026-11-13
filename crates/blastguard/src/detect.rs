@@ -677,7 +677,8 @@ pub(super) const EXPANSION_HEAD_TAIL: &str = " is an expansion whose value only 
 fn analyze_shell_payload(payload: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let prefixed = ctx.cwd_prefix.as_ref().map(|p| format!("{p}{payload}"));
     let payload = prefixed.as_deref().unwrap_or(payload);
-    let d = detect_bash(payload, depth + 1, ctx);
+    // With and without its line continuations (backlog 040b959b).
+    let d = readings::shell_payload_verdict(payload, depth, ctx);
     if d.is_blocking() {
         return d;
     }

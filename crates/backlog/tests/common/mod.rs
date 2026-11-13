@@ -452,6 +452,126 @@ pub fn path_with_condukt_shim() -> String {
     format!("{}:{}", condukt_shim_dir().display(), old)
 }
 
+// ---- Pushable origin for GitHub-mirrored fixtures (backlog f6795f52) ----
+
+/// `add` on a GitHub remote merges its row into the primary tree's branch and
+/// PUSHES that branch to `origin` before it files the issue. Fixtures whose
+/// `remote.origin.url` is github.com (so the mirror engages) must therefore
+/// have a push target that is not the network: this creates a bare repo
+/// `<primary>.origin.git` and sets `remote.origin.pushurl` to it. Call after
+/// `remote add origin`. Returns the bare repo path.
+pub fn local_push_origin(primary: &Path) -> PathBuf {
+    let bare = primary.with_file_name(format!(
+        "{}.origin.git",
+        primary.file_name().unwrap().to_string_lossy()
+    ));
+    std::fs::create_dir_all(&bare).expect("mkdir bare origin");
+    let git = |cwd: &Path, args: &[&str]| {
+        let out = harness_core::git_env::scrub(&mut Command::new("git"))
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?} in {} failed: {}",
+            cwd.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&bare, &["init", "-q", "--bare"]);
+    git(
+        primary,
+        &["config", "remote.origin.pushurl", bare.to_str().unwrap()],
+    );
+    bare
+}
+
+/// The sibling primary checkout `<dir>.main` that [`linked_checkout`] and
+/// [`Fixture::new`] create for the linked worktree `dir`.
+pub fn linked_primary(dir: &Path) -> PathBuf {
+    dir.with_file_name(format!(
+        "{}.main",
+        dir.file_name().unwrap().to_string_lossy()
+    ))
+}
+
+/// [`local_push_origin`] for a primary whose checked-out branch may be
+/// UNBORN ([`Fixture::new`]'s `primary`): the row can only be merged onto a
+/// branch that has a commit, so give it an empty root commit first.
+pub fn born_primary_with_push_origin(primary: &Path) -> PathBuf {
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args(["commit", "-q", "--allow-empty", "-m", "primary base"])
+        .current_dir(primary)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "primary base commit: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    local_push_origin(primary)
+}
+
+/// For a [`Fixture::new`] checkout `linked`: add the github.com `origin`
+/// (`git remote add origin https://github.com/o/r.git`, as the callers did
+/// inline before) plus [`born_primary_with_push_origin`] on its primary.
+pub fn fixture_github_origin(linked: &Path) {
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
+        .args(["remote", "add", "origin", "https://github.com/o/r.git"])
+        .current_dir(linked)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "remote add: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    born_primary_with_push_origin(&linked_primary(linked));
+}
+
+/// After a GitHub-mirrored `add` from a linked worktree, the primary tree
+/// (on `main`) holds the store — but only through the merge (§8): the tree is
+/// clean, its store is exactly `main`'s committed store, and `main`'s tip is
+/// a merge commit.
+pub fn assert_primary_only_merged(primary: &Path) {
+    let git = |args: &[&str]| {
+        let out = harness_core::git_env::scrub(&mut Command::new("git"))
+            .arg("-C")
+            .arg(primary)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .expect("git runs");
+        assert!(out.status.success(), "git {args:?} failed");
+        out.stdout
+    };
+    let porcelain = git(&["status", "--porcelain"]);
+    assert!(
+        porcelain.is_empty(),
+        "the primary tree must only receive the merge (clean tree): {:?}",
+        String::from_utf8_lossy(&porcelain)
+    );
+    assert_eq!(
+        std::fs::read(primary.join(".backlog/tasks.toml")).expect("primary store"),
+        git(&["show", "main:.backlog/tasks.toml"]),
+        "the primary tree's store must be exactly main's merged store"
+    );
+    let parents = git(&["rev-list", "--parents", "-n1", "main"]);
+    assert_eq!(
+        String::from_utf8_lossy(&parents).split_whitespace().count(),
+        3,
+        "main's tip must be a merge commit (§8: the primary tree only integrates)"
+    );
+}
+
 // ---- Linked-worktree checkouts (backlog 1e6f00ae) ----
 
 /// Turn the (empty or not-yet-existing) `dir` into a linked worktree of a

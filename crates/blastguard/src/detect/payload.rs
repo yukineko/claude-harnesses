@@ -151,8 +151,18 @@ blastguard cannot read it",
             // unrelated statement become the finding: `rmdir olddir; echo hi |
             // python3` was denied for "runs `rmdir`" when the program was `hi`.
             // A reason must name what was observed about THIS program.
-            let program_texts = stdin_program_texts(cmd, stage, &statement, i, heredoc_open);
+            let mut program_texts = stdin_program_texts(cmd, stage, &statement, i, heredoc_open);
             let shape = format!("`{}` takes its program from stdin", stage.trim());
+            // A shell removes its program's line continuations before it
+            // splits words: judge that reading too (backlog 040b959b).
+            if is_shell(&normalized_command(tokens[idx])) {
+                let (readings, undetermined) =
+                    super::readings::shell_program_readings(&program_texts);
+                program_texts = readings;
+                if let Some(deny) = undetermined.and_then(|ask| acc.record(ask)) {
+                    return deny;
+                }
+            }
             let python = python_stdin_reading(cmd, tokens[idx], &program_texts, depth, ctx);
             if let Some(deny) = acc.record(interpreter_code_verdict(
                 &shape,
@@ -485,9 +495,16 @@ unquote — it cannot tell what text the shell will run",
             }
             continue;
         }
+        // The operand and, when it holds a line continuation, its reading
+        // with them removed, which is what the shell runs (backlog 040b959b).
+        let (operands, undetermined) =
+            super::readings::shell_program_readings(std::slice::from_ref(&span.operand));
+        if let Some(deny) = undetermined.and_then(|ask| acc.record(ask)) {
+            return deny;
+        }
         let verdict = interpreter_code_verdict(
             &shape,
-            std::slice::from_ref(&span.operand),
+            &operands,
             depth,
             ctx,
             !span.single_quoted,

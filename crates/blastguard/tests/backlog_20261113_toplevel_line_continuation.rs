@@ -134,10 +134,7 @@ const SHAPES: &[(&str, &str, &str)] = &[
     ),
 ];
 
-// test-weakening-justified: new RED for an unfixed fail-open family
-// (2026-11-13); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: backslash-LF (BN) removed by the shell hides a system-harm command (chmod/open on /etc/hosts) from blastguard"]
 fn backslash_newline_in_system_harm_command_is_not_allowed() {
     let home = unique_home("red");
     let mut failures = Vec::new();

@@ -9,8 +9,9 @@ use unicode_normalization::UnicodeNormalization;
 /// cancelled` (`cancel --reason`, a recorded discard; abandoned, see
 /// [`STATUS_CANCELLED`]); a deferred task is restored to `pending` once its
 /// `defer_until` elapses. `done` and `cancelled` are terminal. `pending|failed
-/// → ruled-deferred` (`defer --ruling`, backlog b3f5e3af) is untimed and never
-/// restored automatically; it leaves only by `cancel` / `done`. NB: `backlog`
+/// → ruled-deferred` was written by the ABOLISHED `defer --ruling` (backlog
+/// b3f5e3af; abolished by user ruling 2026-11-13): legacy rows are parsed and
+/// leave by `recheck` (-> pending or auto-cancelled), `cancel` or `done`. NB: `backlog`
 /// has no `open` status — that vocabulary belongs to `hypothesis` (open/
 /// validated/rejected), a different binary.
 pub const STATUS_PENDING: Status = Status::Pending;
@@ -64,8 +65,8 @@ pub const STATUSES: [Status; 4] = [STATUS_PENDING, STATUS_DONE, STATUS_FAILED, S
 /// stored, backlog 0dafa254). A filter naming any of these must not warn; a
 /// filter naming anything else (any string that is not a [`Status`]) must.
 /// `ruled-deferred` (backlog b3f5e3af) is filterable too; it is stored but NOT
-/// in [`STATUSES`] because `edit --status` must never set it — its only writer
-/// is `backlog defer ID --ruling QUOTE`, which records the ruling.
+/// in [`STATUSES`] because `edit --status` must never set it — and nothing
+/// writes it any more (`backlog defer` is abolished, user ruling 2026-11-13).
 pub const FILTER_STATUSES: [Status; 6] = Status::ALL;
 
 /// How a task reached a terminal status, recorded as `[task.closure]`.

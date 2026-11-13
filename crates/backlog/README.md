@@ -4,14 +4,16 @@ To drain the whole queue automatically, use `/flow` instead.
 
 ## Use the subcommands
 
-- `add` — Append a task (`--repro-test`); see **File only with a reproducing test**
-- `list` — List the store's tasks, filterable by `--tag` / `--status` (`pending` / `done` / `failed` / `cancelled` / `claimed` / `ruled-deferred`; `open` is not a status; `claimed` is derived) and `--json`. For a repo store `--project` is an assertion, not a filter — see **Scope**
+- `add` — Append a task (`--repro-test`); see **File only with a reproducing test**. On a GitHub `origin` the row is merged into main and pushed before the issue is created; see **`add` lands the row on main before the issue**
+- `list` — List the store's tasks, filterable by `--tag` / `--status` (`pending` / `done` / `failed` / `cancelled` / `claimed` / `ruled-deferred` (legacy rows written by the abolished `defer`; never written now); `open` is not a status; `claimed` is derived) and `--json`. For a repo store `--project` is an assertion, not a filter — see **Scope**
 - `next` — Print the next highest-priority pending task that carries a reproduced repro, as JSON (`--claim` reserves it — see below)
+  - `--claim` re-runs the candidate's stored repro at HEAD before handing it out (see **No deferral** below): reproduced → handed out; not reproduced / not demonstrated → **auto-cancelled**, then the next candidate; undeterminable for an infrastructure reason → the claim is refused (non-zero, row untouched)
 - `done <id>` — Mark a task done **with evidence**: `--test CMD --red-rev REV` (`--reason fixed|already-fixed|obsolete`), `--doc-only COMMIT`, or `--duplicate-of ID`. Exactly one of those forms is required. A bare `done <id>` is refused
   - **`done` does not execute RED** (user ruling 2026-11-08: 「backlog doneのRED実行はそもそも全面廃止でいい」). There is no temp worktree, no overlay of HEAD's test files, and no run at `--red-rev`. Only the GREEN run at HEAD executes, with its exit status, `<N> passed` check and refusal on anything undetermined unchanged. `--red-rev` is still required; a rev that does not resolve to a commit, or is not an ancestor of HEAD, is refused (no build needed). The resolved rev is recorded **as a claim only** in `closure.red`: `rev`, `executed = false`, `kind = "not-executed"` and a `note` quoting the ruling, with no `exit`. Such a closure never reads as a verified RED: `audit-closures` classes it `green-only` and `list` shows `closed:green`. `--red-overlay` was removed (there is no overlay any more; passing it is a usage error). Older closures with an observed RED (`exit`, `kind = "behavioural"`) still load unchanged.
 - `fail <id>` — Mark a task failed (`--reason`). It defers the re-run by 2 days
 - `cancel <id> --reason R` — Close as "decided not to do it": terminal, never requeued, recorded as a `discard` closure, no test needed
-- `defer <id> --ruling QUOTE` — Record a user ruling (見送り): status `ruled-deferred`, which `next` / `next --claim` never hand out and nothing requeues. The ruling is appended to the notes. `fail` and `edit --status` refuse to put the row back on the queue, and `add` refuses to re-file the same content without `--force`; it leaves only through `cancel` / `done`
+- `defer <id>` — **Abolished** (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): always refused non-zero, nothing written. There is no deferral state
+- `recheck [--id ID]` — Re-run the stored repro of every open row (`pending` / `failed` / legacy `ruled-deferred`, rows under a live lease skipped) and resolve it: reproduced → stays open (a legacy `ruled-deferred` row becomes `pending`); not-reproduced / not-demonstrated / no recorded repro → auto-cancelled (a `discard` closure recording verdict, cmd, rev, exit code and output tail verbatim; the mirrored issue is closed as by `cancel`); undeterminable → row untouched, named on stderr, non-zero exit after the rest. One `<verdict>\t<action>\t<id>` line per row
 - `audit-closures` — Read-only classification of every terminal row's closure evidence (`--json`); never writes the store
 - `overlap` — Group queued tasks by declared `touched_files` scope (advisory; undeclared scopes listed separately)
 - `edit <id>` — Update a task's title / tags / notes / status; `--repro-test CMD` replaces a pending task's repro (see **File only with a reproducing test**)
@@ -31,13 +33,38 @@ The registered hook's timeout is 10s.
 
 ## Store writes need a linked worktree
 
-`add` / `done` / `fail` / `edit` / `cancel` / `defer` / `sync --apply` are **refused** (non-zero exit,
+`add` / `done` / `fail` / `edit` / `cancel` / `recheck` / `sync --apply` are **refused** (non-zero exit,
 nothing written) when the store lies inside the *primary* working tree of a git repo, so run them
 from a linked worktree (`git worktree add …`).
 If git cannot say which kind of checkout this is, `add` is refused too.
 `list` works in the primary tree.
-`next --claim` is allowed there too and leaves `git status` clean.
+`next --claim` is allowed there too and leaves `git status` clean — except that a candidate whose repro no longer reproduces must be auto-cancelled, which writes the store, so in the primary tree the claim is REFUSED (non-zero, nothing written) and names the candidate; run `next --claim` or `recheck --id` from a linked worktree.
 The SessionStart hook skips its requeue in the primary tree and says so.
+
+## `add` lands the row on main before the issue
+
+User ruling: 「backlog addの時点で台帳も更新される。mainにいく、issueができる」.
+When `remote.origin.url` is a GitHub remote and the store is in a linked worktree, `add` runs in this order:
+
+1. The row is written to the worktree's store (no issue fields yet).
+2. The row is put on the branch checked out in the primary tree (normally `main`).
+   `add` builds a commit whose only change is that store file (the branch's store plus this row).
+   It **merges** that commit from the primary tree (`git merge --no-ff`) and checks the row is on the branch.
+   Then it **pushes** the branch to `origin` (`git push origin <branch>:<branch>`; repo hooks run).
+3. Only then does `add` run `gh issue create`.
+4. If the issue is created, its number and URL are recorded on the row (`updated_at` unchanged).
+   The row is then merged and pushed again, so main's row carries the issue number.
+
+If step 2 fails, `add` creates **no issue** and exits non-zero with the reason.
+Failures include: a merge already in progress in the primary tree (left untouched), a detached or unborn primary branch, a failed or conflicting merge, or a failed push.
+The row stays only in the worktree store.
+Only a failed merge of `add`'s own commit is aborted.
+If step 4 fails after the issue exists, `add` exits non-zero and names the issue number.
+
+If `gh` is absent or fails, the row is still on main, `add` prints `GitHub issue NOT created`, and exits 0.
+`backlog sync --apply` mirrors it later.
+A non-GitHub remote never merges, pushes or creates an issue.
+A store in no git repository (pinned outside any checkout) is not landed; its issue is created as before.
 
 ## Run standalone from cargo
 
@@ -91,6 +118,32 @@ writing.
 - A determined row is skipped on later runs, even if a repro is added later.
 - An undetermined row is re-examined on the next run.
 - An unreadable ledger fails the command.
+
+### No deferral: demonstrated → open, otherwise → closed
+
+User rulings (2026-11-13): 「保留はありえない実証されないならclose,実証されたらopen」 and
+「起票しますか?というのはもう聞かないこと。実証されたら起票、そうでないなら破棄。それは自動で実行していくこと。それを仕組みとしていれて」.
+
+- An open row stays open only **while its stored repro still reproduces**. `next --claim` (for the
+  candidate it is about to hand out) and `recheck` (for every open row) re-run it and decide.
+- The re-run has four verdicts (`evidence::RecheckVerdict`):
+  - **reproduced** — a behavioural failure (cargo `test result: FAILED`, pytest exit 1, script exit 1
+    or 3..=125). Stays open.
+  - **not-reproduced** — exit 0 with at least one test run. Auto-cancelled.
+  - **not-demonstrated** (environment unavailable / cannot even be started) — script exit 2 (this repo's
+    script convention for "environment unavailable", e.g. `no v9fs dir` from
+    `scripts/tests/blastguard-2287ebae-v9fs-target.sh`) or 126/127; exit 0 with zero tests run
+    (`0 passed; 0 failed`, a filter matching nothing, a cargo run with no `test result:` line); pytest
+    exit 4/5; a stored command that no longer parses or is off the allowlist; a script no longer tracked
+    at HEAD. Auto-cancelled.
+  - **undeterminable** (infrastructure) — a timeout (including a cargo lock wait), a signal (script exit
+    >= 128 or no exit code), a spawn failure, a failed git query, a dirty checkout, a bad
+    `BACKLOG_TEST_TIMEOUT_SECS`, a build/compile failure (a broken HEAD must never mass-close tickets),
+    a non-zero cargo run with neither `test result: FAILED` nor a build marker, pytest exit 2/3 or a build
+    marker. **Never auto-cancelled**: `next --claim` refuses (non-zero, row untouched) and `recheck`
+    leaves the row and exits non-zero (CLAUDE.md §3).
+- Filing uses the same boundary: `add --repro-test` / `edit --repro-test` write only on reproduced. A
+  script exit 2 (formerly read as RED) is not-demonstrated and refused, i.e. discarded.
 
 `add` derives a **content hashkey** from the title and project (title trimmed →
 Unicode NFKC → lowercased → runs of whitespace collapsed to one space →
@@ -228,8 +281,8 @@ project identity that cannot be resolved. A refusal is not an empty queue. The l
 
 ### The lease never touches the tracked store; `claimed` is derived
 
-A claim writes **only** the ledger. The tracked `.backlog/tasks.toml` is not
-modified by `next --claim`, and SessionStart's requeue never rewrites rows on account of
+A claim (the lease) writes **only** the ledger. The tracked `.backlog/tasks.toml` is not
+modified by `next --claim` for the lease (the one exception is the auto-cancel of a candidate whose repro no longer reproduces — the same store write as `cancel`, done only from a linked worktree; commit that store change), and SessionStart's requeue never rewrites rows on account of
 claims — so claiming leaves the git worktree clean. `claimed` is a DERIVED status, decided per row from its stored status and its live lease (if any):
 
 - a `pending` row with a live lease is shown `claimed`;

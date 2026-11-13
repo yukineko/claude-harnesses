@@ -586,7 +586,7 @@ fn claim_r_carries_a_hashkey_field() {
 
 fn sync_fixture(tag: &str) -> (Fixture, PathBuf) {
     let f = Fixture::new(tag);
-    f.git(&["remote", "add", "origin", "https://github.com/o/r.git"]);
+    common::fixture_github_origin(&f.repo);
     let log = f.shim.join("gh.log");
     let stub = format!(
         "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {log}\n\
@@ -1196,7 +1196,7 @@ fn claim_r_rows_already_in_the_done_file_keep_their() {
     );
     assert_ne!(text, stamped);
     std::fs::write(f.done_path(), &stamped).unwrap();
-    f.git(&["remote", "add", "origin", "https://github.com/o/r.git"]);
+    common::fixture_github_origin(&f.repo);
     f.write_exec_shim("gh", "#!/bin/sh\nexit 0\n");
     let y_before = block_of(&f.done_path(), &y);
 

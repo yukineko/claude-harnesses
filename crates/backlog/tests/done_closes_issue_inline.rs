@@ -102,6 +102,7 @@ fn setup(tag: &str) -> Env {
     // A LINKED worktree: store writes are refused in a PRIMARY working tree (1e6f00ae).
     common::linked_checkout(&repo);
     g(&["remote", "add", "origin", "https://github.com/o/r.git"]);
+    common::local_push_origin(&common::linked_primary(&repo));
     // `add` files (and mirrors) only a reproduced finding (intake contract
     // v2): commit a repro that exits 1, and expose `bash` (the allowlisted
     // runner) in the PATH=bin the binary runs with.

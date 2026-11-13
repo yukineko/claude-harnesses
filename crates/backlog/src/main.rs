@@ -12,9 +12,11 @@ mod evidence;
 mod github;
 mod hooks;
 mod install;
+mod integrate;
 mod liveness;
 mod lock;
 mod merge_driver;
+mod recheck;
 mod store;
 mod task;
 mod timefmt;
@@ -254,10 +256,10 @@ enum Command {
         reason: String,
     },
 
-    /// Record a user ruling deferring a task (見送り): its status becomes
-    /// `ruled-deferred`, which `next` / `next --claim` never hand out and
-    /// nothing requeues. Exits are `cancel` / `done` only
+    /// ABOLISHED (user ruling 2026-11-13): always refused; use `recheck`
     Defer(defer::DeferArgs),
+    /// Re-run open rows' repros: reproduced stays open, else auto-cancelled
+    Recheck(recheck::RecheckArgs),
 
     /// Reconcile this store against its GitHub issues (one-way: local wins)
     Sync {
@@ -901,14 +903,12 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
             let now = now_unix();
-            // Fail-soft GitHub push (Phase 1, one-way): resolve the project's
-            // git remote URL for real (`git config --get remote.origin.url`,
-            // best-effort empty on any failure) and inject the real `gh`
-            // spawn via `gh_probe`, mirroring condukt::pr's real-closure-at-
-            // the-call-site / fake-closure-in-tests pattern. The pure
-            // decision (`github::decide_issue_create`, driven from
-            // `store::add_with_weight_and_github_push`) never runs a process
-            // itself, so unit tests exercise it with fake closures only.
+            // GitHub mirror (Phase 1, one-way): resolve the project's git
+            // remote URL (`git config --get remote.origin.url`, empty on any
+            // failure = no mirror, no issue) and inject the real `gh` spawn
+            // (`gh_probe`) and the real row-to-main merge+push
+            // (`integrate::land_row_on_main`); `store::add_finding` never
+            // runs a process itself and creates no issue unless land is Ok.
             let remote_url = git_remote_origin_url(&project);
             // The repro runs BEFORE the store lock is taken (a test can run
             // for up to BACKLOG_TEST_TIMEOUT_SECS). Its outcome decides
@@ -950,6 +950,7 @@ fn run(cli: Cli) -> Result<()> {
                 now,
                 &remote_url,
                 gh_probe,
+                integrate::land_row_on_main,
                 intake,
             )?;
             println!("added: {id}");
@@ -1591,7 +1592,16 @@ fn run(cli: Cli) -> Result<()> {
             mirror_close_for(&tasks_path, &id);
         }
 
-        Command::Defer(args) => defer::run(&write_store_path("backlog defer")?, &args)?,
+        Command::Defer(args) => defer::run(&args)?,
+
+        Command::Recheck(args) => {
+            let tasks_path = write_store_path("backlog recheck")?;
+            let effective_project = read_project_scope(&location, None, false, "recheck")?;
+            let leased: HashSet<String> = live_lease_view(effective_project.as_deref(), "recheck")?
+                .into_keys()
+                .collect();
+            recheck::run(&tasks_path, &args, &leased)?;
+        }
 
         Command::Fail { id, reason } => {
             let tasks_path = write_store_path("backlog fail")?;
@@ -1957,7 +1967,7 @@ fn report_near_duplicates(tasks_path: &Path, id: &str) {
 /// the caller has already committed the local state change and the mirror is
 /// downstream of it. A failure deliberately records NOTHING, so the task keeps
 /// its `issue_closed_at: None` and the next `backlog sync` retries.
-fn mirror_close_for(tasks_path: &Path, id: &str) {
+pub(crate) fn mirror_close_for(tasks_path: &Path, id: &str) {
     let Ok(tasks) = store::load(tasks_path) else {
         eprintln!("warning: could not re-read the store to close {id}'s issue; run `backlog sync`");
         return;
@@ -2007,10 +2017,10 @@ fn mirror_close_for(tasks_path: &Path, id: &str) {
 }
 
 /// Bound on how long `gh_probe` waits for `gh` before treating it as absent.
-/// `add_with_weight_and_github_push` calls `gh_probe` from inside the
-/// tasks-file lock's critical section, so an unbounded spawn (`gh` hanging on
-/// a network auth prompt) would hold that lock indefinitely and block every
-/// other session's `backlog add`/`next --claim`. Mirrors `propguard::git`'s
+/// `add` runs it after its locked write (`sync --apply` likewise), and an
+/// unbounded spawn (`gh` hanging on a network auth prompt) would hang that
+/// command indefinitely, with the row already on main but no issue (or, in
+/// older binaries, while holding the tasks lock). Mirrors `propguard::git`'s
 /// `GIT_TIMEOUT` use of `boundary::run_with_timeout`.
 const GH_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -2049,8 +2059,8 @@ mod gh_probe_tests {
     // ── gh-probe-timeout: gh_probe must be timeout-bounded ──────────────────
     //
     // Before this fix, `gh_probe` spawned `gh` with no timeout at all. Since
-    // `add_with_weight_and_github_push` calls it from inside the tasks-file
-    // lock's critical section, a hung `gh` (e.g. stuck on an interactive
+    // `add` then called it from inside the tasks-file lock's critical
+    // section (it now runs after the lock is released), a hung `gh` (e.g. stuck on an interactive
     // network-auth prompt) would hold that lock indefinitely and block every
     // other session's `backlog add`/`next --claim`. Actually reproducing a
     // hung `gh` binary is too heavy for a unit test, so this checks the two

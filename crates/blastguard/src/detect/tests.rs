@@ -4850,3 +4850,30 @@ fn escaped_quote_splitting_does_not_hide_real_commands() {
         ]
     );
 }
+
+/// Backlog 040b959b: [`shell_lex::line_continuation_reading`] removes a
+/// backslash-newline where the shell removes it — unquoted, in double quotes,
+/// in `$(…)` and backticks — and nowhere else: single quotes, `$'…'`, a `#`
+/// comment and a quoted here-document body keep it (the reading is then
+/// `Same`). Escaped quotes and comments are left as written.
+#[test]
+fn line_continuation_reading_removes_only_where_the_shell_does() {
+    use shell_lex::{line_continuation_reading as r, ShellLexed};
+    let text = |s: &str| ShellLexed::Text(s.to_string());
+    assert_eq!(r("ls \\\n-la"), text("ls -la"));
+    assert_eq!(
+        r("a\\\nb \"c\\\nd\" $(e\\\nf) `g\\\nh`"),
+        text("ab \"cd\" $(ef) `gh`")
+    );
+    assert_eq!(r("x \\'y\\\nz # k\\\n"), text("x \\'yz # k\\\n"));
+    for same in [
+        "echo 'a\\\nb'",
+        "echo $'a\\\nb'",
+        "echo a # b \\\nls",
+        "cat <<'EOF'\na\\\nb\nEOF\n",
+        "echo \\\\",
+        "plain",
+    ] {
+        assert_eq!(r(same), ShellLexed::Same, "{same:?}");
+    }
+}

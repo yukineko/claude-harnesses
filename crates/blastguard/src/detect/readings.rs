@@ -1,4 +1,6 @@
-use super::shell_lex::{bash32_lexed_reading, shell_lexed_reading, Bash32Lexed, ShellLexed};
+use super::shell_lex::{
+    bash32_lexed_reading, line_continuation_reading, shell_lexed_reading, Bash32Lexed, ShellLexed,
+};
 use super::substitution::{assuming_comment_hides_quotes, under_bash32_reading};
 use super::{
     detect_bash, Ctx, Decision, SafeRoots, VerdictAcc, ANALYSIS_BUDGET, MAX_ANALYSIS_NODES,
@@ -29,6 +31,14 @@ use super::{
 /// the live code they are, so a stray quote in such a body no longer hides a
 /// later substitution (backlog 5916d385); an unquoted body whose expansion the
 /// lexer does not model is Ask. See [`shell_lexed_reading`].
+///
+/// A further pass (backlog 040b959b) judges [`line_continuation_reading`] —
+/// the text with only its line continuations (backslash-newline) removed where
+/// the shell removes them — whenever it differs from the text: every splitter
+/// splits at the newline of such a pair, which hid a command word or operand
+/// cut in two by it. The shell-lexed pass above removes them too, but it also
+/// re-spells escaped quotes, which a backslash-escaped program operand needs
+/// intact. Undetermined is Ask.
 ///
 /// A fourth pass (backlog 089bedd4) does the same for the bash 3.2 reading:
 /// where bash 3.2 closes a substitution early at a here-document body `)`,
@@ -65,6 +75,19 @@ pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision 
         ShellLexed::Text(lexed) => {
             ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
             if let Some(deny) = acc.record(detect_bash(&lexed, 0, &Ctx::new(scope, &lexed))) {
+                return deny;
+            }
+        }
+    }
+    match line_continuation_reading(c) {
+        ShellLexed::Same => {}
+        ShellLexed::Undetermined => {
+            // An Ask never short-circuits, so there is nothing to return here.
+            let _ = acc.record(Decision::ask(LINE_CONTINUATION_UNDETERMINED));
+        }
+        ShellLexed::Text(joined) => {
+            ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
+            if let Some(deny) = acc.record(detect_bash(&joined, 0, &Ctx::new(scope, &joined))) {
                 return deny;
             }
         }
@@ -109,6 +132,59 @@ pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision 
     }
     acc.finish()
 }
+
+/// [`detect_bash`] on a shell payload (the code a nested shell parses —
+/// `bash -c '…'`, `eval`, a program's `os.system(…)` string) and on its
+/// [`line_continuation_reading`], the more restrictive verdict winning
+/// (`Deny > Ask > Allow`; an undetermined reading is Ask). The nested shell
+/// removes the payload's line continuations before it splits words, and the
+/// outer single quotes that kept them literal are gone by then:
+/// `bash -c 'chm\<NL>od …'` runs `chmod` (backlog 040b959b).
+pub(super) fn shell_payload_verdict(payload: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+    let mut acc = VerdictAcc::default();
+    if let Some(deny) = acc.record(detect_bash(payload, depth + 1, ctx)) {
+        return deny;
+    }
+    let joined = match line_continuation_reading(payload) {
+        ShellLexed::Same => Decision::Allow,
+        ShellLexed::Undetermined => Decision::ask(LINE_CONTINUATION_UNDETERMINED),
+        ShellLexed::Text(joined) => detect_bash(&joined, depth + 1, ctx),
+    };
+    if let Some(deny) = acc.record(joined) {
+        return deny;
+    }
+    acc.finish()
+}
+
+/// A SHELL program read from stdin (a here-string or here-document fed to
+/// `bash`/`sh`, or a literal piped into one): `texts` followed by the
+/// [`line_continuation_reading`] of each text that has one, plus an Ask when
+/// one is undetermined. The reading shell removes the program's line
+/// continuations before it splits words, whatever quoting delivered the text
+/// (`bash <<< 'chm\<NL>od …'` runs `chmod`, backlog 040b959b), so the caller
+/// judges every returned text and the most restrictive verdict wins. A text
+/// without a line continuation adds nothing.
+pub(super) fn shell_program_readings(texts: &[String]) -> (Vec<String>, Option<Decision>) {
+    let mut all = texts.to_vec();
+    let mut undetermined = None;
+    for text in texts {
+        match line_continuation_reading(text) {
+            ShellLexed::Same => {}
+            ShellLexed::Text(joined) => all.push(joined),
+            ShellLexed::Undetermined => {
+                undetermined = Some(Decision::ask(LINE_CONTINUATION_UNDETERMINED));
+            }
+        }
+    }
+    (all, undetermined)
+}
+
+/// Reason of the Ask for a [`line_continuation_reading`] that is undetermined.
+const LINE_CONTINUATION_UNDETERMINED: &str =
+    "the shell removes a backslash-newline (line continuation) before it reads the words, \
+     and blastguard cannot determine how this command reads with them removed (a \
+     here-document whose lines it joins, or nesting too deep) — it cannot vouch for it \
+     either way";
 
 /// The bash 3.2 passes of [`detect_bash_every_reading`] (plain and lexed)
 /// re-run under [`assuming_comment_hides_quotes`]: a comment whose line holds

@@ -834,6 +834,16 @@ forge・condukt のスケジューラが再利用）。
   Ask（subagent では Deny）になる。`\$PY ...` の部分を除いた同形は Allow（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_printf_operand_judged_as_command_fp.rs`
   （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の RED（2026-11-14、flow-8cca7ef5。修正は未実装）: procsub operand と list の twin** — (1) system-harm
+  fail-open: シェルに渡す process substitution が先頭 operand でないとき（`bash <(echo '…') foo` の script 引数、
+  `bash -x` / `-o pipefail` / `-O extglob` / `--rcfile f` の値取りフラグ、`bash <&3 3< <(…)` の fd dup、
+  `source <(…) foo`）、`/etc/hosts` の re-permission を走らせるのに main / subagent とも Allow。system harm は常に Deny。
+  (2) false positive: `bash <(echo hi; echo there)` / `bash < <(echo hi; echo there)` は静的に無害と証明できる list だが
+  Ask（subagent では Deny）。base（0e726e66）では Allow だった。control: 先頭 operand の `bash <(echo '…')` と
+  `bash 0< <(…)` は Deny、`bash < <(echo hi)` / `diff <(sort a) <(sort b)` / `bash script.sh < <(echo y)` は Allow、
+  `bash < <(cat f)` は Allow ではない。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_procsub_operand_flags_and_list_twins.rs`
+  （`#[ignore]` の RED 2 本 + control。独立 author が書いた。証明しない範囲はファイル冒頭の doc comment）。
 
 ### module 責務
 

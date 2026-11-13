@@ -1571,37 +1571,6 @@ exit 101: LED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finish
 error: test failed, to rerun pass `-p blastguard --test env_split_string_comment_collapse_20261113`"""
 
 [[task]]
-id = "d9387d49"
-title = "backlog no-deferral RED: h_recheck_leaves_undeterminable_row_untouched_and_fails (user ruling 2026-11-13)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "RED e6c2a72b on red/backlog-no-deferral. Ruling: 保留はありえない実証されないならclose,実証されたらopen / 実証されたら起票、そうでないなら破棄"
-created_at = 1794569656
-updated_at = 1794569656
-weight = 0.0
-issue_number = 1718
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1718"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close h_recheck_leaves_undeterminable_row_untouched_and_fails -- --ignored --exact"
-rev = "24ed46b943401dd8f91842873af9b710b2c29dd6"
-observed_at = 1794569656
-detail = """
-exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.17s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
-     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-a792bd36b1aa8618)
-error: test failed, to rerun pass `-p backlog --test backlog_20261113_no_deferral_auto_close`"""
-
-[[task]]
 id = "f055b526"
 title = "backlog no-deferral RED: i_claim_from_primary_tree_with_green_repro_writes_nothing (user ruling 2026-11-13)"
 project = "/Users/yuki/src/harness"

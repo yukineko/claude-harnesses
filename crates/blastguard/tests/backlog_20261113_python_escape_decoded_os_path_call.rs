@@ -95,7 +95,6 @@ const PLAIN: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: python escape-decoded system path in os.* call is Allow (backlog p0)"]
 fn escape_decoded_system_path_in_os_call_is_not_allowed() {
     let home = unique_home("esc");
     let mut allowed = Vec::new();

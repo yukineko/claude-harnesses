@@ -795,6 +795,13 @@ forge・condukt のスケジューラが再利用）。
   「it writes `/etc/hosts`」で Deny、SRC だけを `/tmp/y` に変えた同形は Ask（main session）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_shutil_copy2_source_judged_as_write_fp.rs`
   （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の system-harm fail-open の RED（2026-11-14、flow-8cca7ef5。修正は未実装）** — python の書き込み API で、
+  system パスの書き込み先が呼び出しの単一 literal 引数でない形は Allow になる（main・subagent とも）:
+  `(Path('/etc') / 'hosts').write_text(..)`、`Path('/etc').joinpath('hosts').write_text(..)`、
+  `shutil.copy(dst='/etc/hosts', src=..)`（keyword 引数）、`from shutil import copy as c; c(.., '/etc/hosts')`（alias import）、
+  `Path('/tmp/y').replace('/etc/hosts')`（移動先の operand）。`os.chmod('/etc/hosts',0)` は Deny（control）。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_python_write_api_indirect_system_target.rs`
+  （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
 
 ### module 責務
 

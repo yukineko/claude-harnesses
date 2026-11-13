@@ -75430,3 +75430,67 @@ rev = "5563f65575df39437ee2299a1f5faf3a7a78a58d"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "569b9b9d"
+title = "blastguard: pathlib write_text/write_bytes, node fs.appendFile(Sync), shutil.copy による system パス書き込みが allow になる fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "System-harm fail-open, RED 4d61aac2 by a non-implementer at main f0854f26 2026-11-13: 10 interpreter write(s) to a system path were ALLOWED (main and subagent): pathlib.Path(sys path).write_text / write_bytes, node require(fs).appendFileSync / appendFile, shutil.copy(src, sys path). Not Allow: perl 2-arg open, perl open my fh without parens, os.replace. Control control_python_open_w_on_system_path_is_denied non-ignored. Found by the 6cac93af implementer's manual probe."
+created_at = 1794527093
+updated_at = 1794585992
+weight = 0.0
+issue_number = 1673
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1673"
+issue_closed_at = 1794585995
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_interpreter_write_api_system_path interpreter_write_apis_on_system_path_are_not_allowed -- --include-ignored"
+rev = "02d939d31bcb908052fe61e1c516b122efcc6cfa"
+observed_at = 1794527093
+detail = """
+exit 101: ers/yuki/src/.harness-worktrees/red6-bg/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/backlog_20261113_interpreter_write_api_system_path.rs (target/debug/deps/backlog_20261113_interpreter_write_api_system_path-89f9d42151d9a4dd)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_interpreter_write_api_system_path`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261113_interpreter_write_api_system_path"
+exit = 0
+passed = 3
+rev = "7581f880722cd4de85c5bc3f51bf42de1bfa5932"
+observed_at = 1794585990
+output_digest = "sha256:cf0111f4de102523429d83d6202df22c93b61e84e4792a4bd64b87ee307d3abc"
+excerpt = """
+
+running 3 tests
+test pathlib_chmod_on_system_path_is_not_allowed ... ok
+test control_python_open_w_on_system_path_is_denied ... ok
+test interpreter_write_apis_on_system_path_are_not_allowed ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.95s
+
+   Compiling blastguard v0.2.520 (/Users/yuki/.condukt/worktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running tests/backlog_20261113_interpreter_write_api_system_path.rs (target/debug/deps/backlog_20261113_interpreter_write_api_system_path-c05f2f681d509987)
+"""
+
+[task.closure.red]
+rev = "02d939d31bcb908052fe61e1c516b122efcc6cfa"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

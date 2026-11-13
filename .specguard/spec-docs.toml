@@ -593,3 +593,8 @@ reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（20
 path = "crates/blastguard/tests/backlog_20261114_shutil_copy2_source_judged_as_write_fp.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14、flow-8cca7ef5。修正は未実装）': python shutil.copy2 with a system file as the read-only SOURCE is denied as writing it; RED test plus a /tmp-source control."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_python_write_api_indirect_system_target.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-14、flow-8cca7ef5。修正は未実装）': python write APIs whose system-path target is built (Path / 'x', joinpath), a keyword argument, an aliased import, or a Path.replace destination are Allow; RED test plus an os.chmod control."

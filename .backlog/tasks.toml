@@ -1791,3 +1791,29 @@ exit 101: ees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 22.59s
      Running tests/backlog_20261114_python_write_method_reference.rs (target/debug/deps/backlog_20261114_python_write_method_reference-65ed7fe4ff9641b0)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_write_method_reference`"""
+
+[[task]]
+id = "efd4ec4b"
+title = "blastguard: quoted heredoc .rs body containing a match arrow (=>) is judged as a redirect (false positive)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-14 by a condukt worker at main 144906a1 (blastguard 0.2.523 live); reproduced at 279e5a66 (0.2.524). Denied with reason: '> format!("{v:.p$}"' destroys the file's current contents and `format!("{v:.p$}"` contains a shell expansion, so blastguard cannot tell which file this names, let alone whether its contents are recoverable. Minimal shape: cat > x.rs <<'EOF' / b'f' => format!("{v:.p$}"), / EOF followed by python3 - <<'EOF' / print(1) / EOF (the .rs heredoc alone is Allow). Controls ': > /etc/hosts' and an executed heredoc stay Deny. RED commit 1f211cef on branch test/bg-fp-heredoc-arrow-red (worktree /Users/yuki/src/.harness-worktrees/bg-fp-heredoc-arrow-red)."""
+created_at = 1794598391
+updated_at = 1794598391
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_heredoc_rs_body_match_arrow_fp -- --include-ignored"
+rev = "1f211cef0eed508277602d09c44d3aeb5b72e14c"
+observed_at = 1794598391
+detail = """
+exit 101: 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/backlog_20261114_heredoc_rs_body_match_arrow_fp.rs (target/debug/deps/backlog_20261114_heredoc_rs_body_match_arrow_fp-c2e07066c7408162)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_heredoc_rs_body_match_arrow_fp`"""

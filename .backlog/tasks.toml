@@ -1754,3 +1754,28 @@ exit 101: arness-worktrees/side-reds-075136/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
      Running tests/backlog_20261114_brace_group_feeder_piped_to_bash_fp.rs (target/debug/deps/backlog_20261114_brace_group_feeder_piped_to_bash_fp-0d22514ccaecfe2b)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_brace_group_feeder_piped_to_bash_fp`"""
+
+[[task]]
+id = "7a5f65bd"
+title = "blastguard FP: read-only python3 -c json.load of ~/.claude/plugins/installed_plugins.json is Ask/Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Measured at dc9b00c7b (0.2.565) 2026-11-14 in run-20261114-075136-6996 follow-up; noticed when a subagent's read-only command was denied with 'a protected gate/config path — changing it changes which hooks and gates run'. main/subagent: ask/deny. Control python3 -c print(open('/tmp/x.json').read()) allow/allow. Two readings: (FP) a read is not changing the path; (intended) detect/interpreter.rs ~1308 says naming a protected path in program literals is deliberately asked on ('naming it is how it gets there'); docs/specs/blastguard.md has no ruling. RED asserts Allow."
+created_at = 1794613034
+updated_at = 1794613034
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_read_of_protected_plugin_file_fp -- --include-ignored"
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+observed_at = 1794613034
+detail = """
+exit 101: rees/side-reds-075136/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261114_python_read_of_protected_plugin_file_fp.rs (target/debug/deps/backlog_20261114_python_read_of_protected_plugin_file_fp-0c08f20d853bc41d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_read_of_protected_plugin_file_fp`"""

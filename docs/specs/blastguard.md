@@ -419,6 +419,19 @@ forge・condukt のスケジューラが再利用）。
   いずれかの operand が、または `cp`/`ln`/`install` で最後の operand がシステムディレクトリ内なら
   system-harm Deny（`os.system('mv /etc/hosts /tmp/x')`）。引数が literal でない呼び出し（変数）は
   ここでは判定せず、従来の program audit に残る（未対応の residual）。
+  (1') **Python が読むプログラム（`python -c`・stdin から読む program）は、path 変更系呼び出しの path 引数を
+  字句の一致ではなく静的評価で解決して判定する**（backlog f6dbff5b、blastguard 0.2.523、
+  `interpreter/python_semantics.rs` の `path_mutation_verdict`）。import alias を正規名に書き換えた上で、
+  here-doc の Python file 判定と同じ `Eval::expr`（隣接 literal の暗黙連結 `'/' 'etc/hosts'`・`+`・
+  `os.path.join`・`/`・単純代入された名前）で path を解決し、下の「filesystem 破壊」と同じ shell 行
+  （`shutil.rmtree`/`os.remove` 等 → `rm`、copy/move/rename の転送先・`os.truncate` → `: >`、
+  `os.chmod`/`os.lchmod`/`Path.chmod()`/`.lchmod()` → `chmod <mode>`、`os.chown`/`os.lchown`/`shutil.chown`
+  → `chown 0:0`）として shell 規則で判定する。`os.chmod('/''etc/hosts',0)` は system-harm Deny、
+  `os.chmod('a' 'b',0o644)`・`os.chmod('build/x',0o755)` は Allow。**path を静的に解決できない呼び出しは
+  Ask**（subagent では Deny。`os.chmod(sys.argv[1],0o755)`）。`open`/`os.open`/`.open()`/`write_text`/
+  `write_bytes` はここでは判定しない（inline program の書き込みは従来の write-target 走査が判定する）。
+  chmod の mode は Python の整数 literal（`0o755`・`493`・`0x1ff`）ならその値、それ以外は `000`
+  （読み取り・実行を外す＝shell の chmod 規則で最も制限側）として描画する。
   (4)（backlog 569b9b9d、blastguard 0.2.518）`Path(…)`/`pathlib.Path(…)`/`PosixPath(…)`/`WindowsPath(…)` の
   呼び出し結果に**直接**続く method（(1) の path 変更系、および `replace`・`write_text`・`write_bytes`・`touch`・
   `symlink_to`・`hardlink_to`）は、receiver の文字列引数がシステムディレクトリ内なら system-harm Deny
@@ -630,7 +643,9 @@ forge・condukt のスケジューラが再利用）。
     `Path.unlink()`/`.rmdir()` → `rm p`、`open(p,'w'|'x'|…)`・`Path.open('w')`・`write_text`/`write_bytes`
     → `: > p`（`a`/`+` は `: >> p`）、`shutil.copy`/`copy2`/`copyfile`/`copytree`/`move`・
     `os.rename`/`replace`/`renames` の転送先（第 2 引数 / `dst`）→ `: > dst`（move が消す転送元は判定しない。
-    tests/heredoc_system_harm_holes_20261111.rs B）、`os.open` の書き込み flag も同様として shell 規則で判定（home・`/`・
+    tests/heredoc_system_harm_holes_20261111.rs B）、`os.truncate(p,…)` → `: > p`、`os.chmod`/`os.lchmod`/
+    `Path.chmod()`/`.lchmod()` → `chmod <mode> p`（整数 literal でない mode は `000`）、`os.chown`/`os.lchown`/
+    `shutil.chown` → `chown 0:0 p`（backlog f6dbff5b）、`os.open` の書き込み flag も同様として shell 規則で判定（home・`/`・
     dotfile は shell と同じ Deny/Ask、repo 相対は Allow）。path は literal・`expanduser`・`Path.home()`・
     `os.path.join`・`/`・`joinpath` と、単純代入 `name = …` だけで束縛される名前（全代入の値を全部判定）から
     静的に解決し、解決できない path・literal でない mode/flag は Ask。

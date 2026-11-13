@@ -87,7 +87,8 @@ pub(super) fn below(b: &str) -> Option<bool> {
 /// tree with dot-named entries (it can name `.git`, `.githooks`, `.claude`) or
 /// the root touches a protected gate/config path; otherwise the shell rules'
 /// verdict on the equivalent command — `rm [-rf] <root>/*` for a removal,
-/// `: > <root>/<entry>` for a write.
+/// `: > <root>/<entry>` for a write, `chmod <mode> <root>/*` /
+/// `chown 0:0 <root>/*` for a re-permission / re-own.
 pub(super) fn under_verdict(
     call: &str,
     path: &PathVal,
@@ -124,6 +125,7 @@ protected gate/config paths"
         Effect::Remove { recursive: false } => format!("rm {dir}/*"),
         Effect::Write { append: false } => format!(": > {dir}/{ENTRY}"),
         Effect::Write { append: true } => format!(": >> {dir}/{ENTRY}"),
+        e @ (Effect::Chmod { .. } | Effect::Chown) => e.shell_line(&format!("{dir}/*")),
     };
     match analyze_shell_payload(&line, depth, ctx) {
         d @ Decision::Deny(_) => d,

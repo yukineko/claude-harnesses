@@ -573,3 +573,8 @@ reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-1
 path = "crates/blastguard/tests/backlog_20261113_printf_escape_and_procsub_to_shell.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-13、flow-8cca7ef5）': printf escape expansion piped to a shell and a shell program read from a process substitution are Allow; RED tests plus a literal-printf control."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261113_python_escape_decoded_os_path_call.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-13、flow-8cca7ef5。修正は未実装）': a Python os.chmod/os.rename system path spelled with a string-literal escape (\\x2f, octal, \\u, \\N{SOLIDUS}) is Allow; RED test plus a plain-literal control."

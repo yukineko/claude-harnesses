@@ -1696,3 +1696,32 @@ exit 101: s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 7.07s
      Running tests/backlog_20261114_label_identity_residual.rs (target/debug/deps/backlog_20261114_label_identity_residual-41e2c7d488853bf3)
 error: test failed, to rerun pass `-p backlog --test backlog_20261114_label_identity_residual`"""
+
+[[task]]
+id = "ab534966"
+title = "near_duplicates ignores peers whose project label differs (foreign-label peer unseen)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "RED at 4c86a8ee (origin/main 1787d8de), 2026-11-14. User ruling (2026-11-14): 「本質的というのは問題の質は通常パスでゆらぐものではない」. Residual of d3f7a4af. Observed: peer (label /some/old/root) missing from near_duplicates on next --claim; local-label control passes. Site: dedup::near_duplicates t.project == anchor.project (dedup.rs:279)."
+created_at = 1794597464
+updated_at = 1794597464
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261114_label_identity_residual -- --ignored near_duplicate_peer_with_foreign_label_is_reported_on_claim"
+rev = "4c86a8eea0981c6597094ad4229ffe7e75003ed1"
+observed_at = 1794597464
+detail = """
+exit 101: sult: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.99s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261114_label_identity_residual.rs (target/debug/deps/backlog_20261114_label_identity_residual-41e2c7d488853bf3)
+error: test failed, to rerun pass `-p backlog --test backlog_20261114_label_identity_residual`"""

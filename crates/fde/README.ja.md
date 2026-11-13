@@ -13,7 +13,19 @@ Forward Deployed Engineer 用の harness。外部の target リポジトリに�
 ## 対象プラットフォーム
 
 **Unix 系(WSL を含む)が対象。Windows は対象外。**(2026-11-03 のユーザー裁定。制限ではなく対象範囲の定義)
-`src/target.rs` は `std::os::unix` を使い、CMD は `/bin/sh -c` で実行する。
+`src/target.rs` は `std::os::unix` を使う。evidence の CMD は macOS の
+`sandbox-exec -p <生成 profile> /bin/sh -c CMD` で書き込みを閉じ込めて実行する(spec `fde-evidence-confine`)。
+書き込みを許すのは target root・fde が CMD ごとに作る私有 TMPDIR(CMD の `$TMPDIR`。実行後に削除し、削除失敗は
+stderr の警告だけで判定と記録は変えない)・`/dev/null`・`/dev/tty`・`$CARGO_TARGET_DIR`(設定時)・
+`$CARGO_HOME/{registry,git}`(未設定なら `$HOME/.cargo/{registry,git}`)・`$RUSTUP_HOME`(未設定なら
+`$HOME/.rustup`)だけで、それ以外(親の `$TMPDIR`・`/private/tmp`・`/private/var/folders`・`$HOME` など)への
+書き込みは拒否される。CMD 内の一時ファイルは `mktemp -p "$TMPDIR"` で作る(素の `mktemp` は macOS では
+`/var/folders/<user>/T` に書くため拒否される)。読み取りとネットワークは制限しない。拒否された書き込みは CMD の環境の一部として扱い、
+CMD の終了ステータスを通常どおり判定する。CMD の前に毎回 `sandbox-exec -p <profile> /usr/bin/true` で preflight を
+行い、sandbox-exec が無い・起動できない・probe が非 0・macOS 以外のときは CMD を実行せず、何も記録せずに
+exit 2(判定不能、理由は stderr)とする。したがって **evidence red/green/pass は macOS でしか記録できない**。
+閉じ込めを変更・無効化する env var や flag は無い(差し替えは `#[cfg(test)]` のテスト専用)。macOS 以外での
+拒否経路はコンパイル確認のみで、この(macOS の)開発ホストでは実行を観測していない。
 
 ## 役割分担
 
@@ -46,7 +58,7 @@ Forward Deployed Engineer 用の harness。外部の target リポジトリに�
 | `fde status [TARGET]` | 批准状態の照会 | 0 批准済み / 1 未批准(未登録・批准後の spec 変更を含む。TARGET が存在せず、登録済み target の root〈最も近い既存の祖先を正規化して比較するので symlink 経由の綴りも一致。記録された root そのままの綴りも可〉だった場合も 1 で、stderr に `gone` と `fde forget` を出す)/ 2 判定不能(state が読めない・壊れている、存在しない TARGET が登録済み root でもない、批准記録後に spec が読めない・無い) |
 | `fde forget [TARGET]` | **人間専用**。target の state dir `<state_dir>/targets/<state_key>/` を丸ごと消す(登録・批准・証跡)。中身はパースしないので壊れた登録も消せる。target 自体には一切触れない。key は、存在する TARGET(省略時は cwd)なら git top-level。存在する TARGET を git が解決できない(例: `.git` を消して repo でなくなった登録 root)ときは TARGET の正規化パスで引くので、そうなった登録 root も消せ(0)、未登録の非 git ディレクトリは拒否(1、理由に git の失敗を含む)。TARGET 自体を正規化できなければ 2。TARGET 省略(cwd)にはこの代替は無い(2)。存在しない TARGET は最も近い既存の祖先を正規化したパス、次に字句的な絶対パスで引く | 0 削除 / 1 拒否(その key の state dir が無い = 未登録)/ 2 判定不能(解決できない・消せない。消せないときは何も消していない。`targets/` の外へ移した後に削除だけ失敗した場合は、未登録になったが残骸が残っている旨を理由に出す) |
 | `fde gate` | PreToolUse hook の入口(stdin で payload を読む) | 0 allow / 2 deny |
-| `fde evidence red\|green\|pass --req ID --cmd CMD [TARGET]` | target root で CMD を実行し、終了ステータスで記録可否を決める | 0 記録 / 1 拒否 / 2 判定不能 |
+| `fde evidence red\|green\|pass --req ID --cmd CMD [TARGET]` | target root で CMD を `sandbox-exec` の書き込み閉じ込め下で実行し、終了ステータスで記録可否を決める(閉じ込めの拒否は 2) | 0 記録 / 1 拒否 / 2 判定不能 |
 | `fde evidence verify [TARGET]` | 全要件が RED→GREEN で検証済みか(PASS のみの要件は完了に数えない) | 0 完了(全要件が RED の後に GREEN)/ 1 欠け(unresolved・unmeasured・PASS のみの要件を stderr に列挙)/ 2 判定不能(未批准・要件ゼロ・ledger 不整合、および下の「HEAD の来歴」規則を満たさない・判定できない場合を含む) |
 | `fde report [TARGET]` | 人間向けの一覧(未批准でも `ratification: UNRATIFIED` を出力。批准時 HEAD と clean/dirty、現在の HEAD、要件ごとの各記録の種類・HEAD・clean/dirty を含む) | 0 完了(批准済みかつ全要件が RED→GREEN)/ 1 未完了(未批准〈未登録・批准後の spec 変更を含む〉、または unresolved・unmeasured・PASS のみの要件がある。理由を stderr に出す)/ 2 判定不能(store・spec・ledger が読めない・壊れている・不整合、要件ゼロ、「HEAD の来歴」規則を満たさない・判定できない、stdout へ書けない) |
 

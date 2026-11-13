@@ -108,6 +108,20 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
 2. テストコマンド `CMD` を 1 つ決め、以後この要件では同じ文字列を使う。
 3. `fde evidence red --req <REQ-ID> --cmd '<CMD>' [TARGET]` — fde が target root で `CMD` を実行し、
    **終了ステータスが非 0 のときだけ** RED を記録する(0 なら exit 1 で拒否)。
+   `CMD` は macOS の `sandbox-exec` で**書き込みを閉じ込めて**実行される(spec `fde-evidence-confine`。
+   `evidence green|pass` も同じ)。書き込めるのは target root・fde が CMD ごとに作る私有 `$TMPDIR`
+   (実行後に削除)・`/dev/null`・`/dev/tty`・`$CARGO_TARGET_DIR`(設定時)・cargo/rustup の registry / git /
+   toolchain(`$CARGO_HOME/{registry,git}` と `$RUSTUP_HOME`、未設定なら `$HOME/.cargo/{registry,git}` と
+   `$HOME/.rustup`)だけで、それ以外(親の `$TMPDIR`・`/private/tmp`・`/private/var/folders`・`$HOME` など)
+   への書き込みは拒否される。読み取りとネットワークは制限しない。
+   - 一時ファイルは **`mktemp -p "$TMPDIR"`** で作る。素の `mktemp` は macOS では `/var/folders/<user>/T` に
+     書くため拒否されて失敗する。
+   - 拒否された書き込みは CMD の環境の一部として扱われ、CMD の終了ステータスがそのまま判定される
+     (RED なら非 0 として記録されうる。GREEN / PASS なら exit 1 の拒否)。書き込み拒否で RED を取らないよう、
+     テストが閉じ込めの外に書いていないか確認する。
+   - 各 CMD の前に毎回 `sandbox-exec -p <profile> /usr/bin/true` の preflight が走る。sandbox-exec が無い・
+     起動できない・probe が非 0・macOS 以外のときは CMD を実行せず、何も記録せず exit 2(判定不能、理由は
+     stderr)。つまり evidence は macOS でしか記録できない。閉じ込めを無効化する env var / flag は無い。
 4. tdd の RED / F→P オラクルも同じ `CMD` で残す:
    `tdd red --task <spec-id>-<REQ-ID> --cmd '<CMD>' --author <test-agent-id>`
    (tdd の証跡は tdd の `proof_dir`、既定 `.tdd` に書かれる)。tdd は `CMD` を自分の cwd で実行し、

@@ -1713,6 +1713,8 @@ notes = "User ruling 2026-11-14: 本質的というのは問題の質は通常�
 created_at = 1794596566
 updated_at = 1794596566
 weight = 0.0
+issue_number = 1726
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1726"
 rev = 0
 
 [task.repro]

@@ -265,6 +265,10 @@ scripts/rollout-plugins.sh --plugin specguard --canary             # GATE クレ
   確認した**後**にマーカーを消すので、build 中に始まって戻された mutation もカウンタで検出される。
   マーカー/カウンタは自 worktree の git dir だけを見る（他 worktree は参照しない）。`--dry-run` は対象外。
   `rebuild-plugins.sh` を**単体で**叩いた場合はこの検査を通らない（rollout 経由でのみ有効）。
+  **残る穴（未対処・明示）**: (a) gitignored ファイルは `git status` に出ず rsync でコピーされ、(2) は HEAD
+  追跡ファイルしか比べないので cache 側の余剰ファイルは検出しない。(b) 汚れ検査は上記 build 入力のみで、
+  `scripts/`（sync-plugin-assets.sh 等）は対象外。(c) (5) で拒否した場合、registry は戻るが cache の
+  version dir には swap 済みバイナリが残る（(4) を通過済みのビルド物）。(d) canary 経路は E2E テスト未整備。
   プロセスが死んで `.active` が残った場合は rollout が拒否し続けるので、`git status` が clean なことを
   確認してから手で消す。
 - **GATE クレートは canary 必須**: canary 無しでの反映はエラーで止まる（fleet 防御ゲートを

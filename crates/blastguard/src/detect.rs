@@ -142,6 +142,7 @@ use protected::{
 use interpreter::{
     analyze_code_interpreter, interpreter_code_verdict, irreversible_device_verb,
     irreversible_git_subcommand, is_code_interpreter, quoted_string_literals, strip_version_suffix,
+    PythonReader,
 };
 
 use payload::{

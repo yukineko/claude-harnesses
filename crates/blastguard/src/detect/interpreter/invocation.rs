@@ -11,7 +11,7 @@ use super::super::{
 use super::{
     interpreter_code_verdict, interpreter_edits_in_place, interpreter_eval_flag_letters,
     interpreter_inline_eval_pos, osascript_app_delete, protected_operand_ask, python_file,
-    quoted_string_literals, strip_version_suffix,
+    quoted_string_literals, strip_version_suffix, PythonReader,
 };
 
 /// The operand that makes an interpreter read its program from STDIN rather
@@ -99,7 +99,11 @@ fn judge_invocation(
             depth,
             ctx,
             true,
-            strip_version_suffix(cmd) == "python",
+            if strip_version_suffix(cmd) == "python" {
+                PythonReader::InlineEval
+            } else {
+                PythonReader::NotPython
+            },
             false,
         );
         if verdict.is_deny() {
@@ -209,7 +213,11 @@ from its strings, so it cannot vouch for it"
         depth,
         ctx,
         !here_document_delimiter_is_quoted(&text),
-        false,
+        if strip_version_suffix(cmd) == "python" {
+            PythonReader::Stdin
+        } else {
+            PythonReader::NotPython
+        },
         false,
     );
     if matches!(verdict, Decision::Allow) {

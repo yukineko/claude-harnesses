@@ -69,7 +69,8 @@ use super::words::basename;
 use super::{
     analyze_shell_payload, command_candidates, executed_substitution_payloads,
     interpreter_code_verdict, is_code_interpreter, is_shell, normalized_command, quote_aware_words,
-    scan_balanced, split_statements_into_pipe_stages, Ctx, Decision, Stop, VerdictAcc,
+    scan_balanced, split_statements_into_pipe_stages, Ctx, Decision, PythonReader, Stop,
+    VerdictAcc,
 };
 
 /// A file an `echo`/`printf` stage writes: its literal path (leading `./`
@@ -210,7 +211,7 @@ written text is judged as the {what} it is",
                 depth,
                 ctx,
                 false,
-                false,
+                PythonReader::NotPython,
                 false,
             ),
             Reader::Shell => match analyze_shell_payload(text, depth, ctx) {

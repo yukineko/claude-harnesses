@@ -98,10 +98,7 @@ const SHAPES: &[(&str, &str, &str)] = &[
 /// Raw python string: python keeps the backslash, so the path is NOT /etc/hosts.
 const RAW_NEGATIVE: &str = "python3 -c \"open(r'/etc/ho\\\\\nsts','w')\"";
 
-// test-weakening-justified: new RED for an unfixed fail-open family
-// (2026-11-13); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: python string-literal backslash-LF is removed by python, hiding /etc/hosts from blastguard"]
 fn backslash_newline_in_python_string_literal_is_not_allowed() {
     let home = unique_home("red");
     let mut failures = Vec::new();

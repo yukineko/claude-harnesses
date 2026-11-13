@@ -868,6 +868,12 @@ forge・condukt のスケジューラが再利用）。
   二重引用符で本当に展開される `perl -ne "print $HOME"` は Allow にならない（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_perl_single_quoted_dollar_fp.rs`
   （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の false positive の RED（2026-11-14。修正は未実装）** — 引用付き heredoc で `.rs` ファイルへ書く本文に
+  Rust の match arm `=>`（例 `b'f' => format!("{v:.p$}"),`）があり、同じコマンド内に後続の `python3 - <<'EOF'` heredoc 文が
+  あると、`>` が redirect と判定され「destroys the file's current contents and ... contains a shell expansion」で Deny になる。
+  `.rs` heredoc 単体は Allow。実際の redirect（`: > /etc/hosts`）と、書いて実行する heredoc（`sh x.sh`）は Deny のまま（control）。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_heredoc_rs_body_match_arrow_fp.rs`
+  （`#[ignore]` の RED 1 本 + control。独立 test author が書いた。証明しない範囲はファイル冒頭の doc comment）。
 
 ### module 責務
 

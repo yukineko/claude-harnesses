@@ -20,25 +20,28 @@
 //!   [`only_ignored_build_output_within`], backlog 2089dfc5 / b997a3d5). Any
 //!   modified, staged, untracked or other ignored entry (`.env`, keys,
 //!   config, unknown names), and a build-named directory holding a nested
-//!   checkout (a linked worktree or repository inside `target/`) or one that
-//!   cannot be walked completely within [`WALK_MAX_ENTRIES`] entries and
-//!   [`WALK_DEADLINE`] (symlinks are not followed), is Ask: the removal
-//!   deletes the whole directory. Directories inside the named worktree are
-//!   part of it, so walking them stays within the ruling below. Only the worktree named
-//!   as the operand is ever inspected (user ruling 2026-11-14, backlog
-//!   b997a3d5): before any git probe, the operand must be, by local metadata,
-//!   a linked-worktree root ([`linked_worktree_root`]: a real directory whose
-//!   `.git` is a regular file), and the probe's `--show-toplevel` must be the
-//!   operand itself. Otherwise (an ignored dir inside another worktree, a main
-//!   worktree, a symlink, a missing path) it is Ask, so no enclosing or other
-//!   worktree's state ever decides the verdict.
+//!   checkout (a linked worktree or repository inside `target/`) or one
+//!   whose walk is cut off by [`WALK_MAX_ENTRIES`] entries or by
+//!   [`WALK_DEADLINE`] (symlinks are not followed; see [`WalkBudget`] for
+//!   what the deadline does and does not bound), is Ask: the removal deletes
+//!   the whole directory. Directories inside the named worktree are part of
+//!   it, so walking them stays within the ruling below.
+//!
+//!   Only the worktree named as the operand is ever inspected (user ruling
+//!   2026-11-14, backlog b997a3d5): before any git probe, the operand must
+//!   be, by local metadata, a linked-worktree root ([`linked_worktree_root`]:
+//!   a real directory whose `.git` is a regular file), and the probe's
+//!   `--show-toplevel` must be the operand itself. Otherwise (an ignored dir
+//!   inside another worktree, a main worktree, a symlink, a missing path) it
+//!   is Ask, so no enclosing or other worktree's state ever decides the
+//!   verdict.
 //!
 //! The `branch` probes run in the repository git will act on: the cumulative
 //! `-C` directory (relative to the segment's base), with `--git-dir` /
 //! `--work-tree` forwarded. The `worktree remove` probes run only with `-C
 //! <operand>` (no `--git-dir` / `--work-tree`); the cumulative `-C`
-//! directory only places a relative operand. Every cannot-determine state is Ask, never Allow
-//! (CLAUDE.md §3): no known working directory (`base_for("git")` is `None`
+//! directory only places a relative operand. Every cannot-determine state is
+//! Ask, never Allow (CLAUDE.md §3): no known working directory (`base_for("git")` is `None`
 //! and no absolute `-C`), an unplaceable or unrecognised global option, no
 //! operand, an unresolvable default branch, a git probe that exits with a code
 //! other than the ones listed for it, fails to spawn, or times out.
@@ -673,35 +676,106 @@ fn only_ignored_build_output(
     only_ignored_build_output_within(toplevel, entries, &mut budget)
 }
 
-/// Upper bound on directory entries [`no_nested_git`] visits for one
-/// `worktree remove` command (all operands and build dirs together).
-/// Measured 2026-11-14 (macOS, APFS, an `-O` replica of this walk: sorted
-/// path listing plus one `symlink_metadata` per entry): a cargo `target/` of
-/// this workspace with 55,883 entries took 585-694 ms warm and 1,809 ms on
-/// the first (colder) run, i.e. ~10-32 us per entry; `find | wc -l` counted
-/// 194,596 entries in a long-lived checkout's `target/`. The entry cap is
-/// ~5x that count; in practice [`WALK_DEADLINE`] binds first, so a target
-/// above roughly 90k (cold) to 300k (warm) entries is Ask, not Allow.
+/// Production cap on directory entries [`no_nested_git`] visits for one
+/// `worktree remove` command (all operands and build dirs together); one
+/// more entry is `Err`. Measured 2026-11-14 (macOS, APFS, an `-O` replica of
+/// this walk: sorted path listing plus one `symlink_metadata` per entry): a
+/// cargo `target/` of this workspace with 55,883 entries took 585-694 ms
+/// warm and 1,809 ms on the first (colder) run, i.e. ~10-32 us per entry;
+/// `find | wc -l` counted 194,596 entries in a long-lived checkout's
+/// `target/`. The cap is ~5x that count. At those measured per-entry costs
+/// [`WALK_DEADLINE`] is usually reached before this cap (from roughly 90k
+/// cold to 300k warm entries), but that is an extrapolation from the one
+/// measurement above, not a guarantee: which limit trips first depends on
+/// the filesystem and cache state.
 const WALK_MAX_ENTRIES: usize = 1_000_000;
 
-/// Wall-clock bound on the walk for one `worktree remove` command. The
-/// PreToolUse hook is killed at 10 s (`hooks/hooks.json`), and a killed hook
-/// does not block the tool, so the walk must finish well inside it, leaving
-/// room for the two [`PROBE_TIMEOUT`] git probes per operand.
+/// Production wall-clock budget for the walk of one `worktree remove`
+/// command. The PreToolUse hook is killed at 10 s (`hooks/hooks.json`) and a
+/// killed hook does not block the tool, so the walk is meant to stop well
+/// inside it, leaving room for the two [`PROBE_TIMEOUT`] git probes per
+/// operand. What [`WalkBudget`] actually guarantees is weaker; see there.
 const WALK_DEADLINE: std::time::Duration = std::time::Duration::from_millis(3000);
 
 /// Shared entry/time budget for every [`no_nested_git`] walk of one command.
-struct WalkBudget {
+///
+/// What it guarantees: the deadline is checked before EVERY directory
+/// listing and for EVERY entry (before its `symlink_metadata`), so once the
+/// clock reads `start + deadline` or later, the next such check is `Err`; the
+/// entry count is checked for every entry, so the `max_entries + 1`-th entry
+/// is `Err`. What it does NOT guarantee: a single directory listing
+/// ([`harness_core::boundary::read_dir_entries_checked`]) or a single
+/// `symlink_metadata` call cannot be interrupted, so one slow call (a huge
+/// directory, a hung network mount) can run past the deadline by its own
+/// duration, unbounded here. There is NO hard bound on the walk's wall time;
+/// if the hook process itself is killed at 10 s, the tool is not blocked
+/// (a fail-open this budget does not close).
+///
+/// Production: [`WalkBudget::new`] ([`WALK_MAX_ENTRIES`], [`WALK_DEADLINE`],
+/// the real clock). Tests: [`WalkBudget::with_limits`].
+pub(crate) struct WalkBudget {
     entries: usize,
-    deadline: std::time::Instant,
+    max_entries: usize,
+    start: std::time::Instant,
+    deadline: std::time::Duration,
+    clock: Box<dyn FnMut() -> std::time::Instant>,
 }
 
 impl WalkBudget {
+    /// The production budget.
     fn new() -> WalkBudget {
+        WalkBudget::with_limits(
+            WALK_MAX_ENTRIES,
+            WALK_DEADLINE,
+            Box::new(std::time::Instant::now),
+        )
+    }
+
+    /// A budget allowing at most `max_entries` entries and expiring once
+    /// `clock()` reads `deadline` or more after its first reading (taken
+    /// here). `clock` is called once here and once per deadline check, so a
+    /// test can inject a clock that advances per call; `Duration::ZERO`
+    /// expires at the very first check. A clock that goes backwards reads as
+    /// no time elapsed.
+    pub(crate) fn with_limits(
+        max_entries: usize,
+        deadline: std::time::Duration,
+        mut clock: Box<dyn FnMut() -> std::time::Instant>,
+    ) -> WalkBudget {
+        let start = clock();
         WalkBudget {
             entries: 0,
-            deadline: std::time::Instant::now() + WALK_DEADLINE,
+            max_entries,
+            start,
+            deadline,
+            clock,
         }
+    }
+
+    /// `Err` once the deadline has passed (`walking` names the walk root).
+    fn check_deadline(&mut self, walking: &std::path::Path) -> Result<(), String> {
+        let elapsed = (self.clock)().saturating_duration_since(self.start);
+        if elapsed >= self.deadline {
+            return Err(format!(
+                "walking `{}` to rule out a nested checkout took longer than {} ms",
+                walking.display(),
+                self.deadline.as_millis()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Count one entry; `Err` once more than `max_entries` were counted.
+    fn count_entry(&mut self, walking: &std::path::Path) -> Result<(), String> {
+        self.entries = self.entries.saturating_add(1);
+        if self.entries > self.max_entries {
+            return Err(format!(
+                "`{}` holds more than {} entries, too many to rule out a nested checkout",
+                walking.display(),
+                self.max_entries
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -715,12 +789,15 @@ impl WalkBudget {
 /// but a symlink NAMED `.git` is still `Err`. Fail-closed: a listing that
 /// [`harness_core::boundary::read_dir_entries_checked`] does not answer with
 /// `Known(Some(..))` (an I/O error, a mid-iteration entry error, or the
-/// directory vanishing), a `symlink_metadata` error, more than
-/// [`WALK_MAX_ENTRIES`] entries or the [`WALK_DEADLINE`] passing (both
-/// shared across the command via `budget`) is `Err`, never `Ok`.
-fn no_nested_git(dir: &std::path::Path, budget: &mut WalkBudget) -> Result<(), String> {
+/// directory vanishing), a `symlink_metadata` error, or `budget` running out
+/// (its entry cap, or its deadline as checked before each listing and each
+/// entry; the budget is shared across the command) is `Err`, never `Ok`. The
+/// deadline does not interrupt a listing or stat already in progress; see
+/// [`WalkBudget`].
+pub(crate) fn no_nested_git(dir: &std::path::Path, budget: &mut WalkBudget) -> Result<(), String> {
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
+        budget.check_deadline(dir)?;
         let listing = match harness_core::boundary::read_dir_entries_checked(&d) {
             Determination::Known(Some(v)) => v,
             Determination::Known(None) => {
@@ -737,21 +814,8 @@ fn no_nested_git(dir: &std::path::Path, budget: &mut WalkBudget) -> Result<(), S
             }
         };
         for p in listing {
-            budget.entries += 1;
-            if budget.entries > WALK_MAX_ENTRIES {
-                return Err(format!(
-                    "`{}` holds more than {WALK_MAX_ENTRIES} entries, too many to rule out a nested \
-checkout",
-                    dir.display()
-                ));
-            }
-            if budget.entries % 1024 == 0 && std::time::Instant::now() > budget.deadline {
-                return Err(format!(
-                    "walking `{}` to rule out a nested checkout took longer than {} ms",
-                    dir.display(),
-                    WALK_DEADLINE.as_millis()
-                ));
-            }
+            budget.count_entry(dir)?;
+            budget.check_deadline(dir)?;
             if p.file_name().is_some_and(|n| n == ".git") {
                 return Err(format!(
                     "`{}` is a `.git` entry: a nested checkout (worktree or repository) lies inside \
@@ -794,7 +858,7 @@ the ignored build directory",
 /// not build output. A file ignored inside a build-named directory that is
 /// not itself ignored (`target/key.env` under `*.env`) is listed by its own
 /// path and is not build output either.
-fn only_ignored_build_output_within(
+pub(crate) fn only_ignored_build_output_within(
     toplevel: &std::path::Path,
     entries: &[(String, String)],
     budget: &mut WalkBudget,

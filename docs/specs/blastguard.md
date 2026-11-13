@@ -159,10 +159,15 @@ forge・condukt のスケジューラが再利用）。
   `harness_core::boundary::read_dir_entries_checked` で歩き、各 entry を `symlink_metadata` で分類する
   （symlink は辿らず leaf として扱う）。listing の失敗・途中 entry の失敗・walk 中の directory 消失・
   `symlink_metadata` 失敗、1 command あたり 1,000,000 entry 超過、または 3 秒の walk 期限超過は判定不能として
-  Ask（Allow にしない）。期限は PreToolUse hook の 10 秒 timeout（kill された hook は tool を止めない）の内側に
-  収めるため。実測（2026-11-14、macOS/APFS、同 walk の `-O` replica）: 本 workspace の cargo `target/`
+  Ask（Allow にしない）。期限は各 directory の listing の前と各 entry ごと（`symlink_metadata` の前）に
+  確認する（blastguard 0.2.551）。期限は PreToolUse hook の 10 秒 timeout（kill された hook は tool を止めない）
+  より十分手前で止めることを狙うが、**walk の壁時計時間に硬い上限は無い**: 実行中の 1 回の listing・1 回の
+  `symlink_metadata` は中断できないので、巨大な directory や応答しない mount ではその 1 回分だけ期限を
+  超えうる（その間に hook が 10 秒で kill されれば tool は止まらない — この budget では塞がない fail-open）。
+  実測（2026-11-14、macOS/APFS、同 walk の `-O` replica）: 本 workspace の cargo `target/`
   55,883 entry を warm 585–694 ms・初回 1,809 ms、`target/debug` 21,791 entry を 179 ms（約 10–32 µs/entry）。
-  したがって約 9 万（cold）〜30 万（warm）entry を超える target は期限で Ask になる（Allow にはならない）。
+  この実測からの外挿では約 9 万（cold）〜30 万（warm）entry で期限に先に達して Ask になる（Allow にはならない）
+  が、これは 1 回の測定からの外挿であり保証ではない。
   test fixture の repo（`.git` を持つ）を `target/tmp` 等に置いた target も nested checkout として Ask。
   walk するのは operand の worktree 内の directory だけで、下の裁定の範囲内。**検査するのは operand に名指しされた
   worktree だけ**（ユーザー裁定 2026-11-14「gateもconduktも絶対に勝手に他のworktreeを参照してはならない」、

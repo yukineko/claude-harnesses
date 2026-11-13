@@ -1020,3 +1020,36 @@ exit 101: rees/session-8cca7ef5/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
      Running tests/backlog_20261113_python_string_literal_line_continuation.rs (target/debug/deps/backlog_20261113_python_string_literal_line_continuation-392be96f8ef05a27)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_python_string_literal_line_continuation`"""
+
+[[task]]
+id = "8a85894b"
+title = "backlog merge-driver --install pins a versioned plugin-cache path that prune-plugin-cache.py later deletes, so .backlog/tasks.toml merges fall back to conflict"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "rollout",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "RED: scripts/test_backlog_merge_driver_pinned_path_20261113.py (1cb95a64, xfail strict; control without the dir removal passes). Observed 2026-11-13: merging origin/main left .backlog/tasks.toml UU with no markers; merge.backlog.driver named ~/.claude/plugins/cache/yukineko/backlog/0.3.86/bin/backlog-linux-x86_64, already pruned. The same driver run by hand from 0.3.111 merged the stages cleanly (exit 0). Cause: merge_driver::install writes std::env::current_exe(); a session on an older backlog even writes an already-superseded path (re-install from this session wrote 0.3.106). prune-plugin-cache.py does not know this reference. Workaround applied: re-installed from 0.3.111 (will break again when 0.3.111 is pruned). Fix direction: version-independent driver path, and/or rollout/prune re-point the config. Remove the xfail when fixed."
+created_at = 1794535333
+updated_at = 1794535333
+weight = 0.0
+issue_number = 1679
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1679"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_merge_driver_pinned_path_20261113.py"
+rev = "1cb95a642892f6a7cb17f41d72a05075b524589a"
+observed_at = 1794535333
+detail = """
+exit 1: : not found
+
+scripts/test_backlog_merge_driver_pinned_path_20261113.py:113: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_backlog_merge_driver_pinned_path_20261113.py::PinnedDriverPath::test_store_merge_survives_removal_of_the_installing_version_dir
+============================== 1 failed in 0.28s ==============================="""

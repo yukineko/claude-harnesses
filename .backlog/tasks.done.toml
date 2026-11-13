@@ -76922,3 +76922,66 @@ rev = "b31308706c3e9e758822c47be599851787d8b168"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "3b60ee04"
+title = "blastguard block log loses that a downgraded repeat was originally an Ask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794612778
+updated_at = 1794613413
+weight = 0.0
+issue_number = 1742
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1742"
+issue_closed_at = 1794613416
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test block_record_gaps_20261114 -- --include-ignored b_deny_downgraded_to_ask_keeps_original_ask"
+rev = "9c3e97f045ba3789753eadf81aa7398a42dd9b9f"
+observed_at = 1794612778
+detail = """
+exit 101: aded_to_ask_keeps_original_ask
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.41s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/block_record_gaps_20261114.rs (target/debug/deps/block_record_gaps_20261114-7f4209f6a41dab8d)
+error: test failed, to rerun pass `-p blastguard --test block_record_gaps_20261114`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test block_record_gaps_20261114 -- --include-ignored b_deny_downgraded_to_ask_keeps_original_ask"
+exit = 0
+passed = 1
+rev = "712aee883ea81cc3296af3015ac55e2f488257e2"
+observed_at = 1794613410
+output_digest = "sha256:0cee048a0b4bba419c149c007f907d228b851edf879e7c289a5f64093f2a6667"
+excerpt = """
+
+running 1 test
+test b_deny_downgraded_to_ask_keeps_original_ask ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.62s
+
+   Compiling blastguard v0.2.568 (/Users/yuki/src/harness-wt-bg-origdec/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.09s
+     Running tests/block_record_gaps_20261114.rs (target/debug/deps/block_record_gaps_20261114-1e19573d962233df)
+"""
+
+[task.closure.red]
+rev = "f6075bba6dff65fd6ba753429431fb7446d8b9b7"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

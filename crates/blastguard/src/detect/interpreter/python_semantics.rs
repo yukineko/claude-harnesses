@@ -2,7 +2,9 @@
 //! Python-file judge ([`super::python_file_body_verdict`]): the names it binds
 //! to command runners (aliases), the paths it removes or overwrites, the
 //! modules whose code it loads, and the SQL it runs. Kept apart from
-//! `python_file.rs` for the file-size cap.
+//! `python_file.rs` for the file-size cap. The path-mutating part of the
+//! filesystem reading ([`path_mutation_verdict`]) also judges inline Python
+//! programs (`python -c`, a program read from stdin; backlog f6dbff5b).
 //!
 //! Every reading here is fail-closed: what cannot be resolved statically (a
 //! runner name passed around, a computed path not proven repo-scoped by
@@ -1088,6 +1090,57 @@ enum Effect {
     Remove { recursive: bool },
     /// `: > <path>` (truncate) or `: >> <path>` (append / update in place).
     Write { append: bool },
+    /// `chmod <mode> <path>`: `os.chmod` / `os.lchmod` / `Path.chmod()` /
+    /// `Path.lchmod()`. `mode` is the value of a Python integer-literal mode;
+    /// any other mode is rendered as `000`, which removes read and exec (the
+    /// restrictive reading of the shell `chmod` rule).
+    Chmod { mode: Option<u32> },
+    /// `chown 0:0 <path>`: `os.chown` / `os.lchown` / `shutil.chown`.
+    Chown,
+}
+
+impl Effect {
+    /// The shell command with this effect on `target` (an already quoted
+    /// shell word, or a glob such as `dir/*`).
+    fn shell_line(self, target: &str) -> String {
+        match self {
+            Effect::Remove { recursive: true } => format!("rm -rf {target}"),
+            Effect::Remove { recursive: false } => format!("rm {target}"),
+            Effect::Write { append: false } => format!(": > {target}"),
+            Effect::Write { append: true } => format!(": >> {target}"),
+            Effect::Chmod { mode } => format!("chmod {:03o} {target}", mode.unwrap_or(0)),
+            Effect::Chown => format!("chown 0:0 {target}"),
+        }
+    }
+}
+
+/// The value of a Python integer literal (`0`, `0o755`, `0x1ff`, `0b111`,
+/// `493`, underscores allowed), `None` for anything else.
+fn int_literal(text: &str) -> Option<u32> {
+    let lower = text.replace('_', "").to_ascii_lowercase();
+    let (digits, radix) = match lower.get(..2) {
+        Some("0o") => (&lower[2..], 8),
+        Some("0x") => (&lower[2..], 16),
+        Some("0b") => (&lower[2..], 2),
+        _ => (lower.as_str(), 10),
+    };
+    if digits.is_empty() || (radix == 10 && digits.len() > 1 && digits.starts_with('0')) {
+        return None;
+    }
+    u32::from_str_radix(digits, radix).ok()
+}
+
+/// The mode of a chmod call: its argument when that is exactly one integer
+/// literal, `None` otherwise.
+fn literal_chmod_mode(ev: &Eval<'_>, span: Option<(usize, usize)>) -> Option<u32> {
+    let (s, e) = span?;
+    if e != s + 1 {
+        return None;
+    }
+    match ev.toks.get(s)? {
+        Tok::Name { text, .. } => int_literal(text),
+        _ => None,
+    }
 }
 
 /// A literal `open` mode, `None` when the argument is not one literal mode.
@@ -1114,7 +1167,10 @@ fn literal_mode(ev: &Eval<'_>, span: Option<(usize, usize)>) -> Option<Option<Ef
 /// `os.removedirs` and `Path.unlink()` / `Path.rmdir()` as `rm p`; the
 /// destination of `shutil.copy` / `copy2` / `copyfile` / `copytree` / `move`
 /// and `os.rename` / `replace` / `renames` as `: > dst` (the source a move
-/// removes is not judged);
+/// removes is not judged); `os.truncate(p, …)` as `: > p`; `os.chmod` /
+/// `os.lchmod` and `Path.chmod()` / `Path.lchmod()` as `chmod <mode> p`
+/// (an integer-literal mode as written, any other mode as `000`);
+/// `os.chown` / `os.lchown` / `shutil.chown` as `chown 0:0 p`;
 /// `open(p, 'w'|'x'|…)`, `Path.open('w')`, `Path.write_text` / `write_bytes`
 /// as `: > p`, and an append or `+` mode as `: >> p`; `os.open` with a write
 /// flag likewise. Each command is judged by the shell rules, so home, `/` and
@@ -1125,11 +1181,46 @@ fn literal_mode(ev: &Eval<'_>, span: Option<(usize, usize)>) -> Option<Option<Ef
 /// cannot be resolved statically ([`Eval::expr`]), or an `open` mode /
 /// `os.open` flag that is not a literal, is an Ask. `argv` is the arguments
 /// of every run of the file ([`values::Argv`]), `None` when not known.
+///
+/// A path is RESOLVED, not matched: `'/' 'etc/hosts'` (Python's implicit
+/// concatenation of adjacent literals), `'/etc/' + 'hosts'` and
+/// `os.path.join('/etc', 'hosts')` are all `/etc/hosts` here (backlog
+/// f6dbff5b).
 pub(super) fn filesystem_verdict(
     src: &str,
     argv: Option<&values::Argv>,
     depth: usize,
     ctx: &Ctx<'_>,
+) -> Decision {
+    path_calls_verdict(src, argv, depth, ctx, true)
+}
+
+/// The path-MUTATING part of [`filesystem_verdict`] for an inline Python
+/// program (`python -c`, or a program `python` reads from stdin): every call
+/// it lists except the `open` / `os.open` / `.open()` / `write_text` /
+/// `write_bytes` writes (those of an inline program are judged by the
+/// interpreter write-target scan). `src` is read with its import aliases
+/// resolved ([`bindings`] / [`rewrite`]: `from os import chmod`).
+///
+/// Backlog f6dbff5b: the literal scan of [`super::shell_calls`] sees only the
+/// string tokens of a call, so `os.chmod('/''etc/hosts', 0)` — two tokens,
+/// neither in a system directory — was Allow. Here the path argument is
+/// evaluated ([`Eval::expr`]) and the resolved value judged by the shell
+/// rules; a path argument that cannot be resolved statically is an Ask
+/// (Deny where no human can answer), never Allow.
+pub(super) fn path_mutation_verdict(src: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+    let rewritten = rewrite(src, &bindings(src));
+    path_calls_verdict(&rewritten, None, depth, ctx, false)
+}
+
+/// [`filesystem_verdict`]; `opens` says whether the `open`-family writes are
+/// judged too.
+fn path_calls_verdict(
+    src: &str,
+    argv: Option<&values::Argv>,
+    depth: usize,
+    ctx: &Ctx<'_>,
+    opens: bool,
 ) -> Decision {
     let toks = lex(src);
     let ev = Eval::new(&toks, src, argv);
@@ -1159,6 +1250,18 @@ pub(super) fn filesystem_verdict(
             {
                 (Effect::Write { append: false }, path_arg(1, "dst"))
             }
+            "os.truncate" if !attr => (Effect::Write { append: false }, path_arg(0, "path")),
+            "os.chmod" | "os.lchmod" if !attr => (
+                Effect::Chmod {
+                    mode: literal_chmod_mode(&ev, ev.arg(open, 1, "mode")),
+                },
+                path_arg(0, "path"),
+            ),
+            "os.chown" | "os.lchown" | "shutil.chown" if !attr => {
+                (Effect::Chown, path_arg(0, "path"))
+            }
+            "open" | "io.open" | "codecs.open" | "builtins.open" if !opens => continue,
+            "os.open" if !opens => continue,
             "open" | "io.open" | "codecs.open" | "builtins.open" if !attr => {
                 match literal_mode(&ev, ev.arg(open, 1, "mode")) {
                     Some(Some(eff)) => (eff, path_arg(0, "file")),
@@ -1192,6 +1295,10 @@ pub(super) fn filesystem_verdict(
             _ if attr || n.contains('.') => {
                 let effect = match method {
                     "unlink" | "rmdir" => Effect::Remove { recursive: false },
+                    "chmod" | "lchmod" => Effect::Chmod {
+                        mode: literal_chmod_mode(&ev, ev.arg(open, 0, "mode")),
+                    },
+                    "write_text" | "write_bytes" | "open" if !opens => continue,
                     "write_text" | "write_bytes" => Effect::Write { append: false },
                     // A non-literal first argument of an `.open` on a value
                     // that is not a path (`webbrowser.open(url)`,
@@ -1214,7 +1321,7 @@ pub(super) fn filesystem_verdict(
         let Some(paths) = path else {
             pending.get_or_insert(Decision::ask(format!(
                 "the program calls `{n}` on a path blastguard cannot resolve statically — it \
-cannot tell whether that removes or overwrites something irreversible"
+cannot tell whether that removes, overwrites or re-permissions something irreversible"
             )));
             continue;
         };
@@ -1229,12 +1336,7 @@ cannot tell whether that removes or overwrites something irreversible"
                 }
                 continue;
             };
-            let line = match effect {
-                Effect::Remove { recursive: true } => format!("rm -rf {word}"),
-                Effect::Remove { recursive: false } => format!("rm {word}"),
-                Effect::Write { append: false } => format!(": > {word}"),
-                Effect::Write { append: true } => format!(": >> {word}"),
-            };
+            let line = effect.shell_line(&word);
             match analyze_shell_payload(&line, depth, ctx) {
                 d @ Decision::Deny(_) => return d,
                 Decision::Ask(r) => {
@@ -1531,3 +1633,32 @@ const STDLIB: &[&str] = &[
     "zlib",
     "zoneinfo",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::{int_literal, Effect};
+
+    #[test]
+    fn python_integer_literals_and_non_literals() {
+        assert_eq!(int_literal("0"), Some(0));
+        assert_eq!(int_literal("0o755"), Some(0o755));
+        assert_eq!(int_literal("0O644"), Some(0o644));
+        assert_eq!(int_literal("493"), Some(0o755));
+        assert_eq!(int_literal("0x1ff"), Some(0o777));
+        assert_eq!(int_literal("0b111"), Some(7));
+        assert_eq!(int_literal("0o7_5_5"), Some(0o755));
+        assert_eq!(int_literal("0755"), None);
+        assert_eq!(int_literal("mode"), None);
+        assert_eq!(int_literal("stat.S_IRWXU"), None);
+    }
+
+    #[test]
+    fn chmod_without_a_literal_mode_is_rendered_restrictively() {
+        assert_eq!(Effect::Chmod { mode: None }.shell_line("x"), "chmod 000 x");
+        assert_eq!(
+            Effect::Chmod { mode: Some(0o755) }.shell_line("x"),
+            "chmod 755 x"
+        );
+        assert_eq!(Effect::Chown.shell_line("x"), "chown 0:0 x");
+    }
+}

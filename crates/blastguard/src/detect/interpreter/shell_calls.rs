@@ -135,7 +135,10 @@ const DEST_OPERAND_MUTATORS: &[&str] = &["cp", "ln", "install"];
 /// A string literal that is not such an argument is data and is not judged
 /// here (`note = "os.system('$CMD')"`, `s.replace("`$CMD`", "")`). A call
 /// whose argument is not a literal (a variable) is not judged here either; it
-/// stays with the rest of the program audit, as before.
+/// stays with the rest of the program audit, as before. For a program Python
+/// reads, the path arguments of path-mutating calls are also RESOLVED, not
+/// matched token by token (`'/' 'etc/hosts'`), by
+/// `python_semantics::path_mutation_verdict` (backlog f6dbff5b).
 pub(super) fn program_call_verdict(payload: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     program_calls(payload, depth, ctx, false)
 }

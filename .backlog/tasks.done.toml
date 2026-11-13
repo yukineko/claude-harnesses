@@ -76158,3 +76158,67 @@ rev = "fe5be3de4bf2a12105fc15db888d080f68715faf"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "c8bf27ea"
+title = "blastguard: pathlib の書き込みメソッドを参照経由 (unbound Path.replace / 束縛メソッドを名前に入れて呼ぶ / __call__) で呼ぶと /etc/hosts 上書きが allow になる fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "System-harm fail-open, RED (orch commit after fe5be3de) by a non-implementer (flow-8cca7ef5 orchestrator) at main eed07c9b 2026-11-14: Path.replace(Path('/tmp/z'), '/etc/hosts'), w = Path('/etc/hosts').write_text; w('x'), Path('/etc/hosts').write_text.__call__('x') are Allow 6 of 6 (main+subagent). Found by the independent 17d985f1 verifier; Allow at 53916d2a and on the 17d985f1 branch (pre-existing). Control: direct write_text not Allow."
+created_at = 1794598308
+updated_at = 1794602240
+weight = 0.0
+issue_number = 1730
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1730"
+issue_closed_at = 1794602243
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_write_method_reference -- --include-ignored"
+rev = "c04f12b4bce86d8daf02c7703b4ab344700919bf"
+observed_at = 1794598308
+detail = """
+exit 101: ees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.59s
+     Running tests/backlog_20261114_python_write_method_reference.rs (target/debug/deps/backlog_20261114_python_write_method_reference-65ed7fe4ff9641b0)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_write_method_reference`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_write_method_reference"
+exit = 0
+passed = 3
+rev = "90855d430279d9f0ab8b8874d02f5425aea3ffef"
+observed_at = 1794602228
+output_digest = "sha256:f58159a81adfaf8b82b75421a4dbf3dd7d00272da28d1004ff2e9f0070f23385"
+excerpt = """
+
+running 3 tests
+test control_direct_write_text_is_not_allowed ... ok
+test class_attribute_method_reference_to_system_path_is_not_allowed ... ok
+test write_method_reference_to_system_path_is_not_allowed ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s
+
+   Compiling blastguard v0.2.543 (/Users/yuki/.condukt/worktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.55s
+     Running tests/backlog_20261114_python_write_method_reference.rs (target/debug/deps/backlog_20261114_python_write_method_reference-759a7c6bc55ab2f4)
+"""
+
+[task.closure.red]
+rev = "c04f12b4bce86d8daf02c7703b4ab344700919bf"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

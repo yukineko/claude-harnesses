@@ -1804,6 +1804,8 @@ notes = """Observed 2026-11-14 by a condukt worker at main 144906a1 (blastguard 
 created_at = 1794598391
 updated_at = 1794598391
 weight = 0.0
+issue_number = 1731
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1731"
 rev = 0
 
 [task.repro]

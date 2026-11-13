@@ -1744,3 +1744,33 @@ test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
      Running tests/fixtures_outside_target_20261114.rs (target/debug/deps/fixtures_outside_target_20261114-0163b95679e1635b)
 error: test failed, to rerun pass `-p blastguard --test fixtures_outside_target_20261114`"""
+
+[[task]]
+id = "b663c5f5"
+title = "fail-open mutation script leaves test-written files behind in the working tree"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open-mutation",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794606394
+updated_at = 1794606394
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_fail_open_mutation_leaves_no_artifacts.py"
+rev = "bd13fa12b73aedfc460f596f77cdf42a0c4fef40"
+observed_at = 1794606394
+detail = """
+exit 1: nd still exited 0
+
+scripts/test_fail_open_mutation_leaves_no_artifacts.py:102: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_fail_open_mutation_leaves_no_artifacts.py::MutationRunArtifacts::test_run_created_untracked_file_is_not_silently_left_behind
+========================= 1 failed, 1 passed in 0.51s =========================="""

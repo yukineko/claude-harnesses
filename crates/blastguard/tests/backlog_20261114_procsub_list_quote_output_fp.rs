@@ -101,7 +101,6 @@ const HARMLESS_SHAPES: &[(&str, &str)] = &[
     ("list-stdin", "bash < <(echo \"it's\"; echo hi)"),
 ];
 
-#[ignore = "RED: 2026-11-14 harmless procsub list whose output holds a quote is Ask — remove the ignore when fixed"]
 #[test]
 fn harmless_procsub_list_with_quote_in_output_is_allowed() {
     let failures = run_all(HARMLESS_SHAPES, "red", |d| d == "allow");

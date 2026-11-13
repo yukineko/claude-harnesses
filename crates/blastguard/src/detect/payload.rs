@@ -689,9 +689,11 @@ fn interpreter_program_source(argv: &[&str]) -> ProgramSource {
 ///   reads and judges each), AND their concatenated output — what the reader
 ///   actually receives, where `printf 'chmod 777 '; echo /etc/hosts` is ONE
 ///   command — as `printf '%s' 'TEXT' | READER`, once per combination of
-///   printf dialect readings. When that output cannot be computed statically
-///   (a member that is not a plain `echo` / evaluable `printf`, an `'` in the
-///   text, too many readings) it is an Ask.
+///   printf dialect readings, with each `'` of TEXT spelled `'"'"'` (close the
+///   single quote, a double-quoted `'`, reopen) so the printf operand's value
+///   is exactly TEXT and no backslash is needed outside quotes. When that
+///   output cannot be computed statically (a member that is not a plain
+///   `echo` / evaluable `printf`, too many readings) it is an Ask.
 /// * Anything else (a pipe, `||`, `&`, a subshell): `(INNER) | READER`, which
 ///   is not a literal emitter, so the pipe rule asks (any literal inside is
 ///   still judged).
@@ -713,17 +715,11 @@ fn procsub_inner_pipelines(inner: &str, reader: &str) -> (Vec<String>, Vec<Strin
         .map(|m| format!("{} | {reader}", quote_bare_echo_words(m)))
         .collect();
     let mut undetermined = Vec::new();
-    let texts = concatenated_outputs(&members).and_then(|texts| {
-        if texts.iter().any(|t| t.contains('\'')) {
-            Err("its output holds a `'`, which this reading does not respell".to_string())
-        } else {
-            Ok(texts)
-        }
-    });
-    match texts {
+    match concatenated_outputs(&members) {
         Ok(texts) => {
             for text in texts {
-                let synthetic = format!("printf '%s' '{text}' | {reader}");
+                let quoted = text.replace('\'', "'\"'\"'");
+                let synthetic = format!("printf '%s' '{quoted}' | {reader}");
                 if !pipelines.contains(&synthetic) {
                     pipelines.push(synthetic);
                 }

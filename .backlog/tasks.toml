@@ -1805,3 +1805,33 @@ exit 101: s/yuki/src/.harness-worktrees/bg-red-pipe-reader-and-py-argv/crates/bl
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.52s
      Running tests/backlog_20261114_zsh_c_literal_echo_dash_fp.rs (target/debug/deps/backlog_20261114_zsh_c_literal_echo_dash_fp-5e83884faa4461ec)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_zsh_c_literal_echo_dash_fp`"""
+
+[[task]]
+id = "72872200"
+title = "blastguard system-harm fail-open: shell program fed by procsub / pipe / fd 3 / zsh `=()` is Allow inside compound commands (subshell, brace group, if/while/for body)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "RED by a non-implementer agent on branch test/bg-red-pipe-reader-and-py-argv (merged to main 2601e70c), finding E of the run-20261114-035331-33292 t2 verifier rounds. Test file crates/blastguard/tests/backlog_20261114_compound_wrapped_or_cross_stage_shell_program.rs (#[ignore] RED + control)."
+created_at = 1794605297
+updated_at = 1794605297
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_compound_wrapped_or_cross_stage_shell_program -- --include-ignored"
+rev = "2601e70c0b56dc8b21d7ac14e00edae73f8cf8a8"
+observed_at = 1794605297
+detail = """
+exit 101: cf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.85s
+     Running tests/backlog_20261114_compound_wrapped_or_cross_stage_shell_program.rs (target/debug/deps/backlog_20261114_compound_wrapped_or_cross_stage_shell_program-0508ab66e52c7b88)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_compound_wrapped_or_cross_stage_shell_program`"""

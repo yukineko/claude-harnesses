@@ -63,6 +63,7 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
 ) -> Result<String> {
     add_finding(
         path,
+        None,
         title,
         project,
         tags,
@@ -105,7 +106,9 @@ impl Intake {
 
 /// The production `add` (see [`add_with_weight_and_github_push`]'s docs for
 /// the two bd6d81df belts, which live here). The task is written with
-/// `intake.status` and `intake.repro`.
+/// `intake.status` and `intake.repro`. `store_root` is
+/// `StoreLocation::project_root` and selects the duplicate guard's row
+/// identity (see [`check_duplicate`]).
 ///
 /// Order (user ruling: 「backlog addの時点で台帳も更新される。mainにいく、
 /// issueができる」), applied only when `remote_url` is a GitHub remote:
@@ -126,6 +129,7 @@ impl Intake {
 #[allow(clippy::too_many_arguments)]
 pub fn add_finding<R, L>(
     path: &Path,
+    store_root: Option<&Path>,
     title: &str,
     project: &str,
     tags: Vec<String>,
@@ -174,7 +178,7 @@ where
             reject_ambiguous_bare_label(&tasks, project)?;
         }
         if !force {
-            check_duplicate(&tasks, title, project)?;
+            check_duplicate(&tasks, title, project, store_root)?;
         }
         let id = new_id(title, now);
         let task = Task {
@@ -348,6 +352,7 @@ mod land_order_tests {
     {
         add_finding(
             path,
+            None,
             "T",
             "/repo",
             vec![],

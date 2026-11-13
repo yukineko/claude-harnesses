@@ -117,7 +117,9 @@ backlog uninstall                                            # 再び除去す�
 連続空白の1個への圧縮 → 前後の記号除去 したものと project を FNV-1a 64bit で畳み込んだ 16 桁 hex)
 で内容の重複を検出する。次のいずれかに該当する場合、`add` はエラーで拒否される。`done` の重複はブロックしない:
 
-- 同じ hashkey を持つ既存タスクが `pending` または `failed` である。
+- 同じ hashkey を持つ既存タスクが `pending` または `failed` である。repo store では store の repo が全行の
+  identity なので、正規化後のタイトルが同じで label がこのマシン上の実在する別 repo でない行（別マシンの path 等）も
+  同一扱いになる（別 repo かどうか判定できない場合も拒否）。
 - `condukt` が（plugin cache を先に、次に PATH を探して）見つかり、`condukt state is-claimed --hashkey <h>` が exit 0 (= 他セッションの
   live なクレームが握っている) を返す。exit 1 は stdout に `"claimed": false` が付いている場合に限り
   「クレームなし」と読む。それ以外 — `condukt` が見つからない・起動失敗、0/1 以外の exit code (例: 3 = claim registry

@@ -27,7 +27,6 @@ fn file(fx: &common::Fixture, title: &str, prio: &str) -> String {
 }
 
 #[test]
-#[ignore = "RED 2026-11-14: store::check_duplicate keys on hashkey(title, project label); a foreign-label first copy is not seen, local refile returns exit 0 and 2 pending rows"]
 fn duplicate_title_filed_locally_is_rejected_when_first_copy_has_foreign_label() {
     let fx = common::Fixture::new("lid-hk");
     let x = file(&fx, "same task refiled from other machine", "p1");
@@ -51,7 +50,6 @@ fn duplicate_title_filed_locally_is_rejected_when_first_copy_has_foreign_label()
 }
 
 #[test]
-#[ignore = "RED 2026-11-14: dedup::near_duplicates requires t.project == anchor.project; foreign-label peer absent from near_duplicates (local-label control passes)"]
 fn near_duplicate_peer_with_foreign_label_is_reported_on_claim() {
     let fx = common::Fixture::new("lid-nd");
     let x = file(&fx, "alpha bravo charlie delta echo foxtrot golf", "p2");

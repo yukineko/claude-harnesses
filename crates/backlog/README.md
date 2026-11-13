@@ -151,7 +151,10 @@ leading/trailing punctuation stripped, folded with `project` via 64-bit FNV-1a
 into a 16-hex-digit key), and rejects the add when either of the following is true. `done` never
 blocks a re-add of the same title:
 
-- an existing `pending` or `failed` task already has that hashkey, or
+- an existing `pending` or `failed` task already has that hashkey, or — in a repo
+  store, where the store's repo is every row's identity — the same normalized title
+  under a label that is not a real different repo here (e.g. another machine's path;
+  if whether it is cannot be determined, the add is refused too), or
 - `condukt` (looked up in the plugin cache first, then on `PATH`) is found and `condukt state is-claimed --hashkey <h>` exits 0
   (another live session holds a claim on it). Exit 1 counts as "not claimed"
   only when stdout also carries `"claimed": false`. Any other outcome — `condukt`

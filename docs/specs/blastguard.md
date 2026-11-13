@@ -829,6 +829,13 @@ forge・condukt のスケジューラが再利用）。
   LF の同形は Allow にならない（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_python_cr_ends_comment.rs`
   （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の system-harm fail-open の RED（2026-11-14、flow-8cca7ef5、pathlib のメソッド参照。修正は未実装）** —
+  pathlib の書き込み・移動メソッドを直接呼び出し `Path(..).method(..)` 以外で呼ぶ形は Allow になる（main・subagent とも）:
+  unbound 呼び出し `Path.replace(Path('/tmp/z'), '/etc/hosts')`、束縛メソッドを名前に入れて呼ぶ
+  `w = Path('/etc/hosts').write_text; w('x')`、`Path('/etc/hosts').write_text.__call__('x')`。
+  直接呼び出し `Path('/etc/hosts').write_text('x')` は Allow にならない（control）。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_python_write_method_reference.rs`
+  （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
 
 ### module 責務
 

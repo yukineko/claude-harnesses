@@ -608,3 +608,8 @@ reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-1
 path = "crates/blastguard/tests/backlog_20261114_python_cr_ends_comment.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-14、flow-8cca7ef5、CR で終わる python コメント。修正は未実装）': a python -c program whose comment ends at a bare CR hides an os.chmod on /etc/hosts and is Allow (also via env -S); RED test plus an LF control."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_python_write_method_reference.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-14、flow-8cca7ef5、pathlib のメソッド参照。修正は未実装）': unbound Path.replace, a bound write_text stored in a name, and write_text.__call__ on /etc/hosts are Allow; RED test plus a direct-call control."

@@ -248,7 +248,7 @@ fn deletable_run_dir(path: &Path) -> Option<std::fs::Metadata> {
 /// Remove stale `run-*` bases (module docs, PRUNE). `parent` is the canonical
 /// dedicated directory. A base that cannot be inspected is left alone (it only
 /// costs disk); a removal failure is reported on stderr.
-fn prune_stale_runs(parent: &Path) {
+pub fn prune_stale_runs(parent: &Path) {
     let Ok(entries) = std::fs::read_dir(parent) else {
         return;
     };
@@ -293,6 +293,12 @@ extern "C" fn self_clean() {
     let Some(run) = OWN_RUN.get() else {
         return;
     };
+    clean_own_run(run);
+}
+
+/// The body of [`self_clean`], parameterised on the run dir so a regression
+/// test can drive it against a seam dir (`fixture_base_prune_20261114.rs`).
+pub fn clean_own_run(run: &Path) {
     if deletable_run_dir(run).is_none() {
         report(&format!(
             "self-clean skipped {}: no longer a plain run dir in the dedicated parent",

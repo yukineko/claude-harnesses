@@ -111,10 +111,7 @@ const SHAPES: &[(&str, &str)] = &[
     ),
 ];
 
-// test-weakening-justified: new RED for an unfixed fail-open (backlog pending,
-// 2026-11-13); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: backlog-pending 2026-11-13 python adjacent-literal concatenation builds a system path blastguard does not see — remove the ignore when fixed"]
 fn python_built_system_path_is_not_allowed() {
     let home = unique_home("red");
     let mut failures = Vec::new();

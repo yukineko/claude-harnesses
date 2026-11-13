@@ -1470,6 +1470,23 @@ it refuses to guess"
         }
         layer = next;
     }
+    // Backlog f6dbff5b: a program PYTHON reads also has the paths of its
+    // path-mutating calls RESOLVED, not matched token by token
+    // (`os.chmod('/' 'etc/hosts', 0)` is a chmod of `/etc/hosts`), an
+    // unresolvable path being an Ask (`python_semantics::path_mutation_verdict`).
+    // Run after the descent, so a Deny the descent earned keeps its reason; a
+    // Deny here still outranks any Ask the descent recorded.
+    if python_reader {
+        for payload in payloads {
+            match python_semantics::path_mutation_verdict(payload, depth, ctx) {
+                d @ Decision::Deny(_) => return d,
+                a @ Decision::Ask(_) => {
+                    pending_ask.get_or_insert(a);
+                }
+                Decision::Allow => {}
+            }
+        }
+    }
     // The whole descent ran without a Deny; an Ask it recorded now stands.
     if let Some(ask) = pending_ask {
         return ask;

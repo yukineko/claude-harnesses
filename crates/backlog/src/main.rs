@@ -1257,6 +1257,7 @@ fn run(cli: Cli) -> Result<()> {
                     effective_project.as_deref(),
                     &identity,
                     session_id.as_deref(),
+                    location.project_root(), // row identity (claim_recheck::rerun_dir)
                 )?
             } else {
                 // A pure read, but claim-aware: a task holding a live lease in
@@ -1600,7 +1601,7 @@ fn run(cli: Cli) -> Result<()> {
             let leased: HashSet<String> = live_lease_view(effective_project.as_deref(), "recheck")?
                 .into_keys()
                 .collect();
-            recheck::run(&tasks_path, &args, &leased)?;
+            recheck::run(&tasks_path, &args, &leased, location.project_root())?;
         }
 
         Command::Fail { id, reason } => {

@@ -653,6 +653,16 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   以外のプログラム本文は字句解析せずに走査し、どこかに非 ASCII の文字・数字があれば
 >   判定不能とする。これにより `open('/etc/hosts','a')`・`'r+'`・`'x'`・`mode='a'` も `'w'` と同様に deny
 >   される。`Path.write_text` や Node の `appendFileSync` はこの規則の対象外（未対応）。
+>   0.2.523 以降（backlog f6dbff5b）、Python が読むプログラム（`python3 -c`・stdin から読む
+>   プログラム）の path 変更系呼び出し（`os.chmod`/`os.lchmod`/`Path.chmod()`・`os.chown`/
+>   `os.lchown`/`shutil.chown`・`os.remove`/`unlink`/`rmdir`/`shutil.rmtree`・copy/move/rename の
+>   転送先・`os.truncate`）は、path 引数を文字列トークンの一致ではなく静的評価で解決して
+>   判定する（`src/detect/interpreter/python_semantics.rs` の `path_mutation_verdict`）。Python は
+>   隣接する文字列 literal を連結するので `os.chmod('/''etc/hosts',0)` は `/etc/hosts` の
+>   chmod として system-harm deny になる（以前は `'/'` と `'etc/hosts'` のどちらもシステム
+>   ディレクトリではないため allow だった）。`os.chmod('a' 'b',0o644)` のような repo 相対は
+>   allow のまま。path を静的に解決できない呼び出し（`os.chmod(sys.argv[1],0o755)`）は ask
+>   （人間が答えられない場では deny）。
 
 当時、overwatch の continuous-audit 再発トラッカー（`overwatch violations --json`）が
 `blastguard:truncating-redirect` と `blastguard:code-interpreter-inline-eval` を

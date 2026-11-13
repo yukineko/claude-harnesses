@@ -75494,3 +75494,129 @@ rev = "02d939d31bcb908052fe61e1c516b122efcc6cfa"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "f6dbff5b"
+title = "blastguard: python の隣接文字列リテラル連結 ('/''etc/hosts') で組んだ system パスへの os.chmod が allow になる fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "System-harm fail-open found by the c619b13f implementer's probe and confirmed by a non-implementer RED 675b6d8a on main 12d7d093 (2026-11-13): 4 of 14 (shape x mode) runs building a system path were ALLOWED: os.chmod('/''etc/hosts',0) and os.chmod('/' 'etc' '/hosts',0), main and subagent mode, no comment needed. Not Allow at HEAD: '/etc' '/hosts', '/etc/'+'hosts', % format, .format, f-string. Control control_plain_literal_system_path_is_denied non-ignored."
+created_at = 1794525860
+updated_at = 1794596936
+weight = 0.0
+issue_number = 1672
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1672"
+issue_closed_at = 1794596939
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_python_adjacent_literal_concat_path python_built_system_path_is_not_allowed -- --include-ignored"
+rev = "675b6d8a5083aaa516888b4ceae51e3a042eea19"
+observed_at = 1794525860
+detail = """
+exit 101: harness-worktrees/red4-bg-payload/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.76s
+     Running tests/backlog_20261113_python_adjacent_literal_concat_path.rs (target/debug/deps/backlog_20261113_python_adjacent_literal_concat_path-7b71dce495db7bff)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_python_adjacent_literal_concat_path`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261113_python_adjacent_literal_concat_path"
+exit = 0
+passed = 2
+rev = "d3793ba25f33c1d4a2d89942aca0f42d8ace6bb5"
+observed_at = 1794596929
+output_digest = "sha256:f847bf32a3a6e91ce8a579e1b4e24deacf912450ffb908e32b1eb938b4c58c4c"
+excerpt = """
+
+running 2 tests
+test control_plain_literal_system_path_is_denied ... ok
+test python_built_system_path_is_not_allowed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s
+
+   Compiling blastguard v0.2.523 (/Users/yuki/.condukt/worktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.49s
+     Running tests/backlog_20261113_python_adjacent_literal_concat_path.rs (target/debug/deps/backlog_20261113_python_adjacent_literal_concat_path-4a0242f244d9519a)
+"""
+
+[task.closure.red]
+rev = "675b6d8a5083aaa516888b4ceae51e3a042eea19"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "d3f7a4af"
+title = "backlog: repo-store row identity follows the filer's absolute path, so same-repo rows filed on another machine are never claimed (next --claim/recheck)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "fail-closed",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "User ruling 2026-11-14: 本質的というのは問題の質は通常パスでゆらぐものではない. RED c4702fad (tests/backlog_20261114_repo_store_identity_not_path.rs a/b/d; K1/32d9232c other-repo cases ignored). 18 rows with project=/home/hiroyuki_nakayama/src/harness are skipped forever on this Mac by claim_recheck::rerun_dir. Also: a label naming an existing different repo is re-run there and auto-cancelled instead of skipped."
+created_at = 1794596566
+updated_at = 1794597151
+weight = 0.0
+issue_number = 1726
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1726"
+issue_closed_at = 1794597153
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261114_repo_store_identity_not_path -- --ignored"
+rev = "c4702fadb6dca37780949690869a48c168d849e4"
+observed_at = 1794596566
+detail = """
+exit 101: g backlog v0.3.119 (/Users/yuki/src/harness-wt-repo-identity/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.58s
+     Running tests/backlog_20261114_repo_store_identity_not_path.rs (target/debug/deps/backlog_20261114_repo_store_identity_not_path-4c18206575601db7)
+error: test failed, to rerun pass `-p backlog --test backlog_20261114_repo_store_identity_not_path`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261114_repo_store_identity_not_path"
+exit = 0
+passed = 4
+rev = "144906a1c2ca84e430cff6676b8095c70c28f239"
+observed_at = 1794597149
+output_digest = "sha256:7f1d671173ea5597972b6ac35f78217c5fe7cd1e98f4dcd602ac97c7038c5c9c"
+excerpt = """
+
+running 4 tests
+test c_list_project_includes_old_root_row ... ok
+test b_repro_rerun_happens_in_this_checkout ... ok
+test d_sole_old_root_candidate_is_claimed_not_refused ... ok
+test a_claim_takes_same_repo_row_with_nonexistent_label ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.14s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/backlog_20261114_repo_store_identity_not_path.rs (target/debug/deps/backlog_20261114_repo_store_identity_not_path-1bb97ab2a7f40c59)
+"""
+
+[task.closure.red]
+rev = "c4702fadb6dca37780949690869a48c168d849e4"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

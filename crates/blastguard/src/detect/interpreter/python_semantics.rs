@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::super::{analyze_shell_payload, Ctx, Decision};
 
+mod method_refs;
 mod values;
 pub(super) use values::{argv_word, Argv};
 
@@ -1217,7 +1218,11 @@ pub(super) fn filesystem_verdict(
 /// `(Path('/etc') / 'hosts').write_text('x')` and
 /// `Path('/etc').joinpath('hosts').write_text('x')` are writes of
 /// `/etc/hosts`, and for the DESTINATION of `Path.replace` / `Path.rename`
-/// (`Path('/tmp/y').replace('/etc/hosts')`).
+/// (`Path('/tmp/y').replace('/etc/hosts')`). Backlog c8bf27ea: the same
+/// callables reached other than by a direct call — the unbound
+/// `Path.replace(Path('/tmp/z'), '/etc/hosts')`, `w = Path(p).write_text;
+/// w('x')`, `.write_text.__call__('x')`, a reference passed or stored — are
+/// judged too ([`method_refs`]); an unresolvable one is an Ask.
 pub(super) fn path_mutation_verdict(src: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let rewritten = rewrite(src, &bindings(src));
     path_calls_verdict(&rewritten, None, depth, ctx)
@@ -1268,6 +1273,13 @@ cannot tell whether that removes, overwrites or re-permissions something irrever
 }
 
 /// The calls [`filesystem_verdict`] and [`path_mutation_verdict`] judge.
+///
+/// Backlog c8bf27ea: a call is read through [`method_refs::callees`], so
+/// `X.m.__call__(…)` is `X.m(…)`, the unbound `Path.m(recv, …)` is
+/// `recv.m(…)`, and `w(…)` for `w = X.m` (every binding of `w` such a
+/// reference) is `X.m(…)`. A write/move-capable callable referenced any other
+/// way — stored, passed, put in a container, reached through `getattr` /
+/// `methodcaller` — is judged by [`method_refs::escaped_reference_verdict`].
 fn path_calls_verdict(
     src: &str,
     argv: Option<&values::Argv>,
@@ -1278,122 +1290,137 @@ fn path_calls_verdict(
     let ev = Eval::new(&toks, src, argv);
     let mut pending: Option<Decision> = None;
     for (k, t) in toks.iter().enumerate() {
-        let Tok::Name { text: n, .. } = t else {
+        let Tok::Name { text, .. } = t else {
             continue;
         };
         if toks.get(k + 1) != Some(&Tok::Punct('(')) {
             continue;
         }
-        let open = k + 1;
         let attr = k > 0 && toks[k - 1] == Tok::Punct('.');
-        let method = n.rsplit('.').next().unwrap_or(n);
-        let path_arg =
-            |idx: usize, kw: &str| ev.arg(open, idx, kw).and_then(|(s, e)| ev.expr(s, e));
-        let (effect, path) = match n.as_str() {
-            "shutil.rmtree" if !attr => (Effect::Remove { recursive: true }, path_arg(0, "path")),
-            "os.remove" | "os.unlink" | "os.rmdir" | "os.removedirs" if !attr => {
-                (Effect::Remove { recursive: false }, path_arg(0, "path"))
+        for call in method_refs::callees(&ev, k, text, attr) {
+            if let Some(d) = judge_call(&ev, &call, depth, ctx, &mut pending) {
+                return d;
             }
-            // The destination of a copy or a move is overwritten, as by
-            // `open(dst, 'w')` (tests/heredoc_system_harm_holes_20261111.rs B).
-            "shutil.copy" | "shutil.copy2" | "shutil.copyfile" | "shutil.copytree"
-            | "shutil.move" | "os.rename" | "os.replace" | "os.renames"
-                if !attr =>
-            {
-                (Effect::Write { append: false }, path_arg(1, "dst"))
-            }
-            "os.truncate" if !attr => (Effect::Write { append: false }, path_arg(0, "path")),
-            "os.chmod" | "os.lchmod" if !attr => (
-                Effect::Chmod {
-                    mode: literal_chmod_mode(&ev, ev.arg(open, 1, "mode")),
-                },
-                path_arg(0, "path"),
-            ),
-            "os.chown" | "os.lchown" | "shutil.chown" if !attr => {
-                (Effect::Chown, path_arg(0, "path"))
-            }
-            "open" | "io.open" | "codecs.open" | "builtins.open" if !attr => {
-                match literal_mode(&ev, ev.arg(open, 1, "mode")) {
-                    Some(Some(eff)) => (eff, path_arg(0, "file")),
-                    Some(None) => continue,
-                    None => {
-                        pending.get_or_insert(computed(n, "opens a file in a mode"));
-                        continue;
-                    }
-                }
-            }
-            "os.open" if !attr => {
-                let flags: Vec<&str> = ev
-                    .arg(open, 1, "flags")
-                    .map(|(s, e)| toks[s..e].iter().filter_map(|t| name(Some(t))).collect())
-                    .unwrap_or_default();
-                if flags.iter().any(|f| !f.starts_with("os.O_")) {
-                    pending.get_or_insert(computed(n, "opens a file with flags"));
-                    continue;
-                }
-                let has = |f: &str| flags.iter().any(|x| x.ends_with(f));
-                if !(has("O_WRONLY") || has("O_RDWR") || has("O_CREAT") || has("O_TRUNC")) {
-                    continue;
-                }
-                (
-                    Effect::Write {
-                        append: !has("O_TRUNC"),
-                    },
-                    path_arg(0, "path"),
-                )
-            }
-            _ if attr || n.contains('.') => {
-                let effect = match method {
-                    "unlink" | "rmdir" => Effect::Remove { recursive: false },
-                    "chmod" | "lchmod" => Effect::Chmod {
-                        mode: literal_chmod_mode(&ev, ev.arg(open, 0, "mode")),
-                    },
-                    "write_text" | "write_bytes" => Effect::Write { append: false },
-                    // Create or update the receiver path (backlog 17d985f1).
-                    "touch" => Effect::Write { append: true },
-                    "symlink_to" | "hardlink_to" => Effect::Write { append: false },
-                    // `Path.replace(target)` / `Path.rename(target)` overwrite
-                    // the DESTINATION and move the receiver away (backlog
-                    // 17d985f1). Only the one-argument shape: `str.replace`
-                    // takes two or three, and a keyword other than `target`
-                    // (`dt.replace(year=…)`) is not this call.
-                    "replace" | "rename" => {
-                        let args = ev.args(open);
-                        let one =
-                            args.len() == 1 && ev.keyword(args[0]).is_none_or(|kw| kw == "target");
-                        if !one {
-                            continue;
-                        }
-                        let dst = ev.arg(open, 0, "target").and_then(|(s, e)| ev.expr(s, e));
-                        let write = Effect::Write { append: false };
-                        if let Some(d) = judge_paths(n, write, dst, depth, ctx, &mut pending) {
-                            return d;
-                        }
-                        Effect::Remove { recursive: false }
-                    }
-                    // A non-literal first argument of an `.open` on a value
-                    // that is not a path (`webbrowser.open(url)`,
-                    // `tarfile.open(name)`) is not a mode; on a path it is.
-                    "open" => match literal_mode(&ev, ev.arg(open, 0, "mode")) {
-                        Some(Some(eff)) => eff,
-                        Some(None) => continue,
-                        None if ev.receiver(k, n).is_none() => continue,
-                        None => {
-                            pending.get_or_insert(computed(n, "opens a file in a mode"));
-                            continue;
-                        }
-                    },
-                    _ => continue,
-                };
-                (effect, ev.receiver(k, n))
-            }
-            _ => continue,
-        };
-        if let Some(d) = judge_paths(n, effect, path, depth, ctx, &mut pending) {
-            return d;
         }
     }
+    if let Some(d) = method_refs::escaped_reference_verdict(&ev, depth, ctx, &mut pending) {
+        return d;
+    }
     pending.unwrap_or(Decision::Allow)
+}
+
+/// Judge one resolved call ([`method_refs::Call`]); a Deny is returned, an Ask
+/// recorded in `pending`.
+fn judge_call(
+    ev: &Eval<'_>,
+    call: &method_refs::Call<'_>,
+    depth: usize,
+    ctx: &Ctx<'_>,
+    pending: &mut Option<Decision>,
+) -> Option<Decision> {
+    let toks = ev.toks;
+    let (n, attr) = (call.n, call.attr);
+    let method = n.rsplit('.').next().unwrap_or(n);
+    let path_arg = |idx: usize, kw: &str| call.arg(ev, idx, kw).and_then(|(s, e)| ev.expr(s, e));
+    let (effect, path) = match n {
+        "shutil.rmtree" if !attr => (Effect::Remove { recursive: true }, path_arg(0, "path")),
+        "os.remove" | "os.unlink" | "os.rmdir" | "os.removedirs" if !attr => {
+            (Effect::Remove { recursive: false }, path_arg(0, "path"))
+        }
+        // The destination of a copy or a move is overwritten, as by
+        // `open(dst, 'w')` (tests/heredoc_system_harm_holes_20261111.rs B).
+        "shutil.copy" | "shutil.copy2" | "shutil.copyfile" | "shutil.copytree" | "shutil.move"
+        | "os.rename" | "os.replace" | "os.renames"
+            if !attr =>
+        {
+            (Effect::Write { append: false }, path_arg(1, "dst"))
+        }
+        "os.truncate" if !attr => (Effect::Write { append: false }, path_arg(0, "path")),
+        "os.chmod" | "os.lchmod" if !attr => (
+            Effect::Chmod {
+                mode: literal_chmod_mode(ev, call.arg(ev, 1, "mode")),
+            },
+            path_arg(0, "path"),
+        ),
+        "os.chown" | "os.lchown" | "shutil.chown" if !attr => (Effect::Chown, path_arg(0, "path")),
+        "open" | "io.open" | "codecs.open" | "builtins.open" if !attr => {
+            match literal_mode(ev, call.arg(ev, 1, "mode")) {
+                Some(Some(eff)) => (eff, path_arg(0, "file")),
+                Some(None) => return None,
+                None => {
+                    pending.get_or_insert(computed(n, "opens a file in a mode"));
+                    return None;
+                }
+            }
+        }
+        "os.open" if !attr => {
+            let flags: Vec<&str> = call
+                .arg(ev, 1, "flags")
+                .map(|(s, e)| toks[s..e].iter().filter_map(|t| name(Some(t))).collect())
+                .unwrap_or_default();
+            if flags.iter().any(|f| !f.starts_with("os.O_")) {
+                pending.get_or_insert(computed(n, "opens a file with flags"));
+                return None;
+            }
+            let has = |f: &str| flags.iter().any(|x| x.ends_with(f));
+            if !(has("O_WRONLY") || has("O_RDWR") || has("O_CREAT") || has("O_TRUNC")) {
+                return None;
+            }
+            (
+                Effect::Write {
+                    append: !has("O_TRUNC"),
+                },
+                path_arg(0, "path"),
+            )
+        }
+        _ if attr || n.contains('.') => {
+            let effect = match method {
+                "unlink" | "rmdir" => Effect::Remove { recursive: false },
+                "chmod" | "lchmod" => Effect::Chmod {
+                    mode: literal_chmod_mode(ev, call.arg(ev, 0, "mode")),
+                },
+                "write_text" | "write_bytes" => Effect::Write { append: false },
+                // Create or update the receiver path (backlog 17d985f1).
+                "touch" => Effect::Write { append: true },
+                "symlink_to" | "hardlink_to" => Effect::Write { append: false },
+                // `Path.replace(target)` / `Path.rename(target)` overwrite
+                // the DESTINATION and move the receiver away (backlog
+                // 17d985f1). Only the one-argument shape: `str.replace`
+                // takes two or three, and a keyword other than `target`
+                // (`dt.replace(year=…)`) is not this call.
+                "replace" | "rename" => {
+                    let args = call.args(ev);
+                    let one =
+                        args.len() == 1 && ev.keyword(args[0]).is_none_or(|kw| kw == "target");
+                    if !one {
+                        return None;
+                    }
+                    let dst = path_arg(0, "target");
+                    let write = Effect::Write { append: false };
+                    if let Some(d) = judge_paths(n, write, dst, depth, ctx, pending) {
+                        return Some(d);
+                    }
+                    Effect::Remove { recursive: false }
+                }
+                // A non-literal first argument of an `.open` on a value
+                // that is not a path (`webbrowser.open(url)`,
+                // `tarfile.open(name)`) is not a mode; on a path it is.
+                "open" => match literal_mode(ev, call.arg(ev, 0, "mode")) {
+                    Some(Some(eff)) => eff,
+                    Some(None) => return None,
+                    None if call.receiver(ev).is_none() => return None,
+                    None => {
+                        pending.get_or_insert(computed(n, "opens a file in a mode"));
+                        return None;
+                    }
+                },
+                _ => return None,
+            };
+            (effect, call.receiver(ev))
+        }
+        _ => return None,
+    };
+    judge_paths(n, effect, path, depth, ctx, pending)
 }
 
 fn computed(call: &str, what: &str) -> Decision {

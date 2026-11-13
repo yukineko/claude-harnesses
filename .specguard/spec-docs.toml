@@ -565,6 +565,11 @@ doc = "docs/specs/blastguard.md"
 reason = "Same bullet, sub-bullet '計算される書き込み path（user ruling 2026-11-08、interpreter/python_semantics/values.rs）': Allow only when provably repo-scoped (repo-relative iteration, sys.argv[N] with repo-relative literal runs, self.attr), everything else Ask."
 
 [[spec]]
+path = "crates/blastguard/src/detect/interpreter/python_semantics/method_refs.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Same bullet, sub-bullet 'メソッド参照（backlog c8bf27ea、interpreter/python_semantics/method_refs.rs）': X.m.__call__(..), unbound Path.m(recv, ..) and w = X.m; w(..) read as the direct call; any other reference to a write/move-capable callable judged by its receiver, unresolvable -> Ask."
+
+[[spec]]
 path = "crates/blastguard/src/detect/condukt.rs"
 doc = "docs/specs/blastguard.md"
 reason = "module list bullet `detect/condukt`: autonomy-set on / HARNESS_AUTONOMOUS / CONDUKT_AUTONOMOUS prefixed to condukt resolve to Ask (Deny in a subagent via harden_for_subagent); matching on parsed argv only (backlog 12ba5845)."

@@ -1727,3 +1727,28 @@ exit 101: rktrees/side-reds-075136/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
      Running tests/backlog_20261114_exec_fd_herestring_then_shell_reads_fd.rs (target/debug/deps/backlog_20261114_exec_fd_herestring_then_shell_reads_fd-de5e1a0b7ceebd7d)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_exec_fd_herestring_then_shell_reads_fd`"""
+
+[[task]]
+id = "7eb86bb3"
+title = "blastguard FP: harmless brace-group feeder piped to bash is Ask/Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """Measured at dc9b00c7b (0.2.565) 2026-11-14 in run-20261114-075136-6996 follow-up. main/subagent: "{ echo 'echo hi'; } | bash" ask/deny; '{ echo a; echo b; } | bash' ask/deny; "echo 'echo hi' | bash" allow/allow. Two readings: (FP) group output is statically known harmless; (intended) multi-command group feeding a shell is deliberately unmodelled so Ask is fail-closed. RED asserts Allow."""
+created_at = 1794613011
+updated_at = 1794613011
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_brace_group_feeder_piped_to_bash_fp -- --include-ignored"
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+observed_at = 1794613011
+detail = """
+exit 101: arness-worktrees/side-reds-075136/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/backlog_20261114_brace_group_feeder_piped_to_bash_fp.rs (target/debug/deps/backlog_20261114_brace_group_feeder_piped_to_bash_fp-0d22514ccaecfe2b)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_brace_group_feeder_piped_to_bash_fp`"""

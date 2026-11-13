@@ -76533,3 +76533,75 @@ rev = "9e5bfaf26154954c8dc50288bc1018861b4ef992"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "bdce0261"
+title = "blastguard: function-body write/rm judged with definition-time vars (Allow of /etc/hosts write)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "RED 1e08ddff (tests/function_body_late_binding_fail_open_20261113.rs). Shape: L=<safe>; f() { echo x > $L; }; L=/etc/hosts; f -> Allow (also multiline); bash -c confirms the write lands on the value assigned AFTER the definition. Also f() { rm -f $L; }; L=/etc/hosts; f -> Allow and f() { rm -f $L; }; f -> Allow, while bare 'rm -f $L' is denied ('this rm operand `$L` cannot be resolved to a path'). Controls: L=<safe>; echo x > $L Allow; L=<safe>; L=/etc/hosts; echo x > $L not Allow; rm -f $L not Allow. Suspected assignment-inside-body direction (L=<safe>; f() { L=/etc/hosts; }; f; echo x > $L) does NOT reproduce: denied."
+created_at = 1794543269
+updated_at = 1794612099
+weight = 0.0
+issue_number = 1690
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1690"
+issue_closed_at = 1794612102
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test function_body_late_binding_fail_open_20261113 -- --ignored"
+rev = "1e08ddff64b2a9e198c3348d1e0f8134bb2fbd92"
+observed_at = 1794543269
+detail = """
+exit 101: ssed; 4 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.06s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/function_body_late_binding_fail_open_20261113.rs (target/debug/deps/function_body_late_binding_fail_open_20261113-563c6faa9cb8a730)
+error: test failed, to rerun pass `-p blastguard --test function_body_late_binding_fail_open_20261113`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test function_body_late_binding_fail_open_20261113"
+exit = 0
+passed = 12
+rev = "5c45bdb287918a8c5e7d37e61fea7a5ebde2f23a"
+observed_at = 1794612098
+output_digest = "sha256:a26f1c35f0bb8da719ac4e9ec410b47f295ece3327281462d39bc8516c8b3e2e"
+excerpt = """
+
+running 12 tests
+test c1_control_safe_redirect_outside_function_is_allowed ... ok
+test d3_rm_in_body_call_time_system_path_is_system_harm_deny ... ok
+test c2_control_system_redirect_outside_function_stays_not_allowed ... ok
+test c3_control_unresolved_rm_outside_function_stays_not_allowed ... ok
+test c4_control_assignment_inside_called_body_then_redirect_is_not_allowed ... ok
+test d1_redirect_in_body_call_time_system_path_is_system_harm_deny ... ok
+test d2_multiline_redirect_in_body_call_time_system_path_is_system_harm_deny ... ok
+test r1_redirect_in_body_after_reassignment_is_not_allowed ... ok
+test d4_rm_unresolved_operand_in_called_body_is_ask_main_deny_subagent ... ok
+test r2_multiline_redirect_in_body_after_reassignment_is_not_allowed ... ok
+test r3_rm_in_body_after_system_assignment_is_not_allowed ... ok
+test r4_rm_unresolved_operand_in_called_body_is_not_allowed ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.92s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/function_body_late_binding_fail_open_20261113.rs (target/debug/deps/function_body_late_binding_fail_open_20261113-9df78bc857a2f005)
+"""
+
+[task.closure.red]
+rev = "e4a1e763ed252a35bd1f24b46b435ea00677da39"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

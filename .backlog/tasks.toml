@@ -986,3 +986,36 @@ exit 101: /yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 3.92s
      Running tests/backlog_20261113_payload_collapse_residual_paths.rs (target/debug/deps/backlog_20261113_payload_collapse_residual_paths-e7fe16b6ea062a14)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_payload_collapse_residual_paths`"""
+
+[[task]]
+id = "c96e756a"
+title = "condukt worktree remove leaves an unregistered orphan dir (target/ residue, .git gone) when git worktree remove --force fails part-way"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "worktree",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "RED: crates/condukt/tests/worktree_remove_orphan_leftover.rs (79f5528d), ported from unmerged bk-leftover-1106 (fb17edd6; its backlog follow-up was never filed). Re-run on main 47ec0a2e: FAILS - git worktree remove --force exits 255 'Permission denied', admin dir deleted, target/ residue left; condukt then refuses ('is not the root of a usable git worktree'). Field observation 2026-11-13: /mnt/c/tmp/aegis-worktrees/run-20261106-100625-7376-blastguard-heredoc-body-fp left with only target/ (1.4G) + tdd.toml, 'prunable' in git worktree list; cleaned by hand (rm -rf + git worktree prune). Earlier field: 2026-11-05/06 wedged tdd/donegate Stop hooks. Remove the #[ignore] when fixed."
+created_at = 1794533093
+updated_at = 1794533093
+weight = 0.0
+issue_number = 1678
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1678"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test worktree_remove_orphan_leftover -- --ignored"
+rev = "79f5528d215b7b71a116795f2af234ba23671ca2"
+observed_at = 1794533093
+detail = """
+exit 101: 0.06s
+
+   Compiling condukt v0.7.394 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-43f28f62/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.25s
+     Running tests/worktree_remove_orphan_leftover.rs (target/debug/deps/worktree_remove_orphan_leftover-b2dcc6fdf9b9a738)
+error: test failed, to rerun pass `-p condukt --test worktree_remove_orphan_leftover`"""

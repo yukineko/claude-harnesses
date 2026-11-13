@@ -68,7 +68,25 @@ pub(super) fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<
             }
         }
     }
-    for statement in split_statements_into_pipe_stages(cmd) {
+    let statements = split_statements_into_pipe_stages(cmd);
+    // A reader hidden behind a subshell or a brace group (`… | (bash)`,
+    // `… | { bash; }`, backlog 036067bf): every command of the group inherits
+    // the pipe as its stdin, so each is judged as piped from the upstream
+    // stage. See `group_reader_pipelines`. The descent terminates: each
+    // synthetic pipeline holds one grouping layer fewer past its first stage
+    // than the stage it came from.
+    let (group_pipelines, group_undetermined) = group_reader_pipelines(&statements);
+    for synthetic in &group_pipelines {
+        if let Some(deny) = acc.record(analyze_interpreter_stdin_exec(synthetic, depth, ctx)) {
+            return deny;
+        }
+    }
+    for why in group_undetermined {
+        if let Some(deny) = acc.record(Decision::ask(why)) {
+            return deny;
+        }
+    }
+    for statement in statements {
         for (i, stage) in statement.iter().enumerate() {
             // The here-string mirror (`bash <<< 'rm -rf ~'`), judged before
             // and independently of the stdin-program rule below, which it can
@@ -138,11 +156,38 @@ blastguard cannot read it",
             }
             let Some(idx) = heads.into_iter().find(|&idx| {
                 let head = normalized_command(tokens[idx]);
-                is_shell(&head) || is_code_interpreter(&head)
+                is_shell(&head) || is_code_interpreter(&head) || is_source_head(&head)
             }) else {
                 continue;
             };
             let rest = &tokens[idx + 1..];
+            // `. /dev/stdin` / `source /dev/stdin` (backlog 036067bf): the
+            // shell reading the line sources its own stdin, i.e. runs the
+            // piped program exactly as `… | bash` does. Only a piped or
+            // here-document stage reads that stream; a sourced FILE is not
+            // this rule's, and an option `source` takes that is not modelled
+            // leaves the program undetermined.
+            let source_reader = is_source_head(&normalized_command(tokens[idx]));
+            if source_reader {
+                if !(i > 0 || heredoc_open) {
+                    continue;
+                }
+                let argv = argv_words(rest);
+                match source_program_source(&argv) {
+                    ProgramSource::File(k) if is_stdin_path(argv[k]) => {}
+                    ProgramSource::Undetermined(why) => {
+                        if let Some(deny) = acc.record(Decision::ask(format!(
+                            "`{}` is fed a program on stdin, and {why} — blastguard cannot tell \
+whether the sourced file is that stdin",
+                            stage.trim()
+                        ))) {
+                            return deny;
+                        }
+                        continue;
+                    }
+                    _ => continue,
+                }
+            }
             // `osascript` removing files through Finder / System Events, however
             // the program arrives — judged before the program-file test, since
             // `osascript -l JavaScript <<'E'` reads `JavaScript` as one.
@@ -153,7 +198,8 @@ blastguard cannot read it",
                 }
             }
             let has_program_file = stage_has_program_operand(rest);
-            let takes_stdin_program = interpreter_stdin_operand(rest).is_some()
+            let takes_stdin_program = source_reader
+                || interpreter_stdin_operand(rest).is_some()
                 || (!has_program_file && (i > 0 || heredoc_open));
             if !takes_stdin_program {
                 continue;
@@ -174,7 +220,7 @@ blastguard cannot read it",
             let shape = format!("`{}` takes its program from stdin", stage.trim());
             // A shell removes its program's line continuations before it
             // splits words: judge that reading too (backlog 040b959b).
-            if is_shell(&normalized_command(tokens[idx])) {
+            if source_reader || is_shell(&normalized_command(tokens[idx])) {
                 let (readings, undetermined) =
                     super::readings::shell_program_readings(&program_texts);
                 program_texts = readings;
@@ -269,6 +315,153 @@ the command line, so blastguard cannot read the program",
         }
     }
     acc.finish()
+}
+
+/// `source` and its `.` spelling: the shell builtin that runs a file's text
+/// as a program in the current shell.
+fn is_source_head(head: &str) -> bool {
+    matches!(head, "source" | ".")
+}
+
+/// A path that names the reading process's own stdin.
+fn is_stdin_path(word: &str) -> bool {
+    matches!(
+        strip_wrapping_quotes(word),
+        "/dev/stdin" | "/dev/fd/0" | "/proc/self/fd/0"
+    )
+}
+
+/// The argv words among a command's tokens after its head: every token that
+/// is not a redirection, nor the target word of a bare redirection operator
+/// (`2> FILE`).
+fn argv_words<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let mut j = 0;
+    while j < rest.len() {
+        match parse_redirect(rest[j]) {
+            Some((_, _, glued)) => j += if glued.is_empty() { 2 } else { 1 },
+            None => {
+                out.push(rest[j]);
+                j += 1;
+            }
+        }
+    }
+    out
+}
+
+/// The `UPSTREAM | MEMBER` pipelines for every stage that is a subshell
+/// `( … )` or a brace group `{ …; }` fed by a pipe (backlog 036067bf).
+///
+/// Every command inside the group inherits the pipe as its stdin, so a shell
+/// there (`printf 'chmod 777 /etc/hosts' | (bash)`, `… | { bash; }`,
+/// `… | { true; bash; }`) runs the piped text exactly as `… | bash` does —
+/// but the stage's head word was `(bash)` or `{`, no reader, and the program
+/// was never judged. Each member (an inner statement, its own pipe stages kept)
+/// is returned piped from the group's upstream stage, which over-approximates
+/// (a member after `head -1` sees only what is left of the stream) on the
+/// restrictive side.
+///
+/// A subshell's text stays inside one stage (the split does not cut inside
+/// parentheses); its inner list is split again. A brace group is NOT kept
+/// together by the split: its first member is the rest of the `{` stage (with
+/// the stages after it), and the following statements are members until the
+/// statement whose first word is the matching `}`.
+///
+/// Returns `(pipelines, undetermined)`: a subshell whose `)` is not found, or a
+/// brace group whose `}` is not found, is an Ask reason — what reads the pipe
+/// cannot be determined.
+fn group_reader_pipelines(statements: &[Vec<String>]) -> (Vec<String>, Vec<String>) {
+    fn first_word(stage: &str) -> Option<&str> {
+        stage.split_whitespace().next()
+    }
+    /// The stage text with every leading `{` word removed (a nested group's
+    /// opener: its members are fed the same stream).
+    fn strip_brace_openers(stage: &str) -> &str {
+        let mut s = stage.trim_start();
+        while let Some(rest) = s.strip_prefix('{') {
+            if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+                break;
+            }
+            s = rest.trim_start();
+        }
+        s
+    }
+    fn joined(stages: &[String]) -> String {
+        stages
+            .iter()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+    let mut pipelines: Vec<String> = Vec::new();
+    let mut undetermined: Vec<String> = Vec::new();
+    fn push(p: String, pipelines: &mut Vec<String>) {
+        if !pipelines.contains(&p) {
+            pipelines.push(p);
+        }
+    }
+    for (s, statement) in statements.iter().enumerate() {
+        for i in 1..statement.len() {
+            let upstream = statement[i - 1].trim();
+            let stage = statement[i].trim();
+            if stage.starts_with('(') {
+                let chars: Vec<char> = stage.chars().collect();
+                let Some(end) = scan_balanced(&chars, 1, Stop::Paren, 0) else {
+                    undetermined.push(format!(
+                        "`{upstream}` is piped into the subshell `{stage}`, whose closing `)` \
+blastguard cannot find — it cannot tell which command inside reads the piped program"
+                    ));
+                    continue;
+                };
+                let inner: String = chars[1..end].iter().collect();
+                for member in split_statements_into_pipe_stages(&inner) {
+                    let member = joined(&member);
+                    if !member.is_empty() {
+                        push(format!("{upstream} | {member}"), &mut pipelines);
+                    }
+                }
+            } else if first_word(stage) == Some("{") {
+                let mut members: Vec<String> = Vec::new();
+                let mut first: Vec<String> = vec![strip_brace_openers(stage).to_string()];
+                first.extend(statement[i + 1..].iter().cloned());
+                members.push(joined(&first));
+                // Nesting: every `{` word opening a statement's first stage
+                // (or the `{` stage itself) is one level; a statement whose
+                // first word is `}` closes one.
+                let opened = stage.split_whitespace().take_while(|w| *w == "{").count();
+                let mut level = opened;
+                let mut closed = false;
+                for later in &statements[s + 1..] {
+                    let head = later.first().map(|st| st.trim()).unwrap_or("");
+                    if first_word(head) == Some("}") {
+                        level -= 1;
+                        if level == 0 {
+                            closed = true;
+                            break;
+                        }
+                        continue;
+                    }
+                    level += head.split_whitespace().take_while(|w| *w == "{").count();
+                    let mut stages = later.clone();
+                    if let Some(st) = stages.first_mut() {
+                        *st = strip_brace_openers(st).to_string();
+                    }
+                    members.push(joined(&stages));
+                }
+                if !closed {
+                    undetermined.push(format!(
+                        "`{upstream}` is piped into the brace group `{stage} …`, whose closing `}}` \
+blastguard cannot find — it cannot tell which command inside reads the piped program"
+                    ));
+                }
+                for member in members.into_iter().filter(|m| !m.is_empty()) {
+                    push(format!("{upstream} | {member}"), &mut pipelines);
+                }
+            }
+        }
+    }
+    (pipelines, undetermined)
 }
 
 /// `cmd` split into simple command stages at `;`, newlines, `|`, `|&`, `||`,

@@ -1,20 +1,24 @@
 //! A write target spelled as a Python literal whose value blastguard cannot
-//! fully decode (backlog 47b20647): a `\N{…}` named escape
-//! ([`Decoded::Holed`]) or a malformed escape ([`Decoded::Undecodable`]).
+//! fully decode (backlog 47b20647): a `\N{…}` named escape of a NON-ASCII (or
+//! unknown) name ([`Decoded::Holed`]) or a malformed escape
+//! ([`Decoded::Undecodable`]). A `\N{…}` naming a printable ASCII character
+//! (`\N{SOLIDUS}`, `\N{LATIN SMALL LETTER E}`) is decoded by
+//! `python_escape` and never reaches this module.
 //!
 //! `open("\N{SOLIDUS}etc/hosts","w")` writes `/etc/hosts`; reading the body
 //! undecoded (`\N{SOLIDUS}etc/hosts`, a relative path) made it Allow. An
 //! undecoded literal is NOT a known value, so it never resolves to Allow on
 //! the strength of its undecoded spelling:
 //!
-//! - each hole is one unknown code point. Every way of filling the holes with
+//! - each hole is one unknown code point that is not printable ASCII (the
+//!   stand-ins below still include `/` and `.`, restrictively). Every way of filling the holes with
 //!   a stand-in from [`HOLE_STAND_INS`] (`/`, `.`, and an ordinary file-name
 //!   character) is judged by the system-directory checks the plain-literal
 //!   path uses; ANY of them landing in a system directory is the program's
 //!   Deny (a reading of the literal is system harm — user ruling: system harm
 //!   is always Deny);
-//! - a hole BEFORE a `/` can be any letter of a directory name
-//!   (`/\N{…}tc/hosts`), which the stand-ins cannot cover, so if no stand-in
+//! - a hole BEFORE a `/` is part of a directory name (`/\N{SNOWMAN}tc/hosts`)
+//!   whose character the stand-ins cannot cover, so if no stand-in
 //!   reading was denied the verdict is an Ask (Deny for a subagent), never
 //!   Allow; so is a literal with more than [`MAX_HOLES`] holes;
 //! - a hole only in the LAST path segment, after a directory spelled in full

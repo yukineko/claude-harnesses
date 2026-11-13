@@ -15,10 +15,14 @@
 //! as Python does. A bytes value byte is mapped to the char of the same number
 //! (latin-1), which is the same text for every ASCII path.
 //!
+//! A `\N{NAME}` named escape (str only) naming a printable ASCII character
+//! (all 95, case-insensitive, plus the alias `SP`; [`ascii_by_name`]) is
+//! decoded to it.
+//!
 //! What cannot be decoded statically is NEVER given a guessed value:
-//! - a well-formed `\N{NAME}` named escape (str only) is exactly ONE code point
-//!   blastguard cannot name (there is no Unicode name table here), so the value
-//!   is [`Decoded::Holed`]: the decoded text with [`HOLE`] standing for each
+//! - any other well-formed `\N{NAME}` is exactly ONE code point blastguard
+//!   cannot name (there is no table of non-ASCII names here), so the value is
+//!   [`Decoded::Holed`]: the decoded text with [`HOLE`] standing for each
 //!   unknown code point. The caller must not read a hole as any particular
 //!   character: it can be `/` or `.` too (see
 //!   `python_literal_target::unknown_literal_target_verdict`). `lex` keeps
@@ -128,9 +132,15 @@ fn decode(body: &str, bytes: bool, holed: &mut bool) -> Option<String> {
                 if close == 0 {
                     return None;
                 }
+                let name: String = chars[i + 1..i + 1 + close].iter().collect();
                 i += 1 + close + 1;
-                out.push(HOLE);
-                *holed = true;
+                match ascii_by_name(&name) {
+                    Some(c) => out.push(c),
+                    None => {
+                        out.push(HOLE);
+                        *holed = true;
+                    }
+                }
             }
             other => {
                 out.push('\\');
@@ -139,6 +149,84 @@ fn decode(body: &str, bytes: bool, holed: &mut bool) -> Option<String> {
         }
     }
     Some(out)
+}
+
+/// Unicode names of the 33 printable ASCII characters that are not a letter or
+/// a digit (letters and digits are computed in [`ascii_by_name`]), as
+/// `unicodedata.name` reports them.
+const ASCII_PUNCTUATION_NAMES: [(&str, char); 33] = [
+    ("SPACE", ' '),
+    ("EXCLAMATION MARK", '!'),
+    ("QUOTATION MARK", '"'),
+    ("NUMBER SIGN", '#'),
+    ("DOLLAR SIGN", '$'),
+    ("PERCENT SIGN", '%'),
+    ("AMPERSAND", '&'),
+    ("APOSTROPHE", '\''),
+    ("LEFT PARENTHESIS", '('),
+    ("RIGHT PARENTHESIS", ')'),
+    ("ASTERISK", '*'),
+    ("PLUS SIGN", '+'),
+    ("COMMA", ','),
+    ("HYPHEN-MINUS", '-'),
+    ("FULL STOP", '.'),
+    ("SOLIDUS", '/'),
+    ("COLON", ':'),
+    ("SEMICOLON", ';'),
+    ("LESS-THAN SIGN", '<'),
+    ("EQUALS SIGN", '='),
+    ("GREATER-THAN SIGN", '>'),
+    ("QUESTION MARK", '?'),
+    ("COMMERCIAL AT", '@'),
+    ("LEFT SQUARE BRACKET", '['),
+    ("REVERSE SOLIDUS", '\\'),
+    ("RIGHT SQUARE BRACKET", ']'),
+    ("CIRCUMFLEX ACCENT", '^'),
+    ("LOW LINE", '_'),
+    ("GRAVE ACCENT", '`'),
+    ("LEFT CURLY BRACKET", '{'),
+    ("VERTICAL LINE", '|'),
+    ("RIGHT CURLY BRACKET", '}'),
+    ("TILDE", '~'),
+];
+
+/// The printable ASCII character a `\N{NAME}` names, or `None` (a name of a
+/// non-ASCII or control character, or no character: the caller keeps a
+/// [`HOLE`]). Python matches the name case-insensitively and exactly (no
+/// extra spaces). Covered: all 95 printable ASCII characters —
+/// `LATIN SMALL|CAPITAL LETTER A..Z` and `DIGIT ZERO..NINE` computed, the rest
+/// from [`ASCII_PUNCTUATION_NAMES`] — plus the alias `SP` (SPACE) from
+/// Unicode's NameAliases.txt, which Python accepts.
+fn ascii_by_name(name: &str) -> Option<char> {
+    const DIGITS: [&str; 10] = [
+        "ZERO", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE",
+    ];
+    let upper = name.to_ascii_uppercase();
+    let letter = |prefix: &str, base: u8| {
+        upper
+            .strip_prefix(prefix)
+            .filter(|l| l.len() == 1 && l.as_bytes()[0].is_ascii_uppercase())
+            .map(|l| char::from(base + (l.as_bytes()[0] - b'A')))
+    };
+    if let Some(c) =
+        letter("LATIN SMALL LETTER ", b'a').or_else(|| letter("LATIN CAPITAL LETTER ", b'A'))
+    {
+        return Some(c);
+    }
+    if let Some(d) = upper.strip_prefix("DIGIT ") {
+        return DIGITS
+            .iter()
+            .position(|n| *n == d)
+            .and_then(|k| u32::try_from(k).ok())
+            .and_then(|k| char::from_digit(k, 10));
+    }
+    if upper == "SP" {
+        return Some(' ');
+    }
+    ASCII_PUNCTUATION_NAMES
+        .iter()
+        .find(|(n, _)| *n == upper)
+        .map(|(_, c)| *c)
 }
 
 /// Exactly `width` hex digits at `chars[at..]`, or `None` (Python rejects a
@@ -183,11 +271,67 @@ mod tests {
     }
 
     #[test]
-    fn named_escape_is_one_hole_not_a_guess() {
+    fn non_ascii_named_escape_is_one_hole_not_a_guess() {
         assert_eq!(
-            decode_non_raw("\\N{SOLIDUS}etc/ho\\N{LATIN SMALL LETTER S}ts", false),
-            Decoded::Holed(format!("{HOLE}etc/ho{HOLE}ts"))
+            decode_non_raw("/tmp/\\N{SNOWMAN}/x\\N{NOT A NAME}", false),
+            Decoded::Holed(format!("/tmp/{HOLE}/x{HOLE}"))
         );
+    }
+
+    #[test]
+    fn ascii_named_escapes_decode_case_insensitively() {
+        assert_eq!(
+            decode_non_raw(
+                "\\N{SOLIDUS}\\N{latin small letter e}tc/\\N{Latin Capital Letter H}\\N{DIGIT SEVEN}\
+\\N{FULL STOP}\\N{HYPHEN-MINUS}\\N{LOW LINE}\\N{REVERSE SOLIDUS}\\N{SP}\\N{SPACE}\\N{TILDE}",
+                false
+            ),
+            value("/etc/H7.-_\\  ~")
+        );
+        // Exact match only (Python rejects the extra space; blastguard keeps a hole).
+        assert_eq!(
+            decode_non_raw("\\N{LATIN  SMALL LETTER E}", false),
+            Decoded::Holed(HOLE.to_string())
+        );
+    }
+
+    #[test]
+    fn all_95_printable_ascii_names_resolve() {
+        use super::ascii_by_name;
+        let mut names: Vec<(String, char)> = super::ASCII_PUNCTUATION_NAMES
+            .iter()
+            .map(|(n, c)| ((*n).to_string(), *c))
+            .collect();
+        for (k, d) in [
+            "ZERO", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE",
+        ]
+        .iter()
+        .enumerate()
+        {
+            names.push((
+                format!("DIGIT {d}"),
+                char::from(b'0' + u8::try_from(k).unwrap()),
+            ));
+        }
+        for l in b'A'..=b'Z' {
+            names.push((
+                format!("LATIN CAPITAL LETTER {}", char::from(l)),
+                char::from(l),
+            ));
+            names.push((
+                format!("LATIN SMALL LETTER {}", char::from(l)),
+                char::from(l.to_ascii_lowercase()),
+            ));
+        }
+        assert_eq!(names.len(), 95);
+        let mut seen: Vec<char> = Vec::new();
+        for (n, c) in &names {
+            assert_eq!(ascii_by_name(n), Some(*c), "{n}");
+            seen.push(*c);
+        }
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen, (' '..='~').collect::<Vec<char>>());
     }
 
     #[test]

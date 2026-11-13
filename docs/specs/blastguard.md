@@ -245,21 +245,24 @@ forge・condukt のスケジューラが再利用）。
   **追加**して判定する（置き換えない）。unquoted here-document（`python3 - <<EOF`）は shell が本文の
   `\<LF>` を取り除き `\\` `\$` `` \` `` を 1 文字にしてから Python に渡すので、その読み
   （`readings::unquoted_here_document_reading`）も program text に足す。
-  **decode できない literal は既知の値として扱わない**: `\N{NAME}`（Unicode 名の表を持たない）は 1 文字の
-  hole（`python_escape::Decoded::Holed`）とし、書き込みを持つ program では
+  `\N{NAME}` は印字可能 ASCII 95 文字すべての名前（`LATIN SMALL|CAPITAL LETTER A..Z`・`DIGIT ZERO..NINE`
+  は規則で、記号・空白は `ASCII_PUNCTUATION_NAMES` の表で。Python と同じく大文字小文字を区別せず完全一致、
+  別名 `SP` も可。`python_escape::ascii_by_name`）を decode する（`/\N{LATIN SMALL LETTER E}tc/hosts` は
+  `/etc/hosts` として main・subagent とも Deny）。
+  **decode できない literal は既知の値として扱わない**: それ以外の `\N{NAME}`（非 ASCII・制御文字・存在しない名前。
+  非 ASCII 名の表は持たない）は 1 文字の hole（`python_escape::Decoded::Holed`）とし、書き込みを持つ program では
   `detect/interpreter/python_literal_target.rs` の `unknown_literal_target_verdict` が hole を `/`・`.`・
   通常の 1 文字で埋めた全読み（hole 4 個まで）を system-directory 判定にかけ、どれかが system directory に
-  着地すれば **Deny**（`\N{SOLIDUS}etc/hosts`・`/etc/ho\N{…}ts`・`/etc/\N{…}`）。hole が directory 名の中に
-  あり（`/\N{…}tc/hosts`）どの読みも Deny でなければ **Ask**（subagent では Deny）、hole が 5 個以上も Ask。
+  着地すれば **Deny**（`/etc/\N{SNOWMAN}`）。hole が directory 名の中に
+  あり（`/\N{SNOWMAN}tc/hosts`）どの読みも Deny でなければ **Ask**（subagent では Deny）、hole が 5 個以上も Ask。
   hole が最後の segment だけにあり directory が確定している場合（`/tmp/\N{SNOWMAN}`）は何も足さない。
   malformed な escape（`\x2`・`\N` の後に `{NAME}` が無い等、`Decoded::Undecodable`）は書き込みを持つ
-  program で Ask。**main session の Ask は「system harm は常に Deny」より弱い**（`/\N{LATIN SMALL LETTER E}tc/hosts`
-  は実際には /etc/hosts に書くが main では Ask）。Python lexer の `Tok::Str` の text は、decode できない本文に
+  program で Ask。Python lexer の `Tok::Str` の text は、decode できない本文に
   ついては従来の読みのまま（Python FILE judge がこれを読む）。raw literal（`r'…'`、Python は `\` と改行を残す）
   は decode しない。テストは `tests/backlog_20261113_python_string_literal_line_continuation.rs`・
   `tests/backlog_20261113_python_named_escape_and_stdin_bn.rs`・
   `tests/python_literal_line_continuation_deny_20261113.rs`（system-harm 形は main・subagent とも Deny、
-  directory 名中の `\N{…}` は main Ask／subagent Deny、`print('a\<LF>b')`・`open('/tmp/x\<LF>y','w')`・
+  directory 名中の非 ASCII `\N{…}` は main Ask／subagent Deny、`print('a\<LF>b')`・`open('/tmp/x\<LF>y','w')`・
   `print('\N{SNOWMAN}')`・`open('/tmp/\N{SNOWMAN}','w')`・無害な stdin program・raw 形は Allow のまま）。
 - **git の exec-capable 形は一律 Deny（backlog fb338793、ユーザー裁定 2026-11-07「git bisectでいろいろ
   構文を処理できてしまうくらいなら使用を禁止した方がいいのでは?」）** — git が呼び出し側の選んだコマンドを

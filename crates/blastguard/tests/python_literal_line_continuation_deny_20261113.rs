@@ -11,11 +11,12 @@
 //!   program itself is one blastguard denies when the path is spelled plainly);
 //! - the same for programs fed to `python` on stdin (`python3 -`, `/dev/stdin`,
 //!   quoted and UNQUOTED here-documents — the shell turns `\\` into `\` in the
-//!   latter) and for `\N{…}` named escapes, which are not decoded: one unknown
-//!   character that can be `/` (`\N{SOLIDUS}etc/hosts`) or sits in a file name
-//!   inside `/etc/`;
-//! - a `\N{…}` inside a directory NAME (`/\N{…}tc/hosts`) is Ask in the main
-//!   session and Deny in a subagent (never Allow) — weaker than Deny in main;
+//!   latter) and for `\N{…}` named escapes: a printable-ASCII name is decoded
+//!   (`\N{SOLIDUS}`, `\N{LATIN SMALL LETTER E}` even inside a directory name,
+//!   capital letters, digits, case-insensitive), a non-ASCII one is an unknown
+//!   character (`/etc/\N{SNOWMAN}` is a new file in /etc);
+//! - a NON-ASCII `\N{…}` inside a directory NAME (`/\N{SNOWMAN}tc/hosts`) is
+//!   Ask in the main session and Deny in a subagent (never Allow);
 //! - harmless programs keep the decision main had before the fix (observed at
 //!   main 5bca9481 for C1-C3; for C4-C9 at a1fcab51 = main 5f208b7b plus the
 //!   first 47b20647 commit, src of the second fix stashed; both modes): Allow;
@@ -179,16 +180,25 @@ const HARM: &[(&str, &str, &str)] = &[
         "python3 /dev/stdin <<'PY'\nopen('/etc/ho\\N{LATIN SMALL LETTER S}ts','w')\nPY",
         "python3 /dev/stdin <<'PY'\nopen('/etc/hosts','w')\nPY",
     ),
+    (
+        "U1-ascii-named-escape-in-directory-name",
+        "python3 -c \"open('/\\N{LATIN SMALL LETTER E}tc/hosts','w')\"",
+        "python3 -c \"open('/etc/hosts','w')\"",
+    ),
+    (
+        "N5-capital-letter-digit-and-lowercase-names",
+        "python3 -c \"open('/\\N{latin small letter e}tc/\\N{LATIN CAPITAL LETTER X}\\N{DIGIT SEVEN}','w')\"",
+        "python3 -c \"open('/etc/X7','w')\"",
+    ),
 ];
 
-/// `\N{…}` inside a DIRECTORY name: no stand-in reading names a system
-/// directory, and the letter cannot be known, so the decision is Ask in the
-/// main session and Deny in a subagent — never Allow. NOTE: this program does
-/// write /etc/hosts, so the main-session Ask is weaker than the "system harm
-/// is always Deny" ruling; it is pinned here so the gap stays visible.
+/// A NON-ASCII `\N{…}` (not decoded) inside a DIRECTORY name: no stand-in
+/// reading names a system directory and the character cannot be known, so
+/// the decision is Ask in the main session and Deny in a subagent — never
+/// Allow. (`\N{SNOWMAN}` is not printable ASCII, so this path is not /etc.)
 const UNDETERMINED_DIR: &[(&str, &str)] = &[(
-    "U1-named-escape-in-directory-name",
-    "python3 -c \"open('/\\N{LATIN SMALL LETTER E}tc/hosts','w')\"",
+    "U2-non-ascii-named-escape-in-directory-name",
+    "python3 -c \"open('/\\N{SNOWMAN}tc/hosts','w')\"",
 )];
 
 /// (label, harmless command with BN inside a literal, decision at main 5bca9481).
@@ -274,7 +284,7 @@ fn control_plain_path_twins_are_deny_in_both_modes() {
 }
 
 #[test]
-fn named_escape_in_directory_name_is_ask_in_main_and_deny_in_subagent() {
+fn non_ascii_named_escape_in_directory_name_is_ask_in_main_and_deny_in_subagent() {
     let home = unique_home("und");
     let mut failures = Vec::new();
     for (label, command) in UNDETERMINED_DIR {

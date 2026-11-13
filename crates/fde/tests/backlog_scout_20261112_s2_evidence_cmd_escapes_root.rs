@@ -5,7 +5,7 @@
 //! ratification can write outside the target root (e.g. into `$HOME`).
 //!
 //! The CMD is a plain `touch <abs path>` (no shell operators). fde runs it
-//! with only cwd = target root (gate.rs:697, SKILL.md:109), nothing confines
+//! with only cwd = target root (evidence.rs `run_cmd`, the `/bin/sh -c CMD` exec site; SKILL.md:109), nothing confines
 //! the write. The fixture HOME is a temp dir outside the target root.
 
 mod common;
@@ -13,7 +13,6 @@ mod common;
 use common::{show, Engagement, TempPlace};
 
 #[test]
-#[ignore = "scout 2026-11-12 S2: RED, open defect. Remove the ignore when fixed"]
 fn evidence_red_cmd_must_not_write_outside_target_root() {
     let e = Engagement::ratified(&[("R1", "first")]);
     let home = TempPlace::new("fde-home-");

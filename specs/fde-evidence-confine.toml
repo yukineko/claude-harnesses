@@ -7,10 +7,10 @@ date = "2026-11-13"
 canon = []
 
 [spec.ratification]
-canon_commit = "a1fdc67427f1ce61f276af6888152c763e6b0656"
+canon_commit = "d270a134efdb3bfa1dc9e85d7dc9de5814de65ce"
 date = "2026-11-13"
-reason = "user ratified 2026-11-13: all open points decided by the human; cargo allow-set and nested sandbox measured on this host"
-fingerprint = "ec1e39b4ac73841c"
+reason = 'user re-ratified 2026-11-13 via esc-6dee8ed4, chosen verbatim: "R4: amend acceptance to mktemp -p "$TMPDIR" (re-ratify spec, test edited by a non-implementer)" (coordinator relay: "R4 を直す（推奨）"). R1 unchanged: /var/folders/<user>/T stays denied. Requirements already queued as backlog c96f571a, hence --no-queue.'
+fingerprint = "07bd0c2b3fd40188"
 
 [[requirement]]
 id = "R1"
@@ -66,12 +66,13 @@ id = "R4"
 statement = "Under the confinement, an evidence CMD can still write inside the target root and into the private TMPDIR that fde exports for it."
 acceptance = [
     "The control half of the S2 test passes: `touch <root>/control-marker` creates the file.",
-    'An evidence CMD `touch "$TMPDIR/x" && test -f "$TMPDIR/x"` exits 0, and so does `mktemp`.',
+    'An evidence CMD `touch "$TMPDIR/x" && test -f "$TMPDIR/x"` exits 0, and so does `mktemp -p "$TMPDIR"`. Bare `mktemp` (no template) is not required: on macOS it writes to _CS_DARWIN_USER_TEMP_DIR (/var/folders/<user>/T), which R1 denies (human ruling 2026-11-13, esc-6dee8ed4).',
     "Inside the CMD, $TMPDIR is a directory other than the parent process's $TMPDIR and exists while the CMD runs.",
 ]
 canon = [
     'crates/fde/tests/backlog_scout_20261112_s2_evidence_cmd_escapes_root.rs:21-35 ("control: CMD must have run (inside-root marker missing)")',
     "Request R4 (human ruling 2026-11-13)",
+    'Escalation esc-6dee8ed4 (human ruling 2026-11-13, chosen: "R4: amend acceptance to mktemp -p \"$TMPDIR\" (re-ratify spec, test edited by a non-implementer)")',
 ]
 falsifiable = true
 

@@ -76287,3 +76287,191 @@ rev = "c58f113491f293e984b91d830ed5d8f7600c38e3"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "5616e9e5"
+title = 'blastguard: python の os.chmod/os.rename の system パスを文字列 literal escape (\x2f, \057, \u002f, \N{SOLIDUS}) で綴ると allow になる fail-open を直す'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "System-harm fail-open, RED e3147b2c by a non-implementer (flow-8cca7ef5 orchestrator) at main 15b5c10e 2026-11-13: 12 of 12 (shape x mode) os.chmod/os.rename runs with an escape-spelled /etc/hosts were ALLOWED (main and subagent). Control control_plain_literal_twins_are_denied non-ignored. Found by the 47b20647 round-2 verifier; also Allow at the 47b20647 branch tip (that branch decodes escapes for open() only)."
+created_at = 1794575697
+updated_at = 1794605993
+weight = 0.0
+issue_number = 1722
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1722"
+issue_closed_at = 1794605995
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_python_escape_decoded_os_path_call -- --include-ignored escape_decoded_system_path_in_os_call_is_not_allowed"
+rev = "e3147b2c64941cbe980097c01c97e0bcc2990268"
+observed_at = 1794575697
+detail = """
+exit 101: ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.38s
+     Running tests/backlog_20261113_python_escape_decoded_os_path_call.rs (target/debug/deps/backlog_20261113_python_escape_decoded_os_path_call-955f4dd2468dee75)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_python_escape_decoded_os_path_call`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261113_python_escape_decoded_os_path_call"
+exit = 0
+passed = 2
+rev = "c1bf7560b9930a5caeb8129080eb1a4b38c7bc7c"
+observed_at = 1794605991
+output_digest = "sha256:1ebeadd063a40ec85d8a305b1dc22028f6895bcb0c7e665da2b62ba513b0a7b7"
+excerpt = """
+
+running 2 tests
+test control_plain_literal_twins_are_denied ... ok
+test escape_decoded_system_path_in_os_call_is_not_allowed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+   Compiling blastguard v0.2.551 (/Users/yuki/src/.harness-worktrees/session-7e01fcf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
+     Running tests/backlog_20261113_python_escape_decoded_os_path_call.rs (target/debug/deps/backlog_20261113_python_escape_decoded_os_path_call-79731ab90451d52a)
+"""
+
+[task.closure.red]
+rev = "15b5c10e9466d2bbe584eed619c19599ef5f1f2e"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "00569f7d"
+title = '''blastguard: printf escape expansion piped to a shell (printf 'chm\x6fd 777 /etc/hosts' | bash) runs a system-harm command but is Allow'''
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = '''Out-of-scope finding of the independent round-2 verifier of 040b959b; RED fab70306 (merged 10000bab) by the flow-8cca7ef5 orchestrator at main 5bca9481 2026-11-13: hex \x6f and octal \157 printf escapes piped to bash/sh are Allow in main and subagent (4 of 4). Literal printf 'chmod 777 /etc/hosts' | bash is denied (control). Pre-existing on main 706e25e1 (verifier).'''
+created_at = 1794571619
+updated_at = 1794606005
+weight = 0.0
+issue_number = 1720
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1720"
+issue_closed_at = 1794606009
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_printf_escape_and_procsub_to_shell printf_escape_expanded_program_piped_to_shell_is_denied -- --include-ignored"
+rev = "10000bab841024f8d1196fa7234a15c7a5abeb33"
+observed_at = 1794571619
+detail = """
+exit 101: ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.60s
+     Running tests/backlog_20261113_printf_escape_and_procsub_to_shell.rs (target/debug/deps/backlog_20261113_printf_escape_and_procsub_to_shell-fe796204173a33a6)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_printf_escape_and_procsub_to_shell`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261113_printf_escape_and_procsub_to_shell -- printf"
+exit = 0
+passed = 2
+rev = "c1bf7560b9930a5caeb8129080eb1a4b38c7bc7c"
+observed_at = 1794606003
+output_digest = "sha256:8a5cedae82761f8d4146029b1046fec004ecce996664d5254b0cfc14645e245c"
+excerpt = """
+
+running 2 tests
+test control_literal_printf_piped_to_shell_is_denied ... ok
+test printf_escape_expanded_program_piped_to_shell_is_denied ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.62s
+
+   Compiling blastguard v0.2.551 (/Users/yuki/src/.harness-worktrees/session-7e01fcf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.67s
+     Running tests/backlog_20261113_printf_escape_and_procsub_to_shell.rs (target/debug/deps/backlog_20261113_printf_escape_and_procsub_to_shell-aa49519a85728ea8)
+"""
+
+[task.closure.red]
+rev = "d84e8cabf73641b33c80d56c498f4abf4592c27b"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "6df87a5c"
+title = "blastguard: shell reading its program from a process substitution (bash < <(echo 'chmod 777 /etc/hosts')) runs a system-harm command but is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Out-of-scope finding of the independent round-2 verifier of 040b959b; RED fab70306 (merged 10000bab) by the flow-8cca7ef5 orchestrator at main 5bca9481 2026-11-13: bash < <(echo ...) and sh < <(printf ...) are Allow in main and subagent (4 of 4), no escape involved. Pre-existing on main 706e25e1 (verifier)."
+created_at = 1794571632
+updated_at = 1794606011
+weight = 0.0
+issue_number = 1721
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1721"
+issue_closed_at = 1794606014
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_printf_escape_and_procsub_to_shell shell_program_from_process_substitution_is_denied -- --include-ignored"
+rev = "10000bab841024f8d1196fa7234a15c7a5abeb33"
+observed_at = 1794571632
+detail = """
+exit 101: ignored; 0 measured; 2 filtered out; finished in 0.47s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_printf_escape_and_procsub_to_shell.rs (target/debug/deps/backlog_20261113_printf_escape_and_procsub_to_shell-fe796204173a33a6)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_printf_escape_and_procsub_to_shell`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261113_printf_escape_and_procsub_to_shell -- process_substitution"
+exit = 0
+passed = 1
+rev = "c1bf7560b9930a5caeb8129080eb1a4b38c7bc7c"
+observed_at = 1794606010
+output_digest = "sha256:a1af7f5bafba68f7109e2c5a058ea3f1af053b43c0552cf7757655c11aee518e"
+excerpt = """
+
+running 1 test
+test shell_program_from_process_substitution_is_denied ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.57s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261113_printf_escape_and_procsub_to_shell.rs (target/debug/deps/backlog_20261113_printf_escape_and_procsub_to_shell-aa49519a85728ea8)
+"""
+
+[task.closure.red]
+rev = "0e726e66c1ecf49699d7de56099beb420196e3b8"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

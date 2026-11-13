@@ -1654,3 +1654,62 @@ exit 101: orktrees/bg-red-pipe-reader-and-py-argv/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
      Running tests/backlog_20261114_printf_file_as_python_data_arg_fp.rs (target/debug/deps/backlog_20261114_printf_file_as_python_data_arg_fp-232693ec2b1af97c)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_printf_file_as_python_data_arg_fp`"""
+
+[[task]]
+id = "de914866"
+title = "blastguard: system-harm program piped to a shell with value-taking flags or -s args (echo 'chmod 777 /etc/hosts' | bash -o pipefail) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 by t2 implementer on builds 0e726e66 and aa47d220; re-observed on 0.2.540 worktree build: allow/allow (main/subagent) for: echo 'chmod 777 /etc/hosts' | bash -o pipefail ; | bash -s a b ; | bash -O extglob ; | bash --rcfile f ; | sh -s a b ; | sh -o pipefail. Deny/deny: | bash, | bash -e, | bash -s. Suspected (unverified) cause: detect/payload.rs stage_has_program_operand treats a flag value or -s positionals as a script file. RED commit 0ab93794 on branch test/bg-red-pipe-reader-and-py-argv (ignored RED + non-ignored control)."
+created_at = 1794604275
+updated_at = 1794604275
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_shell_with_value_flags_or_s_args -- --include-ignored"
+rev = "0ab93794b711e8c74d0dfaed9183824ac6493d90"
+observed_at = 1794604275
+detail = """
+exit 101: eader-and-py-argv/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.50s
+     Running tests/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args.rs (target/debug/deps/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args-74dc82015cfb998f)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_shell_with_value_flags_or_s_args`"""
+
+[[task]]
+id = "32b414d2"
+title = "blastguard: zsh -c / bash -c with literal program containing 'echo - foo' is refused as a stdin program"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 (subagent refusal: program is taken from stdin and is not on the command line); reproduced on 0.2.540 worktree build: ask/deny (main/subagent) for zsh -c 'echo - foo', bash -c 'echo - foo', and the longer multi-echo shapes. Allow for zsh -c 'echo hi', 'echo -- x', 'echo -nE a', 'echo -x y'; zsh -c 'chmod 777 /etc/hosts' is Deny. Trigger is the lone dash operand. RED commit 0ab93794 on branch test/bg-red-pipe-reader-and-py-argv."
+created_at = 1794604359
+updated_at = 1794604359
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_zsh_c_literal_echo_dash_fp -- --include-ignored"
+rev = "0ab93794b711e8c74d0dfaed9183824ac6493d90"
+observed_at = 1794604359
+detail = """
+exit 101: s/yuki/src/.harness-worktrees/bg-red-pipe-reader-and-py-argv/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.52s
+     Running tests/backlog_20261114_zsh_c_literal_echo_dash_fp.rs (target/debug/deps/backlog_20261114_zsh_c_literal_echo_dash_fp-5e83884faa4461ec)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_zsh_c_literal_echo_dash_fp`"""

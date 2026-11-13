@@ -638,3 +638,13 @@ reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（20
 path = "crates/blastguard/tests/backlog_20261114_printf_file_as_python_data_arg_fp.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14、printf で書いたファイルを python の data 引数に渡す形。修正は未実装）': a printf-with-format-reuse file passed as argv to a python script is Ask (subagent Deny) as if it were the program; RED test plus file-is-the-program controls."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-14、value-taking flag / -s 引数付き shell への pipe。修正は未実装）': a system-path chmod program piped to bash -o pipefail / bash -s a b / bash -O extglob / bash --rcfile f / sh -s a b / sh -o pipefail is Allow in main and subagent mode; RED test plus bare / -e / -s Deny controls."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_zsh_c_literal_echo_dash_fp.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14、shell -c の literal program 内の echo - foo。修正は未実装）': zsh/bash -c with a literal program containing a lone-dash echo operand is refused as a stdin program; RED test plus harmless-variant Allow and harmful -c Deny controls."

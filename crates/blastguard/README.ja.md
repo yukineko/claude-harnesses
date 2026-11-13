@@ -688,6 +688,11 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   literal 名の `getattr`/`methodcaller` 等）は receiver が解決できればその path で判定し、
 >   できなければ ask（`str.replace`・`'a'.replace`・`webbrowser.open` は対象外で allow のまま。
 >   receiver が解決できない `args.replace` のような同名の属性読み出しは ask になる）。
+>   0.2.544 以降（backlog 67219006）、解決した書き込み先が shell の redirect 規則で特定できない
+>   もの（payload に `cwd` が無いときの相対 path、`$`・backtick を含む path）は deny ではなく
+>   保留 ask（人間が答えられない場では deny）: `python3 -c "open('a/b','w')"`（cwd 無し）は
+>   ask。system directory・保護 path への書き込みと、同じ program の他の deny は従来どおり
+>   deny が優先する。shell の `echo x > a/b`（cwd 無し）は deny のまま。
 >   束縛を「呼び出し時に判定する別名」として扱うのは module 直下（行頭 column 0）の単純代入で、
 >   名前が直接呼び出し以外に現れないときだけ。class 属性（`class C:` 本体の
 >   `w = Path('/etc/hosts').write_text` → `C.w('x')`）・`self.w =`・subscript・連鎖/tuple/

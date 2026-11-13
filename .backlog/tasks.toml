@@ -1745,6 +1745,8 @@ notes = "System-harm fail-open, RED fe5be3de by a non-implementer (flow-8cca7ef5
 created_at = 1794597834
 updated_at = 1794597834
 weight = 0.0
+issue_number = 1729
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1729"
 rev = 0
 
 [task.repro]

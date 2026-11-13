@@ -616,6 +616,11 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   空白に潰れ、`python3 -c "import os # x<改行>os.chmod('/etc/…',0)"` の `#` コメントが
 >   次行の呼び出しを飲み込んで allow になっていた。原文が読めず、かつ語が複数トークンに
 >   またがる（＝区切りが失われた）ときは allow せず ask に倒す（`word_separators_lost`）。
+>   0.2.491 以降（backlog 6cac93af 第 4 ラウンド）、その語の quote 除去は POSIX の行継続に従う
+>   （`src/detect/words.rs` の `first_shell_word`）。unquoted か double quote 内の
+>   バックスラッシュ＋改行は取り除き（`python3 -c "o\<改行>pen('/etc/hosts','a')"` は python が
+>   受け取る `open('/etc/hosts','a')` として判定する）、single quote 内（`$'…'` 内も）では
+>   そのまま残す。バックスラッシュの付かない本物の改行は繋がない。
 >   `env -S` の引数はこの変更の対象外で、従来どおり空白 1 個で繋ぎ直す（未検証）。
 >   0.2.483 以降（backlog 6cac93af）、プログラムが**書き込むか**（パスリテラルへの
 >   回復可能性／システムディレクトリ判定を起動するか）は、`'w'` 系の綴りの列挙ではなく、

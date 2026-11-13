@@ -56,7 +56,6 @@ fn sq(body: &str) -> String {
 }
 
 #[test]
-#[ignore = "RED: backslash-newline inside a double-quoted python3 -c word splits the identifier (o\\<NL>pen / os.ch\\<NL>mod) and is Allow; fix pending (6cac93af round 4)"]
 fn double_quoted_line_continuation_in_identifier_is_not_allow() {
     let h = home();
     let mut shapes: Vec<String> = Vec::new();

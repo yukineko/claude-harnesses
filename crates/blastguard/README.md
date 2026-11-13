@@ -58,7 +58,12 @@ and runs of blanks kept (`faithful_tail` in `src/detect/payload.rs`) — not the
 whitespace-split tokens re-joined by one space, which let a `#` comment swallow
 the call on the next line (`python3 -c "import os # x<NL>os.chmod(…)"` was
 allowed). A re-join that cannot be checked against the source and has lost a
-word's separators is an ask, never an allow. A program that demonstrably deletes something, or whose
+word's separators is an ask, never an allow. Since 0.2.491 the word is
+dequoted with POSIX line continuation (`first_shell_word` in
+`src/detect/words.rs`): a backslash-newline is removed when unquoted or inside
+double quotes — `python3 -c "o\<NL>pen('/etc/hosts','a')"` is judged as the
+`open('/etc/hosts','a')` python receives — and kept literally inside single
+quotes (and `$'…'`); a real newline is never joined. A program that demonstrably deletes something, or whose
 embedded shell line is destructive, is a deny; one that names a protected
 gate/config path is an ask; a benign program such as `python3 -c "print(1)"`
 is allowed (0.2.59). Since 0.2.483 (backlog 6cac93af) whether a program

@@ -14,6 +14,14 @@ pub(super) fn basename(tok: &str) -> &str {
 /// also what makes a `-c` operand recoverable as a single word regardless of
 /// what follows it on the line.
 ///
+/// LINE CONTINUATION (backlog 6cac93af round 4): a backslash followed by a
+/// newline is REMOVED when unquoted or inside double quotes, as POSIX sh does,
+/// so `python3 -c "o\<NL>pen('/etc/hosts','a')"` yields the program text
+/// `open('/etc/hosts','a')` that python actually receives. Inside single
+/// quotes (and so inside `$'…'`, read here as `$` + a single-quoted run) the
+/// pair is kept literally. A real newline is never touched: only the
+/// backslash-newline pair joins.
+///
 /// Deliberately NOT a full shell lexer: no expansion of `$VAR`, `${…}`,
 /// `$(…)`/backticks, `~`, globs or history. See `normalized_command` for the
 /// list of forms that remain out of reach and why.
@@ -46,6 +54,10 @@ pub(super) fn first_shell_word(s: &str) -> Option<String> {
                     if d == '\\' {
                         match chars.next() {
                             Some(e @ ('"' | '\\' | '$' | '`')) => out.push(e),
+                            // POSIX line continuation: `\<newline>` inside
+                            // double quotes is removed (`"o\<NL>pen"` is
+                            // `open` to the program).
+                            Some('\n') => {}
                             Some(e) => {
                                 out.push('\\');
                                 out.push(e);
@@ -62,6 +74,9 @@ pub(super) fn first_shell_word(s: &str) -> Option<String> {
                 // alias-bypass idiom); a trailing lone `\` is kept literal.
                 saw_word = true;
                 match chars.next() {
+                    // POSIX line continuation: an unquoted `\<newline>` is
+                    // removed and the word continues on the next line.
+                    Some('\n') => {}
                     Some(d) => out.push(d),
                     None => out.push('\\'),
                 }

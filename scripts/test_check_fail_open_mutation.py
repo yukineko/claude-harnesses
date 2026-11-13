@@ -157,7 +157,7 @@ class RevertMutation(unittest.TestCase):
             old_repo, old_run_tests = cfom.REPO, cfom.run_crate_tests
             cfom.REPO = repo
 
-            def boom(crate, timeout=600):
+            def boom(crate, timeout=600, test_args=None):
                 raise RuntimeError("simulated failure between apply and revert")
 
             cfom.run_crate_tests = boom
@@ -239,7 +239,7 @@ class EvaluateScenarioOutcomes(unittest.TestCase):
             )
             old_repo, old_run_tests = cfom.REPO, cfom.run_crate_tests
             cfom.REPO = repo
-            cfom.run_crate_tests = lambda crate, timeout=600: (rc, tail)
+            cfom.run_crate_tests = lambda crate, timeout=600, test_args=None: (rc, tail)
             try:
                 result = cfom.evaluate_scenario(scenario, timeout=5)
             finally:
@@ -274,7 +274,7 @@ class EvaluateScenarioOutcomes(unittest.TestCase):
             )
             old_repo, old_run_tests = cfom.REPO, cfom.run_crate_tests
             cfom.REPO = repo
-            cfom.run_crate_tests = lambda crate, timeout=600: (None, "timed out")
+            cfom.run_crate_tests = lambda crate, timeout=600, test_args=None: (None, "timed out")
             try:
                 result = cfom.evaluate_scenario(scenario, timeout=5)
             finally:

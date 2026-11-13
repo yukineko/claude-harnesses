@@ -121,14 +121,22 @@ impl Fixture {
     }
 
     fn cmd(&self) -> String {
+        self.cmd_for(&self.wt)
+    }
+
+    fn cmd_for(&self, op: &Path) -> String {
         format!(
             "git -C {} worktree remove --force {}",
             self.repo.display(),
-            self.wt.display()
+            op.display()
         )
     }
 
     fn decision(&self, role: Role) -> String {
+        self.decision_for(role, &self.wt)
+    }
+
+    fn decision_for(&self, role: Role, op: &Path) -> String {
         let case = format!("c{}", SEQ.fetch_add(1, Ordering::Relaxed));
         let session = format!("bg-wtrm-{}-{case}-{}", self.tag, std::process::id());
         let home = self.base.join("homes").join(&case);
@@ -138,7 +146,7 @@ impl Fixture {
             "hook_event_name": "PreToolUse",
             "cwd": self.repo.display().to_string(),
             "tool_name": "Bash",
-            "tool_input": { "command": self.cmd() },
+            "tool_input": { "command": self.cmd_for(op) },
         });
         if role == Role::Sub {
             v["agent_id"] = serde_json::json!("agent-wtrm");
@@ -204,6 +212,39 @@ fn t1_clean_worktree_with_only_ignored_build_output_is_allow() {
     f.assert_decision_all_roles(true);
 }
 
+/// RED (2026-11-14, flow-8cca7ef5 orchestrator — not an implementer), user
+/// ruling 2026-11-14 「gateもconduktも絶対に勝手に他のworktreeを参照してはならない」
+/// (an operation explicitly aimed at a named worktree is exempt): the content
+/// check may inspect ONLY the worktree named in the remove command. When the
+/// operand is not itself a worktree root (here: the ignored `target/` build
+/// dir inside the MAIN worktree), git resolves the enclosing repository, so
+/// the check reads the main worktree's state — and at main c4336b61 it then
+/// answers Allow from that foreign state. Expected: not Allow (main and
+/// subagent), decided without consulting any worktree other than the operand.
+/// DOES NOT PROVE: that no git subprocess touched the enclosing repo (only the
+/// verdict is observed).
+#[test]
+fn t2_operand_inside_main_worktree_is_not_judged_by_main_state() {
+    let f = Fixture::new("t2");
+    let d = f.repo.join("target/debug");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("x"), "bin\n").unwrap();
+    let op = f.repo.join("target");
+    let mut bad = Vec::new();
+    for role in [Role::Main, Role::Sub] {
+        let got = f.decision_for(role, &op);
+        if got == "allow" {
+            bad.push(format!("[{}] -> {got}", role.name()));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "`{}` (want not-allow): {}",
+        f.cmd_for(&op),
+        bad.join("; ")
+    );
+}
+
 #[test]
 fn c0_clean_worktree_without_build_output_is_allow() {
     let f = Fixture::new("c0");
@@ -232,4 +273,63 @@ fn cc_ignored_env_file_stays_not_allow() {
     f.add_build_output();
     std::fs::write(f.wt.join(".env"), "SECRET=1\n").unwrap();
     f.assert_decision_all_roles(false);
+}
+
+/// RED (2026-11-14, flow-8cca7ef5 orchestrator — not an implementer), found by
+/// the b997a3d5 check-D probe: a linked worktree nested inside the named
+/// worktree's ignored `target/` dir, holding uncommitted work. git reports
+/// the whole `target/` as ignored, so the build-output exemption answered
+/// Allow — and the forced remove of the named worktree was then observed
+/// (relay run in the main session, 2026-11-14) to delete the nested worktree
+/// together with its uncommitted file (`ls .../target/inner: No such file or
+/// directory`; `git worktree list` then marks it `prunable`). The nested
+/// worktree lies INSIDE the named directory, so inspecting it stays within the
+/// user ruling 「gateもconduktも絶対に勝手に他のworktreeを参照してはならない」.
+/// Expected: not Allow (main and subagent).
+/// DOES NOT PROVE: how the nested worktree is detected (a `.git` entry, a
+/// nested repo of any kind, or the uncommitted file itself).
+#[test]
+fn t3_nested_worktree_inside_ignored_build_dir_is_not_allow() {
+    let f = Fixture::new("t3");
+    f.add_build_output();
+    let inner = f.wt.join("target/inner");
+    git(
+        &f.repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "inner",
+            inner.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(inner.join("uncommitted.txt"), "work\n").unwrap();
+    f.assert_decision_all_roles(false);
+}
+
+/// Pin of an assumption the nested-`.git` walk relies on (it never follows
+/// symlinks): observed 2026-11-14 via relay, `git version 2.50.1 (Apple
+/// Git-155)`, a forced `git worktree remove` of a worktree whose `target/link`
+/// symlinks to an outside directory left `outside/precious.txt` intact. This
+/// test runs git itself and asserts the outside file survives and the worktree
+/// directory is gone.
+/// DOES NOT PROVE: other git versions or platforms behave the same.
+#[test]
+fn g1_git_forced_remove_does_not_follow_symlink_out_of_worktree() {
+    let f = Fixture::new("g1");
+    f.add_build_output();
+    let outside = f.base.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("precious.txt"), "keep\n").unwrap();
+    std::os::unix::fs::symlink(&outside, f.wt.join("target/link")).unwrap();
+    git(
+        &f.repo,
+        &["worktree", "remove", "--force", f.wt.to_str().unwrap()],
+    );
+    assert!(
+        outside.join("precious.txt").exists(),
+        "git followed the symlink and deleted the outside file"
+    );
+    assert!(!f.wt.exists(), "worktree dir must be gone");
 }

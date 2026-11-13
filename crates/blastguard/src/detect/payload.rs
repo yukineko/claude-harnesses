@@ -1,3 +1,4 @@
+use super::printf_eval::{evaluate_printf_stage, PrintfStage};
 use super::{
     backtick_body_as_run, command_candidates, first_line_quoted_here_document_body,
     first_shell_word, here_document_delimiter_is_quoted, here_string_spans,
@@ -48,6 +49,24 @@ pub(super) fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<
     let echoed = super::echo_script_file::echoed_script_verdict(cmd, depth, ctx);
     if let Some(deny) = acc.record(echoed) {
         return deny;
+    }
+    // A process substitution a shell/interpreter reads as its PROGRAM
+    // (`bash < <(echo 'rm -rf ~')`, `sh <(printf …) arg`, `source <(…)`,
+    // `bash <&3 3< <(…)`): the inner command's output is the program, exactly
+    // as when it is piped in. Judged as that pipeline; see `procsub_programs`.
+    // Read on `procsub_stages`, which keeps `<&3` / `2>&1` inside the stage.
+    for stage in procsub_stages(cmd) {
+        let procsubs = procsub_programs(&stage);
+        for synthetic in &procsubs.pipelines {
+            if let Some(deny) = acc.record(analyze_interpreter_stdin_exec(synthetic, depth, ctx)) {
+                return deny;
+            }
+        }
+        for why in procsubs.undetermined {
+            if let Some(deny) = acc.record(Decision::ask(why)) {
+                return deny;
+            }
+        }
     }
     for statement in split_statements_into_pipe_stages(cmd) {
         for (i, stage) in statement.iter().enumerate() {
@@ -218,6 +237,15 @@ blastguard cannot tell whether anything here is irreversible"
                         return deny;
                     }
                 }
+                if let PrintfStage::Undetermined(why) = evaluate_printf_stage(&statement[i - 1]) {
+                    if let Some(deny) = acc.record(Decision::ask(format!(
+                        "{shape}, and the printf stage piping into it (`{}`) cannot be \
+evaluated statically ({why}) — its output is the program, so blastguard cannot read it",
+                        statement[i - 1].trim()
+                    ))) {
+                        return deny;
+                    }
+                }
                 // The quoted literals are the WHOLE program only when the
                 // upstream stage emits nothing but its own arguments (`echo`,
                 // `printf`). Any other upstream — `grep -E "a" f`, `jq -r . f`,
@@ -241,6 +269,703 @@ the command line, so blastguard cannot read the program",
         }
     }
     acc.finish()
+}
+
+/// `cmd` split into simple command stages at `;`, newlines, `|`, `|&`, `||`,
+/// `&&` and a background `&` outside quotes and parentheses — but NOT at the
+/// `&` of a redirection (`<&3`, `2>&1`, `&>f`), which belongs to its stage
+/// (`split_statements_into_pipe_stages` splits there, which cut
+/// `bash <&3 3< <(…)` into `bash <` and `3 3< <(…)`).
+fn procsub_stages(cmd: &str) -> Vec<String> {
+    let chars: Vec<char> = cmd.chars().collect();
+    let mut stages = Vec::new();
+    let mut cur = String::new();
+    let (mut in_s, mut in_d) = (false, false);
+    let mut depth: u32 = 0;
+    let mut k = 0;
+    while k < chars.len() {
+        let c = chars[k];
+        if c == '\\' && !in_s {
+            cur.push(c);
+            if let Some(&n) = chars.get(k + 1) {
+                cur.push(n);
+            }
+            k += 2;
+            continue;
+        }
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+        } else if c == '"' && !in_s {
+            in_d = !in_d;
+        } else if !in_s && !in_d {
+            match c {
+                '(' => depth += 1,
+                ')' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            let redirect_amp = c == '&'
+                && (matches!(k.checked_sub(1).map(|p| chars[p]), Some('<' | '>'))
+                    || chars.get(k + 1) == Some(&'>'));
+            if depth == 0 && matches!(c, ';' | '\n' | '|' | '&') && !redirect_amp {
+                stages.push(std::mem::take(&mut cur));
+                k += 1;
+                continue;
+            }
+        }
+        cur.push(c);
+        k += 1;
+    }
+    stages.push(cur);
+    stages.retain(|s| !s.trim().is_empty());
+    stages
+}
+
+/// What the process substitutions of one stage hand its reader as a PROGRAM.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ProcsubPrograms {
+    /// `UPSTREAM | READER` pipelines, one per reading of a substitution that is
+    /// (or may be) the program, each judged by [`analyze_interpreter_stdin_exec`].
+    pipelines: Vec<String>,
+    /// Why a substitution may be the program and blastguard cannot tell which
+    /// one or cannot read it: each is an Ask.
+    undetermined: Vec<String>,
+}
+
+/// How a reader's arguments decide where its program comes from.
+#[derive(Debug, PartialEq, Eq)]
+enum ProgramSource {
+    /// The operand at this word index is the script file.
+    File(usize),
+    /// No script operand: the program is read from stdin.
+    Stdin,
+    /// The program is an inline string (`-c`, `-e`, `-m` …): neither an
+    /// operand nor stdin is the program.
+    Inline,
+    /// An option whose shape is not modelled precedes the operands, so which
+    /// operand (if any) is the script cannot be proved.
+    Undetermined(String),
+}
+
+/// The process substitutions of `stage` that its reader — a shell, a code
+/// interpreter, or `source` / `.` (which run the file's text in the current
+/// shell; judged as `sh`) — runs as its PROGRAM, as `UPSTREAM | READER`
+/// pipelines the pipe rule judges (see [`procsub_inner_pipelines`]):
+///
+/// * the SCRIPT operand (`bash <(…) a b`, `bash -o pipefail -x <(…)`,
+///   `source <(…) arg`): what follows it are `$1`…, which do not change which
+///   program runs, so the pipeline is `UPSTREAM | READER` with no arguments;
+/// * STDIN when the reader has no script operand (`bash < <(…)`,
+///   `bash 0< <(…)`, `bash -s a b < <(…)`), including an fd the substitution is
+///   opened on and stdin is duplicated from (`bash <&3 3< <(…)`, in either
+///   order — the order-insensitive reading is the restrictive one);
+/// * a shell's `--rcfile` / `--init-file` value (`bash --rcfile <(…) -i`,
+///   `bash --init-file=<(…)`), the startup file an interactive bash sources,
+///   judged whether or not `-i` is given ([`shell_startup_file_values`]),
+///   in addition to the main program.
+///
+/// Apart from that startup file, nothing when the reader runs an inline program (`bash -c 'x' <(…)`,
+/// `python3 -c …`, `perl -ne …`) or a script file that is not a substitution
+/// (`bash script.sh <(…)`, `bash script.sh < <(…)`): those keep their
+/// verdicts, as does every stage whose command is not such a reader
+/// (`diff <(ls a) <(ls b)`, `cat <(echo hi)`). An option shape that is not
+/// modelled before the operands (`bash --frobnicate <(…)`, `node -r m <(…)`)
+/// means the script operand cannot be proved: every substitution that may be
+/// the program is judged as one AND the stage is an Ask (never an Allow).
+///
+/// Every pipeline holds only the TEXT of a substitution (one nesting level
+/// down), so the recursion through [`analyze_interpreter_stdin_exec`] ends.
+fn procsub_programs(stage: &str) -> ProcsubPrograms {
+    let mut out = ProcsubPrograms::default();
+    let words = super::quote_aware_words(stage);
+    if !words.iter().any(|w| w.contains("<(")) {
+        return out;
+    }
+    let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+    let Some(r) = wrapped_command_heads(&refs).into_iter().find(|&idx| {
+        let head = normalized_command(refs[idx]);
+        is_shell(&head) || is_code_interpreter(&head) || head == "source" || head == "."
+    }) else {
+        return out;
+    };
+    let head = normalized_command(refs[r]);
+    let reader = if head == "source" || head == "." {
+        "sh"
+    } else {
+        refs[r]
+    };
+    // Split the arguments into argv words and input redirections.
+    let mut argv: Vec<usize> = Vec::new();
+    let mut fd_procsub: Vec<(u32, usize)> = Vec::new();
+    let mut dup_into_stdin: Vec<u32> = Vec::new();
+    let mut j = r + 1;
+    while j < refs.len() {
+        let w = refs[j];
+        let Some((fd, op, glued)) = parse_redirect(w) else {
+            argv.push(j);
+            j += 1;
+            continue;
+        };
+        let target_idx = if glued.is_empty() {
+            j += 1;
+            Some(j).filter(|&t| t < refs.len())
+        } else {
+            None
+        };
+        let target = target_idx.map_or(glued, |t| refs[t]);
+        match op {
+            "<" | "<>" => {
+                if let Some(t) = target_idx.filter(|&t| procsub_body(refs[t]).is_some()) {
+                    fd_procsub.push((fd.unwrap_or(0), t));
+                }
+            }
+            "<&" | ">&" if fd.unwrap_or(if op == "<&" { 0 } else { 1 }) == 0 => {
+                if let Ok(n) = target.parse::<u32>() {
+                    dup_into_stdin.push(n);
+                }
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    let stdin_procsubs: Vec<usize> = fd_procsub
+        .iter()
+        .filter(|(fd, _)| *fd == 0 || dup_into_stdin.contains(fd))
+        .map(|&(_, idx)| idx)
+        .collect();
+    let operand_procsubs: Vec<usize> = argv
+        .iter()
+        .copied()
+        .filter(|&idx| procsub_body(refs[idx]).is_some())
+        .collect();
+    let operands: Vec<&str> = argv.iter().map(|&idx| refs[idx]).collect();
+    let source = if head == "source" || head == "." {
+        source_program_source(&operands)
+    } else if is_shell(&head) {
+        shell_program_source(&operands)
+    } else if is_python_head(&head) {
+        python_program_source(&operands)
+    } else {
+        interpreter_program_source(&operands)
+    };
+    let programs: Vec<usize> = match source {
+        ProgramSource::File(k) => {
+            let idx = argv[k];
+            if procsub_body(refs[idx]).is_some() {
+                vec![idx]
+            } else {
+                Vec::new()
+            }
+        }
+        ProgramSource::Stdin => stdin_procsubs,
+        ProgramSource::Inline => Vec::new(),
+        ProgramSource::Undetermined(why) => {
+            let mut all = operand_procsubs;
+            all.extend(stdin_procsubs);
+            if !all.is_empty() {
+                out.undetermined.push(format!(
+                    "`{}` reads a process substitution, and {why} — blastguard cannot prove which \
+operand or input is the program `{reader}` runs, so it cannot tell whether the substitution's \
+output is that program",
+                    stage.trim()
+                ));
+            }
+            all
+        }
+    };
+    let mut inners: Vec<&str> = programs
+        .iter()
+        .filter_map(|&idx| procsub_body(refs[idx]))
+        .collect();
+    // A shell's `--rcfile` / `--init-file` value is a program too.
+    if is_shell(&head) {
+        inners.extend(
+            shell_startup_file_values(&operands)
+                .into_iter()
+                .filter_map(procsub_body),
+        );
+    }
+    for inner in inners {
+        let (pipelines, undetermined) = procsub_inner_pipelines(inner, reader);
+        out.pipelines.extend(pipelines);
+        out.undetermined.extend(undetermined);
+    }
+    out
+}
+
+/// The command text of a process substitution word `<(…)`, `None` for any
+/// other word (a quoted `'<(x)'` is not one; neither is `<(x)y`).
+fn procsub_body(word: &str) -> Option<&str> {
+    let rest = word.strip_prefix("<(")?;
+    let chars: Vec<char> = word.chars().collect();
+    let end = scan_balanced(&chars, 2, Stop::Paren, 0)?;
+    if end + 1 != chars.len() {
+        return None;
+    }
+    Some(rest.strip_suffix(')').unwrap_or(rest).trim())
+}
+
+/// A redirection word as `(fd, operator, glued target)`: `3<` is
+/// `(Some(3), "<", "")`, `<&3` is `(None, "<&", "3")`, `2>/dev/null` is
+/// `(Some(2), ">", "/dev/null")`. `None` for a word that is not a redirection,
+/// including a process substitution `<(…)` / `>(…)` (an operand).
+fn parse_redirect(word: &str) -> Option<(Option<u32>, &str, &str)> {
+    if word.starts_with("<(") || word.starts_with(">(") {
+        return None;
+    }
+    let digits = word.len() - word.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    let fd = word[..digits].parse::<u32>().ok();
+    let rest = &word[digits..];
+    const OPS: [&str; 12] = [
+        "&>>", "<<<", "<<-", "&>", "<<", "<>", "<&", ">>", ">&", ">|", "<", ">",
+    ];
+    let op = OPS.iter().find(|op| rest.starts_with(**op))?;
+    if fd.is_some() && op.starts_with('&') {
+        return None;
+    }
+    Some((fd, op, &rest[op.len()..]))
+}
+
+/// Where a shell (`bash`, `sh`, `zsh` …) takes its program from, given its
+/// argv words after the command. Options end at `--`, `-`, or the first word
+/// that is not an option; `-o` / `-O` (and `+o` / `+O`) take the next word,
+/// `--rcfile` / `--init-file` too (or a glued `=VALUE`); `-c` makes the
+/// program inline and `-s` makes it stdin. An option letter cluster with
+/// `o`/`O` not at its end, or a long option not listed here, is Undetermined.
+///
+/// This decides only the MAIN program. The `--rcfile` / `--init-file` value is
+/// a second program the shell runs (an interactive bash sources it); it is
+/// judged separately, see [`shell_startup_file_values`].
+fn shell_program_source(argv: &[&str]) -> ProgramSource {
+    const LONG_FLAGS: [&str; 15] = [
+        "--debug",
+        "--debugger",
+        "--dump-po-strings",
+        "--dump-strings",
+        "--help",
+        "--login",
+        "--noediting",
+        "--noprofile",
+        "--norc",
+        "--posix",
+        "--pretty-print",
+        "--restricted",
+        "--verbose",
+        "--version",
+        "--wordexp",
+    ];
+    const LONG_VALUE: [&str; 2] = ["--rcfile", "--init-file"];
+    let mut stdin_mode = false;
+    let mut k = 0;
+    while k < argv.len() {
+        let w = argv[k];
+        if w == "--" || w == "-" {
+            k += 1;
+            break;
+        }
+        if w.starts_with("--") {
+            if LONG_FLAGS.contains(&w)
+                || LONG_VALUE
+                    .iter()
+                    .any(|o| w.strip_prefix(o).is_some_and(|r| r.starts_with('=')))
+            {
+                k += 1;
+            } else if LONG_VALUE.contains(&w) {
+                k += 2;
+            } else {
+                return ProgramSource::Undetermined(format!(
+                    "the shell option `{w}` is not one blastguard models"
+                ));
+            }
+            continue;
+        }
+        let Some(letters) = w.strip_prefix('-').or_else(|| w.strip_prefix('+')) else {
+            break;
+        };
+        if letters.is_empty() || !letters.chars().all(|c| c.is_ascii_alphabetic()) {
+            return ProgramSource::Undetermined(format!(
+                "the shell option `{w}` is not one blastguard models"
+            ));
+        }
+        if let Some(p) = letters.find(['o', 'O']) {
+            if p + 1 != letters.len() {
+                return ProgramSource::Undetermined(format!(
+                    "the shell option cluster `{w}` takes a value in the middle"
+                ));
+            }
+        }
+        if letters.contains('c') {
+            return ProgramSource::Inline;
+        }
+        if letters.contains('s') {
+            stdin_mode = true;
+        }
+        k += if letters.ends_with(['o', 'O']) { 2 } else { 1 };
+    }
+    if stdin_mode || k >= argv.len() {
+        ProgramSource::Stdin
+    } else {
+        ProgramSource::File(k)
+    }
+}
+
+/// The values of every `--rcfile` / `--init-file` option among a shell's argv
+/// words (`--rcfile FILE`, `--rcfile=FILE`): the startup file an interactive
+/// bash sources, i.e. a program it runs. Every word is scanned, wherever it
+/// sits and whether or not `-i` is given (a word after the script operand is
+/// an argument, not an option; reading it as one is the restrictive side).
+fn shell_startup_file_values<'a>(argv: &[&'a str]) -> Vec<&'a str> {
+    const OPTS: [&str; 2] = ["--rcfile", "--init-file"];
+    let mut out = Vec::new();
+    for (k, w) in argv.iter().enumerate() {
+        for opt in OPTS {
+            if *w == opt {
+                if let Some(v) = argv.get(k + 1) {
+                    out.push(*v);
+                }
+            } else if let Some(v) = w.strip_prefix(opt).and_then(|r| r.strip_prefix('=')) {
+                out.push(v);
+            }
+        }
+    }
+    out
+}
+
+/// `source FILE ARGS…` / `. FILE ARGS…`: the first word (after a `--`) is the
+/// file. Any option is Undetermined (bash 5.3 has `source -p PATH`).
+fn source_program_source(argv: &[&str]) -> ProgramSource {
+    match argv {
+        [] => ProgramSource::Inline,
+        ["--", ..] if argv.len() > 1 => ProgramSource::File(1),
+        ["--"] => ProgramSource::Inline,
+        [w, ..] if w.starts_with('-') => ProgramSource::Undetermined(format!(
+            "the `source` option `{w}` is not one blastguard models"
+        )),
+        _ => ProgramSource::File(0),
+    }
+}
+
+/// Where `python` / `python3` takes its program from: `-c` / `-m` inline,
+/// `-W` / `-X` take a value (glued or the next word), the other single-letter
+/// flags take none, `-` or no operand is stdin.
+fn python_program_source(argv: &[&str]) -> ProgramSource {
+    let mut k = 0;
+    while k < argv.len() {
+        let w = argv[k];
+        if w == "-" {
+            return ProgramSource::Stdin;
+        }
+        if w == "--" {
+            k += 1;
+            break;
+        }
+        let Some(letters) = w.strip_prefix('-') else {
+            break;
+        };
+        if letters.starts_with('-') || letters.is_empty() {
+            return ProgramSource::Undetermined(format!(
+                "the python option `{w}` is not one blastguard models"
+            ));
+        }
+        let mut step = 1;
+        for (pos, c) in letters.char_indices() {
+            match c {
+                'c' | 'm' => return ProgramSource::Inline,
+                'W' | 'X' => {
+                    if pos + 1 == letters.len() {
+                        step = 2;
+                    }
+                    break;
+                }
+                'b' | 'B' | 'd' | 'E' | 'h' | 'i' | 'I' | 'O' | 'P' | 'q' | 's' | 'S' | 'u'
+                | 'v' | 'V' | 'x' | 'R' => {}
+                _ => {
+                    return ProgramSource::Undetermined(format!(
+                        "the python option `{w}` is not one blastguard models"
+                    ))
+                }
+            }
+        }
+        k += step;
+    }
+    if argv.get(k).is_none_or(|w| *w == "-") {
+        ProgramSource::Stdin
+    } else {
+        ProgramSource::File(k)
+    }
+}
+
+/// Any other code interpreter (`perl`, `ruby`, `node`, `osascript` …): with no
+/// option the first operand is the script (none: stdin); an option cluster
+/// holding `e` / `E` (`-e`, `-ne`, `-E`, `--eval`) makes the program inline;
+/// any other option's value-taking is not modelled, so Undetermined.
+fn interpreter_program_source(argv: &[&str]) -> ProgramSource {
+    match argv.first() {
+        None => ProgramSource::Stdin,
+        Some(w) if *w == "-" => ProgramSource::Stdin,
+        Some(w) if w.starts_with('-') => {
+            let inline = argv.iter().take_while(|a| a.starts_with('-')).any(|a| {
+                *a == "--eval"
+                    || (!a.starts_with("--")
+                        && a[1..].chars().all(|c| c.is_ascii_alphabetic())
+                        && a.contains(['e', 'E']))
+            });
+            if inline {
+                ProgramSource::Inline
+            } else {
+                ProgramSource::Undetermined(format!(
+                    "the interpreter option `{w}` is not one blastguard models"
+                ))
+            }
+        }
+        Some(_) => ProgramSource::File(0),
+    }
+}
+
+/// The `UPSTREAM | READER` pipelines judging the output of process
+/// substitution text `inner` as `reader`'s program, plus the reasons it cannot
+/// be read (each an Ask).
+///
+/// * One simple command: `INNER | READER`, with a bare `echo` respelled by
+///   [`quote_bare_echo_words`].
+/// * A list of simple commands joined by `;`, `&&` or newlines
+///   (`echo hi; echo there`): each member piped on its own (so the pipe rule
+///   reads and judges each), AND their concatenated output — what the reader
+///   actually receives, where `printf 'chmod 777 '; echo /etc/hosts` is ONE
+///   command — as `printf '%s' 'TEXT' | READER`, once per combination of
+///   printf dialect readings, with each `'` of TEXT spelled `'"'"'` (close the
+///   single quote, a double-quoted `'`, reopen) so the printf operand's value
+///   is exactly TEXT and no backslash is needed outside quotes. When that
+///   output cannot be computed statically (a member that is not a plain
+///   `echo` / evaluable `printf`, too many readings) it is an Ask.
+/// * Anything else (a pipe, `||`, `&`, a subshell): `(INNER) | READER`, which
+///   is not a literal emitter, so the pipe rule asks (any literal inside is
+///   still judged).
+fn procsub_inner_pipelines(inner: &str, reader: &str) -> (Vec<String>, Vec<String>) {
+    if inner.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let Some(members) = simple_list_members(inner) else {
+        return (vec![format!("({inner}) | {reader}")], Vec::new());
+    };
+    if let [only] = members.as_slice() {
+        return (
+            vec![format!("{} | {reader}", quote_bare_echo_words(only))],
+            Vec::new(),
+        );
+    }
+    let mut pipelines: Vec<String> = members
+        .iter()
+        .map(|m| format!("{} | {reader}", quote_bare_echo_words(m)))
+        .collect();
+    let mut undetermined = Vec::new();
+    match concatenated_outputs(&members) {
+        Ok(texts) => {
+            for text in texts {
+                let quoted = text.replace('\'', "'\"'\"'");
+                let synthetic = format!("printf '%s' '{quoted}' | {reader}");
+                if !pipelines.contains(&synthetic) {
+                    pipelines.push(synthetic);
+                }
+            }
+        }
+        Err(why) => undetermined.push(format!(
+            "the process substitution `<({inner})` is the program `{reader}` runs, and the \
+combined output of its commands cannot be computed statically ({why}) — that output is the \
+program, so blastguard cannot read it"
+        )),
+    }
+    (pipelines, undetermined)
+}
+
+/// The members of `inner` when it is a list of commands joined only by `;`,
+/// `&&` or newlines outside quotes, each without a pipe, `||`, `&` or a
+/// parenthesis (`None` otherwise). Empty members are dropped.
+fn simple_list_members(inner: &str) -> Option<Vec<String>> {
+    let chars: Vec<char> = inner.chars().collect();
+    let mut members = Vec::new();
+    let mut cur = String::new();
+    let (mut in_s, mut in_d) = (false, false);
+    let mut k = 0;
+    while k < chars.len() {
+        let c = chars[k];
+        if c == '\\' && !in_s {
+            cur.push(c);
+            if let Some(&n) = chars.get(k + 1) {
+                cur.push(n);
+            }
+            k += 2;
+            continue;
+        }
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+        } else if c == '"' && !in_s {
+            in_d = !in_d;
+        } else if !in_s && !in_d {
+            if c == ';' || c == '\n' || (c == '&' && chars.get(k + 1) == Some(&'&')) {
+                members.push(std::mem::take(&mut cur));
+                k += if c == '&' { 2 } else { 1 };
+                continue;
+            }
+            if matches!(c, '|' | '&' | '(' | ')') {
+                return None;
+            }
+        }
+        cur.push(c);
+        k += 1;
+    }
+    if in_s || in_d {
+        return None;
+    }
+    members.push(cur);
+    let members: Vec<String> = members
+        .into_iter()
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty())
+        .collect();
+    if members.is_empty() {
+        None
+    } else {
+        Some(members)
+    }
+}
+
+/// Every reading of what the list `members` writes to stdout, in order, when
+/// each member is a plain `echo` ([`plain_echo_output`]) or a `printf` whose
+/// output [`evaluate_printf_stage`] determines (one reading per combination of
+/// its dialect outputs, at most 16). Otherwise `Err` naming why the output is
+/// undetermined (the caller's Ask).
+fn concatenated_outputs(members: &[String]) -> Result<Vec<String>, String> {
+    const MAX_READINGS: usize = 16;
+    let mut readings = vec![String::new()];
+    for member in members {
+        let outputs = match plain_echo_output(member) {
+            Some(text) => vec![text],
+            None => match evaluate_printf_stage(member) {
+                PrintfStage::Outputs(texts) => texts,
+                PrintfStage::Undetermined(why) => {
+                    return Err(format!("the printf `{member}` cannot be evaluated ({why})"))
+                }
+                PrintfStage::NotPrintf => {
+                    return Err(format!(
+                        "`{member}` is not a plain `echo` or a `printf` whose output is static"
+                    ))
+                }
+            },
+        };
+        let mut next = Vec::new();
+        for prefix in &readings {
+            for text in &outputs {
+                let joined = format!("{prefix}{text}");
+                if !next.contains(&joined) {
+                    next.push(joined);
+                }
+            }
+        }
+        if next.len() > MAX_READINGS {
+            return Err(format!(
+                "it has more than {MAX_READINGS} printf dialect readings"
+            ));
+        }
+        readings = next;
+    }
+    Ok(readings)
+}
+
+/// What `echo [-neE…] WORD…` writes when every WORD is static and holds no
+/// backslash (so bash's and zsh's echo agree: no escape is decoded): plain
+/// characters, single-quoted text, or double-quoted text without `$`, a
+/// backtick, `\` or `!`. `None` for anything else, including a first word `-`
+/// or `--` (zsh and bash disagree on it) and any redirection.
+fn plain_echo_output(stage: &str) -> Option<String> {
+    let words = super::quote_aware_words(stage);
+    if words.first().map(String::as_str) != Some("echo") {
+        return None;
+    }
+    let flags = echo_flag_count(&words[1..]);
+    let no_newline = words[1..1 + flags].iter().any(|f| f.contains('n'));
+    let rest = &words[1 + flags..];
+    if rest.first().is_some_and(|w| w == "-" || w == "--") {
+        return None;
+    }
+    let mut out = Vec::new();
+    for word in rest {
+        out.push(static_word(word)?);
+    }
+    let mut text = out.join(" ");
+    if !no_newline {
+        text.push('\n');
+    }
+    Some(text)
+}
+
+/// How many leading `words` are echo option clusters: `-` followed only by
+/// `n`, `e`, `E` (`-n`, `-nE`, `-neE` …).
+fn echo_flag_count<S: AsRef<str>>(words: &[S]) -> usize {
+    words
+        .iter()
+        .take_while(|w| {
+            w.as_ref()
+                .strip_prefix('-')
+                .is_some_and(|f| !f.is_empty() && f.chars().all(|c| matches!(c, 'n' | 'e' | 'E')))
+        })
+        .count()
+}
+
+/// The text of one shell word built only from plain characters, single-quoted
+/// spans and double-quoted spans without `$`, a backtick, `\` or `!`; `None`
+/// for anything else (expansion, escape, glob, tilde, operator, unterminated
+/// quote, `#` comment).
+fn static_word(word: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut chars = word.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' | '"' => loop {
+                let d = chars.next()?;
+                if d == c {
+                    break;
+                }
+                if d == '\\' || (c == '"' && matches!(d, '$' | '`' | '!')) {
+                    return None;
+                }
+                out.push(d);
+            },
+            c if is_plain_word_char(c) => out.push(c),
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+/// A character that means itself in an unquoted shell word (no quoting,
+/// escape, expansion, glob, tilde, comment or operator role).
+fn is_plain_word_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "._-/:=@%+,".contains(c)
+}
+
+/// `echo [-neE…] WORD…` with every WORD made only of plain characters
+/// ([`is_plain_word_char`]) respelled as `echo [-neE…] 'WORD …'`: the same
+/// output, in the quoted form the pipe rule reads as a literal program (an
+/// unquoted `echo hi | bash` has no quoted text there and asks). The leading
+/// option clusters are any `-` followed only by `n` / `e` / `E` (`-nE`, `-En`,
+/// `-neE` too); a plain word holds no backslash, so `-e` decodes nothing. A
+/// first word `-` / `--` (zsh and bash read it differently) or anything else
+/// is returned unchanged, so it keeps whatever verdict the pipe rule gives.
+fn quote_bare_echo_words(inner: &str) -> String {
+    let tokens: Vec<&str> = inner.split_whitespace().collect();
+    if tokens.first() != Some(&"echo") {
+        return inner.to_string();
+    }
+    let flags = echo_flag_count(&tokens[1..]);
+    let words = &tokens[1 + flags..];
+    if words.is_empty()
+        || words[0] == "-"
+        || words[0] == "--"
+        || !words.iter().all(|w| w.chars().all(is_plain_word_char))
+    {
+        return inner.to_string();
+    }
+    format!("{} '{}'", tokens[..1 + flags].join(" "), words.join(" "))
 }
 
 /// True when `head` is `python`, `python3` or `python3.N`.
@@ -293,7 +1018,8 @@ fn python_stdin_reading(
 
 /// The program text an interpreter stage receives on stdin: the
 /// here-document body and/or the literals the upstream `echo`/`printf` stage
-/// of THIS statement emits. Shared by the stdin-program audit of
+/// of THIS statement emits (a `printf` stage's evaluated outputs too), each
+/// with its NUL readings ([`with_nul_readings`]). Shared by the stdin-program audit of
 /// [`analyze_interpreter_stdin_exec`] and its `osascript` application-delete
 /// check.
 fn stdin_program_texts(
@@ -330,8 +1056,42 @@ fn stdin_program_texts(
         program_texts.extend(quoted_string_literals(&backticks_as_dollar_paren(
             &statement[i - 1],
         )));
+        // A `printf` stage emits its EVALUATED output (escapes, `%s` …), not
+        // the quoted text: judge that too (backlog 00569f7d), once per
+        // printf dialect whose output differs (zsh, bash, BSD and GNU
+        // disagree on `\x`, `\c`, unknown escapes …). The verbatim literals
+        // above stay judged; an unevaluable printf is the Ask that
+        // `analyze_interpreter_stdin_exec` records from the same
+        // `evaluate_printf_stage` call's `PrintfStage::Undetermined`.
+        if let PrintfStage::Outputs(texts) = evaluate_printf_stage(&statement[i - 1]) {
+            for text in texts {
+                if !text.trim().is_empty() && !program_texts.contains(&text) {
+                    program_texts.push(text);
+                }
+            }
+        }
     }
-    program_texts
+    with_nul_readings(program_texts)
+}
+
+/// `texts` plus, for each text holding a NUL byte, the two ways a reader
+/// handles it: bash and sh DROP NUL bytes from a program read on stdin
+/// (observed 2026-11-14: `printf 'ec\0ho x\n' | /bin/bash` prints `x`), and
+/// zsh ends the word there (`… | zsh` reports `command not found: ec`), read
+/// here as a line break so the text before the NUL is judged on its own
+/// (backlog 00569f7d). The texts as given stay judged.
+fn with_nul_readings(mut texts: Vec<String>) -> Vec<String> {
+    let extra: Vec<String> = texts
+        .iter()
+        .filter(|t| t.contains('\0'))
+        .flat_map(|t| [t.replace('\0', ""), t.replace('\0', "\n")])
+        .collect();
+    for t in extra {
+        if !t.trim().is_empty() && !texts.contains(&t) {
+            texts.push(t);
+        }
+    }
+    texts
 }
 
 /// True when `stage` emits only text spelled in its own arguments: its

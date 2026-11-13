@@ -1010,9 +1010,11 @@ EOF
 
     # --- blocking check 5: fail-open mutation over the range's gate crates ---
     # scripts/check-fail-open-mutation.py applies each gate crate's registered
-    # fail-open mutation, runs `cargo test -p <crate>`, requires RED, and
-    # reverts (byte-identity verified). Nothing at commit time runs it, so it
-    # runs here (backlog 4f19b628 / issue #1584).
+    # fail-open mutation, runs `cargo test -p <crate>` over that scenario's
+    # declared test targets (the targets observed to go RED under the mutation
+    # and to pass without it; the whole crate when none are declared),
+    # requires RED, and reverts (byte-identity verified). Nothing at commit
+    # time runs it, so it runs here (backlog 4f19b628 / issue #1584).
     #
     # SCOPE: per crate, only the gate crates whose crates/<gate>/ this range
     # touches. A range that cannot be computed, or a change to the mutation

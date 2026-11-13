@@ -15,15 +15,33 @@
 //!   reports in it. It is Allow only when every entry is an ignored directory
 //!   positively recognised as regenerable build output (a real directory,
 //!   not a symlink, whose last component is one of
-//!   [`crate::deletion::BUILD_OUTPUT_NAMES`], e.g. `target/`; see
-//!   [`only_ignored_build_output`], backlog 2089dfc5). Any modified, staged,
-//!   untracked or other ignored entry (`.env`, keys, config, unknown names)
-//!   is Ask: the removal deletes the whole directory.
+//!   [`crate::deletion::BUILD_OUTPUT_NAMES`], e.g. `target/`, and which
+//!   contains no `.git` entry at any depth; see
+//!   [`only_ignored_build_output_within`], backlog 2089dfc5 / b997a3d5). Any
+//!   modified, staged, untracked or other ignored entry (`.env`, keys,
+//!   config, unknown names), and a build-named directory holding a nested
+//!   checkout (a linked worktree or repository inside `target/`) or one
+//!   whose walk is cut off by [`WALK_MAX_ENTRIES`] entries or by
+//!   [`WALK_DEADLINE`] (symlinks are not followed; see [`WalkBudget`] for
+//!   what the deadline does and does not bound), is Ask: the removal deletes
+//!   the whole directory. Directories inside the named worktree are part of
+//!   it, so walking them stays within the ruling below.
 //!
-//! The probes run in the repository git will act on: the cumulative `-C`
-//! directory (relative to the segment's base), with `--git-dir` /
-//! `--work-tree` forwarded. Every cannot-determine state is Ask, never Allow
-//! (CLAUDE.md §3): no known working directory (`base_for("git")` is `None`
+//!   Only the worktree named as the operand is ever inspected (user ruling
+//!   2026-11-14, backlog b997a3d5): before any git probe, the operand must
+//!   be, by local metadata, a linked-worktree root ([`linked_worktree_root`]:
+//!   a real directory whose `.git` is a regular file), and the probe's
+//!   `--show-toplevel` must be the operand itself. Otherwise (an ignored dir
+//!   inside another worktree, a main worktree, a symlink, a missing path) it
+//!   is Ask, so no enclosing or other worktree's state ever decides the
+//!   verdict.
+//!
+//! The `branch` probes run in the repository git will act on: the cumulative
+//! `-C` directory (relative to the segment's base), with `--git-dir` /
+//! `--work-tree` forwarded. The `worktree remove` probes run only with `-C
+//! <operand>` (no `--git-dir` / `--work-tree`); the cumulative `-C`
+//! directory only places a relative operand. Every cannot-determine state is
+//! Ask, never Allow (CLAUDE.md §3): no known working directory (`base_for("git")` is `None`
 //! and no absolute `-C`), an unplaceable or unrecognised global option, no
 //! operand, an unresolvable default branch, a git probe that exits with a code
 //! other than the ones listed for it, fails to spawn, or times out.
@@ -492,12 +510,17 @@ default branch `{}` ({}), so deleting it destroys unmerged work",
 
 /// `git <globals> worktree <args>`. Allow unless the verb is `remove` with a
 /// force flag anywhere in `args` (before or after the verb); then Allow only
-/// when, in every operand worktree, `git rev-parse --show-toplevel` and
-/// [`STATUS_ARGS`] both exit 0, the status output parses as porcelain v1, and
-/// [`only_ignored_build_output`] accepts every entry (nothing at all, or only
-/// ignored build-output directories). Anything else is Ask. A relative
-/// operand is placed against the directory git runs in (the cumulative `-C`
-/// directory, else the segment's base).
+/// when, for every operand: [`linked_worktree_root`] accepts it (checked
+/// locally before any git subprocess); `git -C <operand> rev-parse
+/// --show-toplevel` and [`STATUS_ARGS`] both exit 0; the reported toplevel,
+/// canonicalised, equals the canonicalised operand; the status output parses
+/// as porcelain v1; and [`only_ignored_build_output_within`] accepts every
+/// entry (nothing at all, or only ignored build-output directories holding
+/// no nested checkout, walked under one [`WalkBudget`] shared by all
+/// operands). Anything else
+/// is Ask. A relative operand is placed against the directory git runs in
+/// (the cumulative `-C` directory, else the segment's base); the globals'
+/// repository itself is never probed here.
 pub(super) fn worktree_verdict(ctx: &Ctx<'_>, globals: &[&str], args: &[&str]) -> Decision {
     let opts = option_words(args);
     let Some(verb_pos) = args.iter().position(|t| !t.starts_with('-')) else {
@@ -527,13 +550,21 @@ uncommitted, untracked and ignored files included"
         Determination::Known(t) => t,
         Determination::Undetermined(u) => return ask(u.reason().as_str().to_string()),
     };
+    let mut budget = WalkBudget::new();
     for op in ops {
         let path = match ctx.scope.lexical_absolute(op, Some(&t.dir)) {
             Determination::Known(p) => p,
             Determination::Undetermined(u) => return ask(u.reason().as_str().to_string()),
         };
+        // Established locally BEFORE any git subprocess: run with `-C` on a
+        // path that is not itself a linked-worktree root, git would walk up
+        // and report the ENCLOSING worktree's state (user ruling
+        // 2026-11-14: never consult a worktree other than the one named).
+        if let Err(why) = linked_worktree_root(std::path::Path::new(&path)) {
+            return ask(why);
+        }
         let wt = Target {
-            dir: path,
+            dir: path.clone(),
             git_dir: None,
             work_tree: None,
         };
@@ -544,6 +575,23 @@ uncommitted, untracked and ignored files included"
         if !toplevel.starts_with('/') || toplevel.contains('\n') {
             return ask("git printed a work-tree root that is not one absolute path".to_string());
         }
+        match (
+            std::fs::canonicalize(&path),
+            std::fs::canonicalize(&toplevel),
+        ) {
+            (Ok(a), Ok(b)) if a == b => {}
+            (Ok(_), Ok(_)) => {
+                return ask(format!(
+                    "git reports the work-tree root `{toplevel}` for `{op}`, which is not the \
+operand itself, so its state is not the operand's"
+                ))
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                return ask(format!(
+                    "the operand and the work-tree root git reports could not be compared ({e})"
+                ))
+            }
+        }
         let status = match probe(&wt, STATUS_ARGS, &[0]) {
             Determination::Known((_, out)) => out,
             Determination::Undetermined(u) => return ask(u.reason().as_str().to_string()),
@@ -551,7 +599,9 @@ uncommitted, untracked and ignored files included"
         let Some(entries) = crate::reversible::parse_status_z(&status) else {
             return ask("git status printed output not in the porcelain v1 shape".to_string());
         };
-        if let Err(why) = only_ignored_build_output(std::path::Path::new(&toplevel), &entries) {
+        if let Err(why) =
+            only_ignored_build_output_within(std::path::Path::new(&toplevel), &entries, &mut budget)
+        {
             return Decision::ask(format!(
                 "git worktree remove --force `{op}`: {why}, which the forced removal (it deletes \
 the whole directory) would destroy"
@@ -559,6 +609,47 @@ the whole directory) would destroy"
         }
     }
     Decision::Allow
+}
+
+/// `Ok(())` only when `path` (absolute, lexically normalised) is, by local
+/// metadata alone, the root of a LINKED worktree: `path` itself is a real
+/// directory (`symlink_metadata`, not a symlink) and `path/.git` is a regular
+/// file (not a symlink, not a directory). A `.git` directory is a main
+/// worktree (or a plain repository), which `git worktree remove` never
+/// removes; anything else (absent, symlink, unreadable) is `Err`. No git
+/// subprocess runs and no parent directory is consulted, and the `.git`
+/// file's `gitdir:` pointer is not read or followed here.
+fn linked_worktree_root(path: &std::path::Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.file_type().is_dir() => {}
+        Ok(_) => {
+            return Err(format!(
+                "`{}` is not a real directory (a symlink or a file)",
+                path.display()
+            ))
+        }
+        Err(e) => return Err(format!("stat {}: {e}", path.display())),
+    }
+    let dot_git = path.join(".git");
+    match std::fs::symlink_metadata(&dot_git) {
+        Ok(m) if m.file_type().is_file() => Ok(()),
+        Ok(m) if m.file_type().is_dir() => Err(format!(
+            "`{}` is a directory, so `{}` is a main worktree or repository, not a linked \
+worktree root",
+            dot_git.display(),
+            path.display()
+        )),
+        Ok(_) => Err(format!(
+            "`{}` is not a regular file, so `{}` is not recognised as a linked worktree root",
+            dot_git.display(),
+            path.display()
+        )),
+        Err(e) => Err(format!(
+            "`{}` is not recognised as a linked worktree root (stat {}: {e})",
+            path.display(),
+            dot_git.display()
+        )),
+    }
 }
 
 /// The status probe for a force-removed worktree: every untracked file
@@ -574,6 +665,177 @@ const STATUS_ARGS: &[&str] = &[
     "--ignore-submodules=none",
 ];
 
+/// [`only_ignored_build_output_within`] with a fresh [`WalkBudget`] (unit
+/// tests).
+#[cfg(test)]
+fn only_ignored_build_output(
+    toplevel: &std::path::Path,
+    entries: &[(String, String)],
+) -> Result<(), String> {
+    let mut budget = WalkBudget::new();
+    only_ignored_build_output_within(toplevel, entries, &mut budget)
+}
+
+/// Production cap on directory entries [`no_nested_git`] visits for one
+/// `worktree remove` command (all operands and build dirs together); one
+/// more entry is `Err`. Measured 2026-11-14 (macOS, APFS, an `-O` replica of
+/// this walk: sorted path listing plus one `symlink_metadata` per entry): a
+/// cargo `target/` of this workspace with 55,883 entries took 585-694 ms
+/// warm and 1,809 ms on the first (colder) run, i.e. ~10-32 us per entry;
+/// `find | wc -l` counted 194,596 entries in a long-lived checkout's
+/// `target/`. The cap is ~5x that count. At those measured per-entry costs
+/// [`WALK_DEADLINE`] is usually reached before this cap (from roughly 90k
+/// cold to 300k warm entries), but that is an extrapolation from the one
+/// measurement above, not a guarantee: which limit trips first depends on
+/// the filesystem and cache state.
+const WALK_MAX_ENTRIES: usize = 1_000_000;
+
+/// Production wall-clock budget for the walk of one `worktree remove`
+/// command. The PreToolUse hook is killed at 10 s (`hooks/hooks.json`) and a
+/// killed hook does not block the tool, so the walk is meant to stop well
+/// inside it, leaving room for the two [`PROBE_TIMEOUT`] git probes per
+/// operand. What [`WalkBudget`] actually guarantees is weaker; see there.
+const WALK_DEADLINE: std::time::Duration = std::time::Duration::from_millis(3000);
+
+/// Shared entry/time budget for every [`no_nested_git`] walk of one command.
+///
+/// What it guarantees: the deadline is checked before EVERY directory
+/// listing and for EVERY entry (before its `symlink_metadata`), so once the
+/// clock reads `start + deadline` or later, the next such check is `Err`; the
+/// entry count is checked for every entry, so the `max_entries + 1`-th entry
+/// is `Err`. What it does NOT guarantee: a single directory listing
+/// ([`harness_core::boundary::read_dir_entries_checked`]) or a single
+/// `symlink_metadata` call cannot be interrupted, so one slow call (a huge
+/// directory, a hung network mount) can run past the deadline by its own
+/// duration, unbounded here. There is NO hard bound on the walk's wall time;
+/// if the hook process itself is killed at 10 s, the tool is not blocked
+/// (a fail-open this budget does not close).
+///
+/// Production: [`WalkBudget::new`] ([`WALK_MAX_ENTRIES`], [`WALK_DEADLINE`],
+/// the real clock). Tests: [`WalkBudget::with_limits`].
+pub(crate) struct WalkBudget {
+    entries: usize,
+    max_entries: usize,
+    start: std::time::Instant,
+    deadline: std::time::Duration,
+    clock: Box<dyn FnMut() -> std::time::Instant>,
+}
+
+impl WalkBudget {
+    /// The production budget.
+    fn new() -> WalkBudget {
+        WalkBudget::with_limits(
+            WALK_MAX_ENTRIES,
+            WALK_DEADLINE,
+            Box::new(std::time::Instant::now),
+        )
+    }
+
+    /// A budget allowing at most `max_entries` entries and expiring once
+    /// `clock()` reads `deadline` or more after its first reading (taken
+    /// here). `clock` is called once here and once per deadline check, so a
+    /// test can inject a clock that advances per call; `Duration::ZERO`
+    /// expires at the very first check. A clock that goes backwards reads as
+    /// no time elapsed.
+    pub(crate) fn with_limits(
+        max_entries: usize,
+        deadline: std::time::Duration,
+        mut clock: Box<dyn FnMut() -> std::time::Instant>,
+    ) -> WalkBudget {
+        let start = clock();
+        WalkBudget {
+            entries: 0,
+            max_entries,
+            start,
+            deadline,
+            clock,
+        }
+    }
+
+    /// `Err` once the deadline has passed (`walking` names the walk root).
+    fn check_deadline(&mut self, walking: &std::path::Path) -> Result<(), String> {
+        let elapsed = (self.clock)().saturating_duration_since(self.start);
+        if elapsed >= self.deadline {
+            return Err(format!(
+                "walking `{}` to rule out a nested checkout took longer than {} ms",
+                walking.display(),
+                self.deadline.as_millis()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Count one entry; `Err` once more than `max_entries` were counted.
+    fn count_entry(&mut self, walking: &std::path::Path) -> Result<(), String> {
+        self.entries = self.entries.saturating_add(1);
+        if self.entries > self.max_entries {
+            return Err(format!(
+                "`{}` holds more than {} entries, too many to rule out a nested checkout",
+                walking.display(),
+                self.max_entries
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// `Ok(())` only when the directory tree rooted at `dir` (already
+/// established to be a real directory) contains NO entry named `.git` (file,
+/// directory or symlink) at any depth: a `.git` entry marks a nested
+/// checkout (a linked worktree's `.git` file, a repository's `.git`
+/// directory), whose uncommitted work and repository the forced removal
+/// would delete with the build directory. Symlinks are never followed (a
+/// symlink is a leaf: deleting the tree removes the link, not its target),
+/// but a symlink NAMED `.git` is still `Err`. Fail-closed: a listing that
+/// [`harness_core::boundary::read_dir_entries_checked`] does not answer with
+/// `Known(Some(..))` (an I/O error, a mid-iteration entry error, or the
+/// directory vanishing), a `symlink_metadata` error, or `budget` running out
+/// (its entry cap, or its deadline as checked before each listing and each
+/// entry; the budget is shared across the command) is `Err`, never `Ok`. The
+/// deadline does not interrupt a listing or stat already in progress; see
+/// [`WalkBudget`].
+pub(crate) fn no_nested_git(dir: &std::path::Path, budget: &mut WalkBudget) -> Result<(), String> {
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        budget.check_deadline(dir)?;
+        let listing = match harness_core::boundary::read_dir_entries_checked(&d) {
+            Determination::Known(Some(v)) => v,
+            Determination::Known(None) => {
+                return Err(format!(
+                    "`{}` vanished while being walked to rule out a nested checkout",
+                    d.display()
+                ))
+            }
+            Determination::Undetermined(u) => {
+                return Err(format!(
+                    "{} (walking to rule out a nested checkout)",
+                    u.reason().as_str()
+                ))
+            }
+        };
+        for p in listing {
+            budget.count_entry(dir)?;
+            budget.check_deadline(dir)?;
+            if p.file_name().is_some_and(|n| n == ".git") {
+                return Err(format!(
+                    "`{}` is a `.git` entry: a nested checkout (worktree or repository) lies inside \
+the ignored build directory",
+                    p.display()
+                ));
+            }
+            // `symlink_metadata`: a symlink is classified as itself (a leaf),
+            // never followed.
+            let ft = std::fs::symlink_metadata(&p)
+                .map_err(|e| format!("cannot classify `{}` ({e})", p.display()))?
+                .file_type();
+            if ft.is_dir() {
+                stack.push(p);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `Ok(())` only when every `git status` entry of the worktree rooted at
 /// `toplevel` is ignored (`!!`) regenerable build output; otherwise `Err`
 /// naming the first entry that is not.
@@ -583,17 +845,23 @@ const STATUS_ARGS: &[&str] = &[
 /// path component, relative to the worktree root, is exactly one of
 /// [`crate::deletion::BUILD_OUTPUT_NAMES`] (the same list the rm class-4
 /// `Allow` uses, so `rm -rf <wt>/target` and removing a worktree holding only
-/// that directory agree); no component is empty, `.` or `..`; and every
+/// that directory agree); no component is empty, `.` or `..`; every
 /// prefix of it, the entry itself included, is a real directory right now
 /// (`symlink_metadata`: a symlink, a file, or an unreadable path is not
-/// build output). Matching is per component, never by substring:
-/// `target-secrets/` and `x/target.env` are not build output. A file
-/// ignored inside a build-named directory that is not itself ignored
-/// (`target/key.env` under `*.env`) is listed by its own path and is not
-/// build output either.
-fn only_ignored_build_output(
+/// build output); and the directory holds no nested checkout:
+/// [`no_nested_git`] walks it (symlinks not followed) and any `.git` entry
+/// at any depth, a walk error, or exhausting `budget` (entries or time) is
+/// `Err` (backlog b997a3d5: git reports a linked worktree created inside an
+/// ignored `target/` only as `target/`, and the forced removal was observed
+/// to delete it together with its uncommitted file). Matching is per
+/// component, never by substring: `target-secrets/` and `x/target.env` are
+/// not build output. A file ignored inside a build-named directory that is
+/// not itself ignored (`target/key.env` under `*.env`) is listed by its own
+/// path and is not build output either.
+pub(crate) fn only_ignored_build_output_within(
     toplevel: &std::path::Path,
     entries: &[(String, String)],
+    budget: &mut WalkBudget,
 ) -> Result<(), String> {
     for (xy, path) in entries {
         if xy != "!!" {
@@ -629,6 +897,9 @@ regenerable build output"
                 _ => return not_build(),
             }
         }
+        no_nested_git(&cur, budget).map_err(|why| {
+            format!("the ignored `{path}` there is not recognised regenerable build output: {why}")
+        })?;
     }
     Ok(())
 }
@@ -636,10 +907,127 @@ regenerable build output"
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
-    use super::only_ignored_build_output;
+    use super::{no_nested_git, only_ignored_build_output, WalkBudget};
+    use std::path::Path;
+    use std::time::{Duration, Instant};
 
     fn e(xy: &str, p: &str) -> (String, String) {
         (xy.to_string(), p.to_string())
+    }
+
+    /// Budget whose clock never advances (the deadline cannot fire).
+    fn frozen(max_entries: usize) -> WalkBudget {
+        let t = Instant::now();
+        WalkBudget::with_limits(max_entries, Duration::from_secs(3600), Box::new(move || t))
+    }
+
+    fn touch(p: &Path) {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, "x").unwrap();
+    }
+
+    /// Nested-`.git` walk arm tests (b997a3d5). Each test pins one fail-closed
+    /// arm of `no_nested_git`/`WalkBudget`; DOES NOT PROVE the production
+    /// constants (`WALK_MAX_ENTRIES`, `WALK_DEADLINE`) or any wall-time bound.
+    #[test]
+    fn walk_entry_cap_is_err_at_n_minus_1_ok_at_n() {
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..5 {
+            touch(&d.path().join(format!("f{i}")));
+        }
+        assert!(no_nested_git(d.path(), &mut frozen(4)).is_err());
+        assert!(no_nested_git(d.path(), &mut frozen(5)).is_ok());
+    }
+
+    #[test]
+    fn walk_deadline_is_err_when_clock_advances_ok_when_frozen() {
+        let d = tempfile::tempdir().unwrap();
+        touch(&d.path().join("f"));
+        let base = Instant::now();
+        let mut calls = 0u32;
+        let mut advancing = WalkBudget::with_limits(
+            100,
+            Duration::from_secs(10),
+            Box::new(move || {
+                calls += 1;
+                if calls == 1 {
+                    base
+                } else {
+                    base + Duration::from_secs(11)
+                }
+            }),
+        );
+        assert!(no_nested_git(d.path(), &mut advancing).is_err());
+        assert!(no_nested_git(d.path(), &mut frozen(100)).is_ok());
+        let t = Instant::now();
+        let mut zero = WalkBudget::with_limits(100, Duration::ZERO, Box::new(move || t));
+        assert!(no_nested_git(d.path(), &mut zero).is_err());
+    }
+
+    #[test]
+    fn walk_missing_dir_is_err() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(no_nested_git(&d.path().join("absent"), &mut frozen(100)).is_err());
+    }
+
+    #[test]
+    fn walk_unreadable_subdir_is_err() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let locked = d.path().join("a/locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read_dir(&locked).is_ok() {
+            eprintln!("NOTE: mode 000 dir is readable (root?); skipping unreadable-subdir test");
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+        let r = no_nested_git(d.path(), &mut frozen(100));
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(r.is_err(), "unreadable listing must be Err, got {r:?}");
+    }
+
+    #[test]
+    fn walk_symlink_named_dot_git_is_err() {
+        let d = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("/nonexistent-anywhere", d.path().join(".git")).unwrap();
+        assert!(no_nested_git(d.path(), &mut frozen(100)).is_err());
+    }
+
+    #[test]
+    fn walk_deep_dot_git_file_and_dir_are_err() {
+        let f = tempfile::tempdir().unwrap();
+        touch(&f.path().join("a/b/c/.git"));
+        assert!(no_nested_git(f.path(), &mut frozen(100)).is_err());
+        let g = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(g.path().join("a/b/c/.git")).unwrap();
+        assert!(no_nested_git(g.path(), &mut frozen(100)).is_err());
+    }
+
+    /// Documents the no-follow design (pinned against git's own behaviour by
+    /// the integration test in tests/worktree_remove_ignored_build_output_fp_20261114.rs).
+    #[test]
+    fn walk_does_not_follow_symlinked_subdir() {
+        let d = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(other.path().join(".git")).unwrap();
+        std::os::unix::fs::symlink(other.path(), d.path().join("link")).unwrap();
+        assert!(no_nested_git(d.path(), &mut frozen(100)).is_ok());
+    }
+
+    #[test]
+    fn walk_budget_is_shared_across_calls() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        for i in 0..3 {
+            touch(&a.path().join(format!("f{i}")));
+            touch(&b.path().join(format!("f{i}")));
+        }
+        assert!(no_nested_git(a.path(), &mut frozen(5)).is_ok());
+        assert!(no_nested_git(b.path(), &mut frozen(5)).is_ok());
+        let mut shared = frozen(5);
+        assert!(no_nested_git(a.path(), &mut shared).is_ok());
+        assert!(no_nested_git(b.path(), &mut shared).is_err());
     }
 
     #[test]

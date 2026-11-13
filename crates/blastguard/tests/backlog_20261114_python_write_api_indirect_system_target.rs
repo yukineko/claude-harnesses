@@ -90,7 +90,6 @@ const SHAPES: &[&str] = &[
 const CONTROL: &str = "python3 -c \"import os; os.chmod('/etc/hosts',0)\"";
 
 #[test]
-#[ignore = "RED: python write API with a built/keyword/aliased system-path target is Allow (backlog p0)"]
 fn indirect_system_path_targets_of_write_apis_are_not_allowed() {
     let home = unique_home("red");
     let mut allowed = Vec::new();

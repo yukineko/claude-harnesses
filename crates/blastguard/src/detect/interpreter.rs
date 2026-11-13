@@ -1474,6 +1474,10 @@ it refuses to guess"
     // path-mutating calls RESOLVED, not matched token by token
     // (`os.chmod('/' 'etc/hosts', 0)` is a chmod of `/etc/hosts`), an
     // unresolvable path being an Ask (`python_semantics::path_mutation_verdict`).
+    // Since backlog 17d985f1 that covers the `open`-family and pathlib writes
+    // too, a method's receiver resolved through `/` / `joinpath`
+    // (`(Path('/etc') / 'hosts').write_text('x')`), and the destination of a
+    // one-argument `.replace(dst)` / `.rename(dst)`.
     // Run after the descent, so a Deny the descent earned keeps its reason; a
     // Deny here still outranks any Ask the descent recorded.
     if python_reader {

@@ -428,8 +428,20 @@ forge・condukt のスケジューラが再利用）。
   `os.chmod`/`os.lchmod`/`Path.chmod()`/`.lchmod()` → `chmod <mode>`、`os.chown`/`os.lchown`/`shutil.chown`
   → `chown 0:0`）として shell 規則で判定する。`os.chmod('/''etc/hosts',0)` は system-harm Deny、
   `os.chmod('a' 'b',0o644)`・`os.chmod('build/x',0o755)` は Allow。**path を静的に解決できない呼び出しは
-  Ask**（subagent では Deny。`os.chmod(sys.argv[1],0o755)`）。`open`/`os.open`/`.open()`/`write_text`/
-  `write_bytes` はここでは判定しない（inline program の書き込みは従来の write-target 走査が判定する）。
+  Ask**（subagent では Deny。`os.chmod(sys.argv[1],0o755)`）。0.2.526 以降（backlog 17d985f1）は
+  `open`/`os.open`/`.open()`/`write_text`/`write_bytes` もここで判定する（literal トークンだけを読む従来の
+  write-target 走査にも引き続きかかる）。pathlib の書き込み method（`write_text`/`write_bytes`/`touch`/
+  `symlink_to`/`hardlink_to`/`chmod`/`unlink`/`rmdir`/`.open(書き込み mode)`）は **receiver** を
+  `Eval`（`/`・`joinpath`・括弧・単純代入された名前）で解決して判定する: `(Path('/etc') / 'hosts').write_text('x')`・
+  `Path('/etc').joinpath('hosts').write_text('x')` は `: > /etc/hosts` として system-harm Deny、
+  `(Path('build') / 'x').write_text('y')`・`Path('build').joinpath('x').write_text('y')` は Allow。
+  `touch` は `: >> p`、`symlink_to`/`hardlink_to` は `: > p`。引数がちょうど 1 個（位置引数か `target=`）の
+  `.replace(…)`/`.rename(…)` は `Path.replace`/`Path.rename` として、**転送先（引数）を `: > dst`、receiver を
+  `rm src`** として判定する（`Path('/tmp/y').replace('/etc/hosts')` は Deny、`Path('a').replace('b')` は Allow）。
+  引数が 2 個以上の `str.replace('a','b')` や `target` 以外の keyword（`dt.replace(year=…)`）は対象外。
+  receiver・転送先・path が解決できないものは Ask（subagent では Deny）: 変数 receiver で束縛が読めない
+  `p.write_text(..)`・1 引数の `x.replace(y)`/`x.rename(y)`（pandas の `s.rename('n')` も含む）・
+  f-string で組んだ `open(f'{d}/x','w')` などは 0.2.523 の Allow から Ask に変わる。
   chmod の mode は Python の整数 literal（`0o755`・`493`・`0x1ff`）ならその値、それ以外は `000`
   （読み取り・実行を外す＝shell の chmod 規則で最も制限側）として描画する。
   (4)（backlog 569b9b9d、blastguard 0.2.518）`Path(…)`/`pathlib.Path(…)`/`PosixPath(…)`/`WindowsPath(…)` の
@@ -643,7 +655,9 @@ forge・condukt のスケジューラが再利用）。
     `Path.unlink()`/`.rmdir()` → `rm p`、`open(p,'w'|'x'|…)`・`Path.open('w')`・`write_text`/`write_bytes`
     → `: > p`（`a`/`+` は `: >> p`）、`shutil.copy`/`copy2`/`copyfile`/`copytree`/`move`・
     `os.rename`/`replace`/`renames` の転送先（第 2 引数 / `dst`）→ `: > dst`（move が消す転送元は判定しない。
-    tests/heredoc_system_harm_holes_20261111.rs B）、`os.truncate(p,…)` → `: > p`、`os.chmod`/`os.lchmod`/
+    tests/heredoc_system_harm_holes_20261111.rs B）、1 引数の `Path.replace(dst)`/`Path.rename(dst)` →
+    `: > dst` と receiver の `rm src`、`Path.touch()` → `: >> p`、`symlink_to`/`hardlink_to` → `: > p`
+    （backlog 17d985f1）、`os.truncate(p,…)` → `: > p`、`os.chmod`/`os.lchmod`/
     `Path.chmod()`/`.lchmod()` → `chmod <mode> p`（整数 literal でない mode は `000`）、`os.chown`/`os.lchown`/
     `shutil.chown` → `chown 0:0 p`（backlog f6dbff5b）、`os.open` の書き込み flag も同様として shell 規則で判定（home・`/`・
     dotfile は shell と同じ Deny/Ask、repo 相対は Allow）。path は literal・`expanduser`・`Path.home()`・
@@ -810,13 +824,14 @@ forge・condukt のスケジューラが再利用）。
   「it writes `/etc/hosts`」で Deny、SRC だけを `/tmp/y` に変えた同形は Ask（main session）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_shutil_copy2_source_judged_as_write_fp.rs`
   （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
-- **未修正の system-harm fail-open の RED（2026-11-14、flow-8cca7ef5。修正は未実装）** — python の書き込み API で、
-  system パスの書き込み先が呼び出しの単一 literal 引数でない形は Allow になる（main・subagent とも）:
+- **system-harm fail-open の RED（2026-11-14、flow-8cca7ef5。keyword 引数・alias import の 2 形は backlog f6dbff5b、
+  残り 3 形は backlog 17d985f1・blastguard 0.2.526 で修正済み。`#[ignore]` は外した）** — python の書き込み API で、
+  system パスの書き込み先が呼び出しの単一 literal 引数でない形は Allow になっていた（main・subagent とも）:
   `(Path('/etc') / 'hosts').write_text(..)`、`Path('/etc').joinpath('hosts').write_text(..)`、
   `shutil.copy(dst='/etc/hosts', src=..)`（keyword 引数）、`from shutil import copy as c; c(.., '/etc/hosts')`（alias import）、
   `Path('/tmp/y').replace('/etc/hosts')`（移動先の operand）。`os.chmod('/etc/hosts',0)` は Deny（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_python_write_api_indirect_system_target.rs`
-  （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+  （RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
 - **未修正の false positive の RED（2026-11-14、flow-8cca7ef5。修正は未実装）** — `printf` の二重引用符 operand が
   `\$PY -c, \\\"\$PY\\\" -c, find -exec sh -c ... os.chmod on /etc/hosts ...` のような文字列だと、印字するだけの
   `printf` が「`printf` is not a command blastguard recognises, and what follows it parses as a destructive command line」で

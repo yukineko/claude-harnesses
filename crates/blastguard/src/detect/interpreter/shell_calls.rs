@@ -138,7 +138,9 @@ const DEST_OPERAND_MUTATORS: &[&str] = &["cp", "ln", "install"];
 /// stays with the rest of the program audit, as before. For a program Python
 /// reads, the path arguments of path-mutating calls are also RESOLVED, not
 /// matched token by token (`'/' 'etc/hosts'`), by
-/// `python_semantics::path_mutation_verdict` (backlog f6dbff5b).
+/// `python_semantics::path_mutation_verdict` (backlog f6dbff5b), which also
+/// resolves the receiver of a pathlib write method and the destination of
+/// `Path.replace` / `Path.rename` (backlog 17d985f1).
 pub(super) fn program_call_verdict(payload: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     program_calls(payload, depth, ctx, false)
 }

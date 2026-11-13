@@ -653,7 +653,16 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   chmod として system-harm deny になる（以前は `'/'` と `'etc/hosts'` のどちらもシステム
 >   ディレクトリではないため allow だった）。`os.chmod('a' 'b',0o644)` のような repo 相対は
 >   allow のまま。path を静的に解決できない呼び出し（`os.chmod(sys.argv[1],0o755)`）は ask
->   （人間が答えられない場では deny）。
+>   （人間が答えられない場では deny）。0.2.526 以降（backlog 17d985f1）、同じ判定が
+>   `open(p,'w')`・`Path.open('w')`・`write_text`/`write_bytes`・`touch`・`symlink_to`/
+>   `hardlink_to` にもかかり、pathlib method は **receiver** を `/`・`joinpath` 込みで解決する:
+>   `(Path('/etc') / 'hosts').write_text('x')` と `Path('/etc').joinpath('hosts').write_text('x')`
+>   は `/etc/hosts` への書き込みとして deny、`(Path('build') / 'x').write_text('y')` は allow。
+>   引数 1 個（位置引数か `target=`）の `.replace(…)`/`.rename(…)` は `Path.replace`/`Path.rename`
+>   として**転送先**を `: > dst`、receiver を `rm src` として判定する
+>   （`Path('/tmp/y').replace('/etc/hosts')` は deny、`Path('a').replace('b')` は allow、
+>   引数 2 個の `s.replace('a','b')` は対象外）。receiver・転送先が解決できない
+>   （変数 receiver の `p.write_text(..)`・1 引数の `x.rename(y)` 等）ものは ask。
 
 当時、overwatch の continuous-audit 再発トラッカー（`overwatch violations --json`）が
 `blastguard:truncating-redirect` と `blastguard:code-interpreter-inline-eval` を

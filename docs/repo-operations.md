@@ -92,6 +92,16 @@
   粒度は crate であって、変更された個々の `Undetermined` arm ではない（スクリプトに arm 単位の選択子は
   無く、scenario が登録されていない arm はここでは測られない）。非0終了（NOT CAUGHT / inconclusive /
   error / revert 失敗 / crash）・スクリプト不在・python3 不在はすべて block。
+  各 scenario は `tests`（`--lib` / `--test <name>` の cargo test-target 選択子）を宣言し、mutation 後は
+  `cargo test -p <gate> <tests>` だけを走らせる（crate 全体ではない）。選択子は推測ではなく実測で選ぶ:
+  mutation を当てた `cargo test -p <gate> --no-fail-fast` で RED になった target のうち、単独でも
+  RED になり、かつ mutation 無しでは pass するものを登録する（実測値はスクリプトの各 scenario 横に記録）。
+  宣言した target が mutation を捕まえなければ NOT CAUGHT（exit 1）、cargo が拒否する選択子
+  （`no test target named`）は inconclusive（exit 1）で、どちらも block — 絞り込みで見逃しが pass に
+  変わることはない。mutation 無しで pass することを条件にしたのは、blastguard では mutation 無しの
+  `cargo test -p blastguard --no-fail-fast` が 60〜61 target 失敗する（2 回の実行。commit 済みの RED repro。rev 91046d26、
+  2026-11-14 実測）ため、旧来の crate 全体実行は mutation の有無に関係なく RED で、何も証明していなかった
+  からである。
 
 ## 記録そのものの定期監査 — `scripts/record-audit.py`（backlog 0f55003a）
 
@@ -250,6 +260,27 @@ scripts/rollout-plugins.sh --plugin specguard --canary             # GATE クレ
 ```
 
 - 冪等（version 不変なら no-op）。`--force` で無変更でも再コピー、`--no-rebuild`/`--no-sync` で段階分け。
+- **committed HEAD 以外からは反映しない（exit 9, backlog ff8cebd0）**: 2026-11-14、pre-push の
+  fail-open mutation（`check-fail-open-mutation.py`）が `crates/blastguard/src/model.rs` を in-place で
+  `Decision::Ask(_reason) => Decision::Allow` に書き換えている最中に rollout が走り、その mutant を
+  blastguard 0.2.548 として配布した。mutation は今の場所に残す（ユーザー裁定）ので、反映側が拒否する。
+  `scripts/rollout_source_guard.py` が判定し、判定不能は拒否:
+  (1) コピー前に build 入力（`crates/`・`Cargo.toml`・`Cargo.lock`・`.cargo/`）に staged/unstaged/untracked
+  の差分が無いこと・HEAD が起動時のままであること・mutation 中マーカー `<git-dir>/fail-open-mutation.active`
+  が無いこと、(2) 各 plugin のコピー直後に、HEAD が追跡する全ファイルが HEAD の blob と一致すること
+  （不一致は cache 側を HEAD の内容に戻してから拒否）、(3) registry 書き込み前、(4) `rebuild-plugins.sh` 内で
+  `cargo build` の後・**バイナリ swap の前**、(5) rebuild+sync 後（in-flight restore で registry は元へ戻る）に、
+  (1) に加えて HEAD と mutation カウンタ `<git-dir>/fail-open-mutation.seq` が不変であることを再確認する。
+  mutation スクリプトはファイルを書き換える**前**にカウンタを増やしマーカーを作り、revert をバイト一致で
+  確認した**後**にマーカーを消すので、build 中に始まって戻された mutation もカウンタで検出される。
+  マーカー/カウンタは自 worktree の git dir だけを見る（他 worktree は参照しない）。`--dry-run` は対象外。
+  `rebuild-plugins.sh` を**単体で**叩いた場合はこの検査を通らない（rollout 経由でのみ有効）。
+  **残る穴（未対処・明示）**: (a) gitignored ファイルは `git status` に出ず rsync でコピーされ、(2) は HEAD
+  追跡ファイルしか比べないので cache 側の余剰ファイルは検出しない。(b) 汚れ検査は上記 build 入力のみで、
+  `scripts/`（sync-plugin-assets.sh 等）は対象外。(c) (5) で拒否した場合、registry は戻るが cache の
+  version dir には swap 済みバイナリが残る（(4) を通過済みのビルド物）。(d) canary 経路は E2E テスト未整備。
+  プロセスが死んで `.active` が残った場合は rollout が拒否し続けるので、`git status` が clean なことを
+  確認してから手で消す。
 - **GATE クレートは canary 必須**: canary 無しでの反映はエラーで止まる（fleet 防御ゲートを
   無検証で入れ替えないための安全策）。`--no-canary` は明示的な例外指定としてのみ用いる。
 - **手動 `cp` は禁止**: cache の binary/asset を手で上書きするだけだと **version dir が旧名のまま残り**

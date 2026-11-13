@@ -935,6 +935,29 @@ make bins                             # 各プラットフォーム向け同梱�
 cargo test -p blastguard              # ユニット + 統合テスト
 ```
 
+### 統合テストの fixture の置き場所（backlog 37955e32）
+
+hook を実バイナリで叩く統合テストの fixture（`git init` / `git worktree add` した repo を含む）は
+`tests/support/neutral_base.rs` の `neutral_base()` の下に作る。置き場所は
+`$HOME/.blastguard-test-fixtures/blastguard-worktree-root-fixtures/run-<pid>-<nanos>[-n]`
+（`BLASTGUARD_TEST_FIXTURE_DIR` を設定すればそれが唯一の候補になり、その下の
+`blastguard-worktree-root-fixtures/run-*`）。テストバイナリの実行ごとに `create_dir` で一意に作る。
+
+- **`target/` には置かない**: worktree の `target/`（無視されたビルド出力）に入れ子の `.git` が残ると、
+  forced な `git worktree remove` の検査が正しく Ask（subagent では Deny）になり、その worktree を撤去できなくなる。
+- **safe root にも置かない**: `/tmp`・`/private/tmp`・`/var/tmp` は temp safe root、`$TMPDIR`
+  （macOS は `/private/var/folders/...`）は temp root かつ削除原則上のシステムディレクトリで、
+  どちらも fixture の場所が判定を左右する。使用前に実 hook で 2 本の較正（cwd 外の `rm -rf` が厳密に Deny、
+  cwd 内の `rm -rf` が厳密に Ask）を通し、通らない場所は panic で拒否する。
+- **自己掃除**: 各実行はプロセス終了時（`atexit`）に**自分の** run ディレクトリだけを消す。
+  `symlink_metadata` で実ディレクトリ（symlink でない）かつ正準パスが作成時と一致する場合に限る。
+  失敗は stderr に出すだけで、panic せず、他は何も消さない。
+- **prune**: 実行開始時、専用ディレクトリ `blastguard-worktree-root-fixtures` の**直下**にある
+  `run-*` のうち、実ディレクトリ（symlink・非ディレクトリは skip）で 24 時間更新が無く、正準パスが
+  `<正準な専用ディレクトリ>/<名前>` と一致するものだけを消す（kill されて自己掃除できなかった実行の残骸）。
+  疑わしいものは消さずに skip する。`remove_dir_all` はツリー内の symlink を辿らない。
+- git repo を作らない一部のテストは引き続き `CARGO_TARGET_TMPDIR` 配下に scratch を作る。
+
 ## 事後検証（`blastguard retro`）
 
 ゲート自身のログは「ゲートが何を言ったか」しか答えない。ゲートが割に合っているかを

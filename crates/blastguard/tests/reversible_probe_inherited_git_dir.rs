@@ -64,8 +64,10 @@ fn run_with_env(base: &Path, proj: &Path, command: &str, envs: &[(&str, &Path)])
 
 #[test]
 fn truncating_non_repo_file_verdict_ignores_inherited_git_dir() {
-    // Physical location must be OUTSIDE every git repo (neutral_base lives under
-    // the workspace `target/`, i.e. inside the outer repo), so the control run
+    // Physical location must be OUTSIDE every git repo (neutral_base used to
+    // live under the workspace `target/`, i.e. inside the outer repo; since
+    // backlog 37955e32 it is under `$HOME`, which is not guaranteed to be
+    // outside every repo either), so the control run
     // really is a non-repo file.
     let base: PathBuf = std::env::temp_dir()
         .canonicalize()

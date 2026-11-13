@@ -802,6 +802,11 @@ forge・condukt のスケジューラが再利用）。
   `Path('/tmp/y').replace('/etc/hosts')`（移動先の operand）。`os.chmod('/etc/hosts',0)` は Deny（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_python_write_api_indirect_system_target.rs`
   （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **comment collapse の回帰ガード（2026-11-14、spec blastguard-comment-collapse-residual R1 の旧 R3）** — `#` コメント行の
+  次の行で `os.chmod('/etc/hosts',0)` を呼ぶ python program を、解決できないコマンド語（`$PY -c` / `"$PY" -c`）、
+  `find -exec sh -c`、ANSI-C `$'..'` で渡す形は、main・subagent とも Allow にならない（a473ba71 で観測済み。ignore なし）。
+  回帰テスト: `crates/blastguard/tests/comment_collapse_r3_shapes_stay_denied_20261114.rs`
+  （e4523bfd の実装者ではなく orchestrator が書いた。検出力の証跡はファイル冒頭の doc comment と commit message）。
 
 ### module 責務
 

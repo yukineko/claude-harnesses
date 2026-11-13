@@ -598,3 +598,8 @@ reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-1
 path = "crates/blastguard/tests/backlog_20261114_python_write_api_indirect_system_target.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-14、flow-8cca7ef5。修正は未実装）': python write APIs whose system-path target is built (Path / 'x', joinpath), a keyword argument, an aliased import, or a Path.replace destination are Allow; RED test plus an os.chmod control."
+
+[[spec]]
+path = "crates/blastguard/tests/comment_collapse_r3_shapes_stay_denied_20261114.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'comment collapse の回帰ガード（2026-11-14、spec blastguard-comment-collapse-residual R1 の旧 R3）': comment-bearing programs reached via an unresolvable command word, find -exec sh -c, or ANSI-C quoting, calling os.chmod on /etc/hosts, stay not-Allow."

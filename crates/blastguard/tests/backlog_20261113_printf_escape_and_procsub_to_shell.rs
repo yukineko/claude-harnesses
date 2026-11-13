@@ -113,7 +113,6 @@ const PROCSUB_SHAPES: &[(&str, &str)] = &[
 // test-weakening-justified: new RED for an unfixed system-harm fail-open
 // (2026-11-13); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: 2026-11-13 printf escape expansion piped to a shell runs a system-harm command but is allowed — remove the ignore when fixed"]
 fn printf_escape_expanded_program_piped_to_shell_is_denied() {
     let failures = non_deny(PRINTF_SHAPES, "printf");
     assert!(

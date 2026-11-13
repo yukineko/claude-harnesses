@@ -1,3 +1,4 @@
+use super::printf_eval::{evaluate_printf_stage, PrintfStage};
 use super::{
     backtick_body_as_run, command_candidates, first_line_quoted_here_document_body,
     first_shell_word, here_document_delimiter_is_quoted, here_string_spans,
@@ -218,6 +219,15 @@ blastguard cannot tell whether anything here is irreversible"
                         return deny;
                     }
                 }
+                if let PrintfStage::Undetermined(why) = evaluate_printf_stage(&statement[i - 1]) {
+                    if let Some(deny) = acc.record(Decision::ask(format!(
+                        "{shape}, and the printf stage piping into it (`{}`) cannot be \
+evaluated statically ({why}) — its output is the program, so blastguard cannot read it",
+                        statement[i - 1].trim()
+                    ))) {
+                        return deny;
+                    }
+                }
                 // The quoted literals are the WHOLE program only when the
                 // upstream stage emits nothing but its own arguments (`echo`,
                 // `printf`). Any other upstream — `grep -E "a" f`, `jq -r . f`,
@@ -330,6 +340,15 @@ fn stdin_program_texts(
         program_texts.extend(quoted_string_literals(&backticks_as_dollar_paren(
             &statement[i - 1],
         )));
+        // A `printf` stage emits its EVALUATED output (escapes, `%s` …), not
+        // the quoted text: judge that too (backlog 00569f7d). The verbatim
+        // literals above stay judged; an unevaluable printf is an Ask
+        // recorded by the caller (`printf_undetermined`).
+        if let PrintfStage::Output(text) = evaluate_printf_stage(&statement[i - 1]) {
+            if !text.trim().is_empty() && !program_texts.contains(&text) {
+                program_texts.push(text);
+            }
+        }
     }
     program_texts
 }

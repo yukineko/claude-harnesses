@@ -780,6 +780,11 @@ forge・condukt のスケジューラが再利用）。
   system パスは Allow になる（main・subagent とも）。escape を使わない `'/etc/hosts'` は Deny（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261113_python_escape_decoded_os_path_call.rs`
   （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の false positive の RED（2026-11-14、flow-8cca7ef5。修正は未実装）** — python の
+  `shutil.copy2(SRC, DST)` は読むだけの SRC も書き込み先として判定される: `shutil.copy2('/etc/hosts','/tmp/x')` は
+  「it writes `/etc/hosts`」で Deny、SRC だけを `/tmp/y` に変えた同形は Ask（main session）。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_shutil_copy2_source_judged_as_write_fp.rs`
+  （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
 
 ### module 責務
 

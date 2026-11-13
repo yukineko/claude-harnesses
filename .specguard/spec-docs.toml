@@ -588,3 +588,8 @@ reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（20
 path = "crates/blastguard/tests/backlog_20261113_python_escape_decoded_os_path_call.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-13、flow-8cca7ef5。修正は未実装）': a Python os.chmod/os.rename system path spelled with a string-literal escape (\\x2f, octal, \\u, \\N{SOLIDUS}) is Allow; RED test plus a plain-literal control."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_shutil_copy2_source_judged_as_write_fp.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14、flow-8cca7ef5。修正は未実装）': python shutil.copy2 with a system file as the read-only SOURCE is denied as writing it; RED test plus a /tmp-source control."

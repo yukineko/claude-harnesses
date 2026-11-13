@@ -139,7 +139,6 @@ const RED2_SHAPES: &[(&str, &str)] = &[
 // test-weakening-justified: new RED for an unfixed system-harm fail-open
 // (2026-11-14); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: 2026-11-14 procsub operand with args/value flags/fd dup is Allow — remove the ignore when fixed"]
 fn procsub_operand_with_args_value_flags_or_fd_dup_is_denied() {
     let failures = run_all(RED1_SHAPES, "red1", |d| d == "deny");
     assert!(
@@ -154,7 +153,6 @@ fn procsub_operand_with_args_value_flags_or_fd_dup_is_denied() {
 // test-weakening-justified: new RED for an unfixed false positive (2026-11-14);
 // the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: 2026-11-14 harmless static echo list in procsub fed to a shell is Ask/Deny, was Allow — remove the ignore when fixed"]
 fn harmless_static_list_procsub_to_shell_is_allowed() {
     let failures = run_all(RED2_SHAPES, "red2", |d| d == "allow");
     assert!(

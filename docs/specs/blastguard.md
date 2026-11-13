@@ -438,6 +438,8 @@ forge・condukt のスケジューラが再利用）。
   `touch` は `: >> p`、`symlink_to`/`hardlink_to` は `: > p`。引数がちょうど 1 個（位置引数か `target=`）の
   `.replace(…)`/`.rename(…)` は `Path.replace`/`Path.rename` として、**転送先（引数）を `: > dst`、receiver を
   `rm src`** として判定する（`Path('/tmp/y').replace('/etc/hosts')` は Deny、`Path('a').replace('b')` は Allow）。
+  0.2.536 以降（backlog c8bf27ea）は同じ callable を直接呼び出し以外で使う形（unbound `Path.m(recv, …)`・
+  `w = X.m; w(…)`・`.__call__`・引数や container に渡す参照等）も判定する（下の「メソッド参照」項）。
   引数が 2 個以上の `str.replace('a','b')` や `target` 以外の keyword（`dt.replace(year=…)`）は対象外。
   receiver・転送先・path が解決できないものは Ask（subagent では Deny）: 変数 receiver で束縛が読めない
   `p.write_text(..)`・1 引数の `x.replace(y)`/`x.rename(y)`（pandas の `s.rename('n')` も含む）・
@@ -669,6 +671,24 @@ forge・condukt のスケジューラが再利用）。
     dotfile は shell と同じ Deny/Ask、repo 相対は Allow）。path は literal・`expanduser`・`Path.home()`・
     `os.path.join`・`/`・`joinpath` と、単純代入 `name = …` だけで束縛される名前（全代入の値を全部判定）から
     静的に解決し、解決できない path・literal でない mode/flag は Ask。
+  - **メソッド参照（backlog c8bf27ea、blastguard 0.2.536、`interpreter/python_semantics/method_refs.rs`）**:
+    上の path 判定（here-doc の Python file と `python -c`/stdin の program の両方）は、書き込み・移動系の
+    callable（pathlib の `write_text`/`write_bytes`/`touch`/`symlink_to`/`hardlink_to`/`chmod`/`lchmod`/`unlink`/
+    `rmdir`/`replace`/`rename`/`open` と、`os.remove` 等・`shutil.copy*`/`move`・`open` 等の module 関数）を
+    直接呼び出し以外で使う形も読む。`X.m.__call__(…)` は `X.m(…)`、unbound の `Path.m(recv, …)`（`PosixPath`/
+    `WindowsPath` も）は第 1 引数（か `self=`）を receiver・残りを bound 形の引数として `recv.m(…)`、
+    全束縛が単純代入 `w = <参照>` で、`w` が直接呼び出し（`w(…)`/`w.__call__(…)`）以外に現れない名前の
+    `w(…)` は参照先の呼び出しとして判定する（`Path.replace(Path('/tmp/z'),'/etc/hosts')`・
+    `w = Path('/etc/hosts').write_text; w('x')`・`Path('/etc/hosts').write_text.__call__('x')` は Deny、
+    `w = Path('build/x').write_text; w('y')`・`Path.replace(Path('a'),'b')` は Allow）。**それ以外の参照**
+    （別の名前へ渡す・引数・container・`.__get__` 等の属性・walrus・literal 名の `getattr`/
+    `operator.methodcaller`/`operator.attrgetter`）は構造的に fail-closed: receiver が解決できれば直接呼び出しと
+    同じ shell 行（`chmod` は mode `000`、`open` は `: >`）で判定し、解決できない receiver・unbound の class 参照・
+    module 関数の参照・`replace`/`rename` の転送先は Ask（subagent では Deny）。Allow のまま残すのは
+    receiver が文字列 literal（`'a'.replace`）か再束縛されていない `str`/`bytes`/`bytearray`（`str.replace`）、
+    `pathlib`/`os`/`posix`/`shutil`/`io`/`codecs`/`builtins` 以外の import した module の属性（`webbrowser.open`）。
+    data 属性として同名を読む `args.replace` 等（receiver が解決できない）は Ask になる。未対応（Allow のまま）:
+    literal でない属性名の `getattr`、名前以外から辿る callable（`vars(Path)['write_text']` 等）。
   - **計算される書き込み path（user ruling 2026-11-08、`interpreter/python_semantics/values.rs`、
     tests/heredoc_script_failopen_red_20261108.rs の FP 群）**: repo-scoped であると**証明できる**ときだけ Allow。
     それ以外（絶対 root・`~`・`expanduser`・`Path.home()`・`/` や `~` を root とする iteration・出自不明）は Ask。
@@ -855,13 +875,15 @@ forge・condukt のスケジューラが再利用）。
   LF の同形は Allow にならない（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_python_cr_ends_comment.rs`
   （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
-- **未修正の system-harm fail-open の RED（2026-11-14、flow-8cca7ef5、pathlib のメソッド参照。修正は未実装）** —
-  pathlib の書き込み・移動メソッドを直接呼び出し `Path(..).method(..)` 以外で呼ぶ形は Allow になる（main・subagent とも）:
+- **system-harm fail-open の RED（2026-11-14、flow-8cca7ef5、pathlib のメソッド参照。backlog c8bf27ea・
+  blastguard 0.2.536 で修正済み。`#[ignore]` は外した）** —
+  pathlib の書き込み・移動メソッドを直接呼び出し `Path(..).method(..)` 以外で呼ぶ形は Allow になっていた（main・subagent とも）:
   unbound 呼び出し `Path.replace(Path('/tmp/z'), '/etc/hosts')`、束縛メソッドを名前に入れて呼ぶ
   `w = Path('/etc/hosts').write_text; w('x')`、`Path('/etc/hosts').write_text.__call__('x')`。
-  直接呼び出し `Path('/etc/hosts').write_text('x')` は Allow にならない（control）。
+  直接呼び出し `Path('/etc/hosts').write_text('x')` は Allow にならない（control）。修正の内容は
+  「filesystem 破壊」項の **メソッド参照**（`interpreter/python_semantics/method_refs.rs`）を参照。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_python_write_method_reference.rs`
-  （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+  （RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
 - **未修正の false positive の RED（2026-11-14、flow-8cca7ef5、単一引用符内の perl 特殊変数。修正は未実装）** —
   単一引用符の `perl -ne 'print if $.==9' /dev/null` は shell が `$.` を展開しないのでコマンド行の文字列がそのままプログラムだが、
   blastguard は「inline-eval のプログラムが shell 展開を含む」として拒否する（subagent で deny を観測）。

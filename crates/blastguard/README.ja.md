@@ -672,6 +672,15 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   （`Path('/tmp/y').replace('/etc/hosts')` は deny、`Path('a').replace('b')` は allow、
 >   引数 2 個の `s.replace('a','b')` は対象外）。receiver・転送先が解決できない
 >   （変数 receiver の `p.write_text(..)`・1 引数の `x.rename(y)` 等）ものは ask。
+>   0.2.536 以降（backlog c8bf27ea、`src/detect/interpreter/python_semantics/method_refs.rs`）、
+>   これらの callable を直接呼び出し以外で使う形も判定する: unbound の
+>   `Path.replace(Path('/tmp/z'), '/etc/hosts')`（第 1 引数が receiver）、
+>   `w = Path('/etc/hosts').write_text; w('x')`、`Path('/etc/hosts').write_text.__call__('x')` は
+>   直接呼び出しと同じく deny、`w = Path('build/x').write_text; w('y')` と
+>   `Path.replace(Path('a'), 'b')` は allow。それ以外の参照（引数・container・別名への受け渡し・
+>   literal 名の `getattr`/`methodcaller` 等）は receiver が解決できればその path で判定し、
+>   できなければ ask（`str.replace`・`'a'.replace`・`webbrowser.open` は対象外で allow のまま。
+>   receiver が解決できない `args.replace` のような同名の属性読み出しは ask になる）。
 
 当時、overwatch の continuous-audit 再発トラッカー（`overwatch violations --json`）が
 `blastguard:truncating-redirect` と `blastguard:code-interpreter-inline-eval` を

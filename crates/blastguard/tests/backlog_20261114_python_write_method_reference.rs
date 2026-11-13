@@ -91,7 +91,6 @@ const SHAPES: &[(&str, &str)] = &[
 ];
 
 #[test]
-#[ignore = "RED: pathlib write method reached through a method reference is Allow (backlog pending)"]
 fn write_method_reference_to_system_path_is_not_allowed() {
     let home = unique_home("red");
     let mut allowed = Vec::new();

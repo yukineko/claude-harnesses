@@ -419,12 +419,22 @@ forge・condukt のスケジューラが再利用）。
   いずれかの operand が、または `cp`/`ln`/`install` で最後の operand がシステムディレクトリ内なら
   system-harm Deny（`os.system('mv /etc/hosts /tmp/x')`）。引数が literal でない呼び出し（変数）は
   ここでは判定せず、従来の program audit に残る（未対応の residual）。
+  (4)（backlog 569b9b9d、blastguard 0.2.518）`Path(…)`/`pathlib.Path(…)`/`PosixPath(…)`/`WindowsPath(…)` の
+  呼び出し結果に**直接**続く method（(1) の path 変更系、および `replace`・`write_text`・`write_bytes`・`touch`・
+  `symlink_to`・`hardlink_to`）は、receiver の文字列引数がシステムディレクトリ内なら system-harm Deny
+  （`Path('/etc/hosts').chmod(0o777)`・`pathlib.Path('/etc/hosts').write_text('x')`・`Path('/etc/hosts').unlink()`）。
+  (5) copy 系（`shutil.copy`・bare `copy`・最終 component が `copy2`/`copyfile`/`copytree`/`copyFile`/
+  `copyFileSync`/`cpSync`）は第 1 引数（読むだけの転送元）より後の文字列引数がシステムディレクトリ内なら
+  system-harm Deny（`shutil.copy('/tmp/x','/etc/hosts')`。`shutil.copy('/etc/hosts','/tmp/x')` は対象外）。
+  変数に束縛した path（`p = Path('/etc/hosts'); p.chmod(…)`）は (4) では判定しない（residual）。
 - **interpreter の書き込み literal にもシステムディレクトリ軸（backlog 0fbfe00d、blastguard 0.2.395）** —
   program audit の回復可能性 probe（`detect/interpreter.rs`）は存在しない path に `NothingToDestroy` を返すので、
   `shutil.copy2(src, "/etc/x")`・`open("/etc/x","w")` のような**新規ファイル**作成が Allow だった（直接形
   `cp`/`>`/`tee` は Deny）。書き込み呼び出しを含む program の write-target literal（probe と同じ条件、probe 上限を
   超えた literal も含む）に `system_path_block` → `real_system_path_block` を適用し、Deny はその場で返す。
   symlink を解決できない landing は Ask（pending、後続の Deny に負ける）。相対 literal は判定しない（従来どおり）。
+  書き込み呼び出しの綴り（`INTERPRETER_WRITE_CALLS`）には blastguard 0.2.518 で node の `appendFileSync(`/
+  `appendFile(` と pathlib の `.write_text(`/`.write_bytes(` を追加した（backlog 569b9b9d）。
 - **`Library/LaunchAgents` への新規ファイルは Ask（ユーザー裁定 2026-11-07、backlog e34eb0be、blastguard 0.2.395）** —
   `system_path_block` が最初に `launch_agents_new_file_ask` を見る: 正規化した絶対パス（先頭 `~/` は `$HOME` で展開）に
   `Library/LaunchAgents` の component 対（ASCII 大小無視）とその下の component があり、システムディレクトリ外で、

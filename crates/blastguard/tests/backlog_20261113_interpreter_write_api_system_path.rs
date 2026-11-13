@@ -92,7 +92,6 @@ const WRITE_API_SHAPES: &[&str] = &[
 // test-weakening-justified: new RED for an unfixed CRITICAL fail-open (backlog
 // pending, 2026-11-13); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: <backlog-pending> 2026-11-13 interpreter write APIs (pathlib/fs.append*/perl open/shutil/os.replace) on a system path are allowed — remove the ignore when fixed"]
 fn interpreter_write_apis_on_system_path_are_not_allowed() {
     let home = unique_home("red");
     let mut failures = Vec::new();
@@ -134,7 +133,6 @@ const PATHLIB_CHMOD_SHAPES: &[&str] = &[
 // test-weakening-justified: new RED for an unfixed CRITICAL fail-open (backlog
 // 569b9b9d, 2026-11-13); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: 569b9b9d 2026-11-13 pathlib Path(..).chmod on a system path is allowed — remove the ignore when fixed"]
 fn pathlib_chmod_on_system_path_is_not_allowed() {
     let home = unique_home("chmod");
     let mut failures = Vec::new();

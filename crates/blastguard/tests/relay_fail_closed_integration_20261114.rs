@@ -103,7 +103,11 @@ fn stop_with_unparseable_stdin_blocks() {
     // so the block above comes from the parse failure, not from the setup.
     let o = relay_stop(&e, &stop_payload("sessFcGarbage", &e.cwd));
     assert_eq!(o.status.code(), Some(0));
-    assert!(!blocks(&o), "stdout: {}", String::from_utf8_lossy(&o.stdout));
+    assert!(
+        !blocks(&o),
+        "stdout: {}",
+        String::from_utf8_lossy(&o.stdout)
+    );
 }
 
 #[test]
@@ -152,5 +156,9 @@ fn control_empty_session_without_queue_file_is_allowed() {
     let o = relay_stop(&e, &stop_payload("sessFcEmpty", &e.cwd));
     assert_eq!(o.status.code(), Some(0));
     assert!(!qfile(&e, "sessFcEmpty").exists());
-    assert!(!blocks(&o), "stdout: {}", String::from_utf8_lossy(&o.stdout));
+    assert!(
+        !blocks(&o),
+        "stdout: {}",
+        String::from_utf8_lossy(&o.stdout)
+    );
 }

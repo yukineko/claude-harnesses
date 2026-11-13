@@ -1,11 +1,16 @@
 //! `next --claim` with the stored repro re-run before the ticket is handed out
 //! (backlog 78cee053). Split out of `main.rs` to keep it under its line cap.
+//! A row's project identity: in a repo store, the store's repo (user ruling
+//! 2026-11-14 「本質的というのは問題の質は通常パスでゆらぐものではない」 —
+//! the `project` label is only where the row was filed); in a pinned
+//! multi-project store, the label.
 //! Where the repro is re-run (user ruling 2026-11-07, "Cwd if same project"):
-//! the cwd's checkout (its git toplevel) when it belongs to the ticket's
-//! project — the same `store::canonical_project_id`, so a linked worktree
-//! matches its main checkout — otherwise the ticket's project root. When
-//! a candidate's project identity is undetermined or its re-run location is
-//! not a usable git checkout, that candidate is SKIPPED and the next candidate
+//! the cwd's checkout (its git toplevel) when it belongs to that project —
+//! the same `store::canonical_project_id`, so a linked worktree matches its
+//! main checkout — otherwise that project's root. When a candidate is
+//! provably another repo's, its project identity is undetermined, or its
+//! re-run location is not a usable git checkout, that candidate is SKIPPED
+//! (never auto-cancelled) and the next candidate
 //! is considered. The claim is REFUSED (non-zero) when no claimable candidate
 //! remains and at least one candidate was skipped due to undetermined re-run
 //! location (others may have been skipped because their fix landed or they were
@@ -22,8 +27,130 @@ use std::path::{Path, PathBuf};
 /// non-zero refusal, never a claim of an un-rechecked ticket.
 const RECHECK_ATTEMPTS: usize = 3;
 
-/// The directory the candidate's stored repro is re-run in (user ruling
-/// 2026-11-07, "Cwd if same project"):
+/// The directory the candidate's stored repro is re-run in.
+///
+/// `store_root` is the repo holding the store (`StoreLocation::project_root`):
+///
+///   * **Repo store** (`Some`): the STORE'S repo is the identity of every row
+///     in it (user ruling 2026-11-14:
+///     「本質的というのは問題の質は通常パスでゆらぐものではない」; and
+///     `config::StoreLocation::Repo`: a repo-local store holds that repo's
+///     tasks "whichever checkout wrote them"). The row's `project` label is
+///     only where the row was FILED, so a label naming another machine's path
+///     (absent here) does not make the row foreign. See
+///     [`repo_store_rerun_dir`] for the only cases the label still matters.
+///   * **Pinned (multi-project) store** (`None`): the label is the only
+///     separator, so it stays the identity ([`label_rerun_dir`]).
+///
+/// `Err` means the caller skips this candidate (never auto-cancels it) and
+/// considers the next one. When no claimable candidate remains and at least
+/// one was skipped this way, the claim is REFUSED instead of reporting an
+/// empty queue (CLAUDE.md §3: fail-closed).
+pub(crate) fn rerun_dir(
+    cand: &task::Task,
+    store_root: Option<&Path>,
+) -> std::result::Result<PathBuf, String> {
+    match store_root {
+        Some(root) => repo_store_rerun_dir(cand, root),
+        None => label_rerun_dir(cand),
+    }
+}
+
+/// [`rerun_dir`] for a repo store: the store's repo is the row's identity.
+///
+/// The label can only DISPROVE that, and only when it is an absolute path
+/// that exists on this machine: one that resolves to a DIFFERENT repo is
+/// `Err` (foreign row), and one whose existence or identity cannot be
+/// determined here is `Err` (undeterminable — never read as "same repo").
+/// An absent label (filed on another machine) or a non-path label is no
+/// evidence against the store, so the row is this repo's.
+///
+/// Re-run location (user ruling 2026-11-07, "Cwd if same project"): the cwd's
+/// checkout when it belongs to the store's repo, else the store's repo root.
+fn repo_store_rerun_dir(
+    cand: &task::Task,
+    store_root: &Path,
+) -> std::result::Result<PathBuf, String> {
+    let store_id = match store::canonical_project_id(store_root) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return Err(format!(
+                "the project identity of this store's repo {} cannot be determined: {why}",
+                store_root.display()
+            ));
+        }
+    };
+    let label = cand.project.trim();
+    let expanded = harness_core::config::expand_tilde(label);
+    if expanded.is_absolute() {
+        match std::fs::symlink_metadata(&expanded) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(format!(
+                    "whether its filing location {label:?} exists on this machine could not be \
+                     determined, so whether it belongs to this store's repo {} cannot be \
+                     determined: {e}",
+                    store_id.display()
+                ));
+            }
+            Ok(_) => match store::canonical_project_id(&expanded) {
+                Determination::Known(id) if id == store_id => {}
+                Determination::Known(id) => {
+                    return Err(format!(
+                        "its filing location {label:?} exists on this machine and belongs to a \
+                         DIFFERENT repo ({}) than this store's repo ({})",
+                        id.display(),
+                        store_id.display()
+                    ));
+                }
+                Determination::Undetermined(why) => {
+                    return Err(format!(
+                        "its filing location {label:?} exists on this machine but its project \
+                         identity cannot be determined, so whether it belongs to this store's \
+                         repo {} cannot be determined: {why}",
+                        store_id.display()
+                    ));
+                }
+            },
+        }
+    }
+    if let Some(top) = cwd_checkout_of(&store_id)? {
+        return Ok(top);
+    }
+    checkout_root(store_root, "this store's repo root")
+}
+
+/// The cwd's checkout (its git toplevel) when the cwd belongs to project `id`;
+/// `Ok(None)` when it belongs to another project or its toplevel is not
+/// resolvable by git; `Err` when the cwd or its identity cannot be read.
+fn cwd_checkout_of(id: &Path) -> std::result::Result<Option<PathBuf>, String> {
+    let cwd = std::env::current_dir().map_err(|e| {
+        format!(
+            "the cwd cannot be read, so whether it belongs to the ticket's project cannot be \
+             determined: {e}"
+        )
+    })?;
+    let cwd_id = match store::canonical_project_id(&cwd) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return Err(format!(
+                "the project identity of the cwd {} cannot be determined: {why}",
+                cwd.display()
+            ));
+        }
+    };
+    if cwd_id == id {
+        if let Ok(top) = evidence::repo_toplevel(&cwd) {
+            if let Ok(top) = top.canonicalize() {
+                return Ok(Some(top));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// [`rerun_dir`] for a pinned (multi-project) store, where the row's label is
+/// its identity (user ruling 2026-11-07, "Cwd if same project"):
 ///   1. the cwd's checkout (its git toplevel) when its
 ///      `store::canonical_project_id` equals that of the ticket's `project`
 ///      field (a linked worktree maps to its main checkout, so a worktree of
@@ -39,7 +166,7 @@ const RECHECK_ATTEMPTS: usize = 3;
 /// the fallback project root is not a usable git checkout. When no claimable
 /// candidate remains and at least one candidate was skipped as undetermined, the
 /// claim is REFUSED instead of returning empty queue (CLAUDE.md §3: fail-closed).
-pub(crate) fn rerun_dir(cand: &task::Task) -> std::result::Result<PathBuf, String> {
+fn label_rerun_dir(cand: &task::Task) -> std::result::Result<PathBuf, String> {
     if cand.project_unresolved {
         return Err(format!(
             "its project root was recorded as unresolved ({:?}), so its project identity cannot \
@@ -61,23 +188,8 @@ pub(crate) fn rerun_dir(cand: &task::Task) -> std::result::Result<PathBuf, Strin
             ));
         }
     };
-    let cwd = std::env::current_dir()
-        .map_err(|e| format!("the cwd cannot be read, so whether it belongs to the ticket's project cannot be determined: {e}"))?;
-    let cwd_id = match store::canonical_project_id(&cwd) {
-        Determination::Known(p) => p,
-        Determination::Undetermined(why) => {
-            return Err(format!(
-                "the project identity of the cwd {} cannot be determined: {why}",
-                cwd.display()
-            ));
-        }
-    };
-    if cwd_id == ticket_id {
-        if let Ok(top) = evidence::repo_toplevel(&cwd) {
-            if let Ok(top) = top.canonicalize() {
-                return Ok(top);
-            }
-        }
+    if let Some(top) = cwd_checkout_of(&ticket_id)? {
+        return Ok(top);
     }
     project_root(cand)
 }
@@ -98,33 +210,31 @@ fn project_root(cand: &task::Task) -> std::result::Result<PathBuf, String> {
     if cand.project.trim().is_empty() {
         return Err("it records no project root to re-run it in".to_string());
     }
-    let root = Path::new(&cand.project).canonicalize().map_err(|e| {
-        format!(
-            "its project root {:?} cannot be resolved: {e}",
-            cand.project
-        )
-    })?;
+    checkout_root(Path::new(&cand.project), "its project root")
+}
+
+/// `path` as a re-run location. `Err` when it is missing, not a directory, or
+/// not itself the top of a git checkout — re-running against any other tree
+/// would hand out a ticket on someone else's evidence. `what` names `path` in
+/// the reason.
+fn checkout_root(path: &Path, what: &str) -> std::result::Result<PathBuf, String> {
+    let root = path
+        .canonicalize()
+        .map_err(|e| format!("{what} {:?} cannot be resolved: {e}", path.display()))?;
     if !root.is_dir() {
-        return Err(format!(
-            "its project root {} is not a directory",
-            root.display()
-        ));
+        return Err(format!("{what} {} is not a directory", root.display()));
     }
-    let top = evidence::repo_toplevel(&root).map_err(|e| {
-        format!(
-            "its project root {} is not a git checkout: {e}",
-            root.display()
-        )
-    })?;
+    let top = evidence::repo_toplevel(&root)
+        .map_err(|e| format!("{what} {} is not a git checkout: {e}", root.display()))?;
     let top = top.canonicalize().map_err(|e| {
         format!(
-            "the git toplevel {} of its project root cannot be resolved: {e}",
+            "the git toplevel {} of {what} cannot be resolved: {e}",
             top.display()
         )
     })?;
     if top != root {
         return Err(format!(
-            "its project root {} is not a git checkout (it lies inside the checkout {})",
+            "{what} {} is not a git checkout (it lies inside the checkout {})",
             root.display(),
             top.display()
         ));
@@ -134,12 +244,15 @@ fn project_root(cand: &task::Task) -> std::result::Result<PathBuf, String> {
 
 /// Whether the fix commit of `cand` (a commit reachable from HEAD whose subject
 /// contains `(backlog <id>)`) has already landed (backlog a04b2b87). HEAD is
-/// the one of the location [`rerun_dir`] picks, NOT the process cwd, so a
-/// `next` run from a non-git cwd still looks at the ticket's project root.
-/// `Err` when that location or git's answer cannot be determined; the caller
-/// refuses rather than hand out a possibly-fixed ticket.
-pub(crate) fn fix_landed(cand: &task::Task) -> std::result::Result<bool, String> {
-    let root = rerun_dir(cand)?;
+/// the one of the location [`rerun_dir`] picks (with the same `store_root`),
+/// NOT the process cwd, so a `next` run from a non-git cwd still looks at the
+/// ticket's project root. `Err` when that location or git's answer cannot be
+/// determined; the caller refuses rather than hand out a possibly-fixed ticket.
+pub(crate) fn fix_landed(
+    cand: &task::Task,
+    store_root: Option<&Path>,
+) -> std::result::Result<bool, String> {
+    let root = rerun_dir(cand, store_root)?;
     Ok(evidence::fixed_task_ids(&root)?.contains(&cand.id))
 }
 
@@ -179,7 +292,7 @@ pub(crate) fn next_unfixed(
         };
         let landed = match &repo_fixed {
             Some(ids) => Ok(ids.contains(&cand.id)),
-            None => fix_landed(&cand),
+            None => fix_landed(&cand, None),
         };
         match landed {
             Ok(false) => return Ok(Some(cand)),
@@ -209,10 +322,13 @@ pub(crate) fn next_unfixed(
 /// Each round: peek the top candidate (a pure read, NO lock held); if its fix
 /// commit already landed ([`fix_landed`]) it joins `skip` with a stderr notice
 /// (undetermined: REFUSED); otherwise re-run its
-/// stored repro at HEAD of the location [`rerun_dir`] picks (the cwd checkout
-/// when it belongs to the ticket's project, else the ticket's project root; an
-/// undetermined identity or an unusable root is SKIPPED with a notice and the
-/// claim moves to the next candidate) via `evidence::run_repro`
+/// stored repro at HEAD of the location [`rerun_dir`] picks for `store_root`
+/// (repo store: the store's repo is the row's identity, user ruling
+/// 2026-11-14; pinned store: the row's label. The cwd checkout when it belongs
+/// to that project, else that project's root; a row that is provably another
+/// repo's, an undetermined identity or an unusable root is SKIPPED with a
+/// notice, never auto-cancelled, and the claim moves to the next candidate)
+/// via `evidence::run_repro`
 /// (can be a long `cargo test`, so it runs outside the ledger lock and the
 /// tasks-file lock), classified by `evidence::run_repro_classified`, then:
 ///   - `not-reproduced` / `not-demonstrated` (user ruling 2026-11-13
@@ -241,6 +357,7 @@ pub(crate) fn claim_rechecked(
     project: Option<&str>,
     identity: &str,
     session_id: Option<&str>,
+    store_root: Option<&Path>,
 ) -> Result<Option<task::Task>> {
     const REFUSED: &str = "backlog next --claim REFUSED to claim (this is NOT \"no pending \
                            tasks\" — nothing was claimed and the queue was not judged empty)";
@@ -272,7 +389,7 @@ pub(crate) fn claim_rechecked(
                 cand.id
             ));
         };
-        let root = match rerun_dir(&cand) {
+        let root = match rerun_dir(&cand, store_root) {
             Ok(r) => r,
             Err(why) => {
                 eprintln!(
@@ -286,7 +403,9 @@ pub(crate) fn claim_rechecked(
                 continue;
             }
         };
-        match fix_landed(&cand) {
+        // Landed-fix check at HEAD of the SAME location the repro re-runs in
+        // (what `fix_landed(&cand, store_root)` would resolve again).
+        match evidence::fixed_task_ids(&root).map(|ids| ids.contains(&cand.id)) {
             Ok(false) => {}
             Ok(true) => {
                 eprintln!(

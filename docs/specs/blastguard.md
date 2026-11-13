@@ -499,7 +499,13 @@ forge・condukt のスケジューラが再利用）。
   ではなく、segment 原文から切り出した**改行・連続空白を保った原文**（shell の quote を外したもの）で判定する。
   繋ぎ直しでは改行が潰れ、`#` コメントが次行の system-harm 呼び出しを飲み込んで Allow になっていた
   （critical fail-open）。原文が切り出せず語が複数トークンにまたがる場合（`word_separators_lost`）は Allow を Ask に
-  倒す（判定不能は制限側）。`env -S` は従来どおり繋ぎ直しで、原文化は未検証。
+  倒す（判定不能は制限側）。blastguard 0.2.522（backlog e4523bfd、spec blastguard-comment-collapse-residual
+  R1/R2）以降、未知 wrapper の後ろの行も原文で判定し（`detect/payload.rs` の `reanalysis_text`。原文が読めず
+  区切りが失われたら Ask）。blastguard 0.2.525 以降、`env -S`／`--split-string` の operand は env 自身の分割規則
+  （GNU coreutils `build_argv` と FreeBSD/macOS `split_spaces` の共通部分）で argv に分割し `env <argv…>` として判定する
+  （`detect/executors.rs` の `env_split_argv` / `env_split_string_verdict`）。`$`／`${VAR}`、両実装で結果が違うか拒否される
+  エスケープ、閉じない quote、shell 側の展開など規則で確定できないものは Ask（subagent では Deny）。従来の shell 文字列
+  としての読みも追加の読みとして判定する。`env -S 'ls   -la'` は Allow のまま。
 - **`open()` 系呼び出しの mode は構文で判定する（`detect/interpreter/open_mode.rs`、backlog 6cac93af、
   blastguard 0.2.493）** — inline program 中の `open` / `fdopen` / `opensync`（`io.` / `codecs.` / `os.` 等の
   receiver 付きを含む）の呼び出しについて、mode operand を位置引数・`mode=` から取り出し、literal が
@@ -832,6 +838,11 @@ forge・condukt のスケジューラが再利用）。
   `Path('/tmp/y').replace('/etc/hosts')`（移動先の operand）。`os.chmod('/etc/hosts',0)` は Deny（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_python_write_api_indirect_system_target.rs`
   （RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **comment collapse の回帰ガード（2026-11-14、spec blastguard-comment-collapse-residual R1 の旧 R3）** — `#` コメント行の
+  次の行で `os.chmod('/etc/hosts',0)` を呼ぶ python program を、解決できないコマンド語（`$PY -c` / `"$PY" -c`）、
+  `find -exec sh -c`、ANSI-C `$'..'` で渡す形は、main・subagent とも Allow にならない（a473ba71 で観測済み。ignore なし）。
+  回帰テスト: `crates/blastguard/tests/comment_collapse_r3_shapes_stay_denied_20261114.rs`
+  （e4523bfd の実装者ではなく orchestrator が書いた。検出力の証跡はファイル冒頭の doc comment と commit message）。
 - **未修正の false positive の RED（2026-11-14、flow-8cca7ef5。修正は未実装）** — `printf` の二重引用符 operand が
   `\$PY -c, \\\"\$PY\\\" -c, find -exec sh -c ... os.chmod on /etc/hosts ...` のような文字列だと、印字するだけの
   `printf` が「`printf` is not a command blastguard recognises, and what follows it parses as a destructive command line」で

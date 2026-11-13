@@ -784,3 +784,107 @@ pub fn commit_repro(dir: &Path) -> &'static str {
     git(&["commit", "-q", "-m", "fixture repro"]);
     COMMITTED_REPRO
 }
+
+impl Fixture {
+    /// Rewrite the stored `project` label of row `id` (as if it was filed on
+    /// another machine / from another root). `add` refuses a foreign
+    /// `--project`, so the label is planted straight into the store.
+    pub fn plant_project_label(&self, id: &str, label: &str) {
+        let p = self.tasks_path();
+        let text = std::fs::read_to_string(&p).unwrap();
+        let mut in_row = false;
+        let mut replaced = false;
+        let out: Vec<String> = text
+            .lines()
+            .map(|l| {
+                if l.starts_with("[[task]]") {
+                    in_row = false;
+                }
+                if l.trim() == format!("id = \"{id}\"") {
+                    in_row = true;
+                }
+                if in_row && l.starts_with("project = ") && !replaced {
+                    replaced = true;
+                    return format!("project = \"{label}\"");
+                }
+                l.to_string()
+            })
+            .collect();
+        assert!(replaced, "setup: {id}'s project line not found in:\n{text}");
+        std::fs::write(&p, out.join("\n") + "\n").unwrap();
+    }
+}
+
+/// A REAL, EXISTING git repository (one commit) that is a different repo from
+/// any fixture repo. The premise is asserted so a test using it is not vacuous.
+pub fn make_other_repo(tag: &str) -> PathBuf {
+    let dir = unique_dir(&format!("{tag}-otherrepo"))
+        .canonicalize()
+        .unwrap();
+    let git = |args: &[&str]| {
+        let mut c = Command::new("git");
+        harness_core::git_env::scrub(&mut c);
+        let o = c
+            .current_dir(&dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .expect("git runs");
+        assert!(
+            o.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "other"]);
+    assert!(dir.exists(), "premise: other repo dir must exist");
+    assert!(
+        dir.join(".git").is_dir(),
+        "premise: other repo has a real git dir"
+    );
+    let top = git(&["rev-parse", "--show-toplevel"]);
+    assert_eq!(
+        PathBuf::from(top).canonicalize().unwrap(),
+        dir,
+        "premise: other repo is its own toplevel"
+    );
+    dir
+}
+
+/// An EXISTING directory whose git entry is a FILE pointing at a nonexistent
+/// gitdir, so its repo identity is really undeterminable. Premise asserted
+/// (git itself cannot resolve it).
+pub fn make_dangling_gitfile_dir(tag: &str) -> PathBuf {
+    let dir = unique_dir(&format!("{tag}-dangling"))
+        .canonicalize()
+        .unwrap();
+    let missing = dir.join("nonexistent-gitdir-target");
+    std::fs::write(dir.join(".git"), format!("gitdir: {}\n", missing.display())).unwrap();
+    assert!(
+        dir.exists() && dir.join(".git").is_file(),
+        "premise: dir with a gitfile"
+    );
+    assert!(!missing.exists(), "premise: gitdir target must not exist");
+    let mut c = Command::new("git");
+    harness_core::git_env::scrub(&mut c);
+    let o = c
+        .current_dir(&dir)
+        .args(["rev-parse", "--git-dir"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("git runs");
+    assert!(
+        !o.status.success(),
+        "premise: git must fail to resolve the dangling gitfile dir, got: {}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+    dir
+}

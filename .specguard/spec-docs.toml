@@ -568,3 +568,8 @@ reason = "module list bullet `log`: read-only `blastguard log` over overwatch vi
 path = "crates/blastguard/tests/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-13、flow-8cca7ef5）': FP1 (.rs heredoc body with python3 -c text) and FP2b (git commit text in a .rs heredoc body) RED tests plus controls."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/python_escape.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Bullet 'Python の非 raw 文字列 literal は escape を decode した値でも判定する（backlog 47b20647）': decode_non_raw decodes a non-raw Python literal body (backslash-newline removed, simple/octal/hex/unicode escapes), None for \\N{...}/malformed; raw literals are not decoded."

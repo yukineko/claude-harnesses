@@ -802,6 +802,12 @@ forge・condukt のスケジューラが再利用）。
   `Path('/tmp/y').replace('/etc/hosts')`（移動先の operand）。`os.chmod('/etc/hosts',0)` は Deny（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_python_write_api_indirect_system_target.rs`
   （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の false positive の RED（2026-11-14、flow-8cca7ef5。修正は未実装）** — `printf` の二重引用符 operand が
+  `\$PY -c, \\\"\$PY\\\" -c, find -exec sh -c ... os.chmod on /etc/hosts ...` のような文字列だと、印字するだけの
+  `printf` が「`printf` is not a command blastguard recognises, and what follows it parses as a destructive command line」で
+  Ask（subagent では Deny）になる。`\$PY ...` の部分を除いた同形は Allow（control）。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_printf_operand_judged_as_command_fp.rs`
+  （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
 
 ### module 責務
 

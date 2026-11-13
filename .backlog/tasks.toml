@@ -1502,38 +1502,6 @@ exit 101: -c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_printf_operand_judged_as_command_fp`"""
 
 [[task]]
-id = "a66c115c"
-title = "blastguard: python コメントを裸の CR で終える python3 -c (import os # x<CR>os.chmod('/etc/hosts',0)) が allow になる fail-open を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "system-harm",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "System-harm fail-open, RED fe5be3de by a non-implementer (flow-8cca7ef5 orchestrator) at main eed07c9b 2026-11-14: CPython ends a # comment at a bare CR (observed via compile on 3.12.11), so the chmod runs, but blastguard treats it as comment: 4 of 4 (python -c and env -S twin, main+subagent) Allow; also allow at d84e8cab. LF twin not Allow (control). Found by the e4523bfd round-2 probe."
-created_at = 1794597834
-updated_at = 1794597834
-weight = 0.0
-issue_number = 1729
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1729"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261114_python_cr_ends_comment -- --include-ignored"
-rev = "fe5be3de4bf2a12105fc15db888d080f68715faf"
-observed_at = 1794597834
-detail = """
-exit 101: s/yuki/.condukt/worktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.57s
-     Running tests/backlog_20261114_python_cr_ends_comment.rs (target/debug/deps/backlog_20261114_python_cr_ends_comment-129109f5aea5f31c)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_cr_ends_comment`"""
-
-[[task]]
 id = "c8bf27ea"
 title = "blastguard: pathlib の書き込みメソッドを参照経由 (unbound Path.replace / 束縛メソッドを名前に入れて呼ぶ / __call__) で呼ぶと /etc/hosts 上書きが allow になる fail-open を直す"
 project = "/Users/yuki/src/harness"
@@ -1625,8 +1593,40 @@ exit 101: rktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastgua
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_perl_single_quoted_dollar_fp`"""
 
 [[task]]
-id = "2089dfc5"
-title = "blastguard: worktree remove --force denied when only ignored build output (target/) remains (false positive)"
+id = "036067bf"
+title = "blastguard: system-harm program piped into a subshell/brace-group/source reader (printf 'chmod 777 /etc/hosts' | (bash)) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 by an independent verifier on blastguard 0.2.530 (branch commit 0e726e66) and main build 144906a1; re-observed at main 4139f1d2 (0.2.539): all Allow in main and subagent mode: printf/echo 'chmod 777 /etc/hosts' piped into (bash), { bash; }, . /dev/stdin, source /dev/stdin. Control: piping into bare bash is Deny. RED commit fa080792 on branch test/bg-red-pipe-reader-and-py-argv."
+created_at = 1794601310
+updated_at = 1794601310
+weight = 0.0
+issue_number = 1734
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1734"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_into_subshell_brace_source_reader -- --include-ignored"
+rev = "fa080792966cccefbe3e040a53de25b6add39720"
+observed_at = 1794601310
+detail = """
+exit 101: -pipe-reader-and-py-argv/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.02s
+     Running tests/backlog_20261114_pipe_into_subshell_brace_source_reader.rs (target/debug/deps/backlog_20261114_pipe_into_subshell_brace_source_reader-efad5afd787342ac)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_into_subshell_brace_source_reader`"""
+
+[[task]]
+id = "dc27f669"
+title = "blastguard: printf (format-reuse) file passed as a data argument to a python script is judged as the python program (Ask / subagent Deny)"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = [
@@ -1636,21 +1636,21 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = 'Observed 2026-11-14, deployed blastguard 0.2.523+, subagent mode, 3 times. Deny reason verbatim: "git worktree remove --force `/Users/yuki/src/harness-wt-label-fix`: git status reports uncommitted changes, untracked files or ignored files there (ignored files such as build output in target/ count: the forced removal deletes the whole directory), which would be destroyed". Repro at rev ff411978 (blastguard 0.2.530 branch test/blastguard-fp-worktree-remove-target): main=ask, subagent=deny. Controls (modified tracked, untracked non-ignored, ignored .env) stay non-Allow.'
-created_at = 1794599118
-updated_at = 1794599118
+notes = '''Observed 2026-11-14 in flow session: printf '%s\n' 'echo hi | bash' 'echo hi |& bash' > c.txt && python3 p.py bin c.txt refused in subagent mode: printf writes the file, another part may run it with Python, written text judged as the Python program; printf option/format-reuse rules not modelled. Reproduced at main 4139f1d2 (0.2.539): printf '%s\n' a b > d.txt && python3 s.py d.txt is ask (main) / deny (subagent); single-conversion printf is Allow; true-positive controls (file is the program) stay non-Allow. RED commit fa080792 on branch test/bg-red-pipe-reader-and-py-argv.'''
+created_at = 1794601343
+updated_at = 1794601343
 weight = 0.0
-issue_number = 1733
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1733"
+issue_number = 1735
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1735"
 rev = 0
 
 [task.repro]
 outcome = "reproduced"
-cmd = "cargo test -p blastguard --test worktree_remove_ignored_build_output_fp_20261114 -- --ignored"
-rev = "ff411978fb15167d21cf8c4c3503e363475a65d2"
-observed_at = 1794599118
+cmd = "cargo test -p blastguard --test backlog_20261114_printf_file_as_python_data_arg_fp -- --include-ignored"
+rev = "fa080792966cccefbe3e040a53de25b6add39720"
+observed_at = 1794601343
 detail = """
-exit 101: 2.530 (/Users/yuki/src/harness-wt-fp-wtremove/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.65s
-     Running tests/worktree_remove_ignored_build_output_fp_20261114.rs (target/debug/deps/worktree_remove_ignored_build_output_fp_20261114-cdb2a2e94685c6b4)
-error: test failed, to rerun pass `-p blastguard --test worktree_remove_ignored_build_output_fp_20261114`"""
+exit 101: orktrees/bg-red-pipe-reader-and-py-argv/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/backlog_20261114_printf_file_as_python_data_arg_fp.rs (target/debug/deps/backlog_20261114_printf_file_as_python_data_arg_fp-232693ec2b1af97c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_printf_file_as_python_data_arg_fp`"""

@@ -617,7 +617,7 @@ reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-1
 [[spec]]
 path = "crates/blastguard/tests/backlog_20261114_python_cr_ends_comment.rs"
 doc = "docs/specs/blastguard.md"
-reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-14、flow-8cca7ef5、CR で終わる python コメント。修正は未実装）': a python -c program whose comment ends at a bare CR hides an os.chmod on /etc/hosts and is Allow (also via env -S); RED test plus an LF control."
+reason = "'振る舞い' bullet 'CR で終わる python コメントの system-harm fail-open（2026-11-14、flow-8cca7ef5、backlog a66c115c で修正済み）': a python -c program whose comment ends at a bare CR hides an os.chmod on /etc/hosts; Python programs are now read with CPython's CR/CRLF line terminators (python_newlines), so it is Deny (also via env -S); regression test plus an LF control."
 
 [[spec]]
 path = "crates/blastguard/tests/backlog_20261114_python_write_method_reference.rs"
@@ -628,3 +628,8 @@ reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（20
 path = "crates/blastguard/tests/backlog_20261114_perl_single_quoted_dollar_fp.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14、flow-8cca7ef5、単一引用符内の perl 特殊変数。修正は未実装）': a single-quoted perl -ne program using $. is refused as a shell expansion; RED test plus a double-quoted $HOME control."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_heredoc_rs_body_match_arrow_fp.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14。修正は未実装）': a quoted heredoc .rs body with a match arrow (=>) followed by a python3 heredoc statement is denied as a redirect; RED test plus real-redirect and executed-heredoc controls."

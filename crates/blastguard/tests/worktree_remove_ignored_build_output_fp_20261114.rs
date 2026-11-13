@@ -197,7 +197,6 @@ impl Fixture {
     }
 }
 
-#[ignore = "RED 2026-11-14: git worktree remove --force on a clean linked worktree holding only gitignored target/ build output is denied (backlog: blastguard worktree remove ignored build output FP)"]
 #[test]
 fn t1_clean_worktree_with_only_ignored_build_output_is_allow() {
     let f = Fixture::new("t1");

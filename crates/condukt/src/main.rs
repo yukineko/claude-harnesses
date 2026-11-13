@@ -50,6 +50,7 @@ mod status;
 mod store;
 mod subagent_stop;
 mod teardown_gate;
+mod testscope;
 mod timings;
 #[cfg(test)]
 mod verifier_f7a0cadc;
@@ -91,6 +92,11 @@ enum Command {
     /// the same turn. A panic in the gate body also blocks (fail-closed via
     /// `run_posttooluse_guarded`); other non-broken outcomes print nothing.
     Editgate,
+    /// PreToolUse(Bash) hook: deny a full-suite `cargo test`, a mid-run
+    /// main merge inside a condukt task worktree, and a same-tree rerun of a
+    /// test (see `testscope.rs`). Prints a `permissionDecision: deny` JSON or
+    /// nothing; a panic exits 2 (fail-closed via `run_pretooluse_guarded`).
+    Testscope,
     /// SubagentStop hook: when a child sub-agent terminates, advance the owning
     /// run task's durable `updated_at` — the timestamp `state probe`, `circuit
     /// check` and the claim reap gate measure idleness against — to that moment.
@@ -1844,6 +1850,9 @@ fn main() {
                 run_editgate();
             })
         }
+        Command::Testscope => {
+            harness_core::hook::run_pretooluse_guarded("condukt testscope", run_testscope)
+        }
         Command::SessionHeartbeat => {
             let heartbeat = try_read_stdin()
                 .context(
@@ -1923,6 +1932,66 @@ fn editgate_block_reason(verdict: &serde_json::Value) -> String {
 /// build, and empty/invalid stdin that was read successfully print nothing.
 /// Called under `harness_core::hook::run_posttooluse_guarded`: the printed block line, not exit
 /// status, is the verdict; a panic here prints a block naming the crash, never a silent exit 0.
+fn run_testscope() {
+    // An unreadable payload is undetermined: which command is about to run is
+    // unknown, so deny (CLAUDE.md §3).
+    let deny = |reason: String| {
+        let out = serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        });
+        println!("{out}");
+    };
+    let raw = match try_read_stdin() {
+        Ok(raw) => raw,
+        Err(e) => {
+            deny(format!(
+                "condukt testscope could not read the PreToolUse payload: {e}"
+            ));
+            return;
+        }
+    };
+    let v: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            deny(format!(
+                "condukt testscope could not parse the PreToolUse payload: {e}"
+            ));
+            return;
+        }
+    };
+    if v.get("tool_name").and_then(|t| t.as_str()) != Some("Bash") {
+        return;
+    }
+    let Some(command) = v.pointer("/tool_input/command").and_then(|c| c.as_str()) else {
+        deny("condukt testscope: Bash payload carries no tool_input.command".to_string());
+        return;
+    };
+    let cwd = match v.get("cwd").and_then(|c| c.as_str()) {
+        Some(c) => std::path::PathBuf::from(c),
+        None => match std::env::current_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                deny(format!("condukt testscope cannot determine the cwd: {e}"));
+                return;
+            }
+        },
+    };
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let Some(ledger) = testscope::ledger_path(home.as_deref()) else {
+        deny("condukt testscope: HOME is unset, so the rerun ledger has no location".to_string());
+        return;
+    };
+    if let testscope::Decision::Deny(reason) =
+        testscope::judge(command, &cwd, home.as_deref(), &ledger)
+    {
+        deny(reason);
+    }
+}
+
 fn run_editgate() {
     // A stdin READ ERROR is not "no payload": which file was edited (and so
     // whether it is in scope) is unknown, so block, stated (user ruling
@@ -2741,6 +2810,7 @@ fn run_user(cmd: Command) -> Result<()> {
         Command::Restore
         | Command::Statusline
         | Command::Editgate
+        | Command::Testscope
         | Command::SubagentStop
         | Command::SessionHeartbeat => {
             bail!("internal: hook subcommands must be dispatched in main(), not run_user()")

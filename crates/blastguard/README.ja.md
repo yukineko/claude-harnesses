@@ -631,6 +631,13 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   `\<空白>` のように実装で結果が違うもの、閉じない quote、shell 側の展開）は ask
 >   （subagent では deny）。従来の「引数を shell の文字列として読む」判定も追加の読みとして残す。
 >   `env -S 'ls   -la'` は `ls -la` に分割されて allow。
+  0.2.535 以降（backlog a66c115c）、Python が読む program（`python3 -c`・here-string・stdin の here-document・
+  `.py` に書いて実行するもの）は、CPython と同じく `\r\n` と裸の CR を改行に変換してから読む
+  （`src/detect/interpreter/python_file.rs` の `python_newlines`）。CPython は CR で `#` コメントを終えるので
+  （3.12.11 で観測）、以前は `python3 -c "import os # x<CR>os.chmod('/etc/hosts',0)"` の chmod をコメントの
+  一部と読んで allow にしていた。今は deny。一重引用符の文字列内の CR は CPython でも SyntaxError なので、
+  LF の同形と同じく「字句解析できない」ask になる。ruby・perl・sh の `#` コメントは CR で終わらない（観測）ので、
+  それらの読みは変わらない。
 >   0.2.483 以降（backlog 6cac93af）、プログラムが**書き込むか**（パスリテラルへの
 >   回復可能性／システムディレクトリ判定を起動するか）は、`'w'` 系の綴りの列挙ではなく、
 >   `open(` 系呼び出し（`open`・`io.open`・`codecs.open`・`os.fdopen`・`pathlib.Path.open`・
@@ -672,7 +679,7 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   （`Path('/tmp/y').replace('/etc/hosts')` は deny、`Path('a').replace('b')` は allow、
 >   引数 2 個の `s.replace('a','b')` は対象外）。receiver・転送先が解決できない
 >   （変数 receiver の `p.write_text(..)`・1 引数の `x.rename(y)` 等）ものは ask。
->   0.2.541 以降（backlog c8bf27ea、`src/detect/interpreter/python_semantics/method_refs.rs`）、
+>   0.2.542 以降（backlog c8bf27ea、`src/detect/interpreter/python_semantics/method_refs.rs`）、
 >   これらの callable を直接呼び出し以外で使う形も判定する: unbound の
 >   `Path.replace(Path('/tmp/z'), '/etc/hosts')`（第 1 引数が receiver）、
 >   `w = Path('/etc/hosts').write_text; w('x')`、`Path('/etc/hosts').write_text.__call__('x')` は

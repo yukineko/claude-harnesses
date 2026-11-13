@@ -10,10 +10,15 @@
 //!   (`-D Main` / `-D maſter` delete `main` / `master` on APFS): the ref
 //!   actually deleted is identified by loose-ref file identity
 //!   ([`exact_ref`]), not by string comparison.
-//! * A force-removed worktree loses everything `git status --porcelain
-//!   --ignored` reports in it. Ignored files COUNT as content: the removal
-//!   deletes the whole directory, ignored build output (e.g. `target/`)
-//!   included, so a worktree holding only ignored files is Ask too.
+//! * A force-removed worktree loses everything `git status --porcelain=v1 -z
+//!   --ignored=matching --untracked-files=all --ignore-submodules=none`
+//!   reports in it. It is Allow only when every entry is an ignored directory
+//!   positively recognised as regenerable build output (a real directory,
+//!   not a symlink, whose last component is one of
+//!   [`crate::deletion::BUILD_OUTPUT_NAMES`], e.g. `target/`; see
+//!   [`only_ignored_build_output`], backlog 2089dfc5). Any modified, staged,
+//!   untracked or other ignored entry (`.env`, keys, config, unknown names)
+//!   is Ask: the removal deletes the whole directory.
 //!
 //! The probes run in the repository git will act on: the cumulative `-C`
 //! directory (relative to the segment's base), with `--git-dir` /
@@ -487,9 +492,12 @@ default branch `{}` ({}), so deleting it destroys unmerged work",
 
 /// `git <globals> worktree <args>`. Allow unless the verb is `remove` with a
 /// force flag anywhere in `args` (before or after the verb); then Allow only
-/// when `git status --porcelain --ignored` in every operand worktree exits 0
-/// and prints nothing. A relative operand is placed against the directory git
-/// runs in (the cumulative `-C` directory, else the segment's base).
+/// when, in every operand worktree, `git rev-parse --show-toplevel` and
+/// [`STATUS_ARGS`] both exit 0, the status output parses as porcelain v1, and
+/// [`only_ignored_build_output`] accepts every entry (nothing at all, or only
+/// ignored build-output directories). Anything else is Ask. A relative
+/// operand is placed against the directory git runs in (the cumulative `-C`
+/// directory, else the segment's base).
 pub(super) fn worktree_verdict(ctx: &Ctx<'_>, globals: &[&str], args: &[&str]) -> Decision {
     let opts = option_words(args);
     let Some(verb_pos) = args.iter().position(|t| !t.starts_with('-')) else {
@@ -529,17 +537,152 @@ uncommitted, untracked and ignored files included"
             git_dir: None,
             work_tree: None,
         };
-        match probe(&wt, &["status", "--porcelain", "--ignored"], &[0]) {
-            Determination::Known((_, out)) if out.trim().is_empty() => {}
-            Determination::Known(_) => {
-                return Decision::ask(format!(
-                    "git worktree remove --force `{op}`: git status reports uncommitted changes, \
-untracked files or ignored files there (ignored files such as build output in target/ count: \
-the forced removal deletes the whole directory), which would be destroyed"
-                ))
-            }
+        let toplevel = match probe(&wt, &["rev-parse", "--show-toplevel"], &[0]) {
+            Determination::Known((_, out)) => out.trim_end_matches('\n').to_string(),
             Determination::Undetermined(u) => return ask(u.reason().as_str().to_string()),
+        };
+        if !toplevel.starts_with('/') || toplevel.contains('\n') {
+            return ask("git printed a work-tree root that is not one absolute path".to_string());
+        }
+        let status = match probe(&wt, STATUS_ARGS, &[0]) {
+            Determination::Known((_, out)) => out,
+            Determination::Undetermined(u) => return ask(u.reason().as_str().to_string()),
+        };
+        let Some(entries) = crate::reversible::parse_status_z(&status) else {
+            return ask("git status printed output not in the porcelain v1 shape".to_string());
+        };
+        if let Err(why) = only_ignored_build_output(std::path::Path::new(&toplevel), &entries) {
+            return Decision::ask(format!(
+                "git worktree remove --force `{op}`: {why}, which the forced removal (it deletes \
+the whole directory) would destroy"
+            ));
         }
     }
     Decision::Allow
+}
+
+/// The status probe for a force-removed worktree: every untracked file
+/// individually, ignored paths as git matched them (an ignored directory is
+/// one `dir/` entry, its contents not listed), submodule changes never hidden
+/// by configuration.
+const STATUS_ARGS: &[&str] = &[
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--ignored=matching",
+    "--untracked-files=all",
+    "--ignore-submodules=none",
+];
+
+/// `Ok(())` only when every `git status` entry of the worktree rooted at
+/// `toplevel` is ignored (`!!`) regenerable build output; otherwise `Err`
+/// naming the first entry that is not.
+///
+/// An ignored entry counts as build output only when ALL of these hold:
+/// it is a directory entry (git prints it with a trailing `/`); its LAST
+/// path component, relative to the worktree root, is exactly one of
+/// [`crate::deletion::BUILD_OUTPUT_NAMES`] (the same list the rm class-4
+/// `Allow` uses, so `rm -rf <wt>/target` and removing a worktree holding only
+/// that directory agree); no component is empty, `.` or `..`; and every
+/// prefix of it, the entry itself included, is a real directory right now
+/// (`symlink_metadata`: a symlink, a file, or an unreadable path is not
+/// build output). Matching is per component, never by substring:
+/// `target-secrets/` and `x/target.env` are not build output. A file
+/// ignored inside a build-named directory that is not itself ignored
+/// (`target/key.env` under `*.env`) is listed by its own path and is not
+/// build output either.
+fn only_ignored_build_output(
+    toplevel: &std::path::Path,
+    entries: &[(String, String)],
+) -> Result<(), String> {
+    for (xy, path) in entries {
+        if xy != "!!" {
+            return Err(format!(
+                "git status reports `{path}` there as uncommitted or untracked (`{xy}`)"
+            ));
+        }
+        let not_build = || {
+            Err(format!(
+                "git status reports the ignored `{path}` there, which is not recognised \
+regenerable build output"
+            ))
+        };
+        let Some(dir) = path.strip_suffix('/') else {
+            return not_build();
+        };
+        let comps: Vec<&str> = dir.split('/').collect();
+        if comps
+            .iter()
+            .any(|c| c.is_empty() || *c == "." || *c == "..")
+        {
+            return not_build();
+        }
+        match comps.last() {
+            Some(last) if crate::deletion::BUILD_OUTPUT_NAMES.contains(last) => {}
+            _ => return not_build(),
+        }
+        let mut cur = toplevel.to_path_buf();
+        for c in &comps {
+            cur.push(c);
+            match std::fs::symlink_metadata(&cur) {
+                Ok(m) if m.file_type().is_dir() => {}
+                _ => return not_build(),
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::only_ignored_build_output;
+
+    fn e(xy: &str, p: &str) -> (String, String) {
+        (xy.to_string(), p.to_string())
+    }
+
+    #[test]
+    fn only_real_build_named_ignored_directories_pass() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        std::fs::create_dir_all(root.join("target/debug")).unwrap();
+        std::fs::create_dir_all(root.join("crates/x/target")).unwrap();
+        std::fs::create_dir_all(root.join("target-secrets")).unwrap();
+        std::fs::create_dir_all(root.join("x")).unwrap();
+        std::fs::write(root.join("x/target.env"), "s").unwrap();
+        std::fs::write(root.join(".env"), "s").unwrap();
+        std::os::unix::fs::symlink("/tmp", root.join("build")).unwrap();
+        std::os::unix::fs::symlink("/tmp", root.join("node_modules")).unwrap();
+
+        assert!(only_ignored_build_output(root, &[]).is_ok());
+        assert!(only_ignored_build_output(root, &[e("!!", "target/")]).is_ok());
+        assert!(only_ignored_build_output(
+            root,
+            &[e("!!", "target/"), e("!!", "crates/x/target/")]
+        )
+        .is_ok());
+
+        for bad in [
+            vec![e("!!", ".env")],
+            vec![e("!!", "target-secrets/")],
+            vec![e("!!", "x/target.env")],
+            vec![e("!!", "target/debug/")],
+            vec![e("!!", "target")],
+            vec![e("!!", "build/")],
+            vec![e("!!", "build")],
+            vec![e("!!", "node_modules/")],
+            vec![e("!!", "absent/target/")],
+            vec![e("!!", "../target/")],
+            vec![e("!!", "./target/")],
+            vec![e("!!", "target/"), e("??", "new.txt")],
+            vec![e(" M", "tracked.txt"), e("!!", "target/")],
+            vec![e("!!", "target/"), e("!!", ".env")],
+        ] {
+            assert!(
+                only_ignored_build_output(root, &bad).is_err(),
+                "{bad:?} must not be build output"
+            );
+        }
+    }
 }

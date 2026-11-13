@@ -1478,3 +1478,35 @@ exit 101: uki_nakayama/src/.harness-worktrees/file-test-defects-20261113/crates/
     Finished `test` profile [unoptimized + debuginfo] target(s) in 58.63s
      Running tests/budget_bound_wallclock_under_load_20261113.rs (target/debug/deps/budget_bound_wallclock_under_load_20261113-43c8b446a6eb9c64)
 error: test failed, to rerun pass `-p blastguard --test budget_bound_wallclock_under_load_20261113`"""
+
+[[task]]
+id = "7ec1bb90"
+title = "blastguard: 13 Allow-expecting /tmp tests in 7 targets get the confined Ask on Linux - neutral_base alias puts fixture HOME under /tmp (contains_home)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Newly visible 2026-11-13 after de8b82ca (a77dd80f) made these fixtures place their temp dirs under canonicalize(/tmp) instead of a literal /private/tmp; before that they panicked in setup on Linux and were never able to run. Linux WSL2 ext4, TMPDIR unset. Observed vs expected (all: expected Allow, observed ask, reason 'recursive rm (-r) is confined to /tmp - a safe root for this session ...' or 'truncating redirect is confined to /tmp - a safe root ...'): mutation_kill_cd_rest_tmp c_cd_tied_rest_allows_and_untied_does_not, c_tmp_plain_existing_file_allows, k_tmp_file_under_dot_git_entry_is_not_allow (its plain/w.txt control); tmp_truncation_recoverable t1..t4; tmp_truncation_refusals c1_plain_existing_single_link_file_in_tmp_allows; scratchpad_truncating_redirect_fp_20261107 control_scratchpad_log_redirect_existing_same_case_allows; cd_and_chain_equivalence c2_tmp_absolute_form_allow, r2_cd_tmpdir_then_rm_sub_is_allow; git_exec_subcommand_failopen_20261107 control_rm_rf_inside_private_tmp_scratch_stays_allow; managed_place_destructive_allow_20261107 target_rm_rf_dir_inside_private_tmp_place_allow. Cause, observed: tests/support/neutral_base.rs spells the fixture base via an alias symlink in std::env::temp_dir() (= /tmp on Linux), so fixture HOME is spelled under /tmp, and src/scope/deletion_roots.rs drops any temp deletion root containing HOME (!contains_home), so /tmp is no disposable root and the relaxation is withheld. Distinguishing checks run: (1) with BLASTGUARD_TEST_FIXTURE_DIR=/home/<user>/a77-fixture-base (outside /tmp, no git) all 7 targets pass 100%; (2) hand probe of the hook binary: HOME under /tmp -> ask, HOME outside /tmp -> allow, project location irrelevant. Linux verdict is MORE restrictive (not fail-open); refusing a temp root containing HOME is intended. Same root cause as 9653d25d (script_file_content_exec); fix both in neutral_base (alias location on Linux) together."
+created_at = 1794551632
+updated_at = 1794551632
+weight = 0.0
+issue_number = 1706
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1706"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test tmp_truncation_recoverable"
+rev = "de8b82ca2fa4a46938bcb38559e7156697c6bc5f"
+observed_at = 1794551632
+detail = """
+exit 101: )
+   Compiling blastguard v0.2.503 (/home/hiroyuki_nakayama/src/.harness-worktrees/fix-private-tmp-a77dd80f-bl/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 28.29s
+     Running tests/tmp_truncation_recoverable.rs (target/debug/deps/tmp_truncation_recoverable-134965f141cc1ad8)
+error: test failed, to rerun pass `-p blastguard --test tmp_truncation_recoverable`"""

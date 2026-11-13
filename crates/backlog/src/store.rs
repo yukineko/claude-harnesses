@@ -14,8 +14,8 @@ use crate::task::{
     new_id, Closure, Repro, Status, Task, STATUS_DONE, STATUS_FAILED, STATUS_PENDING,
 };
 
-/// The stored "a user ruled this out for now" status (backlog b3f5e3af),
-/// written only by [`mark_ruled_deferred`].
+/// Legacy "ruled out for now" status (b3f5e3af); its writer `defer` is abolished
+/// (ruling 2026-11-13). Still parsed; `backlog recheck` resolves such rows.
 pub(crate) const STATUS_RULED_DEFERRED: Status = Status::RuledDeferred;
 
 /// The DERIVED claim status (backlog f09db5ce). It is never written to the

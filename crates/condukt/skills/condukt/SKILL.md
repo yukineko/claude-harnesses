@@ -98,7 +98,9 @@ allowed-tools: Task, AskUserQuestion, Bash(condukt:*), Bash(fugu-router:*), Bash
    余分な 1 件はキューの 1 行で済む。orchestrator は Phase 5/6 で worker と verifier の返り値を読んだら、
    `別件:` 行と verifier の reason 中の対象外の指摘を**Phase 7 の worktree 削除より前に**すべて
    **再現テスト（RED）を書いて** `backlog add --repro-test` で起票すること（テスト無し・再現しないものは拒否され store に何も書かれない）。
-   テストが書けなければ Ask すること。
+   起票するかを人に聞かないこと（ユーザー裁定 2026-11-13「起票しますか?というのはもう聞かないこと。実証されたら起票、
+   そうでないなら破棄。それは自動で実行していくこと」）。RED が書けない・`backlog add` が拒否した（再現しない・判定不能）ものは
+   Ask せず**破棄し、最終報告に逐語の観測とともに列挙する**こと。
    書く内容は逐語の観測・測定点 (rev と日付・どの task の worktree で見たか)・
    判定できないときは (a) 実在の欠陥 / (b) 意図どおりの両方の読みと、それを見分ける方法とすること。
    起票を着手として扱わないこと。書いたら元の task に戻ること。

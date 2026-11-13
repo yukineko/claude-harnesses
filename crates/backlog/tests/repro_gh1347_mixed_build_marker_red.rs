@@ -3,7 +3,7 @@
 //! GitHub issue #1347: `backlog done` classifies a behavioural RED as a build
 //! failure whenever the RED output mentions "could not compile" anywhere.
 //!
-//! `classify_red` (crates/backlog/src/evidence.rs) checks the build-failure
+//! `classify_nonzero` (formerly `classify_red`) (crates/backlog/src/evidence.rs) checks the build-failure
 //! markers BEFORE it looks for `test result: FAILED`. A realistic
 //! `cargo test --workspace --no-fail-fast` RED run can carry both: one package
 //! fails to compile (an unrelated crate), while the package under test BUILDS,
@@ -16,7 +16,7 @@
 //! Since user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止で
 //! いい」) `done` no longer runs the RED at all, so this test now only shows
 //! that `done` accepts this close on GREEN at HEAD; it no longer exercises
-//! `classify_red` (still used by the `--repro-test` repro run at HEAD).
+//! `classify_nonzero` (formerly `classify_red`) (still used by the `--repro-test` repro run at HEAD).
 mod common;
 use common::*;
 

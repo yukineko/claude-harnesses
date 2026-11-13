@@ -560,11 +560,11 @@ fn build_failure_marker(output: &str) -> Option<&'static str> {
     MARKERS.iter().copied().find(|m| output.contains(m))
 }
 
-/// Is a non-zero run a BEHAVIOURAL failure (the test ran and failed)?
-/// `Err` names why it is not (build failure, runner usage error, signal...).
-/// Used by the repro run at HEAD ([`run_repro`]: `add --repro-test`,
-/// `edit --repro-test`, the `next --claim` re-check); `done` no longer calls it, because it no longer runs
-/// RED (user ruling 2026-11-08).
+/// Is a non-zero run a BEHAVIOURAL failure (the test ran and failed)? This is
+/// `classify_red` of earlier builds, split three ways. Used by the repro run
+/// at HEAD ([`run_repro`] / [`run_repro_classified`]: `add --repro-test`,
+/// `edit --repro-test`, the `next --claim` re-check, `recheck`); `done` no
+/// longer calls it, because it no longer runs RED (user ruling 2026-11-08).
 ///
 /// For `cargo test`, a `test result: FAILED` line is checked **before** the
 /// build-failure marker: that line is printed only by a test binary that ran
@@ -574,30 +574,52 @@ fn build_failure_marker(output: &str) -> Option<&'static str> {
 /// still refused as a build failure. For pytest and script runners the
 /// build-failure marker is checked first, as before: they have no equivalent
 /// "this test ran and failed" line to outrank it.
-fn classify_red(cmd: &TestCmd, r: &RunResult) -> Result<(), String> {
+///
+/// What a completed NON-ZERO run of a repro showed (user ruling 2026-11-13,
+/// 「保留はありえない実証されないならclose,実証されたらopen」). Three answers:
+///   - `Red`: the test ran and failed behaviourally — the defect is demonstrated.
+///   - `NotDemonstrated`: the run completed and did not demonstrate the defect,
+///     and the reason is a property of the repro or its environment that a
+///     re-run would show again (the stored script declared its environment
+///     unavailable with exit 2, the script/command could not even be started
+///     with 126/127, pytest found no such test with 4/5). A ticket whose repro
+///     is not demonstrated is CLOSED (`next --claim` / `recheck` auto-cancel).
+///   - `Undeterminable`: the run did not show anything about the defect for
+///     an INFRASTRUCTURE reason (killed by a signal, a build/compile failure
+///     — a broken HEAD must never mass-close tickets — or a non-zero cargo /
+///     pytest run with no recognisable test result). Never closes a ticket:
+///     the caller refuses (CLAUDE.md §3, undetermined is not clean).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NonZero {
+    Red,
+    NotDemonstrated(String),
+    Undeterminable(String),
+}
+
+fn classify_nonzero(cmd: &TestCmd, r: &RunResult) -> NonZero {
     let build_failure = |m: &str| {
-        format!(
+        NonZero::Undeterminable(format!(
             "the run failed at BUILD/compile time (output contains {m:?}), not behaviourally; a \
              build failure is not RED. Restructure the test so the pre-fix revision builds and \
              fails an assertion; if no behavioural RED can be shown, the item is cancelled \
              (`backlog cancel ID --reason R`)"
-        )
+        ))
     };
     if !matches!(cmd.runner, Runner::CargoTest) {
         if let Some(m) = build_failure_marker(&r.output) {
-            return Err(build_failure(m));
+            return build_failure(m);
         }
     }
     match cmd.runner {
         Runner::CargoTest => {
             if r.output.contains("test result: FAILED") {
-                Ok(())
+                NonZero::Red
             } else if let Some(m) = build_failure_marker(&r.output) {
-                Err(build_failure(m))
+                build_failure(m)
             } else {
                 // No "test result: FAILED" and no build marker. The test didn't
                 // produce a conclusive failure output.
-                Err(format!(
+                NonZero::Undeterminable(format!(
                     "cargo exited {} without a `test result: FAILED` line, so no test is shown \
                      to have run and failed (a build/compile failure is not RED; if the RED \
                      cannot be behavioural, the item is cancelled)",
@@ -605,28 +627,36 @@ fn classify_red(cmd: &TestCmd, r: &RunResult) -> Result<(), String> {
                 ))
             }
         }
-        Runner::Pytest => {
-            if r.exit == 1 {
-                Ok(())
-            } else {
-                Err(format!(
-                    "pytest exited {} (only 1 means tests ran and failed; 2-5 are collection, \
-                     usage or no-tests errors, not RED)",
-                    r.exit
-                ))
-            }
-        }
-        Runner::Script => {
-            if r.exit == 126 || r.exit == 127 || r.exit >= 128 {
-                Err(format!(
-                    "the script exited {} (not executable / command not found / killed by a \
-                     signal), which is not a behavioural failure",
-                    r.exit
-                ))
-            } else {
-                Ok(())
-            }
-        }
+        Runner::Pytest => match r.exit {
+            1 => NonZero::Red,
+            4 | 5 => NonZero::NotDemonstrated(format!(
+                "pytest exited {} (4 = usage error such as a test path/node that does not exist, \
+                 5 = no tests collected), so the repro no longer demonstrates the defect",
+                r.exit
+            )),
+            _ => NonZero::Undeterminable(format!(
+                "pytest exited {} (only 1 means tests ran and failed; 2 = interrupted / \
+                 collection error, 3 = internal error), not RED",
+                r.exit
+            )),
+        },
+        Runner::Script => match r.exit {
+            2 => NonZero::NotDemonstrated(
+                "the script exited 2, which by this repo's script convention means its \
+                 environment is UNAVAILABLE (it could not set up the observation), not that the \
+                 defect was shown; a repro that is not demonstrated is not RED"
+                    .to_string(),
+            ),
+            126 | 127 => NonZero::NotDemonstrated(format!(
+                "the script exited {} (not executable / command not found): the repro cannot \
+                 even be started, which is not a behavioural failure",
+                r.exit
+            )),
+            e if e >= 128 => NonZero::Undeterminable(format!(
+                "the script exited {e} (killed by a signal), which is not a behavioural failure"
+            )),
+            _ => NonZero::Red,
+        },
     }
 }
 
@@ -794,61 +824,174 @@ fn excerpt_short(output: &str) -> String {
 /// caller (`add`) files a task only on `reproduced` and writes nothing for
 /// any other outcome.
 pub fn run_repro(cwd: &Path, text: &str, now: i64) -> Repro {
-    let undetermined = |detail: String, rev: Option<String>| Repro {
-        outcome: REPRO_UNDETERMINED.to_string(),
+    run_repro_classified(cwd, text, now).repro
+}
+
+/// The verdict of re-running a STORED repro (`next --claim`, `backlog
+/// recheck`; user ruling 2026-11-13 「保留はありえない実証されないならclose,
+/// 実証されたらopen」). A row stays open only while its repro is
+/// `Reproduced`. `NotReproduced` and `NotDemonstrated` close it (auto-cancel);
+/// `Undeterminable` never does — the caller refuses and reports (CLAUDE.md §3).
+///
+/// The boundary between the last two is: NOT DEMONSTRATED = the repro itself
+/// ran (or could not even be started) and its own answer is "the defect is
+/// not shown" — exit 0 with zero tests run, a stored script that exits 2
+/// (its environment is unavailable: e.g. "no v9fs dir"), 126/127 (cannot be
+/// started), pytest 4/5, a stored command that no longer parses / is not on
+/// the allowlist, a script no longer tracked at HEAD. UNDETERMINABLE = the
+/// harness or host failed to carry the run to an answer — a timeout (e.g. a
+/// cargo lock wait), a signal, a spawn failure, a git query failure, a dirty
+/// checkout, a bad `BACKLOG_TEST_TIMEOUT_SECS`, a build/compile failure (a
+/// broken HEAD must never mass-close tickets), or a non-zero cargo/pytest run
+/// without a recognisable test result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecheckVerdict {
+    Reproduced,
+    NotReproduced,
+    NotDemonstrated,
+    Undeterminable,
+}
+
+impl RecheckVerdict {
+    pub fn label(self) -> &'static str {
+        match self {
+            RecheckVerdict::Reproduced => "reproduced",
+            RecheckVerdict::NotReproduced => "not-reproduced",
+            RecheckVerdict::NotDemonstrated => "not-demonstrated",
+            RecheckVerdict::Undeterminable => "undeterminable",
+        }
+    }
+
+    /// Whether this verdict closes the row (auto-cancel).
+    pub fn closes(self) -> bool {
+        matches!(
+            self,
+            RecheckVerdict::NotReproduced | RecheckVerdict::NotDemonstrated
+        )
+    }
+}
+
+/// A repro run with its [`RecheckVerdict`]. `repro.outcome` keeps the three
+/// stored outcomes (`add` / `edit --repro-test` file only `reproduced`, so
+/// `not-demonstrated` and `undeterminable` both appear there as
+/// `undetermined`); the verdict carries the finer split. Nothing new is
+/// serialised.
+#[derive(Debug, Clone)]
+pub struct ClassifiedRepro {
+    pub repro: Repro,
+    pub verdict: RecheckVerdict,
+    /// The exit code of a run that completed, `None` when none did.
+    pub exit: Option<i32>,
+}
+
+/// [`run_repro`] with the [`RecheckVerdict`]. When a run completed, `detail`
+/// always starts `exit N` and carries the output tail.
+pub fn run_repro_classified(cwd: &Path, text: &str, now: i64) -> ClassifiedRepro {
+    let mk = |outcome: &str, detail: String, rev: Option<String>| Repro {
+        outcome: outcome.to_string(),
         cmd: text.to_string(),
         rev,
         observed_at: now,
         detail,
     };
+    let undet =
+        |verdict: RecheckVerdict, detail: String, rev: Option<String>, exit| ClassifiedRepro {
+            repro: mk(REPRO_UNDETERMINED, detail, rev),
+            verdict,
+            exit,
+        };
     let cmd = match parse_test_cmd(text) {
         Ok(c) => c,
-        Err(e) => return undetermined(e, None),
+        // The stored command cannot even be started.
+        Err(e) => return undet(RecheckVerdict::NotDemonstrated, e, None, None),
     };
     let timeout = match test_timeout() {
         Ok(t) => t,
-        Err(e) => return undetermined(e, None),
+        Err(e) => return undet(RecheckVerdict::Undeterminable, e, None, None),
     };
     let root = match repo_toplevel(cwd) {
         Ok(r) => r,
-        Err(e) => return undetermined(e, None),
+        Err(e) => return undet(RecheckVerdict::Undeterminable, e, None, None),
     };
     let head = match head_commit(&root) {
         Ok(h) => h,
-        Err(e) => return undetermined(e, None),
+        Err(e) => return undet(RecheckVerdict::Undeterminable, e, None, None),
     };
-    if let Err(e) = preflight(&root, &cmd, &head) {
-        return undetermined(e, Some(head));
+    if let Err(e) = require_clean_tree(&root) {
+        return undet(RecheckVerdict::Undeterminable, e, Some(head), None);
+    }
+    if let Some(script) = &cmd.script {
+        match tracked_at(&root, &head, script) {
+            Ok(true) => {}
+            Ok(false) => {
+                return undet(
+                    RecheckVerdict::NotDemonstrated,
+                    format!(
+                        "script {script} is not committed at HEAD ({head}); only a git-tracked, \
+                         committed test script is evidence, so the stored repro cannot even be \
+                         started"
+                    ),
+                    Some(head),
+                    None,
+                )
+            }
+            Err(e) => return undet(RecheckVerdict::Undeterminable, e, Some(head), None),
+        }
     }
     let r = match execute(&cmd, &root, timeout) {
         Determination::Known(r) => r,
         Determination::Undetermined(why) => {
-            return undetermined(format!("the repro run did not complete: {why}"), Some(head))
+            return undet(
+                RecheckVerdict::Undeterminable,
+                format!("the repro run did not complete: {why}"),
+                Some(head),
+                None,
+            )
         }
     };
+    let tail = excerpt_short(&r.output);
     if r.exit == 0 {
         if let Some(why) = zero_tests_ran(&cmd, &r.output) {
-            return undetermined(format!("{why}: {}", excerpt_short(&r.output)), Some(head));
+            return undet(
+                RecheckVerdict::NotDemonstrated,
+                format!("exit 0: {why}: {tail}"),
+                Some(head),
+                Some(0),
+            );
         }
-        return Repro {
-            outcome: REPRO_NOT_REPRODUCED.to_string(),
-            cmd: text.to_string(),
-            rev: Some(head),
-            observed_at: now,
-            detail: format!("exit 0: {}", excerpt_short(&r.output)),
+        return ClassifiedRepro {
+            repro: mk(REPRO_NOT_REPRODUCED, format!("exit 0: {tail}"), Some(head)),
+            verdict: RecheckVerdict::NotReproduced,
+            exit: Some(0),
         };
     }
-    match classify_red(&cmd, &r) {
-        Ok(()) => Repro {
-            outcome: REPRO_REPRODUCED.to_string(),
-            cmd: text.to_string(),
-            rev: Some(head),
-            observed_at: now,
-            detail: format!("exit {}: {}", r.exit, excerpt_short(&r.output)),
+    match classify_nonzero(&cmd, &r) {
+        NonZero::Red => ClassifiedRepro {
+            repro: mk(
+                REPRO_REPRODUCED,
+                format!("exit {}: {tail}", r.exit),
+                Some(head),
+            ),
+            verdict: RecheckVerdict::Reproduced,
+            exit: Some(r.exit),
         },
-        Err(why) => undetermined(
-            format!("exit {} is not a behavioural failure: {why}", r.exit),
+        NonZero::NotDemonstrated(why) => undet(
+            RecheckVerdict::NotDemonstrated,
+            format!(
+                "exit {} is not a behavioural failure: {why}: {tail}",
+                r.exit
+            ),
             Some(head),
+            Some(r.exit),
+        ),
+        NonZero::Undeterminable(why) => undet(
+            RecheckVerdict::Undeterminable,
+            format!(
+                "exit {} is not a behavioural failure: {why}: {tail}",
+                r.exit
+            ),
+            Some(head),
+            Some(r.exit),
         ),
     }
 }

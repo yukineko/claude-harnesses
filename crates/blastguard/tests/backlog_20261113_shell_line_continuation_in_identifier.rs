@@ -4,6 +4,7 @@
 //!
 //! In single quotes the backslash-newline is NOT removed (python sees a syntax
 //! error); either decision is acceptable there, so it is printed, not asserted.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 #[path = "support/bounded.rs"]
 mod bounded;

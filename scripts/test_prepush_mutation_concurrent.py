@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
-"""Hook tests for pre-push blocking check 5 (fail-open mutation) when it runs
-concurrently with the in-place chain (typecheck -> compile-fail -> specguard)
-for the same pushed sha (user ruling 2026-11-14).
+"""Hook tests for pre-push blocking check 5 (fail-open mutation) relative to
+the in-place chain (typecheck -> compile-fail -> specguard) for the same
+pushed sha.
+
+HISTORY: written (by a non-implementer agent) for a design in which the
+mutation ran concurrently with the chain in a temporary checkout. The user
+revoked that on 2026-11-14 (「gateにそんな例外は追加してほしくない」): the
+mutation stays in place and serial, after the chain. m1 was therefore inverted
+from "overlaps" to "never overlaps" (the mutation rewrites source in this
+worktree, so overlapping it with a cargo build of the same tree would judge a
+mutant). m2-m5 are unchanged.
 
 Run: `python3 scripts/test_prepush_mutation_concurrent.py` (stdlib unittest).
 Reuses PhaseTestCase from test_prepush_concurrent_phase_failure.py (stub cargo,
@@ -14,7 +22,7 @@ The push touches only crates/blastguard, so the stub is invoked as
 `--crate blastguard --keep-going`; its record id is
 `fail-open-mutation:blastguard`.
 
-  m1  mutation and cargo-check intervals overlap.       (RED at origin/main)
+  m1  the mutation starts only after every in-place phase ended. (GUARD)
   m2  mutation exits 1, in-place phases pass => blocked, no record.
   m3  mutation SIGKILLs itself => blocked, no record.
   m4  typecheck fails fast while mutation sleeps 3s => blocked, and after the
@@ -26,8 +34,7 @@ so); m4's process-liveness part is trivially true sequentially (the mutation
 never starts), so it is a GUARD there too.
 
 DOES NOT PROVE: m4 does not assert whether the mutation stub started, nor
-whether its result was recorded; m1 does not prove the temp-checkout isolation
-(that the mutation touches only a copy of the tree); nothing here runs the real
+whether its result was recorded; nothing here runs the real
 mutation script or real cargo. m4's pid check cannot see a descendant that
 re-parented under a different pid than the one the stub wrote.
 """
@@ -86,18 +93,22 @@ class MutationConcurrent(PhaseTestCase):
             t.setdefault(name, {})[what] = float(ts)
         return t
 
-    def test_m1_mutation_overlaps_typecheck(self):
-        """m1. Both stubs sleep ~2s; their [start,end] intervals must overlap.
-        Does NOT prove the other phases overlap, nor temp-checkout isolation."""
+    def test_m1_mutation_never_overlaps_the_in_place_phases(self):
+        """m1 (inverted 2026-11-14, see the module docstring). The mutation
+        rewrites source in THIS worktree, so it must start only after every
+        in-place phase (cargo check, compile-fail, specguard) has ended.
+        Does NOT prove anything about phases whose stubs do not log."""
         h = self.mut_harness(CHECK_SLEEP="2", MUT_SLEEP="2")
         proc = self.push(h)
         self.assertAllowed(proc, _out(proc))
         t = self.intervals(h)
         self.assertIn("MUT", t, _out(proc))
         self.assertIn("CHECK", t, _out(proc))
-        a, b = t["MUT"], t["CHECK"]
-        self.assertTrue(a["start"] < b["end"] and b["start"] < a["end"],
-                        "mutation and cargo check ran serially: %r" % t)
+        for name, iv in t.items():
+            if name == "MUT":
+                continue
+            self.assertGreaterEqual(t["MUT"]["start"], iv["end"],
+                                    "mutation overlapped %s: %r" % (name, t))
 
     def test_m2_mutation_exit_1_blocks_and_is_not_recorded(self):
         """m2. In-place phases pass, mutation exits 1 => non-zero, no record.

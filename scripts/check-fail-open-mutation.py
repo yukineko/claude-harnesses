@@ -18,9 +18,17 @@ parallelguard) it
      file (a literal old-string -> new-string replacement, applied
      programmatically — never "an LLM decides at check-time whether this
      would break something"),
-  2. runs `cargo test -p <crate>` and captures the real exit code,
-  3. asserts the exit code is non-zero (i.e., the crate's OWN test suite
-     went RED because of the injected fail-open), and
+  2. runs `cargo test -p <crate> <scenario.tests>` and captures the real exit
+     code. `scenario.tests` are the test-target selectors (`--lib`,
+     `--test <name>`) that were OBSERVED to go RED under this mutation (and
+     to pass without it) when the scenario was narrowed; the evidence is
+     recorded next to each scenario. A scenario without declared selectors
+     runs the whole `cargo test -p <crate>`.
+  3. asserts the exit code is non-zero (i.e., the crate's OWN declared tests
+     went RED because of the injected fail-open). A declared set that does
+     NOT catch the mutation is NOT CAUGHT (exit 1), and a selector cargo
+     rejects (`no test target named ...`) is inconclusive (exit 1), never a
+     RED — narrowing never turns a miss into a pass, and
   4. reverts the mutation (`git checkout -- <file>`), VERIFYING the file is
      byte-identical to its pre-mutation state afterward — this happens in a
      `finally` block, so a revert always runs even if step 2/3 raised or the
@@ -82,12 +90,18 @@ class Scenario:
     than once, the scenario is treated as INCONCLUSIVE rather than guessing.
     """
 
-    def __init__(self, crate, file_rel, description, old, new):
+    def __init__(self, crate, file_rel, description, old, new, tests=None):
         self.crate = crate
         self.file_rel = file_rel
         self.description = description
         self.old = old
         self.new = new
+        # Cargo test-target selectors run for this scenario, e.g.
+        # ("--test", "foo") or ("--lib",). None = the whole crate.
+        self.tests = tuple(tests) if tests is not None else None
+
+    def test_args(self):
+        return list(self.tests) if self.tests else []
 
 
 SCENARIOS = [
@@ -264,14 +278,16 @@ def revert_mutation(scenario, original_bytes):
         return False
 
 
-def run_crate_tests(crate, timeout=600):
-    """Run `cargo test -p <crate>`. Returns (exit_code, tail_of_output)."""
+def run_crate_tests(crate, timeout=600, test_args=None):
+    """Run `cargo test -p <crate> [test_args...]`. Returns (exit_code,
+    tail_of_output); exit_code is None on timeout."""
+    cmd = ["cargo", "test", "-p", crate] + list(test_args or [])
     try:
-        p = run(["cargo", "test", "-p", crate], timeout=timeout)
+        p = run(cmd, timeout=timeout)
         tail = "\n".join(p.stdout.splitlines()[-40:])
         return p.returncode, tail
     except subprocess.TimeoutExpired:
-        return None, f"cargo test -p {crate} timed out after {timeout}s"
+        return None, f"{' '.join(cmd)} timed out after {timeout}s"
 
 
 def looks_like_compile_failure(output):
@@ -305,7 +321,8 @@ def evaluate_scenario(scenario, timeout):
             result.detail = err
             return result
 
-        rc, tail = run_crate_tests(scenario.crate, timeout=timeout)
+        shown = " ".join(["cargo test -p", scenario.crate] + scenario.test_args())
+        rc, tail = run_crate_tests(scenario.crate, timeout=timeout, test_args=scenario.test_args())
         if rc is None:
             result.status = "inconclusive"
             result.detail = tail
@@ -313,9 +330,8 @@ def evaluate_scenario(scenario, timeout):
         if rc == 0:
             result.status = "not-caught"
             result.detail = (
-                "mutated build compiled and `cargo test -p "
-                f"{scenario.crate}` PASSED (exit 0) — the existing test "
-                "suite did NOT catch this fail-open mutation."
+                f"mutated build compiled and `{shown}` PASSED (exit 0) — the "
+                "declared tests did NOT catch this fail-open mutation."
             )
             return result
 
@@ -333,7 +349,7 @@ def evaluate_scenario(scenario, timeout):
 
         result.status = "caught"
         result.red_confirmed = True
-        result.detail = f"cargo test -p {scenario.crate} exited {rc} (RED):\n{tail}"
+        result.detail = f"{shown} exited {rc} (RED):\n{tail}"
         return result
     except Exception as e:  # noqa: BLE001 - must still revert on any failure
         result.status = "error"

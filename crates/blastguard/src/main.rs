@@ -559,7 +559,7 @@ fn emit(
     let hardened_ask = was_ask && was_deny;
     let decision = downgrade_on_repeat(input, decision);
     let kind = if was_deny && decision.is_ask() {
-        blocklog::DecisionKind::DenyDowngradedToAsk
+        blocklog::DecisionKind::DenyDowngradedToAsk { hardened_ask }
     } else if hardened_ask {
         blocklog::DecisionKind::AskHardenedToDeny
     } else if decision.is_ask() {

@@ -8,7 +8,8 @@
 //! subagent or a headless session, and a repeat `Deny` downgraded to `Ask` —
 //! appends ONE JSON line here that holds exactly what was blocked: the
 //! command byte-exact (Bash) or the full `tool_input` (file tools), the cwd,
-//! the session and agent ids, the decision and how it was reached, the reason
+//! the session and agent ids, the decision and how it was reached, the
+//! detector's original verdict (`original_decision`), the reason
 //! the agent saw, and the rule id. An `Allow` writes nothing.
 //!
 //! # Why not (only) the overwatch violation ledger
@@ -53,8 +54,9 @@ pub const DIR_VAR: &str = "BLASTGUARD_BLOCK_LOG_DIR";
 /// File name inside the log directory.
 pub const FILE_NAME: &str = "blocks.jsonl";
 
-/// Record schema version.
-pub const VERSION: u64 = 1;
+/// Record schema version. 2 added `original_decision`; a v1 record has no
+/// such field, and its absence there means "not recorded", never "deny".
+pub const VERSION: u64 = 2;
 
 /// Above this many bytes of compact `tool_input` JSON the copy is dropped
 /// (`tool_input: null`, `tool_input_capped: true`). The hash, the length,
@@ -75,7 +77,11 @@ pub enum DecisionKind {
     /// headless session).
     AskHardenedToDeny,
     /// A repeat `Deny` handed back as an `Ask` (operator ruling 2026-09-18).
-    DenyDowngradedToAsk,
+    /// The `Deny` being downgraded may itself be a hardened `Ask` (headless
+    /// session): `hardened_ask` keeps which, so the record's
+    /// `original_decision` says `ask` for it instead of reading as a repeat of
+    /// a real `Deny`.
+    DenyDowngradedToAsk { hardened_ask: bool },
     /// The verdict path panicked and the call was blocked with exit 2. The
     /// record keeps the raw stdin in `raw_payload`.
     PanicBlocked,
@@ -87,8 +93,25 @@ impl DecisionKind {
             DecisionKind::Deny => "deny",
             DecisionKind::Ask => "ask",
             DecisionKind::AskHardenedToDeny => "ask-hardened-to-deny",
-            DecisionKind::DenyDowngradedToAsk => "deny-downgraded-to-ask",
+            DecisionKind::DenyDowngradedToAsk { .. } => "deny-downgraded-to-ask",
             DecisionKind::PanicBlocked => "panic-blocked",
+        }
+    }
+
+    /// The detector's own verdict before any hardening or downgrade, as
+    /// recorded in `original_decision`. Total over every kind, so the field is
+    /// always present and never null: `undetermined` is a panic on the verdict
+    /// path (no verdict was reached), never a stand-in for `deny`.
+    pub fn original_decision(self) -> &'static str {
+        match self {
+            DecisionKind::Deny => "deny",
+            DecisionKind::Ask => "ask",
+            DecisionKind::AskHardenedToDeny => "ask",
+            DecisionKind::DenyDowngradedToAsk { hardened_ask: true } => "ask",
+            DecisionKind::DenyDowngradedToAsk {
+                hardened_ask: false,
+            } => "deny",
+            DecisionKind::PanicBlocked => "undetermined",
         }
     }
 }
@@ -192,6 +215,7 @@ pub fn record(raw: &str, parsed: bool, block: &Block<'_>, ts: u64) -> Value {
         "tool_input_sha256": sha_hex(serialized.as_bytes()),
         "decision": block.decision,
         "decision_kind": block.kind.as_str(),
+        "original_decision": block.kind.original_decision(),
         "actor": block.actor,
         "system_harm": block.system_harm,
         "reason": block.reason,
@@ -280,6 +304,31 @@ mod tests {
         );
         assert_eq!(r["raw_payload"], "{not json");
         assert_eq!(r["decision_kind"], "ask-hardened-to-deny");
+        assert_eq!(r["original_decision"], "ask");
+    }
+
+    #[test]
+    fn original_decision_is_explicit_for_every_kind() {
+        let cases = [
+            (DecisionKind::Deny, "deny"),
+            (DecisionKind::Ask, "ask"),
+            (DecisionKind::AskHardenedToDeny, "ask"),
+            (
+                DecisionKind::DenyDowngradedToAsk { hardened_ask: true },
+                "ask",
+            ),
+            (
+                DecisionKind::DenyDowngradedToAsk {
+                    hardened_ask: false,
+                },
+                "deny",
+            ),
+            (DecisionKind::PanicBlocked, "undetermined"),
+        ];
+        for (kind, want) in cases {
+            let r = record("{}", true, &block(kind), 0);
+            assert_eq!(r["original_decision"], want, "{kind:?}: {r}");
+        }
     }
 
     #[test]

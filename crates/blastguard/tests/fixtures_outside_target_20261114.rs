@@ -20,8 +20,8 @@
 //!     git fixtures (listed in the failure message). `neutral_base` users are
 //!     covered by the dynamic test 1, not by the text scan.
 //!
-//! Both RED tests assert decisions about observed paths / file contents and
-//! are `#[ignore]`d until the fix lands.
+//! Both RED tests assert decisions about observed paths / file contents. They
+//! were `#[ignore]`d until the fix landed (backlog 37955e32) and now run.
 //!
 //! DOES NOT PROVE: (0) the scan is file-level: a file that mentions
 //! directly joins `CARGO_TARGET_TMPDIR` AND runs git `init` is listed even if
@@ -127,10 +127,9 @@ fn control_predicates_discriminate() {
     assert!(n > 20, "only {n} test files found under {tests:?}");
 }
 
-/// RED (observed failing): the shared fixture base must not resolve under
-/// the workspace `target/`.
+/// Was RED (observed failing at 20baa9f2); GREEN since the 37955e32 fix: the
+/// shared fixture base must not resolve under the workspace `target/`.
 #[test]
-#[ignore = "RED: neutral_base() resolves under <workspace>/target/tmp; fixture git repos there make `git worktree remove --force` Ask"]
 fn neutral_base_not_under_workspace_target() {
     let base = neutral_base::neutral_base();
     // The lexical spelling may be an alias symlink: judge the real path.
@@ -150,7 +149,8 @@ fn neutral_base_not_under_workspace_target() {
     );
 }
 
-/// RED (observed failing): no integration test file joins a path directly onto
+/// Was RED (observed failing at 8ad4d3f7); GREEN since the 37955e32 fix: no
+/// integration test file joins a path directly onto
 /// `CARGO_TARGET_TMPDIR` and creates a git repository / worktree there.
 ///
 /// Usage of `neutral_base` is NOT flagged here: its resolved location is
@@ -163,7 +163,6 @@ fn neutral_base_not_under_workspace_target() {
 /// match means "joins CARGO_TARGET_TMPDIR and runs git init somewhere in the
 /// file", an upper bound, not a per-repo path observation.
 #[test]
-#[ignore = "RED: integration tests create git fixture repos under CARGO_TARGET_TMPDIR (see offender list)"]
 fn git_fixture_files_not_under_target() {
     let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
     let me = Path::new(file!())

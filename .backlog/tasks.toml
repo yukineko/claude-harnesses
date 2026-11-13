@@ -1623,3 +1623,32 @@ exit 101: -pipe-reader-and-py-argv/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.02s
      Running tests/backlog_20261114_pipe_into_subshell_brace_source_reader.rs (target/debug/deps/backlog_20261114_pipe_into_subshell_brace_source_reader-efad5afd787342ac)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_into_subshell_brace_source_reader`"""
+
+[[task]]
+id = "dc27f669"
+title = "blastguard: printf (format-reuse) file passed as a data argument to a python script is judged as the python program (Ask / subagent Deny)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-14 in flow session: printf '%s\n' 'echo hi | bash' 'echo hi |& bash' > c.txt && python3 p.py bin c.txt refused in subagent mode: printf writes the file, another part may run it with Python, written text judged as the Python program; printf option/format-reuse rules not modelled. Reproduced at main 4139f1d2 (0.2.539): printf '%s\n' a b > d.txt && python3 s.py d.txt is ask (main) / deny (subagent); single-conversion printf is Allow; true-positive controls (file is the program) stay non-Allow. RED commit fa080792 on branch test/bg-red-pipe-reader-and-py-argv.'''
+created_at = 1794601343
+updated_at = 1794601343
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_printf_file_as_python_data_arg_fp -- --include-ignored"
+rev = "fa080792966cccefbe3e040a53de25b6add39720"
+observed_at = 1794601343
+detail = """
+exit 101: orktrees/bg-red-pipe-reader-and-py-argv/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/backlog_20261114_printf_file_as_python_data_arg_fp.rs (target/debug/deps/backlog_20261114_printf_file_as_python_data_arg_fp-232693ec2b1af97c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_printf_file_as_python_data_arg_fp`"""

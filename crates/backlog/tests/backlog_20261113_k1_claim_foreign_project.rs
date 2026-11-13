@@ -95,12 +95,11 @@ fn control_plain_next_with_undeterminable_label() {
     control_plain_next(Kind::Undeterminable, "k1-ctl-undet");
 }
 
-// test-weakening-justified: user ruling 2026-11-14 「本質的というのは問題の質は通常パスでゆらぐものではない」 —
-// observed at HEAD: a row labelled with an existing DIFFERENT repo is re-run in
-// that repo and AUTO-CANCELLED (status "cancelled"), not skipped-and-left-pending.
-// This is a RED for the fix; the fix commit MUST remove this `#[ignore]`.
+// RED observed at c4702fad (user ruling 2026-11-14
+// 「本質的というのは問題の質は通常パスでゆらぐものではない」): a row labelled with
+// an existing DIFFERENT repo was re-run in that repo and AUTO-CANCELLED instead
+// of skipped-and-left-pending. Un-ignored by the fix (backlog d3f7a4af).
 #[test]
-#[ignore = "RED until repo-store row identity fix: HEAD auto-cancels a different-repo row"]
 fn next_claim_skips_row_labelled_with_a_different_existing_repo() {
     claim_skips_foreign(Kind::OtherRepo, "k1-claim-repo");
 }

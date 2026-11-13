@@ -77,12 +77,12 @@ fn sole_candidate_refuses(kind: Kind, tag: &str) {
     );
 }
 
-// test-weakening-justified: user ruling 2026-11-14 「本質的というのは問題の質は通常パスでゆらぐものではない」 —
-// observed at HEAD: a sole different-repo row is re-run in that repo and
-// AUTO-CANCELLED, so `next --claim` prints "no pending tasks" with exit 0
-// instead of REFUSED. RED for the fix; the fix commit MUST remove this `#[ignore]`.
+// RED observed at c4702fad (user ruling 2026-11-14
+// 「本質的というのは問題の質は通常パスでゆらぐものではない」): a sole
+// different-repo row was re-run in that repo and AUTO-CANCELLED, so
+// `next --claim` printed "no pending tasks" with exit 0 instead of REFUSED.
+// Un-ignored by the fix (backlog d3f7a4af).
 #[test]
-#[ignore = "RED until repo-store row identity fix: HEAD auto-cancels a different-repo row"]
 fn next_claim_with_only_other_repo_candidate_refuses() {
     sole_candidate_refuses(Kind::OtherRepo, "32d9-repo");
 }

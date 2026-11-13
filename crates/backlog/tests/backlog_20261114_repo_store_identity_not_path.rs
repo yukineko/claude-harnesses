@@ -36,12 +36,10 @@ fn plant_old_root(fx: &common::Fixture, id: &str) {
     assert_eq!(fx.row(id)["project"], OLD_ROOT, "premise: label planted");
 }
 
-// test-weakening-justified: user ruling 2026-11-14 「本質的というのは問題の質は通常パスでゆらぐものではない」 —
-// this is the RED for the fix (repo store identity is the store's repo, not the
-// row label); `#[ignore]` only so the pre-fix tree stays committable. The fix
-// commit MUST remove this attribute.
+// RED observed at c4702fad (user ruling 2026-11-14
+// 「本質的というのは問題の質は通常パスでゆらぐものではない」); un-ignored by the
+// fix (backlog d3f7a4af).
 #[test]
-#[ignore = "RED until repo-store row identity fix (user ruling 2026-11-14)"]
 /// Same-repo row with a nonexistent filer label (p0) ahead of a valid local row
 /// (p2): `next --claim` claims the p0 row.
 ///
@@ -59,10 +57,8 @@ fn a_claim_takes_same_repo_row_with_nonexistent_label() {
     assert_ne!(fx.status(&y), "claimed", "p2 row must not be claimed");
 }
 
-// test-weakening-justified: user ruling 2026-11-14 「本質的というのは問題の質は通常パスでゆらぐものではない」 —
-// RED for the fix; to be un-ignored (attribute removed) by the fix commit.
+// RED observed at c4702fad; un-ignored by the fix (backlog d3f7a4af).
 #[test]
-#[ignore = "RED until repo-store row identity fix (user ruling 2026-11-14)"]
 /// The stored repro of an old-root row is executed with cwd = this checkout.
 /// The committed repro script records `pwd -P` in `rerun_marker.txt`; the
 /// marker is deleted after filing (which also runs the repro), so a marker
@@ -119,10 +115,8 @@ fn c_list_project_includes_old_root_row() {
     );
 }
 
-// test-weakening-justified: user ruling 2026-11-14 「本質的というのは問題の質は通常パスでゆらぐものではない」 —
-// RED for the fix; to be un-ignored by the fix commit.
+// RED observed at c4702fad; un-ignored by the fix (backlog d3f7a4af).
 #[test]
-#[ignore = "RED until repo-store row identity fix (user ruling 2026-11-14)"]
 /// The ONLY candidate has the old-root label: `next --claim` claims it (exit 0)
 /// instead of refusing.
 ///

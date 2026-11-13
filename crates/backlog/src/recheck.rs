@@ -41,9 +41,17 @@ fn is_open(t: &Task) -> bool {
 }
 
 /// The `recheck` body. `leased` = ids under a live claim lease (skipped: a
-/// worker holds them). `Err` (non-zero) when any row was undeterminable, when
-/// `--id` names no open row, or when a write failed.
-pub fn run(tasks_path: &Path, args: &RecheckArgs, leased: &HashSet<String>) -> Result<()> {
+/// worker holds them). `store_root` = the repo holding the store (`None` for a
+/// pinned store): in a repo store the store's repo is every row's identity
+/// (user ruling 2026-11-14), see `claim_recheck::rerun_dir`. `Err` (non-zero)
+/// when any row was undeterminable, when `--id` names no open row, or when a
+/// write failed.
+pub fn run(
+    tasks_path: &Path,
+    args: &RecheckArgs,
+    leased: &HashSet<String>,
+    store_root: Option<&Path>,
+) -> Result<()> {
     let tasks = store::load(tasks_path)?;
     let rows: Vec<Task> = match &args.id {
         Some(id) => {
@@ -83,7 +91,7 @@ pub fn run(tasks_path: &Path, args: &RecheckArgs, leased: &HashSet<String>) -> R
             println!("no-repro\tcancelled\t{}", t.id);
             continue;
         };
-        let root = match rerun_dir(&t) {
+        let root = match rerun_dir(&t, store_root) {
             Ok(r) => r,
             Err(why) => {
                 println!("undeterminable\tuntouched\t{}", t.id);

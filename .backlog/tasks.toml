@@ -1731,6 +1731,8 @@ notes = "Observed 2026-11-14 in a subagent: a sh -c script with a background sub
 created_at = 1794602089
 updated_at = 1794602089
 weight = 0.0
+issue_number = 1737
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1737"
 rev = 0
 
 [task.repro]

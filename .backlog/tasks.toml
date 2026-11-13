@@ -1853,6 +1853,8 @@ notes = "RED 20baa9f2 (branch flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8/fixture-
 created_at = 1794605725
 updated_at = 1794605725
 weight = 0.0
+issue_number = 1740
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1740"
 rev = 0
 
 [task.repro]

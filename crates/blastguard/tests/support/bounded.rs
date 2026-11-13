@@ -71,8 +71,9 @@ pub fn run_bounded(cmd: &mut Command, stdin: &[u8], deadline: Duration) -> Outpu
 ///    cannot fail.
 /// 6. On a timeout in any phase (the child still running, the stdin write
 ///    still blocked, or a drain still open because a descendant outlived the
-///    child and holds the pipe): runs `kill -TERM -<pgid>` (the child and
-///    every descendant in its group), polls `try_wait` for up to 5s to reap the
+///    child and holds the pipe): runs `kill -TERM -- -<pgid>` (the child and
+///    every descendant in its group; the `--` is required by procps-ng `kill`
+///    on Linux, which otherwise exits 0 and signals nothing), polls `try_wait` for up to 5s to reap the
 ///    child if it has not exited, then panics with the phase, the deadline, the
 ///    pgid, the `kill` result and the reap result. A child that ignores
 ///    SIGTERM is reported in that panic, not waited on. A descendant that left
@@ -239,8 +240,12 @@ fn timed_out(
     deadline: Duration,
     pgid: u32,
 ) -> ! {
+    // `--` before the negative pgid: procps-ng `kill` (Linux) reads `-<pgid>`
+    // without it as an option, exits 0 and signals nothing. POSIX `kill`
+    // (BSD/macOS too) accepts `--` as the end of options.
     let killed = Command::new("kill")
         .arg("-TERM")
+        .arg("--")
         .arg(format!("-{pgid}"))
         .status();
     let reaped = match exited {

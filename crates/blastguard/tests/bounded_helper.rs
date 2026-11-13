@@ -384,10 +384,14 @@ fn exit_after_slow_read_with_stdin_held_by_a_grandchild_is_cut_at_the_deadline()
     // stays blocked. Correct: cut at ~6s, whatever the start latency. A
     // stdin-write wait given a fresh 6s budget after the exit would be cut at
     // start latency + 3s + 6s >= 9s.
+    // The pipe is handed to the grandchild through fd 3: POSIX sh (dash) gives
+    // an asynchronous list /dev/null as stdin before its own redirections, so
+    // `sleep 120 <&0 &` would hold /dev/null, not the pipe, and the write would
+    // fail with EPIPE once the stub exits instead of staying blocked.
     let cmd = sh_stub(
         &dir,
         &format!(
-            "sleep 120 <&0 &\necho $! > {}\nsleep 3\nexit 0",
+            "exec 3<&0\nsleep 120 <&3 3<&- &\nexec 3<&-\necho $! > {}\nsleep 3\nexit 0",
             pidfile.display()
         ),
     );

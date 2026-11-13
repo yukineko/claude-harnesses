@@ -1471,38 +1471,6 @@ exit 101: e-a579-cd4f8d3822a8-orch/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_shutil_copy2_source_judged_as_write_fp`"""
 
 [[task]]
-id = "17d985f1"
-title = "blastguard: python 書き込み API の system パス先が組み立て (Path/'x', joinpath)・keyword 引数・alias import・Path.replace の移動先だと allow になる fail-open を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "system-harm",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "System-harm fail-open, RED 7581f880 by a non-implementer (flow-8cca7ef5 orchestrator) at main 43d64581 2026-11-14 (after the 569b9b9d fix): 10 of 10 (shape x mode) runs ALLOWED: (Path('/etc') / 'hosts').write_text, Path('/etc').joinpath('hosts').write_text, shutil.copy(dst='/etc/hosts', src=..), from shutil import copy as c; c(.., '/etc/hosts'), Path('/tmp/y').replace('/etc/hosts'). Also Allow at 33464587 (569b9b9d verifier). Control control_plain_os_chmod_on_system_path_is_denied non-ignored."
-created_at = 1794585984
-updated_at = 1794585984
-weight = 0.0
-issue_number = 1724
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1724"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261114_python_write_api_indirect_system_target -- --include-ignored indirect_system_path_targets_of_write_apis_are_not_allowed"
-rev = "7581f880722cd4de85c5bc3f51bf42de1bfa5932"
-observed_at = 1794585984
-detail = """
-exit 101: 579-cd4f8d3822a8-orch/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.88s
-     Running tests/backlog_20261114_python_write_api_indirect_system_target.rs (target/debug/deps/backlog_20261114_python_write_api_indirect_system_target-5a14ae3b3a50e7e6)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_write_api_indirect_system_target`"""
-
-[[task]]
 id = "7bf91f5a"
 title = "blastguard: printf の二重引用符 operand（エスケープした PY 変数と command 風の文言を含む）を実行される command line と判定して Ask にする false positive を直す"
 project = "/Users/yuki/src/harness"

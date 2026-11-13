@@ -74571,3 +74571,63 @@ rev = "e6c2a72b269f0fa1e14f9af8366ab59dc0ef50c6"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "5bf50bb7"
+title = "backlog no-deferral RED: b_claim_auto_cancels_green_top_candidate_and_closes_issue (user ruling 2026-11-13)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "RED e6c2a72b on red/backlog-no-deferral. Ruling: 保留はありえない実証されないならclose,実証されたらopen / 実証されたら起票、そうでないなら破棄"
+created_at = 1794569611
+updated_at = 1794570370
+weight = 0.0
+issue_number = 1711
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1711"
+issue_closed_at = 1794570372
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close b_claim_auto_cancels_green_top_candidate_and_closes_issue -- --ignored --exact"
+rev = "21f3f1a538199b322cc8a5cdc504a4937a22ff85"
+observed_at = 1794569611
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.92s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-a792bd36b1aa8618)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_no_deferral_auto_close`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close b_claim_auto_cancels_green_top_candidate_and_closes_issue -- --exact"
+exit = 0
+passed = 1
+rev = "c4b9c6e4e11e4b7359abe95098d0acbfe5e41b6c"
+observed_at = 1794570367
+output_digest = "sha256:456ec0dca0bb334d9bc94a385e195729d4bed240668bfa8043dacfb2bdf7bf50"
+excerpt = """
+
+running 1 test
+test b_claim_auto_cancels_green_top_candidate_and_closes_issue ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 2.39s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-2d994707162181b5)
+"""
+
+[task.closure.red]
+rev = "e6c2a72b269f0fa1e14f9af8366ab59dc0ef50c6"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

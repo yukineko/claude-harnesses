@@ -1700,6 +1700,8 @@ notes = "Regression of this run's 17d985f1 (eca769ad): tests/backlog_7483e85b_tw
 created_at = 1794602044
 updated_at = 1794602044
 weight = 0.0
+issue_number = 1736
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1736"
 rev = 0
 
 [task.repro]

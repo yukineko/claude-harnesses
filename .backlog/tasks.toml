@@ -757,38 +757,6 @@ exit 101: harness-worktrees/red4-bg-payload/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_python_adjacent_literal_concat_path`"""
 
 [[task]]
-id = "569b9b9d"
-title = "blastguard: pathlib write_text/write_bytes, node fs.appendFile(Sync), shutil.copy による system パス書き込みが allow になる fail-open を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "system-harm",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "System-harm fail-open, RED 4d61aac2 by a non-implementer at main f0854f26 2026-11-13: 10 interpreter write(s) to a system path were ALLOWED (main and subagent): pathlib.Path(sys path).write_text / write_bytes, node require(fs).appendFileSync / appendFile, shutil.copy(src, sys path). Not Allow: perl 2-arg open, perl open my fh without parens, os.replace. Control control_python_open_w_on_system_path_is_denied non-ignored. Found by the 6cac93af implementer's manual probe."
-created_at = 1794527093
-updated_at = 1794527093
-weight = 0.0
-issue_number = 1673
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1673"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261113_interpreter_write_api_system_path interpreter_write_apis_on_system_path_are_not_allowed -- --include-ignored"
-rev = "02d939d31bcb908052fe61e1c516b122efcc6cfa"
-observed_at = 1794527093
-detail = """
-exit 101: ers/yuki/src/.harness-worktrees/red6-bg/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
-     Running tests/backlog_20261113_interpreter_write_api_system_path.rs (target/debug/deps/backlog_20261113_interpreter_write_api_system_path-89f9d42151d9a4dd)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261113_interpreter_write_api_system_path`"""
-
-[[task]]
 id = "4880afab"
 title = "blastguard FP: heredoc 本文のデータ中の symlink 作成文言を実コマンドとしてモデルし、後続の redirect を deny する"
 project = "/Users/yuki/src/harness"
@@ -1665,3 +1633,35 @@ exit 101: e-a579-cd4f8d3822a8-orch/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 3.11s
      Running tests/backlog_20261114_shutil_copy2_source_judged_as_write_fp.rs (target/debug/deps/backlog_20261114_shutil_copy2_source_judged_as_write_fp-dd5429a9b98ba464)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_shutil_copy2_source_judged_as_write_fp`"""
+
+[[task]]
+id = "17d985f1"
+title = "blastguard: python 書き込み API の system パス先が組み立て (Path/'x', joinpath)・keyword 引数・alias import・Path.replace の移動先だと allow になる fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "System-harm fail-open, RED 7581f880 by a non-implementer (flow-8cca7ef5 orchestrator) at main 43d64581 2026-11-14 (after the 569b9b9d fix): 10 of 10 (shape x mode) runs ALLOWED: (Path('/etc') / 'hosts').write_text, Path('/etc').joinpath('hosts').write_text, shutil.copy(dst='/etc/hosts', src=..), from shutil import copy as c; c(.., '/etc/hosts'), Path('/tmp/y').replace('/etc/hosts'). Also Allow at 33464587 (569b9b9d verifier). Control control_plain_os_chmod_on_system_path_is_denied non-ignored."
+created_at = 1794585984
+updated_at = 1794585984
+weight = 0.0
+issue_number = 1724
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1724"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_write_api_indirect_system_target -- --include-ignored indirect_system_path_targets_of_write_apis_are_not_allowed"
+rev = "7581f880722cd4de85c5bc3f51bf42de1bfa5932"
+observed_at = 1794585984
+detail = """
+exit 101: 579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.88s
+     Running tests/backlog_20261114_python_write_api_indirect_system_target.rs (target/debug/deps/backlog_20261114_python_write_api_indirect_system_target-5a14ae3b3a50e7e6)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_write_api_indirect_system_target`"""

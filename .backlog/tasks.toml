@@ -1747,32 +1747,3 @@ exit 101: eader-and-py-argv/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 20.50s
      Running tests/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args.rs (target/debug/deps/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args-74dc82015cfb998f)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_shell_with_value_flags_or_s_args`"""
-
-[[task]]
-id = "ff8cebd0"
-title = "rollout-plugins.sh deploys from a working tree that differs from committed HEAD (deployed a fail-open-mutated blastguard)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "rollout",
-    "fail-open",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "2026-11-14: rollout --plugin blastguard ran while check-fail-open-mutation.py had model.rs mutated in place (Ask=>Allow); the mutant was copied+built+deployed as 0.2.548. Fix: pre/post source guard + mutation marker. RED: 9e5bfaf2."
-created_at = 1794605139
-updated_at = 1794605139
-weight = 0.0
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_rollout_refuses_dirty_source.py"
-rev = "9e5bfaf26154954c8dc50288bc1018861b4ef992"
-observed_at = 1794605139
-detail = """
-exit 1: rce.py::MidBuild::test_d2_mutate_then_revert_during_build_is_not_deployed
-FAILED scripts/test_rollout_refuses_dirty_source.py::MidBuild::test_d_source_mutated_during_build_is_not_deployed
-FAILED scripts/test_rollout_refuses_dirty_source.py::MutationMarker::test_f_evaluate_scenario_brackets_mutation_with_marker_and_seq
-========================= 6 failed, 1 passed in 10.08s ========================="""

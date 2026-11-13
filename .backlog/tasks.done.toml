@@ -76287,3 +76287,61 @@ rev = "c58f113491f293e984b91d830ed5d8f7600c38e3"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "ff8cebd0"
+title = "rollout-plugins.sh deploys from a working tree that differs from committed HEAD (deployed a fail-open-mutated blastguard)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "2026-11-14: rollout --plugin blastguard ran while check-fail-open-mutation.py had model.rs mutated in place (Ask=>Allow); the mutant was copied+built+deployed as 0.2.548. Fix: pre/post source guard + mutation marker. RED: 9e5bfaf2."
+created_at = 1794605139
+updated_at = 1794606344
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_rollout_refuses_dirty_source.py"
+rev = "9e5bfaf26154954c8dc50288bc1018861b4ef992"
+observed_at = 1794605139
+detail = """
+exit 1: rce.py::MidBuild::test_d2_mutate_then_revert_during_build_is_not_deployed
+FAILED scripts/test_rollout_refuses_dirty_source.py::MidBuild::test_d_source_mutated_during_build_is_not_deployed
+FAILED scripts/test_rollout_refuses_dirty_source.py::MutationMarker::test_f_evaluate_scenario_brackets_mutation_with_marker_and_seq
+========================= 6 failed, 1 passed in 10.08s ========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_rollout_refuses_dirty_source.py"
+exit = 0
+passed = 7
+rev = "2cf6aa6685723f3630c49f79f17b28dc5a5512b3"
+observed_at = 1794606334
+output_digest = "sha256:bcc4a29d6ac549e28a06ee90a3c1e706bf0e472aa04eabaced9e0072035c4ea4"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/harness-wt-rollout-clean
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 7 items
+
+scripts/test_rollout_refuses_dirty_source.py .......                     [100%]
+
+============================== 7 passed in 8.86s ===============================
+"""
+
+[task.closure.red]
+rev = "9e5bfaf26154954c8dc50288bc1018861b4ef992"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

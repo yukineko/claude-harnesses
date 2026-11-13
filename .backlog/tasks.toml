@@ -1053,3 +1053,35 @@ scripts/test_backlog_merge_driver_pinned_path_20261113.py:113: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_backlog_merge_driver_pinned_path_20261113.py::PinnedDriverPath::test_store_merge_survives_removal_of_the_installing_version_dir
 ============================== 1 failed in 0.28s ==============================="""
+
+[[task]]
+id = "53a97aa3"
+title = "blastguard: quoted here-doc 本文の行頭バッククォートをコマンド語として扱う誤検知を直す"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "RED febfee9c (crates/blastguard/tests/quoted_heredoc_body_backtick_fp_20261113.rs r1/r2, ignored). Shape: git commit -q -F - <<'EOF' with a body line starting with a backticked word, then a command after EOF -> ask/deny 'the command word detect is an expansion'. Nothing after EOF, or a mid-line backtick -> allow. Hit by a subagent commit 2026-11-13. Controls c1 (allow) and c2 (top-level backtick stays not Allow) must hold."
+created_at = 1794542097
+updated_at = 1794542097
+weight = 0.0
+issue_number = 1680
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1680"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test quoted_heredoc_body_backtick_fp_20261113 -- --ignored"
+rev = "febfee9c14ac41ec7a7a18099e953625453f5d1e"
+observed_at = 1794542097
+detail = """
+exit 101: t: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.14s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/quoted_heredoc_body_backtick_fp_20261113.rs (target/debug/deps/quoted_heredoc_body_backtick_fp_20261113-fec620ef97438896)
+error: test failed, to rerun pass `-p blastguard --test quoted_heredoc_body_backtick_fp_20261113`"""

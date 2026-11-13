@@ -129,7 +129,6 @@ fn a_headless_hardened_ask_is_recorded_as_ask_hardened_to_deny() {
 }
 
 #[test]
-#[ignore = "RED: deny-downgraded-to-ask record does not keep that the original verdict was an Ask (no original_decision field); a hardened Ask repeated is indistinguishable from a repeated Deny"]
 fn b_deny_downgraded_to_ask_keeps_original_ask() {
     let e = env("b");
     let sess = "sess-gb";

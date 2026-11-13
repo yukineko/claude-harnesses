@@ -1037,12 +1037,14 @@ Deny が 0 件であることは弱い保証ではあるが事実である — �
 （`BLASTGUARD_BLOCK_LOG_DIR` で dir を上書き、ファイルは `<dir>/blocks.jsonl`）へ 1 行追記する
 （`src/blocklog.rs`）。`Allow` は記録しない。
 
-各行: `v`(1)・`ts`・`blastguard_version`・`session_id`・`agent_id`（subagent 外は null）・
+各行: `v`(2)・`ts`・`blastguard_version`・`session_id`・`agent_id`（subagent 外は null）・
 `cwd`（payload 値。不透明な文字列で検査しない）・`tool_name`・`command`（Bash、バイト一致・
 切り詰めない）・`file_path`（ファイル系 tool）・`tool_input`（payload の値そのもの）・
 `tool_input_capped`・`tool_input_bytes`・`tool_input_sha256`（compact JSON の sha256）・
 `decision`（表示した `deny`/`ask`）・`decision_kind`（`deny` / `ask` / `ask-hardened-to-deny` /
-`deny-downgraded-to-ask` / `panic-blocked`）・`actor`・`system_harm`・`reason`（表示した文そのもの）・
+`deny-downgraded-to-ask` / `panic-blocked`）・`original_decision`（硬化・2 度目の降格前の検出器の
+判定。`deny` / `ask` / `undetermined`〈panic〉。全 `decision_kind` で必ず出し null にしない。headless で
+硬化した Ask の 2 度目は `ask`、真の Deny の 2 度目は `deny`。欠落は v1 レコードのみで `deny` を意味しない）・`actor`・`system_harm`・`reason`（表示した文そのもの）・
 `rule_id`・`raw_payload`（payload をパースできなかったとき・verdict 経路の panic 時のみ、raw stdin）。
 
 サイズ: `tool_input` の複製だけは compact JSON が 1 MiB を超えると `null`・`tool_input_capped: true`

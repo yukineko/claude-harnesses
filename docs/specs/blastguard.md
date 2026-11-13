@@ -1148,12 +1148,15 @@ forge・condukt のスケジューラが再利用）。
   これ以上は切り分けられません。というのは大変愚かなので記録をとること。止めたなら止めた責任をとる」）。
   表示した `Deny` / `Ask` ごとに 1 行を overwatch に依存せず `~/.blastguard/blocks/blocks.jsonl`
   （`BLASTGUARD_BLOCK_LOG_DIR` で dir を上書き）へ追記する。`Allow` は記録しない。フィールド:
-  `v`(1)・`ts`・`blastguard_version`・`session_id`・`agent_id`（subagent 外は null）・`cwd`（payload 値、
+  `v`(2)・`ts`・`blastguard_version`・`session_id`・`agent_id`（subagent 外は null）・`cwd`（payload 値、
   不透明・非検査）・`tool_name`・`command`（Bash、バイト一致・非切り詰め）・`file_path`・`tool_input`
   （payload の値そのもの）・`tool_input_capped`・`tool_input_bytes`・`tool_input_sha256`（compact JSON の
   sha256）・`decision`（表示した `deny`/`ask`）・`decision_kind`（`deny` / `ask` / `ask-hardened-to-deny`
   〈subagent・headless での硬化〉/ `deny-downgraded-to-ask`〈2 度目〉/ `panic-blocked`〈verdict 経路の
-  panic で exit 2〉）・`actor`・`system_harm`・`reason`（表示文そのもの）・`rule_id`・`raw_payload`
+  panic で exit 2〉）・`original_decision`（検出器の元の判定。`deny` / `ask` / `undetermined`〈panic
+  で判定に至らず〉。全 `decision_kind` で必ず出力し null にならない。`deny-downgraded-to-ask` は元が
+  headless で硬化した Ask なら `ask`、真の Deny なら `deny`。欠落・null を `deny` と読まない — v1
+  レコードには無い）・`actor`・`system_harm`・`reason`（表示文そのもの）・`rule_id`・`raw_payload`
   （payload をパースできなかったとき・panic 時のみ raw stdin）。`tool_input` の複製だけは compact JSON が
   1 MiB を超えると null・`tool_input_capped: true`（長さ・hash・`command`・`file_path` は保持）。
   記録は判定確定後・表示前に書き、判定を変えない。書けない（panic を含む）ときは表示理由に

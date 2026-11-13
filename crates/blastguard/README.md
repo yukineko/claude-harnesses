@@ -680,7 +680,7 @@ User ruling, 2026-11-14 (verbatim): 「…完全なコマンドが残ってい�
 Every printed `Deny` or `Ask` appends one JSON line to blastguard's own
 `~/.blastguard/blocks/blocks.jsonl` (override: `BLASTGUARD_BLOCK_LOG_DIR`, file
 `<dir>/blocks.jsonl`), independent of overwatch (`src/blocklog.rs`). An `Allow`
-writes nothing. Fields: `v` (1), `ts`, `blastguard_version`, `session_id`,
+writes nothing. Fields: `v` (2), `ts`, `blastguard_version`, `session_id`,
 `agent_id` (null outside a subagent), `cwd` (payload value, opaque, never
 inspected), `tool_name`, `command` (Bash, byte-exact, never truncated),
 `file_path` (file tools), `tool_input` (the full payload value),
@@ -688,7 +688,11 @@ inspected), `tool_name`, `command` (Bash, byte-exact, never truncated),
 JSON serialization), `decision` (printed `deny`/`ask`), `decision_kind`
 (`deny`, `ask`, `ask-hardened-to-deny` for a subagent/headless Ask,
 `deny-downgraded-to-ask` for a repeat deny, `panic-blocked` for a panic on the
-verdict path blocked with exit 2), `actor`, `system_harm`, `reason` (exactly as
+verdict path blocked with exit 2), `original_decision` (the detector's own
+verdict before hardening/downgrade: `deny`, `ask`, or `undetermined` for a
+panic; present and non-null for every `decision_kind`, so a downgraded repeat
+of a headless-hardened Ask says `ask` and a downgraded real Deny says `deny`;
+absent only in v1 records, where absence never means `deny`), `actor`, `system_harm`, `reason` (exactly as
 printed), `rule_id`, and `raw_payload` (the raw stdin, only when the payload
 could not be parsed or the verdict path panicked).
 

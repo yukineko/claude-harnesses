@@ -165,7 +165,7 @@ fn sha256_hex(v: &Value) -> String {
 
 /// Properties every record of a printed Deny/Ask must satisfy.
 fn check_common(rec: &Value, r: &Run, payload: &Value) {
-    assert_eq!(rec["v"], 1, "record schema version v: {rec}");
+    assert_eq!(rec["v"], 2, "record schema version v: {rec}");
     assert!(
         rec["ts"].is_u64() || rec["ts"].is_i64(),
         "ts must be an integer: {rec}"
@@ -529,7 +529,7 @@ fn g_unparseable_payload_records_raw_payload() {
         printed(&r).as_str(),
         "record decision must equal stdout permissionDecision: {rec}"
     );
-    assert_eq!(rec["v"], 1, "{rec}");
+    assert_eq!(rec["v"], 2, "{rec}");
     assert!(
         rec["tool_name"].is_null(),
         "tool_name null when unparseable: {rec}"

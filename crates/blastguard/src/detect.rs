@@ -80,6 +80,7 @@ mod heredoc;
 mod high_blast;
 mod interpreter;
 mod payload;
+mod printf_eval;
 mod protected;
 mod readings;
 mod readonly;

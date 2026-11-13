@@ -12,7 +12,7 @@ use super::{
 // ---------------------------------------------------------------------------
 
 /// One `;`/`&&`/`||`/`&`/newline-separated STATEMENT, further broken into its
-/// `|`-connected PIPE STAGES in order.
+/// `|`- or `|&`-connected PIPE STAGES in order.
 ///
 /// Deliberately NOT `split_segments`: that function flattens every operator
 /// (`;`, `&&`, `||`, `|`, `&`) into one list and — by design, for the rules it
@@ -107,11 +107,15 @@ pub(super) fn split_statements_into_pipe_stages(cmd: &str) -> Vec<Vec<String>> {
                     i += 2;
                     continue;
                 }
-                // A single `|` is a pipe: new stage, SAME statement.
+                // A single `|` is a pipe: new stage, SAME statement. So is
+                // `|&` (stdout AND stderr piped, backlog 00569f7d): read as
+                // `|` then `&`, its `&` ended the statement, so the reader of
+                // `echo 'rm -rf /' |& sh` looked unpiped and was not audited.
+                // `||` was consumed above and never reaches here.
                 if c == '|' {
                     stages.push(std::mem::take(&mut cur));
                     line_code.push(c);
-                    i += 1;
+                    i += if chars.get(i + 1) == Some(&'&') { 2 } else { 1 };
                     continue;
                 }
                 if c == '\n' {

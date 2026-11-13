@@ -1212,3 +1212,34 @@ exit 101: ured; 3 filtered out; finished in 0.06s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
      Running tests/quoted_heredoc_body_string_parsed_as_command_fp_20261113.rs (target/debug/deps/quoted_heredoc_body_string_parsed_as_command_fp_20261113-fbc836818ea62332)
 error: test failed, to rerun pass `-p blastguard --test quoted_heredoc_body_string_parsed_as_command_fp_20261113`"""
+
+[[task]]
+id = "6efd5a40"
+title = "blastguard: arithmetic expansion body parsed as a command line, first operand judged as an unresolvable command word"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-13 on deployed blastguard 0.2.499, main 8dedad41, identical in main and subagent mode. Denied: an arithmetic expansion whose first operand is a command substitution of date plus-percent-s minus 5, reason verbatim: the command word DOLLAR-PAREN-date is an expansion whose value only exists at run time - blastguard cannot tell what program this runs. Same deny when the first operand is a plain variable (reason names DOLLAR-x as the command word) or a backtick substitution. Allowed: arithmetic with only literal or bare-name operands; the same date substitution outside arithmetic. bash evaluates all these as arithmetic and prints numbers. So date is not what is rejected: the arithmetic body is split as a command line and its first operand judged as a command word. This contradicts the doc comment of executed_substitution_payloads in src/detect/substitution.rs which says the arithmetic body is an expression in which the analyser finds nothing destructive. Readings: (a) defect, arithmetic operands are never executed as a command name; (b) intended, DOLLAR-double-paren deliberately treated as a command substitution holding a subshell. bash reads it as a subshell only when the body does not parse as arithmetic; all repro cases parse as arithmetic. If (b) is intended, fix the docstring and delete the RED cases instead. RED r1..r3 ignored, observed failing at 8dedad41 exit 101 (Ask in the test fixture, Deny on the deployed binary). Controls c1 plain arithmetic Allow; c2 recursive rm of /etc inside a substitution nested in arithmetic stays not Allow; c3 a real subshell inside a substitution with an expansion command word stays not Allow. RED commit 447c20b5."
+created_at = 1794546242
+updated_at = 1794546242
+weight = 0.0
+issue_number = 1694
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1694"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test arithmetic_expansion_operand_as_command_word_fp_20261113 -- --ignored"
+rev = "447c20b5d894a3935001842b7f09983ae9b664fe"
+observed_at = 1794546242
+detail = """
+exit 101: rees/fp-file-20261113/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.64s
+     Running tests/arithmetic_expansion_operand_as_command_word_fp_20261113.rs (target/debug/deps/arithmetic_expansion_operand_as_command_word_fp_20261113-8df5a1fb1455a5cd)
+error: test failed, to rerun pass `-p blastguard --test arithmetic_expansion_operand_as_command_word_fp_20261113`"""

@@ -377,37 +377,6 @@ exit 101: 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.77s
 error: test failed, to rerun pass `-p condukt --test backlog_20261113_c5_c6_circuit_budget_unmeasured`"""
 
 [[task]]
-id = "32d9232c"
-title = "backlog: next --claim が他プロジェクトパスの 1 件で queue 全体を拒否する問題を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "audit-20261113",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """K1. claim_recheck.rs rerun_dir: undetermined project identity refuses the whole claim. RED (verbatim): Error: backlog next --claim REFUSED to claim ... the re-run of candidate 18480a75's stored repro could not be determined (cmd: bash tests/repro_yes.sh): the project identity of its project root "/some/old/root" cannot be determined. The fixture rewrites X's project line (backlog add refuses a nonexistent project), a state a moved repo produces. Two fix readings: (a) skip X and claim Y (what the RED expects); (b) like 97d5f45c, re-run in the store's own repo and claim X - would fail this RED. 'skip X, claim Y' is a design choice: ask the user before choosing (b). A single-candidate store must still refuse, not report empty. source: audit 2026-11-13 (condukt run run-20261112-072718-37987 follow-ups; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."""
-created_at = 1794516640
-updated_at = 1794516640
-weight = 0.0
-issue_number = 1657
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1657"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test backlog_20261113_k1_claim_foreign_project -- --ignored next_claim_hands_out_valid_ticket_despite_foreign_project_on_another"
-rev = "99e1d092f0fe8213c94668b9757b20be93d0a46d"
-observed_at = 1794516640
-detail = """
-exit 101: ng backlog v0.3.110 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.17s
-     Running tests/backlog_20261113_k1_claim_foreign_project.rs (target/debug/deps/backlog_20261113_k1_claim_foreign_project-bcb762cbc9a84c04)
-error: test failed, to rerun pass `-p backlog --test backlog_20261113_k1_claim_foreign_project`"""
-
-[[task]]
 id = "536e2811"
 title = "backlog: fix コミット件名の (backlog <id> wave 2) / (backlog <id>; x) 形式を修正済みと認識しない問題を直す"
 project = "/Users/yuki/src/harness"

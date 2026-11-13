@@ -1712,6 +1712,8 @@ notes = "RED at 4c86a8ee (origin/main 1787d8de), 2026-11-14. User ruling (2026-1
 created_at = 1794597464
 updated_at = 1794597464
 weight = 0.0
+issue_number = 1728
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1728"
 rev = 0
 
 [task.repro]

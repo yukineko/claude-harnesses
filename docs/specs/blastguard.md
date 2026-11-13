@@ -724,6 +724,15 @@ forge・condukt のスケジューラが再利用）。
   code interpreter の program 監査は `node -e` と同じ文字列ベースの破壊的呼び出し検出であり、言語ごとの
   parser ではない。`>>` の連結で読み方が 16 を超えると、超えた分の読み方は判定せず Ask にする（そこに system
   harm があっても Deny ではなく Ask）。
+- **未修正の false positive の RED（2026-11-13、flow-8cca7ef5。修正は未実装）** — `.rs` 宛ての quoted heredoc の
+  body は data であり shell ではない（ユーザー裁定: heredoc body を .py/.rs へ書くコマンドの body は data、
+  .sh/拡張子なしだけ shell として判定、同一 command 内で実行される場合を除く）。しかし (FP1) body に Rust 文字列
+  リテラルとして `python3 -c \"...\"` を含む複数行 body + 後続の `cd && cargo test` は「python3 の inline program を
+  tokenise できない」で Ask（subagent では Deny）、(FP2b) body に `git add && git commit -m \"a \\\"b\\\" c\" -m ...`
+  のテキストを含む body + 後続コマンドは「whole-tree staging（unclosed double quote）」で Ask/Deny になる。報告された
+  素の `git add <paths> && git commit -m "..\"..."` コマンド自体は Allow で再現しなかった（control）。
+  回帰テスト: `crates/blastguard/tests/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs`
+  （`#[ignore]` の RED 2 本 + control。独立 subagent が書いた。証明しない範囲はファイル冒頭の doc comment）。
 
 ### module 責務
 

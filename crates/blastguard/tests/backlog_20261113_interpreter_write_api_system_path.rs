@@ -122,3 +122,34 @@ fn control_python_open_w_on_system_path_is_denied() {
         assert_eq!(d, "deny", "subagent={subagent} {c:?} -> {d} | {r}");
     }
 }
+
+/// Shapes added 2026-11-13 by the flow-8cca7ef5 orchestrator (not the 569b9b9d
+/// implementer): pathlib `Path(..).chmod(..)` on a system path. Same harm as
+/// `os.chmod('/etc/hosts', 0o777)`, reached through the pathlib method API.
+const PATHLIB_CHMOD_SHAPES: &[&str] = &[
+    "python3 -c \"from pathlib import Path; Path('/etc/hosts').chmod(0o777)\"",
+    "python3 -c \"import pathlib; pathlib.Path('/etc/hosts').chmod(0o777)\"",
+];
+
+// test-weakening-justified: new RED for an unfixed CRITICAL fail-open (backlog
+// 569b9b9d, 2026-11-13); the ignore is removed in the fixing commit.
+#[test]
+#[ignore = "RED: 569b9b9d 2026-11-13 pathlib Path(..).chmod on a system path is allowed — remove the ignore when fixed"]
+fn pathlib_chmod_on_system_path_is_not_allowed() {
+    let home = unique_home("chmod");
+    let mut failures = Vec::new();
+    for c in PATHLIB_CHMOD_SHAPES {
+        for subagent in [false, true] {
+            let (d, r) = run_as(c, &home, subagent);
+            if d == "allow" {
+                failures.push(format!("subagent={subagent} {c:?} -> {d} | {r}"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} pathlib chmod(s) on a system path were ALLOWED:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}

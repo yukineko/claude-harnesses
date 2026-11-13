@@ -1173,7 +1173,12 @@ fn literal_mode(ev: &Eval<'_>, span: Option<(usize, usize)>) -> Option<Option<Ef
 /// `os.chown` / `os.lchown` / `shutil.chown` as `chown 0:0 p`;
 /// `open(p, 'w'|'x'|…)`, `Path.open('w')`, `Path.write_text` / `write_bytes`
 /// as `: > p`, and an append or `+` mode as `: >> p`; `os.open` with a write
-/// flag likewise. Each command is judged by the shell rules, so home, `/` and
+/// flag likewise; `Path.touch()` as `: >> p` and `Path.symlink_to` /
+/// `hardlink_to` as `: > p`; a ONE-argument `.replace(dst)` / `.rename(dst)`
+/// (positional or `target=`: `Path.replace` / `Path.rename`, never the
+/// two-argument `str.replace`) as `: > dst` plus `rm` of its receiver
+/// (backlog 17d985f1). The path of a method is its RECEIVER, resolved by
+/// [`Eval::receiver`] through `/`, `joinpath` and parentheses. Each command is judged by the shell rules, so home, `/` and
 /// dotfile targets get the shell's Deny/Ask and a repo-relative path stays
 /// Allow. A path computed by iterating a repo-relative directory, or read
 /// from `sys.argv` / a constructor argument, is judged by [`values`] (user
@@ -1192,35 +1197,82 @@ pub(super) fn filesystem_verdict(
     depth: usize,
     ctx: &Ctx<'_>,
 ) -> Decision {
-    path_calls_verdict(src, argv, depth, ctx, true)
+    path_calls_verdict(src, argv, depth, ctx)
 }
 
-/// The path-MUTATING part of [`filesystem_verdict`] for an inline Python
-/// program (`python -c`, or a program `python` reads from stdin): every call
-/// it lists except the `open` / `os.open` / `.open()` / `write_text` /
-/// `write_bytes` writes (those of an inline program are judged by the
-/// interpreter write-target scan). `src` is read with its import aliases
-/// resolved ([`bindings`] / [`rewrite`]: `from os import chmod`).
+/// [`filesystem_verdict`] for an inline Python program (`python -c`, or a
+/// program `python` reads from stdin), every call it lists included — the
+/// `open` / `os.open` / `.open()` / `write_text` / `write_bytes` writes too
+/// (backlog 17d985f1; they are ALSO judged by the interpreter write-target
+/// scan, which reads only literal tokens). `src` is read with its import
+/// aliases resolved ([`bindings`] / [`rewrite`]: `from os import chmod`).
 ///
 /// Backlog f6dbff5b: the literal scan of [`super::shell_calls`] sees only the
 /// string tokens of a call, so `os.chmod('/''etc/hosts', 0)` — two tokens,
 /// neither in a system directory — was Allow. Here the path argument is
 /// evaluated ([`Eval::expr`]) and the resolved value judged by the shell
 /// rules; a path argument that cannot be resolved statically is an Ask
-/// (Deny where no human can answer), never Allow.
+/// (Deny where no human can answer), never Allow. Backlog 17d985f1: the same
+/// holds for the RECEIVER of a pathlib write method, so
+/// `(Path('/etc') / 'hosts').write_text('x')` and
+/// `Path('/etc').joinpath('hosts').write_text('x')` are writes of
+/// `/etc/hosts`, and for the DESTINATION of `Path.replace` / `Path.rename`
+/// (`Path('/tmp/y').replace('/etc/hosts')`).
 pub(super) fn path_mutation_verdict(src: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let rewritten = rewrite(src, &bindings(src));
-    path_calls_verdict(&rewritten, None, depth, ctx, false)
+    path_calls_verdict(&rewritten, None, depth, ctx)
 }
 
-/// [`filesystem_verdict`]; `opens` says whether the `open`-family writes are
-/// judged too.
+/// Judge every value in `path` (the resolved target of the call `n`) as the
+/// shell command with `effect` on it. A Deny is returned at once; an Ask is
+/// recorded in `pending` (the first one stands). `None` — a target that
+/// cannot be resolved statically — is an Ask, never an Allow.
+fn judge_paths(
+    n: &str,
+    effect: Effect,
+    path: Option<Vals>,
+    depth: usize,
+    ctx: &Ctx<'_>,
+    pending: &mut Option<Decision>,
+) -> Option<Decision> {
+    let Some(paths) = path else {
+        pending.get_or_insert(Decision::ask(format!(
+            "the program calls `{n}` on a path blastguard cannot resolve statically — it \
+cannot tell whether that removes, overwrites or re-permissions something irreversible"
+        )));
+        return None;
+    };
+    for path in paths {
+        let Some(word) = path.shell_word() else {
+            match values::under_verdict(n, &path, effect, depth, ctx) {
+                d @ Decision::Deny(_) => return Some(d),
+                a @ Decision::Ask(_) => {
+                    pending.get_or_insert(a);
+                }
+                Decision::Allow => {}
+            }
+            continue;
+        };
+        let line = effect.shell_line(&word);
+        match analyze_shell_payload(&line, depth, ctx) {
+            d @ Decision::Deny(_) => return Some(d),
+            Decision::Ask(r) => {
+                pending.get_or_insert(Decision::ask(format!(
+                    "the program calls `{n}`, which does what `{line}` does: {r}"
+                )));
+            }
+            Decision::Allow => {}
+        }
+    }
+    None
+}
+
+/// The calls [`filesystem_verdict`] and [`path_mutation_verdict`] judge.
 fn path_calls_verdict(
     src: &str,
     argv: Option<&values::Argv>,
     depth: usize,
     ctx: &Ctx<'_>,
-    opens: bool,
 ) -> Decision {
     let toks = lex(src);
     let ev = Eval::new(&toks, src, argv);
@@ -1260,8 +1312,6 @@ fn path_calls_verdict(
             "os.chown" | "os.lchown" | "shutil.chown" if !attr => {
                 (Effect::Chown, path_arg(0, "path"))
             }
-            "open" | "io.open" | "codecs.open" | "builtins.open" if !opens => continue,
-            "os.open" if !opens => continue,
             "open" | "io.open" | "codecs.open" | "builtins.open" if !attr => {
                 match literal_mode(&ev, ev.arg(open, 1, "mode")) {
                     Some(Some(eff)) => (eff, path_arg(0, "file")),
@@ -1298,8 +1348,29 @@ fn path_calls_verdict(
                     "chmod" | "lchmod" => Effect::Chmod {
                         mode: literal_chmod_mode(&ev, ev.arg(open, 0, "mode")),
                     },
-                    "write_text" | "write_bytes" | "open" if !opens => continue,
                     "write_text" | "write_bytes" => Effect::Write { append: false },
+                    // Create or update the receiver path (backlog 17d985f1).
+                    "touch" => Effect::Write { append: true },
+                    "symlink_to" | "hardlink_to" => Effect::Write { append: false },
+                    // `Path.replace(target)` / `Path.rename(target)` overwrite
+                    // the DESTINATION and move the receiver away (backlog
+                    // 17d985f1). Only the one-argument shape: `str.replace`
+                    // takes two or three, and a keyword other than `target`
+                    // (`dt.replace(year=…)`) is not this call.
+                    "replace" | "rename" => {
+                        let args = ev.args(open);
+                        let one =
+                            args.len() == 1 && ev.keyword(args[0]).is_none_or(|kw| kw == "target");
+                        if !one {
+                            continue;
+                        }
+                        let dst = ev.arg(open, 0, "target").and_then(|(s, e)| ev.expr(s, e));
+                        let write = Effect::Write { append: false };
+                        if let Some(d) = judge_paths(n, write, dst, depth, ctx, &mut pending) {
+                            return d;
+                        }
+                        Effect::Remove { recursive: false }
+                    }
                     // A non-literal first argument of an `.open` on a value
                     // that is not a path (`webbrowser.open(url)`,
                     // `tarfile.open(name)`) is not a mode; on a path it is.
@@ -1318,34 +1389,8 @@ fn path_calls_verdict(
             }
             _ => continue,
         };
-        let Some(paths) = path else {
-            pending.get_or_insert(Decision::ask(format!(
-                "the program calls `{n}` on a path blastguard cannot resolve statically — it \
-cannot tell whether that removes, overwrites or re-permissions something irreversible"
-            )));
-            continue;
-        };
-        for path in paths {
-            let Some(word) = path.shell_word() else {
-                match values::under_verdict(n, &path, effect, depth, ctx) {
-                    d @ Decision::Deny(_) => return d,
-                    a @ Decision::Ask(_) => {
-                        pending.get_or_insert(a);
-                    }
-                    Decision::Allow => {}
-                }
-                continue;
-            };
-            let line = effect.shell_line(&word);
-            match analyze_shell_payload(&line, depth, ctx) {
-                d @ Decision::Deny(_) => return d,
-                Decision::Ask(r) => {
-                    pending.get_or_insert(Decision::ask(format!(
-                        "the program calls `{n}`, which does what `{line}` does: {r}"
-                    )));
-                }
-                Decision::Allow => {}
-            }
+        if let Some(d) = judge_paths(n, effect, path, depth, ctx, &mut pending) {
+            return d;
         }
     }
     pending.unwrap_or(Decision::Allow)

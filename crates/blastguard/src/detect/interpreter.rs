@@ -308,6 +308,12 @@ const INTERPRETER_WRITE_CALLS: &[&str] = &[
     "o_creat",
     "o_append",
     "writefilesync(",
+    // Backlog 569b9b9d: node's append APIs and pathlib's write methods write
+    // the path they name exactly like `writeFileSync` / `open(p,'w')`.
+    "appendfilesync(",
+    "appendfile(",
+    ".write_text(",
+    ".write_bytes(",
     "createwritestream(",
     "file.write(",
     // `open(path, <mode>)` is NOT decided by these spellings any more: every

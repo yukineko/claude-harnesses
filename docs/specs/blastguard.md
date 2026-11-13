@@ -54,10 +54,21 @@ forge・condukt のスケジューラが再利用）。
   test が作る fixture（とりわけ `git init` / `git worktree add` した repo）が `target/`（`CARGO_TARGET_TMPDIR`
   / `<workspace>/target`）に残ると、その worktree は無視されたビルド出力ディレクトリ内に入れ子の `.git`
   を持ち、forced な worktree 撤去が正しく Ask（subagent は Deny）になって撤去できなくなる
-  （観測: 842 個の `.git`）。`support/neutral_base.rs` の `neutral_base()` の実パスが `target/` 配下に
-  ならないこと、および `target/` 配下に git repo を作るテストファイルが無いことを
-  `tests/fixtures_outside_target_20261114.rs` が固定する（RED、fix 待ちで `#[ignore]`）。`/tmp` 系の
-  safe root も避ける（fixture の場所が判定を左右しない）こと自体は引き続き要件。
+  （観測: 842 個の `.git`）。fixture base は `tests/support/neutral_base.rs` の `neutral_base()` で、
+  既定の置き場は `$HOME/.blastguard-test-fixtures/blastguard-worktree-root-fixtures/run-<pid>-<nanos>[-n]`
+  （この suite 専用の scratch 名前空間。テストバイナリ実行ごとに `create_dir` で一意。
+  `BLASTGUARD_TEST_FIXTURE_DIR` で上書き可、上書き時はそれが唯一の候補）。`/tmp`・`/private/tmp`・`/var/tmp`
+  は temp safe root、`$TMPDIR`（macOS は `/private/var/folders/...`）は temp root かつ削除原則上の
+  システムディレクトリなので使わない。使用前に実 hook で 2 本の較正（cwd 外の `rm -rf` が厳密に Deny、
+  cwd 内の `rm -rf` が厳密に Ask）を通し、通らない場所は panic で拒否する（場所が判定を左右しないこと）。
+  各実行はプロセス終了時（`atexit`）に**自分の** run ディレクトリだけを消す（`symlink_metadata` で実ディレクトリ
+  かつ正準パスが作成時と一致する場合のみ。失敗は stderr、panic しない、他は消さない）。開始時の prune は
+  専用ディレクトリ直下の `run-*` のうち実ディレクトリ（symlink・非ディレクトリは skip）・24 時間無更新・
+  正準パスが `<正準な専用ディレクトリ>/<名前>` に一致するものだけを消し、疑わしいものは skip する。
+  `CARGO_TARGET_TMPDIR` に直接 fixture を繋いで git repo を作っていたテスト（`backlog_audit_s02.rs`・
+  `backlog_worktree_redirect_and_sq_fp_20261107.rs`）は `neutral_base()` に移した。git repo を作らない一部の
+  テストは引き続き `CARGO_TARGET_TMPDIR` 配下に scratch を作る。`tests/fixtures_outside_target_20261114.rs`
+  の RED（`#[ignore]`）は scan の再アンカー後に外す（backlog 37955e32）。
 
 ## 振る舞い
 

@@ -20,6 +20,8 @@
 
 #[path = "support/bounded.rs"]
 mod bounded;
+#[path = "support/neutral_base.rs"]
+mod neutral_base;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -54,9 +56,11 @@ impl Fx {
     fn new(name: &str) -> Fx {
         // NOT under /tmp or /var/tmp: those are blastguard TEMP safe roots, which
         // would make every path in the fixture "inside the session's safe roots"
-        // (measured: the fixture then allows, the real layout denies).
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join(format!("bg-wt-fp-{}-{name}", std::process::id()));
+        // (measured: the fixture then allows, the real layout denies). The
+        // calibrated fixture base (support/neutral_base.rs) is neither, and is
+        // not under the workspace `target/` (backlog 37955e32).
+        let root =
+            neutral_base::neutral_base().join(format!("bg-wt-fp-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let base = std::fs::canonicalize(&root).unwrap();

@@ -33,8 +33,10 @@
 //! peer list as silence: **an empty peer set here does NOT mean "checked, no
 //! duplicates"** — a reworded duplicate (Japanese or not) scores below it.
 
+use crate::store::row_identity::{row_repo, RowRepo};
 use crate::task::Task;
 use serde::Serialize;
+use std::path::Path;
 
 /// Jaccard score at or above which two queued titles are surfaced as possible
 /// near-duplicates.
@@ -273,13 +275,33 @@ pub fn is_live_finding(t: &Task) -> bool {
 ///
 /// Read this module's docs before treating an empty result as "no duplicates":
 /// on Japanese titles the scorer is largely inert.
-pub fn near_duplicates(anchor: &Task, tasks: &[Task], threshold: f64) -> Vec<NearDuplicate> {
+///
+/// "Same project" (backlog ab534966): in a REPO store (`store_root` is
+/// `StoreLocation::project_root`, `Some`) the store's repo is every row's
+/// identity (user ruling 2026-11-14
+/// 「本質的というのは問題の質は通常パスでゆらぐものではない」), so a peer whose
+/// label is another machine's path is a peer. Only a label that resolves to a
+/// real DIFFERENT repo excludes it. A peer whose membership cannot be
+/// determined is REPORTED (this scan is advisory; dropping it would be the
+/// silent "no duplicates" this module exists to avoid). In a pinned store
+/// (`None`) the label is the identity.
+pub fn near_duplicates(
+    anchor: &Task,
+    tasks: &[Task],
+    threshold: f64,
+    store_root: Option<&Path>,
+) -> Vec<NearDuplicate> {
+    let same_project = |t: &Task| {
+        t.project == anchor.project
+            || store_root
+                .is_some_and(|root| !matches!(row_repo(&t.project, root), RowRepo::Other(_)))
+    };
     let mut found: Vec<NearDuplicate> = tasks
         .iter()
-        .filter(|t| t.id != anchor.id && t.project == anchor.project && is_live_finding(t))
+        .filter(|t| t.id != anchor.id && is_live_finding(t))
         .filter_map(|t| {
             let similarity = harness_core::lessons::text_similarity(&anchor.title, &t.title);
-            (similarity >= threshold).then(|| {
+            (similarity >= threshold && same_project(t)).then(|| {
                 let overlap = scope_overlap(&anchor.touched_files, &t.touched_files);
                 NearDuplicate {
                     id: t.id.clone(),
@@ -298,6 +320,46 @@ pub fn near_duplicates(anchor: &Task, tasks: &[Task], threshold: f64) -> Vec<Nea
             .then_with(|| a.id.cmp(&b.id))
     });
     found
+}
+
+/// (f7b018f8) Print the near-duplicate scan for task `id` to stderr.
+/// `store_root` selects the row identity (see [`near_duplicates`]).
+///
+/// ADVISORY by construction: it returns `()`, carries no verdict, and cannot
+/// change any exit code — the ruling was 「blocking しないまま、ただし必ず
+/// 可視化」 (do not block; always make it visible). It runs AFTER the write, so
+/// a task is never lost to a failing scan.
+///
+/// Every failure path says WHY the scan did not run instead of printing an
+/// empty peer list: "could not scan" and "scanned, found nothing" must not
+/// render the same (CLAUDE.md §3). Note that even a successful empty scan is
+/// not a clean bill of health here — see this module's docs: a lexical
+/// scorer cannot see a reworded duplicate (backlog 7b6bcfe6) — which is
+/// why [`near_duplicate_report`] renders that case explicitly rather than
+/// staying silent.
+pub fn report_near_duplicates(tasks_path: &Path, id: &str, store_root: Option<&Path>) {
+    let all = match crate::store::load(tasks_path) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!(
+                "warning: near-duplicate scan for {id} could not run (store re-read \
+                 failed: {e}) — this is NOT \"no duplicates\""
+            );
+            return;
+        }
+    };
+    let Some(anchor) = all.iter().find(|t| t.id == id) else {
+        eprintln!(
+            "warning: near-duplicate scan for {id} could not run (the task is absent from \
+             the store it was just written to) — this is NOT \"no duplicates\""
+        );
+        return;
+    };
+    let peers = near_duplicates(anchor, &all, NEAR_DUPLICATE_THRESHOLD, store_root);
+    eprintln!(
+        "{}",
+        near_duplicate_report(anchor, &peers, NEAR_DUPLICATE_THRESHOLD)
+    );
 }
 
 /// The human-facing render of a near-duplicate scan. **Always non-empty** for a
@@ -508,7 +570,7 @@ mod tests {
         let peer = task("bbbb", "add touched_files field to backlog task queue", &[]);
         let unrelated = task("cccc", "rewrite the mutation canary shell script", &[]);
         let tasks = vec![anchor.clone(), peer.clone(), unrelated];
-        let found = near_duplicates(&anchor, &tasks, NEAR_DUPLICATE_THRESHOLD);
+        let found = near_duplicates(&anchor, &tasks, NEAR_DUPLICATE_THRESHOLD, None);
         assert_eq!(found.len(), 1, "expected exactly the one peer: {found:?}");
         assert_eq!(found[0].id, "bbbb");
         assert!(found[0].similarity >= NEAR_DUPLICATE_THRESHOLD);
@@ -528,7 +590,7 @@ mod tests {
         let mut claimed = task("dddd", "add touched_files field to backlog task", &[]);
         claimed.status = crate::task::Status::Claimed;
         let tasks = vec![anchor.clone(), done, foreign, claimed];
-        let found = near_duplicates(&anchor, &tasks, NEAR_DUPLICATE_THRESHOLD);
+        let found = near_duplicates(&anchor, &tasks, NEAR_DUPLICATE_THRESHOLD, None);
         assert_eq!(
             found.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
             vec!["dddd"],
@@ -547,7 +609,7 @@ mod tests {
         );
         let undeclared = task("bbbb", "add touched_files field to backlog task queue", &[]);
         let tasks = vec![anchor.clone(), undeclared];
-        let found = near_duplicates(&anchor, &tasks, NEAR_DUPLICATE_THRESHOLD);
+        let found = near_duplicates(&anchor, &tasks, NEAR_DUPLICATE_THRESHOLD, None);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].scope, ScopeOverlap::Undeclared.label());
         assert!(
@@ -564,7 +626,7 @@ mod tests {
         let anchor = task("aaaa", "add touched_files field to backlog task", &[]);
         let peer = task("bbbb", "add touched_files field to backlog task queue", &[]);
         let tasks = vec![anchor.clone(), peer];
-        let found = near_duplicates(&anchor, &tasks, NEAR_DUPLICATE_THRESHOLD);
+        let found = near_duplicates(&anchor, &tasks, NEAR_DUPLICATE_THRESHOLD, None);
         let report = near_duplicate_report(&anchor, &found, NEAR_DUPLICATE_THRESHOLD);
         assert!(report.contains("bbbb"), "peer id must be visible: {report}");
         assert!(

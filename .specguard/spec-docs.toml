@@ -20,6 +20,16 @@ doc = "docs/specs/blastguard.md"
 reason = "'module 責務' lib: public pure API re-exporting the detector modules for specforge/condukt reuse; 概要 last sentence."
 
 [[spec]]
+path = "crates/blastguard/src/relay.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `relay`: subagent Ask relay (user ruling 2026-11-14 「sub agentのAskはmainで裁定する」) — append-only per-session queue, queued only for a hardened subagent Bash Ask, mark-executed / mark-relayed / Stop block / dismiss with reason, fail-closed on unreadable or corrupt queue."
+
+[[spec]]
+path = "crates/blastguard/tests/subagent_ask_relay_20261114.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `relay`: RED->GREEN tests for the relay (queue only on hardened subagent Ask, exact-match marking, Stop block/allow/dismiss/corrupt) plus the verdict-unchanged guard."
+
+[[spec]]
 path = "crates/blastguard/src/scope/checkout.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'managed な使い捨て場所での working-tree 破棄の Allow': SafeRoots::is_linked_worktree_checkout and its Known(true)/Known(false)/Undetermined contract."
@@ -555,6 +565,11 @@ doc = "docs/specs/blastguard.md"
 reason = "Same bullet, sub-bullet '計算される書き込み path（user ruling 2026-11-08、interpreter/python_semantics/values.rs）': Allow only when provably repo-scoped (repo-relative iteration, sys.argv[N] with repo-relative literal runs, self.attr), everything else Ask."
 
 [[spec]]
+path = "crates/blastguard/src/detect/interpreter/python_semantics/method_refs.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Same bullet, sub-bullet 'メソッド参照（backlog c8bf27ea、interpreter/python_semantics/method_refs.rs）': X.m.__call__(..), unbound Path.m(recv, ..) and w = X.m; w(..) read as the direct call; any other reference to a write/move-capable callable judged by its receiver, unresolvable -> Ask."
+
+[[spec]]
 path = "crates/blastguard/src/detect/condukt.rs"
 doc = "docs/specs/blastguard.md"
 reason = "module list bullet `detect/condukt`: autonomy-set on / HARNESS_AUTONOMOUS / CONDUKT_AUTONOMOUS prefixed to condukt resolve to Ask (Deny in a subagent via harden_for_subagent); matching on parsed argv only (backlog 12ba5845)."
@@ -582,12 +597,12 @@ reason = "Same bullet (backlog 47b20647): unknown_literal_target_verdict judges 
 [[spec]]
 path = "crates/blastguard/tests/backlog_20261113_printf_escape_and_procsub_to_shell.rs"
 doc = "docs/specs/blastguard.md"
-reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-13、flow-8cca7ef5）': printf escape expansion piped to a shell and a shell program read from a process substitution are Allow; RED tests plus a literal-printf control."
+reason = "'振る舞い' bullet 'system-harm fail-open の RED（2026-11-13、flow-8cca7ef5。backlog 00569f7d / 6df87a5c で修正済み）': printf escape expansion piped to a shell and a shell program read from a process substitution were Allow and are now Deny; RED tests plus a literal-printf control."
 
 [[spec]]
 path = "crates/blastguard/tests/backlog_20261113_python_escape_decoded_os_path_call.rs"
 doc = "docs/specs/blastguard.md"
-reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-13、flow-8cca7ef5。修正は未実装）': a Python os.chmod/os.rename system path spelled with a string-literal escape (\\x2f, octal, \\u, \\N{SOLIDUS}) is Allow; RED test plus a plain-literal control."
+reason = "'振る舞い' bullet 'system-harm fail-open の RED（2026-11-13、flow-8cca7ef5。backlog 5616e9e5 で修正済み）': a Python os.chmod/os.rename system path spelled with a string-literal escape (\\x2f, octal, \\u, \\N{SOLIDUS}) is Allow; RED test plus a plain-literal control."
 
 [[spec]]
 path = "crates/blastguard/tests/backlog_20261114_shutil_copy2_source_judged_as_write_fp.rs"
@@ -612,14 +627,34 @@ reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-1
 [[spec]]
 path = "crates/blastguard/tests/backlog_20261114_procsub_operand_flags_and_list_twins.rs"
 doc = "docs/specs/blastguard.md"
-reason = "'振る舞い' bullet '未修正の RED（2026-11-14、flow-8cca7ef5。修正は未実装）: procsub operand と list の twin': a process substitution fed to a shell as a non-first operand (script args, value-taking flags, fd dup) is Allow although it runs a system-file re-permission, and a statically harmless echo list in a procsub fed to a shell is Ask/Deny; RED tests plus controls."
+reason = "'振る舞い' bullet 'RED（2026-11-14、flow-8cca7ef5。backlog 6df87a5c で修正済み）: procsub operand と list の twin': a process substitution fed to a shell as a non-first operand (script args, value-taking flags, fd dup) is Allow although it runs a system-file re-permission, and a statically harmless echo list in a procsub fed to a shell is Ask/Deny; RED tests plus controls."
 
 [[spec]]
 path = "crates/blastguard/tests/backlog_20261114_procsub_list_quote_output_fp.rs"
 doc = "docs/specs/blastguard.md"
-reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14、t2 実装者の観測。修正は未実装）: procsub list の出力に引用符': a statically harmless echo list in a process substitution fed to a shell is Ask/Deny only because its output holds a quote; RED test plus a system-harm twin control that stays Deny."
+reason = "'振る舞い' bullet 'false positive の RED（2026-11-14、t2 実装者の観測。backlog 6df87a5c で修正済み）: procsub list の出力に引用符': a statically harmless echo list in a process substitution fed to a shell is Ask/Deny only because its output holds a quote; RED test plus a system-harm twin control that stays Deny."
 
 [[spec]]
 path = "crates/blastguard/tests/backlog_20261114_procsub_rcfile_init_file.rs"
 doc = "docs/specs/blastguard.md"
-reason = "'振る舞い' bullet '未修正の RED（2026-11-14、orchestrator の観測。修正は未実装）: procsub を --rcfile / --init-file に渡す': an interactive bash sources a process substitution given as --rcfile / --init-file as a program, yet it is Allow although it runs a system-file re-permission; RED test plus a harmless-twin control that stays Allow."
+reason = "'振る舞い' bullet 'RED（2026-11-14、orchestrator の観測。backlog 6df87a5c で修正済み）: procsub を --rcfile / --init-file に渡す': an interactive bash sources a process substitution given as --rcfile / --init-file as a program, yet it is Allow although it runs a system-file re-permission; RED test plus a harmless-twin control that stays Allow."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_python_cr_ends_comment.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'CR で終わる python コメントの system-harm fail-open（2026-11-14、flow-8cca7ef5、backlog a66c115c で修正済み）': a python -c program whose comment ends at a bare CR hides an os.chmod on /etc/hosts; Python programs are now read with CPython's CR/CRLF line terminators (python_newlines), so it is Deny (also via env -S); regression test plus an LF control."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_python_write_method_reference.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-14、flow-8cca7ef5、pathlib のメソッド参照。修正は未実装）': unbound Path.replace, a bound write_text stored in a name, and write_text.__call__ on /etc/hosts are Allow; RED test plus a direct-call control."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_perl_single_quoted_dollar_fp.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14、flow-8cca7ef5、単一引用符内の perl 特殊変数。修正は未実装）': a single-quoted perl -ne program using $. is refused as a shell expansion; RED test plus a double-quoted $HOME control."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_heredoc_rs_body_match_arrow_fp.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14。修正は未実装）': a quoted heredoc .rs body with a match arrow (=>) followed by a python3 heredoc statement is denied as a redirect; RED test plus real-redirect and executed-heredoc controls."

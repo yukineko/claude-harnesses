@@ -123,7 +123,7 @@ never-break-a-turn: cargo check や test がハング・無限ループしそう
 ホスト直実行せず** `condukt sandbox run` 経由で隔離コンテナ内で実行する:
 
 ```sh
-condukt sandbox run --cmd 'cargo test -p <crate>' --timeout 300
+condukt sandbox run --cmd 'cargo test -p <crate> --test <file>' --timeout 300
 ```
 
 - `condukt sandbox run` は config を読み、有効時のみ既存の docker exec backend

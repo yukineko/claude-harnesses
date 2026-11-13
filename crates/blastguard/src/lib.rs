@@ -42,6 +42,7 @@ pub mod interactive;
 pub mod log;
 pub mod model;
 pub mod protection;
+pub mod relay;
 pub mod retro;
 pub mod reversible;
 pub mod rule_id;

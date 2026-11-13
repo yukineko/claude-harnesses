@@ -950,6 +950,19 @@ pub(super) fn interpreter_code_verdict(
 ) -> Decision {
     let python = reader == PythonReader::InlineEval;
     let python_reader = reader != PythonReader::NotPython;
+    // Python ends a line at CR and CRLF too (backlog a66c115c); every reader
+    // below ends one only at `\n`, so a Python program is judged as CPython
+    // reads it ([`python_file::python_newlines`]).
+    let translated: Vec<String>;
+    let payloads = if python_reader {
+        translated = payloads
+            .iter()
+            .map(|p| python_file::python_newlines(p).into_owned())
+            .collect();
+        &translated[..]
+    } else {
+        payloads
+    };
     let redirects = ProgramTextSink {
         rows: std::cell::RefCell::new(Vec::new()),
         redirects_are_data: python
@@ -1474,6 +1487,12 @@ it refuses to guess"
     // path-mutating calls RESOLVED, not matched token by token
     // (`os.chmod('/' 'etc/hosts', 0)` is a chmod of `/etc/hosts`), an
     // unresolvable path being an Ask (`python_semantics::path_mutation_verdict`).
+    // Since backlog 17d985f1 that covers the `open`-family and pathlib writes
+    // too, a method's receiver resolved through `/` / `joinpath`
+    // (`(Path('/etc') / 'hosts').write_text('x')`), and the destination of a
+    // one-argument `.replace(dst)` / `.rename(dst)`. Since backlog c8bf27ea
+    // also those callables reached other than by a direct call (unbound
+    // `Path.m(recv, …)`, `w = X.m; w(…)`, `.__call__`, a passed reference).
     // Run after the descent, so a Deny the descent earned keeps its reason; a
     // Deny here still outranks any Ask the descent recorded.
     if python_reader {

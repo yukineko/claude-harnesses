@@ -941,6 +941,7 @@ fn run(cli: Cli) -> Result<()> {
                 .map(|r| (r.outcome.clone(), r.detail.clone()));
             let id = store::add_finding(
                 &tasks_path,
+                location.project_root(),
                 &title,
                 &project,
                 tags,
@@ -963,7 +964,7 @@ fn run(cli: Cli) -> Result<()> {
             // ADVISORY: the task above is already written, this cannot fail the
             // command, and it never blocks — the ruling was
             // 「blocking しないまま、ただし必ず可視化」.
-            report_near_duplicates(&tasks_path, &id);
+            dedup::report_near_duplicates(&tasks_path, &id, location.project_root());
         }
 
         Command::Overlap { project, all } => {
@@ -1301,9 +1302,12 @@ fn run(cli: Cli) -> Result<()> {
                         // explicitly, which is why it is emitted unconditionally
                         // rather than only when peers were found.
                         let peers = match store::load(&tasks_path) {
-                            Ok(all) => {
-                                dedup::near_duplicates(&t, &all, dedup::NEAR_DUPLICATE_THRESHOLD)
-                            }
+                            Ok(all) => dedup::near_duplicates(
+                                &t,
+                                &all,
+                                dedup::NEAR_DUPLICATE_THRESHOLD,
+                                location.project_root(),
+                            ),
                             Err(e) => {
                                 // Re-reading the store failed AFTER the claim
                                 // succeeded. Say so; do not print an empty
@@ -1922,45 +1926,6 @@ fn store_repo_root(tasks_path: &Path) -> String {
         .and_then(|p| p.parent())
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default()
-}
-
-/// (f7b018f8) Print the near-duplicate scan for task `id` to stderr.
-///
-/// ADVISORY by construction: it returns `()`, carries no verdict, and cannot
-/// change any exit code — the ruling was 「blocking しないまま、ただし必ず
-/// 可視化」 (do not block; always make it visible). It runs AFTER the write, so
-/// a task is never lost to a failing scan.
-///
-/// Every failure path says WHY the scan did not run instead of printing an
-/// empty peer list: "could not scan" and "scanned, found nothing" must not
-/// render the same (CLAUDE.md §3). Note that even a successful empty scan is
-/// not a clean bill of health here — see `dedup`'s module docs: a lexical
-/// scorer cannot see a reworded duplicate (backlog 7b6bcfe6) — which is
-/// why `dedup::near_duplicate_report` renders that case explicitly rather than
-/// staying silent.
-fn report_near_duplicates(tasks_path: &Path, id: &str) {
-    let all = match store::load(tasks_path) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!(
-                "warning: near-duplicate scan for {id} could not run (store re-read \
-                 failed: {e}) — this is NOT \"no duplicates\""
-            );
-            return;
-        }
-    };
-    let Some(anchor) = all.iter().find(|t| t.id == id) else {
-        eprintln!(
-            "warning: near-duplicate scan for {id} could not run (the task is absent from \
-             the store it was just written to) — this is NOT \"no duplicates\""
-        );
-        return;
-    };
-    let peers = dedup::near_duplicates(anchor, &all, dedup::NEAR_DUPLICATE_THRESHOLD);
-    eprintln!(
-        "{}",
-        dedup::near_duplicate_report(anchor, &peers, dedup::NEAR_DUPLICATE_THRESHOLD)
-    );
 }
 
 /// Close the GitHub issue mirroring task `id`, if the store says there is one

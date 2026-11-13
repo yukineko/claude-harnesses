@@ -1001,7 +1001,7 @@ pub fn add_with_weight(
             reject_ambiguous_bare_label(&tasks, project)?;
         }
         if !force {
-            check_duplicate(&tasks, title, project)?;
+            check_duplicate(&tasks, title, project, None)?;
         }
         let id = new_id(title, now);
         let task = Task {
@@ -1088,22 +1088,71 @@ fn reject_ambiguous_bare_label(tasks: &[Task], bare: &str) -> Result<()> {
     Ok(())
 }
 
-fn check_duplicate(tasks: &[Task], title: &str, project: &str) -> Result<()> {
+/// `store_root` is `StoreLocation::project_root`: for a REPO store (`Some`)
+/// the store's repo is every row's identity (user ruling 2026-11-14
+/// 「本質的というのは問題の質は通常パスでゆらぐものではない」, backlog 5a502995),
+/// so a same-title row whose label is another machine's path is the same
+/// content ([`row_identity::row_repo`]). A row whose label resolves to a real
+/// different repo stays distinct. One whose membership cannot be determined
+/// refuses the add (a duplicate cannot be ruled out; `--force` overrides) —
+/// never read as "not a duplicate". A pinned store (`None`) keeps label identity.
+fn check_duplicate(
+    tasks: &[Task],
+    title: &str,
+    project: &str,
+    store_root: Option<&Path>,
+) -> Result<()> {
     let hk = crate::task::hashkey(title, project);
+    let same = |t: &Task| -> Determination<bool> {
+        if crate::task::hashkey(&t.title, &t.project) == hk {
+            return Determination::known(true);
+        }
+        // Same normalized title under the row's own label?
+        let same_title =
+            crate::task::hashkey(title, &t.project) == crate::task::hashkey(&t.title, &t.project);
+        match store_root {
+            Some(root) if same_title => match row_identity::row_repo(&t.project, root) {
+                row_identity::RowRepo::This => Determination::known(true),
+                row_identity::RowRepo::Other(_) => Determination::known(false),
+                row_identity::RowRepo::Undetermined(why) => Determination::undetermined(why),
+            },
+            _ => Determination::known(false),
+        }
+    };
+    let undetermined = |t: &Task, why: &str| {
+        anyhow!(
+            "add refused: task {} has this title but whether it belongs to this store's repo \
+             cannot be determined ({why}), so a duplicate cannot be ruled out (hashkey {hk}); \
+             use --force to add anyway",
+            t.id
+        )
+    };
 
-    if tasks.iter().any(|t| {
-        crate::task::hashkey(&t.title, &t.project) == hk
-            && matches!(t.status, STATUS_PENDING | STATUS_FAILED)
-    }) {
-        return Err(anyhow!(
-            "duplicate task rejected: an existing pending/failed/claimed task already has this content (hashkey {hk}); use --force to add anyway"
-        ));
+    for t in tasks
+        .iter()
+        .filter(|t| matches!(t.status, STATUS_PENDING | STATUS_FAILED))
+    {
+        match same(t) {
+            Determination::Known(true) => {
+                return Err(anyhow!(
+                    "duplicate task rejected: an existing pending/failed/claimed task already has this content (hashkey {hk}); use --force to add anyway"
+                ));
+            }
+            Determination::Known(false) => {}
+            Determination::Undetermined(why) => return Err(undetermined(t, why.as_str())),
+        }
     }
     // backlog b3f5e3af: re-filing a ruled-deferred ticket under the same
     // content would put the ruled-against work straight back on the queue.
-    if let Some(t) = tasks.iter().find(|t| {
-        crate::task::hashkey(&t.title, &t.project) == hk && t.status == STATUS_RULED_DEFERRED
-    }) {
+    for t in tasks.iter().filter(|t| t.status == STATUS_RULED_DEFERRED) {
+        if let Determination::Undetermined(why) = same(t) {
+            return Err(undetermined(t, why.as_str()));
+        }
+    }
+    if let Some(t) = tasks
+        .iter()
+        .find(|t| t.status == STATUS_RULED_DEFERRED && same(t) == Determination::known(true))
+    {
         return Err(anyhow!(
             "duplicate task rejected: task {} has this content (hashkey {hk}) and is \
              ruled-deferred by a user ruling (`backlog defer`); re-filing it would hand the \
@@ -2426,6 +2475,7 @@ pub fn mark_cancelled(path: &Path, id: &str, reason: &str) -> Result<()> {
 pub use crate::edit_repro::edit;
 
 mod add;
+pub(crate) mod row_identity;
 #[cfg(test)]
 pub use add::add_with_weight_and_github_push;
 pub use add::{add_finding, Intake};

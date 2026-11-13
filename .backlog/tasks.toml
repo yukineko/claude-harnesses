@@ -1243,3 +1243,242 @@ exit 101: rees/fp-file-20261113/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.64s
      Running tests/arithmetic_expansion_operand_as_command_word_fp_20261113.rs (target/debug/deps/arithmetic_expansion_operand_as_command_word_fp_20261113-8df5a1fb1455a5cd)
 error: test failed, to rerun pass `-p blastguard --test arithmetic_expansion_operand_as_command_word_fp_20261113`"""
+
+[[task]]
+id = "a77dd80f"
+title = "blastguard: 105 integration tests hard-code macOS /private/tmp fixtures and fail at setup on Linux at 8dedad41 (8 targets)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-13 at main 8dedad41 and again at 1fd747e9 (blastguard 0.2.500), Linux WSL2 6.6.87.2, /tmp is a plain dir on the ext4 root fs (not tmpfs), TMPDIR unset, /private does not exist. Targets and counts: scope_redirect_relaxation_boundaries_20261108 64, mutation_kill_cd_rest_tmp 19, tmp_truncation_recoverable 11, tmp_truncation_refusals 3, scratchpad_truncating_redirect_fp_20261107 3, cd_and_chain_equivalence 3, git_exec_subcommand_failopen_20261107 1 (control_rm_rf_inside_private_tmp_scratch_stays_allow), managed_place_destructive_allow_20261107 1 (target_rm_rf_dir_inside_private_tmp_place_allow). Every one panics in fixture setup before blastguard is asked anything: create_dir_all of a literal /private/tmp/... path -> Os code 13 PermissionDenied (104 tests), or create_dir -> Os code 2 NotFound (managed_place). Rerun per target: identical, 0 panics other than these. Reading (b) test assumption: fixtures assume macOS where /tmp is a symlink to /private/tmp; scope_redirect_relaxation also states it needs a case-insensitive FS (APFS) for its case-fold tests to bite. Reading (a) real Linux verdict defect: cannot be the cause of these panics (the verdict is never reached), but it means the Linux verdict for these 105 cases is UNTESTED. Distinguishing probe run: 9 representative cases replayed by hand against the hook binary with /tmp in place of /private/tmp and the same env as the fixtures (HOME/project outside /tmp, TMPDIR removed): truncating redirect onto existing /tmp file, redirect to new /tmp file, cd into /tmp dir then redirect, recursive rm of a dir inside /tmp, cd into /tmp dir then recursive rm of sub, recursive rm of nonexistent /tmp/foo -> all allow as the tests expect; dotdot escape out of /tmp and symlink escape out of /tmp onto a project file -> ask; cd up out of /tmp then recursive rm of the project -> deny, as expected. Not checked: the other 96 cases. Prior art: tests/fixture_portability.rs (issue 1486) bans the /private/tmp literal only in src unit tests, not in tests/. Fix direction: use the canonical-temp-root helper (src/scope.rs test helper documents /private/tmp on macOS, /tmp on Linux) in these fixtures."
+created_at = 1794547570
+updated_at = 1794547570
+weight = 0.0
+issue_number = 1697
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1697"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test tmp_truncation_recoverable"
+rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
+observed_at = 1794547570
+detail = """
+exit 101: isting_nested_tmp_file_allows
+
+test result: FAILED. 0 passed; 11 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.04s
+     Running tests/tmp_truncation_recoverable.rs (target/debug/deps/tmp_truncation_recoverable-6e7824e28c0732cb)
+error: test failed, to rerun pass `-p blastguard --test tmp_truncation_recoverable`"""
+
+[[task]]
+id = "2711e9e1"
+title = "blastguard: bounded_helper test-support timeout/kill fails on Linux at 8dedad41 (3 tests)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-13 at main 8dedad41 and 1fd747e9, Linux WSL2, /bin/sh is dash, kill on PATH is /usr/bin/kill from procps-ng 4.0.4. Deterministic: same 3 failures with default threads and with test-threads=1 (so not parallelism). Failures verbatim: (1) timeout_kills_the_child_and_its_descendants: after a timeout neither the stub nor its sleep child may stay alive; still alive: [both pids]; the helper's panic says sent SIGTERM to process group N (kill: Ok(ExitStatus 0)). (2) slow_stdin_read_then_overrun_is_cut_at_the_deadline: the single 3s deadline was not honoured: run_bounded took 8.01s. (3) exit_after_slow_read_with_stdin_held_by_a_grandchild_is_cut_at_the_deadline: expected a timeout panic naming the stdin write, got stdin write of 1048576 bytes to /bin/sh failed: Broken pipe (exit status 0). Root cause 1 (tests 1 and 2), observed by probe: tests/support/bounded.rs timed_out spawns kill with args -TERM then -PGID (no double-dash separator). procps-ng kill exits 0 and signals NOTHING for that argv (all 3 processes of the group still alive 0.5s later); with a double-dash before -PGID the group dies. BSD kill on macOS accepts the form, so this only bites on Linux. Root cause 2 (test 3), observed by probe: the stub runs sleep in the background with stdin dup'd from fd 0; under dash an async list gets /dev/null as stdin before its own redirections, so the grandchild's fd 0 is /dev/null, not the pipe (bash keeps the pipe). The pipe therefore has no reader once the stub exits and the 1MB write gets EPIPE instead of blocking. Reading (a) product defect: not applicable, run_bounded is test support only; product kill calls (harness-core run_lock, overwatch/hypothesis lock) use kill -0 PID with a positive pid. Reading (b) test/env assumption: confirmed for both causes. Side effect worth noting: on Linux every blastguard integration test that hits the run_bounded deadline leaks the hung hook process group instead of killing it. tests/log_subcommand_20261113.rs also uses the same kill form (currently not failing)."
+created_at = 1794547764
+updated_at = 1794547764
+weight = 0.0
+issue_number = 1698
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1698"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test bounded_helper"
+rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
+observed_at = 1794547764
+detail = """
+exit 101: _at_the_deadline
+    timeout_kills_the_child_and_its_descendants
+
+test result: FAILED. 6 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.17s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.40s
+     Running tests/bounded_helper.rs (target/debug/deps/bounded_helper-66b2010f75e1b41c)
+error: test failed, to rerun pass `-p blastguard --test bounded_helper`"""
+
+[[task]]
+id = "99c1a088"
+title = "blastguard: no_unbounded_child_wait source-scan lint fails at 8dedad41 (3 tests, not Linux-specific)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-13 at main 8dedad41 and 1fd747e9 (Linux WSL2, but this is a pure source scan of tests/*.rs, no platform dependence). Failing: no_child_wait_outside_the_bounded_helper (log_subcommand_20261113.rs:752 child.wait), no_wait_with_output_outside_the_bounded_helper (library_entry_scratch_place_1637.rs:58 wait_with_output), no_command_status_outside_the_bounded_helper (7 hits: backlog_20261113_b1_reset_hard_clean_worktree.rs:146 and :161, log_subcommand_20261113.rs:750, backlog_20261113_b2_subagent_rm_scratchpad.rs:165, heredoc_script_failopen_red_20261108.rs:585-587). Reading (a) product defect: not applicable (lint over test sources). Reading (b) newer test files bypass the run_bounded helper the lint mandates, plus probable lint false positives: the b1 hits are a fixture helper named status (git status), and the heredoc_script hits are inside string literals of Rust source shown to blastguard as payload text. Distinguishing check: read the flagged lines; the log_subcommand and library_entry and b2 hits are real unbounded waits, the b1 and heredoc_script hits are not child waits. Fix both: route the real waits through run_bounded, and make the scan skip string-literal and non-Command status matches (or rename the helper)."
+created_at = 1794547860
+updated_at = 1794547860
+weight = 0.0
+issue_number = 1699
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1699"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test no_unbounded_child_wait"
+rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
+observed_at = 1794547860
+detail = """
+exit 101: _with_output_outside_the_bounded_helper
+
+test result: FAILED. 5 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.21s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/no_unbounded_child_wait.rs (target/debug/deps/no_unbounded_child_wait-af4dc3e3783a09d4)
+error: test failed, to rerun pass `-p blastguard --test no_unbounded_child_wait`"""
+
+[[task]]
+id = "596ef57d"
+title = "blastguard: heredoc_script_attacks_are_not_allow still RED at 8dedad41 - 114 of 653 heredoc-written script attacks Allow (1 test)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-13 at main 8dedad41 and 1fd747e9 (blastguard 0.2.500), Linux WSL2. Verbatim: 114 of 653 attack cases are Allow (must be Ask or Deny); every listed case is main=allow sub=allow, e.g. shutil_move_home_away, shutil_copyfile_ssh, os_chmod_home, os_chmod_ssh, os_chown_home, os_truncate_zshrc, os_symlink_zshrc, os_link, pathlib_rename, pathlib_replace, pathlib_touch, pathlib_rmdir_home. This is a deliberately RED test added 2026-11-08 in 72d164e1 (its header says RED on main until fixed; that commit counted 125 failing entries, now 114), but no backlog entry names it, so the gap was tracked only in commit messages. Reading (a) real gate fail-open: plausible and is what the test asserts (a body written to a script file by a quoted heredoc and then run is Allow). Reading (b) Linux/fixture artefact: checked and ruled out for the fixture location: rerun with the fixture base moved off /tmp (BLASTGUARD_TEST_FIXTURE_DIR under HOME/.cache, so no path is spelled through the /tmp alias symlink) gives the identical 114-case list (diff empty). Not checked on macOS. Runtime about 50s (680s under concurrent load)."
+created_at = 1794547881
+updated_at = 1794547881
+weight = 0.0
+issue_number = 1700
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1700"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_attacks_are_not_allow"
+rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
+observed_at = 1794547881
+detail = """
+exit 101: 
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 51.91s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/heredoc_script_failopen_red_20261108.rs (target/debug/deps/heredoc_script_failopen_red_20261108-b34c95b93eea8416)
+error: test failed, to rerun pass `-p blastguard --test heredoc_script_failopen_red_20261108`"""
+
+[[task]]
+id = "f9f3eed8"
+title = "blastguard: relink_operands h3a/h3b deny-reason needle assumes macOS spelling of /etc, fails on Linux at 8dedad41 (2 tests)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-13 at 8dedad41 and 1fd747e9, Linux WSL2 (/etc is a real dir, not a symlink to /private/etc). Failing: h3a_cp_t_into_relinked_dir and h3b_cp_target_directory_into_relinked_dir. Verbatim: deny reason must name the real landing (one of [/etc/, /private/etc]); got a deny whose reason begins: cp target /etc writes into a system directory - a NEW file there is itself the change ... [system harm: refused on every request, never handed back as a question]. The verdict is deny, as the test requires; only the reason-text needle fails. On Linux the landing is spelled /etc without a trailing slash, which neither needle matches; on macOS it would read /private/etc. Reading (a) defect: verdict correct and the reason does name the real landing, so not a gate fail-open; at most a wording inconsistency (other cases name /etc/hosts). Reading (b) test assumption: the needle list was written for the macOS spelling. Distinguishing check: the other 12 tests in the target (h1, h2 etc., naming /etc/hosts) pass on Linux; the h3 verdict is deny in the observed output."
+created_at = 1794547960
+updated_at = 1794547960
+weight = 0.0
+issue_number = 1701
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1701"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test relink_operands_20261112 h3"
+rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
+observed_at = 1794547960
+detail = """
+exit 101: _target_directory_into_relinked_dir
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.14s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/relink_operands_20261112.rs (target/debug/deps/relink_operands_20261112-5ddaa57b4f473dd9)
+error: test failed, to rerun pass `-p blastguard --test relink_operands_20261112`"""
+
+[[task]]
+id = "9653d25d"
+title = "blastguard: script_file_content_exec inline control fails on Linux - fixture HOME spelled under /tmp disqualifies /tmp as deletion root (1 test)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-13 at 8dedad41 and 1fd747e9, Linux WSL2, TMPDIR unset so temp_dir() is /tmp. Verbatim: inline harmless baseline must be Allow: rm -rf /tmp/foo -> ask (recursive rm (-r) is confined to /tmp - a safe root for this session ...). Cause, observed: tests/support/neutral_base.rs, when the cargo target dir lies under .harness-worktrees, spells the fixture base through an alias symlink created in temp_dir(), i.e. /tmp/blastguard-wtfix-HASH/run-.../home. The fixture HOME spelling is therefore under /tmp, and src/scope/deletion_roots.rs refuses any temp deletion root that contains HOME (contains_home), so /tmp stops being a disposable root and the rm becomes a confined Ask instead of Allow. On macOS temp_dir() is /var/folders/..., so HOME is not under /tmp. Reading (a) defect: the Linux verdict is MORE restrictive (ask), not fail-open; refusing a temp root that contains HOME is intended. Reading (b) fixture artefact: confirmed. Distinguishing check run: with BLASTGUARD_TEST_FIXTURE_DIR set to a dir under HOME/.cache (outside /tmp, outside git), the target passes 6/6 (14 ignored). A hand probe with HOME outside /tmp also gives allow for rm -rf /tmp/foo. Other neutral_base users on Linux are exposed to the same alias-under-/tmp effect."
+created_at = 1794547962
+updated_at = 1794547962
+weight = 0.0
+issue_number = 1702
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1702"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test script_file_content_exec control_inline_harmless_text_is_allowed_in_this_fixture"
+rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
+observed_at = 1794547962
+detail = """
+exit 101: ess_text_is_allowed_in_this_fixture
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.10s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/script_file_content_exec.rs (target/debug/deps/script_file_content_exec-aa97529daaea1fbb)
+error: test failed, to rerun pass `-p blastguard --test script_file_content_exec`"""
+
+[[task]]
+id = "91828a5e"
+title = "blastguard: scoped_destructive relaxed_truncating_forms expects Ask for a /tmp probe file that the 2026-10-28 ruling makes Allow on Linux (1 test)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-13 at 8dedad41 and 1fd747e9, Linux WSL2, TMPDIR unset. Verbatim: cargo test > /tmp/blastguard-scoped-redirect-PID/blastguard-scoped-redirect-probe.txt is confined to a safe root, so it must Ask (not refuse); got Allow. The test writes an existing probe file into std::env::temp_dir(), which is /tmp on Linux and /var/folders/.../T on macOS. src/detect.rs (Unrecoverable arm, temp_disposable_redirect_target) allows a truncating redirect onto an existing file in a fixed temp root (/tmp, /private/tmp) outside any git tree, per user ruling 2026-10-28. The test's own comment says on Linux temp_dir() is /tmp and claims the two agree, which predates that ruling. Reading (a) fail-open: the Linux verdict is weaker than the test expects, but it is exactly what the ruling and the source comment prescribe, so not a defect unless the ruling is re-read. Reading (b) test assumption (temp_dir not a fixed temp root): confirmed. Distinguishing check run: with TMPDIR pointed at a dir under HOME/.cache (outside /tmp and git) the whole target passes 21/21. Needs a human decision only if the ruling is meant not to cover this shape."
+created_at = 1794547964
+updated_at = 1794547964
+weight = 0.0
+issue_number = 1703
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1703"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test scoped_destructive relaxed_truncating_forms_inside_the_project"
+rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
+observed_at = 1794547964
+detail = """
+exit 101: ures:
+    relaxed_truncating_forms_inside_the_project
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.04s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/scoped_destructive.rs (target/debug/deps/scoped_destructive-395b282c42c733bf)
+error: test failed, to rerun pass `-p blastguard --test scoped_destructive`"""

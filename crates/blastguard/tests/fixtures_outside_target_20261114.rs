@@ -16,14 +16,15 @@
 //!   * `neutral_base()` resolves, canonically, under `<workspace>/target/tmp`
 //!     (candidate `CARGO_TARGET_TMPDIR` wins when no
 //!     `BLASTGUARD_TEST_FIXTURE_DIR` override is set).
-//!   * Several test files build git fixtures from `neutral_base` or from
-//!     `CARGO_TARGET_TMPDIR` directly (listed in the failure message).
+//!   * Several test files join onto `CARGO_TARGET_TMPDIR` directly and create
+//!     git fixtures (listed in the failure message). `neutral_base` users are
+//!     covered by the dynamic test 1, not by the text scan.
 //!
 //! Both RED tests assert decisions about observed paths / file contents and
 //! are `#[ignore]`d until the fix lands.
 //!
 //! DOES NOT PROVE: (0) the scan is file-level: a file that mentions
-//! `neutral_base` / `CARGO_TARGET_TMPDIR` AND runs git `init` is listed even if
+//! directly joins `CARGO_TARGET_TMPDIR` AND runs git `init` is listed even if
 //! its git repo lives elsewhere (e.g. a `tempfile` dir), so the list is an
 //! upper bound of offenders, not a per-repo path observation; the per-path
 //! observation is `neutral_base_not_under_workspace_target`. (a) the textual scan (`git_fixture_files_not_under_target`)
@@ -57,17 +58,29 @@ fn is_under(path: &Path, root: &Path) -> bool {
     path.starts_with(root)
 }
 
-/// Does `src` both place something under CARGO_TARGET_TMPDIR (directly or via
-/// `neutral_base`) and run fixture git `init` / `worktree add`?
+/// Does `src` join a path DIRECTLY onto `CARGO_TARGET_TMPDIR` (i.e. under the
+/// workspace `target/`) AND create a git repository / worktree?
+///
+/// Deliberately NOT keyed on `neutral_base`: a file that merely calls
+/// `neutral_base()` is judged by its resolved path, which the dynamic test
+/// `neutral_base_not_under_workspace_target` covers.
 fn builds_git_fixture_under_target(src: &str) -> bool {
-    let places = src.contains("CARGO_TARGET_TMPDIR") || src.contains("neutral_base");
     let compact: String = src.split_whitespace().collect();
-    let runs_git = compact.contains("\"init\"")
-        && (compact.contains("[\"init\"") || compact.contains("\"init\",\"-q\""))
+    // `...CARGO_TARGET_TMPDIR")` followed shortly by `.join(`: a direct join.
+    let needle = "CARGO_TARGET_TMPDIR\"";
+    let joins_directly = compact.match_indices(needle).any(|(i, _)| {
+        let tail = &compact[i + needle.len()..];
+        let window: String = tail.chars().take(8).collect();
+        window.contains(".join(")
+    });
+    let runs_git = compact.contains("[\"init\"")
+        || compact.contains("\"init\",\"-")
+        || compact.contains("gitinit")
         || compact.contains("git init")
         || compact.contains("\"worktree\",\"add\"")
-        || compact.contains("\"worktree\",\n\"add\"");
-    places && runs_git
+        || compact.contains("[\"clone\"")
+        || compact.contains("\"clone\",\"");
+    joins_directly && runs_git
 }
 
 /// CONTROL (passes now): the predicates used below are meaningful.
@@ -86,15 +99,20 @@ fn control_predicates_discriminate() {
         &target
     ));
 
-    // The scanner flags a synthetic offender and ignores benign files.
-    let offender = "let b = neutral_base::neutral_base();\ngit(&repo, &[\"init\", \"-q\"]);";
+    // The scanner flags a direct CARGO_TARGET_TMPDIR join + git init ...
+    let offender = "let b = Path::new(env!(\"CARGO_TARGET_TMPDIR\")).join(\"x\");\ngit(&b, &[\"init\", \"-q\"]);";
     assert!(builds_git_fixture_under_target(offender));
-    let offender2 =
-        "Path::new(env!(\"CARGO_TARGET_TMPDIR\"));\nrun(&[\"worktree\", \"add\", \"x\"]);";
+    let offender2 = "let b = PathBuf::from(env!(\"CARGO_TARGET_TMPDIR\"))\n    .join(\"x\");\nrun(&[\"worktree\", \"add\", \"x\"]);";
     assert!(builds_git_fixture_under_target(offender2));
+    // ... but NOT a neutral_base-only sample (covered dynamically by test 1),
     assert!(!builds_git_fixture_under_target(
-        "Path::new(env!(\"CARGO_TARGET_TMPDIR\")); no vcs here"
+        "let b = neutral_base::neutral_base();\ngit(&b, &[\"init\", \"-q\"]);"
     ));
+    // NOT CARGO_TARGET_TMPDIR without git,
+    assert!(!builds_git_fixture_under_target(
+        "Path::new(env!(\"CARGO_TARGET_TMPDIR\")).join(\"x\"); no vcs here"
+    ));
+    // and NOT git without a direct target join.
     assert!(!builds_git_fixture_under_target(
         "git(&[\"init\", \"-q\"]); // tempfile only"
     ));
@@ -132,8 +150,18 @@ fn neutral_base_not_under_workspace_target() {
     );
 }
 
-/// RED (observed failing): no integration test file builds a git repository
-/// under CARGO_TARGET_TMPDIR (directly or through `neutral_base`).
+/// RED (observed failing): no integration test file joins a path directly onto
+/// `CARGO_TARGET_TMPDIR` and creates a git repository / worktree there.
+///
+/// Usage of `neutral_base` is NOT flagged here: its resolved location is
+/// covered dynamically by test 1, `neutral_base_not_under_workspace_target`.
+///
+/// DOES NOT PROVE: this is a static text scan. It cannot see a git repo built
+/// through a helper that hides the git args from the file, a `CARGO_TARGET_TMPDIR`
+/// path built indirectly (stored in a variable/const then joined, or via
+/// another env var), or where a repo from a `tempfile` dir actually lives; a
+/// match means "joins CARGO_TARGET_TMPDIR and runs git init somewhere in the
+/// file", an upper bound, not a per-repo path observation.
 #[test]
 #[ignore = "RED: integration tests create git fixture repos under CARGO_TARGET_TMPDIR (see offender list)"]
 fn git_fixture_files_not_under_target() {
@@ -162,7 +190,7 @@ fn git_fixture_files_not_under_target() {
     offenders.sort();
     assert!(
         offenders.is_empty(),
-        "{} test file(s) create git repos under CARGO_TARGET_TMPDIR / neutral_base: {offenders:#?}",
+        "{} test file(s) join onto CARGO_TARGET_TMPDIR directly and create git repos: {offenders:#?}",
         offenders.len()
     );
 }

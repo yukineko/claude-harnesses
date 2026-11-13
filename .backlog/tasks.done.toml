@@ -74510,3 +74510,64 @@ error: test failed, to rerun pass `-p blastguard --test backlog_2287ebae`"""
 [task.closure]
 reason = "discard"
 discard_reason = "user ruling 2026-11-13: 「保留はありえない実証されないならclose,実証されたらopen」. repro scripts/tests/blastguard-2287ebae-v9fs-target.sh exits 2 on this machine (Darwin 25.6.0): 'no v9fs dir at /mnt/c/tmp' — not demonstrated, so closed"
+
+[[task]]
+id = "248828fe"
+title = "backlog no-deferral RED: a_defer_is_refused_and_writes_nothing (user ruling 2026-11-13)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "RED e6c2a72b on red/backlog-no-deferral. Ruling: 保留はありえない実証されないならclose,実証されたらopen / 実証されたら起票、そうでないなら破棄"
+created_at = 1794569601
+updated_at = 1794570361
+weight = 0.0
+issue_number = 1710
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1710"
+issue_closed_at = 1794570364
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close a_defer_is_refused_and_writes_nothing -- --ignored --exact"
+rev = "e6c2a72b269f0fa1e14f9af8366ab59dc0ef50c6"
+observed_at = 1794569601
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.44s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-a792bd36b1aa8618)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_no_deferral_auto_close`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close a_defer_is_refused_and_writes_nothing -- --exact"
+exit = 0
+passed = 1
+rev = "64a2ae4c35d45408a3e85cb5db14d084ea7d1884"
+observed_at = 1794570355
+output_digest = "sha256:adb4ce121a5f2e90dd6854d9cc0d1304eb6f919ba8cdb1e6a692c424b1d3e0ba"
+excerpt = """
+
+running 1 test
+test a_defer_is_refused_and_writes_nothing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.83s
+
+   Compiling backlog v0.3.114 (/Users/yuki/src/.harness-worktrees/bl-nodefer-red/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.97s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-2d994707162181b5)
+"""
+
+[task.closure.red]
+rev = "e6c2a72b269f0fa1e14f9af8366ab59dc0ef50c6"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

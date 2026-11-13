@@ -683,3 +683,8 @@ reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-1
 path = "crates/blastguard/tests/backlog_20261114_compound_wrapped_or_cross_stage_shell_program.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-14、compound command 内 / fd 3 / zsh =() / subshell pipe で shell に渡る program。修正は未実装）': a system-path program fed to a shell via process substitution inside (), { }, if/while/for bodies, via fd 3, zsh =( ) or a pipe inside a subshell is Allow in main and subagent mode; RED test plus bare pipe-to-shell and subshell Deny controls."
+
+[[spec]]
+path = "crates/blastguard/src/detect/printf_eval.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'system-harm fail-open の RED（2026-11-13、flow-8cca7ef5。(a) は backlog 00569f7d …）': static evaluation of a printf stage piped to a shell (escape expansion across the bash/zsh/BSD/GNU printf dialects; an unevaluable stage is judged undetermined), so the expanded OUTPUT is judged as the shell program (backlog 00569f7d)."

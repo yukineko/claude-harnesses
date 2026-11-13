@@ -75366,3 +75366,67 @@ rev = "5645d093a54a61dece17c9c403fcc49bb5f1c750"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "47b20647"
+title = "blastguard: python 文字列 literal 内の行継続 (backslash+LF) で組んだ system パスへの open 書き込みが allow になる fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "System-harm fail-open found by the 6cac93af round-4 independent verifier probe; RED 06143f1b by a non-implementer, observed on main 47ec0a2e and identical at 02553aa8, still failing on c6532fe0: 6 of 6 (shape x mode) BN-in-literal runs were ALLOWED. Python removes backslash+LF inside a non-raw string literal, so '/etc/ho<BN>sts' names /etc/hosts: single-quoted -c, double-quoted -c with an escaped backslash, and via an assigned variable. Controls with a plain path are Deny; the raw-string negative control is printed only."
+created_at = 1794530734
+updated_at = 1794576173
+weight = 0.0
+issue_number = 1677
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1677"
+issue_closed_at = 1794576176
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_python_string_literal_line_continuation -- --include-ignored"
+rev = "5563f65575df39437ee2299a1f5faf3a7a78a58d"
+observed_at = 1794530734
+detail = """
+exit 101: rees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/backlog_20261113_python_string_literal_line_continuation.rs (target/debug/deps/backlog_20261113_python_string_literal_line_continuation-392be96f8ef05a27)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_python_string_literal_line_continuation`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261113_python_string_literal_line_continuation"
+exit = 0
+passed = 3
+rev = "8567c8d50661a9177dfd54e8519b66b3b830c45d"
+observed_at = 1794576168
+output_digest = "sha256:50504dba8a8a79cb0d4ddf904561382501d38e7dc368aab9d2a98bcc4e9d183c"
+excerpt = """
+
+running 3 tests
+test negative_control_raw_string_decision_is_printed ... ok
+test backslash_newline_in_python_string_literal_is_not_allowed ... ok
+test control_same_programs_with_plain_path_are_not_allowed ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.95s
+
+   Compiling blastguard v0.2.517 (/Users/yuki/.condukt/worktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.34s
+     Running tests/backlog_20261113_python_string_literal_line_continuation.rs (target/debug/deps/backlog_20261113_python_string_literal_line_continuation-50d1d701a0e47f5f)
+"""
+
+[task.closure.red]
+rev = "5563f65575df39437ee2299a1f5faf3a7a78a58d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

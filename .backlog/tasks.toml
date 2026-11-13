@@ -1654,3 +1654,32 @@ exit 101: orktrees/bg-red-pipe-reader-and-py-argv/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
      Running tests/backlog_20261114_printf_file_as_python_data_arg_fp.rs (target/debug/deps/backlog_20261114_printf_file_as_python_data_arg_fp-232693ec2b1af97c)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_printf_file_as_python_data_arg_fp`"""
+
+[[task]]
+id = "b997a3d5"
+title = "blastguard: forced worktree remove check consults the enclosing (main) worktree when the operand is not a worktree root"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "worktree-scope",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "User ruling 2026-11-14: gate/condukt must never consult another worktree on their own; an operation explicitly aimed at a named worktree is exempt. RED 8f1baa5c (t2_operand_inside_main_worktree_is_not_judged_by_main_state in tests/worktree_remove_ignored_build_output_fp_20261114.rs) by the flow-8cca7ef5 orchestrator at main c58f1134: git worktree remove --force <main repo>/target is Allow (main and subagent) because git -C <operand> resolves the enclosing main worktree and the content check reads main's status. Expected not Allow without consulting any other worktree."
+created_at = 1794601926
+updated_at = 1794601926
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test worktree_remove_ignored_build_output_fp_20261114 t2_operand_inside_main_worktree_is_not_judged_by_main_state -- --include-ignored"
+rev = "8f1baa5c98033acf9d0cddf1aae3400b77a6cca0"
+observed_at = 1794601926
+detail = """
+exit 101: 8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-wtscope/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.63s
+     Running tests/worktree_remove_ignored_build_output_fp_20261114.rs (target/debug/deps/worktree_remove_ignored_build_output_fp_20261114-be5db071c9b36a72)
+error: test failed, to rerun pass `-p blastguard --test worktree_remove_ignored_build_output_fp_20261114`"""

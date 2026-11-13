@@ -608,3 +608,8 @@ reason = "'振る舞い' bullet 'comment collapse の回帰ガード（2026-11-1
 path = "crates/blastguard/tests/backlog_20261114_printf_operand_judged_as_command_fp.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14、flow-8cca7ef5。修正は未実装）': printf whose double-quoted operand holds escaped $PY text plus a command-looking phrase is Ask as if it ran it; RED test plus a twin control."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_heredoc_rs_body_match_arrow_fp.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14。修正は未実装）': a quoted heredoc .rs body with a match arrow (=>) followed by a python3 heredoc statement is denied as a redirect; RED test plus real-redirect and executed-heredoc controls."

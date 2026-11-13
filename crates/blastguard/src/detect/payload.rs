@@ -721,6 +721,31 @@ pub(super) fn word_separators_lost(source: Option<&str>, rest: &[&str], from: us
     false
 }
 
+/// `rest[from..]` as a command line to re-analyse, read off `source` so a
+/// quoted program keeps its newlines ([`faithful_tail`]). When the tokens are
+/// not slices of `source` the whitespace re-join is used, unless that re-join
+/// loses whitespace inside a shell word ([`word_separators_lost`]): then the
+/// text that would run cannot be rebuilt and the `Err` is an Ask naming `what`.
+///
+/// Backlog e4523bfd (spec blastguard-comment-collapse-residual R1): the
+/// unknown-wrapper tail (`myrunner python3 -c "import os # x<NL>os.chmod(…)"`)
+/// was re-joined with one space, so the `#` comment swallowed the call and the
+/// tail analysed to Allow.
+pub(super) fn reanalysis_text(
+    source: Option<&str>,
+    rest: &[&str],
+    from: usize,
+    what: &str,
+) -> Result<String, Decision> {
+    if word_separators_lost(source, rest, from) {
+        return Err(Decision::ask(format!(
+            "{what} could not be read with its line breaks intact — blastguard cannot tell \
+what command line it is, so it refuses to guess"
+        )));
+    }
+    Ok(tail_text(source, rest, from))
+}
+
 /// The `dash_c_payloads` candidate set for a command-string flag already located
 /// at index `pos`. Split out so callers with a different spelling of the flag
 /// (e.g. flock's long form `--command`) reuse the identical candidate logic

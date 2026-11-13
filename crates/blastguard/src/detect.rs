@@ -1367,10 +1367,9 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
             if normalized_command(t) != "env" {
                 continue;
             }
-            for payload in executors::env_split_string_payloads(&tokens[i + 1..]) {
-                if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth, ctx)) {
-                    return deny;
-                }
+            let verdict = executors::env_split_string_verdict(&tokens[i + 1..], seg, depth, ctx);
+            if let Some(deny) = acc.record(verdict) {
+                return deny;
             }
         }
         // 675eb991: `GIT_PAGER='rm -rf ~/x' git log` — an environment
@@ -1428,7 +1427,7 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
 
     // ASK-2: an UNRECOGNISED wrapper standing in front of a destructive command
     // line. See `unknown_wrapper_ask`.
-    if let Some(deny) = acc.record(unknown_wrapper_ask(&tokens, depth, line, seg_idx, ctx)) {
+    if let Some(deny) = acc.record(unknown_wrapper_ask(&tokens, seg, depth, line, seg_idx, ctx)) {
         return deny;
     }
 
@@ -1470,6 +1469,7 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
 /// is not a regression — that case was, and remains, the pre-existing Allow.
 fn unknown_wrapper_ask(
     tokens: &[&str],
+    seg: &str,
     depth: usize,
     line: &str,
     seg_idx: usize,
@@ -1648,20 +1648,20 @@ fn unknown_wrapper_ask(
     // line and were already judged in full by the caller before this rule ran;
     // re-analysing them here attributes the OUTER line's redirect to the head,
     // which turned `cargo test 2>&1`, `make >&2` and `echo x >&2` into asks
-    // about `cargo` / `make` / `echo`. Re-joining tokens with a single space
-    // also re-serialises redirect punctuation into a shape the redirect
-    // classifier reads differently from the original text, so the re-parse was
-    // not even asking about the same redirect.
-    //
-    // Dropping them costs nothing: a destructive REDIRECT is a deny from the
-    // outer analysis regardless of what the head is, so nothing is missed.
+    // about `cargo` / `make` / `echo`; a destructive REDIRECT is a deny from the
+    // outer analysis anyway. The tail is read off `seg` with its newlines
+    // (e4523bfd: a one-space re-join let a `#` comment swallow the next line).
     let end = tokens
         .iter()
         .enumerate()
         .skip(start)
         .find(|(_, t)| is_redirect_token(t))
         .map_or(tokens.len(), |(j, _)| j);
-    let tail = tokens[start..end].join(" ");
+    let what = format!("the command line behind `{}`", tokens[idx]);
+    let tail = match payload::reanalysis_text(Some(seg), &tokens[..end], start, &what) {
+        Ok(tail) => tail,
+        Err(undetermined) => return undetermined,
+    };
     if tail.trim().is_empty() {
         return Decision::Allow;
     }

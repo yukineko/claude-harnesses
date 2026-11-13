@@ -1447,3 +1447,66 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 20 filtered out;
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
      Running tests/scoped_destructive.rs (target/debug/deps/scoped_destructive-395b282c42c733bf)
 error: test failed, to rerun pass `-p blastguard --test scoped_destructive`"""
+
+[[task]]
+id = "c3d5d225"
+title = "blastguard tests: process-group kill without -- leaks the group on Linux (log_subcommand_20261113)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-11-13 at bc0880b6 (RED commit; base main 6015a4b1). tests/log_subcommand_20261113.rs:747-750 spawns Command::new(kill) with args [-TERM, format!(-{}, child.id())] and no -- (timeout path only; result discarded). 0a16ac9f showed procps-ng 4.0.4 /usr/bin/kill (WSL2) exits 0 and signals nothing for that argv, so on Linux the timed-out child group leaks silently. Fix: insert .arg(--) before the negative pgid as in tests/support/bounded.rs. RED: the ignored test no_process_group_kill_without_double_dash exits 101 with exactly that one hit; 3 non-ignored controls pass (pre-fix bounded.rs shape flagged; fixed shape and kill -0 pid accepted; tree scan sees the fixed support/bounded.rs site). Scan scope: blastguard src/ + tests/ only. Other crates grep (Command::new kill in crates/*/src, crates/*/tests): no negative-pid spawn without -- found; kill sites are kill -0 pid liveness probes (harness-core run_lock.rs:295, hypothesis lock.rs:94, overwatch lock.rs:106, blastguard tests/bounded_helper.rs:91), kill pid (bounded_helper.rs:103), kill -9 pid (fugu-router tests/session_end_budget.rs:405, sitecraft tests/check_security_round2.rs:278). Process-group kills elsewhere use libc::kill(-pid)/killpg (harness-core boundary.rs:495, condukt worktree.rs:165, sitecraft check/security.rs:860, init.rs:353, serve.rs:204), unaffected. sitecraft serve.rs:573 prints a human hint kill -KILL -{pgid} (shell builtin usually, not spawned; not judged)."
+created_at = 1794550007
+updated_at = 1794550007
+weight = 0.0
+issue_number = 1704
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1704"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test process_group_kill_needs_dashdash_20261113 -- --ignored"
+rev = "bc0880b6546012bd8f0fb5541849cb264545508a"
+observed_at = 1794550007
+detail = """
+exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/process_group_kill_needs_dashdash_20261113.rs (target/debug/deps/process_group_kill_needs_dashdash_20261113-d5895dc5d31fe86e)
+error: test failed, to rerun pass `-p blastguard --test process_group_kill_needs_dashdash_20261113`"""
+
+[[task]]
+id = "3c1a3f35"
+title = "blastguard tests: budget_bound wall-clock 2s assert fails under CPU load (depth_limit_fail_open:499)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "flaky-timing",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-13. depth_limit_fail_open::budget_bound_is_still_reachable_with_its_own_reason asserts detect() on budget_hog() (300 x find -exec unit) finishes < 2s wall clock (depth_limit_fail_open.rs:499). Unloaded: 1.6-1.8s per cargo finished-in (debug build, 12 CPUs) = 80-92% of the bound. Parent session at main 45fd3365: with 18 busy yes processes it failed 5/5 at :499 (message: a PreToolUse hook must never hang the turn: analysis took ...); the Deny assert was never reached. RED at b3b0b0a3: tests/budget_bound_wallclock_under_load_20261113.rs spawns 1.5 x available_parallelism busy-spin threads; ignored RED exits 101 3/3 (9.64s, 9.04s, 8.42s, 18 spinners, host loadavg ~38 with other sessions active); non-ignored control passes: decision under load is still the exact budget Deny after hardening (7.99s) - budget is a node count (MAX_ANALYSIS_NODES=2000, detect/budget.rs), so the verdict is load-independent. Readings: (a) a wall-clock bound in a test is load-sensitive by design (shared host / parallel cargo test); (b) detect() on budget_hog is genuinely near its time budget (80-92% unloaded, debug build) and a real PreToolUse hook under load would also be slow. Distinguish by measuring node visits consumed vs elapsed time (e.g. the cfg(test) VISIT_PROBE in detect/budget.rs, or a release-build timing of the hook binary): if time scales with load at fixed node count it is (a); if per-node cost or node count regressed it is (b). Not decided here."
+created_at = 1794550453
+updated_at = 1794550453
+weight = 0.0
+issue_number = 1705
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1705"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test budget_bound_wallclock_under_load_20261113 -- --ignored"
+rev = "b3b0b0a32d201164cd006e50c6e28192cdcc7876"
+observed_at = 1794550453
+detail = """
+exit 101: uki_nakayama/src/.harness-worktrees/file-test-defects-20261113/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 58.63s
+     Running tests/budget_bound_wallclock_under_load_20261113.rs (target/debug/deps/budget_bound_wallclock_under_load_20261113-43c8b446a6eb9c64)
+error: test failed, to rerun pass `-p blastguard --test budget_bound_wallclock_under_load_20261113`"""

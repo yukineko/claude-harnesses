@@ -118,7 +118,6 @@ fn write_method_reference_to_system_path_is_not_allowed() {
 /// was Allow on the round-1 fix a8845f1e and at main 916a29bd (main and
 /// subagent; probe run/orch-c8b-probe.txt, row class-body).
 #[test]
-#[ignore = "RED round 2: class-attribute method reference is Allow (c8bf27ea)"]
 fn class_attribute_method_reference_to_system_path_is_not_allowed() {
     let home = unique_home("cls");
     let cmd = "python3 -c \"from pathlib import Path\nclass C:\n    w = Path('/etc/hosts').write_text\nC.w('x')\"";

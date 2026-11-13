@@ -16,8 +16,16 @@
 //!   is the receiver and the remaining arguments are those of the bound call
 //!   ([`Call`]);
 //! * `w = Path('/etc/hosts').write_text; w('x')` — when EVERY binding of `w`
-//!   is a simple `w = <reference>` and `w` is read nowhere except as a direct
-//!   call, the call `w(…)` is read as the referenced call (one per binding).
+//!   is a simple `w = <reference>`, the call `w(…)` is read as the referenced
+//!   call (one per binding), and also as written (a name such as `open` bound
+//!   in a class body is still the builtin elsewhere). The binding itself is
+//!   left unjudged only when every binding is a MODULE-LEVEL statement (its
+//!   line starts at column 0, no `:` before it on the line) and `w` is read
+//!   nowhere except as a direct call — never as an attribute (`C.w`,
+//!   `self.w`). A reference bound any other way — a class attribute (round 2
+//!   of the backlog), `self.w =` / `o.w =`, a subscript, a chained, tuple,
+//!   annotated or augmented target, a function local — is an escaped
+//!   reference (below).
 //!
 //! STRUCTURAL FAIL-CLOSED: any other reference to such a callable — stored in
 //! a name that is also used another way, passed as an argument
@@ -35,7 +43,13 @@
 //! literal (`'a'.replace`) or the unrebound builtin `str` / `bytes` /
 //! `bytearray` (`str.replace`), and an attribute of an imported module other
 //! than `pathlib` / `os` / `posix` / `shutil` / `io` / `codecs` / `builtins`
-//! (`webbrowser.open`) — none of these is a filesystem path method. NOT
+//! (`webbrowser.open`) — none of these is a filesystem path method; a
+//! receiver that is exactly a call of a known non-path stdlib constructor
+//! (`zipfile.ZipFile(..)`, `tarfile.open(..)`, or a name bound only to such
+//! calls); and a module function mapped by the builtin `map` over one
+//! list/tuple of string literals, read as one call per literal (`open` with
+//! one argument reads; `os.remove` / `shutil.rmtree` … are judged as `rm` of
+//! each literal; any other function stays an Ask). NOT
 //! MODELLED (so not refused): `getattr` with a non-literal attribute name, and
 //! a callable reached through anything other than a name of the program text
 //! (`vars(Path)['write_text']`, `Path.__dict__`).
@@ -188,15 +202,39 @@ pub(super) fn callees<'t>(ev: &Eval<'t>, k: usize, text: &'t str, attr: bool) ->
         open: k + 1,
         unbound: !attr && unbound_method(n),
     };
+    // The call as written is always judged too: a name such as `open` bound
+    // to a reference somewhere (a class body) may still be the builtin here.
+    let mut out = vec![direct(n, attr, k)];
     if !attr && !n.contains('.') {
         if let Some(binds) = alias_bindings(ev, n) {
-            return binds
-                .into_iter()
-                .map(|(r, rn, rattr)| direct(rn, rattr, r))
-                .collect();
+            out.extend(binds.into_iter().map(|(r, rn, rattr)| direct(rn, rattr, r)));
         }
     }
-    vec![direct(n, attr, k)]
+    out
+}
+
+/// True when the statement whose first token is `pos` starts a physical line
+/// at column 0 — a module-level statement (round 2 of backlog c8bf27ea: a
+/// binding in a class body is a class ATTRIBUTE, reachable as `C.w`). A
+/// statement after `;` takes the indentation of its line and is refused when
+/// a `:` precedes it on that line.
+fn module_level(ev: &Eval<'_>, pos: usize) -> bool {
+    let Some(Tok::Name { start, .. }) = ev.toks.get(pos) else {
+        return false;
+    };
+    let head = ev.src.get(..*start).unwrap_or("");
+    let line = &head[head.rfind('\n').map_or(0, |i| i + 1)..];
+    // The line's first character is not whitespace (an indented line is a
+    // block body: class, def, if, with, …), and no `:` precedes the statement
+    // on its line (`class C: pass; w = …` puts `w` in the class body). A `:`
+    // inside a string or a lambda only makes this answer `false`, the
+    // restrictive side.
+    let line_start = head.len() - line.len();
+    !line.contains(':')
+        && ev.src[line_start..]
+            .chars()
+            .next()
+            .is_some_and(|c| !c.is_whitespace())
 }
 
 /// True when the reference `rn` (a token text with `.__call__` stripped; an
@@ -252,6 +290,14 @@ fn alias_fully_called(ev: &Eval<'_>, w: &str) -> bool {
     if alias_bindings(ev, w).is_none() {
         return false;
     }
+    // Every binding is a module-level statement (`w` at `pos`, `=`, value).
+    let spans = ev.assigns.get(w).map(Vec::as_slice).unwrap_or_default();
+    if !spans
+        .iter()
+        .all(|(s, _)| s.checked_sub(2).is_some_and(|pos| module_level(ev, pos)))
+    {
+        return false;
+    }
     let targets: Vec<usize> = ev
         .assigns
         .get(w)
@@ -262,7 +308,14 @@ fn alias_fully_called(ev: &Eval<'_>, w: &str) -> bool {
         let Tok::Name { text, .. } = t else {
             return true;
         };
-        if j > 0 && toks[j - 1] == Tok::Punct('.') {
+        // An attribute spelled `w` anywhere (`C.w`, `self.w`, `f().w`) may be
+        // the same reference reached through an object: not "only called".
+        let attr = j > 0 && toks[j - 1] == Tok::Punct('.');
+        let skip = usize::from(!attr);
+        if text.split('.').skip(skip).any(|c| c == w) {
+            return false;
+        }
+        if attr {
             return true;
         }
         if text != w && !text.strip_prefix(w).is_some_and(|x| x.starts_with('.')) {
@@ -406,13 +459,18 @@ pub(super) fn escaped_reference_verdict(
             let shown = comps[..=i].join(".");
             match kind {
                 Ref::Function => {
-                    pending.get_or_insert(escaped(&shown));
+                    if let Some(d) = mapped_function_verdict(ev, r, &shown, depth, ctx, pending) {
+                        return Some(d);
+                    }
                 }
                 Ref::Method => {
                     let m = comps[i];
                     let recv = if i == 0 {
                         // `<chain>.m`: a string-literal receiver is `str.m`.
                         if r >= 2 && matches!(toks[r - 2], Tok::Str { .. }) {
+                            continue;
+                        }
+                        if constructed_non_path_chain(ev, r) {
                             continue;
                         }
                         ev.receiver(r, m)
@@ -424,7 +482,7 @@ pub(super) fn escaped_reference_verdict(
                             pending.get_or_insert(escaped(&shown));
                             continue;
                         }
-                        if string_type(ev, &rn) {
+                        if string_type(ev, &rn) || constructed_non_path_name(ev, &rn) {
                             continue;
                         }
                         let t = top(&rn);
@@ -441,6 +499,140 @@ pub(super) fn escaped_reference_verdict(
         }
     }
     None
+}
+
+/// Standard-library constructors whose result is never a filesystem path
+/// object: a `.open` / `.rename` / … on one is that class's own method
+/// (`zipfile.ZipFile(..).open(name)` reads a member of the archive). Matched
+/// on the spelling written (`import zipfile`; `from zipfile import ZipFile`
+/// is not followed and stays an Ask).
+const NON_PATH_CONSTRUCTORS: &[&str] = &[
+    "zipfile.ZipFile",
+    "zipfile.PyZipFile",
+    "tarfile.open",
+    "tarfile.TarFile",
+];
+
+/// True when the token at `k` is the callee of a call to a
+/// [`NON_PATH_CONSTRUCTORS`] entry whose module is imported and never
+/// re-bound.
+fn non_path_constructor_at(ev: &Eval<'_>, k: usize) -> bool {
+    let Some(n) = name(ev.toks.get(k)) else {
+        return false;
+    };
+    let t = top(n);
+    NON_PATH_CONSTRUCTORS.contains(&n)
+        && ev.toks.get(k + 1) == Some(&Tok::Punct('('))
+        && ev.imported.contains(t)
+        && !ev.nonparam.contains(t)
+        && !ev.assigns.contains_key(t)
+        && (k == 0 || ev.toks[k - 1] != Tok::Punct('.'))
+}
+
+/// `<constructor>(…).m` at the method token `r`: the receiver chain is
+/// exactly one [`NON_PATH_CONSTRUCTORS`] call.
+fn constructed_non_path_chain(ev: &Eval<'_>, r: usize) -> bool {
+    if r < 2 || ev.toks[r - 1] != Tok::Punct('.') || ev.toks[r - 2] != Tok::Punct(')') {
+        return false;
+    }
+    let Some(open) = ev.open_of(r - 2) else {
+        return false;
+    };
+    open >= 1 && ev.chain_start(r - 1) == Some(open - 1) && non_path_constructor_at(ev, open - 1)
+}
+
+/// The plain name `rn` is bound only by simple assignments whose value is
+/// exactly one [`NON_PATH_CONSTRUCTORS`] call (`z = zipfile.ZipFile('a.zip')`).
+fn constructed_non_path_name(ev: &Eval<'_>, rn: &str) -> bool {
+    if rn.contains('.') || ev.rebound.contains(rn) || ev.loops.contains_key(rn) {
+        return false;
+    }
+    let Some(spans) = ev.assigns.get(rn) else {
+        return false;
+    };
+    !spans.is_empty()
+        && spans
+            .iter()
+            .all(|&(s, e)| non_path_constructor_at(ev, s) && e >= 1 && ev.close(s + 1) == e - 1)
+}
+
+/// The string literals of the one list/tuple display spanning `[s, e)`
+/// (`['a.txt', 'b']`), `None` for anything else or an empty display.
+fn literal_display(ev: &Eval<'_>, s: usize, e: usize) -> Option<Vals> {
+    let toks = ev.toks;
+    if !matches!(toks.get(s), Some(Tok::Punct('[' | '('))) || ev.close(s) + 1 != e {
+        return None;
+    }
+    let mut vals = Vec::new();
+    for (k, t) in toks.iter().enumerate().take(e - 1).skip(s + 1) {
+        match t {
+            Tok::Str { .. } => vals.push(super::PathVal::Lit(ev.literal(k, k + 1)?)),
+            Tok::Punct(',') => {}
+            _ => return None,
+        }
+    }
+    (!vals.is_empty()).then_some(vals)
+}
+
+/// The elements the module function referenced at token `r` is mapped over,
+/// when that reference is the first argument of the builtin `map` (not
+/// re-bound) with exactly one other argument, a [`literal_display`].
+fn mapped_literals(ev: &Eval<'_>, r: usize) -> Option<Vals> {
+    let toks = ev.toks;
+    if r < 2 || toks[r - 1] != Tok::Punct('(') || (r >= 3 && toks[r - 3] == Tok::Punct('.')) {
+        return None;
+    }
+    let map = name(toks.get(r - 2))?;
+    let builtin_map = map == "builtins.map"
+        || (map == "map"
+            && !ev.rebound.contains("map")
+            && !ev.assigns.contains_key("map")
+            && !ev.loops.contains_key("map"));
+    if !builtin_map {
+        return None;
+    }
+    let args = ev.args(r - 1);
+    let [first, (s, e)] = args.as_slice() else {
+        return None;
+    };
+    if *first != (r, r + 1) {
+        return None;
+    }
+    literal_display(ev, *s, *e)
+}
+
+/// A module function referenced at token `r` (shown as `f`). When it is
+/// mapped over string literals ([`mapped_literals`]: `map(open, ['a.txt'])`),
+/// each call is `f(<literal>)`: an `open`-family function with one argument
+/// opens for reading (no write), and `os.remove` / `unlink` / `rmdir` /
+/// `removedirs` / `shutil.rmtree` are judged as `rm [-rf] <literal>`. Every
+/// other reference, and every other function, is an Ask.
+fn mapped_function_verdict(
+    ev: &Eval<'_>,
+    r: usize,
+    f: &str,
+    depth: usize,
+    ctx: &Ctx<'_>,
+    pending: &mut Option<Decision>,
+) -> Option<Decision> {
+    let Some(vals) = mapped_literals(ev, r) else {
+        pending.get_or_insert(escaped(f));
+        return None;
+    };
+    let rebound =
+        |n: &str| ev.rebound.contains(n) || ev.assigns.contains_key(n) || ev.loops.contains_key(n);
+    let effect = match f {
+        "open" | "io.open" | "codecs.open" | "builtins.open" if !rebound(top(f)) => return None,
+        "shutil.rmtree" => Effect::Remove { recursive: true },
+        "os.remove" | "os.unlink" | "os.rmdir" | "os.removedirs" => {
+            Effect::Remove { recursive: false }
+        }
+        _ => {
+            pending.get_or_insert(escaped(f));
+            return None;
+        }
+    };
+    judge_paths(f, effect, Some(vals), depth, ctx, pending)
 }
 
 /// `getattr(recv, 'm')`, `operator.methodcaller('m', …)` and
@@ -562,13 +754,35 @@ mod tests {
     #[test]
     fn a_name_bound_only_to_references_is_read_as_the_referenced_call() {
         let src = "w = pathlib.Path('/x').write_text\nw('y')";
+        // The call as written is judged too (round 2: `open` bound in a class
+        // body is still the builtin at module level).
         assert_eq!(
             resolved(src, "w"),
-            vec![("write_text".to_string(), true, false)]
+            vec![
+                ("w".to_string(), false, false),
+                ("write_text".to_string(), true, false)
+            ]
         );
         let toks = lex(src);
         let ev = Eval::new(&toks, src, None);
         assert!(alias_fully_called(&ev, "w"));
+    }
+
+    #[test]
+    fn only_a_module_level_binding_is_exempt() {
+        for src in [
+            // class attribute (round 2 RED), also after `;` behind a `:`
+            "class C:\n    w = pathlib.Path('/x').write_text\nC.w('y')",
+            "class C: pass; w = pathlib.Path('/x').write_text\nw('y')",
+            // a function local
+            "def f():\n    w = pathlib.Path('/x').write_text\n    w('y')",
+            // reached as an attribute somewhere
+            "w = pathlib.Path('/x').write_text\nw('y')\nC.w('z')",
+        ] {
+            let toks = lex(src);
+            let ev = Eval::new(&toks, src, None);
+            assert!(!alias_fully_called(&ev, "w"), "{src}");
+        }
     }
 
     #[test]

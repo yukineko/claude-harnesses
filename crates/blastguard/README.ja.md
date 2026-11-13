@@ -672,7 +672,7 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   （`Path('/tmp/y').replace('/etc/hosts')` は deny、`Path('a').replace('b')` は allow、
 >   引数 2 個の `s.replace('a','b')` は対象外）。receiver・転送先が解決できない
 >   （変数 receiver の `p.write_text(..)`・1 引数の `x.rename(y)` 等）ものは ask。
->   0.2.536 以降（backlog c8bf27ea、`src/detect/interpreter/python_semantics/method_refs.rs`）、
+>   0.2.541 以降（backlog c8bf27ea、`src/detect/interpreter/python_semantics/method_refs.rs`）、
 >   これらの callable を直接呼び出し以外で使う形も判定する: unbound の
 >   `Path.replace(Path('/tmp/z'), '/etc/hosts')`（第 1 引数が receiver）、
 >   `w = Path('/etc/hosts').write_text; w('x')`、`Path('/etc/hosts').write_text.__call__('x')` は
@@ -681,6 +681,14 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   literal 名の `getattr`/`methodcaller` 等）は receiver が解決できればその path で判定し、
 >   できなければ ask（`str.replace`・`'a'.replace`・`webbrowser.open` は対象外で allow のまま。
 >   receiver が解決できない `args.replace` のような同名の属性読み出しは ask になる）。
+>   束縛を「呼び出し時に判定する別名」として扱うのは module 直下（行頭 column 0）の単純代入で、
+>   名前が直接呼び出し以外に現れないときだけ。class 属性（`class C:` 本体の
+>   `w = Path('/etc/hosts').write_text` → `C.w('x')`）・`self.w =`・subscript・連鎖/tuple/
+>   注釈付き/augmented の代入先・関数 local は参照として判定する（`/etc/hosts` なら deny）。
+>   `zipfile.ZipFile(..)`/`tarfile.open(..)` の結果（とそれだけで束縛された名前）の `.open` 等は
+>   path method ではないので allow、`map(open, ['a.txt'])`（literal だけを 1 引数で開く＝読み込み）は
+>   allow、`map(os.remove, [...])` は各 literal の `rm` として判定、それ以外の `map` 形や
+>   `from zipfile import ZipFile` の綴りは ask のまま。
 
 当時、overwatch の continuous-audit 再発トラッカー（`overwatch violations --json`）が
 `blastguard:truncating-redirect` と `blastguard:code-interpreter-inline-eval` を

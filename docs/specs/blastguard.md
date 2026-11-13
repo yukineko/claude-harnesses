@@ -301,6 +301,19 @@ forge・condukt のスケジューラが再利用）。
   （Deny 自体は残る）。システムパスは safe root の strict な内側なら対象外、home 側に escape は無い。
   `git bisect run` の埋め込みコマンドは各語を re-quote して解析するので（`sh -c 'cd /etc && rm passwd'`）、
   その system-harm Deny が ban の理由に代わって返る。`rule_id` は marker を外してから照合する。
+- **関数本体の書き込み・rm は呼び出し時点の変数状態で判定する（backlog bdce0261、ユーザー裁定 2026-11-13「A+B」）** —
+  裁定原文（Human decisions, 2026-11-13, user ruling "A+B"）:
+  - Method: A+B. Judge a function body at each call site with the variable state at that call (late binding).
+    If the value at the call resolves to a system path -> Deny (system-harm), consistent with docs/specs/blastguard.md:271-274
+    ("Ask, deny known paths"). If the value cannot be resolved -> Ask (Deny in subagents).
+  - A body that is defined but never called: keep today's behaviour (judged at definition time).
+  - Out of scope, stated explicitly: `function f {}` spelling, subshell bodies `f() ( ... )`, calls through `eval` / `command`,
+    and functions defined in a different Bash tool call than the one that calls them. A definition and a call on different
+    physical lines of the SAME command string (the multiline RED case r2) ARE in scope.
+  - Add control c4 to the test file: `L=<safe>; f() { L=/etc/hosts; }; f; echo x > $L` -> not Allow
+    (the c4 test must be written by a non-implementer).
+
+  回帰テスト: `crates/blastguard/tests/function_body_late_binding_fail_open_20261113.rs`。
 - **rm 以外のシステムファイル変更コマンドも system-harm Deny（backlog 3c750df2）** — `detect/system_paths.rs` の
   `system_mutation_verdict` が `analyze_command_at` の per-command arm より先に 1 箇所で判定する。対象は
   `unlink`/`rmdir` の operand、`mv` の source（`-t` 時は全 operand）、`sed -i`/`--in-place` の入力ファイル

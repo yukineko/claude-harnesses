@@ -115,6 +115,15 @@ SCENARIOS = [
         ),
         old="            Decision::Ask(reason) => Decision::Deny(reason),\n",
         new="            Decision::Ask(_reason) => Decision::Allow,\n",
+        # Evidence (rev 91046d26, 2026-11-14): mutated `--no-fail-fast` run
+        # went RED in 72 targets, but 60 of them ALSO fail on the unmutated
+        # tree when run alone, and an unmutated `cargo test -p blastguard
+        # --no-fail-fast` failed 61 targets (committed RED repros) — so the
+        # former whole-crate run was RED with or without the mutation and
+        # proved nothing for this scenario. ask_hardening_invariant (not among
+        # the 61): mutated exit 101
+        # ("test result: FAILED", 0.5s warm), unmutated exit 0.
+        tests=("--test", "ask_hardening_invariant"),
     ),
     Scenario(
         crate="propguard",
@@ -130,6 +139,11 @@ SCENARIOS = [
         new="pub fn below_threshold(_satisfied: usize, _threshold: usize) -> bool {\n"
         "    false\n"
         "}\n",
+        # Evidence (rev 91046d26, 2026-11-14): RED targets bin propguard,
+        # backlog_b74955f4, hook_contract, integration,
+        # repro_criteria_env_non_utf8, session_scoped_skip (all pass
+        # unmutated). Fastest: backlog_b74955f4, mutated exit 101 (0.9s warm).
+        tests=("--test", "backlog_b74955f4"),
     ),
     Scenario(
         crate="specguard",
@@ -142,6 +156,10 @@ SCENARIOS = [
         ),
         old="            (true, true)\n",
         new="            (false, false)\n",
+        # Evidence (rev 91046d26, 2026-11-14): the only RED target is the
+        # binary's unit tests (specguard has no tests/ dir): mutated exit 101
+        # (5.4s warm), unmutated exit 0.
+        tests=("--bin", "specguard"),
     ),
     Scenario(
         crate="stuckguard",
@@ -153,6 +171,10 @@ SCENARIOS = [
         ),
         old="    if same.len() < cfg.repeat_threshold {\n        return None;\n    }\n",
         new="    if true {\n        return None;\n    }\n",
+        # Evidence (rev 91046d26, 2026-11-14): RED targets bin stuckguard,
+        # backlog_6108a7fa, faultinject_state, integration (all pass
+        # unmutated). integration: mutated exit 101 (1.3s warm).
+        tests=("--test", "integration"),
     ),
     Scenario(
         crate="parallelguard",
@@ -168,6 +190,10 @@ SCENARIOS = [
         new="        if false {\n"
         "            return Decision::Deny(deny_reason(class, live, cap));\n"
         "        }\n",
+        # Evidence (rev 91046d26, 2026-11-14): RED targets bin parallelguard,
+        # concurrency, hook_contract (all pass unmutated). concurrency:
+        # mutated exit 101 (0.4s warm).
+        tests=("--test", "concurrency"),
     ),
     Scenario(
         crate="mutategate",
@@ -179,6 +205,10 @@ SCENARIOS = [
         ),
         old="            let passed = kr + KILL_RATE_EPSILON >= threshold;\n",
         new="            let passed = true;\n",
+        # Evidence (rev 91046d26, 2026-11-14): RED targets lib, cli_contract,
+        # overwatch_violation (all pass unmutated). lib: mutated exit 101
+        # (0.1s warm).
+        tests=("--lib",),
     ),
     Scenario(
         crate="overwatch",
@@ -196,6 +226,10 @@ SCENARIOS = [
         new="    let _ = observed_violations;\n"
         "    let _ = policy.max_violations_in_window;\n"
         "    let decision = GateDecision::Proceed;\n",
+        # Evidence (rev 91046d26, 2026-11-14): RED targets lib, bin overwatch,
+        # canary, cli_contract (all pass unmutated). canary: mutated exit 101
+        # (0.5s warm).
+        tests=("--test", "canary"),
     ),
 ]
 

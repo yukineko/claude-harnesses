@@ -8,8 +8,10 @@ cargo is a PATH stub (like test_fail_open_mutation_mutates_invoking_tree_2026111
 the real script runs inside a scratch git repo. No real cargo test is run.
 
   b1  static: every SCENARIOS entry has a non-empty `tests` of strings that are
-      only `--lib` or `--test <name>` pairs, and each `--test <name>` names an
-      existing crates/<crate>/tests/<name>.rs.      (RED at origin/main: no attr)
+      only `--lib`, `--test <name>` or `--bin <crate>` (each `--test <name>`
+      names an existing crates/<crate>/tests/<name>.rs; `--bin` only the crate's
+      own src/main.rs binary — added by the implementer for specguard, which
+      has no tests/ dir).                            (RED at origin/main: no attr)
   b2  end-to-end: the argv cargo sees for the test run is `test -p <crate>`
       followed by exactly the scenario's declared selectors (an optional
       trailing `-- ...` harness-args tail is tolerated). (RED at origin/main)
@@ -76,8 +78,21 @@ class DeclaredTestsStatic(unittest.TestCase):
                         f = REPO / "crates" / sc.crate / "tests" / (name + ".rs")
                         self.assertTrue(f.is_file(), "%s does not exist (from %r)" % (f, tests))
                         i += 2
+                    elif tests[i] == "--bin":
+                        # Added by the implementer (2026-11-14): the original
+                        # spec omitted `--bin`, but specguard has no tests/ dir
+                        # and only its binary's unit tests catch its mutation.
+                        # Only the crate's own default binary (src/main.rs,
+                        # bin name == crate name) is accepted.
+                        self.assertLess(i + 1, len(tests), "dangling --bin in %r" % (tests,))
+                        name = tests[i + 1]
+                        self.assertEqual(name, sc.crate, tests)
+                        f = REPO / "crates" / sc.crate / "src" / "main.rs"
+                        self.assertTrue(f.is_file(), "%s does not exist (from %r)" % (f, tests))
+                        i += 2
                     else:
-                        self.fail("selector %r in %r is neither --lib nor --test <name>" % (tests[i], tests))
+                        self.fail("selector %r in %r is neither --lib, --test <name> nor --bin <crate>"
+                                  % (tests[i], tests))
 
 
 class DeclaredTestsEndToEnd(unittest.TestCase):

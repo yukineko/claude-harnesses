@@ -11,7 +11,9 @@ use super::{
 
 /// True if this stage names a program FILE for the interpreter to run, rather
 /// than taking its program from stdin. Flags, redirections and a bare `-` are
-/// not program files.
+/// not program files. It does not know which options take a value, so a
+/// shell's argv is read with [`shell_program_source`] instead (backlog
+/// de914866); this reading remains for code interpreters and a shell's `-c`.
 fn stage_has_program_operand(rest: &[&str]) -> bool {
     let mut skip_next = false;
     for tok in rest {
@@ -197,7 +199,35 @@ whether the sourced file is that stdin",
                     return deny;
                 }
             }
-            let has_program_file = stage_has_program_operand(rest);
+            // A SHELL's argv is read with its option grammar (backlog
+            // de914866): the value of `-o` / `-O` / `--rcfile` and the
+            // positionals after `-s` (`| bash -o pipefail`, `| sh -s a b`) are
+            // not a script file — the shell still runs its stdin. Taking the
+            // first non-dash word for the script let those pipes through
+            // unjudged. An option shape the grammar does not model leaves the
+            // program undetermined: the stdin program is judged AND the stage
+            // is an Ask, never an Allow. `-c` keeps the generic reading.
+            let has_program_file = if is_shell(&normalized_command(tokens[idx])) {
+                match shell_program_source(&argv_words(rest)) {
+                    ProgramSource::File(_) => true,
+                    ProgramSource::Stdin => false,
+                    ProgramSource::Inline => stage_has_program_operand(rest),
+                    ProgramSource::Undetermined(why) => {
+                        if i > 0 || heredoc_open {
+                            if let Some(deny) = acc.record(Decision::ask(format!(
+                                "`{}` is fed a program on stdin, and {why} — blastguard cannot \
+tell whether the shell runs that stdin or a script file",
+                                stage.trim()
+                            ))) {
+                                return deny;
+                            }
+                        }
+                        false
+                    }
+                }
+            } else {
+                stage_has_program_operand(rest)
+            };
             let takes_stdin_program = source_reader
                 || interpreter_stdin_operand(rest).is_some()
                 || (!has_program_file && (i > 0 || heredoc_open));

@@ -1619,3 +1619,28 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
      Running tests/block_record_gaps_20261114.rs (target/debug/deps/block_record_gaps_20261114-7f4209f6a41dab8d)
 error: test failed, to rerun pass `-p blastguard --test block_record_gaps_20261114`"""
+
+[[task]]
+id = "b3569da5"
+title = "blastguard: harmful program piped into if/while compound or eval/sh -c forwarder to a shell is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "pending"
+notes = "Measured at dc9b00c7b (0.2.565) 2026-11-14 in run-20261114-075136-6996 follow-up (probe of side findings). P=echo 'chmod 777 /etc/hosts'. main/subagent: 'P | if true; then bash; fi' allow/allow; 'P | while true; do bash; done' allow/allow; 'P | eval bash' allow/allow; 'P | ( eval bash )' allow/allow; 'P | sh -c bash' allow/allow; 'P | { sh -c bash; }' allow/allow. Controls deny/deny: bare bash, { if..fi; }, ( for..done ), for..done, ! bash. System-harm fail-open: expected Deny."
+created_at = 1794612903
+updated_at = 1794612903
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_compound_reader_and_forwarder -- --include-ignored"
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+observed_at = 1794612903
+detail = """
+exit 101: -worktrees/side-reds-075136/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.90s
+     Running tests/backlog_20261114_pipe_to_compound_reader_and_forwarder.rs (target/debug/deps/backlog_20261114_pipe_to_compound_reader_and_forwarder-99efd004045dbe1c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_compound_reader_and_forwarder`"""

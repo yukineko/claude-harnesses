@@ -7,10 +7,10 @@ date = "2026-11-13"
 canon = []
 
 [spec.ratification]
-canon_commit = "8dedad41e5ac8a0325f2a4b3501f55f929aefd21"
+canon_commit = "e9987b1606e7cec0299ad764394ec6120f8b61f0"
 date = "2026-11-13"
-reason = "User ruling 2026-11-13: ratify as drafted (R1 covers all three residual paths incl. relink; R2 allows split-or-refuse for env -S, never Allow)"
-fingerprint = "de529c7dcd1a3d57"
+reason = "User ruling 2026-11-13: ratify as drafted; R3/R4 folded into R1/R2 acceptance by user ruling"
+fingerprint = "7b31245b30a87d4b"
 
 [[requirement]]
 id = "R1"

@@ -1777,6 +1777,8 @@ notes = "System-harm fail-open, RED (orch commit after fe5be3de) by a non-implem
 created_at = 1794598308
 updated_at = 1794598308
 weight = 0.0
+issue_number = 1730
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1730"
 rev = 0
 
 [task.repro]

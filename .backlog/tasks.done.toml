@@ -75494,3 +75494,66 @@ rev = "02d939d31bcb908052fe61e1c516b122efcc6cfa"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "f6dbff5b"
+title = "blastguard: python の隣接文字列リテラル連結 ('/''etc/hosts') で組んだ system パスへの os.chmod が allow になる fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "System-harm fail-open found by the c619b13f implementer's probe and confirmed by a non-implementer RED 675b6d8a on main 12d7d093 (2026-11-13): 4 of 14 (shape x mode) runs building a system path were ALLOWED: os.chmod('/''etc/hosts',0) and os.chmod('/' 'etc' '/hosts',0), main and subagent mode, no comment needed. Not Allow at HEAD: '/etc' '/hosts', '/etc/'+'hosts', % format, .format, f-string. Control control_plain_literal_system_path_is_denied non-ignored."
+created_at = 1794525860
+updated_at = 1794596936
+weight = 0.0
+issue_number = 1672
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1672"
+issue_closed_at = 1794596939
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_python_adjacent_literal_concat_path python_built_system_path_is_not_allowed -- --include-ignored"
+rev = "675b6d8a5083aaa516888b4ceae51e3a042eea19"
+observed_at = 1794525860
+detail = """
+exit 101: harness-worktrees/red4-bg-payload/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.76s
+     Running tests/backlog_20261113_python_adjacent_literal_concat_path.rs (target/debug/deps/backlog_20261113_python_adjacent_literal_concat_path-7b71dce495db7bff)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_python_adjacent_literal_concat_path`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261113_python_adjacent_literal_concat_path"
+exit = 0
+passed = 2
+rev = "d3793ba25f33c1d4a2d89942aca0f42d8ace6bb5"
+observed_at = 1794596929
+output_digest = "sha256:f847bf32a3a6e91ce8a579e1b4e24deacf912450ffb908e32b1eb938b4c58c4c"
+excerpt = """
+
+running 2 tests
+test control_plain_literal_system_path_is_denied ... ok
+test python_built_system_path_is_not_allowed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s
+
+   Compiling blastguard v0.2.523 (/Users/yuki/.condukt/worktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.49s
+     Running tests/backlog_20261113_python_adjacent_literal_concat_path.rs (target/debug/deps/backlog_20261113_python_adjacent_literal_concat_path-4a0242f244d9519a)
+"""
+
+[task.closure.red]
+rev = "675b6d8a5083aaa516888b4ceae51e3a042eea19"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

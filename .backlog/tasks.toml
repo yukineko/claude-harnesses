@@ -1646,3 +1646,28 @@ exit 101: -worktrees/side-reds-075136/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 9.90s
      Running tests/backlog_20261114_pipe_to_compound_reader_and_forwarder.rs (target/debug/deps/backlog_20261114_pipe_to_compound_reader_and_forwarder-99efd004045dbe1c)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_compound_reader_and_forwarder`"""
+
+[[task]]
+id = "f9861c4e"
+title = "blastguard: harmful program piped to python3/node with a value-taking flag (-X, -W, -r) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "pending"
+notes = """Measured at dc9b00c7b (0.2.565) 2026-11-14 in run-20261114-075136-6996 follow-up. main/subagent: echo 'import os; os.chmod("/etc/hosts", 0o777)' | python3 deny/deny (control); same | python3 -X dev allow/allow; | python3 -W ignore allow/allow; echo 'require("fs").chmodSync("/etc/hosts", 0o777)' | node deny/deny (control); | node -r m allow/allow. Sibling of the bash value-flag RED. System-harm fail-open: expected Deny."""
+created_at = 1794612940
+updated_at = 1794612940
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_interpreter_with_value_flag -- --include-ignored"
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+observed_at = 1794612940
+detail = """
+exit 101: arness-worktrees/side-reds-075136/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/backlog_20261114_pipe_to_interpreter_with_value_flag.rs (target/debug/deps/backlog_20261114_pipe_to_interpreter_with_value_flag-cbd8277bbb82e170)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_interpreter_with_value_flag`"""

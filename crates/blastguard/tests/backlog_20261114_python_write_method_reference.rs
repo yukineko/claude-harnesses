@@ -91,7 +91,6 @@ const SHAPES: &[(&str, &str)] = &[
 ];
 
 #[test]
-#[ignore = "RED: pathlib write method reached through a method reference is Allow (backlog pending)"]
 fn write_method_reference_to_system_path_is_not_allowed() {
     let home = unique_home("red");
     let mut allowed = Vec::new();
@@ -111,6 +110,22 @@ fn write_method_reference_to_system_path_is_not_allowed() {
         allowed.len(),
         SHAPES.len() * 2,
         allowed.join("\n")
+    );
+}
+
+/// Round-2 RED (2026-11-14, flow-8cca7ef5 orchestrator — not an implementer):
+/// the bound method stored as a CLASS attribute and called through the class
+/// was Allow on the round-1 fix a8845f1e and at main 916a29bd (main and
+/// subagent; probe run/orch-c8b-probe.txt, row class-body).
+#[test]
+fn class_attribute_method_reference_to_system_path_is_not_allowed() {
+    let home = unique_home("cls");
+    let cmd = "python3 -c \"from pathlib import Path\nclass C:\n    w = Path('/etc/hosts').write_text\nC.w('x')\"";
+    let main = decide(cmd, &home, false);
+    let sub = decide(cmd, &home, true);
+    assert!(
+        (main == "ask" || main == "deny") && sub == "deny",
+        "main={main} subagent={sub}"
     );
 }
 

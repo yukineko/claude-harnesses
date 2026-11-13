@@ -847,6 +847,12 @@ forge・condukt のスケジューラが再利用）。
   直接呼び出し `Path('/etc/hosts').write_text('x')` は Allow にならない（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_python_write_method_reference.rs`
   （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の false positive の RED（2026-11-14、flow-8cca7ef5、単一引用符内の perl 特殊変数。修正は未実装）** —
+  単一引用符の `perl -ne 'print if $.==9' /dev/null` は shell が `$.` を展開しないのでコマンド行の文字列がそのままプログラムだが、
+  blastguard は「inline-eval のプログラムが shell 展開を含む」として拒否する（subagent で deny を観測）。
+  二重引用符で本当に展開される `perl -ne "print $HOME"` は Allow にならない（control）。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_perl_single_quoted_dollar_fp.rs`
+  （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
 
 ### module 責務
 

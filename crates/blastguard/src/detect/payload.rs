@@ -303,7 +303,8 @@ fn python_stdin_reading(
 
 /// The program text an interpreter stage receives on stdin: the
 /// here-document body and/or the literals the upstream `echo`/`printf` stage
-/// of THIS statement emits. Shared by the stdin-program audit of
+/// of THIS statement emits (a `printf` stage's evaluated outputs too), each
+/// with its NUL readings ([`with_nul_readings`]). Shared by the stdin-program audit of
 /// [`analyze_interpreter_stdin_exec`] and its `osascript` application-delete
 /// check.
 fn stdin_program_texts(
@@ -341,16 +342,41 @@ fn stdin_program_texts(
             &statement[i - 1],
         )));
         // A `printf` stage emits its EVALUATED output (escapes, `%s` …), not
-        // the quoted text: judge that too (backlog 00569f7d). The verbatim
-        // literals above stay judged; an unevaluable printf is an Ask
-        // recorded by the caller (`printf_undetermined`).
-        if let PrintfStage::Output(text) = evaluate_printf_stage(&statement[i - 1]) {
-            if !text.trim().is_empty() && !program_texts.contains(&text) {
-                program_texts.push(text);
+        // the quoted text: judge that too (backlog 00569f7d), once per
+        // printf dialect whose output differs (zsh, bash, BSD and GNU
+        // disagree on `\x`, `\c`, unknown escapes …). The verbatim literals
+        // above stay judged; an unevaluable printf is the Ask that
+        // `analyze_interpreter_stdin_exec` records from the same
+        // `evaluate_printf_stage` call's `PrintfStage::Undetermined`.
+        if let PrintfStage::Outputs(texts) = evaluate_printf_stage(&statement[i - 1]) {
+            for text in texts {
+                if !text.trim().is_empty() && !program_texts.contains(&text) {
+                    program_texts.push(text);
+                }
             }
         }
     }
-    program_texts
+    with_nul_readings(program_texts)
+}
+
+/// `texts` plus, for each text holding a NUL byte, the two ways a reader
+/// handles it: bash and sh DROP NUL bytes from a program read on stdin
+/// (observed 2026-11-14: `printf 'ec\0ho x\n' | /bin/bash` prints `x`), and
+/// zsh ends the word there (`… | zsh` reports `command not found: ec`), read
+/// here as a line break so the text before the NUL is judged on its own
+/// (backlog 00569f7d). The texts as given stay judged.
+fn with_nul_readings(mut texts: Vec<String>) -> Vec<String> {
+    let extra: Vec<String> = texts
+        .iter()
+        .filter(|t| t.contains('\0'))
+        .flat_map(|t| [t.replace('\0', ""), t.replace('\0', "\n")])
+        .collect();
+    for t in extra {
+        if !t.trim().is_empty() && !texts.contains(&t) {
+            texts.push(t);
+        }
+    }
+    texts
 }
 
 /// True when `stage` emits only text spelled in its own arguments: its

@@ -125,7 +125,6 @@ const PIPE_AMP_SHAPES: &[(&str, &str)] = &[
 
 // test-weakening-justified: new RED for an unfixed system-harm fail-open (2026-11-14); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: 2026-11-14 printf output with NUL bytes (bash drops them) piped to a shell runs a system-harm command but is allowed — remove the ignore when fixed"]
 fn printf_nul_byte_program_piped_to_shell_is_denied() {
     let failures = non_deny(NUL_SHAPES, "nul");
     assert!(
@@ -139,7 +138,6 @@ fn printf_nul_byte_program_piped_to_shell_is_denied() {
 
 // test-weakening-justified: new RED for an unfixed system-harm fail-open (2026-11-14); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: 2026-11-14 zsh printf turns a bare \\x into NUL so the piped shell runs a system-harm command but it is allowed — remove the ignore when fixed"]
 fn printf_zsh_bare_hex_escape_program_piped_to_shell_is_denied() {
     let failures = non_deny(ZSH_HEX_SHAPES, "zshx");
     assert!(
@@ -153,7 +151,6 @@ fn printf_zsh_bare_hex_escape_program_piped_to_shell_is_denied() {
 
 // test-weakening-justified: new RED for an unfixed system-harm fail-open (2026-11-14); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: 2026-11-14 a program piped with |& (stdout+stderr) into a shell runs a system-harm command but is allowed — remove the ignore when fixed"]
 fn program_piped_with_pipe_amp_to_shell_is_denied() {
     let failures = non_deny(PIPE_AMP_SHAPES, "pamp");
     assert!(

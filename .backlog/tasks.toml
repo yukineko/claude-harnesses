@@ -917,38 +917,6 @@ exit 101: 0.06s
 error: test failed, to rerun pass `-p condukt --test worktree_remove_orphan_leftover`"""
 
 [[task]]
-id = "040b959b"
-title = "blastguard: トップレベルのコマンド語・引数の shell 行継続 (backslash+LF) で chmod / python3 -c の system パス操作が allow になる fail-open を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "system-harm",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "System-harm fail-open found by the 6cac93af round-4 independent verifier probe; RED 06143f1b by a non-implementer, observed on main 47ec0a2e and identical at 02553aa8, still failing on c6532fe0: 20 of 20 (shape x mode) BN runs were ALLOWED. Shapes: BN inside the command word (chmod, python3), inside or before a path argument, between -c and the program, unquoted escaped program, and through bash -c, env, timeout wrappers. Controls without BN are Deny. first_shell_word joins BN since 0.2.491 but the top-level tokenizer does not."
-created_at = 1794530710
-updated_at = 1794530710
-weight = 0.0
-issue_number = 1676
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1676"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261113_toplevel_line_continuation -- --include-ignored"
-rev = "c6532fe077569e3c6d90922916dbe40e323b9b7b"
-observed_at = 1794530710
-detail = """
-exit 101: 0.2.494 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.95s
-     Running tests/backlog_20261113_toplevel_line_continuation.rs (target/debug/deps/backlog_20261113_toplevel_line_continuation-61c3bab8994b17e0)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261113_toplevel_line_continuation`"""
-
-[[task]]
 id = "47b20647"
 title = "blastguard: python 文字列 literal 内の行継続 (backslash+LF) で組んだ system パスへの open 書き込みが allow になる fail-open を直す"
 project = "/Users/yuki/src/harness"
@@ -1569,3 +1537,66 @@ exit 101: LED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finish
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
      Running tests/env_split_string_comment_collapse_20261113.rs (target/debug/deps/env_split_string_comment_collapse_20261113-bea4bc2c37f1750e)
 error: test failed, to rerun pass `-p blastguard --test env_split_string_comment_collapse_20261113`"""
+
+[[task]]
+id = "070b696c"
+title = "blastguard FP: quoted heredoc appending Rust source to a .rs file is Ask/Deny when its body has multi-line python3 -c string literals and a command follows"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-13 at main 50474876 (blastguard 0.2.506) by the flow-8cca7ef5 orchestrator in subagent mode: cat >> <wt>/crates/blastguard/tests/x.rs <<'EOF' with Rust string literals "python3 -c \"... Path('/etc/hosts').chmod(0o777)\"" followed by cd <wt> && cargo test was denied: 'python3 is invoked with an inline-eval flag, and its program cannot be tokenised as Python (an unterminated string or an unbalanced bracket)'. Main mode: ask. Standing ruling: .rs heredoc body is data. RED bccf0730 (merged 4fb5d734) written by an independent subagent; one-line body is allow (control).'''
+created_at = 1794569079
+updated_at = 1794569079
+weight = 0.0
+issue_number = 1707
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1707"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes fp1_rs_heredoc_body_with_python_c_text_is_allowed -- --include-ignored"
+rev = "706e25e16a8558ac93233aeb4b8e991c92189f54"
+observed_at = 1794569079
+detail = """
+exit 101: -cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.61s
+     Running tests/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs (target/debug/deps/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes-a8fc5a5e6c06304a)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes`"""
+
+[[task]]
+id = "f6028f18"
+title = "blastguard FP: git commit text with nested escaped quotes inside a .rs heredoc body is read as an unclosed double quote (whole-tree staging Ask/Deny) when a command follows"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-13 at main 50474876 (blastguard 0.2.506): orchestrator's explicit-path git add && git commit -m ... -m "python3 -c \"...\" ..." was denied with 'blastguard cannot determine whether this git add/commit is whole-tree staging (an unclosed double quote)'. The plain command did NOT reproduce in isolation (independent subagent, both modes allow); the reproducing shape (FP2b) is a cat >> x.rs <<'EOF' body containing a git add/commit Rust string with nested escaped quotes followed by cargo test. RED bccf0730 (merged 4fb5d734). The exact trigger of the orchestrator's original block is not identified.'''
+created_at = 1794569092
+updated_at = 1794569092
+weight = 0.0
+issue_number = 1708
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1708"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes fp2b_rs_heredoc_body_with_git_commit_text_is_allowed -- --include-ignored"
+rev = "706e25e16a8558ac93233aeb4b8e991c92189f54"
+observed_at = 1794569092
+detail = """
+exit 101: d; 6 filtered out; finished in 0.45s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs (target/debug/deps/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes-a8fc5a5e6c06304a)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes`"""

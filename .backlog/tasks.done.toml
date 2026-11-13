@@ -75243,3 +75243,66 @@ rev = "54315495dba5e1d53d242872f87a9516ae4becb0"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "040b959b"
+title = "blastguard: トップレベルのコマンド語・引数の shell 行継続 (backslash+LF) で chmod / python3 -c の system パス操作が allow になる fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "System-harm fail-open found by the 6cac93af round-4 independent verifier probe; RED 06143f1b by a non-implementer, observed on main 47ec0a2e and identical at 02553aa8, still failing on c6532fe0: 20 of 20 (shape x mode) BN runs were ALLOWED. Shapes: BN inside the command word (chmod, python3), inside or before a path argument, between -c and the program, unquoted escaped program, and through bash -c, env, timeout wrappers. Controls without BN are Deny. first_shell_word joins BN since 0.2.491 but the top-level tokenizer does not."
+created_at = 1794530710
+updated_at = 1794571165
+weight = 0.0
+issue_number = 1676
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1676"
+issue_closed_at = 1794571167
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_toplevel_line_continuation -- --include-ignored"
+rev = "c6532fe077569e3c6d90922916dbe40e323b9b7b"
+observed_at = 1794530710
+detail = """
+exit 101: 0.2.494 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.95s
+     Running tests/backlog_20261113_toplevel_line_continuation.rs (target/debug/deps/backlog_20261113_toplevel_line_continuation-61c3bab8994b17e0)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_toplevel_line_continuation`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261113_toplevel_line_continuation"
+exit = 0
+passed = 2
+rev = "7c2aabd251a352d2b29f7aba38f95f27f637588b"
+observed_at = 1794571160
+output_digest = "sha256:c0259874e71aecff0f7438bc0d71fa5835a7ae35b83114321498c5c8c675ae31"
+excerpt = """
+
+running 2 tests
+test control_same_commands_without_bn_are_not_allowed ... ok
+test backslash_newline_in_system_harm_command_is_not_allowed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
+
+   Compiling blastguard v0.2.511 (/Users/yuki/.condukt/worktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.47s
+     Running tests/backlog_20261113_toplevel_line_continuation.rs (target/debug/deps/backlog_20261113_toplevel_line_continuation-a6c4bb5f226bc5f9)
+"""
+
+[task.closure.red]
+rev = "c6532fe077569e3c6d90922916dbe40e323b9b7b"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -1634,3 +1634,34 @@ exit 101: ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 3.38s
      Running tests/backlog_20261113_python_escape_decoded_os_path_call.rs (target/debug/deps/backlog_20261113_python_escape_decoded_os_path_call-955f4dd2468dee75)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_python_escape_decoded_os_path_call`"""
+
+[[task]]
+id = "84277e41"
+title = "blastguard: shutil.copy2 の読み取り専用の source（'/etc/hosts' など）を書き込み先として Deny する false positive を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "FP, RED 34937f3f by a non-implementer (flow-8cca7ef5 orchestrator) at main 33464587 2026-11-14: python3 -c shutil.copy2('/etc/hosts','/tmp/x') is Deny ('it writes /etc/hosts (shutil.copy2()') while the /tmp/y-source twin is Ask (main session). Reported as 別件 by the 569b9b9d implementer (INTERPRETER_WRITE_CALLS 'shutil.copy2('). Live hit 2026-11-14: a python3 - <<'EOF' heredoc that only edited docs/specs/blastguard.md and .specguard/spec-docs.toml (its string literals contained the text shutil.copy2('/etc/hosts','/tmp/x')) was denied verbatim: python3 - <<'EOF' takes its program from stdin, and it writes /etc/hosts (shutil.copy2() - it exists, and it is not inside a git work tree. Control control_tmp_source_copy2_is_not_denied_in_main_session non-ignored."
+created_at = 1794583403
+updated_at = 1794583403
+weight = 0.0
+issue_number = 1723
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1723"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_shutil_copy2_source_judged_as_write_fp -- --include-ignored copy2_decision_does_not_depend_on_read_only_source"
+rev = "34937f3fa91c897bc6127934c75d01fc6ec298ce"
+observed_at = 1794583403
+detail = """
+exit 101: e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.11s
+     Running tests/backlog_20261114_shutil_copy2_source_judged_as_write_fp.rs (target/debug/deps/backlog_20261114_shutil_copy2_source_judged_as_write_fp-dd5429a9b98ba464)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_shutil_copy2_source_judged_as_write_fp`"""

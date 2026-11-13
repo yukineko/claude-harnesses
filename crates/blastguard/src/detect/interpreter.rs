@@ -1490,7 +1490,9 @@ it refuses to guess"
     // Since backlog 17d985f1 that covers the `open`-family and pathlib writes
     // too, a method's receiver resolved through `/` / `joinpath`
     // (`(Path('/etc') / 'hosts').write_text('x')`), and the destination of a
-    // one-argument `.replace(dst)` / `.rename(dst)`.
+    // one-argument `.replace(dst)` / `.rename(dst)`. Since backlog c8bf27ea
+    // also those callables reached other than by a direct call (unbound
+    // `Path.m(recv, …)`, `w = X.m; w(…)`, `.__call__`, a passed reference).
     // Run after the descent, so a Deny the descent earned keeps its reason; a
     // Deny here still outranks any Ask the descent recorded.
     if python_reader {

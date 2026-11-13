@@ -2572,6 +2572,9 @@ pub fn run_tests(cfg: &Config, cwd: &Path, _rs: &RunState) -> Result<()> {
     if cmd_str.trim().is_empty() {
         bail!("empty test command");
     }
+    if let Some(reason) = crate::testscope::full_suite_reason(&cmd_str) {
+        bail!("refusing to run `{cmd_str}`: {reason}");
+    }
     eprintln!("condukt: running tests in {}: {cmd_str}", root.display());
     let status = harness_core::shell::command(&cmd_str)
         .current_dir(&root)

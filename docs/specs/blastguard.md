@@ -449,10 +449,20 @@ forge・condukt のスケジューラが再利用）。
   `touch` は `: >> p`、`symlink_to`/`hardlink_to` は `: > p`。引数がちょうど 1 個（位置引数か `target=`）の
   `.replace(…)`/`.rename(…)` は `Path.replace`/`Path.rename` として、**転送先（引数）を `: > dst`、receiver を
   `rm src`** として判定する（`Path('/tmp/y').replace('/etc/hosts')` は Deny、`Path('a').replace('b')` は Allow）。
+  0.2.542 以降（backlog c8bf27ea）は同じ callable を直接呼び出し以外で使う形（unbound `Path.m(recv, …)`・
+  `w = X.m; w(…)`・`.__call__`・引数や container に渡す参照等）も判定する（下の「メソッド参照」項）。
   引数が 2 個以上の `str.replace('a','b')` や `target` 以外の keyword（`dt.replace(year=…)`）は対象外。
   receiver・転送先・path が解決できないものは Ask（subagent では Deny）: 変数 receiver で束縛が読めない
   `p.write_text(..)`・1 引数の `x.replace(y)`/`x.rename(y)`（pandas の `s.rename('n')` も含む）・
   f-string で組んだ `open(f'{d}/x','w')` などは 0.2.523 の Allow から Ask に変わる。
+  0.2.544 以降（backlog 67219006）、解決した書き込み先が shell の redirect 規則で**特定できない**もの
+  （payload に `cwd` が無いときの相対 path、`$`・backtick を含む path）は、redirect 規則の Deny ではなく
+  **保留 Ask**（subagent では Deny）にする。program-text の shell pass と同じ R2 の side channel
+  （`ProgramTextSink`、`redirects_are_data: false`）経由で判定するので、system directory・保護 path・
+  既存の復元不能 target など redirect 規則の他の拒否はそのまま Deny、同じ program の他の Deny が優先する。
+  `python3 -c "open('a/b','w')"`・`Path('a/b').write_text('x')`（cwd 無し）は 0.2.526〜0.2.543 の Deny から
+  Ask に戻る（write-target 走査の `Recovery::Undetermined` = 保留 Ask と同じ結論、backlog 7483e85b）。
+  実際の shell の `echo x > a/b`（cwd 無し）は Deny のまま。
   chmod の mode は Python の整数 literal（`0o755`・`493`・`0x1ff`）ならその値、それ以外は `000`
   （読み取り・実行を外す＝shell の chmod 規則で最も制限側）として描画する。
   (4)（backlog 569b9b9d、blastguard 0.2.518）`Path(…)`/`pathlib.Path(…)`/`PosixPath(…)`/`WindowsPath(…)` の
@@ -680,6 +690,35 @@ forge・condukt のスケジューラが再利用）。
     dotfile は shell と同じ Deny/Ask、repo 相対は Allow）。path は literal・`expanduser`・`Path.home()`・
     `os.path.join`・`/`・`joinpath` と、単純代入 `name = …` だけで束縛される名前（全代入の値を全部判定）から
     静的に解決し、解決できない path・literal でない mode/flag は Ask。
+  - **メソッド参照（backlog c8bf27ea、blastguard 0.2.542、`interpreter/python_semantics/method_refs.rs`）**:
+    上の path 判定（here-doc の Python file と `python -c`/stdin の program の両方）は、書き込み・移動系の
+    callable（pathlib の `write_text`/`write_bytes`/`touch`/`symlink_to`/`hardlink_to`/`chmod`/`lchmod`/`unlink`/
+    `rmdir`/`replace`/`rename`/`open` と、`os.remove` 等・`shutil.copy*`/`move`・`open` 等の module 関数）を
+    直接呼び出し以外で使う形も読む。`X.m.__call__(…)` は `X.m(…)`、unbound の `Path.m(recv, …)`（`PosixPath`/
+    `WindowsPath` も）は第 1 引数（か `self=`）を receiver・残りを bound 形の引数として `recv.m(…)`、
+    全束縛が単純代入 `w = <参照>` の名前の `w(…)` は参照先の呼び出しとして（書かれたままの呼び出しとしても）
+    判定する。束縛そのものを判定しないのは、全束縛が **module 直下の文**（行頭 column 0 で、同じ行の前に `:` が
+    無い）で、`w` が直接呼び出し（`w(…)`/`w.__call__(…)`）以外に現れず属性（`C.w`・`self.w`）としても
+    現れないときだけ。class 属性（`class C:` 本体の `w = …` → `C.w('x')`。round 2 の RED）・`self.w =`/`o.w =`・
+    subscript・連鎖/tuple/注釈付き/augmented の代入先・関数 local に入れた参照は下の「それ以外の参照」として
+    判定する（`Path.replace(Path('/tmp/z'),'/etc/hosts')`・
+    `w = Path('/etc/hosts').write_text; w('x')`・`Path('/etc/hosts').write_text.__call__('x')` は Deny、
+    `w = Path('build/x').write_text; w('y')`・`Path.replace(Path('a'),'b')` は Allow）。**それ以外の参照**
+    （別の名前へ渡す・引数・container・`.__get__` 等の属性・walrus・literal 名の `getattr`/
+    `operator.methodcaller`/`operator.attrgetter`）は構造的に fail-closed: receiver が解決できれば直接呼び出しと
+    同じ shell 行（`chmod` は mode `000`、`open` は `: >`）で判定し、解決できない receiver・unbound の class 参照・
+    module 関数の参照・`replace`/`rename` の転送先は Ask（subagent では Deny）。Allow のまま残すのは
+    receiver が文字列 literal（`'a'.replace`）か再束縛されていない `str`/`bytes`/`bytearray`（`str.replace`）、
+    `pathlib`/`os`/`posix`/`shutil`/`io`/`codecs`/`builtins` 以外の import した module の属性（`webbrowser.open`）、
+    receiver が既知の非 path な stdlib constructor（`zipfile.ZipFile`/`PyZipFile`・`tarfile.open`/`TarFile`。
+    `import zipfile` の綴りのみ）の呼び出しそのもの、またはその呼び出しだけで束縛された名前
+    （`z = zipfile.ZipFile('a.zip'); o = z.open`）。builtin `map` の第 1 引数に渡した module 関数で、残りの引数が
+    文字列 literal だけの list/tuple 1 個のものは literal ごとの呼び出しとして読む: 再束縛されていない
+    `open` は 1 引数＝読み込みなので Allow（`map(open, ['a.txt'])`）、`os.remove`/`unlink`/`rmdir`/`removedirs`/
+    `shutil.rmtree` は各 literal の `rm` として判定、それ以外の関数・形（`map(open, ['a'], ['w'])`・
+    `open = print` 後の `map(open, …)`）は Ask。
+    data 属性として同名を読む `args.replace` 等（receiver が解決できない）は Ask になる。未対応（Allow のまま）:
+    literal でない属性名の `getattr`、名前以外から辿る callable（`vars(Path)['write_text']` 等）。
   - **計算される書き込み path（user ruling 2026-11-08、`interpreter/python_semantics/values.rs`、
     tests/heredoc_script_failopen_red_20261108.rs の FP 群）**: repo-scoped であると**証明できる**ときだけ Allow。
     それ以外（絶対 root・`~`・`expanduser`・`Path.home()`・`/` や `~` を root とする iteration・出自不明）は Ask。
@@ -825,17 +864,17 @@ forge・condukt のスケジューラが再利用）。
   素の `git add <paths> && git commit -m "..\"..."` コマンド自体は Allow で再現しなかった（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs`
   （`#[ignore]` の RED 2 本 + control。独立 subagent が書いた。証明しない範囲はファイル冒頭の doc comment）。
-- **未修正の system-harm fail-open の RED（2026-11-13、flow-8cca7ef5。修正は未実装）** — shell に渡す program の
-  本文が実行時に作られる 2 形は、system harm でも Allow になる: (a) `printf` の escape 展開
+- **system-harm fail-open の RED（2026-11-13、flow-8cca7ef5。(a) は backlog 00569f7d・blastguard 0.2.530、(b) は backlog 6df87a5c・blastguard 0.2.537 で修正済み。`#[ignore]` は外した）** — shell に渡す program の
+  本文が実行時に作られる 2 形は、system harm でも Allow になっていた: (a) `printf` の escape 展開
   （`printf 'chm\x6fd 777 /etc/hosts' | bash`、octal `\157` も同じ）、(b) process substitution から stdin で読む
   `bash < <(echo 'chmod 777 /etc/hosts')`。literal の `printf 'chmod 777 /etc/hosts' | bash` は Deny（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261113_printf_escape_and_procsub_to_shell.rs`
-  （`#[ignore]` の RED 2 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
-- **未修正の system-harm fail-open の RED（2026-11-13、flow-8cca7ef5。修正は未実装）** — Python の `os.chmod` /
+  （RED 2 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **system-harm fail-open の RED（2026-11-13、flow-8cca7ef5。backlog 5616e9e5 で修正済み〈main の f6dbff5b の修正で GREEN〉。`#[ignore]` は外した）** — Python の `os.chmod` /
   `os.rename` の path 引数を文字列 literal の escape（`\x2f`、octal `\057`、`\u002f`、`\N{SOLIDUS}`）で綴った
-  system パスは Allow になる（main・subagent とも）。escape を使わない `'/etc/hosts'` は Deny（control）。
+  system パスは Allow になっていた（main・subagent とも）。escape を使わない `'/etc/hosts'` は Deny（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261113_python_escape_decoded_os_path_call.rs`
-  （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+  （RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
 - **未修正の false positive の RED（2026-11-14、flow-8cca7ef5。修正は未実装）** — python の
   `shutil.copy2(SRC, DST)` は読むだけの SRC も書き込み先として判定される: `shutil.copy2('/etc/hosts','/tmp/x')` は
   「it writes `/etc/hosts`」で Deny、SRC だけを `/tmp/y` に変えた同形は Ask（main session）。
@@ -893,6 +932,30 @@ forge・condukt のスケジューラが再利用）。
   harmless な変種は Allow、harmful な `zsh -c` program（system hosts file を world-writable にする）は Deny のまま（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_zsh_c_literal_echo_dash_fp.rs`
   （`#[ignore]` の RED 1 本 + control。独立 test author が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **RED（2026-11-14、flow-8cca7ef5。backlog 6df87a5c・blastguard 0.2.533 で修正済み。`#[ignore]` は外した）: procsub operand と list の twin** — (1) system-harm
+  fail-open: シェルに渡す process substitution が先頭 operand でないとき（`bash <(echo '…') foo` の script 引数、
+  `bash -x` / `-o pipefail` / `-O extglob` / `--rcfile f` の値取りフラグ、`bash <&3 3< <(…)` の fd dup、
+  `source <(…) foo`）、`/etc/hosts` の re-permission を走らせるのに main / subagent とも Allow。system harm は常に Deny。
+  (2) false positive: `bash <(echo hi; echo there)` / `bash < <(echo hi; echo there)` は静的に無害と証明できる list だが
+  Ask（subagent では Deny）。base（0e726e66）では Allow だった。control: 先頭 operand の `bash <(echo '…')` と
+  `bash 0< <(…)` は Deny、`bash < <(echo hi)` / `diff <(sort a) <(sort b)` / `bash script.sh < <(echo y)` は Allow、
+  `bash < <(cat f)` は Allow ではない。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_procsub_operand_flags_and_list_twins.rs`
+  （RED 2 本 + control。独立 author が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **false positive の RED（2026-11-14、t2 実装者の観測。backlog 6df87a5c・blastguard 0.2.535 で修正済み。`#[ignore]` は外した）: procsub list の出力に引用符** —
+  `bash <(echo "it's"; echo hi)` / `bash < <(echo "it's"; echo hi)` は 2 つの literal echo だけで出力が静的に
+  証明でき無害だが、結合出力に `'` を含むことだけを理由に Ask（subagent では Deny）。base（0e726e66）では Allow だった。
+  control: 同じ引用符入り list の 2 つ目の echo が system file の re-permission を出力する形は main / subagent とも Deny のまま。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_procsub_list_quote_output_fp.rs`
+  （RED 1 本 + control。独立 author が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **RED（2026-11-14、orchestrator の観測。backlog 6df87a5c・blastguard 0.2.537 で修正済み。`#[ignore]` は外した）: procsub を `--rcfile` / `--init-file` に渡す** —
+  interactive bash は `--rcfile` / `--init-file` の引数を program として source する。その値が process substitution で、
+  出力が `/etc/hosts` の re-permission のとき（`bash --init-file <(…) -i` / `bash --rcfile <(…) -i` /
+  `bash --rcfile <(…)` / `bash -i --rcfile <(…)` / `bash --rcfile=<(…) -i`）、実行されるのに main / subagent とも Allow。
+  procsub 側が option の値を判定せず消費しているため。system harm は常に Deny。
+  control: 無害な `bash --rcfile <(echo hi) -i` / `bash --init-file <(echo hi) -i` は Allow のまま。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_procsub_rcfile_init_file.rs`
+  （RED 1 本 + control。独立 author が書いた。証明しない範囲はファイル冒頭の doc comment）。
 - **CR で終わる python コメントの system-harm fail-open（2026-11-14、flow-8cca7ef5、backlog a66c115c で修正済み）** —
   CPython は program を字句解析する前に `\r\n` と裸の CR（`\r`）を `\n` に変換する（3.12.11 で `python3 -c`・stdin・
   ファイル・`compile` のいずれでも観測: CR は `#` コメントを終え、文を区切り、`\` の行継続になり、三重引用符内では値 `\n`、
@@ -907,13 +970,16 @@ forge・condukt のスケジューラが再利用）。
   LF の同形は Allow にならない（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_python_cr_ends_comment.rs`
   （RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
-- **未修正の system-harm fail-open の RED（2026-11-14、flow-8cca7ef5、pathlib のメソッド参照。修正は未実装）** —
-  pathlib の書き込み・移動メソッドを直接呼び出し `Path(..).method(..)` 以外で呼ぶ形は Allow になる（main・subagent とも）:
+- **system-harm fail-open の RED（2026-11-14、flow-8cca7ef5、pathlib のメソッド参照。backlog c8bf27ea・
+  blastguard 0.2.542 で修正済み。`#[ignore]` は外した）** —
+  pathlib の書き込み・移動メソッドを直接呼び出し `Path(..).method(..)` 以外で呼ぶ形は Allow になっていた（main・subagent とも）:
   unbound 呼び出し `Path.replace(Path('/tmp/z'), '/etc/hosts')`、束縛メソッドを名前に入れて呼ぶ
-  `w = Path('/etc/hosts').write_text; w('x')`、`Path('/etc/hosts').write_text.__call__('x')`。
-  直接呼び出し `Path('/etc/hosts').write_text('x')` は Allow にならない（control）。
+  `w = Path('/etc/hosts').write_text; w('x')`、`Path('/etc/hosts').write_text.__call__('x')`、
+  round 2 として class 属性に入れた参照 `class C:` 本体の `w = Path('/etc/hosts').write_text` → `C.w('x')`。
+  直接呼び出し `Path('/etc/hosts').write_text('x')` は Allow にならない（control）。修正の内容は
+  「filesystem 破壊」項の **メソッド参照**（`interpreter/python_semantics/method_refs.rs`）を参照。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_python_write_method_reference.rs`
-  （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+  （RED 2 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
 - **未修正の false positive の RED（2026-11-14、flow-8cca7ef5、単一引用符内の perl 特殊変数。修正は未実装）** —
   単一引用符の `perl -ne 'print if $.==9' /dev/null` は shell が `$.` を展開しないのでコマンド行の文字列がそのままプログラムだが、
   blastguard は「inline-eval のプログラムが shell 展開を含む」として拒否する（subagent で deny を観測）。
@@ -977,6 +1043,28 @@ forge・condukt のスケジューラが再利用）。
   1 entry = 1 行と表示順の不変を保証するが、曖昧さは無くさない（値は quote されない）。厳密な解析は `--json` を使う。
   exit: 0 = 成功（一致なし・ledger 不在を含み、不在は stderr に `no ledger at <path>`）、2 = 使い方の誤り、
   3 = ledger を特定・読めない／不正な行がある（有効な entry は出力したうえで `line <N>`）／stdout 書き込み失敗。
+- **`relay`** — subagent の Ask を main session で裁定させる relay（ユーザー裁定 2026-11-14 逐語:
+  「sub agentのAskはmainで裁定する」「この仕組みはコードで強制する、どうせわすれる」
+  「gateにそんな例外は追加してほしくない」「gateもconduktも絶対に勝手に他のworktreeを参照してはならない」）。
+  session ごとの append-only JSONL queue（`~/.blastguard/relay/<session_id>.jsonl`、`BLASTGUARD_RELAY_DIR`
+  で上書き。session_id が `[A-Za-z0-9_-]` 以外を含めば hash してファイル名にし dir 外を指させない）に
+  `queued` / `executed` / `relayed` / `dismissed` event を追記し、fold した状態で判定する。
+  (1) `main` の `emit` が subagent の **Bash の `Ask`** を `Deny` に硬化するとき、`ask_available()` が真
+  （main session が ask できる）なら `queued`（id `bgr-<12 hex>`・ts・session_id・agent_id・cwd・command・
+  Ask 理由）を追記し、id を**表示する** deny 理由の末尾に付ける（violation ledger へは付加前の理由を
+  記録するので `rule_id` は動かない）。`Deny`（system harm を含む）・main の `Ask`・headless の subagent
+  `Ask` は記録しない。書き込み失敗・panic でも判定は `Deny` のままで、失敗を deny 理由に明記する。
+  (2) `relay mark-executed`（PostToolUse / PostToolUseFailure、Bash）: main session（`payload_is_subagent`
+  が偽）の呼び出しで command と cwd がバイト一致する最古の未実行・未 dismiss entry に `executed`
+  （`tool_response` の整数 `exit_code`/`exitCode`/`returnCode`/`code`、無ければ `error` の `Exit code N`、
+  無ければ null）を追記。(3) `relay mark-relayed`（PostToolUse、SendMessage）: main session の
+  `tool_input` 全体に id を含む**実行済み**の entry に `relayed` を追記。(4) `relay stop`（Stop、
+  `run_guarded("blastguard-relay")` 下）: 未解決（executed∧relayed でも dismissed でもない）entry が
+  あれば `stop_hook_active` に関わらず block し、id・agent_id・cwd・command と手順を列挙。queue 読み取り
+  失敗・パース不能行・未知 id の event・パース不能な Stop payload は block（path を明示）。queue 不在は
+  allow。dismiss 済みは `systemMessage`（pending があれば block 理由）に毎回列挙。(5) `relay dismiss
+  <id> --reason <text>`: 空白のみ/欠落の理由・未知 id は exit 2、queue 読み書き失敗は exit 3。
+  コマンドを実行する経路は持たず、cwd は不透明な文字列として比較するだけで解決・stat しない。
 - **`hookio`** — PreToolUse `deny` の単一行 JSON 生成（`deny_json`）。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。

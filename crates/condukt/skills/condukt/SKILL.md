@@ -531,15 +531,10 @@ if command -v tracekit >/dev/null 2>&1; then
 fi
 ```
 
-### Phase 4.5 — ベースライン取得
-実装開始前にテストスイートの現状を記録する:
-```
-condukt state test --run $RID > /tmp/condukt-baseline.txt 2>&1
-BASELINE_EXIT=$?
-```
-- exit 0（全通過）: 以降 worker / verifier は「テストが新たに壊れた」ことを fail の根拠にできる。
-- exit 非 0（既存失敗あり）: `/tmp/condukt-baseline.txt` の失敗テスト一覧を `baseline_failures` として workers に渡す。verifier はこのリストに含まれる失敗を「実装前から壊れていた」として除外して合否を判定する。
-- テストコマンドが未設定でエラーになる場合は無視して Phase 5 へ進む。
+### Phase 4.5 — ベースライン取得（廃止: フルスイートはバイナリが拒否する）
+フルスイートのベースラインは取らない。`condukt state test` は、解決したテストコマンドがフルスイート
+（target selector の無い `cargo test` 等）なら実行せずに非 0 で拒否する（`crates/condukt/src/testscope.rs`）。
+worker / verifier の Bash も PreToolUse の `condukt testscope` が同じ規則で deny し、同一ツリーでの同じテストの再実行も deny する。
 
 **初期 checkpoint (auto-rollback の復元フロア)**: ベースライン取得の直後、実装で run-state が動く前に
 run の初期 checkpoint を1本書く。これが無いと後段の auto-rollback (Phase 6) は `latest_checkpoint=None`

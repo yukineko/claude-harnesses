@@ -74510,3 +74510,604 @@ error: test failed, to rerun pass `-p blastguard --test backlog_2287ebae`"""
 [task.closure]
 reason = "discard"
 discard_reason = "user ruling 2026-11-13: 「保留はありえない実証されないならclose,実証されたらopen」. repro scripts/tests/blastguard-2287ebae-v9fs-target.sh exits 2 on this machine (Darwin 25.6.0): 'no v9fs dir at /mnt/c/tmp' — not demonstrated, so closed"
+
+[[task]]
+id = "248828fe"
+title = "backlog no-deferral RED: a_defer_is_refused_and_writes_nothing (user ruling 2026-11-13)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "RED e6c2a72b on red/backlog-no-deferral. Ruling: 保留はありえない実証されないならclose,実証されたらopen / 実証されたら起票、そうでないなら破棄"
+created_at = 1794569601
+updated_at = 1794570361
+weight = 0.0
+issue_number = 1710
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1710"
+issue_closed_at = 1794570364
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close a_defer_is_refused_and_writes_nothing -- --ignored --exact"
+rev = "e6c2a72b269f0fa1e14f9af8366ab59dc0ef50c6"
+observed_at = 1794569601
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.44s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-a792bd36b1aa8618)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_no_deferral_auto_close`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close a_defer_is_refused_and_writes_nothing -- --exact"
+exit = 0
+passed = 1
+rev = "64a2ae4c35d45408a3e85cb5db14d084ea7d1884"
+observed_at = 1794570355
+output_digest = "sha256:adb4ce121a5f2e90dd6854d9cc0d1304eb6f919ba8cdb1e6a692c424b1d3e0ba"
+excerpt = """
+
+running 1 test
+test a_defer_is_refused_and_writes_nothing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.83s
+
+   Compiling backlog v0.3.114 (/Users/yuki/src/.harness-worktrees/bl-nodefer-red/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.97s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-2d994707162181b5)
+"""
+
+[task.closure.red]
+rev = "e6c2a72b269f0fa1e14f9af8366ab59dc0ef50c6"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "5bf50bb7"
+title = "backlog no-deferral RED: b_claim_auto_cancels_green_top_candidate_and_closes_issue (user ruling 2026-11-13)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "RED e6c2a72b on red/backlog-no-deferral. Ruling: 保留はありえない実証されないならclose,実証されたらopen / 実証されたら起票、そうでないなら破棄"
+created_at = 1794569611
+updated_at = 1794570370
+weight = 0.0
+issue_number = 1711
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1711"
+issue_closed_at = 1794570372
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close b_claim_auto_cancels_green_top_candidate_and_closes_issue -- --ignored --exact"
+rev = "21f3f1a538199b322cc8a5cdc504a4937a22ff85"
+observed_at = 1794569611
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.92s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-a792bd36b1aa8618)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_no_deferral_auto_close`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close b_claim_auto_cancels_green_top_candidate_and_closes_issue -- --exact"
+exit = 0
+passed = 1
+rev = "c4b9c6e4e11e4b7359abe95098d0acbfe5e41b6c"
+observed_at = 1794570367
+output_digest = "sha256:456ec0dca0bb334d9bc94a385e195729d4bed240668bfa8043dacfb2bdf7bf50"
+excerpt = """
+
+running 1 test
+test b_claim_auto_cancels_green_top_candidate_and_closes_issue ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 2.39s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-2d994707162181b5)
+"""
+
+[task.closure.red]
+rev = "e6c2a72b269f0fa1e14f9af8366ab59dc0ef50c6"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "ea23839f"
+title = "backlog no-deferral RED: c_claim_auto_cancels_env_unavailable_exit_2_candidate (user ruling 2026-11-13)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "RED e6c2a72b on red/backlog-no-deferral. Ruling: 保留はありえない実証されないならclose,実証されたらopen / 実証されたら起票、そうでないなら破棄"
+created_at = 1794569622
+updated_at = 1794570377
+weight = 0.0
+issue_number = 1712
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1712"
+issue_closed_at = 1794570380
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close c_claim_auto_cancels_env_unavailable_exit_2_candidate -- --ignored --exact"
+rev = "4c30baa6030439f2c2ffb70fca22744cd30f3d8d"
+observed_at = 1794569622
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.31s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-a792bd36b1aa8618)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_no_deferral_auto_close`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close c_claim_auto_cancels_env_unavailable_exit_2_candidate -- --exact"
+exit = 0
+passed = 1
+rev = "3058c5e3ae6b89f6a37d8fcdd6f17ab2fb34d839"
+observed_at = 1794570376
+output_digest = "sha256:4b6c5fae9441c00fee5b194712b6803fc5ae98473074772728471ff6e7717538"
+excerpt = """
+
+running 1 test
+test c_claim_auto_cancels_env_unavailable_exit_2_candidate ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.52s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-2d994707162181b5)
+"""
+
+[task.closure.red]
+rev = "e6c2a72b269f0fa1e14f9af8366ab59dc0ef50c6"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "c84cca55"
+title = "backlog no-deferral RED: f_add_with_exit_2_repro_writes_nothing (user ruling 2026-11-13)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "RED e6c2a72b on red/backlog-no-deferral. Ruling: 保留はありえない実証されないならclose,実証されたらopen / 実証されたら起票、そうでないなら破棄"
+created_at = 1794569628
+updated_at = 1794570385
+weight = 0.0
+issue_number = 1713
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1713"
+issue_closed_at = 1794570387
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close f_add_with_exit_2_repro_writes_nothing -- --ignored --exact"
+rev = "72b3ffa8a79dde21cf30da19940d2200f15ec230"
+observed_at = 1794569628
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.66s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-a792bd36b1aa8618)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_no_deferral_auto_close`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close f_add_with_exit_2_repro_writes_nothing -- --exact"
+exit = 0
+passed = 1
+rev = "3ea6bbc65eb848dc8ccd779e2763c1d63d968fd0"
+observed_at = 1794570384
+output_digest = "sha256:5ce65acf8fa3249e96387388b22e827b68f64f0d8479d2a18ea572e9a9c2ad72"
+excerpt = """
+
+running 1 test
+test f_add_with_exit_2_repro_writes_nothing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.66s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-2d994707162181b5)
+"""
+
+[task.closure.red]
+rev = "e6c2a72b269f0fa1e14f9af8366ab59dc0ef50c6"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "6076f9be"
+title = "backlog no-deferral RED: g_cargo_zero_tests_at_head_is_auto_cancelled (user ruling 2026-11-13)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "RED e6c2a72b on red/backlog-no-deferral. Ruling: 保留はありえない実証されないならclose,実証されたらopen / 実証されたら起票、そうでないなら破棄"
+created_at = 1794569632
+updated_at = 1794570392
+weight = 0.0
+issue_number = 1714
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1714"
+issue_closed_at = 1794570394
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close g_cargo_zero_tests_at_head_is_auto_cancelled -- --ignored --exact"
+rev = "36661d6282b8646a739b1d07f27ed16d0c22d3b9"
+observed_at = 1794569632
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.58s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-a792bd36b1aa8618)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_no_deferral_auto_close`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close g_cargo_zero_tests_at_head_is_auto_cancelled -- --exact"
+exit = 0
+passed = 1
+rev = "40989fd6f2c449b3ce9dbaa8e65abd3419f4752d"
+observed_at = 1794570390
+output_digest = "sha256:371372bd768fb054fddb0030b1bf7c9f0c478eac5f36c80965ace895723f12ff"
+excerpt = """
+
+running 1 test
+test g_cargo_zero_tests_at_head_is_auto_cancelled ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.12s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-2d994707162181b5)
+"""
+
+[task.closure.red]
+rev = "e6c2a72b269f0fa1e14f9af8366ab59dc0ef50c6"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "c72d031e"
+title = "backlog no-deferral RED: h_recheck_cancels_green_and_keeps_red (user ruling 2026-11-13)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "RED e6c2a72b on red/backlog-no-deferral. Ruling: 保留はありえない実証されないならclose,実証されたらopen / 実証されたら起票、そうでないなら破棄"
+created_at = 1794569638
+updated_at = 1794570399
+weight = 0.0
+issue_number = 1715
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1715"
+issue_closed_at = 1794570401
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close h_recheck_cancels_green_and_keeps_red -- --ignored --exact"
+rev = "a22f7dfa38bf3e9cac0ce01fcc3be349699c8d55"
+observed_at = 1794569638
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-a792bd36b1aa8618)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_no_deferral_auto_close`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close h_recheck_cancels_green_and_keeps_red -- --exact"
+exit = 0
+passed = 1
+rev = "91f841f3676e2392c31c33b08ca429ac5ffcba06"
+observed_at = 1794570397
+output_digest = "sha256:c4158b4ccccfa06240981a4e446c587c5831e9e75d3336be153ab35209975242"
+excerpt = """
+
+running 1 test
+test h_recheck_cancels_green_and_keeps_red ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.36s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-2d994707162181b5)
+"""
+
+[task.closure.red]
+rev = "e6c2a72b269f0fa1e14f9af8366ab59dc0ef50c6"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "e7446163"
+title = "backlog no-deferral RED: h_recheck_resolves_legacy_ruled_deferred_rows (user ruling 2026-11-13)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "RED e6c2a72b on red/backlog-no-deferral. Ruling: 保留はありえない実証されないならclose,実証されたらopen / 実証されたら起票、そうでないなら破棄"
+created_at = 1794569644
+updated_at = 1794570407
+weight = 0.0
+issue_number = 1716
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1716"
+issue_closed_at = 1794570410
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close h_recheck_resolves_legacy_ruled_deferred_rows -- --ignored --exact"
+rev = "2ea835a9d05e10ba4c400641b1e8d79b8c901226"
+observed_at = 1794569644
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.97s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-a792bd36b1aa8618)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_no_deferral_auto_close`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close h_recheck_resolves_legacy_ruled_deferred_rows -- --exact"
+exit = 0
+passed = 1
+rev = "96725ae1282be3159c07914a7fcebfa472e1d0e7"
+observed_at = 1794570405
+output_digest = "sha256:8e5b855632779aec51dd6adef57714be853a0e8226dfb7638089198f0645dd1a"
+excerpt = """
+
+running 1 test
+test h_recheck_resolves_legacy_ruled_deferred_rows ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.35s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-2d994707162181b5)
+"""
+
+[task.closure.red]
+rev = "e6c2a72b269f0fa1e14f9af8366ab59dc0ef50c6"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "8c8563b5"
+title = "backlog no-deferral RED: h_recheck_id_touches_only_that_row (user ruling 2026-11-13)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "RED e6c2a72b on red/backlog-no-deferral. Ruling: 保留はありえない実証されないならclose,実証されたらopen / 実証されたら起票、そうでないなら破棄"
+created_at = 1794569650
+updated_at = 1794570414
+weight = 0.0
+issue_number = 1717
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1717"
+issue_closed_at = 1794570417
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close h_recheck_id_touches_only_that_row -- --ignored --exact"
+rev = "e2a6a121ba4de62a1708b09bbe5a383ce031b79d"
+observed_at = 1794569650
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.10s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-a792bd36b1aa8618)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_no_deferral_auto_close`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close h_recheck_id_touches_only_that_row -- --exact"
+exit = 0
+passed = 1
+rev = "55561787528acac9c6ca1d0f509335a4d38d27af"
+observed_at = 1794570413
+output_digest = "sha256:45d7617f4ea381ecec6ea05603577afb329d55093ac94604cdad142c56989280"
+excerpt = """
+
+running 1 test
+test h_recheck_id_touches_only_that_row ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.15s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-2d994707162181b5)
+"""
+
+[task.closure.red]
+rev = "e6c2a72b269f0fa1e14f9af8366ab59dc0ef50c6"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "d9387d49"
+title = "backlog no-deferral RED: h_recheck_leaves_undeterminable_row_untouched_and_fails (user ruling 2026-11-13)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "RED e6c2a72b on red/backlog-no-deferral. Ruling: 保留はありえない実証されないならclose,実証されたらopen / 実証されたら起票、そうでないなら破棄"
+created_at = 1794569656
+updated_at = 1794570422
+weight = 0.0
+issue_number = 1718
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1718"
+issue_closed_at = 1794570424
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close h_recheck_leaves_undeterminable_row_untouched_and_fails -- --ignored --exact"
+rev = "24ed46b943401dd8f91842873af9b710b2c29dd6"
+observed_at = 1794569656
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.17s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-a792bd36b1aa8618)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_no_deferral_auto_close`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close h_recheck_leaves_undeterminable_row_untouched_and_fails -- --exact"
+exit = 0
+passed = 1
+rev = "7ef7c59f2e0a62db5f3e25978b3e5ff05f09f488"
+observed_at = 1794570420
+output_digest = "sha256:c7c7d45bf482e44c6bdd1264fc93bada0d703fd6885024c5de0d15622c6b6d98"
+excerpt = """
+
+running 1 test
+test h_recheck_leaves_undeterminable_row_untouched_and_fails ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.30s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-2d994707162181b5)
+"""
+
+[task.closure.red]
+rev = "e6c2a72b269f0fa1e14f9af8366ab59dc0ef50c6"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "f055b526"
+title = "backlog no-deferral RED: i_claim_from_primary_tree_with_green_repro_writes_nothing (user ruling 2026-11-13)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "RED e6c2a72b on red/backlog-no-deferral. Ruling: 保留はありえない実証されないならclose,実証されたらopen / 実証されたら起票、そうでないなら破棄"
+created_at = 1794569662
+updated_at = 1794570431
+weight = 0.0
+issue_number = 1719
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1719"
+issue_closed_at = 1794570433
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close i_claim_from_primary_tree_with_green_repro_writes_nothing -- --ignored --exact"
+rev = "7aa456f08f7382a4c2953c2e401eed9356b3b317"
+observed_at = 1794569662
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.91s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-a792bd36b1aa8618)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_no_deferral_auto_close`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close i_claim_from_primary_tree_with_green_repro_writes_nothing -- --exact"
+exit = 0
+passed = 1
+rev = "011ef2bd23ed25a1f1bf09fc9b2ffd4c63eaa3d6"
+observed_at = 1794570429
+output_digest = "sha256:117e595f83f9acc9aeaf9c3bb0a64a9e7be8318ed39533a56c4d5cac6316cd06"
+excerpt = """
+
+running 1 test
+test i_claim_from_primary_tree_with_green_repro_writes_nothing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.95s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-2d994707162181b5)
+"""
+
+[task.closure.red]
+rev = "e6c2a72b269f0fa1e14f9af8366ab59dc0ef50c6"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

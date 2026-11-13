@@ -608,3 +608,18 @@ reason = "'振る舞い' bullet 'comment collapse の回帰ガード（2026-11-1
 path = "crates/blastguard/tests/backlog_20261114_printf_operand_judged_as_command_fp.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14、flow-8cca7ef5。修正は未実装）': printf whose double-quoted operand holds escaped $PY text plus a command-looking phrase is Ask as if it ran it; RED test plus a twin control."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_python_cr_ends_comment.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-14、flow-8cca7ef5、CR で終わる python コメント。修正は未実装）': a python -c program whose comment ends at a bare CR hides an os.chmod on /etc/hosts and is Allow (also via env -S); RED test plus an LF control."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_python_write_method_reference.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（2026-11-14、flow-8cca7ef5、pathlib のメソッド参照。修正は未実装）': unbound Path.replace, a bound write_text stored in a name, and write_text.__call__ on /etc/hosts are Allow; RED test plus a direct-call control."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_perl_single_quoted_dollar_fp.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14、flow-8cca7ef5、単一引用符内の perl 特殊変数。修正は未実装）': a single-quoted perl -ne program using $. is refused as a shell expansion; RED test plus a double-quoted $HOME control."

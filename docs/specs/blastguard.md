@@ -844,6 +844,12 @@ forge・condukt のスケジューラが再利用）。
   `bash < <(cat f)` は Allow ではない。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_procsub_operand_flags_and_list_twins.rs`
   （`#[ignore]` の RED 2 本 + control。独立 author が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の false positive の RED（2026-11-14、t2 実装者の観測。修正は未実装）: procsub list の出力に引用符** —
+  `bash <(echo "it's"; echo hi)` / `bash < <(echo "it's"; echo hi)` は 2 つの literal echo だけで出力が静的に
+  証明でき無害だが、結合出力に `'` を含むことだけを理由に Ask（subagent では Deny）。base（0e726e66）では Allow だった。
+  control: 同じ引用符入り list の 2 つ目の echo が system file の re-permission を出力する形は main / subagent とも Deny のまま。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_procsub_list_quote_output_fp.rs`
+  （`#[ignore]` の RED 1 本 + control。独立 author が書いた。証明しない範囲はファイル冒頭の doc comment）。
 
 ### module 責務
 

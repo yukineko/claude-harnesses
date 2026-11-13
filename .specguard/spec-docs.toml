@@ -613,3 +613,8 @@ reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-1
 path = "crates/blastguard/tests/backlog_20261114_procsub_operand_flags_and_list_twins.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '未修正の RED（2026-11-14、flow-8cca7ef5。修正は未実装）: procsub operand と list の twin': a process substitution fed to a shell as a non-first operand (script args, value-taking flags, fd dup) is Allow although it runs a system-file re-permission, and a statically harmless echo list in a procsub fed to a shell is Ask/Deny; RED tests plus controls."
+
+[[spec]]
+path = "crates/blastguard/tests/backlog_20261114_procsub_list_quote_output_fp.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未修正の false positive の RED（2026-11-14、t2 実装者の観測。修正は未実装）: procsub list の出力に引用符': a statically harmless echo list in a process substitution fed to a shell is Ask/Deny only because its output holds a quote; RED test plus a system-harm twin control that stays Deny."

@@ -125,10 +125,7 @@ const RED1_SHAPES: &[(&str, &str)] = &[
         "bash-rcfile",
         "bash --rcfile f <(echo 'chmod 777 /etc/hosts')",
     ),
-    (
-        "bash-fd-dup",
-        "bash <&3 3< <(echo 'chmod 777 /etc/hosts')",
-    ),
+    ("bash-fd-dup", "bash <&3 3< <(echo 'chmod 777 /etc/hosts')"),
 ];
 
 const RED2_SHAPES: &[(&str, &str)] = &[

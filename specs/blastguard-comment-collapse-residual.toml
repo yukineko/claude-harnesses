@@ -1,0 +1,75 @@
+[spec]
+id = "blastguard-comment-collapse-residual"
+title = "blastguard: comment collapse on residual join paths"
+status = "ratified"
+provenance_commit = "8dedad41e5ac8a0325f2a4b3501f55f929aefd21"
+date = "2026-11-13"
+canon = []
+
+[spec.ratification]
+canon_commit = "8dedad41e5ac8a0325f2a4b3501f55f929aefd21"
+date = "2026-11-13"
+reason = "User ruling 2026-11-13: ratify as drafted (R1 covers all three residual paths incl. relink; R2 allows split-or-refuse for env -S, never Allow)"
+fingerprint = "de529c7dcd1a3d57"
+
+[[requirement]]
+id = "R1"
+statement = "未知 wrapper の後ろ（`myrunner python3 -c ...`）、`env -S '...'`、relink した operand と同じ segment にある `python3 -c` の 3 経路で、`#` コメント行の次の行にある system-harm 呼び出し（os.chmod('/etc/hosts',0)）を含むプログラムを、main セッションでも subagent でも allow にしない。"
+acceptance = [
+    'crates/blastguard/tests/backlog_20261113_payload_collapse_residual_paths.rs の comment_before_system_harm_call_is_not_allowed_on_residual_collapse_paths から #[ignore] を外し、`cargo test -p blastguard --test backlog_20261113_payload_collapse_residual_paths` が pass する（3 形 × {main, subagent} の 6 実行すべてで permissionDecision が "allow" ではない）',
+    "同じファイルの control_same_programs_without_comment_are_not_allowed が引き続き pass する",
+    "テストファイル本体（SHAPES の 3 形と assert 条件）を変えない。変えてよいのは #[ignore] 属性とそれに付いた test-weakening-justified コメントの削除だけ",
+]
+canon = [
+    "crates/blastguard/tests/backlog_20261113_payload_collapse_residual_paths.rs:84-126",
+    "CLAUDE.md §3（判定不能は必ず制限側に解決する）",
+    """要望 Acceptance: "The RED case ... passes with #[ignore] removed, the file's controls pass"""",
+]
+falsifiable = true
+repro_test = "cargo test -p blastguard --test backlog_20261113_payload_collapse_residual_paths comment_before_system_harm_call_is_not_allowed_on_residual_collapse_paths -- --include-ignored"
+
+[[requirement]]
+id = "R2"
+statement = "`env -S` の operand に interpreter payload が含まれるときは、operand を env と同じ規則で分割して判定するか、判定を拒否するかのどちらかにする。どちらの場合も allow にはせず（判定不能なら Ask、subagent では Deny 相当）、無害な `env -S` は今の判定のまま残す。"
+acceptance = [
+    "R1 の env-S 形（main・subagent の両方）が allow にならない",
+    """既存の crates/blastguard/tests/daf7611b_executor_behaviour.rs の assert_allow("env -S 'ls -la'") と、同じファイルにある env -S / --split-string 系の assert_deny が引き続き pass する""",
+    'crates/blastguard/src/detect/executors.rs の env_split_string_payloads の doc comment（"re-joining the whitespace-split tokens ... was not examined"）と、crates/blastguard/README.ja.md の「`env -S` の引数はこの変更の対象外で、従来どおり空白 1 個で繋ぎ直す（未検証）。」を、変更後の実挙動に合わせて同じコミットで書き換える（変更後のコードと食い違う記述が grep で残っていない）',
+]
+canon = [
+    "crates/blastguard/src/detect/executors.rs:1077-1089",
+    "crates/blastguard/README.ja.md:624",
+    "crates/blastguard/tests/daf7611b_executor_behaviour.rs:70,75,172",
+    "CLAUDE.md §4（実装を変えたら同じコミットで記述も直す）",
+    "CLAUDE.md §3",
+]
+falsifiable = true
+repro_test = "cargo test -p blastguard --test env_split_string_comment_collapse_20261113 -- --include-ignored"
+
+[[requirement]]
+id = "R3"
+statement = """HEAD で allow にならないことが観測されているコメント付きの形（コマンド語が解決できない `$PY -c` / `"$PY" -c`、`find -exec sh -c`、ANSI-C `$'...'`）が修正後も allow にならないことを、実装者とは別の Agent が書いた回帰テストで固定する。"""
+acceptance = [
+    """上の形それぞれについて、`#` コメント行の次の行で os.chmod('/etc/hosts',0) を呼ぶコマンドを main と subagent の両方で実行し、permissionDecision が "allow" ではないことを assert するテストが crates/blastguard/tests/ に ignore なしで存在し、pass する""",
+    "そのテストは実装者と別の Agent（condukt-verifier または独立 subagent）が書く。書いた主体が commit message かテストの doc comment に記録されている",
+    "そのテストが allow を検出できることを、少なくとも 1 形について確認した証跡（例: assert を反転した RED の観測、または修正前の挙動を再現した変異）が残っている",
+]
+canon = [
+    "crates/blastguard/tests/backlog_20261113_payload_collapse_residual_paths.rs:10-11（Probed and NOT Allow, so not listed）",
+    "CLAUDE.md §2 (a)(b)",
+    '要望: "Not Allow at HEAD (must stay so)"',
+]
+falsifiable = true
+
+[[requirement]]
+id = "R4"
+statement = "blastguard のテスト全体で、8dedad41 時点より失敗が増えない。"
+acceptance = [
+    "`cargo test -p blastguard` の失敗テスト名の集合が、8dedad41 での同じコマンドの失敗テスト名の集合の部分集合になっている（両方の出力を証跡として残す）",
+    "このために既存テストへ新しく #[ignore] を付けたり、assert を緩めたりしていない（git diff の crates/blastguard/tests/ で R1 の #[ignore] 削除と R3 の追加以外にテスト変更が無い）",
+]
+canon = [
+    '要望 Acceptance: "the full `cargo test -p blastguard` has no new failures versus 8dedad41"',
+    "CLAUDE.md §4（通すためだけに緩める / skip するのは禁止）",
+]
+falsifiable = true

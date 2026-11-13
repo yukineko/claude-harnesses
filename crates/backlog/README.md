@@ -4,7 +4,7 @@ To drain the whole queue automatically, use `/flow` instead.
 
 ## Use the subcommands
 
-- `add` — Append a task (`--repro-test`); see **File only with a reproducing test**
+- `add` — Append a task (`--repro-test`); see **File only with a reproducing test**. On a GitHub `origin` the row is merged into main and pushed before the issue is created; see **`add` lands the row on main before the issue**
 - `list` — List the store's tasks, filterable by `--tag` / `--status` (`pending` / `done` / `failed` / `cancelled` / `claimed` / `ruled-deferred` (legacy rows written by the abolished `defer`; never written now); `open` is not a status; `claimed` is derived) and `--json`. For a repo store `--project` is an assertion, not a filter — see **Scope**
 - `next` — Print the next highest-priority pending task that carries a reproduced repro, as JSON (`--claim` reserves it — see below)
   - `--claim` re-runs the candidate's stored repro at HEAD before handing it out (see **No deferral** below): reproduced → handed out; not reproduced / not demonstrated → **auto-cancelled**, then the next candidate; undeterminable for an infrastructure reason → the claim is refused (non-zero, row untouched)
@@ -40,6 +40,31 @@ If git cannot say which kind of checkout this is, `add` is refused too.
 `list` works in the primary tree.
 `next --claim` is allowed there too and leaves `git status` clean — except that a candidate whose repro no longer reproduces must be auto-cancelled, which writes the store, so in the primary tree the claim is REFUSED (non-zero, nothing written) and names the candidate; run `next --claim` or `recheck --id` from a linked worktree.
 The SessionStart hook skips its requeue in the primary tree and says so.
+
+## `add` lands the row on main before the issue
+
+User ruling: 「backlog addの時点で台帳も更新される。mainにいく、issueができる」.
+When `remote.origin.url` is a GitHub remote and the store is in a linked worktree, `add` runs in this order:
+
+1. The row is written to the worktree's store (no issue fields yet).
+2. The row is put on the branch checked out in the primary tree (normally `main`).
+   `add` builds a commit whose only change is that store file (the branch's store plus this row).
+   It **merges** that commit from the primary tree (`git merge --no-ff`) and checks the row is on the branch.
+   Then it **pushes** the branch to `origin` (`git push origin <branch>:<branch>`; repo hooks run).
+3. Only then does `add` run `gh issue create`.
+4. If the issue is created, its number and URL are recorded on the row (`updated_at` unchanged).
+   The row is then merged and pushed again, so main's row carries the issue number.
+
+If step 2 fails, `add` creates **no issue** and exits non-zero with the reason.
+Failures include: a merge already in progress in the primary tree (left untouched), a detached or unborn primary branch, a failed or conflicting merge, or a failed push.
+The row stays only in the worktree store.
+Only a failed merge of `add`'s own commit is aborted.
+If step 4 fails after the issue exists, `add` exits non-zero and names the issue number.
+
+If `gh` is absent or fails, the row is still on main, `add` prints `GitHub issue NOT created`, and exits 0.
+`backlog sync --apply` mirrors it later.
+A non-GitHub remote never merges, pushes or creates an issue.
+A store in no git repository (pinned outside any checkout) is not landed; its issue is created as before.
 
 ## Run standalone from cargo
 

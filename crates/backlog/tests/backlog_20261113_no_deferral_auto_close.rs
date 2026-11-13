@@ -84,7 +84,11 @@ fn gh_stub(f: &Fixture) -> PathBuf {
         log = log.display()
     );
     f.write_exec_shim("gh", &body);
-    f.git(&["remote", "add", "origin", "https://github.com/o/r.git"]);
+    // github.com origin whose pushes land in a local bare repo: `add` now
+    // merges the row onto the primary's branch and pushes it before filing
+    // the issue (f6795f52), so the primary needs a born branch and a
+    // reachable push target.
+    common::fixture_github_origin(&f.repo);
     log
 }
 

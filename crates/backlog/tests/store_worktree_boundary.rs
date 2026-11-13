@@ -82,6 +82,7 @@ fn fixture(seed: Option<&dyn Fn(&Path) -> String>) -> Fixture {
         &primary,
         &["remote", "add", "origin", "https://github.com/o/r.git"],
     );
+    common::local_push_origin(&primary);
     std::fs::write(primary.join("README"), "x\n").unwrap();
     if let Some(f) = seed {
         // A REAL committed RED repro for the seeded rows' stored cmd (exit 1 =
@@ -226,10 +227,13 @@ fn add_from_linked_worktree_succeeds_and_lands_in_that_worktree() {
         body.contains("from-wt"),
         "task must land in the worktree store: {body}"
     );
-    assert!(
-        !store(&fx.primary).exists(),
-        "the primary tree must stay untouched by a worktree write"
-    );
+    // Changed with backlog f6795f52 (user ruling 「backlog addの時点で台帳も更新
+    // される。mainにいく、issueができる」): on a GitHub origin the row now
+    // reaches main by a MERGE, so the primary tree (on main) does hold the
+    // store afterwards. What must still hold (§8): nothing was written there
+    // except through that merge. Was: `assert!(!store(&fx.primary).exists(),
+    // "the primary tree must stay untouched by a worktree write")`.
+    common::assert_primary_only_merged(&fx.primary);
 }
 
 #[test]

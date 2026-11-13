@@ -165,3 +165,116 @@ fn c3_control_unresolved_rm_outside_function_stays_not_allowed() {
     let f = Fx::new("c3");
     f.assert_not_allowed("rm -f $L", "an unresolvable rm operand must not be Allow");
 }
+
+// ---------------------------------------------------------------------------
+// Added 2026-11-13 (backlog bdce0261) by a non-implementer spec-prep agent,
+// to match the user ruling "A+B" recorded in docs/specs/blastguard.md
+// ("関数本体の書き込み・rm は呼び出し時点の変数状態で判定する"):
+// - call-time value resolves to a system path -> Deny (system-harm)
+// - call-time value cannot be resolved -> Ask in the main session, Deny in
+//   a subagent
+// r1..r4 above accept Ask OR Deny; d1..d4 pin the ruling's exact verdicts.
+// c4 is the control the ruling asks for (assignment INSIDE the body).
+//
+// DOES NOT PROVE: which call wins when f is called several times with
+// different values; positional parameters in the body; any shape the ruling
+// lists as out of scope.
+// ---------------------------------------------------------------------------
+
+impl Fx {
+    /// Same hook invocation as `bash`, optionally as a subagent; returns
+    /// the raw trimmed stdout so callers can inspect the reason text.
+    fn hook_raw(&self, command: &str, subagent: bool) -> String {
+        let mut payload = serde_json::json!({
+            "session_id": "function-body-late-binding-fail-open-20261113",
+            "hook_event_name": "PreToolUse",
+            "cwd": self.proj.display().to_string(),
+            "tool_name": "Bash",
+            "tool_input": { "command": command },
+        });
+        if subagent {
+            payload["agent_id"] = serde_json::json!("test-subagent");
+        }
+        let payload = payload.to_string();
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_blastguard"));
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env("CLAUDE_PROJECT_DIR", &self.proj)
+            .env("BLASTGUARD_APPROVALS_DIR", self.base.join("store"))
+            .env("HOME", &self.home)
+            .env("CLAUDE_CODE_ENTRYPOINT", "cli")
+            .env("CLAUDECODE", "1")
+            .env_remove("BLASTGUARD_ASK")
+            .env_remove("TMPDIR")
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .current_dir(&self.base);
+        let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "hook must exit 0; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        println!("[{command}] subagent={subagent} => {} {s:?}", verdict(&s));
+        s
+    }
+
+    fn assert_system_harm_deny(&self, cmd: &str, why: &str) {
+        let s = self.hook_raw(cmd, false);
+        assert_eq!(verdict(&s), "deny", "{why}: must be Deny: {cmd} -> {s}");
+        assert!(
+            s.contains("[system harm"),
+            "{why}: Deny must carry the system-harm marker: {cmd} -> {s}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "RED 2026-11-13: function-body redirect with call-time $L=/etc/hosts must be system-harm Deny (ruling A+B)"]
+fn d1_redirect_in_body_call_time_system_path_is_system_harm_deny() {
+    let f = Fx::new("d1");
+    let cmd = format!("L={}; f() {{ echo x > $L; }}; L=/etc/hosts; f", f.safe());
+    f.assert_system_harm_deny(&cmd, "bash writes /etc/hosts when f runs");
+}
+
+#[test]
+#[ignore = "RED 2026-11-13: multiline function-body redirect with call-time $L=/etc/hosts must be system-harm Deny (ruling A+B)"]
+fn d2_multiline_redirect_in_body_call_time_system_path_is_system_harm_deny() {
+    let f = Fx::new("d2");
+    let cmd = format!("L={}\nf() {{\necho x > $L\n}}\nL=/etc/hosts\nf", f.safe());
+    f.assert_system_harm_deny(&cmd, "bash writes /etc/hosts when f runs");
+}
+
+#[test]
+#[ignore = "RED 2026-11-13: function-body rm with call-time $L=/etc/hosts must be system-harm Deny (ruling A+B)"]
+fn d3_rm_in_body_call_time_system_path_is_system_harm_deny() {
+    let f = Fx::new("d3");
+    f.assert_system_harm_deny(
+        "f() { rm -f $L; }; L=/etc/hosts; f",
+        "bash deletes /etc/hosts when f runs",
+    );
+}
+
+#[test]
+#[ignore = "RED 2026-11-13: function-body rm with unresolvable call-time $L must be Ask in main, Deny in a subagent (ruling A+B)"]
+fn d4_rm_unresolved_operand_in_called_body_is_ask_main_deny_subagent() {
+    let f = Fx::new("d4");
+    let cmd = "f() { rm -f $L; }; f";
+    let main = f.hook_raw(cmd, false);
+    assert_eq!(
+        verdict(&main),
+        "ask",
+        "main session must Ask: {cmd} -> {main}"
+    );
+    let sub = f.hook_raw(cmd, true);
+    assert_eq!(verdict(&sub), "deny", "subagent must Deny: {cmd} -> {sub}");
+}
+
+#[test]
+fn c4_control_assignment_inside_called_body_then_redirect_is_not_allowed() {
+    let f = Fx::new("c4");
+    let cmd = format!("L={}; f() {{ L=/etc/hosts; }}; f; echo x > $L", f.safe());
+    f.assert_not_allowed(&cmd, "f rebinds L to /etc/hosts before the write");
+}

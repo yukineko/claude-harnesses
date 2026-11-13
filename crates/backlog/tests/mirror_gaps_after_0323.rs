@@ -158,6 +158,7 @@ fn setup(tag: &str) -> Env {
     // A LINKED worktree: store writes are refused in a PRIMARY working tree (1e6f00ae).
     common::linked_checkout(&e.repo);
     g(&["remote", "add", "origin", "https://github.com/o/r.git"]);
+    common::local_push_origin(&common::linked_primary(&e.repo));
 
     std::fs::create_dir_all(e.repo.join(".backlog")).unwrap();
     e

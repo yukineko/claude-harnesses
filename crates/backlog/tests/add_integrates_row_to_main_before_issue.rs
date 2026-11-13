@@ -175,7 +175,6 @@ fn cleanup(e: &Env) {
 }
 
 #[test]
-#[ignore = "RED: backlog add creates the issue before the row is on main (fix pending)"]
 fn issue_is_created_only_after_the_row_is_on_main_and_pushed() {
     let e = setup("order", true);
     let (code, stdout, stderr) = run_add(&e);
@@ -227,7 +226,6 @@ fn issue_is_created_only_after_the_row_is_on_main_and_pushed() {
 }
 
 #[test]
-#[ignore = "RED: backlog add creates the issue before the row is on main (fix pending)"]
 fn no_issue_when_integration_into_main_is_refused() {
     let e = setup("refused", true);
     // A foreign in-progress, conflicting merge in the primary tree.
@@ -270,7 +268,6 @@ fn no_issue_when_integration_into_main_is_refused() {
 }
 
 #[test]
-#[ignore = "RED: backlog add creates the issue before the row is on main (fix pending)"]
 fn no_issue_when_push_fails() {
     let e = setup("pushfail", false);
     let (code, stdout, stderr) = run_add(&e);

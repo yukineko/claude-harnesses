@@ -4,7 +4,7 @@
 
 ## サブコマンドを使うこと
 
-- `add` — `--repro-test` のコミット済みテストが HEAD で落ちた時だけタスクを追加する
+- `add` — `--repro-test` のコミット済みテストが HEAD で落ちた時だけタスクを追加する。`origin` が GitHub なら、行を main へ merge して push してから issue を作る（下の「`add` は issue より先に行を main へ載せる」参照）
 - `list` — store のタスク一覧: `--tag` / `--status`（`pending` / `done` / `failed` / `cancelled` / `claimed` / `ruled-deferred`、`claimed` は導出値、`open` は status ではない）/ `--json`。repo store では `--project` は絞り込みではなく **assertion**（下の「スコープ」参照）
 - `next` — reproduced な repro を持つ pending タスクのうち最高優先度のものを JSON で出力する（`--claim` で予約）
 - `done <id>` — タスクを**証拠付きで**完了マークする: `--test CMD --red-rev REV`（`--reason fixed|already-fixed|obsolete`）・`--doc-only COMMIT`・`--duplicate-of ID`。この 3 形式のちょうど 1 つが必要。素の `done <id>` は拒否される
@@ -32,6 +32,31 @@ git が checkout の種別を答えられない場合も `add` を拒否する�
 `list` は primary でも動く。
 `next --claim` も primary で許可され、`git status` は clean のまま。
 SessionStart フックは primary では requeue をスキップし、その旨を表示する。
+
+### `add` は issue より先に行を main へ載せる
+
+ユーザー裁定:「backlog addの時点で台帳も更新される。mainにいく、issueができる」。
+`remote.origin.url` が GitHub で、store が linked worktree にあるとき、`add` は次の順で動く。
+
+1. 行を worktree の store に書く（issue 欄はまだ空）。
+2. primary 作業ツリーで checkout されている branch（通常 `main`）に行を載せる。
+   その branch の store にこの行を加えた store ファイルだけを変える commit を作る。
+   それを primary 作業ツリーから **merge** し（`git merge --no-ff`）、branch 上に行があることを確かめる。
+   続けて branch を `origin` へ **push** する（`git push origin <branch>:<branch>`。repo の hook が走る）。
+3. ここで初めて `gh issue create` を実行する。
+4. issue ができたら番号と URL を行に記録する（`updated_at` は変えない）。
+   その行をもう一度 merge・push し、main の行も issue 番号を持つようにする。
+
+手順 2 が失敗したら、`add` は issue を**作らず**、理由を表示して非 0 終了する。
+失敗には次が含まれる: primary 作業ツリーで merge が進行中（触らずに残す）、primary の branch が detached / unborn、merge の失敗・衝突、push の失敗。
+行は worktree の store にだけ残る。
+abort するのは `add` 自身の commit の merge が失敗したときだけ。
+issue ができた後に手順 4 が失敗したら、`add` は非 0 終了し、その issue 番号を名指す。
+
+`gh` が無い・失敗したときは、行は main に載ったまま `GitHub issue NOT created` を表示して 0 終了する。
+あとで `backlog sync --apply` が mirror する。
+GitHub 以外の remote では merge も push も issue 作成もしない。
+git リポジトリの外にある store（checkout の外に固定したもの）は main へ載せず、issue は従来どおり作る。
 
 プラグインの `hooks/hooks.json` が SessionStart フック（`backlog session-start`）を登録する。登録されたフックの timeout は 10 秒。`backlog install` は standalone（cargo）利用向けで、`SessionStart` グループを `~/.claude/settings.json` にマージする（冪等・所有権マーク付き）。`install` / `uninstall` は `--dry-run` で書き込まず結果だけ表示できる。
 

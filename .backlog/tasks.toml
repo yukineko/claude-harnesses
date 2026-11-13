@@ -954,3 +954,35 @@ exit 101: /yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 3.92s
      Running tests/backlog_20261113_payload_collapse_residual_paths.rs (target/debug/deps/backlog_20261113_payload_collapse_residual_paths-e7fe16b6ea062a14)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_payload_collapse_residual_paths`"""
+
+[[task]]
+id = "040b959b"
+title = "blastguard: トップレベルのコマンド語・引数の shell 行継続 (backslash+LF) で chmod / python3 -c の system パス操作が allow になる fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "System-harm fail-open found by the 6cac93af round-4 independent verifier probe; RED 06143f1b by a non-implementer, observed on main 47ec0a2e and identical at 02553aa8, still failing on c6532fe0: 20 of 20 (shape x mode) BN runs were ALLOWED. Shapes: BN inside the command word (chmod, python3), inside or before a path argument, between -c and the program, unquoted escaped program, and through bash -c, env, timeout wrappers. Controls without BN are Deny. first_shell_word joins BN since 0.2.491 but the top-level tokenizer does not."
+created_at = 1794530710
+updated_at = 1794530710
+weight = 0.0
+issue_number = 1676
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1676"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_toplevel_line_continuation -- --include-ignored"
+rev = "c6532fe077569e3c6d90922916dbe40e323b9b7b"
+observed_at = 1794530710
+detail = """
+exit 101: 0.2.494 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.95s
+     Running tests/backlog_20261113_toplevel_line_continuation.rs (target/debug/deps/backlog_20261113_toplevel_line_continuation-61c3bab8994b17e0)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_toplevel_line_continuation`"""

@@ -1665,3 +1665,34 @@ exit 101: 579-cd4f8d3822a8-orch/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.88s
      Running tests/backlog_20261114_python_write_api_indirect_system_target.rs (target/debug/deps/backlog_20261114_python_write_api_indirect_system_target-5a14ae3b3a50e7e6)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_write_api_indirect_system_target`"""
+
+[[task]]
+id = "7bf91f5a"
+title = "blastguard: printf の二重引用符 operand（エスケープした PY 変数と command 風の文言を含む）を実行される command line と判定して Ask にする false positive を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "FP, RED ae5e7750 by the flow-8cca7ef5 orchestrator at main a473ba71 2026-11-14. Exact commands are the MENTIONS/HARMLESS constants of the test file. printf whose double-quoted operand holds escaped PY-variable text plus a find -exec sh -c / os.chmod phrase is Ask in main and Deny in subagent with reason: printf is not a command blastguard recognises, and what follows it parses as a destructive command line. The twin without the PY text is Allow (control). Live hits in the same family on 2026-11-14: a printf append to .specguard/spec-docs.toml, a python3 /dev/stdin heredoc editing the RED file, and the first attempt at this very backlog add whose notes quoted the operand (reason listed backlog, add, p1 ... as unrecognised commands, then: plus is not a command blastguard recognises, and what follows it parses as a destructive command line)."
+created_at = 1794589692
+updated_at = 1794589692
+weight = 0.0
+issue_number = 1725
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1725"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_printf_operand_judged_as_command_fp -- --include-ignored printf_operand_text_is_not_judged_as_a_command"
+rev = "ae5e7750029010af16850a08159b21c171b6a971"
+observed_at = 1794589692
+detail = """
+exit 101: -c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.22s
+     Running tests/backlog_20261114_printf_operand_judged_as_command_fp.rs (target/debug/deps/backlog_20261114_printf_operand_judged_as_command_fp-90eba1c145325263)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_printf_operand_judged_as_command_fp`"""

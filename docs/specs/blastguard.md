@@ -601,6 +601,38 @@ forge・condukt のスケジューラが再利用）。
   （`\r` 等）を含む、1 行目の quote 不均衡・行末 `\`・`<<` が（quote を見ずに数えて）ちょうど 1 個でない、
   delimiter が unquoted または空、stage が `<<` を含まないか 1 行目の部分文字列でない、終端行が無い、
   終端行より後に `<<` が（文字列として）1 つでもある。
+- **関数本体は呼び出し時点の変数で判定する（`detect/function_calls.rs` の `function_call_reading`、
+  backlog bdce0261、blastguard 0.2.555）** — `f() { …; }` / `function f { …; }` の定義を `:` に、各呼び出しを
+  その本体の `{ … }` group に置き換えた読みを、`detect_bash_every_reading`（トップレベル）と
+  `shell_payload_verdict`（`bash -c` 等の payload）で原文の読みに**加えて**判定し、厳しい方を返す
+  （`L=<safe>; f() { echo x > $L; }; L=/etc/hosts; f` は system-harm Deny）。inline できない呼び出し
+  （`f() ( … )` 等の未モデル化の定義形、定義への redirect、閉じない本体、深さ 8 を超える再帰、
+  256KiB を超える展開、segment 対応付けの失敗）は判定不能として Ask（subagent では Deny）。
+  `$(f)`・backtick・`eval`/`command`/`xargs`/`env` 経由の呼び出しはこの読みでは認識せず、原文の読みだけが
+  判定する（未検証の残余）。回帰テスト: `crates/blastguard/tests/function_body_late_binding_fail_open_20261113.rs`。
+- **pipe で `( … )` / `{ …; }` / `. /dev/stdin` に渡る program も判定する（`detect/payload.rs` の
+  `group_reader_pipelines`、backlog 036067bf、blastguard 0.2.555）** — pipe で供給される stage が subshell・
+  brace group なら、group 内の各 command を `UPSTREAM | member` として `analyze_interpreter_stdin_exec` で
+  再判定する（入れ子は 1 層ずつ剥がす）。閉じ括弧が見つからなければ Ask。`.`/`source` は pipe または
+  here-document で供給され第 1 引数が `/dev/stdin`・`/dev/fd/0`・`/proc/self/fd/0` のとき stdin reader と
+  みなし、未モデル化の option は Ask。回帰テスト:
+  `crates/blastguard/tests/backlog_20261114_pipe_into_subshell_brace_source_reader.rs`。
+- **pipe 先の shell の argv は option 文法で読む（`detect/payload.rs` の pipe 規則、
+  `detect/payload/program_source.rs` の `shell_program_source`、backlog de914866、blastguard 0.2.556）** —
+  shell reader（`is_shell`）では `-o`/`-O`/`--rcfile` の値や `-s` 以降の位置引数を script file と誤認しない:
+  `File` なら script file 実行、`Stdin` なら pipe の program を判定、`Inline`（`-c`）は従来の読み、
+  `Undetermined`（未知の option）は pipe/here-document 供給時に Ask を記録したうえで program も判定する。
+  code interpreter は従来の `stage_has_program_operand` のまま。回帰テスト:
+  `crates/blastguard/tests/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args.rs`。
+- **compound command 内・exec fd・zsh `=()` 経由の shell program も判定する（`detect/payload.rs` の
+  `decompounded`、`detect/payload/exec_fds.rs` の `exec_opened_fds`、backlog 72872200、blastguard 0.2.557）** —
+  `analyze_interpreter_stdin_exec` は行を原文と compound 構文を外した読みの 2 回判定する（追加のみ。2 つの
+  splitter の長さが食い違えば Ask）。`exec N< <(…)` / `exec < <(…)` で開かれた fd から stdin を複製する reader は
+  その procsub の program を判定し、どこでも開かれていない fd（`bash <&3`）や here-string/here-document で開かれた
+  fd は、reader が stdin から program を読みうるとき Ask。ファイルで開かれた fd は `bash < file` と同じ扱い。
+  exec で開かれた stdin は upstream pipe のある reader にも適用する（制限側の過大近似）。zsh の `=(…)` は
+  process substitution として読む。回帰テスト:
+  `crates/blastguard/tests/backlog_20261114_compound_wrapped_or_cross_stage_shell_program.rs`。
 - **inline Python program の文字列中の `>` は data（#1626、ユーザー裁定 2026-11-07）** —
   `python3 -c '…'`（`python`/`python3`/`python3.N` の inline-eval のみ）の program text に対する
   shell pass で、truncating redirect の target が**判定可能**なものは recoverability による Deny を

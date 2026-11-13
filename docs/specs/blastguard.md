@@ -849,12 +849,20 @@ forge・condukt のスケジューラが再利用）。
   Ask（subagent では Deny）になる。`\$PY ...` の部分を除いた同形は Allow（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_printf_operand_judged_as_command_fp.rs`
   （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
-- **未修正の system-harm fail-open の RED（2026-11-14、flow-8cca7ef5、CR で終わる python コメント。修正は未実装）** —
-  CPython は `#` コメントを裸の CR（`\r`）で終える（`compile` で観測）ので、`python3 -c "import os # x<CR>os.chmod('/etc/hosts',0)"`
-  は chmod を実行するが、blastguard は呼び出しをコメントの一部と読んで Allow にする（`env -S` 経由の同形も同じ。main・subagent とも）。
+- **CR で終わる python コメントの system-harm fail-open（2026-11-14、flow-8cca7ef5、backlog a66c115c で修正済み）** —
+  CPython は program を字句解析する前に `\r\n` と裸の CR（`\r`）を `\n` に変換する（3.12.11 で `python3 -c`・stdin・
+  ファイル・`compile` のいずれでも観測: CR は `#` コメントを終え、文を区切り、`\` の行継続になり、三重引用符内では値 `\n`、
+  一重引用符内では unterminated string の SyntaxError。form feed・`\x0b`・U+2028 はコメントを終えない）。以前の blastguard は
+  `\n` でしか行を終えず、`python3 -c "import os # x<CR>os.chmod('/etc/hosts',0)"`（`env -S` 経由・here-string・
+  `python3 - <<'EOF'`・`cat > x.py <<'EOF'` 後の実行も同じ）の chmod をコメントの一部と読んで Allow にしていた。
+  0.2.535 以降、Python が読む program のすべての入口（`interpreter_code_verdict` の Python reader、`python_program_verdict`・
+  `python_stdin_body_reading`・`python_strings_never_reach_a_shell`・`python_program_tokenises`・`python_redirect_view`）で
+  同じ変換（`src/detect/interpreter/python_file.rs` の `python_newlines`）をしてから読むので、main・subagent とも Deny になる。
+  一重引用符内に CR がある program は LF の同形と同じく「字句解析できない」Ask（subagent では Deny）になる。
+  ruby・perl・sh の `#` コメントは CR で終わらない（観測）ので、それらの読みは変えていない。
   LF の同形は Allow にならない（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_python_cr_ends_comment.rs`
-  （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+  （RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
 - **未修正の system-harm fail-open の RED（2026-11-14、flow-8cca7ef5、pathlib のメソッド参照。修正は未実装）** —
   pathlib の書き込み・移動メソッドを直接呼び出し `Path(..).method(..)` 以外で呼ぶ形は Allow になる（main・subagent とも）:
   unbound 呼び出し `Path.replace(Path('/tmp/z'), '/etc/hosts')`、束縛メソッドを名前に入れて呼ぶ

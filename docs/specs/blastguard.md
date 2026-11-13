@@ -879,6 +879,14 @@ forge・condukt のスケジューラが再利用）。
   `| bash -s` は Deny のまま（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args.rs`
   （`#[ignore]` の RED 1 本 + control。独立 test author が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の system-harm fail-open の RED（2026-11-14、compound command 内 / fd 3 / zsh `=()` / subshell 内 pipe で shell に渡る program。修正は未実装）** —
+  system file（/etc 配下の hosts）を world-writable にする program を、process substitution 経由で shell に渡す形が
+  subshell `( )`・brace group・`if` / `while` / `for` の本体に入っていると main・subagent とも Allow になる。同じく fd 3 に
+  process substitution を開いて次の文で shell が fd 3 を stdin として読む形、`zsh =( ... )`、subshell 内の pipe 先 shell も Allow
+  （この main 由来の build では素の process substitution 形も Allow。0.2.541 で観測、独立 verifier は 0e726e66 / 572cc1c3 で観測）。
+  素の pipe-to-shell と subshell 内の直接実行は Deny のまま（control）。system harm は常に Deny であるべき。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_compound_wrapped_or_cross_stage_shell_program.rs`
+  （`#[ignore]` の RED 1 本 + control。独立 test author が書いた。証明しない範囲はファイル冒頭の doc comment）。
 - **未修正の false positive の RED（2026-11-14、shell `-c` の literal program 内の `echo - foo`。修正は未実装）** —
   `zsh -c 'echo - foo'` / `bash -c 'echo - foo'` が「program は stdin から取る」と誤判定されて Ask（subagent では Deny）になる。
   program は command line 上にある。`echo -- x` / `echo -nE a` / `echo -x y` は Allow で、引き金は単独の `-` operand。

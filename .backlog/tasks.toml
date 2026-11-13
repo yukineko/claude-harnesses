@@ -1569,3 +1569,35 @@ exit 101: LED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finish
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
      Running tests/env_split_string_comment_collapse_20261113.rs (target/debug/deps/env_split_string_comment_collapse_20261113-bea4bc2c37f1750e)
 error: test failed, to rerun pass `-p blastguard --test env_split_string_comment_collapse_20261113`"""
+
+[[task]]
+id = "f6795f52"
+title = "backlog add creates the GitHub issue before the row is on main (ledger/issue divergence)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-13 (main 50474876): add calls gh issue create before tasks.push/save, and the row lands only in the invoking worktree's store. 18 issues (#1678-#1706) arrived hours before their rows; 9 (#1681-#1689) have no observable row. Ruling: 「backlog addの時点で台帳も更新される。mainにいく、issueができる」. RED: crates/backlog/tests/add_integrates_row_to_main_before_issue.rs (54315495)."
+created_at = 1794569235
+updated_at = 1794569235
+weight = 0.0
+issue_number = 1709
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1709"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test add_integrates_row_to_main_before_issue -- --ignored"
+rev = "54315495dba5e1d53d242872f87a9516ae4becb0"
+observed_at = 1794569235
+detail = """
+exit 101: 
+
+   Compiling backlog v0.3.112 (/Users/yuki/.condukt/worktrees/bl-add-int-red/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.13s
+     Running tests/add_integrates_row_to_main_before_issue.rs (target/debug/deps/add_integrates_row_to_main_before_issue-7387e9cd928ae9a8)
+error: test failed, to rerun pass `-p backlog --test add_integrates_row_to_main_before_issue`"""

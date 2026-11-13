@@ -78,7 +78,12 @@ then `(` (`open ('/etc/hosts','a')`); the mode-taking file classes (`FileIO`,
 `open` follow the same rule (dbm flag: only `'r'` is a read; `shelve`'s
 default `'c'` is a write); and any non-call use of the name `open`
 (`from io import open as o`, `from os import open`, `o = open`) makes the
-whole program undetermined, i.e. a write. So `open('/etc/hosts','a')`,
+whole program undetermined, i.e. a write. Since 0.2.489 a known-Python
+program (no `exec`/`eval`/`getattr`-style marker, no f-string) is read with the
+Python lexer, so `open` in a string or `#` comment counts for nothing, and a
+non-ASCII character in a code token (full-width `ｏｐｅｎ`, which Python
+NFKC-normalises to `open`) makes it undetermined; other program text is scanned
+raw, where any non-ASCII letter is undetermined. So `open('/etc/hosts','a')`,
 `'r+'`, `'x'` and `mode='a'` are denied like `'w'` was; `Path.write_text` and
 Node `appendFileSync` are not covered by this rule. Running a script **file** (`python3 app.py`,
 `python3 -m …`) is not judged. A `>` in program text whose "target" cannot be

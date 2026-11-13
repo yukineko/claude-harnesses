@@ -632,7 +632,12 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   `shelve`/`dbm` の `open` も同じ規則で判定する（dbm のフラグは `'r'` だけが読み取り、
 >   `shelve` の既定 `'c'` は書き込み）。名前 `open` の呼び出し以外の出現（`from io import
 >   open as o`・`from os import open`・`o = open`）があればプログラム全体を判定不能＝
->   書き込みとみなす。これにより `open('/etc/hosts','a')`・`'r+'`・`'x'`・`mode='a'` も `'w'` と同様に deny
+>   書き込みとみなす。0.2.489 以降、Python と確定したプログラム（`exec`/`eval`/`getattr`
+>   等の動的実行の印も f-string も無いもの）は Python の字句解析器で読み、文字列・`#`
+>   コメント中の `open` は数えない。コード中のトークンに非 ASCII 文字があれば（全角
+>   `ｏｐｅｎ` は Python が NFKC 正規化で `open` にする）判定不能＝書き込みとみなす。それ
+>   以外のプログラム本文は字句解析せずに走査し、どこかに非 ASCII の文字・数字があれば
+>   判定不能とする。これにより `open('/etc/hosts','a')`・`'r+'`・`'x'`・`mode='a'` も `'w'` と同様に deny
 >   される。`Path.write_text` や Node の `appendFileSync` はこの規則の対象外（未対応）。
 
 当時、overwatch の continuous-audit 再発トラッカー（`overwatch violations --json`）が

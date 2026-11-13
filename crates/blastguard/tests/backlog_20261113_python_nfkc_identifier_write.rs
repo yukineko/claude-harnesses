@@ -91,7 +91,6 @@ fn shapes() -> Vec<String> {
 // test-weakening-justified: new RED for an unfixed fail-open; the ignore is
 // removed in the fixing commit.
 #[test]
-#[ignore = "RED: fail-open, full-width (NFKC) python identifiers on system path not detected"]
 fn python_nfkc_identifier_writes_on_system_path_are_not_allowed() {
     let home = unique_home("red");
     let mut failures = Vec::new();

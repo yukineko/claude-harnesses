@@ -61,9 +61,19 @@
 //! recoverability / system-path probes do that), and writes not spelled as
 //! one of these calls (`Path.write_text`, Node `appendFileSync`, Perl
 //! two-argument `open(FH, ">$p")`, `open my $fh, '>>', $p` without
-//! parentheses). Those are not made write-capable here. The identifier scan
-//! does not skip string literals or comments, so the word `open` in prose
-//! also makes a program undetermined (restrictive side).
+//! parentheses). Those are not made write-capable here.
+//!
+//! CODE VS TEXT (backlog 6cac93af round 3, REDs 0fdc9a36 / 366c622d). When
+//! the text is known Python (layer 0 of a `python` invocation) and holds no
+//! dynamic-execution marker and no f-string, it is read with the Python lexer
+//! (`python_semantics::lex`) and only CODE name tokens count: `open` in a
+//! string literal or a `#` comment is neither a call nor an alias. A non-ASCII
+//! character in a code token (`ｏｐｅｎ(…)`, which Python NFKC-normalises to
+//! `open`) makes the program undetermined — no normaliser is linked, so it
+//! fails closed. Any other text (another language, a deeper quote layer,
+//! `exec`/`eval`/`getattr`, an f-string) is scanned raw — strings and
+//! comments count as code, and any non-ASCII letter/digit anywhere is
+//! undetermined — because there the lexer cannot prove a string is inert.
 
 /// Label reported as the write call when a literal mode is write-capable.
 pub(super) const WRITE_MODE_LABEL: &str = "open() in a write-capable mode";
@@ -162,9 +172,12 @@ enum Operand<'a> {
 /// The strongest write-capable `open`-family call in `lowered` (already
 /// ASCII-lowercased), if any. A determined write-capable mode wins over an
 /// undetermined one only in the label; both answer `Some`.
-pub(super) fn write_capable_open(lowered: &str) -> Option<&'static str> {
+pub(super) fn write_capable_open(payload: &str, python_code: bool) -> Option<&'static str> {
+    let lowered = payload.to_ascii_lowercase();
+    let lowered = lowered.as_str();
     let bytes = lowered.as_bytes();
-    let mut undetermined = false;
+    let view = code_view(payload, python_code);
+    let mut undetermined = view.non_ascii_code;
     let mut i = 0usize;
     while i < bytes.len() {
         if !is_ident(bytes[i]) {
@@ -176,6 +189,10 @@ pub(super) fn write_capable_open(lowered: &str) -> Option<&'static str> {
             i += 1;
         }
         let name = &lowered[start..i];
+        if !view.is_code(start) {
+            // Inside a string literal or a comment of known Python text.
+            continue;
+        }
         let is_open = OPEN_NAMES.contains(&name);
         if !is_open && !MODE_CLASSES.contains(&name) {
             continue;
@@ -205,6 +222,65 @@ pub(super) fn write_capable_open(lowered: &str) -> Option<&'static str> {
 
 fn is_ident(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+}
+
+/// Which bytes of the program are CODE, and whether code holds a non-ASCII
+/// character.
+struct CodeView {
+    /// Byte spans of code name tokens, sorted; `None` = every byte is code.
+    names: Option<Vec<(usize, usize)>>,
+    /// A non-ASCII character in code (or, when the text could not be lexed,
+    /// anywhere as a letter/digit). Python NFKC-normalises identifiers
+    /// (`ｏｐｅｎ` is `open`) and no normaliser is linked, so this is
+    /// undetermined: the restrictive side.
+    non_ascii_code: bool,
+}
+
+impl CodeView {
+    fn is_code(&self, at: usize) -> bool {
+        let Some(names) = &self.names else {
+            return true;
+        };
+        let k = names.partition_point(|&(s, _)| s <= at);
+        k > 0 && at < names[k - 1].1
+    }
+}
+
+/// Lex `payload` with the Python lexer when it is known Python text and
+/// nothing in it can turn a string into code: no dynamic-execution marker
+/// (`exec`, `eval`, `getattr`, …) and no f-string (whose `{…}` fields are
+/// code the lexer files under the string). Otherwise every byte is code — the
+/// raw scan, restrictive by construction — and any non-ASCII letter or digit
+/// in the text is undetermined, since strings cannot be told apart from code.
+fn code_view(payload: &str, python_code: bool) -> CodeView {
+    use super::python_semantics::{lex, Tok};
+    let raw = || CodeView {
+        names: None,
+        non_ascii_code: payload
+            .chars()
+            .any(|c| !c.is_ascii() && c.is_alphanumeric()),
+    };
+    if !python_code || super::has_dynamic_code_execution(payload) {
+        return raw();
+    }
+    let toks = lex(payload);
+    let mut names = Vec::new();
+    let mut non_ascii_code = false;
+    for t in &toks {
+        match t {
+            Tok::Str { fstring: true, .. } => return raw(),
+            Tok::Str { .. } | Tok::Nl => {}
+            Tok::Name { text, start, end } => {
+                non_ascii_code |= !text.is_ascii();
+                names.push((*start, *end));
+            }
+            Tok::Punct(c) => non_ascii_code |= !c.is_ascii(),
+        }
+    }
+    CodeView {
+        names: Some(names),
+        non_ascii_code,
+    }
 }
 
 /// Classify the call of `name` whose identifier starts at byte `start`.
@@ -370,8 +446,9 @@ fn judge_mode_str(s: &str) -> Judged {
 /// Judge an `os.open` flag expression that is not a single literal.
 fn judge_flags_expr(text: &str) -> Judged {
     let all_read_only = text.split('|').all(|term| {
+        // `os . O_RDONLY` is `os.O_RDONLY`: trim the attribute part too.
         let t = term.trim();
-        let t = t.rsplit('.').next().unwrap_or(t);
+        let t = t.rsplit('.').next().unwrap_or(t).trim();
         t == "0" || READ_ONLY_FLAGS.contains(&t)
     });
     if all_read_only {

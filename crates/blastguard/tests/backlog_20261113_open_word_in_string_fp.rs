@@ -93,7 +93,6 @@ fn render(t: &str, word: &str, home: &Home) -> String {
 // test-weakening-justified: new RED for an unfixed false positive; the ignore
 // is removed in the fixing commit.
 #[test]
-#[ignore = "RED: FP, the word `open` in a string/comment makes a read-only python program write-capable"]
 fn read_only_python_mentioning_open_in_string_or_comment_is_allowed() {
     let home = unique_home("red");
     let mut failures = Vec::new();

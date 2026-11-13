@@ -379,13 +379,15 @@ fn names_unwritable_directory(
 /// cannot be determined statically is treated as write-capable, and so is any
 /// program that uses the name `open` other than as a call (an import or
 /// alias); an absent or read-only mode (`'r'`, `'rb'`, `'rt'`) is not.
-fn interpreter_write_call(payload: &str) -> Option<&'static str> {
+/// `python_code` says `payload` is known Python program text, which lets that
+/// judgement look only at code tokens (see the module doc of `open_mode`).
+fn interpreter_write_call(payload: &str, python_code: bool) -> Option<&'static str> {
     let lowered = payload.to_ascii_lowercase();
     INTERPRETER_WRITE_CALLS
         .iter()
         .find(|needle| lowered.contains(**needle))
         .copied()
-        .or_else(|| open_mode::write_capable_open(&lowered))
+        .or_else(|| open_mode::write_capable_open(payload, python_code))
 }
 
 /// Whether EVERY occurrence of `literal` in `payload` is positively a
@@ -940,7 +942,7 @@ pub(super) fn interpreter_code_verdict(
         depth,
         ctx,
         &program_ctx,
-        (expansion_possible, strings_are_data),
+        (expansion_possible, strings_are_data, python),
         &mentions,
     );
     // A destructive spelling that `inert_literal_bodies` showed sits only inside
@@ -1067,7 +1069,7 @@ fn interpreter_program_verdict(
     depth: usize,
     ctx: &Ctx<'_>,
     program_ctx: &Ctx<'_>,
-    (expansion_possible, strings_are_data): (bool, bool),
+    (expansion_possible, strings_are_data, python): (bool, bool, bool),
     mentions: &Mentions,
 ) -> Decision {
     // Descend through nested quoting rather than stopping at the first layer.
@@ -1273,7 +1275,9 @@ files or directories outright if that string is run as code; blastguard cannot s
                     return Decision::Deny(reason);
                 }
             }
-            let write_call = interpreter_write_call(payload);
+            // Only the layer-0 text of a `python` invocation is known to be
+            // Python, so only it is read with the Python lexer.
+            let write_call = interpreter_write_call(payload, python && depth_of_layer == 0);
             let mut probed = 0usize;
             for literal in &literals {
                 let candidate = literal.trim();

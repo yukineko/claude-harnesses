@@ -74463,3 +74463,50 @@ rev = "8dedad41e5ac8a0325f2a4b3501f55f929aefd21"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "10ce8e01"
+title = "blastguard test backlog_2287ebae fails in condukt worktrees on /mnt/c (v9fs ignores chmod 000; NotFound instead of PermissionDenied)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-06: donegate test-changed blocked the condukt worktree run-20261106-100625-7376-blastguard-heredoc-body-fp: crates/blastguard/tests/backlog_2287ebae.rs:201 'fixture: the locked ancestor must make resolution fail with EACCES (running as root?)' left Some(NotFound) right Some(PermissionDenied). Same test at 3cdfd72e passes with target on ext4 (/home) and fails with CARGO_TARGET_DIR on /mnt/c (stat -f: v9fs). Fixture uses CARGO_TARGET_TMPDIR, which lives under the worktree target on /mnt/c. Effect: every blastguard change made in a condukt worktree fails donegate though the code equals main. Readings: (a) defect in the fixture's environment assumption (should place its fixture on a POSIX-enforcing fs or report inconclusive distinctly); (b) intentional fail-closed precondition (an unverifiable fixture must not pass). Distinguish: (b) is right that it must not PASS silently; the question is whether 'fixture cannot be built here' should be a test failure or a skip-with-reason; ask before choosing. Also consider moving condukt worktrees off /mnt/c. Repro: bash scripts/tests/blastguard-2287ebae-v9fs-target.sh.
+ruling (defer): backlog を defer にする（推奨） — 2026-11-13: v9fs (/mnt/c) でしか再現せず、この環境では実行できない。GitHub #1554 は not_planned で close 済み
+user ruling 2026-11-13: 「保留はありえない実証されないならclose,実証されたらopen」. repro scripts/tests/blastguard-2287ebae-v9fs-target.sh exits 2 on this machine (Darwin 25.6.0): 'no v9fs dir at /mnt/c/tmp' — not demonstrated, so closed"""
+created_at = 1793928977
+updated_at = 1794568880
+weight = 0.0
+issue_number = 1554
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1554"
+issue_closed_at = 1794568881
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/blastguard-2287ebae-v9fs-target.sh"
+rev = "ffc801c431d382e7b4435546a209d556b8a9af42"
+observed_at = 1793928977
+detail = """
+exit 101: n fail with EACCES (running as root?)
+  left: Some(NotFound)
+ right: Some(PermissionDenied)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    unresolvable_real_landing_is_not_allowed
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+
+error: test failed, to rerun pass `-p blastguard --test backlog_2287ebae`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "user ruling 2026-11-13: 「保留はありえない実証されないならclose,実証されたらopen」. repro scripts/tests/blastguard-2287ebae-v9fs-target.sh exits 2 on this machine (Darwin 25.6.0): 'no v9fs dir at /mnt/c/tmp' — not demonstrated, so closed"

@@ -223,7 +223,6 @@ fn t1_clean_worktree_with_only_ignored_build_output_is_allow() {
 /// subagent), decided without consulting any worktree other than the operand.
 /// DOES NOT PROVE: that no git subprocess touched the enclosing repo (only the
 /// verdict is observed).
-#[ignore = "RED: worktree remove operand that is not a worktree root is judged by the enclosing (main) worktree's state"]
 #[test]
 fn t2_operand_inside_main_worktree_is_not_judged_by_main_state() {
     let f = Fixture::new("t2");

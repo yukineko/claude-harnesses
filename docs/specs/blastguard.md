@@ -151,7 +151,17 @@ forge・condukt のスケジューラが再利用）。
   `target` は directory でないので数えない（Ask）。modified / staged / untracked、build 名でない ignored
   （`.env`・鍵・設定・未知の名前）は Ask（強制削除は directory ごと消すため）。backlog 2089dfc5、
   blastguard 0.2.537 で、clean な linked worktree に ignored `target/` しか無い場合の Ask/Deny（誤検知）を
-  解消（`tests/worktree_remove_ignored_build_output_fp_20261114.rs`）。probe は git が実際に作用する repo
+  解消（`tests/worktree_remove_ignored_build_output_fp_20261114.rs`）。**検査するのは operand に名指しされた
+  worktree だけ**（ユーザー裁定 2026-11-14「gateもconduktも絶対に勝手に他のworktreeを参照してはならない」、
+  backlog b997a3d5、blastguard 0.2.546）: git を起動する前に、operand 自身が実 directory（symlink でない）で
+  `<operand>/.git` が regular file（symlink でも directory でもない）＝ linked worktree の root であることを
+  `symlink_metadata` だけで確かめ（親 directory は辿らず、`.git` file の `gitdir:` も読まない）、さらに
+  `git -C <operand> rev-parse --show-toplevel` の結果と operand を両方 canonicalize して一致を要求する。
+  それ以外（main worktree 内の ignored `target/` のように worktree root でない path、`.git` が directory の
+  main worktree、symlink、存在しない path、stat 失敗、toplevel 不一致）は Ask で、
+  包含する worktree や他の worktree の状態で判定しない。worktree remove の probe は `-C <operand>` だけで
+  走り（`--git-dir`/`--work-tree` は転送しない）、累積 `-C` は相対 operand を置く起点にのみ使う。
+  branch force-delete の probe は git が実際に作用する repo
   （累積 `-C`〈相対は segment の base 起点〉・`--git-dir`・`--work-tree`）で走らせ、相対 worktree path は
   その `-C` directory 起点で置く。判定不能 — operand 無し・base 不明（`cd "$VAR"` 後など）・置けない/
   未知の global option・default branch 解決不能・probe の想定外 exit / spawn 失敗 / timeout・

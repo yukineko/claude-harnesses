@@ -18,11 +18,20 @@
 //!   [`crate::deletion::BUILD_OUTPUT_NAMES`], e.g. `target/`; see
 //!   [`only_ignored_build_output`], backlog 2089dfc5). Any modified, staged,
 //!   untracked or other ignored entry (`.env`, keys, config, unknown names)
-//!   is Ask: the removal deletes the whole directory.
+//!   is Ask: the removal deletes the whole directory. Only the worktree named
+//!   as the operand is ever inspected (user ruling 2026-11-14, backlog
+//!   b997a3d5): before any git probe, the operand must be, by local metadata,
+//!   a linked-worktree root ([`linked_worktree_root`]: a real directory whose
+//!   `.git` is a regular file), and the probe's `--show-toplevel` must be the
+//!   operand itself. Otherwise (an ignored dir inside another worktree, a main
+//!   worktree, a symlink, a missing path) it is Ask, so no enclosing or other
+//!   worktree's state ever decides the verdict.
 //!
-//! The probes run in the repository git will act on: the cumulative `-C`
-//! directory (relative to the segment's base), with `--git-dir` /
-//! `--work-tree` forwarded. Every cannot-determine state is Ask, never Allow
+//! The `branch` probes run in the repository git will act on: the cumulative
+//! `-C` directory (relative to the segment's base), with `--git-dir` /
+//! `--work-tree` forwarded. The `worktree remove` probes run only with `-C
+//! <operand>` (no `--git-dir` / `--work-tree`); the cumulative `-C`
+//! directory only places a relative operand. Every cannot-determine state is Ask, never Allow
 //! (CLAUDE.md §3): no known working directory (`base_for("git")` is `None`
 //! and no absolute `-C`), an unplaceable or unrecognised global option, no
 //! operand, an unresolvable default branch, a git probe that exits with a code
@@ -492,12 +501,15 @@ default branch `{}` ({}), so deleting it destroys unmerged work",
 
 /// `git <globals> worktree <args>`. Allow unless the verb is `remove` with a
 /// force flag anywhere in `args` (before or after the verb); then Allow only
-/// when, in every operand worktree, `git rev-parse --show-toplevel` and
-/// [`STATUS_ARGS`] both exit 0, the status output parses as porcelain v1, and
-/// [`only_ignored_build_output`] accepts every entry (nothing at all, or only
-/// ignored build-output directories). Anything else is Ask. A relative
-/// operand is placed against the directory git runs in (the cumulative `-C`
-/// directory, else the segment's base).
+/// when, for every operand: [`linked_worktree_root`] accepts it (checked
+/// locally before any git subprocess); `git -C <operand> rev-parse
+/// --show-toplevel` and [`STATUS_ARGS`] both exit 0; the reported toplevel,
+/// canonicalised, equals the canonicalised operand; the status output parses
+/// as porcelain v1; and [`only_ignored_build_output`] accepts every entry
+/// (nothing at all, or only ignored build-output directories). Anything else
+/// is Ask. A relative operand is placed against the directory git runs in
+/// (the cumulative `-C` directory, else the segment's base); the globals'
+/// repository itself is never probed here.
 pub(super) fn worktree_verdict(ctx: &Ctx<'_>, globals: &[&str], args: &[&str]) -> Decision {
     let opts = option_words(args);
     let Some(verb_pos) = args.iter().position(|t| !t.starts_with('-')) else {
@@ -532,8 +544,15 @@ uncommitted, untracked and ignored files included"
             Determination::Known(p) => p,
             Determination::Undetermined(u) => return ask(u.reason().as_str().to_string()),
         };
+        // Established locally BEFORE any git subprocess: run with `-C` on a
+        // path that is not itself a linked-worktree root, git would walk up
+        // and report the ENCLOSING worktree's state (user ruling
+        // 2026-11-14: never consult a worktree other than the one named).
+        if let Err(why) = linked_worktree_root(std::path::Path::new(&path)) {
+            return ask(why);
+        }
         let wt = Target {
-            dir: path,
+            dir: path.clone(),
             git_dir: None,
             work_tree: None,
         };
@@ -543,6 +562,23 @@ uncommitted, untracked and ignored files included"
         };
         if !toplevel.starts_with('/') || toplevel.contains('\n') {
             return ask("git printed a work-tree root that is not one absolute path".to_string());
+        }
+        match (
+            std::fs::canonicalize(&path),
+            std::fs::canonicalize(&toplevel),
+        ) {
+            (Ok(a), Ok(b)) if a == b => {}
+            (Ok(_), Ok(_)) => {
+                return ask(format!(
+                    "git reports the work-tree root `{toplevel}` for `{op}`, which is not the \
+operand itself, so its state is not the operand's"
+                ))
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                return ask(format!(
+                    "the operand and the work-tree root git reports could not be compared ({e})"
+                ))
+            }
         }
         let status = match probe(&wt, STATUS_ARGS, &[0]) {
             Determination::Known((_, out)) => out,
@@ -559,6 +595,47 @@ the whole directory) would destroy"
         }
     }
     Decision::Allow
+}
+
+/// `Ok(())` only when `path` (absolute, lexically normalised) is, by local
+/// metadata alone, the root of a LINKED worktree: `path` itself is a real
+/// directory (`symlink_metadata`, not a symlink) and `path/.git` is a regular
+/// file (not a symlink, not a directory). A `.git` directory is a main
+/// worktree (or a plain repository), which `git worktree remove` never
+/// removes; anything else (absent, symlink, unreadable) is `Err`. No git
+/// subprocess runs and no parent directory is consulted, and the `.git`
+/// file's `gitdir:` pointer is not read or followed here.
+fn linked_worktree_root(path: &std::path::Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.file_type().is_dir() => {}
+        Ok(_) => {
+            return Err(format!(
+                "`{}` is not a real directory (a symlink or a file)",
+                path.display()
+            ))
+        }
+        Err(e) => return Err(format!("stat {}: {e}", path.display())),
+    }
+    let dot_git = path.join(".git");
+    match std::fs::symlink_metadata(&dot_git) {
+        Ok(m) if m.file_type().is_file() => Ok(()),
+        Ok(m) if m.file_type().is_dir() => Err(format!(
+            "`{}` is a directory, so `{}` is a main worktree or repository, not a linked \
+worktree root",
+            dot_git.display(),
+            path.display()
+        )),
+        Ok(_) => Err(format!(
+            "`{}` is not a regular file, so `{}` is not recognised as a linked worktree root",
+            dot_git.display(),
+            path.display()
+        )),
+        Err(e) => Err(format!(
+            "`{}` is not recognised as a linked worktree root (stat {}: {e})",
+            path.display(),
+            dot_git.display()
+        )),
+    }
 }
 
 /// The status probe for a force-removed worktree: every untracked file

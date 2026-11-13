@@ -43,7 +43,25 @@ pub(super) enum Tok {
 /// Python keeps the backslash). An
 /// unterminated string runs to the end of the text (the caller has already
 /// refused a body that does not tokenise).
+///
+/// A body with a `\N{…}` or a malformed escape keeps that undecoded text HERE
+/// only; its true reading ([`super::python_escape::Decoded::Holed`] /
+/// `Undecodable`) is what [`literal_values`] reports, and the interpreter
+/// write check judges a holed or undecodable write target from that.
 pub(super) fn lex(src: &str) -> Vec<Tok> {
+    lex_impl(src, None)
+}
+
+/// The decoded value of every NON-raw string literal of `src`, read with the
+/// same lexer as [`lex`] (comments, prefixes and triple quotes handled), in
+/// source order. Raw literals are not listed: their text is their body.
+pub(super) fn literal_values(src: &str) -> Vec<super::python_escape::Decoded> {
+    let mut values = Vec::new();
+    lex_impl(src, Some(&mut values));
+    values
+}
+
+fn lex_impl(src: &str, mut values: Option<&mut Vec<super::python_escape::Decoded>>) -> Vec<Tok> {
     let chars: Vec<(usize, char)> = src.char_indices().collect();
     let byte_at = |i: usize| chars.get(i).map_or(src.len(), |(b, _)| *b);
     let mut out = Vec::new();
@@ -113,11 +131,16 @@ pub(super) fn lex(src: &str) -> Vec<Tok> {
             // way Python does — notably a backslash-newline is REMOVED, so
             // `'/etc/ho\<LF>sts'` is `/etc/hosts` (backlog 47b20647). A raw
             // literal, or a body `decode_non_raw` cannot decode statically
-            // (`\N{…}`), keeps the reading above.
+            // (`\N{…}`, a malformed escape), keeps the reading above here; the
+            // undecoded reading is reported through `values`.
             if !raw {
                 let body = src.get(body_start..body_end.max(body_start)).unwrap_or("");
-                if let Some(decoded) = super::python_escape::decode_non_raw(body, bytes) {
-                    s = decoded;
+                let decoded = super::python_escape::decode_non_raw(body, bytes);
+                if let super::python_escape::Decoded::Value(v) = &decoded {
+                    s = v.clone();
+                }
+                if let Some(values) = values.as_deref_mut() {
+                    values.push(decoded);
                 }
             }
             out.push(Tok::Str { text: s, fstring });

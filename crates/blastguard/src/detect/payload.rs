@@ -5,7 +5,7 @@ use super::{
     is_exec_wrapper, is_foreign_shell, is_redirect_token, is_shell, is_short_flag,
     normalized_command, opens_here_document, quoted_string_literals, recommend_against,
     scan_balanced, split_statements_into_pipe_stages, wrapped_command_heads, xargs_command_start,
-    xargs_reads_arg_file, xargs_shell, Ctx, Decision, Stop, VerdictAcc,
+    xargs_reads_arg_file, xargs_shell, Ctx, Decision, PythonReader, Stop, VerdictAcc,
 };
 
 /// True if this stage names a program FILE for the interpreter to run, rather
@@ -164,13 +164,29 @@ blastguard cannot read it",
                 }
             }
             let python = python_stdin_reading(cmd, tokens[idx], &program_texts, depth, ctx);
+            // A Python reader decodes its literals (backlog 47b20647), and an
+            // UNQUOTED here-document reaches it with the shell's backslash
+            // processing applied: judge that reading of the body too.
+            let python_reader = is_python_head(tokens[idx]);
+            if python_reader && heredoc_open && !here_document_delimiter_is_quoted(cmd) {
+                if let Some(read) = program_texts
+                    .first()
+                    .and_then(|b| super::readings::unquoted_here_document_reading(b))
+                {
+                    program_texts.push(read);
+                }
+            }
             if let Some(deny) = acc.record(interpreter_code_verdict(
                 &shape,
                 &program_texts,
                 depth,
                 ctx,
                 !here_document_delimiter_is_quoted(cmd),
-                false,
+                if python_reader {
+                    PythonReader::Stdin
+                } else {
+                    PythonReader::NotPython
+                },
                 python.as_ref().is_some_and(|(_, data)| *data),
             )) {
                 return deny;
@@ -227,6 +243,18 @@ the command line, so blastguard cannot read the program",
     acc.finish()
 }
 
+/// True when `head` is `python`, `python3` or `python3.N`.
+fn is_python_head(head: &str) -> bool {
+    normalized_command(head)
+        .strip_prefix("python")
+        .is_some_and(|v| {
+            v.is_empty()
+                || v == "3"
+                || v.strip_prefix("3.")
+                    .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        })
+}
+
 /// The Python judge's reading of a QUOTED here-document body that `head` (a
 /// bare `python` / `python3` / `python3.N`) runs as its program
 /// ([`super::heredoc::python_stdin_here_document`]'s shape), as
@@ -253,15 +281,7 @@ fn python_stdin_reading(
     depth: usize,
     ctx: &Ctx<'_>,
 ) -> Option<(Decision, bool)> {
-    let python = normalized_command(head)
-        .strip_prefix("python")
-        .is_some_and(|v| {
-            v.is_empty()
-                || v == "3"
-                || v.strip_prefix("3.")
-                    .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
-        });
-    if !python {
+    if !is_python_head(head) {
         return None;
     }
     let parts = super::heredoc::python_stdin_here_document(cmd)?;
@@ -508,7 +528,7 @@ unquote — it cannot tell what text the shell will run",
             depth,
             ctx,
             !span.single_quoted,
-            false,
+            PythonReader::NotPython,
             false,
         );
         if let Some(deny) = acc.record(verdict) {

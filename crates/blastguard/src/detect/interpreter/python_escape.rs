@@ -15,14 +15,51 @@
 //! as Python does. A bytes value byte is mapped to the char of the same number
 //! (latin-1), which is the same text for every ASCII path.
 //!
-//! `None` — NOT a guessed value — when the body cannot be decoded statically:
-//! a `\N{…}` named escape (no Unicode name table here), a malformed `\x`/`\u`
-//! /`\U`, or a code point that is not a `char`. The caller then keeps the
-//! reading it had before; it must not treat `None` as "no literal".
+//! What cannot be decoded statically is NEVER given a guessed value:
+//! - a well-formed `\N{NAME}` named escape (str only) is exactly ONE code point
+//!   blastguard cannot name (there is no Unicode name table here), so the value
+//!   is [`Decoded::Holed`]: the decoded text with [`HOLE`] standing for each
+//!   unknown code point. The caller must not read a hole as any particular
+//!   character: it can be `/` or `.` too (see
+//!   `python_literal_target::unknown_literal_target_verdict`). `lex` keeps
+//!   the undecoded text for its `Tok::Str`; `python_semantics::literal_values`
+//!   reports the `Holed`/`Undecodable` reading.
+//! - a malformed escape (`\x2`, a short `\u`, `\N` without `{NAME}`, a code
+//!   point that is not a `char`) is [`Decoded::Undecodable`]. Python rejects
+//!   such a literal at compile time, but blastguard does not rely on that: the
+//!   caller must not read the literal as a known value.
+
+/// Stands for one code point of a `\N{…}` escape that is not decoded. A
+/// Unicode noncharacter, so it never occurs in a decoded body by accident (a
+/// body that already holds it is [`Decoded::Undecodable`]).
+pub(super) const HOLE: char = '\u{FDD0}';
+
+/// The value of a non-raw literal body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Decoded {
+    /// Fully decoded.
+    Value(String),
+    /// Decoded except for `\N{…}` escapes, each one [`HOLE`] in the text.
+    Holed(String),
+    /// A malformed escape: no value can be read.
+    Undecodable,
+}
 
 /// Decode `body` (the text between the quotes, prefix and quotes excluded) of
 /// a non-raw literal. `bytes` is true for a `b''`/`B''` literal.
-pub(super) fn decode_non_raw(body: &str, bytes: bool) -> Option<String> {
+pub(super) fn decode_non_raw(body: &str, bytes: bool) -> Decoded {
+    if body.contains(HOLE) {
+        return Decoded::Undecodable;
+    }
+    let mut holed = false;
+    match decode(body, bytes, &mut holed) {
+        None => Decoded::Undecodable,
+        Some(text) if holed => Decoded::Holed(text),
+        Some(text) => Decoded::Value(text),
+    }
+}
+
+fn decode(body: &str, bytes: bool, holed: &mut bool) -> Option<String> {
     let chars: Vec<char> = body.chars().collect();
     let mut out = String::with_capacity(body.len());
     let mut i = 0;
@@ -81,7 +118,20 @@ pub(super) fn decode_non_raw(body: &str, bytes: bool) -> Option<String> {
                 i += width;
                 out.push(char::from_u32(n)?);
             }
-            'N' if !bytes => return None,
+            'N' if !bytes => {
+                // `\N{NAME}`: a non-empty name up to the first `}`. Anything
+                // else after `\N` is malformed.
+                if chars.get(i) != Some(&'{') {
+                    return None;
+                }
+                let close = chars[i + 1..].iter().position(|&d| d == '}')?;
+                if close == 0 {
+                    return None;
+                }
+                i += 1 + close + 1;
+                out.push(HOLE);
+                *holed = true;
+            }
             other => {
                 out.push('\\');
                 out.push(other);
@@ -102,42 +152,60 @@ fn hex(chars: &[char], at: usize, width: usize) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_non_raw;
+    use super::{decode_non_raw, Decoded, HOLE};
+
+    fn value(s: &str) -> Decoded {
+        Decoded::Value(s.to_string())
+    }
 
     #[test]
     fn backslash_newline_is_removed() {
-        assert_eq!(
-            decode_non_raw("/etc/ho\\\nsts", false).as_deref(),
-            Some("/etc/hosts")
-        );
-        assert_eq!(decode_non_raw("/e\\\r\ntc", true).as_deref(), Some("/etc"));
+        assert_eq!(decode_non_raw("/etc/ho\\\nsts", false), value("/etc/hosts"));
+        assert_eq!(decode_non_raw("/e\\\r\ntc", true), value("/etc"));
     }
 
     #[test]
     fn common_escapes_decode_like_python() {
         assert_eq!(
-            decode_non_raw("\\x2fetc\\057x\\u0041\\U00000042\\\\\\'", false).as_deref(),
-            Some("/etc/xAB\\'")
+            decode_non_raw("\\x2fetc\\057x\\u0041\\U00000042\\\\\\'", false),
+            value("/etc/xAB\\'")
         );
-        assert_eq!(
-            decode_non_raw("a\\nb\\tc", false).as_deref(),
-            Some("a\nb\tc")
-        );
+        assert_eq!(decode_non_raw("a\\nb\\tc", false), value("a\nb\tc"));
     }
 
     #[test]
     fn unknown_and_bytes_only_escapes_are_kept() {
-        assert_eq!(decode_non_raw("\\d\\q", false).as_deref(), Some("\\d\\q"));
+        assert_eq!(decode_non_raw("\\d\\q", false), value("\\d\\q"));
         assert_eq!(
-            decode_non_raw("\\u0041\\N{x}", true).as_deref(),
-            Some("\\u0041\\N{x}")
+            decode_non_raw("\\u0041\\N{x}", true),
+            value("\\u0041\\N{x}")
         );
     }
 
     #[test]
-    fn undecodable_is_none_not_a_guess() {
-        assert_eq!(decode_non_raw("\\N{SOLIDUS}etc", false), None);
-        assert_eq!(decode_non_raw("\\x2", false), None);
-        assert_eq!(decode_non_raw("\\uD800", false), None);
+    fn named_escape_is_one_hole_not_a_guess() {
+        assert_eq!(
+            decode_non_raw("\\N{SOLIDUS}etc/ho\\N{LATIN SMALL LETTER S}ts", false),
+            Decoded::Holed(format!("{HOLE}etc/ho{HOLE}ts"))
+        );
+    }
+
+    #[test]
+    fn malformed_is_undecodable_not_a_guess() {
+        for body in [
+            "\\x2",
+            "\\uD800",
+            "\\N",
+            "\\Nx",
+            "\\N{}",
+            "\\N{open",
+            "a\u{FDD0}",
+        ] {
+            assert_eq!(
+                decode_non_raw(body, false),
+                Decoded::Undecodable,
+                "{body:?}"
+            );
+        }
     }
 }

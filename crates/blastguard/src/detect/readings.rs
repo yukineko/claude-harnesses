@@ -179,6 +179,39 @@ pub(super) fn shell_program_readings(texts: &[String]) -> (Vec<String>, Option<D
     (all, undetermined)
 }
 
+/// The text an UNQUOTED here-document body reaches its reader with, as far as
+/// backslashes go (POSIX: inside such a body a backslash quotes only `$`,
+/// `` ` ``, `\` and newline): `\<LF>` is removed, `\\` `\$` `` \` `` become the
+/// second character, any other backslash stays. `None` when that changes
+/// nothing. Expansions (`$x`, `$(…)`) are left as spelled — the caller judges
+/// them as an expansion it cannot read (backlog 47b20647: a Python program in
+/// `python3 - <<EOF` with `'/etc/ho\\<LF>sts'` reaches Python as
+/// `'/etc/ho\<LF>sts'`, i.e. `/etc/hosts`).
+pub(super) fn unquoted_here_document_reading(body: &str) -> Option<String> {
+    if !body.contains('\\') {
+        return None;
+    }
+    let mut out = String::with_capacity(body.len());
+    let mut chars = body.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek() {
+            Some('\n') => {
+                chars.next();
+            }
+            Some(&e @ ('\\' | '$' | '`')) => {
+                chars.next();
+                out.push(e);
+            }
+            _ => out.push('\\'),
+        }
+    }
+    (out != body).then_some(out)
+}
+
 /// Reason of the Ask for a [`line_continuation_reading`] that is undetermined.
 const LINE_CONTINUATION_UNDETERMINED: &str =
     "the shell removes a backslash-newline (line continuation) before it reads the words, \

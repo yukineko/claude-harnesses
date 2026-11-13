@@ -239,12 +239,28 @@ forge・condukt のスケジューラが再利用）。
   は `/etc/hosts` に書く。literal 本文（改行を含むので候補 path から外れていた）だけを見ていたため Allow
   になっていた。Python lexer（`python_semantics::lex`）の非 raw 文字列の text を Python と同じ decode
   （`\`＋LF／CRLF の除去、`\\` `\'` `\"` `\a` `\b` `\f` `\n` `\r` `\t` `\v`、8 進、`\xHH`、str のみ
-  `\uXXXX`/`\UXXXXXXXX`、それ以外の `\` 対はそのまま）にし、`python -c` の layer-0 program では
-  その decode 値も `interpreter_code_verdict` の literal 集合に**追加**して判定する（置き換えない）。
-  `\N{…}` など静的に decode できない本文は従来の読みのまま。raw literal（`r'…'`、Python は `\` と改行を残す）
+  `\uXXXX`/`\UXXXXXXXX`、それ以外の `\` 対はそのまま）にし、Python が読む layer-0 program
+  （`python -c`、および stdin から読む `python3 -`・`python3 /dev/stdin`・pipe・here-document。
+  `interpreter_code_verdict` の `PythonReader::InlineEval`/`Stdin`）では、その decode 値も literal 集合に
+  **追加**して判定する（置き換えない）。unquoted here-document（`python3 - <<EOF`）は shell が本文の
+  `\<LF>` を取り除き `\\` `\$` `` \` `` を 1 文字にしてから Python に渡すので、その読み
+  （`readings::unquoted_here_document_reading`）も program text に足す。
+  **decode できない literal は既知の値として扱わない**: `\N{NAME}`（Unicode 名の表を持たない）は 1 文字の
+  hole（`python_escape::Decoded::Holed`）とし、書き込みを持つ program では
+  `detect/interpreter/python_literal_target.rs` の `unknown_literal_target_verdict` が hole を `/`・`.`・
+  通常の 1 文字で埋めた全読み（hole 4 個まで）を system-directory 判定にかけ、どれかが system directory に
+  着地すれば **Deny**（`\N{SOLIDUS}etc/hosts`・`/etc/ho\N{…}ts`・`/etc/\N{…}`）。hole が directory 名の中に
+  あり（`/\N{…}tc/hosts`）どの読みも Deny でなければ **Ask**（subagent では Deny）、hole が 5 個以上も Ask。
+  hole が最後の segment だけにあり directory が確定している場合（`/tmp/\N{SNOWMAN}`）は何も足さない。
+  malformed な escape（`\x2`・`\N` の後に `{NAME}` が無い等、`Decoded::Undecodable`）は書き込みを持つ
+  program で Ask。**main session の Ask は「system harm は常に Deny」より弱い**（`/\N{LATIN SMALL LETTER E}tc/hosts`
+  は実際には /etc/hosts に書くが main では Ask）。Python lexer の `Tok::Str` の text は、decode できない本文に
+  ついては従来の読みのまま（Python FILE judge がこれを読む）。raw literal（`r'…'`、Python は `\` と改行を残す）
   は decode しない。テストは `tests/backlog_20261113_python_string_literal_line_continuation.rs`・
+  `tests/backlog_20261113_python_named_escape_and_stdin_bn.rs`・
   `tests/python_literal_line_continuation_deny_20261113.rs`（system-harm 形は main・subagent とも Deny、
-  `print('a\<LF>b')`・`open('/tmp/x\<LF>y','w')`・raw 形は Allow のまま）。
+  directory 名中の `\N{…}` は main Ask／subagent Deny、`print('a\<LF>b')`・`open('/tmp/x\<LF>y','w')`・
+  `print('\N{SNOWMAN}')`・`open('/tmp/\N{SNOWMAN}','w')`・無害な stdin program・raw 形は Allow のまま）。
 - **git の exec-capable 形は一律 Deny（backlog fb338793、ユーザー裁定 2026-11-07「git bisectでいろいろ
   構文を処理できてしまうくらいなら使用を禁止した方がいいのでは?」）** — git が呼び出し側の選んだコマンドを
   実行する形は、埋め込みコマンドの中身に関わらず Deny（`detect/git.rs` の `git_exec_ban`。

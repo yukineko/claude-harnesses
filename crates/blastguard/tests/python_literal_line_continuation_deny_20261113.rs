@@ -9,15 +9,22 @@
 //!   main session AND in a subagent (user ruling: system harm always Deny);
 //! - each shape's plain-path twin is Deny too (the control that shows the
 //!   program itself is one blastguard denies when the path is spelled plainly);
-//! - harmless programs with a BN inside a literal keep the decision main had
-//!   before the fix (observed at main 5bca9481, both modes): `print('a\<LF>b')`
-//!   and `open('/tmp/x\<LF>y','w')` are Allow;
+//! - the same for programs fed to `python` on stdin (`python3 -`, `/dev/stdin`,
+//!   quoted and UNQUOTED here-documents — the shell turns `\\` into `\` in the
+//!   latter) and for `\N{…}` named escapes, which are not decoded: one unknown
+//!   character that can be `/` (`\N{SOLIDUS}etc/hosts`) or sits in a file name
+//!   inside `/etc/`;
+//! - a `\N{…}` inside a directory NAME (`/\N{…}tc/hosts`) is Ask in the main
+//!   session and Deny in a subagent (never Allow) — weaker than Deny in main;
+//! - harmless programs keep the decision main had before the fix (observed at
+//!   main 5bca9481 for C1-C3; for C4-C9 at a1fcab51 = main 5f208b7b plus the
+//!   first 47b20647 commit, src of the second fix stashed; both modes): Allow;
 //! - the raw-string shape `r'/etc/ho\<LF>sts'` (NOT /etc/hosts) keeps its
 //!   decision at main 5bca9481: Allow, both modes.
 //!
-//! DOES NOT PROVE: escape forms other than BN (`\x2f`, octal, `\u`) are
-//! decoded on every path; shapes not listed here are safe; `\N{…}` named
-//! escapes (not decoded) are judged.
+//! DOES NOT PROVE: escape forms other than BN and `\N{…}` (`\x2f`, octal, `\u`)
+//! are judged on every path; shapes not listed here are safe; the Python FILE
+//! judge (`python3 x.py` of a written file) reads `\N{…}` correctly.
 
 #[path = "support/bounded.rs"]
 mod bounded;
@@ -142,7 +149,47 @@ const HARM: &[(&str, &str, &str)] = &[
         "python3 - <<'PY'\nopen('/etc/ho\\\nsts','w')\nPY",
         "python3 - <<'PY'\nopen('/etc/hosts','w')\nPY",
     ),
+    (
+        "H2-dev-stdin-pipe-free-heredoc-os-remove",
+        "python3 /dev/stdin <<'PY'\nimport os\nos.remove('/etc/ho\\\nsts')\nPY",
+        "python3 /dev/stdin <<'PY'\nimport os\nos.remove('/etc/hosts')\nPY",
+    ),
+    (
+        "H3-unquoted-heredoc-triple-quoted",
+        "python3 - <<PY\nopen('''/etc/ho\\\\\nsts''','w')\nPY",
+        "python3 - <<PY\nopen('''/etc/hosts''','w')\nPY",
+    ),
+    (
+        "N1-named-escape-os-remove",
+        "python3 -c \"import os; os.remove('\\N{SOLIDUS}etc/hosts')\"",
+        "python3 -c \"import os; os.remove('/etc/hosts')\"",
+    ),
+    (
+        "N2-named-escape-new-file-in-etc",
+        "python3 -c \"open('/etc/\\N{SNOWMAN}','w')\"",
+        "python3 -c \"open('/etc/x','w')\"",
+    ),
+    (
+        "N3-named-escape-unquoted-heredoc",
+        "python3 - <<PY\nopen('\\N{SOLIDUS}etc/hosts','w')\nPY",
+        "python3 - <<PY\nopen('/etc/hosts','w')\nPY",
+    ),
+    (
+        "N4-named-escape-dev-stdin",
+        "python3 /dev/stdin <<'PY'\nopen('/etc/ho\\N{LATIN SMALL LETTER S}ts','w')\nPY",
+        "python3 /dev/stdin <<'PY'\nopen('/etc/hosts','w')\nPY",
+    ),
 ];
+
+/// `\N{…}` inside a DIRECTORY name: no stand-in reading names a system
+/// directory, and the letter cannot be known, so the decision is Ask in the
+/// main session and Deny in a subagent — never Allow. NOTE: this program does
+/// write /etc/hosts, so the main-session Ask is weaker than the "system harm
+/// is always Deny" ruling; it is pinned here so the gap stays visible.
+const UNDETERMINED_DIR: &[(&str, &str)] = &[(
+    "U1-named-escape-in-directory-name",
+    "python3 -c \"open('/\\N{LATIN SMALL LETTER E}tc/hosts','w')\"",
+)];
 
 /// (label, harmless command with BN inside a literal, decision at main 5bca9481).
 const HARMLESS: &[(&str, &str, &str)] = &[
@@ -155,6 +202,36 @@ const HARMLESS: &[(&str, &str, &str)] = &[
     (
         "C3-raw-string-not-etc-hosts",
         "python3 -c \"open(r'/etc/ho\\\\\nsts','w')\"",
+        "allow",
+    ),
+    (
+        "C4-print-named-escape",
+        "python3 -c \"print('\\N{SNOWMAN}')\"",
+        "allow",
+    ),
+    (
+        "C5-open-tmp-named-escape",
+        "python3 -c \"open('/tmp/\\N{SNOWMAN}','w')\"",
+        "allow",
+    ),
+    (
+        "C6-stdin-quoted-heredoc-print-bn",
+        "python3 - <<'PY'\nprint('a\\\nb')\nPY",
+        "allow",
+    ),
+    (
+        "C7-stdin-unquoted-heredoc-print-bn",
+        "python3 - <<PY\nprint('a\\\\\nb')\nPY",
+        "allow",
+    ),
+    (
+        "C8-dev-stdin-open-tmp-bn",
+        "python3 /dev/stdin <<'PY'\nopen('/tmp/x\\\ny','w')\nPY",
+        "allow",
+    ),
+    (
+        "C9-stdin-print-named-escape",
+        "python3 - <<'PY'\nprint('\\N{SNOWMAN}')\nPY",
         "allow",
     ),
 ];
@@ -194,6 +271,24 @@ fn bn_in_python_literal_system_harm_is_deny_in_both_modes() {
 fn control_plain_path_twins_are_deny_in_both_modes() {
     let cases: Vec<(&str, &str)> = HARM.iter().map(|(l, _, plain)| (*l, *plain)).collect();
     check(&cases, |_| "deny");
+}
+
+#[test]
+fn named_escape_in_directory_name_is_ask_in_main_and_deny_in_subagent() {
+    let home = unique_home("und");
+    let mut failures = Vec::new();
+    for (label, command) in UNDETERMINED_DIR {
+        for (subagent, want) in [(false, "ask"), (true, "deny")] {
+            let (d, r) = run_as(command, &home, subagent);
+            println!("[{label}] subagent={subagent} {command:?} -> {d} (want {want}) | {r}");
+            if d != want {
+                failures.push(format!(
+                    "[{label}] subagent={subagent} -> {d} (want {want}) | {r}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]

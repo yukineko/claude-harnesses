@@ -11,6 +11,7 @@ mod open_mode;
 mod osascript;
 mod python_escape;
 mod python_file;
+mod python_literal_target;
 mod python_semantics;
 mod shell_calls;
 #[cfg(test)]
@@ -855,6 +856,18 @@ pub(super) fn quoted_string_literals(payload: &str) -> Vec<String> {
     out
 }
 
+/// Which reader runs the program [`interpreter_code_verdict`] judges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PythonReader {
+    /// Not Python (another interpreter, or a reader not known to be Python).
+    NotPython,
+    /// `python -c '…'`: the inline-eval program.
+    InlineEval,
+    /// A program `python` reads from stdin (a here-document, a here-string,
+    /// `/dev/stdin`, a pipe).
+    Stdin,
+}
+
 /// What [`Ctx::program_text_redirects`] points at while
 /// [`interpreter_code_verdict`] runs its shell pass over program text.
 pub(super) struct ProgramTextSink {
@@ -913,15 +926,24 @@ pub(super) struct ProgramTextSink {
 /// unchanged. `strings_are_data` (only from the `python3 - <<'EOF'` audit,
 /// [`python_file::python_stdin_body_reading`]) stops the descent at layer 0:
 /// the parser showed no string of that program reaches a shell or a process.
+///
+/// `reader` says whether PYTHON reads the layer-0 program
+/// ([`PythonReader`]). `python` above is [`PythonReader::InlineEval`] only;
+/// the Python literal reading (backlog 47b20647) applies to both Python
+/// readers: each non-raw literal's decoded value is judged as well, and a
+/// literal that is not fully decoded (`\N{…}`, a malformed escape) is judged
+/// by [`python_literal_target::unknown_literal_target_verdict`].
 pub(super) fn interpreter_code_verdict(
     shape: &str,
     payloads: &[String],
     depth: usize,
     ctx: &Ctx<'_>,
     expansion_possible: bool,
-    python: bool,
+    reader: PythonReader,
     strings_are_data: bool,
 ) -> Decision {
+    let python = reader == PythonReader::InlineEval;
+    let python_reader = reader != PythonReader::NotPython;
     let redirects = ProgramTextSink {
         rows: std::cell::RefCell::new(Vec::new()),
         redirects_are_data: python
@@ -943,7 +965,7 @@ pub(super) fn interpreter_code_verdict(
         depth,
         ctx,
         &program_ctx,
-        (expansion_possible, strings_are_data, python),
+        (expansion_possible, strings_are_data, python, python_reader),
         &mentions,
     );
     // A destructive spelling that `inert_literal_bodies` showed sits only inside
@@ -1070,7 +1092,7 @@ fn interpreter_program_verdict(
     depth: usize,
     ctx: &Ctx<'_>,
     program_ctx: &Ctx<'_>,
-    (expansion_possible, strings_are_data, python): (bool, bool, bool),
+    (expansion_possible, strings_are_data, python, python_reader): (bool, bool, bool, bool),
     mentions: &Mentions,
 ) -> Decision {
     // Descend through nested quoting rather than stopping at the first layer.
@@ -1234,15 +1256,23 @@ files or directories outright if that string is run as code; blastguard cannot s
             // decodes its escapes and REMOVES a backslash-newline, so
             // `open('/etc/ho\<LF>sts','w')` writes `/etc/hosts` while its body
             // holds an LF the candidate loop below skips as whitespace. The
-            // layer-0 text of a `python` invocation is read with the Python
-            // lexer and every decoded value that differs from the bodies is
-            // judged as well — an added reading, never a replacement.
-            if python && depth_of_layer == 0 {
-                for t in python_semantics::lex(payload) {
-                    if let python_semantics::Tok::Str { text, .. } = t {
-                        if !text.trim().is_empty() && !literals.contains(&text) {
-                            literals.push(text);
+            // layer-0 text of a program PYTHON reads (`python -c`, or a
+            // program fed to `python` on stdin: `python_reader`) is read with
+            // the Python lexer and every decoded value that differs from the
+            // bodies is judged as well — an added reading, never a
+            // replacement. A literal that is not fully decoded (`\N{…}`, a
+            // malformed escape) is judged below by
+            // `python_literal_target::unknown_literal_target_verdict`.
+            let mut unknown_values = Vec::new();
+            if python_reader && depth_of_layer == 0 {
+                for value in python_semantics::literal_values(payload) {
+                    match value {
+                        python_escape::Decoded::Value(text) => {
+                            if !text.trim().is_empty() && !literals.contains(&text) {
+                                literals.push(text);
+                            }
                         }
+                        other => unknown_values.push(other),
                     }
                 }
             }
@@ -1411,6 +1441,19 @@ it refuses to guess"
                         }
                     };
                     match block {
+                        Some(d) if d.is_deny() => return d,
+                        Some(ask) if pending_ask.is_none() => pending_ask = Some(ask),
+                        _ => {}
+                    }
+                }
+            }
+            // A Python literal that is not fully decoded is never a known,
+            // harmless path (backlog 47b20647): judged when the program writes.
+            if let Some(call) = write_call {
+                for value in &unknown_values {
+                    match python_literal_target::unknown_literal_target_verdict(
+                        shape, call, value, ctx,
+                    ) {
                         Some(d) if d.is_deny() => return d,
                         Some(ask) if pending_ask.is_none() => pending_ask = Some(ask),
                         _ => {}

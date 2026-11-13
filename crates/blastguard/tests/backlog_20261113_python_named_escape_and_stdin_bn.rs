@@ -127,10 +127,7 @@ fn non_deny(shapes: &[(&str, &str, &str)], plain: bool, tag: &str) -> Vec<String
     failures
 }
 
-// test-weakening-justified: new RED for an unfixed system-harm fail-open
-// (47b20647 scope, 2026-11-13); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: 47b20647 2026-11-13 \\N{..} named escape in a python literal builds a system path but is allowed — remove the ignore when fixed"]
 fn named_escape_literal_system_path_is_denied() {
     let f = non_deny(NAMED_ESCAPE_SHAPES, false, "ne");
     assert!(
@@ -142,10 +139,7 @@ fn named_escape_literal_system_path_is_denied() {
     );
 }
 
-// test-weakening-justified: new RED for an unfixed system-harm fail-open
-// (47b20647 scope, 2026-11-13); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: 47b20647 2026-11-13 BN in a python literal of a stdin program builds a system path but is allowed — remove the ignore when fixed"]
 fn stdin_program_literal_bn_system_path_is_denied() {
     let f = non_deny(STDIN_BN_SHAPES, false, "sbn");
     assert!(

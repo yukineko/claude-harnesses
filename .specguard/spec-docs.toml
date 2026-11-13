@@ -20,6 +20,16 @@ doc = "docs/specs/blastguard.md"
 reason = "'module 責務' lib: public pure API re-exporting the detector modules for specforge/condukt reuse; 概要 last sentence."
 
 [[spec]]
+path = "crates/blastguard/src/relay.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `relay`: subagent Ask relay (user ruling 2026-11-14 「sub agentのAskはmainで裁定する」) — append-only per-session queue, queued only for a hardened subagent Bash Ask, mark-executed / mark-relayed / Stop block / dismiss with reason, fail-closed on unreadable or corrupt queue."
+
+[[spec]]
+path = "crates/blastguard/tests/subagent_ask_relay_20261114.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `relay`: RED->GREEN tests for the relay (queue only on hardened subagent Ask, exact-match marking, Stop block/allow/dismiss/corrupt) plus the verdict-unchanged guard."
+
+[[spec]]
 path = "crates/blastguard/src/scope/checkout.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'managed な使い捨て場所での working-tree 破棄の Allow': SafeRoots::is_linked_worktree_checkout and its Known(true)/Known(false)/Undetermined contract."

@@ -986,6 +986,28 @@ forge・condukt のスケジューラが再利用）。
   1 entry = 1 行と表示順の不変を保証するが、曖昧さは無くさない（値は quote されない）。厳密な解析は `--json` を使う。
   exit: 0 = 成功（一致なし・ledger 不在を含み、不在は stderr に `no ledger at <path>`）、2 = 使い方の誤り、
   3 = ledger を特定・読めない／不正な行がある（有効な entry は出力したうえで `line <N>`）／stdout 書き込み失敗。
+- **`relay`** — subagent の Ask を main session で裁定させる relay（ユーザー裁定 2026-11-14 逐語:
+  「sub agentのAskはmainで裁定する」「この仕組みはコードで強制する、どうせわすれる」
+  「gateにそんな例外は追加してほしくない」「gateもconduktも絶対に勝手に他のworktreeを参照してはならない」）。
+  session ごとの append-only JSONL queue（`~/.blastguard/relay/<session_id>.jsonl`、`BLASTGUARD_RELAY_DIR`
+  で上書き。session_id が `[A-Za-z0-9_-]` 以外を含めば hash してファイル名にし dir 外を指させない）に
+  `queued` / `executed` / `relayed` / `dismissed` event を追記し、fold した状態で判定する。
+  (1) `main` の `emit` が subagent の **Bash の `Ask`** を `Deny` に硬化するとき、`ask_available()` が真
+  （main session が ask できる）なら `queued`（id `bgr-<12 hex>`・ts・session_id・agent_id・cwd・command・
+  Ask 理由）を追記し、id を**表示する** deny 理由の末尾に付ける（violation ledger へは付加前の理由を
+  記録するので `rule_id` は動かない）。`Deny`（system harm を含む）・main の `Ask`・headless の subagent
+  `Ask` は記録しない。書き込み失敗・panic でも判定は `Deny` のままで、失敗を deny 理由に明記する。
+  (2) `relay mark-executed`（PostToolUse / PostToolUseFailure、Bash）: main session（`payload_is_subagent`
+  が偽）の呼び出しで command と cwd がバイト一致する最古の未実行・未 dismiss entry に `executed`
+  （`tool_response` の整数 `exit_code`/`exitCode`/`returnCode`/`code`、無ければ `error` の `Exit code N`、
+  無ければ null）を追記。(3) `relay mark-relayed`（PostToolUse、SendMessage）: main session の
+  `tool_input` 全体に id を含む**実行済み**の entry に `relayed` を追記。(4) `relay stop`（Stop、
+  `run_guarded("blastguard-relay")` 下）: 未解決（executed∧relayed でも dismissed でもない）entry が
+  あれば `stop_hook_active` に関わらず block し、id・agent_id・cwd・command と手順を列挙。queue 読み取り
+  失敗・パース不能行・未知 id の event・パース不能な Stop payload は block（path を明示）。queue 不在は
+  allow。dismiss 済みは `systemMessage`（pending があれば block 理由）に毎回列挙。(5) `relay dismiss
+  <id> --reason <text>`: 空白のみ/欠落の理由・未知 id は exit 2、queue 読み書き失敗は exit 3。
+  コマンドを実行する経路は持たず、cwd は不透明な文字列として比較するだけで解決・stat しない。
 - **`hookio`** — PreToolUse `deny` の単一行 JSON 生成（`deny_json`）。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。

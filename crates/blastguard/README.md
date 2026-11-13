@@ -466,6 +466,60 @@ that lock's failure would have to resolve to `Undetermined` on every read.
 Writes go through temp + rename, so a reader never sees a half-written entry.
 
 
+## Subagent Ask relay: a subagent's Ask is adjudicated in the main session
+
+User rulings, 2026-11-14 (verbatim): 「sub agentのAskはmainで裁定する」 (the
+governing statement), 「この仕組みはコードで強制する、どうせわすれる」,
+「gateにそんな例外は追加してほしくない」, and
+「gateもconduktも絶対に勝手に他のworktreeを参照してはならない」.
+
+Inside a subagent nobody can answer a permission prompt, so an `Ask` is hardened
+to a `Deny` there. That verdict is unchanged. The relay makes sure the main
+session adjudicates it instead of forgetting it (`src/relay.rs`):
+
+1. **Record (PreToolUse).** When a subagent's Bash `Ask` is hardened and the main
+   session itself could ask (`interactive::ask_available`), a `queued` record
+   (id `bgr-<12 hex>`, ts, session_id, agent_id, cwd, exact command, Ask reason)
+   is appended to `~/.blastguard/relay/<session_id>.jsonl` (override:
+   `BLASTGUARD_RELAY_DIR`). The id is appended to the printed deny reason. A
+   true `Deny` (system harm or otherwise), a main-session `Ask`, and a subagent
+   `Ask` in a session that cannot ask (headless) are never queued. If the record
+   cannot be written the verdict is still `Deny`, and the deny reason says the
+   record failed and why.
+2. **Executed (PostToolUse / PostToolUseFailure, Bash, `blastguard relay
+   mark-executed`).** A main-session Bash call whose command and cwd are
+   byte-identical to a pending entry marks it executed, with the exit code when
+   the payload reports one. A subagent's call marks nothing.
+3. **Relayed (PostToolUse, SendMessage, `blastguard relay mark-relayed`).** A
+   main-session SendMessage that names the relay id marks an executed entry
+   relayed. Sending before executing marks nothing.
+4. **Stop (`blastguard relay stop`).** The main-session Stop blocks while any
+   entry of the session is neither executed-and-relayed nor dismissed, and
+   lists each pending entry's id, agent_id, cwd and exact command with the
+   procedure. It blocks on re-entry too: the way out is to resolve or dismiss.
+   An unreadable queue, an unparseable line, an event naming an unknown id, or
+   an unparseable Stop payload blocks (fail-closed) and names the queue path.
+   A panic blocks via the shared Stop barrier. No queue file allows.
+5. **Dismiss (`blastguard relay dismiss <id> --reason "<text>"`).** For a prompt
+   the human declined, or a command that cannot be re-run. A blank or missing
+   reason is refused (exit 2), as is an unknown id; an unreadable queue is
+   exit 3. Every dismissal of the session is shown on each later Stop
+   (`systemMessage` when nothing else is pending, appended to the block reason
+   otherwise).
+
+What it never does: it never executes a command (a tool that ran the stored
+command inside one Bash call would hide it from blastguard — the main agent runs
+it through its own Bash tool, where blastguard judges it normally); it adds no
+exception to any verdict; and it never resolves, stats or runs anything in the
+stored cwd, which is compared as an opaque string only. The main agent's own
+Bash call is the only thing that runs there.
+
+Known limits: only Bash is relayed (an `Edit`/`Write` Ask in a subagent is
+hardened as before but not queued); two main-session runs of the same command
+racing each other may mark the same entry; the `mark-*` hooks report write
+failures on stderr only, which leaves the entry pending (the restrictive side).
+
+
 ## Why it exists
 
 In agentic coding, a single `rm -rf`, `git reset --hard`, `git clean -fdx`, or
@@ -515,13 +569,15 @@ The CLI surface is minimal: `--version` / `-V`, `--help` / `-h` and `--protects`
 (the gate's protection statement from `src/protection.rs`: PROTECTS / AGAINST /
 GROUNDS lines) short-circuit before stdin is touched; `retro` runs the
 [retrospective](#retrospective); `record-approval` reads a PostToolUse payload
-(the approval-memory recorder); otherwise it reads a PreToolUse payload from
-stdin.
+(the approval-memory recorder); `relay mark-executed | mark-relayed | stop |
+dismiss` is the [subagent Ask relay](#subagent-ask-relay-a-subagents-ask-is-adjudicated-in-the-main-session);
+otherwise it reads a PreToolUse payload from stdin.
 
 | env var | effect |
 |---|---|
 | `BLASTGUARD_ASK` | `never` / `always` / `auto` (default): whether an `ask` may be emitted or is hardened to `deny` (see [Design bias](#design-bias)) |
 | `BLASTGUARD_APPROVALS_DIR` | approval-memory store location (default `~/.blastguard/approvals`) |
+| `BLASTGUARD_RELAY_DIR` | subagent Ask relay queue location (default `~/.blastguard/relay`) |
 | `CLAUDE_PROJECT_DIR`, `TMPDIR`, `HOME` | read by the hook to build the safe roots |
 | `CLAUDE_CODE_SESSION_ID` | keys the repeat-deny ledger |
 
@@ -534,7 +590,11 @@ cargo test -p blastguard              # unit + integration tests
 The hooks (`hooks/hooks.json`): **PreToolUse** with matcher
 `Bash|Edit|Write|MultiEdit|NotebookEdit` (timeout 10) calls
 `${CLAUDE_PLUGIN_ROOT}/bin/blastguard`; **PostToolUse** with matcher `Bash`
-(timeout 10) calls `${CLAUDE_PLUGIN_ROOT}/bin/blastguard record-approval`.
+(timeout 10) calls `${CLAUDE_PLUGIN_ROOT}/bin/blastguard record-approval` and
+`blastguard relay mark-executed`; **PostToolUseFailure** with matcher `Bash`
+calls `blastguard relay mark-executed`; **PostToolUse** with matcher
+`SendMessage` calls `blastguard relay mark-relayed`; **Stop** calls
+`blastguard relay stop` (all timeout 10).
 `bin/blastguard` is a POSIX-sh launcher that execs the matching
 `blastguard-<os>-<arch>` build. If no build is bundled for the host platform,
 the launcher prints a warning to stderr **and emits a PreToolUse decision**

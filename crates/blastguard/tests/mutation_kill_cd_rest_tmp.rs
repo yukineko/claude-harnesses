@@ -8,9 +8,12 @@
 //! fixture shape, so a `k_*` that goes RED is attributable to the guard alone
 //! and not to a fixture that never reached the relaxed path.
 //!
-//! Temp fixtures live under `/private/tmp` (the fixed temp root the relaxation
-//! is about); the project and home dirs live under the location-neutral base.
+//! Temp fixtures live under the canonical fixed temp root (`/private/tmp` on
+//! macOS, `/tmp` on Linux; `support/fixed_tmp.rs`), the root the relaxation is
+//! about; the project and home dirs live under the location-neutral base.
 
+#[path = "support/fixed_tmp.rs"]
+mod fixed_tmp;
 #[path = "support/git_env.rs"]
 mod git_env;
 #[path = "support/neutral_base.rs"]
@@ -36,7 +39,7 @@ struct Fx {
     base: PathBuf,
     home: PathBuf,
     proj: PathBuf,
-    /// unique dir under /private/tmp (canonical spelling)
+    /// unique dir under the canonical fixed temp root (canonical spelling)
     tmp: PathBuf,
     session: String,
 }
@@ -57,7 +60,7 @@ impl Fx {
         let proj = base.join("src/proj");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&proj).unwrap();
-        let tmp = PathBuf::from(format!("/private/tmp/bg-mutkill-{uniq}"));
+        let tmp = fixed_tmp::canonical_fixed_temp_root().join(format!("bg-mutkill-{uniq}"));
         std::fs::create_dir_all(&tmp).unwrap();
         Fx {
             base,

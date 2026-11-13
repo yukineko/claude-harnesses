@@ -7,6 +7,8 @@
 //! spelling alone. `g*` cases are fail-closed guards: undeterminable or
 //! non-tying input must never be Allow.
 
+#[path = "support/fixed_tmp.rs"]
+mod fixed_tmp;
 #[path = "support/git_env.rs"]
 mod git_env;
 #[path = "support/neutral_base.rs"]
@@ -201,14 +203,16 @@ fn r1b_cd_worktree_then_rm_target_is_allow() {
 }
 
 // ---- R2: /private/tmp ---------------------------------------------------------
+// (spelled via the canonical fixed temp root: `/private/tmp` on macOS, `/tmp`
+// on Linux; `support/fixed_tmp.rs`)
 
 struct TmpFx {
     dir: PathBuf,
 }
 impl TmpFx {
     fn new(tag: &str) -> TmpFx {
-        let dir = PathBuf::from(format!(
-            "/private/tmp/cdeq-{tag}-{}-{}",
+        let dir = fixed_tmp::canonical_fixed_temp_root().join(format!(
+            "cdeq-{tag}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

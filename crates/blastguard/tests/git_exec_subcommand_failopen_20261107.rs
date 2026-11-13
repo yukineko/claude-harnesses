@@ -51,6 +51,8 @@
 //! [`neutral_base::neutral_base`], `BLASTGUARD_ASK` / `TMPDIR` removed, so
 //! Allow is exactly empty stdout.
 
+#[path = "support/fixed_tmp.rs"]
+mod fixed_tmp;
 #[path = "support/git_env.rs"]
 mod git_env;
 #[path = "support/neutral_base.rs"]
@@ -301,8 +303,9 @@ fn control_git_log_stays_allow() {
 #[test]
 fn control_rm_rf_inside_private_tmp_scratch_stays_allow() {
     let f = Fixture::new("c_tmp");
-    let scratch = PathBuf::from(format!(
-        "/private/tmp/blastguard-git-exec-failopen-{}",
+    // The canonical fixed temp root: `/private/tmp` on macOS, `/tmp` on Linux.
+    let scratch = fixed_tmp::canonical_fixed_temp_root().join(format!(
+        "blastguard-git-exec-failopen-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(scratch.join("work/nested")).unwrap();

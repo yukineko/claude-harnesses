@@ -118,10 +118,10 @@ SCENARIOS = [
         # Evidence (rev 91046d26, 2026-11-14): mutated `--no-fail-fast` run
         # went RED in 72 targets, but 60 of them ALSO fail on the unmutated
         # tree when run alone, and an unmutated `cargo test -p blastguard
-        # --no-fail-fast` failed 61 targets (committed RED repros) — so the
+        # --no-fail-fast` failed 61 and 60 targets in two runs (committed RED repros) — so the
         # former whole-crate run was RED with or without the mutation and
         # proved nothing for this scenario. ask_hardening_invariant (not among
-        # the 61): mutated exit 101
+        # either list): mutated exit 101
         # ("test result: FAILED", 0.5s warm), unmutated exit 0.
         tests=("--test", "ask_hardening_invariant"),
     ),

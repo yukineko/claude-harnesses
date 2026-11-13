@@ -99,7 +99,7 @@
   宣言した target が mutation を捕まえなければ NOT CAUGHT（exit 1）、cargo が拒否する選択子
   （`no test target named`）は inconclusive（exit 1）で、どちらも block — 絞り込みで見逃しが pass に
   変わることはない。mutation 無しで pass することを条件にしたのは、blastguard では mutation 無しの
-  `cargo test -p blastguard --no-fail-fast` が 61 target 失敗する（commit 済みの RED repro。rev 91046d26、
+  `cargo test -p blastguard --no-fail-fast` が 60〜61 target 失敗する（2 回の実行。commit 済みの RED repro。rev 91046d26、
   2026-11-14 実測）ため、旧来の crate 全体実行は mutation の有無に関係なく RED で、何も証明していなかった
   からである。
 

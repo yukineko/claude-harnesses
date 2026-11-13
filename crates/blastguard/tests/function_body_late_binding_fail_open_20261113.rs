@@ -111,7 +111,6 @@ fn verdict(out: &str) -> &'static str {
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: function-body redirect judged with definition-time $L; bash writes /etc/hosts"]
 fn r1_redirect_in_body_after_reassignment_is_not_allowed() {
     let f = Fx::new("r1");
     let cmd = format!("L={}; f() {{ echo x > $L; }}; L=/etc/hosts; f", f.safe());
@@ -119,7 +118,6 @@ fn r1_redirect_in_body_after_reassignment_is_not_allowed() {
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: function-body redirect judged with definition-time $L; bash writes /etc/hosts"]
 fn r2_multiline_redirect_in_body_after_reassignment_is_not_allowed() {
     let f = Fx::new("r2");
     let cmd = format!("L={}\nf() {{\necho x > $L\n}}\nL=/etc/hosts\nf", f.safe());
@@ -127,7 +125,6 @@ fn r2_multiline_redirect_in_body_after_reassignment_is_not_allowed() {
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: rm with a variable operand inside a function body is allowed"]
 fn r3_rm_in_body_after_system_assignment_is_not_allowed() {
     let f = Fx::new("r3");
     f.assert_not_allowed(
@@ -137,7 +134,6 @@ fn r3_rm_in_body_after_system_assignment_is_not_allowed() {
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: rm with a variable operand inside a function body is allowed"]
 fn r4_rm_unresolved_operand_in_called_body_is_not_allowed() {
     let f = Fx::new("r4");
     f.assert_not_allowed(
@@ -232,7 +228,6 @@ impl Fx {
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: function-body redirect with call-time $L=/etc/hosts must be system-harm Deny (ruling A+B)"]
 fn d1_redirect_in_body_call_time_system_path_is_system_harm_deny() {
     let f = Fx::new("d1");
     let cmd = format!("L={}; f() {{ echo x > $L; }}; L=/etc/hosts; f", f.safe());
@@ -240,7 +235,6 @@ fn d1_redirect_in_body_call_time_system_path_is_system_harm_deny() {
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: multiline function-body redirect with call-time $L=/etc/hosts must be system-harm Deny (ruling A+B)"]
 fn d2_multiline_redirect_in_body_call_time_system_path_is_system_harm_deny() {
     let f = Fx::new("d2");
     let cmd = format!("L={}\nf() {{\necho x > $L\n}}\nL=/etc/hosts\nf", f.safe());
@@ -248,7 +242,6 @@ fn d2_multiline_redirect_in_body_call_time_system_path_is_system_harm_deny() {
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: function-body rm with call-time $L=/etc/hosts must be system-harm Deny (ruling A+B)"]
 fn d3_rm_in_body_call_time_system_path_is_system_harm_deny() {
     let f = Fx::new("d3");
     f.assert_system_harm_deny(
@@ -258,7 +251,6 @@ fn d3_rm_in_body_call_time_system_path_is_system_harm_deny() {
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: function-body rm with unresolvable call-time $L must be Ask in main, Deny in a subagent (ruling A+B)"]
 fn d4_rm_unresolved_operand_in_called_body_is_ask_main_deny_subagent() {
     let f = Fx::new("d4");
     let cmd = "f() { rm -f $L; }; f";

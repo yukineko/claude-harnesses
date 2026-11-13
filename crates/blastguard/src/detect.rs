@@ -70,6 +70,7 @@ mod executors;
 mod file_tool;
 mod fileops;
 mod find_xargs;
+mod function_calls;
 mod gh;
 mod git;
 mod git_stage;

@@ -1,3 +1,4 @@
+use super::function_calls::{function_call_reading, FUNCTION_CALL_UNDETERMINED};
 use super::shell_lex::{
     bash32_lexed_reading, line_continuation_reading, shell_lexed_reading, Bash32Lexed, ShellLexed,
 };
@@ -48,6 +49,12 @@ use super::{
 /// bash 3.2 tokenises it, and that text is judged under
 /// [`under_bash32_reading`] too; a shape that lexer does not model is Ask.
 ///
+/// A further pass (backlog bdce0261) judges [`function_call_reading`] — the
+/// text with every call of a function defined on the line replaced by that
+/// function's body at the call site, where bash expands it with the variables
+/// in effect at the CALL (the plain reading judges a body, if at all, with the
+/// variables of its DEFINITION). Undetermined is Ask.
+///
 /// When either bash 3.2 pass is undetermined, the answer is at least Ask, and
 /// both passes run once more under a candidate parse of the unmodelled
 /// comment-with-quote shape ([`bash32_comment_candidate`], issue #1614): a
@@ -88,6 +95,21 @@ pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision 
         ShellLexed::Text(joined) => {
             ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
             if let Some(deny) = acc.record(detect_bash(&joined, 0, &Ctx::new(scope, &joined))) {
+                return deny;
+            }
+        }
+    }
+    // Backlog bdce0261: a function body judged where it is CALLED, with the
+    // variables in effect there. See `function_call_reading`.
+    match function_call_reading(c) {
+        ShellLexed::Same => {}
+        ShellLexed::Undetermined => {
+            // An Ask never short-circuits, so there is nothing to return here.
+            let _ = acc.record(Decision::ask(FUNCTION_CALL_UNDETERMINED));
+        }
+        ShellLexed::Text(inlined) => {
+            ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
+            if let Some(deny) = acc.record(detect_bash(&inlined, 0, &Ctx::new(scope, &inlined))) {
                 return deny;
             }
         }
@@ -139,7 +161,9 @@ pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision 
 /// (`Deny > Ask > Allow`; an undetermined reading is Ask). The nested shell
 /// removes the payload's line continuations before it splits words, and the
 /// outer single quotes that kept them literal are gone by then:
-/// `bash -c 'chm\<NL>od …'` runs `chmod` (backlog 040b959b).
+/// `bash -c 'chm\<NL>od …'` runs `chmod` (backlog 040b959b). The payload's
+/// [`function_call_reading`] is judged too (backlog bdce0261): the nested
+/// shell runs a function body at its call; an undetermined one is Ask.
 pub(super) fn shell_payload_verdict(payload: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let mut acc = VerdictAcc::default();
     if let Some(deny) = acc.record(detect_bash(payload, depth + 1, ctx)) {
@@ -151,6 +175,15 @@ pub(super) fn shell_payload_verdict(payload: &str, depth: usize, ctx: &Ctx<'_>) 
         ShellLexed::Text(joined) => detect_bash(&joined, depth + 1, ctx),
     };
     if let Some(deny) = acc.record(joined) {
+        return deny;
+    }
+    // Backlog bdce0261: the nested shell runs a function body at its call.
+    let inlined = match function_call_reading(payload) {
+        ShellLexed::Same => Decision::Allow,
+        ShellLexed::Undetermined => Decision::ask(FUNCTION_CALL_UNDETERMINED),
+        ShellLexed::Text(inlined) => detect_bash(&inlined, depth + 1, ctx),
+    };
+    if let Some(deny) = acc.record(inlined) {
         return deny;
     }
     acc.finish()

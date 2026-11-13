@@ -1687,3 +1687,34 @@ exit 101: 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
      Running tests/backlog_20261114_heredoc_rs_body_match_arrow_fp.rs (target/debug/deps/backlog_20261114_heredoc_rs_body_match_arrow_fp-c2e07066c7408162)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_heredoc_rs_body_match_arrow_fp`"""
+
+[[task]]
+id = "cec1ff7b"
+title = "blastguard: single-quoted perl -ne program using a perl special variable (dollar-dot) is refused as a shell expansion (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "RED 7b96fb5e (tests/backlog_20261114_perl_single_quoted_dollar_fp.rs) by the flow-8cca7ef5 orchestrator at main 3423cc72 2026-11-14: the read-only single-quoted perl -ne print-if-line-9 program on /dev/null is ask in main and deny in subagent, reason 'that program contains a shell expansion'. Single quotes pass the variable through literally, so the command text IS the program. Observed live on the deployed 0.2.527/0.2.529 hook several times this run (also when the perl text was only data inside a heredoc or a commit-message heredoc). Control: double-quoted perl -ne with HOME expansion is not Allow (passes)."
+created_at = 1794599022
+updated_at = 1794599022
+weight = 0.0
+issue_number = 1732
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1732"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_perl_single_quoted_dollar_fp -- --include-ignored"
+rev = "7b96fb5e164a16db916880d687e8843f9dd18039"
+observed_at = 1794599022
+detail = """
+exit 101: rktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.57s
+     Running tests/backlog_20261114_perl_single_quoted_dollar_fp.rs (target/debug/deps/backlog_20261114_perl_single_quoted_dollar_fp-78124a0de3e79bba)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_perl_single_quoted_dollar_fp`"""

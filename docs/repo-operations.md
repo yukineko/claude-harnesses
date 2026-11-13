@@ -92,6 +92,16 @@
   粒度は crate であって、変更された個々の `Undetermined` arm ではない（スクリプトに arm 単位の選択子は
   無く、scenario が登録されていない arm はここでは測られない）。非0終了（NOT CAUGHT / inconclusive /
   error / revert 失敗 / crash）・スクリプト不在・python3 不在はすべて block。
+  各 scenario は `tests`（`--lib` / `--test <name>` の cargo test-target 選択子）を宣言し、mutation 後は
+  `cargo test -p <gate> <tests>` だけを走らせる（crate 全体ではない）。選択子は推測ではなく実測で選ぶ:
+  mutation を当てた `cargo test -p <gate> --no-fail-fast` で RED になった target のうち、単独でも
+  RED になり、かつ mutation 無しでは pass するものを登録する（実測値はスクリプトの各 scenario 横に記録）。
+  宣言した target が mutation を捕まえなければ NOT CAUGHT（exit 1）、cargo が拒否する選択子
+  （`no test target named`）は inconclusive（exit 1）で、どちらも block — 絞り込みで見逃しが pass に
+  変わることはない。mutation 無しで pass することを条件にしたのは、blastguard では mutation 無しの
+  `cargo test -p blastguard --no-fail-fast` が 60〜61 target 失敗する（2 回の実行。commit 済みの RED repro。rev 91046d26、
+  2026-11-14 実測）ため、旧来の crate 全体実行は mutation の有無に関係なく RED で、何も証明していなかった
+  からである。
 
 ## 記録そのものの定期監査 — `scripts/record-audit.py`（backlog 0f55003a）
 

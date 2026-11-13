@@ -76222,3 +76222,68 @@ rev = "c04f12b4bce86d8daf02c7703b4ab344700919bf"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "67219006"
+title = "blastguard: python open/write_text on a relative path with no cwd in the payload became Deny (was Ask) after 17d985f1"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "regression",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Regression of this run's 17d985f1 (eca769ad): tests/backlog_7483e85b_twin_pending_ask_20261107.rs::undetermined_probe_relative_write_without_cwd_is_ask fails at 916a29bd, c4336b61 and c58f1134 (left deny, right ask) and passes at 53916d2a. Reason now: the shell redirect rule ('> a/b' ... relative path and blastguard does not know which directory) because inline open(...,'w') is mapped to ': > p'. Observed by the orchestrator (run/7483-*.txt), reported by another agent's donegate."
+created_at = 1794602044
+updated_at = 1794604775
+weight = 0.0
+issue_number = 1736
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1736"
+issue_closed_at = 1794604777
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_7483e85b_twin_pending_ask_20261107 undetermined_probe_relative_write_without_cwd_is_ask"
+rev = "8f1baa5c98033acf9d0cddf1aae3400b77a6cca0"
+observed_at = 1794602044
+detail = """
+exit 101: ukt/worktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-wtscope/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running tests/backlog_7483e85b_twin_pending_ask_20261107.rs (target/debug/deps/backlog_7483e85b_twin_pending_ask_20261107-f96b304257c29984)
+error: test failed, to rerun pass `-p blastguard --test backlog_7483e85b_twin_pending_ask_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_7483e85b_twin_pending_ask_20261107"
+exit = 0
+passed = 5
+rev = "194ac434b8b06c918ed18402a115f60c6e7ccf18"
+observed_at = 1794604769
+output_digest = "sha256:429b9d93b642c751068381f61a16624b5dc342533fd2065f61256cf3971c1fb5"
+excerpt = """
+
+running 5 tests
+test control_relative_read_without_cwd_is_allow ... ok
+test undetermined_probe_relative_write_without_cwd_is_ask ... ok
+test control_relative_write_with_cwd_is_allow ... ok
+test confined_ask_does_not_mask_a_later_deny_write ... ok
+test control_confined_unrecoverable_write_alone_is_ask ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+   Compiling blastguard v0.2.548 (/Users/yuki/.condukt/worktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.55s
+     Running tests/backlog_7483e85b_twin_pending_ask_20261107.rs (target/debug/deps/backlog_7483e85b_twin_pending_ask_20261107-dfea1e1f19985f9b)
+"""
+
+[task.closure.red]
+rev = "c58f113491f293e984b91d830ed5d8f7600c38e3"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

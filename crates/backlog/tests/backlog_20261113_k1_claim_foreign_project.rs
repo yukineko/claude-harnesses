@@ -76,7 +76,6 @@ fn control_plain_next_does_not_refuse_queue_for_foreign_project() {
 }
 
 #[test]
-#[ignore = "RED: K1 — remove the ignore when fixed"]
 fn next_claim_hands_out_valid_ticket_despite_foreign_project_on_another() {
     let (fx, x, y) = setup("k1-claim");
     let o = fx.run(&["next", "--claim"]);

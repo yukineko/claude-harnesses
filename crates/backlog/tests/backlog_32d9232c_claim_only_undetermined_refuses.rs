@@ -1,29 +1,24 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! RED repro (audit 2026-11-13 32d9232c): `backlog next --claim` with ONLY
-//! undetermined candidate (single ticket in queue with foreign/nonexistent
-//! project path) must REFUSE TO CLAIM the whole queue (non-zero exit, "REFUSED"
-//! message in output, ticket NOT claimed, store status still pending).
+//! Regression guard (backlog 1657, audit 2026-11-13): `backlog next --claim`
+//! with ONLY undetermined candidate (single ticket in queue with foreign/
+//! nonexistent project path) must REFUSE TO CLAIM the queue (non-zero exit,
+//! "REFUSED" message, ticket NOT claimed, store status still pending).
 //!
-//! Invariant: when the only candidate is undetermined (cannot determine its
-//! project identity or project root to re-run its repro), the claim is refused
-//! non-zero with a "REFUSED" message. This is NOT a "no pending tasks" scenario
-//! — the task is pending, but the claim cannot be fulfilled because the task's
-//! information is insufficient. The task remains unclaimed and in pending status.
-//!
-//! The fix will make `claim_rechecked` skip candidates with undetermined `rerun_dir`
-//! and consider the next one. When the ONLY candidate is undetermined, after that
-//! skip there are no more candidates, so the loop exhausts all candidates and
-//! must return an error REFUSED (not Ok(None) which would render "no pending tasks").
+//! The fix (claim_rechecked policy change) makes `claim_rechecked` skip
+//! candidates with undetermined `rerun_dir` and consider the next one. When
+//! the ONLY candidate is undetermined, the loop exhausts all candidates and
+//! returns an error REFUSED (not Ok(None) which would render "no pending tasks").
+//! This invariant ensures that an unverifiable queue is NOT rendered as empty;
+//! the task IS pending but cannot be claimed due to insufficient information.
 //!
 //! Fixture: isolated HOME + linked-worktree git repo (tests/common). Single
-//! ticket X (p0) carries project `/some/old/root` (does not exist, foreign,
+//! ticket X (p0) carries project `/some/old/root` (nonexistent, foreign,
 //! undetermined). Measurement point: 2026-11-13.
 //!
-//! Does NOT prove: that the undetermined candidate must be silently skipped in
-//! the future (only that the queue must refuse when only that candidate exists),
-//! nor what happens when multiple candidates exist (one undetermined, others valid),
-//! nor the correct behavior when project identity is undetermined for reasons other
-//! than nonexistent path.
+//! Does NOT prove: whether an undetermined candidate is silently skipped
+//! (only that the queue refuses when it is the only candidate), nor what
+//! happens when multiple candidates exist (mixed undetermined and valid),
+//! nor the correct behavior for project identity undetermined by other causes.
 
 mod common;
 

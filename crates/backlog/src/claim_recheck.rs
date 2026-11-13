@@ -4,8 +4,12 @@
 //! the cwd's checkout (its git toplevel) when it belongs to the ticket's
 //! project — the same `store::canonical_project_id`, so a linked worktree
 //! matches its main checkout — otherwise the ticket's project root. When
-//! either identity is undetermined, or the chosen location is not a usable
-//! git checkout, the claim is REFUSED (see [`rerun_dir`]).
+//! a candidate's project identity is undetermined or its re-run location is
+//! not a usable git checkout, that candidate is SKIPPED and the next candidate
+//! is considered. The claim is REFUSED (non-zero) when no claimable candidate
+//! remains and at least one candidate was skipped due to undetermined re-run
+//! location (others may have been skipped because their fix landed or they were
+//! auto-cancelled). See [`rerun_dir`].
 
 use crate::{claim_ledger, evidence, live_lease_view, store, task};
 use anyhow::Result;
@@ -28,11 +32,13 @@ const RECHECK_ATTEMPTS: usize = 3;
 ///      or its toplevel is not resolvable by git) the ticket's project root,
 ///      validated by [`project_root`].
 ///
-/// `Err` (the caller refuses the claim) when the ticket's project field is
-/// unresolved or empty, when EITHER project identity is `Undetermined` (or the
-/// cwd itself cannot be read) — an undetermined identity is never read as
-/// "same project" nor as "different project" — or when the fallback project
-/// root is not a usable git checkout.
+/// `Err` (the caller skips this candidate and considers the next one) when the
+/// ticket's project field is unresolved or empty, when EITHER project identity
+/// is `Undetermined` (or the cwd itself cannot be read) — an undetermined
+/// identity is never read as "same project" nor as "different project" — or when
+/// the fallback project root is not a usable git checkout. When no claimable
+/// candidate remains and at least one candidate was skipped as undetermined, the
+/// claim is REFUSED instead of returning empty queue (CLAUDE.md §3: fail-closed).
 pub(crate) fn rerun_dir(cand: &task::Task) -> std::result::Result<PathBuf, String> {
     if cand.project_unresolved {
         return Err(format!(
@@ -77,9 +83,9 @@ pub(crate) fn rerun_dir(cand: &task::Task) -> std::result::Result<PathBuf, Strin
 }
 
 /// The ticket's project root (the row's `project` field) as a re-run
-/// location. `Err` (the caller refuses the claim) when the root is
+/// location. `Err` (the caller skips this candidate) when the root is
 /// unresolved, empty, missing, or not itself the top of a git checkout —
-/// re-running against any other tree would hand out (or skip) a ticket on
+/// re-running against any other tree would hand out a ticket on
 /// someone else's evidence.
 fn project_root(cand: &task::Task) -> std::result::Result<PathBuf, String> {
     if cand.project_unresolved {
@@ -205,7 +211,8 @@ pub(crate) fn next_unfixed(
 /// (undetermined: REFUSED); otherwise re-run its
 /// stored repro at HEAD of the location [`rerun_dir`] picks (the cwd checkout
 /// when it belongs to the ticket's project, else the ticket's project root; an
-/// undetermined identity or an unusable root refuses the claim) via `evidence::run_repro`
+/// undetermined identity or an unusable root is SKIPPED with a notice and the
+/// claim moves to the next candidate) via `evidence::run_repro`
 /// (can be a long `cargo test`, so it runs outside the ledger lock and the
 /// tasks-file lock), classified by `evidence::run_repro_classified`, then:
 ///   - `not-reproduced` / `not-demonstrated` (user ruling 2026-11-13
@@ -223,8 +230,11 @@ pub(crate) fn next_unfixed(
 ///     reserves ONLY this candidate. If the locked pick differs, nothing was
 ///     reserved and the round repeats, at most [`RECHECK_ATTEMPTS`] times.
 ///
-/// `Ok(None)` only when the peek finds no eligible candidate: an observation
-/// of an empty queue (after the green skips), the same as before.
+/// `Ok(None)` only when no eligible candidate remains AND none was skipped as
+/// undetermined (truly empty queue). When no claimable candidate remains and at
+/// least one candidate was skipped due to undetermined re-run location, returns
+/// Err (REFUSED) instead, because the queue is not judged empty — those
+/// candidates are pending but unverifiable.
 pub(crate) fn claim_rechecked(
     tasks_path: &Path,
     tag: Option<&str>,
@@ -235,6 +245,7 @@ pub(crate) fn claim_rechecked(
     const REFUSED: &str = "backlog next --claim REFUSED to claim (this is NOT \"no pending \
                            tasks\" — nothing was claimed and the queue was not judged empty)";
     let mut skip: HashSet<String> = HashSet::new();
+    let mut undetermined: Vec<(String, String, String)> = Vec::new();
     let mut moved_rounds = 0usize;
     loop {
         let mut excluded: HashSet<String> = live_lease_view(project, "next --claim")?
@@ -242,7 +253,16 @@ pub(crate) fn claim_rechecked(
             .collect();
         excluded.extend(skip.iter().cloned());
         let Some(cand) = store::next_excluding(tasks_path, tag, project, &excluded)? else {
-            return Ok(None);
+            if undetermined.is_empty() {
+                return Ok(None);
+            }
+            let mut msg = format!(
+                "{REFUSED}: no claimable candidate remains and the re-run of these skipped candidates could not be determined (they are left pending):"
+            );
+            for (id, cmd, why) in undetermined {
+                msg.push_str(&format!("\n  - {id} (cmd: {cmd}): {why}"));
+            }
+            return Err(anyhow::anyhow!(msg));
         };
         // `pick_next` only returns rows with a reproduced repro, so a missing
         // record here is a broken invariant, refused rather than claimed.
@@ -255,12 +275,15 @@ pub(crate) fn claim_rechecked(
         let root = match rerun_dir(&cand) {
             Ok(r) => r,
             Err(why) => {
-                return Err(anyhow::anyhow!(
-                    "{REFUSED}: the re-run of candidate {}'s stored repro could not be \
-                     determined (cmd: {}): {why}",
-                    cand.id,
-                    stored.cmd
-                ));
+                eprintln!(
+                    "backlog next --claim: NOT handing out {}: the re-run of its stored repro \
+                     could not be determined (cmd: {}): {why}. It is left pending (not \
+                     cancelled). Considering the next candidate.",
+                    cand.id, stored.cmd
+                );
+                undetermined.push((cand.id.clone(), stored.cmd.clone(), why));
+                skip.insert(cand.id.clone());
+                continue;
             }
         };
         match fix_landed(&cand) {

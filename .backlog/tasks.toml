@@ -377,37 +377,6 @@ exit 101: 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.77s
 error: test failed, to rerun pass `-p condukt --test backlog_20261113_c5_c6_circuit_budget_unmeasured`"""
 
 [[task]]
-id = "32d9232c"
-title = "backlog: next --claim が他プロジェクトパスの 1 件で queue 全体を拒否する問題を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "audit-20261113",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """K1. claim_recheck.rs rerun_dir: undetermined project identity refuses the whole claim. RED (verbatim): Error: backlog next --claim REFUSED to claim ... the re-run of candidate 18480a75's stored repro could not be determined (cmd: bash tests/repro_yes.sh): the project identity of its project root "/some/old/root" cannot be determined. The fixture rewrites X's project line (backlog add refuses a nonexistent project), a state a moved repo produces. Two fix readings: (a) skip X and claim Y (what the RED expects); (b) like 97d5f45c, re-run in the store's own repo and claim X - would fail this RED. 'skip X, claim Y' is a design choice: ask the user before choosing (b). A single-candidate store must still refuse, not report empty. source: audit 2026-11-13 (condukt run run-20261112-072718-37987 follow-ups; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."""
-created_at = 1794516640
-updated_at = 1794516640
-weight = 0.0
-issue_number = 1657
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1657"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test backlog_20261113_k1_claim_foreign_project -- --ignored next_claim_hands_out_valid_ticket_despite_foreign_project_on_another"
-rev = "99e1d092f0fe8213c94668b9757b20be93d0a46d"
-observed_at = 1794516640
-detail = """
-exit 101: ng backlog v0.3.110 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.17s
-     Running tests/backlog_20261113_k1_claim_foreign_project.rs (target/debug/deps/backlog_20261113_k1_claim_foreign_project-bcb762cbc9a84c04)
-error: test failed, to rerun pass `-p backlog --test backlog_20261113_k1_claim_foreign_project`"""
-
-[[task]]
 id = "536e2811"
 title = "backlog: fix コミット件名の (backlog <id> wave 2) / (backlog <id>; x) 形式を修正済みと認識しない問題を直す"
 project = "/Users/yuki/src/harness"
@@ -1665,3 +1634,35 @@ exit 101: ignored; 0 measured; 2 filtered out; finished in 0.47s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
      Running tests/backlog_20261113_printf_escape_and_procsub_to_shell.rs (target/debug/deps/backlog_20261113_printf_escape_and_procsub_to_shell-fe796204173a33a6)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_printf_escape_and_procsub_to_shell`"""
+
+[[task]]
+id = "5616e9e5"
+title = 'blastguard: python の os.chmod/os.rename の system パスを文字列 literal escape (\x2f, \057, \u002f, \N{SOLIDUS}) で綴ると allow になる fail-open を直す'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "System-harm fail-open, RED e3147b2c by a non-implementer (flow-8cca7ef5 orchestrator) at main 15b5c10e 2026-11-13: 12 of 12 (shape x mode) os.chmod/os.rename runs with an escape-spelled /etc/hosts were ALLOWED (main and subagent). Control control_plain_literal_twins_are_denied non-ignored. Found by the 47b20647 round-2 verifier; also Allow at the 47b20647 branch tip (that branch decodes escapes for open() only)."
+created_at = 1794575697
+updated_at = 1794575697
+weight = 0.0
+issue_number = 1722
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1722"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_python_escape_decoded_os_path_call -- --include-ignored escape_decoded_system_path_in_os_call_is_not_allowed"
+rev = "e3147b2c64941cbe980097c01c97e0bcc2990268"
+observed_at = 1794575697
+detail = """
+exit 101: ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.38s
+     Running tests/backlog_20261113_python_escape_decoded_os_path_call.rs (target/debug/deps/backlog_20261113_python_escape_decoded_os_path_call-955f4dd2468dee75)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_python_escape_decoded_os_path_call`"""

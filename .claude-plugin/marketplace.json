@@ -82,7 +82,7 @@
     {
       "name": "backlog",
       "description": "Cross-project task queue for Claude Code with cycle-type tags, a SessionStart hook that injects pending work, and subcommands to add, list, claim and finish tasks.",
-      "version": "0.3.113",
+      "version": "0.3.115",
       "category": "workflow",
       "keywords": [
         "backlog",
@@ -156,7 +156,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: schedules parallel and serial task batches by file-conflict analysis, manages git worktrees, tracks run state and gates completion.",
-      "version": "0.7.394",
+      "version": "0.7.395",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -405,7 +405,7 @@
     {
       "name": "flow",
       "description": "Backlog-draining loop skill for Claude Code that picks tasks from sources such as compass, backlog and hypothesis and hands them to condukt for execution, without locking the whole queue.",
-      "version": "0.2.33",
+      "version": "0.2.34",
       "category": "orchestration",
       "keywords": [
         "flow",
@@ -854,7 +854,7 @@
     {
       "name": "scout",
       "description": "Multi-lens project audit skill that fans out read-only sub-agents across five lenses, scores the findings into prioritized tasks, writes them to the backlog and hands execution to /flow.",
-      "version": "0.1.15",
+      "version": "0.1.16",
       "category": "planning",
       "keywords": [
         "scout",

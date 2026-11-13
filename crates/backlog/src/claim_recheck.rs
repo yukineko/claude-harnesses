@@ -33,7 +33,7 @@ const RECHECK_ATTEMPTS: usize = 3;
 /// cwd itself cannot be read) — an undetermined identity is never read as
 /// "same project" nor as "different project" — or when the fallback project
 /// root is not a usable git checkout.
-fn rerun_dir(cand: &task::Task) -> std::result::Result<PathBuf, String> {
+pub(crate) fn rerun_dir(cand: &task::Task) -> std::result::Result<PathBuf, String> {
     if cand.project_unresolved {
         return Err(format!(
             "its project root was recorded as unresolved ({:?}), so its project identity cannot \
@@ -207,12 +207,18 @@ pub(crate) fn next_unfixed(
 /// when it belongs to the ticket's project, else the ticket's project root; an
 /// undetermined identity or an unusable root refuses the claim) via `evidence::run_repro`
 /// (can be a long `cargo test`, so it runs outside the ledger lock and the
-/// tasks-file lock), then:
-///   - `not-reproduced` (GREEN): not handed out. A notice naming the id, cmd
-///     and rev goes to stderr, the ticket joins `skip`, and the next candidate
-///     is considered. Nothing is written to the store.
-///   - `undetermined`: REFUSED (user ruling 2026-11-07, "Refuse the claim"):
-///     non-zero, the runner's detail in the error, nothing claimed.
+/// tasks-file lock), classified by `evidence::run_repro_classified`, then:
+///   - `not-reproduced` / `not-demonstrated` (user ruling 2026-11-13
+///     「保留はありえない実証されないならclose,実証されたらopen」): not handed
+///     out and AUTO-CANCELLED ([`auto_cancel`]: discard closure recording the
+///     verdict, cmd, rev, exit code and output tail; the mirrored issue is
+///     closed like `backlog cancel`). A stderr notice names it and the next
+///     candidate is considered. When the store lies in the PRIMARY working
+///     tree (store writes refused there, backlog 1e6f00ae) nothing is written
+///     and the claim is REFUSED, naming the candidate and the observation.
+///   - `undeterminable` (infrastructure: timeout, signal, build failure, ...):
+///     REFUSED (user ruling 2026-11-07, "Refuse the claim"): non-zero, the
+///     runner's detail in the error, nothing claimed, the row untouched.
 ///   - `reproduced` (RED): claimed through `claim_ledger::claim_pinned`, which
 ///     reserves ONLY this candidate. If the locked pick differs, nothing was
 ///     reserved and the round repeats, at most [`RECHECK_ATTEMPTS`] times.
@@ -277,26 +283,57 @@ pub(crate) fn claim_rechecked(
                 ));
             }
         }
-        let rerun = evidence::run_repro(&root, &stored.cmd, store::now_unix());
+        let classified = evidence::run_repro_classified(&root, &stored.cmd, store::now_unix());
+        let rerun = &classified.repro;
         let rev = rerun.rev.as_deref().unwrap_or("<unresolved>");
-        match rerun.outcome.as_str() {
-            task::REPRO_REPRODUCED => {}
-            task::REPRO_NOT_REPRODUCED => {
+        match classified.verdict {
+            evidence::RecheckVerdict::Reproduced => {}
+            // User ruling 2026-11-13: not demonstrated -> close. The row is
+            // auto-cancelled (discard closure, issue closed) and the claim
+            // moves on to the next candidate in the same invocation.
+            evidence::RecheckVerdict::NotReproduced | evidence::RecheckVerdict::NotDemonstrated => {
+                if let Err(why) =
+                    harness_core::primary_tree::refuse_if_primary(tasks_path, "auto-cancel")
+                {
+                    return Err(anyhow::anyhow!(
+                        "{REFUSED}: candidate {}'s stored repro is {} (cmd: {}, rev: {rev}): {}. \
+                         It must be auto-cancelled (user ruling 2026-11-13), but this store \
+                         cannot be written here: {why}. Run `backlog next --claim` or \
+                         `backlog recheck --id {}` from a linked worktree.",
+                        cand.id,
+                        classified.verdict.label(),
+                        rerun.cmd,
+                        rerun.detail,
+                        cand.id
+                    ));
+                }
+                auto_cancel(tasks_path, &cand.id, &classified, "next --claim").map_err(|e| {
+                    anyhow::anyhow!(
+                        "{REFUSED}: candidate {}'s stored repro is {} but auto-cancelling it \
+                         failed: {e}",
+                        cand.id,
+                        classified.verdict.label()
+                    )
+                })?;
                 eprintln!(
-                    "backlog next --claim: NOT handing out {}: its stored repro no longer \
-                     reproduces (cmd: {}, rev: {rev}): {}. It is likely fixed; verify and close \
-                     it. Considering the next candidate.",
-                    cand.id, rerun.cmd, rerun.detail
+                    "backlog next --claim: AUTO-CANCELLED {} (user ruling 2026-11-13: not \
+                     demonstrated -> close): its stored repro is {} (cmd: {}, rev: {rev}): {}. \
+                     Commit the store change. Considering the next candidate.",
+                    cand.id,
+                    classified.verdict.label(),
+                    rerun.cmd,
+                    rerun.detail
                 );
                 skip.insert(cand.id.clone());
                 continue;
             }
-            // `undetermined` and any outcome this build does not know.
-            other => {
+            evidence::RecheckVerdict::Undeterminable => {
                 return Err(anyhow::anyhow!(
                     "{REFUSED}: the re-run of candidate {}'s stored repro could not be \
-                     determined (outcome {other}, cmd: {}, rev: {rev}): {}",
+                     determined (infrastructure; NOT auto-cancelled; outcome {}, cmd: {}, rev: \
+                     {rev}): {}",
                     cand.id,
+                    classified.verdict.label(),
                     rerun.cmd,
                     rerun.detail
                 ));
@@ -328,4 +365,43 @@ pub(crate) fn claim_rechecked(
             }
         }
     }
+}
+
+/// The user ruling every auto-cancel quotes (2026-11-13).
+pub(crate) const NO_DEFERRAL_RULING: &str =
+    "「保留はありえない実証されないならclose,実証されたらopen」";
+
+/// The discard reason recorded by an auto-cancel: the ruling, which command
+/// observed it, and the observation verbatim (verdict, rev, cmd, exit code
+/// and output tail as carried by the repro detail).
+pub(crate) fn auto_cancel_reason(by: &str, c: &evidence::ClassifiedRepro) -> String {
+    let exit = match c.exit {
+        Some(e) => format!("exit {e}"),
+        None => "no completed run".to_string(),
+    };
+    format!(
+        "auto-cancel by `backlog {by}` (user ruling 2026-11-13 {NO_DEFERRAL_RULING}): the stored \
+         repro was re-run and did NOT demonstrate the defect. verdict: {}; {exit}; cmd: {}; rev: \
+         {}; observed: {}",
+        c.verdict.label(),
+        c.repro.cmd,
+        c.repro.rev.as_deref().unwrap_or("<unresolved>"),
+        c.repro.detail
+    )
+}
+
+/// Auto-cancel `id` with `cancel` semantics (discard closure via
+/// `store::mark_cancelled`) and close its mirrored issue exactly like
+/// `backlog cancel` (`mirror_close_for`). The caller has already checked the
+/// store is writable (not the primary working tree).
+pub(crate) fn auto_cancel(
+    tasks_path: &Path,
+    id: &str,
+    c: &evidence::ClassifiedRepro,
+    by: &str,
+) -> Result<()> {
+    debug_assert!(c.verdict.closes());
+    store::mark_cancelled(tasks_path, id, &auto_cancel_reason(by, c))?;
+    crate::mirror_close_for(tasks_path, id);
+    Ok(())
 }

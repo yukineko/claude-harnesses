@@ -16,6 +16,7 @@ mod integrate;
 mod liveness;
 mod lock;
 mod merge_driver;
+mod recheck;
 mod store;
 mod task;
 mod timefmt;
@@ -255,10 +256,10 @@ enum Command {
         reason: String,
     },
 
-    /// Record a user ruling deferring a task (見送り): its status becomes
-    /// `ruled-deferred`, which `next` / `next --claim` never hand out and
-    /// nothing requeues. Exits are `cancel` / `done` only
+    /// ABOLISHED (user ruling 2026-11-13): always refused; use `recheck`
     Defer(defer::DeferArgs),
+    /// Re-run open rows' repros: reproduced stays open, else auto-cancelled
+    Recheck(recheck::RecheckArgs),
 
     /// Reconcile this store against its GitHub issues (one-way: local wins)
     Sync {
@@ -1591,7 +1592,16 @@ fn run(cli: Cli) -> Result<()> {
             mirror_close_for(&tasks_path, &id);
         }
 
-        Command::Defer(args) => defer::run(&write_store_path("backlog defer")?, &args)?,
+        Command::Defer(args) => defer::run(&args)?,
+
+        Command::Recheck(args) => {
+            let tasks_path = write_store_path("backlog recheck")?;
+            let effective_project = read_project_scope(&location, None, false, "recheck")?;
+            let leased: HashSet<String> = live_lease_view(effective_project.as_deref(), "recheck")?
+                .into_keys()
+                .collect();
+            recheck::run(&tasks_path, &args, &leased)?;
+        }
 
         Command::Fail { id, reason } => {
             let tasks_path = write_store_path("backlog fail")?;
@@ -1957,7 +1967,7 @@ fn report_near_duplicates(tasks_path: &Path, id: &str) {
 /// the caller has already committed the local state change and the mirror is
 /// downstream of it. A failure deliberately records NOTHING, so the task keeps
 /// its `issue_closed_at: None` and the next `backlog sync` retries.
-fn mirror_close_for(tasks_path: &Path, id: &str) {
+pub(crate) fn mirror_close_for(tasks_path: &Path, id: &str) {
     let Ok(tasks) = store::load(tasks_path) else {
         eprintln!("warning: could not re-read the store to close {id}'s issue; run `backlog sync`");
         return;

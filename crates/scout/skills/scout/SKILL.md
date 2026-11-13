@@ -38,7 +38,9 @@ read-only で課題を *発見* するだけ。実装は一切しない。
 1. **監査は read-only** — scout も sub-agent もファイルを編集しない。施策の実行は flow/condukt に委ねる。
 2. **証拠のない施策は採用しない** — 各施策は逐語引用 or `file:line` 参照 or Web ソース URL を必ず持つ（幻覚防止）。
 3. **書き込みは backlog add のみ** — scout はループもロックも持たない。直列化が要る実行は /flow（backlog ロック）に任せる。
-4. **合意は main のみ** — backlog に積む施策の確定は `AskUserQuestion`（HOTL）。勝手に全件積まない。
+4. **起票するかを人に聞かない**（ユーザー裁定 2026-11-13「起票しますか?というのはもう聞かないこと。実証されたら起票、そうでないなら破棄。それは自動で実行していくこと。それを仕組みとしていれて」） — Phase 3 を通った候補は全部、RED（不足を示すテスト）を書いて
+   `backlog add --repro-test` に掛ける。再現した＝実証されたものだけが起票され、RED が書けない・`add` が拒否した
+   （再現しない・判定不能）ものは**破棄して最終サマリに列挙する**。選別の `AskUserQuestion` は出さない。
 5. **発見を実装に化けさせない。与えられた監査スコープから逸れない** — scout の逸脱は「起票するより
    直した方が早い」の形で起きる。typo 1 文字・`unwrap` 1 個・欠けたテスト 1 本でも、scout 自身も
    sub-agent も**直さない**（1. の read-only はこの誘惑に対して置かれている）。同じく、重大そうな
@@ -53,7 +55,7 @@ read-only で課題を *発見* するだけ。実装は一切しない。
    レンズの担当外・スコープ外・scout 自身の手順の不具合（`compass score` が落ちた等）で見かけた
    ものまで含めて、証拠を添えて候補に入れる。「軽微」「たぶん意図的」「このレンズの話ではない」は
    候補から外す理由にならない。候補から落としてよいのは Phase 3 の定められたフィルタ（証拠が無い・
-   spec_doc か green のテストが意図どおりと**示している**）と Phase 4 の合意だけであり、落とした候補も
+   spec_doc か green のテストが意図どおりと**示している**）と Phase 5 で実証できなかったこと（RED が書けない・`backlog add` が拒否）だけであり、落とした候補も
    理由を添えて最終サマリに列挙する（黙って消さない）。証拠が付かず 2. で採用できない気づきも、
    「未検証の気づき」としてサマリに残す。
    **Why**: 落とすかどうかの判断は、観測が最も新しく最も未検証な瞬間に下される予測であり、
@@ -188,69 +190,21 @@ L3 は「他プロジェクトが現にやっている」根拠の URL を必ず
      **セキュリティ(L2)・安全性(L5) は重みを上げる**手動判断にフォールバックする（後方互換・never break a turn）。
 5. **優先度付け** — `p0`(即対応) / `p1`(近いうち) / `p2`(いつか) のタグを付与。
 
-### Phase 4 — 合意（AskUserQuestion / HOTL）
+### Phase 4 — 全候補を起票へ回す（Ask しない）
 
-合意提示の前に、この選別ゲートを **`condukt policy answer` に通す**（condukt / flow と**同一**の shim。
-まずグローバルな autonomy スイッチで縮退可否を確認し、autonomous なら per-gate verdict で判定する）:
+起票するかを人に聞かない（ユーザー裁定 2026-11-13「起票しますか?というのはもう聞かないこと。実証されたら起票、そうでないなら破棄。それは自動で実行していくこと。それを仕組みとしていれて」）。Phase 3 のフィルタを通った候補は**全部** Phase 5 へ回す
+（`APPROVED_TASKS` = Phase 3 を通った全候補。スコア順に並べるのは処理順のためだけで、上位 N 件への切り詰めはしない）。
+選別の `AskUserQuestion`・`condukt policy answer` による採否の自答・`--untestable` による採否の escalate は**行わない**
+（採否を決めるのは人の判断でも LLM の判断でもなく、Phase 5 の `backlog add --repro-test` が RED を実測した結果である）。
 
-```bash
-condukt state autonomy-check   # autonomous なら exit 0 + {"autonomous":true}、そうでなければ exit 1 + {"autonomous":false}
-```
-
-- **exit 1（非 autonomous・既定）／ autonomy-check 未対応（exit 127）** → 従来どおり。スコア上位の施策
-  （既定 8〜12 件）を `AskUserQuestion`（multiSelect）で提示し、**backlog に積むものを選ばせる**。各選択肢に
-  `severity/effort/lens/priority` を要約表示する（後方互換。既定では必ず選別 Ask が出る）。
-- **exit 0（autonomous）** → 選別ゲートを policy-answer に掛ける。施策採用は low-risk・可逆（backlog 項目は
-  後で除去できる）なので既定 verdict は **auto**:
-  ```bash
-  OUT=$(condukt policy answer --risk low --reversible high --confidence high \
-          --question "scout 施策のうち backlog に積むものは?" \
-          --option "top-N を自動採用" --option "選別を人手に返す" --recommend 0 2>/dev/null)
-  case $? in
-    0) : ;;  # auto: 選別 Ask を省略し、スコア上位 N 件（既定 top 8、p0/p1 優先）を採用して Phase 5 へ auto-queue（自答は監査ログに残る）
-    2) : ;;  # escalate: 上の exit 1 と同じ AskUserQuestion（multiSelect）で選ばせる
-    3) : ;;  # block: 積まずに停止する
-    *) : ;;  # 旧バイナリ（`answer` 無しの clap exit 2 も case 2 に落ちて安全）/ 不正入力 → 安全側 = AskUserQuestion
-  esac
-  ```
-  採用した施策一覧は「autonomy: top-N を自動採用」として**サマリで明示**し、`condukt policy answers` で監査できる
-  （黙って積まない）。安全側の不変:
-  - `--dry-run` は autonomy でも**必ずここで停止**する（選別省略は「停止しない」ではない）。
-  - `condukt` バイナリが無い / `answer` 未対応なら非 autonomous とみなし、従来どおり Ask を出す。
-  - **測れない決定には `--untestable` を付ける**（次項）。選別ゲートは可逆なので `--untestable` を
-    付けないが、施策の妥当性そのものが**測れない**と判明したゲートは別扱いになる。
-
-**測れない決定は自答しない（CLAUDE.md §2・`--untestable`）**
-
-施策の効果や前提が**観測で確かめられない**と判明した場合 — 効果測定の手段が無い、
-検証する術が環境的に存在しない、書いたテストが意味のある観測にならない — その判断を
-`policy answer` の通常経路に流してはならない。低 risk・可逆な施策は `decide` で **auto** に落ち、
-**「テスト不能なので判断で通した」という §2 最大の抜け穴**がそのまま開く。`--untestable` は
-`auto` を **`escalate` へ引き上げる上向き clamp** で、`--approval` の下向き clamp より**常に優先**する
-（`crates/condukt/tests/autonomy_invariant.rs` の `policy_answer_untestable_beats_approval` が
-binary 境界で機械検査する）:
-
-```bash
-OUT=$(condukt policy answer --untestable \
-        --risk "$RISK" --reversible "$REV" --confidence low \
-        --question "<何が測れないのか。なぜ測れないのか>" \
-        --option "<測らずに積む案>" --option "<測れる形に施策を切り直す案>" 2>/dev/null)
-case $? in
-  0) : ;;  # 到達しない（--untestable が auto を escalate へ clamp する）
-  2) : ;;  # escalate: AskUserQuestion で人間に投げる。何が測れないのかを添える
-  3) : ;;  # block: 積まない
-  *) : ;;  # 旧バイナリ / 不正入力 → 安全側 = AskUserQuestion
-esac
-```
-
-**測れないという事実こそ人間が知るべき情報**であり、それを表明して返すことは失敗ではなく成果である。
-迷ったら付ける — 付け忘れは判断の消失になるが、付けすぎは冗長な質問で済む。
-
-`--dry-run` ならここで停止し、提示だけで終了。
+- 施策の効果や前提が観測で確かめられない＝ RED が書けない候補は、Ask せず**破棄**し、
+  「実証できず破棄」として理由（何が測れないのか・なぜ測れないのか）を添えて最終サマリに列挙する。
+  破棄は黙って消すことではない — 測れないという事実を報告に残すことが成果である（CLAUDE.md §2）。
+- `--dry-run` ならここで候補一覧を提示して停止し、backlog に積まない（停止であって Ask ではない）。
 
 ### Phase 5 — backlog へ書き出し
 
-承認された施策を 1 件ずつ backlog に積む。同時に、**機械スコープ共有発見ストア（discovery store）に記録し、並行セッションの重複を回避**する。
+Phase 4 で回された施策を 1 件ずつ、RED（不足を示すテスト）を書いてコミットしたうえで backlog に積む（RED の作成は観測の固定であって施策の実装ではない）。`backlog add` が拒否した施策（再現しない・判定不能）は破棄し、拒否の stderr を逐語で最終サマリに列挙する（Ask しない）。同時に、**機械スコープ共有発見ストア（discovery store）に記録し、並行セッションの重複を回避**する。
 発見ストアの呼び出しが失敗したら（`compass` が非 0 終了し stderr に `undetermined` 等の理由を出す）、**そこで Phase 5 を止める**（下記「発見ストアが判定不能のとき」）:
 
 ```bash
@@ -288,7 +242,7 @@ done
 **非 0 で終了し stderr に `undetermined` と理由を出す**。このとき `list` は `[]` を出さない。
 これを「誰も発見していない」（`[]`）や「記録できた」として扱ってはならない — 重複起票や、他セッションから見えない起票になる。
 `2>/dev/null` / `|| true` / `|| echo '[]'` で失敗を消さないこと。判定不能なら**残りの施策の起票を止め**、
-compass の stderr を逐語でユーザーに報告し、どうするか（ストアを直して再実行 / 重複判定なしで起票するか）を Ask する。
+compass の stderr を逐語で報告する（重複判定なしで起票するかは聞かない。判定不能のまま起票しない）。
 既に起票した施策はそのまま報告に含める。
 
 `--tag scout` を付け、scout 由来の施策と分かるようにする。`--notes` に証拠と完了条件を残し、
@@ -298,8 +252,12 @@ compass の stderr を逐語でユーザーに報告し、どうするか（ス�
 
 ### Phase 6 — 実行引き渡し（autonomy で分岐）
 
-backlog に積んだら、Phase 4 と**同じ autonomy スイッチ**で引き渡し方を決める（`condukt state autonomy-check`
-の結果を Phase 4 で得ていればそれを再利用してよい）:
+backlog に積んだら、autonomy スイッチで引き渡し方を決める:
+
+```bash
+condukt state autonomy-check   # autonomous なら exit 0 + {"autonomous":true}、そうでなければ exit 1 + {"autonomous":false}
+```
+
 
 - **非 autonomous（既定）→ propose-then-confirm**。`/flow` を**提案**する（即実行はしない＝HOTL）:
 
@@ -327,17 +285,17 @@ backlog に積んだら、Phase 4 と**同じ autonomy スイッチ**で引き�
 | 候補が 0 件（健全） | 「重大な不足施策は検出されず」と報告し、軽微な改善のみ提示 |
 | `backlog` バイナリ不在 | 施策を Markdown で提示し、手動投入を案内（書き込みはスキップ） |
 | WebSearch 不可（オフライン等） | L3 をスキップし「業界標準は未調査」と明示して残り4レンズで続行 |
-| `--dry-run` | Phase 4 提示で停止、backlog に積まない |
+| `--dry-run` | Phase 4 の候補一覧提示で停止、backlog に積まない |
+| RED が書けない / `backlog add` が拒否 | Ask せず破棄し、理由（拒否の stderr を逐語）を最終サマリに列挙する |
 
 ## ハードルール（再掲）
 
 - **scout は実装しない**。発見した施策の実行は backlog→/flow→condukt に委ねる。「直した方が早い」
   1 行の修正も、原因調査への深掘りも含む（不変条件 5）。
-- **気づいたものを黙って落とさない**。落とせるのは Phase 3 のフィルタと Phase 4 の合意だけで、
+- **気づいたものを黙って落とさない**。落とせるのは Phase 3 のフィルタと Phase 5 で実証できなかったものだけで、
   落とした候補も理由つきでサマリに出す（不変条件 6）。
 - **証拠のない施策は出さない**（逐語引用 / `file:line` / Web URL のいずれか必須）。
 - **/backlog や /flow と併走させない**（scout は書き込むだけでループを持たない）。autonomy の
   auto-handoff（Phase 6）は「`/flow` を**起動して終了**する」バトン渡しであり、併走ではない。
-- **合意なく全件 backlog に積まない** — ただし *非 autonomous 既定時*。Phase 4 の AskUserQuestion を
-  省略できるのは `condukt state autonomy-check` が autonomous を返したときのみで、その場合も採用した
-  top-N をサマリで明示し、`--dry-run` では必ず停止する（静かな全件採用は禁止）。
+- **起票するかを人に聞かない** — 実証された（`backlog add --repro-test` が再現を観測した）施策は全部起票され、
+  実証されなかった施策は破棄されてサマリに列挙される（不変条件 4）。`--dry-run` では Phase 4 で必ず停止する。

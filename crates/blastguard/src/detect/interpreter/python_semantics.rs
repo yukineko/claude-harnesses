@@ -1223,9 +1223,40 @@ pub(super) fn filesystem_verdict(
 /// `Path.replace(Path('/tmp/z'), '/etc/hosts')`, `w = Path(p).write_text;
 /// w('x')`, `.write_text.__call__('x')`, a reference passed or stored — are
 /// judged too ([`method_refs`]); an unresolvable one is an Ask.
+///
+/// Backlog 67219006: a write whose target cannot be DETERMINED by the shell
+/// redirect rule — a relative path with no known base directory (the payload
+/// has no `cwd`), or one carrying `$` / a backtick — is a pending Ask here,
+/// not the Deny the redirect rule gives a real shell `> a/b`. The resolved
+/// value is judged through the same R2 side channel the program-text shell
+/// pass uses ([`super::ProgramTextSink`], `redirects_are_data: false`): the
+/// redirect rule records such a target instead of denying it, and this
+/// function turns the record into an Ask. That is the outcome the interpreter
+/// write-target scan already gives the same literal (`Recovery::Undetermined`
+/// is a pending Ask, backlog 7483e85b). Every other refusal of the redirect
+/// rule (system directory, protected path, an existing unrecoverable target)
+/// still denies, a Deny earned anywhere else in the program still outranks
+/// the Ask, and with no human to answer (a subagent) the Ask hardens to Deny.
 pub(super) fn path_mutation_verdict(src: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let rewritten = rewrite(src, &bindings(src));
-    path_calls_verdict(&rewritten, None, depth, ctx)
+    let undeterminable = super::ProgramTextSink {
+        rows: std::cell::RefCell::new(Vec::new()),
+        redirects_are_data: false,
+    };
+    let sink_ctx = Ctx {
+        program_text_redirects: Some(&undeterminable),
+        ..ctx.clone()
+    };
+    match path_calls_verdict(&rewritten, None, depth, &sink_ctx) {
+        d @ Decision::Deny(_) => d,
+        a @ Decision::Ask(_) => a,
+        Decision::Allow => match undeterminable.rows.into_inner().into_iter().next() {
+            Some(row) => Decision::ask(format!(
+                "the program writes a path whose location blastguard cannot determine: {row}"
+            )),
+            None => Decision::Allow,
+        },
+    }
 }
 
 /// Judge every value in `path` (the resolved target of the call `n`) as the

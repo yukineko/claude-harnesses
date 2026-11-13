@@ -455,6 +455,14 @@ forge・condukt のスケジューラが再利用）。
   receiver・転送先・path が解決できないものは Ask（subagent では Deny）: 変数 receiver で束縛が読めない
   `p.write_text(..)`・1 引数の `x.replace(y)`/`x.rename(y)`（pandas の `s.rename('n')` も含む）・
   f-string で組んだ `open(f'{d}/x','w')` などは 0.2.523 の Allow から Ask に変わる。
+  0.2.544 以降（backlog 67219006）、解決した書き込み先が shell の redirect 規則で**特定できない**もの
+  （payload に `cwd` が無いときの相対 path、`$`・backtick を含む path）は、redirect 規則の Deny ではなく
+  **保留 Ask**（subagent では Deny）にする。program-text の shell pass と同じ R2 の side channel
+  （`ProgramTextSink`、`redirects_are_data: false`）経由で判定するので、system directory・保護 path・
+  既存の復元不能 target など redirect 規則の他の拒否はそのまま Deny、同じ program の他の Deny が優先する。
+  `python3 -c "open('a/b','w')"`・`Path('a/b').write_text('x')`（cwd 無し）は 0.2.526〜0.2.543 の Deny から
+  Ask に戻る（write-target 走査の `Recovery::Undetermined` = 保留 Ask と同じ結論、backlog 7483e85b）。
+  実際の shell の `echo x > a/b`（cwd 無し）は Deny のまま。
   chmod の mode は Python の整数 literal（`0o755`・`493`・`0x1ff`）ならその値、それ以外は `000`
   （読み取り・実行を外す＝shell の chmod 規則で最も制限側）として描画する。
   (4)（backlog 569b9b9d、blastguard 0.2.518）`Path(…)`/`pathlib.Path(…)`/`PosixPath(…)`/`WindowsPath(…)` の

@@ -1639,6 +1639,8 @@ notes = "User ruling 2026-11-14: gate/condukt must never consult another worktre
 created_at = 1794601926
 updated_at = 1794601926
 weight = 0.0
+issue_number = 1738
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1738"
 rev = 0
 
 [task.repro]
@@ -1715,3 +1717,64 @@ exit 101: d out; finished in 1.09s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 9.71s
      Running tests/wait_bang_argument_fp_20261114.rs (target/debug/deps/wait_bang_argument_fp_20261114-3e368ab0dd0b3bd6)
 error: test failed, to rerun pass `-p blastguard --test wait_bang_argument_fp_20261114`"""
+
+[[task]]
+id = "d462444e"
+title = "blastguard false positive: multi-line backtick span in quoted heredoc body after a preceding command"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 in a subagent. A command that runs one command, then a semicolon or double ampersand, then a command with a quoted heredoc whose body has a backtick span crossing a line break, is judged Ask because the word on the second line inside the span is read as a command word. Quoted heredoc bodies are data. Minimal repro is test f2. Without the preceding command (f1), with a single-line span (f3), it is Allow. Unquoted heredoc stays non-Allow (c1)."
+created_at = 1794603914
+updated_at = 1794603914
+weight = 0.0
+issue_number = 1739
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1739"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test quoted_heredoc_multiline_backtick_fp_20261114 -- --ignored"
+rev = "4f2b114bd20f55b8647925ba3c6f7e2c038cee57"
+observed_at = 1794603914
+detail = """
+exit 101: 2.545 (/Users/yuki/src/harness-wt-fp-heredoc-backtick2/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.11s
+     Running tests/quoted_heredoc_multiline_backtick_fp_20261114.rs (target/debug/deps/quoted_heredoc_multiline_backtick_fp_20261114-a0bd5b5b0b5f77e4)
+error: test failed, to rerun pass `-p blastguard --test quoted_heredoc_multiline_backtick_fp_20261114`"""
+
+[[task]]
+id = "de914866"
+title = "blastguard: system-harm program piped to a shell with value-taking flags or -s args (echo 'chmod 777 /etc/hosts' | bash -o pipefail) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 by t2 implementer on builds 0e726e66 and aa47d220; re-observed on 0.2.540 worktree build: allow/allow (main/subagent) for: echo 'chmod 777 /etc/hosts' | bash -o pipefail ; | bash -s a b ; | bash -O extglob ; | bash --rcfile f ; | sh -s a b ; | sh -o pipefail. Deny/deny: | bash, | bash -e, | bash -s. Suspected (unverified) cause: detect/payload.rs stage_has_program_operand treats a flag value or -s positionals as a script file. RED commit 0ab93794 on branch test/bg-red-pipe-reader-and-py-argv (ignored RED + non-ignored control)."
+created_at = 1794604275
+updated_at = 1794604275
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_shell_with_value_flags_or_s_args -- --include-ignored"
+rev = "0ab93794b711e8c74d0dfaed9183824ac6493d90"
+observed_at = 1794604275
+detail = """
+exit 101: eader-and-py-argv/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.50s
+     Running tests/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args.rs (target/debug/deps/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args-74dc82015cfb998f)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_shell_with_value_flags_or_s_args`"""

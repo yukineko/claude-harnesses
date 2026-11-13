@@ -214,6 +214,20 @@ forge・condukt のスケジューラが再利用）。
   `$((…))`・here-document 本文（verbatim に写す）をモデル化する。あわせて unquoted の `<(…)`/`>(…)`
   process substitution の本体も `$(…)` と同じく実行される command として解析する
   （`executed_substitution_payloads`）。
+- **行継続（`\`＋改行）を除いた読みも判定する（`detect/shell_lex.rs` の `line_continuation_reading`、
+  backlog 040b959b、blastguard 0.2.507）** — shell は単語分割の前に、unquoted・double quote 内・`$(…)`・
+  backtick・`$((…))` の `\`＋改行を取り除く（single quote・`$'…'`・`#` comment・here-document 本文では
+  取り除かない。comment 末尾の `\` は次の行を継続しない。/bin/bash 3.2・/bin/sh・/bin/zsh で観測）。
+  segment 分割器と単語 scan はその改行で行を割るため、コマンド語・引数・`-c` operand を `\`＋改行で
+  二分すると system-harm のコマンドが無害な 2 行に見えて Allow になっていた。`detect_bash_every_reading`
+  は行継続だけを除いた text（comment・escape された quote はそのまま）が元と異なるとき、それも
+  `detect_bash` で判定し**厳しい方**を返す。`analyze_shell_payload` も payload（`bash -c '…'` の
+  single quote 内の行継続は内側の shell が取り除く）に同じ読みを足し、Deny > Ask > Allow で合成する。
+  読みが判定不能（行を join する here-document の未モデル形・入れ子上限）なら Ask。`shell_lexed_reading`
+  も同じ位置の行継続を取り除き、`#` を comment 開始とみなす単語境界は綴り直した後の text で決める。
+  テストは `tests/backlog_20261113_toplevel_line_continuation.rs` と
+  `tests/line_continuation_deny_and_controls_20261113.rs`（system-harm は main・subagent とも Deny、
+  無害な行継続コマンドは Allow のまま）。
 - **git の exec-capable 形は一律 Deny（backlog fb338793、ユーザー裁定 2026-11-07「git bisectでいろいろ
   構文を処理できてしまうくらいなら使用を禁止した方がいいのでは?」）** — git が呼び出し側の選んだコマンドを
   実行する形は、埋め込みコマンドの中身に関わらず Deny（`detect/git.rs` の `git_exec_ban`。
@@ -426,8 +440,9 @@ forge・condukt のスケジューラが再利用）。
   文字列・`#` コメント中の `open` は数えない。コードトークンに非 ASCII 文字があれば判定不能（NFKC 正規化で
   `ｏｐｅｎ` が `open` になるため）。それ以外は原文走査で、どこかに非 ASCII 英数字があれば判定不能。
   shell の quote 除去（`detect/words.rs` の `first_shell_word`）は POSIX の行継続を実装し、unquoted と
-  double quote 内の `\`＋改行を取り除く（single quote 内は保持）。トップレベルのコマンド語・引数の行継続と
-  Python 文字列 literal 内の行継続は未対応（RED 06143f1b、別 backlog）。
+  double quote 内の `\`＋改行を取り除く（single quote 内は保持）。トップレベルのコマンド語・引数の行継続は
+  下の「行継続を除いた読みも判定する」で扱う（backlog 040b959b）。Python 文字列 literal 内の行継続は
+  未対応（RED 06143f1b、別 backlog）。
 - **stdin here-document の program text は body だけ（`detect/payload.rs` の
   `analyze_interpreter_stdin_exec`、`detect/heredoc.rs` の `first_line_quoted_here_document_body`、
   backlog aafeaa05）** — `python3 - <<'PY'` 等で stdin から program を受け取る stage の program text

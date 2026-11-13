@@ -16,8 +16,11 @@
 //!
 //! [`shell_lexed_reading`] re-spells the line the way the shell tokenises it,
 //! so that the naive trackers read it correctly: every `#` comment is removed
-//! (its newline kept) and every backslash-escaped `'`/`"`/`` ` `` — one the
-//! shell reads as a literal character, never as a quote — becomes `_`. The
+//! (its newline kept), every backslash-escaped `'`/`"`/`` ` `` — one the
+//! shell reads as a literal character, never as a quote — becomes `_`, and
+//! every line continuation (backslash-newline) outside single quotes, `$'…'`,
+//! comments and here-document bodies is removed (backlog 040b959b);
+//! [`line_continuation_reading`] removes only those line continuations. The
 //! caller ([`super::readings::detect_bash_every_reading`]) judges that text IN
 //! ADDITION to the original, the most restrictive verdict winning, so this
 //! reading can only add a verdict, never remove one.
@@ -88,7 +91,43 @@ pub(super) enum ShellLexed {
 /// `cmd` re-spelled as the shell tokenises it (see the module doc).
 pub(super) fn shell_lexed_reading(cmd: &str) -> ShellLexed {
     let chars: Vec<char> = cmd.chars().collect();
-    let lexed = lex(&chars, false, 0);
+    let lexed = lex(&chars, false, true, 0);
+    if lexed.undetermined {
+        ShellLexed::Undetermined
+    } else if lexed.text == cmd {
+        ShellLexed::Same
+    } else {
+        ShellLexed::Text(lexed.text)
+    }
+}
+
+/// `cmd` with every line continuation the shell removes removed, and nothing
+/// else changed (backlog 040b959b, critical).
+///
+/// The shell deletes a backslash-newline before it splits words — unquoted,
+/// inside double quotes, inside `$(…)`, backticks and `$((…))` — but not inside
+/// single quotes, `$'…'`, a `#` comment or a here-document body (observed in
+/// /bin/bash 3.2, /bin/sh and /bin/zsh). The splitters and word scans of
+/// [`super::detect_bash`] split at every newline, so a command word written
+/// `chm\<NL>od` was judged as the two harmless lines `chm\` and `od …` while
+/// the shell runs `chmod …`. The callers
+/// ([`super::readings::detect_bash_every_reading`] and
+/// [`super::analyze_shell_payload`], whose payload a nested shell re-parses —
+/// `bash -c 'chm\<NL>od …'`) judge this text IN ADDITION to the original, so
+/// it can only add a verdict. Unlike [`shell_lexed_reading`] it keeps
+/// comments and escaped quotes as they are, so that a backslash-escaped
+/// program operand (`python3 -c o\<NL>pen\(\'…\',\'w\'\)`) is judged with its
+/// quotes intact.
+///
+/// [`ShellLexed::Same`] when `cmd` holds no backslash-newline. A here-document
+/// whose body joins lines in a shape the lexer does not model, and the depth
+/// cap, give [`ShellLexed::Undetermined`]: the caller resolves it to Ask.
+pub(super) fn line_continuation_reading(cmd: &str) -> ShellLexed {
+    if !cmd.contains("\\\n") {
+        return ShellLexed::Same;
+    }
+    let chars: Vec<char> = cmd.chars().collect();
+    let lexed = lex(&chars, false, false, 0);
     if lexed.undetermined {
         ShellLexed::Undetermined
     } else if lexed.text == cmd {
@@ -146,7 +185,7 @@ pub(super) enum Bash32Lexed {
 /// over-approximates.
 pub(super) fn bash32_lexed_reading(cmd: &str) -> Bash32Lexed {
     let chars: Vec<char> = cmd.chars().collect();
-    let lexed = lex(&chars, true, 0);
+    let lexed = lex(&chars, true, true, 0);
     if lexed.undetermined {
         Bash32Lexed::Undetermined
     } else if lexed.text == cmd {
@@ -181,9 +220,16 @@ impl Lexed {
     }
 }
 
-/// The lexer behind [`shell_lexed_reading`] (`bash32 == false`) and
-/// [`bash32_lexed_reading`] (`bash32 == true`).
-fn lex(chars: &[char], bash32: bool, depth: usize) -> Lexed {
+/// The lexer behind [`shell_lexed_reading`] (`bash32 == false`),
+/// [`bash32_lexed_reading`] (`bash32 == true`) and, with `respell == false`,
+/// [`line_continuation_reading`].
+///
+/// In every mode a backslash-newline outside single quotes, `$'…'`, comments
+/// and here-document bodies is removed, as the shell removes it before it
+/// splits words (backlog 040b959b). With `respell == false` nothing else is
+/// changed: comments, escaped quotes, `$'…'` and here-document bodies are
+/// copied verbatim (`bash32` must then be `false`).
+fn lex(chars: &[char], bash32: bool, respell: bool, depth: usize) -> Lexed {
     let mut out = String::with_capacity(chars.len());
     if depth >= MAX_QUOTE_PAREN_DEPTH {
         return Lexed::undetermined(out);
@@ -222,7 +268,12 @@ fn lex(chars: &[char], bash32: bool, depth: usize) -> Lexed {
                     stack.pop();
                     out.push(c);
                 }
-                '\\' if matches!(next, Some('"' | '`')) => {
+                // A line continuation: removed inside double quotes too.
+                '\\' if next == Some('\n') => {
+                    i += 2;
+                    continue;
+                }
+                '\\' if respell && matches!(next, Some('"' | '`')) => {
                     out.push('_');
                     i += 2;
                     continue;
@@ -265,7 +316,7 @@ fn lex(chars: &[char], bash32: bool, depth: usize) -> Lexed {
                 continue;
             }
             '$' if next == Some('\'') => {
-                let (after, closed) = copy_ansi_c(chars, i, &mut out);
+                let (after, closed) = copy_ansi_c(chars, i, respell, &mut out);
                 open_quote |= !closed;
                 i = after;
                 continue;
@@ -274,7 +325,13 @@ fn lex(chars: &[char], bash32: bool, depth: usize) -> Lexed {
                 stack.push(Lex::Double);
                 out.push(c);
             }
-            '\\' if matches!(next, Some('\'' | '"' | '`')) => {
+            // A line continuation: the shell deletes the pair, so a word
+            // split by it is one word (`chm\<NL>od` is `chmod`).
+            '\\' if next == Some('\n') => {
+                i += 2;
+                continue;
+            }
+            '\\' if respell && matches!(next, Some('\'' | '"' | '`')) => {
                 out.push('_');
                 i += 2;
                 continue;
@@ -314,16 +371,21 @@ fn lex(chars: &[char], bash32: bool, depth: usize) -> Lexed {
                 }
                 out.push(c);
             }
-            '#' if top != Lex::Arith && starts_word(chars, i) => {
+            '#' if top != Lex::Arith && starts_word(&out) => {
                 // A comment runs to the newline (kept), or — inside
                 // backticks, whose body the shell cuts out first — to the
-                // closing backtick.
+                // closing backtick. A backslash at its end continues nothing
+                // (observed in /bin/bash 3.2, /bin/sh and /bin/zsh:
+                // `echo a # b \` / `echo c` prints `a` and `c`).
                 let mut j = i;
                 while j < chars.len()
                     && chars[j] != '\n'
                     && !(top == Lex::Backtick && chars[j] == '`')
                 {
                     j += 1;
+                }
+                if !respell {
+                    out.extend(&chars[i..j]);
                 }
                 i = j;
                 continue;
@@ -345,7 +407,14 @@ fn lex(chars: &[char], bash32: bool, depth: usize) -> Lexed {
             '\n' => {
                 out.push(c);
                 i += 1;
-                let bodies = copy_here_doc_bodies(chars, i, &mut pending, &mut out, bash32, depth);
+                let bodies = copy_here_doc_bodies(
+                    chars,
+                    i,
+                    &mut pending,
+                    &mut out,
+                    (bash32, respell),
+                    depth,
+                );
                 if bodies.undetermined {
                     return Lexed::undetermined(out);
                 }
@@ -408,7 +477,7 @@ fn lex_bash32_substitution(chars: &[char], i: usize, depth: usize, out: &mut Str
         out.extend(&chars[i..=end]);
         return Sub32::Closed(end + 1);
     }
-    let inner = lex(content, true, depth + 1);
+    let inner = lex(content, true, true, depth + 1);
     if inner.undetermined || inner.open {
         return Sub32::Undetermined;
     }
@@ -429,13 +498,17 @@ fn lex_bash32_substitution(chars: &[char], i: usize, depth: usize, out: &mut Str
     Sub32::Closed(end + 1)
 }
 
-/// True when `chars[i]` begins a word, which is where `#` starts a comment.
-fn starts_word(chars: &[char], i: usize) -> bool {
-    i == 0
-        || matches!(
-            chars[i - 1],
+/// True when a character appended to `out` (the text spelt so far) begins a
+/// word, which is where `#` starts a comment. The spelt text, not the input,
+/// decides: a removed line continuation joins `a\<NL>#b` into the one word
+/// `a#b`, where the `#` starts no comment.
+fn starts_word(out: &str) -> bool {
+    out.chars().next_back().is_none_or(|c| {
+        matches!(
+            c,
             ' ' | '\t' | '\n' | ';' | '&' | '|' | '(' | ')' | '<' | '>'
         )
+    })
 }
 
 /// `$(` or `$((` at `chars[i]`: push the matching context(s), copy, and return
@@ -453,10 +526,10 @@ fn open_dollar_paren(chars: &[char], i: usize, stack: &mut Vec<Lex>, out: &mut S
     i + 2
 }
 
-/// `$'…'` at `chars[i]`: copy it with each escaped quote spelt `_`, and return
-/// the index after the closing `'` (or the end of the input) and whether that
-/// closing `'` was found.
-fn copy_ansi_c(chars: &[char], i: usize, out: &mut String) -> (usize, bool) {
+/// `$'…'` at `chars[i]`: copy it with each escaped quote spelt `_` (copied as
+/// is when `respell` is false), and return the index after the closing `'` (or
+/// the end of the input) and whether that closing `'` was found.
+fn copy_ansi_c(chars: &[char], i: usize, respell: bool, out: &mut String) -> (usize, bool) {
     out.push_str("$'");
     let mut j = i + 2;
     while j < chars.len() {
@@ -465,7 +538,7 @@ fn copy_ansi_c(chars: &[char], i: usize, out: &mut String) -> (usize, bool) {
                 out.push('\'');
                 return (j + 1, true);
             }
-            '\\' if matches!(chars.get(j + 1), Some('\'' | '"' | '`')) => {
+            '\\' if respell && matches!(chars.get(j + 1), Some('\'' | '"' | '`')) => {
                 out.push('_');
                 j += 2;
             }
@@ -560,7 +633,7 @@ fn copy_here_doc_bodies(
     from: usize,
     pending: &mut Vec<Pending>,
     out: &mut String,
-    bash32: bool,
+    (bash32, respell): (bool, bool),
     depth: usize,
 ) -> Bodies {
     let mut pos = from;
@@ -602,8 +675,9 @@ fn copy_here_doc_bodies(
         }
         let body_end = terminator.map_or(chars.len(), |(start, _)| start);
         let body = &chars[body_start..body_end.max(body_start)];
-        if doc.quoted {
+        if doc.quoted || !respell {
             out.extend(body);
+            undetermined |= joined && doc.strips_tabs;
         } else {
             undetermined |= joined && doc.strips_tabs;
             match spell_expanding_body(body, bash32, depth) {
@@ -671,7 +745,7 @@ fn ends_in_continuation(line: &[char]) -> bool {
 fn spell_expanding_body(body: &[char], bash32: bool, depth: usize) -> Option<String> {
     let mut out = String::with_capacity(body.len());
     let lexed_code = |code: &[char]| -> Option<String> {
-        let inner = lex(code, bash32, depth + 1);
+        let inner = lex(code, bash32, true, depth + 1);
         (!inner.undetermined && !inner.open && inner.unterminated.is_empty()).then_some(inner.text)
     };
     let mut k = 0;

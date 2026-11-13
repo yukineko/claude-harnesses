@@ -811,7 +811,29 @@ backtick で引用されたものも判定対象に残る。
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/blastguard record-approval", "timeout": 10 }
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/blastguard record-approval", "timeout": 10 },
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/blastguard relay mark-executed", "timeout": 10 }
+        ]
+      },
+      {
+        "matcher": "SendMessage",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/blastguard relay mark-relayed", "timeout": 10 }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/blastguard relay mark-executed", "timeout": 10 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/blastguard relay stop", "timeout": 10 }
         ]
       }
     ]
@@ -819,7 +841,51 @@ backtick で引用されたものも判定対象に残る。
 }
 ```
 
-PostToolUse 側は承認の記憶（上記）を昇格する recorder である。
+PostToolUse 側の `record-approval` は承認の記憶（上記）を昇格する recorder である。
+`relay mark-executed` / `relay mark-relayed` / Stop の `relay stop` は下記
+「subagent の Ask は main で裁定する」の relay である。
+
+### subagent の Ask は main で裁定する（relay）— ユーザー裁定 2026-11-14
+
+裁定（逐語）: 「sub agentのAskはmainで裁定する」（本機能を統べる裁定）、
+「この仕組みはコードで強制する、どうせわすれる」、「gateにそんな例外は追加してほしくない」、
+「gateもconduktも絶対に勝手に他のworktreeを参照してはならない」。
+
+subagent の中では誰も permission prompt に答えられないので、`Ask` は `Deny` に硬化される。
+この判定は変えない。relay は、それを main session が裁定し忘れないことを機械で強制する
+（`src/relay.rs`）:
+
+1. **記録（PreToolUse）** — subagent の Bash の `Ask` が硬化され、かつ main session 自身が
+   ask できる（`interactive::ask_available`）とき、`queued` レコード（id `bgr-<12 hex>`・ts・
+   session_id・agent_id・cwd・コマンド文字列そのまま・Ask の理由）を
+   `~/.blastguard/relay/<session_id>.jsonl`（`BLASTGUARD_RELAY_DIR` で上書き）へ追記し、
+   id を deny 理由の末尾に付ける。真の `Deny`（system harm を含む）・main session の `Ask`・
+   ask できない（headless）session の subagent の `Ask` は記録しない。記録に失敗しても判定は
+   `Deny` のままで、失敗とその理由を deny 理由に書く（沈黙しない）。
+2. **実行済み（PostToolUse / PostToolUseFailure、Bash、`blastguard relay mark-executed`）** —
+   main session の Bash 呼び出しで、コマンドと cwd が pending entry とバイト一致したものを
+   実行済みにする（payload に exit code があれば記録）。subagent の呼び出しは何も付けない。
+3. **返送済み（PostToolUse、SendMessage、`blastguard relay mark-relayed`）** — main session の
+   SendMessage が relay id を含めば、実行済みの entry を返送済みにする。実行前の送信は付けない。
+4. **Stop（`blastguard relay stop`）** — その session に「実行済みかつ返送済み」でも
+   「dismiss 済み」でもない entry があれば block し、各 entry の id・agent_id・cwd・
+   コマンドと手順を列挙する。`stop_hook_active` でも block する（出口は解消か dismiss）。
+   queue が読めない・行がパースできない・未知 id を指す event・Stop payload がパースできない
+   は block（fail-closed、queue の path を示す）。panic は共有 Stop barrier で block。
+   queue ファイルが無ければ allow。
+5. **dismiss（`blastguard relay dismiss <id> --reason "<理由>"`）** — 人間が prompt を
+   拒否した、またはコマンドを再実行できないとき用。理由が空・欠落なら拒否（exit 2）、
+   未知 id も exit 2、queue が読めなければ exit 3。dismiss はその session の以後の
+   すべての Stop に表示される（他に pending が無ければ `systemMessage`、あれば block 理由に追記）。
+
+しないこと: コマンドを実行しない（保存したコマンドを 1 回の Bash 呼び出しの中で実行する
+道具は、そのコマンドを blastguard から隠す fail-open になる。main agent が自分の Bash
+tool で実行し、blastguard が通常どおり判定する）。どの判定にも例外を足さない。保存した
+cwd を解決・stat・実行に使わず、不透明な文字列として比較するだけである。
+
+既知の限界: relay するのは Bash だけ（subagent の `Edit`/`Write` の Ask は従来どおり硬化
+されるが記録されない）。同じコマンドを main で並行実行すると同じ entry を二重に付けうる。
+`mark-*` hook の書き込み失敗は stderr にだけ出る（entry は pending のまま＝制限側）。
 
 `bin/blastguard` はホストの OS / アーキテクチャに合う `blastguard-<os>-<arch>` を
 exec する POSIX-sh ランチャである。**該当プラットフォーム向けの同梱ビルドが無い場合は
@@ -832,8 +898,10 @@ stderr に警告を出したうえで「評価していない」旨の PreToolUs
 
 CLI 表面は最小限で、stdin を触る前に `--version` / `-V`、`--help` / `-h`、
 `--protects`（`src/protection.rs` の PROTECTS / AGAINST / GROUNDS を表示）が短絡する。
-サブコマンドは `retro`（事後検証、下記）と `record-approval`（PostToolUse の承認記録）。
+サブコマンドは `retro`（事後検証、下記）と `record-approval`（PostToolUse の承認記録）と
+`relay mark-executed | mark-relayed | stop | dismiss`（上記 relay）。
 環境変数: `BLASTGUARD_ASK`（ask の可否）、`BLASTGUARD_APPROVALS_DIR`（承認ストア）、
+`BLASTGUARD_RELAY_DIR`（relay queue）、
 `CLAUDE_PROJECT_DIR`・`TMPDIR`・`HOME`（安全ルートの構築）、`CLAUDE_CODE_SESSION_ID`
 （2 度目の deny の台帳）。
 

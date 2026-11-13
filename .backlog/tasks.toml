@@ -1727,3 +1727,33 @@ exit 101: sult: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered ou
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
      Running tests/backlog_20261114_label_identity_residual.rs (target/debug/deps/backlog_20261114_label_identity_residual-41e2c7d488853bf3)
 error: test failed, to rerun pass `-p backlog --test backlog_20261114_label_identity_residual`"""
+
+[[task]]
+id = "a66c115c"
+title = "blastguard: python コメントを裸の CR で終える python3 -c (import os # x<CR>os.chmod('/etc/hosts',0)) が allow になる fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "System-harm fail-open, RED fe5be3de by a non-implementer (flow-8cca7ef5 orchestrator) at main eed07c9b 2026-11-14: CPython ends a # comment at a bare CR (observed via compile on 3.12.11), so the chmod runs, but blastguard treats it as comment: 4 of 4 (python -c and env -S twin, main+subagent) Allow; also allow at d84e8cab. LF twin not Allow (control). Found by the e4523bfd round-2 probe."
+created_at = 1794597834
+updated_at = 1794597834
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_cr_ends_comment -- --include-ignored"
+rev = "fe5be3de4bf2a12105fc15db888d080f68715faf"
+observed_at = 1794597834
+detail = """
+exit 101: s/yuki/.condukt/worktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.57s
+     Running tests/backlog_20261114_python_cr_ends_comment.rs (target/debug/deps/backlog_20261114_python_cr_ends_comment-129109f5aea5f31c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_cr_ends_comment`"""

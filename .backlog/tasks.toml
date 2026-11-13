@@ -1586,3 +1586,165 @@ scripts/test_fail_open_mutation_leaves_no_artifacts.py:102: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_fail_open_mutation_leaves_no_artifacts.py::MutationRunArtifacts::test_run_created_untracked_file_is_not_silently_left_behind
 ========================= 1 failed, 1 passed in 0.51s =========================="""
+
+[[task]]
+id = "b3569da5"
+title = "blastguard: harmful program piped into if/while compound or eval/sh -c forwarder to a shell is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "pending"
+notes = "Measured at dc9b00c7b (0.2.565) 2026-11-14 in run-20261114-075136-6996 follow-up (probe of side findings). P=echo 'chmod 777 /etc/hosts'. main/subagent: 'P | if true; then bash; fi' allow/allow; 'P | while true; do bash; done' allow/allow; 'P | eval bash' allow/allow; 'P | ( eval bash )' allow/allow; 'P | sh -c bash' allow/allow; 'P | { sh -c bash; }' allow/allow. Controls deny/deny: bare bash, { if..fi; }, ( for..done ), for..done, ! bash. System-harm fail-open: expected Deny."
+created_at = 1794612903
+updated_at = 1794612903
+weight = 0.0
+issue_number = 1743
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1743"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_compound_reader_and_forwarder -- --include-ignored"
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+observed_at = 1794612903
+detail = """
+exit 101: -worktrees/side-reds-075136/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.90s
+     Running tests/backlog_20261114_pipe_to_compound_reader_and_forwarder.rs (target/debug/deps/backlog_20261114_pipe_to_compound_reader_and_forwarder-99efd004045dbe1c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_compound_reader_and_forwarder`"""
+
+[[task]]
+id = "f9861c4e"
+title = "blastguard: harmful program piped to python3/node with a value-taking flag (-X, -W, -r) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "pending"
+notes = """Measured at dc9b00c7b (0.2.565) 2026-11-14 in run-20261114-075136-6996 follow-up. main/subagent: echo 'import os; os.chmod("/etc/hosts", 0o777)' | python3 deny/deny (control); same | python3 -X dev allow/allow; | python3 -W ignore allow/allow; echo 'require("fs").chmodSync("/etc/hosts", 0o777)' | node deny/deny (control); | node -r m allow/allow. Sibling of the bash value-flag RED. System-harm fail-open: expected Deny."""
+created_at = 1794612940
+updated_at = 1794612940
+weight = 0.0
+issue_number = 1744
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1744"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_interpreter_with_value_flag -- --include-ignored"
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+observed_at = 1794612940
+detail = """
+exit 101: arness-worktrees/side-reds-075136/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/backlog_20261114_pipe_to_interpreter_with_value_flag.rs (target/debug/deps/backlog_20261114_pipe_to_interpreter_with_value_flag-cbd8277bbb82e170)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_interpreter_with_value_flag`"""
+
+[[task]]
+id = "671f3dfa"
+title = "blastguard: function call inside command substitution ($(f) / backticks) is not inlined; rm of /etc/hosts Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "pending"
+notes = "Measured at dc9b00c7b (0.2.565) 2026-11-14 in run-20261114-075136-6996 follow-up. main/subagent: 'f() { rm -f $L; }; L=/etc/hosts; x=$(f)' allow/allow; same with backticks allow/allow. Controls deny/deny: direct f, eval f, command f, conditional redefinition then f. System-harm fail-open: expected Deny."
+created_at = 1794612964
+updated_at = 1794612964
+weight = 0.0
+issue_number = 1745
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1745"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_function_call_in_command_substitution -- --include-ignored"
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+observed_at = 1794612964
+detail = """
+exit 101: -worktrees/side-reds-075136/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261114_function_call_in_command_substitution.rs (target/debug/deps/backlog_20261114_function_call_in_command_substitution-4a1206965fe3f94d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_function_call_in_command_substitution`"""
+
+[[task]]
+id = "e686a85e"
+title = "blastguard: exec 3<<< harmful; bash <&3 is Ask in main (in-stage form is Deny)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "pending"
+notes = """Measured at dc9b00c7b (0.2.565) 2026-11-14 in run-20261114-075136-6996 follow-up. main/subagent: "exec 3<<< 'chmod 777 /etc/hosts'; bash <&3" ask/deny; "bash 3<<< 'chmod 777 /etc/hosts' <&3" deny/deny. Two readings: (real defect) program text is literally on the command line so system harm should be Deny in main; (intended) cross-statement fd tracking is out of model and Ask is the deliberate fail-closed answer. RED asserts the first reading."""
+created_at = 1794612991
+updated_at = 1794612991
+weight = 0.0
+issue_number = 1746
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1746"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_exec_fd_herestring_then_shell_reads_fd -- --include-ignored"
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+observed_at = 1794612991
+detail = """
+exit 101: rktrees/side-reds-075136/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/backlog_20261114_exec_fd_herestring_then_shell_reads_fd.rs (target/debug/deps/backlog_20261114_exec_fd_herestring_then_shell_reads_fd-de5e1a0b7ceebd7d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_exec_fd_herestring_then_shell_reads_fd`"""
+
+[[task]]
+id = "7eb86bb3"
+title = "blastguard FP: harmless brace-group feeder piped to bash is Ask/Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """Measured at dc9b00c7b (0.2.565) 2026-11-14 in run-20261114-075136-6996 follow-up. main/subagent: "{ echo 'echo hi'; } | bash" ask/deny; '{ echo a; echo b; } | bash' ask/deny; "echo 'echo hi' | bash" allow/allow. Two readings: (FP) group output is statically known harmless; (intended) multi-command group feeding a shell is deliberately unmodelled so Ask is fail-closed. RED asserts Allow."""
+created_at = 1794613011
+updated_at = 1794613011
+weight = 0.0
+issue_number = 1747
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1747"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_brace_group_feeder_piped_to_bash_fp -- --include-ignored"
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+observed_at = 1794613011
+detail = """
+exit 101: arness-worktrees/side-reds-075136/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/backlog_20261114_brace_group_feeder_piped_to_bash_fp.rs (target/debug/deps/backlog_20261114_brace_group_feeder_piped_to_bash_fp-0d22514ccaecfe2b)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_brace_group_feeder_piped_to_bash_fp`"""
+
+[[task]]
+id = "7a5f65bd"
+title = "blastguard FP: read-only python3 -c json.load of ~/.claude/plugins/installed_plugins.json is Ask/Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Measured at dc9b00c7b (0.2.565) 2026-11-14 in run-20261114-075136-6996 follow-up; noticed when a subagent's read-only command was denied with 'a protected gate/config path — changing it changes which hooks and gates run'. main/subagent: ask/deny. Control python3 -c print(open('/tmp/x.json').read()) allow/allow. Two readings: (FP) a read is not changing the path; (intended) detect/interpreter.rs ~1308 says naming a protected path in program literals is deliberately asked on ('naming it is how it gets there'); docs/specs/blastguard.md has no ruling. RED asserts Allow."
+created_at = 1794613034
+updated_at = 1794613034
+weight = 0.0
+issue_number = 1748
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1748"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_read_of_protected_plugin_file_fp -- --include-ignored"
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+observed_at = 1794613034
+detail = """
+exit 101: rees/side-reds-075136/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261114_python_read_of_protected_plugin_file_fp.rs (target/debug/deps/backlog_20261114_python_read_of_protected_plugin_file_fp-0c08f20d853bc41d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_read_of_protected_plugin_file_fp`"""

@@ -750,6 +750,12 @@ forge・condukt のスケジューラが再利用）。
   素の `git add <paths> && git commit -m "..\"..."` コマンド自体は Allow で再現しなかった（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs`
   （`#[ignore]` の RED 2 本 + control。独立 subagent が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の system-harm fail-open の RED（2026-11-13、flow-8cca7ef5。修正は未実装）** — shell に渡す program の
+  本文が実行時に作られる 2 形は、system harm でも Allow になる: (a) `printf` の escape 展開
+  （`printf 'chm\x6fd 777 /etc/hosts' | bash`、octal `\157` も同じ）、(b) process substitution から stdin で読む
+  `bash < <(echo 'chmod 777 /etc/hosts')`。literal の `printf 'chmod 777 /etc/hosts' | bash` は Deny（control）。
+  回帰テスト: `crates/blastguard/tests/backlog_20261113_printf_escape_and_procsub_to_shell.rs`
+  （`#[ignore]` の RED 2 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
 
 ### module 責務
 

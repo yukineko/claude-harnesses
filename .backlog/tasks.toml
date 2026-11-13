@@ -1600,3 +1600,68 @@ exit 101: d; 6 filtered out; finished in 0.45s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
      Running tests/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs (target/debug/deps/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes-a8fc5a5e6c06304a)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes`"""
+
+[[task]]
+id = "00569f7d"
+title = '''blastguard: printf escape expansion piped to a shell (printf 'chm\x6fd 777 /etc/hosts' | bash) runs a system-harm command but is Allow'''
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = '''Out-of-scope finding of the independent round-2 verifier of 040b959b; RED fab70306 (merged 10000bab) by the flow-8cca7ef5 orchestrator at main 5bca9481 2026-11-13: hex \x6f and octal \157 printf escapes piped to bash/sh are Allow in main and subagent (4 of 4). Literal printf 'chmod 777 /etc/hosts' | bash is denied (control). Pre-existing on main 706e25e1 (verifier).'''
+created_at = 1794571619
+updated_at = 1794571619
+weight = 0.0
+issue_number = 1720
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1720"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_printf_escape_and_procsub_to_shell printf_escape_expanded_program_piped_to_shell_is_denied -- --include-ignored"
+rev = "10000bab841024f8d1196fa7234a15c7a5abeb33"
+observed_at = 1794571619
+detail = """
+exit 101: ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.60s
+     Running tests/backlog_20261113_printf_escape_and_procsub_to_shell.rs (target/debug/deps/backlog_20261113_printf_escape_and_procsub_to_shell-fe796204173a33a6)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_printf_escape_and_procsub_to_shell`"""
+
+[[task]]
+id = "6df87a5c"
+title = "blastguard: shell reading its program from a process substitution (bash < <(echo 'chmod 777 /etc/hosts')) runs a system-harm command but is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Out-of-scope finding of the independent round-2 verifier of 040b959b; RED fab70306 (merged 10000bab) by the flow-8cca7ef5 orchestrator at main 5bca9481 2026-11-13: bash < <(echo ...) and sh < <(printf ...) are Allow in main and subagent (4 of 4), no escape involved. Pre-existing on main 706e25e1 (verifier)."
+created_at = 1794571632
+updated_at = 1794571632
+weight = 0.0
+issue_number = 1721
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1721"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_printf_escape_and_procsub_to_shell shell_program_from_process_substitution_is_denied -- --include-ignored"
+rev = "10000bab841024f8d1196fa7234a15c7a5abeb33"
+observed_at = 1794571632
+detail = """
+exit 101: ignored; 0 measured; 2 filtered out; finished in 0.47s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_printf_escape_and_procsub_to_shell.rs (target/debug/deps/backlog_20261113_printf_escape_and_procsub_to_shell-fe796204173a33a6)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_printf_escape_and_procsub_to_shell`"""

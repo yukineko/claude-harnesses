@@ -251,6 +251,60 @@ def apply_mutation(scenario):
     return None
 
 
+MARKER_NAME = "fail-open-mutation.active"
+SEQ_NAME = "fail-open-mutation.seq"
+
+
+def mutation_git_dir():
+    """This worktree's git dir (absolute), or None when git cannot say."""
+    p = run(["git", "rev-parse", "--absolute-git-dir"])
+    gd = p.stdout.strip() if p.returncode == 0 else ""
+    return Path(gd) if gd else None
+
+
+def begin_mutation_marker():
+    """Announce an in-place mutation to scripts/rollout_source_guard.py
+    (backlog ff8cebd0): bump <git-dir>/fail-open-mutation.seq and create
+    <git-dir>/fail-open-mutation.active BEFORE the mutated file is written.
+    A rollout refuses while .active exists, and refuses when .seq moved during
+    its run, so it can never build and deploy a mutant -- not even one that was
+    already reverted by the time it looked. Returns None on success, or an
+    error string; the caller then refuses to mutate."""
+    gd = mutation_git_dir()
+    if gd is None:
+        return "cannot locate the git dir to write the mutation marker"
+    seq_path = gd / SEQ_NAME
+    try:
+        cur = 0
+        if seq_path.exists():
+            raw = seq_path.read_text(encoding="utf-8").strip()
+            if not raw.isdigit():
+                return f"{seq_path} does not hold an integer ({raw!r})"
+            cur = int(raw)
+        tmp = gd / (SEQ_NAME + ".tmp")
+        tmp.write_text(f"{cur + 1}\n", encoding="utf-8")
+        tmp.replace(seq_path)
+        (gd / MARKER_NAME).write_text("active\n", encoding="utf-8")
+    except OSError as e:
+        return f"cannot write the mutation marker in {gd}: {e}"
+    return None
+
+
+def end_mutation_marker():
+    """Remove .active. Called ONLY after the revert is confirmed byte-identical;
+    an unconfirmed revert leaves it, so rollouts keep refusing."""
+    gd = mutation_git_dir()
+    if gd is None:
+        return False
+    try:
+        (gd / MARKER_NAME).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return False
+    return True
+
+
 def revert_mutation(scenario, original_bytes):
     """Revert via `git checkout --`, then verify byte-identity. Always run,
     even when the caller is unwinding from an exception (call from finally).
@@ -297,6 +351,15 @@ def evaluate_scenario(scenario, timeout):
         return result
 
     original_bytes = git_file_bytes(path)
+    marker_err = begin_mutation_marker()
+    if marker_err is not None:
+        result.status = "error"
+        result.detail = (
+            f"{marker_err} -- refusing to mutate: without the marker a "
+            "concurrent rollout-plugins.sh could build and deploy the mutant "
+            "(backlog ff8cebd0)"
+        )
+        return result
     start = time.monotonic()
     try:
         err = apply_mutation(scenario)
@@ -341,6 +404,12 @@ def evaluate_scenario(scenario, timeout):
         return result
     finally:
         result.revert_confirmed = revert_mutation(scenario, original_bytes)
+        if result.revert_confirmed and not end_mutation_marker():
+            result.status = "error"
+            result.detail = (
+                f"reverted, but could not remove the {MARKER_NAME} marker in "
+                "the git dir -- rollouts refuse until it is removed by hand"
+            )
         result.elapsed = time.monotonic() - start
 
 

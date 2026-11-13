@@ -76030,3 +76030,131 @@ rev = "7581f880722cd4de85c5bc3f51bf42de1bfa5932"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "2089dfc5"
+title = "blastguard: worktree remove --force denied when only ignored build output (target/) remains (false positive)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = 'Observed 2026-11-14, deployed blastguard 0.2.523+, subagent mode, 3 times. Deny reason verbatim: "git worktree remove --force `/Users/yuki/src/harness-wt-label-fix`: git status reports uncommitted changes, untracked files or ignored files there (ignored files such as build output in target/ count: the forced removal deletes the whole directory), which would be destroyed". Repro at rev ff411978 (blastguard 0.2.530 branch test/blastguard-fp-worktree-remove-target): main=ask, subagent=deny. Controls (modified tracked, untracked non-ignored, ignored .env) stay non-Allow.'
+created_at = 1794599118
+updated_at = 1794600947
+weight = 0.0
+issue_number = 1733
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1733"
+issue_closed_at = 1794600950
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test worktree_remove_ignored_build_output_fp_20261114 -- --ignored"
+rev = "ff411978fb15167d21cf8c4c3503e363475a65d2"
+observed_at = 1794599118
+detail = """
+exit 101: 2.530 (/Users/yuki/src/harness-wt-fp-wtremove/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.65s
+     Running tests/worktree_remove_ignored_build_output_fp_20261114.rs (target/debug/deps/worktree_remove_ignored_build_output_fp_20261114-cdb2a2e94685c6b4)
+error: test failed, to rerun pass `-p blastguard --test worktree_remove_ignored_build_output_fp_20261114`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test worktree_remove_ignored_build_output_fp_20261114"
+exit = 0
+passed = 5
+rev = "468ac2d3cd3c5cad43a58fff6f86cb4c177adfe5"
+observed_at = 1794600918
+output_digest = "sha256:7eed8b6bdd72fea08cdb626cb6695a2d1c98e66563ef7bd34633cce2fdd3f1a6"
+excerpt = """
+
+running 5 tests
+test ca_modified_tracked_file_stays_not_allow ... ok
+test cc_ignored_env_file_stays_not_allow ... ok
+test c0_clean_worktree_without_build_output_is_allow ... ok
+test t1_clean_worktree_with_only_ignored_build_output_is_allow ... ok
+test cb_untracked_non_ignored_file_stays_not_allow ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.09s
+
+   Compiling blastguard v0.2.539 (/Users/yuki/.condukt/worktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 27.01s
+     Running tests/worktree_remove_ignored_build_output_fp_20261114.rs (target/debug/deps/worktree_remove_ignored_build_output_fp_20261114-a6a8eeae62632e56)
+"""
+
+[task.closure.red]
+rev = "ff411978fb15167d21cf8c4c3503e363475a65d2"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "a66c115c"
+title = "blastguard: python コメントを裸の CR で終える python3 -c (import os # x<CR>os.chmod('/etc/hosts',0)) が allow になる fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "System-harm fail-open, RED fe5be3de by a non-implementer (flow-8cca7ef5 orchestrator) at main eed07c9b 2026-11-14: CPython ends a # comment at a bare CR (observed via compile on 3.12.11), so the chmod runs, but blastguard treats it as comment: 4 of 4 (python -c and env -S twin, main+subagent) Allow; also allow at d84e8cab. LF twin not Allow (control). Found by the e4523bfd round-2 probe."
+created_at = 1794597834
+updated_at = 1794600953
+weight = 0.0
+issue_number = 1729
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1729"
+issue_closed_at = 1794600955
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_cr_ends_comment -- --include-ignored"
+rev = "fe5be3de4bf2a12105fc15db888d080f68715faf"
+observed_at = 1794597834
+detail = """
+exit 101: s/yuki/.condukt/worktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.57s
+     Running tests/backlog_20261114_python_cr_ends_comment.rs (target/debug/deps/backlog_20261114_python_cr_ends_comment-129109f5aea5f31c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_cr_ends_comment`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_cr_ends_comment"
+exit = 0
+passed = 2
+rev = "468ac2d3cd3c5cad43a58fff6f86cb4c177adfe5"
+observed_at = 1794600950
+output_digest = "sha256:c09125a189297814f62976800721923ad2263b57d77262fa12c1a005a15fb840"
+excerpt = """
+
+running 2 tests
+test control_lf_twin_is_not_allowed ... ok
+test cr_terminated_comment_does_not_hide_a_system_harm_call ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s
+
+   Compiling blastguard v0.2.539 (/Users/yuki/.condukt/worktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s
+     Running tests/backlog_20261114_python_cr_ends_comment.rs (target/debug/deps/backlog_20261114_python_cr_ends_comment-69f8cd7d4ddaf98d)
+"""
+
+[task.closure.red]
+rev = "fe5be3de4bf2a12105fc15db888d080f68715faf"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

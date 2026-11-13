@@ -127,7 +127,6 @@ fn printf_escape_expanded_program_piped_to_shell_is_denied() {
 // test-weakening-justified: new RED for an unfixed system-harm fail-open
 // (2026-11-13); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: 2026-11-13 a shell reading its program from a process substitution runs a system-harm command but is allowed — remove the ignore when fixed"]
 fn shell_program_from_process_substitution_is_denied() {
     let failures = non_deny(PROCSUB_SHAPES, "procsub");
     assert!(

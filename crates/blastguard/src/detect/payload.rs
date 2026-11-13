@@ -118,6 +118,17 @@ blastguard cannot read it",
                     return deny;
                 }
             }
+            // A process substitution a shell/interpreter reads as its PROGRAM
+            // (`bash < <(echo 'rm -rf ~')`, `sh <(printf …)`, `source <(…)`):
+            // the inner command's output is the program, exactly as when it is
+            // piped in. Judged as that pipeline; see `program_procsub_pipeline`.
+            if let Some(synthetic) = program_procsub_pipeline(stage, &tokens, &heads) {
+                if let Some(deny) =
+                    acc.record(analyze_interpreter_stdin_exec(&synthetic, depth, ctx))
+                {
+                    return deny;
+                }
+            }
             let Some(idx) = heads.into_iter().find(|&idx| {
                 let head = normalized_command(tokens[idx]);
                 is_shell(&head) || is_code_interpreter(&head)
@@ -251,6 +262,120 @@ the command line, so blastguard cannot read the program",
         }
     }
     acc.finish()
+}
+
+/// The pipeline `INNER | READER` equivalent to a stage in which a process
+/// substitution is the PROGRAM its reader runs: `READER < <(INNER)` (stdin), or
+/// `READER <(INNER)` with the substitution as the first non-flag operand (the
+/// script file), where READER is a shell, a code interpreter, or `source` / `.`
+/// (which run the file's text in the current shell; judged as `sh`). `None`
+/// when the stage has no such substitution (`diff <(ls a) <(ls b)`,
+/// `cat <(echo hi)`, `bash script.sh <(…)` keep their verdicts).
+///
+/// Only the first qualifying substitution is rewritten; the rewritten stage no
+/// longer holds it, so a second one is reached by the recursion in
+/// [`analyze_interpreter_stdin_exec`], which terminates because every step
+/// removes one substitution. The inner command list is wrapped in `( )` when it
+/// is not one simple command, so it stays ONE upstream stage (and is then not a
+/// literal emitter: Ask, with any literal inside still judged).
+fn program_procsub_pipeline(stage: &str, tokens: &[&str], heads: &[usize]) -> Option<String> {
+    let &idx = heads.iter().find(|&&idx| {
+        let head = normalized_command(tokens[idx]);
+        is_shell(&head) || is_code_interpreter(&head) || head == "source" || head == "."
+    })?;
+    let head = normalized_command(tokens[idx]);
+    let reader = if head == "source" || head == "." {
+        "sh".to_string()
+    } else {
+        tokens[idx].to_string()
+    };
+    let chars: Vec<char> = stage.chars().collect();
+    let (mut in_s, mut in_d) = (false, false);
+    let mut k = 0;
+    while k < chars.len() {
+        let c = chars[k];
+        if c == '\\' && !in_s {
+            k += 2;
+            continue;
+        }
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+        } else if c == '"' && !in_s {
+            in_d = !in_d;
+        } else if !in_s
+            && !in_d
+            && c == '<'
+            && chars.get(k + 1) == Some(&'(')
+            && (k == 0 || chars[k - 1].is_whitespace())
+        {
+            let end = scan_balanced(&chars, k + 2, Stop::Paren, 0)?;
+            let prefix: String = chars[..k].iter().collect();
+            let trimmed = prefix.trim_end();
+            let stdin = trimmed.ends_with('<') && !trimmed.ends_with("<<");
+            let before: &str = if stdin {
+                let t = trimmed.strip_suffix('<').unwrap_or(trimmed);
+                t.strip_suffix('0')
+                    .filter(|r| r.ends_with(char::is_whitespace))
+                    .unwrap_or(t)
+            } else {
+                trimmed
+            };
+            // Operand shape: nothing but flags between the reader and `<(`.
+            let operand_first = !stdin
+                && trimmed.split_whitespace().count() > idx
+                && trimmed
+                    .split_whitespace()
+                    .skip(idx + 1)
+                    .all(|t| t.starts_with('-'));
+            if stdin || operand_first {
+                let inner: String = chars[k + 2..end].iter().collect();
+                let after: String = chars[end + 1..].iter().collect();
+                let inner = inner.trim();
+                if inner.is_empty() {
+                    return None;
+                }
+                let upstream = if inner.contains([';', '|', '&', '\n', '(']) {
+                    format!("({inner})")
+                } else {
+                    quote_bare_echo_words(inner)
+                };
+                let mut stage_tokens: Vec<&str> = before.split_whitespace().collect();
+                if stage_tokens.len() > idx {
+                    stage_tokens[idx] = &reader;
+                }
+                let reader_stage = format!("{} {}", stage_tokens.join(" "), after.trim());
+                return Some(format!("{upstream} | {}", reader_stage.trim()));
+            }
+            k = end;
+        }
+        k += 1;
+    }
+    None
+}
+
+/// `echo -n WORD…` with every WORD made only of plain characters (no quote,
+/// escape, expansion, glob, tilde or operator) respelled as `echo -n 'WORD …'`:
+/// the same output, in the quoted form the pipe rule reads as a literal program
+/// (an unquoted `echo hi | bash` has no quoted text there and asks). Anything
+/// else is returned unchanged, so it keeps whatever verdict the pipe rule gives.
+fn quote_bare_echo_words(inner: &str) -> String {
+    let tokens: Vec<&str> = inner.split_whitespace().collect();
+    let plain = |w: &str| {
+        w.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-/:=@%+,".contains(c))
+    };
+    if tokens.first() != Some(&"echo") {
+        return inner.to_string();
+    }
+    let flags = tokens[1..]
+        .iter()
+        .take_while(|t| matches!(**t, "-n" | "-e" | "-E" | "-ne" | "-en"))
+        .count();
+    let words = &tokens[1 + flags..];
+    if words.is_empty() || !words.iter().all(|w| plain(w)) {
+        return inner.to_string();
+    }
+    format!("{} '{}'", tokens[..1 + flags].join(" "), words.join(" "))
 }
 
 /// True when `head` is `python`, `python3` or `python3.N`.

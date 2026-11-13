@@ -16,6 +16,7 @@
 //! location (others may have been skipped because their fix landed or they were
 //! auto-cancelled). See [`rerun_dir`].
 
+use crate::store::row_identity;
 use crate::{claim_ledger, evidence, live_lease_view, store, task};
 use anyhow::Result;
 use harness_core::verdict::Determination;
@@ -71,6 +72,12 @@ fn repo_store_rerun_dir(
     cand: &task::Task,
     store_root: &Path,
 ) -> std::result::Result<PathBuf, String> {
+    match row_identity::row_repo(&cand.project, store_root) {
+        row_identity::RowRepo::This => {}
+        row_identity::RowRepo::Other(why) | row_identity::RowRepo::Undetermined(why) => {
+            return Err(why);
+        }
+    }
     let store_id = match store::canonical_project_id(store_root) {
         Determination::Known(p) => p,
         Determination::Undetermined(why) => {
@@ -80,40 +87,6 @@ fn repo_store_rerun_dir(
             ));
         }
     };
-    let label = cand.project.trim();
-    let expanded = harness_core::config::expand_tilde(label);
-    if expanded.is_absolute() {
-        match std::fs::symlink_metadata(&expanded) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => {
-                return Err(format!(
-                    "whether its filing location {label:?} exists on this machine could not be \
-                     determined, so whether it belongs to this store's repo {} cannot be \
-                     determined: {e}",
-                    store_id.display()
-                ));
-            }
-            Ok(_) => match store::canonical_project_id(&expanded) {
-                Determination::Known(id) if id == store_id => {}
-                Determination::Known(id) => {
-                    return Err(format!(
-                        "its filing location {label:?} exists on this machine and belongs to a \
-                         DIFFERENT repo ({}) than this store's repo ({})",
-                        id.display(),
-                        store_id.display()
-                    ));
-                }
-                Determination::Undetermined(why) => {
-                    return Err(format!(
-                        "its filing location {label:?} exists on this machine but its project \
-                         identity cannot be determined, so whether it belongs to this store's \
-                         repo {} cannot be determined: {why}",
-                        store_id.display()
-                    ));
-                }
-            },
-        }
-    }
     if let Some(top) = cwd_checkout_of(&store_id)? {
         return Ok(top);
     }

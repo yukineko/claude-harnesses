@@ -1664,3 +1664,33 @@ exit 101: -c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 3.22s
      Running tests/backlog_20261114_printf_operand_judged_as_command_fp.rs (target/debug/deps/backlog_20261114_printf_operand_judged_as_command_fp-90eba1c145325263)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_printf_operand_judged_as_command_fp`"""
+
+[[task]]
+id = "5a502995"
+title = "dup guard keys on project label: foreign-label first copy not seen (hashkey)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "RED at 4c86a8ee (origin/main 1787d8de), 2026-11-14. User ruling (2026-11-14): 「本質的というのは問題の質は通常パスでゆらぐものではない」. Rows filed on another machine (foreign absolute project label) must behave like local rows in a repo store; residual of d3f7a4af. Observed: duplicate must be rejected (code 0, pending rows 2). Site: store::check_duplicate hashkey(title, project); also claim_ledger.rs:575, main.rs:1110."
+created_at = 1794597424
+updated_at = 1794597424
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261114_label_identity_residual -- --ignored duplicate_title_filed_locally_is_rejected_when_first_copy_has_foreign_label"
+rev = "4c86a8eea0981c6597094ad4229ffe7e75003ed1"
+observed_at = 1794597424
+detail = """
+exit 101: s
+
+   Compiling backlog v0.3.121 (/Users/yuki/src/harness-wt-label-identity/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.07s
+     Running tests/backlog_20261114_label_identity_residual.rs (target/debug/deps/backlog_20261114_label_identity_residual-41e2c7d488853bf3)
+error: test failed, to rerun pass `-p backlog --test backlog_20261114_label_identity_residual`"""

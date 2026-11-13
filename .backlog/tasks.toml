@@ -1700,3 +1700,28 @@ exit 101: -worktrees/side-reds-075136/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
      Running tests/backlog_20261114_function_call_in_command_substitution.rs (target/debug/deps/backlog_20261114_function_call_in_command_substitution-4a1206965fe3f94d)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_function_call_in_command_substitution`"""
+
+[[task]]
+id = "e686a85e"
+title = "blastguard: exec 3<<< harmful; bash <&3 is Ask in main (in-stage form is Deny)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "pending"
+notes = """Measured at dc9b00c7b (0.2.565) 2026-11-14 in run-20261114-075136-6996 follow-up. main/subagent: "exec 3<<< 'chmod 777 /etc/hosts'; bash <&3" ask/deny; "bash 3<<< 'chmod 777 /etc/hosts' <&3" deny/deny. Two readings: (real defect) program text is literally on the command line so system harm should be Deny in main; (intended) cross-statement fd tracking is out of model and Ask is the deliberate fail-closed answer. RED asserts the first reading."""
+created_at = 1794612991
+updated_at = 1794612991
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_exec_fd_herestring_then_shell_reads_fd -- --include-ignored"
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+observed_at = 1794612991
+detail = """
+exit 101: rktrees/side-reds-075136/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/backlog_20261114_exec_fd_herestring_then_shell_reads_fd.rs (target/debug/deps/backlog_20261114_exec_fd_herestring_then_shell_reads_fd-de5e1a0b7ceebd7d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_exec_fd_herestring_then_shell_reads_fd`"""

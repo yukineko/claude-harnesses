@@ -140,11 +140,22 @@ forge・condukt のスケジューラが再利用）。
   消える ref」として判定する（文字列 folding では再現しない。一致 0 件・複数・stat/probe 失敗は Ask。
   blastguard 0.2.299）。存在しない branch（`rev-parse --verify` exit 1）は何も消えないので Allow。
   `git worktree … remove` に force（verb の前後どちらでも）があるとき、各 operand で
-  `git status --porcelain --ignored` が exit 0 かつ空なら Allow、出力があれば Ask（ignored file も
-  削除されるので数える。`target/` のような build 出力だけでも Ask）。probe は git が実際に作用する repo
+  `git rev-parse --show-toplevel` と `git status --porcelain=v1 -z --ignored=matching
+  --untracked-files=all --ignore-submodules=none` がともに exit 0 で、出力が porcelain v1 として読め、
+  全 entry が「regenerable な build 出力と確認できた ignored directory」のときだけ Allow（空も Allow）。
+  build 出力と数えるのは、`!!` で、git が末尾 `/` 付き（directory）で出し、worktree root 相対の
+  **最後の path component** が `deletion::BUILD_OUTPUT_NAMES`（rm の class 4 と同じ一覧: `target`・
+  `node_modules`・`__pycache__` 等）のどれかに完全一致し、`.`/`..`/空 component を含まず、その entry と
+  全ての祖先 prefix が今 symlink でない実 directory（`symlink_metadata`）であるものだけ。component 単位の
+  一致で substring ではない（`target-secrets/`・`x/target.env` は数えない）。worktree 外を指す symlink の
+  `target` は directory でないので数えない（Ask）。modified / staged / untracked、build 名でない ignored
+  （`.env`・鍵・設定・未知の名前）は Ask（強制削除は directory ごと消すため）。backlog 2089dfc5、
+  blastguard 0.2.537 で、clean な linked worktree に ignored `target/` しか無い場合の Ask/Deny（誤検知）を
+  解消（`tests/worktree_remove_ignored_build_output_fp_20261114.rs`）。probe は git が実際に作用する repo
   （累積 `-C`〈相対は segment の base 起点〉・`--git-dir`・`--work-tree`）で走らせ、相対 worktree path は
   その `-C` directory 起点で置く。判定不能 — operand 無し・base 不明（`cd "$VAR"` 後など）・置けない/
-  未知の global option・default branch 解決不能・probe の想定外 exit / spawn 失敗 / timeout — は全て Ask。
+  未知の global option・default branch 解決不能・probe の想定外 exit / spawn 失敗 / timeout・
+  絶対 path でない toplevel・porcelain v1 として読めない status 出力 — は全て Ask。
 - **whole-tree staging は Ask（`detect/git_stage.rs`、backlog e9325654、blastguard 0.2.300）** —
   他セッションの未 commit 作業を自分の commit に巻き込むため。argv だけで判定し、どの repo に作用するか
   （`-C`・`--git-dir`・`--work-tree`・`-c`）には依存しない（probe しない。linked worktree の免除も無い）。
@@ -849,12 +860,20 @@ forge・condukt のスケジューラが再利用）。
   Ask（subagent では Deny）になる。`\$PY ...` の部分を除いた同形は Allow（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_printf_operand_judged_as_command_fp.rs`
   （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
-- **未修正の system-harm fail-open の RED（2026-11-14、flow-8cca7ef5、CR で終わる python コメント。修正は未実装）** —
-  CPython は `#` コメントを裸の CR（`\r`）で終える（`compile` で観測）ので、`python3 -c "import os # x<CR>os.chmod('/etc/hosts',0)"`
-  は chmod を実行するが、blastguard は呼び出しをコメントの一部と読んで Allow にする（`env -S` 経由の同形も同じ。main・subagent とも）。
+- **CR で終わる python コメントの system-harm fail-open（2026-11-14、flow-8cca7ef5、backlog a66c115c で修正済み）** —
+  CPython は program を字句解析する前に `\r\n` と裸の CR（`\r`）を `\n` に変換する（3.12.11 で `python3 -c`・stdin・
+  ファイル・`compile` のいずれでも観測: CR は `#` コメントを終え、文を区切り、`\` の行継続になり、三重引用符内では値 `\n`、
+  一重引用符内では unterminated string の SyntaxError。form feed・`\x0b`・U+2028 はコメントを終えない）。以前の blastguard は
+  `\n` でしか行を終えず、`python3 -c "import os # x<CR>os.chmod('/etc/hosts',0)"`（`env -S` 経由・here-string・
+  `python3 - <<'EOF'`・`cat > x.py <<'EOF'` 後の実行も同じ）の chmod をコメントの一部と読んで Allow にしていた。
+  0.2.535 以降、Python が読む program のすべての入口（`interpreter_code_verdict` の Python reader、`python_program_verdict`・
+  `python_stdin_body_reading`・`python_strings_never_reach_a_shell`・`python_program_tokenises`・`python_redirect_view`）で
+  同じ変換（`src/detect/interpreter/python_file.rs` の `python_newlines`）をしてから読むので、main・subagent とも Deny になる。
+  一重引用符内に CR がある program は LF の同形と同じく「字句解析できない」Ask（subagent では Deny）になる。
+  ruby・perl・sh の `#` コメントは CR で終わらない（観測）ので、それらの読みは変えていない。
   LF の同形は Allow にならない（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_python_cr_ends_comment.rs`
-  （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+  （RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
 - **未修正の system-harm fail-open の RED（2026-11-14、flow-8cca7ef5、pathlib のメソッド参照。修正は未実装）** —
   pathlib の書き込み・移動メソッドを直接呼び出し `Path(..).method(..)` 以外で呼ぶ形は Allow になる（main・subagent とも）:
   unbound 呼び出し `Path.replace(Path('/tmp/z'), '/etc/hosts')`、束縛メソッドを名前に入れて呼ぶ
@@ -868,6 +887,12 @@ forge・condukt のスケジューラが再利用）。
   二重引用符で本当に展開される `perl -ne "print $HOME"` は Allow にならない（control）。
   回帰テスト: `crates/blastguard/tests/backlog_20261114_perl_single_quoted_dollar_fp.rs`
   （`#[ignore]` の RED 1 本 + control。orchestrator が書いた。証明しない範囲はファイル冒頭の doc comment）。
+- **未修正の false positive の RED（2026-11-14。修正は未実装）** — 引用付き heredoc で `.rs` ファイルへ書く本文に
+  Rust の match arm `=>`（例 `b'f' => format!("{v:.p$}"),`）があり、同じコマンド内に後続の `python3 - <<'EOF'` heredoc 文が
+  あると、`>` が redirect と判定され「destroys the file's current contents and ... contains a shell expansion」で Deny になる。
+  `.rs` heredoc 単体は Allow。実際の redirect（`: > /etc/hosts`）と、書いて実行する heredoc（`sh x.sh`）は Deny のまま（control）。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_heredoc_rs_body_match_arrow_fp.rs`
+  （`#[ignore]` の RED 1 本 + control。独立 test author が書いた。証明しない範囲はファイル冒頭の doc comment）。
 
 ### module 責務
 

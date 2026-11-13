@@ -1623,3 +1623,34 @@ exit 101: rktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastgua
     Finished `test` profile [unoptimized + debuginfo] target(s) in 3.57s
      Running tests/backlog_20261114_perl_single_quoted_dollar_fp.rs (target/debug/deps/backlog_20261114_perl_single_quoted_dollar_fp-78124a0de3e79bba)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_perl_single_quoted_dollar_fp`"""
+
+[[task]]
+id = "2089dfc5"
+title = "blastguard: worktree remove --force denied when only ignored build output (target/) remains (false positive)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = 'Observed 2026-11-14, deployed blastguard 0.2.523+, subagent mode, 3 times. Deny reason verbatim: "git worktree remove --force `/Users/yuki/src/harness-wt-label-fix`: git status reports uncommitted changes, untracked files or ignored files there (ignored files such as build output in target/ count: the forced removal deletes the whole directory), which would be destroyed". Repro at rev ff411978 (blastguard 0.2.530 branch test/blastguard-fp-worktree-remove-target): main=ask, subagent=deny. Controls (modified tracked, untracked non-ignored, ignored .env) stay non-Allow.'
+created_at = 1794599118
+updated_at = 1794599118
+weight = 0.0
+issue_number = 1733
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1733"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test worktree_remove_ignored_build_output_fp_20261114 -- --ignored"
+rev = "ff411978fb15167d21cf8c4c3503e363475a65d2"
+observed_at = 1794599118
+detail = """
+exit 101: 2.530 (/Users/yuki/src/harness-wt-fp-wtremove/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.65s
+     Running tests/worktree_remove_ignored_build_output_fp_20261114.rs (target/debug/deps/worktree_remove_ignored_build_output_fp_20261114-cdb2a2e94685c6b4)
+error: test failed, to rerun pass `-p blastguard --test worktree_remove_ignored_build_output_fp_20261114`"""

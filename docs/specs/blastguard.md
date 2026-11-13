@@ -1112,6 +1112,21 @@ forge・condukt のスケジューラが再利用）。
   allow。dismiss 済みは `systemMessage`（pending があれば block 理由）に毎回列挙。(5) `relay dismiss
   <id> --reason <text>`: 空白のみ/欠落の理由・未知 id は exit 2、queue 読み書き失敗は exit 3。
   コマンドを実行する経路は持たず、cwd は不透明な文字列として比較するだけで解決・stat しない。
+- **`blocklog`** — block log（ユーザー裁定 2026-11-14 逐語:「…完全なコマンドが残っていないため、
+  これ以上は切り分けられません。というのは大変愚かなので記録をとること。止めたなら止めた責任をとる」）。
+  表示した `Deny` / `Ask` ごとに 1 行を overwatch に依存せず `~/.blastguard/blocks/blocks.jsonl`
+  （`BLASTGUARD_BLOCK_LOG_DIR` で dir を上書き）へ追記する。`Allow` は記録しない。フィールド:
+  `v`(1)・`ts`・`blastguard_version`・`session_id`・`agent_id`（subagent 外は null）・`cwd`（payload 値、
+  不透明・非検査）・`tool_name`・`command`（Bash、バイト一致・非切り詰め）・`file_path`・`tool_input`
+  （payload の値そのもの）・`tool_input_capped`・`tool_input_bytes`・`tool_input_sha256`（compact JSON の
+  sha256）・`decision`（表示した `deny`/`ask`）・`decision_kind`（`deny` / `ask` / `ask-hardened-to-deny`
+  〈subagent・headless での硬化〉/ `deny-downgraded-to-ask`〈2 度目〉/ `panic-blocked`〈verdict 経路の
+  panic で exit 2〉）・`actor`・`system_harm`・`reason`（表示文そのもの）・`rule_id`・`raw_payload`
+  （payload をパースできなかったとき・panic 時のみ raw stdin）。`tool_input` の複製だけは compact JSON が
+  1 MiB を超えると null・`tool_input_capped: true`（長さ・hash・`command`・`file_path` は保持）。
+  記録は判定確定後・表示前に書き、判定を変えない。書けない（panic を含む）ときは表示理由に
+  `could NOT be recorded` とエラーを付け stderr にも警告する（沈黙しない）。relay（subagent の Bash Ask の
+  再実行 queue）とは別物で、block log は真の `Deny` と main の `Ask` を含む全 block を記録する。
 - **`hookio`** — PreToolUse `deny` の単一行 JSON 生成（`deny_json`）。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。

@@ -15,10 +15,16 @@
 //!   reports in it. It is Allow only when every entry is an ignored directory
 //!   positively recognised as regenerable build output (a real directory,
 //!   not a symlink, whose last component is one of
-//!   [`crate::deletion::BUILD_OUTPUT_NAMES`], e.g. `target/`; see
-//!   [`only_ignored_build_output`], backlog 2089dfc5). Any modified, staged,
-//!   untracked or other ignored entry (`.env`, keys, config, unknown names)
-//!   is Ask: the removal deletes the whole directory. Only the worktree named
+//!   [`crate::deletion::BUILD_OUTPUT_NAMES`], e.g. `target/`, and which
+//!   contains no `.git` entry at any depth; see
+//!   [`only_ignored_build_output_within`], backlog 2089dfc5 / b997a3d5). Any
+//!   modified, staged, untracked or other ignored entry (`.env`, keys,
+//!   config, unknown names), and a build-named directory holding a nested
+//!   checkout (a linked worktree or repository inside `target/`) or one that
+//!   cannot be walked completely within [`WALK_MAX_ENTRIES`] entries and
+//!   [`WALK_DEADLINE`] (symlinks are not followed), is Ask: the removal
+//!   deletes the whole directory. Directories inside the named worktree are
+//!   part of it, so walking them stays within the ruling below. Only the worktree named
 //!   as the operand is ever inspected (user ruling 2026-11-14, backlog
 //!   b997a3d5): before any git probe, the operand must be, by local metadata,
 //!   a linked-worktree root ([`linked_worktree_root`]: a real directory whose
@@ -505,8 +511,10 @@ default branch `{}` ({}), so deleting it destroys unmerged work",
 /// locally before any git subprocess); `git -C <operand> rev-parse
 /// --show-toplevel` and [`STATUS_ARGS`] both exit 0; the reported toplevel,
 /// canonicalised, equals the canonicalised operand; the status output parses
-/// as porcelain v1; and [`only_ignored_build_output`] accepts every entry
-/// (nothing at all, or only ignored build-output directories). Anything else
+/// as porcelain v1; and [`only_ignored_build_output_within`] accepts every
+/// entry (nothing at all, or only ignored build-output directories holding
+/// no nested checkout, walked under one [`WalkBudget`] shared by all
+/// operands). Anything else
 /// is Ask. A relative operand is placed against the directory git runs in
 /// (the cumulative `-C` directory, else the segment's base); the globals'
 /// repository itself is never probed here.
@@ -539,6 +547,7 @@ uncommitted, untracked and ignored files included"
         Determination::Known(t) => t,
         Determination::Undetermined(u) => return ask(u.reason().as_str().to_string()),
     };
+    let mut budget = WalkBudget::new();
     for op in ops {
         let path = match ctx.scope.lexical_absolute(op, Some(&t.dir)) {
             Determination::Known(p) => p,
@@ -587,7 +596,9 @@ operand itself, so its state is not the operand's"
         let Some(entries) = crate::reversible::parse_status_z(&status) else {
             return ask("git status printed output not in the porcelain v1 shape".to_string());
         };
-        if let Err(why) = only_ignored_build_output(std::path::Path::new(&toplevel), &entries) {
+        if let Err(why) =
+            only_ignored_build_output_within(std::path::Path::new(&toplevel), &entries, &mut budget)
+        {
             return Decision::ask(format!(
                 "git worktree remove --force `{op}`: {why}, which the forced removal (it deletes \
 the whole directory) would destroy"
@@ -651,6 +662,116 @@ const STATUS_ARGS: &[&str] = &[
     "--ignore-submodules=none",
 ];
 
+/// [`only_ignored_build_output_within`] with a fresh [`WalkBudget`] (unit
+/// tests).
+#[cfg(test)]
+fn only_ignored_build_output(
+    toplevel: &std::path::Path,
+    entries: &[(String, String)],
+) -> Result<(), String> {
+    let mut budget = WalkBudget::new();
+    only_ignored_build_output_within(toplevel, entries, &mut budget)
+}
+
+/// Upper bound on directory entries [`no_nested_git`] visits for one
+/// `worktree remove` command (all operands and build dirs together).
+/// Measured 2026-11-14 (macOS, APFS, an `-O` replica of this walk: sorted
+/// path listing plus one `symlink_metadata` per entry): a cargo `target/` of
+/// this workspace with 55,883 entries took 585-694 ms warm and 1,809 ms on
+/// the first (colder) run, i.e. ~10-32 us per entry; `find | wc -l` counted
+/// 194,596 entries in a long-lived checkout's `target/`. The entry cap is
+/// ~5x that count; in practice [`WALK_DEADLINE`] binds first, so a target
+/// above roughly 90k (cold) to 300k (warm) entries is Ask, not Allow.
+const WALK_MAX_ENTRIES: usize = 1_000_000;
+
+/// Wall-clock bound on the walk for one `worktree remove` command. The
+/// PreToolUse hook is killed at 10 s (`hooks/hooks.json`), and a killed hook
+/// does not block the tool, so the walk must finish well inside it, leaving
+/// room for the two [`PROBE_TIMEOUT`] git probes per operand.
+const WALK_DEADLINE: std::time::Duration = std::time::Duration::from_millis(3000);
+
+/// Shared entry/time budget for every [`no_nested_git`] walk of one command.
+struct WalkBudget {
+    entries: usize,
+    deadline: std::time::Instant,
+}
+
+impl WalkBudget {
+    fn new() -> WalkBudget {
+        WalkBudget {
+            entries: 0,
+            deadline: std::time::Instant::now() + WALK_DEADLINE,
+        }
+    }
+}
+
+/// `Ok(())` only when the directory tree rooted at `dir` (already
+/// established to be a real directory) contains NO entry named `.git` (file,
+/// directory or symlink) at any depth: a `.git` entry marks a nested
+/// checkout (a linked worktree's `.git` file, a repository's `.git`
+/// directory), whose uncommitted work and repository the forced removal
+/// would delete with the build directory. Symlinks are never followed (a
+/// symlink is a leaf: deleting the tree removes the link, not its target),
+/// but a symlink NAMED `.git` is still `Err`. Fail-closed: a listing that
+/// [`harness_core::boundary::read_dir_entries_checked`] does not answer with
+/// `Known(Some(..))` (an I/O error, a mid-iteration entry error, or the
+/// directory vanishing), a `symlink_metadata` error, more than
+/// [`WALK_MAX_ENTRIES`] entries or the [`WALK_DEADLINE`] passing (both
+/// shared across the command via `budget`) is `Err`, never `Ok`.
+fn no_nested_git(dir: &std::path::Path, budget: &mut WalkBudget) -> Result<(), String> {
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let listing = match harness_core::boundary::read_dir_entries_checked(&d) {
+            Determination::Known(Some(v)) => v,
+            Determination::Known(None) => {
+                return Err(format!(
+                    "`{}` vanished while being walked to rule out a nested checkout",
+                    d.display()
+                ))
+            }
+            Determination::Undetermined(u) => {
+                return Err(format!(
+                    "{} (walking to rule out a nested checkout)",
+                    u.reason().as_str()
+                ))
+            }
+        };
+        for p in listing {
+            budget.entries += 1;
+            if budget.entries > WALK_MAX_ENTRIES {
+                return Err(format!(
+                    "`{}` holds more than {WALK_MAX_ENTRIES} entries, too many to rule out a nested \
+checkout",
+                    dir.display()
+                ));
+            }
+            if budget.entries % 1024 == 0 && std::time::Instant::now() > budget.deadline {
+                return Err(format!(
+                    "walking `{}` to rule out a nested checkout took longer than {} ms",
+                    dir.display(),
+                    WALK_DEADLINE.as_millis()
+                ));
+            }
+            if p.file_name().is_some_and(|n| n == ".git") {
+                return Err(format!(
+                    "`{}` is a `.git` entry: a nested checkout (worktree or repository) lies inside \
+the ignored build directory",
+                    p.display()
+                ));
+            }
+            // `symlink_metadata`: a symlink is classified as itself (a leaf),
+            // never followed.
+            let ft = std::fs::symlink_metadata(&p)
+                .map_err(|e| format!("cannot classify `{}` ({e})", p.display()))?
+                .file_type();
+            if ft.is_dir() {
+                stack.push(p);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `Ok(())` only when every `git status` entry of the worktree rooted at
 /// `toplevel` is ignored (`!!`) regenerable build output; otherwise `Err`
 /// naming the first entry that is not.
@@ -660,17 +781,23 @@ const STATUS_ARGS: &[&str] = &[
 /// path component, relative to the worktree root, is exactly one of
 /// [`crate::deletion::BUILD_OUTPUT_NAMES`] (the same list the rm class-4
 /// `Allow` uses, so `rm -rf <wt>/target` and removing a worktree holding only
-/// that directory agree); no component is empty, `.` or `..`; and every
+/// that directory agree); no component is empty, `.` or `..`; every
 /// prefix of it, the entry itself included, is a real directory right now
 /// (`symlink_metadata`: a symlink, a file, or an unreadable path is not
-/// build output). Matching is per component, never by substring:
-/// `target-secrets/` and `x/target.env` are not build output. A file
-/// ignored inside a build-named directory that is not itself ignored
-/// (`target/key.env` under `*.env`) is listed by its own path and is not
-/// build output either.
-fn only_ignored_build_output(
+/// build output); and the directory holds no nested checkout:
+/// [`no_nested_git`] walks it (symlinks not followed) and any `.git` entry
+/// at any depth, a walk error, or exhausting `budget` (entries or time) is
+/// `Err` (backlog b997a3d5: git reports a linked worktree created inside an
+/// ignored `target/` only as `target/`, and the forced removal was observed
+/// to delete it together with its uncommitted file). Matching is per
+/// component, never by substring: `target-secrets/` and `x/target.env` are
+/// not build output. A file ignored inside a build-named directory that is
+/// not itself ignored (`target/key.env` under `*.env`) is listed by its own
+/// path and is not build output either.
+fn only_ignored_build_output_within(
     toplevel: &std::path::Path,
     entries: &[(String, String)],
+    budget: &mut WalkBudget,
 ) -> Result<(), String> {
     for (xy, path) in entries {
         if xy != "!!" {
@@ -706,6 +833,9 @@ regenerable build output"
                 _ => return not_build(),
             }
         }
+        no_nested_git(&cur, budget).map_err(|why| {
+            format!("the ignored `{path}` there is not recognised regenerable build output: {why}")
+        })?;
     }
     Ok(())
 }

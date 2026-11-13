@@ -151,7 +151,20 @@ forge・condukt のスケジューラが再利用）。
   `target` は directory でないので数えない（Ask）。modified / staged / untracked、build 名でない ignored
   （`.env`・鍵・設定・未知の名前）は Ask（強制削除は directory ごと消すため）。backlog 2089dfc5、
   blastguard 0.2.537 で、clean な linked worktree に ignored `target/` しか無い場合の Ask/Deny（誤検知）を
-  解消（`tests/worktree_remove_ignored_build_output_fp_20261114.rs`）。**検査するのは operand に名指しされた
+  解消（`tests/worktree_remove_ignored_build_output_fp_20261114.rs`）。build 名の ignored directory でも、
+  その中に **nested checkout（`.git` という名前の entry — file・directory・symlink を問わず — が任意の深さに
+  1 つでもある）** があれば build output とみなさず Ask（subagent では Deny）: git は `target/` 内に
+  `git worktree add` された linked worktree を `target/` 1 行としか報告せず、強制削除がその未 commit
+  file ごと消すことを実観測した（backlog b997a3d5、blastguard 0.2.550、同 test の t3）。判定は directory を
+  `harness_core::boundary::read_dir_entries_checked` で歩き、各 entry を `symlink_metadata` で分類する
+  （symlink は辿らず leaf として扱う）。listing の失敗・途中 entry の失敗・walk 中の directory 消失・
+  `symlink_metadata` 失敗、1 command あたり 1,000,000 entry 超過、または 3 秒の walk 期限超過は判定不能として
+  Ask（Allow にしない）。期限は PreToolUse hook の 10 秒 timeout（kill された hook は tool を止めない）の内側に
+  収めるため。実測（2026-11-14、macOS/APFS、同 walk の `-O` replica）: 本 workspace の cargo `target/`
+  55,883 entry を warm 585–694 ms・初回 1,809 ms、`target/debug` 21,791 entry を 179 ms（約 10–32 µs/entry）。
+  したがって約 9 万（cold）〜30 万（warm）entry を超える target は期限で Ask になる（Allow にはならない）。
+  test fixture の repo（`.git` を持つ）を `target/tmp` 等に置いた target も nested checkout として Ask。
+  walk するのは operand の worktree 内の directory だけで、下の裁定の範囲内。**検査するのは operand に名指しされた
   worktree だけ**（ユーザー裁定 2026-11-14「gateもconduktも絶対に勝手に他のworktreeを参照してはならない」、
   backlog b997a3d5、blastguard 0.2.546）: git を起動する前に、operand 自身が実 directory（symlink でない）で
   `<operand>/.git` が regular file（symlink でも directory でもない）＝ linked worktree の root であることを

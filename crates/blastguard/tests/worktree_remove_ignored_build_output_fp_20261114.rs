@@ -289,7 +289,6 @@ fn cc_ignored_env_file_stays_not_allow() {
 /// DOES NOT PROVE: how the nested worktree is detected (a `.git` entry, a
 /// nested repo of any kind, or the uncommitted file itself).
 #[test]
-#[ignore = "RED: nested linked worktree with uncommitted work inside the named worktree's ignored target/ is treated as build output"]
 fn t3_nested_worktree_inside_ignored_build_dir_is_not_allow() {
     let f = Fixture::new("t3");
     f.add_build_output();

@@ -111,9 +111,11 @@ pub(super) fn shell_lexed_reading(cmd: &str) -> ShellLexed {
 /// [`super::detect_bash`] split at every newline, so a command word written
 /// `chm\<NL>od` was judged as the two harmless lines `chm\` and `od …` while
 /// the shell runs `chmod …`. The callers
-/// ([`super::readings::detect_bash_every_reading`] and
-/// [`super::analyze_shell_payload`], whose payload a nested shell re-parses —
-/// `bash -c 'chm\<NL>od …'`) judge this text IN ADDITION to the original, so
+/// ([`super::readings::detect_bash_every_reading`];
+/// [`super::readings::shell_payload_verdict`] for a payload a nested shell
+/// re-parses — `bash -c 'chm\<NL>od …'`; and
+/// [`super::readings::shell_program_readings`] for a shell program on stdin —
+/// `bash <<< 'chm\<NL>od …'`) judge this text IN ADDITION to the original, so
 /// it can only add a verdict. Unlike [`shell_lexed_reading`] it keeps
 /// comments and escaped quotes as they are, so that a backslash-escaped
 /// program operand (`python3 -c o\<NL>pen\(\'…\',\'w\'\)`) is judged with its

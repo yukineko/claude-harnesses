@@ -215,17 +215,22 @@ forge・condukt のスケジューラが再利用）。
   process substitution の本体も `$(…)` と同じく実行される command として解析する
   （`executed_substitution_payloads`）。
 - **行継続（`\`＋改行）を除いた読みも判定する（`detect/shell_lex.rs` の `line_continuation_reading`、
-  backlog 040b959b、blastguard 0.2.507）** — shell は単語分割の前に、unquoted・double quote 内・`$(…)`・
+  backlog 040b959b）** — shell は単語分割の前に、unquoted・double quote 内・`$(…)`・
   backtick・`$((…))` の `\`＋改行を取り除く（single quote・`$'…'`・`#` comment・here-document 本文では
   取り除かない。comment 末尾の `\` は次の行を継続しない。/bin/bash 3.2・/bin/sh・/bin/zsh で観測）。
   segment 分割器と単語 scan はその改行で行を割るため、コマンド語・引数・`-c` operand を `\`＋改行で
   二分すると system-harm のコマンドが無害な 2 行に見えて Allow になっていた。`detect_bash_every_reading`
   は行継続だけを除いた text（comment・escape された quote はそのまま）が元と異なるとき、それも
   `detect_bash` で判定し**厳しい方**を返す。`analyze_shell_payload` も payload（`bash -c '…'` の
-  single quote 内の行継続は内側の shell が取り除く）に同じ読みを足し、Deny > Ask > Allow で合成する。
-  読みが判定不能（行を join する here-document の未モデル形・入れ子上限）なら Ask。`shell_lexed_reading`
+  single quote 内の行継続は内側の shell が取り除く）に同じ読みを足し、Deny > Ask > Allow で合成する
+  （`readings::shell_payload_verdict`）。stdin から読む shell program（`bash`/`sh` への here-string、
+  quoted / unquoted の here-document、`echo … | bash` の literal）も、読む shell が行継続を取り除くので、
+  各 program text に行継続を除いた読みを足して同じ `interpreter_code_verdict` で判定する
+  （`readings::shell_program_readings`、`detect/payload.rs`）。読む側が shell でない here-document
+  （`cat <<'EOF' > file` の data 本文、python の stdin program）には足さない。読みが判定不能（行を join する here-document の未モデル形・入れ子上限）なら Ask。`shell_lexed_reading`
   も同じ位置の行継続を取り除き、`#` を comment 開始とみなす単語境界は綴り直した後の text で決める。
-  テストは `tests/backlog_20261113_toplevel_line_continuation.rs` と
+  テストは `tests/backlog_20261113_toplevel_line_continuation.rs`・
+  `tests/backlog_20261113_bn_shell_stdin_payload.rs`・
   `tests/line_continuation_deny_and_controls_20261113.rs`（system-harm は main・subagent とも Deny、
   無害な行継続コマンドは Allow のまま）。
 - **git の exec-capable 形は一律 Deny（backlog fb338793、ユーザー裁定 2026-11-07「git bisectでいろいろ

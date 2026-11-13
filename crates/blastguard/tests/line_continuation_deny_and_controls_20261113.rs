@@ -7,12 +7,14 @@
 //! system-harm shape ends in Deny (never Ask) in the main session and in a
 //! subagent: the shapes of
 //! `tests/backlog_20261113_toplevel_line_continuation.rs` plus BN inside double
-//! quotes, after `;`, inside `$(…)` and inside a double-quoted `sh -c` payload.
+//! quotes, after `;`, inside `$(…)`, inside a double-quoted `sh -c` payload,
+//! and in a shell program on stdin (a piped literal, a `bash -s` here-document).
 //!
 //! `harmless_bn_commands_keep_their_decision` pins the decision of harmless
 //! commands holding a BN (including a BN inside single quotes, which the shell
-//! keeps, and one at the end of a comment, which continues nothing) to the
-//! decision observed for them BEFORE the fix (Allow, at main 50474876).
+//! keeps, one at the end of a comment, which continues nothing, harmless shell
+//! programs on stdin, and a here-document DATA body written to a file) to the
+//! decision observed for them BEFORE the fix (Allow).
 //!
 //! DOES NOT PROVE: that shapes not listed here are judged correctly; which
 //! reading produced the Deny.
@@ -96,6 +98,9 @@ const HARM: &[&str] = &[
     "true; chm\\\nod 777 /etc/hosts",
     "echo $(chm\\\nod 777 /etc/hosts)",
     "sh -c \"chm\\\nod 777 /etc/hosts\"",
+    // A shell program on stdin: piped literal, `-s` here-document.
+    "echo 'chm\\\nod 777 /etc/hosts' | bash",
+    "bash -s <<'EOF'\nchm\\\nod 777 /etc/hosts\nEOF",
 ];
 
 #[test]
@@ -120,8 +125,9 @@ fn system_harm_with_bn_is_deny() {
     );
 }
 
-/// Harmless commands holding a BN, each Allow before the fix (observed at main
-/// 50474876 with this test's harness).
+/// Harmless commands holding a BN, each Allow before the fix (observed with
+/// this test's harness: the first eight at main 50474876, the stdin-program
+/// and data here-document ones with the src of 817e3fb1).
 const HARMLESS: &[&str] = &[
     "ls \\\n-la",
     "cargo test \\\n-p foo",
@@ -133,6 +139,12 @@ const HARMLESS: &[&str] = &[
     // A comment's trailing backslash continues nothing.
     "echo a # note \\\nls",
     "printf '%s\\n' a \\\n  b \\\n  c",
+    // Harmless shell programs on stdin.
+    "bash <<< 'ls \\\n-la'",
+    "bash <<'EOF'\nls \\\n-la\nEOF",
+    "echo 'ls \\\n-la' | sh",
+    // A here-document DATA body: written to a file, not run.
+    "cat <<'EOF' > x.txt\nchm\\\nod 777 /etc/hosts\nEOF",
 ];
 
 #[test]

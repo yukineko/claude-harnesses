@@ -156,6 +156,29 @@ pub(super) fn shell_payload_verdict(payload: &str, depth: usize, ctx: &Ctx<'_>) 
     acc.finish()
 }
 
+/// A SHELL program read from stdin (a here-string or here-document fed to
+/// `bash`/`sh`, or a literal piped into one): `texts` followed by the
+/// [`line_continuation_reading`] of each text that has one, plus an Ask when
+/// one is undetermined. The reading shell removes the program's line
+/// continuations before it splits words, whatever quoting delivered the text
+/// (`bash <<< 'chm\<NL>od …'` runs `chmod`, backlog 040b959b), so the caller
+/// judges every returned text and the most restrictive verdict wins. A text
+/// without a line continuation adds nothing.
+pub(super) fn shell_program_readings(texts: &[String]) -> (Vec<String>, Option<Decision>) {
+    let mut all = texts.to_vec();
+    let mut undetermined = None;
+    for text in texts {
+        match line_continuation_reading(text) {
+            ShellLexed::Same => {}
+            ShellLexed::Text(joined) => all.push(joined),
+            ShellLexed::Undetermined => {
+                undetermined = Some(Decision::ask(LINE_CONTINUATION_UNDETERMINED));
+            }
+        }
+    }
+    (all, undetermined)
+}
+
 /// Reason of the Ask for a [`line_continuation_reading`] that is undetermined.
 const LINE_CONTINUATION_UNDETERMINED: &str =
     "the shell removes a backslash-newline (line continuation) before it reads the words, \

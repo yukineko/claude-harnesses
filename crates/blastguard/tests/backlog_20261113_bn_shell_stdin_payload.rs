@@ -108,10 +108,7 @@ const SHAPES: &[(&str, &str, &str)] = &[
     ),
 ];
 
-// test-weakening-justified: new RED for an unfixed system-harm fail-open
-// (040b959b scope, 2026-11-13); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: 040b959b 2026-11-13 BN in a shell program fed to bash/sh on stdin is allowed — remove the ignore when fixed"]
 fn bn_in_shell_program_on_stdin_is_denied() {
     let home = unique_home("red");
     let mut failures = Vec::new();

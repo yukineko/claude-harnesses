@@ -1085,3 +1085,66 @@ exit 101: t: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 2 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
      Running tests/quoted_heredoc_body_backtick_fp_20261113.rs (target/debug/deps/quoted_heredoc_body_backtick_fp_20261113-fec620ef97438896)
 error: test failed, to rerun pass `-p blastguard --test quoted_heredoc_body_backtick_fp_20261113`"""
+
+[[task]]
+id = "bdce0261"
+title = "blastguard: function-body write/rm judged with definition-time vars (Allow of /etc/hosts write)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "RED 1e08ddff (tests/function_body_late_binding_fail_open_20261113.rs). Shape: L=<safe>; f() { echo x > $L; }; L=/etc/hosts; f -> Allow (also multiline); bash -c confirms the write lands on the value assigned AFTER the definition. Also f() { rm -f $L; }; L=/etc/hosts; f -> Allow and f() { rm -f $L; }; f -> Allow, while bare 'rm -f $L' is denied ('this rm operand `$L` cannot be resolved to a path'). Controls: L=<safe>; echo x > $L Allow; L=<safe>; L=/etc/hosts; echo x > $L not Allow; rm -f $L not Allow. Suspected assignment-inside-body direction (L=<safe>; f() { L=/etc/hosts; }; f; echo x > $L) does NOT reproduce: denied."
+created_at = 1794543269
+updated_at = 1794543269
+weight = 0.0
+issue_number = 1690
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1690"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test function_body_late_binding_fail_open_20261113 -- --ignored"
+rev = "1e08ddff64b2a9e198c3348d1e0f8134bb2fbd92"
+observed_at = 1794543269
+detail = """
+exit 101: ssed; 4 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.06s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/function_body_late_binding_fail_open_20261113.rs (target/debug/deps/function_body_late_binding_fail_open_20261113-563c6faa9cb8a730)
+error: test failed, to rerun pass `-p blastguard --test function_body_late_binding_fail_open_20261113`"""
+
+[[task]]
+id = "c2449da8"
+title = 'blastguard: stdin python "w" mode attributed to an unrelated read-only path literal'
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = '''RED 1e08ddff (tests/stdin_python_write_mode_misattributed_fp_20261113.rs). Shape: python3 -I - <<'PYEOF' / p = "<existing file outside git>" / open("<project file>", "w").write("y") / PYEOF. Deployed 0.2.496 with p=$HOME/.cargo/env: deny, reason '`python3 -I - <<'PYEOF'` takes its program from stdin, and it writes `/home/.../.cargo/env` (`, \"w\")`) — it exists, and it is not inside a git work tree — nothing holds a second copy of these bytes'. Any absolute path literal triggers it (print("<ro>"), q=<proj>; open(q,"w")); the open(p) read is not needed. In the test fixture the verdict is Ask naming home/notes.txt. Controls: no "w" Allow; project write alone Allow; open("/etc/hosts","w") with and without the RO literal not Allow.'''
+created_at = 1794543271
+updated_at = 1794543271
+weight = 0.0
+issue_number = 1691
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1691"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test stdin_python_write_mode_misattributed_fp_20261113 -- --ignored"
+rev = "1e08ddff64b2a9e198c3348d1e0f8134bb2fbd92"
+observed_at = 1794543271
+detail = """
+exit 101: ma/src/.harness-worktrees/session-43f28f62/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.98s
+     Running tests/stdin_python_write_mode_misattributed_fp_20261113.rs (target/debug/deps/stdin_python_write_mode_misattributed_fp_20261113-8fbfbc28440bb821)
+error: test failed, to rerun pass `-p blastguard --test stdin_python_write_mode_misattributed_fp_20261113`"""

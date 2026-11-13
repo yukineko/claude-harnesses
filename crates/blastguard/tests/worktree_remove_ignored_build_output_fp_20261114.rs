@@ -307,3 +307,29 @@ fn t3_nested_worktree_inside_ignored_build_dir_is_not_allow() {
     std::fs::write(inner.join("uncommitted.txt"), "work\n").unwrap();
     f.assert_decision_all_roles(false);
 }
+
+/// Pin of an assumption the nested-`.git` walk relies on (it never follows
+/// symlinks): observed 2026-11-14 via relay, `git version 2.50.1 (Apple
+/// Git-155)`, a forced `git worktree remove` of a worktree whose `target/link`
+/// symlinks to an outside directory left `outside/precious.txt` intact. This
+/// test runs git itself and asserts the outside file survives and the worktree
+/// directory is gone.
+/// DOES NOT PROVE: other git versions or platforms behave the same.
+#[test]
+fn g1_git_forced_remove_does_not_follow_symlink_out_of_worktree() {
+    let f = Fixture::new("g1");
+    f.add_build_output();
+    let outside = f.base.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("precious.txt"), "keep\n").unwrap();
+    std::os::unix::fs::symlink(&outside, f.wt.join("target/link")).unwrap();
+    git(
+        &f.repo,
+        &["worktree", "remove", "--force", f.wt.to_str().unwrap()],
+    );
+    assert!(
+        outside.join("precious.txt").exists(),
+        "git followed the symlink and deleted the outside file"
+    );
+    assert!(!f.wt.exists(), "worktree dir must be gone");
+}

@@ -907,10 +907,127 @@ regenerable build output"
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
-    use super::only_ignored_build_output;
+    use super::{no_nested_git, only_ignored_build_output, WalkBudget};
+    use std::path::Path;
+    use std::time::{Duration, Instant};
 
     fn e(xy: &str, p: &str) -> (String, String) {
         (xy.to_string(), p.to_string())
+    }
+
+    /// Budget whose clock never advances (the deadline cannot fire).
+    fn frozen(max_entries: usize) -> WalkBudget {
+        let t = Instant::now();
+        WalkBudget::with_limits(max_entries, Duration::from_secs(3600), Box::new(move || t))
+    }
+
+    fn touch(p: &Path) {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, "x").unwrap();
+    }
+
+    /// Nested-`.git` walk arm tests (b997a3d5). Each test pins one fail-closed
+    /// arm of `no_nested_git`/`WalkBudget`; DOES NOT PROVE the production
+    /// constants (`WALK_MAX_ENTRIES`, `WALK_DEADLINE`) or any wall-time bound.
+    #[test]
+    fn walk_entry_cap_is_err_at_n_minus_1_ok_at_n() {
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..5 {
+            touch(&d.path().join(format!("f{i}")));
+        }
+        assert!(no_nested_git(d.path(), &mut frozen(4)).is_err());
+        assert!(no_nested_git(d.path(), &mut frozen(5)).is_ok());
+    }
+
+    #[test]
+    fn walk_deadline_is_err_when_clock_advances_ok_when_frozen() {
+        let d = tempfile::tempdir().unwrap();
+        touch(&d.path().join("f"));
+        let base = Instant::now();
+        let mut calls = 0u32;
+        let mut advancing = WalkBudget::with_limits(
+            100,
+            Duration::from_secs(10),
+            Box::new(move || {
+                calls += 1;
+                if calls == 1 {
+                    base
+                } else {
+                    base + Duration::from_secs(11)
+                }
+            }),
+        );
+        assert!(no_nested_git(d.path(), &mut advancing).is_err());
+        assert!(no_nested_git(d.path(), &mut frozen(100)).is_ok());
+        let t = Instant::now();
+        let mut zero = WalkBudget::with_limits(100, Duration::ZERO, Box::new(move || t));
+        assert!(no_nested_git(d.path(), &mut zero).is_err());
+    }
+
+    #[test]
+    fn walk_missing_dir_is_err() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(no_nested_git(&d.path().join("absent"), &mut frozen(100)).is_err());
+    }
+
+    #[test]
+    fn walk_unreadable_subdir_is_err() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let locked = d.path().join("a/locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read_dir(&locked).is_ok() {
+            eprintln!("NOTE: mode 000 dir is readable (root?); skipping unreadable-subdir test");
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+        let r = no_nested_git(d.path(), &mut frozen(100));
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(r.is_err(), "unreadable listing must be Err, got {r:?}");
+    }
+
+    #[test]
+    fn walk_symlink_named_dot_git_is_err() {
+        let d = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("/nonexistent-anywhere", d.path().join(".git")).unwrap();
+        assert!(no_nested_git(d.path(), &mut frozen(100)).is_err());
+    }
+
+    #[test]
+    fn walk_deep_dot_git_file_and_dir_are_err() {
+        let f = tempfile::tempdir().unwrap();
+        touch(&f.path().join("a/b/c/.git"));
+        assert!(no_nested_git(f.path(), &mut frozen(100)).is_err());
+        let g = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(g.path().join("a/b/c/.git")).unwrap();
+        assert!(no_nested_git(g.path(), &mut frozen(100)).is_err());
+    }
+
+    /// Documents the no-follow design (pinned against git's own behaviour by
+    /// the integration test in tests/worktree_remove_ignored_build_output_fp_20261114.rs).
+    #[test]
+    fn walk_does_not_follow_symlinked_subdir() {
+        let d = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(other.path().join(".git")).unwrap();
+        std::os::unix::fs::symlink(other.path(), d.path().join("link")).unwrap();
+        assert!(no_nested_git(d.path(), &mut frozen(100)).is_ok());
+    }
+
+    #[test]
+    fn walk_budget_is_shared_across_calls() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        for i in 0..3 {
+            touch(&a.path().join(format!("f{i}")));
+            touch(&b.path().join(format!("f{i}")));
+        }
+        assert!(no_nested_git(a.path(), &mut frozen(5)).is_ok());
+        assert!(no_nested_git(b.path(), &mut frozen(5)).is_ok());
+        let mut shared = frozen(5);
+        assert!(no_nested_git(a.path(), &mut shared).is_ok());
+        assert!(no_nested_git(b.path(), &mut shared).is_err());
     }
 
     #[test]

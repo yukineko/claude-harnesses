@@ -476,9 +476,11 @@ forge・condukt のスケジューラが再利用）。
   （critical fail-open）。原文が切り出せず語が複数トークンにまたがる場合（`word_separators_lost`）は Allow を Ask に
   倒す（判定不能は制限側）。blastguard 0.2.522（backlog e4523bfd、spec blastguard-comment-collapse-residual
   R1/R2）以降、未知 wrapper の後ろの行も原文で判定し（`detect/payload.rs` の `reanalysis_text`。原文が読めず
-  区切りが失われたら Ask）、`env -S`／`--split-string` の operand は原文と空白繋ぎ直しの両方で判定したうえ、
-  operand の語の中に改行・タブ・連続空白があって両者の読みが食い違うときは env 自身の分割規則を模倣せず Ask に倒す
-  （`detect/executors.rs` の `env_split_string_verdict`。subagent では Deny）。`env -S 'ls -la'` は Allow のまま。
+  区切りが失われたら Ask）。blastguard 0.2.525 以降、`env -S`／`--split-string` の operand は env 自身の分割規則
+  （GNU coreutils `build_argv` と FreeBSD/macOS `split_spaces` の共通部分）で argv に分割し `env <argv…>` として判定する
+  （`detect/executors.rs` の `env_split_argv` / `env_split_string_verdict`）。`$`／`${VAR}`、両実装で結果が違うか拒否される
+  エスケープ、閉じない quote、shell 側の展開など規則で確定できないものは Ask（subagent では Deny）。従来の shell 文字列
+  としての読みも追加の読みとして判定する。`env -S 'ls   -la'` は Allow のまま。
 - **`open()` 系呼び出しの mode は構文で判定する（`detect/interpreter/open_mode.rs`、backlog 6cac93af、
   blastguard 0.2.493）** — inline program 中の `open` / `fdopen` / `opensync`（`io.` / `codecs.` / `os.` 等の
   receiver 付きを含む）の呼び出しについて、mode operand を位置引数・`mode=` から取り出し、literal が

@@ -113,7 +113,6 @@ const ENV_ESCAPED_NEWLINE: &str =
     "env -S 'python3 -c \"import os # x\\nos.chmod(\\\"/etc/hosts\\\",0)\"'";
 
 #[test]
-#[ignore = "RED: env -S backslash-n escape hides the call (R2); removed by the fixing commit"]
 fn env_split_string_escaped_newline_payload_is_not_allowed() {
     let home = unique_home("esc");
     let main = decide(ENV_ESCAPED_NEWLINE, &home, false);
@@ -131,7 +130,6 @@ fn env_split_string_escaped_newline_payload_is_not_allowed() {
 /// A harmless env -S whose quoted operand has a run of spaces is split by env
 /// into `ls` `-la`; it was Allow at main d84e8cab and must stay Allow.
 #[test]
-#[ignore = "RED: false positive introduced on the e4523bfd branch; removed by the fixing commit"]
 fn harmless_env_split_string_with_space_runs_stays_allowed() {
     let home = unique_home("spc");
     assert_eq!(decide("env -S 'ls   -la'", &home, false), "allow");

@@ -1773,6 +1773,8 @@ notes = "RED 7b96fb5e (tests/backlog_20261114_perl_single_quoted_dollar_fp.rs) b
 created_at = 1794599022
 updated_at = 1794599022
 weight = 0.0
+issue_number = 1732
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1732"
 rev = 0
 
 [task.repro]

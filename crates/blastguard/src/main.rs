@@ -61,7 +61,7 @@
 use blastguard::model::Decision;
 use blastguard::rule_id::INTERNAL_ERROR_REASON;
 use blastguard::scope::SafeRoots;
-use blastguard::{approve, detect, hookio, interactive, log, relay, retro, rule_id};
+use blastguard::{approve, blocklog, detect, hookio, interactive, log, relay, retro, rule_id};
 use harness_core::hook::{self, HookInput};
 use std::process::exit;
 
@@ -133,7 +133,24 @@ fn main() {
 /// do something else.
 fn run_verdict_guarded<F: FnOnce()>(body: F) -> ! {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
-    exit(verdict_exit_code(outcome))
+    let code = verdict_exit_code(outcome);
+    if code != 0 {
+        // A panic-blocked call is a block too: record it with the payload
+        // that was read, if any (`RAW_STDIN`). A failure is reported on
+        // stderr, which Claude Code shows the model for an exit-2 block.
+        let raw = RAW_STDIN.get().map(String::as_str).unwrap_or("");
+        let block = blastguard::blocklog::Block {
+            decision: "deny",
+            kind: blastguard::blocklog::DecisionKind::PanicBlocked,
+            actor: "unknown",
+            system_harm: false,
+            reason: "internal error (panic) on the verdict path; blocked with exit 2",
+            rule_id: "internal-error-panic",
+        };
+        // Its failure note is already on stderr; there is no reason text to add it to.
+        record_block(raw, false, &block);
+    }
+    exit(code)
 }
 
 /// Pure core of [`run_verdict_guarded`]: 0 when the verdict path completed
@@ -286,6 +303,7 @@ config, and is judged by the path it would have outside that directory.",
 
 fn run() {
     let raw = hook::read_stdin();
+    let _ = RAW_STDIN.set(raw.clone());
 
     // EMPTY stdin is the case that genuinely determined there is nothing to
     // judge: no tool call was described, so silence is an accurate answer.
@@ -312,6 +330,7 @@ fn run() {
             emit(
                 Decision::ask(UNREADABLE_PAYLOAD),
                 None,
+                &raw,
                 subagent,
                 agent_id.as_deref(),
             );
@@ -322,7 +341,34 @@ fn run() {
     let decision = analyse(&input);
     let decision = consult_memory(&input, decision);
 
-    emit(decision, Some(&input), subagent, agent_id.as_deref());
+    emit(decision, Some(&input), &raw, subagent, agent_id.as_deref());
+}
+
+/// The raw stdin of the verdict path, kept so a PANIC on that path (blocked
+/// with exit 2 by [`run_verdict_guarded`]) can still be recorded in the block
+/// log with the call it blocked. Set once, right after the read.
+static RAW_STDIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Append one block record and return the note to add to the printed reason
+/// when it could not be written (`None` = recorded). A panic while recording
+/// counts as a failure to record; it can never change the verdict, which the
+/// caller decided before calling this.
+fn record_block(raw: &str, parsed: bool, block: &blocklog::Block<'_>) -> Option<String> {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        blocklog::write(&blocklog::log_dir(), raw, parsed, block)
+    }));
+    let err = match outcome {
+        Ok(Ok(_)) => return None,
+        Ok(Err(e)) => e,
+        Err(_) => "internal error (panic) while writing the record".to_string(),
+    };
+    eprintln!(
+        "blastguard: WARNING this `{}` ({}) {} in the blastguard block log: {err}",
+        block.decision,
+        block.kind.as_str(),
+        blocklog::UNRECORDED_MARK
+    );
+    Some(blocklog::unrecorded_note(&err))
 }
 
 /// The payload's `agent_id` as a string, for the relay record only. Subagent
@@ -416,7 +462,13 @@ const UNREADABLE_PAYLOAD: &str =
 analysed — refusing to guess. If this recurs, the hook's payload schema has \
 drifted from what Claude Code sends and needs updating.";
 
-/// Harden, print, and only then record telemetry.
+/// Harden, write the block log, print, and only then record telemetry.
+///
+/// The block log ([`blocklog`], user ruling 2026-11-14) is the one write that
+/// precedes the print, so a failure to record can be surfaced in the printed
+/// reason; it is panic-guarded in [`record_block`] and can only append text to
+/// the reason, never change the verdict. Everything said below about
+/// telemetry concerns the overwatch ledger write, which stays after the print.
 ///
 /// # The order is the invariant
 ///
@@ -440,7 +492,17 @@ drifted from what Claude Code sends and needs updating.";
 /// should not be able to re-open the hole silently. Printing first makes the
 /// ordering enforce that, and the inner `catch_and_log` means telemetry can
 /// only ever lose ITSELF.
-fn emit(decision: Decision, input: Option<&HookInput>, subagent: bool, agent_id: Option<&str>) {
+fn emit(
+    decision: Decision,
+    input: Option<&HookInput>,
+    raw: &str,
+    subagent: bool,
+    agent_id: Option<&str>,
+) {
+    // How the printed decision is reached is recorded in the block log
+    // (`blastguard::blocklog`): an `Ask` that is printed as a `Deny` must not
+    // read as a plain `Deny` there.
+    let was_ask = decision.is_ask();
     // A subagent can never answer an `ask` — user ruling 2026-11-01, after a
     // background subagent waited 10.6 h on one. Its env is inherited from the
     // main thread and looks interactive, so this check comes FIRST and is not
@@ -456,11 +518,17 @@ fn emit(decision: Decision, input: Option<&HookInput>, subagent: bool, agent_id:
         };
         // The repeat-deny downgrade is skipped on purpose: inside a subagent
         // its `Ask` would stall exactly like any other. A repeat stays a deny.
+        let kind = if was_ask {
+            blocklog::DecisionKind::AskHardenedToDeny
+        } else {
+            blocklog::DecisionKind::Deny
+        };
         emit_line_annotated(
             harden_for_subagent(decision),
             input,
             "subagent",
             annotation.as_deref(),
+            BlockSource { raw, kind },
         );
         return;
     }
@@ -487,37 +555,83 @@ fn emit(decision: Decision, input: Option<&HookInput>, subagent: bool, agent_id:
     // 「全 gate で 2度目は無条件に通す」, so the downgrade has to survive the
     // hardening that would otherwise fold it straight back into a deny.
     // Subagents are the one exception (user ruling 2026-11-01, handled above).
+    let was_deny = decision.is_deny();
+    let hardened_ask = was_ask && was_deny;
     let decision = downgrade_on_repeat(input, decision);
+    let kind = if was_deny && decision.is_ask() {
+        blocklog::DecisionKind::DenyDowngradedToAsk
+    } else if hardened_ask {
+        blocklog::DecisionKind::AskHardenedToDeny
+    } else if decision.is_ask() {
+        blocklog::DecisionKind::Ask
+    } else {
+        blocklog::DecisionKind::Deny
+    };
 
-    emit_line(decision, input, actor);
+    emit_line_annotated(decision, input, actor, None, BlockSource { raw, kind });
 }
 
-/// Print the decision, then record telemetry (see [`emit`] for why the order
-/// is the invariant).
-fn emit_line(decision: Decision, input: Option<&HookInput>, actor: &str) {
-    emit_line_annotated(decision, input, actor, None);
+/// What the block log needs beyond the decision: the raw stdin payload (the
+/// only complete description of the blocked call) and how the printed
+/// decision was reached.
+struct BlockSource<'a> {
+    raw: &'a str,
+    kind: blocklog::DecisionKind,
 }
 
-/// [`emit_line`] with `annotation` appended to the PRINTED reason only. The
-/// violation ledger records the unannotated reason, so its rule id
-/// (`rule_id::rule_id`, a `contains` classifier) cannot be moved by the
-/// annotation's wording. An `Allow` is never annotated (it prints nothing).
+/// Record the block, print the decision, then record telemetry.
+///
+/// `annotation` is appended to the PRINTED reason only. The violation ledger
+/// records the unannotated reason, so its rule id (`rule_id::rule_id`, a
+/// `contains` classifier) cannot be moved by the annotation's wording. An
+/// `Allow` is never annotated, never recorded, and prints nothing.
+///
+/// # Order
+///
+/// The verdict is fixed before anything here runs. The block-log record
+/// ([`record_block`]) is written BEFORE the print so that a failure to write
+/// it can be surfaced in the printed reason itself (user ruling 2026-11-14:
+/// 「止めたなら止めた責任をとる」 — an unrecorded block must say so, where the
+/// agent reads it). It cannot change the verdict: every outcome, a panic
+/// included, is at most an extra paragraph of reason text. The overwatch
+/// ledger write stays AFTER the print (see [`emit`]).
 fn emit_line_annotated(
     decision: Decision,
     input: Option<&HookInput>,
     actor: &str,
     annotation: Option<&str>,
+    source: BlockSource<'_>,
 ) {
     let printed = match (&decision, annotation) {
         (Decision::Deny(r), Some(a)) => Decision::Deny(format!("{r}{a}")),
         (Decision::Ask(r), Some(a)) => Decision::Ask(format!("{r}{a}")),
         _ => decision.clone(),
     };
+    let (decision_word, printed_reason, base_reason) = match (&printed, &decision) {
+        (Decision::Deny(p), Decision::Deny(b)) => ("deny", p.as_str(), b.as_str()),
+        (Decision::Ask(p), Decision::Ask(b)) => ("ask", p.as_str(), b.as_str()),
+        _ => return, // Allow → record nothing, print nothing.
+    };
+    let rid = rule_id::rule_id(base_reason);
+    let block = blocklog::Block {
+        decision: decision_word,
+        kind: source.kind,
+        actor,
+        system_harm: decision.is_system_harm(),
+        reason: printed_reason,
+        rule_id: rid,
+    };
+    let unrecorded = record_block(source.raw, input.is_some(), &block);
+    let printed = match (printed, unrecorded) {
+        (Decision::Deny(r), Some(n)) => Decision::Deny(format!("{r}{n}")),
+        (Decision::Ask(r), Some(n)) => Decision::Ask(format!("{r}{n}")),
+        (p, _) => p,
+    };
     let Some(line) = hookio::decision_line(&printed) else {
-        return; // Allow → print nothing.
+        return; // unreachable: `printed` is a Deny or an Ask here.
     };
 
-    // The decision reaches Claude Code FIRST. Nothing below can retract it.
+    // The decision reaches Claude Code here. Nothing below can retract it.
     println!("{line}");
 
     // Fail-soft fleet violation record for overwatch's cross-task

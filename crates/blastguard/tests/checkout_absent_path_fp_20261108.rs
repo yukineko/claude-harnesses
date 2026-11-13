@@ -294,8 +294,10 @@ fn c2_absent_on_disk_but_staged_is_not_allow() {
 #[test]
 fn c3_not_a_repo_is_not_allow() {
     let f = Fixture::new("c3");
-    // NOT under the fixture base: that base physically lives in the cargo
-    // target dir, which is inside a git checkout (observed: a `plain` dir
+    // NOT under the fixture base: that base used to live in the cargo target
+    // dir (before backlog 37955e32; now `$HOME/.blastguard-test-fixtures`,
+    // which may or may not be inside a git checkout depending on the machine),
+    // and the target dir is inside a git checkout (observed: a `plain` dir
     // there made git answer `!!` for x.txt and the hook Allowed). The system
     // temp dir is outside every repository.
     let plain = std::env::temp_dir().join(format!(

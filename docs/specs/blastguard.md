@@ -50,6 +50,25 @@ forge・condukt のスケジューラが再利用）。
   `**/package.json`, `*.toml`/`*.yaml`/`*.yml`/`*.lock`, `.config/**` 等の glob）に一致するパスは、
   破壊的な形（空内容 Write、再帰/ワイルドカード rm、truncating redirect target）でも allow。
   `exclude::normalize` がクォート除去・`\`→`/`・先頭 `./` 除去を行う。
+- **テスト fixture（git repo を含む）は workspace の `target/` 配下に作らない** — blastguard の integration
+  test が作る fixture（とりわけ `git init` / `git worktree add` した repo）が `target/`（`CARGO_TARGET_TMPDIR`
+  / `<workspace>/target`）に残ると、その worktree は無視されたビルド出力ディレクトリ内に入れ子の `.git`
+  を持ち、forced な worktree 撤去が正しく Ask（subagent は Deny）になって撤去できなくなる
+  （観測: 842 個の `.git`）。fixture base は `tests/support/neutral_base.rs` の `neutral_base()` で、
+  既定の置き場は `$HOME/.blastguard-test-fixtures/blastguard-worktree-root-fixtures/run-<pid>-<nanos>[-n]`
+  （この suite 専用の scratch 名前空間。テストバイナリ実行ごとに `create_dir` で一意。
+  `BLASTGUARD_TEST_FIXTURE_DIR` で上書き可、上書き時はそれが唯一の候補）。`/tmp`・`/private/tmp`・`/var/tmp`
+  は temp safe root、`$TMPDIR`（macOS は `/private/var/folders/...`）は temp root かつ削除原則上の
+  システムディレクトリなので使わない。使用前に実 hook で 2 本の較正（cwd 外の `rm -rf` が厳密に Deny、
+  cwd 内の `rm -rf` が厳密に Ask）を通し、通らない場所は panic で拒否する（場所が判定を左右しないこと）。
+  各実行はプロセス終了時（`atexit`）に**自分の** run ディレクトリだけを消す（`symlink_metadata` で実ディレクトリ
+  かつ正準パスが作成時と一致する場合のみ。失敗は stderr、panic しない、他は消さない）。開始時の prune は
+  専用ディレクトリ直下の `run-*` のうち実ディレクトリ（symlink・非ディレクトリは skip）・24 時間無更新・
+  正準パスが `<正準な専用ディレクトリ>/<名前>` に一致するものだけを消し、疑わしいものは skip する。
+  `CARGO_TARGET_TMPDIR` に直接 fixture を繋いで git repo を作っていたテスト（`backlog_audit_s02.rs`・
+  `backlog_worktree_redirect_and_sq_fp_20261107.rs`）は `neutral_base()` に移した。git repo を作らない一部の
+  テストは引き続き `CARGO_TARGET_TMPDIR` 配下に scratch を作る。`tests/fixtures_outside_target_20261114.rs`
+  の RED（`#[ignore]`）は scan の再アンカー後に外す（backlog 37955e32）。
 
 ## 振る舞い
 
@@ -1093,6 +1112,21 @@ forge・condukt のスケジューラが再利用）。
   allow。dismiss 済みは `systemMessage`（pending があれば block 理由）に毎回列挙。(5) `relay dismiss
   <id> --reason <text>`: 空白のみ/欠落の理由・未知 id は exit 2、queue 読み書き失敗は exit 3。
   コマンドを実行する経路は持たず、cwd は不透明な文字列として比較するだけで解決・stat しない。
+- **`blocklog`** — block log（ユーザー裁定 2026-11-14 逐語:「…完全なコマンドが残っていないため、
+  これ以上は切り分けられません。というのは大変愚かなので記録をとること。止めたなら止めた責任をとる」）。
+  表示した `Deny` / `Ask` ごとに 1 行を overwatch に依存せず `~/.blastguard/blocks/blocks.jsonl`
+  （`BLASTGUARD_BLOCK_LOG_DIR` で dir を上書き）へ追記する。`Allow` は記録しない。フィールド:
+  `v`(1)・`ts`・`blastguard_version`・`session_id`・`agent_id`（subagent 外は null）・`cwd`（payload 値、
+  不透明・非検査）・`tool_name`・`command`（Bash、バイト一致・非切り詰め）・`file_path`・`tool_input`
+  （payload の値そのもの）・`tool_input_capped`・`tool_input_bytes`・`tool_input_sha256`（compact JSON の
+  sha256）・`decision`（表示した `deny`/`ask`）・`decision_kind`（`deny` / `ask` / `ask-hardened-to-deny`
+  〈subagent・headless での硬化〉/ `deny-downgraded-to-ask`〈2 度目〉/ `panic-blocked`〈verdict 経路の
+  panic で exit 2〉）・`actor`・`system_harm`・`reason`（表示文そのもの）・`rule_id`・`raw_payload`
+  （payload をパースできなかったとき・panic 時のみ raw stdin）。`tool_input` の複製だけは compact JSON が
+  1 MiB を超えると null・`tool_input_capped: true`（長さ・hash・`command`・`file_path` は保持）。
+  記録は判定確定後・表示前に書き、判定を変えない。書けない（panic を含む）ときは表示理由に
+  `could NOT be recorded` とエラーを付け stderr にも警告する（沈黙しない）。relay（subagent の Bash Ask の
+  再実行 queue）とは別物で、block log は真の `Deny` と main の `Ask` を含む全 block を記録する。
 - **`hookio`** — PreToolUse `deny` の単一行 JSON 生成（`deny_json`）。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。

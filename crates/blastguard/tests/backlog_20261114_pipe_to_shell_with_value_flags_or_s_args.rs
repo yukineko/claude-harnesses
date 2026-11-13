@@ -102,7 +102,6 @@ const FAIL_OPEN_SHELLS: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: 2026-11-14 system-harm program piped to a shell with a value-taking flag or -s args is Allow — remove the ignore when fixed"]
 fn harmful_program_piped_to_shell_with_value_flag_or_s_args_is_deny() {
     let home = unique_home("red");
     let mut bad = Vec::new();

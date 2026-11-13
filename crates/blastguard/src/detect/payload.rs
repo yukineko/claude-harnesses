@@ -9,9 +9,20 @@ use super::{
     xargs_reads_arg_file, xargs_shell, Ctx, Decision, PythonReader, Stop, VerdictAcc,
 };
 
+mod exec_fds;
+mod program_source;
+
+use exec_fds::{exec_opened_fds, ExecFd};
+use program_source::{
+    interpreter_program_source, python_program_source, shell_program_source,
+    shell_startup_file_values, source_program_source, ProgramSource,
+};
+
 /// True if this stage names a program FILE for the interpreter to run, rather
 /// than taking its program from stdin. Flags, redirections and a bare `-` are
-/// not program files.
+/// not program files. It does not know which options take a value, so a
+/// shell's argv is read with [`shell_program_source`] instead (backlog
+/// de914866); this reading remains for code interpreters and a shell's `-c`.
 fn stage_has_program_operand(rest: &[&str]) -> bool {
     let mut skip_next = false;
     for tok in rest {
@@ -42,6 +53,99 @@ fn stage_has_program_operand(rest: &[&str]) -> bool {
 /// called `… | python3` a code-exec sink in the egress path. This runs over the
 /// FULL command text, where the body and the upstream stage are both visible.
 pub(super) fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+    let mut acc = VerdictAcc::default();
+    if let Some(deny) = acc.record(stdin_exec_verdict(cmd, depth, ctx)) {
+        return deny;
+    }
+    // A reader inside a compound command (`(bash <(…))`, `{ bash <(…); }`,
+    // `if …; then bash <(…); fi`, `while …; do … | bash; done`, backlog
+    // 72872200): the stage's first word is `(`, `{`, `then` or `do`, not the
+    // reader, so the readings below never found it. The same line is judged
+    // once more with that syntax removed (see `decompounded`), IN ADDITION to
+    // the text as written — this can only add verdicts. Not recursive: the
+    // decompounded text is judged by `stdin_exec_verdict` directly.
+    let flat = match decompounded(cmd) {
+        Ok(flat) => flat,
+        Err(why) => {
+            if let Some(deny) = acc.record(Decision::ask(why)) {
+                return deny;
+            }
+            None
+        }
+    };
+    if let Some(flat) = flat {
+        if let Some(deny) = acc.record(stdin_exec_verdict(&flat, depth, ctx)) {
+            return deny;
+        }
+    }
+    acc.finish()
+}
+
+/// `cmd` with its compound-command syntax removed — subshell parentheses,
+/// brace groups, `if` / `then` / `do` / `done` … and `for` / `case` headers —
+/// as [`super::compound_views`] reads it: each segment's simple command, joined
+/// by the separator that followed it (`|` stays a pipe, `&&` / `||` become
+/// `&&`, `;` and newlines stay). A separator that follows a segment with no
+/// command (a closing `}` / `fi` / `done`) carries over to the next command,
+/// and a `|` there wins (`{ echo a; echo x; } | bash` reads
+/// `echo a ; echo x | bash`). That pipes only the group's LAST member, not the
+/// whole stream the reader gets; the text as written keeps its own reading of
+/// the group, so this pass only adds a judgement and never replaces one.
+///
+/// `Ok(None)` when no segment has any such syntax (the text is already flat);
+/// `Err` (an Ask reason) when the segments and their views do not line up.
+fn decompounded(cmd: &str) -> Result<Option<String>, String> {
+    use super::SegmentSep;
+    let segs = super::split_segments_with_separators(cmd);
+    let views = super::compound_views(cmd);
+    if segs.len() != views.len() {
+        // `compound_views` is index-aligned with this split by construction;
+        // if that ever breaks, the compound reading cannot be built, and
+        // silently skipping it would let a reader inside a group through.
+        return Err(format!(
+            "blastguard could not line up the compound-command reading of `{}` with its \
+segments, so it cannot tell which command inside a group or loop reads a program",
+            cmd.trim()
+        ));
+    }
+    let changed = segs
+        .iter()
+        .zip(&views)
+        .any(|(s, v)| v.command.trim() != s.text.trim() || !v.data.trim().is_empty());
+    if !changed {
+        return Ok(None);
+    }
+    let mut out = String::new();
+    let mut pending: Option<&str> = None;
+    for (seg, view) in segs.iter().zip(&views) {
+        let command = view.command.trim();
+        if !command.is_empty() {
+            if let Some(sep) = pending.take() {
+                out.push_str(sep);
+            }
+            out.push_str(command);
+        }
+        let sep = match seg.sep_after {
+            SegmentSep::Pipe => " | ",
+            SegmentSep::Conditional => " && ",
+            SegmentSep::Background => " & ",
+            SegmentSep::Sequential if seg.ends_at_newline => "\n",
+            SegmentSep::Sequential => " ; ",
+            SegmentSep::EndOfLine => "",
+        };
+        if !out.is_empty() && !sep.is_empty() {
+            pending = Some(match pending {
+                Some(" | ") => " | ",
+                _ => sep,
+            });
+        }
+    }
+    let flat = out.trim().to_string();
+    Ok((!flat.is_empty() && flat != cmd.trim()).then_some(flat))
+}
+
+/// The readings of [`analyze_interpreter_stdin_exec`] over `cmd` as written.
+fn stdin_exec_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let heredoc_open = opens_here_document(cmd);
     let mut acc = VerdictAcc::default();
     // What `echo`/`printf` write to a file another stage runs
@@ -55,8 +159,13 @@ pub(super) fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<
     // `bash <&3 3< <(…)`): the inner command's output is the program, exactly
     // as when it is piped in. Judged as that pipeline; see `procsub_programs`.
     // Read on `procsub_stages`, which keeps `<&3` / `2>&1` inside the stage.
-    for stage in procsub_stages(cmd) {
-        let procsubs = procsub_programs(&stage);
+    // An fd `exec` opens for the rest of the line (`exec 3< <(…); bash <&3`,
+    // backlog 72872200) is read across the statement boundary; see
+    // `exec_opened_fds`.
+    let stages = procsub_stages(cmd);
+    let exec_fds = exec_opened_fds(&stages);
+    for stage in &stages {
+        let procsubs = procsub_programs(stage, &exec_fds);
         for synthetic in &procsubs.pipelines {
             if let Some(deny) = acc.record(analyze_interpreter_stdin_exec(synthetic, depth, ctx)) {
                 return deny;
@@ -68,7 +177,25 @@ pub(super) fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<
             }
         }
     }
-    for statement in split_statements_into_pipe_stages(cmd) {
+    let statements = split_statements_into_pipe_stages(cmd);
+    // A reader hidden behind a subshell or a brace group (`… | (bash)`,
+    // `… | { bash; }`, backlog 036067bf): every command of the group inherits
+    // the pipe as its stdin, so each is judged as piped from the upstream
+    // stage. See `group_reader_pipelines`. The descent terminates: each
+    // synthetic pipeline holds one grouping layer fewer past its first stage
+    // than the stage it came from.
+    let (group_pipelines, group_undetermined) = group_reader_pipelines(&statements);
+    for synthetic in &group_pipelines {
+        if let Some(deny) = acc.record(analyze_interpreter_stdin_exec(synthetic, depth, ctx)) {
+            return deny;
+        }
+    }
+    for why in group_undetermined {
+        if let Some(deny) = acc.record(Decision::ask(why)) {
+            return deny;
+        }
+    }
+    for statement in statements {
         for (i, stage) in statement.iter().enumerate() {
             // The here-string mirror (`bash <<< 'rm -rf ~'`), judged before
             // and independently of the stdin-program rule below, which it can
@@ -138,11 +265,38 @@ blastguard cannot read it",
             }
             let Some(idx) = heads.into_iter().find(|&idx| {
                 let head = normalized_command(tokens[idx]);
-                is_shell(&head) || is_code_interpreter(&head)
+                is_shell(&head) || is_code_interpreter(&head) || is_source_head(&head)
             }) else {
                 continue;
             };
             let rest = &tokens[idx + 1..];
+            // `. /dev/stdin` / `source /dev/stdin` (backlog 036067bf): the
+            // shell reading the line sources its own stdin, i.e. runs the
+            // piped program exactly as `… | bash` does. Only a piped or
+            // here-document stage reads that stream; a sourced FILE is not
+            // this rule's, and an option `source` takes that is not modelled
+            // leaves the program undetermined.
+            let source_reader = is_source_head(&normalized_command(tokens[idx]));
+            if source_reader {
+                if !(i > 0 || heredoc_open) {
+                    continue;
+                }
+                let argv = argv_words(rest);
+                match source_program_source(&argv) {
+                    ProgramSource::File(k) if is_stdin_path(argv[k]) => {}
+                    ProgramSource::Undetermined(why) => {
+                        if let Some(deny) = acc.record(Decision::ask(format!(
+                            "`{}` is fed a program on stdin, and {why} — blastguard cannot tell \
+whether the sourced file is that stdin",
+                            stage.trim()
+                        ))) {
+                            return deny;
+                        }
+                        continue;
+                    }
+                    _ => continue,
+                }
+            }
             // `osascript` removing files through Finder / System Events, however
             // the program arrives — judged before the program-file test, since
             // `osascript -l JavaScript <<'E'` reads `JavaScript` as one.
@@ -152,8 +306,37 @@ blastguard cannot read it",
                     return deny;
                 }
             }
-            let has_program_file = stage_has_program_operand(rest);
-            let takes_stdin_program = interpreter_stdin_operand(rest).is_some()
+            // A SHELL's argv is read with its option grammar (backlog
+            // de914866): the value of `-o` / `-O` / `--rcfile` and the
+            // positionals after `-s` (`| bash -o pipefail`, `| sh -s a b`) are
+            // not a script file — the shell still runs its stdin. Taking the
+            // first non-dash word for the script let those pipes through
+            // unjudged. An option shape the grammar does not model leaves the
+            // program undetermined: the stdin program is judged AND the stage
+            // is an Ask, never an Allow. `-c` keeps the generic reading.
+            let has_program_file = if is_shell(&normalized_command(tokens[idx])) {
+                match shell_program_source(&argv_words(rest)) {
+                    ProgramSource::File(_) => true,
+                    ProgramSource::Stdin => false,
+                    ProgramSource::Inline => stage_has_program_operand(rest),
+                    ProgramSource::Undetermined(why) => {
+                        if i > 0 || heredoc_open {
+                            if let Some(deny) = acc.record(Decision::ask(format!(
+                                "`{}` is fed a program on stdin, and {why} — blastguard cannot \
+tell whether the shell runs that stdin or a script file",
+                                stage.trim()
+                            ))) {
+                                return deny;
+                            }
+                        }
+                        false
+                    }
+                }
+            } else {
+                stage_has_program_operand(rest)
+            };
+            let takes_stdin_program = source_reader
+                || interpreter_stdin_operand(rest).is_some()
                 || (!has_program_file && (i > 0 || heredoc_open));
             if !takes_stdin_program {
                 continue;
@@ -174,7 +357,7 @@ blastguard cannot read it",
             let shape = format!("`{}` takes its program from stdin", stage.trim());
             // A shell removes its program's line continuations before it
             // splits words: judge that reading too (backlog 040b959b).
-            if is_shell(&normalized_command(tokens[idx])) {
+            if source_reader || is_shell(&normalized_command(tokens[idx])) {
                 let (readings, undetermined) =
                     super::readings::shell_program_readings(&program_texts);
                 program_texts = readings;
@@ -271,6 +454,153 @@ the command line, so blastguard cannot read the program",
     acc.finish()
 }
 
+/// `source` and its `.` spelling: the shell builtin that runs a file's text
+/// as a program in the current shell.
+fn is_source_head(head: &str) -> bool {
+    matches!(head, "source" | ".")
+}
+
+/// A path that names the reading process's own stdin.
+fn is_stdin_path(word: &str) -> bool {
+    matches!(
+        strip_wrapping_quotes(word),
+        "/dev/stdin" | "/dev/fd/0" | "/proc/self/fd/0"
+    )
+}
+
+/// The argv words among a command's tokens after its head: every token that
+/// is not a redirection, nor the target word of a bare redirection operator
+/// (`2> FILE`).
+fn argv_words<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let mut j = 0;
+    while j < rest.len() {
+        match parse_redirect(rest[j]) {
+            Some((_, _, glued)) => j += if glued.is_empty() { 2 } else { 1 },
+            None => {
+                out.push(rest[j]);
+                j += 1;
+            }
+        }
+    }
+    out
+}
+
+/// The `UPSTREAM | MEMBER` pipelines for every stage that is a subshell
+/// `( … )` or a brace group `{ …; }` fed by a pipe (backlog 036067bf).
+///
+/// Every command inside the group inherits the pipe as its stdin, so a shell
+/// there (`printf 'chmod 777 /etc/hosts' | (bash)`, `… | { bash; }`,
+/// `… | { true; bash; }`) runs the piped text exactly as `… | bash` does —
+/// but the stage's head word was `(bash)` or `{`, no reader, and the program
+/// was never judged. Each member (an inner statement, its own pipe stages kept)
+/// is returned piped from the group's upstream stage, which over-approximates
+/// (a member after `head -1` sees only what is left of the stream) on the
+/// restrictive side.
+///
+/// A subshell's text stays inside one stage (the split does not cut inside
+/// parentheses); its inner list is split again. A brace group is NOT kept
+/// together by the split: its first member is the rest of the `{` stage (with
+/// the stages after it), and the following statements are members until the
+/// statement whose first word is the matching `}`.
+///
+/// Returns `(pipelines, undetermined)`: a subshell whose `)` is not found, or a
+/// brace group whose `}` is not found, is an Ask reason — what reads the pipe
+/// cannot be determined.
+fn group_reader_pipelines(statements: &[Vec<String>]) -> (Vec<String>, Vec<String>) {
+    fn first_word(stage: &str) -> Option<&str> {
+        stage.split_whitespace().next()
+    }
+    /// The stage text with every leading `{` word removed (a nested group's
+    /// opener: its members are fed the same stream).
+    fn strip_brace_openers(stage: &str) -> &str {
+        let mut s = stage.trim_start();
+        while let Some(rest) = s.strip_prefix('{') {
+            if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+                break;
+            }
+            s = rest.trim_start();
+        }
+        s
+    }
+    fn joined(stages: &[String]) -> String {
+        stages
+            .iter()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+    let mut pipelines: Vec<String> = Vec::new();
+    let mut undetermined: Vec<String> = Vec::new();
+    fn push(p: String, pipelines: &mut Vec<String>) {
+        if !pipelines.contains(&p) {
+            pipelines.push(p);
+        }
+    }
+    for (s, statement) in statements.iter().enumerate() {
+        for i in 1..statement.len() {
+            let upstream = statement[i - 1].trim();
+            let stage = statement[i].trim();
+            if stage.starts_with('(') {
+                let chars: Vec<char> = stage.chars().collect();
+                let Some(end) = scan_balanced(&chars, 1, Stop::Paren, 0) else {
+                    undetermined.push(format!(
+                        "`{upstream}` is piped into the subshell `{stage}`, whose closing `)` \
+blastguard cannot find — it cannot tell which command inside reads the piped program"
+                    ));
+                    continue;
+                };
+                let inner: String = chars[1..end].iter().collect();
+                for member in split_statements_into_pipe_stages(&inner) {
+                    let member = joined(&member);
+                    if !member.is_empty() {
+                        push(format!("{upstream} | {member}"), &mut pipelines);
+                    }
+                }
+            } else if first_word(stage) == Some("{") {
+                let mut members: Vec<String> = Vec::new();
+                let mut first: Vec<String> = vec![strip_brace_openers(stage).to_string()];
+                first.extend(statement[i + 1..].iter().cloned());
+                members.push(joined(&first));
+                // Nesting: every `{` word opening a statement's first stage
+                // (or the `{` stage itself) is one level; a statement whose
+                // first word is `}` closes one.
+                let opened = stage.split_whitespace().take_while(|w| *w == "{").count();
+                let mut level = opened;
+                let mut closed = false;
+                for later in &statements[s + 1..] {
+                    let head = later.first().map(|st| st.trim()).unwrap_or("");
+                    if first_word(head) == Some("}") {
+                        level -= 1;
+                        if level == 0 {
+                            closed = true;
+                            break;
+                        }
+                        continue;
+                    }
+                    level += head.split_whitespace().take_while(|w| *w == "{").count();
+                    let mut stages = later.clone();
+                    if let Some(st) = stages.first_mut() {
+                        *st = strip_brace_openers(st).to_string();
+                    }
+                    members.push(joined(&stages));
+                }
+                if !closed {
+                    undetermined.push(format!(
+                        "`{upstream}` is piped into the brace group `{stage} …`, whose closing `}}` \
+blastguard cannot find — it cannot tell which command inside reads the piped program"
+                    ));
+                }
+                for member in members.into_iter().filter(|m| !m.is_empty()) {
+                    push(format!("{upstream} | {member}"), &mut pipelines);
+                }
+            }
+        }
+    }
+    (pipelines, undetermined)
+}
+
 /// `cmd` split into simple command stages at `;`, newlines, `|`, `|&`, `||`,
 /// `&&` and a background `&` outside quotes and parentheses — but NOT at the
 /// `&` of a redirection (`<&3`, `2>&1`, `&>f`), which belongs to its stage
@@ -331,21 +661,6 @@ struct ProcsubPrograms {
     undetermined: Vec<String>,
 }
 
-/// How a reader's arguments decide where its program comes from.
-#[derive(Debug, PartialEq, Eq)]
-enum ProgramSource {
-    /// The operand at this word index is the script file.
-    File(usize),
-    /// No script operand: the program is read from stdin.
-    Stdin,
-    /// The program is an inline string (`-c`, `-e`, `-m` …): neither an
-    /// operand nor stdin is the program.
-    Inline,
-    /// An option whose shape is not modelled precedes the operands, so which
-    /// operand (if any) is the script cannot be proved.
-    Undetermined(String),
-}
-
 /// The process substitutions of `stage` that its reader — a shell, a code
 /// interpreter, or `source` / `.` (which run the file's text in the current
 /// shell; judged as `sh`) — runs as its PROGRAM, as `UPSTREAM | READER`
@@ -372,12 +687,31 @@ enum ProgramSource {
 /// means the script operand cannot be proved: every substitution that may be
 /// the program is judged as one AND the stage is an Ask (never an Allow).
 ///
+/// Stdin may also come from an fd an earlier `exec` opened on the line
+/// (`exec 3< <(…); bash <&3`, `exec < <(…); bash`, backlog 72872200), given as
+/// `exec_fds` ([`exec_opened_fds`]): a substitution there is judged as the
+/// program exactly as an in-stage one is. An fd above 2 that stdin is
+/// duplicated from and that nothing on the line opens (`bash <&3`), or that is
+/// opened on a here-document / here-string, cannot be read: when the reader
+/// takes its program from stdin that is an Ask, never an Allow. An fd opened on
+/// a file (`exec 3< f; bash <&3`) is that file, read as `bash < f` is.
+///
+/// zsh's `=(…)` (a substitution handed over as a temporary FILE) is read as
+/// `<(…)`: `zsh =(…)` runs the inner command's output just as `zsh <(…)` does.
+/// It is read so for every reader, not only zsh (bash does not parse a word
+/// starting `=(`; reading it as a substitution there only adds a judgement).
+///
 /// Every pipeline holds only the TEXT of a substitution (one nesting level
 /// down), so the recursion through [`analyze_interpreter_stdin_exec`] ends.
-fn procsub_programs(stage: &str) -> ProcsubPrograms {
+fn procsub_programs(stage: &str, exec_fds: &[(u32, ExecFd)]) -> ProcsubPrograms {
     let mut out = ProcsubPrograms::default();
     let words = super::quote_aware_words(stage);
-    if !words.iter().any(|w| w.contains("<(")) {
+    let exec_stdin = exec_fds.iter().any(|(fd, _)| *fd == 0);
+    if !exec_stdin
+        && !words
+            .iter()
+            .any(|w| w.contains("<(") || w.contains("=(") || w.contains('&'))
+    {
         return out;
     }
     let refs: Vec<&str> = words.iter().map(String::as_str).collect();
@@ -397,6 +731,10 @@ fn procsub_programs(stage: &str) -> ProcsubPrograms {
     let mut argv: Vec<usize> = Vec::new();
     let mut fd_procsub: Vec<(u32, usize)> = Vec::new();
     let mut dup_into_stdin: Vec<u32> = Vec::new();
+    // Every other fd this stage opens itself, and whether it is a readable
+    // FILE (false: a here-document / here-string, whose text is not read here).
+    let mut opened_in_stage: Vec<(u32, bool)> = Vec::new();
+    let mut stdin_redirected = false;
     let mut j = r + 1;
     while j < refs.len() {
         let w = refs[j];
@@ -412,18 +750,25 @@ fn procsub_programs(stage: &str) -> ProcsubPrograms {
             None
         };
         let target = target_idx.map_or(glued, |t| refs[t]);
+        let effective_fd = fd.unwrap_or(if op.starts_with('<') { 0 } else { 1 });
+        if effective_fd == 0 && (op.starts_with('<') || op == ">&") {
+            stdin_redirected = true;
+        }
         match op {
             "<" | "<>" => {
                 if let Some(t) = target_idx.filter(|&t| procsub_body(refs[t]).is_some()) {
-                    fd_procsub.push((fd.unwrap_or(0), t));
+                    fd_procsub.push((effective_fd, t));
+                } else {
+                    opened_in_stage.push((effective_fd, true));
                 }
             }
-            "<&" | ">&" if fd.unwrap_or(if op == "<&" { 0 } else { 1 }) == 0 => {
+            "<&" | ">&" if effective_fd == 0 => {
                 if let Ok(n) = target.parse::<u32>() {
                     dup_into_stdin.push(n);
                 }
             }
-            _ => {}
+            "<<" | "<<-" | "<<<" => opened_in_stage.push((effective_fd, false)),
+            _ => opened_in_stage.push((effective_fd, true)),
         }
         j += 1;
     }
@@ -432,6 +777,50 @@ fn procsub_programs(stage: &str) -> ProcsubPrograms {
         .filter(|(fd, _)| *fd == 0 || dup_into_stdin.contains(fd))
         .map(|&(_, idx)| idx)
         .collect();
+    // Stdin taken from an fd the stage does not open itself: an `exec` earlier
+    // on the line, or nothing at all (an inherited fd blastguard cannot see).
+    let mut exec_stdin_bodies: Vec<String> = Vec::new();
+    let mut unreadable_stdin: Vec<String> = Vec::new();
+    let from_exec = |n: u32, bodies: &mut Vec<String>, unreadable: &mut Vec<String>| {
+        let opened: Vec<&ExecFd> = exec_fds
+            .iter()
+            .filter(|(f, _)| *f == n)
+            .map(|(_, e)| e)
+            .collect();
+        if opened.is_empty() && n > 2 {
+            unreadable.push(format!(
+                "its stdin is duplicated from fd {n}, which nothing on this line opens"
+            ));
+        }
+        for e in opened {
+            match e {
+                ExecFd::Procsub(body) => bodies.push(body.clone()),
+                ExecFd::File => {}
+                ExecFd::Unreadable => unreadable.push(format!(
+                    "its stdin is fd {n}, which `exec` opens on text blastguard does not read \
+(a here-document, a here-string or another unresolved fd)"
+                )),
+            }
+        }
+    };
+    for &n in &dup_into_stdin {
+        if n == 0 || fd_procsub.iter().any(|(f, _)| *f == n) {
+            continue;
+        }
+        if let Some(&(_, readable_file)) = opened_in_stage.iter().find(|(f, _)| *f == n) {
+            if !readable_file {
+                unreadable_stdin.push(format!(
+                    "its stdin is duplicated from fd {n}, opened on a here-document or \
+here-string blastguard does not read as this reader's program"
+                ));
+            }
+            continue;
+        }
+        from_exec(n, &mut exec_stdin_bodies, &mut unreadable_stdin);
+    }
+    if !stdin_redirected {
+        from_exec(0, &mut exec_stdin_bodies, &mut unreadable_stdin);
+    }
     let operand_procsubs: Vec<usize> = argv
         .iter()
         .copied()
@@ -447,8 +836,9 @@ fn procsub_programs(stage: &str) -> ProcsubPrograms {
     } else {
         interpreter_program_source(&operands)
     };
-    let programs: Vec<usize> = match source {
+    let programs: Vec<usize> = match &source {
         ProgramSource::File(k) => {
+            let k = *k;
             let idx = argv[k];
             if procsub_body(refs[idx]).is_some() {
                 vec![idx]
@@ -461,7 +851,7 @@ fn procsub_programs(stage: &str) -> ProcsubPrograms {
         ProgramSource::Undetermined(why) => {
             let mut all = operand_procsubs;
             all.extend(stdin_procsubs);
-            if !all.is_empty() {
+            if !all.is_empty() || !exec_stdin_bodies.is_empty() {
                 out.undetermined.push(format!(
                     "`{}` reads a process substitution, and {why} — blastguard cannot prove which \
 operand or input is the program `{reader}` runs, so it cannot tell whether the substitution's \
@@ -476,6 +866,21 @@ output is that program",
         .iter()
         .filter_map(|&idx| procsub_body(refs[idx]))
         .collect();
+    // Stdin from an `exec`-opened fd, or from an fd nothing opens: only when
+    // the reader may take its program from stdin.
+    if matches!(
+        source,
+        ProgramSource::Stdin | ProgramSource::Undetermined(_)
+    ) {
+        inners.extend(exec_stdin_bodies.iter().map(String::as_str));
+        for why in unreadable_stdin {
+            out.undetermined.push(format!(
+                "`{}` may take its program from stdin, and {why} — blastguard cannot read the \
+program `{reader}` runs",
+                stage.trim()
+            ));
+        }
+    }
     // A shell's `--rcfile` / `--init-file` value is a program too.
     if is_shell(&head) {
         inners.extend(
@@ -492,10 +897,13 @@ output is that program",
     out
 }
 
-/// The command text of a process substitution word `<(…)`, `None` for any
-/// other word (a quoted `'<(x)'` is not one; neither is `<(x)y`).
+/// The command text of a process substitution word `<(…)` — or zsh's
+/// `=(…)`, the same command output handed over as a temporary file — `None`
+/// for any other word (a quoted `'<(x)'` is not one; neither is `<(x)y`).
 fn procsub_body(word: &str) -> Option<&str> {
-    let rest = word.strip_prefix("<(")?;
+    let rest = word
+        .strip_prefix("<(")
+        .or_else(|| word.strip_prefix("=("))?;
     let chars: Vec<char> = word.chars().collect();
     let end = scan_balanced(&chars, 2, Stop::Paren, 0)?;
     if end + 1 != chars.len() {
@@ -523,202 +931,6 @@ fn parse_redirect(word: &str) -> Option<(Option<u32>, &str, &str)> {
         return None;
     }
     Some((fd, op, &rest[op.len()..]))
-}
-
-/// Where a shell (`bash`, `sh`, `zsh` …) takes its program from, given its
-/// argv words after the command. Options end at `--`, `-`, or the first word
-/// that is not an option; `-o` / `-O` (and `+o` / `+O`) take the next word,
-/// `--rcfile` / `--init-file` too (or a glued `=VALUE`); `-c` makes the
-/// program inline and `-s` makes it stdin. An option letter cluster with
-/// `o`/`O` not at its end, or a long option not listed here, is Undetermined.
-///
-/// This decides only the MAIN program. The `--rcfile` / `--init-file` value is
-/// a second program the shell runs (an interactive bash sources it); it is
-/// judged separately, see [`shell_startup_file_values`].
-fn shell_program_source(argv: &[&str]) -> ProgramSource {
-    const LONG_FLAGS: [&str; 15] = [
-        "--debug",
-        "--debugger",
-        "--dump-po-strings",
-        "--dump-strings",
-        "--help",
-        "--login",
-        "--noediting",
-        "--noprofile",
-        "--norc",
-        "--posix",
-        "--pretty-print",
-        "--restricted",
-        "--verbose",
-        "--version",
-        "--wordexp",
-    ];
-    const LONG_VALUE: [&str; 2] = ["--rcfile", "--init-file"];
-    let mut stdin_mode = false;
-    let mut k = 0;
-    while k < argv.len() {
-        let w = argv[k];
-        if w == "--" || w == "-" {
-            k += 1;
-            break;
-        }
-        if w.starts_with("--") {
-            if LONG_FLAGS.contains(&w)
-                || LONG_VALUE
-                    .iter()
-                    .any(|o| w.strip_prefix(o).is_some_and(|r| r.starts_with('=')))
-            {
-                k += 1;
-            } else if LONG_VALUE.contains(&w) {
-                k += 2;
-            } else {
-                return ProgramSource::Undetermined(format!(
-                    "the shell option `{w}` is not one blastguard models"
-                ));
-            }
-            continue;
-        }
-        let Some(letters) = w.strip_prefix('-').or_else(|| w.strip_prefix('+')) else {
-            break;
-        };
-        if letters.is_empty() || !letters.chars().all(|c| c.is_ascii_alphabetic()) {
-            return ProgramSource::Undetermined(format!(
-                "the shell option `{w}` is not one blastguard models"
-            ));
-        }
-        if let Some(p) = letters.find(['o', 'O']) {
-            if p + 1 != letters.len() {
-                return ProgramSource::Undetermined(format!(
-                    "the shell option cluster `{w}` takes a value in the middle"
-                ));
-            }
-        }
-        if letters.contains('c') {
-            return ProgramSource::Inline;
-        }
-        if letters.contains('s') {
-            stdin_mode = true;
-        }
-        k += if letters.ends_with(['o', 'O']) { 2 } else { 1 };
-    }
-    if stdin_mode || k >= argv.len() {
-        ProgramSource::Stdin
-    } else {
-        ProgramSource::File(k)
-    }
-}
-
-/// The values of every `--rcfile` / `--init-file` option among a shell's argv
-/// words (`--rcfile FILE`, `--rcfile=FILE`): the startup file an interactive
-/// bash sources, i.e. a program it runs. Every word is scanned, wherever it
-/// sits and whether or not `-i` is given (a word after the script operand is
-/// an argument, not an option; reading it as one is the restrictive side).
-fn shell_startup_file_values<'a>(argv: &[&'a str]) -> Vec<&'a str> {
-    const OPTS: [&str; 2] = ["--rcfile", "--init-file"];
-    let mut out = Vec::new();
-    for (k, w) in argv.iter().enumerate() {
-        for opt in OPTS {
-            if *w == opt {
-                if let Some(v) = argv.get(k + 1) {
-                    out.push(*v);
-                }
-            } else if let Some(v) = w.strip_prefix(opt).and_then(|r| r.strip_prefix('=')) {
-                out.push(v);
-            }
-        }
-    }
-    out
-}
-
-/// `source FILE ARGS…` / `. FILE ARGS…`: the first word (after a `--`) is the
-/// file. Any option is Undetermined (bash 5.3 has `source -p PATH`).
-fn source_program_source(argv: &[&str]) -> ProgramSource {
-    match argv {
-        [] => ProgramSource::Inline,
-        ["--", ..] if argv.len() > 1 => ProgramSource::File(1),
-        ["--"] => ProgramSource::Inline,
-        [w, ..] if w.starts_with('-') => ProgramSource::Undetermined(format!(
-            "the `source` option `{w}` is not one blastguard models"
-        )),
-        _ => ProgramSource::File(0),
-    }
-}
-
-/// Where `python` / `python3` takes its program from: `-c` / `-m` inline,
-/// `-W` / `-X` take a value (glued or the next word), the other single-letter
-/// flags take none, `-` or no operand is stdin.
-fn python_program_source(argv: &[&str]) -> ProgramSource {
-    let mut k = 0;
-    while k < argv.len() {
-        let w = argv[k];
-        if w == "-" {
-            return ProgramSource::Stdin;
-        }
-        if w == "--" {
-            k += 1;
-            break;
-        }
-        let Some(letters) = w.strip_prefix('-') else {
-            break;
-        };
-        if letters.starts_with('-') || letters.is_empty() {
-            return ProgramSource::Undetermined(format!(
-                "the python option `{w}` is not one blastguard models"
-            ));
-        }
-        let mut step = 1;
-        for (pos, c) in letters.char_indices() {
-            match c {
-                'c' | 'm' => return ProgramSource::Inline,
-                'W' | 'X' => {
-                    if pos + 1 == letters.len() {
-                        step = 2;
-                    }
-                    break;
-                }
-                'b' | 'B' | 'd' | 'E' | 'h' | 'i' | 'I' | 'O' | 'P' | 'q' | 's' | 'S' | 'u'
-                | 'v' | 'V' | 'x' | 'R' => {}
-                _ => {
-                    return ProgramSource::Undetermined(format!(
-                        "the python option `{w}` is not one blastguard models"
-                    ))
-                }
-            }
-        }
-        k += step;
-    }
-    if argv.get(k).is_none_or(|w| *w == "-") {
-        ProgramSource::Stdin
-    } else {
-        ProgramSource::File(k)
-    }
-}
-
-/// Any other code interpreter (`perl`, `ruby`, `node`, `osascript` …): with no
-/// option the first operand is the script (none: stdin); an option cluster
-/// holding `e` / `E` (`-e`, `-ne`, `-E`, `--eval`) makes the program inline;
-/// any other option's value-taking is not modelled, so Undetermined.
-fn interpreter_program_source(argv: &[&str]) -> ProgramSource {
-    match argv.first() {
-        None => ProgramSource::Stdin,
-        Some(w) if *w == "-" => ProgramSource::Stdin,
-        Some(w) if w.starts_with('-') => {
-            let inline = argv.iter().take_while(|a| a.starts_with('-')).any(|a| {
-                *a == "--eval"
-                    || (!a.starts_with("--")
-                        && a[1..].chars().all(|c| c.is_ascii_alphabetic())
-                        && a.contains(['e', 'E']))
-            });
-            if inline {
-                ProgramSource::Inline
-            } else {
-                ProgramSource::Undetermined(format!(
-                    "the interpreter option `{w}` is not one blastguard models"
-                ))
-            }
-        }
-        Some(_) => ProgramSource::File(0),
-    }
 }
 
 /// The `UPSTREAM | READER` pipelines judging the output of process

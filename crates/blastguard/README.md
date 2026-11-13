@@ -578,6 +578,7 @@ otherwise it reads a PreToolUse payload from stdin.
 | `BLASTGUARD_ASK` | `never` / `always` / `auto` (default): whether an `ask` may be emitted or is hardened to `deny` (see [Design bias](#design-bias)) |
 | `BLASTGUARD_APPROVALS_DIR` | approval-memory store location (default `~/.blastguard/approvals`) |
 | `BLASTGUARD_RELAY_DIR` | subagent Ask relay queue location (default `~/.blastguard/relay`) |
+| `BLASTGUARD_BLOCK_LOG_DIR` | block log directory (default `~/.blastguard/blocks`; file `blocks.jsonl`) |
 | `CLAUDE_PROJECT_DIR`, `TMPDIR`, `HOME` | read by the hook to build the safe roots |
 | `CLAUDE_CODE_SESSION_ID` | keys the repeat-deny ledger |
 
@@ -586,6 +587,38 @@ cargo build --release -p blastguard   # -> target/release/blastguard
 make bins                             # refresh bundled per-platform binaries
 cargo test -p blastguard              # unit + integration tests
 ```
+
+### Where integration-test fixtures live (backlog 37955e32)
+
+Integration tests that drive the real hook binary build their fixtures —
+including repos made with `git init` / `git worktree add` — under
+`neutral_base()` from `tests/support/neutral_base.rs`:
+`$HOME/.blastguard-test-fixtures/blastguard-worktree-root-fixtures/run-<pid>-<nanos>[-n]`
+(when `BLASTGUARD_TEST_FIXTURE_DIR` is set it is the only candidate, with
+`blastguard-worktree-root-fixtures/run-*` below it). Each test-binary run
+creates its own directory with `create_dir`.
+
+- **Never under `target/`**: a nested `.git` left in a worktree's ignored
+  `target/` makes the forced `git worktree remove` check answer Ask (subagent:
+  Deny), correctly, so the worktree could not be removed without a prompt.
+- **Never on a safe root**: `/tmp`, `/private/tmp`, `/var/tmp` are temp safe
+  roots; `$TMPDIR` (macOS `/private/var/folders/...`) is a temp root and a
+  system directory for the deletion principle. Either lets the fixture's
+  location decide the verdict. Before use, two calibration probes against the
+  real hook (`rm -rf` outside the cwd exactly Deny, inside the cwd exactly Ask)
+  must pass, or the base panics.
+- **Self-clean**: at process exit (`atexit`) each run deletes its OWN run
+  directory, only if `symlink_metadata` shows a real directory (not a symlink)
+  whose canonical path is the one it created. A failure is reported on stderr;
+  it never panics and never deletes anything else.
+- **Prune**: at start, a run deletes `run-*` entries DIRECTLY in the dedicated
+  `blastguard-worktree-root-fixtures` directory that are real directories
+  (symlinks and non-directories are skipped), untouched for 24 hours, and whose
+  canonical path is exactly `<canonical dedicated dir>/<name>` — leftovers of
+  runs killed before their self-clean. Anything doubtful is skipped;
+  `remove_dir_all` does not follow symlinks inside the tree.
+- Some tests that create no git repo still put scratch under
+  `CARGO_TARGET_TMPDIR`.
 
 The hooks (`hooks/hooks.json`): **PreToolUse** with matcher
 `Bash|Edit|Write|MultiEdit|NotebookEdit` (timeout 10) calls
@@ -638,6 +671,41 @@ Two things the report deliberately does not claim: an approval does **not**
 establish that stopping was wrong (only that nothing was prevented), and a
 command the agent rephrased and re-ran is **not** detected — so prevention
 counts are an upper bound. Both qualifiers are printed with the numbers.
+
+## Block log: every block records exactly what it blocked
+
+User ruling, 2026-11-14 (verbatim): 「…完全なコマンドが残っていないため、これ以上は
+切り分けられません。というのは大変愚かなので記録をとること。止めたなら止めた責任をとる」.
+
+Every printed `Deny` or `Ask` appends one JSON line to blastguard's own
+`~/.blastguard/blocks/blocks.jsonl` (override: `BLASTGUARD_BLOCK_LOG_DIR`, file
+`<dir>/blocks.jsonl`), independent of overwatch (`src/blocklog.rs`). An `Allow`
+writes nothing. Fields: `v` (1), `ts`, `blastguard_version`, `session_id`,
+`agent_id` (null outside a subagent), `cwd` (payload value, opaque, never
+inspected), `tool_name`, `command` (Bash, byte-exact, never truncated),
+`file_path` (file tools), `tool_input` (the full payload value),
+`tool_input_capped`, `tool_input_bytes`, `tool_input_sha256` (of the compact
+JSON serialization), `decision` (printed `deny`/`ask`), `decision_kind`
+(`deny`, `ask`, `ask-hardened-to-deny` for a subagent/headless Ask,
+`deny-downgraded-to-ask` for a repeat deny, `panic-blocked` for a panic on the
+verdict path blocked with exit 2), `actor`, `system_harm`, `reason` (exactly as
+printed), `rule_id`, and `raw_payload` (the raw stdin, only when the payload
+could not be parsed or the verdict path panicked).
+
+Only the `tool_input` copy is capped: above 1 MiB of compact JSON (a large
+`Write` content) it is `null` with `tool_input_capped: true`; the length, the
+hash, `command` and `file_path` are kept. Nothing is redacted; the log is local
+under `$HOME` and never sent anywhere.
+
+The record is written after the verdict is decided and before it is printed.
+It cannot change the verdict. If it cannot be written (or the write panics), the
+printed reason gets a paragraph containing `could NOT be recorded` with the
+error, and stderr warns too — a lost record is never silent. The overwatch
+ledger line below is still written.
+
+This is the complement of the relay: the relay queues only a subagent's Bash
+`Ask` for re-execution in the main session; the block log records every block,
+true `Deny`s and main-session `Ask`s included.
 
 ## Context recorded in the violation ledger (overwatch)
 

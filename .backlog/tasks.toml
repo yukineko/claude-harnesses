@@ -1673,3 +1673,28 @@ exit 101: arness-worktrees/side-reds-075136/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
      Running tests/backlog_20261114_pipe_to_interpreter_with_value_flag.rs (target/debug/deps/backlog_20261114_pipe_to_interpreter_with_value_flag-cbd8277bbb82e170)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_interpreter_with_value_flag`"""
+
+[[task]]
+id = "671f3dfa"
+title = "blastguard: function call inside command substitution ($(f) / backticks) is not inlined; rm of /etc/hosts Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "pending"
+notes = "Measured at dc9b00c7b (0.2.565) 2026-11-14 in run-20261114-075136-6996 follow-up. main/subagent: 'f() { rm -f $L; }; L=/etc/hosts; x=$(f)' allow/allow; same with backticks allow/allow. Controls deny/deny: direct f, eval f, command f, conditional redefinition then f. System-harm fail-open: expected Deny."
+created_at = 1794612964
+updated_at = 1794612964
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_function_call_in_command_substitution -- --include-ignored"
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+observed_at = 1794612964
+detail = """
+exit 101: -worktrees/side-reds-075136/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261114_function_call_in_command_substitution.rs (target/debug/deps/backlog_20261114_function_call_in_command_substitution-4a1206965fe3f94d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_function_call_in_command_substitution`"""

@@ -1148,3 +1148,67 @@ exit 101: ma/src/.harness-worktrees/session-43f28f62/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.98s
      Running tests/stdin_python_write_mode_misattributed_fp_20261113.rs (target/debug/deps/stdin_python_write_mode_misattributed_fp_20261113-8fbfbc28440bb821)
 error: test failed, to rerun pass `-p blastguard --test stdin_python_write_mode_misattributed_fp_20261113`"""
+
+[[task]]
+id = "21b3faad"
+title = "blastguard: cp/mv/install destination through a variable is not judged (Allow of /etc/hosts overwrite)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = """RED bf134cb8 (tests/cp_variable_destination_fail_open_20261113.rs r1-r6). Deployed 0.2.496: ALLOW for L=/etc/hosts; cp /dev/null $L / cp README.md $L / cp README.md "$L" / L=/etc; cp README.md $L/hosts / mv README.md $L / install README.md $L, and unresolvable cp README.md $L / mv README.md $L. Literal forms deny: 'cp destination /etc/hosts' writes into a system directory - a NEW file there is itself the change ... [system harm]. Redirect and rm DO resolve the same variable (L=/etc/hosts; echo x > $L and L=/etc/hosts; rm -f $L deny). Controls: literal cp/mv/install onto /etc/hosts not Allow; project scratch destination (variable and literal) Allow."""
+created_at = 1794543569
+updated_at = 1794543569
+weight = 0.0
+issue_number = 1692
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1692"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test cp_variable_destination_fail_open_20261113 -- --ignored"
+rev = "bf134cb8cc071c61900696a6d295e51d5c7d3212"
+observed_at = 1794543569
+detail = """
+exit 101: LED. 0 passed; 6 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.06s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/cp_variable_destination_fail_open_20261113.rs (target/debug/deps/cp_variable_destination_fail_open_20261113-0454c5ed5750040b)
+error: test failed, to rerun pass `-p blastguard --test cp_variable_destination_fail_open_20261113`"""
+
+[[task]]
+id = "87661417"
+title = "blastguard: 前にコマンドがある quoted here-doc の本文行（破壊的に見える文字列リテラルで始まる行）をコマンド行として扱う誤検知を直す"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "RED bf134cb8, crates/blastguard/tests/quoted_heredoc_body_string_parsed_as_command_fp_20261113.rs r1-r3 (ignored). Trigger: a quoted here-doc (single-quoted terminator) preceded by another command (and-list or semicolon), whose body has a line starting with a string literal that looks like a system-path copy. Observed deny or ask; the same here-doc with no preceding command, or the literal mid-line, is Allow. Same family as 53a97aa3 (that one needs a command AFTER the terminator); shared root cause likely but unconfirmed from source. Controls c1 (benign line Allow), c2/c3 (real top-level copy into a system dir stays not Allow) must hold. Also seen: a backlog add notes argument whose quoted text contained a move command with an unknown option was refused by the same kind of misparse (unprobed)."
+created_at = 1794543623
+updated_at = 1794543623
+weight = 0.0
+issue_number = 1693
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1693"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test quoted_heredoc_body_string_parsed_as_command_fp_20261113 -- --ignored"
+rev = "bf134cb8cc071c61900696a6d295e51d5c7d3212"
+observed_at = 1794543623
+detail = """
+exit 101: ured; 3 filtered out; finished in 0.06s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/quoted_heredoc_body_string_parsed_as_command_fp_20261113.rs (target/debug/deps/quoted_heredoc_body_string_parsed_as_command_fp_20261113-fbc836818ea62332)
+error: test failed, to rerun pass `-p blastguard --test quoted_heredoc_body_string_parsed_as_command_fp_20261113`"""

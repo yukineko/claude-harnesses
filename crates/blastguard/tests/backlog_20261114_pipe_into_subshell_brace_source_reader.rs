@@ -100,7 +100,6 @@ const SHAPES: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: 2026-11-14 system-harm program piped into (bash) / { bash; } / . /dev/stdin / source /dev/stdin is Allow — remove the ignore when fixed"]
 fn pipe_into_subshell_brace_or_source_reader_is_deny() {
     let home = unique_home("red");
     let mut bad = Vec::new();

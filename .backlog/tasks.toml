@@ -1464,38 +1464,6 @@ exit 101: rktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastgua
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_perl_single_quoted_dollar_fp`"""
 
 [[task]]
-id = "036067bf"
-title = "blastguard: system-harm program piped into a subshell/brace-group/source reader (printf 'chmod 777 /etc/hosts' | (bash)) is Allow"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "system-harm",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-14 by an independent verifier on blastguard 0.2.530 (branch commit 0e726e66) and main build 144906a1; re-observed at main 4139f1d2 (0.2.539): all Allow in main and subagent mode: printf/echo 'chmod 777 /etc/hosts' piped into (bash), { bash; }, . /dev/stdin, source /dev/stdin. Control: piping into bare bash is Deny. RED commit fa080792 on branch test/bg-red-pipe-reader-and-py-argv."
-created_at = 1794601310
-updated_at = 1794601310
-weight = 0.0
-issue_number = 1734
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1734"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261114_pipe_into_subshell_brace_source_reader -- --include-ignored"
-rev = "fa080792966cccefbe3e040a53de25b6add39720"
-observed_at = 1794601310
-detail = """
-exit 101: -pipe-reader-and-py-argv/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.02s
-     Running tests/backlog_20261114_pipe_into_subshell_brace_source_reader.rs (target/debug/deps/backlog_20261114_pipe_into_subshell_brace_source_reader-efad5afd787342ac)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_into_subshell_brace_source_reader`"""
-
-[[task]]
 id = "dc27f669"
 title = "blastguard: printf (format-reuse) file passed as a data argument to a python script is judged as the python program (Ask / subagent Deny)"
 project = "/Users/yuki/src/harness"
@@ -1591,36 +1559,6 @@ exit 101: 2.545 (/Users/yuki/src/harness-wt-fp-heredoc-backtick2/crates/blastgua
 error: test failed, to rerun pass `-p blastguard --test quoted_heredoc_multiline_backtick_fp_20261114`"""
 
 [[task]]
-id = "de914866"
-title = "blastguard: system-harm program piped to a shell with value-taking flags or -s args (echo 'chmod 777 /etc/hosts' | bash -o pipefail) is Allow"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "system-harm",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-14 by t2 implementer on builds 0e726e66 and aa47d220; re-observed on 0.2.540 worktree build: allow/allow (main/subagent) for: echo 'chmod 777 /etc/hosts' | bash -o pipefail ; | bash -s a b ; | bash -O extglob ; | bash --rcfile f ; | sh -s a b ; | sh -o pipefail. Deny/deny: | bash, | bash -e, | bash -s. Suspected (unverified) cause: detect/payload.rs stage_has_program_operand treats a flag value or -s positionals as a script file. RED commit 0ab93794 on branch test/bg-red-pipe-reader-and-py-argv (ignored RED + non-ignored control)."
-created_at = 1794604275
-updated_at = 1794604275
-weight = 0.0
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_shell_with_value_flags_or_s_args -- --include-ignored"
-rev = "0ab93794b711e8c74d0dfaed9183824ac6493d90"
-observed_at = 1794604275
-detail = """
-exit 101: eader-and-py-argv/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.50s
-     Running tests/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args.rs (target/debug/deps/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args-74dc82015cfb998f)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_shell_with_value_flags_or_s_args`"""
-
-[[task]]
 id = "32b414d2"
 title = "blastguard: zsh -c / bash -c with literal program containing 'echo - foo' is refused as a stdin program"
 project = "/Users/yuki/src/harness"
@@ -1648,36 +1586,6 @@ exit 101: s/yuki/src/.harness-worktrees/bg-red-pipe-reader-and-py-argv/crates/bl
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.52s
      Running tests/backlog_20261114_zsh_c_literal_echo_dash_fp.rs (target/debug/deps/backlog_20261114_zsh_c_literal_echo_dash_fp-5e83884faa4461ec)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_zsh_c_literal_echo_dash_fp`"""
-
-[[task]]
-id = "72872200"
-title = "blastguard system-harm fail-open: shell program fed by procsub / pipe / fd 3 / zsh `=()` is Allow inside compound commands (subshell, brace group, if/while/for body)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "system-harm",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "RED by a non-implementer agent on branch test/bg-red-pipe-reader-and-py-argv (merged to main 2601e70c), finding E of the run-20261114-035331-33292 t2 verifier rounds. Test file crates/blastguard/tests/backlog_20261114_compound_wrapped_or_cross_stage_shell_program.rs (#[ignore] RED + control)."
-created_at = 1794605297
-updated_at = 1794605297
-weight = 0.0
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261114_compound_wrapped_or_cross_stage_shell_program -- --include-ignored"
-rev = "2601e70c0b56dc8b21d7ac14e00edae73f8cf8a8"
-observed_at = 1794605297
-detail = """
-exit 101: cf0/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.85s
-     Running tests/backlog_20261114_compound_wrapped_or_cross_stage_shell_program.rs (target/debug/deps/backlog_20261114_compound_wrapped_or_cross_stage_shell_program-0508ab66e52c7b88)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261114_compound_wrapped_or_cross_stage_shell_program`"""
 
 [[task]]
 id = "b663c5f5"

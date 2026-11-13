@@ -121,14 +121,22 @@ impl Fixture {
     }
 
     fn cmd(&self) -> String {
+        self.cmd_for(&self.wt)
+    }
+
+    fn cmd_for(&self, op: &Path) -> String {
         format!(
             "git -C {} worktree remove --force {}",
             self.repo.display(),
-            self.wt.display()
+            op.display()
         )
     }
 
     fn decision(&self, role: Role) -> String {
+        self.decision_for(role, &self.wt)
+    }
+
+    fn decision_for(&self, role: Role, op: &Path) -> String {
         let case = format!("c{}", SEQ.fetch_add(1, Ordering::Relaxed));
         let session = format!("bg-wtrm-{}-{case}-{}", self.tag, std::process::id());
         let home = self.base.join("homes").join(&case);
@@ -138,7 +146,7 @@ impl Fixture {
             "hook_event_name": "PreToolUse",
             "cwd": self.repo.display().to_string(),
             "tool_name": "Bash",
-            "tool_input": { "command": self.cmd() },
+            "tool_input": { "command": self.cmd_for(op) },
         });
         if role == Role::Sub {
             v["agent_id"] = serde_json::json!("agent-wtrm");
@@ -202,6 +210,40 @@ fn t1_clean_worktree_with_only_ignored_build_output_is_allow() {
     let f = Fixture::new("t1");
     f.add_build_output();
     f.assert_decision_all_roles(true);
+}
+
+/// RED (2026-11-14, flow-8cca7ef5 orchestrator — not an implementer), user
+/// ruling 2026-11-14 「gateもconduktも絶対に勝手に他のworktreeを参照してはならない」
+/// (an operation explicitly aimed at a named worktree is exempt): the content
+/// check may inspect ONLY the worktree named in the remove command. When the
+/// operand is not itself a worktree root (here: the ignored `target/` build
+/// dir inside the MAIN worktree), git resolves the enclosing repository, so
+/// the check reads the main worktree's state — and at main c4336b61 it then
+/// answers Allow from that foreign state. Expected: not Allow (main and
+/// subagent), decided without consulting any worktree other than the operand.
+/// DOES NOT PROVE: that no git subprocess touched the enclosing repo (only the
+/// verdict is observed).
+#[ignore = "RED: worktree remove operand that is not a worktree root is judged by the enclosing (main) worktree's state"]
+#[test]
+fn t2_operand_inside_main_worktree_is_not_judged_by_main_state() {
+    let f = Fixture::new("t2");
+    let d = f.repo.join("target/debug");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("x"), "bin\n").unwrap();
+    let op = f.repo.join("target");
+    let mut bad = Vec::new();
+    for role in [Role::Main, Role::Sub] {
+        let got = f.decision_for(role, &op);
+        if got == "allow" {
+            bad.push(format!("[{}] -> {got}", role.name()));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "`{}` (want not-allow): {}",
+        f.cmd_for(&op),
+        bad.join("; ")
+    );
 }
 
 #[test]

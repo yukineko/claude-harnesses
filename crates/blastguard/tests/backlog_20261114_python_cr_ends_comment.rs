@@ -88,7 +88,6 @@ const SHAPES: &[(&str, &str)] = &[
 ];
 
 #[test]
-#[ignore = "RED: CR-terminated python comment hides a system-harm call (backlog pending)"]
 fn cr_terminated_comment_does_not_hide_a_system_harm_call() {
     let home = unique_home("red");
     let mut allowed = Vec::new();

@@ -166,7 +166,7 @@ pub(in crate::detect) fn python_stdin_body_reading(
     depth: usize,
     ctx: &Ctx<'_>,
 ) -> Option<PythonStdinReading> {
-    let body = &parts.body;
+    let body = &*python_newlines(&parts.body);
     code_view(body)?;
     // The program runs before any later line, so only the `cd`s before the
     // reader place it.
@@ -265,6 +265,7 @@ fn python_program_verdict(
     depth: usize,
     ctx: &Ctx<'_>,
 ) -> Decision {
+    let body = &*python_newlines(body);
     let refuse = || {
         Decision::ask(format!(
             "{shape}, and its program cannot be tokenised as Python (an unterminated string or an \
@@ -384,6 +385,7 @@ const DATA_ONLY_MODULES: &[&str] = &[
 /// The caller additionally requires that no layer-0 payload carries a
 /// shell-string or dynamic-execution marker anywhere (strings included).
 pub(super) fn python_strings_never_reach_a_shell(program: &str) -> bool {
+    let program = &*python_newlines(program);
     let Some(code) = code_view(program) else {
         return false;
     };
@@ -404,9 +406,38 @@ pub(super) fn python_strings_never_reach_a_shell(program: &str) -> bool {
 }
 
 /// True when `program` tokenises as Python ([`code_view`] is `Some`): every
-/// string is closed and every bracket balanced.
+/// string is closed and every bracket balanced. Read with Python's line
+/// terminators ([`python_newlines`]): a bare CR inside a one-quote string ends
+/// that string's line, as it does for CPython (a SyntaxError there).
 pub(super) fn python_program_tokenises(program: &str) -> bool {
-    code_view(program).is_some()
+    code_view(&python_newlines(program)).is_some()
+}
+
+/// `src` with its line terminators translated the way CPython translates
+/// them before its tokenizer reads a program: `\r\n` and a bare `\r` each
+/// become `\n` (backlog a66c115c).
+///
+/// Observed (CPython 3.12.11, 2026-11-14, `python3 -c`, `python3 -` on stdin,
+/// `python3 file.py` and `compile()` all alike): `import sys # x<CR>print(…)`
+/// RUNS the `print` — the CR ends the comment; a CR between statements
+/// separates them; `x = 1 + \<CR>2` is a line continuation; a CR inside a
+/// triple-quoted string is the value `\n`; a CR inside a one-quote string is
+/// "unterminated string literal"; a trailing CR is harmless. Form feed, `\x0b`
+/// and U+2028 do NOT end a comment, so only CR is translated.
+///
+/// Every Python reading of a program (the lexers of `python_semantics`,
+/// `shell_calls`, [`code_view`], the `#` comment strip, the inert-literal scan
+/// and the shell pass over the program text of
+/// [`super::interpreter_code_verdict`]) ends a line only at `\n`. Reading the
+/// raw text, they took `os.chmod('/etc/hosts',0)` after `# x<CR>` as part of
+/// the comment and allowed it. So every entry point of a Python program
+/// translates first, and the readers below it see the lines CPython sees.
+pub(in crate::detect) fn python_newlines(src: &str) -> std::borrow::Cow<'_, str> {
+    if src.contains('\r') {
+        std::borrow::Cow::Owned(src.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        std::borrow::Cow::Borrowed(src)
+    }
 }
 
 fn reason(d: &Decision) -> &str {
@@ -628,10 +659,13 @@ fn code_view(src: &str) -> Option<String> {
 /// ([`code_view`]'s rule: an unclosed string, an unbalanced bracket), so the
 /// caller keeps the raw body. Used only for the redirect view of a body that
 /// `python3 -` runs ([`super::super::heredoc::python_stdin_redirect_view`]).
+/// `src` is read, and the view returned, with Python's line terminators
+/// ([`python_newlines`]: each CR / CRLF is a `\n` in the view).
 pub(in crate::detect) fn python_redirect_view(
     src: &str,
     keep: impl Fn(&str) -> bool,
 ) -> Option<String> {
+    let src = &*python_newlines(src);
     code_view(src)?;
     let chars: Vec<char> = src.chars().collect();
     let mut out = String::with_capacity(src.len());

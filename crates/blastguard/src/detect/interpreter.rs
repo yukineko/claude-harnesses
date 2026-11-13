@@ -950,6 +950,19 @@ pub(super) fn interpreter_code_verdict(
 ) -> Decision {
     let python = reader == PythonReader::InlineEval;
     let python_reader = reader != PythonReader::NotPython;
+    // Python ends a line at CR and CRLF too (backlog a66c115c); every reader
+    // below ends one only at `\n`, so a Python program is judged as CPython
+    // reads it ([`python_file::python_newlines`]).
+    let translated: Vec<String>;
+    let payloads = if python_reader {
+        translated = payloads
+            .iter()
+            .map(|p| python_file::python_newlines(p).into_owned())
+            .collect();
+        &translated[..]
+    } else {
+        payloads
+    };
     let redirects = ProgramTextSink {
         rows: std::cell::RefCell::new(Vec::new()),
         redirects_are_data: python

@@ -332,13 +332,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "scout 2026-11-12, RED observed at 656b1c38, verified (independent verifier, no re-run). S4: read-only json.load(open(HOME/.claude/settings.json)) denied as a protected config path. Non-ignored controls s4_control_python_c_write_mode_{w,a}_to_home_settings_is_denied (deny at HEAD, observed) keep writes denied. | 2026-11-13 PARKED by user ruling esc-29440698 ('Abandon the exemption until payload fidelity is fixed; keep S4 #[ignore]'): BLOCKED ON c619b13f (payload.rs:713 newline collapse; critical fail-open). Attempt run-20261113-063336-54001/bg-s4-pyread cancelled after 8 verifier FAIL rounds; branch condukt/run-20261113-063336-54001/bg-s4-pyread (5dc743ea) kept as a record; round-8 uncommitted diff saved as scratchpad patch bg-s4-pyread-round8-uncommitted.patch and git stash. Lesson: any read-only exemption must be judged on the faithful -c text and an allowlisted language (rounds found rebinding/f-string/lambda/CR/breakpoint/use-before-assign holes)."
+notes = "scout 2026-11-12, RED observed at 656b1c38, verified (independent verifier, no re-run). S4: read-only json.load(open(HOME/.claude/settings.json)) denied as a protected config path. Non-ignored controls s4_control_python_c_write_mode_{w,a}_to_home_settings_is_denied (deny at HEAD, observed) keep writes denied. | 2026-11-13 PARKED by user ruling esc-29440698 ('Abandon the exemption until payload fidelity is fixed; keep S4 #[ignore]'): BLOCKED ON c619b13f (payload.rs:713 newline collapse; critical fail-open). Attempt run-20261113-063336-54001/bg-s4-pyread cancelled after 8 verifier FAIL rounds; branch condukt/run-20261113-063336-54001/bg-s4-pyread (5dc743ea) kept as a record; round-8 uncommitted diff saved as scratchpad patch bg-s4-pyread-round8-uncommitted.patch and git stash. Lesson: any read-only exemption must be judged on the faithful -c text and an allowlisted language (rounds found rebinding/f-string/lambda/CR/breakpoint/use-before-assign holes). | 2026-11-13 blocker c619b13f FIXED (merge 1346c1a2, blastguard 0.2.485: faithful -c text). Still parked per esc-29440698 until a human re-opens it; any new attempt must start from the faithful text and an allowlisted language."
 created_at = 1794434314
-updated_at = 1794524640
+updated_at = 1794526378
 weight = 0.0
 issue_number = 1651
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1651"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -766,38 +766,6 @@ exit 101: d; 0 measured; 0 filtered out; finished in 0.65s
 error: test failed, to rerun pass `-p backlog --test backlog_20261113_sync_detects_closed_remote_open_local`"""
 
 [[task]]
-id = "c619b13f"
-title = "blastguard: python -c の改行潰れで # コメント後の system-harm 呼び出しが allow になる fail-open を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "system-harm",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "CRITICAL fail-open observed on main d37ae072 2026-11-13 (main and subagent mode): python3 -c programs whose system-harm call follows a # comment are ALLOWED with empty reason (12 programs, e.g. import os # x<NL>os.chmod('/etc/hosts',0); comment-only line; dedent variant; os.rename). Same programs without the comment are denied as system harm. Cause: crates/blastguard/src/detect/payload.rs ~713 interpreter_payloads_after rebuilds the -c program from whitespace-split words, so newlines collapse and the comment swallows the call. RED 13e3e779 (non-implementer); observed: 12 program(s) whose system-harm call follows a # comment were ALLOWED / 1 passed; 1 failed. Control control_same_programs_without_comment_are_denied non-ignored. Fix: pass the faithful -c text; split interpreter.rs first if needed, do not raise the cap. Blocks 758debfd (parked)."
-created_at = 1794524559
-updated_at = 1794524559
-weight = 0.0
-issue_number = 1668
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1668"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261113_payload_newline_comment_hides_call comment_before_system_harm_call_does_not_allow_it -- --include-ignored"
-rev = "f1cadb771b362bfba3a6a3d2242c7a2a2fc6df83"
-observed_at = 1794524559
-detail = """
-exit 101: /.harness-worktrees/session-8cca7ef5/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.18s
-     Running tests/backlog_20261113_payload_newline_comment_hides_call.rs (target/debug/deps/backlog_20261113_payload_newline_comment_hides_call-5132d9edd3d69fa1)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261113_payload_newline_comment_hides_call`"""
-
-[[task]]
 id = "6cac93af"
 title = "blastguard: python open() の a/a+/ab/r+/x/mode='a' による system パス書き込みが allow になる fail-open を直す"
 project = "/Users/yuki/src/harness"
@@ -890,3 +858,131 @@ exit 1: st_fail_open_mutation_mutates_invoking_tree_20261113.py:119: AssertionEr
 =========================== short test summary info ============================
 FAILED scripts/test_fail_open_mutation_mutates_invoking_tree_20261113.py::MutationCheckInvokingTree::test_invoking_tree_tracked_file_is_not_mutated_during_the_run
 ========================= 1 failed, 1 passed in 1.18s =========================="""
+
+[[task]]
+id = "f6dbff5b"
+title = "blastguard: python の隣接文字列リテラル連結 ('/''etc/hosts') で組んだ system パスへの os.chmod が allow になる fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "System-harm fail-open found by the c619b13f implementer's probe and confirmed by a non-implementer RED 675b6d8a on main 12d7d093 (2026-11-13): 4 of 14 (shape x mode) runs building a system path were ALLOWED: os.chmod('/''etc/hosts',0) and os.chmod('/' 'etc' '/hosts',0), main and subagent mode, no comment needed. Not Allow at HEAD: '/etc' '/hosts', '/etc/'+'hosts', % format, .format, f-string. Control control_plain_literal_system_path_is_denied non-ignored."
+created_at = 1794525860
+updated_at = 1794525860
+weight = 0.0
+issue_number = 1672
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1672"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_python_adjacent_literal_concat_path python_built_system_path_is_not_allowed -- --include-ignored"
+rev = "675b6d8a5083aaa516888b4ceae51e3a042eea19"
+observed_at = 1794525860
+detail = """
+exit 101: harness-worktrees/red4-bg-payload/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.76s
+     Running tests/backlog_20261113_python_adjacent_literal_concat_path.rs (target/debug/deps/backlog_20261113_python_adjacent_literal_concat_path-7b71dce495db7bff)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_python_adjacent_literal_concat_path`"""
+
+[[task]]
+id = "569b9b9d"
+title = "blastguard: pathlib write_text/write_bytes, node fs.appendFile(Sync), shutil.copy による system パス書き込みが allow になる fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "System-harm fail-open, RED 4d61aac2 by a non-implementer at main f0854f26 2026-11-13: 10 interpreter write(s) to a system path were ALLOWED (main and subagent): pathlib.Path(sys path).write_text / write_bytes, node require(fs).appendFileSync / appendFile, shutil.copy(src, sys path). Not Allow: perl 2-arg open, perl open my fh without parens, os.replace. Control control_python_open_w_on_system_path_is_denied non-ignored. Found by the 6cac93af implementer's manual probe."
+created_at = 1794527093
+updated_at = 1794527093
+weight = 0.0
+issue_number = 1673
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1673"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_interpreter_write_api_system_path interpreter_write_apis_on_system_path_are_not_allowed -- --include-ignored"
+rev = "02d939d31bcb908052fe61e1c516b122efcc6cfa"
+observed_at = 1794527093
+detail = """
+exit 101: ers/yuki/src/.harness-worktrees/red6-bg/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/backlog_20261113_interpreter_write_api_system_path.rs (target/debug/deps/backlog_20261113_interpreter_write_api_system_path-89f9d42151d9a4dd)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_interpreter_write_api_system_path`"""
+
+[[task]]
+id = "4880afab"
+title = "blastguard FP: heredoc 本文のデータ中の symlink 作成文言を実コマンドとしてモデルし、後続の redirect を deny する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed live 3 times 2026-11-13 in subagents (backlog add with a long notes argument; a cat append heredoc probe; and the orchestrator's own backlog add while filing this very item): a redirect target was denied because quoted/data text describing a symlink-then-create sequence was modelled as executed (reason: may create or rename an entry on this path and is not modelled). RED 02d939d3 by a non-implementer: minimal repro is a heredoc body holding that sentence as data followed by a line with a redirect; single-line quoted arguments are Allow (green control). Control: a real symlink into /etc then create stays not-Allow. Same family as c619b13f. A separate deny of a double-quoted command-substitution argument (reason: the command word dollar-paren-cat is an expansion) did not reproduce in tests; not filed."
+created_at = 1794527104
+updated_at = 1794527104
+weight = 0.0
+issue_number = 1674
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1674"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_quoted_arg_text_read_as_command_fp -- --include-ignored"
+rev = "02d939d31bcb908052fe61e1c516b122efcc6cfa"
+observed_at = 1794527104
+detail = """
+exit 101: ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_quoted_arg_text_read_as_command_fp.rs (target/debug/deps/backlog_20261113_quoted_arg_text_read_as_command_fp-571a5a0477c1f04d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_quoted_arg_text_read_as_command_fp`"""
+
+[[task]]
+id = "e4523bfd"
+title = "blastguard: 未知 wrapper / env -S / relink 同一 segment で python -c の # コメント後の system-harm 呼び出しが allow になる残存 fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Residual newline-collapse sites left after c619b13f (verifier list). RED 1c56efd4 by a non-implementer at main 4cf135cd 2026-11-13: 6 of 6 (shape x mode) runs whose system-harm call follows a comment were ALLOWED (main and subagent): unknown-wrapper tail (myrunner python3 -c ...; detect.rs re-join), env -S (re-join, documented unexamined), relink-operand-same-segment (artificial shape; see the test file). Without the comment all three are not Allow. Not Allow at HEAD: unresolvable command word PY -c, find -exec sh -c, ANSI-C dollar-quote (deny, but the reason shows a collapsed name xnos.chmod: the escaped newline is not decoded)."
+created_at = 1794527241
+updated_at = 1794527241
+weight = 0.0
+issue_number = 1675
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1675"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_payload_collapse_residual_paths comment_before_system_harm_call_is_not_allowed_on_residual_collapse_paths -- --include-ignored"
+rev = "46ab7b39307a580a2e62217f3c8a6f8d25c8ed4a"
+observed_at = 1794527241
+detail = """
+exit 101: /yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.92s
+     Running tests/backlog_20261113_payload_collapse_residual_paths.rs (target/debug/deps/backlog_20261113_payload_collapse_residual_paths-e7fe16b6ea062a14)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_payload_collapse_residual_paths`"""

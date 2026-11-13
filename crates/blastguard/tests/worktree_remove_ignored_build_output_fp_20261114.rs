@@ -274,3 +274,37 @@ fn cc_ignored_env_file_stays_not_allow() {
     std::fs::write(f.wt.join(".env"), "SECRET=1\n").unwrap();
     f.assert_decision_all_roles(false);
 }
+
+/// RED (2026-11-14, flow-8cca7ef5 orchestrator — not an implementer), found by
+/// the b997a3d5 check-D probe: a linked worktree nested inside the named
+/// worktree's ignored `target/` dir, holding uncommitted work. git reports
+/// the whole `target/` as ignored, so the build-output exemption answered
+/// Allow — and the forced remove of the named worktree was then observed
+/// (relay run in the main session, 2026-11-14) to delete the nested worktree
+/// together with its uncommitted file (`ls .../target/inner: No such file or
+/// directory`; `git worktree list` then marks it `prunable`). The nested
+/// worktree lies INSIDE the named directory, so inspecting it stays within the
+/// user ruling 「gateもconduktも絶対に勝手に他のworktreeを参照してはならない」.
+/// Expected: not Allow (main and subagent).
+/// DOES NOT PROVE: how the nested worktree is detected (a `.git` entry, a
+/// nested repo of any kind, or the uncommitted file itself).
+#[test]
+#[ignore = "RED: nested linked worktree with uncommitted work inside the named worktree's ignored target/ is treated as build output"]
+fn t3_nested_worktree_inside_ignored_build_dir_is_not_allow() {
+    let f = Fixture::new("t3");
+    f.add_build_output();
+    let inner = f.wt.join("target/inner");
+    git(
+        &f.repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "inner",
+            inner.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(inner.join("uncommitted.txt"), "work\n").unwrap();
+    f.assert_decision_all_roles(false);
+}

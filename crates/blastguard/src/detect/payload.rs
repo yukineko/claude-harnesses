@@ -357,9 +357,13 @@ enum ProgramSource {
 /// * STDIN when the reader has no script operand (`bash < <(…)`,
 ///   `bash 0< <(…)`, `bash -s a b < <(…)`), including an fd the substitution is
 ///   opened on and stdin is duplicated from (`bash <&3 3< <(…)`, in either
-///   order — the order-insensitive reading is the restrictive one).
+///   order — the order-insensitive reading is the restrictive one);
+/// * a shell's `--rcfile` / `--init-file` value (`bash --rcfile <(…) -i`,
+///   `bash --init-file=<(…)`), the startup file an interactive bash sources,
+///   judged whether or not `-i` is given ([`shell_startup_file_values`]),
+///   in addition to the main program.
 ///
-/// Nothing when the reader runs an inline program (`bash -c 'x' <(…)`,
+/// Apart from that startup file, nothing when the reader runs an inline program (`bash -c 'x' <(…)`,
 /// `python3 -c …`, `perl -ne …`) or a script file that is not a substitution
 /// (`bash script.sh <(…)`, `bash script.sh < <(…)`): those keep their
 /// verdicts, as does every stage whose command is not such a reader
@@ -373,7 +377,7 @@ enum ProgramSource {
 fn procsub_programs(stage: &str) -> ProcsubPrograms {
     let mut out = ProcsubPrograms::default();
     let words = super::quote_aware_words(stage);
-    if !words.iter().any(|w| procsub_body(w).is_some()) {
+    if !words.iter().any(|w| w.contains("<(")) {
         return out;
     }
     let refs: Vec<&str> = words.iter().map(String::as_str).collect();
@@ -468,10 +472,19 @@ output is that program",
             all
         }
     };
-    for idx in programs {
-        let Some(inner) = procsub_body(refs[idx]) else {
-            continue;
-        };
+    let mut inners: Vec<&str> = programs
+        .iter()
+        .filter_map(|&idx| procsub_body(refs[idx]))
+        .collect();
+    // A shell's `--rcfile` / `--init-file` value is a program too.
+    if is_shell(&head) {
+        inners.extend(
+            shell_startup_file_values(&operands)
+                .into_iter()
+                .filter_map(procsub_body),
+        );
+    }
+    for inner in inners {
         let (pipelines, undetermined) = procsub_inner_pipelines(inner, reader);
         out.pipelines.extend(pipelines);
         out.undetermined.extend(undetermined);
@@ -515,9 +528,13 @@ fn parse_redirect(word: &str) -> Option<(Option<u32>, &str, &str)> {
 /// Where a shell (`bash`, `sh`, `zsh` …) takes its program from, given its
 /// argv words after the command. Options end at `--`, `-`, or the first word
 /// that is not an option; `-o` / `-O` (and `+o` / `+O`) take the next word,
-/// `--rcfile` / `--init-file` too; `-c` makes the program inline and `-s`
-/// makes it stdin. An option letter cluster with `o`/`O` not at its end, or a
-/// long option not listed here, is Undetermined.
+/// `--rcfile` / `--init-file` too (or a glued `=VALUE`); `-c` makes the
+/// program inline and `-s` makes it stdin. An option letter cluster with
+/// `o`/`O` not at its end, or a long option not listed here, is Undetermined.
+///
+/// This decides only the MAIN program. The `--rcfile` / `--init-file` value is
+/// a second program the shell runs (an interactive bash sources it); it is
+/// judged separately, see [`shell_startup_file_values`].
 fn shell_program_source(argv: &[&str]) -> ProgramSource {
     const LONG_FLAGS: [&str; 15] = [
         "--debug",
@@ -546,7 +563,11 @@ fn shell_program_source(argv: &[&str]) -> ProgramSource {
             break;
         }
         if w.starts_with("--") {
-            if LONG_FLAGS.contains(&w) {
+            if LONG_FLAGS.contains(&w)
+                || LONG_VALUE
+                    .iter()
+                    .any(|o| w.strip_prefix(o).is_some_and(|r| r.starts_with('=')))
+            {
                 k += 1;
             } else if LONG_VALUE.contains(&w) {
                 k += 2;
@@ -585,6 +606,28 @@ fn shell_program_source(argv: &[&str]) -> ProgramSource {
     } else {
         ProgramSource::File(k)
     }
+}
+
+/// The values of every `--rcfile` / `--init-file` option among a shell's argv
+/// words (`--rcfile FILE`, `--rcfile=FILE`): the startup file an interactive
+/// bash sources, i.e. a program it runs. Every word is scanned, wherever it
+/// sits and whether or not `-i` is given (a word after the script operand is
+/// an argument, not an option; reading it as one is the restrictive side).
+fn shell_startup_file_values<'a>(argv: &[&'a str]) -> Vec<&'a str> {
+    const OPTS: [&str; 2] = ["--rcfile", "--init-file"];
+    let mut out = Vec::new();
+    for (k, w) in argv.iter().enumerate() {
+        for opt in OPTS {
+            if *w == opt {
+                if let Some(v) = argv.get(k + 1) {
+                    out.push(*v);
+                }
+            } else if let Some(v) = w.strip_prefix(opt).and_then(|r| r.strip_prefix('=')) {
+                out.push(v);
+            }
+        }
+    }
+    out
 }
 
 /// `source FILE ARGS…` / `. FILE ARGS…`: the first word (after a `--`) is the

@@ -123,7 +123,6 @@ const HARMLESS_SHAPES: &[(&str, &str)] = &[
 ];
 
 #[test]
-#[ignore = "RED: 2026-11-14 procsub given as --rcfile/--init-file runs as a program but is allowed — remove the ignore when fixed"]
 fn procsub_given_as_rcfile_or_init_file_with_system_harm_is_denied() {
     let failures = run_all(HARMFUL_SHAPES, "red", |d| d == "deny");
     assert!(

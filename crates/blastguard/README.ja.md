@@ -918,7 +918,7 @@ CLI 表面は最小限で、stdin を触る前に `--version` / `-V`、`--help` 
 サブコマンドは `retro`（事後検証、下記）と `record-approval`（PostToolUse の承認記録）と
 `relay mark-executed | mark-relayed | stop | dismiss`（上記 relay）。
 環境変数: `BLASTGUARD_ASK`（ask の可否）、`BLASTGUARD_APPROVALS_DIR`（承認ストア）、
-`BLASTGUARD_RELAY_DIR`（relay queue）、
+`BLASTGUARD_RELAY_DIR`（relay queue）、`BLASTGUARD_BLOCK_LOG_DIR`（block log）、
 `CLAUDE_PROJECT_DIR`・`TMPDIR`・`HOME`（安全ルートの構築）、`CLAUDE_CODE_SESSION_ID`
 （2 度目の deny の台帳）。
 
@@ -998,6 +998,33 @@ Deny が 0 件であることは弱い保証ではあるが事実である — �
 **正しく拒否している**）、`"$D/bin/tool"` のように参照へテキストが貼り付いた head 9
 （残る機会。backlog `2fb05132`）、前置代入 1、条件付き 1。
 **見積りの数字を実測として転記しない** — この節が置かれている理由がそれである。
+
+## block log — 止めたものは必ず逐語で記録する（ユーザー裁定 2026-11-14）
+
+裁定原文:「…完全なコマンドが残っていないため、これ以上は切り分けられません。というのは
+大変愚かなので記録をとること。止めたなら止めた責任をとる」
+
+表示した `Deny` / `Ask`（subagent・headless で硬化した Ask、2 度目で Ask に戻した Deny を含む）は
+すべて、overwatch の有無に関係なく blastguard 自身の `~/.blastguard/blocks/blocks.jsonl`
+（`BLASTGUARD_BLOCK_LOG_DIR` で dir を上書き、ファイルは `<dir>/blocks.jsonl`）へ 1 行追記する
+（`src/blocklog.rs`）。`Allow` は記録しない。
+
+各行: `v`(1)・`ts`・`blastguard_version`・`session_id`・`agent_id`（subagent 外は null）・
+`cwd`（payload 値。不透明な文字列で検査しない）・`tool_name`・`command`（Bash、バイト一致・
+切り詰めない）・`file_path`（ファイル系 tool）・`tool_input`（payload の値そのもの）・
+`tool_input_capped`・`tool_input_bytes`・`tool_input_sha256`（compact JSON の sha256）・
+`decision`（表示した `deny`/`ask`）・`decision_kind`（`deny` / `ask` / `ask-hardened-to-deny` /
+`deny-downgraded-to-ask` / `panic-blocked`）・`actor`・`system_harm`・`reason`（表示した文そのもの）・
+`rule_id`・`raw_payload`（payload をパースできなかったとき・verdict 経路の panic 時のみ、raw stdin）。
+
+サイズ: `tool_input` の複製だけは compact JSON が 1 MiB を超えると `null`・`tool_input_capped: true`
+にする（長さ・hash・`command`・`file_path` は残す）。redaction はしない。ログは `$HOME` 配下の
+ローカルにあり、どこにも送らない。
+
+記録は判定が決まった後・表示の前に書く。判定は変えない。書けない（panic を含む）ときは、表示する
+理由に `could NOT be recorded` とエラーを付け、stderr にも警告する（記録の欠落を沈黙させない）。
+下の overwatch 台帳への記録も従来どおり行う。relay（subagent の Bash Ask を main で再実行させる
+queue）とは役割が違い、block log は真の `Deny` と main session の `Ask` も含む全 block を記録する。
 
 ## violation 台帳（overwatch）に残る文脈
 

@@ -578,6 +578,7 @@ otherwise it reads a PreToolUse payload from stdin.
 | `BLASTGUARD_ASK` | `never` / `always` / `auto` (default): whether an `ask` may be emitted or is hardened to `deny` (see [Design bias](#design-bias)) |
 | `BLASTGUARD_APPROVALS_DIR` | approval-memory store location (default `~/.blastguard/approvals`) |
 | `BLASTGUARD_RELAY_DIR` | subagent Ask relay queue location (default `~/.blastguard/relay`) |
+| `BLASTGUARD_BLOCK_LOG_DIR` | block log directory (default `~/.blastguard/blocks`; file `blocks.jsonl`) |
 | `CLAUDE_PROJECT_DIR`, `TMPDIR`, `HOME` | read by the hook to build the safe roots |
 | `CLAUDE_CODE_SESSION_ID` | keys the repeat-deny ledger |
 
@@ -638,6 +639,41 @@ Two things the report deliberately does not claim: an approval does **not**
 establish that stopping was wrong (only that nothing was prevented), and a
 command the agent rephrased and re-ran is **not** detected — so prevention
 counts are an upper bound. Both qualifiers are printed with the numbers.
+
+## Block log: every block records exactly what it blocked
+
+User ruling, 2026-11-14 (verbatim): 「…完全なコマンドが残っていないため、これ以上は
+切り分けられません。というのは大変愚かなので記録をとること。止めたなら止めた責任をとる」.
+
+Every printed `Deny` or `Ask` appends one JSON line to blastguard's own
+`~/.blastguard/blocks/blocks.jsonl` (override: `BLASTGUARD_BLOCK_LOG_DIR`, file
+`<dir>/blocks.jsonl`), independent of overwatch (`src/blocklog.rs`). An `Allow`
+writes nothing. Fields: `v` (1), `ts`, `blastguard_version`, `session_id`,
+`agent_id` (null outside a subagent), `cwd` (payload value, opaque, never
+inspected), `tool_name`, `command` (Bash, byte-exact, never truncated),
+`file_path` (file tools), `tool_input` (the full payload value),
+`tool_input_capped`, `tool_input_bytes`, `tool_input_sha256` (of the compact
+JSON serialization), `decision` (printed `deny`/`ask`), `decision_kind`
+(`deny`, `ask`, `ask-hardened-to-deny` for a subagent/headless Ask,
+`deny-downgraded-to-ask` for a repeat deny, `panic-blocked` for a panic on the
+verdict path blocked with exit 2), `actor`, `system_harm`, `reason` (exactly as
+printed), `rule_id`, and `raw_payload` (the raw stdin, only when the payload
+could not be parsed or the verdict path panicked).
+
+Only the `tool_input` copy is capped: above 1 MiB of compact JSON (a large
+`Write` content) it is `null` with `tool_input_capped: true`; the length, the
+hash, `command` and `file_path` are kept. Nothing is redacted; the log is local
+under `$HOME` and never sent anywhere.
+
+The record is written after the verdict is decided and before it is printed.
+It cannot change the verdict. If it cannot be written (or the write panics), the
+printed reason gets a paragraph containing `could NOT be recorded` with the
+error, and stderr warns too — a lost record is never silent. The overwatch
+ledger line below is still written.
+
+This is the complement of the relay: the relay queues only a subagent's Bash
+`Ask` for re-execution in the main session; the block log records every block,
+true `Deny`s and main-session `Ask`s included.
 
 ## Context recorded in the violation ledger (overwatch)
 

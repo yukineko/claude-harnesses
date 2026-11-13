@@ -99,10 +99,7 @@ const SHAPES: &[(&str, &str, &str)] = &[
     ),
 ];
 
-// test-weakening-justified: new RED for an unfixed fail-open family (backlog
-// c619b13f, 2026-11-13); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: backlog-pending c619b13f residual - newline-collapse re-join sites (unknown wrapper tail, env -S, relinked operand) hide a system-harm call after a comment"]
 fn comment_before_system_harm_call_is_not_allowed_on_residual_collapse_paths() {
     let home = unique_home("red");
     let mut failures = Vec::new();

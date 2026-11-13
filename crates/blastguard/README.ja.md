@@ -621,7 +621,13 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   バックスラッシュ＋改行は取り除き（`python3 -c "o\<改行>pen('/etc/hosts','a')"` は python が
 >   受け取る `open('/etc/hosts','a')` として判定する）、single quote 内（`$'…'` 内も）では
 >   そのまま残す。バックスラッシュの付かない本物の改行は繋がない。
->   `env -S` の引数はこの変更の対象外で、従来どおり空白 1 個で繋ぎ直す（未検証）。
+>   0.2.522 以降（backlog e4523bfd、spec blastguard-comment-collapse-residual R1/R2）、
+>   未知の wrapper の後ろの行（`myrunner python3 -c "…"`）も原文から読む（原文が読めず区切りが
+>   失われたときは ask。`src/detect/payload.rs` の `reanalysis_text`）。`env -S` の引数は
+>   原文から読んだものと空白 1 個で繋ぎ直したものの両方を判定し、さらに operand の語の中に
+>   改行・タブ・連続空白があって両者の読みが食い違うときは、env 自身の分割規則を模倣しないので
+>   allow せず ask に倒す（deny が出ればそちらが優先）（`src/detect/executors.rs` の `env_split_string_verdict`。subagent では deny）。
+>   `env -S 'ls -la'` のような単純な形は従来どおり allow。
 >   0.2.483 以降（backlog 6cac93af）、プログラムが**書き込むか**（パスリテラルへの
 >   回復可能性／システムディレクトリ判定を起動するか）は、`'w'` 系の綴りの列挙ではなく、
 >   `open(` 系呼び出し（`open`・`io.open`・`codecs.open`・`os.fdopen`・`pathlib.Path.open`・

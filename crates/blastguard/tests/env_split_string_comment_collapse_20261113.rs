@@ -76,10 +76,7 @@ fn decide(command: &str, home: &Home, subagent: bool) -> String {
 
 const WITH_COMMENT: &str = "env -S 'python3 -c \"import os # x\nos.chmod(\\\"/etc/hosts\\\",0)\"'";
 
-// test-weakening-justified: new RED for spec blastguard-comment-collapse-residual
-// R2 (backlog e4523bfd, 2026-11-13); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED 2026-11-13: env -S operand re-joined on one line hides a system-harm call after a # comment (spec blastguard-comment-collapse-residual R2)"]
 fn env_split_string_payload_with_comment_is_not_allowed() {
     let home = unique_home("red");
     let main = decide(WITH_COMMENT, &home, false);

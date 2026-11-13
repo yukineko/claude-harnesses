@@ -21,9 +21,10 @@
 //! analyse" and resolves to Ask (CLAUDE.md §3), never to Allow.
 
 use super::{
-    analyze_git, analyze_shell_payload, depth_exhausted, first_shell_word, inline_command_payloads,
+    analyze_git, analyze_shell_payload, depth_exhausted, faithful_tail, first_shell_word,
     is_assignment, is_code_interpreter, is_shell, is_short_flag, payloads_after, quote_aware_words,
-    unknown_verb_protected_ask, unquote_literal_value, Ctx, VerdictAcc, MAX_SHELL_DEPTH,
+    unknown_verb_protected_ask, unquote_literal_value, word_separators_lost, Ctx, VerdictAcc,
+    MAX_SHELL_DEPTH,
 };
 use crate::model::Decision;
 
@@ -1074,20 +1075,20 @@ fn git_env_config_verdict(what: &str, assignment: &str, depth: usize, ctx: &Ctx<
 
 // ---------------------------------------------------------------- env -S ----
 
-/// Command lines handed to `env -S` / `--split-string`, which splits its one
-/// operand into argv and execs it.
+/// The words from `env -S` / `--split-string`'s operand on — the operand
+/// first; for a glued form (`-S'…'`, `--split-string=…`) the in-token
+/// remainder spliced in front of the later tokens. `None` without `-S`.
 ///
 /// Walks env's own options only: assignments and flags, with `-u NAME`,
 /// `-C DIR` and `-P PATH` consuming their value; the first plain word is the
 /// command and ends env's options. Bundled short flags are read getopt-style:
 /// once a value-taking letter appears the rest of the token is its value.
-///
-/// The payload is still rebuilt by re-joining the whitespace-split tokens
-/// (`source` = `None`): the faithful-text change of backlog 2026-11-13 was
-/// applied to `-c`/`-e` payloads only, and how `env -S` itself treats a
-/// newline or `#` inside its operand was not examined.
-pub(super) fn env_split_string_payloads(rest: &[&str]) -> Vec<String> {
-    let mut out = Vec::new();
+fn env_split_string_operand<'a>(rest: &[&'a str]) -> Option<Vec<&'a str>> {
+    let glued = |i: usize, inline: &'a str| {
+        let mut words = vec![inline];
+        words.extend_from_slice(&rest[i + 1..]);
+        Some(words)
+    };
     let mut i = 0;
     while i < rest.len() {
         let t = rest[i];
@@ -1096,20 +1097,16 @@ pub(super) fn env_split_string_payloads(rest: &[&str]) -> Vec<String> {
             continue;
         }
         match t {
-            "-S" | "--split-string" => {
-                out.extend(payloads_after(rest, i, None));
-                break;
-            }
+            "-S" | "--split-string" => return Some(rest[i + 1..].to_vec()),
             "-u" | "--unset" | "-C" | "--chdir" | "-P" => {
                 i += 2;
                 continue;
             }
-            "--" => break,
+            "--" => return None,
             _ => {}
         }
         if let Some(v) = t.strip_prefix("--split-string=") {
-            out.extend(inline_command_payloads(rest, i, v, None));
-            break;
+            return glued(i, v);
         }
         if t.starts_with("--") {
             i += 1;
@@ -1122,20 +1119,81 @@ pub(super) fn env_split_string_payloads(rest: &[&str]) -> Vec<String> {
                 }
                 if c == 'S' {
                     let inline = &t[1 + k + 1..];
-                    if inline.is_empty() {
-                        out.extend(payloads_after(rest, i, None));
+                    return if inline.is_empty() {
+                        Some(rest[i + 1..].to_vec())
                     } else {
-                        out.extend(inline_command_payloads(rest, i, inline, None));
-                    }
-                    return out;
+                        glued(i, inline)
+                    };
                 }
             }
             i += 1;
             continue;
         }
-        break;
+        return None;
+    }
+    None
+}
+
+/// Command lines handed to `env -S` / `--split-string`, which splits its one
+/// operand into argv and execs it ([`env_split_string_operand`]).
+///
+/// Every candidate is taken in two readings: read off `source` (the segment
+/// the tokens were whitespace-split from, so the operand keeps its newlines
+/// and runs of blanks — [`faithful_tail`]) and re-joined with one space.
+/// env's own splitting is NOT modelled: outside env's quotes a newline is a
+/// separator like a space (the re-join reading); inside them it is literal
+/// text (the source reading, where a `#` comment cannot swallow the next
+/// line). Judging both can only add verdicts, and [`env_split_string_verdict`]
+/// refuses to judge (Ask) whenever the two readings of the operand differ.
+pub(super) fn env_split_string_payloads(rest: &[&str], source: Option<&str>) -> Vec<String> {
+    let Some(words) = env_split_string_operand(rest) else {
+        return Vec::new();
+    };
+    let mut flagged = vec!["-S"];
+    flagged.extend_from_slice(&words);
+    let mut out = payloads_after(&flagged, 0, None);
+    for p in payloads_after(&flagged, 0, source) {
+        if !out.contains(&p) {
+            out.push(p);
+        }
     }
     out
+}
+
+/// The verdict for `env -S`'s payloads ([`env_split_string_payloads`]), plus
+/// an Ask when the operand word read off `source` differs from its one-space
+/// re-join — a newline, tab or run of blanks inside it, which env splits by
+/// rules blastguard does not model (spec blastguard-comment-collapse-residual
+/// R2, backlog e4523bfd: `env -S 'python3 -c "import os # x<NL>os.chmod(…)"'`
+/// was Allowed on the re-joined reading, where the comment swallowed the
+/// call). When the tokens are not slices of `source`, the Ask is raised if the
+/// operand word spans more than one token. A Deny outranks the Ask.
+pub(super) fn env_split_string_verdict(
+    rest: &[&str],
+    source: &str,
+    depth: usize,
+    ctx: &Ctx<'_>,
+) -> Decision {
+    let Some(words) = env_split_string_operand(rest) else {
+        return Decision::Allow;
+    };
+    let mut acc = VerdictAcc::default();
+    for payload in env_split_string_payloads(rest, Some(source)) {
+        if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth, ctx)) {
+            return deny;
+        }
+    }
+    let lost = match faithful_tail(Some(source), &words, 0) {
+        Some(text) => first_shell_word(text) != first_shell_word(&words.join(" ")),
+        None => word_separators_lost(None, &words[..words.len().min(1)], 0),
+    };
+    if lost {
+        let _ = acc.record(Decision::ask(
+            "`env -S`'s operand holds a line break or a run of blanks, which env splits by its \
+own rules — blastguard cannot tell what command line env builds from it, so it refuses to guess",
+        ));
+    }
+    acc.finish()
 }
 
 #[cfg(test)]
@@ -1174,12 +1232,14 @@ mod tests {
 
     #[test]
     fn env_split_string_extraction() {
-        assert!(env_split_string_payloads(&["FOO=1", "ls"]).is_empty());
-        assert!(env_split_string_payloads(&["-u", "S", "ls"]).is_empty());
-        assert!(env_split_string_payloads(&["-S", "\"rm", "-rf", "~/x\""])
-            .iter()
-            .any(|p| p == "rm -rf ~/x"));
-        assert!(env_split_string_payloads(&["-iS'rm", "-rf", "~/x'"])
+        assert!(env_split_string_payloads(&["FOO=1", "ls"], None).is_empty());
+        assert!(env_split_string_payloads(&["-u", "S", "ls"], None).is_empty());
+        assert!(
+            env_split_string_payloads(&["-S", "\"rm", "-rf", "~/x\""], None)
+                .iter()
+                .any(|p| p == "rm -rf ~/x")
+        );
+        assert!(env_split_string_payloads(&["-iS'rm", "-rf", "~/x'"], None)
             .iter()
             .any(|p| p == "rm -rf ~/x"));
     }

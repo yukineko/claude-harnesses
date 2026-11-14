@@ -2076,3 +2076,31 @@ exit 101: /Users/yuki/src/.harness-worktrees/side-run-20261114-163341-69351/crat
     Finished `test` profile [unoptimized + debuginfo] target(s) in 15.25s
      Running tests/verify_e70b6a71_commit_heredoc_later_cmds.rs (target/debug/deps/verify_e70b6a71_commit_heredoc_later_cmds-d7445c9c13b531bf)
 error: test failed, to rerun pass `-p blastguard --test verify_e70b6a71_commit_heredoc_later_cmds`"""
+
+[[task]]
+id = "3764e463"
+title = "blastguard FP: python3 -c の文字列リテラル内 '>> `y`' を run-time append redirect と誤読して ask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-14 at main a67c5d23f: python3 -c 'print("x >> BACKTICKy BACKTICK")' => ask "'>> BACKTICKyBACKTICK' appends to a path that only exists at run time". Python never executes backticks. Suspected (unverified): detect/interpreter.rs redirects_are_data ~968. RED: crates/blastguard/tests/backlog_20261114_python_c_append_backtick_fp.rs (commit b58fa9a63 on side/run-20261114-163341-69351). Control: os.system('echo x >> $v') still not Allow (green)."""
+created_at = 1794647064
+updated_at = 1794647064
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_c_append_backtick_fp -- --ignored python_c_string_literal_append_backtick_text_is_not_a_redirect"
+rev = "b58fa9a63a03827b24c6f6d6de6d5ea10a003092"
+observed_at = 1794647064
+detail = """
+exit 101: uki/src/.harness-worktrees/side-run-20261114-163341-69351/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.11s
+     Running tests/backlog_20261114_python_c_append_backtick_fp.rs (target/debug/deps/backlog_20261114_python_c_append_backtick_fp-4b2a0245b29c3102)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_c_append_backtick_fp`"""

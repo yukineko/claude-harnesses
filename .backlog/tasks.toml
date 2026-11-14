@@ -2201,3 +2201,33 @@ scripts/test_rollout_refuses_dirty_source.py:253: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_rollout_refuses_dirty_source.py::MutationMarker::test_f_evaluate_scenario_brackets_mutation_with_marker_and_seq
 ============================== 1 failed in 0.22s ==============================="""
+
+[[task]]
+id = "3ab6109f"
+title = "blastguard: quoted git commit -F - heredoc body judged when opener has a quoted $ option value (protected path in message read as command)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-14 at main 9bab9873e (blastguard 0.2.594 built from that rev; RED committed eb8811f70, 0.2.595). First seen in run-20261114-163341-69351, task worktree run-20261114-163341-69351-b793fddc, relay bgr-5f4e253e177a (installed 0.2.588, subagent deny; main re-run committed). Verbatim reason: '`second` is a command blastguard has no rule for, and .githooks/pre-push, is a protected gate/config path — blastguard cannot tell whether this reads it, rewrites it or removes it, and refuses to guess'. Observed splits (main): git commit -q -F - <<'EOF' + body allow; --trailer "T: lit" allow; --trailer "T: $X" ask; --author "$X" ask; $ opener with body without the protected path allow; git add -- a.py .githooks/pre-push (alone, and && commit without $) allow. So the cause is the $ on the opener line, not git add of the protected path nor the line-initial word. Suspected site (UNVERIFIED): crates/blastguard/src/detect/heredoc.rs ~1031-1035 expansion_free refusing any $ in consumer/opener_line. Controls green: $ opener + later sh .git/COMMIT_EDITMSG with rm -rf /etc or echo x > .githooks/pre-push body is not Allow."""
+created_at = 1794654114
+updated_at = 1794654114
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_git_commit_heredoc_opener_expansion_body_fp -- --ignored quoted_commit_heredoc_body_with_dollar_option_value_is_not_judged"
+rev = "eb8811f703a54920bf6db2621db0b07e0eaf89be"
+observed_at = 1794654114
+detail = """
+exit 101: ered out; finished in 0.44s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261114_git_commit_heredoc_opener_expansion_body_fp.rs (target/debug/deps/backlog_20261114_git_commit_heredoc_opener_expansion_body_fp-567942cab59131fd)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_git_commit_heredoc_opener_expansion_body_fp`"""

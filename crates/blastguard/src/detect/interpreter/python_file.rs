@@ -57,7 +57,7 @@ pub(in crate::detect) struct PythonFileVerdict {
 ///     an f-string replacement field is judged too;
 ///   * a call whose command is computed ([`shell_calls::computed_shell_call`]:
 ///     `os.system(cmd)`) is an Ask;
-///   * a [`super::CODE_BUILDING`] marker in the code view (`exec(`, `eval(`,
+///   * a [`super::code_building::CODE_BUILDING`] marker in the code view (`exec(`, `eval(`,
 ///     `__import__`, …) is an Ask: the text is not the program that runs;
 ///   * a runner referenced without being called (`f(os.system)`, a module
 ///     like `os` passed as a value; [`sem::escaped_runner`]) is an Ask;
@@ -379,7 +379,7 @@ const DATA_ONLY_MODULES: &[&str] = &[
 /// guessed from the shell spelling:
 ///   * the program tokenises ([`code_view`]): string and comment boundaries
 ///     are known. A program that does not tokenise answers `false`;
-///   * no [`super::CODE_BUILDING`] marker in the raw text or in the code view
+///   * no [`super::code_building::CODE_BUILDING`] marker in the raw text or in the code view
 ///     (`exec(`, `eval(`, `getattr(`, `__import__`, …);
 ///   * no relative import and no star import from a runner module, and every
 ///     imported module is in [`DATA_ONLY_MODULES`];

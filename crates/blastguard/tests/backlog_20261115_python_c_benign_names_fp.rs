@@ -122,7 +122,6 @@ fn undenied(cmds: &[String], tag: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-15 python -c benign name FP — remove when fixed"]
 fn re_compile_in_python_c_is_not_deny() {
     let bad = denied(
         &[format!("{BENIGN}python3 -c 'import re; re.compile(\"x\")'")],
@@ -132,7 +131,6 @@ fn re_compile_in_python_c_is_not_deny() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-15 python -c benign name FP — remove when fixed"]
 fn globals_name_lookup_in_python_c_is_not_deny() {
     let bad = denied(
         &[format!(

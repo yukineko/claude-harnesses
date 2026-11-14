@@ -410,37 +410,6 @@ exit 101:
 error: test failed, to rerun pass `-p backlog --test backlog_20261113_k4_shallow_clone_fix`"""
 
 [[task]]
-id = "f70e5164"
-title = "blastguard: subagent が scratchpad 内で ./ や ../ 綴りの rm -rf を deny される誤検知を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "audit-20261113",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "B2 (FP). The audit's literal shape (subagent rm -rf proj/target, cwd in the session scratchpad) is Allow at HEAD; the same target spelled ./proj/target or ../sbx/proj/target is Ask hardened to Deny for a subagent. RED (verbatim): subagent rm -rf ./proj/target inside the session scratchpad must not be Deny (ruling: scratch in managed places is allowed); reason: blastguard: this call was made inside a subagent, where nobody can answer a permission prompt, so it is denied instead of asked. Conflict: deletion.rs documents '.'/'..' operands as undetermined ('cannot determine is never an Allow'); a fix must change that prose, and '..' needs physical resolution. Untested alternative cause of the original observation: a non-canonical cwd (/tmp vs /private/tmp). Controls: subagent rm -rf /usr/lib stays Deny; witness git -C proj clean -fd main=ask/sub=deny. macOS-only test. source: audit 2026-11-13 (main-session observation / condukt run run-20261113-044355-24760 decision log; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."
-created_at = 1794516869
-updated_at = 1794516869
-weight = 0.0
-issue_number = 1661
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1661"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261113_b2_subagent_rm_scratchpad -- --ignored b2_subagent_rm_rf_"
-rev = "6cf45c7fb994159111d94aeff598cd476093a22f"
-observed_at = 1794516869
-detail = """
-exit 101: d v0.2.473 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
-     Running tests/backlog_20261113_b2_subagent_rm_scratchpad.rs (target/debug/deps/backlog_20261113_b2_subagent_rm_scratchpad-14c325f83eaa5364)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261113_b2_subagent_rm_scratchpad`"""
-
-[[task]]
 id = "7a960841"
 title = "blastguard: log テキストで rule 欠落と rule=unknown が同じ表示になる曖昧さを直す"
 project = "/Users/yuki/src/harness"

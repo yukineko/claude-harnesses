@@ -77345,3 +77345,65 @@ rev = "6d5c1627c604c47421e5941b1191191c2984df19"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "f70e5164"
+title = "blastguard: subagent が scratchpad 内で ./ や ../ 綴りの rm -rf を deny される誤検知を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "audit-20261113",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "B2 (FP). The audit's literal shape (subagent rm -rf proj/target, cwd in the session scratchpad) is Allow at HEAD; the same target spelled ./proj/target or ../sbx/proj/target is Ask hardened to Deny for a subagent. RED (verbatim): subagent rm -rf ./proj/target inside the session scratchpad must not be Deny (ruling: scratch in managed places is allowed); reason: blastguard: this call was made inside a subagent, where nobody can answer a permission prompt, so it is denied instead of asked. Conflict: deletion.rs documents '.'/'..' operands as undetermined ('cannot determine is never an Allow'); a fix must change that prose, and '..' needs physical resolution. Untested alternative cause of the original observation: a non-canonical cwd (/tmp vs /private/tmp). Controls: subagent rm -rf /usr/lib stays Deny; witness git -C proj clean -fd main=ask/sub=deny. macOS-only test. source: audit 2026-11-13 (main-session observation / condukt run run-20261113-044355-24760 decision log; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."
+created_at = 1794516869
+updated_at = 1794628097
+weight = 0.0
+issue_number = 1661
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1661"
+issue_closed_at = 1794628099
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_b2_subagent_rm_scratchpad -- --ignored b2_subagent_rm_rf_"
+rev = "6cf45c7fb994159111d94aeff598cd476093a22f"
+observed_at = 1794516869
+detail = """
+exit 101: d v0.2.473 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/backlog_20261113_b2_subagent_rm_scratchpad.rs (target/debug/deps/backlog_20261113_b2_subagent_rm_scratchpad-14c325f83eaa5364)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_b2_subagent_rm_scratchpad`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261113_b2_subagent_rm_scratchpad b2_subagent_rm_rf_"
+exit = 0
+passed = 2
+rev = "7ec00aeb5c2ea416d3772932ad4f3eb8bf23bbd0"
+observed_at = 1794628091
+output_digest = "sha256:40193252a67e93972d65322077315edc72ad2154fd7edc37d82fd54ec58d94af"
+excerpt = """
+
+running 2 tests
+test b2_subagent_rm_rf_dotdot_spelling_inside_scratchpad_is_not_denied ... ok
+test b2_subagent_rm_rf_dot_slash_inside_scratchpad_is_not_denied ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.58s
+
+   Compiling blastguard v0.2.578 (/Users/yuki/src/.harness-worktrees/session-b3435a5e/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.24s
+     Running tests/backlog_20261113_b2_subagent_rm_scratchpad.rs (target/debug/deps/backlog_20261113_b2_subagent_rm_scratchpad-9f176e9ec697cfde)
+"""
+
+[task.closure.red]
+rev = "6d5c1627c604c47421e5941b1191191c2984df19"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

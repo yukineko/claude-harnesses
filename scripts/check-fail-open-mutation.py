@@ -14,25 +14,40 @@ This script is the missing DYNAMIC check: for each of the 7 GATE crates
 (blastguard / propguard / specguard / stuckguard / mutategate / overwatch /
 parallelguard) it
 
-  1. applies one concrete, mechanical fail-open mutation to a real source
-     file (a literal old-string -> new-string replacement, applied
-     programmatically — never "an LLM decides at check-time whether this
-     would break something"),
-  2. runs `cargo test -p <crate> <scenario.tests>` and captures the real exit
-     code. `scenario.tests` are the test-target selectors (`--lib`,
-     `--test <name>`) that were OBSERVED to go RED under this mutation (and
-     to pass without it) when the scenario was narrowed; the evidence is
-     recorded next to each scenario. A scenario without declared selectors
-     runs the whole `cargo test -p <crate>`.
+  1. copies the invoking tree into a SCRATCH temporary directory (every
+     tracked and untracked-but-not-ignored path `git ls-files` lists, read
+     from the working tree, so the copy holds exactly what an in-place
+     `cargo test` would have compiled -- the whole workspace, so path
+     dependencies such as harness-core resolve), then applies one concrete,
+     mechanical fail-open mutation to the COPY of a real source file (a
+     literal old-string -> new-string replacement, applied programmatically
+     -- never "an LLM decides at check-time whether this would break
+     something"). USER RULING 2026-11-14: the mutation and the test run
+     happen in that scratch copy, and the invoking tree's tracked file is
+     never written. The 2026-11-08 "no temp checkout" ruling is read
+     narrowly as "no git worktree / second checkout", and this plain file
+     copy is neither,
+  2. runs `cargo test -p <crate> <scenario.tests>` with cwd = the scratch
+     copy and CARGO_TARGET_DIR = <scratch>/target (never the invoking tree's
+     target dir, so no mutant binary lands where hooks or rollouts look),
+     and captures the real exit code. `scenario.tests` are the test-target
+     selectors (`--lib`, `--test <name>`) that were OBSERVED to go RED under
+     this mutation (and to pass without it) when the scenario was narrowed;
+     the evidence is recorded next to each scenario. A scenario without
+     declared selectors runs the whole `cargo test -p <crate>`.
   3. asserts the exit code is non-zero (i.e., the crate's OWN declared tests
      went RED because of the injected fail-open). A declared set that does
      NOT catch the mutation is NOT CAUGHT (exit 1), and a selector cargo
      rejects (`no test target named ...`) is inconclusive (exit 1), never a
      RED — narrowing never turns a miss into a pass, and
-  4. reverts the mutation (`git checkout -- <file>`), VERIFYING the file is
-     byte-identical to its pre-mutation state afterward — this happens in a
-     `finally` block, so a revert always runs even if step 2/3 raised or the
-     process was interrupted mid-way through a single scenario.
+  4. in a `finally` block (so it runs even if step 2/3 raised or timed out):
+     writes the original bytes back into the scratch copy, deletes the
+     scratch directory (VERIFYING it is gone), and VERIFIES the invoking
+     tree's target file is still byte-identical to its pre-run state. That
+     file is only read, never written, so a mismatch (e.g. a concurrent
+     edit) is reported as a failed cleanup and left untouched. A scratch copy
+     that cannot be created, mutated, tested or removed is an ERROR (exit 1),
+     never a pass.
 
 If a mutation compiles but the test suite does NOT go red, that is not
 "this scenario failed" — it is a genuine finding (the crate's tests do not
@@ -45,8 +60,9 @@ Exit codes:
   0 — every scenario across all 6 crates was CAUGHT (red confirmed).
   1 — at least one scenario was NOT CAUGHT (existing tests missed a real
       fail-open) or INCONCLUSIVE (mutation didn't compile), or an
-      unexpected error occurred. Details are always printed; the mutated
-      file is always reverted first.
+      unexpected error occurred (including a scratch copy that could not be
+      created, mutated, tested or removed). Details are always printed; the
+      scratch copy is always removed first.
 
 Usage:
   python3 scripts/check-fail-open-mutation.py
@@ -61,8 +77,12 @@ this copy and the canonical list is caught the same mechanical way every
 other copy is.
 """
 import argparse
+import os
+import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -242,13 +262,14 @@ class ScenarioResult:
         self.status = None  # "caught" | "not-caught" | "inconclusive" | "error"
         self.detail = ""
         self.red_confirmed = False
-        # Default True ("nothing to revert"): only the code paths that
-        # actually apply a mutation set this to the real outcome of
-        # `revert_mutation`. The one path that returns BEFORE ever touching
-        # the file (the pre-flight dirty-file refusal) must not be reported
-        # as "REVERT FAILED" -- no mutation was ever applied, so there is
-        # nothing to revert and the pre-existing (unrelated) dirty state was
-        # correctly left untouched.
+        # "Cleanup confirmed" (the name predates the 2026-11-14 scratch-copy
+        # ruling): scratch copy restored and removed, and the invoking
+        # tree's target file byte-identical to its pre-run bytes. Default
+        # True ("nothing to clean up"): only the paths that reach the scratch
+        # step set it to the real outcome. The pre-flight refusals (dirty
+        # file, marker) return before any copy exists, so they must not be
+        # reported as "CLEANUP FAILED". The pre-existing (unrelated) dirty
+        # state is correctly left untouched.
         self.revert_confirmed = True
         self.elapsed = 0.0
 
@@ -271,22 +292,96 @@ def run(cmd, cwd=None, timeout=600):
 
 
 def git_is_clean(path_rel):
-    """True iff `git status --porcelain` reports no changes for this path."""
+    """True iff `git status --porcelain` reports no changes for this path.
+
+    A failed git call is NOT clean (CLAUDE.md section 3), so the caller
+    refuses."""
     p = run(["git", "status", "--porcelain", "--", path_rel])
-    return p.stdout.strip() == ""
+    return p.returncode == 0 and p.stdout.strip() == ""
 
 
 def git_file_bytes(path):
     return path.read_bytes()
 
 
-def apply_mutation(scenario):
-    """Apply the mutation. Returns None on success, or an error string.
+class ScratchError(Exception):
+    """The scratch copy could not be created or used. evaluate_scenario turns
+    it into status "error" (never a pass)."""
+
+
+# The scratch copy that the current scenario's `cargo test` runs in.
+# evaluate_scenario sets it for one scenario and clears it in its `finally`.
+# It is module state, not an argument, so the call keeps the shape
+# `run_crate_tests(crate, timeout=..., test_args=...)` that the unit tests'
+# stubs replace. run_crate_tests refuses to run while it is unset, and never
+# falls back to the invoking tree.
+_ACTIVE_SCRATCH = None
+
+
+def make_scratch_copy():
+    """Copy the invoking tree (REPO) into a new temporary directory and return
+    its path. Raises ScratchError on any failure, after removing the partial
+    copy.
+
+    Copied: every path `git ls-files -z --cached --others --exclude-standard`
+    lists, read from the WORKING TREE, so the copy holds what an in-place
+    `cargo test` would have compiled. Ignored paths such as target/ are not
+    copied. Symlinks are copied as symlinks. Listed paths that no longer exist
+    on disk are skipped, since an in-place cargo would not see them either.
+    This is a plain file copy: no git worktree, no checkout, no .git
+    (2026-11-08 ruling, read narrowly per the 2026-11-14 ruling)."""
+    p = subprocess.run(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=str(REPO), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if p.returncode != 0:
+        raise ScratchError(
+            f"git ls-files failed (exit {p.returncode}) in {REPO}: "
+            f"{p.stderr.decode('utf-8', 'replace').strip()}"
+        )
+    rels = [r.decode("utf-8", "surrogateescape") for r in p.stdout.split(b"\0") if r]
+    if not rels:
+        raise ScratchError(f"git ls-files listed no files in {REPO}; nothing to copy")
+    scratch = Path(tempfile.mkdtemp(prefix="fail-open-mutation-")).resolve()
+    try:
+        for rel in rels:
+            src = REPO / rel
+            dst = scratch / rel
+            if src.is_symlink():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                os.symlink(os.readlink(src), dst)
+            elif src.is_file():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+            # else: deleted in the working tree, or a gitlink dir -- skipped.
+    except OSError as e:
+        remove_scratch_copy(scratch)
+        raise ScratchError(f"cannot copy {REPO} into scratch {scratch}: {e}") from e
+    return scratch
+
+
+def remove_scratch_copy(scratch):
+    """Delete the scratch copy. True iff it is confirmed gone."""
+    shutil.rmtree(scratch, ignore_errors=True)
+    return not os.path.lexists(scratch)
+
+
+def apply_mutation(scenario, root=None):
+    """Apply the mutation to `root / scenario.file_rel`. Returns None on
+    success, or an error string.
+
+    evaluate_scenario always passes the scratch copy as `root`. The default
+    (the module-level REPO, resolved at call time) is there only for the unit
+    tests that drive this helper against their own throwaway repo. The script
+    never calls it on the invoking tree (2026-11-14 ruling).
 
     Requires `old` to appear EXACTLY once (ambiguity is treated as a hard
-    stop, never a guess at which occurrence to mutate).
+    stop, never a guess at which occurrence to mutate). A symlinked target is
+    refused, because writing through it would write wherever it points.
     """
-    path = REPO / scenario.file_rel
+    path = (root if root is not None else REPO) / scenario.file_rel
+    if path.is_symlink():
+        return f"{scenario.file_rel} is a symlink — refusing to write through it"
     text = path.read_text(encoding="utf-8")
     count = text.count(scenario.old)
     if count != 1:
@@ -296,6 +391,8 @@ def apply_mutation(scenario):
         )
     mutated = text.replace(scenario.old, scenario.new, 1)
     path.write_text(mutated, encoding="utf-8")
+    if path.read_text(encoding="utf-8") != mutated:
+        return f"{scenario.file_rel}: the mutated content did not read back as written"
     return None
 
 
@@ -311,13 +408,19 @@ def mutation_git_dir():
 
 
 def begin_mutation_marker():
-    """Announce an in-place mutation to scripts/rollout_source_guard.py
-    (backlog ff8cebd0): bump <git-dir>/fail-open-mutation.seq and create
-    <git-dir>/fail-open-mutation.active BEFORE the mutated file is written.
-    A rollout refuses while .active exists, and refuses when .seq moved during
-    its run, so it can never build and deploy a mutant -- not even one that was
-    already reverted by the time it looked. Returns None on success, or an
-    error string; the caller then refuses to mutate."""
+    """Announce a mutation run to scripts/rollout_source_guard.py (backlog
+    ff8cebd0): bump <git-dir>/fail-open-mutation.seq and create
+    <git-dir>/fail-open-mutation.active BEFORE the mutant is written. A
+    rollout refuses while .active exists, and refuses when .seq moved during
+    its run.
+
+    History: the marker was added when the mutation was written IN PLACE into
+    the invoking tree, where a concurrent rollout could build and deploy the
+    mutant. Since the 2026-11-14 ruling the mutant exists only in a scratch
+    copy outside the tree and builds into the scratch's own target dir, so a
+    rollout of this tree cannot pick it up. The marker stays as a conservative
+    second barrier, and failing to write it still means refusing to mutate.
+    Returns None on success, or an error string."""
     gd = mutation_git_dir()
     if gd is None:
         return "cannot locate the git dir to write the mutation marker"
@@ -339,8 +442,9 @@ def begin_mutation_marker():
 
 
 def end_mutation_marker():
-    """Remove .active. Called ONLY after the revert is confirmed byte-identical;
-    an unconfirmed revert leaves it, so rollouts keep refusing."""
+    """Remove .active. Called ONLY after the cleanup is confirmed (scratch copy
+    gone, the invoking tree's target file byte-identical). An unconfirmed
+    cleanup leaves it in place, so rollouts keep refusing."""
     gd = mutation_git_dir()
     if gd is None:
         return False
@@ -353,29 +457,68 @@ def end_mutation_marker():
     return True
 
 
-def revert_mutation(scenario, original_bytes):
-    """Revert via `git checkout --`, then verify byte-identity. Always run,
-    even when the caller is unwinding from an exception (call from finally).
-    Returns True iff the revert is confirmed byte-identical.
+def revert_mutation(scenario, original_bytes, root=None):
+    """Write `original_bytes` back to `root / scenario.file_rel`, then verify
+    byte-identity. Returns True iff that is confirmed.
+
+    evaluate_scenario calls it on the SCRATCH copy, from its `finally`,
+    before deleting the copy, so a scratch dir that cannot be fully removed
+    does not keep a mutant. The default root (REPO, resolved at call time) is
+    there only for the unit tests that drive this helper against their own
+    throwaway repo. The script never writes the invoking tree (2026-11-14
+    ruling).
     """
-    path = REPO / scenario.file_rel
-    run(["git", "checkout", "--", scenario.file_rel])
+    path = (root if root is not None else REPO) / scenario.file_rel
     try:
+        if path.is_symlink():
+            return False
+        path.write_bytes(original_bytes)
         return path.read_bytes() == original_bytes
     except OSError:
         return False
 
 
-def run_crate_tests(crate, timeout=600, test_args=None):
-    """Run `cargo test -p <crate> [test_args...]`. Returns (exit_code,
-    tail_of_output); exit_code is None on timeout."""
-    cmd = ["cargo", "test", "-p", crate] + list(test_args or [])
+def invoking_tree_unchanged(scenario, original_bytes):
+    """Read-only check that the invoking tree's target file still holds its
+    pre-run bytes. It never writes the file."""
     try:
-        p = run(cmd, timeout=timeout)
-        tail = "\n".join(p.stdout.splitlines()[-40:])
-        return p.returncode, tail
+        return (REPO / scenario.file_rel).read_bytes() == original_bytes
+    except OSError:
+        return False
+
+
+def run_crate_tests(crate, timeout=600, test_args=None, cwd=None):
+    """Run `cargo test -p <crate> [test_args...]` in the scratch copy (`cwd`,
+    which defaults to the active scratch that evaluate_scenario sets), with
+    CARGO_TARGET_DIR=<scratch>/target. Returns (exit_code, tail_of_output).
+    exit_code is None on timeout, and the whole process group is killed.
+
+    Raises ScratchError when there is no scratch copy to run in. It never
+    falls back to the invoking tree."""
+    root = cwd if cwd is not None else _ACTIVE_SCRATCH
+    if root is None:
+        raise ScratchError(
+            "no scratch copy to run cargo in — refusing to run the mutated "
+            "tests in the invoking tree"
+        )
+    root = Path(root)
+    cmd = ["cargo", "test", "-p", crate] + list(test_args or [])
+    env = dict(os.environ, CARGO_TARGET_DIR=str(root / "target"))
+    proc = subprocess.Popen(
+        cmd, cwd=str(root), env=env, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True, start_new_session=True,
+    )
+    try:
+        out, _ = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            proc.kill()
+        proc.communicate()
         return None, f"{' '.join(cmd)} timed out after {timeout}s"
+    tail = "\n".join((out or "").splitlines()[-40:])
+    return proc.returncode, tail
 
 
 def looks_like_compile_failure(output):
@@ -388,15 +531,17 @@ def looks_like_compile_failure(output):
 
 
 def evaluate_scenario(scenario, timeout):
+    global _ACTIVE_SCRATCH
     result = ScenarioResult(scenario)
     path = REPO / scenario.file_rel
 
     if not git_is_clean(scenario.file_rel):
         result.status = "error"
         result.detail = (
-            f"{scenario.file_rel} already has uncommitted changes — refusing "
-            "to mutate a dirty file (would clobber unrelated in-progress "
-            "edits, and the revert step could not tell 'ours' from 'theirs')"
+            f"{scenario.file_rel} already has uncommitted changes (or git could "
+            "not tell) — refusing to mutate a dirty file (the scratch copy "
+            "would test unrelated in-progress edits, and the post-run "
+            "byte-identity check could not tell 'ours' from 'theirs')"
         )
         return result
 
@@ -405,19 +550,32 @@ def evaluate_scenario(scenario, timeout):
     if marker_err is not None:
         result.status = "error"
         result.detail = (
-            f"{marker_err} -- refusing to mutate: without the marker a "
-            "concurrent rollout-plugins.sh could build and deploy the mutant "
+            f"{marker_err} -- refusing to mutate: the marker tells a "
+            "concurrent rollout-plugins.sh that a mutation run is in flight "
             "(backlog ff8cebd0)"
         )
         return result
     start = time.monotonic()
+    scratch = None
     try:
-        err = apply_mutation(scenario)
+        # The mutant lives ONLY in this scratch copy (USER RULING
+        # 2026-11-14). REPO / file_rel is read, never written.
+        scratch = make_scratch_copy()
+        copy_path = scratch / scenario.file_rel
+        if copy_path.is_symlink() or not copy_path.is_file() or copy_path.read_bytes() != original_bytes:
+            result.status = "error"
+            result.detail = (
+                f"the scratch copy of {scenario.file_rel} is missing, a symlink, "
+                "or differs from the invoking tree's file — refusing to test it"
+            )
+            return result
+        err = apply_mutation(scenario, root=scratch)
         if err is not None:
             result.status = "error"
             result.detail = err
             return result
 
+        _ACTIVE_SCRATCH = scratch
         shown = " ".join(["cargo test -p", scenario.crate] + scenario.test_args())
         rc, tail = run_crate_tests(scenario.crate, timeout=timeout, test_args=scenario.test_args())
         if rc is None:
@@ -448,16 +606,37 @@ def evaluate_scenario(scenario, timeout):
         result.red_confirmed = True
         result.detail = f"{shown} exited {rc} (RED):\n{tail}"
         return result
-    except Exception as e:  # noqa: BLE001 - must still revert on any failure
+    except Exception as e:  # noqa: BLE001 - must still clean up on any failure
         result.status = "error"
         result.detail = f"unexpected exception: {e!r}"
         return result
     finally:
-        result.revert_confirmed = revert_mutation(scenario, original_bytes)
+        _ACTIVE_SCRATCH = None
+        problems = []
+        if scratch is not None:
+            # Restore the copy first, so a scratch dir that cannot be fully
+            # removed does not keep a mutant around.
+            copy_path = scratch / scenario.file_rel
+            if os.path.lexists(copy_path) and not revert_mutation(scenario, original_bytes, root=scratch):
+                problems.append(f"could not restore the scratch copy of {scenario.file_rel}")
+            if not remove_scratch_copy(scratch):
+                problems.append(f"could not remove the scratch copy {scratch}")
+        if not invoking_tree_unchanged(scenario, original_bytes):
+            problems.append(
+                f"{scenario.file_rel} in the invoking tree no longer matches its "
+                "pre-run bytes (this script never writes it; left untouched)"
+            )
+        # `revert_confirmed` now means "cleanup confirmed": scratch restored
+        # and gone, and the invoking tree's file byte-identical.
+        result.revert_confirmed = not problems
+        if problems:
+            result.status = "error"
+            result.red_confirmed = False
+            result.detail = (result.detail + "\n" if result.detail else "") + "; ".join(problems)
         if result.revert_confirmed and not end_mutation_marker():
             result.status = "error"
             result.detail = (
-                f"reverted, but could not remove the {MARKER_NAME} marker in "
+                f"cleaned up, but could not remove the {MARKER_NAME} marker in "
                 "the git dir -- rollouts refuse until it is removed by hand"
             )
         result.elapsed = time.monotonic() - start
@@ -466,10 +645,10 @@ def evaluate_scenario(scenario, timeout):
 def print_result(result):
     s = result.scenario
     red = "yes" if result.red_confirmed else "no"
-    revert = "yes" if result.revert_confirmed else "NO -- REVERT FAILED"
+    revert = "yes" if result.revert_confirmed else "NO -- CLEANUP FAILED"
     print(f"--- {s.crate} :: {s.description}")
     print(f"    file: {s.file_rel}")
-    print(f"    status: {result.status}  (RED confirmed: {red}; revert confirmed: {revert}; {result.elapsed:.1f}s)")
+    print(f"    status: {result.status}  (RED confirmed: {red}; scratch cleanup confirmed: {revert}; {result.elapsed:.1f}s)")
     if result.status != "caught":
         indented = "\n".join("      " + line for line in result.detail.splitlines())
         print(indented if indented.strip() else "      (no detail)")
@@ -491,9 +670,9 @@ def select_scenarios(crate_filter):
 
 def run_scenarios(scenarios, timeout, keep_going):
     """Evaluate each scenario in order, printing as it goes. Stops at the
-    first non-"caught" result unless `keep_going` is set. Revert failures
+    first non-"caught" result unless `keep_going` is set. Cleanup failures
     never stop the loop (every remaining scenario still gets its own
-    mutate/revert cycle)."""
+    copy/mutate/test/remove cycle)."""
     results = []
     for s in scenarios:
         result = evaluate_scenario(s, timeout=timeout)
@@ -522,7 +701,7 @@ def print_summary(summary):
     print(f"  caught (RED confirmed): {summary['caught']}")
     print(f"  NOT caught (existing tests missed a real fail-open): {len(summary['not_caught'])}")
     print(f"  inconclusive (mutation didn't compile): {len(summary['inconclusive'])}")
-    print(f"  errored (setup/revert problem): {len(summary['errored'])}")
+    print(f"  errored (setup/scratch-copy/cleanup problem): {len(summary['errored'])}")
 
     if summary["not_caught"]:
         print()
@@ -534,8 +713,10 @@ def print_summary(summary):
 
     if summary["revert_failed"]:
         print()
-        print("ERROR: at least one mutated file did NOT revert to its original byte "
-              "content. Run `git status` / `git diff` and `git checkout --` manually.",
+        print("ERROR: at least one scenario's cleanup is unconfirmed: a scratch copy "
+              "was not restored/removed, or the invoking tree's target file no longer "
+              "matches its pre-run bytes (this script never writes it). See the "
+              "details above and run `git status` / `git diff`.",
               file=sys.stderr)
 
 

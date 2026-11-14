@@ -11,10 +11,15 @@
 # pushed range touches, and a final re-check that
 # each pushed ref still names the sha those checks judged — see the end of this
 # file; over https that re-check narrows but does not close the window, a
-# residual window remains). Every check is scoped to THIS push's range, runs in
-# THIS worktree only (no temp checkout, no other worktree is consulted), and a
-# check already recorded as passed for the exact pushed tree is not rerun
-# (scripts/test-pass-record.py; user ruling 2026-11-08):
+# residual window remains). Every check is scoped to THIS push's range, runs
+# from THIS worktree only (no git worktree or second checkout is created, and no
+# other worktree is consulted), and a check already recorded as passed for the
+# exact pushed tree is not rerun (scripts/test-pass-record.py; user ruling
+# 2026-11-08). One exception to "the check runs in this tree": the fail-open
+# mutation harness (check 5) copies this tree into a scratch temporary
+# directory and mutates and tests that copy, so this tree is never written
+# (user ruling 2026-11-14, which reads the 2026-11-08 "no temp checkout" as "no
+# git worktree / second checkout"):
 #   1. GATE crates (advisory) — when the push touches blastguard/propguard/
 #      specguard/stuckguard/mutategate/overwatch (the fleet defense gates),
 #      suggest a Continuous-Audit round (`scripts/continuous-audit.sh --dry-run`).
@@ -551,7 +556,12 @@ fi
 #     cargo's own target dir), and only when HEAD == S, the tree and index equal
 #     HEAD, and nothing untracked sits under crates/ or the root cargo files —
 #     so the content judged is exactly the content pushed. Anything else BLOCKS:
-#     a verdict about the files on disk is not a verdict about S.
+#     a verdict about the files on disk is not a verdict about S. Exception
+#     (user ruling 2026-11-14): check 5, the fail-open mutation, copies this
+#     verified tree into a scratch temporary directory and runs there (cwd =
+#     the copy, CARGO_TARGET_DIR inside the copy). The same in-place
+#     preconditions still gate it, so the copy holds exactly the content
+#     pushed, and this tree is never written.
 #
 # FAIL-CLOSED throughout: no cargo when a check must run, an unresolvable tree,
 # unreadable cargo metadata, a crate dir that maps to no package => block.
@@ -1009,12 +1019,15 @@ EOF
     fi
 
     # --- blocking check 5: fail-open mutation over the range's gate crates ---
-    # scripts/check-fail-open-mutation.py applies each gate crate's registered
-    # fail-open mutation, runs `cargo test -p <crate>` over that scenario's
-    # declared test targets (the targets observed to go RED under the mutation
-    # and to pass without it; the whole crate when none are declared),
-    # requires RED, and reverts (byte-identity verified). Nothing at commit
-    # time runs it, so it runs here (backlog 4f19b628 / issue #1584).
+    # scripts/check-fail-open-mutation.py copies this tree into a scratch
+    # temporary directory (user ruling 2026-11-14: the invoking tree is never
+    # written), applies each gate crate's registered fail-open mutation to
+    # the COPY, runs `cargo test -p <crate>` in the copy (its own
+    # CARGO_TARGET_DIR) over that scenario's declared test targets (the
+    # targets observed to go RED under the mutation and to pass without it;
+    # the whole crate when none are declared), requires RED, then removes the
+    # copy and verifies this tree's target file is byte-identical. Nothing at
+    # commit time runs it, so it runs here (backlog 4f19b628 / issue #1584).
     #
     # SCOPE: per crate, only the gate crates whose crates/<gate>/ this range
     # touches. A range that cannot be computed, or a change to the mutation
@@ -1027,7 +1040,7 @@ EOF
     # is not measured here.
     #
     # FAIL-CLOSED: any nonzero exit (NOT CAUGHT, inconclusive, setup error,
-    # revert failure, crash) blocks; so does a tree without the script or a
+    # scratch copy that cannot be created/mutated/tested/removed, crash) blocks; so does a tree without the script or a
     # missing python3. A pass is recorded per crate for this tree.
     fm_crates=""
     fm_all="$range_wide"
@@ -1061,8 +1074,8 @@ EOF
             if [ "$fm_rc" -ne 0 ]; then
                 echo "" >&2
                 echo "pre-push: BLOCKED — fail-open mutation check for $_g at $short exited" >&2
-                echo "$fm_rc (a mutation was NOT CAUGHT, inconclusive, errored, or did not" >&2
-                echo "revert). See the output above; run git status before anything else." >&2
+                echo "$fm_rc (a mutation was NOT CAUGHT, inconclusive, errored, or its scratch" >&2
+                echo "copy cleanup is unconfirmed). See the output above; run git status." >&2
                 exit 1
             fi
             record_pass "$tree" "$fm_id"

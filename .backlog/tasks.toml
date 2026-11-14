@@ -1897,6 +1897,8 @@ notes = "Side finding run-20261114-130020-46995, RED in 3d99f03e (2026-11-14). O
 created_at = 1794629181
 updated_at = 1794629181
 weight = 0.0
+issue_number = 1761
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1761"
 rev = 0
 
 [task.repro]

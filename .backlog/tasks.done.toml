@@ -77407,3 +77407,241 @@ rev = "6d5c1627c604c47421e5941b1191191c2984df19"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "e686a85e"
+title = "blastguard: exec 3<<< harmful; bash <&3 is Ask in main (in-stage form is Deny)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "done"
+notes = """Measured at dc9b00c7b (0.2.565) 2026-11-14 in run-20261114-075136-6996 follow-up. main/subagent: "exec 3<<< 'chmod 777 /etc/hosts'; bash <&3" ask/deny; "bash 3<<< 'chmod 777 /etc/hosts' <&3" deny/deny. Two readings: (real defect) program text is literally on the command line so system harm should be Deny in main; (intended) cross-statement fd tracking is out of model and Ask is the deliberate fail-closed answer. RED asserts the first reading."""
+created_at = 1794612991
+updated_at = 1794634215
+weight = 0.0
+issue_number = 1746
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1746"
+issue_closed_at = 1794634217
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_exec_fd_herestring_then_shell_reads_fd -- --include-ignored"
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+observed_at = 1794612991
+detail = """
+exit 101: rktrees/side-reds-075136/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/backlog_20261114_exec_fd_herestring_then_shell_reads_fd.rs (target/debug/deps/backlog_20261114_exec_fd_herestring_then_shell_reads_fd-de5e1a0b7ceebd7d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_exec_fd_herestring_then_shell_reads_fd`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_exec_fd_herestring_then_shell_reads_fd -- --include-ignored"
+exit = 0
+passed = 2
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634214
+output_digest = "sha256:224cf8760c6281ff8bdff11079989bbe242484134649c39413cb61eff5a66989"
+excerpt = """
+
+running 2 tests
+test control_in_stage_fd_herestring_is_deny ... ok
+test exec_fd_herestring_then_shell_reading_fd_is_deny_in_main ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/backlog_20261114_exec_fd_herestring_then_shell_reads_fd.rs (target/debug/deps/backlog_20261114_exec_fd_herestring_then_shell_reads_fd-b12a5450779b2475)
+"""
+
+[task.closure.red]
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "6f4ec5ce"
+title = "harmful program piped to python3 -i script.py or python3 -m code is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc"
+created_at = 1794626638
+updated_at = 1794634218
+weight = 0.0
+issue_number = 1757
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1757"
+issue_closed_at = 1794634221
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_python_interactive -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626638
+detail = """
+exit 101: 0.2.574 (/Users/yuki/src/.harness-worktrees/session-7e01fcf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.55s
+     Running tests/backlog_20261114_pipe_to_python_interactive.rs (target/debug/deps/backlog_20261114_pipe_to_python_interactive-a1e46e5f4820211c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_python_interactive`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_python_interactive -- --include-ignored"
+exit = 0
+passed = 2
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634218
+output_digest = "sha256:6a5b8da8cb6f9d1abd658073423d8a130a103e85fe480103530bf54f6ee17aa8"
+excerpt = """
+
+running 2 tests
+test control_harmful_program_piped_to_bare_python_is_deny ... ok
+test harmful_program_piped_to_interactive_python_is_deny ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261114_pipe_to_python_interactive.rs (target/debug/deps/backlog_20261114_pipe_to_python_interactive-91062e8ee458101f)
+"""
+
+[task.closure.red]
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "e5a8fcc2"
+title = "system-file rm via variable in a later statement of a command substitution is Ask in main (expected Deny)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc"
+created_at = 1794626682
+updated_at = 1794634222
+weight = 0.0
+issue_number = 1750
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1750"
+issue_closed_at = 1794634224
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_var_in_multi_statement_substitution -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626682
+detail = """
+exit 101: arness-worktrees/session-7e01fcf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/backlog_20261114_var_in_multi_statement_substitution.rs (target/debug/deps/backlog_20261114_var_in_multi_statement_substitution-65c416248a77981c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_var_in_multi_statement_substitution`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_var_in_multi_statement_substitution -- --include-ignored"
+exit = 0
+passed = 2
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634221
+output_digest = "sha256:01fd212bf0015715dfe2e6893437a2622df3a464ce595ea75e44888cca532688"
+excerpt = """
+
+running 2 tests
+test control_system_file_var_deleted_in_single_statement_substitution_is_deny ... ok
+test system_file_var_deleted_inside_multi_statement_substitution_is_deny ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261114_var_in_multi_statement_substitution.rs (target/debug/deps/backlog_20261114_var_in_multi_statement_substitution-ca470acaf559d984)
+"""
+
+[task.closure.red]
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "403f9797"
+title = "harmful program piped to a top-level for loop whose body has a closed nested compound before the reader is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc"
+created_at = 1794626701
+updated_at = 1794634226
+weight = 0.0
+issue_number = 1751
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1751"
+issue_closed_at = 1794634228
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_for_body_nested_compound -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626701
+detail = """
+exit 101: ki/src/.harness-worktrees/session-7e01fcf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running tests/backlog_20261114_pipe_to_for_body_nested_compound.rs (target/debug/deps/backlog_20261114_pipe_to_for_body_nested_compound-1f8c1a82dd20c996)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_for_body_nested_compound`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_for_body_nested_compound -- --include-ignored"
+exit = 0
+passed = 3
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634225
+output_digest = "sha256:3bf6c4eec03779a06ff0bfb15fb7066f19359d305f6af0ba70abedcaadbd7dfa"
+excerpt = """
+
+running 3 tests
+test control_benign_program_piped_to_for_body_with_nested_compound_is_allow ... ok
+test control_harmful_program_piped_to_handled_for_shapes_is_deny ... ok
+test harmful_program_piped_to_for_body_with_nested_compound_is_deny ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261114_pipe_to_for_body_nested_compound.rs (target/debug/deps/backlog_20261114_pipe_to_for_body_nested_compound-185c7b4874dfc184)
+"""
+
+[task.closure.red]
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

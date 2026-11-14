@@ -71,7 +71,10 @@ const ARG: &str = "==BL-ARG==\n";
 const END: &str = "\n==BL-END==\n";
 
 /// A stub `gh` that logs every argument individually and, for `issue create`,
-/// answers with a new issue URL the way the real thing does.
+/// answers with a new issue URL the way the real thing does; for `issue view
+/// --json state` (the remote-state read `sync --only both` makes since
+/// e787b168) it answers that the issue is OPEN, as the real thing would for an
+/// issue nobody closed on GitHub.
 /// `ok = false` makes every invocation fail AFTER logging it.
 fn stub_body(log: &Path, ok: bool) -> String {
     format!(
@@ -82,6 +85,7 @@ fn stub_body(log: &Path, ok: bool) -> String {
          \u{20} n=$(grep -c '^create$' {log})\n\
          \u{20} echo \"https://github.com/o/r/issues/$((500 + n))\"\n\
          fi\n\
+         if [ \"$1\" = issue ] && [ \"$2\" = view ]; then echo '{{\"state\":\"OPEN\"}}'; fi\n\
          exit {code}\n",
         inv = INV.escape_default(),
         arg = ARG.escape_default(),

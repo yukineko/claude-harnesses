@@ -2106,3 +2106,31 @@ exit 101: uki/src/.harness-worktrees/side-run-20261114-163341-69351/crates/blast
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.11s
      Running tests/backlog_20261114_python_c_append_backtick_fp.rs (target/debug/deps/backlog_20261114_python_c_append_backtick_fp-4b2a0245b29c3102)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_c_append_backtick_fp`"""
+
+[[task]]
+id = "b2d9cb6b"
+title = "condukt: suffixed-topic retry worktree (--topic <task>-r1) records identity of a task the run lacks; verified task's worktree cannot be removed/merged"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "worktree",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 run run-20261114-163341-69351 task e70b6a71. worktree create --run R --topic <task>-r1 records branch identity R/<task>-r1 (worktree.rs create_namespaced). Then worktree merge --task <task> => merge-task-mismatch, and worktree remove of the VERIFIED task's recorded worktree refuses: 'cannot determine whether the task that owns it is verified (branch identity names task <task>-r1 of run R, which that run does not have)' (teardown_gate.rs). RED: crates/condukt/tests/backlog_20261114_retry_suffixed_topic_worktree_unremovable.rs (commit bbffde1cb, side/run-20261114-163341-69351). Two readings: (a) binary: teardown gate should fall back to the task whose recorded worktree is this path, or create should not mint identity for a nonexistent task; (b) skill: SKILL.md retry step (L1038 'new per-task worktree') gives no naming rule; correct invocation keeps --topic <task>. Distinguish: if a documented invocation yields a fresh retry worktree with identity R/<task>, it is (b); if none exists, (a)."
+created_at = 1794647180
+updated_at = 1794647180
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261114_retry_suffixed_topic_worktree_unremovable -- --ignored verified_task_with_suffixed_topic_retry_worktree_can_be_removed"
+rev = "bbffde1cbf508b54ea9de97004e080e219cd7d1d"
+observed_at = 1794647180
+detail = """
+exit 101: 20261114-163341-69351/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.29s
+     Running tests/backlog_20261114_retry_suffixed_topic_worktree_unremovable.rs (target/debug/deps/backlog_20261114_retry_suffixed_topic_worktree_unremovable-302e92890b4d4139)
+error: test failed, to rerun pass `-p condukt --test backlog_20261114_retry_suffixed_topic_worktree_unremovable`"""

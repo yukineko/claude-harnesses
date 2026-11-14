@@ -15,7 +15,8 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
 止めるのは「明らかに破壊的で、取り消しが難しい」操作に限られる。
 
 - **Bash コマンド**: 再帰 `rm`（`rm -rf dir` など）、ワイルドカード `rm`（`rm *`,
-  `rm path/*`）、`git clean -fdx` / `-fd`、`git reset --hard`、作業ツリー破棄
+  `rm path/*`）、`git clean -fdx` / `-fd`、`git reset --hard`（例外: rev が文字どおり `HEAD` で、`git status --ignore-submodules=none` が clean と
+  確認でき、index に assume-unchanged / skip-worktree の entry が無い linked worktree checkout 内なら allow。probe 失敗は deny のまま）、作業ツリー破棄
   （`git checkout -- .`, `git checkout --force`）、上書きリダイレクト（単一の
   `>`）、ファイル切り詰め / 抹消（`truncate -s0`, `shred`）、ファイルシステム /
   デバイス書き込み（`mkfs.*`, `dd of=/dev/sda`）、再帰的なパーミッション / 所有者

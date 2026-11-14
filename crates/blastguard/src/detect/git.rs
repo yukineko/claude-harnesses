@@ -295,6 +295,91 @@ fn managed_worktree_git(ctx: &Ctx<'_>, rest: &[&str], idx: usize) -> bool {
     }
 }
 
+/// `git reset --hard HEAD` discards nothing when the checkout it runs in has
+/// no changes. True ONLY when: the line is one plain git command; the words
+/// after `reset` are exactly `--hard` and the literal `HEAD`; the only global
+/// option is at most one `-C <dir>`; the directory git runs in is placed and
+/// has a `.git` FILE (a linked worktree checkout, observed on disk);
+/// `git status --porcelain -z --untracked-files=all --ignore-submodules=none`
+/// there exits 0 with empty output; and `git ls-files -v -z` there exits 0
+/// with every index entry tagged `H` (no assume-unchanged / skip-worktree
+/// entry, whose local edits status would not show). Anything else (probe
+/// failure, timeout, non-zero exit, any status output: staged, unstaged,
+/// untracked or dirty submodule; any non-`H` tag) is false and the caller
+/// keeps its Deny.
+fn reset_hard_head_in_clean_linked_worktree(ctx: &Ctx<'_>, rest: &[&str], idx: usize) -> bool {
+    if ctx.git_eligible_rest.as_deref() != Some(rest.join(" ").as_str()) {
+        return false;
+    }
+    let mut ops: Vec<&str> = rest[idx + 1..].to_vec();
+    ops.sort_unstable();
+    if ops != ["--hard", "HEAD"] {
+        return false;
+    }
+    let globals = &rest[..idx];
+    let base = ctx.base_for("git");
+    let dir = match globals {
+        [] => match base {
+            Some(b) => b.to_string(),
+            None => return false,
+        },
+        ["-C", d] => match ctx.scope.lexical_absolute(d, base) {
+            Determination::Known(d) => d,
+            Determination::Undetermined(_) => return false,
+        },
+        _ => return false,
+    };
+    if !dir.starts_with('/') || dir.split('/').any(|c| c == "..") {
+        return false;
+    }
+    match std::fs::symlink_metadata(std::path::Path::new(&dir).join(".git")) {
+        Ok(m) if m.file_type().is_file() => {}
+        // Not a `.git` file, or the probe failed: not observed as a linked
+        // worktree checkout, so the Deny stays.
+        Ok(_) | Err(_) => return false,
+    }
+    // One bounded git probe in `dir`: Known(stdout) only on exit 0; spawn
+    // failure, timeout, signal or any other exit is Undetermined (the caller
+    // keeps its Deny).
+    let probe = |args: &[&str]| -> Determination<String> {
+        let mut cmd = std::process::Command::new("git");
+        harness_core::git_env::scrub(&mut cmd).arg("-C").arg(&dir);
+        cmd.args(["--no-optional-locks", "-c", "core.fsmonitor=false"]);
+        cmd.args(args);
+        match harness_core::boundary::run_with_timeout(
+            &mut cmd,
+            std::time::Duration::from_millis(3000),
+        ) {
+            Determination::Known(out) => out.stdout_allowing(&[0]),
+            Determination::Undetermined(why) => Determination::Undetermined(why),
+        }
+    };
+    // `--ignore-submodules=none` overrides `submodule.<name>.ignore` /
+    // `diff.ignoreSubmodules` config that would otherwise hide dirty
+    // submodule content from the status probe.
+    match probe(&[
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+    ]) {
+        Determination::Known(s) if s.is_empty() => {}
+        Determination::Known(_) | Determination::Undetermined(_) => return false,
+    }
+    // Index entries marked assume-unchanged (lowercase tag) or skip-worktree
+    // (`S`) can carry local edits that `git status` does not show. Every
+    // entry must carry the plain `H` tag; anything else, or an unparseable
+    // record, is not clean.
+    match probe(&["ls-files", "-v", "-z"]) {
+        Determination::Known(s) => s
+            .split('\0')
+            .filter(|r| !r.is_empty())
+            .all(|r| r.starts_with("H ")),
+        Determination::Undetermined(_) => false,
+    }
+}
+
 /// One pathspec of `git checkout [<tree-ish>] -- <pathspec>`: Allow only when
 /// git reports nothing at or below it that the overwrite would destroy; Deny
 /// when it reports uncommitted changes; Ask whenever that cannot be observed.
@@ -1193,7 +1278,15 @@ actually delete is undetermined."
         }
         "reset" => {
             if rest.contains(&"--hard") && !managed {
-                Decision::deny("git reset --hard discards working-tree changes")
+                if reset_hard_head_in_clean_linked_worktree(ctx, rest, idx) {
+                    Decision::Allow
+                } else {
+                    Decision::deny(
+                        "git reset --hard discards working-tree changes (allowed only for \
+`git reset --hard HEAD` run in a linked worktree checkout that a git status probe positively \
+reports clean)",
+                    )
+                }
             } else {
                 Decision::Allow
             }

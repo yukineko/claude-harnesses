@@ -140,7 +140,6 @@ fn verdict(out: &str) -> &'static str {
 }
 
 #[test]
-#[ignore = "RED: B1 — remove the ignore when fixed"]
 fn b1_reset_hard_in_clean_linked_worktree_is_not_denied() {
     let f = Fx::new("clean");
     assert_eq!(f.status().trim(), "", "fixture: worktree must be clean");

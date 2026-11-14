@@ -2563,6 +2563,10 @@ pub fn resolve_agent_tokens(agent_id: &str) -> Determination<Option<(u64, u64)>>
 /// auto-detection sees the project's manifest. The command is handed to `sh -c`
 /// so quoted args, pipes, and env vars in a configured `test_command` work as
 /// the user expects (`pytest -k "foo bar"`).
+///
+/// It is first judged by [`crate::testscope::judge`] (the hook's rules and
+/// rerun ledger, repo root as cwd): a deny refuses without running, an allow is
+/// recorded in the ledger. No ledger location (`$HOME` unset) is refused.
 pub fn run_tests(cfg: &Config, cwd: &Path, _rs: &RunState) -> Result<()> {
     let root = repo_root(cwd);
     let cmd_str = cfg
@@ -2572,7 +2576,13 @@ pub fn run_tests(cfg: &Config, cwd: &Path, _rs: &RunState) -> Result<()> {
     if cmd_str.trim().is_empty() {
         bail!("empty test command");
     }
-    if let Some(reason) = crate::testscope::full_suite_reason(&cmd_str) {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let Some(ledger) = crate::testscope::ledger_path(home.as_deref()) else {
+        bail!("refusing to run `{cmd_str}`: HOME is unset, so the rerun ledger has no location");
+    };
+    if let crate::testscope::Decision::Deny(reason) =
+        crate::testscope::judge(&cmd_str, &root, home.as_deref(), &ledger)
+    {
         bail!("refusing to run `{cmd_str}`: {reason}");
     }
     eprintln!("condukt: running tests in {}: {cmd_str}", root.display());

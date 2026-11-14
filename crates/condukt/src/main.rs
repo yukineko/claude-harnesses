@@ -93,8 +93,11 @@ enum Command {
     /// `run_posttooluse_guarded`); other non-broken outcomes print nothing.
     Editgate,
     /// PreToolUse(Bash) hook: deny a full-suite `cargo test`, a mid-run
-    /// main merge inside a condukt task worktree, and a same-tree rerun of a
-    /// test (see `testscope.rs`). Prints a `permissionDecision: deny` JSON or
+    /// main merge inside a condukt task worktree, a same-tree rerun of a
+    /// test (bare, via `tdd red|green --cmd`, or `state test`), and a test
+    /// target outside the owning task's scope inside its worktree; records
+    /// the per-session marker `state set --status running` requires (see
+    /// `testscope.rs`). Prints a `permissionDecision: deny` JSON or
     /// nothing; a panic exits 2 (fail-closed via `run_pretooluse_guarded`).
     Testscope,
     /// SubagentStop hook: when a child sub-agent terminates, advance the owning
@@ -1916,22 +1919,14 @@ fn editgate_block_reason(verdict: &serde_json::Value) -> String {
     }
 }
 
-/// PostToolUse edit-time compile gate. Reads a PostToolUse payload from stdin,
-/// and — for an Edit/Write/MultiEdit to a Rust file inside a live condukt
-/// worktree whose verdict `state::enforce_edit_gate` rejects (a failed
-/// `cargo check`, or one that could not run: cargo unspawnable, toolchain
-/// unresolvable) — prints one line of JSON
-/// `{"decision":"block","reason":<verdict reason, then diagnostics>}` (see
-/// [`editgate_block_reason`]) so the worker fixes it in the same turn. It also
-/// blocks, with a stated reason, when the current directory cannot be
-/// determined (e.g. deleted), or when the project's run state cannot be
-/// located, including when condukt's configuration cannot be loaded
-/// (config.toml unreadable or unparseable), and when stdin cannot be read (an
-/// I/O error, which is not the same as an empty payload). Out-of-scope paths
-/// (non-edit tool, no file, non-Rust file, out-of-worktree edit), a clean
-/// build, and empty/invalid stdin that was read successfully print nothing.
-/// Called under `harness_core::hook::run_posttooluse_guarded`: the printed block line, not exit
-/// status, is the verdict; a panic here prints a block naming the crash, never a silent exit 0.
+/// PreToolUse(Bash) test-scope gate (see `testscope.rs`). Writes the
+/// per-session marker `<ledger parent>/sessions/<session_id>` whenever the
+/// payload carries a session id (what `state set --status running` requires),
+/// then judges the command and prints a `permissionDecision: deny` JSON or
+/// nothing. An unreadable / unparseable payload, a Bash payload without a
+/// command, an undeterminable cwd and an unset `$HOME` (no ledger location)
+/// deny. Called under `harness_core::hook::run_pretooluse_guarded`: a panic
+/// exits 2 (fail-closed).
 fn run_testscope() {
     // An unreadable payload is undetermined: which command is about to run is
     // unknown, so deny (CLAUDE.md §3).
@@ -1985,6 +1980,19 @@ fn run_testscope() {
         deny("condukt testscope: HOME is unset, so the rerun ledger has no location".to_string());
         return;
     };
+    // Rule A: record that this hook is loaded in this session, so `condukt
+    // state set --status running` can refuse a session that never loaded it. A
+    // marker that cannot be written leaves the session unmarked, which is the
+    // restricted side (its `state set running` is refused); it is named on
+    // stderr, and this command is still judged below.
+    if let Some(sid) = v.get("session_id").and_then(|s| s.as_str()) {
+        if let Err(e) = testscope::write_session_marker(&ledger, sid) {
+            eprintln!(
+                "condukt testscope: could not write the session marker for '{sid}' ({e}); \
+                 `condukt state set --status running` will be refused in this session"
+            );
+        }
+    }
     if let testscope::Decision::Deny(reason) =
         testscope::judge(command, &cwd, home.as_deref(), &ledger)
     {
@@ -1992,6 +2000,22 @@ fn run_testscope() {
     }
 }
 
+/// PostToolUse edit-time compile gate. Reads a PostToolUse payload from stdin,
+/// and — for an Edit/Write/MultiEdit to a Rust file inside a live condukt
+/// worktree whose verdict `state::enforce_edit_gate` rejects (a failed
+/// `cargo check`, or one that could not run: cargo unspawnable, toolchain
+/// unresolvable) — prints one line of JSON
+/// `{"decision":"block","reason":<verdict reason, then diagnostics>}` (see
+/// [`editgate_block_reason`]) so the worker fixes it in the same turn. It also
+/// blocks, with a stated reason, when the current directory cannot be
+/// determined (e.g. deleted), or when the project's run state cannot be
+/// located, including when condukt's configuration cannot be loaded
+/// (config.toml unreadable or unparseable), and when stdin cannot be read (an
+/// I/O error, which is not the same as an empty payload). Out-of-scope paths
+/// (non-edit tool, no file, non-Rust file, out-of-worktree edit), a clean
+/// build, and empty/invalid stdin that was read successfully print nothing.
+/// Called under `harness_core::hook::run_posttooluse_guarded`: the printed block line, not exit
+/// status, is the verdict; a panic here prints a block naming the crash, never a silent exit 0.
 fn run_editgate() {
     // A stdin READ ERROR is not "no payload": which file was edited (and so
     // whether it is in scope) is unknown, so block, stated (user ruling
@@ -4414,6 +4438,16 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // but that is now distinguishable from a task whose touched_files
             // could not be READ, which is named on stderr instead of passing as
             // "nothing to guard" (see `task_files`).
+            // Testscope session guard (user ruling 2026-11-14): a task may only
+            // start in a session where the `condukt testscope` PreToolUse hook
+            // is actually loaded — otherwise its test-scope rules are prompt
+            // prose again. The hook leaves a per-session marker; no session id,
+            // no marker, or a marker whose existence cannot be told refuses the
+            // transition before anything is claimed or written.
+            if st == state::Status::Running {
+                ensure_testscope_session()?;
+            }
+
             if st == state::Status::Running {
                 match task_files(cfg, cwd, &run, &task).require() {
                     Required::Blocked(verdict) => {
@@ -5732,6 +5766,43 @@ fn session_id_from_env() -> Option<String> {
     std::env::var("CLAUDE_CODE_SESSION_ID")
         .ok()
         .filter(|s| !s.is_empty())
+}
+
+/// `Ok` only when `$CLAUDE_CODE_SESSION_ID` names a session whose `condukt
+/// testscope` hook left its marker (see `testscope::write_session_marker`).
+/// Every other shape — no session id, no ledger location, no marker, or a
+/// marker whose existence cannot be told — is an `Err` (CLAUDE.md §3).
+fn ensure_testscope_session() -> Result<()> {
+    const RESTART: &str = "the testscope hook is not loaded in this session \
+         (この session では testscope hook が読み込まれていない); restart the session \
+         (session を再起動すること) so the hook is active, then retry";
+    let Some(sid) = session_id_from_env() else {
+        bail!(
+            "refusing `state set --status running`: CLAUDE_CODE_SESSION_ID is unset, so \
+             this session's testscope hook cannot be confirmed: {RESTART}"
+        );
+    };
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let Some(ledger) = testscope::ledger_path(home.as_deref()) else {
+        bail!(
+            "refusing `state set --status running`: HOME is unset, so the testscope session \
+             marker has no location; {RESTART}"
+        );
+    };
+    match testscope::session_marker_present(&ledger, &sid) {
+        Ok(true) => Ok(()),
+        Ok(false) => bail!(
+            "refusing `state set --status running` for session '{sid}': no testscope session \
+             marker under {}; {RESTART}",
+            ledger
+                .parent()
+                .map(|p| p.join("sessions").display().to_string())
+                .unwrap_or_else(|| ledger.display().to_string())
+        ),
+        Err(e) => {
+            bail!("refusing `state set --status running` for session '{sid}': {e}; {RESTART}")
+        }
+    }
 }
 
 /// Is this status *finished* work, so the task's file claims must go back?

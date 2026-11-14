@@ -2251,6 +2251,8 @@ notes = "Observed 2026-11-14 (run-20261114-161340-68728, t3 worker + side-reds a
 created_at = 1794656868
 updated_at = 1794656868
 weight = 0.0
+issue_number = 1779
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1779"
 rev = 0
 
 [task.repro]

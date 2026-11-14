@@ -2045,3 +2045,32 @@ exit 101:  0 filtered out; finished in 0.46s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
      Running tests/egress_exec_closure.rs (target/debug/deps/egress_exec_closure-be7dc7ee5ca00e48)
 error: test failed, to rerun pass `-p blastguard --test egress_exec_closure`"""
+
+[[task]]
+id = "42741ea3"
+title = "blastguard fail-open: git apply/git am fed a quoted heredoc patch that creates run.sh, then 'sh run.sh', is Allow (system harm)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 by the independent verifier of condukt run run-20261114-163341-69351 task e70b6a71 at commit 1420ba8ee and again on main 5decb21e2 (pinned as #[ignore]d e_prime test). Command: git apply <<'EOF' / <diff creating run.sh with +rm -rf ~> / EOF / sh run.sh (and the same with git am) is Allow in main and subagent. here_document_consumer_is_data rejects non-commit git, so the e70b6a71 diff did not touch this path; the verifier reports it pre-existing (Allow at 1420ba8ee; base eeaa73843 not directly measured because the testscope rerun hook refused). Expected: Deny (system harm through a file the heredoc writes via git). Distinguish: if base eeaa73843 is also Allow it is pre-existing (a); if not, it regressed (b) — measure with the e_prime test at both revs."
+created_at = 1794646180
+updated_at = 1794646180
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test verify_e70b6a71_commit_heredoc_later_cmds -- --ignored e_prime_git_apply_or_am_patch_then_running_the_written_file_is_not_allowed"
+rev = "5decb21e2f604f4eb450256c59378909525b19c9"
+observed_at = 1794646180
+detail = """
+exit 101: /Users/yuki/src/.harness-worktrees/side-run-20261114-163341-69351/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.25s
+     Running tests/verify_e70b6a71_commit_heredoc_later_cmds.rs (target/debug/deps/verify_e70b6a71_commit_heredoc_later_cmds-d7445c9c13b531bf)
+error: test failed, to rerun pass `-p blastguard --test verify_e70b6a71_commit_heredoc_later_cmds`"""

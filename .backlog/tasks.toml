@@ -2074,3 +2074,32 @@ exit 101: 20261114-163341-69351/crates/condukt)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.29s
      Running tests/backlog_20261114_retry_suffixed_topic_worktree_unremovable.rs (target/debug/deps/backlog_20261114_retry_suffixed_topic_worktree_unremovable-302e92890b4d4139)
 error: test failed, to rerun pass `-p condukt --test backlog_20261114_retry_suffixed_topic_worktree_unremovable`"""
+
+[[task]]
+id = "5ef2d51f"
+title = "blastguard fail-open: export F=/etc/hosts; sed -i ... $F is Ask in main (system harm must be Deny)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 with blastguard 0.2.588 by an independent RED author. 'F=/etc/hosts; sed -i ... $F' is deny/deny, but the 'export F=' form is ask in main with reason 'path depends on an expansion blastguard cannot resolve'. System harm must be Deny through any form. RED 8bd245b23."
+created_at = 1794650187
+updated_at = 1794650187
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_static_literal_var_resolution red_export_etc_hosts_is_system_harm_deny -- --include-ignored"
+rev = "0eb2e03f923ed040f586881d5041ca0869ef7b93"
+observed_at = 1794650187
+detail = """
+exit 101: /Users/yuki/src/.harness-worktrees/session-7e01fcf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.36s
+     Running tests/backlog_20261114_static_literal_var_resolution.rs (target/debug/deps/backlog_20261114_static_literal_var_resolution-da48bb690206911d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_static_literal_var_resolution`"""

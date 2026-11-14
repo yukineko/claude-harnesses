@@ -1912,6 +1912,8 @@ notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by
 created_at = 1794626818
 updated_at = 1794626818
 weight = 0.0
+issue_number = 1755
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1755"
 rev = 0
 
 [task.repro]

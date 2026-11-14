@@ -1980,3 +1980,31 @@ exit 101: v0.2.588 (/Users/yuki/.condukt/worktrees/run-20261114-125811-45041-int
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
      Running tests/backlog_20261114_exec_fd_var_dup_reader.rs (target/debug/deps/backlog_20261114_exec_fd_var_dup_reader-466cc94938df81ce)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_exec_fd_var_dup_reader`"""
+
+[[task]]
+id = "0065d086"
+title = "blastguard fail-open: bash /dev/fd/3 (program operand on an fd nothing on the line opens) is Allow while bash <&3 is Ask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. `bash /dev/fd/3` => allow in main (control `bash <&3` => ask in main). Readings: (a) defect - /dev/fd/N as a program operand is not treated as an undeterminable program source; (b) intended - inherited fds are assumed benign. Tell apart: the two spellings read the same fd, so their verdicts should match."
+created_at = 1794634309
+updated_at = 1794634309
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_inherited_dev_fd_program_operand -- --include-ignored"
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634309
+detail = """
+exit 101: /worktrees/run-20261114-125811-45041-integ/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261114_inherited_dev_fd_program_operand.rs (target/debug/deps/backlog_20261114_inherited_dev_fd_program_operand-f942a51f6a25c4c9)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_inherited_dev_fd_program_operand`"""

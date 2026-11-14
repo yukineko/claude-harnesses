@@ -2040,3 +2040,31 @@ exit 101: rees/run-20261114-125811-45041-integ/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
      Running tests/backlog_20261114_exec_stdin_herestring_literal_harm.rs (target/debug/deps/backlog_20261114_exec_stdin_herestring_literal_harm-a50a6e1d71704f6c)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_exec_stdin_herestring_literal_harm`"""
+
+[[task]]
+id = "bf90fa9d"
+title = "blastguard FP: printf writing a .json data file and python3 script.py reading it as an argument is denied in subagent mode"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. `printf '%s\n' '[{"cmd":"echo hi"}]' > cases5.json && python3 probe.py cases5.json` => deny (subagent) with reason that the written file may be run with Python. The json is a data argument to a script, not the program. Readings: (a) FP - argument-position file treated as program; (b) intended conservative pairing of printf writes with later interpreter runs. Tell apart: python3 runs probe.py, cases5.json is argv[1].'''
+created_at = 1794634347
+updated_at = 1794634347
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_printf_json_then_python_script_arg_fp -- --include-ignored"
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634347
+detail = """
+exit 101: 20261114-125811-45041-integ/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running tests/backlog_20261114_printf_json_then_python_script_arg_fp.rs (target/debug/deps/backlog_20261114_printf_json_then_python_script_arg_fp-2333295ec2028b8d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_printf_json_then_python_script_arg_fp`"""

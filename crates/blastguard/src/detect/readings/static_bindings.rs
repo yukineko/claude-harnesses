@@ -305,9 +305,16 @@ fn update_env(
 }
 
 /// Replace each plain reference (`$NAME`, `${NAME}`) outside single quotes for
-/// which `lookup` answers a value. A double-quoted word that is exactly one
-/// such reference (`"$T"`) loses its quotes: the value has no character the
-/// quotes would protect.
+/// which `lookup` answers a value.
+///
+/// A double-quoted span that holds at least one reference and that, once every
+/// reference in it is replaced, is made only of substitutable characters
+/// (`"$T"`, `"$P/fstab"`) loses its quotes: nothing left in it is a character
+/// the quotes would protect, so the unquoted text is the same word, and the
+/// rules then see exactly the literal spelling (`> "$P/fstab"` with `P=/etc`
+/// is judged, and reported, as `> /etc/fstab`). A span that keeps anything
+/// else — an unresolved reference, a glob character, a space — keeps its
+/// quotes.
 fn substitute_references(text: &str, lookup: &dyn Fn(&str) -> Option<String>) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
@@ -331,14 +338,10 @@ fn substitute_references(text: &str, lookup: &dyn Fn(&str) -> Option<String>) ->
         }
         if c == '"' && !in_s {
             if !in_d {
-                if let Some((name, len)) = reference_at(&chars, i + 1) {
-                    if chars.get(i + 1 + len) == Some(&'"') {
-                        if let Some(v) = lookup(&name) {
-                            out.push_str(&v);
-                            i += len + 2;
-                            continue;
-                        }
-                    }
+                if let Some((unquoted, close)) = resolved_double_quoted_span(&chars, i, lookup) {
+                    out.push_str(&unquoted);
+                    i = close + 1;
+                    continue;
                 }
             }
             in_d = !in_d;
@@ -359,6 +362,42 @@ fn substitute_references(text: &str, lookup: &dyn Fn(&str) -> Option<String>) ->
         i += 1;
     }
     out
+}
+
+/// For the double-quoted span opening at `chars[open]`: its text with every
+/// reference resolved and the quotes dropped, plus the index of the closing
+/// quote — or `None` when the span holds no reference, holds a backslash,
+/// backtick or single quote, does not close, or still holds anything outside
+/// the substitutable set after resolution.
+fn resolved_double_quoted_span(
+    chars: &[char],
+    open: usize,
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<(String, usize)> {
+    let close = (open + 1..chars.len()).find(|&k| chars.get(k) == Some(&'"'))?;
+    let content = chars.get(open + 1..close)?;
+    if !content.contains(&'$') || content.iter().any(|c| matches!(c, '\\' | '`' | '\'')) {
+        return None;
+    }
+    let mut out = String::new();
+    let mut k = 0;
+    while k < content.len() {
+        if let Some((name, len)) = reference_at(content, k) {
+            out.push_str(&lookup(&name)?);
+            k += len;
+            continue;
+        }
+        let c = *content.get(k)?;
+        if !is_substitutable_char(c) {
+            return None;
+        }
+        out.push(c);
+        k += 1;
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some((out, close))
 }
 
 /// The name and char length of a plain reference starting at `chars[at]`

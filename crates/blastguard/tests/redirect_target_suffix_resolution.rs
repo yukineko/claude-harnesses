@@ -712,6 +712,13 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
 /// `NothingToDestroy`). The single-match row above shows bash truncating a real
 /// file for that same text. Per CLAUDE.md §3 a target the text does not
 /// determine is not a permissive target.
+///
+/// SUPERSEDED (user ruling 2026-11-15, 「`P=/abs; echo hi > $P/*.log` のように、
+/// 解決できる変数の後ろに glob を付けた形は、literal と同じに判定する。」): the
+/// paragraphs above record the earlier policy. The assertion below now pins
+/// only that the variable form is judged exactly like the literal spelling; the
+/// glob hazard measured above is the LITERAL form's verdict to answer, not the
+/// resolver's.
 #[test]
 fn unresolvable_glob_suffix_is_not_resolved_to_a_literal_path() {
     // Pin the trap first, so the test says WHY it is restrictive: if this ever
@@ -722,24 +729,39 @@ fn unresolvable_glob_suffix_is_not_resolved_to_a_literal_path() {
         "fixture precondition: a literal `*.log` under the project root is Allowed, \
          which is what makes resolving a glob suffix the permissive error"
     );
-    for cmd in [
-        "P=/home/yuki/proj; echo hi > $P/*.log",
-        "P=/home/yuki/proj; echo hi > $P/?.log",
-        "P=/home/yuki/proj; echo hi > $P/[ab].log",
-        "P=/home/yuki/proj; echo hi > ${P}/*.log",
-        "P=/home/yuki/proj; echo hi > \"$P\"/*.log",
+    // User ruling 2026-11-15: 「`P=/abs; echo hi > $P/*.log` のように、解決できる変数の
+    // 後ろに glob を付けた形は、literal と同じに判定する。」 The earlier assertion
+    // here (the variable form must block) pinned the policy that ruling
+    // replaced; the expectation is now "the same verdict as the same shape
+    // written literally". The precondition above stays: it documents what that
+    // literal verdict is.
+    for (cmd, literal) in [
+        (
+            "P=/home/yuki/proj; echo hi > $P/*.log",
+            "echo hi > /home/yuki/proj/*.log",
+        ),
+        (
+            "P=/home/yuki/proj; echo hi > $P/?.log",
+            "echo hi > /home/yuki/proj/?.log",
+        ),
+        (
+            "P=/home/yuki/proj; echo hi > $P/[ab].log",
+            "echo hi > /home/yuki/proj/[ab].log",
+        ),
+        (
+            "P=/home/yuki/proj; echo hi > ${P}/*.log",
+            "echo hi > /home/yuki/proj/*.log",
+        ),
+        (
+            "P=/home/yuki/proj; echo hi > \"$P\"/*.log",
+            "echo hi > /home/yuki/proj/*.log",
+        ),
     ] {
-        let d = scoped(cmd);
-        assert!(
-            d.is_blocking(),
-            "`{cmd}` names whichever file the filesystem happens to match at run \
-             time (measured: an existing `one.log` was truncated), so it must not \
-             be resolved to a literal path; got {d:?}"
-        );
-        assert!(
-            d.clone().hardened().is_deny(),
-            "`{cmd}` must harden to Deny when no human is available; got {:?}",
-            d.clone().hardened()
+        assert_eq!(
+            scoped(cmd),
+            scoped(literal),
+            "`{cmd}` must be judged exactly like its literal spelling `{literal}` \
+             (user ruling 2026-11-15)"
         );
     }
 }

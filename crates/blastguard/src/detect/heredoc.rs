@@ -706,14 +706,23 @@ pub(super) fn python_file_here_document(cmd: &str) -> Option<HereDocumentParts> 
 /// whose target carries an expansion): that text is kept (its `'`, `"` and `\`
 /// blanked, so it cannot open a shell quote over later lines) and its `>` is
 /// judged as before (user ruling R2, 2026-10-14: an undeterminable `>` in
-/// program text is an Ask, never Allow). The literals' quote delimiters are
+/// program text is an Ask, never Allow). One narrowing (backlog b2330a21): a
+/// text whose `>` comes with a backtick but no `$` is blanked too when the
+/// lexer shows the whole program only prints to its stdout
+/// ([`super::interpreter::python_program_only_prints`]: no import, `open`,
+/// `file=`, runner or f-string), which this shape leaves unredirected — no
+/// string of it can reach a shell or a file. A `$` text is always kept. The
+/// literals' quote delimiters are
 /// blanked too. Code outside
 /// literals is kept as is. A body that does not tokenise answers `None`, and
 /// the view keeps the body. Only the line-level redirect scans read this view;
 /// every other rule (the interpreter scans included) still reads the full body.
 pub(super) fn python_stdin_redirect_view(cmd: &str) -> Option<String> {
     let parts = python_stdin_here_document(cmd)?;
-    let keep = |text: &str| text.contains('>') && text.contains(['$', '`']);
+    let prints_only = super::interpreter::python_program_only_prints(&parts.body);
+    let keep = |text: &str| {
+        text.contains('>') && (text.contains('$') || (text.contains('`') && !prints_only))
+    };
     let body = super::interpreter::python_redirect_view(&parts.body, keep)?;
     let (head, tail) = parts.without_body.split_at(parts.head_len);
     Some(format!("{head}{body}{tail}"))

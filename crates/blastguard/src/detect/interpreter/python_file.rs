@@ -149,7 +149,10 @@ pub(in crate::detect) struct PythonStdinReading {
     /// True ONLY when the parser shows no string of the program can reach a
     /// shell or a process: the body holds no [`super::SHELL_STRING_EXEC_MARKERS`]
     /// entry or dynamic-execution marker anywhere (strings included), and
-    /// passes [`python_strings_never_reach_a_shell`]. The contents of its
+    /// passes [`python_strings_never_reach_a_shell`] — or the lexer shows it
+    /// only prints to its stdout ([`python_program_only_prints`]), when a
+    /// marker such as a bare backtick inside a literal is that literal's text,
+    /// not a call (backlog b2330a21). The contents of its
     /// string literals are then data, not program text, so the caller's
     /// program-text scan (`interpreter_code_verdict`) does not descend into
     /// them as code (case G: a printed `"shutil.copy2('a','/etc/hosts')"`
@@ -180,9 +183,10 @@ pub(in crate::detect) fn python_stdin_body_reading(
     );
     Some(PythonStdinReading {
         verdict,
-        strings_are_data: !super::runs_shell_strings(body)
+        strings_are_data: (!super::runs_shell_strings(body)
             && !super::has_dynamic_code_execution(body)
-            && python_strings_never_reach_a_shell(body),
+            && python_strings_never_reach_a_shell(body))
+            || python_program_only_prints(body),
     })
 }
 
@@ -403,6 +407,176 @@ pub(super) fn python_strings_never_reach_a_shell(program: &str) -> bool {
         return false;
     }
     sem::references_runner(&sem::rewrite(&code, &names)).is_none()
+}
+
+/// The only names a [`python_program_only_prints`] program may use: keywords
+/// that only steer control flow or build values, builtins that only compute a
+/// value, `print` and its `sep` / `end` / `flush` keywords. Deliberately absent: `open`, `input`, `exec`, `eval`, `compile`,
+/// `getattr`, `vars`, `globals`, `type`, `help`, `breakpoint`, `__import__`,
+/// `import` / `from` / `def` / `class` / `with` / `try` / `lambda`, and `file`
+/// (`print(…, file=f)` writes elsewhere). A closed list: any other name keeps
+/// the program out of that reading.
+const PRINT_ONLY_NAMES: &[&str] = &[
+    "if",
+    "elif",
+    "else",
+    "for",
+    "in",
+    "while",
+    "not",
+    "and",
+    "or",
+    "is",
+    "None",
+    "True",
+    "False",
+    "pass",
+    "break",
+    "continue",
+    "print",
+    "sep",
+    "end",
+    "flush",
+    "len",
+    "str",
+    "int",
+    "float",
+    "bool",
+    "list",
+    "dict",
+    "tuple",
+    "set",
+    "frozenset",
+    "range",
+    "enumerate",
+    "zip",
+    "sorted",
+    "reversed",
+    "min",
+    "max",
+    "sum",
+    "abs",
+    "repr",
+    "round",
+    "any",
+    "all",
+    "chr",
+    "ord",
+    "hex",
+    "bin",
+    "oct",
+    "divmod",
+];
+
+/// Attribute names a [`python_program_only_prints`] program may read: methods
+/// of `str` / `bytes` / `list` / `dict`, none of which does I/O. A closed list:
+/// `.write`, `.gi_frame`, `.f_globals` and every other attribute keep the
+/// program out of that reading (an attribute of a generator, frame or
+/// exception object can lead back to `open`).
+const PRINT_ONLY_ATTRIBUTES: &[&str] = &[
+    "join",
+    "split",
+    "rsplit",
+    "strip",
+    "lstrip",
+    "rstrip",
+    "upper",
+    "lower",
+    "replace",
+    "format",
+    "startswith",
+    "endswith",
+    "splitlines",
+    "count",
+    "find",
+    "rfind",
+    "index",
+    "rindex",
+    "partition",
+    "rpartition",
+    "center",
+    "ljust",
+    "rjust",
+    "zfill",
+    "title",
+    "capitalize",
+    "casefold",
+    "swapcase",
+    "isdigit",
+    "isalpha",
+    "isalnum",
+    "isspace",
+    "isupper",
+    "islower",
+    "removeprefix",
+    "removesuffix",
+    "encode",
+    "decode",
+    "hex",
+    "append",
+    "extend",
+    "insert",
+    "pop",
+    "sort",
+    "reverse",
+    "copy",
+    "remove",
+    "clear",
+    "items",
+    "keys",
+    "values",
+    "get",
+    "setdefault",
+    "update",
+];
+
+/// True ONLY when the Python `program` provably has no effect but writing
+/// text to its own stdout, read with the Python lexer ([`sem::lex`]), so no
+/// string of it can reach a shell, a process or a file (backlog b2330a21: a
+/// `print("x >> \`y\`")` body of `python3 - <<'EOF'` is not a redirect).
+/// Every condition is positive, an allowlist:
+///   * the program tokenises ([`code_view`]) and holds no f-string (its
+///     replacement fields are code the lexer does not split into names);
+///   * every name (keyword arguments included) is on [`PRINT_ONLY_NAMES`] or a
+///     number, and every attribute is on [`PRINT_ONLY_ATTRIBUTES`]; no name or
+///     attribute holds `__`. A name the program binds itself is NOT admitted:
+///     a binding that does not run (`if False:` / `open = 1`) leaves the
+///     builtin of that name in place, and Python folds a non-ASCII name to
+///     ASCII (NFKC), so only the listed ASCII spellings pass. So there is no
+///     import, no `open`, no `file=` and no runner, and every name only ever
+///     holds a value built from those;
+///   * every punctuation character is an ordinary operator or bracket (no
+///     `@`, `` ` ``, `$`, `\`, `?`).
+///
+/// It says nothing about where that stdout goes: the caller must know the
+/// reader's stdout is not redirected, piped or captured
+/// ([`super::super::heredoc::python_stdin_here_document`]'s shape).
+pub(in crate::detect) fn python_program_only_prints(program: &str) -> bool {
+    let program = &*python_newlines(program);
+    if code_view(program).is_none() {
+        return false;
+    }
+    let toks = sem::lex(program);
+    let number = |w: &str| w.chars().next().is_some_and(|c| c.is_ascii_digit());
+    toks.iter().enumerate().all(|(k, t)| match t {
+        sem::Tok::Str { fstring, .. } => !fstring,
+        sem::Tok::Nl => true,
+        sem::Tok::Punct(c) => "()[]{},:.=+-*/%<>!&|^~".contains(*c),
+        sem::Tok::Name { text, .. } => {
+            if text.contains("__") {
+                return false;
+            }
+            let mut parts = text.split('.');
+            let head = parts.next().unwrap_or("");
+            let after_dot = k > 0 && toks[k - 1] == sem::Tok::Punct('.');
+            let head_ok = if after_dot {
+                PRINT_ONLY_ATTRIBUTES.contains(&head)
+            } else {
+                number(head) || PRINT_ONLY_NAMES.contains(&head)
+            };
+            head_ok && parts.all(|p| number(p) || PRINT_ONLY_ATTRIBUTES.contains(&p))
+        }
+    })
 }
 
 /// True when `program` tokenises as Python ([`code_view`] is `Some`): every

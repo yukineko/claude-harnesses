@@ -1926,3 +1926,31 @@ exit 101: ession-7e01fcf0/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
      Running tests/backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp.rs (target/debug/deps/backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp-8f521eb05a2af65d)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp`"""
+
+[[task]]
+id = "9d347af5"
+title = "quoted heredoc body line resembling git commit -m with backtick is judged as a command when the heredoc is not the first statement (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b)"
+created_at = 1794626839
+updated_at = 1794626839
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626839
+detail = """
+exit 101: ofile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp.rs (target/debug/deps/backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp-99b7743c0d81c17f)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp`"""

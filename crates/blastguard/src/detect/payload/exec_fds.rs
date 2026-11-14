@@ -623,13 +623,73 @@ fn probe_synthetics(texts: &[HereText], stages: &[&Stage], default_sh: bool) -> 
     out
 }
 
-/// Why a stdin dup `<&TARGET` cannot be followed when TARGET is spelled with an
-/// expansion (`<&$fd`): which fd stdin is a copy of is not known. `None` for
-/// any other target.
+/// Why a stdin dup `<&TARGET` cannot be followed when the shell word TARGET
+/// (as written, quotes intact) is not a literal: which fd stdin is a copy of
+/// is not known. The word is decoded with the shell's quoting rules
+/// ([`decode_literal_word`]), so only a `$` or backquote the shell EXPANDS
+/// counts: unquoted (`<&$fd`, `` <&`cmd` ``) or inside double quotes
+/// (`<&"$fd"`). A single-quoted or backslash-escaped one (`<&'$fd'`,
+/// `<&\$fd`) is the literal text `$fd`, which is no fd: bash rejects the
+/// redirection and nothing is read, so that is `None`. A word that cannot be
+/// decoded (an unclosed quote, ANSI-C `$'…'` / locale `$"…"` quoting, a
+/// trailing lone backslash) is undetermined and gets a reason too: it resolves
+/// to the restrictive side, never to `None`. `None` for any literal target.
 pub(super) fn dynamic_dup_reason(target: &str) -> Option<String> {
-    (target.contains('$') || target.contains('`')).then(|| {
-        format!("its stdin is duplicated from `{target}`, an fd spelled with an expansion")
-    })
+    decode_literal_word(target)
+        .err()
+        .map(|why| format!("its stdin is duplicated from `{target}`, an fd spelled with {why}"))
+}
+
+/// The literal text the shell word `word` stands for after quote removal, or
+/// `Err(why)` when the text does not determine it: an expansion the shell
+/// performs (`$…` or a backquote, unquoted or inside double quotes), ANSI-C
+/// `$'…'` or locale `$"…"` quoting (not modelled here), an unclosed quote, or
+/// a trailing lone backslash. Single quotes keep everything literal; outside
+/// quotes a backslash makes the next character literal; inside double quotes
+/// it does so only before `$`, a backquote, `"`, `\\` or a newline.
+fn decode_literal_word(word: &str) -> Result<String, &'static str> {
+    const EXPANSION: &str = "an expansion";
+    let mut out = String::new();
+    let mut chars = word.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => loop {
+                match chars.next() {
+                    Some('\'') => break,
+                    Some(d) => out.push(d),
+                    None => return Err("an unclosed quote"),
+                }
+            },
+            '"' => loop {
+                match chars.next() {
+                    Some('"') => break,
+                    Some('\\') => match chars.next() {
+                        Some('\n') => {}
+                        Some(e @ ('$' | '`' | '"' | '\\')) => out.push(e),
+                        Some(e) => {
+                            out.push('\\');
+                            out.push(e);
+                        }
+                        None => return Err("an unclosed quote"),
+                    },
+                    Some('$' | '`') => return Err(EXPANSION),
+                    Some(d) => out.push(d),
+                    None => return Err("an unclosed quote"),
+                }
+            },
+            '\\' => match chars.next() {
+                Some('\n') => {}
+                Some(d) => out.push(d),
+                None => return Err("a trailing backslash"),
+            },
+            '$' if matches!(chars.peek(), Some('\'' | '"')) => {
+                return Err("ANSI-C or locale quoting");
+            }
+            '$' | '`' => return Err(EXPANSION),
+            c => out.push(c),
+        }
+    }
+    Ok(out)
 }
 
 /// A dup or fd-path mention whose fd is spelled with an expansion

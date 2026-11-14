@@ -88,7 +88,10 @@ fn check_allow(cmd: &str, tag: &str) {
         m, "allow",
         "main must allow quoted target; cmd={cmd:?} got={m} reason={mr}"
     );
-    assert_eq!(s, "allow", "subagent must allow quoted target; cmd={cmd:?} reason={sr}");
+    assert_eq!(
+        s, "allow",
+        "subagent must allow quoted target; cmd={cmd:?} reason={sr}"
+    );
 }
 
 fn check_not_allow(cmd: &str, tag: &str) {
@@ -99,17 +102,18 @@ fn check_not_allow(cmd: &str, tag: &str) {
         m != "allow",
         "main must not allow unquoted target; cmd={cmd:?} got={m} reason={mr}"
     );
-    assert_eq!(s, "deny", "subagent must deny unquoted target; cmd={cmd:?} reason={sr}");
+    assert_eq!(
+        s, "deny",
+        "subagent must deny unquoted target; cmd={cmd:?} reason={sr}"
+    );
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 quoted $ in dup target treated as expansion — remove the ignore when fixed"]
 fn bash_dup_single_quoted_dollar_fd_should_allow() {
     check_allow("bash <&'$fd'", "single-quoted");
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 quoted $ in dup target treated as expansion — remove the ignore when fixed"]
 fn bash_dup_backslash_escaped_dollar_fd_should_allow() {
     check_allow("bash <&\\$fd", "backslash-escaped");
 }

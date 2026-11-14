@@ -1837,3 +1837,32 @@ exit 101: arness-worktrees/session-7e01fcf0/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
      Running tests/backlog_20261114_quoted_heredoc_substitution_text_fp.rs (target/debug/deps/backlog_20261114_quoted_heredoc_substitution_text_fp-6bbbfefd6bbb24e2)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_quoted_heredoc_substitution_text_fp`"""
+
+[[task]]
+id = "c9da0437"
+title = "python3 - heredoc: backtick span with / in an unrelated string literal is read as the open(...,'w') target (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b)"
+created_at = 1794626768
+updated_at = 1794626768
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_heredoc_backtick_string_write_target_fp -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626768
+detail = """
+exit 101: /crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running tests/backlog_20261114_python_heredoc_backtick_string_write_target_fp.rs (target/debug/deps/backlog_20261114_python_heredoc_backtick_string_write_target_fp-f9925a4af716991a)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_heredoc_backtick_string_write_target_fp`"""

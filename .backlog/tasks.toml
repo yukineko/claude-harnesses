@@ -1950,3 +1950,31 @@ exit 101: ukt/worktrees/run-20261114-125811-45041-integ/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
      Running tests/backlog_20261114_sed_inplace_literal_var_path_fp.rs (target/debug/deps/backlog_20261114_sed_inplace_literal_var_path_fp-91907d4df13df58b)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_sed_inplace_literal_var_path_fp`"""
+
+[[task]]
+id = "cc8eed3f"
+title = "blastguard fail-open: bash <&$fd (stdin dup from an expansion-spelled fd) is Allow in main and subagent"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. plain `bash <&$fd` => allow/allow (and before t1's fix also `fd=3; exec 3<<< 'chmod 777 /etc/hosts'; bash <&$fd`). The fd source is undeterminable, so it must be Ask in main / Deny in subagent. Readings: (a) defect - an expansion-spelled stdin dup is not modelled and falls to allow; (b) intended - an fd nothing on the line opens is treated as inherited and harmless. Tell apart: compare with `bash <&3` (Ask in main) - the two should not differ."
+created_at = 1794634290
+updated_at = 1794634290
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_exec_fd_var_dup_reader -- --include-ignored"
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634290
+detail = """
+exit 101: v0.2.588 (/Users/yuki/.condukt/worktrees/run-20261114-125811-45041-integ/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261114_exec_fd_var_dup_reader.rs (target/debug/deps/backlog_20261114_exec_fd_var_dup_reader-466cc94938df81ce)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_exec_fd_var_dup_reader`"""

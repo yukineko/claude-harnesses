@@ -1920,3 +1920,31 @@ exit 101: ki/src/.harness-worktrees/session-b3435a5e/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.66s
      Running tests/backlog_20261114_perl_single_quoted_dollar_dot_fp.rs (target/debug/deps/backlog_20261114_perl_single_quoted_dollar_dot_fp-5b415bce532c3ab8)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_perl_single_quoted_dollar_dot_fp`"""
+
+[[task]]
+id = "574a751c"
+title = "blastguard FP: sed -i on a path built from a variable literally assigned earlier in the same command is denied in subagent mode"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. S=<wt>; sed -i '' 's/a/b/' $S/full.py => deny (subagent): "`sed` rewrites in place `$S/full.py`, whose path depends on an expansion blastguard cannot resolve". Control with the literal path is allow. Readings: (a) FP - S is a literal assigned in an earlier statement of the same line and vars.rs resolve_expanded_command_word can resolve it for other verbs; (b) intended - sed -i operand resolution deliberately does not consult same-line assignments. Tell apart: check whether the sed in-place target path goes through the same variable resolution as rm operands."""
+created_at = 1794634270
+updated_at = 1794634270
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_sed_inplace_literal_var_path_fp -- --include-ignored"
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634270
+detail = """
+exit 101: ukt/worktrees/run-20261114-125811-45041-integ/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261114_sed_inplace_literal_var_path_fp.rs (target/debug/deps/backlog_20261114_sed_inplace_literal_var_path_fp-91907d4df13df58b)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_sed_inplace_literal_var_path_fp`"""

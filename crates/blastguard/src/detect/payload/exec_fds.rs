@@ -443,6 +443,148 @@ struct FdRef {
     span: usize,
 }
 
+/// What a reader's program operand names when it is an fd path, read with
+/// the shell's quoting rules ([`decode_literal_word`]): `Ok(N)` for the
+/// literal `/dev/fd/N`, `/proc/self/fd/N` (`/dev/stdin` is `Ok(0)`), so
+/// `bash /dev/fd/3` reads its program from fd 3 exactly as `bash <&3` does.
+/// `Err(why)` for a word that names one of those fd directories but whose fd
+/// the text does not determine (`/dev/fd/$fd`, an undecodable quote): the fd
+/// is unknown, as with `<&$fd`. `None` for any other word.
+pub(super) fn program_operand_fd(word: &str) -> Option<Result<u32, String>> {
+    match decode_literal_word(word) {
+        Ok(lit) if lit == "/dev/stdin" => Some(Ok(0)),
+        Ok(lit) => fd_path(&lit).map(Ok),
+        Err(why) => ["/dev/fd/", "/proc/self/fd/", "/dev/stdin"]
+            .iter()
+            .any(|p| word.contains(p))
+            .then(|| {
+                Err(format!(
+                    "its program operand `{word}` names an fd spelled with {why}"
+                ))
+            }),
+    }
+}
+
+/// What reading fd `n` (which the reading stage does not open itself; `what`
+/// names how it is read, for the reason) gives a reader whose program it is,
+/// from the fds `exec` opened on the line (`exec_fds`): the bodies of process
+/// substitutions are pushed to `bodies`; an fd above 2 that nothing on the
+/// line opens (the inherited fd), a here-text fd [`cross_statement_fd_verdict`]
+/// did not resolve (not in `resolved`) and an `exec` dup of an fd above 2
+/// ([`ExecFd::Unreadable`]) each push a reason to `unreadable` (an Ask). A
+/// file adds nothing (read as `READER < f` is).
+pub(super) fn exec_fd_reads(
+    exec_fds: &[(u32, ExecFd)],
+    resolved: &[u32],
+    n: u32,
+    what: &str,
+    bodies: &mut Vec<String>,
+    unreadable: &mut Vec<String>,
+) {
+    let opened: Vec<&ExecFd> = exec_fds
+        .iter()
+        .filter(|(f, _)| *f == n)
+        .map(|(_, e)| e)
+        .collect();
+    if opened.is_empty() && n > 2 {
+        unreadable.push(format!("{what}, which nothing on this line opens"));
+    }
+    for e in opened {
+        match e {
+            ExecFd::Procsub(body) => bodies.push(body.clone()),
+            ExecFd::File => {}
+            // Judged by `cross_statement_fd_verdict`, which read every
+            // mention of this fd on the line.
+            ExecFd::HereText if resolved.contains(&n) => {}
+            ExecFd::HereText | ExecFd::Unreadable => unreadable.push(format!(
+                "{what}, which `exec` opens on text blastguard does not read (a here-document, a \
+here-string or another unresolved fd)"
+            )),
+        }
+    }
+}
+
+/// The fds one reader stage opens itself: each process substitution with its
+/// text, and every other fd with whether it is a readable file (`false`: a
+/// here-document / here-string).
+pub(super) type StageFds<'a> = (&'a [(u32, &'a str)], &'a [(u32, bool)]);
+
+/// What the fd-path program operands of one reader stage read
+/// ([`program_operand_fds`]).
+#[derive(Default)]
+pub(super) struct OperandFdReads {
+    /// The script operand is the reader's own stdin (`/dev/stdin`,
+    /// `/dev/fd/0`): its program source is stdin.
+    pub(super) stdin: bool,
+    /// Process-substitution texts that are (or may be) the program.
+    pub(super) bodies: Vec<String>,
+    /// Why the program read from an fd cannot be read: each an Ask.
+    pub(super) undetermined: Vec<String>,
+}
+
+/// The fds a reader's program operand names (`bash /dev/fd/3`, `source
+/// /dev/stdin`, `python3 /proc/self/fd/4`), read as the dup `<&N` is: the
+/// operand is the program exactly as stdin duplicated from that fd would be.
+/// The script operand (`File(k)` of `source`) is the one read; for an
+/// `Undetermined` source every fd-path operand may be the program. fd 0 makes
+/// the source stdin. Any other fd is the process substitution this stage
+/// opens on it (`stage_procsubs`: fd and its text), a here-text this stage
+/// opens on it (`stage_opened` with `false`: unreadable, an Ask), a file
+/// (nothing), or else what an `exec` opened on it, per [`exec_fd_reads`] —
+/// the inherited fd above 2 that nothing opens is an Ask. An fd spelled with
+/// an expansion (`/dev/fd/$fd`) is an Ask. `label` is the stage text and the
+/// reader, for the reasons.
+pub(super) fn program_operand_fds(
+    source: &ProgramSource,
+    operands: &[&str],
+    (stage_procsubs, stage_opened): StageFds<'_>,
+    (exec_fds, resolved): (&[(u32, ExecFd)], &[u32]),
+    (stage, reader): (&str, &str),
+) -> OperandFdReads {
+    let mut out = OperandFdReads::default();
+    let candidates: Vec<usize> = match source {
+        ProgramSource::File(k) => vec![*k],
+        ProgramSource::Undetermined(_) => (0..operands.len()).collect(),
+        _ => Vec::new(),
+    };
+    let mut why: Vec<String> = Vec::new();
+    for k in candidates {
+        let Some(&w) = operands.get(k) else {
+            continue;
+        };
+        match program_operand_fd(w) {
+            None => {}
+            Some(Err(reason)) => why.push(reason),
+            Some(Ok(0)) => out.stdin |= matches!(source, ProgramSource::File(_)),
+            Some(Ok(n)) => {
+                if let Some(&(_, body)) = stage_procsubs.iter().find(|(f, _)| *f == n) {
+                    out.bodies.push(body.to_string());
+                } else if let Some(&(_, file)) = stage_opened.iter().find(|(f, _)| *f == n) {
+                    if !file {
+                        why.push(format!(
+                            "its program operand `{w}` is fd {n}, opened on a here-document or \
+here-string blastguard does not read as this reader's program"
+                        ));
+                    }
+                } else {
+                    let what = format!("its program operand `{w}` is fd {n}");
+                    exec_fd_reads(exec_fds, resolved, n, &what, &mut out.bodies, &mut why);
+                }
+            }
+        }
+    }
+    out.undetermined = why
+        .into_iter()
+        .map(|why| {
+            format!(
+                "`{stage}` may read its program from an fd, and {why} — blastguard cannot read \
+the program `{reader}` runs"
+            )
+        })
+        .collect();
+    out
+}
+
 /// `N` of a `/dev/fd/N` / `/proc/self/fd/N` word.
 fn fd_path(word: &str) -> Option<u32> {
     let n = word

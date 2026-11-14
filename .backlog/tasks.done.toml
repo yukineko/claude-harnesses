@@ -76985,3 +76985,126 @@ rev = "f6075bba6dff65fd6ba753429431fb7446d8b9b7"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "9352d929"
+title = "blastguard: クリーンな linked worktree での git reset --hard を deny する誤検知を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "audit-20261113",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = 'B1 (FP). detect/git.rs:1194-1199 denies --hard by shape outside managed roots; cleanliness is never consulted. Observed in /Users/yuki/.condukt/worktrees/run-20261113-044355-24760-t1 (main session, Deny). RED (verbatim): git reset --hard in a CLEAN linked worktree discards nothing and must not be Deny; got {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"git reset --hard discards working-tree changes"}}. RED uses HEAD as <rev>; it does not prove other revs. Non-ignored control: dirty linked worktree stays not-Allow. source: audit 2026-11-13 (main-session observation / condukt run run-20261113-044355-24760 decision log; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13.'
+created_at = 1794516861
+updated_at = 1794624748
+weight = 0.0
+issue_number = 1660
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1660"
+issue_closed_at = 1794624751
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_b1_reset_hard_clean_worktree -- --ignored b1_reset_hard_in_clean_linked_worktree_is_not_denied"
+rev = "6cf45c7fb994159111d94aeff598cd476093a22f"
+observed_at = 1794516861
+detail = """
+exit 101: 3 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.55s
+     Running tests/backlog_20261113_b1_reset_hard_clean_worktree.rs (target/debug/deps/backlog_20261113_b1_reset_hard_clean_worktree-b01651fe64ccd9ca)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_b1_reset_hard_clean_worktree`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261113_b1_reset_hard_clean_worktree -- b1_reset_hard_in_clean_linked_worktree_is_not_denied"
+exit = 0
+passed = 1
+rev = "1be29d26cc6f43b356886070fc52777c1138ba54"
+observed_at = 1794624741
+output_digest = "sha256:e3906341659f42dd0ae8e268ee9ab29ba264cf6b1698a28374067eed593e529a"
+excerpt = """
+
+running 1 test
+test b1_reset_hard_in_clean_linked_worktree_is_not_denied ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.84s
+
+   Compiling blastguard v0.2.569 (/Users/yuki/src/.harness-worktrees/session-b3435a5e/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.99s
+     Running tests/backlog_20261113_b1_reset_hard_clean_worktree.rs (target/debug/deps/backlog_20261113_b1_reset_hard_clean_worktree-eec3d722dc5f37ca)
+"""
+
+[task.closure.red]
+rev = "b0b4ac6e39a29065dbc2ad66f6b4fc326c3b2483"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "da84db1c"
+title = "condukt: budget 未計測時に circuit journal が budget_over_cap=false と記録する fail-open を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "audit-20261113",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = 'C5. gatelog.rs CircuitRecord.budget_over_cap: bool; circuit.rs:643-647 maps a ledger load failure to (false, Some(reason)) and circuit.rs:796 journals false. RED (verbatim): the circuit journal records "budget_over_cap":false for a corrupt (unmeasured) budget ledger; journal={"verdict":"trip","reason":"budget_unmeasured",...,"budget_over_cap":false,...}. Fix shape is free (null / omit); a fix that keeps false plus a separate field would not pass this RED. source: audit 2026-11-13 (condukt run run-20261112-072718-37987 follow-ups; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13.'
+created_at = 1794516634
+updated_at = 1794624762
+weight = 0.0
+issue_number = 1655
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1655"
+issue_closed_at = 1794624765
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261113_c5_c6_circuit_budget_unmeasured -- --ignored journal_does_not_record_unmeasured_budget_as_not_over_cap"
+rev = "99e1d092f0fe8213c94668b9757b20be93d0a46d"
+observed_at = 1794516634
+detail = """
+exit 101: /Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running tests/backlog_20261113_c5_c6_circuit_budget_unmeasured.rs (target/debug/deps/backlog_20261113_c5_c6_circuit_budget_unmeasured-c6ed3d07a4e141db)
+error: test failed, to rerun pass `-p condukt --test backlog_20261113_c5_c6_circuit_budget_unmeasured`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261113_c5_c6_circuit_budget_unmeasured -- journal_does_not_record_unmeasured_budget_as_not_over_cap"
+exit = 0
+passed = 1
+rev = "1be29d26cc6f43b356886070fc52777c1138ba54"
+observed_at = 1794624751
+output_digest = "sha256:0fca26a8d1ac2eb57fe66e8e52b9a937a6a686aa8d166e8ceda7e00069532f5e"
+excerpt = """
+
+running 1 test
+test journal_does_not_record_unmeasured_budget_as_not_over_cap ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.18s
+
+   Compiling blastguard v0.2.569 (/Users/yuki/src/.harness-worktrees/session-b3435a5e/crates/blastguard)
+   Compiling condukt v0.7.400 (/Users/yuki/src/.harness-worktrees/session-b3435a5e/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.09s
+     Running tests/backlog_20261113_c5_c6_circuit_budget_unmeasured.rs (target/debug/deps/backlog_20261113_c5_c6_circuit_budget_unmeasured-fda3cfcc213a912b)
+"""
+
+[task.closure.red]
+rev = "f883e610396f25f0875c3e0faa2273385ce7878b"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

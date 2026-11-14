@@ -314,37 +314,6 @@ FAILED scripts/test_scout_20261112_f3_cap_clean_failed_repro.py::CapCleanMarker:
 ========================= 1 failed, 1 passed in 0.77s =========================="""
 
 [[task]]
-id = "da84db1c"
-title = "condukt: budget 未計測時に circuit journal が budget_over_cap=false と記録する fail-open を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "audit-20261113",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = 'C5. gatelog.rs CircuitRecord.budget_over_cap: bool; circuit.rs:643-647 maps a ledger load failure to (false, Some(reason)) and circuit.rs:796 journals false. RED (verbatim): the circuit journal records "budget_over_cap":false for a corrupt (unmeasured) budget ledger; journal={"verdict":"trip","reason":"budget_unmeasured",...,"budget_over_cap":false,...}. Fix shape is free (null / omit); a fix that keeps false plus a separate field would not pass this RED. source: audit 2026-11-13 (condukt run run-20261112-072718-37987 follow-ups; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13.'
-created_at = 1794516634
-updated_at = 1794516634
-weight = 0.0
-issue_number = 1655
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1655"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261113_c5_c6_circuit_budget_unmeasured -- --ignored journal_does_not_record_unmeasured_budget_as_not_over_cap"
-rev = "99e1d092f0fe8213c94668b9757b20be93d0a46d"
-observed_at = 1794516634
-detail = """
-exit 101: /Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
-     Running tests/backlog_20261113_c5_c6_circuit_budget_unmeasured.rs (target/debug/deps/backlog_20261113_c5_c6_circuit_budget_unmeasured-c6ed3d07a4e141db)
-error: test failed, to rerun pass `-p condukt --test backlog_20261113_c5_c6_circuit_budget_unmeasured`"""
-
-[[task]]
 id = "eeeb2ed3"
 title = "condukt: budget_unmeasured が stall の trip 理由を上書きして隠す問題を直す"
 project = "/Users/yuki/src/harness"
@@ -439,37 +408,6 @@ exit 101:
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
      Running tests/backlog_20261113_k4_shallow_clone_fix.rs (target/debug/deps/backlog_20261113_k4_shallow_clone_fix-870ba509d3c0bcec)
 error: test failed, to rerun pass `-p backlog --test backlog_20261113_k4_shallow_clone_fix`"""
-
-[[task]]
-id = "9352d929"
-title = "blastguard: クリーンな linked worktree での git reset --hard を deny する誤検知を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "audit-20261113",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = 'B1 (FP). detect/git.rs:1194-1199 denies --hard by shape outside managed roots; cleanliness is never consulted. Observed in /Users/yuki/.condukt/worktrees/run-20261113-044355-24760-t1 (main session, Deny). RED (verbatim): git reset --hard in a CLEAN linked worktree discards nothing and must not be Deny; got {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"git reset --hard discards working-tree changes"}}. RED uses HEAD as <rev>; it does not prove other revs. Non-ignored control: dirty linked worktree stays not-Allow. source: audit 2026-11-13 (main-session observation / condukt run run-20261113-044355-24760 decision log; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13.'
-created_at = 1794516861
-updated_at = 1794516861
-weight = 0.0
-issue_number = 1660
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1660"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261113_b1_reset_hard_clean_worktree -- --ignored b1_reset_hard_in_clean_linked_worktree_is_not_denied"
-rev = "6cf45c7fb994159111d94aeff598cd476093a22f"
-observed_at = 1794516861
-detail = """
-exit 101: 3 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.55s
-     Running tests/backlog_20261113_b1_reset_hard_clean_worktree.rs (target/debug/deps/backlog_20261113_b1_reset_hard_clean_worktree-b01651fe64ccd9ca)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261113_b1_reset_hard_clean_worktree`"""
 
 [[task]]
 id = "f70e5164"

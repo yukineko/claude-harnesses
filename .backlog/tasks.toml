@@ -2070,3 +2070,31 @@ exit 101: 20261114-125811-45041-integ/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
      Running tests/backlog_20261114_printf_json_then_python_script_arg_fp.rs (target/debug/deps/backlog_20261114_printf_json_then_python_script_arg_fp-2333295ec2028b8d)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_printf_json_then_python_script_arg_fp`"""
+
+[[task]]
+id = "2e5e080c"
+title = "blastguard fail-open: harmful program piped to python3 -m asyncio / PYTHONINSPECT=1 python3 script.py / python3 -c 'import code; code.interact()' is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. Side finding of 6f4ec5ce verification (verifier probe on t2 worktree). All three are allow/allow; each executes stdin (asyncio REPL printed '>>> 12345' for piped print(12345); PYTHONINSPECT likewise). program_source.rs python_reads_stdin_program covers only -i / -m code / -m pdb. Readings: (a) defect - more stdin-executing python modes; (b) intended - only flag-visible modes modelled. Tell apart: run the shapes with a benign print and observe stdin execution."
+created_at = 1794634367
+updated_at = 1794634367
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_python_stdin_repl_variants -- --include-ignored"
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634367
+detail = """
+exit 101: rees/run-20261114-125811-45041-integ/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running tests/backlog_20261114_pipe_to_python_stdin_repl_variants.rs (target/debug/deps/backlog_20261114_pipe_to_python_stdin_repl_variants-582dfeec1c0cd7ab)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_python_stdin_repl_variants`"""

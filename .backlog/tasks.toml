@@ -507,37 +507,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; 
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_heredoc_body_fp`"""
 
 [[task]]
-id = "b793fddc"
-title = "pre-push の fail-open mutation チェックが呼び出し元の作業ツリー (main) を in-place で書き換える"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "scripts",
-    "githooks",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = '''Observed 2026-11-13 during git push from main: guard-maintree reported verbatim: Refused: this command modified this project's MAIN working tree outside integration (CLAUDE.md 8: main only receives merges). Changed in /Users/yuki/src/harness: crates/blastguard/src/model.rs. Cause: check-fail-open-mutation.py apply_mutation write_text on REPO/file_rel in place. RED 55b0bb53 (non-implementer, xfail strict): AssertionError: ' M crates/blastguard/src/model.rs\n' != '' / 1 failed, 1 passed. NEEDS HUMAN RULING before fix: .githooks/pre-push cites user ruling 2026-11-08 'runs in THIS worktree only (no temp checkout ...)' / 'In place', which conflicts with CLAUDE.md §8 (no non-merge edits of main tree) and concurrent-session visibility. USER RULING 2026-11-14 (AskUserQuestion): mutate a temporary copy — copy the target file(s) to scratch and mutate/test there; never rewrite the invoking tree. The 2026-11-08 ruling is read narrowly as 'do not create a separate checkout'.'''
-created_at = 1794524592
-updated_at = 1794629515
-weight = 0.0
-issue_number = 1671
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1671"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_fail_open_mutation_mutates_invoking_tree_20261113.py"
-rev = "f1cadb771b362bfba3a6a3d2242c7a2a2fc6df83"
-observed_at = 1794524592
-detail = """
-exit 1: st_fail_open_mutation_mutates_invoking_tree_20261113.py:119: AssertionError
-=========================== short test summary info ============================
-FAILED scripts/test_fail_open_mutation_mutates_invoking_tree_20261113.py::MutationCheckInvokingTree::test_invoking_tree_tracked_file_is_not_mutated_during_the_run
-========================= 1 failed, 1 passed in 1.18s =========================="""
-
-[[task]]
 id = "4880afab"
 title = "blastguard FP: heredoc 本文のデータ中の symlink 作成文言を実コマンドとしてモデルし、後続の redirect を deny する"
 project = "/Users/yuki/src/harness"

@@ -77766,3 +77766,64 @@ rev = "eeaa7384332ad0d19076fa9c21390e711ca261bf"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "b793fddc"
+title = "pre-push の fail-open mutation チェックが呼び出し元の作業ツリー (main) を in-place で書き換える"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "scripts",
+    "githooks",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = '''Observed 2026-11-13 during git push from main: guard-maintree reported verbatim: Refused: this command modified this project's MAIN working tree outside integration (CLAUDE.md 8: main only receives merges). Changed in /Users/yuki/src/harness: crates/blastguard/src/model.rs. Cause: check-fail-open-mutation.py apply_mutation write_text on REPO/file_rel in place. RED 55b0bb53 (non-implementer, xfail strict): AssertionError: ' M crates/blastguard/src/model.rs\n' != '' / 1 failed, 1 passed. NEEDS HUMAN RULING before fix: .githooks/pre-push cites user ruling 2026-11-08 'runs in THIS worktree only (no temp checkout ...)' / 'In place', which conflicts with CLAUDE.md §8 (no non-merge edits of main tree) and concurrent-session visibility. USER RULING 2026-11-14 (AskUserQuestion): mutate a temporary copy — copy the target file(s) to scratch and mutate/test there; never rewrite the invoking tree. The 2026-11-08 ruling is read narrowly as 'do not create a separate checkout'.'''
+created_at = 1794524592
+updated_at = 1794654333
+weight = 0.0
+issue_number = 1671
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1671"
+issue_closed_at = 1794654335
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_fail_open_mutation_mutates_invoking_tree_20261113.py"
+rev = "f1cadb771b362bfba3a6a3d2242c7a2a2fc6df83"
+observed_at = 1794524592
+detail = """
+exit 1: st_fail_open_mutation_mutates_invoking_tree_20261113.py:119: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_fail_open_mutation_mutates_invoking_tree_20261113.py::MutationCheckInvokingTree::test_invoking_tree_tracked_file_is_not_mutated_during_the_run
+========================= 1 failed, 1 passed in 1.18s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_fail_open_mutation_mutates_invoking_tree_20261113.py"
+exit = 0
+passed = 2
+rev = "bf93af36fe9ec7054cd4c06fad2de6b1116a3de0"
+observed_at = 1794654331
+output_digest = "sha256:b203f5bdf3b146d60bcfe4ac78ff17d2d4dd91eb1f13f10e897bd8bda2e91c9e"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-6dcca0ad
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_fail_open_mutation_mutates_invoking_tree_20261113.py ..     [100%]
+
+============================== 2 passed in 1.27s ===============================
+"""
+
+[task.closure.red]
+rev = "202d33f253a309ae4f937db656f1d4694d9ae4c1"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

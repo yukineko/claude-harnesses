@@ -2100,3 +2100,31 @@ exit 101: rees/run-20261114-125811-45041-integ/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
      Running tests/backlog_20261114_pipe_to_python_stdin_repl_variants.rs (target/debug/deps/backlog_20261114_pipe_to_python_stdin_repl_variants-582dfeec1c0cd7ab)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_python_stdin_repl_variants`"""
+
+[[task]]
+id = "6cd305a9"
+title = "blastguard FP: rm $L inside $(...) is denied as system harm although L is rebound before the rm (body assignment, prefix assignment, function)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. `L=/etc/hosts; x=$(L=/tmp/x; rm -f $L)`, `L=/etc/hosts; L=/tmp/x y=$(rm -f $L)`, `f() { L=/tmp/x; }; L=/etc/hosts; x=$(f; rm -f $L)` => deny/deny ('this rm deletes from a system directory: `$L)`'), but bash deletes /tmp/x. Pre-existing path: rm::known_path_harm on the outer segment after split_substitution_opening_assignments (the operand keeps the closing paren). Readings: (a) FP; (b) intended over-approximation. Tell apart: run in bash with a dry-run echo."
+created_at = 1794634387
+updated_at = 1794634387
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_rm_substitution_body_rebind_false_deny -- --include-ignored"
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634387
+detail = """
+exit 101: 61114-125811-45041-integ/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261114_rm_substitution_body_rebind_false_deny.rs (target/debug/deps/backlog_20261114_rm_substitution_body_rebind_false_deny-c7f67f061b9d2b24)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_rm_substitution_body_rebind_false_deny`"""

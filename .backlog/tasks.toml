@@ -2062,6 +2062,8 @@ notes = "Observed 2026-11-14 by the independent verifier of condukt run run-2026
 created_at = 1794646180
 updated_at = 1794646180
 weight = 0.0
+issue_number = 1770
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1770"
 rev = 0
 
 [task.repro]

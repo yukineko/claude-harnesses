@@ -645,14 +645,14 @@ touched_files = []
 status = "failed"
 notes = """
 RED: crates/condukt/tests/worktree_remove_orphan_leftover.rs (79f5528d), ported from unmerged bk-leftover-1106 (fb17edd6; its backlog follow-up was never filed). Re-run on main 47ec0a2e: FAILS - git worktree remove --force exits 255 'Permission denied', admin dir deleted, target/ residue left; condukt then refuses ('is not the root of a usable git worktree'). Field observation 2026-11-13: /mnt/c/tmp/aegis-worktrees/run-20261106-100625-7376-blastguard-heredoc-body-fp left with only target/ (1.4G) + tdd.toml, 'prunable' in git worktree list; cleaned by hand (rm -rf + git worktree prune). Earlier field: 2026-11-05/06 wedged tdd/donegate Stop hooks. Remove the #[ignore] when fixed.
-blocked 2026-11-14 run-20261114-130020-46995: Q7 — leftover after git already deleted the admin dir: (i) quarantine-move, delete nothing (proposed) / (ii) delete only proven-gitignored entries / (iii) re-register as worktree. Needs ruling."""
+blocked 2026-11-14 run-20261114-130020-46995: Q7 — leftover after git already deleted the admin dir: (i) quarantine-move, delete nothing (proposed) / (ii) delete only proven-gitignored entries / (iii) re-register as worktree. Needs ruling. | RULED 2026-11-14 by user (AskUserQuestion): Q7 quarantine-move the leftover, delete nothing."""
 created_at = 1794533093
-updated_at = 1794629115
+updated_at = 1794629451
 defer_until = 1794801915
 weight = 0.0
 issue_number = 1678
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1678"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -908,14 +908,14 @@ touched_files = []
 status = "failed"
 notes = """
 Observed 2026-11-13 at main 8dedad41 and 1fd747e9 (blastguard 0.2.500), Linux WSL2. Verbatim: 114 of 653 attack cases are Allow (must be Ask or Deny); every listed case is main=allow sub=allow, e.g. shutil_move_home_away, shutil_copyfile_ssh, os_chmod_home, os_chmod_ssh, os_chown_home, os_truncate_zshrc, os_symlink_zshrc, os_link, pathlib_rename, pathlib_replace, pathlib_touch, pathlib_rmdir_home. This is a deliberately RED test added 2026-11-08 in 72d164e1 (its header says RED on main until fixed; that commit counted 125 failing entries, now 114), but no backlog entry names it, so the gap was tracked only in commit messages. Reading (a) real gate fail-open: plausible and is what the test asserts (a body written to a script file by a quoted heredoc and then run is Allow). Reading (b) Linux/fixture artefact: checked and ruled out for the fixture location: rerun with the fixture base moved off /tmp (BLASTGUARD_TEST_FIXTURE_DIR under HOME/.cache, so no path is spelled through the /tmp alias symlink) gives the identical 114-case list (diff empty). Not checked on macOS. Runtime about 50s (680s under concurrent load).
-blocked 2026-11-14 run-20261114-130020-46995: needs human rulings Q1 (python sink denylist->allowlist?), Q2 (h_heredoc_bs_quoted_cmdsub/h_heredoc_dq_delim_cmdsub quoted+not run vs .py-body-is-data ruling), Q3 (protect /Users/<n>,/home/<n>,**/.ssh/**,**/.gitconfig when not HOME?), Q4 (which paths are gate scripts), Q5 (kill -9 -1 / os.kill(-1,9): Deny or Ask). 107/653 Allow on macOS at b823ffa5. Decomp: 7 serial tasks a-g, 4 low-confidence."""
+blocked 2026-11-14 run-20261114-130020-46995: needs human rulings Q1 (python sink denylist->allowlist?), Q2 (h_heredoc_bs_quoted_cmdsub/h_heredoc_dq_delim_cmdsub quoted+not run vs .py-body-is-data ruling), Q3 (protect /Users/<n>,/home/<n>,**/.ssh/**,**/.gitconfig when not HOME?), Q4 (which paths are gate scripts), Q5 (kill -9 -1 / os.kill(-1,9): Deny or Ask). 107/653 Allow on macOS at b823ffa5. Decomp: 7 serial tasks a-g, 4 low-confidence. | RULED 2026-11-14 by user (AskUserQuestion): Q1 python sink -> allowlist (provably harmless APIs Allow, else Ask). Q2 h_heredoc_bs_quoted_cmdsub/h_heredoc_dq_delim_cmdsub are test defects (.py-body-is-data ruling wins; drop or re-anchor to Allow). Q3 protect /Users/<n>, /home/<n>, **/.ssh/**, **/.gitconfig even when not HOME (Deny). Q4 gate scripts = .githooks/**, scripts/check-*.py, crates/*/hooks/**, ~/.claude/plugins/cache/**/{bin,hooks}. Q5 kill -9 -1 / os.kill(-1,9) -> Deny."""
 created_at = 1794547881
-updated_at = 1794629114
+updated_at = 1794629450
 defer_until = 1794801914
 weight = 0.0
 issue_number = 1700
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1700"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -1142,14 +1142,14 @@ touched_files = []
 status = "failed"
 notes = '''
 Observed 2026-11-13 at main 50474876 (blastguard 0.2.506) by the flow-8cca7ef5 orchestrator in subagent mode: cat >> <wt>/crates/blastguard/tests/x.rs <<'EOF' with Rust string literals "python3 -c \"... Path('/etc/hosts').chmod(0o777)\"" followed by cd <wt> && cargo test was denied: 'python3 is invoked with an inline-eval flag, and its program cannot be tokenised as Python (an unterminated string or an unbalanced bracket)'. Main mode: ask. Standing ruling: .rs heredoc body is data. RED bccf0730 (merged 4fb5d734) written by an independent subagent; one-line body is allow (control).
-blocked 2026-11-14 run-20261114-130020-46995: Q6 — the command runs cargo test which compiles the appended tests/x.rs (ruling exception 'unless run in the same command'); conflicts with 596ef57d cases h_rs_rustc/h_rs_cargo_script/h_rs_build_rs. Proposal: Allow only if body is provably inert Rust (const/static literals). Needs ruling.'''
+blocked 2026-11-14 run-20261114-130020-46995: Q6 — the command runs cargo test which compiles the appended tests/x.rs (ruling exception 'unless run in the same command'); conflicts with 596ef57d cases h_rs_rustc/h_rs_cargo_script/h_rs_build_rs. Proposal: Allow only if body is provably inert Rust (const/static literals). Needs ruling. | RULED 2026-11-14 by user (AskUserQuestion): Q6 Allow only when the .rs body compiled in the same command is provably inert Rust (const/static literals); anything else stays not-Allow.'''
 created_at = 1794569079
-updated_at = 1794629114
+updated_at = 1794629450
 defer_until = 1794801914
 weight = 0.0
 issue_number = 1707
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1707"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"

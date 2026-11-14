@@ -32,10 +32,22 @@
 //! [`MAX_INLINE_DEPTH`], an inlined text larger than [`MAX_INLINED_LEN`], and
 //! a segment layout this module cannot place back onto the text.
 //!
+//! A call inside a command substitution (`x=$(f)`, `` x=`f` ``, `"$(f)"`,
+//! `<(f)`, nested `$(echo $(f))`; backlog 671f3dfa) is read too: bash runs
+//! the substitution body in a subshell, at the segment, BEFORE the command it
+//! stands in, with the variables and functions in effect there. So each
+//! executed substitution body of a segment whose inlining changes it is
+//! spelt, inlined, as a subshell `( … )` placed just before the segment's
+//! command (after its compound keywords and opening `(`), the substitution
+//! itself left in place. Functions defined inside the body stay inside its
+//! subshell (they do not reach the definitions of the rest of the line). A
+//! body that opens with `(` (`$((…))` arithmetic, which runs no command) is
+//! not read this way.
+//!
 //! NOT modelled (the call is not recognised, so this reading adds nothing for
-//! it — the original reading still applies): a call inside `$(…)` / backticks,
-//! through `eval` / `command` / `xargs` / `env`, and a function body read
-//! from a here-document fed to a shell.
+//! it — the original reading still applies): a call through `eval` /
+//! `command` / `xargs` / `env`, inside an unterminated substitution, and a
+//! function body read from a here-document fed to a shell.
 
 use std::collections::HashMap;
 
@@ -43,6 +55,7 @@ use super::compound::{split_first_word, strip_unmatched_close_parens, COMPOUND_P
 use super::heredoc::here_document_layout;
 use super::segment::{split_segments_with_separators, SeparatedSegment};
 use super::shell_lex::ShellLexed;
+use super::substitution::executed_substitution_payloads;
 use super::words::is_assignment;
 
 /// How many calls deep one inlining may go (a call inside an inlined body
@@ -228,8 +241,61 @@ fn call_word(seg: &str) -> Option<(usize, &str)> {
     }
 }
 
+/// The byte offset within `seg` where its command starts: after compound
+/// keywords and opening `(`, before any assignment prefix (an assignment
+/// prefix may itself hold the substitution).
+fn command_start(seg: &str) -> usize {
+    let mut off = 0usize;
+    loop {
+        let rest = &seg[off..];
+        off += rest.len() - rest.trim_start().len();
+        let rest = &seg[off..];
+        if let Some(r) = rest.strip_prefix('(') {
+            if !r.starts_with('(') {
+                off += 1;
+                continue;
+            }
+        }
+        match split_first_word(rest) {
+            Some((w, _)) if COMPOUND_PREFIX_WORDS.contains(&w) && w != "}" => off += w.len(),
+            _ => return off,
+        }
+    }
+}
+
+/// The executed command-substitution bodies of `seg` that inlining changes,
+/// each inlined (with a copy of `defs`: a function defined in the body stays
+/// in its subshell) and spelt as a subshell `( … )` followed by `; `, in
+/// source order. Empty when no body calls a function defined on the line.
+fn hoisted_substitutions(
+    seg: &str,
+    defs: &HashMap<String, Def>,
+    depth: usize,
+) -> Result<String, ()> {
+    let mut out = String::new();
+    for payload in executed_substitution_payloads(seg) {
+        // `$((…))` arithmetic: its body is an expression, not a command.
+        if payload.starts_with('(') {
+            continue;
+        }
+        let mut inner_defs = defs.clone();
+        let (inner, changed) = inline_calls(&payload, &mut inner_defs, depth + 1)?;
+        if !changed {
+            continue;
+        }
+        out.push_str("( ");
+        out.push_str(inner.trim());
+        out.push_str("\n); ");
+        if out.len() > MAX_INLINED_LEN {
+            return Err(());
+        }
+    }
+    Ok(out)
+}
+
 /// Rewrite `text`: definitions become `:`, calls become their body at the
-/// call site. Returns the text and whether anything changed.
+/// call site, and an executed substitution body that calls a function is
+/// spelt, inlined, as a subshell before its segment's command. Returns the text and whether anything changed.
 fn inline_calls(
     text: &str,
     defs: &mut HashMap<String, Def>,
@@ -260,6 +326,16 @@ fn inline_calls(
             changed = true;
             i = last + 1;
             continue;
+        }
+        // Backlog 671f3dfa: a call inside `$(…)` / backticks runs too, before
+        // the segment's command, with the same variables and functions.
+        let hoist = hoisted_substitutions(&segs[i].text, defs, depth)?;
+        if !hoist.is_empty() {
+            let at = start + command_start(&segs[i].text);
+            out.push_str(&text[cursor..at]);
+            out.push_str(&hoist);
+            cursor = at;
+            changed = true;
         }
         if let Some((woff, word)) = call_word(&segs[i].text) {
             if let Some(def) = defs.get(word).cloned() {

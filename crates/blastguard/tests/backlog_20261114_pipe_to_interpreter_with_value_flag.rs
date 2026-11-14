@@ -94,7 +94,6 @@ fn undenied(cmds: &[String], tag: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 harmful program piped to python3/node with a value-taking flag is Allow — remove the ignore when fixed"]
 fn harmful_program_piped_to_interpreter_with_value_flag_is_deny() {
     let cmds = vec![
         format!("{PY}python3 -X dev"),

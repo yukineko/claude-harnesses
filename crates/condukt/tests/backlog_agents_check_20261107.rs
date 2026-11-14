@@ -15,6 +15,8 @@
 //!
 //! Written by a disinterested author (CLAUDE.md section 2(a)): no fix exists.
 
+mod common;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -99,6 +101,7 @@ impl Fx {
     }
 
     fn condukt(&self, args: &[&str]) -> Output {
+        common::prime_if_running(args, &self.home, SESSION);
         let path = if self.overwatch_on_path {
             format!(
                 "{}:{}",
@@ -114,6 +117,10 @@ impl Fx {
         cmd.args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
+            .env(
+                "CONDUKT_TESTSCOPE_LEDGER",
+                common::testscope_ledger(&self.home),
+            )
             .env("PATH", path)
             .env("CLAUDE_CODE_SESSION_ID", SESSION)
             .env("CONDUKT_DEFAULT_BRANCH", "main")

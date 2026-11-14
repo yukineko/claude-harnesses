@@ -62,6 +62,8 @@
 //! be determined at all exits non-zero, because §3 forbids mapping "could not
 //! check" onto the value that means "checked and clean". Both tests now run.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -101,10 +103,15 @@ impl Fixture {
     }
 
     fn condukt(&self, args: &[&str]) -> Output {
+        common::prime_if_running(args, &self.home, "sess-test");
         harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
+            .env(
+                "CONDUKT_TESTSCOPE_LEDGER",
+                common::testscope_ledger(&self.home),
+            )
             .env("CLAUDE_CODE_SESSION_ID", "sess-test")
             .output()
             .expect("spawn condukt")

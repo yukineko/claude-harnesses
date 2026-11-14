@@ -23,6 +23,8 @@
 //! where condukt's state dir and `~/.claude/projects` resolve), inside a
 //! throwaway git repo, so the live claim registry is never touched.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, SystemTime};
@@ -65,13 +67,24 @@ impl Fixture {
     }
 
     fn cmd(&self, args: &[&str]) -> Command {
+        common::prime_if_running(args, &self.home, common::TESTSCOPE_SESSION);
         let mut c = Command::new(bin());
         harness_core::git_env::scrub(&mut c);
         c.args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
-            // Never let the developer's live session id leak into a claim.
+            .env(
+                "CONDUKT_TESTSCOPE_LEDGER",
+                common::testscope_ledger(&self.home),
+            )
+            // Never let the developer's live session id leak into a claim
+            // (a claim with no `--session` must stay session-less here).
             .env_remove("CLAUDE_CODE_SESSION_ID");
+        // Only the `running` transition needs a session: `state set --status
+        // running` requires the testscope marker of a pinned session id.
+        if common::is_running_transition(args) {
+            c.env("CLAUDE_CODE_SESSION_ID", common::TESTSCOPE_SESSION);
+        }
         c
     }
 

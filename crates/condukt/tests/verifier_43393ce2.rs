@@ -7,6 +7,8 @@
 //! Every invocation pins `HOME` to a fixture dir so the real `~/.condukt` is
 //! never touched.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -25,11 +27,13 @@ fn unique_dir(tag: &str) -> PathBuf {
 }
 
 fn condukt(dir: &Path, home: &Path, args: &[&str]) -> Output {
+    common::prime_if_running(args, home, common::TESTSCOPE_SESSION);
     harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args(args)
         .current_dir(dir)
         .env("HOME", home)
-        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env("CONDUKT_TESTSCOPE_LEDGER", common::testscope_ledger(home))
+        .env("CLAUDE_CODE_SESSION_ID", common::TESTSCOPE_SESSION)
         .stdin(Stdio::null())
         .output()
         .expect("condukt spawns")

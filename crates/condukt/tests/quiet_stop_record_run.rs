@@ -8,6 +8,8 @@
 //! Fixture mirrors tests/record_run_failure_not_marked.rs (HOME isolated,
 //! fugu-router stub on a PATH of its own).
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -65,10 +67,16 @@ impl Env {
     }
 
     fn run(&self, args: &[&str]) -> (i32, String, String) {
+        common::prime_if_running(args, &self.home, common::TESTSCOPE_SESSION);
         let out = harness_core::git_env::scrub(&mut Command::new(BIN))
             .args(args)
             .current_dir(&self.cwd)
             .env("HOME", &self.home)
+            .env(
+                "CONDUKT_TESTSCOPE_LEDGER",
+                common::testscope_ledger(&self.home),
+            )
+            .env("CLAUDE_CODE_SESSION_ID", common::TESTSCOPE_SESSION)
             .env("PATH", &self.path_env)
             .output()
             .unwrap();

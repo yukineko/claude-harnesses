@@ -20,6 +20,8 @@
 //! Pinned: with a ~400 KB committed diff, `state set --status done` returns
 //! well inside one git timeout, and does not call the diff "no-diff".
 
+mod common;
+
 use std::path::Path;
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
@@ -44,12 +46,14 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 fn condukt(cwd: &Path, home: &Path, args: &[&str]) -> Output {
+    common::prime_if_running(args, home, common::TESTSCOPE_SESSION);
     harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args(args)
         .current_dir(cwd)
         .env("HOME", home)
+        .env("CONDUKT_TESTSCOPE_LEDGER", common::testscope_ledger(home))
         .env("CONDUKT_DEFAULT_BRANCH", "main")
-        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env("CLAUDE_CODE_SESSION_ID", common::TESTSCOPE_SESSION)
         .env_remove("CONDUKT_DISABLE")
         .output()
         .expect("spawn condukt")

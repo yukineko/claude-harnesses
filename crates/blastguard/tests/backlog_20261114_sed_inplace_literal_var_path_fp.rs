@@ -89,7 +89,6 @@ fn seed(home: &Home) -> String {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 sed -i on $S/file with S assigned a literal in the same command is denied as unresolvable — remove the ignore when fixed"]
 fn sed_inplace_on_same_command_literal_var_path_is_not_denied() {
     let home = unique_home("red");
     let abs = seed(&home);

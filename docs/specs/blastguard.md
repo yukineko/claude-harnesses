@@ -448,9 +448,38 @@ forge・condukt のスケジューラが再利用）。
   **Ask**（判定不能は制限側。例: `chmod +x "$f"`・`mv "$a" b`）。ただし rm と同じく、同じ行のテキストが値を
   決める展開（前セグメントの literal 代入・literal 語の `$(echo …)`）は解決して判定し、システムパスなら
   system-harm Deny（`system_paths::known_mutation_harm`、`rm::known_path_harm` から呼ぶ。
-  `X=/etc/passwd; unlink $X`・`X=/etc/hosts; mv $X /tmp/h`・`X=/etc/passwd; chmod 000 $X`）。解決して system 外
-  なら Ask のまま（`X=build.log; unlink $X`）。`find -exec` の `{}` と rsync の remote
+  `X=/etc/passwd; unlink $X`・`X=/etc/hosts; mv $X /tmp/h`・`X=/etc/passwd; chmod 000 $X`）。下の
+  「コマンド文面だけで値が決まる変数は静的に解決して判定する」の resolver が解決できる形は、この判定より前に
+  literal へ置き換わるので literal と同じ判定になる（解決して system 外なら literal と同じ。以前の「Ask のまま」は
+  backlog 3a950c6c で撤回）。`find -exec` の `{}` と rsync の remote
   operand（`host:/path`）は判定しない。base 不明の相対 operand は rm と同じく判定しない（他の rule は残る）。
+- **コマンド文面だけで値が決まる変数は静的に解決して判定する（backlog 3a950c6c / 5ef2d51f、ユーザー裁定
+  2026-11-14「静的に判定できない blastguard の実装がゴミなので、それをなおす」「必ず静的に判定し、判断する」）** —
+  `detect/readings/static_bindings.rs` の `resolve_static_bindings` が、top-level の Bash コマンドに対して
+  **すべての reading・すべての rule より前に 1 回だけ**走る共通 resolver。文（`;`・`&&`・`||`・改行で区切られた
+  segment）を順に走査して literal の束縛環境を作り、後の文の素の参照（`$X`・`${X}`・`"$X"`、連結
+  `"$T"bin/tdd`・`${W}/a`・`$T/bin`）をその literal に置き換える。sed -i / unlink / mv 等の対象・command word・
+  redirect 先・rm operand・cd はすべて置換後のテキストを判定するので、解決できた値は literal と同じ判定になり、
+  「cannot resolve」「only exists at run time」「cannot tell」を理由に判定不能にはならない
+  （`export F=/etc/hosts; sed -i '' 's/a/b/' $F` は system-harm Deny）。
+  - 束縛として採るもの: 親 shell で（pipeline の段・`&` でなく）無条件に（`assignment_execution_is_unconditional`）
+    実行される、代入だけの文（`X=lit`・`X="lit"`・`X='lit'`）と `export X=lit`（operand が `NAME=value` か
+    素の名前だけ。flag 付きは不採用）。値は先に置換するので既知の名前からの連結（`B=$A/x`）も解ける。
+  - 値として採るのは、空でなく `[A-Za-z0-9/._+,:@%^-]` だけから成る literal（空白・引用符・`$`・backtick・
+    backslash・glob・brace・`~`・`=`・`#`・演算子を含まない）。置換が単語分割・glob・tilde・brace 展開・
+    segment 分割を変えないことをこの文字種で保証する。`"$X"` だけから成る引用語は引用符ごと置換する。
+  - 判定不能（置換しない = 従来どおり制限側）のまま残すもの: `$(cmd)`・backtick の値とそれによる再代入、
+    未代入、`&&`/`||` や `if`/ループ/`case`/subshell/brace group の中の代入、pipeline・`&` の代入、配列、`+=`、
+    その名前を素の参照以外で言及する他の文（`read X`・`for X in`・`unset X`・`printf -v X`・`(X=…`・
+    `$(X=…)`。以後その名前は未知）、ループ内のどこかで再束縛される名前（ループ開始以降）、`eval`/`source`/`.`
+    （環境を捨てる）、shell が維持する名前（`PWD`・`RANDOM`・`_` 等）、here-document の body と閉じない
+    opener 以降。
+  - 行全体を解決しない（文面のまま判定）もの: shell 関数を定義する行、`IFS` を含む行、`trap`/`alias`/
+    `readonly`/`declare`/`typeset`/`local` を含む行、`#` コメントか `$'…'` を含む行、segment をテキストへ
+    対応付けられない行。
+  - 対象外: `sh -c` 等の payload 内部の束縛（payload の再解析には適用しない）、プロセス環境由来の値。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_static_literal_var_resolution.rs`・
+  `crates/blastguard/tests/backlog_20261114_sed_inplace_literal_var_path_fp.rs`。
 - **pipeline で供給される `xargs rm`/`xargs unlink`（backlog 3c750df2）** — `analyze_xargs` は xargs 自身の
   token しか見ないため `echo /etc/passwd | xargs rm` は operand 無しの `rm` として Allow だった。
   `detect/find_xargs.rs` の `xargs_pipe_feed`（`analyze_segment` から `line`/`seg_idx` で呼ぶ）が、

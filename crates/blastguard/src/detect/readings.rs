@@ -7,6 +7,8 @@ use super::{
     detect_bash, Ctx, Decision, SafeRoots, VerdictAcc, ANALYSIS_BUDGET, MAX_ANALYSIS_NODES,
 };
 
+mod static_bindings;
+
 /// The top-level Bash analysis: [`detect_bash`] under the modern reading and,
 /// when the command could be parsed differently by macOS `/bin/bash` 3.2 /
 /// `/bin/sh`, again under [`under_bash32_reading`], the MOST restrictive
@@ -64,6 +66,12 @@ use super::{
 /// reading cannot be starved by an earlier one; budget exhaustion in any pass
 /// is that pass's own Ask.
 pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision {
+    // Backlog 3a950c6c / 5ef2d51f: every reading below — and every rule inside
+    // each — judges the text with the line's own literal bindings already
+    // resolved (`W=/x; sed -i … $W/f` is judged as `sed -i … /x/f`). One
+    // resolver, run once, before anything else; see `static_bindings`.
+    let resolved = static_bindings::resolve_static_bindings(c);
+    let c: &str = &resolved;
     ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
     let mut acc = VerdictAcc::default();
     if let Some(deny) = acc.record(detect_bash(c, 0, &Ctx::new(scope, c))) {

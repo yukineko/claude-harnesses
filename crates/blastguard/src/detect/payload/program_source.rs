@@ -263,6 +263,29 @@ fn dash_c_program_reads_stdin(argv: &[&str], at: usize, source: &str) -> bool {
     }
 }
 
+/// Whether `python -m MODULE` names a [`STDIN_REPL_MODULES`] console. `raw` is
+/// the module shell word (the text glued after `-m`, or the next argv word);
+/// it is decoded as ONE shell word with the crate's shell-word reader, so
+/// `-m 'asyncio'` and `-m "asyncio"` match `asyncio` the same as the unquoted
+/// form. A trailing `.__main__` is stripped first (`-m asyncio.__main__` runs
+/// the same REPL as `-m asyncio`). A value the shell would expand
+/// ([`shell_word_is_literal`] false) or one that cannot be decoded is
+/// undetermined and counts as reading stdin; an empty value (`python -m` with
+/// no module) is not a reader here.
+fn dash_m_module_reads_stdin(raw: &str) -> bool {
+    if raw.is_empty() {
+        return false;
+    }
+    if !shell_word_is_literal(raw) {
+        return true;
+    }
+    let Some(decoded) = crate::detect::words::first_shell_word(raw) else {
+        return true;
+    };
+    let module = decoded.strip_suffix(".__main__").unwrap_or(&decoded);
+    STDIN_REPL_MODULES.contains(&module)
+}
+
 /// [`python_reads_stdin_program`] for the python head `tokens[idx]` (false for
 /// any other head), with the env words before it read for `PYTHONINSPECT`.
 pub(super) fn python_head_reads_stdin(
@@ -306,12 +329,12 @@ pub(super) fn python_reads_stdin_program(argv: &[&str], source: &str, env_inspec
                 }
                 'm' => {
                     let glued = &letters[pos + 1..];
-                    let module = if glued.is_empty() {
+                    let raw = if glued.is_empty() {
                         argv.get(k + 1).copied().unwrap_or("")
                     } else {
                         glued
                     };
-                    return STDIN_REPL_MODULES.contains(&module) || (env_inspect && !ignore_env);
+                    return dash_m_module_reads_stdin(raw) || (env_inspect && !ignore_env);
                 }
                 'W' | 'X' => {
                     if pos + 1 == letters.len() {

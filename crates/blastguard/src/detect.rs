@@ -1408,7 +1408,8 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
         let _ = acc.record(ask);
     }
 
-    if let Some(deny) = acc.record(rm::known_path_harm(&tokens, line, seg_idx, ctx)) {
+    // `seg` too: commands inside its `$(…)` bodies see this line's variables (e5a8fcc2).
+    if let Some(deny) = acc.record(rm::known_path_harm(&tokens, seg, line, seg_idx, ctx)) {
         return deny;
     }
     // D3: analyse EVERY candidate command-word position; deny if ANY is

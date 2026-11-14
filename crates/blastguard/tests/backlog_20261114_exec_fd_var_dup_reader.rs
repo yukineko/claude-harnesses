@@ -90,13 +90,11 @@ fn check(cmd: &str, tag: &str) {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 bash <&$fd allowed — remove the ignore when fixed"]
 fn exec_herestring_then_bash_dup_var_fd_is_not_allowed() {
     check("fd=3; exec 3<<< 'chmod 777 /etc/hosts'; bash <&$fd", "a");
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 plain bash <&$fd allowed — remove the ignore when fixed"]
 fn plain_bash_dup_var_fd_is_not_allowed() {
     check("bash <&$fd", "b");
 }

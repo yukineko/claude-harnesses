@@ -623,6 +623,15 @@ fn probe_synthetics(texts: &[HereText], stages: &[&Stage], default_sh: bool) -> 
     out
 }
 
+/// Why a stdin dup `<&TARGET` cannot be followed when TARGET is spelled with an
+/// expansion (`<&$fd`): which fd stdin is a copy of is not known. `None` for
+/// any other target.
+pub(super) fn dynamic_dup_reason(target: &str) -> Option<String> {
+    (target.contains('$') || target.contains('`')).then(|| {
+        format!("its stdin is duplicated from `{target}`, an fd spelled with an expansion")
+    })
+}
+
 /// A dup or fd-path mention whose fd is spelled with an expansion
 /// (`<&$fd`, `<&"$fd"`, `/dev/fd/$fd`).
 fn mentions_dynamic_fd(words: &[&str]) -> bool {

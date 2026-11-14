@@ -611,13 +611,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = '''Observed 2026-11-13 during git push from main: guard-maintree reported verbatim: Refused: this command modified this project's MAIN working tree outside integration (CLAUDE.md 8: main only receives merges). Changed in /Users/yuki/src/harness: crates/blastguard/src/model.rs. Cause: check-fail-open-mutation.py apply_mutation write_text on REPO/file_rel in place. RED 55b0bb53 (non-implementer, xfail strict): AssertionError: ' M crates/blastguard/src/model.rs\n' != '' / 1 failed, 1 passed. NEEDS HUMAN RULING before fix: .githooks/pre-push cites user ruling 2026-11-08 'runs in THIS worktree only (no temp checkout ...)' / 'In place', which conflicts with CLAUDE.md §8 (no non-merge edits of main tree) and concurrent-session visibility.'''
+notes = '''Observed 2026-11-13 during git push from main: guard-maintree reported verbatim: Refused: this command modified this project's MAIN working tree outside integration (CLAUDE.md 8: main only receives merges). Changed in /Users/yuki/src/harness: crates/blastguard/src/model.rs. Cause: check-fail-open-mutation.py apply_mutation write_text on REPO/file_rel in place. RED 55b0bb53 (non-implementer, xfail strict): AssertionError: ' M crates/blastguard/src/model.rs\n' != '' / 1 failed, 1 passed. NEEDS HUMAN RULING before fix: .githooks/pre-push cites user ruling 2026-11-08 'runs in THIS worktree only (no temp checkout ...)' / 'In place', which conflicts with CLAUDE.md §8 (no non-merge edits of main tree) and concurrent-session visibility. USER RULING 2026-11-14 (AskUserQuestion): mutate a temporary copy — copy the target file(s) to scratch and mutate/test there; never rewrite the invoking tree. The 2026-11-08 ruling is read narrowly as 'do not create a separate checkout'.'''
 created_at = 1794524592
-updated_at = 1794524592
+updated_at = 1794629515
 weight = 0.0
 issue_number = 1671
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1671"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

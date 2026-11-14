@@ -141,20 +141,24 @@ fn harmful_program_piped_to_python_m_doublequoted_asyncio_is_deny() {
 
 #[test]
 fn harmful_program_piped_to_python_m_asyncio_dunder_main_is_deny() {
-    let bad = undenied(
-        &[format!("{PY}python3 -m asyncio.__main__")],
-        "m-dunder",
-    );
+    let bad = undenied(&[format!("{PY}python3 -m asyncio.__main__")], "m-dunder");
     assert!(bad.is_empty(), "expected Deny:\n{}", bad.join("\n"));
 }
 
 #[test]
 fn json_load_from_stdin_with_code_key_is_allow() {
     let bad = unallowed(
-        &["cat data.json | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"code\"])'".to_string()],
+        &[
+            "cat data.json | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"code\"])'"
+                .to_string(),
+        ],
         "json-code-key",
     );
-    assert!(bad.is_empty(), "expected Allow (json dict key access is data loading, not stdin execution):\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "expected Allow (json dict key access is data loading, not stdin execution):\n{}",
+        bad.join("\n")
+    );
 }
 
 #[test]
@@ -163,7 +167,11 @@ fn regex_findall_on_stdin_read_is_allow() {
         &["git log | python3 -c 'import re,sys; print(re.compile(\"x\").findall(sys.stdin.read()))'".to_string()],
         "regex-stdin",
     );
-    assert!(bad.is_empty(), "expected Allow (read() is data loading, not stdin execution):\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "expected Allow (read() is data loading, not stdin execution):\n{}",
+        bad.join("\n")
+    );
 }
 
 #[test]
@@ -172,7 +180,11 @@ fn stdin_code_variable_assignment_is_allow() {
         &["cat f | python3 -c 'import sys; code=sys.stdin.read(); print(len(code))'".to_string()],
         "code-var",
     );
-    assert!(bad.is_empty(), "expected Allow (variable named 'code' is not stdin execution):\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "expected Allow (variable named 'code' is not stdin execution):\n{}",
+        bad.join("\n")
+    );
 }
 
 #[test]

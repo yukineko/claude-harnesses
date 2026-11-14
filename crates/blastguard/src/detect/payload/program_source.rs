@@ -198,24 +198,6 @@ const STDIN_REPL_MODULES: &[&str] = &[
     "ptpython",
 ];
 
-/// Whether `PYTHONINSPECT` is set non-empty by the env assignments / `env`
-/// words in front of the interpreter. `env -u PYTHONINSPECT` is not read (a
-/// restrictive over-approximation); a value holding an expansion is
-/// undetermined and counts as set. An inherited or earlier-statement export is
-/// not visible here.
-pub(super) fn python_inspect_env(prefix: &[&str]) -> bool {
-    prefix.iter().any(|t| {
-        let t = t.trim_start_matches(['\'', '"']);
-        let Some(value) = t.strip_prefix("PYTHONINSPECT=") else {
-            return false;
-        };
-        if value.contains(['$', '`']) {
-            return true;
-        }
-        crate::detect::words::first_shell_word(value).is_some_and(|v| !v.is_empty())
-    })
-}
-
 /// Whether the raw text of one shell word is free of anything the shell
 /// expands (`$`, backtick, and an unquoted glob / tilde / brace character), so
 /// its unquoted value is the text the interpreter receives.
@@ -287,27 +269,23 @@ fn dash_m_module_reads_stdin(raw: &str) -> bool {
 }
 
 /// [`python_reads_stdin_program`] for the python head `tokens[idx]` (false for
-/// any other head), with the env words before it read for `PYTHONINSPECT`.
+/// any other head).
 pub(super) fn python_head_reads_stdin(
     tokens: &[&str],
     idx: usize,
     argv: &[&str],
     source: &str,
 ) -> bool {
-    super::is_python_head(tokens[idx])
-        && python_reads_stdin_program(argv, source, python_inspect_env(&tokens[..idx]))
+    super::is_python_head(tokens[idx]) && python_reads_stdin_program(argv, source)
 }
 
 /// Whether a python invocation reads its stdin as a PROGRAM even though a
 /// script operand, `-m` module or `-c` program is named: `-i` (inspect: after
-/// the script it runs stdin as an interactive interpreter), `PYTHONINSPECT`
-/// set non-empty in the env prefix (`env_inspect`; the same inspect mode, but
-/// ignored under `-E` / `-I`, which ignore every `PYTHON*` variable), `-m` on a
+/// the script it runs stdin as an interactive interpreter), `-m` on a
 /// [`STDIN_REPL_MODULES`] module, and a `-c` program that may enter a stdin
 /// console ([`dash_c_program_reads_stdin`]). Options end at the first
 /// non-option word, `--` or `-`.
-pub(super) fn python_reads_stdin_program(argv: &[&str], source: &str, env_inspect: bool) -> bool {
-    let mut ignore_env = false;
+pub(super) fn python_reads_stdin_program(argv: &[&str], source: &str) -> bool {
     let mut k = 0;
     while k < argv.len() {
         let w = argv[k];
@@ -320,12 +298,9 @@ pub(super) fn python_reads_stdin_program(argv: &[&str], source: &str, env_inspec
         for (pos, c) in letters.char_indices() {
             match c {
                 'i' => return true,
-                'E' | 'I' => ignore_env = true,
                 'c' => {
                     let glued = !letters[pos + 1..].is_empty();
-                    return glued
-                        || dash_c_program_reads_stdin(argv, k + 1, source)
-                        || (env_inspect && !ignore_env);
+                    return glued || dash_c_program_reads_stdin(argv, k + 1, source);
                 }
                 'm' => {
                     let glued = &letters[pos + 1..];
@@ -334,7 +309,7 @@ pub(super) fn python_reads_stdin_program(argv: &[&str], source: &str, env_inspec
                     } else {
                         glued
                     };
-                    return dash_m_module_reads_stdin(raw) || (env_inspect && !ignore_env);
+                    return dash_m_module_reads_stdin(raw);
                 }
                 'W' | 'X' => {
                     if pos + 1 == letters.len() {
@@ -347,7 +322,7 @@ pub(super) fn python_reads_stdin_program(argv: &[&str], source: &str, env_inspec
         }
         k += 1;
     }
-    env_inspect && !ignore_env
+    false
 }
 
 /// Any other code interpreter (`perl`, `ruby`, `node`, `osascript` …): with no

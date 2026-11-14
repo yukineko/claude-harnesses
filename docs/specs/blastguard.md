@@ -1242,3 +1242,22 @@ path/target を埋め込む。例: `"Write would replace {path} with empty conte
 - **マッチは `detect` の文言と lockstep の固定 prefix / 部分文字列判定** — `detect` の wording 変更が
   ここへ反映されない場合、未認識の理由は既定 id へ落ちる（将来の文言変更で署名が静かに壊れないよう、
   両者は意図的に同期して保守する）。
+
+## exec が開く fd の文をまたいだ追跡 — ユーザー裁定 2026-11-14（backlog e686a85e）
+
+裁定（AskUserQuestion への回答、2026-11-14）:
+
+1. **中身が system harm と literal で分かる program は、形を解析できなくても main・subagent ともに Deny。**
+   中身に harm を含む literal の program text が、blastguard のまだモデル化していない形で shell / interpreter に渡る場合も、main で Ask にせず Deny とする（「system harm はどの wrapper を通しても Deny」の適用）。
+   中身が literal で読めない（判定不能な）場合は従来どおり Ask（subagent では Deny）で、Allow にはしない。
+2. **追跡は最小範囲とする。**
+   - モデル化する形: `exec N<<< literal` と、quoted here-document（`exec N<<'EOF'`）で開いた fd を、後の文の `bash|sh|zsh` または interpreter が `<&N` か `/dev/fd/N` で読む形。文は `;`、改行、`&&`、`||` で区切られ、書かれた順に追う。
+   - `exec N<&-`（close）と、同じ N への再代入は、書かれた順に反映する。close した後と、再代入した後の fd は、新しい中身で判定する。
+   - subshell `( … )`、関数本体、条件付きの exec（`&&` / `||` の右辺や `if` の中）、展開を含む here-document（unquoted `<<EOF`）、`N<&M`（M が 3 以上）の連鎖は、追跡の対象外とする。これらの形で開いた fd を読む場合は判定不能として扱う。ただし中身が literal で harm と分かる場合は、裁定 1 により Deny とする。
+3. 再現テスト: `crates/blastguard/tests/backlog_20261114_exec_fd_herestring_then_shell_reads_fd.rs`（`exec 3<<< 'chmod 777 /etc/hosts'; bash <&3` は main・subagent とも Deny）。
+4. 補足裁定（AskUserQuestion への回答、2026-11-14。specforge rigor 未達の 4 点への回答）:
+   - `exec N< file` と `exec N<&0`（`0..2` の標準 fd の複製）を読む reader は、従来どおり `bash < file`（標準 fd の複製なら stdin）と同じ扱いとする（上の「ファイルで開かれた fd は `bash < file` と同じ扱い」を維持する）。
+   - brace group `{ … }` の中の exec はモデル化する。既存の `decompounded` の読みと同じく brace を外して、トップレベルの exec と同じに扱う。
+   - exec がトップレベルにあり、reader が subshell `( … )` か関数本体の中にある場合は判定不能とする（main で Ask、subagent で Deny）。ただし中身が literal で harm と分かる場合は、裁定 1 により Deny とする。reader が brace の中にある場合は、brace を外した読みと外さない読みの両方で判定し、制限側の verdict を採る（追加のみ）。
+   - close（`exec N<&-`）した後で fd N を読む reader は、close 前に開いていた中身が literal で harm なら Deny とする。それ以外は、どこでも開かれていない fd と同じく Ask とする（subagent では Deny）。
+   - `<&N` や `/dev/fd/N` で fd を読む reader は、shell（`bash|sh|zsh`）に限らない。既存の stdin reader の集合（code interpreter を含む）のすべてを対象とする。

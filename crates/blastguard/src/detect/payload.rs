@@ -789,8 +789,8 @@ fn procsub_programs(
     let mut argv: Vec<usize> = Vec::new();
     let mut fd_procsub: Vec<(u32, usize)> = Vec::new();
     let mut dup_into_stdin: Vec<u32> = Vec::new();
-    // Every other fd this stage opens itself, and whether it is a readable
-    // FILE (false: a here-document / here-string, whose text is not read here).
+    let mut unreadable_stdin: Vec<String> = Vec::new();
+    // Other fds this stage opens: readable FILE (false: here-document / here-string).
     let mut opened_in_stage: Vec<(u32, bool)> = Vec::new();
     let mut stdin_redirected = false;
     let mut j = r + 1;
@@ -823,6 +823,8 @@ fn procsub_programs(
             "<&" | ">&" if effective_fd == 0 => {
                 if let Ok(n) = target.parse::<u32>() {
                     dup_into_stdin.push(n);
+                } else if let Some(why) = exec_fds::dynamic_dup_reason(target) {
+                    unreadable_stdin.push(why);
                 }
             }
             "<<" | "<<-" | "<<<" => opened_in_stage.push((effective_fd, false)),
@@ -835,10 +837,8 @@ fn procsub_programs(
         .filter(|(fd, _)| *fd == 0 || dup_into_stdin.contains(fd))
         .map(|&(_, idx)| idx)
         .collect();
-    // Stdin taken from an fd the stage does not open itself: an `exec` earlier
-    // on the line, or nothing at all (an inherited fd blastguard cannot see).
+    // Stdin from an fd the stage does not open itself: an earlier `exec`, or an inherited fd.
     let mut exec_stdin_bodies: Vec<String> = Vec::new();
-    let mut unreadable_stdin: Vec<String> = Vec::new();
     let from_exec = |n: u32, bodies: &mut Vec<String>, unreadable: &mut Vec<String>| {
         let opened: Vec<&ExecFd> = exec_fds
             .iter()

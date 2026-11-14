@@ -2233,3 +2233,33 @@ exit 101: ered out; finished in 0.44s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
      Running tests/backlog_20261114_git_commit_heredoc_opener_expansion_body_fp.rs (target/debug/deps/backlog_20261114_git_commit_heredoc_opener_expansion_body_fp-567942cab59131fd)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_git_commit_heredoc_opener_expansion_body_fp`"""
+
+[[task]]
+id = "4c15fa35"
+title = "blastguard: python3 - heredoc program with rmtree only inside a triple-quoted string literal denied as destructive call"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 at main 9bab9873e (blastguard 0.2.594 built from that rev; RED committed eb8811f70, 0.2.595). First seen in run-20261114-163341-69351, task worktree run-20261114-163341-69351-b793fddc (blocks.jsonl, installed 0.2.588, actor=subagent, rule interpreter-destructive-call): program rewrote scripts/check-fail-open-mutation.py via p.write_text(s), rmtree only inside r'''...''' text; verbatim reason \"`python3 - <<'EOF'` takes its program from stdin, and it runs `rmtree`, which deletes files or directories outright\" (it calls no rmtree). Minimised reason: '... a quoted string in its program spells `rmtree`, which deletes files or directories outright if that string is run as code; blastguard cannot show it is not'. Splits (main): plain 'shutil.rmtree(x)' literal ask (27795e6e downgrade, not asserted); '''...''' print deny; r'''...''' write_text deny; same with copy allow; real shutil.rmtree call deny. Judged FP under user ruling 2026-11-08 (text vs code via a real parser): quoted delimiter, no sink. Suspected (UNVERIFIED): layer-0 substring scan in crates/blastguard/src/detect/interpreter.rs ~1165 whose only downgrade is heuristic inert_literal_bodies (detect/interpreter/inert_literal.rs ~123) returning None on any ''' or \"\"\"; the Python lexer (python_semantics.rs lex) is not consulted. The verbatim 'it runs' wording comes from the strip_hash_comments(payload, true) quote toggler (detect/interpreter/comments.rs:29), cause UNVERIFIED. Controls green: real rmtree call, call after a triple literal, exec of a literal are not Allow."
+created_at = 1794654144
+updated_at = 1794654144
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp -- --ignored python_stdin_triple_quoted_rmtree_text_is_not_a_call"
+rev = "eb8811f703a54920bf6db2621db0b07e0eaf89be"
+observed_at = 1794654144
+detail = """
+exit 101: d out; finished in 0.44s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp.rs (target/debug/deps/backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp-7b85eef629c6ed87)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp`"""

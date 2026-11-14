@@ -91,7 +91,13 @@ forge・condukt のスケジューラが再利用）。
   operand。ただし全 operand が config なら allow。**保護パスは config 免除より先に判定され、
   免除を上書きする**＝`is_protected_path`/`protected_tree_deny` が `is_config_file` に優先）、
   `git`（`analyze_git`: `clean -f` + `-d`/`-x`、`clean -f` 単体でも追跡外ファイルを消すので deny、
-  `reset --hard`、`checkout --force`/`-f`、`checkout -- .`（whole-tree）、`switch -f/--discard-changes`、
+  `reset --hard`（例外 9352d929 / GH #1660: rev が文字どおり `HEAD`、top-level の単一 git コマンドで
+  global option は `-C <dir>` 1 回まで、git が走るディレクトリが解決済みで `.git` が通常ファイル
+  〈linked worktree checkout をディスクで観測〉、かつ `git status --porcelain=v1 -z --untracked-files=all
+  --ignore-submodules=none` が exit 0・出力空、`git ls-files -v -z` が exit 0 で全 entry が `H`
+  〈assume-unchanged / skip-worktree なし〉のときだけ allow。probe 失敗・timeout・非 0・それ以外の出力は
+  deny のまま — `detect/git.rs` の `reset_hard_head_in_clean_linked_worktree`）、
+  `checkout --force`/`-f`、`checkout -- .`（whole-tree）、`switch -f/--discard-changes`、
   `stash` の `-a/--all/-u`（追跡外・無視ファイルを working-tree から除去）、`git rm`（`--cached` 含む・
   保護パス target のみ）、および `checkout`/`restore` の operand が保護パスの場合。**通常のパスへの
   `git checkout [<rev>] -- <path>` は壊すもので判定する**（`detect/git.rs` の `checkout_pathspec_verdict`）:

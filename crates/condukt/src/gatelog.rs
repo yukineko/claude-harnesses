@@ -214,8 +214,12 @@ pub struct CircuitRecord {
     pub streak: u32,
     /// The streak cap the decision used (0 disables the streak axis).
     pub streak_cap: u32,
-    /// Whether the budget signal was over its cap.
-    pub budget_over_cap: bool,
+    /// Whether the budget signal was over its cap: `Some(true/false)` when
+    /// measured (or the axis is off, `Some(false)`), `None` (JSON `null`) when
+    /// the budget could not be measured. Older journal lines carry a plain
+    /// bool and still deserialize as `Some(_)`. Consumers must treat `None`
+    /// as unknown, never as "not over cap".
+    pub budget_over_cap: Option<bool>,
     /// The gathered idle duration in seconds.
     pub idle_secs: i64,
     /// The idle TTL the decision used (0 disables the stall axis).
@@ -638,7 +642,7 @@ mod tests {
             reason: Some("failure_streak".to_string()),
             streak: 3,
             streak_cap: 3,
-            budget_over_cap: false,
+            budget_over_cap: Some(false),
             idle_secs: 0,
             idle_ttl_secs: 1800,
             compactions: Some(1),
@@ -652,6 +656,47 @@ mod tests {
         assert_eq!(got[0], rec);
         // a different run id has its own (still-empty) log
         assert!(load_circuit_records(dir.path(), "r2").is_empty());
+    }
+
+    #[test]
+    fn circuit_old_plain_bool_and_null_budget_over_cap_deserialize() {
+        let dir = tempfile::tempdir().unwrap();
+        let line = |v: &str| {
+            format!(
+                r#"{{"verdict":"continue","reason":null,"streak":0,"streak_cap":3,"budget_over_cap":{v},"idle_secs":0,"idle_ttl_secs":0,"compactions":null,"max_compactions":0,"recorded_at":1}}"#
+            )
+        };
+        let body = format!("{}\n{}\n{}\n", line("false"), line("true"), line("null"));
+        std::fs::write(circuit_log_path(dir.path(), "r9"), body).unwrap();
+        let got = load_circuit_records(dir.path(), "r9");
+        let vals: Vec<Option<bool>> = got.iter().map(|r| r.budget_over_cap).collect();
+        assert_eq!(vals, vec![Some(false), Some(true), None]);
+    }
+
+    #[test]
+    fn circuit_measured_budget_over_cap_round_trips_true_and_false() {
+        let dir = tempfile::tempdir().unwrap();
+        for v in [true, false] {
+            let rec = CircuitRecord {
+                verdict: "continue".to_string(),
+                reason: None,
+                streak: 0,
+                streak_cap: 3,
+                budget_over_cap: Some(v),
+                idle_secs: 0,
+                idle_ttl_secs: 0,
+                compactions: None,
+                max_compactions: 0,
+                recorded_at: 1,
+            };
+            append_circuit(dir.path(), "r8", &rec);
+        }
+        let raw = std::fs::read_to_string(circuit_log_path(dir.path(), "r8")).unwrap();
+        assert!(raw.contains(r#""budget_over_cap":true"#));
+        assert!(raw.contains(r#""budget_over_cap":false"#));
+        let got = load_circuit_records(dir.path(), "r8");
+        assert_eq!(got[0].budget_over_cap, Some(true));
+        assert_eq!(got[1].budget_over_cap, Some(false));
     }
 
     #[test]

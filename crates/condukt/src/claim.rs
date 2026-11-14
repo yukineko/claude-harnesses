@@ -909,6 +909,27 @@ mod test_hook {
     }
 }
 
+/// `.claude-plugin/marketplace.json`, `Cargo.lock`, and each crate's
+/// `crates/<c>/Cargo.toml` / `crates/<c>/.claude-plugin/plugin.json`: the files
+/// the version-lockstep rule makes every plugin bump touch.
+fn is_lockstep_version_file(f: &str) -> bool {
+    let f = f.trim_start_matches("./");
+    if f == ".claude-plugin/marketplace.json" || f == "Cargo.lock" {
+        return true;
+    }
+    let Some(rest) = f.strip_prefix("crates/") else {
+        return false;
+    };
+    match rest.split_once('/') {
+        Some((krate, tail)) => {
+            !krate.is_empty()
+                && !krate.contains(['*', '?', '['])
+                && (tail == "Cargo.toml" || tail == ".claude-plugin/plugin.json")
+        }
+        None => false,
+    }
+}
+
 fn ttl_secs(cfg: &Config) -> i64 {
     // Reuse the STUCK TTL: a task silent past it is already considered stuck, so
     // its claim should likewise be reclaimable. Clamp to i64 defensively.
@@ -971,6 +992,15 @@ fn claim_files_with_deadline(
 
     let mut outcome = ClaimOutcome::default();
     for f in files {
+        // Version-lockstep files are never exclusive: every plugin bump edits
+        // them, two sessions' edits are line-disjoint and git merges them, and
+        // scripts/check-plugin-versions.py guards the result. Serializing runs
+        // on them only stalls parallel work (backlog: claim over-serialization,
+        // 2026-11-14), so they are granted without a registry entry.
+        if is_lockstep_version_file(f) {
+            outcome.claimed.push(f.clone());
+            continue;
+        }
         // Does any *other* run hold an overlapping claim? Clone the holder out so
         // the immutable borrow ends before we mutate `reg` below.
         let conflict = reg

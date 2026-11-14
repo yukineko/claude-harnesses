@@ -632,10 +632,13 @@ pub fn run_circuit_check(
     //    budgetguard is a binary-only crate with no lib target to depend on
     //    anyway), and we do NOT parse budgetguard's private config. The cap is
     //    injected via `--budget-cap-usd`; an absent/<=0 cap switches the axis
-    //    off (`false`). With a cap set, a MISSING ledger is a genuine $0 day
+    //    off (`false`: the axis was not consulted). With a cap set, a MISSING ledger is a genuine $0 day
     //    (`load_checked` → default), but a present-and-unreadable/corrupt one
     //    is cannot-determine: `budget_unknown_reason` is set and the breaker
-    //    trips `budget_unmeasured` (CLAUDE.md §3). No network calls.
+    //    trips `budget_unmeasured` (CLAUDE.md §3). In that unreadable case the
+    //    bool below is a placeholder `false`; it is never journaled as a
+    //    measurement (the journal gets `None`/null, see the record below).
+    //    No network calls.
     let (budget_over_cap, budget_unknown_reason) = match budget_cap_usd {
         Some(cap) if cap > 0.0 => {
             let today = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -788,12 +791,19 @@ pub fn run_circuit_check(
         Determination::Known(secs) => *secs,
         Determination::Undetermined(_) => 0,
     };
+    // `budget_over_cap` is journaled as `None` (JSON null) whenever the budget
+    // could not be measured, so a trail reader never sees `false` ("not over
+    // cap") for an unmeasured budget; the reason is in the printed JSON.
     let record = crate::gatelog::CircuitRecord {
         verdict: verdict_str.to_string(),
         reason,
         streak,
         streak_cap,
-        budget_over_cap,
+        budget_over_cap: if budget_unknown_reason.is_some() {
+            None
+        } else {
+            Some(budget_over_cap)
+        },
         idle_secs: journaled_idle_secs,
         idle_ttl_secs,
         compactions,

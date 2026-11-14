@@ -27,7 +27,7 @@ Cargo ワークスペース・モノレポ。`yukineko` の Claude Code ハー�
 | autoflow | Stop フックで `/record` と `/condukt` を自動ループするセッション終了オートフローゲート |
 | backlog | SessionStart フックで未完了タスクを通知するクロスプロジェクト・タスクキュー |
 | beacon | Stop/Notification フックでデスクトップ・Slack 通知を送る |
-| blastguard | PreToolUse フックで Bash/ファイル操作中の破壊的操作（再帰 rm・git reset --hard・全消し上書き等）を deny する。リポの設定ファイルは除外 |
+| blastguard | PreToolUse フックで Bash/ファイル操作中の破壊的操作（再帰 rm・git reset --hard〈clean と probe で確認できた linked worktree での `HEAD` 指定は除く〉・全消し上書き等）を deny する。リポの設定ファイルは除外 |
 | budgetguard | Stop フックでセッション/日次コスト上限を監視し超過時に制御する |
 | compass | 北極星ゴール設定・次の一手導出を行う condukt の上流エージェント |
 | condukt | インタープリタ/ワーカー/ベリファイア/リサーチャーの 4 エージェント + Rust バイナリによる決定論オーケストレーションエンジン。`consensus`（multi-sample 自己整合投票・opt-in）と autonomy switch（`condukt state autonomy-check` / env `CONDUKT_AUTONOMOUS` / config）で自律時に人間ゲートを縮退する。完了ゲートは F→P 再現性オラクル（`condukt state check-oracle`）を強制し、有効な Fail→Pass 遷移を伴わない `fix`/`feature` タスクの verified 昇格を拒否する（tdd 不在時はフェイルソフト縮退） |

@@ -36,7 +36,7 @@ It matches `Bash`, `Edit`, `Write`, `MultiEdit`, and `NotebookEdit`.
 | Recursive `rm` | `rm -rf dir`, `rm -fr dir`, `rm -r -f dir` |
 | Wildcard `rm` | `rm *`, `rm -f *`, `rm path/*` |
 | `git clean` force + dir/ignored | `git clean -fdx`, `git clean -fd` |
-| `git reset --hard` | `git reset --hard HEAD~3` |
+| `git reset --hard` (exception: the literal rev `HEAD`, run in a linked worktree checkout that `git status --ignore-submodules=none` positively reports clean and whose index has no assume-unchanged / skip-worktree entry, is allowed; probe failure keeps the deny) | `git reset --hard HEAD~3` |
 | Working-tree discard | `git checkout -- .`, `git checkout --force` |
 | Truncating redirect (single `>`) | `echo x > existing` (judged by recoverability — see [Truncating redirects](#truncating-redirects-are-judged-by-recoverability)) |
 | Bash write into a system directory | `echo x > /etc/paths.d/zz`, `… \| tee /etc/sudoers.d/x`, `cp evil /etc/paths.d/zz` |

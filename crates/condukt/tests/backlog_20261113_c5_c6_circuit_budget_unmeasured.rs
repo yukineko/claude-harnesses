@@ -202,7 +202,6 @@ fn control_stall_with_absent_ledger_names_stall() {
 
 /// C5: an unmeasured budget must not be journaled as `budget_over_cap:false`.
 #[test]
-#[ignore = "RED: audit 2026-11-13 C5 — remove the ignore when fixed"]
 fn journal_does_not_record_unmeasured_budget_as_not_over_cap() {
     let fx = Fixture::new();
     let run = "flow-c5";

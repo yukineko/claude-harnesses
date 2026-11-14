@@ -579,6 +579,76 @@ pub(in crate::detect) fn python_program_only_prints(program: &str) -> bool {
     })
 }
 
+/// Names (any dotted component, or an exact string literal) whose presence in
+/// a `python -c` program means it may run the text on ITS stdin as Python: a
+/// stdin console / debugger entry point, or a dynamic-execution primitive that
+/// can be fed `sys.stdin.read()`. A CLOSED list: a program that tokenises and
+/// names none of these only ever reads stdin as data.
+///   * consoles: `code` (`interact`, `InteractiveConsole`,
+///     `InteractiveInterpreter`, `runsource`, `runcode`), `codeop`, `asyncio`
+///     (`python -m asyncio`'s console is `asyncio.__main__`), `_pyrepl`,
+///     `pyrepl`, `readline`-less `cmd`/`pdb`/`bdb` (`pdb.set_trace`,
+///     `pdb.post_mortem`, `breakpoint()`), `IPython`/`ipdb`/`pudb`/`bpython`;
+///   * executors: `exec`, `eval`, `compile`, `__import__`, `importlib`,
+///     `runpy`, `getattr` (a name reached by string).
+const STDIN_PROGRAM_NAMES: &[&str] = &[
+    "code",
+    "codeop",
+    "interact",
+    "InteractiveConsole",
+    "InteractiveInterpreter",
+    "runsource",
+    "runcode",
+    "asyncio",
+    "_pyrepl",
+    "pyrepl",
+    "pdb",
+    "bdb",
+    "cmd",
+    "set_trace",
+    "post_mortem",
+    "breakpoint",
+    "IPython",
+    "ipdb",
+    "pudb",
+    "bpython",
+    "exec",
+    "eval",
+    "compile",
+    "__import__",
+    "importlib",
+    "runpy",
+    "getattr",
+    "globals",
+    "locals",
+    "vars",
+];
+
+/// Whether a literal `python -c` program may run its stdin as a Python
+/// program (an interactive console, a debugger, or `exec`/`eval` of what it
+/// reads). Fail-closed: a program that does not tokenise
+/// ([`python_program_tokenises`]) is `true` (undetermined), as is any name or
+/// string literal on [`STDIN_PROGRAM_NAMES`], any f-string, and any literal
+/// whose escapes are not statically decodable. Names are compared per dotted
+/// component, so `code.interact`, `c.interact` and `from code import *` all
+/// match.
+pub(in crate::detect) fn python_program_enters_stdin_console(program: &str) -> bool {
+    let program = &*python_newlines(program);
+    if !python_program_tokenises(program) {
+        return true;
+    }
+    let listed = |w: &str| STDIN_PROGRAM_NAMES.contains(&w);
+    let named = sem::lex(program).iter().any(|t| match t {
+        sem::Tok::Name { text, .. } => text.split('.').any(listed),
+        sem::Tok::Str { text, fstring } => *fstring || listed(text.trim()),
+        _ => false,
+    });
+    named
+        || sem::literal_values(program)
+            .iter()
+            .any(|v| !matches!(v, super::python_escape::Decoded::Value(_)))
+}
+
 /// True when `program` tokenises as Python ([`code_view`] is `Some`): every
 /// string is closed and every bracket balanced. Read with Python's line
 /// terminators ([`python_newlines`]): a bare CR inside a one-quote string ends

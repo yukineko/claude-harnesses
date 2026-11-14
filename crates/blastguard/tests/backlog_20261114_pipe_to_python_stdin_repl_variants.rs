@@ -103,14 +103,12 @@ fn undenied(cmds: &[String], tag: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 harmful program piped to python3 -m asyncio is Allow — remove the ignore when fixed"]
 fn harmful_program_piped_to_python_m_asyncio_is_deny() {
     let bad = undenied(&[format!("{PY}python3 -m asyncio")], "asyncio");
     assert!(bad.is_empty(), "expected Deny:\n{}", bad.join("\n"));
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 harmful program piped to PYTHONINSPECT=1 python3 script.py is Allow — remove the ignore when fixed"]
 fn harmful_program_piped_to_pythoninspect_script_is_deny() {
     let bad = undenied(
         &[format!("{PY}PYTHONINSPECT=1 python3 script.py")],
@@ -120,7 +118,6 @@ fn harmful_program_piped_to_pythoninspect_script_is_deny() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 harmful program piped to python3 -c code.interact() is Allow — remove the ignore when fixed"]
 fn harmful_program_piped_to_code_interact_is_deny() {
     let bad = undenied(
         &[format!("{PY}python3 -c 'import code; code.interact()'")],

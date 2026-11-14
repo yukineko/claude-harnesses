@@ -1850,3 +1850,32 @@ exit 101: 0 (/Users/yuki/src/.harness-worktrees/session-b3435a5e/crates/blastgua
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.67s
      Running tests/backlog_20261114_quoted_heredoc_body_side_fps.rs (target/debug/deps/backlog_20261114_quoted_heredoc_body_side_fps-e32d5314fa6568e9)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_quoted_heredoc_body_side_fps`"""
+
+[[task]]
+id = "f869115c"
+title = "blastguard FP: quoted heredoc writing .json whose body has backticked sh <<'EOF' text is denied as a stdin program"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "heredoc-fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Side finding run-20261114-130020-46995, RED in 3d99f03e (2026-11-14). Observed live: relay bgr-028db5975780, reason '`sh <<'EOF'` takes its program from stdin'. Readings: (a) FP, .json body is data; (b) intended — distinguish: nothing executes the .json."
+created_at = 1794629115
+updated_at = 1794629115
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_json_heredoc_body_sh_heredoc_text_fp -- --include-ignored"
+rev = "3d99f03eacaeefa68c963747d3dbb7d17c599b3a"
+observed_at = 1794629115
+detail = """
+exit 101: ess-worktrees/session-b3435a5e/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.88s
+     Running tests/backlog_20261114_json_heredoc_body_sh_heredoc_text_fp.rs (target/debug/deps/backlog_20261114_json_heredoc_body_sh_heredoc_text_fp-021fb1a9b8d57db3)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_json_heredoc_body_sh_heredoc_text_fp`"""

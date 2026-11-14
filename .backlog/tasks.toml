@@ -1881,3 +1881,31 @@ exit 101: ess-worktrees/session-b3435a5e/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.88s
      Running tests/backlog_20261114_json_heredoc_body_sh_heredoc_text_fp.rs (target/debug/deps/backlog_20261114_json_heredoc_body_sh_heredoc_text_fp-021fb1a9b8d57db3)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_json_heredoc_body_sh_heredoc_text_fp`"""
+
+[[task]]
+id = "ec087b02"
+title = "blastguard FP: perl $. inside a single-quoted -e program is denied as a shell expansion"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Side finding run-20261114-130020-46995, RED in 3d99f03e (2026-11-14). Observed live: relay bgr-b57a7fb9f47c, reason 'that program contains a shell expansion'. Possibly same as GH #1732. Readings: (a) FP — single quotes do not expand; (b) intended — distinguish via a real shell quoting parser."
+created_at = 1794629181
+updated_at = 1794629181
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_perl_single_quoted_dollar_dot_fp -- --include-ignored"
+rev = "3d99f03eacaeefa68c963747d3dbb7d17c599b3a"
+observed_at = 1794629181
+detail = """
+exit 101: ki/src/.harness-worktrees/session-b3435a5e/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.66s
+     Running tests/backlog_20261114_perl_single_quoted_dollar_dot_fp.rs (target/debug/deps/backlog_20261114_perl_single_quoted_dollar_dot_fp-5b415bce532c3ab8)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_perl_single_quoted_dollar_dot_fp`"""

@@ -77645,3 +77645,124 @@ rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "b2330a21"
+title = "blastguard FP: quoted python heredoc 本文の >> `y` を append redirect と誤読する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed by a worker 2026-11-13 (python3 - <<'EOF' body with Rust string text containing >> and backticks), verbatim: '>> `' appends to a path that only exists at run time — blastguard cannot tell whether it is a protected gate/config file or a system directory. RED d26296d2 (non-implementer): subagent=false: heredoc BODY text read as an append redirect: ask; subagent: deny. Trigger: >> followed by a backtick-quoted word; no cd needed (detect.rs:1103 runtime-path append branch). Distinct from a2d36aa2 (needs unresolvable cd, relative > redirect). Controls: same body without backticks allowed; real echo hi >> "$var" stays not-Allow."""
+created_at = 1794524589
+updated_at = 1794649219
+weight = 0.0
+issue_number = 1670
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1670"
+issue_closed_at = 1794649221
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_python_heredoc_body_append_backtick_fp quoted_python_heredoc_body_append_text_is_not_a_redirect -- --include-ignored"
+rev = "f1cadb771b362bfba3a6a3d2242c7a2a2fc6df83"
+observed_at = 1794524589
+detail = """
+exit 101: rktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
+     Running tests/backlog_20261113_python_heredoc_body_append_backtick_fp.rs (target/debug/deps/backlog_20261113_python_heredoc_body_append_backtick_fp-2306f6e79c0bcb58)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_python_heredoc_body_append_backtick_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261113_python_heredoc_body_append_backtick_fp quoted_python_heredoc_body_append_text_is_not_a_redirect -- --include-ignored"
+exit = 0
+passed = 1
+rev = "d6e79571ac70072ea885d132a9956f0adc818ce2"
+observed_at = 1794649217
+output_digest = "sha256:a5cd02e1bb11334f7d107eedd9ed7aff68ac62bfe68ed02dadcb589be31a38eb"
+excerpt = """
+
+running 1 test
+test quoted_python_heredoc_body_append_text_is_not_a_redirect ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.62s
+
+   Compiling blastguard v0.2.594 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/backlog_20261113_python_heredoc_body_append_backtick_fp.rs (target/debug/deps/backlog_20261113_python_heredoc_body_append_backtick_fp-fa9c782444d7a38c)
+"""
+
+[task.closure.red]
+rev = "eeaa7384332ad0d19076fa9c21390e711ca261bf"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "e70b6a71"
+title = "blastguard: quoted-heredoc commit message with backticks is Ask/Deny (command-word expansion FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "audit-20261113",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "git commit -q -F - <<'EOF' whose quoted body contains backtick spans (e.g. blastguard log in backticks) gets: the command word ``blastguard` is an expansion whose value only exists at run time — blastguard cannot tell what program this runs. Quoted heredoc bodies are not expanded. RED: crates/blastguard/tests/backlog_20261113_commit_heredoc_backtick_fp.rs (dc6b8ce0). Controls for unquoted heredocs are live."
+created_at = 1794519412
+updated_at = 1794649230
+weight = 0.0
+issue_number = 1664
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1664"
+issue_closed_at = 1794649232
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_commit_heredoc_backtick_fp -- --ignored quoted_heredoc_commit_message_with_backticks_is_not_denied_or_asked"
+rev = "8e3817c2b58e0deb83abc9f67ea085e7a6ab3256"
+observed_at = 1794519412
+detail = """
+exit 101: 0.2.475 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s
+     Running tests/backlog_20261113_commit_heredoc_backtick_fp.rs (target/debug/deps/backlog_20261113_commit_heredoc_backtick_fp-f62566408a5777c8)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_commit_heredoc_backtick_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261113_commit_heredoc_backtick_fp quoted_heredoc_commit_message_with_backticks_is_not_denied_or_asked"
+exit = 0
+passed = 1
+rev = "d6e79571ac70072ea885d132a9956f0adc818ce2"
+observed_at = 1794649229
+output_digest = "sha256:8b521d652893270073eec096193954aa034bacb91f474b4d63bc1ca5862ba4d9"
+excerpt = """
+
+running 1 test
+test quoted_heredoc_commit_message_with_backticks_is_not_denied_or_asked ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.42s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_commit_heredoc_backtick_fp.rs (target/debug/deps/backlog_20261113_commit_heredoc_backtick_fp-19689b50cf879f55)
+"""
+
+[task.closure.red]
+rev = "eeaa7384332ad0d19076fa9c21390e711ca261bf"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

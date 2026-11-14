@@ -77283,3 +77283,65 @@ rev = "b0b4ac6e39a29065dbc2ad66f6b4fc326c3b2483"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "e787b168"
+title = "backlog sync: open-local/closed-remote の食い違いを検出・解消しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "issue-sync",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794521535
+updated_at = 1794626765
+weight = 0.0
+issue_number = 1667
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1667"
+issue_closed_at = 1794626768
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_sync_detects_closed_remote_open_local -- --include-ignored"
+rev = "5633a31d3de3acbb470bbe8fa5096c4a4c6c776c"
+observed_at = 1794521535
+detail = """
+exit 101: d; 0 measured; 0 filtered out; finished in 0.65s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261113_sync_detects_closed_remote_open_local.rs (target/debug/deps/backlog_20261113_sync_detects_closed_remote_open_local-8fab923a3b589cee)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_sync_detects_closed_remote_open_local`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261113_sync_detects_closed_remote_open_local -- open_local_closed_remote_row_is_planned_for_reopen"
+exit = 0
+passed = 1
+rev = "7f5be37a64217094031a083db1b808e6e0ee4061"
+observed_at = 1794626760
+output_digest = "sha256:8157fda2427b03bb409461ea24bb854a5b81c3fc8caae3ab5d598ee22b3113ae"
+excerpt = """
+
+running 1 test
+test open_local_closed_remote_row_is_planned_for_reopen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 1.33s
+
+   Compiling backlog v0.3.124 (/Users/yuki/src/.harness-worktrees/session-b3435a5e/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.44s
+     Running tests/backlog_20261113_sync_detects_closed_remote_open_local.rs (target/debug/deps/backlog_20261113_sync_detects_closed_remote_open_local-798c008ea7c237a1)
+"""
+
+[task.closure.red]
+rev = "6d5c1627c604c47421e5941b1191191c2984df19"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

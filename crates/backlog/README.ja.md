@@ -17,7 +17,7 @@
 - `audit-closures` — 全終端行の closure 証拠を read-only で分類する（`--json`）。store は書かない
 - `overlap` — キュー中のタスクを宣言された `touched_files` scope でグループ化する（advisory、未宣言は別に列挙）
 - `edit <id>` — タスクの title / tags / notes / status を更新する。`--repro-test CMD` で pending タスクの repro を差し替える（「テストが無ければ起票しない」参照）
-- `sync` — store を GitHub issue と突き合わせる（一方向・ローカル優先）。`--apply` なしでは報告のみ。`--only both|create|close|body` で実行する arm を選ぶ。`--limit` は plan をそのタスク数に切り詰める
+- `sync` — store を GitHub issue と突き合わせる（一方向・ローカル優先）。`--apply` なしでは報告のみ。`--only both` ではローカルで open の mirror 済み行の issue 状態を `gh issue view` で読み、リモートで closed なら reopen を plan する。`gh` の失敗・パース不能は「判定不能」として非0終了で報告する（「0 件」とはしない）。`--only both|create|close|body` で実行する arm を選ぶ。`--limit` は plan をそのタスク数に切り詰める
 - `session-start` — SessionStart フック: pending タスクを context として注入する
 - `install` / `uninstall` — `~/.claude/settings.json` の SessionStart フックを配線/除去する（standalone 用）
 - `merge-driver` — task store 用の git merge driver（下記参照）

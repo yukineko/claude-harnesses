@@ -392,6 +392,151 @@ pub fn decide_issue_reopen<R: Fn(&[&str]) -> Option<(bool, String)>>(
     }
 }
 
+/// What GitHub says about one mirrored issue (backlog e787b168).
+///
+/// Three-valued on purpose: "could not read it" is `Undetermined`, never
+/// folded into `Open` (which would read as "nothing to reconcile").
+#[derive(Debug, Clone, PartialEq)]
+pub enum RemoteIssueState {
+    Open,
+    Closed,
+    Undetermined { reason: String },
+}
+
+/// Read `number`'s state through `gh issue view <n> --json state`, from the
+/// injected runner's result. Never spawns a process itself; never panics.
+///
+/// Anything but a zero-exit run whose output is a JSON object with a `state`
+/// of exactly `OPEN` or `CLOSED` is `Undetermined`: non-github remote, absent
+/// gh, non-zero exit, unparsable output, unknown state. On success the runner
+/// must hand over stdout ONLY (main.rs `gh_probe_stdout`): a stderr warning
+/// appended to the JSON would make a determined answer unparsable.
+pub fn decide_issue_state<R: Fn(&[&str]) -> Option<(bool, String)>>(
+    remote_url: &str,
+    number: u64,
+    run: R,
+) -> RemoteIssueState {
+    let undetermined = |reason: String| RemoteIssueState::Undetermined { reason };
+    if !is_github_remote(remote_url) {
+        return undetermined("remote is not github.com; cannot read issue state".to_string());
+    }
+    let n = number.to_string();
+    match run(&["issue", "view", n.as_str(), "--json", "state"]) {
+        None => undetermined("gh CLI not found or timed out".to_string()),
+        Some((false, output)) => undetermined(format!("gh issue view failed: {}", output.trim())),
+        Some((true, output)) => {
+            let v: serde_json::Value = match serde_json::from_str(output.trim()) {
+                Ok(v) => v,
+                Err(e) => {
+                    return undetermined(format!(
+                        "unparsable gh output ({e}): {}",
+                        output.trim().chars().take(200).collect::<String>()
+                    ))
+                }
+            };
+            match v.get("state").and_then(|s| s.as_str()) {
+                Some("OPEN") => RemoteIssueState::Open,
+                Some("CLOSED") => RemoteIssueState::Closed,
+                other => undetermined(format!("unrecognised issue state {other:?}")),
+            }
+        }
+    }
+}
+
+/// Read the remote state of every locally-open mirrored row (pending/failed,
+/// issue number, no recorded close). A remotely CLOSED one yields a `Reopen`
+/// action (local wins); one whose state could not be read yields a line in the
+/// second vec (undetermined — see [`finish_undetermined`]).
+pub fn remote_reopens<R: Fn(&[&str]) -> Option<(bool, String)>>(
+    tasks: &[crate::task::Task],
+    remote_url: &str,
+    run: R,
+) -> (Vec<crate::store::SyncAction>, Vec<String>) {
+    let (mut reopens, mut undetermined) = (Vec::new(), Vec::new());
+    for t in tasks {
+        if !matches!(
+            t.status,
+            crate::task::STATUS_PENDING | crate::task::STATUS_FAILED
+        ) || t.issue_closed_at.is_some()
+        {
+            continue;
+        }
+        let Some(n) = t.issue_number else { continue };
+        match decide_issue_state(remote_url, n, &run) {
+            RemoteIssueState::Open => {}
+            RemoteIssueState::Closed => reopens.push(crate::store::SyncAction::Reopen {
+                id: t.id.clone(),
+                number: n,
+            }),
+            RemoteIssueState::Undetermined { reason } => {
+                undetermined.push(format!("{}: #{n}: {reason}", t.id))
+            }
+        }
+    }
+    (reopens, undetermined)
+}
+
+/// Report rows whose remote state could not be read and turn that into a
+/// non-zero exit. Empty means every mirrored row's state was determined.
+pub fn finish_undetermined(undetermined: &[String]) -> anyhow::Result<()> {
+    if undetermined.is_empty() {
+        return Ok(());
+    }
+    eprintln!(
+        "sync: UNDETERMINED: could not read the remote state of {} mirrored issue(s); \
+         the plan above is incomplete:",
+        undetermined.len()
+    );
+    for u in undetermined {
+        eprintln!("  {u}");
+    }
+    Err(anyhow::anyhow!(
+        "{} issue(s) have undetermined remote state; this is NOT '0 to reconcile'",
+        undetermined.len()
+    ))
+}
+
+/// End of `backlog sync --apply`: list EVERY failed action, then the rows
+/// whose remote state could not be read, and exit non-zero if either is
+/// non-empty. Neither report may hide the other (CLAUDE.md §4): the
+/// undetermined report is not an early return in front of the failure list.
+pub fn finish_apply(
+    failures: &[String],
+    planned: usize,
+    undetermined: &[String],
+) -> anyhow::Result<()> {
+    if !failures.is_empty() {
+        eprintln!(
+            "sync: {} action(s) FAILED and were not recorded:",
+            failures.len()
+        );
+        for f in failures {
+            eprintln!("  {f}");
+        }
+    }
+    let unread = finish_undetermined(undetermined);
+    if !failures.is_empty() {
+        // A partially-applied reconciliation that exits 0 reads as "the
+        // mirror is in sync". It is not — say so in the exit code as well as
+        // on stderr (CLAUDE.md §3), and re-running picks the failures up again
+        // because nothing was recorded for them.
+        return Err(anyhow::anyhow!(
+            "{} of {} sync action(s) did not complete{}; re-run `backlog sync --apply` to retry",
+            failures.len(),
+            planned,
+            if unread.is_err() {
+                format!(
+                    ", and {} issue(s) have undetermined remote state",
+                    undetermined.len()
+                )
+            } else {
+                String::new()
+            }
+        ));
+    }
+    unread
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

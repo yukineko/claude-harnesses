@@ -17,7 +17,7 @@ To drain the whole queue automatically, use `/flow` instead.
 - `audit-closures` — Read-only classification of every terminal row's closure evidence (`--json`); never writes the store
 - `overlap` — Group queued tasks by declared `touched_files` scope (advisory; undeclared scopes listed separately)
 - `edit <id>` — Update a task's title / tags / notes / status; `--repro-test CMD` replaces a pending task's repro (see **File only with a reproducing test**)
-- `sync` — Reconcile the store against its GitHub issues (one-way, local wins). It is report-only unless `--apply`. `--only both|create|close|body` selects which arms run. `--limit` truncates the plan to that many tasks
+- `sync` — Reconcile the store against its GitHub issues (one-way, local wins). It is report-only unless `--apply`. With `--only both` it reads each locally-open mirrored row's issue state via `gh issue view`; a row closed remotely is planned for reopen, and a `gh` failure or unparsable output is reported as UNDETERMINED with a non-zero exit (never "0 to reconcile"). `--only both|create|close|body` selects which arms run. `--limit` truncates the plan to that many tasks
 - `session-start` — SessionStart hook: inject pending tasks as context
 - `install` / `uninstall` — Wire/remove the SessionStart hook in `~/.claude/settings.json` (standalone use)
 - `merge-driver` — git merge driver for the task store — see below

@@ -274,8 +274,9 @@ enum Command {
 
         /// Which half of the mirror to reconcile. `close` catches up on issues
         /// whose task is already finished; `create` PUBLISHES a new public
-        /// issue per unmirrored pending task. Defaults to `both`, which is what
-        /// `sync` has always done.
+        /// issue per unmirrored pending task. Defaults to `both`, which also
+        /// reads each locally-open mirrored issue's state via `gh` (even on a
+        /// dry run) and plans a reopen for one closed on GitHub.
         #[arg(long, value_enum, default_value = "both")]
         only: store::SyncOnly,
     },
@@ -1391,7 +1392,8 @@ fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Sync { apply, limit, only } => {
-            // The dry run is a read; only `--apply` writes (and calls `gh`).
+            // The dry run never writes; only `--apply` writes and mutates
+            // GitHub. Both READ GitHub for `--only both` (`gh issue view`, below).
             let tasks_path = if apply {
                 write_store_path("backlog sync --apply")?
             } else {
@@ -1401,6 +1403,20 @@ fn run(cli: Cli) -> Result<()> {
             // Scope BEFORE truncating: `--only close --limit 50` must mean
             // fifty closes, not the first fifty actions of a mixed plan.
             let mut plan = store::filter_sync_plan(store::sync_plan(&tasks), only);
+            // Remote read (backlog e787b168, GH #1667): `sync_plan` sees only
+            // the local store, so a row open locally whose issue was closed on
+            // GitHub is invisible to it. Read each such row's remote state via
+            // `gh`; a closed one is planned for reopen (local wins), and one
+            // that could not be read is UNDETERMINED, reported below with a
+            // non-zero exit — never counted as "nothing to reconcile".
+            let mut undetermined: Vec<String> = Vec::new();
+            if matches!(only, store::SyncOnly::Both) {
+                let remote_url = git_remote_origin_url(&store_repo_root(&tasks_path));
+                let (reopens, unread) =
+                    github::remote_reopens(&tasks, &remote_url, gh_probe_stdout);
+                plan.extend(reopens);
+                undetermined = unread;
+            }
             if limit > 0 && plan.len() > limit {
                 plan.truncate(limit);
             }
@@ -1475,7 +1491,7 @@ fn run(cli: Cli) -> Result<()> {
                     println!("  ... and {} more", plan.len() - 20);
                 }
                 println!("(dry run; pass --apply to perform)");
-                return Ok(());
+                return github::finish_undetermined(&undetermined);
             }
 
             // The `gh` calls run OUTSIDE the tasks lock on purpose: at ~1s per
@@ -1567,24 +1583,8 @@ fn run(cli: Cli) -> Result<()> {
             }
             let updated = store::record_sync_outcomes(&tasks_path, &outcomes, now_unix())?;
             println!("sync: {} confirmed, {} recorded", outcomes.len(), updated);
-            if !failures.is_empty() {
-                eprintln!(
-                    "sync: {} action(s) FAILED and were not recorded:",
-                    failures.len()
-                );
-                for f in &failures {
-                    eprintln!("  {f}");
-                }
-                // A partially-applied reconciliation that exits 0 reads as
-                // "the mirror is in sync". It is not — say so in the exit code
-                // as well as on stderr (CLAUDE.md §3), and re-running picks the
-                // failures up again because nothing was recorded for them.
-                return Err(anyhow::anyhow!(
-                    "{} of {} sync action(s) did not complete; re-run `backlog sync --apply` to retry",
-                    failures.len(),
-                    plan.len()
-                ));
-            }
+            // Failed actions AND undetermined rows, both listed; non-zero if either.
+            github::finish_apply(&failures, plan.len(), &undetermined)?;
         }
 
         Command::Cancel { id, reason } => {
@@ -1999,6 +1999,18 @@ const GH_TIMEOUT: Duration = Duration::from_secs(20);
 /// `gh_status`-style detection pattern, plus the timeout bound from
 /// `boundary::run_with_timeout` (kills the whole process group on timeout).
 fn gh_probe(argv: &[&str]) -> Option<(bool, String)> {
+    gh_run(argv).map(|(ok, out, err)| (ok, format!("{out}{err}")))
+}
+
+/// [`gh_probe`] for callers that PARSE the output (`gh issue view --json`):
+/// on success only stdout, so a stderr warning is not mistaken for part of the
+/// JSON; on failure stdout+stderr, as `gh_probe`.
+fn gh_probe_stdout(argv: &[&str]) -> Option<(bool, String)> {
+    gh_run(argv).map(|(ok, out, err)| (ok, if ok { out } else { format!("{out}{err}") }))
+}
+
+/// Spawn `gh <argv>`, bounded by `GH_TIMEOUT`: `Some((success, stdout, stderr))`.
+fn gh_run(argv: &[&str]) -> Option<(bool, String, String)> {
     let mut cmd = std::process::Command::new("gh");
     cmd.args(argv).stdin(std::process::Stdio::null());
     match boundary::run_with_timeout(&mut cmd, GH_TIMEOUT) {
@@ -2011,7 +2023,7 @@ fn gh_probe(argv: &[&str]) -> Option<(bool, String)> {
                     "stdout_allowing given the command's own exit code always succeeds"
                 ),
             };
-            Some((code == 0, format!("{stdout}{stderr}")))
+            Some((code == 0, stdout, stderr))
         }
         Determination::Undetermined(_) => None,
     }

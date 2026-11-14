@@ -151,11 +151,13 @@ pub fn run(input: &HookInput) -> Option<String> {
     // agent ever sees, so `additionalContext` is the only channel that can
     // carry it (CLAUDE.md §1: silence is not an acceptable degrade).
     //
-    // Computed from the SAME `sync_plan` the fix command uses, so the report
-    // can never name a different set of work than `backlog sync` would act on.
-    // It reads only the store — no git, no network, no `gh` — so it costs
-    // nothing and is visible precisely on the machine where the mirror is
-    // broken. `MirrorDrift::is_reportable` carries the anti-noise rule and the
+    // Computed from the SAME local `sync_plan` the fix command starts from.
+    // `backlog sync` additionally reads each open row's remote state via `gh`
+    // (e787b168), which this hook deliberately does NOT: it reads only the
+    // store — no git, no network, no `gh` — so it costs nothing and is visible
+    // precisely on the machine where the mirror is broken. A row open locally
+    // but closed on GitHub is therefore NOT counted here; only `backlog sync`
+    // shows it. `MirrorDrift::is_reportable` carries the anti-noise rule and the
     // gap it knowingly leaves open.
     let drift = store::mirror_drift(&tasks);
     if drift.is_reportable() {

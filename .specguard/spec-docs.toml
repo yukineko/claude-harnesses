@@ -115,6 +115,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'pipe 先の shell の argv は option 文法で読む': ProgramSource and the shell/source/python/interpreter program-source readers, moved out of detect/payload.rs unchanged (file-growth cap) and used by the pipe rule (backlog de914866)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/payload/node_source.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'pipe 先の python/node の argv は option 文法で読む': node_program_source's value-taking / boolean / inline option tables and the Undetermined -> Ask arm (backlog f9861c4e)."
+
+[[spec]]
 path = "crates/blastguard/src/detect/payload/exec_fds.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'compound command 内・exec fd・zsh =() 経由の shell program も判定する': exec_opened_fds and ExecFd classes (procsub / file / unreadable) consumed by procsub_programs (backlog 72872200)."

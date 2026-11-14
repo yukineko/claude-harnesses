@@ -10,9 +10,11 @@ use super::{
 };
 
 mod exec_fds;
+mod node_source;
 mod program_source;
 
 use exec_fds::{exec_opened_fds, ExecFd};
+use node_source::{is_node_head, node_program_source};
 use program_source::{
     interpreter_program_source, python_program_source, shell_program_source,
     shell_startup_file_values, source_program_source, ProgramSource,
@@ -324,6 +326,35 @@ whether the sourced file is that stdin",
                             if let Some(deny) = acc.record(Decision::ask(format!(
                                 "`{}` is fed a program on stdin, and {why} — blastguard cannot \
 tell whether the shell runs that stdin or a script file",
+                                stage.trim()
+                            ))) {
+                                return deny;
+                            }
+                        }
+                        false
+                    }
+                }
+            } else if is_python_head(tokens[idx]) || is_node_head(tokens[idx]) {
+                // `python3 -X dev` / `-W ignore` / `node -r m`: the option's
+                // VALUE is not a program file (backlog f9861c4e), so read the
+                // argv with the interpreter's option grammar. An option the
+                // grammar does not model is Undetermined: the stdin program is
+                // judged AND the stage is an Ask, never an Allow.
+                let words = argv_words(rest);
+                let source = if is_python_head(tokens[idx]) {
+                    python_program_source(&words)
+                } else {
+                    node_program_source(&words)
+                };
+                match source {
+                    ProgramSource::File(_) => true,
+                    ProgramSource::Stdin => false,
+                    ProgramSource::Inline => stage_has_program_operand(rest),
+                    ProgramSource::Undetermined(why) => {
+                        if i > 0 || heredoc_open {
+                            if let Some(deny) = acc.record(Decision::ask(format!(
+                                "`{}` is fed a program on stdin, and {why} — blastguard cannot \
+tell whether the interpreter runs that stdin or a script file",
                                 stage.trim()
                             ))) {
                                 return deny;

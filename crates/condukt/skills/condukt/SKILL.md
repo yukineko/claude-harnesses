@@ -535,6 +535,12 @@ fi
 フルスイートのベースラインは取らない。`condukt state test` は、解決したテストコマンドがフルスイート
 （target selector の無い `cargo test` 等）なら実行せずに非 0 で拒否する（`crates/condukt/src/testscope.rs`）。
 worker / verifier の Bash も PreToolUse の `condukt testscope` が同じ規則で deny し、同一ツリーでの同じテストの再実行も deny する。
+`tdd red|green --cmd <c>`（`--cmd=<c>`）の `<c>` も素の Bash と同じに判定され、再実行 ledger は素の `cargo test`・
+`tdd --cmd`・`condukt state test` で共有される（どの経路で走らせても同一ツリーで 2 回目は拒否）。
+**task worktree の中では task のテストしか走らない**: `--test <name>` は decomposition の `reproduction_tests` に
+`--test <name>` として現れるものか、その worktree が base から追加・変更した `tests/<name>.rs`（commit 済み・未 commit・
+untracked）だけ。`--lib`/`--bin`/`--doc` は `reproduction_tests` に同じ selector があるときだけ。だから
+`reproduction_tests` には worker が走らせるべき selector を `--test <file>` / `--lib` の形で書くこと。
 
 **初期 checkpoint (auto-rollback の復元フロア)**: ベースライン取得の直後、実装で run-state が動く前に
 run の初期 checkpoint を1本書く。これが無いと後段の auto-rollback (Phase 6) は `latest_checkpoint=None`
@@ -566,6 +572,10 @@ condukt state checkpoint --run "$RID" --label baseline   # 復元フロア: 実�
    2 つの run は決して同じ名前を指さない。以降の `--branch` はすべて **`condukt/$RID/<t.id>`** を使う。
    (`--run` 省略時は従来の非名前空間レイアウトのまま = 後方互換。並列セッション下では使わないこと。)
 2. `condukt state set --run $RID --task <t.id> --status running --worktree "$WP" --branch condukt/$RID/<t.id>`
+   **testscope session ゲート**: `--status running` は `CLAUDE_CODE_SESSION_ID` が無いか、その session で
+   `condukt testscope` hook が marker（`<ledger 親>/sessions/<session_id>`）を書いていなければ **非 0 で拒否**し、
+   状態は変わらない。拒否されたら「この session では testscope hook が読み込まれていない」ので、
+   **session を再起動して**から再試行する（迂回しない）。
    **クロスセッション claim ゲート (PDO 衝突防止)**: `--status running` はこのタスクの `touched_files` を
    `<state>/<project>/claims.json` に自動占有する。**別 session の live な run が同じファイルを占有中**なら、
    この `state set` は skip JSON (`{"skipped":true,"conflicts":[...]}`) を stdout に出して **exit 1** し、

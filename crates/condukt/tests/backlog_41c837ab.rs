@@ -14,6 +14,8 @@
 //! Control: a task whose branch commit really is merged into main is still
 //! promoted (so the RED test cannot be satisfied by never promoting anything).
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -81,10 +83,15 @@ impl Fixture {
     }
 
     fn condukt(&self, args: &[&str]) -> Output {
+        common::prime_if_running(args, &self.home, "sess-41c837ab");
         harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
+            .env(
+                "CONDUKT_TESTSCOPE_LEDGER",
+                common::testscope_ledger(&self.home),
+            )
             .env("CLAUDE_CODE_SESSION_ID", "sess-41c837ab")
             .env_remove("CONDUKT_DISABLE")
             .output()

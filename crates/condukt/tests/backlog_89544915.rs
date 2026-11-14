@@ -45,6 +45,8 @@
 // the reconcile. Always exits 0 (observability hook); the effect is the
 // disposition row.
 
+mod common;
+
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -83,11 +85,17 @@ impl Fx {
     }
 
     fn run(&self, args: &[&str], now: Option<i64>) -> Output {
+        common::prime_if_running(args, &self.home, common::TESTSCOPE_SESSION);
         let mut c = Command::new(bin());
         harness_core::git_env::scrub(&mut c);
         c.args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
+            .env(
+                "CONDUKT_TESTSCOPE_LEDGER",
+                common::testscope_ledger(&self.home),
+            )
+            .env("CLAUDE_CODE_SESSION_ID", common::TESTSCOPE_SESSION)
             .env("CONDUKT_AUTONOMOUS", "0")
             .env_remove("CONDUKT_NOW_EPOCH");
         if let Some(n) = now {

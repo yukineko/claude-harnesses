@@ -17,6 +17,8 @@
 //!    refuse a worktree that run state records for a task that is not yet
 //!    verified. Control: the same remove proceeds once the task is verified.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -58,6 +60,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 fn condukt(dir: &Path, home: &Path, args: &[&str]) -> Output {
+    common::prime_if_running(args, home, "sess-b12");
     let mut paths = vec![tdd_bin_dir()];
     paths.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
@@ -66,6 +69,7 @@ fn condukt(dir: &Path, home: &Path, args: &[&str]) -> Output {
         .args(args)
         .current_dir(dir)
         .env("HOME", home)
+        .env("CONDUKT_TESTSCOPE_LEDGER", common::testscope_ledger(home))
         .env("PATH", std::env::join_paths(paths).unwrap())
         .env("CLAUDE_CODE_SESSION_ID", "sess-b12")
         .env("CONDUKT_DEFAULT_BRANCH", "main")

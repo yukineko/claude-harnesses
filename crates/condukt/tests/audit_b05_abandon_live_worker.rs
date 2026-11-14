@@ -19,16 +19,21 @@
 //! control puts an OLD transcript there and requires the reset to proceed,
 //! so a gate that refuses every explicit reset does not satisfy it.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const AGENT: &str = "a0b05f00dfeedbeef";
 
 fn condukt(dir: &Path, home: &Path, args: &[&str]) -> (i32, String) {
+    common::prime_if_running(args, home, common::TESTSCOPE_SESSION);
     let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args(args)
         .current_dir(dir)
         .env("HOME", home)
+        .env("CONDUKT_TESTSCOPE_LEDGER", common::testscope_ledger(home))
+        .env("CLAUDE_CODE_SESSION_ID", common::TESTSCOPE_SESSION)
         .env_remove("CONDUKT_DISABLE")
         .stdin(Stdio::null())
         .output()

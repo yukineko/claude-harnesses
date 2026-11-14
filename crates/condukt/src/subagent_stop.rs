@@ -115,17 +115,7 @@ pub fn resolve_owner(payload_cwd: &str, runs: &[RunState]) -> Determination<Owne
         ));
     }
 
-    let cwd_path = PathBuf::from(cwd);
-    let mut matches: Vec<(&RunState, &state::TaskState)> = Vec::new();
-    for rs in runs {
-        for t in &rs.tasks {
-            let Some(wt) = &t.worktree else { continue };
-            let wt_path = PathBuf::from(wt);
-            if cwd_path == wt_path || cwd_path.starts_with(&wt_path) {
-                matches.push((rs, t));
-            }
-        }
-    }
+    let matches = tasks_owning_cwd(Path::new(cwd), runs);
 
     match matches.as_slice() {
         [] => Determination::undetermined(format!(
@@ -160,6 +150,28 @@ pub fn resolve_owner(payload_cwd: &str, runs: &[RunState]) -> Determination<Owne
             ))
         }
     }
+}
+
+/// Every task across `runs` whose recorded `worktree` is `cwd` or an ancestor of
+/// it, whatever its status. Pure: no filesystem. Shared by [`resolve_owner`]
+/// (which additionally requires exactly one match that is `running`) and the
+/// `condukt testscope` task-scope rule (which needs to tell "no task" from
+/// "several tasks" itself).
+pub(crate) fn tasks_owning_cwd<'a>(
+    cwd: &Path,
+    runs: &'a [RunState],
+) -> Vec<(&'a RunState, &'a state::TaskState)> {
+    let mut matches = Vec::new();
+    for rs in runs {
+        for t in &rs.tasks {
+            let Some(wt) = &t.worktree else { continue };
+            let wt_path = PathBuf::from(wt);
+            if cwd == wt_path || cwd.starts_with(&wt_path) {
+                matches.push((rs, t));
+            }
+        }
+    }
+    matches
 }
 
 /// Advance `owner`'s `updated_at` to `now`, under the per-run state lock.

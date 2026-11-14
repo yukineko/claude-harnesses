@@ -7,6 +7,8 @@
 //! suite stays green. Remove the `#[ignore]` when the defect is fixed.
 //! Run: `cargo test -p condukt --test backlog_s03_audit -- --ignored`.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -61,11 +63,17 @@ impl Fx {
     }
 
     fn run(&self, args: &[&str], path_prefix: Option<&Path>) -> std::process::Output {
+        common::prime_if_running(args, &self.home, common::TESTSCOPE_SESSION);
         let mut c = Command::new(bin());
         harness_core::git_env::scrub(&mut c);
         c.args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
+            .env(
+                "CONDUKT_TESTSCOPE_LEDGER",
+                common::testscope_ledger(&self.home),
+            )
+            .env("CLAUDE_CODE_SESSION_ID", common::TESTSCOPE_SESSION)
             .env("HARNESS_PROGRESS_WINDOW_SECS", "0");
         if let Some(p) = path_prefix {
             let old = std::env::var("PATH").unwrap_or_default();

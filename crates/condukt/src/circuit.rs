@@ -793,7 +793,11 @@ pub fn run_circuit_check(
         reason,
         streak,
         streak_cap,
-        budget_over_cap,
+        budget_over_cap: if budget_unknown_reason.is_some() {
+            None
+        } else {
+            Some(budget_over_cap)
+        },
         idle_secs: journaled_idle_secs,
         idle_ttl_secs,
         compactions,

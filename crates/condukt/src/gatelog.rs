@@ -214,8 +214,9 @@ pub struct CircuitRecord {
     pub streak: u32,
     /// The streak cap the decision used (0 disables the streak axis).
     pub streak_cap: u32,
-    /// Whether the budget signal was over its cap.
-    pub budget_over_cap: bool,
+    /// Whether the budget signal was over its cap. `None` when the budget could
+    /// not be measured (journaled together with `budget_unknown_reason`).
+    pub budget_over_cap: Option<bool>,
     /// The gathered idle duration in seconds.
     pub idle_secs: i64,
     /// The idle TTL the decision used (0 disables the stall axis).
@@ -638,7 +639,7 @@ mod tests {
             reason: Some("failure_streak".to_string()),
             streak: 3,
             streak_cap: 3,
-            budget_over_cap: false,
+            budget_over_cap: Some(false),
             idle_secs: 0,
             idle_ttl_secs: 1800,
             compactions: Some(1),

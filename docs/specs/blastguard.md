@@ -391,6 +391,13 @@ forge・condukt のスケジューラが再利用）。
   literal 語だけを出力する `$(echo …)`・`$(printf %s …)`・backtick（`rm $(echo /etc/passwd)`）。値が引用符・
   `\`・`$`・backtick・`{}`・`~` を含むもの、引用外の展開が長い語の一部として単語分割されるものは解決しない
   （Ask のまま）。解決して system 外になった operand も Ask のまま（この解決は Deny を足すだけ）。
+  `$(…)`・backtick・`<(…)` の本体は外側 shell の変数を継承するので、本体内の command（2 文目以降・
+  `{ …; }`・入れ子 substitution を含む）の `$X` operand も、その substitution を含むセグメントから見た
+  代入で解決する（`rm::known_path_harm_in_substitutions`、backlog e5a8fcc2:
+  `L=/etc/hosts; x=$(echo a; rm -f $L)` は main でも Deny）。ただしそのセグメント内に `$X`/`${X…` 以外の
+  綴りで名前が現れる（`X=…`・`export X`・`read X`・`for X in`・`unset X`・代入 prefix
+  `X=/tmp/x y=$(…)`）、本体に `eval`/`source`/`.` がある、行が関数を定義している、本体が `cd`/`pushd`/`popd`
+  する、のいずれかなら解決しない（Ask のまま。Deny を足すだけ）。
   引用符内の glob 文字は展開されないので、`-r`/`-d` なしの `rm "*.tmp"` は wildcard rm ではない
   （`for f in *.tmp; do rm "$f"; done` の loop 値代入版がこの形になり、glob は `for` のもの）。loop header の
   語が引用・`\`・`$`・backtick・brace・括弧を含まない素の glob（`*.tmp`・`build/*.o`）なら、各反復の値は

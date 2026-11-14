@@ -94,7 +94,6 @@ fn undenied(cmds: &[&str], tag: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 system-file var deleted in a non-first statement of $(...) is main Ask, not Deny — remove the ignore when fixed"]
 fn system_file_var_deleted_inside_multi_statement_substitution_is_deny() {
     let cmds = [
         "L=/etc/hosts; x=$(echo a; rm -f $L)",

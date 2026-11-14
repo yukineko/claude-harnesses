@@ -492,17 +492,29 @@ fn control_inline_harmless_text_is_allowed_in_this_fixture() {
     assert_none(&bad, "inline harmless baseline must be Allow");
 }
 
-/// Inline commands are unchanged (ruling R3). Measured 2026-10-14: an INLINE
-/// `rm -rf ./target` inside the session repo is a confined Ask ("recursive rm
-/// (-r) is confined to <repo> ... this is a question rather than a refusal").
+/// Inline commands are unchanged by the script-content feature (ruling R3):
+/// an INLINE `rm -rf ./target` gets exactly the verdict the inline spelling
+/// `rm -rf target` gets — the script feature must not change either.
+///
+/// History: measured 2026-10-14, the `./target` spelling was a confined Ask
+/// ("recursive rm (-r) is confined to <repo> ... a question rather than a
+/// refusal") only because the deletion principle refused any operand spelled
+/// with a `.`/`..` component, while `rm -rf target` was already judged by
+/// recoverability. Since GH #1661 (task f70e5164) such an operand is resolved
+/// physically and judged like its plain spelling, so the pin was re-anchored
+/// by user ruling esc-6eab173e (2026-11-14). Measured 2026-11-14 on this
+/// fixture (an empty, untracked `target` in a fresh repo): both spellings
+/// Allow. Renamed from `control_inline_recursive_rm_in_repo_stays_confined_ask`.
 /// Pairs with `repo_confined_rm_script_asks_same_as_inline`.
 #[test]
-fn control_inline_recursive_rm_in_repo_stays_confined_ask() {
+fn control_inline_dot_slash_rm_in_repo_matches_plain_spelling() {
     let f = Fixture::new("inline_rm_target_control");
+    let (plain, plain_reason) = f.verdict("rm -rf target");
     let (d, reason) = f.verdict("rm -rf ./target");
     assert_eq!(
-        d, "ask",
-        "inline `rm -rf ./target` verdict changed ({reason})"
+        d, plain,
+        "inline `rm -rf ./target` must get the same verdict as `rm -rf target` \
+         ({reason} vs {plain_reason})"
     );
 }
 

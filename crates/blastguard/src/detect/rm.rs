@@ -289,6 +289,42 @@ fn analyze_rm_placed(rest: &[&str], ctx: &Ctx<'_>, unplaced: &mut Option<String>
             crate::deletion::RmJudgement::FallThrough => {}
         }
     }
+    // The same deletion principle for operands spelled with `.`/`..`
+    // components (GH #1661): a line `deletion_rm_eligible` refuses ONLY for
+    // that spelling ([`deletion_rm_dotted_eligible`]). Every operand is first
+    // resolved PHYSICALLY (`SafeRoots::physical_absolute`: a `..` is popped
+    // only from a prefix that is an existing real directory and its own real
+    // path), then judged by the unchanged class table. One operand that cannot
+    // be resolved that way skips this whole step and keeps the logic below.
+    if recursive
+        && !wildcard
+        && !ctx.deletion_rm_eligible.literal
+        && ctx.deletion_rm_eligible.dotted
+    {
+        let base = ctx.base_for("rm");
+        // Known only when EVERY operand resolved; the first undetermined one
+        // makes the whole list undetermined (and skips this step).
+        let mut physical: Determination<Vec<String>> = Determination::known(Vec::new());
+        for o in &operands {
+            physical = match (physical, ctx.scope.physical_absolute(o, base)) {
+                (Determination::Known(mut v), Determination::Known(p)) => {
+                    v.push(p);
+                    Determination::Known(v)
+                }
+                (Determination::Undetermined(u), _) | (_, Determination::Undetermined(u)) => {
+                    Determination::Undetermined(u)
+                }
+            };
+        }
+        if let Determination::Known(physical) = physical {
+            let physical: Vec<&str> = physical.iter().map(String::as_str).collect();
+            match crate::deletion::judge_rm(ctx.scope, &physical, base) {
+                crate::deletion::RmJudgement::Allow => return Decision::Allow,
+                crate::deletion::RmJudgement::Deny(reason) => return Decision::deny(reason),
+                crate::deletion::RmJudgement::FallThrough => {}
+            }
+        }
+    }
 
     // /tmp WILDCARD axis (user ruling 2026-11-02, verbatim
     // 「そもそも/tmp以下はrm -frを削除していい。worktreeなどと同じあつかいにして」,
@@ -964,8 +1000,11 @@ pub(super) fn worktree_rm_eligible(command: &str) -> bool {
 /// segment:
 ///
 ///   * no word after `rm` has a component that is exactly `.` or `..`
-///     (split on `/` and `=`): the spec withholds the Allow for any such
-///     spelling, harmless or not;
+///     (split on `/` and `=`): this predicate feeds `judge_rm` the operands
+///     as spelled, and `scope` collapses such components lexically. A line
+///     refused ONLY for that reason (an operand, not an option word, spelled
+///     `./x`, `../x`, `a/./b`, …) is [`deletion_rm_dotted_eligible`] instead,
+///     and the rm arm resolves those operands physically before judging them;
 ///   * the words after `rm` are a run of option words followed only by
 ///     operands: no lone `-` (an operand named `-` that the arm's `-`-prefix
 ///     filter would drop), no `--`, and no option-looking word after the
@@ -991,6 +1030,66 @@ pub(super) fn deletion_rm_eligible(command: &str) -> bool {
         })
         .filter(|w| w.first().copied() == Some("rm"))
         .all(|w| rm_words_are_plain_options_then_operands(&w[1..]))
+}
+
+/// Whole-command precondition for the deletion-principle verdicts on
+/// operands spelled with `.`/`..` components (GH #1661): EXACTLY
+/// [`deletion_rm_eligible`] once every `.`/`..` component of every `rm`
+/// OPERAND word is stood in for by a plain name. Only `/`-separated
+/// components of operand words are masked: an option word (`--opt=../x`,
+/// any word starting with `-`) and a `.`/`..` after an `=` keep their
+/// refusal, and every other rule — bare `rm`/`cd` segments of plain word
+/// characters, only absolute `rm` operands when a `cd` is present (so a
+/// relative `..` is always judged against the payload cwd, never against a
+/// lexically joined `cd` target), options before operands, no `-`/`--` —
+/// applies unchanged. Through [`Ctx::new`] it is also read on the `REST` of a
+/// [`literal_cd_and_rest`] line, which contains no `..` at all.
+///
+/// Accepting the line grants nothing by itself: [`analyze_rm`] resolves each
+/// operand physically (`SafeRoots::physical_absolute`) and an operand it
+/// cannot resolve keeps the pre-existing verdict.
+pub(super) fn deletion_rm_dotted_eligible(command: &str) -> bool {
+    let masked: String = command
+        .split_inclusive([';', '&', '|'])
+        .map(mask_rm_operand_dot_components)
+        .collect();
+    deletion_rm_eligible(&masked)
+}
+
+/// One segment (with its trailing separator, if any) of
+/// [`deletion_rm_dotted_eligible`]: when its first word is `rm`, every later
+/// word not starting with `-` has each `/`-separated `.`/`..` component
+/// replaced by `x`. Spacing and the separator are kept, so the masked line
+/// splits into the same segments and words.
+fn mask_rm_operand_dot_components(seg: &str) -> String {
+    let (body, sep) = match seg.char_indices().last() {
+        Some((i, ';' | '&' | '|')) => (&seg[..i], &seg[i..]),
+        _ => (seg, ""),
+    };
+    if body.split(' ').find(|w| !w.is_empty()) != Some("rm") {
+        return seg.to_string();
+    }
+    let mut seen_verb = false;
+    let words: Vec<String> = body
+        .split(' ')
+        .map(|w| {
+            if w.is_empty() {
+                return String::new();
+            }
+            if !seen_verb {
+                seen_verb = true;
+                return w.to_string();
+            }
+            if w.starts_with('-') {
+                return w.to_string();
+            }
+            w.split('/')
+                .map(|c| if c == "." || c == ".." { "x" } else { c })
+                .collect::<Vec<&str>>()
+                .join("/")
+        })
+        .collect();
+    format!("{}{sep}", words.join(" "))
 }
 
 /// See [`deletion_rm_eligible`]: options first, then operands; no `-`, no
@@ -1120,15 +1219,20 @@ pub(super) struct DeletionEligibility {
     /// [`tmp_glob_rm_eligible`]: the `/tmp` wildcard `Allow` of
     /// [`tmp_glob_confined`].
     pub(super) tmp_glob: bool,
+    /// [`deletion_rm_dotted_eligible`]: the literal-operand verdicts for
+    /// operands spelled with `.`/`..`, resolved physically first.
+    pub(super) dotted: bool,
 }
 
 impl DeletionEligibility {
     /// `literal` is [`deletion_rm_eligible`] already combined by `eligible`;
-    /// `eligible` combines [`tmp_glob_rm_eligible`] the same way.
+    /// `eligible` combines [`tmp_glob_rm_eligible`] and
+    /// [`deletion_rm_dotted_eligible`] the same way.
     pub(super) fn of(literal: bool, eligible: impl Fn(fn(&str) -> bool) -> bool) -> Self {
         DeletionEligibility {
             literal,
             tmp_glob: eligible(tmp_glob_rm_eligible),
+            dotted: eligible(deletion_rm_dotted_eligible),
         }
     }
 }

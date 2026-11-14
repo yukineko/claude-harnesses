@@ -44,10 +44,16 @@
 //!     placement. Lexical collapse is NOT what the kernel does: it resolves
 //!     `a/lnk/..` to the parent of `lnk`'s TARGET. So a `..` that follows a
 //!     symlinked component is placed at a path the kernel will not touch
-//!     (`<root>/lnk/../x` is classified as `<root>/x`). This module does not
-//!     close that; its callers must not grant anything on the strength of a
-//!     `..`-bearing spelling (the worktree `Allow` refuses any `..` — see
-//!     below; the safe-root `Ask` does NOT, see "Known gap" at the end);
+//!     (`<root>/lnk/../x` is classified as `<root>/x`). The classifiers do not
+//!     close that; their callers must not grant anything on the strength of a
+//!     `..`-bearing spelling as such (the worktree `Allow` refuses any `..` —
+//!     see below; the safe-root `Ask` does NOT, see "Known gap" at the end).
+//!     The one route that does judge such a spelling, the deletion-principle
+//!     verdicts of `crate::deletion` (GH #1661), first rewrites it with
+//!     [`SafeRoots::physical_absolute`], which pops a `..` only from a prefix
+//!     that is an existing real directory and its own real path, and answers
+//!     `Undetermined` for anything else — so the classifiers never see the
+//!     `..` at all on that route;
 //!   * `~`, `$VAR`, backticks, `$(…)`, globs, braces, quotes, `{}` (a
 //!     `find -exec` placeholder) — the operand is not a literal path at all, so
 //!     it is `Undetermined`. This module NEVER expands a shell construct and
@@ -1115,6 +1121,113 @@ is not decided by where it is spelled"
                 "`{lexical}` is not spelled through the root {root}"
             ))
         }
+    }
+
+    /// The operand as an absolute path with every `.` and `..` component
+    /// resolved PHYSICALLY (GH #1661), or why it cannot be.
+    ///
+    /// [`SafeRoots::lexical_absolute`] collapses `..` lexically, which is not
+    /// what the kernel does: it resolves `a/lnk/..` against the REAL parent of
+    /// `lnk`'s target. This function walks the spelling left to right,
+    /// starting from `cwd` for a relative operand (or `/` for an absolute
+    /// one), and answers a path whose prefix before every removed `..` was
+    /// verified to be exactly what the kernel walks:
+    ///
+    ///  * `.` (and an empty component, `//`): the prefix so far must be an
+    ///    existing real directory ([`SafeRoots::resolves_to_existing_dir`]);
+    ///    the component is then dropped;
+    ///  * `..`: the prefix so far must be an existing real directory AND its
+    ///    own real path per the injected resolver — no symlinked component
+    ///    anywhere in it, above or below any root. Only then is the last
+    ///    component popped: for such a prefix the lexical parent IS the
+    ///    physical parent. A prefix that does not exist, is not a directory,
+    ///    does not resolve, or resolves anywhere else (a symlink, also a
+    ///    harmless one such as `/tmp` -> `/private/tmp`, or a differently
+    ///    cased spelling on a case-insensitive filesystem) is `Undetermined`;
+    ///  * a `..` with nothing left to pop (above `/`) is `Undetermined`, even
+    ///    though the kernel would stay at `/`;
+    ///  * any other component is appended by name, unresolved: the caller
+    ///    judges the result exactly as it judges a plain spelling (symlinks
+    ///    between a root and the operand still withhold its `Allow` there —
+    ///    [`SafeRoots::no_symlink_below`]).
+    ///
+    /// `cwd` must be absolute and free of `.`/`..` components; a literal-path
+    /// violation ([`SafeRoots::lexical_absolute`]'s character rules), an empty
+    /// operand, no resolver, or a relative operand with no `cwd` is
+    /// `Undetermined`. A spelling with no `.`, `..` or empty component comes
+    /// back as its lexical absolute path.
+    pub(crate) fn physical_absolute(
+        &self,
+        operand: &str,
+        cwd: Option<&str>,
+    ) -> Determination<String> {
+        if operand.is_empty() {
+            return Determination::undetermined("empty operand");
+        }
+        if operand
+            .chars()
+            .any(|c| NOT_A_LITERAL_PATH.contains(&c) || c.is_control())
+        {
+            return Determination::undetermined(
+                "operand is not a literal path (expansion, glob, quoting or a find -exec placeholder)",
+            );
+        }
+        if self.resolver.is_none() {
+            return Determination::undetermined("no symlink resolver in this session model");
+        }
+        let mut comps: Vec<&str> = Vec::new();
+        if !operand.starts_with('/') {
+            let Some(base) = cwd else {
+                return Determination::undetermined(
+                    "relative operand with no known working directory",
+                );
+            };
+            if !base.starts_with('/') {
+                return Determination::undetermined("working directory is not absolute");
+            }
+            for c in base.split('/').filter(|c| !c.is_empty()) {
+                if c == "." || c == ".." {
+                    return Determination::undetermined(
+                        "working directory has a `.` or `..` component",
+                    );
+                }
+                comps.push(c);
+            }
+        }
+        let joined = |comps: &[&str]| format!("/{}", comps.join("/"));
+        for (i, c) in operand.split('/').enumerate() {
+            // The leading empty piece of an absolute operand is not a `//`.
+            if i == 0 && c.is_empty() {
+                continue;
+            }
+            match c {
+                "" | "." => {
+                    let prefix = joined(&comps);
+                    if !self.resolves_to_existing_dir(&prefix) {
+                        return Determination::undetermined(format!(
+                            "`{prefix}` (before a `.` or `/`) is not an existing real directory"
+                        ));
+                    }
+                }
+                ".." => {
+                    if comps.is_empty() {
+                        return Determination::undetermined("`..` climbs above `/`");
+                    }
+                    let prefix = joined(&comps);
+                    if !self.resolves_to_existing_dir(&prefix)
+                        || self.resolve(&prefix).as_deref() != Some(prefix.as_str())
+                    {
+                        return Determination::undetermined(format!(
+                            "`{prefix}` (before a `..`) is not an existing real directory that is \
+its own real path, so its physical parent is not its lexical one"
+                        ));
+                    }
+                    comps.pop();
+                }
+                name => comps.push(name),
+            }
+        }
+        Determination::known(joined(&comps))
     }
 
     /// True when there is no model at all — [`SafeRoots::classify`] can only

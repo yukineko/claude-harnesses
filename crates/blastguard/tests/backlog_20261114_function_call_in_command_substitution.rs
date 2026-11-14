@@ -92,7 +92,6 @@ fn undenied(cmds: &[&str], tag: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 function call inside $(...) / backticks is not inlined; rm of /etc/hosts is Allow — remove the ignore when fixed"]
 fn function_call_in_command_substitution_deleting_system_file_is_deny() {
     let bad = undenied(
         &[

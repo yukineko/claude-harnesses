@@ -645,7 +645,7 @@ forge・condukt のスケジューラが再利用）。
   後の文の reader（`<&N` / `/dev/fd/N`）を中身を inline で渡した形（`bash <<< …`）として判定する
   （`detect/payload/exec_fds.rs` の `cross_statement_fd_verdict`、backlog e686a85e、blastguard 0.2.580。詳細は
   末尾の節「exec が開く fd の文をまたいだ追跡」）。モデル外の形（subshell・関数本体・条件付きの exec、unquoted
-  here-document、`N<&M` の連鎖、close 後の読み、subshell・関数本体内の reader、読めない形での fd の言及）は
+  here-document、`N<&M` の連鎖、close 後の読み、subshell・関数本体内の reader、読めない形での fd の言及、`<&$fd` のように展開で書かれた fd の読み）は
   Ask（subagent では Deny）で、中身が literal で harm なら main でも Deny。fd 0 を here-text で開く
   `exec <<< …` は追跡対象外で、従来どおり reader が stdin から program を読みうるとき Ask。
   ファイルで開かれた fd は `bash < file` と同じ扱い。

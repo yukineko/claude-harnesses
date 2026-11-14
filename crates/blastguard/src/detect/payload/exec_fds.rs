@@ -677,8 +677,10 @@ pub(super) struct FdTracking {
 /// body, a reader whose other stdin redirections compete with the fd, a
 /// mention of the fd in a shape this does not read (quoted, inside a
 /// substitution or a `-c` / `eval` string, on a here-document body line), and
-/// a read through an fd spelled with an expansion (`<&$fd`) when an `exec`
-/// opens a named fd (`exec {fd}<<< '…'`) on literal text. Where no reader is
+/// a read through an fd spelled with an expansion (`<&$fd`, `<&$((1+2))`,
+/// `/dev/fd/$fd`) on a line where an `exec` opens a numbered or named fd
+/// (`exec {fd}<<< '…'`) on literal text: every text opened so far is judged.
+/// Where no reader is
 /// visible, a text is judged as `sh` would run it. fd 0 (`exec <<< '…'`) is
 /// not followed here.
 pub(super) fn cross_statement_fd_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> FdTracking {
@@ -863,9 +865,22 @@ runs that text",
             .filter(|(_, s)| s.pipeline == st.pipeline)
             .collect();
         let pipeline_stages: Vec<&Stage> = pipeline.iter().map(|(_, s)| *s).collect();
-        // A read through an fd spelled with an expansion may be any named fd.
-        if !named.is_empty() && mentions_dynamic_fd(&words) {
-            for synthetic in probe_synthetics(&named, &pipeline_stages, true) {
+        // A read through an fd spelled with an expansion (`<&$fd`,
+        // `<&$((1+2))`, `/dev/fd/$fd`) may be any fd an `exec` opened on
+        // literal text before it, numbered or named: each such text is
+        // judged, and the read is an Ask.
+        if mentions_dynamic_fd(&words) {
+            let mut texts: Vec<HereText> = named.clone();
+            let mut open: Vec<(&u32, &FdState)> = fds.iter().collect();
+            open.sort_by_key(|(n, _)| **n);
+            for (_, state) in open {
+                for t in state.texts() {
+                    if !texts.contains(&t) {
+                        texts.push(t);
+                    }
+                }
+            }
+            for synthetic in probe_synthetics(&texts, &pipeline_stages, true) {
                 if let Some(deny) = judge(&synthetic, &mut acc) {
                     return FdTracking {
                         verdict: deny,
@@ -874,8 +889,8 @@ runs that text",
                 }
             }
             if let Some(deny) = acc.record(Decision::ask(format!(
-                "`{}` reads an fd spelled with an expansion, and an `exec` on this line opens a \
-named fd (`{{NAME}}<<<` / `{{NAME}}<<`) on literal text — blastguard cannot tell which text it reads",
+                "`{}` reads an fd spelled with an expansion, and an `exec` on this line opens an \
+fd (`N<<<` / `N<<` / `{{NAME}}<<<`) on literal text — blastguard cannot tell which text it reads",
                 st.raw.trim()
             ))) {
                 return FdTracking {

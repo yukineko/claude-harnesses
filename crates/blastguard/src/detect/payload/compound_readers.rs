@@ -111,15 +111,23 @@ fn after_case_header(text: &str) -> Option<&str> {
     Some(s)
 }
 
-/// How many words of `stages` are a compound-opening keyword, wherever they
-/// stand (an argument `echo if` counts too: the check that uses this only
-/// widens to an Ask).
-fn raw_opener_words(stages: &[String]) -> usize {
+/// How many compounds the pipe stages after a statement's first open: a `|`
+/// puts the next word in command position too (`echo y | if …; fi`), and an
+/// opener there that went uncounted would let its `fi` close the enclosing
+/// compound early. Only command-position words count — an argument
+/// (`echo if`) or a quoted word never opens a compound. A stage whose prefix
+/// cannot be read (`coproc`) records an Ask reason.
+fn later_stage_openers(stages: &[String], undetermined: &mut Vec<String>) -> usize {
     stages
         .iter()
-        .flat_map(|st| st.split_whitespace())
-        .filter(|w| opens_any_compound(w))
-        .count()
+        .map(|st| match strip_compound_prefix(st) {
+            Ok((_, opened)) => opened,
+            Err(why) => {
+                undetermined.push(why);
+                0
+            }
+        })
+        .sum()
 }
 
 fn joined(stages: &[String]) -> String {
@@ -148,8 +156,14 @@ fn push(p: String, pipelines: &mut Vec<String>) {
 /// inherit the pipe, an over-approximation on the restrictive side). A
 /// forwarder's member is each statement of the command text it runs — every
 /// `-c` candidate of [`dash_c_payloads`], and for `eval` the argument text as
-/// written and with one layer of wrapping quotes removed. A closed compound
-/// holding a keyword the count did not see, or a `coproc`, is an Ask reason.
+/// written and with one layer of wrapping quotes removed.
+///
+/// Keywords are counted in command position only — at the start of each
+/// statement (`;`, `&&`, `||`, newline) and pipe stage (`|`), and after
+/// `then` / `do` / `else` / `elif` / `{` / `!` / `time` / a `case` pattern
+/// (see [`strip_compound_prefix`]); a word in argument position (`echo if`)
+/// or inside quotes is not a keyword to the shell either. A `coproc` or an
+/// unreadable `case` header, whose extent is not modelled, is an Ask reason.
 pub(super) fn compound_and_forwarder_pipelines(
     statements: &[Vec<String>],
 ) -> (Vec<String>, Vec<String>) {
@@ -177,23 +191,22 @@ pub(super) fn compound_and_forwarder_pipelines(
                 let mut head: Vec<String> = vec![body.to_string()];
                 head.extend(statement[i + 1..].iter().cloned());
                 members.push(joined(&head));
-                let mut level = opened;
-                let mut counted_openers = opened;
-                let mut raw_openers = raw_opener_words(&statement[i..]);
-                let mut closed = false;
+                let mut level =
+                    opened + later_stage_openers(&statement[i + 1..], &mut undetermined);
                 for later in &statements[s + 1..] {
-                    raw_openers += raw_opener_words(later);
                     let lead = later.first().map(|st| st.trim()).unwrap_or("");
                     let lead_word = lead.split_whitespace().next().unwrap_or("");
                     if closes_compound(lead_word) {
                         level -= 1;
                         if level == 0 {
-                            closed = true;
                             break;
                         }
+                        // `fi | if …` opens again after the closer.
+                        level += later_stage_openers(&later[1..], &mut undetermined);
                         continue;
                     }
                     if lead_word == "}" {
+                        level += later_stage_openers(&later[1..], &mut undetermined);
                         continue;
                     }
                     let (body, opened) = match strip_compound_prefix(lead) {
@@ -203,29 +216,17 @@ pub(super) fn compound_and_forwarder_pipelines(
                             (lead, 0)
                         }
                     };
-                    level += opened;
-                    counted_openers += opened;
+                    level += opened + later_stage_openers(&later[1..], &mut undetermined);
                     let mut stages = later.clone();
                     if let Some(st) = stages.first_mut() {
                         *st = body.to_string();
                     }
                     members.push(joined(&stages));
                 }
-                // An opener word this count did not see (behind a prefix it
-                // does not model, `a) if …` in a `case`) would let an inner
-                // closer end the compound early and hide the readers after
-                // it: the extent is then undetermined. An unclosed compound
-                // is not: every statement to the end of the line is already
-                // a member (and a member of a split-up group arrives here
-                // without its closer, see `group_reader_pipelines`).
-                if closed && raw_openers > counted_openers {
-                    undetermined.push(format!(
-                        "`{upstream}` is piped into the compound `{} …`, and a compound keyword \
-inside it is in a position blastguard does not model — it cannot tell where the compound ends, so \
-which command inside reads the piped program",
-                        stage.trim()
-                    ));
-                }
+                // An unclosed compound hides nothing: every statement to the
+                // end of the line is already a member (and a member of a
+                // split-up group arrives here without its closer, see
+                // `group_reader_pipelines`).
                 for member in members.into_iter().filter(|m| !m.is_empty()) {
                     push(format!("{upstream} | {member}"), &mut pipelines);
                 }

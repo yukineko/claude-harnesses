@@ -194,7 +194,13 @@ class TestWeeks(Base):
                              task(created_at=ts(2026, 10, 6))])
         labels = [w["week"] for w in out["weeks"]]
         self.assertEqual(labels, sorted(labels))
-        self.assertEqual(len(labels), 3)
+        self.assertEqual(labels, ["2026-W%02d" % n for n in range(36, 47)])
+        for w in out["weeks"]:
+            want = 1 if w["week"] in ("2026-W36", "2026-W41", "2026-W46") else 0
+            self.assertEqual(w["total"], want, w)
+            if want == 0:
+                self.assertEqual((w["fail_open"], w["fp"], w["ambiguous"], w["unclassified"]),
+                                 (0, 0, 0, 0), w)
 
     def test_undated_missing_and_nonnumeric(self):
         t1 = task()  # missing created_at
@@ -232,6 +238,94 @@ class TestWeeks(Base):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("2026-W46", r.stdout)
         self.assertIn("undated", r.stdout)
+
+
+def iso_labels(start, end):
+    """ISO week labels from the week of `start` to the week of `end` inclusive,
+    computed by stepping 7 days from the Monday of the start week."""
+    d = start - datetime.timedelta(days=start.weekday())
+    out = []
+    while d <= end:
+        iso = d.isocalendar()
+        out.append("%04d-W%02d" % (iso[0], iso[1]))
+        d += datetime.timedelta(days=7)
+    return out
+
+
+class TestZeroWeeks(Base):
+    def zero(self, w):
+        return (w["fail_open"], w["fp"], w["ambiguous"], w["unclassified"], w["total"])
+
+    def test_gap_weeks_are_rows(self):
+        out = self.run_json([task(created_at=ts(2026, 10, 6)), task(created_at=ts(2026, 10, 27))])
+        self.assertEqual([w["week"] for w in out["weeks"]],
+                         ["2026-W41", "2026-W42", "2026-W43", "2026-W44"])
+        self.assertEqual([w["total"] for w in out["weeks"]], [1, 0, 0, 1])
+        self.assertEqual(self.zero(out["weeks"][1]), (0, 0, 0, 0, 0))
+        self.assertEqual(self.zero(out["weeks"][2]), (0, 0, 0, 0, 0))
+
+    def test_iso_year_boundary_range(self):
+        # 2025 has 52 ISO weeks; 2025-12-22 is 2025-W52, 2026-01-12 is 2026-W03.
+        a, b = ts(2025, 12, 24), ts(2026, 1, 14)
+        out = self.run_json([task(created_at=a), task(created_at=b)])
+        labels = [w["week"] for w in out["weeks"]]
+        self.assertEqual(labels, ["2025-W52", "2026-W01", "2026-W02", "2026-W03"])
+        self.assertEqual(labels, iso_labels(datetime.date(2025, 12, 24), datetime.date(2026, 1, 14)))
+        self.assertEqual([w["total"] for w in out["weeks"]], [1, 0, 0, 1])
+
+    def test_iso_year_boundary_with_week_53(self):
+        # 2026 has 53 ISO weeks (2026-12-31 is W53); next is 2027-W01.
+        out = self.run_json([task(created_at=ts(2026, 12, 16)), task(created_at=ts(2027, 1, 13))])
+        labels = [w["week"] for w in out["weeks"]]
+        self.assertEqual(labels, iso_labels(datetime.date(2026, 12, 16), datetime.date(2027, 1, 13)))
+        self.assertIn("2026-W53", labels)
+        self.assertEqual(labels[0], "2026-W51")
+        self.assertEqual(labels[-1], "2027-W02")
+        self.assertEqual(sum(w["total"] for w in out["weeks"]), 2)
+
+    def test_cancelled_does_not_extend_range(self):
+        out = self.run_json([task(created_at=ts(2026, 10, 6)), task(created_at=ts(2026, 10, 13)),
+                             task(status="cancelled", created_at=ts(2026, 1, 6)),
+                             task(status="cancelled", created_at=ts(2026, 12, 1))])
+        self.assertEqual([w["week"] for w in out["weeks"]], ["2026-W41", "2026-W42"])
+        self.assertEqual(out["excluded_cancelled"], 2)
+
+    def test_non_blastguard_does_not_extend_range(self):
+        out = self.run_json([task(created_at=ts(2026, 10, 6)),
+                             task(title="other", tags=["x"], created_at=ts(2026, 1, 6))])
+        self.assertEqual([w["week"] for w in out["weeks"]], ["2026-W41"])
+
+    def test_weeks_limit_counts_calendar_weeks(self):
+        # data in W36 and W46 only; --weeks 3 = W44,W45,W46 (zero rows included)
+        out = self.run_json([task(created_at=ts(2026, 9, 1)), task(created_at=ts(2026, 11, 10))],
+                            "--weeks", "3")
+        self.assertEqual([w["week"] for w in out["weeks"]], ["2026-W44", "2026-W45", "2026-W46"])
+        self.assertEqual([w["total"] for w in out["weeks"]], [0, 0, 1])
+
+    def test_weeks_limit_zero_rows_only_window_and_undated_last(self):
+        out = self.run_json([task(created_at=ts(2026, 9, 1)), task(created_at=ts(2026, 11, 10)),
+                             task()], "--weeks", "2")
+        self.assertEqual([w["week"] for w in out["weeks"]], ["2026-W45", "2026-W46", "undated"])
+        self.assertEqual([w["total"] for w in out["weeks"]], [0, 1, 1])
+
+    def test_weeks_limit_exceeding_range_returns_whole_range(self):
+        out = self.run_json([task(created_at=ts(2026, 10, 6)), task(created_at=ts(2026, 10, 20))],
+                            "--weeks", "8")
+        self.assertEqual([w["week"] for w in out["weeks"]], ["2026-W41", "2026-W42", "2026-W43"])
+
+    def test_undated_alone_has_no_zero_weeks(self):
+        out = self.run_json([task()])
+        self.assertEqual([w["week"] for w in out["weeks"]], ["undated"])
+
+    def test_human_table_shows_zero_rows(self):
+        p = self.write([task(created_at=ts(2026, 10, 6)), task(created_at=ts(2026, 10, 20))])
+        r = self.run_script("--input", p)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for lbl in ("2026-W41", "2026-W42", "2026-W43"):
+            self.assertIn(lbl, r.stdout)
+        row = [l for l in r.stdout.splitlines() if l.startswith("2026-W42")]
+        self.assertEqual(len(row), 1, r.stdout)
+        self.assertEqual(row[0].split()[1:], ["0", "0", "0", "0", "0"])
 
 
 class TestFailClosed(Base):

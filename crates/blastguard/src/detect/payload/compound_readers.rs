@@ -1,4 +1,5 @@
-//! Readers a pipe reaches through an `if` / `while` / `until` compound or a
+//! Readers a pipe reaches through an `if` / `while` / `until` / `case` compound
+//! (behind `!` / `time` too) or a
 //! stdin-forwarding wrapper (`eval`, `<shell> -c`), backlog b3569da5.
 //!
 //! `printf 'chmod 777 /etc/hosts' | if true; then bash; fi` hands the piped
@@ -36,25 +37,89 @@ fn closes_compound(word: &str) -> bool {
 }
 
 /// `stage` with its leading compound syntax removed (`if`, `while`, `until`,
-/// `then`, `do`, `else`, `elif`, `{`), and how many compounds those words
-/// open (a `for` / `select` / `case` header opens one too, but its text is
-/// kept: it is not a command, and the compound-free reading drops it).
-fn strip_compound_prefix(stage: &str) -> (&str, usize) {
+/// `then`, `do`, `else`, `elif`, `{`, a `case WORD in` header and a `case`
+/// item's pattern word, and the pipeline prefixes `!` and `time` with its
+/// options), and how many compounds those words open (a `for` / `select`
+/// header opens one too, but its text is kept: it is not a command, and the
+/// compound-free reading drops it).
+///
+/// An opener behind `!` / `time` (`! if …; fi`) or inside a `case` item
+/// (`x) if …; fi`) is counted like any other: missing it let the inner `fi`
+/// close the OUTER compound, and the reader after it went unjudged. `Err` (an
+/// Ask reason) for `coproc`, whose compound's extent this reading does not
+/// model, and for a `case` whose header is not `case WORD in`.
+fn strip_compound_prefix(stage: &str) -> Result<(&str, usize), String> {
     let mut s = stage.trim_start();
     let mut opened = 0;
+    let mut after_time = false;
     loop {
         let word_end = s.find(char::is_whitespace).unwrap_or(s.len());
         let word = &s[..word_end];
+        let time_option = after_time && word.starts_with('-') && word.len() > 1;
+        after_time = word == "time" || time_option;
+        if word == "case" {
+            opened += 1;
+            s = after_case_header(s).ok_or_else(|| {
+                format!(
+                    "`{}` opens a `case` whose `case WORD in` header blastguard cannot read — it \
+cannot tell where the enclosing compound ends",
+                    stage.trim()
+                )
+            })?;
+            continue;
+        }
         if opens_read_compound(word) {
             opened += 1;
-        } else if !matches!(word, "then" | "do" | "else" | "elif" | "{") {
+        } else if word == "coproc" {
+            return Err(format!(
+                "`{}` starts a `coproc`, whose extent blastguard does not model — it cannot tell \
+where the enclosing compound ends",
+                stage.trim()
+            ));
+        } else if !(time_option
+            || is_case_pattern(word)
+            || matches!(word, "then" | "do" | "else" | "elif" | "{" | "!" | "time"))
+        {
             if opens_any_compound(word) {
                 opened += 1;
             }
-            return (s, opened);
+            return Ok((s, opened));
         }
         s = s[word_end..].trim_start();
     }
+}
+
+/// A `case` item's pattern word (`x)`, `*)`): it ends in `)` and holds no
+/// `(`, so it is not a subshell (`(bash)`). Outside a `case` such a word in
+/// command position is a syntax error, so skipping it there hides nothing.
+fn is_case_pattern(word: &str) -> bool {
+    word.len() > 1 && word.ends_with(')') && !word.contains('(')
+}
+
+/// The text of `case WORD in …` after its third word, which must be `in`.
+/// `None` when the header is not three plain words ending in `in`.
+fn after_case_header(text: &str) -> Option<&str> {
+    let mut s = text.trim_start();
+    for expected in ["case", "", "in"] {
+        let end = s.find(char::is_whitespace).unwrap_or(s.len());
+        let word = &s[..end];
+        if word.is_empty() || (!expected.is_empty() && word != expected) {
+            return None;
+        }
+        s = s[end..].trim_start();
+    }
+    Some(s)
+}
+
+/// How many words of `stages` are a compound-opening keyword, wherever they
+/// stand (an argument `echo if` counts too: the check that uses this only
+/// widens to an Ask).
+fn raw_opener_words(stages: &[String]) -> usize {
+    stages
+        .iter()
+        .flat_map(|st| st.split_whitespace())
+        .filter(|w| opens_any_compound(w))
+        .count()
 }
 
 fn joined(stages: &[String]) -> String {
@@ -73,16 +138,18 @@ fn push(p: String, pipelines: &mut Vec<String>) {
 }
 
 /// The `UPSTREAM | MEMBER` pipelines for every piped stage that opens an
-/// `if` / `while` / `until` compound, or runs a command through `eval` or a
-/// shell's `-c`. Returns `(pipelines, undetermined)`; a compound whose closing
-/// `fi` / `done` is not found is an Ask reason.
+/// `if` / `while` / `until` / `case` compound (behind `!` / `time` too), or runs a
+/// command through `eval` or a shell's `-c`. Returns `(pipelines,
+/// undetermined)`.
 ///
-/// A compound's members are its statements up to the matching closer, each
-/// with its leading keywords removed (the condition and every branch: all
+/// A compound's members are its statements up to the matching closer (to the
+/// end of the line when no closer is found), each with its leading keywords
+/// removed (the condition and every branch: all
 /// inherit the pipe, an over-approximation on the restrictive side). A
 /// forwarder's member is each statement of the command text it runs — every
 /// `-c` candidate of [`dash_c_payloads`], and for `eval` the argument text as
-/// written and with one layer of wrapping quotes removed.
+/// written and with one layer of wrapping quotes removed. A closed compound
+/// holding a keyword the count did not see, or a `coproc`, is an Ask reason.
 pub(super) fn compound_and_forwarder_pipelines(
     statements: &[Vec<String>],
 ) -> (Vec<String>, Vec<String>) {
@@ -92,16 +159,30 @@ pub(super) fn compound_and_forwarder_pipelines(
         for i in 1..statement.len() {
             let upstream = statement[i - 1].trim();
             let stage = statement[i].as_str();
-            let first = stage.split_whitespace().next().unwrap_or("");
-            if opens_read_compound(first) {
-                let (body, opened) = strip_compound_prefix(stage);
+            // The stage opens a compound this module reads when its leading
+            // words (behind `!` / `time` too) open one and the text left is
+            // not a `for` / `select` header (the compound-free reading
+            // flattens those). A `case` header is removed by the strip, so
+            // the member is shorter than the stage and the descent ends.
+            let (body, opened) = match strip_compound_prefix(stage) {
+                Ok(read) => read,
+                Err(why) => {
+                    undetermined.push(why);
+                    continue;
+                }
+            };
+            let rest_word = body.split_whitespace().next().unwrap_or("");
+            if opened > 0 && !opens_any_compound(rest_word) {
                 let mut members: Vec<String> = Vec::new();
                 let mut head: Vec<String> = vec![body.to_string()];
                 head.extend(statement[i + 1..].iter().cloned());
                 members.push(joined(&head));
                 let mut level = opened;
+                let mut counted_openers = opened;
+                let mut raw_openers = raw_opener_words(&statement[i..]);
                 let mut closed = false;
                 for later in &statements[s + 1..] {
+                    raw_openers += raw_opener_words(later);
                     let lead = later.first().map(|st| st.trim()).unwrap_or("");
                     let lead_word = lead.split_whitespace().next().unwrap_or("");
                     if closes_compound(lead_word) {
@@ -115,18 +196,33 @@ pub(super) fn compound_and_forwarder_pipelines(
                     if lead_word == "}" {
                         continue;
                     }
-                    let (body, opened) = strip_compound_prefix(lead);
+                    let (body, opened) = match strip_compound_prefix(lead) {
+                        Ok(read) => read,
+                        Err(why) => {
+                            undetermined.push(why);
+                            (lead, 0)
+                        }
+                    };
                     level += opened;
+                    counted_openers += opened;
                     let mut stages = later.clone();
                     if let Some(st) = stages.first_mut() {
                         *st = body.to_string();
                     }
                     members.push(joined(&stages));
                 }
-                if !closed {
+                // An opener word this count did not see (behind a prefix it
+                // does not model, `a) if …` in a `case`) would let an inner
+                // closer end the compound early and hide the readers after
+                // it: the extent is then undetermined. An unclosed compound
+                // is not: every statement to the end of the line is already
+                // a member (and a member of a split-up group arrives here
+                // without its closer, see `group_reader_pipelines`).
+                if closed && raw_openers > counted_openers {
                     undetermined.push(format!(
-                        "`{upstream}` is piped into the compound `{} …`, whose closing `fi` / \
-`done` blastguard cannot find — it cannot tell which command inside reads the piped program",
+                        "`{upstream}` is piped into the compound `{} …`, and a compound keyword \
+inside it is in a position blastguard does not model — it cannot tell where the compound ends, so \
+which command inside reads the piped program",
                         stage.trim()
                     ));
                 }

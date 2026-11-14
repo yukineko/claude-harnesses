@@ -2250,6 +2250,8 @@ notes = "Observed 2026-11-14 at main 9bab9873e (blastguard 0.2.594 built from th
 created_at = 1794654144
 updated_at = 1794654144
 weight = 0.0
+issue_number = 1778
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1778"
 rev = 0
 
 [task.repro]

@@ -1686,3 +1686,33 @@ exit 101: rees/side-reds-075136/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
      Running tests/backlog_20261114_python_read_of_protected_plugin_file_fp.rs (target/debug/deps/backlog_20261114_python_read_of_protected_plugin_file_fp-0c08f20d853bc41d)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_read_of_protected_plugin_file_fp`"""
+
+[[task]]
+id = "214b39b5"
+title = "condukt testscope: rerun guard keys tree identity on hook payload cwd, not on a leading cd target, so a rerun after editing the cd target tree is refused"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "testscope",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Side finding of run-20261114-110017-12373 (flow session b3435a5e), measured 2026-11-14 at e9d58cccb. crates/condukt/src/testscope.rs check_rerun / tree_identity(cwd) uses the hook payload cwd; a Bash call 'cd <worktree> && cargo test ...' whose payload cwd is another tree is keyed on the wrong tree, so after editing the cd-target tree the rerun is refused as unchanged. RED: crates/condukt/tests/backlog_20261114_testscope_cd_tree_identity.rs rerun_after_editing_the_cd_target_tree_is_allowed (panics at :138). Non-ignored control control_editing_payload_cwd_tree_allows_rerun passes. Observed in the wild: several rerun refusals during that run. Readings: (a) real defect (FP refusing a legitimate rerun); (b) intended (guard only keys payload cwd by design) - distinguish by whether testscope docs promise cd-target awareness. Fix must stay fail-closed when the cd target cannot be resolved."
+created_at = 1794624843
+updated_at = 1794624843
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261114_testscope_cd_tree_identity -- --ignored rerun_after_editing_the_cd_target_tree_is_allowed"
+rev = "e9d58cccb086bd62368e4c702f3f037f71c9497d"
+observed_at = 1794624843
+detail = """
+exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.96s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/backlog_20261114_testscope_cd_tree_identity.rs (target/debug/deps/backlog_20261114_testscope_cd_tree_identity-eb881238f9300bcf)
+error: test failed, to rerun pass `-p condukt --test backlog_20261114_testscope_cd_tree_identity`"""

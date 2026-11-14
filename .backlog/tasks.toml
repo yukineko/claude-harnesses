@@ -1448,6 +1448,8 @@ notes = "Observed 2026-11-14 (subagent refusal: program is taken from stdin and 
 created_at = 1794604359
 updated_at = 1794604359
 weight = 0.0
+issue_number = 1756
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1756"
 rev = 0
 
 [task.repro]
@@ -1702,6 +1704,8 @@ notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by
 created_at = 1794626638
 updated_at = 1794626638
 weight = 0.0
+issue_number = 1757
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1757"
 rev = 0
 
 [task.repro]
@@ -1853,6 +1857,8 @@ notes = """Side finding of run-20261114-120314-34769 (flow session b3435a5e), RE
 created_at = 1794626779
 updated_at = 1794626779
 weight = 0.0
+issue_number = 1758
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1758"
 rev = 0
 
 [task.repro]

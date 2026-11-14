@@ -574,7 +574,14 @@ pub(super) fn program_body_segments_fed_to(cmd: &str, reader: impl Fn(&str) -> b
 ///     backslash (with an unquoted delimiter the shell expands those);
 ///   * every line AFTER the closing delimiter is blank or a comment. A later
 ///     line could reach the written file by any spelling, so no later command
-///     is allowed at all;
+///     is allowed — with ONE exception: a QUOTED-delimiter `git … commit -F -`
+///     reader with no output redirect may be followed by commands that
+///     [`later_commands_cannot_run_stored_message`] accepts (`git log -1`,
+///     `git status --short`, `echo "rc=$?"`). git stores the message in
+///     `.git/COMMIT_EDITMSG` and the commit object, so any other later command
+///     (`sh .git/COMMIT_EDITMSG`, `git log -1 --format=%B | sh`, an unknown
+///     word) keeps the body judged. The later lines stay in the text and are
+///     judged by every rule;
 ///   * no line outside the body contains whitespace other than space, tab and
 ///     newline. A carriage return in particular: bash keeps a `\r` in the
 ///     delimiter word, so `<<'EOF'\r` is closed only by a line `EOF\r`, while
@@ -900,10 +907,12 @@ pub(super) fn is_python_file_target(target: &str) -> bool {
 ///   * the opener's output redirect may name ANY literal target, not only a
 ///     data file. Its target is still judged: the opener line stays in the
 ///     view, so `> src/x.rs` goes through every redirect axis as before;
-///   * when the reader stores the body in no file
-///     ([`here_document_reader_stores_nothing`]: bare `cat`, `git commit -F -`,
-///     no output redirect), ANY lines may follow the closing delimiter. They
-///     stay in the view and are judged like every other line;
+///   * when the reader is a bare `cat` with no output redirect (it stores the
+///     body in no file, [`here_document_reader_stores_nothing`]), ANY lines may
+///     follow the closing delimiter; for `git commit -F -` with no output
+///     redirect, which stores the message in `.git/COMMIT_EDITMSG`, only lines
+///     [`later_commands_cannot_run_stored_message`] accepts may. They stay in
+///     the view and are judged like every other line;
 ///   * the consumer text is [`redirect_view_consumer`]'s: besides the heads
 ///     [`opener_consumer`] splits, further `cd <one word>` heads split at `;`
 ///     or `&&` are peeled, even with an unresolvable operand like `"$WT"`. The
@@ -1030,21 +1039,38 @@ fn here_document_body_parts(cmd: &str, targets: OutputTargets) -> Option<HereDoc
     if !here_document_delimiter_is_quoted(&opener_line) && body.contains(['$', '`', '\\']) {
         return None;
     }
-    // Lines after the close. The redirect view may keep LATER commands when the
-    // reader stores the body nowhere a later command could run it from
-    // ([`here_document_reader_stores_nothing`]): those lines stay in the view
-    // and every redirect rule still judges them; only the body leaves.
+    // Lines after the close. LATER commands may follow (and stay in the text,
+    // judged by every rule; only the body leaves) when no later command can
+    // reach the body: a bare `cat` reader leaves it in no file
+    // ([`here_document_reader_stores_nothing`]), which suffices for the
+    // redirect view; a QUOTED `git commit -F -` reader stores it in
+    // `.git/COMMIT_EDITMSG` and the commit object, so for both the redirect
+    // view and the every-rule strip each later command must also be unable to
+    // run that stored message ([`later_commands_cannot_run_stored_message`]).
     // The Python-file split keeps every later line too: the body is judged as
     // Python whether or not a later line runs it, and the later lines are
     // judged as shell. So does the Python-stdin redirect view: its later lines
     // stay in the view.
     // The non-shell-code split checks its later lines itself
     // ([`non_shell_code_file_here_document`]).
+    let stores_nothing = here_document_reader_stores_nothing(consumer);
+    let git_reader_head = quote_aware_words(consumer).first().map(String::as_str) == Some("git");
+    let stored_message_unreachable = || {
+        here_document_delimiter_is_quoted(&opener_line)
+            && later_commands_cannot_run_stored_message(&lines[close + 1..].concat())
+    };
     let later_commands_ok = matches!(
         targets,
         OutputTargets::PythonFiles | OutputTargets::PythonStdin | OutputTargets::NonShellCodeFiles
-    ) || (targets == OutputTargets::AnyTarget
-        && here_document_reader_stores_nothing(consumer));
+    ) || (matches!(
+        targets,
+        OutputTargets::AnyTarget | OutputTargets::DataFilesOnly
+    ) && stores_nothing
+        && if git_reader_head {
+            stored_message_unreachable()
+        } else {
+            targets == OutputTargets::AnyTarget
+        });
     if lines[close + 1..]
         .iter()
         .any(|l| odd_whitespace(&text(l)) || !(later_commands_ok || inert(&text(l))))
@@ -1233,9 +1259,14 @@ fn redirect_view_extra_head(head: &str, and_joined: bool) -> bool {
 ///
 /// The here-document redirects the stdin of the simple command it is attached
 /// to, so the body is `git commit`'s stdin and nothing else's: a `|` after the
-/// opener takes git's STDOUT, and a `;`/`&&`/`||` starts a command that never
-/// sees the body. The tail is not removed: it stays in the command text and
-/// every rule judges it as its own command (`<<'EOF'; rm -rf /etc` is Deny).
+/// opener takes git's STDOUT, and a `;`/`&&`/`||` starts a command that does
+/// not get the body on its stdin. It CAN still read the body back: git stores
+/// the message verbatim in `.git/COMMIT_EDITMSG` and in the commit object, so
+/// `<<'EOF'; sh .git/COMMIT_EDITMSG` runs it. The commands after the pipeline
+/// stages must therefore pass [`later_commands_cannot_run_stored_message`]
+/// (`; git log -1` does, `; sh .git/COMMIT_EDITMSG` does not). The tail is not
+/// removed either way: it stays in the command text and every rule judges it
+/// as its own command (`<<'EOF'; rm -rf /etc` is Deny).
 ///
 /// Refused (`None`): no unquoted operator, a `\`, `$` or backtick anywhere in
 /// the consumer text, a single `&` (background) or `|&`, a reader that is not
@@ -1244,6 +1275,8 @@ fn redirect_view_extra_head(head: &str, and_joined: bool) -> bool {
 /// next `;`/`&&`/`||`) whose program is not `cat`/`grep`/`egrep`/`fgrep`/
 /// `head`/`tail`/`wc` or that holds `<`, `>`, `(`, `)`. git prints the commit
 /// subject on stdout, so a stage that could run its stdin keeps the body judged.
+/// Also refused: commands after those stages that
+/// [`later_commands_cannot_run_stored_message`] does not accept.
 fn git_commit_reader_before_tail(consumer: &str) -> Option<String> {
     if consumer.contains(['\\', '$', '`']) {
         return None;
@@ -1311,21 +1344,28 @@ fn git_commit_reader_before_tail(consumer: &str) -> Option<String> {
         }
         k += 1;
     }
+    // The commands after the pipeline run after git stored the message.
+    if let Some(&(at, op)) = ops.get(k) {
+        if !later_commands_cannot_run_stored_message(&consumer[at + op.len()..]) {
+            return None;
+        }
+    }
     Some(reader)
 }
 
 /// True when `consumer` (the opener-line text [`opener_consumer`] returns, which
-/// [`here_document_consumer_is_data`] has already accepted) hands the body to a
-/// reader that leaves it in NO file: a bare `cat` with no output redirect (the
-/// body goes to the tool's stdout) or `git commit -F -` with no output redirect
-/// (the body becomes a commit message).
+/// [`here_document_consumer_is_data`] has already accepted) is a bare `cat` or a
+/// `git` reader with no output redirect. Despite the name, only `cat` leaves
+/// the body in NO file (it goes to the tool's stdout). `git commit -F -` STORES
+/// it: git writes the message verbatim to `.git/COMMIT_EDITMSG` and into the
+/// commit object, where a later line can read it back and run it
+/// (`sh .git/COMMIT_EDITMSG`, `git log -1 --format=%B | sh`).
 ///
-/// Only for the redirect view ([`OutputTargets::AnyTarget`]), where it lets
-/// commands follow the closing delimiter line (FP1, backlog e0085090:
-/// `git commit -F - <<'EOF'` … `EOF` then `git log -1` had a message line ending
-/// in `>` read as the redirect `> EOF`). The reason the shape rule otherwise
-/// forbids later commands is that one of them could execute a FILE the body was
-/// written to; with no file there is nothing for it to execute. `tee` writes
+/// So [`here_document_body_parts`] lets commands follow the closing delimiter
+/// line on this answer alone only for `cat`; for a `git` reader every later
+/// line must also pass [`later_commands_cannot_run_stored_message`] (FP1,
+/// backlog e0085090: `git commit -F - <<'EOF'` … `EOF` then `git log -1` had a
+/// message line ending in `>` read as the redirect `> EOF`). `tee` writes
 /// files, and any output redirect names one, so both answer false.
 pub(super) fn here_document_reader_stores_nothing(consumer: &str) -> bool {
     let words = quote_aware_words(consumer);
@@ -1336,6 +1376,72 @@ pub(super) fn here_document_reader_stores_nothing(consumer: &str) -> bool {
         return false;
     }
     matches!(words.first().map(String::as_str), Some("cat" | "git"))
+}
+
+/// The `git` subcommands [`later_commands_cannot_run_stored_message`] accepts:
+/// each only prints history or the working-tree state and runs no file. A
+/// CLOSED list; any other subcommand (`push`, `rebase -x`, an alias, …) keeps
+/// the body judged.
+const LATER_GIT_READS: &[&str] = &["log", "status", "show"];
+
+/// True when no command in `text` (the commands that run AFTER a quoted
+/// `git … commit -F -` here-document reader: the lines after the closing
+/// delimiter, or the opener-line tail [`git_commit_reader_before_tail`] splits
+/// off) can run the stored commit message. git keeps that message verbatim in
+/// `.git/COMMIT_EDITMSG` and in the commit object, so a later
+/// `sh .git/COMMIT_EDITMSG`, `bash < …`, `source …`, `. …`, or
+/// `git log -1 --format=%B | sh` runs the body as shell code; when this answers
+/// false the body stays in the judged text and every rule reads it.
+///
+/// `text` is split with the segment parser ([`split_segments_with_separators`]:
+/// `;`, `&&`, `||`, `|`, `&`, newline) and every segment must be headed by:
+///   * a word on [`INERT_LATER_COMMANDS`], spelled bare (no quote, path or
+///     assignment). Those tools have no option that runs a program, so any
+///     operand — `$` expansions included, which can only add operands — leaves
+///     them reading or printing;
+///   * `git` followed DIRECTLY by a subcommand on [`LATER_GIT_READS`] (no global
+///     option such as `-c`), whose words hold no `$` (an expansion could add any
+///     option) and none starting `--ou` (`--output=<file>` and its unambiguous
+///     abbreviations write the printed message to a file).
+///
+/// Whole-line comments and blank lines are skipped. A line holding a backtick,
+/// `\`, `(`, `)`, `{`, `}`, `<`, `>`, `#` or an unbalanced quote answers false:
+/// substitutions, groups, redirects and continued quotes are not judged here.
+/// Empty `text` answers true (nothing runs after the reader).
+///
+/// RESIDUALS, not covered: a LATER, separate tool call that runs the stored
+/// message is judged on its own text; programs git itself runs from existing
+/// configuration (hooks, pager, diff drivers) are the repository's, not the
+/// body's.
+pub(super) fn later_commands_cannot_run_stored_message(text: &str) -> bool {
+    let mut commands = String::new();
+    for line in text.lines() {
+        let t = line.trim_matches([' ', '\t']);
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        if t.contains(['`', '\\', '(', ')', '{', '}', '<', '>', '#']) || !quotes_balance(t) {
+            return false;
+        }
+        commands.push_str(t);
+        commands.push('\n');
+    }
+    split_segments_with_separators(&commands).iter().all(|s| {
+        let words = quote_aware_words(&s.text);
+        match words.split_first() {
+            None => true,
+            Some((head, _)) if INERT_LATER_COMMANDS.contains(&head.as_str()) => true,
+            Some((head, rest)) if head == "git" => {
+                rest.split_first().is_some_and(|(sub, options)| {
+                    LATER_GIT_READS.contains(&sub.as_str())
+                        && options
+                            .iter()
+                            .all(|w| !w.contains('$') && !w.starts_with("--ou"))
+                })
+            }
+            _ => false,
+        }
+    })
 }
 
 /// True when `line` has no unterminated `'` or `"` quote.

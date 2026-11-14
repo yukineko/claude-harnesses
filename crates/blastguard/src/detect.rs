@@ -719,12 +719,12 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
 
     // 0. When the command is effectively ONE here-document fed to a data-only
     // reader (`cat > notes.txt <<'EOF'`, `git commit -F - <<'EOF'`), with no
-    // other command before or after it, its body is removed before EVERY rule
-    // below — the line-level scans as much as the per-segment loop — so its
-    // text is not judged as a command (backlog fa1fce21 / 7037df97). In every
-    // other shape the body stays and is judged as code. RESIDUAL, not covered:
-    // a data file written here can still be executed by a LATER, separate tool
-    // call. See `strip_data_here_document_bodies` for the exact shape rule.
+    // other command around it (a quoted `git commit -F -` may be followed by
+    // commands that cannot run the stored .git/COMMIT_EDITMSG; those stay
+    // judged), its body is removed before EVERY rule below, so its text is not
+    // judged as a command (backlog fa1fce21 / 7037df97). In every other shape
+    // the body stays and is judged as code. RESIDUAL, not covered: a data file
+    // written here can still be run by a LATER, separate tool call. Shape rule: `strip_data_here_document_bodies`.
     let stripped = strip_data_here_document_bodies(cmd);
     let cmd: &str = &stripped;
     // 0b. A QUOTED here-document body written to a literal `.py` file is judged

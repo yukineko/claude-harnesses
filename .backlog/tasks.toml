@@ -1605,3 +1605,244 @@ exit 101: rees/side-reds-075136/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
      Running tests/backlog_20261114_python_read_of_protected_plugin_file_fp.rs (target/debug/deps/backlog_20261114_python_read_of_protected_plugin_file_fp-0c08f20d853bc41d)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_read_of_protected_plugin_file_fp`"""
+
+[[task]]
+id = "6f4ec5ce"
+title = "harmful program piped to python3 -i script.py or python3 -m code is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc"
+created_at = 1794626638
+updated_at = 1794626638
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_python_interactive -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626638
+detail = """
+exit 101: 0.2.574 (/Users/yuki/src/.harness-worktrees/session-7e01fcf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.55s
+     Running tests/backlog_20261114_pipe_to_python_interactive.rs (target/debug/deps/backlog_20261114_pipe_to_python_interactive-a1e46e5f4820211c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_python_interactive`"""
+
+[[task]]
+id = "e5a8fcc2"
+title = "system-file rm via variable in a later statement of a command substitution is Ask in main (expected Deny)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc"
+created_at = 1794626682
+updated_at = 1794626682
+weight = 0.0
+issue_number = 1750
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1750"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_var_in_multi_statement_substitution -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626682
+detail = """
+exit 101: arness-worktrees/session-7e01fcf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/backlog_20261114_var_in_multi_statement_substitution.rs (target/debug/deps/backlog_20261114_var_in_multi_statement_substitution-65c416248a77981c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_var_in_multi_statement_substitution`"""
+
+[[task]]
+id = "403f9797"
+title = "harmful program piped to a top-level for loop whose body has a closed nested compound before the reader is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc"
+created_at = 1794626701
+updated_at = 1794626701
+weight = 0.0
+issue_number = 1751
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1751"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_for_body_nested_compound -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626701
+detail = """
+exit 101: ki/src/.harness-worktrees/session-7e01fcf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running tests/backlog_20261114_pipe_to_for_body_nested_compound.rs (target/debug/deps/backlog_20261114_pipe_to_for_body_nested_compound-1f8c1a82dd20c996)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_for_body_nested_compound`"""
+
+[[task]]
+id = "e79485cb"
+title = "quoted here-document body containing $(f) is Ask/Deny though never expanded (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b)"
+created_at = 1794626746
+updated_at = 1794626746
+weight = 0.0
+issue_number = 1752
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1752"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_quoted_heredoc_substitution_text_fp -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626746
+detail = """
+exit 101: arness-worktrees/session-7e01fcf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/backlog_20261114_quoted_heredoc_substitution_text_fp.rs (target/debug/deps/backlog_20261114_quoted_heredoc_substitution_text_fp-6bbbfefd6bbb24e2)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_quoted_heredoc_substitution_text_fp`"""
+
+[[task]]
+id = "c9da0437"
+title = "python3 - heredoc: backtick span with / in an unrelated string literal is read as the open(...,'w') target (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b)"
+created_at = 1794626768
+updated_at = 1794626768
+weight = 0.0
+issue_number = 1753
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1753"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_heredoc_backtick_string_write_target_fp -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626768
+detail = """
+exit 101: /crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running tests/backlog_20261114_python_heredoc_backtick_string_write_target_fp.rs (target/debug/deps/backlog_20261114_python_heredoc_backtick_string_write_target_fp-f9925a4af716991a)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_heredoc_backtick_string_write_target_fp`"""
+
+[[task]]
+id = "7c430e87"
+title = "tdd red/green output_tail uses a shared fixed tdd-run.log; concurrent runs in other cwds contaminate each other"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b)"
+created_at = 1794626790
+updated_at = 1794626790
+weight = 0.0
+issue_number = 1754
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1754"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261114_red_output_capture_shared_log -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626790
+detail = """
+exit 101:  tdd v0.1.76 (/Users/yuki/src/.harness-worktrees/session-7e01fcf0/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.08s
+     Running tests/backlog_20261114_red_output_capture_shared_log.rs (target/debug/deps/backlog_20261114_red_output_capture_shared_log-e14c357d581c124e)
+error: test failed, to rerun pass `-p tdd --test backlog_20261114_red_output_capture_shared_log`"""
+
+[[task]]
+id = "234cae6f"
+title = """git commit -m "$(cat <<'EOF' ... backtick ... EOF)" is Ask/Deny though the quoted heredoc body is literal (FP)"""
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b)"
+created_at = 1794626818
+updated_at = 1794626818
+weight = 0.0
+issue_number = 1755
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1755"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626818
+detail = """
+exit 101: ession-7e01fcf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp.rs (target/debug/deps/backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp-8f521eb05a2af65d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp`"""
+
+[[task]]
+id = "9d347af5"
+title = "quoted heredoc body line resembling git commit -m with backtick is judged as a command when the heredoc is not the first statement (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b)"
+created_at = 1794626839
+updated_at = 1794626839
+weight = 0.0
+issue_number = 1759
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1759"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626839
+detail = """
+exit 101: ofile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp.rs (target/debug/deps/backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp-99b7743c0d81c17f)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp`"""

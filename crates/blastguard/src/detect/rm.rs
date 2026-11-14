@@ -1063,7 +1063,7 @@ pub(super) fn deletion_rm_dotted_eligible(command: &str) -> bool {
 /// splits into the same segments and words.
 fn mask_rm_operand_dot_components(seg: &str) -> String {
     let (body, sep) = match seg.char_indices().last() {
-        Some((i, c)) if matches!(c, ';' | '&' | '|') => (&seg[..i], &seg[i..]),
+        Some((i, ';' | '&' | '|')) => (&seg[..i], &seg[i..]),
         _ => (seg, ""),
     };
     if body.split(' ').find(|w| !w.is_empty()) != Some("rm") {

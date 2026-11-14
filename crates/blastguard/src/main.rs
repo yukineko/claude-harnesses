@@ -800,8 +800,10 @@ fn analyse(input: &HookInput) -> Decision {
 /// need, plus the absent-path index probe (`reversible::probe_absent_path`)
 /// the `git checkout -- <pathspec>` verdict uses for a path missing on disk.
 /// Recursive rm strictly inside them is Allow under the same
-/// whole-command conditions as the worktree Allow plus a few more (no `.`
-/// component, plain options-then-operands); see `deletion`'s module doc.
+/// whole-command conditions as the worktree Allow plus a few more (plain
+/// options-then-operands; an operand spelled with `.`/`..` components is
+/// judged only after they are resolved physically, GH #1661); see
+/// `deletion`'s module doc.
 ///
 /// A missing or empty `cwd` yields a model with only the temp roots in it, and
 /// an unresolvable one yields no model at all — both of which simply keep the

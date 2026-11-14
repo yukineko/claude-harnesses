@@ -4220,8 +4220,9 @@ fn deletion_escape_spellings_are_not_allowed() {
         format!("rm -rf {}/out", f.tmp),
         format!("rm -rf {}/in/b", f.tmp),
         format!("rm -rf {}/../home/docs", f.tmp),
-        format!("rm -rf {}/a/../a", f.tmp),
-        format!("rm -rf {}/./a", f.tmp),
+        // GH #1661: a `..` that physically leaves the temp root.
+        format!("rm -rf {}/a/../../home/docs", f.tmp),
+        format!("rm -rf {}/a/../out", f.tmp),
         format!("rm -rf {}/a {}/docs", f.tmp, f.home),
         format!("mv {}/docs {}/x && rm -rf {}/x", f.home, f.tmp, f.tmp),
         format!("rm -rf {}/a -x", f.tmp),
@@ -4235,13 +4236,37 @@ fn deletion_escape_spellings_are_not_allowed() {
     // User ruling 2026-10-28: cd <literal safe root> && rm -rf <relative> must match the absolute spelling.
     let cd_rel = format!("cd {} && rm -rf a", f.tmp);
     assert_eq!(f.run(&cd_rel), Decision::Allow, "{cd_rel}");
-    // `.` relative spelling, cwd in the temp root.
-    let dot = detect_scoped(
-        "Bash",
-        Some(&json!({ "command": "rm -rf ./a" })),
-        &f.roots_with_cwd(&f.tmp),
-    );
-    assert_ne!(verdict_name(&dot), "allow");
+    // GH #1661, re-anchored by user ruling esc-6eab173e (2026-11-14): a `.`/`..`
+    // spelling that PHYSICALLY resolves to the same path gets the same verdict
+    // as its plain spelling (it used to be refused for the spelling alone).
+    let plain = verdict_name(&f.run(&format!("rm -rf {}/a", f.tmp)));
+    assert_eq!(plain, "allow", "baseline: the plain spelling is Allow");
+    for cmd in [
+        format!("rm -rf {}/a/../a", f.tmp),
+        format!("rm -rf {}/./a", f.tmp),
+    ] {
+        assert_eq!(verdict_name(&f.run(&cmd)), plain, "{cmd}");
+    }
+    // `.` relative spelling, cwd in the temp root: same as the bare `a`.
+    let at_tmp = |cmd: &str| {
+        verdict_name(&detect_scoped(
+            "Bash",
+            Some(&json!({ "command": cmd })),
+            &f.roots_with_cwd(&f.tmp),
+        ))
+    };
+    assert_eq!(at_tmp("rm -rf ./a"), at_tmp("rm -rf a"), "rm -rf ./a");
+    // …but a `./`/`../` spelling that physically ESCAPES the temp root (a
+    // symlink out, or a `..` above it) stays not-Allow.
+    for cmd in [
+        "rm -rf ./out",
+        "rm -rf ./out/",
+        "rm -rf ../home/docs",
+        "rm -rf ./a/../../home/docs",
+        "rm -rf ./out/../docs",
+    ] {
+        assert_ne!(at_tmp(cmd), "allow", "cwd={} {cmd}", f.tmp);
+    }
     // A non-canonical payload cwd withholds every deletion Allow.
     let raw = format!("{}/a/..", f.tmp);
     let d = detect_scoped(

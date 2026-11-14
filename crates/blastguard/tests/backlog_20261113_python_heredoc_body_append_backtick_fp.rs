@@ -91,7 +91,6 @@ const BODY_PLAIN: &str = "python3 - <<'EOF'\nprint(\"x >> y\")\nEOF";
 // test-weakening-justified: new RED for an unfixed false positive (backlog
 // pending, 2026-11-13); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: <backlog-pending> 2026-11-13 quoted python heredoc body `>> `y`` read as run-time append redirect — remove the ignore when fixed"]
 fn quoted_python_heredoc_body_append_text_is_not_a_redirect() {
     let home = unique_home("red");
     for subagent in [false, true] {

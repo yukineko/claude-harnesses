@@ -22,8 +22,8 @@ pub(super) use invocation::analyze_code_interpreter;
 use osascript::osascript_app_delete;
 pub(super) use osascript::osascript_program_delete;
 pub(super) use python_file::{
-    python_file_body_verdict, python_redirect_view, python_stdin_body_reading,
-    python_written_program_verdict,
+    python_file_body_verdict, python_program_only_prints, python_redirect_view,
+    python_stdin_body_reading, python_written_program_verdict,
 };
 pub(super) use shell_calls::python_body_segment_verdict;
 

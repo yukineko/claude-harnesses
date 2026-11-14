@@ -52,15 +52,6 @@ SCRIPT = HERE / "check-fail-open-mutation.py"
 TARGET_REL = "crates/blastguard/src/model.rs"
 ANCHOR = "            Decision::Ask(reason) => Decision::Deny(reason),\n"
 
-# test-weakening-justified: new RED for an unfixed defect (backlog pending,
-# 2026-11-13); xfail(strict) is this repo's python RED convention and turns into
-# a failure once the defect is fixed.
-OPEN = pytest.mark.xfail(
-    strict=True,
-    reason="RED: <backlog-pending> 2026-11-13 fail-open mutation check mutates the invoking "
-    "tree in place; remove this mark when fixed",
-)
-
 
 def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(
@@ -111,7 +102,6 @@ class MutationCheckInvokingTree(unittest.TestCase):
             timeout=120,
         )
 
-    @OPEN
     def test_invoking_tree_tracked_file_is_not_mutated_during_the_run(self):
         p = self._run()
         self.assertTrue(self.log.exists(), f"stub cargo never ran:\n{p.stdout}")

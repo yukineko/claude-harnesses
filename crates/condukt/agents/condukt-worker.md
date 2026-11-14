@@ -18,7 +18,7 @@ hooks:
 - 触れてよいファイル (`touched_files`) — **このスコープ外のファイルに触れない**。
 - `done_criteria` — 達成すべき合格条件。
 - `interface_context` (省略可) — 呼び出し元が渡す「スコープ外だが参照する型・API のシグネチャ・インターフェース定義」。スコープ外ファイルを直接 Edit しなくても型情報として参照してよい。
-- `reproduction_tests` (省略可) — interpreter が done_criteria から導出した実行可能テストコマンド (例: `cargo test -p condukt -- test_foo`)。あればこれが TDD ループの起点になる。**省略された場合でも `cargo check` は必須** (下記「コンパイル早期検証」を参照)。テストが無いことは未コンパイルコードを verifier まで通過させる免罪符にはならない。
+- `reproduction_tests` (省略可) — interpreter が done_criteria から導出した実行可能テストコマンド (例: `cargo test -p condukt --test <file>`。target selector の無い `cargo test -p condukt -- test_foo` はフルスイートとして testscope hook が deny する)。あればこれが TDD ループの起点になる。**省略された場合でも `cargo check` は必須** (下記「コンパイル早期検証」を参照)。テストが無いことは未コンパイルコードを verifier まで通過させる免罪符にはならない。
 - `failure_context` (省略可) — 前回 verifier が fail した際の構造化フィールド: `reason` (verifier の判定理由)・`failed_tests` (失敗したテスト出力)・`diff` (前回 worker の変更 diff)。2 回目以降の再投入時に渡される。
 - `knowledge_context` (省略可) — `condukt knowledge` コマンドが返すプロジェクト固有の知識・規約・注意点。存在する場合は実装に反映する。空の場合は無視してよい。
 - `peer_tasks` (省略可) — 同バッチで並列実行されている他タスクの `[{id, title, touched_files}]` リスト。スコープ衝突を避けるために参照する。
@@ -33,6 +33,12 @@ hooks:
   peer が触れているファイルは原則修正しない。もし依存関係上どうしても必要な場合は `needs-serial` を返して
   呼び出し元にエスカレーションする。
 - **新機能・修正にはテストを伴わせる** (プロジェクトにテスト基盤がある場合)。
+- **走らせてよいテストは task のものだけ（`condukt testscope` hook が機械的に deny する）**: この worktree の中では、
+  `--test <name>` は `reproduction_tests` に `--test <name>` として現れるものか、この worktree が base から追加・変更した
+  `tests/<name>.rs`（commit 済み・未 commit・untracked）だけ。`--lib`/`--bin`/`--doc` は `reproduction_tests` に同じ selector が
+  ある場合だけ。同じコマンドを同じツリーで 2 回走らせるのも deny される — 素の `cargo test`・`tdd red|green --cmd`・
+  `condukt state test` は同じ再実行 ledger を共有するので、経路を変えても 2 回目は通らない。deny されたら理由を
+  そのまま report し、別構文で再試行しない。
 - **コミット方針**: 作業ディレクトリは**このタスク専用の worktree**（呼び出し元が渡す。タスクごとに 1 つ）。
   - 完了したら worktree 内で commit する。**merge はしない**（統合は呼び出し元が verifier 通過後に `condukt worktree merge` で行う）。commit 前 `cargo check` は必須（下記）。
   - **すべての commit に task trailer `Condukt-Task: <run-id>/<task-id>` を付ける。** 値はプロンプトでは渡されない。

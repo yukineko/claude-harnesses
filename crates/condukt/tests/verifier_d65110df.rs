@@ -8,6 +8,8 @@
 //! end to end against the real binary in throwaway git repos with an isolated
 //! `$HOME`.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -32,10 +34,16 @@ impl Fx {
     }
 
     fn run(&self, args: &[&str]) -> Output {
+        common::prime_if_running(args, &self.home, common::TESTSCOPE_SESSION);
         harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
             .args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
+            .env(
+                "CONDUKT_TESTSCOPE_LEDGER",
+                common::testscope_ledger(&self.home),
+            )
+            .env("CLAUDE_CODE_SESSION_ID", common::TESTSCOPE_SESSION)
             .env("HARNESS_PROGRESS_WINDOW_SECS", "0")
             .output()
             .expect("spawn condukt")

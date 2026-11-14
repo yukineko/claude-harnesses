@@ -8,6 +8,8 @@
 //! subcommands exist (unrecognized subcommand) and passes once wired = a
 //! genuine Fail->Pass reproduction oracle for the wiring task.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -47,10 +49,16 @@ impl Fixture {
     }
 
     fn condukt(&self, args: &[&str]) -> std::process::Output {
+        common::prime_if_running(args, &self.home, common::TESTSCOPE_SESSION);
         harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
+            .env(
+                "CONDUKT_TESTSCOPE_LEDGER",
+                common::testscope_ledger(&self.home),
+            )
+            .env("CLAUDE_CODE_SESSION_ID", common::TESTSCOPE_SESSION)
             .output()
             .expect("spawn condukt")
     }

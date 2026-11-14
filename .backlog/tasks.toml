@@ -2137,3 +2137,32 @@ exit 101: ; 12 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
      Running tests/backlog_20261114_static_literal_var_resolution.rs (target/debug/deps/backlog_20261114_static_literal_var_resolution-da48bb690206911d)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_static_literal_var_resolution`"""
+
+[[task]]
+id = "d5c404c0"
+title = "test_fail_open_mutation_leaves_no_artifacts.py passes vacuously: stub lacks test_args so it never runs"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "scripts",
+    "test-vacuous",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-14 at main 670f82987 (side finding of run-20261114-163341-69351 task b793fddc, worker + main loop). scripts/test_fail_open_mutation_leaves_no_artifacts.py:74 defines stub(crate, timeout=600); check-fail-open-mutation.py:580 calls run_crate_tests(scenario.crate, timeout=timeout, test_args=scenario.test_args()). Verbatim output: unexpected exception: TypeError("MutationRunArtifacts._drive.<locals>.stub() got an unexpected keyword argument 'test_args'"); status error, so the artifact-writing stub never runs and test_run_created_untracked_file_is_not_silently_left_behind sees no leak. Also fails the same at 202d33f25 (pre-b793fddc). After b793fddc the run happens in a scratch copy, so a fixed stub must write its artifact relative to the cwd/scratch it is given, not cfom.REPO. RED: scripts/test_fail_open_mutation_leaves_no_artifacts_stub_invoked_20261114.py (commit 9fe913745, xfail strict)."""
+created_at = 1794653933
+updated_at = 1794653933
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_fail_open_mutation_leaves_no_artifacts_stub_invoked_20261114.py"
+rev = "9fe913745a6a0634dc83723658f0c131086eacc3"
+observed_at = 1794653933
+detail = """
+exit 1: _leaves_no_artifacts_stub_invoked_20261114.py:44: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_fail_open_mutation_leaves_no_artifacts_stub_invoked_20261114.py::LeavesNoArtifactsStubIsInvoked::test_drive_reaches_the_stub_instead_of_raising_typeerror
+============================== 1 failed in 0.24s ==============================="""

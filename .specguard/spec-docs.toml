@@ -120,6 +120,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'compound command 内・exec fd・zsh =() 経由の shell program も判定する': exec_opened_fds and ExecFd classes (procsub / file / unreadable) consumed by procsub_programs (backlog 72872200)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/payload/compound_readers.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'pipe で if / while / until の本体や eval / sh -c に渡る program も判定する' and module 責務 'detect/payload/compound_readers': compound_and_forwarder_pipelines, consumed by stdin_exec_verdict alongside group_reader_pipelines (backlog b3569da5)."
+
+[[spec]]
 path = "crates/blastguard/src/exclude.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'module 責務' exclude (ALLOW_GLOBS, glob_set, normalize, is_config_file, is_git_internal) and the 'config ファイル除外' invariant."

@@ -633,6 +633,14 @@ forge・condukt のスケジューラが再利用）。
   exec で開かれた stdin は upstream pipe のある reader にも適用する（制限側の過大近似）。zsh の `=(…)` は
   process substitution として読む。回帰テスト:
   `crates/blastguard/tests/backlog_20261114_compound_wrapped_or_cross_stage_shell_program.rs`。
+- **pipe で if / while / until の本体や eval / sh -c に渡る program も判定する（`detect/payload/compound_readers.rs`
+  の `compound_and_forwarder_pipelines`、backlog b3569da5、blastguard 0.2.569）** — pipe で供給される stage が
+  `if` / `while` / `until` で始まれば、対応する `fi` / `done` までの各文（条件・全分岐。先頭の `then`/`do`/`else`/
+  `elif`/`{` を外す）を `UPSTREAM | member` として `analyze_interpreter_stdin_exec` で再判定する（制限側の過大近似）。
+  閉じが見つからなければ Ask。stage の head（exec-wrapper の先も含む）が `eval` ならその引数テキスト（原文と
+  外側の quote を 1 層外した読み）、shell の `-c`（`shell_program_source` が `Inline`）なら `dash_c_payloads` の
+  各候補の各文を同様に再判定する。回帰テスト:
+  `crates/blastguard/tests/backlog_20261114_pipe_to_compound_reader_and_forwarder.rs`。
 - **inline Python program の文字列中の `>` は data（#1626、ユーザー裁定 2026-11-07）** —
   `python3 -c '…'`（`python`/`python3`/`python3.N` の inline-eval のみ）の program text に対する
   shell pass で、truncating redirect の target が**判定可能**なものは recoverability による Deny を
@@ -1091,6 +1099,10 @@ forge・condukt のスケジューラが再利用）。
   GATED ゲート強制に利用する。
 - **`model`** — 判定型 `Decision::{Allow, Deny(String), Ask(String)}`（`deny()`/`ask()`/`is_deny()`）。
   system-harm の Deny は `deny_system_harm()` で理由に `SYSTEM_HARM_MARK` を付け、`is_system_harm()` で識別する。
+- **`detect/payload/compound_readers`** — `detect/payload` の子 module。pipe で供給される `if`/`while`/`until`
+  compound の各文と、`eval`/shell `-c` が実行する command text の各文を `UPSTREAM | member` の合成 pipeline として
+  返す（`compound_and_forwarder_pipelines`。閉じない compound は Ask 理由）。`stdin_exec_verdict` が
+  `group_reader_pipelines` の結果に加えて判定する（backlog b3569da5）。
 - **`detect/verdict_acc`** — `detect` の再解析ループ（segment・`-c` payload・command-word 候補・`-exec` tail）が
   共有する `VerdictAcc`。`Deny > Ask > Allow` の順位で畳み、`Deny` は即座に返し、`Ask` は最初の 1 件を保持して
   走査を続ける（後続の `Deny` を `Ask` が隠さない）。順位は `harness_core::verdict::Verdict::worst_of` そのもので、

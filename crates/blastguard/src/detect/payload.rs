@@ -9,6 +9,7 @@ use super::{
     xargs_reads_arg_file, xargs_shell, Ctx, Decision, PythonReader, Stop, VerdictAcc,
 };
 
+mod compound_readers;
 mod exec_fds;
 mod program_source;
 
@@ -184,7 +185,12 @@ fn stdin_exec_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // stage. See `group_reader_pipelines`. The descent terminates: each
     // synthetic pipeline holds one grouping layer fewer past its first stage
     // than the stage it came from.
-    let (group_pipelines, group_undetermined) = group_reader_pipelines(&statements);
+    let (mut group_pipelines, mut group_undetermined) = group_reader_pipelines(&statements);
+    // The same for `if` / `while` / `until` bodies and `eval` / `sh -c`
+    // forwarders (backlog b3569da5); see `compound_readers`.
+    let (more, why) = compound_readers::compound_and_forwarder_pipelines(&statements);
+    group_pipelines.extend(more);
+    group_undetermined.extend(why);
     for synthetic in &group_pipelines {
         if let Some(deny) = acc.record(analyze_interpreter_stdin_exec(synthetic, depth, ctx)) {
             return deny;

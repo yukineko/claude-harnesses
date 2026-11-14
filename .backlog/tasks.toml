@@ -1809,13 +1809,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "Side finding of run-20261114-110017-12373 (flow session b3435a5e), measured 2026-11-14 at e9d58cccb. crates/condukt/src/testscope.rs check_rerun / tree_identity(cwd) uses the hook payload cwd; a Bash call 'cd <worktree> && cargo test ...' whose payload cwd is another tree is keyed on the wrong tree, so after editing the cd-target tree the rerun is refused as unchanged. RED: crates/condukt/tests/backlog_20261114_testscope_cd_tree_identity.rs rerun_after_editing_the_cd_target_tree_is_allowed (panics at :138). Non-ignored control control_editing_payload_cwd_tree_allows_rerun passes. Observed in the wild: several rerun refusals during that run. Readings: (a) real defect (FP refusing a legitimate rerun); (b) intended (guard only keys payload cwd by design) - distinguish by whether testscope docs promise cd-target awareness. Fix must stay fail-closed when the cd target cannot be resolved."
+notes = "Side finding of run-20261114-110017-12373 (flow session b3435a5e), measured 2026-11-14 at e9d58cccb. crates/condukt/src/testscope.rs check_rerun / tree_identity(cwd) uses the hook payload cwd; a Bash call 'cd <worktree> && cargo test ...' whose payload cwd is another tree is keyed on the wrong tree, so after editing the cd-target tree the rerun is refused as unchanged. RED: crates/condukt/tests/backlog_20261114_testscope_cd_tree_identity.rs rerun_after_editing_the_cd_target_tree_is_allowed (panics at :138). Non-ignored control control_editing_payload_cwd_tree_allows_rerun passes. Observed in the wild: several rerun refusals during that run. Readings: (a) real defect (FP refusing a legitimate rerun); (b) intended (guard only keys payload cwd by design) - distinguish by whether testscope docs promise cd-target awareness. Fix must stay fail-closed when the cd target cannot be resolved. | 2026-11-14 fix be8c59992 on branch fix-214b39b5 (worktree .harness-worktrees/fix-214b39b5), NOT merged. RULED 2026-11-14 by user: when the cd target cannot be determined statically, do NOT deny — skip rerun detection (do not write the ledger), Allow, and say why on stderr (the guard is a duplicate-run check, not a safety gate). Remaining: RED for that ruling by an independent author, implement, remove #[ignore] on backlog_20261114_testscope_cd_tree_identity, tests for undetermined-cd and ( ) restore branches. Also: ledger is written at PreToolUse so a call denied by another hook counts as ran (FP, unfiled)."
 created_at = 1794624843
-updated_at = 1794624843
+updated_at = 1794641093
 weight = 0.0
 issue_number = 1749
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1749"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

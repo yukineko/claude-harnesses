@@ -76,7 +76,6 @@ fn run_as(command: &str, home: &Home, subagent: bool) -> (String, String) {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 exec stdin herestring literal harm is Ask in main — remove the ignore when fixed"]
 fn exec_stdin_herestring_literal_system_harm_is_deny_in_both_modes() {
     let home = unique_home("red");
     let cmd = "exec <<< 'chmod 777 /etc/hosts'; bash";

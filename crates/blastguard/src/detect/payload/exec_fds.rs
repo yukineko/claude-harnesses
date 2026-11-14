@@ -399,6 +399,28 @@ fn here_text_fds(stages: &[Stage]) -> Vec<u32> {
     }
 }
 
+/// Whether some `exec` on the line opens fd 0 on a here-string or a
+/// here-document (`exec <<< '…'`, `exec 0<<'EOF'`), or duplicates fd 0 from
+/// an fd in `tracked` (`exec 0<&3`). Its text is judged by
+/// [`cross_statement_fd_verdict`] only for a literal harm (a Deny); fd 0 is
+/// never resolved, so [`super::procsub_programs`] keeps its Ask.
+fn stdin_here_text(stages: &[Stage], tracked: &[u32]) -> bool {
+    stages.iter().any(|st| {
+        let Some((at, _)) = exec_word(&st.words) else {
+            return false;
+        };
+        let Some(redirects) = exec_only_redirects(&st.words[at + 1..]) else {
+            return false;
+        };
+        redirects.iter().any(|(fd, op, target)| {
+            let n = fd.unwrap_or(if op.starts_with('<') { 0 } else { 1 });
+            n == 0
+                && (matches!(op.as_str(), "<<<" | "<<" | "<<-")
+                    || (op == "<&" && target.parse::<u32>().is_ok_and(|m| tracked.contains(&m))))
+        })
+    })
+}
+
 /// The body of the here-document a segment `opener_raw` opens, located on the
 /// physical lines of `cmd`: `None` unless exactly one line holds that segment
 /// and opens exactly one here-document, and a closing line follows.
@@ -681,8 +703,15 @@ pub(super) struct FdTracking {
 /// `/dev/fd/$fd`) on a line where an `exec` opens a numbered or named fd
 /// (`exec {fd}<<< '…'`) on literal text: every text opened so far is judged.
 /// Where no reader is
-/// visible, a text is judged as `sh` would run it. fd 0 (`exec <<< '…'`) is
-/// not followed here.
+/// visible, a text is judged as `sh` would run it.
+///
+/// fd 0 (`exec <<< '…'`, `exec 0<<'EOF'`, `exec 0<&3`; backlog 2210e1db) is
+/// followed the same way but judged for a literal harm only: each later
+/// reader (shell / interpreter) that does not redirect its own stdin and is
+/// not piped into is judged as the pipeline as written with each text fd 0
+/// may hold given inline, and a Deny there is the verdict in both modes. fd 0
+/// is never in `resolved`, so every other case keeps the Ask (a Deny in a
+/// subagent) [`super::procsub_programs`] gives a stdin-program reader of it.
 pub(super) fn cross_statement_fd_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> FdTracking {
     let none = FdTracking {
         verdict: Decision::Allow,
@@ -694,7 +723,8 @@ pub(super) fn cross_statement_fd_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>)
     let stages = structured_stages(cmd);
     let tracked = here_text_fds(&stages);
     let named = named_fd_texts(cmd, &stages);
-    if tracked.is_empty() && named.is_empty() {
+    let stdin_tracked = stdin_here_text(&stages, &tracked);
+    if tracked.is_empty() && named.is_empty() && !stdin_tracked {
         return none;
     }
     let mut unresolved: Vec<u32> = Vec::new();
@@ -865,6 +895,40 @@ runs that text",
             .filter(|(_, s)| s.pipeline == st.pipeline)
             .collect();
         let pipeline_stages: Vec<&Stage> = pipeline.iter().map(|(_, s)| *s).collect();
+        // A reader that inherits fd 0 an `exec` opened on literal text
+        // (`exec <<< '…'; bash`): the pipeline as written, this stage given
+        // each text fd 0 may hold inline (`bash <<< '…'`), judged for a
+        // literal harm only. A Deny is a Deny in both modes; any other verdict
+        // is dropped here, since fd 0 is never resolved and
+        // `procsub_programs` keeps its Ask for a stdin-program reader.
+        if stdin_tracked
+            && stdin_redirects == 0
+            && !st.piped_in
+            && !pipeline_readers(&[st]).is_empty()
+            && depth < MAX_SHELL_DEPTH
+        {
+            let texts = fds.get(&0).map(FdState::texts).unwrap_or_default();
+            for text in &texts {
+                let members: Vec<String> = pipeline
+                    .iter()
+                    .map(|(pi, p)| {
+                        if *pi == si {
+                            format!("{} {}", p.words.join(" "), text.stdin_redirect())
+                        } else {
+                            p.words.join(" ")
+                        }
+                    })
+                    .collect();
+                let synthetic = format!("{}{}", members.join(" | "), text.trailer());
+                let verdict = super::super::detect_bash(&synthetic, depth + 1, ctx);
+                if verdict.is_deny() {
+                    return FdTracking {
+                        verdict,
+                        resolved: Vec::new(),
+                    };
+                }
+            }
+        }
         // A read through an fd spelled with an expansion (`<&$fd`,
         // `<&$((1+2))`, `/dev/fd/$fd`) may be any fd an `exec` opened on
         // literal text before it, numbered or named: each such text is

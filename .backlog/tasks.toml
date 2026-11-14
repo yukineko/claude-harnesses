@@ -1718,3 +1718,31 @@ exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finish
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
      Running tests/backlog_20261114_testscope_cd_tree_identity.rs (target/debug/deps/backlog_20261114_testscope_cd_tree_identity-eb881238f9300bcf)
 error: test failed, to rerun pass `-p condukt --test backlog_20261114_testscope_cd_tree_identity`"""
+
+[[task]]
+id = "6f4ec5ce"
+title = "harmful program piped to python3 -i script.py or python3 -m code is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc"
+created_at = 1794626638
+updated_at = 1794626638
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_python_interactive -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626638
+detail = """
+exit 101: 0.2.574 (/Users/yuki/src/.harness-worktrees/session-7e01fcf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.55s
+     Running tests/backlog_20261114_pipe_to_python_interactive.rs (target/debug/deps/backlog_20261114_pipe_to_python_interactive-a1e46e5f4820211c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_python_interactive`"""

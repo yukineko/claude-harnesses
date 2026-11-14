@@ -77,10 +77,6 @@ fn run_as(command: &str, home: &Home, subagent: bool) -> (String, String) {
     )
 }
 
-fn wt(home: &Home) -> String {
-    home.0.join("wt").display().to_string()
-}
-
 #[test]
 #[ignore = "RED: 2026-11-14 bash /dev/fd/3 allowed — remove the ignore when fixed"]
 fn bash_dev_fd_operand_is_not_allowed() {

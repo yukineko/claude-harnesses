@@ -78,10 +78,6 @@ fn run_as(command: &str, home: &Home, subagent: bool) -> (String, String) {
     )
 }
 
-fn wt(home: &Home) -> String {
-    home.0.join("wt").display().to_string()
-}
-
 fn check(cmd: &str, tag: &str) {
     let home = unique_home(tag);
     let (m, mr) = run_as(cmd, &home, false);

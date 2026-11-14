@@ -80,10 +80,6 @@ fn run_as(command: &str, home: &Home, subagent: bool) -> (String, String) {
     )
 }
 
-fn wt(home: &Home) -> String {
-    home.0.join("wt").display().to_string()
-}
-
 fn seed(home: &Home) {
     std::fs::write(
         home.0.join("wt").join("probe.py"),

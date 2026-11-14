@@ -75,10 +75,6 @@ fn run_as(command: &str, home: &Home, subagent: bool) -> (String, String) {
     )
 }
 
-fn wt(home: &Home) -> String {
-    home.0.join("wt").display().to_string()
-}
-
 #[test]
 #[ignore = "RED: 2026-11-14 exec stdin herestring literal harm is Ask in main — remove the ignore when fixed"]
 fn exec_stdin_herestring_literal_system_harm_is_deny_in_both_modes() {

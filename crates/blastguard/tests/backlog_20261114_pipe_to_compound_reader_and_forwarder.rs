@@ -120,7 +120,6 @@ fn undenied(shapes: &[&str], tag: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 harmful program piped into if/while compound or eval/sh -c forwarder to a shell is Allow — remove the ignore when fixed"]
 fn harmful_program_piped_to_compound_reader_or_forwarder_is_deny() {
     let bad = undenied(FAIL_OPEN, "red");
     assert!(

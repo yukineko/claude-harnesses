@@ -645,6 +645,23 @@ forge・condukt のスケジューラが再利用）。
   exec で開かれた stdin は upstream pipe のある reader にも適用する（制限側の過大近似）。zsh の `=(…)` は
   process substitution として読む。回帰テスト:
   `crates/blastguard/tests/backlog_20261114_compound_wrapped_or_cross_stage_shell_program.rs`。
+- **pipe で if / while / until の本体や eval / sh -c に渡る program も判定する（`detect/payload/compound_readers.rs`
+  の `compound_and_forwarder_pipelines`、backlog b3569da5、blastguard 0.2.569–0.2.571）** — pipe で供給される
+  stage が（`!` / `time [-p]` の後ろも含め）`if` / `while` / `until` / `case WORD in` で始まれば、対応する
+  `fi` / `done` / `esac` までの各文（条件・全分岐。先頭の `then`/`do`/`else`/`elif`/`{`/`!`/`time`/case の
+  pattern 語 `x)` を外す）を `UPSTREAM | member` として `analyze_interpreter_stdin_exec` で再判定する（制限側の
+  過大近似）。入れ子の opener はこれらの前置語の後ろでも数える（数え漏れると内側の `fi` が外側を早く閉じ、
+  後続の reader が判定されない）。keyword は command 位置（各文の先頭＝`;`・`&&`・`||`・改行の後、各 pipe
+  stage の先頭＝`|` の後、およびそれらに続く前置語の後。closer `fi`/`done`/`esac`/`}` の文に続く stage も含む）
+  でだけ opener / closer として数え、引数位置（`echo if`）や quote 内の語は数えない（shell にとっても keyword
+  ではない）。範囲を判定できない `coproc` や読めない `case` header は Ask。閉じが
+  見つからなければ行末までの全文を member にする（Ask にはしない。brace group から分割された member は
+  閉じを持たずに届く）。stage の head（exec-wrapper の先も含む）が `eval` ならその引数テキスト（原文と
+  外側の quote を 1 層外した読み）、shell の `-c`（`shell_program_source` が `Inline`）なら `dash_c_payloads` の
+  各候補の各文を同様に再判定する。回帰テスト:
+  `crates/blastguard/tests/backlog_20261114_pipe_to_compound_reader_and_forwarder.rs`、
+  `crates/blastguard/tests/backlog_20261114_pipe_to_compound_nested_bang_time.rs`、
+  `crates/blastguard/tests/backlog_20261114_pipe_to_compound_keyword_argument_fp.rs`。
 - **inline Python program の文字列中の `>` は data（#1626、ユーザー裁定 2026-11-07）** —
   `python3 -c '…'`（`python`/`python3`/`python3.N` の inline-eval のみ）の program text に対する
   shell pass で、truncating redirect の target が**判定可能**なものは recoverability による Deny を
@@ -1103,6 +1120,10 @@ forge・condukt のスケジューラが再利用）。
   GATED ゲート強制に利用する。
 - **`model`** — 判定型 `Decision::{Allow, Deny(String), Ask(String)}`（`deny()`/`ask()`/`is_deny()`）。
   system-harm の Deny は `deny_system_harm()` で理由に `SYSTEM_HARM_MARK` を付け、`is_system_harm()` で識別する。
+- **`detect/payload/compound_readers`** — `detect/payload` の子 module。pipe で供給される `if`/`while`/`until`
+  compound の各文と、`eval`/shell `-c` が実行する command text の各文を `UPSTREAM | member` の合成 pipeline として
+  返す（`compound_and_forwarder_pipelines`。keyword は command 位置でだけ数える。`coproc`・読めない `case` header は Ask 理由）。`stdin_exec_verdict` が
+  `group_reader_pipelines` の結果に加えて判定する（backlog b3569da5）。
 - **`detect/verdict_acc`** — `detect` の再解析ループ（segment・`-c` payload・command-word 候補・`-exec` tail）が
   共有する `VerdictAcc`。`Deny > Ask > Allow` の順位で畳み、`Deny` は即座に返し、`Ask` は最初の 1 件を保持して
   走査を続ける（後続の `Deny` を `Ask` が隠さない）。順位は `harness_core::verdict::Verdict::worst_of` そのもので、

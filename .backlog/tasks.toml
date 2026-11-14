@@ -2074,3 +2074,66 @@ exit 101: 20261114-163341-69351/crates/condukt)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.29s
      Running tests/backlog_20261114_retry_suffixed_topic_worktree_unremovable.rs (target/debug/deps/backlog_20261114_retry_suffixed_topic_worktree_unremovable-302e92890b4d4139)
 error: test failed, to rerun pass `-p condukt --test backlog_20261114_retry_suffixed_topic_worktree_unremovable`"""
+
+[[task]]
+id = "5ef2d51f"
+title = "blastguard fail-open: export F=/etc/hosts; sed -i ... $F is Ask in main (system harm must be Deny)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 with blastguard 0.2.588 by an independent RED author. 'F=/etc/hosts; sed -i ... $F' is deny/deny, but the 'export F=' form is ask in main with reason 'path depends on an expansion blastguard cannot resolve'. System harm must be Deny through any form. RED 8bd245b23."
+created_at = 1794650187
+updated_at = 1794650187
+weight = 0.0
+issue_number = 1773
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1773"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_static_literal_var_resolution red_export_etc_hosts_is_system_harm_deny -- --include-ignored"
+rev = "0eb2e03f923ed040f586881d5041ca0869ef7b93"
+observed_at = 1794650187
+detail = """
+exit 101: /Users/yuki/src/.harness-worktrees/session-7e01fcf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.36s
+     Running tests/backlog_20261114_static_literal_var_resolution.rs (target/debug/deps/backlog_20261114_static_literal_var_resolution-da48bb690206911d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_static_literal_var_resolution`"""
+
+[[task]]
+id = "3a950c6c"
+title = "blastguard: statically resolve same-command literal variables (sed -i target, command word, export, concat) instead of 'cannot resolve'"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "static-analysis",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = """User ruling 2026-11-14: '静的に判定できないblastguardの実装がゴミなので、それをなおす' / '必ず静的に判定し、判断する'. Values fixed by the command text (a literal assignment in an earlier statement, export X=lit, concatenations like "$T"bin/tdd or ${W}/a) must be resolved and judged on the resolved value. Only runtime-only values ($(cmd), unassigned, conditional, subshell or function assignment, loop vars) stay undetermined, which means restrictive. RED 8bd245b23: 12 RED and 11 guards/controls. See also 574a751c (subagent sed form)."""
+created_at = 1794650212
+updated_at = 1794650212
+weight = 0.0
+issue_number = 1774
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1774"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_static_literal_var_resolution -- --include-ignored"
+rev = "0eb2e03f923ed040f586881d5041ca0869ef7b93"
+observed_at = 1794650212
+detail = """
+exit 101: ; 12 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261114_static_literal_var_resolution.rs (target/debug/deps/backlog_20261114_static_literal_var_resolution-da48bb690206911d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_static_literal_var_resolution`"""

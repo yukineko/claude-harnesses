@@ -896,6 +896,9 @@ forge・condukt のスケジューラが再利用）。
   な `>` は Ask、Allow にしない）を従来どおり適用する。token 化できない本文は view に本文を残す。
   この view を読むのは行単位の `>`/`>>` scan だけで、interpreter scan 等の他の規則は本文全体を読む
   （stdin の program を Python 判定器だけで判定することはしない）。
+- **`python3 -i script.py` と `python3 -m code`（`-m pdb`）は、script / module があっても stdin を program として読む**
+  （`program_source::python_reads_stdin_program`、tests/backlog_20261114_pipe_to_python_interactive.rs）— pipe の program を判定する。
+  `-i` 無しの `python3 script.py` は stdin が data のまま（広げない）。
 - **`python3 -` が実行する quoted here-document の本文は、stdin-program scan に加えて Python 判定器でも読む
   （tests/heredoc_system_harm_holes_20261111.rs A / G）** — 形は上と同じ（`heredoc::python_stdin_here_document`）。
   `payload::analyze_interpreter_stdin_exec` が `interpreter::python_stdin_body_reading` を呼ぶ。token 化

@@ -97,7 +97,6 @@ fn undenied(cmds: &[String], tag: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 harmful program piped to python3 -i script.py / python3 -m code is Allow — remove the ignore when fixed"]
 fn harmful_program_piped_to_interactive_python_is_deny() {
     let cmds = vec![
         format!("{PY}python3 -i script.py"),

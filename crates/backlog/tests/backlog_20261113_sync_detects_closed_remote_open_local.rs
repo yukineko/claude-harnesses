@@ -129,7 +129,6 @@ fn control_locally_recorded_closure_is_planned_for_reopen() {
 }
 
 #[test]
-#[ignore = "RED: sync ignores GitHub state, open-local/closed-remote row gets no reopen — remove the ignore when fixed"]
 fn open_local_closed_remote_row_is_planned_for_reopen() {
     let out = dry_run_sync("remote");
     assert!(

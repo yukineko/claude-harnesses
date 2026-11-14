@@ -1945,10 +1945,15 @@ impl SyncAction {
     }
 }
 
-/// Derive the full set of GitHub mirror work implied by `tasks`. Pure: no IO,
-/// no `gh`, no clock, no panics — the whole plan is a function of the store's
-/// contents, so it can be re-derived from scratch on every run and never
-/// depends on remembering that a previous run failed.
+/// Derive the LOCAL-STORE part of the GitHub mirror work implied by `tasks`.
+/// Pure: no IO, no `gh`, no clock, no panics — this part of the plan is a
+/// function of the store's contents, so it can be re-derived from scratch on
+/// every run and never depends on remembering that a previous run failed.
+///
+/// It does NOT see GitHub: a row open locally whose issue was closed remotely
+/// is invisible here. `backlog sync` (main.rs) adds those as `Reopen` actions
+/// after reading each open row's remote state via `gh` (e787b168), and
+/// reports unreadable ones as undetermined.
 ///
 /// **Scope is the store file itself.** `config::locate` resolves the
 /// store per repo root, so every task in a given `tasks.toml` belongs to the
@@ -1958,8 +1963,8 @@ impl SyncAction {
 /// cross-machine `C:/Users/.../harness` label — both measured present in this
 /// repo's store on 2026-08-14, 52 of them holding real unpushed work).
 ///
-/// Two rules, both one-directional (local is authoritative; GitHub is a
-/// mirror, never an input — CLAUDE.md §7):
+/// Local is authoritative and the rules below never read GitHub (the remote
+/// closed-vs-open-locally check lives in `backlog sync`, not here — CLAUDE.md §7):
 ///
 /// - **Create** for a `pending` task with no `issue_number`. Deliberately NOT
 ///   for `done`/`cancelled`/`failed`: filing an issue for work that is already
@@ -2120,9 +2125,16 @@ pub fn build_close_comment(task: &Task, reason: crate::github::CloseReason) -> S
 /// pre-existing `backlog sync` invocation already meant — which is why it does
 /// NOT include [`Body`](SyncOnly::Body), the arm added in 0.3.24. "Both" names
 /// the two arms that have always run, not "everything available".
+///
+/// Since e787b168 `Both` is also the ONLY scope under which `backlog sync`
+/// reads GitHub (`gh issue view` per locally-open mirrored row) and plans a
+/// `Reopen` for a row closed remotely; the narrower scopes never call `gh` on
+/// a dry run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
 pub enum SyncOnly {
-    /// Reconcile the create and close arms (the pre-existing behaviour).
+    /// Reconcile the create and close arms, plus the reopen arm — including
+    /// rows closed on GitHub but open locally, found by reading each mirrored
+    /// row's remote state via `gh` (e787b168; unreadable = undetermined).
     #[default]
     Both,
     /// Only file issues for pending tasks that have none.

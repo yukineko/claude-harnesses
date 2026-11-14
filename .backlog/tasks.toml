@@ -569,38 +569,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; 
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_heredoc_body_fp`"""
 
 [[task]]
-id = "e787b168"
-title = "backlog sync: open-local/closed-remote の食い違いを検出・解消しない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "issue-sync",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1794521535
-updated_at = 1794521535
-weight = 0.0
-issue_number = 1667
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1667"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test backlog_20261113_sync_detects_closed_remote_open_local -- --include-ignored"
-rev = "5633a31d3de3acbb470bbe8fa5096c4a4c6c776c"
-observed_at = 1794521535
-detail = """
-exit 101: d; 0 measured; 0 filtered out; finished in 0.65s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
-     Running tests/backlog_20261113_sync_detects_closed_remote_open_local.rs (target/debug/deps/backlog_20261113_sync_detects_closed_remote_open_local-8fab923a3b589cee)
-error: test failed, to rerun pass `-p backlog --test backlog_20261113_sync_detects_closed_remote_open_local`"""
-
-[[task]]
 id = "b2330a21"
 title = "blastguard FP: quoted python heredoc 本文の >> `y` を append redirect と誤読する"
 project = "/Users/yuki/src/harness"
@@ -1835,3 +1803,32 @@ exit 101: arness-worktrees/session-7e01fcf0/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
      Running tests/backlog_20261114_quoted_heredoc_substitution_text_fp.rs (target/debug/deps/backlog_20261114_quoted_heredoc_substitution_text_fp-6bbbfefd6bbb24e2)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_quoted_heredoc_substitution_text_fp`"""
+
+[[task]]
+id = "9d88d739"
+title = """blastguard FP: quoted heredoc bodies judged as code (python3 - <<'EOF' with a backticked gh span is Ask; .rs append heredoc with "rm -rf ./a" literal followed by a command is Deny)"""
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "heredoc-fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Side finding of run-20261114-120314-34769 (flow session b3435a5e), RED committed 86d9b0dea, measured 2026-11-14. FP-A: python3 - <<'EOF' program with a `gh` span inside a Python string -> Ask, reason 'gh: no subcommand given — blastguard cannot tell what this does' (relay bgr-5dc49e87261a). FP-B: quoted heredoc appending "rm -rf ./a", to a .rs file followed by a cargo test line -> Deny 'recursive rm (-r) can delete an entire directory tree' even in main mode; without the trailing command Allow (blocks.jsonl ts=1794625871). Same class as open FP1/FP2b in backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs with different content; may share a root cause with GH #1664/#1680/#1739. RED: 2 ignored fail, 3 controls pass. Readings: (a) real FP (quoted heredoc body is data); (b) intended fail-closed for python stdin programs — distinguish: FP-A's span is inside a Python string literal, so a real parser of the target language separates it (memory: gate text vs code via parser)."""
+created_at = 1794626779
+updated_at = 1794626779
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_quoted_heredoc_body_side_fps -- --ignored"
+rev = "7f5be37a64217094031a083db1b808e6e0ee4061"
+observed_at = 1794626779
+detail = """
+exit 101: 0 (/Users/yuki/src/.harness-worktrees/session-b3435a5e/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.67s
+     Running tests/backlog_20261114_quoted_heredoc_body_side_fps.rs (target/debug/deps/backlog_20261114_quoted_heredoc_body_side_fps-e32d5314fa6568e9)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_quoted_heredoc_body_side_fps`"""

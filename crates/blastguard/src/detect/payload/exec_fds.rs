@@ -15,8 +15,8 @@ use super::super::segment::{split_segments_with_separators, SegmentSep};
 use super::{
     interpreter_program_source, is_assignment, is_code_interpreter, is_node_head, is_python_head,
     is_shell, node_program_source, normalized_command, parse_redirect, procsub_body,
-    python_program_source, shell_program_source, wrapped_command_heads, Ctx, Decision,
-    ProgramSource, VerdictAcc,
+    python_program_source, shell_program_source, source_program_source, wrapped_command_heads, Ctx,
+    Decision, ProgramSource, VerdictAcc,
 };
 
 /// What an fd `exec` opens for the rest of the line refers to.
@@ -400,11 +400,10 @@ fn here_text_fds(stages: &[Stage]) -> Vec<u32> {
 }
 
 /// Whether some `exec` on the line opens fd 0 on a here-string or a
-/// here-document (`exec <<< '…'`, `exec 0<<'EOF'`), or duplicates fd 0 from
-/// an fd in `tracked` (`exec 0<&3`). Its text is judged by
+/// here-document (`exec <<< '…'`, `exec 0<<'EOF'`). Its text is judged by
 /// [`cross_statement_fd_verdict`] only for a literal harm (a Deny); fd 0 is
 /// never resolved, so [`super::procsub_programs`] keeps its Ask.
-fn stdin_here_text(stages: &[Stage], tracked: &[u32]) -> bool {
+fn stdin_here_text(stages: &[Stage]) -> bool {
     stages.iter().any(|st| {
         let Some((at, _)) = exec_word(&st.words) else {
             return false;
@@ -412,13 +411,52 @@ fn stdin_here_text(stages: &[Stage], tracked: &[u32]) -> bool {
         let Some(redirects) = exec_only_redirects(&st.words[at + 1..]) else {
             return false;
         };
-        redirects.iter().any(|(fd, op, target)| {
-            let n = fd.unwrap_or(if op.starts_with('<') { 0 } else { 1 });
-            n == 0
-                && (matches!(op.as_str(), "<<<" | "<<" | "<<-")
-                    || (op == "<&" && target.parse::<u32>().is_ok_and(|m| tracked.contains(&m))))
+        redirects.iter().any(|(fd, op, _)| {
+            fd.unwrap_or(if op.starts_with('<') { 0 } else { 1 }) == 0
+                && matches!(op.as_str(), "<<<" | "<<" | "<<-")
         })
     })
+}
+
+/// Whether the reader of `st` (a shell, a code interpreter, `source` / `.`)
+/// may take its program from stdin: its program source, read with the
+/// reader's option grammar as [`super::procsub_programs`] reads it, is stdin
+/// or undetermined. `false` for `bash script.sh`, `bash -c '…'`, or a stage
+/// without such a reader.
+fn reads_program_from_stdin(st: &Stage) -> bool {
+    let refs: Vec<&str> = st.words.iter().map(String::as_str).collect();
+    let Some(r) = wrapped_command_heads(&refs).into_iter().find(|&idx| {
+        let head = normalized_command(refs[idx]);
+        is_shell(&head) || is_code_interpreter(&head) || head == "source" || head == "."
+    }) else {
+        return false;
+    };
+    let head = normalized_command(refs[r]);
+    let mut operands: Vec<&str> = Vec::new();
+    let mut j = r + 1;
+    while j < refs.len() {
+        if let Some((_, _, glued)) = parse_redirect(refs[j]) {
+            j += if glued.is_empty() { 2 } else { 1 };
+            continue;
+        }
+        operands.push(refs[j]);
+        j += 1;
+    }
+    let source = if head == "source" || head == "." {
+        source_program_source(&operands)
+    } else if is_shell(&head) {
+        shell_program_source(&operands)
+    } else if is_python_head(&head) {
+        python_program_source(&operands)
+    } else if is_node_head(&head) {
+        node_program_source(&operands)
+    } else {
+        interpreter_program_source(&operands)
+    };
+    matches!(
+        source,
+        ProgramSource::Stdin | ProgramSource::Undetermined(_)
+    )
 }
 
 /// The body of the here-document a segment `opener_raw` opens, located on the
@@ -705,13 +743,20 @@ pub(super) struct FdTracking {
 /// Where no reader is
 /// visible, a text is judged as `sh` would run it.
 ///
-/// fd 0 (`exec <<< '…'`, `exec 0<<'EOF'`, `exec 0<&3`; backlog 2210e1db) is
-/// followed the same way but judged for a literal harm only: each later
-/// reader (shell / interpreter) that does not redirect its own stdin and is
-/// not piped into is judged as the pipeline as written with each text fd 0
-/// may hold given inline, and a Deny there is the verdict in both modes. fd 0
-/// is never in `resolved`, so every other case keeps the Ask (a Deny in a
-/// subagent) [`super::procsub_programs`] gives a stdin-program reader of it.
+/// fd 0 opened on a here-string or a here-document (`exec <<< '…'`,
+/// `exec 0<<'EOF'`; backlog 2210e1db) is followed the same way but judged for
+/// a literal harm only. A later reader (shell / interpreter / `source`) is
+/// judged when it does not redirect its own stdin, is not piped into, and its
+/// program source is stdin or undetermined (not `bash script.sh`, not
+/// `bash -c '…'`), and fd 0 at that point — the `exec`s before it applied in
+/// order — holds a known text (`FdState::Text`): the pipeline as written,
+/// that reader given the text inline. A Deny there is the verdict in both
+/// modes; any other verdict is dropped. After a close (`exec 0<&-`) or a
+/// reopen on a file fd 0 holds no text; an undetermined fd 0 (a copy
+/// `exec 0<&N`, an unquoted here-document, an `exec` in a subshell or behind
+/// `&&`) is not judged. fd 0 is never in `resolved`, so every case not
+/// denied here keeps the Ask (a Deny in a subagent)
+/// [`super::procsub_programs`] gives a stdin-program reader of it.
 pub(super) fn cross_statement_fd_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> FdTracking {
     let none = FdTracking {
         verdict: Decision::Allow,
@@ -723,7 +768,7 @@ pub(super) fn cross_statement_fd_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>)
     let stages = structured_stages(cmd);
     let tracked = here_text_fds(&stages);
     let named = named_fd_texts(cmd, &stages);
-    let stdin_tracked = stdin_here_text(&stages, &tracked);
+    let stdin_tracked = stdin_here_text(&stages);
     if tracked.is_empty() && named.is_empty() && !stdin_tracked {
         return none;
     }
@@ -898,16 +943,27 @@ runs that text",
         // A reader that inherits fd 0 an `exec` opened on literal text
         // (`exec <<< '…'; bash`): the pipeline as written, this stage given
         // each text fd 0 may hold inline (`bash <<< '…'`), judged for a
-        // literal harm only. A Deny is a Deny in both modes; any other verdict
+        // literal harm only, for a reader whose program source is stdin or
+        // undetermined (not `bash script.sh`, not `bash -c '…'`, which do not
+        // run stdin as their program). A Deny is a Deny in both modes; any other verdict
         // is dropped here, since fd 0 is never resolved and
         // `procsub_programs` keeps its Ask for a stdin-program reader.
         if stdin_tracked
             && stdin_redirects == 0
             && !st.piped_in
-            && !pipeline_readers(&[st]).is_empty()
+            && reads_program_from_stdin(st)
             && depth < MAX_SHELL_DEPTH
         {
-            let texts = fds.get(&0).map(FdState::texts).unwrap_or_default();
+            // Only the text fd 0 holds for certain at this point, the
+            // `exec`s before it applied in order: after a close (`exec 0<&-`)
+            // or a reopen on a file it holds none, after a reassignment the
+            // new text, and an undetermined fd 0 (a copy `exec 0<&N`, an
+            // unquoted here-document, an `exec` in a subshell or behind
+            // `&&`) is left to `procsub_programs`' Ask.
+            let texts = match fds.get(&0) {
+                Some(FdState::Text(h)) => vec![h.clone()],
+                _ => Vec::new(),
+            };
             for text in &texts {
                 let members: Vec<String> = pipeline
                     .iter()

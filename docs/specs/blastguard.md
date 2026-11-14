@@ -654,8 +654,8 @@ forge・condukt のスケジューラが再利用）。
   末尾の節「exec が開く fd の文をまたいだ追跡」）。モデル外の形（subshell・関数本体・条件付きの exec、unquoted
   here-document、`N<&M` の連鎖、close 後の読み、subshell・関数本体内の reader、読めない形での fd の言及、`<&$fd` のように展開で書かれた fd の読み）は
   Ask（subagent では Deny）で、中身が literal で harm なら main でも Deny。fd 0 を here-text で開く
-  `exec <<< …` / `exec <<'EOF'` / `exec 0<&N` も同じ追跡で中身を判定し、literal で harm なら main でも Deny
-  （backlog 2210e1db、blastguard 0.2.596）。それ以外は従来どおり reader が stdin から program を読みうるとき Ask。
+  `exec <<< …` / `exec <<'EOF'` も同じ追跡で、stdin を program として読む後の reader について中身を判定し（`exec 0<&N` の複製と close の後は対象外。詳細は末尾の節の 5）、literal で harm なら main でも Deny
+  （backlog 2210e1db、blastguard 0.2.598）。それ以外は従来どおり reader が stdin から program を読みうるとき Ask。
   ファイルで開かれた fd は `bash < file` と同じ扱い。
   exec で開かれた stdin は upstream pipe のある reader にも適用する（制限側の過大近似）。zsh の `=(…)` は
   process substitution として読む。回帰テスト:
@@ -1306,8 +1306,9 @@ path/target を埋め込む。例: `"Write would replace {path} with empty conte
    - exec がトップレベルにあり、reader が subshell `( … )` か関数本体の中にある場合は判定不能とする（main で Ask、subagent で Deny）。ただし中身が literal で harm と分かる場合は、裁定 1 により Deny とする。reader が brace の中にある場合は、brace を外した読みと外さない読みの両方で判定し、制限側の verdict を採る（追加のみ）。
    - close（`exec N<&-`）した後で fd N を読む reader は、close 前に開いていた中身が literal で harm なら Deny とする。それ以外は、どこでも開かれていない fd と同じく Ask とする（subagent では Deny）。
    - `<&N` や `/dev/fd/N` で fd を読む reader は、shell（`bash|sh|zsh`）に限らない。既存の stdin reader の集合（code interpreter を含む）のすべてを対象とする。
-5. fd 0 への拡張（ユーザー裁定 2026-11-14、backlog 2210e1db。blastguard 0.2.596）:
-   - 上の追跡は fd 0 にも適用する。`exec <<< literal`・`exec 0<<< literal`・quoted here-document（`exec <<'EOF'`）で fd 0 を開いた後（`exec 0<&N` で追跡中の fd N を複製した場合も含む）、後の文の reader（`bash|sh|zsh` または interpreter）が自分で stdin を redirect せず、pipe からも読まないとき、その reader の pipeline を書かれたまま、その reader に中身を inline で渡した形（`bash <<< …`）として判定する。
-   - その判定が Deny（中身が literal で system harm）なら、main・subagent ともに Deny とする（裁定 1）。
-   - それ以外（中身が harm でない・literal でない・読めない）では、fd 0 の追跡はこの判定を採らない。fd 0 は解決済みにしないので、reader が stdin から program を読みうるときは従来どおり Ask（subagent では Deny）のまま。たとえば `exec <<< 'echo hi'; bash` は main で Ask のまま。
-   - 再現テスト: `crates/blastguard/tests/backlog_20261114_exec_stdin_herestring_literal_harm.rs`（fd 0 の here-string に literal の system harm を入れて後で `bash` が読む形は main・subagent とも Deny）。
+5. fd 0 への拡張（ユーザー裁定 2026-11-14、backlog 2210e1db。blastguard 0.2.598）:
+   - 上の追跡は fd 0 にも適用する。`exec <<< literal`・`exec 0<<< literal`・quoted here-document（`exec <<'EOF'`）で fd 0 を開いた後、後の文の reader（`bash|sh|zsh`・interpreter・`source` / `.`）を判定する。対象は次の 3 条件をすべて満たす reader だけ: 自分で stdin を redirect しない、pipe からも読まない、program の読み元（reader の option 文法で読んだもの）が stdin か判定不能。`bash script.sh` や `bash -c '…'` は stdin を program として実行しないので対象外。
+   - fd 0 の中身は、それより前の exec を書かれた順に反映して決める。判定に使うのは、その時点で fd 0 が確実に持つ literal の中身だけ。close（`exec 0<&-`）やファイルでの開き直し（`exec 0< file`）の後は中身なし、`exec <<< other` で再代入した後は新しい中身になる。中身が判定不能な fd 0 は判定しない。`exec 0<&N` での複製、unquoted here-document、subshell や `&&` の後ろの exec がこれに当たる。
+   - 判定は、その reader の pipeline を書かれたまま、その reader に中身を inline で渡した形（`bash <<< …`）で行う。それが Deny（中身が literal で system harm）なら、main・subagent ともに Deny とする（裁定 1）。
+   - それ以外（中身が harm でない・判定しない形・上の対象外の reader）では、fd 0 の追跡はこの判定を採らない。fd 0 は解決済みにしないので、reader が stdin から program を読みうるときは従来どおり Ask（subagent では Deny）のまま。たとえば `exec <<< 'echo hi'; bash` は main で Ask のまま。close の後の reader と `exec 0<&N` の後の reader も同じく従来どおりで、close 前・複製元の中身が harm でも、この追跡では Deny にしない。
+   - 再現テスト: `crates/blastguard/tests/backlog_20261114_exec_stdin_herestring_literal_harm.rs`（fd 0 の here-string に literal の system harm を入れて後で `bash` が読む形は main・subagent とも Deny）と、`crates/blastguard/tests/backlog_20261114_exec_stdin_harm_non_stdin_reader_fp.rs`（script ファイルや `-c` を実行する reader は Allow のまま、close の後は main で Deny にしない）。

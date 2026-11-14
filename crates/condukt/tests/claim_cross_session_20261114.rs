@@ -171,5 +171,8 @@ fn holder_survives_cross_session_claim() {
     let c = claim(&repo, &home, "runC", Some("S1"), &[FILE]);
     let v = json_of(&c);
     assert_skipped(&v, &c, "holder A (S1) must remain and exclude run C");
-    assert_eq!(v["skipped"][0]["holder_run"], "runA", "holder must be A: {v}");
+    assert_eq!(
+        v["skipped"][0]["holder_run"], "runA",
+        "holder must be A: {v}"
+    );
 }

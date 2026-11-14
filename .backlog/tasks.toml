@@ -2296,3 +2296,32 @@ exit 101: ndukt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.05s
      Running tests/backlog_20261114_txt_data_heredoc_python_probe.rs (target/debug/deps/backlog_20261114_txt_data_heredoc_python_probe-8821daae300377ea)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_txt_data_heredoc_python_probe`"""
+
+[[task]]
+id = "967fd65c"
+title = "blastguard fail-open: bash <&3- (move inherited fd to stdin) is Allow while bash <&3 is Ask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 (run-20261114-161340-68728 t1 verifier + side-reds agent, main dde31f11b): bash <&3- and bash 0<&3- are allow/allow (main/subagent) while bash <&3 is ask/deny. crates/blastguard/src/detect/payload.rs:~824 procsub_programs: target '3-' fails parse::<u32>() and is neither a dup nor unreadable. exec 3<<< 'chmod 777 /etc/hosts'; bash <&3- is Deny (other path). Readings: (a) fail-open — fd 3 contents unknown, same as bash <&3; (b) none plausible. "
+created_at = 1794656943
+updated_at = 1794656943
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_stdin_dup_move_fd_suffix -- --include-ignored"
+rev = "b7903d36f4c6501380f6ae3a95d12d6b8dae69bc"
+observed_at = 1794656943
+detail = """
+exit 101: /Users/yuki/.condukt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/backlog_20261114_stdin_dup_move_fd_suffix.rs (target/debug/deps/backlog_20261114_stdin_dup_move_fd_suffix-9ced7a051e26aaa3)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_stdin_dup_move_fd_suffix`"""

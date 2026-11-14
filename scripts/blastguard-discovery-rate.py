@@ -16,8 +16,12 @@ newly filed that week (bucketed by ``created_at``), split into:
 
 Classification is a deterministic tag/title/notes regex, nothing more.
 ``ambiguous`` and ``unclassified`` are shown explicitly rather than guessed into
-one of the other columns. Items without a numeric ``created_at`` go to an
-``undated`` bucket (listed last, never dropped). An item is "blastguard" when it
+one of the other columns. Every calendar week between the earliest and the
+latest dated week of the selection is a row, zero-count weeks included (a
+missing row would read as missing data). ``--weeks N`` keeps the last N
+calendar weeks of that contiguous range. Items without a numeric
+``created_at`` go to an ``undated`` bucket (listed last, never dropped, and not
+subject to ``--weeks``). An item is "blastguard" when it
 carries the ``blastguard`` tag or its title starts with ``blastguard``
 (case-insensitive). Cancelled items are excluded from the weeks but counted in
 ``excluded_cancelled``.
@@ -129,14 +133,19 @@ def classify(title, notes, tags):
     return "unclassified"
 
 
-def week_label(created_at):
+def week_monday(created_at):
+    """UTC Monday (a date) of the ISO week containing `created_at`, or None."""
     if isinstance(created_at, bool) or not isinstance(created_at, (int, float)):
-        return UNDATED
+        return None
     try:
-        dt = datetime.datetime.fromtimestamp(created_at, datetime.timezone.utc)
+        d = datetime.datetime.fromtimestamp(created_at, datetime.timezone.utc).date()
     except (OverflowError, OSError, ValueError):
-        return UNDATED
-    iso = dt.isocalendar()
+        return None
+    return d - datetime.timedelta(days=d.weekday())
+
+
+def iso_label(monday):
+    iso = monday.isocalendar()
     return "%04d-W%02d" % (iso[0], iso[1])
 
 
@@ -154,15 +163,25 @@ def aggregate(tasks, weeks_limit):
         if t.get("status") == "cancelled":
             excluded_cancelled += 1
             continue
-        lbl = week_label(t.get("created_at"))
-        row = buckets.setdefault(lbl, dict.fromkeys(COLUMNS, 0))
+        key = week_monday(t.get("created_at"))
+        row = buckets.setdefault(key, dict.fromkeys(COLUMNS, 0))
         row[classify(title, notes, tags)] += 1
         row["total"] += 1
-    dated = sorted(k for k in buckets if k != UNDATED)
+    # Every calendar week from the earliest to the latest dated week is a row,
+    # zero-count weeks included, so a gap is never mistaken for missing data.
+    mondays = []
+    dated = [k for k in buckets if k is not None]
+    if dated:
+        d, last = min(dated), max(dated)
+        while d <= last:
+            mondays.append(d)
+            d += datetime.timedelta(days=7)
     if weeks_limit is not None:
-        dated = dated[-weeks_limit:]
-    order = dated + ([UNDATED] if UNDATED in buckets else [])
-    weeks = [dict(week=k, **buckets[k]) for k in order]
+        mondays = mondays[-weeks_limit:]
+    weeks = [dict(week=iso_label(m), **buckets.get(m, dict.fromkeys(COLUMNS, 0)))
+             for m in mondays]
+    if None in buckets:
+        weeks.append(dict(week=UNDATED, **buckets[None]))
     return {"weeks": weeks, "excluded_cancelled": excluded_cancelled}
 
 
@@ -195,7 +214,7 @@ def main(argv=None):
                                     "(default: run that command)")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of a table")
     ap.add_argument("--weeks", type=positive_int, default=None,
-                    help="keep only the last N dated weeks (undated is always kept)")
+                    help="keep only the last N calendar weeks (undated is always kept)")
     args = ap.parse_args(argv)
     try:
         result = aggregate(load_input(args.input), args.weeks)

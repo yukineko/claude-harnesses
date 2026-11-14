@@ -104,7 +104,12 @@ const LOCKSTEP: [&str; 4] = [
 fn lockstep_files_never_conflict_across_runs() {
     let (repo, home) = setup("lockstep");
     let a = claim(&repo, &home, "runA", "sess-A", &LOCKSTEP);
-    assert_eq!(a.status.code(), Some(0), "run A must claim cleanly: {}", json_of(&a));
+    assert_eq!(
+        a.status.code(),
+        Some(0),
+        "run A must claim cleanly: {}",
+        json_of(&a)
+    );
 
     let b = claim(&repo, &home, "runB", "sess-B", &LOCKSTEP);
     let v = json_of(&b);
@@ -118,7 +123,10 @@ fn lockstep_files_never_conflict_across_runs() {
     claimed.sort();
     let mut want: Vec<String> = LOCKSTEP.iter().map(|s| s.to_string()).collect();
     want.sort();
-    assert_eq!(claimed, want, "all lockstep files must be in `claimed`: {v}");
+    assert_eq!(
+        claimed, want,
+        "all lockstep files must be in `claimed`: {v}"
+    );
     assert_eq!(b.status.code(), Some(0), "no skip => exit 0: {v}");
 }
 
@@ -128,11 +136,20 @@ fn ordinary_source_file_still_conflicts() {
     let (repo, home) = setup("control");
     let f = "crates/blastguard/src/detect/payload.rs";
     let a = claim(&repo, &home, "runA", "sess-A", &[f]);
-    assert_eq!(a.status.code(), Some(0), "run A must claim cleanly: {}", json_of(&a));
+    assert_eq!(
+        a.status.code(),
+        Some(0),
+        "run A must claim cleanly: {}",
+        json_of(&a)
+    );
 
     let b = claim(&repo, &home, "runB", "sess-B", &[f]);
     let v = json_of(&b);
-    assert_eq!(skipped_files(&v), vec![f.to_string()], "source file held by a live run must be skipped: {v}");
+    assert_eq!(
+        skipped_files(&v),
+        vec![f.to_string()],
+        "source file held by a live run must be skipped: {v}"
+    );
     assert_eq!(v["claimed"], serde_json::json!([]), "nothing claimed: {v}");
     assert_eq!(b.status.code(), Some(1), "skip => exit 1: {v}");
 }

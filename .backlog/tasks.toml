@@ -1703,6 +1703,8 @@ notes = "Side finding of run-20261114-110017-12373 (flow session b3435a5e), meas
 created_at = 1794624843
 updated_at = 1794624843
 weight = 0.0
+issue_number = 1749
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1749"
 rev = 0
 
 [task.repro]

@@ -630,6 +630,12 @@ forge・condukt のスケジューラが再利用）。
   `Undetermined`（未知の option）は pipe/here-document 供給時に Ask を記録したうえで program も判定する。
   code interpreter は従来の `stage_has_program_operand` のまま。回帰テスト:
   `crates/blastguard/tests/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args.rs`。
+- **pipe 先の python/node の argv も option 文法で読む（`detect/payload.rs` の pipe 規則、
+  `detect/payload/program_source.rs` の `python_program_source`、`detect/payload/node_source.rs` の
+  `node_program_source`、backlog f9861c4e、blastguard 0.2.569）** — `python3 -X dev` / `-W ignore`、
+  `node -r m` の値を script file と誤認せず、pipe の program を判定する（`File` は script file 実行、
+  `-c`/`-m`/`-e`/`-p` は従来の読み、`Undetermined`＝未知の option は pipe/here-document 供給時に Ask を記録）。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_pipe_to_interpreter_with_value_flag.rs`。
 - **compound command 内・exec fd・zsh `=()` 経由の shell program も判定する（`detect/payload.rs` の
   `decompounded`、`detect/payload/exec_fds.rs` の `exec_opened_fds`、backlog 72872200、blastguard 0.2.557）** —
   `analyze_interpreter_stdin_exec` は行を原文と compound 構文を外した読みの 2 回判定する（追加のみ。2 つの

@@ -128,7 +128,6 @@ fn run(command: &str, s: &Scratch) -> (String, String) {
 }
 
 #[test]
-#[ignore = "RED: B2 — remove the ignore when fixed"]
 fn b2_subagent_rm_rf_dot_slash_inside_scratchpad_is_not_denied() {
     let s = scratch("red");
     let (d, reason) = run("rm -rf ./proj/target", &s);
@@ -139,7 +138,6 @@ fn b2_subagent_rm_rf_dot_slash_inside_scratchpad_is_not_denied() {
 }
 
 #[test]
-#[ignore = "RED: B2 — remove the ignore when fixed"]
 fn b2_subagent_rm_rf_dotdot_spelling_inside_scratchpad_is_not_denied() {
     let s = scratch("red2");
     // `../sbx/proj/target` names the same existing dir as `proj/target`.

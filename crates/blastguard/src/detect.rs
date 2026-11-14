@@ -300,7 +300,8 @@ struct Ctx<'a> {
     /// line in [`Ctx::new`] and carried unchanged into every derived context.
     worktree_rm_eligible: bool,
     /// Whether the TOP-LEVEL command may use the deletion-principle verdicts
-    /// at all — literal ([`deletion_rm_eligible`]) and `/tmp` wildcard — see
+    /// at all — literal ([`deletion_rm_eligible`]), literal with `.`/`..`
+    /// operand components resolved physically, and `/tmp` wildcard — see
     /// [`DeletionEligibility`]. Computed once in [`Ctx::new`], carried unchanged.
     deletion_rm_eligible: DeletionEligibility,
     /// Whether the TOP-LEVEL command may lift the protected-path rule for a

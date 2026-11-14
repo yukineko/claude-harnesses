@@ -4877,3 +4877,38 @@ fn line_continuation_reading_removes_only_where_the_shell_does() {
         assert_eq!(r(same), ShellLexed::Same, "{same:?}");
     }
 }
+
+// GH #1661 (task f70e5164): the dotted-operand eligibility is exactly
+// `deletion_rm_eligible` with `.`/`..` OPERAND components masked. Option
+// words, `=`-attached dots, a relative operand next to a `cd`, and every
+// other refusal of the plain predicate keep refusing.
+#[test]
+fn deletion_rm_dotted_eligible_masks_only_operand_dot_components() {
+    for ok in [
+        "rm -rf ./a",
+        "rm -rf a/./b",
+        "rm -rf a/..",
+        "rm -rf ../sbx/proj/target",
+        "rm -rf ./a ../b",
+        "rm -rf /x/../y",
+        "cd /x && rm -rf /x/../y",
+        // A plain line stays eligible here too.
+        "rm -rf a b",
+    ] {
+        assert!(rm::deletion_rm_dotted_eligible(ok), "{ok}");
+    }
+    for bad in [
+        "rm -rf --opt=../x a",
+        "rm -rf a=..",
+        "rm -rf ./a -x",
+        "rm -rf -- ./a",
+        "rm -rf - ./a",
+        "rm -rf ./a && ls",
+        "cd /x && rm -rf ./y",
+        "cd /x && rm -rf ../y",
+        "rm -rf './a'",
+        "rm -rf ./a*",
+    ] {
+        assert!(!rm::deletion_rm_dotted_eligible(bad), "{bad}");
+    }
+}

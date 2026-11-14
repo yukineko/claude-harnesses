@@ -1,0 +1,123 @@
+[spec]
+id = "bg-exec-fd-tracking"
+title = "blastguard: cross-statement exec fd tracking"
+status = "ratified"
+provenance_commit = "a742d41e32e94852b254746d94c4fd22bf8f4c7d"
+date = "2026-11-14"
+canon = []
+
+[spec.ratification]
+canon_commit = "a742d41e32e94852b254746d94c4fd22bf8f4c7d"
+date = "2026-11-14"
+reason = "User rulings 2026-11-14 (AskUserQuestion): literal harm is Deny even for unmodelled shapes; minimal fd tracking scope; supplementary rulings on file fd, brace, reader boundary, close and reader set. Grounds backlog e686a85e."
+fingerprint = "0c6301314911ee28"
+
+[[requirement]]
+id = "R1"
+statement = "トップレベルの `exec N<<< literal` で開いた fd を、後の文の reader が `<&N` または `/dev/fd/N` で読む場合、blastguard はその literal を reader の program として判定する。区切りは `;`・改行・`&&`・`||` で、書かれた順に追う。"
+acceptance = [
+    "コミット済み RED `crates/blastguard/tests/backlog_20261114_exec_fd_herestring_then_shell_reads_fd.rs` から `#[ignore]` だけを外し、assert は変えずに通る（`exec 3<<< 'chmod 777 /etc/hosts'; bash <&3` が main・subagent とも deny）",
+    "`exec 3<<< 'chmod 777 /etc/hosts'` の後に改行・`&&`・`||` のどれで `bash <&3` を続けても、main・subagent とも deny",
+    "`exec 3<<< 'chmod 777 /etc/hosts'; bash /dev/fd/3` は main・subagent とも deny",
+    "`exec 5<<< 'chmod 777 /etc/hosts'; sh <&5` と `...; zsh <&5` は main・subagent とも deny",
+    "`exec 3<<< 'echo hi'; bash <&3` の verdict は、同じ subagent 区分で `bash <<< 'echo hi'` の verdict と一致する",
+]
+canon = [
+    "docs/specs/blastguard.md#exec が開く fd の文をまたいだ追跡 — 裁定 2「モデル化する形: `exec N<<< literal` と…後の文の `bash|sh|zsh` または interpreter が `<&N` か `/dev/fd/N` で読む形。文は `;`、改行、`&&`、`||` で区切られ、書かれた順に追う。」",
+    "同節 裁定 3（再現テスト）",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R2"
+statement = "quoted here-document（`exec N<<'EOF'`）で開いた fd も、R1 と同じく本文を program として判定する。"
+acceptance = [
+    "`exec 3<<'EOF'` / `chmod 777 /etc/hosts` / `EOF` / `bash <&3` の各行を改行で区切った command は、main・subagent とも deny",
+    "同じ形で本文が `echo hi` の場合の verdict は、`bash <<'EOF'`（本文 `echo hi`）の verdict と一致する",
+]
+canon = ["docs/specs/blastguard.md 同節 裁定 2「quoted here-document（`exec N<<'EOF'`）で開いた fd を…」"]
+falsifiable = true
+
+[[requirement]]
+id = "R3"
+statement = "fd を読む reader の集合は shell だけでなく、既存の stdin reader の集合全体（code interpreter を含む）とする。"
+acceptance = [
+    """`exec 3<<< 'import os; os.chmod("/etc/hosts", 0o777)'; python3 <&3` は main・subagent とも deny""",
+    """`exec 3<<< 'require("fs").chmodSync("/etc/hosts", 0o777)'; node <&3` は main・subagent とも deny""",
+]
+canon = ["docs/specs/blastguard.md 同節 補足裁定「`<&N` や `/dev/fd/N` で fd を読む reader は、shell（`bash|sh|zsh`）に限らない。既存の stdin reader の集合（code interpreter を含む）のすべてを対象とする。」"]
+falsifiable = true
+
+[[requirement]]
+id = "R4"
+statement = "同じ N への再代入は書かれた順に反映し、reader の時点で最新の中身で判定する。fd は N ごとに独立に追跡する。"
+acceptance = [
+    "`exec 3<<< 'echo hi'; exec 3<<< 'chmod 777 /etc/hosts'; bash <&3` は main・subagent とも deny",
+    "`exec 3<<< 'chmod 777 /etc/hosts'; exec 3<<< 'echo hi'; bash <&3` の verdict は、`bash <<< 'echo hi'` の verdict と一致する",
+    "`exec 3<<< 'echo hi'; exec 4<<< 'chmod 777 /etc/hosts'; bash <&4` は main・subagent とも deny",
+]
+canon = ["docs/specs/blastguard.md 同節 裁定 2「`exec N<&-`（close）と、同じ N への再代入は、書かれた順に反映する。close した後と、再代入した後の fd は、新しい中身で判定する。」"]
+falsifiable = true
+
+[[requirement]]
+id = "R5"
+statement = "close（`exec N<&-`）した後に fd N を読む reader は、close 前の中身が literal で harm なら Deny とし、それ以外は開かれていない fd と同じく main で Ask、subagent で Deny とする。"
+acceptance = [
+    "`exec 3<<< 'chmod 777 /etc/hosts'; exec 3<&-; bash <&3` は main・subagent とも deny",
+    "`exec 3<<< 'echo hi'; exec 3<&-; bash <&3` は main で ask、subagent で deny（allow にならない）",
+]
+canon = ["docs/specs/blastguard.md 同節 補足裁定「close（`exec N<&-`）した後で fd N を読む reader は、close 前に開いていた中身が literal で harm なら Deny とする。それ以外は、どこでも開かれていない fd と同じく Ask とする（subagent では Deny）。」"]
+falsifiable = true
+
+[[requirement]]
+id = "R6"
+statement = "brace group `{ … }` の中の exec はトップレベルの exec と同じに扱う。brace の中の reader は、brace を外した読みと外さない読みの両方で判定し、制限側の verdict を採る。"
+acceptance = [
+    "`{ exec 3<<< 'chmod 777 /etc/hosts'; }; bash <&3` は main・subagent とも deny",
+    "`exec 3<<< 'chmod 777 /etc/hosts'; { bash <&3; }` は main・subagent とも deny",
+    "`exec 3<<< 'echo hi'; { bash <&3; }` の verdict は、`exec 3<<< 'echo hi'; bash <&3` の verdict より緩くならない（allow < ask < deny の順で比較）",
+]
+canon = ["docs/specs/blastguard.md 同節 補足裁定「brace group `{ … }` の中の exec はモデル化する。既存の `decompounded` の読みと同じく brace を外して、トップレベルの exec と同じに扱う。」「reader が brace の中にある場合は、brace を外した読みと外さない読みの両方で判定し、制限側の verdict を採る（追加のみ）。」"]
+falsifiable = true
+
+[[requirement]]
+id = "R7"
+statement = "モデル外の形で開いた fd・読んだ fd は判定不能として main で Ask、subagent で Deny とし、Allow にしない。中身が literal で harm なら main・subagent とも Deny とする。モデル外の形は次のとおり: subshell 内の exec、関数本体内の exec、条件付き exec（`&&`/`||` の右辺・`if` の中）、unquoted here-document、`N<&M`（M≥3）の連鎖、トップレベルの exec に対する subshell 内または関数本体内の reader。"
+acceptance = [
+    "中身が `chmod 777 /etc/hosts` の次の各形は、main・subagent とも deny: `( exec 3<<< '…'; bash <&3 )`、`f() { exec 3<<< '…'; bash <&3; }; f`、`true && exec 3<<< '…'; bash <&3`、`if true; then exec 3<<< '…'; fi; bash <&3`、`exec 3<<EOF`（unquoted、本文は `…`）の後に `bash <&3`、`exec 3<<< '…'; exec 4<&3; bash <&4`、`exec 3<<< '…'; ( bash <&3 )`、`exec 3<<< '…'; g() { bash <&3; }; g`",
+    "上の各形で中身を `echo hi` にしたものは、main で ask、subagent で deny（どれも allow にならない）",
+    "unquoted here-document で本文に展開を含むもの（例: 本文 `chmod 777 $T`）は、main で ask、subagent で deny（allow にならない）",
+]
+canon = [
+    "docs/specs/blastguard.md 同節 裁定 1「中身が system harm と literal で分かる program は、形を解析できなくても main・subagent ともに Deny。…中身が literal で読めない（判定不能な）場合は従来どおり Ask（subagent では Deny）で、Allow にはしない。」",
+    "同節 裁定 2「subshell `( … )`、関数本体、条件付きの exec（`&&` / `||` の右辺や `if` の中）、展開を含む here-document（unquoted `<<EOF`）、`N<&M`（M が 3 以上）の連鎖は、追跡の対象外とする。…」",
+    "同節 補足裁定「exec がトップレベルにあり、reader が subshell `( … )` か関数本体の中にある場合は判定不能とする（main で Ask、subagent で Deny）。…」",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R8"
+statement = "`exec N< file` と `exec N<&0`（0..2 の標準 fd の複製）で開いた fd を読む reader は、従来どおり `bash < file`（標準 fd の複製なら stdin を読む reader）と同じに扱う。既存の `exec N< <(…)` の procsub 追跡は退行させない。"
+acceptance = [
+    "`exec 3< x.sh; bash <&3` の verdict は、同じ subagent 区分・同じ cwd で `bash < x.sh` の verdict と一致する",
+    "`exec 3<&0; bash <&3` の verdict は、同じ subagent 区分で `bash <&0` の verdict と一致する",
+    "既存の回帰テスト `crates/blastguard/tests/backlog_20261114_compound_wrapped_or_cross_stage_shell_program.rs` が変更なしで通る",
+]
+canon = [
+    "docs/specs/blastguard.md 同節 補足裁定「`exec N< file` と `exec N<&0`（`0..2` の標準 fd の複製）を読む reader は、従来どおり `bash < file`（標準 fd の複製なら stdin）と同じ扱いとする…」",
+    "docs/specs/blastguard.md 633–640 行「`exec N< <(…)` / `exec < <(…)` で開かれた fd から stdin を複製する reader はその procsub の program を判定し…ファイルで開かれた fd は `bash < file` と同じ扱い。」",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R9"
+statement = "実装を変えるコミットで、canon の既存記述「here-string/here-document で開かれた fd は…Ask」（docs/specs/blastguard.md 633–640 行）を新しい挙動に合わせて書き直し、blastguard の version を 3 ファイル lockstep で micro 以上上げる。"
+acceptance = [
+    "実装を変えるコミットで docs/specs/blastguard.md 633–640 行の段落も変わっていて、quoted here-document と here-string で開いた fd を一律 Ask とする記述が残っていない",
+    "同じコミットで `crates/blastguard/Cargo.toml`・`crates/blastguard/.claude-plugin/plugin.json`・`.claude-plugin/marketplace.json` の blastguard version が同じ値で上がり、`scripts/check-plugin-versions.py` と `scripts/check-version-bumped.py` が exit 0",
+]
+canon = [
+    "CLAUDE.md §4「実装を変えたら**同じコミットで**記述も直す。」",
+    "CLAUDE.md「`crates/<name>/` の中身…を1行でも触ったら、その plugin の version を最低でも micro…上げ、3ファイル同時…で lockstep させる。」",
+]
+falsifiable = true

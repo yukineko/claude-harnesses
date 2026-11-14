@@ -2327,3 +2327,32 @@ exit 101: /Users/yuki/.condukt/worktrees/run-20261114-161340-68728-side-reds/cra
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
      Running tests/backlog_20261114_stdin_dup_move_fd_suffix.rs (target/debug/deps/backlog_20261114_stdin_dup_move_fd_suffix-9ced7a051e26aaa3)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_stdin_dup_move_fd_suffix`"""
+
+[[task]]
+id = "a3a8cdcf"
+title = "blastguard fail-open: source /dev/stdin <&3 (and . /dev/stdin, /dev/fd/0, <&$fd) is Allow while bash /dev/stdin <&3 is Ask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 (run-20261114-161340-68728 t1 verifier + side-reds agent, main dde31f11b): source /dev/stdin <&3, . /dev/stdin <&3, source /dev/stdin <&$fd, source /dev/fd/0 <&$fd are allow/allow; bash /dev/stdin <&3 is ask/deny. source runs a program read from an unseen fd; source_program_source likely treats the operand as a File. Readings: (a) fail-open; (b) intended only if source of /dev/stdin is modelled elsewhere — the RED shows it is not."
+created_at = 1794656966
+updated_at = 1794656966
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_source_dev_stdin_dup -- --include-ignored"
+rev = "b7903d36f4c6501380f6ae3a95d12d6b8dae69bc"
+observed_at = 1794656966
+detail = """
+exit 101: d v0.2.596 (/Users/yuki/.condukt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/backlog_20261114_source_dev_stdin_dup.rs (target/debug/deps/backlog_20261114_source_dev_stdin_dup-66f175671539ba93)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_source_dev_stdin_dup`"""

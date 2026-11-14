@@ -2265,3 +2265,32 @@ exit 101: kt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.80s
      Running tests/backlog_20261114_py_heredoc_harm_string_literal.rs (target/debug/deps/backlog_20261114_py_heredoc_harm_string_literal-3cfcc4cc8634a2c8)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_py_heredoc_harm_string_literal`"""
+
+[[task]]
+id = "eb52d2e5"
+title = "blastguard FP: a .txt data heredoc whose body has echo hi >&$fd raises python3 probe.py from allow to Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-14 (run-20261114-161340-68728 t1 verifier, side-reds agent, main dde31f11b): python3 <wt>/probe.py <wt> alone = allow; cat > <wt>/cmds.txt <<'EOF' (body: echo hi >&$fd / probe 3<<< x) EOF then python3 <wt>/probe.py <wt> = deny in main and subagent, verbatim: "'> $fd' destroys the file's current contents and `$fd` contains a shell expansion, so blastguard cannot tell which file this names, let alone whether its contents are recoverable". Readings: (a) FP — .txt body is data (heredoc-body-by-target-language ruling); (b) intended — an unseen python script might exec the .txt. Tell apart: ruling says .txt is not judged as shell unless run as shell in the same command."""
+created_at = 1794656915
+updated_at = 1794656915
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_txt_data_heredoc_python_probe -- --include-ignored"
+rev = "b7903d36f4c6501380f6ae3a95d12d6b8dae69bc"
+observed_at = 1794656915
+detail = """
+exit 101: ndukt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.05s
+     Running tests/backlog_20261114_txt_data_heredoc_python_probe.rs (target/debug/deps/backlog_20261114_txt_data_heredoc_python_probe-8821daae300377ea)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_txt_data_heredoc_python_probe`"""

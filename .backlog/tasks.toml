@@ -2092,6 +2092,8 @@ notes = """Observed 2026-11-14 at main a67c5d23f: python3 -c 'print("x >> BACKTI
 created_at = 1794647064
 updated_at = 1794647064
 weight = 0.0
+issue_number = 1771
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1771"
 rev = 0
 
 [task.repro]

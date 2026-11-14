@@ -165,10 +165,19 @@ fn stdin_exec_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // An fd `exec` opens for the rest of the line (`exec 3< <(…); bash <&3`,
     // backlog 72872200) is read across the statement boundary; see
     // `exec_opened_fds`.
+    //
+    // An fd `exec` opens on a here-string or a quoted here-document
+    // (`exec 3<<< '…'; bash <&3`, backlog e686a85e) is followed through the
+    // statements and its text judged as the reader's program; see
+    // `cross_statement_fd_verdict`. The fds it resolved are left to it below.
+    let tracking = exec_fds::cross_statement_fd_verdict(cmd, depth, ctx);
+    if let Some(deny) = acc.record(tracking.verdict) {
+        return deny;
+    }
     let stages = procsub_stages(cmd);
     let exec_fds = exec_opened_fds(&stages);
     for stage in &stages {
-        let procsubs = procsub_programs(stage, &exec_fds);
+        let procsubs = procsub_programs(stage, &exec_fds, &tracking.resolved);
         for synthetic in &procsubs.pipelines {
             if let Some(deny) = acc.record(analyze_interpreter_stdin_exec(synthetic, depth, ctx)) {
                 return deny;
@@ -729,8 +738,11 @@ struct ProcsubPrograms {
 /// `exec_fds` ([`exec_opened_fds`]): a substitution there is judged as the
 /// program exactly as an in-stage one is. An fd above 2 that stdin is
 /// duplicated from and that nothing on the line opens (`bash <&3`), or that is
-/// opened on a here-document / here-string, cannot be read: when the reader
-/// takes its program from stdin that is an Ask, never an Allow. An fd opened on
+/// opened on a here-document / here-string that `cross_statement_fd_verdict`
+/// did not resolve (`resolved_here_text`: fd 0, or an fd mentioned in a shape it
+/// does not read), cannot be read: when the reader takes its program from stdin
+/// that is an Ask, never an Allow. A resolved here-text fd is judged by that
+/// pass, which reads it as the inline text (backlog e686a85e). An fd opened on
 /// a file (`exec 3< f; bash <&3`) is that file, read as `bash < f` is.
 ///
 /// zsh's `=(…)` (a substitution handed over as a temporary FILE) is read as
@@ -740,7 +752,11 @@ struct ProcsubPrograms {
 ///
 /// Every pipeline holds only the TEXT of a substitution (one nesting level
 /// down), so the recursion through [`analyze_interpreter_stdin_exec`] ends.
-fn procsub_programs(stage: &str, exec_fds: &[(u32, ExecFd)]) -> ProcsubPrograms {
+fn procsub_programs(
+    stage: &str,
+    exec_fds: &[(u32, ExecFd)],
+    resolved_here_text: &[u32],
+) -> ProcsubPrograms {
     let mut out = ProcsubPrograms::default();
     let words = super::quote_aware_words(stage);
     let exec_stdin = exec_fds.iter().any(|(fd, _)| *fd == 0);
@@ -833,7 +849,10 @@ fn procsub_programs(stage: &str, exec_fds: &[(u32, ExecFd)]) -> ProcsubPrograms 
             match e {
                 ExecFd::Procsub(body) => bodies.push(body.clone()),
                 ExecFd::File => {}
-                ExecFd::Unreadable => unreadable.push(format!(
+                // Judged by `cross_statement_fd_verdict`, which read every
+                // mention of this fd on the line.
+                ExecFd::HereText if resolved_here_text.contains(&n) => {}
+                ExecFd::HereText | ExecFd::Unreadable => unreadable.push(format!(
                     "its stdin is fd {n}, which `exec` opens on text blastguard does not read \
 (a here-document, a here-string or another unresolved fd)"
                 )),

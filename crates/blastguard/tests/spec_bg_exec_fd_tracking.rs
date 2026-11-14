@@ -141,7 +141,6 @@ fn ask_main_deny_sub(cmds: &[String]) {
 // ---- R1 ----
 
 #[test]
-#[ignore = "RED: 2026-11-14 newline/&&/|| separated harm is Ask in main (expected Deny) — remove the ignore when fixed"]
 fn r1_newline_andand_oror_separators_deny() {
     let cmds: Vec<String> = ["\n", " && ", " || "]
         .iter()
@@ -151,13 +150,11 @@ fn r1_newline_andand_oror_separators_deny() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 bash /dev/fd/3 harm is Allow in main and subagent (expected Deny) — remove the ignore when fixed"]
 fn r1_dev_fd_3_deny() {
     deny_both(&[format!("exec 3<<< '{HARM}'; bash /dev/fd/3")]);
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 sh/zsh <&5 harm is Ask in main (expected Deny) — remove the ignore when fixed"]
 fn r1_fd5_sh_and_zsh_deny() {
     deny_both(&[
         format!("exec 5<<< '{HARM}'; sh <&5"),
@@ -166,7 +163,6 @@ fn r1_fd5_sh_and_zsh_deny() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 fd-read echo hi is ask/deny but inline here-string is allow — remove the ignore when fixed"]
 fn r1_echo_hi_verdict_equals_inline_herestring() {
     same_verdict("exec 3<<< 'echo hi'; bash <&3", "bash <<< 'echo hi'");
 }
@@ -179,7 +175,6 @@ fn r2_quoted_heredoc_fd_harm_deny() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 fd-read quoted heredoc echo hi is ask/deny but inline heredoc is allow — remove the ignore when fixed"]
 fn r2_quoted_heredoc_fd_echo_equals_inline_heredoc() {
     same_verdict(
         "exec 3<<'EOF'\necho hi\nEOF\nbash <&3",
@@ -190,7 +185,6 @@ fn r2_quoted_heredoc_fd_echo_equals_inline_heredoc() {
 // ---- R3 ----
 
 #[test]
-#[ignore = "RED: 2026-11-14 python3 <&3 harm is Ask in main (expected Deny) — remove the ignore when fixed"]
 fn r3_python3_reader_deny() {
     deny_both(&[
         r#"exec 3<<< 'import os; os.chmod("/etc/hosts", 0o777)'; python3 <&3"#.to_string(),
@@ -198,7 +192,6 @@ fn r3_python3_reader_deny() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 node <&3 harm is Ask in main (expected Deny) — remove the ignore when fixed"]
 fn r3_node_reader_deny() {
     deny_both(&[
         r#"exec 3<<< 'require("fs").chmodSync("/etc/hosts", 0o777)'; node <&3"#.to_string(),
@@ -208,13 +201,11 @@ fn r3_node_reader_deny() {
 // ---- R4 ----
 
 #[test]
-#[ignore = "RED: 2026-11-14 reassigned-to-harm fd read is Ask in main (expected Deny) — remove the ignore when fixed"]
 fn r4_reassign_latest_harm_deny() {
     deny_both(&[format!("exec 3<<< 'echo hi'; exec 3<<< '{HARM}'; bash <&3")]);
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 reassigned-to-echo-hi fd read is ask/deny but inline is allow — remove the ignore when fixed"]
 fn r4_reassign_latest_benign_equals_inline() {
     same_verdict(
         &format!("exec 3<<< '{HARM}'; exec 3<<< 'echo hi'; bash <&3"),
@@ -223,7 +214,6 @@ fn r4_reassign_latest_benign_equals_inline() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 independent fd 4 harm read is Ask in main (expected Deny) — remove the ignore when fixed"]
 fn r4_independent_fds_deny() {
     deny_both(&[format!("exec 3<<< 'echo hi'; exec 4<<< '{HARM}'; bash <&4")]);
 }
@@ -231,7 +221,6 @@ fn r4_independent_fds_deny() {
 // ---- R5 ----
 
 #[test]
-#[ignore = "RED: 2026-11-14 close-then-read of harm fd is Ask in main (expected Deny) — remove the ignore when fixed"]
 fn r5_close_after_harm_deny() {
     deny_both(&[format!("exec 3<<< '{HARM}'; exec 3<&-; bash <&3")]);
 }
@@ -244,13 +233,11 @@ fn r5_close_after_benign_ask_main_deny_subagent() {
 // ---- R6 ----
 
 #[test]
-#[ignore = "RED: 2026-11-14 brace-wrapped exec harm is Ask in main (expected Deny) — remove the ignore when fixed"]
 fn r6_exec_inside_brace_then_reader_deny() {
     deny_both(&[format!("{{ exec 3<<< '{HARM}'; }}; bash <&3")]);
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 brace-wrapped reader harm is Ask in main (expected Deny) — remove the ignore when fixed"]
 fn r6_reader_inside_brace_deny() {
     deny_both(&[format!("exec 3<<< '{HARM}'; {{ bash <&3; }}")]);
 }
@@ -287,7 +274,6 @@ fn r7_forms(body: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 out-of-model literal-harm forms are Ask in main (expected Deny) — remove the ignore when fixed"]
 fn r7_out_of_model_forms_with_literal_harm_deny() {
     deny_both(&r7_forms(HARM));
 }

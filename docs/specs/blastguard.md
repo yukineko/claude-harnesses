@@ -640,8 +640,15 @@ forge・condukt のスケジューラが再利用）。
   `decompounded`、`detect/payload/exec_fds.rs` の `exec_opened_fds`、backlog 72872200、blastguard 0.2.557）** —
   `analyze_interpreter_stdin_exec` は行を原文と compound 構文を外した読みの 2 回判定する（追加のみ。2 つの
   splitter の長さが食い違えば Ask）。`exec N< <(…)` / `exec < <(…)` で開かれた fd から stdin を複製する reader は
-  その procsub の program を判定し、どこでも開かれていない fd（`bash <&3`）や here-string/here-document で開かれた
-  fd は、reader が stdin から program を読みうるとき Ask。ファイルで開かれた fd は `bash < file` と同じ扱い。
+  その procsub の program を判定し、どこでも開かれていない fd（`bash <&3`）は、reader が stdin から program を
+  読みうるとき Ask。here-string（`exec N<<< …`）と quoted here-document（`exec N<<'EOF'`）で開かれた fd は、
+  後の文の reader（`<&N` / `/dev/fd/N`）を中身を inline で渡した形（`bash <<< …`）として判定する
+  （`detect/payload/exec_fds.rs` の `cross_statement_fd_verdict`、backlog e686a85e、blastguard 0.2.580。詳細は
+  末尾の節「exec が開く fd の文をまたいだ追跡」）。モデル外の形（subshell・関数本体・条件付きの exec、unquoted
+  here-document、`N<&M` の連鎖、close 後の読み、subshell・関数本体内の reader、読めない形での fd の言及）は
+  Ask（subagent では Deny）で、中身が literal で harm なら main でも Deny。fd 0 を here-text で開く
+  `exec <<< …` は追跡対象外で、従来どおり reader が stdin から program を読みうるとき Ask。
+  ファイルで開かれた fd は `bash < file` と同じ扱い。
   exec で開かれた stdin は upstream pipe のある reader にも適用する（制限側の過大近似）。zsh の `=(…)` は
   process substitution として読む。回帰テスト:
   `crates/blastguard/tests/backlog_20261114_compound_wrapped_or_cross_stage_shell_program.rs`。

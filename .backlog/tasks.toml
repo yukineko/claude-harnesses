@@ -2010,3 +2010,31 @@ exit 101: /worktrees/run-20261114-125811-45041-integ/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
      Running tests/backlog_20261114_inherited_dev_fd_program_operand.rs (target/debug/deps/backlog_20261114_inherited_dev_fd_program_operand-f942a51f6a25c4c9)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_inherited_dev_fd_program_operand`"""
+
+[[task]]
+id = "2210e1db"
+title = "blastguard: exec <<< 'chmod 777 /etc/hosts'; bash (fd 0 here-string, literal system harm) is Ask in main, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. Literal system harm reaching a shell via `exec <<< ...` on fd 0 is main Ask (subagent Deny). User ruling: literal harm is Deny in main too. spec bg-exec-fd-tracking only models N>=3, so fd 0 was left out of e686a85e. Readings: (a) defect - fd 0 here-text should be judged like fd N; (b) out of model by the spec. Tell apart: spec canon section 'exec が開く fd の文をまたいだ追跡' scope."
+created_at = 1794634328
+updated_at = 1794634328
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_exec_stdin_herestring_literal_harm -- --include-ignored"
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634328
+detail = """
+exit 101: rees/run-20261114-125811-45041-integ/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running tests/backlog_20261114_exec_stdin_herestring_literal_harm.rs (target/debug/deps/backlog_20261114_exec_stdin_herestring_literal_harm-a50a6e1d71704f6c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_exec_stdin_herestring_literal_harm`"""

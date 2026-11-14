@@ -2122,6 +2122,8 @@ notes = "Observed 2026-11-14 run run-20261114-163341-69351 task e70b6a71. worktr
 created_at = 1794647180
 updated_at = 1794647180
 weight = 0.0
+issue_number = 1772
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1772"
 rev = 0
 
 [task.repro]

@@ -2234,3 +2234,32 @@ exit 101: d out; finished in 0.44s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
      Running tests/backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp.rs (target/debug/deps/backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp-7b85eef629c6ed87)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp`"""
+
+[[task]]
+id = "762f38bd"
+title = "blastguard FP: python3 - heredoc that only writes a file whose string literal holds chmod 777 /etc/hosts is system-harm Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 (run-20261114-161340-68728, t3 worker + side-reds agent, main dde31f11b): the exact recovered t3 spec-edit command (python3 - <<'PY' reading docs/specs/blastguard.md, str.replace with triple-quoted literals, open(p,'w').write) is Deny in main: verbatim reason '`chmod` re-permissions `/etc/hosts` ... [system harm: refused on every request, never handed back as a question]'. Minimised single-line forms are NOT denied (same verdict as echo hi), so trigger not localised. Controls (subprocess.run/os.system/os.chmod on /etc/hosts) stay Deny. Readings: (a) FP — harm text is Python string data written to a file; (b) intended over-approximation. Tell apart: localise which part of the full program flips the verdict."
+created_at = 1794656868
+updated_at = 1794656868
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_py_heredoc_harm_string_literal -- --include-ignored"
+rev = "b7903d36f4c6501380f6ae3a95d12d6b8dae69bc"
+observed_at = 1794656868
+detail = """
+exit 101: kt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.80s
+     Running tests/backlog_20261114_py_heredoc_harm_string_literal.rs (target/debug/deps/backlog_20261114_py_heredoc_harm_string_literal-3cfcc4cc8634a2c8)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_py_heredoc_harm_string_literal`"""

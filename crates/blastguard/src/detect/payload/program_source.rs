@@ -187,6 +187,48 @@ pub(super) fn python_program_source(argv: &[&str]) -> ProgramSource {
     }
 }
 
+/// Whether a python invocation reads its stdin as a PROGRAM even though a
+/// script operand or `-m` module is named: `-i` (inspect: after the script it
+/// runs stdin as an interactive interpreter) and `-m code` / `-m pdb` (a console
+/// / debugger that executes stdin). Options end at the first non-option word,
+/// `--` or `-`; `-c` ends the scan (stdin stays data there).
+pub(super) fn python_reads_stdin_program(argv: &[&str]) -> bool {
+    let mut k = 0;
+    while k < argv.len() {
+        let w = argv[k];
+        let Some(letters) = w.strip_prefix('-') else {
+            break;
+        };
+        if letters.is_empty() || letters.starts_with('-') {
+            break;
+        }
+        for (pos, c) in letters.char_indices() {
+            match c {
+                'i' => return true,
+                'c' => return false,
+                'm' => {
+                    let glued = &letters[pos + 1..];
+                    let module = if glued.is_empty() {
+                        argv.get(k + 1).copied().unwrap_or("")
+                    } else {
+                        glued
+                    };
+                    return matches!(module, "code" | "pdb");
+                }
+                'W' | 'X' => {
+                    if pos + 1 == letters.len() {
+                        k += 1;
+                    }
+                    break;
+                }
+                _ => {}
+            }
+        }
+        k += 1;
+    }
+    false
+}
+
 /// Any other code interpreter (`perl`, `ruby`, `node`, `osascript` …): with no
 /// option the first operand is the script (none: stdin); an option cluster
 /// holding `e` / `E` (`-e`, `-ne`, `-E`, `--eval`) makes the program inline;

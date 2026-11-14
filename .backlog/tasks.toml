@@ -2358,3 +2358,32 @@ exit 101: d v0.2.596 (/Users/yuki/.condukt/worktrees/run-20261114-161340-68728-s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
      Running tests/backlog_20261114_source_dev_stdin_dup.rs (target/debug/deps/backlog_20261114_source_dev_stdin_dup-66f175671539ba93)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_source_dev_stdin_dup`"""
+
+[[task]]
+id = "7cccad0a"
+title = "blastguard fail-open: harmful literal piped to python3 -c that forwards stdin to a shell (os.system(input()), subprocess.run(stdin, shell=True)) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 (run-20261114-161340-68728 t4 verifier + side-reds agent, main c158cd573 and t4 wt): echo 'rm -rf /' | python3 -c 'import os; os.system(input())' and ... subprocess.run(sys.stdin.read(), shell=True) are allow/allow (main/subagent). The -c program forwards stdin to a shell. Readings: (a) fail-open — literal system harm reaches a shell; (b) intended only if -c programs are never modelled as stdin forwarders — conflicts with system-harm-always-deny. Control: echo hi | python3 -c 'import sys; print(sys.stdin.read())' allow."
+created_at = 1794657413
+updated_at = 1794657413
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_stdin_forward_shell_literal_harm -- --include-ignored"
+rev = "95197ae5b4457c7d6c8328cdd42f7693fbf06446"
+observed_at = 1794657413
+detail = """
+exit 101: 61340-68728-side-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.24s
+     Running tests/backlog_20261114_python_stdin_forward_shell_literal_harm.rs (target/debug/deps/backlog_20261114_python_stdin_forward_shell_literal_harm-eacd53911bd95b16)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_stdin_forward_shell_literal_harm`"""

@@ -120,7 +120,10 @@ fn r2_adversarial_tails_not_allowed() {
         for sub in [false, true] {
             let (d, _) = verdict(&c, sub);
             if d == "allow" {
-                allowed.push(format!("{} :: {c:?}", if sub { "subagent" } else { "main" }));
+                allowed.push(format!(
+                    "{} :: {c:?}",
+                    if sub { "subagent" } else { "main" }
+                ));
             }
         }
     }

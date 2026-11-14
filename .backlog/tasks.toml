@@ -2026,6 +2026,8 @@ notes = "Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, b
 created_at = 1794634328
 updated_at = 1794634328
 weight = 0.0
+issue_number = 1765
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1765"
 rev = 0
 
 [task.repro]

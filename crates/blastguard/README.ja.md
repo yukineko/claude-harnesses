@@ -898,8 +898,8 @@ subagent の中では誰も permission prompt に答えられないので、`Ask
    queue ファイルが無ければ allow。
 5. **dismiss（`blastguard relay dismiss <id> --reason "<理由>"`）** — 人間が prompt を
    拒否した、またはコマンドを再実行できないとき用。理由が空・欠落なら拒否（exit 2）、
-   未知 id も exit 2、queue が読めなければ exit 3。dismiss はその session の以後の
-   すべての Stop に表示される（他に pending が無ければ `systemMessage`、あれば block 理由に追記）。
+   未知 id も exit 2、queue が読めなければ exit 3。dismiss は queue ファイルに記録される
+   が、以後の Stop には表示されない（pending が無ければ allow、あれば pending だけを列挙して block）。
 
 しないこと: コマンドを実行しない（保存したコマンドを 1 回の Bash 呼び出しの中で実行する
 道具は、そのコマンドを blastguard から隠す fail-open になる。main agent が自分の Bash

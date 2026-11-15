@@ -1264,7 +1264,7 @@ fn relay_dismiss(rest: &[String]) -> i32 {
     match relay::dismiss(&relay::relay_dir(), id, reason) {
         Ok(path) => {
             println!(
-                "dismissed {id} ({}); it stays listed (id and reason only) on every later Stop of that session",
+                "dismissed {id} ({}); the dismissal is recorded in the queue file and is no longer shown on Stop",
                 path.display()
             );
             0

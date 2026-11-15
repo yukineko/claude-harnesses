@@ -35,10 +35,10 @@
 //!
 //! The human may decline the prompt; then no PostToolUse fires. That is what
 //! [`dismiss`] is for: it requires a non-empty reason, and every dismissal of
-//! the session is shown by the Stop hook from then on, so a dismissal is
-//! never silent. That includes a repeated dismissal of the same id: each
-//! reason is listed on its own line, oldest first, and a later one never
-//! replaces an earlier one.
+//! the session is recorded in the queue file (a repeated dismissal of the same
+//! id appends another reason, oldest first, and never replaces an earlier
+//! one). User ruling 2026-11-16: the Stop hook no longer lists dismissed
+//! entries at all.
 //!
 //! # What this module never does
 //!
@@ -513,8 +513,8 @@ sees the real permission prompt. Do not rewrite it, wrap it, or hand it to the u
   2. SendMessage the output and exit code to the subagent, and name the relay id in the message.\n\
 If the human declined the prompt, blastguard denied the re-run in the main session, or the command \
 cannot be run, record why with \
-`blastguard relay dismiss <id> --reason \"<why>\"`; every dismissal stays listed on each later Stop of \
-this session as its relay id and reason only (the full command stays in the queue file).";
+`blastguard relay dismiss <id> --reason \"<why>\"`; the dismissal is recorded in the queue file and is \
+not shown on later Stops.";
 
 fn describe(e: &Entry) -> String {
     let state = match (&e.executed, e.relayed) {
@@ -549,15 +549,6 @@ fn indent(s: &str) -> String {
         .join("\n")
 }
 
-/// One line per dismissal of `e`, oldest first: a second `relay dismiss` on
-/// the same id adds a line and never hides the first (backlog b82e882a).
-fn describe_dismissed(e: &Entry) -> String {
-    e.dismissed
-        .iter()
-        .map(|r| format!("- relay id: {} dismissed — reason: {r}\n", e.id))
-        .collect()
-}
-
 /// The Stop verdict for `session`. Blocks on any unresolved entry and on any
 /// queue that cannot be read or folded (fail-closed, path named). Blocking
 /// does not depend on `stop_hook_active`: the way out is to resolve or
@@ -578,36 +569,16 @@ pub fn stop_outcome(dir: &Path, session: &str) -> StopOutcome {
         }
     };
     let pending: Vec<&Entry> = entries.iter().filter(|e| !e.is_resolved()).collect();
-    let dismissed: Vec<&Entry> = entries.iter().filter(|e| e.is_dismissed()).collect();
-    let dismissed_text = if dismissed.is_empty() {
-        None
-    } else {
-        Some(format!(
-            "blastguard relay: {} subagent Ask(s) were dismissed in this session instead of being \
-             re-run in the main session (id and reason only; the full commands are in the queue \
-             file {}):\n{}",
-            dismissed.len(),
-            path.display(),
-            dismissed
-                .iter()
-                .map(|e| describe_dismissed(e))
-                .collect::<String>()
-        ))
-    };
     if pending.is_empty() {
-        return StopOutcome::Allow(dismissed_text);
+        return StopOutcome::Allow(None);
     }
-    let mut reason = format!(
+    let reason = format!(
         "blastguard relay: {} subagent Ask(s) in this session have not been adjudicated in the \
          main session.\n{PROCEDURE}\nqueue file: {}\n\nPending:\n{}",
         pending.len(),
         path.display(),
         pending.iter().map(|e| describe(e)).collect::<String>()
     );
-    if let Some(d) = dismissed_text {
-        reason.push('\n');
-        reason.push_str(&d);
-    }
     StopOutcome::Block(reason)
 }
 

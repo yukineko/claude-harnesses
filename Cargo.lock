@@ -78,7 +78,7 @@ dependencies = [
 
 [[package]]
 name = "answerlang"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "harness-core",
  "serde",
@@ -181,7 +181,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.610"
+version = "0.2.616"
 dependencies = [
  "globset",
  "harness-core",
@@ -323,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.416"
+version = "0.7.417"
 dependencies = [
  "anyhow",
  "blastguard",

@@ -122,7 +122,6 @@ fn spaced_compile_input_with_harmful_stdin_is_deny() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-15 python -c globals-alias exec(input()) with harmful stdin is allow — remove when fixed"]
 fn globals_alias_exec_input_with_harmful_stdin_is_deny() {
     assert_deny_both(GLOBALS_ALIAS, "c");
 }

@@ -826,7 +826,7 @@ fn procsub_programs(
                 }
             }
             "<&" | ">&" if effective_fd == 0 => {
-                if let Ok(n) = target.parse::<u32>() {
+                if let Some(n) = exec_fds::dup_fd_number(target) {
                     dup_into_stdin.push(n);
                 } else if let Some(why) = exec_fds::dynamic_dup_reason(target) {
                     unreadable_stdin.push(why);

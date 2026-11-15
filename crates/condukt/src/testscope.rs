@@ -50,7 +50,9 @@
 //! a bare relative name while `CDPATH` is set) or which is conditional
 //! (`||`, `|`, `&`, after a non-head `&&` member followed by `;`) or followed
 //! by an `&` redirection (`cd x &>f | …`; its effect is not modelled) leaves the
-//! directory undetermined, and a test there is denied. See [`judge_pieces`].
+//! directory undetermined, and a test there is denied. `env cd` / `nice cd` /
+//! `timeout N cd` run an external `cd` and move nothing, so they leave the
+//! directory unchanged. See [`judge_pieces`].
 //! When the run directory's tree differs from the payload cwd's tree, the
 //! rerun key also records the payload cwd's tree, so editing the payload cwd
 //! permits a rerun through the same `cd`; a test run directly in a tree and a
@@ -299,7 +301,21 @@ fn judge_pieces(pieces: &[Piece], start: &Dir, ctx: &Ctx, depth: usize, what: &s
             at_head = false;
             continue;
         };
-        let stripped_words = strip_prefixes(&words);
+        // Only the shell's own `cd` moves the shell: leading assignments and
+        // `command` keep the builtin, but `env` / `nice` / `timeout` run an
+        // external `cd` (e.g. /usr/bin/cd) that cannot change the directory
+        // of later commands, so [`strip_prefixes`] is NOT used here; such a
+        // `cd` falls through to `judge_words` and leaves `dir` unchanged.
+        let stripped_words = {
+            let mut i = 0;
+            while words
+                .get(i)
+                .is_some_and(|w| is_assignment(w) || w == "command")
+            {
+                i += 1;
+            }
+            &words[i..]
+        };
         if let Some(first) = stripped_words.first() {
             if matches!(first.as_str(), "cd" | "pushd" | "popd") {
                 // The piece right after the `cd`. A redirection `&` (`&>f`,

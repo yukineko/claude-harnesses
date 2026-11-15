@@ -700,15 +700,19 @@ pub fn run_circuit_check(
         compactions.unwrap_or(0),
         max_compactions,
     ) {
-        // An uncountable streak with the streak axis on cannot continue; only
-        // a budget trip (higher precedence) keeps its own label.
-        CircuitVerdict::Trip(CircuitReason::BudgetOverCap) => {
-            CircuitVerdict::Trip(CircuitReason::BudgetOverCap)
-        }
-        _ if budget_unknown_reason.is_some() => {
+        // All Trip verdicts (measured outcomes) keep their labels, including
+        // BudgetOverCap, Stall, FailureStreak. Fixed precedence: a measured
+        // outcome is not relabeled by an unmeasured input.
+        CircuitVerdict::Trip(reason) => CircuitVerdict::Trip(reason),
+        // Continue can be relabeled if one of the measured factors could not be
+        // determined. Budget unknown is tried first (highest cost), then streak
+        // unknown (if streak axis is on), then compactions unknown. Lowest
+        // precedence: every other outcome (measured or measured-unmeasured) is
+        // reported first.
+        CircuitVerdict::Continue if budget_unknown_reason.is_some() => {
             CircuitVerdict::Trip(CircuitReason::BudgetUnmeasured)
         }
-        _ if streak_cap > 0 && streak_unknown_reason.is_some() => {
+        CircuitVerdict::Continue if streak_cap > 0 && streak_unknown_reason.is_some() => {
             CircuitVerdict::Trip(CircuitReason::StreakUnmeasured)
         }
         // A transcript that was located but could not be counted is not a

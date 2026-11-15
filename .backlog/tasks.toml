@@ -2760,6 +2760,8 @@ notes = "Observed 2026-11-15 at blastguard 0.2.616 by independent RED designer: 
 created_at = 1794744257
 updated_at = 1794744257
 weight = 0.0
+issue_number = 1806
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1806"
 rev = 0
 
 [task.repro]

@@ -24,6 +24,9 @@
 //!    through its own Bash tool. blastguard judges that call normally, so the
 //!    human sees the real permission prompt. A PostToolUse /
 //!    PostToolUseFailure hook ([`mark_executed`]) marks the entry executed.
+//!    When blastguard's PreToolUse DENIES that re-run instead, the denial is
+//!    recorded on the entry ([`mark_denied`]) so the Stop text says so rather
+//!    than "not executed"; the entry stays pending until it is dismissed.
 //! 3. The main agent sends the output and exit code to the subagent with
 //!    SendMessage, naming the relay id. A PostToolUse hook on SendMessage
 //!    ([`mark_relayed`]) marks the entry relayed.
@@ -88,6 +91,10 @@ pub enum Event {
     },
     /// The main session sent a SendMessage naming the id, after executing.
     Relayed { id: String, ts: u64 },
+    /// The main session re-ran the exact command (same `cwd`) and blastguard's
+    /// PreToolUse DENIED it there, so it never ran. An outcome, not a
+    /// resolution: the entry stays pending until dismissed (backlog b72b1c4d).
+    Denied { id: String, ts: u64, reason: String },
     /// A human-supplied reason why the entry will not be re-run.
     Dismissed { id: String, ts: u64, reason: String },
 }
@@ -108,6 +115,9 @@ pub struct Entry {
     /// is appended, never substituted, so no earlier reason disappears from
     /// the Stop text (backlog b82e882a).
     pub dismissed: Vec<String>,
+    /// The reason of every main-session deny of the exact command, oldest
+    /// first. A deny never resolves the entry: the command did not run.
+    pub denied: Vec<String>,
 }
 
 impl Entry {
@@ -283,7 +293,15 @@ pub fn load(path: &Path) -> Result<Queue, String> {
                 executed: None,
                 relayed: false,
                 dismissed: Vec::new(),
+                denied: Vec::new(),
             }),
+            Event::Denied { id, reason, .. } => {
+                let e = entries
+                    .iter_mut()
+                    .find(|e| e.id == id)
+                    .ok_or_else(|| unknown(&id))?;
+                e.denied.push(reason);
+            }
             Event::Executed { id, exit_code, .. } => {
                 let e = entries
                     .iter_mut()
@@ -341,6 +359,42 @@ pub fn mark_executed(
             id: hit.id.clone(),
             ts: now(),
             exit_code,
+        },
+    )?;
+    Ok(Some(hit.id.clone()))
+}
+
+/// PreToolUse in the MAIN session that printed a `Deny` for a Bash call:
+/// record a `denied` outcome on the oldest unexecuted, undismissed entry whose
+/// `command` and `cwd` are byte-identical to this call's (the same match as
+/// [`mark_executed`]; the `cwd` is compared as a string and never resolved).
+/// Returns the id recorded, if any.
+///
+/// Fail-closed: an unreadable or corrupt queue is `Err` and nothing is
+/// written, so an undetermined match never records an outcome. A `denied`
+/// line never resolves an entry either way — it only replaces the
+/// never-attempted state in the Stop text; the entry keeps blocking the Stop
+/// until it is dismissed with a reason (or later executed and relayed).
+pub fn mark_denied(
+    dir: &Path,
+    session: &str,
+    cwd: &str,
+    command: &str,
+    reason: &str,
+) -> Result<Option<String>, String> {
+    let path = queue_path(dir, session);
+    let entries = known_entries(&path)?;
+    let Some(hit) = entries.iter().find(|e| {
+        e.executed.is_none() && !e.is_dismissed() && e.command == command && e.cwd == cwd
+    }) else {
+        return Ok(None);
+    };
+    append(
+        &path,
+        &Event::Denied {
+            id: hit.id.clone(),
+            ts: now(),
+            reason: reason.to_string(),
         },
     )?;
     Ok(Some(hit.id.clone()))
@@ -454,12 +508,21 @@ prompt there). For each pending entry below:\n\
 is elsewhere, `cd` there in a separate Bash call first). blastguard judges it normally, so the human \
 sees the real permission prompt. Do not rewrite it, wrap it, or hand it to the user to run.\n\
   2. SendMessage the output and exit code to the subagent, and name the relay id in the message.\n\
-If the human declined the prompt, or the command cannot be run, record why with \
+If the human declined the prompt, blastguard denied the re-run in the main session, or the command \
+cannot be run, record why with \
 `blastguard relay dismiss <id> --reason \"<why>\"`; every dismissal stays listed on each later Stop of \
 this session as its relay id and reason only (the full command stays in the queue file).";
 
 fn describe(e: &Entry) -> String {
     let state = match (&e.executed, e.relayed) {
+        (None, _) if !e.denied.is_empty() => format!(
+            "re-run in the main session and DENIED there by blastguard ({} time(s)), so it did \
+             not run; record the outcome with `blastguard relay dismiss {} --reason \"<why>\"` \
+             (latest deny reason, first line: {})",
+            e.denied.len(),
+            e.id,
+            e.denied.last().and_then(|r| r.lines().next()).unwrap_or("")
+        ),
         (None, _) => "not executed in the main session".to_string(),
         (Some(code), false) => format!(
             "executed (exit code {}), not yet relayed by SendMessage",
@@ -609,6 +672,36 @@ mod tests {
         assert!(matches!(stop_outcome(&d, "s"), StopOutcome::Block(_)));
         assert_eq!(mark_relayed(&d, "s", &id).unwrap(), vec![id.clone()]);
         assert_eq!(stop_outcome(&d, "s"), StopOutcome::Allow(None));
+    }
+
+    // Implementer-written (backlog b72b1c4d): a denial is an outcome, never a
+    // resolution, and an undetermined queue records nothing.
+    #[test]
+    fn denial_is_shown_but_never_resolves_and_corrupt_queue_records_nothing() {
+        let d = tmp("denied");
+        let id = queue(&d, "s", None, "/w", "echo hi", "r").unwrap();
+        assert_eq!(
+            mark_denied(&d, "s", "/other", "echo hi", "no").unwrap(),
+            None
+        );
+        assert_eq!(
+            mark_denied(&d, "s", "/w", "echo hi", "denied here\nmore").unwrap(),
+            Some(id.clone())
+        );
+        match stop_outcome(&d, "s") {
+            StopOutcome::Block(msg) => {
+                assert!(msg.contains("DENIED there by blastguard"), "{msg}");
+                assert!(msg.contains("denied here"), "{msg}");
+                assert!(!msg.contains("not executed in the main session"), "{msg}");
+            }
+            other => panic!("{other:?}"),
+        }
+        let p = queue_path(&d, "s");
+        let mut text = std::fs::read_to_string(&p).unwrap();
+        text.push_str("not json\n");
+        std::fs::write(&p, &text).unwrap();
+        assert!(mark_denied(&d, "s", "/w", "echo hi", "x").is_err());
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), text);
     }
 
     #[test]

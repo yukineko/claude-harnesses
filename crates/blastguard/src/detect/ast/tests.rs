@@ -1213,3 +1213,336 @@ mod env_arith_followups {
         );
     }
 }
+
+// After an opaque builtin (eval / source / `.` / undetermined command word) the
+// integer attribute of any name cannot be read statically, so any name may be
+// integer: an assignment whose value is not text-determined is Unsupported
+// (user ruling 2026-11-16, reading A).
+mod env_arith_opaque {
+    use super::*;
+
+    fn assert_unsupported(command: &str) {
+        match analyze(command) {
+            Analysis::Undetermined(Cause::Unsupported(_)) => {}
+            other => panic!(
+                "{command:?}: after an opaque state any name may be integer, so a \
+                 non-text-determined assignment must be Undetermined(Unsupported), got {other:#?}"
+            ),
+        }
+    }
+
+    fn assert_known(command: &str) {
+        match analyze(command) {
+            Analysis::Known(_) => {}
+            other => panic!("{command:?} is fully determined by its text; got {other:#?}"),
+        }
+    }
+
+    #[test]
+    fn eval_declare_i_then_env_assign_is_unsupported() {
+        assert_unsupported("eval 'declare -i n'; n=$X; cat > /tmp/f");
+    }
+
+    #[test]
+    fn eval_then_env_assign_is_unsupported() {
+        assert_unsupported("eval foo; n=$X; cat > /tmp/f");
+    }
+
+    #[test]
+    fn dot_source_then_prefix_assign_is_unsupported() {
+        assert_unsupported(". \"$HOME/.cargo/env\" && X=$Y cat > /tmp/f");
+    }
+
+    #[test]
+    fn source_then_env_assign_is_unsupported() {
+        assert_unsupported("source ./env.sh; n=$X; cat > /tmp/f");
+    }
+
+    #[test]
+    fn undetermined_command_word_then_env_assign_is_unsupported() {
+        assert_unsupported("$cmd; n=$X; cat > /tmp/f");
+    }
+
+    #[test]
+    fn eval_then_export_operand_env_assign_is_unsupported() {
+        assert_unsupported("eval foo; export n=$X; cat > /tmp/f");
+    }
+
+    // Controls.
+    #[test]
+    fn control_no_opaque_env_assign_stays_known() {
+        assert_known("n=$X; cat > /tmp/f");
+    }
+
+    #[test]
+    fn control_opaque_then_numeric_literal_stays_known() {
+        assert_known("eval foo; n=5; cat > /tmp/f");
+    }
+
+    #[test]
+    fn control_source_then_no_assignment_stays_known() {
+        assert_known(". \"$HOME/.cargo/env\" && cat > /tmp/f");
+    }
+}
+
+// Paths that assign a name without going through the plain/prefix/declare
+// operand check. Observed in bash 3.2: `declare -i v; for v in 1+1 2+2; do echo
+// "v=$v"; done` prints v=2 and v=4, so a loop assignment is arithmetic too.
+mod env_arith_opaque_followups {
+    use super::*;
+
+    fn assert_unsupported(command: &str) {
+        match analyze(command) {
+            Analysis::Undetermined(Cause::Unsupported(_)) => {}
+            other => panic!(
+                "{command:?}: a possibly-integer name receives a non-text-determined \
+                 value, so this must be Undetermined(Unsupported), got {other:#?}"
+            ),
+        }
+    }
+
+    fn assert_known(command: &str) {
+        match analyze(command) {
+            Analysis::Known(_) => {}
+            other => panic!("{command:?} is fully determined by its text; got {other:#?}"),
+        }
+    }
+
+    #[test]
+    fn opaque_then_for_over_undetermined_list_is_unsupported() {
+        assert_unsupported("eval foo; for v in $(ls); do :; done; cat > /tmp/f");
+    }
+
+    #[test]
+    fn opaque_then_for_over_literal_word_is_unsupported() {
+        assert_unsupported("eval foo; for v in bar; do :; done; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declared_integer_for_over_undetermined_list_is_unsupported() {
+        assert_unsupported("declare -i v; for v in $X; do :; done; cat > /tmp/f");
+    }
+
+    #[test]
+    fn opaque_then_bare_read_sets_reply_is_unsupported() {
+        assert_unsupported("eval foo; read; cat > /tmp/f");
+    }
+
+    #[test]
+    fn opaque_then_bare_mapfile_sets_mapfile_is_unsupported() {
+        assert_unsupported("eval foo; mapfile < /tmp/in; cat > /tmp/f");
+    }
+
+    // RED not observed at 9e9cb8eca
+    #[test]
+    fn opaque_then_getopts_sets_optarg_is_unsupported() {
+        assert_unsupported("eval foo; getopts ab opt; cat > /tmp/f");
+    }
+
+    // Unobservable locally (bash is 3.2). Restrictive reading: an option word
+    // containing `n` on a declaration builtin counts like a possible integer
+    // attribute for that command's operands.
+    // RED not observed at 9e9cb8eca
+    #[test]
+    fn same_command_nameref_then_assign_is_unsupported() {
+        assert_unsupported("declare -i n; declare -n r=n r=$X; cat > /tmp/f");
+    }
+
+    // RED not observed at 9e9cb8eca
+    #[test]
+    fn opaque_then_local_operand_is_unsupported() {
+        assert_unsupported("eval foo; local n=$X; cat > /tmp/f");
+    }
+
+    // RED not observed at 9e9cb8eca
+    #[test]
+    fn opaque_then_readonly_operand_is_unsupported() {
+        assert_unsupported("eval foo; readonly n=$X; cat > /tmp/f");
+    }
+
+    // RED not observed at 9e9cb8eca
+    #[test]
+    fn opaque_then_typeset_operand_is_unsupported() {
+        assert_unsupported("eval foo; typeset n=$X; cat > /tmp/f");
+    }
+
+    // RED not observed at 9e9cb8eca
+    #[test]
+    fn opaque_then_printf_v_target_is_unsupported() {
+        assert_unsupported("eval foo; printf -v n %s \"$X\"; cat > /tmp/f");
+    }
+
+    // RED not observed at 9e9cb8eca
+    #[test]
+    fn opaque_then_read_target_is_unsupported() {
+        assert_unsupported("eval foo; read n; cat > /tmp/f");
+    }
+
+    // RED not observed at 9e9cb8eca
+    #[test]
+    fn opaque_joined_across_branches_then_assign_is_unsupported() {
+        assert_unsupported("if true; then eval foo; fi; n=$X; cat > /tmp/f");
+    }
+
+    // Controls.
+    #[test]
+    fn control_for_over_numeric_literals_stays_known() {
+        assert_known("for v in 1 2; do :; done; cat > /tmp/f");
+    }
+
+    #[test]
+    fn control_declare_array_literal_stays_known() {
+        assert_known("declare -a a=(x y); cat > /tmp/g");
+    }
+
+    #[test]
+    fn control_opaque_then_for_over_numeric_literals_stays_known() {
+        assert_known("eval foo; for v in 1 2; do :; done; cat > /tmp/f");
+    }
+}
+
+mod env_arith_opaque_assign_default {
+    use super::*;
+
+    fn assert_unsupported(command: &str) {
+        match analyze(command) {
+            Analysis::Undetermined(Cause::Unsupported(_)) => {}
+            other => panic!(
+                "{command:?}: an assign-default expansion assigns a non-text-determined \
+                 value to a possibly-integer name, so this must be \
+                 Undetermined(Unsupported), got {other:#?}"
+            ),
+        }
+    }
+
+    fn assert_known(command: &str) {
+        match analyze(command) {
+            Analysis::Known(_) => {}
+            other => panic!("{command:?} is fully determined by its text; got {other:#?}"),
+        }
+    }
+
+    #[test]
+    fn opaque_then_assign_default_colon_eq_undetermined_is_unsupported() {
+        assert_unsupported("eval foo; : ${n:=$X}; cat > /tmp/f");
+    }
+
+    #[test]
+    fn opaque_then_assign_default_eq_literal_is_unsupported() {
+        assert_unsupported("eval foo; : ${n=bar}; cat > /tmp/f");
+    }
+
+    // Whether `declare -i n` alone already makes the state opaque is not
+    // asserted here; the expectation is only that the declared integer name
+    // evaluates the assigned value as arithmetic.
+    #[test]
+    fn declared_integer_assign_default_undetermined_is_unsupported() {
+        assert_unsupported("declare -i n; : ${n:=$X}; cat > /tmp/f");
+    }
+
+    #[test]
+    fn opaque_then_assign_default_array_element_is_unsupported() {
+        assert_unsupported("eval foo; : ${a[0]:=$X}; cat > /tmp/f");
+    }
+
+    #[test]
+    fn opaque_then_assign_default_inside_redirected_word_is_unsupported() {
+        assert_unsupported("eval foo; echo \"${n:=$X}\" > /tmp/f");
+    }
+
+    // Controls.
+    #[test]
+    fn control_assign_default_numeric_stays_known() {
+        assert_known(": ${n:=5}; cat > /tmp/f");
+    }
+
+    #[test]
+    fn control_use_default_does_not_assign_stays_known() {
+        assert_known(": ${n:-$X}; cat > /tmp/f");
+    }
+
+    #[test]
+    fn control_opaque_then_assign_default_numeric_literal_stays_known() {
+        assert_known("eval foo; : ${n:=5}; cat > /tmp/f");
+    }
+}
+
+// The `builtin` / `command` wrappers must not hide the wrapped builtin's
+// assignment from the integer-name check.
+mod env_arith_wrapped_builtins {
+    use super::*;
+
+    fn assert_unsupported(command: &str) {
+        match analyze(command) {
+            Analysis::Undetermined(Cause::Unsupported(_)) => {}
+            other => panic!(
+                "{command:?}: the wrapped builtin assigns a non-text-determined value to a \
+                 possibly-integer name, so this must be Undetermined(Unsupported), \
+                 got {other:#?}"
+            ),
+        }
+    }
+
+    fn assert_known(command: &str) {
+        match analyze(command) {
+            Analysis::Known(_) => {}
+            other => panic!("{command:?} is fully determined by its text; got {other:#?}"),
+        }
+    }
+
+    #[test]
+    fn opaque_then_builtin_read_is_unsupported() {
+        assert_unsupported("eval true; builtin read n; cat > /tmp/f");
+    }
+
+    #[test]
+    fn opaque_then_command_read_is_unsupported() {
+        assert_unsupported("eval true; command read n; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declared_integer_builtin_read_is_unsupported() {
+        assert_unsupported("declare -i n; builtin read n; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declared_integer_command_read_is_unsupported() {
+        assert_unsupported("declare -i n; command read n; cat > /tmp/f");
+    }
+
+    #[test]
+    fn opaque_then_builtin_declare_assign_is_unsupported() {
+        assert_unsupported("eval true; builtin declare n='a[$(echo hi)]'; cat > /tmp/f");
+    }
+
+    #[test]
+    fn opaque_then_command_export_assign_is_unsupported() {
+        assert_unsupported("eval true; command export n='a[$(echo hi)]'; cat > /tmp/f");
+    }
+
+    #[test]
+    fn opaque_then_command_printf_v_is_unsupported() {
+        assert_unsupported("eval true; command printf -v n %s 'a[$(echo hi)]'; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declared_integer_nested_builtin_read_is_unsupported() {
+        assert_unsupported("declare -i n; builtin builtin read n; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declared_integer_command_p_read_is_unsupported() {
+        assert_unsupported("declare -i n; command -p read n; cat > /tmp/f");
+    }
+
+    // Controls.
+    #[test]
+    fn control_plain_redirect_stays_known() {
+        assert_known("cat > /tmp/f");
+    }
+
+    #[test]
+    fn control_command_v_stays_known() {
+        assert_known("command -v git; cat > /tmp/f");
+    }
+}

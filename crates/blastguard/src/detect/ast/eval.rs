@@ -19,7 +19,13 @@
 //!   `source`, `.`, `trap`, `alias`, `shopt`, `builtin`, `command`, an
 //!   undetermined command word, `declare`-family options, `set` with options
 //!   other than the plain ones — makes the state *opaque*: from there on every
-//!   variable, the cwd and stdin are `Undetermined`.
+//!   variable, the cwd and stdin are `Undetermined`. `builtin [--] w ...` and
+//!   `command [-p] [--] w ...` (nested too) are unwrapped first: the wrapped
+//!   command `w` has its effects and assignment checks as if it ran alone
+//!   (a wrapped declaration builtin's operands keep Field mode), and then the
+//!   wrapper still makes the state opaque. `command -v` / `-V` (a lookup
+//!   that runs nothing), an undetermined word and an unmodelled option of
+//!   the chain have no effect other than making the state opaque.
 //! * cwd: `cd <literal>` moves the tracked cwd for the commands that run only
 //!   if it succeeded (`cd x && ...`); after `cd x;` the cd may have failed, so
 //!   the cwd is the join of both and `Undetermined`. `cd -`, `cd` alone,
@@ -48,7 +54,23 @@
 //!   arithmetic assignment are `Undetermined`, so a later read of them in
 //!   arithmetic (a loop counter `i=$((i+1))`) is `Unsupported` too.
 //!   `declare -i` (also `local` / `typeset`) names are remembered: a later
-//!   assignment to one is arithmetic. An undetermined non-assignment operand
+//!   assignment to one is arithmetic. Once the state is opaque (`eval`,
+//!   `source`, `.`, an undetermined command word, ...) any name may have the
+//!   integer attribute (user ruling 2026-11-16, reading A). From there on (and
+//!   for a `declare -i` name) these assignments are checked as arithmetic:
+//!   plain `n=v` and prefix `n=v cmd`; the operands of `export` / `declare` /
+//!   `typeset` / `local` / `readonly` (with the opacity from before the
+//!   command); the `printf -v` target; every literal operand of `read` /
+//!   `mapfile` / `readarray` / `getopts` / `wait` plus their implicit targets
+//!   (`REPLY`, `MAPFILE`, `OPTARG` / `OPTIND`); and a `for` variable (each
+//!   literal word, or an undetermined value for an undetermined list); and
+//!   `${n:=v}` / `${n=v}` (also `${a[i]:=v}`; an indirect `${!x:=v}` counts
+//!   as possibly integer while opaque or any name is `declare -i`). The
+//!   variables being `Undetermined`, a value not determined by the text or
+//!   that reads a name is `Unsupported` (even a literal word such as `bar` or
+//!   `/abs/path`: `bar` / `abs` name variables). The opaque flag is OR-ed
+//!   where paths join.
+//!   An undetermined non-assignment operand
 //!   of a declaration builtin (`declare $opt n=v`) counts as a possible `-i`.
 //!   The keys of a compound value are arithmetic in a declaration builtin
 //!   too (`declare -a a=([i]=1)`), checked in operand order; a compound
@@ -62,7 +84,8 @@
 //!
 //! Stateless helpers (escape decoding, path joining, fd / stdin bookkeeping,
 //! `set` options, pipeline stdin) live in `support.rs`; the arithmetic checks
-//! in `arith.rs`.
+//! in `arith.rs`; parameter-expansion values and the final value of an
+//! expanded word (`param`, `finish`) in the child module `eval/words.rs`.
 
 use super::support::{
     apply_stdin, conv_fd, decode_ansi_c, join_path, normalise_abs, parse_fd_target,
@@ -73,11 +96,14 @@ use super::{
     RedirTarget, Redirect, Script, SimpleCommand, StdinSource, Value, Word,
 };
 use brush_parser::ast;
-use brush_parser::word::{Parameter, ParameterExpr, WordPiece, WordPieceWithSource};
+use brush_parser::word::{WordPiece, WordPieceWithSource};
 use brush_parser::SourceSpan;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use words::{finish, param};
+
+mod words;
 
 /// The reason carried by [`SimpleCommand::cwd`] when no `cd` applies to the
 /// command: it runs in the hook's cwd, which the command text does not name.
@@ -237,7 +263,8 @@ struct Env {
     /// Names that may have the integer attribute (`declare -i`): every
     /// assignment to one is evaluated as arithmetic.
     integer: BTreeSet<String>,
-    /// Something unmodelled may have changed any variable / attribute.
+    /// Something unmodelled may have changed any variable / attribute; while
+    /// set, every name may have the integer attribute (see `int_assign`).
     opaque: bool,
     cwd: Cwd,
     stdin: StdinSource,
@@ -305,11 +332,26 @@ impl Env {
     }
 
     /// Assigning `v` to `name` (`name` may carry a subscript): arithmetic if
-    /// `name` may have the integer attribute.
+    /// `name` may have the integer attribute — it was declared `-i` here, or
+    /// the state is opaque (an `eval` / `source` / ... may have given any
+    /// name the attribute; user ruling 2026-11-16, reading A). The paths
+    /// that go through here are listed in the module doc.
     fn int_assign(&self, name: &str, v: &Value) -> Result<(), Cause> {
-        match name.split('[').next() {
-            Some(base) if self.integer.contains(base) => arith::check_value(v, &|n| self.lookup(n)),
-            _ => Ok(()),
+        self.int_assign_if(self.opaque, name, v)
+    }
+
+    /// [`Env::int_assign`] with the "any name may be integer" flag given by
+    /// the caller: a declaration builtin passes the opacity from *before* the
+    /// command, since an option of the command itself (which makes the state
+    /// opaque) gives the integer attribute only to the names it declares, and
+    /// only with an `i` (or an undetermined option) — `int_attr`, which puts
+    /// those names in `integer` first.
+    fn int_assign_if(&self, any_integer: bool, name: &str, v: &Value) -> Result<(), Cause> {
+        let base = name.split('[').next().unwrap_or(name);
+        if any_integer || self.integer.contains(base) {
+            arith::check_value(v, &|n| self.lookup(n))
+        } else {
+            Ok(())
         }
     }
 
@@ -502,6 +544,7 @@ fn resolve(cwd: &Cwd, v: Value) -> Value {
 const DECL_BUILTINS: &[&str] = &["export", "declare", "typeset", "local", "readonly"];
 
 /// An assignment operand of a declaration builtin, as parsed by brush.
+#[derive(Clone)]
 struct DeclArg {
     /// The variable name (`None` for `a[i]=v`).
     name: Option<String>,
@@ -519,6 +562,62 @@ const SPECIAL_BUILTINS: &[&str] = &[
     ":", ".", "break", "continue", "eval", "exec", "exit", "export", "readonly", "return", "set",
     "shift", "times", "trap", "unset", "source",
 ];
+
+/// What a `builtin` / `command` wrapper chain at the start of `argv` runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Wrapped {
+    /// `argv[i]` is the command word that runs (`i == 0`: no wrapper).
+    At(usize),
+    /// `command -v` / `-V`: a lookup that runs nothing.
+    Lookup,
+    /// The chain ends (`builtin` alone), or a word / option of it is not
+    /// determined or not modelled.
+    Unknown,
+}
+
+/// Unwrap `builtin [--] w ...` and `command [-p] [--] w ...` (nested too).
+fn unwrap_wrappers(argv: &[Word]) -> Wrapped {
+    let mut i = 0;
+    loop {
+        let lit = |j: usize| match argv.get(j).map(|w| &w.value) {
+            Some(Value::Literal(s)) => Some(s.as_str()),
+            _ => None,
+        };
+        match lit(i) {
+            Some("builtin") => {
+                i += 1;
+                if lit(i) == Some("--") {
+                    i += 1;
+                }
+            }
+            Some("command") => {
+                i += 1;
+                loop {
+                    match lit(i) {
+                        Some("--") => {
+                            i += 1;
+                            break;
+                        }
+                        Some(o) if o.starts_with('-') && o.len() > 1 => {
+                            let o = &o[1..];
+                            if o.contains(['v', 'V']) {
+                                return Wrapped::Lookup;
+                            }
+                            if !o.chars().all(|c| c == 'p') {
+                                return Wrapped::Unknown;
+                            }
+                            i += 1;
+                        }
+                        Some(_) => break,
+                        None => return Wrapped::Unknown,
+                    }
+                }
+            }
+            Some(_) => return Wrapped::At(i),
+            None => return Wrapped::Unknown,
+        }
+    }
+}
 
 struct Ev {
     out: Vec<SimpleCommand>,
@@ -886,7 +985,10 @@ impl Ev {
             Some(vs) => {
                 let mut exits: Option<Env> = None;
                 for v in vs {
-                    env.bind(var, Value::Literal(v));
+                    // `declare -i v; for v in 1+1` assigns 2: arithmetic.
+                    let v = Value::Literal(v);
+                    env.int_assign(var, &v)?;
+                    env.bind(var, v);
                     self.accums.push(None);
                     let end = self.list(text, &f.body.list, env.clone(), ctx);
                     let acc = self.accums.pop().flatten();
@@ -902,10 +1004,9 @@ impl Ev {
                 Ok(join_opt(exits, env))
             }
             None => self.fix_loop(env, |ev, mut e| {
-                e.forget(
-                    var,
-                    "loop variable over a list not determined from the text",
-                );
+                let why = "loop variable over a list not determined from the text";
+                e.int_assign(var, &undet(format!("{var}: {why}")))?;
+                e.forget(var, why);
                 ev.list(text, &f.body.list, e, ctx)
             }),
         }
@@ -988,14 +1089,18 @@ impl Ev {
         }
         let decl = matches!(argv.first().map(|w| &w.value),
             Some(Value::Literal(n)) if DECL_BUILTINS.contains(&n.as_str()));
-        // argv index -> assignment operand, for declaration builtins.
+        // argv index -> assignment operand, for declaration builtins (also
+        // one behind `builtin` / `command`, whose operands keep Field mode).
         let mut decl_names: BTreeMap<usize, DeclArg> = BTreeMap::new();
         for item in suffix {
             match item {
                 I::Word(w) => argv.push(self.word(text, w, Mode::Field, &mut env)?),
                 I::AssignmentWord(a, w) => {
                     let mode = if decl { Mode::Assign } else { Mode::Field };
-                    if decl {
+                    let wrapped_decl = matches!(unwrap_wrappers(&argv),
+                        Wrapped::At(i) if i > 0 && matches!(&argv[i].value,
+                            Value::Literal(n) if DECL_BUILTINS.contains(&n.as_str())));
+                    if decl || wrapped_decl {
                         let name = match &a.name {
                             ast::AssignmentName::VariableName(n) => Some(n.clone()),
                             ast::AssignmentName::ArrayElementName(..) => None,
@@ -1133,7 +1238,43 @@ impl Ev {
             }
             Some(Value::Literal(n)) => n.as_str(),
         };
+        if name == "builtin" || name == "command" {
+            // The wrapped command's effects (and assignment checks) apply as
+            // if it ran unwrapped. The wrapper still makes the state opaque:
+            // that `command` drops special-builtin semantics and that the
+            // modelling of every wrapped builtin is unchanged by the wrapper
+            // is not verified here, so the earlier, restrictive effect stays.
+            let mut out = match unwrap_wrappers(&sc.argv) {
+                Wrapped::At(i) => match &sc.argv[i].value {
+                    Value::Literal(w) => {
+                        let shifted: BTreeMap<usize, DeclArg> = decl_names
+                            .range(i + 1..)
+                            .map(|(k, d)| (k - i, d.clone()))
+                            .collect();
+                        let args = sc.argv.get(i + 1..).unwrap_or(&[]);
+                        self.builtin_effects(sc, w, args, &shifted, env)?
+                    }
+                    Value::Undetermined(_) => Outcome::same(env),
+                },
+                Wrapped::Lookup | Wrapped::Unknown => Outcome::same(env),
+            };
+            out.ok.make_opaque(&format!("`{name}` ran"));
+            out.fail.make_opaque(&format!("`{name}` ran"));
+            return Ok(out);
+        }
         let args = sc.argv.get(1..).unwrap_or(&[]);
+        self.builtin_effects(sc, name, args, decl_names, env)
+    }
+
+    /// The effects of the builtin (or other command) `name` with `args`.
+    fn builtin_effects(
+        &mut self,
+        sc: &SimpleCommand,
+        name: &str,
+        args: &[Word],
+        decl_names: &BTreeMap<usize, DeclArg>,
+        mut env: Env,
+    ) -> Result<Outcome, Cause> {
         if SPECIAL_BUILTINS.contains(&name) {
             for (n, _) in &sc.assignments {
                 env.forget_operand(n, "prefix assignment of a special builtin")?;
@@ -1183,6 +1324,20 @@ impl Ev {
             }
             n if DECL_BUILTINS.contains(&n) => self.declaration(n, args, decl_names, &mut env)?,
             n if ASSIGNING_BUILTINS.contains(&n) => {
+                // The variables these set without naming them (bare `read`
+                // sets REPLY, bare `mapfile` MAPFILE, getopts OPTARG /
+                // OPTIND): which operand is a name is not modelled, so they
+                // count as assigned whatever the operands are (superset).
+                let implicit: &[&str] = match n {
+                    "read" => &["REPLY"],
+                    "mapfile" | "readarray" => &["MAPFILE"],
+                    "getopts" => &["OPTARG", "OPTIND"],
+                    _ => &[],
+                };
+                for t in implicit {
+                    env.int_assign(t, &undet(format!("a value set by {n}")))?;
+                    env.forget(t, &format!("set by {n}"));
+                }
                 for a in args {
                     match &a.value {
                         Value::Literal(s) => {
@@ -1213,6 +1368,10 @@ impl Ev {
         // An `i` in any option may give the integer attribute (superset); so
         // may an undetermined operand that is not an assignment (`declare
         // $opt n=v` with opt=-i): its value is not known not to be `-i`.
+        // A nameref (`declare -n r=n r=v` assigns `n`) needs no rule here: a
+        // name gets into `integer` only through an option or an undetermined
+        // operand, both of which make the state opaque, so a target that may
+        // be integer was declared while opaque and `start.opaque` holds.
         let int_attr = args.iter().enumerate().any(|(i, a)| match &a.value {
             Value::Literal(s) => s.starts_with('-') && s.contains('i'),
             Value::Undetermined(_) => !decl_names.contains_key(&(i + 1)),
@@ -1265,7 +1424,7 @@ impl Ev {
                             if int_attr {
                                 env.integer.insert(n.clone());
                             }
-                            env.int_assign(n, &a.value)?;
+                            env.int_assign_if(start.opaque, n, &a.value)?;
                             env.forget(n, &format!("assigned by {builtin}"));
                         }
                         None => env.make_opaque(&format!("{builtin} with an undetermined operand")),
@@ -1290,7 +1449,8 @@ impl Ev {
                         Some(n) => format!("{n} + {rhs}"),
                         None => rhs.to_string(),
                     };
-                    env.int_assign(lhs.strip_suffix('+').unwrap_or(lhs), &Value::Literal(expr))?;
+                    let target = lhs.strip_suffix('+').unwrap_or(lhs);
+                    env.int_assign_if(start.opaque, target, &Value::Literal(expr))?;
                     if let Some(n) = lhs.strip_suffix('+') {
                         env.forget_operand(n, "+= appends to a value")?;
                     } else if decl.is_some_and(|d| d.compound) {
@@ -1735,108 +1895,6 @@ impl Ev {
         self.program(&text, &program, env.clone(), &Context::CommandSubstitution)?;
         Ok(())
     }
-}
-
-fn param(expr: &ParameterExpr, praw: &str, env: &mut Env) -> Result<Value, Cause> {
-    match expr {
-        ParameterExpr::Parameter {
-            parameter: Parameter::Named(n),
-            indirect: false,
-        } => Ok(env.lookup(n)),
-        ParameterExpr::Parameter {
-            parameter: Parameter::Positional(_) | Parameter::Special(_),
-            indirect: false,
-        } => Ok(undet(format!("{praw}: positional / special parameter"))),
-        _ => {
-            if has_subst(praw) {
-                return Err(Cause::Unsupported(format!(
-                    "command substitution inside the parameter operation {praw}"
-                )));
-            }
-            arith::check_param(expr, &|n| env.lookup(n))?;
-            if praw.contains('=') || praw.contains('[') {
-                env.havoc_vars("a parameter operation may assign variables");
-            }
-            Ok(undet(format!("{praw}: parameter operation not evaluated")))
-        }
-    }
-}
-
-/// The value of an expanded word, after the checks of its `mode`.
-fn finish(acc: Acc, mode: Mode, env: &Env) -> Value {
-    if let Some(r) = acc.undet {
-        return undet(r);
-    }
-    let full: String = acc.segs.iter().map(|(s, _)| s.as_str()).collect();
-    let unquoted_lits = || {
-        acc.segs
-            .iter()
-            .filter(|(_, k)| *k == Some(Seg::UnquotedLit))
-            .map(|(s, _)| s.as_str())
-    };
-    let starts_with_tilde = matches!(acc.segs.first(),
-        Some((s, Some(Seg::UnquotedLit))) if s.starts_with('~'));
-    // Bash also tilde-expands after `=` / `:` in an argv word shaped like an
-    // assignment (`of=~/f`, `c=x:~/y`), so Field treats those like Assign
-    // (also when the `=` / `:` ends the previous segment).
-    let tilde = starts_with_tilde
-        || unquoted_lits().any(|s| s.contains(":~") || s.contains("=~"))
-        || acc.segs.windows(2).any(|w| {
-            w[0].0.ends_with(['=', ':'])
-                && matches!(&w[1], (s, Some(Seg::UnquotedLit)) if s.starts_with('~'))
-        });
-    if tilde && mode != Mode::Heredoc {
-        return undet("~ expands to a home directory at run time");
-    }
-    match mode {
-        Mode::Heredoc => {
-            if acc.expansion {
-                return undet("unquoted heredoc holds expansions");
-            }
-        }
-        Mode::Assign => {}
-        Mode::Field => {
-            let ifs: Option<String> = if env.opaque {
-                None
-            } else {
-                match env.vars.get("IFS") {
-                    None => Some(" \t\n".to_string()),
-                    Some(Value::Literal(v)) => Some(v.clone()),
-                    Some(Value::Undetermined(_)) => None,
-                }
-            };
-            for (s, k) in &acc.segs {
-                if *k != Some(Seg::UnquotedExp) {
-                    continue;
-                }
-                match &ifs {
-                    None => return undet("unquoted expansion with an undetermined IFS"),
-                    Some(ifs) if s.chars().any(|c| ifs.contains(c)) => {
-                        return undet(format!("unquoted expansion `{s}` is word-split"));
-                    }
-                    _ => {}
-                }
-                if s.contains(['*', '?', '[']) {
-                    return undet(format!("unquoted expansion `{s}` is pathname-expanded"));
-                }
-            }
-            for s in unquoted_lits() {
-                if s.contains(['*', '?', '(']) || (s.contains('[') && full.contains(']')) {
-                    return undet(format!("`{full}` is a glob pattern"));
-                }
-                if s.contains('{')
-                    && full.contains('}')
-                    && (full.contains(',') || full.contains(".."))
-                {
-                    return undet(format!("`{full}` is brace-expanded"));
-                }
-            }
-            if full.is_empty() && !acc.any_quote() {
-                return undet("an empty unquoted expansion removes the word");
-            }
-        }
-    }
-    Value::Literal(full)
 }
 
 /// The span of a redirection: the target word, extended back over the

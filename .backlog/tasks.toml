@@ -2870,6 +2870,8 @@ notes = "Code (crates/tdd/src/proof.rs at 9a989926b): red() = judge_ran(&out) (i
 created_at = 1794764566
 updated_at = 1794764566
 weight = 0.0
+issue_number = 1812
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1812"
 rev = 0
 
 [task.repro]

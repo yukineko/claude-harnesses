@@ -2384,3 +2384,31 @@ exit 101: /yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s
      Running tests/backlog_20261115_heredoc_rust_text_brace_pipe_fp.rs (target/debug/deps/backlog_20261115_heredoc_rust_text_brace_pipe_fp-3da92e4b4c49e59c)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_heredoc_rust_text_brace_pipe_fp`"""
+
+[[task]]
+id = "d292ce6e"
+title = "blastguard FP: quoted heredoc body line starting with a backtick is judged as a command word (true && git commit -F - <<'EOF' ... `import re` ...)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "F18. Original command: relay bgr-837357910fb9 (t4 worker commit), reproduced verbatim by independent author on 0.2.606; RED 0633bb8ec observed by main with reason 'the command word ``import` is an expansion whose value only exists at run time'. Fires only when the heredoc command is not the first bare command and the backtick is at column 0. Readings: (a) defect - quoted heredoc body is data; (b) intended - column-0 backtick deliberately shell. Tell apart: same body mid-line, or bare first git commit, is allow."
+created_at = 1794730885
+updated_at = 1794730885
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_quoted_heredoc_backtick_commit_msg_fp -- --include-ignored"
+rev = "6fbcfcb7fd03418ea503c61e6ab0529ea29e2e29"
+observed_at = 1794730885
+detail = """
+exit 101: -worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.21s
+     Running tests/backlog_20261115_quoted_heredoc_backtick_commit_msg_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_backtick_commit_msg_fp-17f6762ef1215f15)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_heredoc_backtick_commit_msg_fp`"""

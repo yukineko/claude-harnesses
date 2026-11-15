@@ -729,10 +729,11 @@ mod tests {
         let id = queue(&d, "s", None, "/w", "x", "r").unwrap();
         assert_eq!(dismiss(&d, &id, "  "), Err(DismissError::EmptyReason));
         assert!(dismiss(&d, &id, "declined").is_ok());
-        match stop_outcome(&d, "s") {
-            StopOutcome::Allow(Some(msg)) => assert!(msg.contains(&id) && msg.contains("declined")),
-            other => panic!("{other:?}"),
-        }
+        // test-weakening-justified: user ruling 2026-11-16 「表示をやめてほしい」 — dismissed entries are no longer listed on Stop
+        assert_eq!(stop_outcome(&d, "s"), StopOutcome::Allow(None));
+        // The dismissal is still recorded in the queue file.
+        let q = std::fs::read_to_string(queue_path(&d, "s")).unwrap();
+        assert!(q.contains(&id) && q.contains("declined"), "{q}");
     }
 
     const DISMISSED_MARKER: &str = "DISMISSED-BODY-MARKER-line1\nDISMISSED-BODY-MARKER-line2 <<EOF";
@@ -746,16 +747,15 @@ mod tests {
         dismiss(&d, &id, "declined by human").unwrap();
         let qp = queue_path(&d, "s").display().to_string();
         match stop_outcome(&d, "s") {
+            StopOutcome::Allow(None) => {}
             StopOutcome::Allow(Some(msg)) => {
+                // test-weakening-justified: user ruling 2026-11-16 「表示をやめてほしい」 — dismissed entries are no longer listed on Stop
                 assert!(
-                    msg.contains(&id) && msg.contains("declined by human"),
-                    "{msg}"
+                    !msg.contains(&id) && !msg.contains("declined by human") && !msg.contains(&qp),
+                    "dismissed entry listed: {msg}"
                 );
-                assert!(msg.contains(&qp), "queue path missing: {msg}");
-                assert!(
-                    !msg.contains("DISMISSED-BODY-MARKER"),
-                    "command body leaked: {msg}"
-                );
+                assert!(!msg.contains("DISMISSED-BODY-MARKER"), "{msg}");
+                panic!("all-dismissed Stop must be a plain Allow(None), got: {msg}");
             }
             other => panic!("{other:?}"),
         }
@@ -775,9 +775,12 @@ mod tests {
                     msg.contains(&indent(PENDING_MARKER)),
                     "pending command not shown in full: {msg}"
                 );
+                // test-weakening-justified: user ruling 2026-11-16 「表示をやめてほしい」 — dismissed entries are no longer listed on Stop
                 assert!(
-                    msg.contains(&did) && msg.contains("declined by human"),
-                    "{msg}"
+                    !msg.contains(&did)
+                        && !msg.contains("declined by human")
+                        && !msg.contains("dismissed"),
+                    "dismissed entry listed: {msg}"
                 );
                 assert!(
                     !msg.contains("DISMISSED-BODY-MARKER"),

@@ -155,19 +155,24 @@ fn second_dismissal_does_not_erase_the_first_from_stop_text() {
     let d1 = run(&root, &["relay", "dismiss", &id, "--reason", R1], "");
     assert_eq!(d1.status.code(), Some(0), "control: first dismiss: {d1:?}");
     let s1 = stop_text(&root);
+    // test-weakening-justified: user ruling 2026-11-16 「表示をやめてほしい」 — dismissed entries are no longer listed on Stop
     assert!(
-        s1.contains("FIRST-DISMISSAL-REASON"),
-        "control: after one dismiss the Stop text shows it: {s1}"
+        !s1.contains("FIRST-DISMISSAL-REASON") && !s1.contains(&id),
+        "dismissed entry listed on Stop: {s1}"
     );
-    let d2 = run(&root, &["relay", "dismiss", &id, "--reason", R2], "");
+    let _d2 = run(&root, &["relay", "dismiss", &id, "--reason", R2], "");
     let s2 = stop_text(&root);
+    // test-weakening-justified: user ruling 2026-11-16 「表示をやめてほしい」 — dismissed entries are no longer listed on Stop
     assert!(
-        s2.contains("FIRST-DISMISSAL-REASON"),
-        "after a second `relay dismiss {id}` (exit {:?}, stdout {:?}, stderr {:?}) the first \
-         dismissal reason is gone from the Stop text: {s2}",
-        d2.status.code(),
-        String::from_utf8_lossy(&d2.stdout),
-        String::from_utf8_lossy(&d2.stderr)
+        !s2.contains("FIRST-DISMISSAL-REASON") && !s2.contains("SECOND-DISMISSAL-REASON"),
+        "dismissed reasons listed on Stop: {s2}"
+    );
+    // Re-anchored property (b82e882a): the second dismissal does not erase the
+    // first — both reasons stay in the queue file.
+    let q = std::fs::read_to_string(root.join("relay").join(format!("{SESSION}.jsonl"))).unwrap();
+    assert!(
+        q.contains("FIRST-DISMISSAL-REASON") && q.contains("SECOND-DISMISSAL-REASON"),
+        "queue file lost a dismissal reason: {q}"
     );
 }
 

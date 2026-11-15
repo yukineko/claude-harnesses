@@ -17,8 +17,8 @@ mod program_source;
 use exec_fds::{exec_opened_fds, ExecFd};
 use node_source::{is_node_head, node_program_source};
 use program_source::{
-    interpreter_program_source, python_program_source, shell_program_source,
-    shell_startup_file_values, source_program_source, ProgramSource,
+    interpreter_program_source, python_head_reads_stdin, python_program_source,
+    shell_program_source, shell_startup_file_values, source_program_source, ProgramSource,
 };
 
 /// True if this stage names a program FILE for the interpreter to run, rather
@@ -165,10 +165,19 @@ fn stdin_exec_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // An fd `exec` opens for the rest of the line (`exec 3< <(…); bash <&3`,
     // backlog 72872200) is read across the statement boundary; see
     // `exec_opened_fds`.
+    //
+    // An fd `exec` opens on a here-string or a quoted here-document
+    // (`exec 3<<< '…'; bash <&3`, backlog e686a85e) is followed through the
+    // statements and its text judged as the reader's program; see
+    // `cross_statement_fd_verdict`. The fds it resolved are left to it below.
+    let tracking = exec_fds::cross_statement_fd_verdict(cmd, depth, ctx);
+    if let Some(deny) = acc.record(tracking.verdict) {
+        return deny;
+    }
     let stages = procsub_stages(cmd);
     let exec_fds = exec_opened_fds(&stages);
     for stage in &stages {
-        let procsubs = procsub_programs(stage, &exec_fds);
+        let procsubs = procsub_programs(stage, &exec_fds, &tracking.resolved);
         for synthetic in &procsubs.pipelines {
             if let Some(deny) = acc.record(analyze_interpreter_stdin_exec(synthetic, depth, ctx)) {
                 return deny;
@@ -353,6 +362,11 @@ tell whether the shell runs that stdin or a script file",
                     node_program_source(&words)
                 };
                 match source {
+                    ProgramSource::File(_) | ProgramSource::Inline
+                        if python_head_reads_stdin(&tokens, idx, &words, stage) =>
+                    {
+                        false
+                    }
                     ProgramSource::File(_) => true,
                     ProgramSource::Stdin => false,
                     ProgramSource::Inline => stage_has_program_operand(rest),
@@ -729,9 +743,14 @@ struct ProcsubPrograms {
 /// `exec_fds` ([`exec_opened_fds`]): a substitution there is judged as the
 /// program exactly as an in-stage one is. An fd above 2 that stdin is
 /// duplicated from and that nothing on the line opens (`bash <&3`), or that is
-/// opened on a here-document / here-string, cannot be read: when the reader
-/// takes its program from stdin that is an Ask, never an Allow. An fd opened on
-/// a file (`exec 3< f; bash <&3`) is that file, read as `bash < f` is.
+/// opened on a here-document / here-string that `cross_statement_fd_verdict`
+/// did not resolve (`resolved_here_text`: fd 0, or an fd mentioned in a shape it
+/// does not read), cannot be read: when the reader takes its program from stdin
+/// that is an Ask, never an Allow. A resolved here-text fd is judged by that
+/// pass, which reads it as the inline text (backlog e686a85e). An fd opened on
+/// a file (`exec 3< f; bash <&3`) is that file, read as `bash < f` is. A
+/// program operand naming an fd (`bash /dev/fd/3`, `source /dev/stdin`) is
+/// read the same way as `<&N`; see `exec_fds::program_operand_fds`.
 ///
 /// zsh's `=(…)` (a substitution handed over as a temporary FILE) is read as
 /// `<(…)`: `zsh =(…)` runs the inner command's output just as `zsh <(…)` does.
@@ -740,14 +759,21 @@ struct ProcsubPrograms {
 ///
 /// Every pipeline holds only the TEXT of a substitution (one nesting level
 /// down), so the recursion through [`analyze_interpreter_stdin_exec`] ends.
-fn procsub_programs(stage: &str, exec_fds: &[(u32, ExecFd)]) -> ProcsubPrograms {
+fn procsub_programs(
+    stage: &str,
+    exec_fds: &[(u32, ExecFd)],
+    resolved_here_text: &[u32],
+) -> ProcsubPrograms {
     let mut out = ProcsubPrograms::default();
     let words = super::quote_aware_words(stage);
     let exec_stdin = exec_fds.iter().any(|(fd, _)| *fd == 0);
     if !exec_stdin
-        && !words
-            .iter()
-            .any(|w| w.contains("<(") || w.contains("=(") || w.contains('&'))
+        && !words.iter().any(|w| {
+            w.contains("<(")
+                || w.contains("=(")
+                || w.contains('&')
+                || exec_fds::program_operand_fd(w).is_some()
+        })
     {
         return out;
     }
@@ -768,8 +794,8 @@ fn procsub_programs(stage: &str, exec_fds: &[(u32, ExecFd)]) -> ProcsubPrograms 
     let mut argv: Vec<usize> = Vec::new();
     let mut fd_procsub: Vec<(u32, usize)> = Vec::new();
     let mut dup_into_stdin: Vec<u32> = Vec::new();
-    // Every other fd this stage opens itself, and whether it is a readable
-    // FILE (false: a here-document / here-string, whose text is not read here).
+    let mut unreadable_stdin: Vec<String> = Vec::new();
+    // Other fds this stage opens: readable FILE (false: here-document / here-string).
     let mut opened_in_stage: Vec<(u32, bool)> = Vec::new();
     let mut stdin_redirected = false;
     let mut j = r + 1;
@@ -800,8 +826,10 @@ fn procsub_programs(stage: &str, exec_fds: &[(u32, ExecFd)]) -> ProcsubPrograms 
                 }
             }
             "<&" | ">&" if effective_fd == 0 => {
-                if let Ok(n) = target.parse::<u32>() {
+                if let Some(n) = exec_fds::dup_fd_number(target) {
                     dup_into_stdin.push(n);
+                } else if let Some(why) = exec_fds::dynamic_dup_reason(target) {
+                    unreadable_stdin.push(why);
                 }
             }
             "<<" | "<<-" | "<<<" => opened_in_stage.push((effective_fd, false)),
@@ -814,31 +842,10 @@ fn procsub_programs(stage: &str, exec_fds: &[(u32, ExecFd)]) -> ProcsubPrograms 
         .filter(|(fd, _)| *fd == 0 || dup_into_stdin.contains(fd))
         .map(|&(_, idx)| idx)
         .collect();
-    // Stdin taken from an fd the stage does not open itself: an `exec` earlier
-    // on the line, or nothing at all (an inherited fd blastguard cannot see).
+    // Stdin from an fd the stage does not open itself: an earlier `exec`, or an inherited fd.
     let mut exec_stdin_bodies: Vec<String> = Vec::new();
-    let mut unreadable_stdin: Vec<String> = Vec::new();
-    let from_exec = |n: u32, bodies: &mut Vec<String>, unreadable: &mut Vec<String>| {
-        let opened: Vec<&ExecFd> = exec_fds
-            .iter()
-            .filter(|(f, _)| *f == n)
-            .map(|(_, e)| e)
-            .collect();
-        if opened.is_empty() && n > 2 {
-            unreadable.push(format!(
-                "its stdin is duplicated from fd {n}, which nothing on this line opens"
-            ));
-        }
-        for e in opened {
-            match e {
-                ExecFd::Procsub(body) => bodies.push(body.clone()),
-                ExecFd::File => {}
-                ExecFd::Unreadable => unreadable.push(format!(
-                    "its stdin is fd {n}, which `exec` opens on text blastguard does not read \
-(a here-document, a here-string or another unresolved fd)"
-                )),
-            }
-        }
+    let from_exec = |n: u32, what: &str, bodies: &mut Vec<String>, why: &mut Vec<String>| {
+        exec_fds::exec_fd_reads(exec_fds, resolved_here_text, n, what, bodies, why);
     };
     for &n in &dup_into_stdin {
         if n == 0 || fd_procsub.iter().any(|(f, _)| *f == n) {
@@ -853,10 +860,12 @@ here-string blastguard does not read as this reader's program"
             }
             continue;
         }
-        from_exec(n, &mut exec_stdin_bodies, &mut unreadable_stdin);
+        let what = format!("its stdin is duplicated from fd {n}");
+        from_exec(n, &what, &mut exec_stdin_bodies, &mut unreadable_stdin);
     }
     if !stdin_redirected {
-        from_exec(0, &mut exec_stdin_bodies, &mut unreadable_stdin);
+        let (bodies, why) = (&mut exec_stdin_bodies, &mut unreadable_stdin);
+        from_exec(0, "its stdin is fd 0", bodies, why);
     }
     let operand_procsubs: Vec<usize> = argv
         .iter()
@@ -864,7 +873,7 @@ here-string blastguard does not read as this reader's program"
         .filter(|&idx| procsub_body(refs[idx]).is_some())
         .collect();
     let operands: Vec<&str> = argv.iter().map(|&idx| refs[idx]).collect();
-    let source = if head == "source" || head == "." {
+    let mut source = if head == "source" || head == "." {
         source_program_source(&operands)
     } else if is_shell(&head) {
         shell_program_source(&operands)
@@ -873,6 +882,19 @@ here-string blastguard does not read as this reader's program"
     } else {
         interpreter_program_source(&operands)
     };
+    let fd_texts: Vec<(u32, &str)> = (fd_procsub.iter())
+        .filter_map(|&(f, t)| procsub_body(refs[t]).map(|b| (f, b)))
+        .collect();
+    let fd_reads = exec_fds::program_operand_fds(
+        &source,
+        &operands,
+        (&fd_texts, &opened_in_stage),
+        (exec_fds, resolved_here_text),
+        (stage.trim(), reader),
+    );
+    if fd_reads.stdin {
+        source = ProgramSource::Stdin;
+    }
     let programs: Vec<usize> = match &source {
         ProgramSource::File(k) => {
             let k = *k;
@@ -903,6 +925,8 @@ output is that program",
         .iter()
         .filter_map(|&idx| procsub_body(refs[idx]))
         .collect();
+    inners.extend(fd_reads.bodies.iter().map(String::as_str));
+    out.undetermined.extend(fd_reads.undetermined);
     // Stdin from an `exec`-opened fd, or from an fd nothing opens: only when
     // the reader may take its program from stdin.
     if matches!(

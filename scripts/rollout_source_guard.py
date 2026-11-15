@@ -9,6 +9,13 @@ deployed GATE turned every Ask into Allow. Only the post-hoc mirror check
 noticed. The pre-push mutation stays where it is (user ruling), so the
 DEPLOY side has to refuse.
 
+Since the 2026-11-14 user ruling, check-fail-open-mutation.py no longer
+writes the invoking tree. It mutates and tests a scratch temporary copy
+outside the tree, with its own CARGO_TARGET_DIR, so a rollout of this tree
+cannot build that mutant. It still announces each run through the marker
+below, which this guard keeps honouring as a conservative second barrier.
+The dirt checks here guard against any other modified source.
+
 What "the source is the committed tree" means here, and how it is decided:
 
   snapshot  (before anything is copied)
@@ -17,8 +24,9 @@ What "the source is the committed tree" means here, and how it is decided:
       (non-ignored) change per `git status`;
     - no fail-open mutation is in flight: `<git-dir>/fail-open-mutation.active`
       is absent. check-fail-open-mutation.py creates it, and bumps the
-      integer in `<git-dir>/fail-open-mutation.seq`, BEFORE it writes a
-      mutated file, and removes it only after the revert is confirmed.
+      integer in `<git-dir>/fail-open-mutation.seq`, BEFORE it writes the
+      mutant (into its scratch copy), and removes it only after the cleanup is
+      confirmed (scratch copy gone, the tree's target file byte-identical).
     Prints a token "<head> <seq>" on stdout.
 
   verify    (after the copy, after the build and before the binary swap,
@@ -126,8 +134,9 @@ def problems_now(repo):
     active, seq, marker = mutation_state(repo)
     if active:
         probs.append(f"a fail-open mutation is in flight ({marker} exists). "
-                     "check-fail-open-mutation.py rewrites a GATE source in place and "
-                     "reverts it afterwards; building now would deploy the mutant. "
+                     "check-fail-open-mutation.py builds a mutated GATE source (in a "
+                     "scratch copy since the 2026-11-14 ruling); the rollout refuses "
+                     "while that runs as a conservative barrier against deploying it. "
                      "If no mutation run is alive, the marker is stale: confirm the "
                      "tree is clean (git status) and remove it by hand.")
     return probs, seq

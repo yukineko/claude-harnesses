@@ -116,7 +116,6 @@ fn mismatched(feeder: &str, shapes: &[&str], want: &str, tag: &str) -> Vec<Strin
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 harmful program piped into a top-level for loop whose body has a closed nested compound before the reader is Allow — remove the ignore when fixed"]
 fn harmful_program_piped_to_for_body_with_nested_compound_is_deny() {
     let bad = mismatched(HARM, FAIL_OPEN, "deny", "red");
     assert!(

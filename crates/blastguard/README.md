@@ -503,9 +503,9 @@ session adjudicates it instead of forgetting it (`src/relay.rs`):
 5. **Dismiss (`blastguard relay dismiss <id> --reason "<text>"`).** For a prompt
    the human declined, or a command that cannot be re-run. A blank or missing
    reason is refused (exit 2), as is an unknown id; an unreadable queue is
-   exit 3. Every dismissal of the session is shown on each later Stop
-   (`systemMessage` when nothing else is pending, appended to the block reason
-   otherwise).
+   exit 3. The dismissal is recorded in the queue file but is no longer
+   shown on later Stops: when nothing is pending, Stop allows; otherwise it
+   lists only the pending entries and blocks.
 
 What it never does: it never executes a command (a tool that ran the stored
 command inside one Bash call would hide it from blastguard — the main agent runs

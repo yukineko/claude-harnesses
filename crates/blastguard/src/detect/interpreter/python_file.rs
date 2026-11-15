@@ -57,7 +57,7 @@ pub(in crate::detect) struct PythonFileVerdict {
 ///     an f-string replacement field is judged too;
 ///   * a call whose command is computed ([`shell_calls::computed_shell_call`]:
 ///     `os.system(cmd)`) is an Ask;
-///   * a [`super::CODE_BUILDING`] marker in the code view (`exec(`, `eval(`,
+///   * a [`super::code_building::CODE_BUILDING`] marker in the code view (`exec(`, `eval(`,
 ///     `__import__`, …) is an Ask: the text is not the program that runs;
 ///   * a runner referenced without being called (`f(os.system)`, a module
 ///     like `os` passed as a value; [`sem::escaped_runner`]) is an Ask;
@@ -149,7 +149,10 @@ pub(in crate::detect) struct PythonStdinReading {
     /// True ONLY when the parser shows no string of the program can reach a
     /// shell or a process: the body holds no [`super::SHELL_STRING_EXEC_MARKERS`]
     /// entry or dynamic-execution marker anywhere (strings included), and
-    /// passes [`python_strings_never_reach_a_shell`]. The contents of its
+    /// passes [`python_strings_never_reach_a_shell`] — or the lexer shows it
+    /// only prints to its stdout ([`python_program_only_prints`]), when a
+    /// marker such as a bare backtick inside a literal is that literal's text,
+    /// not a call (backlog b2330a21). The contents of its
     /// string literals are then data, not program text, so the caller's
     /// program-text scan (`interpreter_code_verdict`) does not descend into
     /// them as code (case G: a printed `"shutil.copy2('a','/etc/hosts')"`
@@ -180,9 +183,10 @@ pub(in crate::detect) fn python_stdin_body_reading(
     );
     Some(PythonStdinReading {
         verdict,
-        strings_are_data: !super::runs_shell_strings(body)
+        strings_are_data: (!super::runs_shell_strings(body)
             && !super::has_dynamic_code_execution(body)
-            && python_strings_never_reach_a_shell(body),
+            && python_strings_never_reach_a_shell(body))
+            || python_program_only_prints(body),
     })
 }
 
@@ -375,7 +379,7 @@ const DATA_ONLY_MODULES: &[&str] = &[
 /// guessed from the shell spelling:
 ///   * the program tokenises ([`code_view`]): string and comment boundaries
 ///     are known. A program that does not tokenise answers `false`;
-///   * no [`super::CODE_BUILDING`] marker in the raw text or in the code view
+///   * no [`super::code_building::CODE_BUILDING`] marker in the raw text or in the code view
 ///     (`exec(`, `eval(`, `getattr(`, `__import__`, …);
 ///   * no relative import and no star import from a runner module, and every
 ///     imported module is in [`DATA_ONLY_MODULES`];
@@ -403,6 +407,260 @@ pub(super) fn python_strings_never_reach_a_shell(program: &str) -> bool {
         return false;
     }
     sem::references_runner(&sem::rewrite(&code, &names)).is_none()
+}
+
+/// The only names a [`python_program_only_prints`] program may use: keywords
+/// that only steer control flow or build values, builtins that only compute a
+/// value, `print` and its `sep` / `end` / `flush` keywords. Deliberately absent: `open`, `input`, `exec`, `eval`, `compile`,
+/// `getattr`, `vars`, `globals`, `type`, `help`, `breakpoint`, `__import__`,
+/// `import` / `from` / `def` / `class` / `with` / `try` / `lambda`, and `file`
+/// (`print(…, file=f)` writes elsewhere). A closed list: any other name keeps
+/// the program out of that reading.
+const PRINT_ONLY_NAMES: &[&str] = &[
+    "if",
+    "elif",
+    "else",
+    "for",
+    "in",
+    "while",
+    "not",
+    "and",
+    "or",
+    "is",
+    "None",
+    "True",
+    "False",
+    "pass",
+    "break",
+    "continue",
+    "print",
+    "sep",
+    "end",
+    "flush",
+    "len",
+    "str",
+    "int",
+    "float",
+    "bool",
+    "list",
+    "dict",
+    "tuple",
+    "set",
+    "frozenset",
+    "range",
+    "enumerate",
+    "zip",
+    "sorted",
+    "reversed",
+    "min",
+    "max",
+    "sum",
+    "abs",
+    "repr",
+    "round",
+    "any",
+    "all",
+    "chr",
+    "ord",
+    "hex",
+    "bin",
+    "oct",
+    "divmod",
+];
+
+/// Attribute names a [`python_program_only_prints`] program may read: methods
+/// of `str` / `bytes` / `list` / `dict`, none of which does I/O. A closed list:
+/// `.write`, `.gi_frame`, `.f_globals` and every other attribute keep the
+/// program out of that reading (an attribute of a generator, frame or
+/// exception object can lead back to `open`).
+const PRINT_ONLY_ATTRIBUTES: &[&str] = &[
+    "join",
+    "split",
+    "rsplit",
+    "strip",
+    "lstrip",
+    "rstrip",
+    "upper",
+    "lower",
+    "replace",
+    "format",
+    "startswith",
+    "endswith",
+    "splitlines",
+    "count",
+    "find",
+    "rfind",
+    "index",
+    "rindex",
+    "partition",
+    "rpartition",
+    "center",
+    "ljust",
+    "rjust",
+    "zfill",
+    "title",
+    "capitalize",
+    "casefold",
+    "swapcase",
+    "isdigit",
+    "isalpha",
+    "isalnum",
+    "isspace",
+    "isupper",
+    "islower",
+    "removeprefix",
+    "removesuffix",
+    "encode",
+    "decode",
+    "hex",
+    "append",
+    "extend",
+    "insert",
+    "pop",
+    "sort",
+    "reverse",
+    "copy",
+    "remove",
+    "clear",
+    "items",
+    "keys",
+    "values",
+    "get",
+    "setdefault",
+    "update",
+];
+
+/// True ONLY when the Python `program` provably has no effect but writing
+/// text to its own stdout, read with the Python lexer ([`sem::lex`]), so no
+/// string of it can reach a shell, a process or a file (backlog b2330a21: a
+/// `print("x >> \`y\`")` body of `python3 - <<'EOF'` is not a redirect).
+/// Every condition is positive, an allowlist:
+///   * the program tokenises ([`code_view`]) and holds no f-string (its
+///     replacement fields are code the lexer does not split into names);
+///   * every name (keyword arguments included) is on [`PRINT_ONLY_NAMES`] or a
+///     number, and every attribute is on [`PRINT_ONLY_ATTRIBUTES`]; no name or
+///     attribute holds `__`. A name the program binds itself is NOT admitted:
+///     a binding that does not run (`if False:` / `open = 1`) leaves the
+///     builtin of that name in place, and Python folds a non-ASCII name to
+///     ASCII (NFKC), so only the listed ASCII spellings pass. So there is no
+///     import, no `open`, no `file=` and no runner, and every name only ever
+///     holds a value built from those;
+///   * every punctuation character is an ordinary operator or bracket (no
+///     `@`, `` ` ``, `$`, `\`, `?`).
+///
+/// It says nothing about where that stdout goes: the caller must know the
+/// reader's stdout is not redirected, piped or captured
+/// ([`super::super::heredoc::python_stdin_here_document`]'s shape).
+pub(in crate::detect) fn python_program_only_prints(program: &str) -> bool {
+    let program = &*python_newlines(program);
+    if code_view(program).is_none() {
+        return false;
+    }
+    let toks = sem::lex(program);
+    let number = |w: &str| w.chars().next().is_some_and(|c| c.is_ascii_digit());
+    toks.iter().enumerate().all(|(k, t)| match t {
+        sem::Tok::Str { fstring, .. } => !fstring,
+        sem::Tok::Nl => true,
+        sem::Tok::Punct(c) => "()[]{},:.=+-*/%<>!&|^~".contains(*c),
+        sem::Tok::Name { text, .. } => {
+            if text.contains("__") {
+                return false;
+            }
+            let mut parts = text.split('.');
+            let head = parts.next().unwrap_or("");
+            let after_dot = k > 0 && toks[k - 1] == sem::Tok::Punct('.');
+            let head_ok = if after_dot {
+                PRINT_ONLY_ATTRIBUTES.contains(&head)
+            } else {
+                number(head) || PRINT_ONLY_NAMES.contains(&head)
+            };
+            head_ok && parts.all(|p| number(p) || PRINT_ONLY_ATTRIBUTES.contains(&p))
+        }
+    })
+}
+
+/// Modules whose IMPORT into a `python -c` program means the program may run
+/// the text on ITS stdin as Python: an interactive console or a debugger that
+/// reads stdin, or the `builtins` namespace used to reach an executor by
+/// string. Matched against the modules a program imports ([`sem::bindings`]'s
+/// `imported`: an `import X`, `import X as y` or `from X import …`), so an
+/// alias or a `from X import *` still counts. A CLOSED list; a module not on
+/// it (`sys`, `json`, `re`, …) read as a value loader is not a match.
+const STDIN_CONSOLE_MODULES: &[&str] = &[
+    "code", "codeop", "pdb", "bdb", "_pyrepl", "pyrepl", "IPython", "ipdb", "pudb", "bpython",
+    "ptpython", "builtins",
+];
+
+/// Builtins that execute text as code when CALLED as a bare name — not an
+/// attribute such as `re.compile`, a dict key `d["compile"]`, or a plain
+/// variable `code = …`: a program calling one can be fed `sys.stdin.read()`.
+/// A CLOSED list. `__import__("code").interact()` is caught here, not by an
+/// import statement.
+const STDIN_EXEC_BUILTINS: &[&str] = &["exec", "eval", "compile", "breakpoint", "__import__"];
+
+/// Bare names whose mere reference reaches code execution through a path that
+/// cannot be followed statically — a name resolved from a string, or the
+/// builtins namespace reachable without an import (`__builtins__["exec"](…)`,
+/// `getattr(o, s)(…)`). The namespace accessors `globals` / `locals` / `vars`
+/// are on it too: bound to a name (`g = globals; g()["exec"](input())`) they
+/// reach `exec` without the call `exec(` ever appearing (backlog 0154ed31).
+/// Judged restrictively: undetermined ⇒ stdin executes. A CLOSED list.
+const STDIN_DYNAMIC_NAMES: &[&str] = &["getattr", "__builtins__", "globals", "locals", "vars"];
+
+/// Whether a literal `python -c` program may run its stdin as a Python
+/// program (an interactive console, a debugger, or `exec`/`eval`/`compile`
+/// of what it reads).
+///
+/// Fail-closed: a program that does not tokenise ([`python_program_tokenises`])
+/// is `true` (undetermined). Otherwise it matches only REAL references, read
+/// with the Python lexer ([`sem::lex`]) so a word inside a string literal (a
+/// dict key `d["code"]`), an attribute (`re.compile`, `json.load(…)["code"]`)
+/// or a plain variable (`code = sys.stdin.read()`) is NOT a match. It is
+/// `true` when:
+///   * an `import` / `from … import` names a [`STDIN_CONSOLE_MODULES`] module
+///     ([`sem::bindings`], aliases and `from … import` included);
+///   * a bare-name call to a [`STDIN_EXEC_BUILTINS`] builtin (`exec(`, `eval(`,
+///     `compile(` as a builtin rather than `re.compile`, `breakpoint(`,
+///     `__import__(`);
+///   * a reference to a [`STDIN_DYNAMIC_NAMES`] dynamic-execution reach.
+///
+/// LIMIT (CLAUDE.md §4): detection is by static reference. A program that
+/// reaches an executor through a path these closed lists do not name — a name
+/// built by string concatenation then resolved off an object other than
+/// `builtins` / `__builtins__`, say — is NOT caught here and is read as
+/// treating stdin as data; the `builtins` / `__builtins__` / `getattr` / `globals` / `locals` / `vars` reaches
+/// cover the dynamic shapes that are statically visible. A program that
+/// forwards its stdin to a child process or a shell (`os.system(input())`) is
+/// out of scope here (filed separately as backlog 7cccad0a).
+pub(in crate::detect) fn python_program_enters_stdin_console(program: &str) -> bool {
+    let program = &*python_newlines(program);
+    if !python_program_tokenises(program) {
+        return true;
+    }
+    if sem::bindings(program)
+        .imported
+        .iter()
+        .any(|m| STDIN_CONSOLE_MODULES.contains(&m.as_str()))
+    {
+        return true;
+    }
+    let toks = sem::lex(program);
+    toks.iter().enumerate().any(|(k, t)| {
+        let sem::Tok::Name { text, .. } = t else {
+            return false;
+        };
+        // The lexer folds dotted access (`re.compile`) into one Name whose
+        // text holds the `.`, and a method on a call result (`f().exec(…)`)
+        // has a leading `.` token: neither is a bare builtin.
+        if text.contains('.') || (k > 0 && toks[k - 1] == sem::Tok::Punct('.')) {
+            return false;
+        }
+        if STDIN_DYNAMIC_NAMES.contains(&text.as_str()) {
+            return true;
+        }
+        STDIN_EXEC_BUILTINS.contains(&text.as_str())
+            && toks.get(k + 1) == Some(&sem::Tok::Punct('('))
+    })
 }
 
 /// True when `program` tokenises as Python ([`code_view`] is `Some`): every

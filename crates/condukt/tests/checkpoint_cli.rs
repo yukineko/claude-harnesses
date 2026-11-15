@@ -8,6 +8,8 @@
 //! subcommands exist (unrecognized subcommand) and passes once wired = a
 //! genuine Fail->Pass reproduction oracle for the wiring task.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -47,10 +49,16 @@ impl Fixture {
     }
 
     fn condukt(&self, args: &[&str]) -> std::process::Output {
+        common::prime_if_running(args, &self.home, common::TESTSCOPE_SESSION);
         harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
+            .env(
+                "CONDUKT_TESTSCOPE_LEDGER",
+                common::testscope_ledger(&self.home),
+            )
+            .env("CLAUDE_CODE_SESSION_ID", common::TESTSCOPE_SESSION)
             .output()
             .expect("spawn condukt")
     }
@@ -158,7 +166,7 @@ impl Fixture {
 }
 
 #[test]
-fn verified_task_that_fails_auto_rolls_back_and_journals() {
+fn verified_task_that_fails_stays_failed_without_restore_and_journals() {
     let fx = Fixture::new("autorollback");
     let decomp = write_decomp(&fx);
     let init = fx.condukt(&["state", "init", "--file", decomp.to_str().unwrap()]);
@@ -173,30 +181,35 @@ fn verified_task_that_fails_auto_rolls_back_and_journals() {
     ]);
     assert!(verify.status.success(), "verify failed: {verify:?}");
 
-    // A verified task that now FAILS must auto-roll-back to the checkpoint.
+    // A verified task that now FAILS changes only itself (backlog b8aa9d43):
+    // no checkpoint restore.
     let fail = fx.condukt(&[
         "state", "set", "--run", &rid, "--task", "t1", "--status", "failed",
     ]);
     assert!(fail.status.success(), "fail-set failed: {fail:?}");
 
-    // Run-state restored to the snapshot: task is pending again, not failed.
+    // The task ends `failed` — NOT restored to the pending snapshot.
     let show = fx.condukt(&["state", "show", "--run", &rid]);
     let after = String::from_utf8_lossy(&show.stdout);
     assert!(
-        after.contains("\"status\": \"pending\"") || after.contains("Pending"),
-        "auto-rollback did not restore snapshot: {after}"
+        after.contains("\"status\": \"failed\""),
+        "task is not failed after verified->failed: {after}"
     );
     assert!(
-        !after.contains("failed"),
-        "task still failed after auto-rollback: {after}"
+        !after.contains("\"status\": \"pending\""),
+        "verified->failed restored the snapshot: {after}"
     );
 
-    // The auto-rollback is journaled.
+    // The transition is journaled as verified_failed, not as an auto_rollback.
     let journal = fx.state_dir_journal(&rid);
     let jtext = std::fs::read_to_string(&journal).unwrap();
     assert!(
-        jtext.contains("auto_rollback"),
-        "no auto_rollback journal entry: {jtext}"
+        jtext.contains("verified_failed"),
+        "no verified_failed journal entry: {jtext}"
+    );
+    assert!(
+        !jtext.contains("auto_rollback"),
+        "a restore was journaled although none happens: {jtext}"
     );
 }
 

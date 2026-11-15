@@ -77,7 +77,6 @@ fn run_as(command: &str, home: &Home, subagent: bool) -> (String, String) {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 exec 3<<< harmful; bash <&3 is Ask in main (expected Deny) — remove the ignore when fixed"]
 fn exec_fd_herestring_then_shell_reading_fd_is_deny_in_main() {
     let home = unique_home("red");
     let cmd = "exec 3<<< 'chmod 777 /etc/hosts'; bash <&3";

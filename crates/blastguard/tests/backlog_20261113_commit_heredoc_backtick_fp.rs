@@ -80,7 +80,6 @@ EOF\n\
 echo \"o3 commit=$?\"; git log --oneline -1; git status --short";
 
 #[test]
-#[ignore = "RED: commit heredoc backtick FP (2026-11-13) — remove the ignore when fixed"]
 fn quoted_heredoc_commit_message_with_backticks_is_not_denied_or_asked() {
     let (d, r) = verdict(OBSERVED);
     assert!(

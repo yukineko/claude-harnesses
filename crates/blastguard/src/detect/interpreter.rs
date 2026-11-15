@@ -4,6 +4,7 @@ use super::{
 };
 use crate::exclude;
 
+mod code_building;
 mod comments;
 mod inert_literal;
 mod invocation;
@@ -16,14 +17,17 @@ mod python_semantics;
 mod shell_calls;
 #[cfg(test)]
 mod unit_tests;
+use code_building::code_building_marker;
+#[cfg(test)]
+use code_building::compile_call_is_regex_method;
 use comments::strip_hash_comments;
 use inert_literal::{has_dynamic_code_execution, inert_literal_bodies};
 pub(super) use invocation::analyze_code_interpreter;
 use osascript::osascript_app_delete;
 pub(super) use osascript::osascript_program_delete;
 pub(super) use python_file::{
-    python_file_body_verdict, python_redirect_view, python_stdin_body_reading,
-    python_written_program_verdict,
+    python_file_body_verdict, python_program_enters_stdin_console, python_program_only_prints,
+    python_redirect_view, python_stdin_body_reading, python_written_program_verdict,
 };
 pub(super) use shell_calls::python_body_segment_verdict;
 
@@ -1542,7 +1546,7 @@ read, so it cannot tell whether anything here is irreversible"
     // placeholder", and the mirror closure in
     // `tests/inline_eval_mirror_closure.rs` would be re-opened through a
     // spelling it does not enumerate.
-    // NOR IS TEXT THAT BUILDS ITS OWN CODE: see [`CODE_BUILDING`].
+    // NOR IS TEXT THAT BUILDS ITS OWN CODE: see [`code_building::CODE_BUILDING`].
     for payload in payloads {
         if let Some(marker) = code_building_marker(payload) {
             return Decision::ask(format!(
@@ -1668,266 +1672,4 @@ anything here is irreversible"
     // unchanged. Nothing beyond that downgrade was ruled; the rest still needs
     // the ruling again.
     Decision::Allow
-}
-
-fn is_python_ident_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
-/// Whether the `compile(` occurrence at byte offset `at` of `payload` is a
-/// regex-module method call, `re.compile(` or `regex.compile(`, and so not the
-/// builtin `compile` that turns a string into code (backlog 80b18990).
-///
-/// `at` is an offset into the ASCII-lowercased payload; lowercasing preserves
-/// byte offsets, and every check here is made case-sensitively on the original
-/// text (Python is case-sensitive: `RE.compile(` or `re.COMPILE(` is not
-/// exempt).
-///
-/// Accepted only when ALL of these hold:
-/// - the text at `at` is exactly `compile(`, immediately preceded by `re.` or
-///   `regex.`, and the character before the module name is neither an
-///   identifier character nor `.` (so `myre.compile(` and `x.re.compile(` are
-///   not exempt);
-/// - `module_bound_only_by_import` establishes that the name is bound by a
-///   plain module-level `import` and is used nowhere else except as
-///   `name.attr` reads.
-///
-/// What this does NOT prove: that the program cannot reach code execution by
-/// some other route (e.g. `c = builtins.compile; c(src, 'f', 'exec')`, which
-/// contains no `compile(` at all, or replacing `re.compile` through a module
-/// handle obtained without writing the name). Such programs already evade the
-/// `CODE_BUILDING` scan with or without this helper; this helper only removes
-/// the misattribution of the regex call and never exempts an occurrence it
-/// cannot positively identify — anything it does not recognise returns
-/// `false`, so the marker still fires.
-fn compile_call_is_regex_method(payload: &str, at: usize) -> bool {
-    let Some(tail) = payload.get(at..) else {
-        return false;
-    };
-    if !tail.starts_with("compile(") {
-        return false;
-    }
-    let Some(head) = payload.get(..at) else {
-        return false;
-    };
-    for module in ["re", "regex"] {
-        let Some(before_module) = head.strip_suffix('.').and_then(|h| h.strip_suffix(module))
-        else {
-            continue;
-        };
-        if before_module
-            .chars()
-            .next_back()
-            .is_some_and(|c| is_python_ident_char(c) || c == '.')
-        {
-            continue;
-        }
-        return module_bound_only_by_import(payload, module);
-    }
-    false
-}
-
-/// NOR IS TEXT THAT BUILDS ITS OWN CODE ([`interpreter_program_verdict`] and
-/// [`python_file_body_verdict`] Ask on these). Same principle as the shell
-/// expansion check, one level in: a program that decodes, concatenates or
-/// looks up the name of what it is about to call is not described by its own
-/// source. `getattr(__import__('os'), 'sys' + 'tem')('wipefs -a /dev/sda')`
-/// contains no `os.system` for any scan to find, and
-/// `exec(bytes.fromhex('…'))` contains no operation at all until it runs.
-/// All four spellings were measured reaching Allow on 2026-09-09.
-///
-/// Be clear about what this is and is not. It IS a list, and a list can be
-/// short. It is not the v0.2.57 mistake, because it does not enumerate
-/// effects (open-ended, and a miss there meant "allow"); it enumerates the
-/// constructs that make the text unfaithful to the program, and a miss means
-/// the text is taken at face value — the same standing this arm already
-/// gives text with no marker in it at all. Adding a spelling here is a
-/// strict improvement; the set never has to be complete to be sound in the
-/// direction it moves.
-pub(super) const CODE_BUILDING: &[&str] = &[
-    "exec(",
-    "eval(",
-    "compile(",
-    "getattr(",
-    "__import__",
-    "__builtins__",
-    "__getattribute__",
-    "globals()[",
-    "vars(",
-    "sys.modules[",
-    "b64decode",
-    "fromhex(",
-    "decode('hex'",
-    "instance_eval",
-    "class_eval",
-    "kernel.send",
-    ".send \"",
-    ".send '",
-    "new function(",
-    "settimeout(\"",
-    "settimeout('",
-    // Execution reached through a PATH or a SERIALISED OBJECT rather than
-    // through source text. Each of these runs code the command line does
-    // not contain, so the text that was read describes the loader and not
-    // the program. All measured reaching Allow on 2026-09-09.
-    "runpy.",
-    "run_path(",
-    "import_module(",
-    "pickle.load",
-    "marshal.load",
-    "functiontype(",
-    "yaml.unsafe_load",
-    "yaml.load(",
-    // `os.system(open(…).read())` — a shell command assembled at run time.
-    // The literal-argument spellings never reach here: the descent hands
-    // them to `analyze_shell_payload`, which denies `os.system('mkfs …')`
-    // several lines above.
-    "system(open(",
-    "system(f\"",
-    "system(f'",
-    "popen(open(",
-];
-
-/// The first [`CODE_BUILDING`] marker in `payload` (case-folded), if any.
-/// `compile(` is the one marker with a common unrelated spelling:
-/// `re.compile(` builds a regex, not code (backlog 80b18990). It is exempted
-/// only occurrence by occurrence, and only when [`compile_call_is_regex_method`]
-/// positively establishes the regex module; any other occurrence still fires.
-pub(super) fn code_building_marker(payload: &str) -> Option<&'static str> {
-    let lowered = payload.to_ascii_lowercase();
-    CODE_BUILDING.iter().copied().find(|m| {
-        if *m == "compile(" {
-            lowered
-                .match_indices("compile(")
-                .any(|(at, _)| !compile_call_is_regex_method(payload, at))
-        } else {
-            lowered.contains(m)
-        }
-    })
-}
-
-/// Whether `name` is bound in `payload` only by a plain module-level import
-/// and otherwise used only to read attributes of it.
-///
-/// Accepted only when ALL of these hold (checked case-sensitively):
-/// - there is an UNINDENTED line that is `import <items>` where one
-///   comma-separated item, trimmed, is exactly `name` (`import re`,
-///   `import os, re`), and no triple quote (`'''` / `"""`) appears anywhere
-///   before that line (so the line is not inside a multi-line string);
-/// - every other whole-word occurrence of `name` comes after that line, is not
-///   preceded by `.`, and is followed by `.` and an attribute name that does
-///   not start with `_`, after which the next non-blank character is none of
-///   `.`, `[`, `:`, or an assignment `=` (a lone `=`, or `=` following an
-///   operator character other than in `==`);
-/// - the payload contains no star import anywhere (`payload_has_star_import`):
-///   `from m import *` can rebind `name` without spelling it.
-///
-/// This rejects the rebinding spellings that write the name
-/// (`import builtins as re`, `from x import y as re`, `re = …`,
-/// `from … import re`, `global re`, `for re in`, `def re(`, `class re`,
-/// `lambda re`, `del re`, `re` passed as an argument, `'re'` in a string,
-/// `re.compile = …`, `re.__dict__`) because none of them is an attribute read,
-/// and the star import, which rebinds without writing the name. Rejection is
-/// the conservative direction.
-///
-/// What this does NOT prove:
-/// - that the module object has not been altered through a handle that never
-///   spells `name` as a word (for example via `sys.modules.get('r' + 'e')`);
-/// - that an imported module (e.g. a local `.py` file next to the program)
-///   does not monkeypatch `re` / `re.compile` when it is imported. That code is
-///   not in the program text. The gap predates this exemption: importing such
-///   a module already runs arbitrary code that no scan of this text sees.
-///
-/// See `compile_call_is_regex_method`.
-fn module_bound_only_by_import(payload: &str, name: &str) -> bool {
-    if payload_has_star_import(payload) {
-        return false;
-    }
-    // Locate the binding import line: [start, end) byte range.
-    let mut binding: Option<(usize, usize)> = None;
-    let mut offset = 0;
-    for raw in payload.split_inclusive('\n') {
-        let start = offset;
-        offset += raw.len();
-        let line = raw.trim_end_matches(['\n', '\r']).trim_end();
-        let Some(items) = line.strip_prefix("import ") else {
-            continue;
-        };
-        if !items.split(',').any(|item| item.trim() == name) {
-            continue;
-        }
-        let Some(before) = payload.get(..start) else {
-            return false;
-        };
-        if before.contains("'''") || before.contains("\"\"\"") {
-            return false;
-        }
-        binding = Some((start, offset));
-        break;
-    }
-    let Some((bind_start, bind_end)) = binding else {
-        return false;
-    };
-
-    for (at, _) in payload.match_indices(name) {
-        let (Some(head), Some(tail)) = (payload.get(..at), payload.get(at + name.len()..)) else {
-            return false;
-        };
-        let prev = head.chars().next_back();
-        if prev.is_some_and(is_python_ident_char) {
-            continue; // part of a longer identifier (`myre`)
-        }
-        if tail.chars().next().is_some_and(is_python_ident_char) {
-            continue; // part of a longer identifier (`regex`, `rest`)
-        }
-        if at >= bind_start && at < bind_end {
-            continue; // the binding import itself
-        }
-        if at < bind_start || prev == Some('.') {
-            return false;
-        }
-        let Some(attr) = tail.strip_prefix('.') else {
-            return false;
-        };
-        if !attr.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
-            return false;
-        }
-        let after_attr = attr.trim_start_matches(is_python_ident_char);
-        let after_attr = after_attr.trim_start_matches([' ', '\t']);
-        let mut chars = after_attr.chars();
-        let next = chars.next();
-        let second = chars.next();
-        match next {
-            Some('.' | '[' | ':') => return false,
-            Some('=') if second != Some('=') => return false,
-            Some('+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '<' | '>' | '@' | '!')
-                if second == Some('=') || matches!(second, Some('<' | '>' | '*' | '/')) =>
-            {
-                // Augmented assignment (`+=`, `<<=`, `**=`, `//=`, …) or a
-                // comparison; either way not a plain attribute read we vouch for.
-                return false;
-            }
-            _ => {}
-        }
-    }
-    true
-}
-
-/// Whether `payload` may contain a star import (`from m import *`).
-///
-/// Deliberately over-approximate (fail-closed): it returns true when ANY
-/// occurrence of the text `import`, anywhere in the payload (indented or not,
-/// after `;`, inside a string or comment), is followed — after any run of
-/// whitespace, newlines, `\` line continuations and `(` — by `*`. That covers
-/// `import *`, `import*`, `import (*`, `import(*` and
-/// `import \` + newline + `*`. A false positive only means the `re.compile(`
-/// exemption is withheld and the marker asks.
-fn payload_has_star_import(payload: &str) -> bool {
-    payload.match_indices("import").any(|(at, kw)| {
-        payload
-            .get(at + kw.len()..)
-            .unwrap_or("*")
-            .trim_start_matches(|c: char| c.is_whitespace() || c == '\\' || c == '(')
-            .starts_with('*')
-    })
 }

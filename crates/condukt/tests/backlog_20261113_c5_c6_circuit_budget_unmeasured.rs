@@ -224,7 +224,6 @@ fn journal_does_not_record_unmeasured_budget_as_not_over_cap() {
 
 /// C6: a measured stall must still be reported when the budget is unmeasured.
 #[test]
-#[ignore = "RED: audit 2026-11-13 C6 — remove the ignore when fixed"]
 fn unmeasured_budget_does_not_relabel_a_measured_stall() {
     let fx = Fixture::new();
     let run = "flow-c6";

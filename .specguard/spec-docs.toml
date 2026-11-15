@@ -95,6 +95,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'echo/printf がファイルへ書いた literal を、同じ command の別の部分がそのファイルを実行しうるとき shell script として判定する': echoed_script_verdict, its runner detection and the Ask on content it cannot reproduce (H1-H3 of tests/script_write_then_run_harm_20261111.rs)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/readings/static_bindings.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'コマンド文面だけで値が決まる変数は静的に解決して判定する' (backlog 3a950c6c / 5ef2d51f): resolve_static_bindings, the one top-level resolver run before every reading, its recorded binding shapes, substitutable value charset, the run-time shapes left unresolved and the whole-line bail-outs (tests/backlog_20261114_static_literal_var_resolution.rs)."
+
+[[spec]]
 path = "crates/blastguard/src/detect/here_string_file.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'cat/tee が here-string（<<<）をファイルへ書くとき、その operand をファイルの内容として shell 規則で判定する': written_here_string_verdict and its target classes (case E of tests/heredoc_system_harm_holes_20261111.rs)."
@@ -733,3 +738,38 @@ reason = "'振る舞い' bullet '未修正の system-harm fail-open の RED（20
 path = "crates/blastguard/src/detect/printf_eval.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'system-harm fail-open の RED（2026-11-13、flow-8cca7ef5。(a) は backlog 00569f7d …）': static evaluation of a printf stage piped to a shell (escape expansion across the bash/zsh/BSD/GNU printf dialects; an unevaluable stage is judged undetermined), so the expanded OUTPUT is judged as the shell program (backlog 00569f7d)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/code_building.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' interpreter bullet '`CODE_BUILDING` marker は Ask' and its follow-up: code_building_marker scans case-folded substrings and exempts only `re.compile(`/`regex.compile(` (compile_call_is_regex_method) and constant-metadata `globals()[...]` reads (globals_subscript_is_metadata_read), occurrence by occurrence from Python tokens; untokenisable programs keep the marker (backlog 80b18990 / 2e5e080c)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/mod.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/ast`: Analysis/Cause/Script/SimpleCommand contract of the parser + static-eval layer (RedirTarget / SimpleCommand.cwd relative-target representation); not yet called by any detector."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/parse.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/ast`: brush-parser front end with MAX_PARSE_BYTES = 8 KiB / bracket depth MAX_PARSE_DEPTH = 16 caps (user ruling 2026-11-16) checked before brush, restrictive-only Scan pre-filter, catch_unwind; unparsable / over-cap -> Undetermined."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/eval.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/ast`: static evaluation — only text-provable values are Literal (literal assignment / for-list / cd, stdin literal programs, heredoc consumer, program_source); everything else Undetermined."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/arith.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/ast`: arithmetic / subscript determination — a value not determined by the text read in arithmetic or a subscript makes the analysis Undetermined(Unsupported) (user ruling 2026-11-16, strict reading)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/support.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/ast`: stateless helpers of the static evaluator (escape decoding, path join/normalise, fd/stdin handling, piped-stdin literal printf/echo)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/tests.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/ast`: contract tests of the parser + static-eval layer: caps/parse failure -> Undetermined, literal assignment/for/cd resolution, relative redirect after cd joined or Undetermined (user ruling 2026-11-16), stdin/program sources, tilde/arithmetic/subscript fail-open regressions."

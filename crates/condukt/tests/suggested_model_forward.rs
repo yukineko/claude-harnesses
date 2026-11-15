@@ -11,6 +11,8 @@
 //! `fingerprint` and dumps every other invocation's argv, one arg per line,
 //! to a file; `--- ` separates invocations.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -68,10 +70,13 @@ fn run_and_capture(tag: &str, suggested: Option<&str>) -> Vec<Vec<String>> {
     let combined = std::env::join_paths(paths).expect("join PATH");
     let bin = env!("CARGO_BIN_EXE_condukt");
     let run = |args: &[&str]| -> (i32, String, String) {
+        common::prime_if_running(args, &home, common::TESTSCOPE_SESSION);
         let out = harness_core::git_env::scrub(&mut Command::new(bin))
             .args(args)
             .current_dir(&dir)
             .env("HOME", &home)
+            .env("CONDUKT_TESTSCOPE_LEDGER", common::testscope_ledger(&home))
+            .env("CLAUDE_CODE_SESSION_ID", common::TESTSCOPE_SESSION)
             .env("PATH", &combined)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

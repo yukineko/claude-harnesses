@@ -391,6 +391,13 @@ forge・condukt のスケジューラが再利用）。
   literal 語だけを出力する `$(echo …)`・`$(printf %s …)`・backtick（`rm $(echo /etc/passwd)`）。値が引用符・
   `\`・`$`・backtick・`{}`・`~` を含むもの、引用外の展開が長い語の一部として単語分割されるものは解決しない
   （Ask のまま）。解決して system 外になった operand も Ask のまま（この解決は Deny を足すだけ）。
+  `$(…)`・backtick・`<(…)` の本体は外側 shell の変数を継承するので、本体内の command（2 文目以降・
+  `{ …; }`・入れ子 substitution を含む）の `$X` operand も、その substitution を含むセグメントから見た
+  代入で解決する（`rm::known_path_harm_in_substitutions`、backlog e5a8fcc2:
+  `L=/etc/hosts; x=$(echo a; rm -f $L)` は main でも Deny）。ただしそのセグメント内に `$X`/`${X…` 以外の
+  綴りで名前が現れる（`X=…`・`export X`・`read X`・`for X in`・`unset X`・代入 prefix
+  `X=/tmp/x y=$(…)`）、本体に `eval`/`source`/`.` がある、行が関数を定義している、本体が `cd`/`pushd`/`popd`
+  する、のいずれかなら解決しない（Ask のまま。Deny を足すだけ）。
   引用符内の glob 文字は展開されないので、`-r`/`-d` なしの `rm "*.tmp"` は wildcard rm ではない
   （`for f in *.tmp; do rm "$f"; done` の loop 値代入版がこの形になり、glob は `for` のもの）。loop header の
   語が引用・`\`・`$`・backtick・brace・括弧を含まない素の glob（`*.tmp`・`build/*.o`）なら、各反復の値は
@@ -441,9 +448,41 @@ forge・condukt のスケジューラが再利用）。
   **Ask**（判定不能は制限側。例: `chmod +x "$f"`・`mv "$a" b`）。ただし rm と同じく、同じ行のテキストが値を
   決める展開（前セグメントの literal 代入・literal 語の `$(echo …)`）は解決して判定し、システムパスなら
   system-harm Deny（`system_paths::known_mutation_harm`、`rm::known_path_harm` から呼ぶ。
-  `X=/etc/passwd; unlink $X`・`X=/etc/hosts; mv $X /tmp/h`・`X=/etc/passwd; chmod 000 $X`）。解決して system 外
-  なら Ask のまま（`X=build.log; unlink $X`）。`find -exec` の `{}` と rsync の remote
+  `X=/etc/passwd; unlink $X`・`X=/etc/hosts; mv $X /tmp/h`・`X=/etc/passwd; chmod 000 $X`）。下の
+  「コマンド文面だけで値が決まる変数は静的に解決して判定する」の resolver が解決できる形は、この判定より前に
+  literal へ置き換わるので literal と同じ判定になる（解決して system 外なら literal と同じ。以前の「Ask のまま」は
+  backlog 3a950c6c で撤回）。`find -exec` の `{}` と rsync の remote
   operand（`host:/path`）は判定しない。base 不明の相対 operand は rm と同じく判定しない（他の rule は残る）。
+- **コマンド文面だけで値が決まる変数は静的に解決して判定する（backlog 3a950c6c / 5ef2d51f、ユーザー裁定
+  2026-11-14「静的に判定できない blastguard の実装がゴミなので、それをなおす」「必ず静的に判定し、判断する」）** —
+  `detect/readings/static_bindings.rs` の `resolve_static_bindings` が、top-level の Bash コマンドに対して
+  **すべての reading・すべての rule より前に 1 回だけ**走る共通 resolver。文（`;`・`&&`・`||`・改行で区切られた
+  segment）を順に走査して literal の束縛環境を作り、後の文の素の参照（`$X`・`${X}`・`"$X"`、連結
+  `"$T"bin/tdd`・`${W}/a`・`$T/bin`）をその literal に置き換える。sed -i / unlink / mv 等の対象・command word・
+  redirect 先・rm operand・cd はすべて置換後のテキストを判定するので、解決できた値は literal と同じ判定になり、
+  「cannot resolve」「only exists at run time」「cannot tell」を理由に判定不能にはならない
+  （`export F=/etc/hosts; sed -i '' 's/a/b/' $F` は system-harm Deny）。
+  - 束縛として採るもの: 親 shell で（pipeline の段・`&` でなく）無条件に（`assignment_execution_is_unconditional`）
+    実行される、代入だけの文（`X=lit`・`X="lit"`・`X='lit'`）と `export X=lit`（operand が `NAME=value` か
+    素の名前だけ。flag 付きは不採用）。値は先に置換するので既知の名前からの連結（`B=$A/x`）も解ける。
+  - 値として採るのは、空でなく `[A-Za-z0-9/._+,:@%^-]` だけから成る literal（空白・引用符・`$`・backtick・
+    backslash・glob・brace・`~`・`=`・`#`・演算子を含まない）。置換が単語分割・glob・tilde・brace 展開・
+    segment 分割を変えないことをこの文字種で保証する。参照を含む `"…"` で、全参照を置換した結果がこの文字種だけに
+    なるもの（`"$T"`・`"$P/fstab"`）は引用符ごと置換し、literal の綴りと同じテキストにする（未解決の参照・glob・
+    空白などが残る `"…"` は引用符を残す）。解決できる変数の後ろの glob（`P=/abs; echo hi > $P/*.log`）は
+    literal と同じに判定する（ユーザー裁定 2026-11-15）。
+  - 判定不能（置換しない = 従来どおり制限側）のまま残すもの: `$(cmd)`・backtick の値とそれによる再代入、
+    未代入、`&&`/`||` や `if`/ループ/`case`/subshell/brace group の中の代入、pipeline・`&` の代入、配列、`+=`、
+    その名前を素の参照以外で言及する他の文（`read X`・`for X in`・`unset X`・`printf -v X`・`(X=…`・
+    `$(X=…)`。以後その名前は未知）、ループ内のどこかで再束縛される名前（ループ開始以降）、`eval`/`source`/`.`
+    （環境を捨てる）、shell が維持する名前（`PWD`・`RANDOM`・`_` 等）、here-document の body と閉じない
+    opener 以降。
+  - 行全体を解決しない（文面のまま判定）もの: shell 関数を定義する行、`IFS` を含む行、`trap`/`alias`/
+    `readonly`/`declare`/`typeset`/`local` を含む行、`#` コメントか `$'…'` を含む行、segment をテキストへ
+    対応付けられない行。
+  - 対象外: `sh -c` 等の payload 内部の束縛（payload の再解析には適用しない）、プロセス環境由来の値。
+  回帰テスト: `crates/blastguard/tests/backlog_20261114_static_literal_var_resolution.rs`・
+  `crates/blastguard/tests/backlog_20261114_sed_inplace_literal_var_path_fp.rs`。
 - **pipeline で供給される `xargs rm`/`xargs unlink`（backlog 3c750df2）** — `analyze_xargs` は xargs 自身の
   token しか見ないため `echo /etc/passwd | xargs rm` は operand 無しの `rm` として Allow だった。
   `detect/find_xargs.rs` の `xargs_pipe_feed`（`analyze_segment` から `line`/`seg_idx` で呼ぶ）が、
@@ -640,8 +679,16 @@ forge・condukt のスケジューラが再利用）。
   `decompounded`、`detect/payload/exec_fds.rs` の `exec_opened_fds`、backlog 72872200、blastguard 0.2.557）** —
   `analyze_interpreter_stdin_exec` は行を原文と compound 構文を外した読みの 2 回判定する（追加のみ。2 つの
   splitter の長さが食い違えば Ask）。`exec N< <(…)` / `exec < <(…)` で開かれた fd から stdin を複製する reader は
-  その procsub の program を判定し、どこでも開かれていない fd（`bash <&3`）や here-string/here-document で開かれた
-  fd は、reader が stdin から program を読みうるとき Ask。ファイルで開かれた fd は `bash < file` と同じ扱い。
+  その procsub の program を判定し、どこでも開かれていない fd（`bash <&3`）は、reader が stdin から program を
+  読みうるとき Ask。here-string（`exec N<<< …`）と quoted here-document（`exec N<<'EOF'`）で開かれた fd は、
+  後の文の reader（`<&N` / `/dev/fd/N`）を中身を inline で渡した形（`bash <<< …`）として判定する
+  （`detect/payload/exec_fds.rs` の `cross_statement_fd_verdict`、backlog e686a85e、blastguard 0.2.580。詳細は
+  末尾の節「exec が開く fd の文をまたいだ追跡」）。モデル外の形（subshell・関数本体・条件付きの exec、unquoted
+  here-document、`N<&M` の連鎖、close 後の読み、subshell・関数本体内の reader、読めない形での fd の言及、`<&$fd` のように展開で書かれた fd の読み）は
+  Ask（subagent では Deny）で、中身が literal で harm なら main でも Deny。fd 0 を here-text で開く
+  `exec <<< …` / `exec <<'EOF'` も同じ追跡で、stdin を program として読む後の reader について中身を判定し（close の後は対象外。`exec 0<&N` / `exec <&N` で中身が確実に分かる fd N を fd 0 に複製した後は、その中身で判定する。詳細は末尾の節の 5）、literal で harm なら main でも Deny
+  （backlog 2210e1db、blastguard 0.2.598、fd 0 への複製は 0.2.600）。それ以外は従来どおり reader が stdin から program を読みうるとき Ask。
+  ファイルで開かれた fd は `bash < file` と同じ扱い。
   exec で開かれた stdin は upstream pipe のある reader にも適用する（制限側の過大近似）。zsh の `=(…)` は
   process substitution として読む。回帰テスト:
   `crates/blastguard/tests/backlog_20261114_compound_wrapped_or_cross_stage_shell_program.rs`。
@@ -786,6 +833,12 @@ forge・condukt のスケジューラが再利用）。
     `pty.spawn`・`asyncio.create_subprocess_exec` は `subprocess.run`、`asyncio.create_subprocess_shell` は
     `os.system` として判定。f-string の `{…}` 内の code も対象。command が計算される call
     （`computed_shell_call`）と `CODE_BUILDING` marker は Ask。
+    `CODE_BUILDING` marker（`interpreter/code_building.rs`）は case-fold した本文の substring で拾い、
+    2 つだけ出現ごとに Python token から免除する: `re.compile(`/`regex.compile(`（module 名が module-level の
+    素の `import` だけで束縛され、他では `name.attr` の読み取りにしか使われない時）と、定数 metadata key の
+    `globals()[...]` 読み取り（backlog 80b18990 / 2e5e080c）。tokenise できない program と、免除を積極的に
+    確定できない出現は marker のまま Ask。substring なので `exec (`・`globals ()[` のように `(` の前に空白が
+    ある綴りは marker に掛からない（list の穴であり免除の穴ではない。未修正）。
   - **filesystem 破壊**: `shutil.rmtree(p)` → `rm -rf p`、`os.remove`/`os.unlink`/`os.rmdir`/`os.removedirs`/
     `Path.unlink()`/`.rmdir()` → `rm p`、`open(p,'w'|'x'|…)`・`Path.open('w')`・`write_text`/`write_bytes`
     → `: > p`（`a`/`+` は `: >> p`）、`shutil.copy`/`copy2`/`copyfile`/`copytree`/`move`・
@@ -889,6 +942,9 @@ forge・condukt のスケジューラが再利用）。
   な `>` は Ask、Allow にしない）を従来どおり適用する。token 化できない本文は view に本文を残す。
   この view を読むのは行単位の `>`/`>>` scan だけで、interpreter scan 等の他の規則は本文全体を読む
   （stdin の program を Python 判定器だけで判定することはしない）。
+- **`python3 -i script.py` と `python3 -m code`（`-m pdb`）は、script / module があっても stdin を program として読む**
+  （`program_source::python_reads_stdin_program`、tests/backlog_20261114_pipe_to_python_interactive.rs）— pipe の program を判定する。
+  `-i` 無しの `python3 script.py` は stdin が data のまま（広げない）。
 - **`python3 -` が実行する quoted here-document の本文は、stdin-program scan に加えて Python 判定器でも読む
   （tests/heredoc_system_harm_holes_20261111.rs A / G）** — 形は上と同じ（`heredoc::python_stdin_here_document`）。
   `payload::analyze_interpreter_stdin_exec` が `interpreter::python_stdin_body_reading` を呼ぶ。token 化
@@ -1174,7 +1230,7 @@ forge・condukt のスケジューラが再利用）。
   `run_guarded("blastguard-relay")` 下）: 未解決（executed∧relayed でも dismissed でもない）entry が
   あれば `stop_hook_active` に関わらず block し、id・agent_id・cwd・command と手順を列挙。queue 読み取り
   失敗・パース不能行・未知 id の event・パース不能な Stop payload は block（path を明示）。queue 不在は
-  allow。dismiss 済みは `systemMessage`（pending があれば block 理由）に毎回列挙。(5) `relay dismiss
+  allow。dismiss 済みは queue に記録されるだけで Stop には列挙しない（ユーザー裁定 2026-11-16「表示をやめてほしい」）。(5) `relay dismiss
   <id> --reason <text>`: 空白のみ/欠落の理由・未知 id は exit 2、queue 読み書き失敗は exit 3。
   コマンドを実行する経路は持たず、cwd は不透明な文字列として比較するだけで解決・stat しない。
 - **`blocklog`** — block log（ユーザー裁定 2026-11-14 逐語:「…完全なコマンドが残っていないため、
@@ -1195,7 +1251,24 @@ forge・condukt のスケジューラが再利用）。
   記録は判定確定後・表示前に書き、判定を変えない。書けない（panic を含む）ときは表示理由に
   `could NOT be recorded` とエラーを付け stderr にも警告する（沈黙しない）。relay（subagent の Bash Ask の
   再実行 queue）とは別物で、block log は真の `Deny` と main の `Ask` を含む全 block を記録する。
-- **`hookio`** — PreToolUse `deny` の単一行 JSON 生成（`deny_json`）。
+- **`detect/ast`**（`mod.rs` / `parse.rs` / `eval.rs` / `arith.rs` / `support.rs`）— shell parser（brush-parser `=0.4.0`）＋静的評価層
+  （ユーザー裁定 2026-11-15「parser ＋ 静的評価で一体にする」）。`analyze(&str) -> Analysis`
+  （`Known(Script)` / `Undetermined(Cause)`、`Cause` = `NotImplemented`/`TooLong`/`TooDeep`/`Timeout`/
+  `Parse`/`Panic`/`ZshOnly`/`Unsupported`）と `program_source(&SimpleCommand) -> Option<ProgramSource>`。
+  quoted heredoc 本文・quoted word・comment は data、実行される command word と展開だけが code。
+  parse 不能・上限超過・zsh 専用構文は `Undetermined` で、呼び出し側は Ask/Deny に倒す（fail-closed）。
+  上限はユーザー裁定 2026-11-16: `MAX_PARSE_BYTES` = 8 KiB 超 → `TooLong`、括弧カウンタ
+  （`({[` で +1 / `)}]` で −1、quote 無視）深さ `MAX_PARSE_DEPTH` = 16 超 → `TooDeep`。どちらも brush-parser
+  より前に判定し、検出器はこれを Deny に解決する。quote-aware な構造 pre-scan（`Scan`）は拒否を増やす方向
+  だけの pre-filter として裁定で許容。brush-parser は `catch_unwind` 下で呼び、parse error → `Parse`、panic → `Panic`。
+  静的評価（`eval.rs`）は本文から証明できる値だけを `Literal` にし、それ以外は `Undetermined`（推測した literal
+  を返さない）: literal 代入・literal for-list・literal cd（相対 redirect 先は cd が無ければ相対のまま、literal cd
+  の後は join した絶対パス、不定の cd の後は `Undetermined`）・stdin の literal program・heredoc。
+  `=~`/`:~` を含む argv の tilde、`[[ a -eq b ]]` 等の算術代入、subscript 付き name operand は havoc または
+  `Undetermined`。subscript 内の command substitution、および本文で決まらない値を読む算術・subscript
+  （`arith.rs`。ユーザー裁定 2026-11-16 strict reading）は解析全体を `Undetermined(Unsupported)` にする。
+  `support.rs` は状態を持たない補助関数（escape 展開・パス正規化・fd/stdin・pipe stdin）。
+  **現状どの検出器からも呼ばれない**（判定に影響しない）。検出器の移行は migrate-path / migrate-stdin-program 段で行う。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。
 
@@ -1288,3 +1361,10 @@ path/target を埋め込む。例: `"Write would replace {path} with empty conte
    - exec がトップレベルにあり、reader が subshell `( … )` か関数本体の中にある場合は判定不能とする（main で Ask、subagent で Deny）。ただし中身が literal で harm と分かる場合は、裁定 1 により Deny とする。reader が brace の中にある場合は、brace を外した読みと外さない読みの両方で判定し、制限側の verdict を採る（追加のみ）。
    - close（`exec N<&-`）した後で fd N を読む reader は、close 前に開いていた中身が literal で harm なら Deny とする。それ以外は、どこでも開かれていない fd と同じく Ask とする（subagent では Deny）。
    - `<&N` や `/dev/fd/N` で fd を読む reader は、shell（`bash|sh|zsh`）に限らない。既存の stdin reader の集合（code interpreter を含む）のすべてを対象とする。
+5. fd 0 への拡張（ユーザー裁定 2026-11-14、backlog 2210e1db。blastguard 0.2.598。fd 0 への複製はユーザー裁定 2026-11-15、blastguard 0.2.600）:
+   - 上の追跡は fd 0 にも適用する。`exec <<< literal`・`exec 0<<< literal`・quoted here-document（`exec <<'EOF'`）で fd 0 を開いた後、または here-text で開いた fd N を `exec 0<&N` / `exec <&N` で fd 0 に複製した後、後の文の reader（`bash|sh|zsh`・interpreter・`source` / `.`）を判定する。対象は次の 3 条件をすべて満たす reader だけ: 自分で stdin を redirect しない、pipe からも読まない、program の読み元（reader の option 文法で読んだもの）が stdin か判定不能。`bash script.sh` や `bash -c '…'` は stdin を program として実行しないので対象外。
+   - fd 0 の中身は、それより前の exec を書かれた順に反映して決める。判定に使うのは、その時点で fd 0 が確実に持つ literal の中身だけ。close（`exec 0<&-`）やファイルでの開き直し（`exec 0< file`）の後は中身なし、`exec <<< other` で再代入した後は新しい中身になる。`exec 0<&N` / `exec <&N` で複製した後は、その時点で fd N が確実に持つ literal の中身になる（例: `exec 3<<< '…'; exec 0<&3; bash` と `exec 3<<< '…'; exec 0<&3 3<&-; sh` は、fd 0 がその中身を持つ）。中身が判定不能な fd 0 は判定しない。中身の分からない fd（どこでも開かれていない fd、判定不能な fd、`N<&M` の連鎖）からの複製、unquoted here-document、subshell や `&&` の後ろの exec がこれに当たる。
+   - 判定は、その reader の pipeline を書かれたまま、その reader に中身を inline で渡した形（`bash <<< …`）で行う。それが Deny（中身が literal で system harm）なら、main・subagent ともに Deny とする（裁定 1）。
+   - それ以外（中身が harm でない・判定しない形・上の対象外の reader）では、fd 0 の追跡はこの判定を採らない。fd 0 は解決済みにしないので、reader が stdin から program を読みうるときは従来どおり Ask（subagent では Deny）のまま。たとえば `exec <<< 'echo hi'; bash` と `exec 3<<< 'echo hi'; exec 0<&3; bash` は main で Ask のまま。close の後の reader も同じく従来どおりで、close 前の中身が harm でも、この追跡では Deny にしない（close した fd 0 の中身は reader に届かない）。中身の分からない fd から複製した fd 0 を読む reader は判定しないが、Allow にもしない（main で Ask、subagent で Deny）。中身が確実に分かる fd N から複製した fd 0 は、上のとおりその中身で判定し、literal で system harm なら main・subagent ともに Deny とする（裁定 1）。
+   - 再現テスト: `crates/blastguard/tests/backlog_20261114_exec_stdin_herestring_literal_harm.rs`（fd 0 の here-string に literal の system harm を入れて後で `bash` が読む形は main・subagent とも Deny）と、`crates/blastguard/tests/backlog_20261114_exec_stdin_harm_non_stdin_reader_fp.rs`（script ファイルや `-c` を実行する reader は Allow のまま、close の後は main で Deny にしない）と、`crates/blastguard/tests/backlog_20261115_exec_dup_onto_stdin_literal_harm.rs`（fd 3 の here-string を `exec 0<&3`・`exec 0<&3 3<&-`・`exec <&3` で fd 0 に複製して後で shell が読む形は main・subagent とも Deny、中身が harm でない形は直接の形 `exec <<< 'echo hi'; bash` と同じく main で Ask・subagent で Deny、`cat`・`bash script.sh` は Deny にしない）。
+   - quote された数字の複製先（backlog cf0bf4ca、2026-11-15）: `<&` / `>&` の複製先の fd 番号は、shell が単語を読むのと同じく quote を外してから数字として読む。`exec 3<<< 'chmod 777 /etc/hosts'; bash <&'3'` と `bash <&"3"` は `<&3` と同じ形として追跡し、main・subagent とも Deny とする。quote を外しても数字にならない複製先（`-` や名前）は従来どおり。quote を外せない複製先（閉じていない quote・ANSI-C `$'…'`・末尾の孤立した backslash）と展開を含む複製先は判定不能として扱い、制限側に倒す（落とさない）。実装は `exec_fds::dup_fd_number` で、`payload.rs` と `exec_fds.rs` にある複製先の単語の読み取りはすべてこれを使う。読めない形の言及を見落とさないための文字列上の数え上げ（`exec_fds::raw_fd_mentions`）も、`&` の後の単語を同じく quote を外して読み、先頭が fd 番号なら言及として数える。したがって quote した形は、quote しない形と同じ所で同じ数だけ数えられ、判定は quote しない形と同じになる（例: `eval 'bash <&3' 2>&'3'` と `x=$(bash <&3) 2>&'3'` は `2>&3` の形と同じく main・subagent とも Deny、`cat <&'3'` は `cat <&3` と同じ、移動の形 `bash <&'3'-` は `bash <&3-` と同じく Deny）。再現テスト: `crates/blastguard/tests/backlog_20261115_quoted_numeric_dup_target.rs` と、quote した形と quote しない形の判定の一致を見る `crates/blastguard/tests/backlog_20261115_quoted_numeric_dup_consistency.rs`。

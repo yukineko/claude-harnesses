@@ -186,9 +186,20 @@ pub(super) fn compound_and_forwarder_pipelines(
                 }
             };
             let rest_word = body.split_whitespace().next().unwrap_or("");
-            if opened > 0 && !opens_any_compound(rest_word) {
+            // A `for` / `select` header is not a command, so it is no member
+            // (a `P | for x in a` member would recurse onto itself), but its
+            // body inherits the pipe: the later statements are read like an
+            // `if` body, so a closed nested compound before the reader
+            // (`P | for x in a; do if …; fi; bash; done`) no longer hides it
+            // from the compound-free reading, which pipes only its first command.
+            let loop_header = matches!(rest_word, "for" | "select");
+            if opened > 0 && (loop_header || !opens_any_compound(rest_word)) {
                 let mut members: Vec<String> = Vec::new();
-                let mut head: Vec<String> = vec![body.to_string()];
+                let mut head: Vec<String> = if loop_header {
+                    Vec::new()
+                } else {
+                    vec![body.to_string()]
+                };
                 head.extend(statement[i + 1..].iter().cloned());
                 members.push(joined(&head));
                 let mut level =

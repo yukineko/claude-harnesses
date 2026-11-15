@@ -300,6 +300,11 @@ fn resolved_system_directory_target_is_still_denied_by_name() {
 /// current shell, so bash really would use the value) and `export P=…` (bash
 /// sets it too). blastguard refuses both, which costs a resolution and invents
 /// none — the direction CLAUDE.md §3 requires.
+///
+/// SUPERSEDED for `export` (user ruling 2026-11-15: 「`export X=lit` は「解決して
+/// 判定」する。`X=lit` と同じく解決し、literal と同じに判定する。」): the export row
+/// is no longer refused; it is pinned below the loop as "judged like the literal
+/// spelling". The brace-group row above is unchanged.
 #[test]
 fn unresolvable_shapes_keep_the_unresolved_verdict() {
     let mut violations: Vec<String> = Vec::new();
@@ -331,10 +336,6 @@ fn unresolvable_shapes_keep_the_unresolved_verdict() {
         (
             "{ P=/home/yuki/proj/ok.log; }; echo hi > \"$P\"",
             "a brace group DOES reach the parent shell; refusing it is the safe error",
-        ),
-        (
-            "export P=/home/yuki/proj/ok.log; echo hi > \"$P\"",
-            "`export NAME=v` is not a pure assignment list to this scan",
         ),
         (
             "local P=/home/yuki/proj/ok.log; echo hi > \"$P\"",
@@ -441,6 +442,14 @@ fn unresolvable_shapes_keep_the_unresolved_verdict() {
         "{} shape(s) resolved to a value the shell would not use:\n  {}",
         violations.len(),
         violations.join("\n  ")
+    );
+    // User ruling 2026-11-15: `export X=lit` は「解決して判定」する — resolved like
+    // `X=lit` and judged exactly like the literal spelling (replaces the former
+    // "export refused" row above).
+    assert_eq!(
+        scoped("export P=/home/yuki/proj/ok.log; echo hi > \"$P\""),
+        scoped("echo hi > /home/yuki/proj/ok.log"),
+        "`export P=…; echo hi > \"$P\"` must be judged like its literal spelling (user ruling 2026-11-15)"
     );
 }
 

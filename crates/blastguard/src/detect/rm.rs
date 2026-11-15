@@ -70,8 +70,14 @@ fn rm_is_recursive(rest: &[&str]) -> bool {
 /// the files they modify: [`super::system_paths::known_mutation_harm`], so
 /// `X=/etc/passwd; unlink $X` is the same system-harm Deny as
 /// `unlink /etc/passwd`, not the expansion Ask.
+///
+/// `seg` is the raw segment `tokens` came from: the commands inside its
+/// executed substitution bodies get the same resolution against `line`
+/// ([`known_path_harm_in_substitutions`], backlog e5a8fcc2). That second pass
+/// only ever contributes a Deny; any other verdict is this segment's own.
 pub(super) fn known_path_harm(
     tokens: &[&str],
+    seg: &str,
     line: &str,
     seg_idx: usize,
     ctx: &Ctx<'_>,
@@ -82,7 +88,23 @@ pub(super) fn known_path_harm(
             CommandWordOrigin::Literal(v) => Some(v),
             _ => None,
         };
-    let resolve = |word: &str| match expand_operand_with(word, ctx.scope.home_real(), Some(&vars)) {
+    let own = known_path_harm_with(tokens, ctx, &vars);
+    if own.is_deny() {
+        return own;
+    }
+    let inner = known_path_harm_in_substitutions(seg, line, seg_idx, ctx);
+    if inner.is_deny() {
+        return inner;
+    }
+    own
+}
+
+/// [`known_path_harm`] with the variable lookup supplied by the caller, so the
+/// same judgement can run on a command that sits INSIDE a command
+/// substitution while its `$NAME` operands are resolved against the line that
+/// encloses it ([`known_path_harm_in_substitutions`]).
+fn known_path_harm_with(tokens: &[&str], ctx: &Ctx<'_>, vars: VarLookup<'_>) -> Decision {
+    let resolve = |word: &str| match expand_operand_with(word, ctx.scope.home_real(), Some(vars)) {
         OperandSpelling::Paths(p) => Some(p),
         OperandSpelling::Unresolvable(_) => None,
     };
@@ -108,12 +130,115 @@ pub(super) fn known_path_harm(
             continue;
         }
         if let SystemHarm::Deny(deny) =
-            rm_system_harm(ctx, &words, rm_is_recursive(rest), Some(&vars))
+            rm_system_harm(ctx, &words, rm_is_recursive(rest), Some(vars))
         {
             return deny;
         }
     }
     Decision::Allow
+}
+
+/// The system-harm Deny of [`known_path_harm`] for a command that runs INSIDE
+/// a command substitution of segment `seg` (at `seg_idx` of `line`), with its
+/// `$NAME` operands resolved against `line` — else `Allow`.
+///
+/// A `$(…)` / backtick / `<(…)` body runs in a subshell that inherits every
+/// shell variable of the enclosing shell, so in
+/// `L=/etc/hosts; x=$(echo a; rm -f $L)` the `rm` really removes `/etc/hosts`.
+/// The body is otherwise judged on its own (`analyze_shell_payload`), where
+/// `L` has no assignment and the operand is an expansion Ask (backlog
+/// e5a8fcc2: a main-mode Ask for system harm). This pass reaches every command
+/// of every executed body — later statements, `{ …; }` groups and nested
+/// substitutions alike, to `MAX_SHELL_DEPTH` levels — and resolves its
+/// variables as the ENCLOSING segment sees them.
+///
+/// It only ever ADDS a Deny: it never returns an Ask and never clears one, so
+/// an operand it cannot resolve stays whatever the body's own analysis said.
+/// A name is resolved from `line` only when nothing between that assignment
+/// and the use can have rebound it, which is established restrictively
+/// (refusing means "unresolved", i.e. the existing Ask):
+///
+///   * `seg` (which contains every body) names the variable nowhere except as
+///     a `$NAME` / `${NAME}` reference — so no `NAME=…`, `export NAME=…`,
+///     `read NAME`, `for NAME in`, `unset NAME` inside a body, nor in the
+///     segment's own assignment prefix (`L=/tmp/x y=$(rm -f $L)`: bash applies
+///     `L=/tmp/x` before it expands `y`'s value);
+///   * neither `seg` nor any body command is a segment
+///     [`super::vars::segment_may_rebind`] distrusts (`eval`, `source`, `.`);
+///   * `line` defines no shell function (one called inside a body could assign
+///     the name);
+///   * and the whole pass is skipped when a body changes directory
+///     (`cd`/`pushd`/`popd`), because the body's relative operands would then
+///     no longer be relative to the cwd `ctx` describes.
+fn known_path_harm_in_substitutions(
+    seg: &str,
+    line: &str,
+    seg_idx: usize,
+    ctx: &Ctx<'_>,
+) -> Decision {
+    use super::vars::{
+        defines_shell_function, mentions_name_outside_reference, resolve_expanded_command_word,
+        segment_may_rebind, CommandWordOrigin,
+    };
+    let mut commands: Vec<String> = Vec::new();
+    if !collect_substitution_commands(seg, 0, &mut commands) {
+        return Decision::Allow;
+    }
+    if !commands.iter().any(|c| has_unresolvable_expansion(c)) || defines_shell_function(line) {
+        return Decision::Allow;
+    }
+    let vars = |name: &str| {
+        if mentions_name_outside_reference(seg, name)
+            || segment_may_rebind(seg, name)
+            || commands.iter().any(|c| segment_may_rebind(c, name))
+        {
+            return None;
+        }
+        match resolve_expanded_command_word(line, seg_idx, &format!("${{{name}}}")) {
+            CommandWordOrigin::Literal(v) => Some(v),
+            _ => None,
+        }
+    };
+    for command in &commands {
+        let tokens =
+            super::split_substitution_opening_assignments(command.split_whitespace().collect());
+        let verdict = known_path_harm_with(&tokens, ctx, &vars);
+        if verdict.is_deny() {
+            return verdict;
+        }
+    }
+    Decision::Allow
+}
+
+/// Every simple command run by the executed substitution bodies of `text`,
+/// recursively (nested substitutions included, bounded by `MAX_SHELL_DEPTH`),
+/// with compound syntax (`{`, `then`, `do`, …) removed by
+/// [`super::compound_views`]. Returns `false` — the caller must not judge —
+/// when a body changes directory or the depth bound is reached.
+fn collect_substitution_commands(text: &str, depth: usize, out: &mut Vec<String>) -> bool {
+    let payloads = super::substitution::executed_substitution_payloads(text);
+    if payloads.is_empty() {
+        return true;
+    }
+    if depth >= super::MAX_SHELL_DEPTH {
+        return false;
+    }
+    for payload in payloads {
+        for view in super::compound_views(&payload) {
+            let command = view.command.trim();
+            if let Some(first) = command.split_whitespace().next() {
+                let head = super::words::normalized_command(first);
+                if matches!(head.as_str(), "cd" | "pushd" | "popd") {
+                    return false;
+                }
+            }
+            if !collect_substitution_commands(command, depth + 1, out) {
+                return false;
+            }
+            out.push(command.to_string());
+        }
+    }
+    true
 }
 
 pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {

@@ -24,6 +24,9 @@
 //!    through its own Bash tool. blastguard judges that call normally, so the
 //!    human sees the real permission prompt. A PostToolUse /
 //!    PostToolUseFailure hook ([`mark_executed`]) marks the entry executed.
+//!    When blastguard's PreToolUse DENIES that re-run instead, the denial is
+//!    recorded on the entry ([`mark_denied`]) so the Stop text says so rather
+//!    than "not executed"; the entry stays pending until it is dismissed.
 //! 3. The main agent sends the output and exit code to the subagent with
 //!    SendMessage, naming the relay id. A PostToolUse hook on SendMessage
 //!    ([`mark_relayed`]) marks the entry relayed.
@@ -32,8 +35,10 @@
 //!
 //! The human may decline the prompt; then no PostToolUse fires. That is what
 //! [`dismiss`] is for: it requires a non-empty reason, and every dismissal of
-//! the session is shown by the Stop hook from then on, so a dismissal is
-//! never silent.
+//! the session is recorded in the queue file (a repeated dismissal of the same
+//! id appends another reason, oldest first, and never replaces an earlier
+//! one). User ruling 2026-11-16: the Stop hook no longer lists dismissed
+//! entries at all.
 //!
 //! # What this module never does
 //!
@@ -43,8 +48,11 @@
 //!   call, which blastguard's PreToolUse judged like any other.
 //! * It never changes a verdict. The queue write happens after the verdict is
 //!   decided; a failed write only adds a line to the deny reason.
-//! * It never records a true `Deny` (system harm or otherwise). Only an `Ask`
-//!   that was hardened because the caller was a subagent is queued.
+//! * It never queues a true `Deny` (system harm or otherwise): only an `Ask`
+//!   that was hardened because the caller was a subagent is queued. A
+//!   main-session `Deny` of an already-queued, byte-identical (command, cwd)
+//!   Bash call is recorded only as a non-resolving `denied` outcome on that
+//!   entry ([`mark_denied`]).
 //!
 //! # Fail-closed (CLAUDE.md §3)
 //!
@@ -86,6 +94,10 @@ pub enum Event {
     },
     /// The main session sent a SendMessage naming the id, after executing.
     Relayed { id: String, ts: u64 },
+    /// The main session re-ran the exact command (same `cwd`) and blastguard's
+    /// PreToolUse DENIED it there, so it never ran. An outcome, not a
+    /// resolution: the entry stays pending until dismissed (backlog b72b1c4d).
+    Denied { id: String, ts: u64, reason: String },
     /// A human-supplied reason why the entry will not be re-run.
     Dismissed { id: String, ts: u64, reason: String },
 }
@@ -102,13 +114,24 @@ pub struct Entry {
     /// `Some(exit_code)` once executed (the exit code itself may be unknown).
     pub executed: Option<Option<i64>>,
     pub relayed: bool,
-    pub dismissed: Option<String>,
+    /// Every dismissal reason of this entry, oldest first. A later dismissal
+    /// is appended, never substituted, so no earlier reason disappears from
+    /// the Stop text (backlog b82e882a).
+    pub dismissed: Vec<String>,
+    /// The reason of every main-session deny of the exact command, oldest
+    /// first. A deny never resolves the entry: the command did not run.
+    pub denied: Vec<String>,
 }
 
 impl Entry {
     /// Resolved: executed AND relayed, or dismissed with a reason.
     pub fn is_resolved(&self) -> bool {
-        self.dismissed.is_some() || (self.executed.is_some() && self.relayed)
+        self.is_dismissed() || (self.executed.is_some() && self.relayed)
+    }
+
+    /// At least one dismissal was recorded.
+    pub fn is_dismissed(&self) -> bool {
+        !self.dismissed.is_empty()
     }
 }
 
@@ -272,8 +295,16 @@ pub fn load(path: &Path) -> Result<Queue, String> {
                 reason,
                 executed: None,
                 relayed: false,
-                dismissed: None,
+                dismissed: Vec::new(),
+                denied: Vec::new(),
             }),
+            Event::Denied { id, reason, .. } => {
+                let e = entries
+                    .iter_mut()
+                    .find(|e| e.id == id)
+                    .ok_or_else(|| unknown(&id))?;
+                e.denied.push(reason);
+            }
             Event::Executed { id, exit_code, .. } => {
                 let e = entries
                     .iter_mut()
@@ -293,7 +324,7 @@ pub fn load(path: &Path) -> Result<Queue, String> {
                     .iter_mut()
                     .find(|e| e.id == id)
                     .ok_or_else(|| unknown(&id))?;
-                e.dismissed = Some(reason);
+                e.dismissed.push(reason);
             }
         }
     }
@@ -321,7 +352,7 @@ pub fn mark_executed(
     let path = queue_path(dir, session);
     let entries = known_entries(&path)?;
     let Some(hit) = entries.iter().find(|e| {
-        e.executed.is_none() && e.dismissed.is_none() && e.command == command && e.cwd == cwd
+        e.executed.is_none() && !e.is_dismissed() && e.command == command && e.cwd == cwd
     }) else {
         return Ok(None);
     };
@@ -331,6 +362,42 @@ pub fn mark_executed(
             id: hit.id.clone(),
             ts: now(),
             exit_code,
+        },
+    )?;
+    Ok(Some(hit.id.clone()))
+}
+
+/// PreToolUse in the MAIN session that printed a `Deny` for a Bash call:
+/// record a `denied` outcome on the oldest unexecuted, undismissed entry whose
+/// `command` and `cwd` are byte-identical to this call's (the same match as
+/// [`mark_executed`]; the `cwd` is compared as a string and never resolved).
+/// Returns the id recorded, if any.
+///
+/// Fail-closed: an unreadable or corrupt queue is `Err` and nothing is
+/// written, so an undetermined match never records an outcome. A `denied`
+/// line never resolves an entry either way — it only replaces the
+/// never-attempted state in the Stop text; the entry keeps blocking the Stop
+/// until it is dismissed with a reason (or later executed and relayed).
+pub fn mark_denied(
+    dir: &Path,
+    session: &str,
+    cwd: &str,
+    command: &str,
+    reason: &str,
+) -> Result<Option<String>, String> {
+    let path = queue_path(dir, session);
+    let entries = known_entries(&path)?;
+    let Some(hit) = entries.iter().find(|e| {
+        e.executed.is_none() && !e.is_dismissed() && e.command == command && e.cwd == cwd
+    }) else {
+        return Ok(None);
+    };
+    append(
+        &path,
+        &Event::Denied {
+            id: hit.id.clone(),
+            ts: now(),
+            reason: reason.to_string(),
         },
     )?;
     Ok(Some(hit.id.clone()))
@@ -346,7 +413,7 @@ pub fn mark_relayed(dir: &Path, session: &str, message_text: &str) -> Result<Vec
     for e in entries.iter().filter(|e| {
         e.executed.is_some()
             && !e.relayed
-            && e.dismissed.is_none()
+            && !e.is_dismissed()
             && message_text.contains(e.id.as_str())
     }) {
         append(
@@ -431,8 +498,9 @@ pub fn dismiss(dir: &Path, id: &str, reason: &str) -> Result<PathBuf, DismissErr
 pub enum StopOutcome {
     /// Block with this reason.
     Block(String),
-    /// Allow; `Some(msg)` is a `systemMessage` listing this session's
-    /// dismissals so they stay visible.
+    /// Allow. [`stop_outcome`] always returns `Allow(None)` (user ruling
+    /// 2026-11-16: dismissals are no longer listed on Stop); the `Some(msg)`
+    /// payload is a `systemMessage` slot that nothing produces any more.
     Allow(Option<String>),
 }
 
@@ -444,12 +512,21 @@ prompt there). For each pending entry below:\n\
 is elsewhere, `cd` there in a separate Bash call first). blastguard judges it normally, so the human \
 sees the real permission prompt. Do not rewrite it, wrap it, or hand it to the user to run.\n\
   2. SendMessage the output and exit code to the subagent, and name the relay id in the message.\n\
-If the human declined the prompt, or the command cannot be run, record why with \
-`blastguard relay dismiss <id> --reason \"<why>\"`; every dismissal is shown on each later Stop of \
-this session.";
+If the human declined the prompt, blastguard denied the re-run in the main session, or the command \
+cannot be run, record why with \
+`blastguard relay dismiss <id> --reason \"<why>\"`; the dismissal is recorded in the queue file and is \
+not shown on later Stops.";
 
 fn describe(e: &Entry) -> String {
     let state = match (&e.executed, e.relayed) {
+        (None, _) if !e.denied.is_empty() => format!(
+            "re-run in the main session and DENIED there by blastguard ({} time(s)), so it did \
+             not run; record the outcome with `blastguard relay dismiss {} --reason \"<why>\"` \
+             (latest deny reason, first line: {})",
+            e.denied.len(),
+            e.id,
+            e.denied.last().and_then(|r| r.lines().next()).unwrap_or("")
+        ),
         (None, _) => "not executed in the main session".to_string(),
         (Some(code), false) => format!(
             "executed (exit code {}), not yet relayed by SendMessage",
@@ -473,16 +550,6 @@ fn indent(s: &str) -> String {
         .join("\n")
 }
 
-fn describe_dismissed(e: &Entry) -> String {
-    format!(
-        "- relay id: {} (cwd: {}) dismissed — reason: {}\n  command:\n{}\n",
-        e.id,
-        e.cwd,
-        e.dismissed.as_deref().unwrap_or(""),
-        indent(&e.command)
-    )
-}
-
 /// The Stop verdict for `session`. Blocks on any unresolved entry and on any
 /// queue that cannot be read or folded (fail-closed, path named). Blocking
 /// does not depend on `stop_hook_active`: the way out is to resolve or
@@ -503,34 +570,16 @@ pub fn stop_outcome(dir: &Path, session: &str) -> StopOutcome {
         }
     };
     let pending: Vec<&Entry> = entries.iter().filter(|e| !e.is_resolved()).collect();
-    let dismissed: Vec<&Entry> = entries.iter().filter(|e| e.dismissed.is_some()).collect();
-    let dismissed_text = if dismissed.is_empty() {
-        None
-    } else {
-        Some(format!(
-            "blastguard relay: {} subagent Ask(s) were dismissed in this session instead of being \
-             re-run in the main session:\n{}",
-            dismissed.len(),
-            dismissed
-                .iter()
-                .map(|e| describe_dismissed(e))
-                .collect::<String>()
-        ))
-    };
     if pending.is_empty() {
-        return StopOutcome::Allow(dismissed_text);
+        return StopOutcome::Allow(None);
     }
-    let mut reason = format!(
+    let reason = format!(
         "blastguard relay: {} subagent Ask(s) in this session have not been adjudicated in the \
          main session.\n{PROCEDURE}\nqueue file: {}\n\nPending:\n{}",
         pending.len(),
         path.display(),
         pending.iter().map(|e| describe(e)).collect::<String>()
     );
-    if let Some(d) = dismissed_text {
-        reason.push('\n');
-        reason.push_str(&d);
-    }
     StopOutcome::Block(reason)
 }
 
@@ -600,6 +649,36 @@ mod tests {
         assert_eq!(stop_outcome(&d, "s"), StopOutcome::Allow(None));
     }
 
+    // Implementer-written (backlog b72b1c4d): a denial is an outcome, never a
+    // resolution, and an undetermined queue records nothing.
+    #[test]
+    fn denial_is_shown_but_never_resolves_and_corrupt_queue_records_nothing() {
+        let d = tmp("denied");
+        let id = queue(&d, "s", None, "/w", "echo hi", "r").unwrap();
+        assert_eq!(
+            mark_denied(&d, "s", "/other", "echo hi", "no").unwrap(),
+            None
+        );
+        assert_eq!(
+            mark_denied(&d, "s", "/w", "echo hi", "denied here\nmore").unwrap(),
+            Some(id.clone())
+        );
+        match stop_outcome(&d, "s") {
+            StopOutcome::Block(msg) => {
+                assert!(msg.contains("DENIED there by blastguard"), "{msg}");
+                assert!(msg.contains("denied here"), "{msg}");
+                assert!(!msg.contains("not executed in the main session"), "{msg}");
+            }
+            other => panic!("{other:?}"),
+        }
+        let p = queue_path(&d, "s");
+        let mut text = std::fs::read_to_string(&p).unwrap();
+        text.push_str("not json\n");
+        std::fs::write(&p, &text).unwrap();
+        assert!(mark_denied(&d, "s", "/w", "echo hi", "x").is_err());
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), text);
+    }
+
     #[test]
     fn event_for_unknown_id_is_corrupt() {
         let d = tmp("unknown");
@@ -622,8 +701,64 @@ mod tests {
         let id = queue(&d, "s", None, "/w", "x", "r").unwrap();
         assert_eq!(dismiss(&d, &id, "  "), Err(DismissError::EmptyReason));
         assert!(dismiss(&d, &id, "declined").is_ok());
+        // test-weakening-justified: user ruling 2026-11-16 「表示をやめてほしい」 — dismissed entries are no longer listed on Stop
+        assert_eq!(stop_outcome(&d, "s"), StopOutcome::Allow(None));
+        // The dismissal is still recorded in the queue file.
+        let q = std::fs::read_to_string(queue_path(&d, "s")).unwrap();
+        assert!(q.contains(&id) && q.contains("declined"), "{q}");
+    }
+
+    const DISMISSED_MARKER: &str = "DISMISSED-BODY-MARKER-line1\nDISMISSED-BODY-MARKER-line2 <<EOF";
+    const PENDING_MARKER: &str = "PENDING-BODY-MARKER-line1\nPENDING-BODY-MARKER-line2";
+
+    // test-weakening-justified: RED contract test for the compact dismissed Stop text; ignored until the fix lands.
+    #[test]
+    fn stop_allow_text_shows_dismissed_id_reason_and_queue_path_but_not_command_body() {
+        let d = tmp("compact-allow");
+        let id = queue(&d, "s", None, "/w", DISMISSED_MARKER, "r").unwrap();
+        dismiss(&d, &id, "declined by human").unwrap();
+        let qp = queue_path(&d, "s").display().to_string();
         match stop_outcome(&d, "s") {
-            StopOutcome::Allow(Some(msg)) => assert!(msg.contains(&id) && msg.contains("declined")),
+            StopOutcome::Allow(None) => {}
+            StopOutcome::Allow(Some(msg)) => {
+                // test-weakening-justified: user ruling 2026-11-16 「表示をやめてほしい」 — dismissed entries are no longer listed on Stop
+                assert!(
+                    !msg.contains(&id) && !msg.contains("declined by human") && !msg.contains(&qp),
+                    "dismissed entry listed: {msg}"
+                );
+                assert!(!msg.contains("DISMISSED-BODY-MARKER"), "{msg}");
+                panic!("all-dismissed Stop must be a plain Allow(None), got: {msg}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    // test-weakening-justified: RED contract test for the compact dismissed Stop text; ignored until the fix lands.
+    #[test]
+    fn stop_block_text_keeps_pending_command_in_full_but_not_dismissed_body() {
+        let d = tmp("compact-block");
+        let pid = queue(&d, "s", None, "/w", PENDING_MARKER, "r").unwrap();
+        let did = queue(&d, "s", None, "/w", DISMISSED_MARKER, "r").unwrap();
+        dismiss(&d, &did, "declined by human").unwrap();
+        match stop_outcome(&d, "s") {
+            StopOutcome::Block(msg) => {
+                assert!(msg.contains(&pid), "{msg}");
+                assert!(
+                    msg.contains(&indent(PENDING_MARKER)),
+                    "pending command not shown in full: {msg}"
+                );
+                // test-weakening-justified: user ruling 2026-11-16 「表示をやめてほしい」 — dismissed entries are no longer listed on Stop
+                assert!(
+                    !msg.contains(&did)
+                        && !msg.contains("declined by human")
+                        && !msg.contains("dismissed"),
+                    "dismissed entry listed: {msg}"
+                );
+                assert!(
+                    !msg.contains("DISMISSED-BODY-MARKER"),
+                    "command body leaked: {msg}"
+                );
+            }
             other => panic!("{other:?}"),
         }
     }

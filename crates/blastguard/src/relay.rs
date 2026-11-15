@@ -498,8 +498,9 @@ pub fn dismiss(dir: &Path, id: &str, reason: &str) -> Result<PathBuf, DismissErr
 pub enum StopOutcome {
     /// Block with this reason.
     Block(String),
-    /// Allow; `Some(msg)` is a `systemMessage` listing this session's
-    /// dismissals so they stay visible.
+    /// Allow. [`stop_outcome`] always returns `Allow(None)` (user ruling
+    /// 2026-11-16: dismissals are no longer listed on Stop); the `Some(msg)`
+    /// payload is a `systemMessage` slot that nothing produces any more.
     Allow(Option<String>),
 }
 

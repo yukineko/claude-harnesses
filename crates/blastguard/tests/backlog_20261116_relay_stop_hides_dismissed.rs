@@ -21,10 +21,7 @@ const SESSION: &str = "relay-hide-sess-20261116";
 const AGENT: &str = "a0c1d2e3f4a5b6c7d";
 
 fn setup(tag: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!(
-        "bg-relay-hide-{tag}-{}",
-        std::process::id()
-    ));
+    let root = std::env::temp_dir().join(format!("bg-relay-hide-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     for d in ["home", "approvals", "relay", "cwd", "other"] {
         std::fs::create_dir_all(root.join(d)).unwrap();

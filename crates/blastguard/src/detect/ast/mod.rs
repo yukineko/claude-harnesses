@@ -614,3 +614,26 @@ fn subscript_may_assign(operand: &str) -> bool {
     };
     idx.is_empty() || !idx.bytes().all(|b| b.is_ascii_digit())
 }
+
+/// A builtin's name operand whose subscript holds `$( )`, `$(( ))`, `${ }`,
+/// a backquote or `<( )` / `>( )`: the shell expands it when it evaluates the
+/// subscript, so `read 'a[$(cmd)]'` runs `cmd` (bash and zsh; `unset`,
+/// `declare`, `printf -v` in bash). The command would be invisible, so the
+/// whole analysis is `Undetermined(Unsupported)` — the same as a prefix
+/// assignment `a[$(cmd)]=v`.
+fn subscript_subst(operand: &str) -> Result<(), Cause> {
+    let Some((_, idx)) = operand.split_once('[') else {
+        return Ok(());
+    };
+    if has_subst(idx) || idx.contains("${") {
+        return Err(Cause::Unsupported(format!(
+            "command substitution in the subscript of {operand}"
+        )));
+    }
+    Ok(())
+}
+
+/// `$( )` (also `$(( ))`), backquotes or process substitution in raw text.
+fn has_subst(s: &str) -> bool {
+    s.contains("$(") || s.contains('`') || s.contains("<(") || s.contains(">(")
+}

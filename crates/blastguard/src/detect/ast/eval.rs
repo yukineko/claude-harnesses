@@ -36,16 +36,17 @@
 //! * Function definitions and `coproc` make the whole analysis
 //!   `Undetermined(Unsupported)` (their bodies run at a time this evaluator
 //!   does not model), as does a `$( )` / backquote inside a parameter
-//!   operation or an arithmetic expression (the commands it runs would be
-//!   invisible).
+//!   operation, an arithmetic expression or a subscript (also a builtin's
+//!   quoted name operand, `read 'a[$(c)]'`; `${` too there): the commands it
+//!   runs would be invisible.
 //!
 //! The whole evaluation runs under `catch_unwind` (a panic is
 //! `Undetermined(Panic)`) and under a work budget (`Undetermined(Unsupported)`
 //! when exceeded).
 
 use super::{
-    parse, Analysis, Cause, Context, FdTarget, HereDoc, Quoting, RedirOp, RedirTarget, Redirect,
-    Script, SimpleCommand, StdinSource, Value, Word,
+    has_subst, parse, Analysis, Cause, Context, FdTarget, HereDoc, Quoting, RedirOp, RedirTarget,
+    Redirect, Script, SimpleCommand, StdinSource, Value, Word,
 };
 use brush_parser::ast;
 use brush_parser::word::{Parameter, ParameterExpr, WordPiece, WordPieceWithSource};
@@ -264,13 +265,15 @@ impl Env {
             .insert(name.to_string(), undet(format!("{name}: {why}")));
     }
 
-    fn forget_operand(&mut self, operand: &str, why: &str) {
+    fn forget_operand(&mut self, operand: &str, why: &str) -> Result<(), Cause> {
+        super::subscript_subst(operand)?;
         if super::subscript_may_assign(operand) {
             self.havoc_vars(&format!("the subscript of {operand} may assign variables"));
         }
         if let Some(base) = operand.split('[').next().filter(|b| is_ident(b)) {
             self.forget(base, why);
         }
+        Ok(())
     }
 
     fn havoc_vars(&mut self, why: &str) {
@@ -413,11 +416,6 @@ impl Acc {
     fn any_quote(&self) -> bool {
         self.single || self.double || self.ansic || self.escape
     }
-}
-
-/// `$( )`, backquotes or process substitution in raw text.
-fn has_subst(s: &str) -> bool {
-    s.contains("$(") || s.contains('`') || s.contains("<(") || s.contains(">(")
 }
 
 fn is_ident(s: &str) -> bool {
@@ -1142,7 +1140,7 @@ impl Ev {
         let args = sc.argv.get(1..).unwrap_or(&[]);
         if SPECIAL_BUILTINS.contains(&name) {
             for (n, _) in &sc.assignments {
-                env.forget_operand(n, "prefix assignment of a special builtin");
+                env.forget_operand(n, "prefix assignment of a special builtin")?;
             }
         }
         match name {
@@ -1168,7 +1166,7 @@ impl Ev {
                 while let Some(a) = it.next() {
                     match &a.value {
                         Value::Literal(s) if s == "-v" => match it.next().map(|w| &w.value) {
-                            Some(Value::Literal(n)) => env.forget_operand(n, "set by printf -v"),
+                            Some(Value::Literal(n)) => env.forget_operand(n, "set by printf -v")?,
                             _ => env.make_opaque("printf -v with an undetermined name"),
                         },
                         Value::Literal(_) => {}
@@ -1179,11 +1177,11 @@ impl Ev {
                     }
                 }
             }
-            n if DECL_BUILTINS.contains(&n) => self.declaration(n, args, decl_names, &mut env),
+            n if DECL_BUILTINS.contains(&n) => self.declaration(n, args, decl_names, &mut env)?,
             n if ASSIGNING_BUILTINS.contains(&n) => {
                 for a in args {
                     match &a.value {
-                        Value::Literal(s) => env.forget_operand(s, &format!("assigned by {n}")),
+                        Value::Literal(s) => env.forget_operand(s, &format!("assigned by {n}"))?,
                         Value::Undetermined(_) => {
                             env.make_opaque(&format!("{n} with an undetermined operand"));
                         }
@@ -1202,7 +1200,7 @@ impl Ev {
         args: &[Word],
         decl_names: &BTreeMap<usize, String>,
         env: &mut Env,
-    ) {
+    ) -> Result<(), Cause> {
         for (i, a) in args.iter().enumerate() {
             let s = match &a.value {
                 Value::Literal(s) => s,
@@ -1221,17 +1219,17 @@ impl Ev {
             match s.split_once('=') {
                 Some((lhs, rhs)) => {
                     if let Some(n) = lhs.strip_suffix('+') {
-                        env.forget_operand(n, "+= appends to a value");
+                        env.forget_operand(n, "+= appends to a value")?;
                     } else if is_ident(lhs) {
                         env.bind(lhs, Value::Literal(rhs.to_string()));
                     } else {
-                        env.forget_operand(lhs, "indexed assignment");
+                        env.forget_operand(lhs, "indexed assignment")?;
                     }
                     if builtin == "readonly" {
                         env.readonly.insert(lhs.to_string());
                     }
                 }
-                None if s.contains('[') => env.forget_operand(s, "declared element"),
+                None if s.contains('[') => env.forget_operand(s, "declared element")?,
                 None => {
                     if builtin == "readonly" {
                         env.readonly.insert(s.clone());
@@ -1239,6 +1237,7 @@ impl Ev {
                 }
             }
         }
+        Ok(())
     }
 
     fn cd(&mut self, sc: &SimpleCommand, args: &[Word], env: Env) -> Outcome {

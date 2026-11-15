@@ -1213,3 +1213,74 @@ mod env_arith_followups {
         );
     }
 }
+
+// After an opaque builtin (eval / source / `.` / undetermined command word) the
+// integer attribute of any name cannot be read statically, so any name may be
+// integer: an assignment whose value is not text-determined is Unsupported
+// (user ruling 2026-11-16, reading A).
+mod env_arith_opaque {
+    use super::*;
+
+    fn assert_unsupported(command: &str) {
+        match analyze(command) {
+            Analysis::Undetermined(Cause::Unsupported(_)) => {}
+            other => panic!(
+                "{command:?}: after an opaque state any name may be integer, so a \
+                 non-text-determined assignment must be Undetermined(Unsupported), got {other:#?}"
+            ),
+        }
+    }
+
+    fn assert_known(command: &str) {
+        match analyze(command) {
+            Analysis::Known(_) => {}
+            other => panic!("{command:?} is fully determined by its text; got {other:#?}"),
+        }
+    }
+
+    #[test]
+    fn eval_declare_i_then_env_assign_is_unsupported() {
+        assert_unsupported("eval 'declare -i n'; n=$X; cat > /tmp/f");
+    }
+
+    #[test]
+    fn eval_then_env_assign_is_unsupported() {
+        assert_unsupported("eval foo; n=$X; cat > /tmp/f");
+    }
+
+    #[test]
+    fn dot_source_then_prefix_assign_is_unsupported() {
+        assert_unsupported(". \"$HOME/.cargo/env\" && X=$Y cat > /tmp/f");
+    }
+
+    #[test]
+    fn source_then_env_assign_is_unsupported() {
+        assert_unsupported("source ./env.sh; n=$X; cat > /tmp/f");
+    }
+
+    #[test]
+    fn undetermined_command_word_then_env_assign_is_unsupported() {
+        assert_unsupported("$cmd; n=$X; cat > /tmp/f");
+    }
+
+    #[test]
+    fn eval_then_export_operand_env_assign_is_unsupported() {
+        assert_unsupported("eval foo; export n=$X; cat > /tmp/f");
+    }
+
+    // Controls.
+    #[test]
+    fn control_no_opaque_env_assign_stays_known() {
+        assert_known("n=$X; cat > /tmp/f");
+    }
+
+    #[test]
+    fn control_opaque_then_numeric_literal_stays_known() {
+        assert_known("eval foo; n=5; cat > /tmp/f");
+    }
+
+    #[test]
+    fn control_source_then_no_assignment_stays_known() {
+        assert_known(". \"$HOME/.cargo/env\" && cat > /tmp/f");
+    }
+}

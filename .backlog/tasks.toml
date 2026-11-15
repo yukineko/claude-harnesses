@@ -2571,3 +2571,32 @@ exit 101: 83 (/Users/yuki/src/.harness-worktrees/sidereds-20261116/crates/tdd)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.48s
      Running tests/backlog_20261116_red_killed_by_signal_records_red.rs (target/debug/deps/backlog_20261116_red_killed_by_signal_records_red-53c8e72309bcc7b8)
 error: test failed, to rerun pass `-p tdd --test backlog_20261116_red_killed_by_signal_records_red`"""
+
+[[task]]
+id = "54231a0a"
+title = "blastguard fail-open: fd=3; exec 3<<< 'echo hi'; bash <&$fd is Allow in main (expected Ask); e686a85e test regressed on main"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-16 on 84254ee76 (base 0744d9ef2 + tests only) and on 0f7cf5b0c: backlog_20261114_exec_fd_dynamic_fd_reader::benign_with_dynamic_fd_reader_is_not_allow FAILED, main => allow, left allow right ask. harm_with_dynamic_fd_reader_is_deny passes. e686a85e was closed done earlier, so this is a regression on main; not caused by 967fd65c/3da14bbd work (fails at their RED base)."
+created_at = 1794785293
+updated_at = 1794785293
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_exec_fd_dynamic_fd_reader"
+rev = "0f7cf5b0c5bf55605ab62165b626b86f5a6ffacd"
+observed_at = 1794785293
+detail = """
+exit 101: 2 (/Users/yuki/src/.harness-worktrees/backlog-close-p0-20261116/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/backlog_20261114_exec_fd_dynamic_fd_reader.rs (target/debug/deps/backlog_20261114_exec_fd_dynamic_fd_reader-4de96f009a33964c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_exec_fd_dynamic_fd_reader`"""

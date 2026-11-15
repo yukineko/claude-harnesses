@@ -27,6 +27,7 @@
 
 mod committed;
 mod config;
+mod excluded_label;
 mod gate;
 mod git;
 mod install;

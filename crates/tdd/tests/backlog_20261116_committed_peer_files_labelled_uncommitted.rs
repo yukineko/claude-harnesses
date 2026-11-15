@@ -66,8 +66,6 @@ fn rec(v: serde_json::Value, ts: &str) -> String {
     v.to_string()
 }
 
-// test-weakening-justified: new RED for an unfixed defect (backlog pending, 2026-11-16); the ignore is removed in the fixing commit.
-#[ignore]
 #[test]
 fn committed_peer_file_is_not_reported_as_uncommitted() {
     let home = std::env::temp_dir().join(format!("tdd-peer-label-{}", std::process::id()));

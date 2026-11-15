@@ -601,9 +601,11 @@ const STDIN_EXEC_BUILTINS: &[&str] = &["exec", "eval", "compile", "breakpoint", 
 /// Bare names whose mere reference reaches code execution through a path that
 /// cannot be followed statically — a name resolved from a string, or the
 /// builtins namespace reachable without an import (`__builtins__["exec"](…)`,
-/// `getattr(o, s)(…)`). Judged restrictively: undetermined ⇒ stdin executes.
-/// A CLOSED list.
-const STDIN_DYNAMIC_NAMES: &[&str] = &["getattr", "__builtins__"];
+/// `getattr(o, s)(…)`). The namespace accessors `globals` / `locals` / `vars`
+/// are on it too: bound to a name (`g = globals; g()["exec"](input())`) they
+/// reach `exec` without the call `exec(` ever appearing (backlog 0154ed31).
+/// Judged restrictively: undetermined ⇒ stdin executes. A CLOSED list.
+const STDIN_DYNAMIC_NAMES: &[&str] = &["getattr", "__builtins__", "globals", "locals", "vars"];
 
 /// Whether a literal `python -c` program may run its stdin as a Python
 /// program (an interactive console, a debugger, or `exec`/`eval`/`compile`

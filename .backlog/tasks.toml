@@ -2791,3 +2791,32 @@ exit 101: rc/.harness-worktrees/sidereds-20261116/crates/backlog)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.52s
      Running tests/backlog_20261116_zero_tests_filtered_out_not_discard.rs (target/debug/deps/backlog_20261116_zero_tests_filtered_out_not_discard-e511e6be63ab2a45)
 error: test failed, to rerun pass `-p backlog --test backlog_20261116_zero_tests_filtered_out_not_discard`"""
+
+[[task]]
+id = "9e565d01"
+title = "tdd gate: committed peer-commit files (folded in by include_committed) are reported as 'uncommitted file(s) not attributed to this session' with a clean working tree"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "message-mismatch",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed live 2026-11-16 in session 06c2bd77: tdd Stop gate said '10 uncommitted file(s) not attributed to this session were excluded: .backlog/tasks.done.toml, .specguard/spec-docs.toml, crates/blastguard/...' while git status --short in the judged checkout /Users/yuki/src/harness was empty. Diff source (gate.rs at 9a989926b): evaluate -> include_committed folds added lines of every non-merge commit on HEAD since session start (peer commits merged into main included) -> scope_to_session -> excluded list printed by attribution_note / generic_block_reason as 'uncommitted'. RED (commit a85bbe389, branch backlog/sidereds-20261116, 2026-11-16) fails verbatim: 'a COMMITTED peer file was reported as an uncommitted file with a clean working tree (git status --porcelain empty). stdout: (empty) stderr: tdd: 1 uncommitted file(s) not attributed to this session were excluded from the scan (no Edit/Write/MultiEdit/NotebookEdit of them and no Bash command naming them outside a read-only statement in this session's transcript): peer/other.rs'. Readings: (a) defect - message names a committed file 'uncommitted' (prose vs behaviour, CLAUDE.md 4), sending the reader to a non-existent working-tree change; (b) only loose wording, exclusion correct. Both agree the exclusion itself is right; the RED asserts only the label, a relabel passes it. Also observed (NOT filed, no RED): 'implementation changed: crates/tdd/src/proof.rs' was this session's own commit 9c58c590d folded in by design (ruling 2026-10-27 Hybrid); that commit's test change was only removing a #[ignore] line (1 deletion, 0 added test lines), so committed_test_evidence may find no test evidence for an un-ignore fix commit - unverified lead. DOES NOT PROVE: the un-ignore lead, merge-commit handling, block_reason path (only the stderr note was observed in the RED)."
+created_at = 1794764414
+updated_at = 1794764414
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261116_committed_peer_files_labelled_uncommitted -- --ignored committed_peer_file_is_not_reported_as_uncommitted"
+rev = "a85bbe38919fc6f1c3b5e59f788f4a2674b7c7b0"
+observed_at = 1794764414
+detail = """
+exit 101: s-worktrees/sidereds-20261116/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.84s
+     Running tests/backlog_20261116_committed_peer_files_labelled_uncommitted.rs (target/debug/deps/backlog_20261116_committed_peer_files_labelled_uncommitted-3ed7d6413e72ff5c)
+error: test failed, to rerun pass `-p tdd --test backlog_20261116_committed_peer_files_labelled_uncommitted`"""

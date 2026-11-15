@@ -2808,6 +2808,8 @@ notes = "Observed live 2026-11-16 in session 06c2bd77: tdd Stop gate said '10 un
 created_at = 1794764414
 updated_at = 1794764414
 weight = 0.0
+issue_number = 1810
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1810"
 rev = 0
 
 [task.repro]

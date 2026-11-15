@@ -15,8 +15,9 @@
 //! 3. editgate — `condukt editgate` blocks a real compile-broken Rust edit
 //!    under the run's live worktree, and fails soft (empty stdout, exit 0)
 //!    on invalid/empty stdin (never-break-a-turn).
-//! 4. auto-rollback — a task that goes `verified -> failed` is automatically
-//!    restored to the last checkpoint and the restore is journaled.
+//! 4. verified -> failed — a task that goes `verified -> failed` ends `failed`
+//!    with NO checkpoint restore; the transition is journaled as
+//!    `verified_failed` (backlog b8aa9d43).
 //! 5. non-interference — interleaving editgate calls with the
 //!    checkpoint/rollback steps never corrupts the shared run-state, its
 //!    checkpoint journal, or the task's recorded worktree.
@@ -243,7 +244,7 @@ fn edit_payload(file_path: &Path) -> String {
 }
 
 #[test]
-fn foundation_capstone_composes_autonomy_checkpoint_editgate_and_auto_rollback_in_one_run() {
+fn foundation_capstone_composes_autonomy_checkpoint_editgate_and_verified_failed_in_one_run() {
     let fx = Fixture::new("capstone");
     let decomp = write_decomp(&fx);
 
@@ -359,8 +360,8 @@ fn foundation_capstone_composes_autonomy_checkpoint_editgate_and_auto_rollback_i
         "journal mutated by editgate calls (non-interference violated)"
     );
 
-    // ── 4. Auto-rollback composition: verified -> failed restores the
-    // checkpoint, journaled as `auto_rollback` ─────────────────────────────
+    // ── 4. verified -> failed composition: the task ends `failed` (no
+    // checkpoint restore), journaled as `verified_failed` ──────────────────
     let verify = fx.condukt(&[
         "state", "set", "--run", &rid, "--task", "t1", "--status", "verified",
     ]);
@@ -373,22 +374,26 @@ fn foundation_capstone_composes_autonomy_checkpoint_editgate_and_auto_rollback_i
     let show_after = fx.condukt(&["state", "show", "--run", &rid]);
     let after = String::from_utf8_lossy(&show_after.stdout);
     assert!(
-        after.contains("\"status\": \"pending\"") || after.contains("Pending"),
-        "auto-rollback did not restore snapshot: {after}"
+        after.contains("\"status\": \"failed\""),
+        "task is not failed after verified->failed: {after}"
     );
     assert!(
-        !after.contains("failed"),
-        "task still failed after auto-rollback: {after}"
+        !after.contains("\"status\": \"pending\""),
+        "verified->failed restored the snapshot: {after}"
     );
     assert!(
         after.contains(fx.broken_wt.to_str().unwrap()),
-        "worktree assignment lost after auto-rollback: {after}"
+        "worktree assignment lost after verified->failed: {after}"
     );
 
     let jtext_final = std::fs::read_to_string(&journal).unwrap();
     assert!(
-        jtext_final.contains("auto_rollback"),
-        "no auto_rollback journal entry: {jtext_final}"
+        jtext_final.contains("verified_failed"),
+        "no verified_failed journal entry: {jtext_final}"
+    );
+    assert!(
+        !jtext_final.contains("auto_rollback"),
+        "a restore was journaled although none happens: {jtext_final}"
     );
 
     // A further editgate call after the composed rollback still resolves the

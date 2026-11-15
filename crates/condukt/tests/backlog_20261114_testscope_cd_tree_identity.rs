@@ -126,7 +126,6 @@ impl Fx {
 // test-weakening-justified: new RED for an unfixed defect (backlog pending,
 // 2026-11-14); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: <backlog-pending> 2026-11-14 testscope rerun guard keys on payload cwd, not the `cd` target — remove the ignore when fixed"]
 fn rerun_after_editing_the_cd_target_tree_is_allowed() {
     let fx = Fx::new();
     let cmd = fx.cmd();

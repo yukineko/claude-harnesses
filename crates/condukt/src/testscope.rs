@@ -42,10 +42,24 @@
 //! (CLAUDE.md §3). A command that contains no test / merge invocation is never
 //! judged and is allowed by printing nothing.
 //!
-//! Not covered (stated, not hidden): the tree and the task scope are taken
-//! from the payload `cwd`, so a leading `cd <dir> &&` or `--manifest-path`
-//! pointing elsewhere is judged against the payload cwd; `tdd red|green`
-//! without `--cmd` (which runs tdd's configured `test_cmd`) is not judged.
+//! **Where a test runs** (backlog 214b39b5): a `cd <dir>` that is certain to
+//! run before a test (head of a list followed by `&&` / `;`, or inside an
+//! all-`&&` chain) moves the test into `<dir>`; rule 3 identifies THAT tree,
+//! and rule 4 is judged both in `<dir>` and in the payload cwd. A `cd` whose
+//! target is not a literal path (`$VAR`, `-`, globs, `pushd`/`popd`, `~user`,
+//! a bare relative name while `CDPATH` is set) or which is conditional
+//! (`||`, `|`, `&`, after a non-head `&&` member followed by `;`) leaves the
+//! directory undetermined, and a test there is denied. See [`judge_pieces`].
+//! When the run directory's tree differs from the payload cwd's tree, the
+//! rerun key also records the payload cwd's tree, so editing the payload cwd
+//! permits a rerun through the same `cd`; a test run directly in a tree and a
+//! `cd` route into the same tree always collide.
+//!
+//! Not covered (stated, not hidden): `--manifest-path` and `git -C`-style
+//! redirection inside cargo, directory changes by anything other than a
+//! literal `cd` (a sourced script, `builtin cd`, `eval`), and `tdd
+//! red|green` without `--cmd` (which runs tdd's configured `test_cmd`) are not
+//! judged — such a test is attributed to the directory the walk last knew.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -73,61 +87,341 @@ type Words = Vec<String>;
 /// worktree root); `ledger` is where same-tree runs are recorded.
 pub fn judge(command: &str, cwd: &Path, home: Option<&Path>, ledger: &Path) -> Decision {
     let stripped = strip_heredoc_bodies(command);
-    let segments = match split_segments(&stripped) {
-        Some(s) => s,
-        None => {
-            return if mentions_test_or_merge(&stripped) {
-                Decision::Deny(format!(
-                    "condukt testscope cannot tokenize this command (unbalanced quote), and it \
-                     mentions a cargo test / git merge, so whether it is a full suite or a \
-                     mid-run main merge is undetermined: {FULL_SUITE_REASON}"
-                ))
-            } else {
-                Decision::Allow
-            };
-        }
+    let Some(pieces) = split_pieces(&stripped) else {
+        return if mentions_test_or_merge(&stripped) {
+            Decision::Deny(format!(
+                "condukt testscope cannot tokenize this command (unbalanced quote), and it \
+                 mentions a cargo test / git merge, so whether it is a full suite or a \
+                 mid-run main merge is undetermined: {FULL_SUITE_REASON}"
+            ))
+        } else {
+            Decision::Allow
+        };
     };
-    let in_task_worktree = home
-        .map(|h| cwd.starts_with(h.join(".condukt").join("worktrees")))
-        .unwrap_or(false);
+    let ctx = Ctx {
+        wt_root: home.map(|h| h.join(".condukt").join("worktrees")),
+        cwd_in_wt: home
+            .map(|h| cwd.starts_with(h.join(".condukt").join("worktrees")))
+            .unwrap_or(false),
+        home: home.map(Path::to_path_buf),
+    };
 
-    let mut test_cmds: Vec<Words> = Vec::new();
-    for seg in &segments {
-        let words = match shlex::split(seg) {
-            Some(w) => w,
-            None => {
-                if mentions_test_or_merge(seg) {
-                    return Decision::Deny(format!(
-                        "condukt testscope cannot tokenize `{seg}`, and it mentions a cargo \
-                         test / git merge: {FULL_SUITE_REASON}"
-                    ));
-                }
-                continue;
+    let test_cmds = match judge_pieces(&pieces, &Dir::Known(cwd.to_path_buf()), &ctx, 0, "") {
+        Judged::Deny(r) => return Decision::Deny(r),
+        Judged::Test(t) => t,
+        Judged::Other => return Decision::Allow,
+    };
+    // Every test must run in a directory we can name; a `cd` we could not
+    // resolve leaves the tree under test undetermined (CLAUDE.md §3).
+    let mut by_dir: Vec<(PathBuf, Vec<Words>)> = Vec::new();
+    for (words, dir) in test_cmds {
+        let d = match dir {
+            Dir::Known(d) => d,
+            Dir::Undetermined(why) => {
+                return Decision::Deny(format!(
+                    "condukt testscope cannot determine the directory `{}` runs in ({why}), so \
+                     its tree, its task scope and whether it re-runs a test already run on the \
+                     same tree are undetermined; run it without that `cd`, or with a leading \
+                     `cd <literal absolute path> &&`",
+                    words.join(" ")
+                ));
             }
         };
-        match judge_words(&words, in_task_worktree, 0) {
-            Judged::Deny(r) => return Decision::Deny(r),
-            Judged::Test(w) => test_cmds.extend(w),
-            Judged::Other => {}
+        match by_dir.iter_mut().find(|(p, _)| *p == d) {
+            Some((_, v)) => v.push(words),
+            None => by_dir.push((d, vec![words])),
         }
     }
-    if test_cmds.is_empty() {
-        return Decision::Allow;
+    // Rule C (task scope) is judged in the directory each test runs in AND in
+    // the payload cwd: a worker inside its task worktree does not escape its
+    // scope by `cd`-ing elsewhere, and a `cd` into a task worktree does not
+    // escape that task's scope (backlog 214b39b5).
+    for (d, tests) in &by_dir {
+        if let Decision::Deny(r) = check_task_scope(tests, d) {
+            return Decision::Deny(r);
+        }
+        if d != cwd {
+            if let Decision::Deny(r) = check_task_scope(tests, cwd) {
+                return Decision::Deny(r);
+            }
+        }
     }
-    if let Decision::Deny(r) = check_task_scope(&test_cmds, cwd) {
-        return Decision::Deny(r);
+    check_rerun(&by_dir, cwd, ledger)
+}
+
+/// Where a simple command runs, as far as the leading `cd`s of its command
+/// line determine it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Dir {
+    Known(PathBuf),
+    /// A `cd` whose target or whose execution cannot be decided statically
+    /// (variable, `-`, `pushd`, conditional on another command, …).
+    Undetermined(String),
+}
+
+impl Dir {
+    fn undetermined(why: impl Into<String>) -> Self {
+        Dir::Undetermined(why.into())
     }
-    check_rerun(&test_cmds, cwd, ledger)
+}
+
+/// Per-command-line facts the segment judge needs.
+struct Ctx {
+    /// `$HOME/.condukt/worktrees`, when `$HOME` is known.
+    wt_root: Option<PathBuf>,
+    /// Whether the payload cwd is inside `wt_root`.
+    cwd_in_wt: bool,
+    home: Option<PathBuf>,
+}
+
+impl Ctx {
+    /// Rule 2 applies when the payload cwd or the directory the command runs
+    /// in is a condukt task worktree; an undetermined directory might be one.
+    fn in_task_worktree(&self, dir: &Dir) -> bool {
+        self.cwd_in_wt
+            || match dir {
+                Dir::Known(d) => self.wt_root.as_ref().is_some_and(|r| d.starts_with(r)),
+                Dir::Undetermined(_) => true,
+            }
+    }
 }
 
 enum Judged {
     Deny(String),
-    /// Scoped (allowed so far) test invocations, normalized.
-    Test(Vec<Words>),
+    /// Scoped (allowed so far) test invocations, normalized, each with the
+    /// directory it runs in.
+    Test(Vec<(Words, Dir)>),
     Other,
 }
 
-fn judge_words(words: &[String], in_task_worktree: bool, depth: usize) -> Judged {
+/// Judge every simple command of a tokenized command line, tracking the
+/// directory leading `cd`s move into. `what` names the program for messages
+/// ("" for the hook's own command line).
+///
+/// A `cd` changes the directory of later commands only when it is certain to
+/// have run before them and they are certain to run after it:
+///
+/// * at the head of a list (start, after `;` / newline / `(`) and followed by
+///   `&&`, `;`, newline, `)` or the end — every later command of the list runs
+///   in its target (if the `cd` fails, a `;`-joined successor runs in the old
+///   directory, but then the target does not exist and its tree identity
+///   fails, which denies);
+/// * later in an all-`&&` list and followed by `&&` — its target holds only
+///   while the `&&` run continues; at the first `;`, `||`, `|` or `&` the
+///   directory becomes undetermined (an earlier member may have failed, so
+///   the `cd` may not have run).
+///
+/// Any other `cd` (after `||` / `|` / `&`, or followed by them, `pushd`,
+/// `popd`) makes the directory undetermined. `( … )` and `` ` … ` `` restore
+/// the directory they started with.
+fn judge_pieces(pieces: &[Piece], start: &Dir, ctx: &Ctx, depth: usize, what: &str) -> Judged {
+    let mut dir = start.clone();
+    // (dir, provisional) saved at each `(` / opening backtick.
+    let mut stack: Vec<(Dir, bool)> = Vec::new();
+    let mut in_tick = false;
+    let mut at_head = true;
+    let mut all_and = true;
+    // `dir` was set by a non-head `cd` and holds only while the `&&` run lasts.
+    let mut provisional = false;
+    let mut found: Vec<(Words, Dir)> = Vec::new();
+    let break_provisional = |dir: &mut Dir, provisional: &mut bool| {
+        if *provisional {
+            *dir = Dir::undetermined(
+                "a `cd` that ran only if an earlier `&&` member succeeded is followed by a \
+                 command that runs either way",
+            );
+            *provisional = false;
+        }
+    };
+    for (idx, piece) in pieces.iter().enumerate() {
+        let seg = match piece {
+            Piece::Op(op) => {
+                match op {
+                    Op::Seq => {
+                        break_provisional(&mut dir, &mut provisional);
+                        at_head = true;
+                        all_and = true;
+                    }
+                    Op::And | Op::Redirect => {}
+                    Op::Or | Op::Pipe | Op::Bg => {
+                        break_provisional(&mut dir, &mut provisional);
+                        all_and = false;
+                    }
+                    Op::Open => {
+                        stack.push((dir.clone(), provisional));
+                        provisional = false;
+                        at_head = true;
+                        all_and = true;
+                    }
+                    Op::Close => {
+                        if let Some((d, p)) = stack.pop() {
+                            dir = d;
+                            provisional = p;
+                        }
+                        at_head = false;
+                    }
+                    Op::Tick => {
+                        if in_tick {
+                            if let Some((d, p)) = stack.pop() {
+                                dir = d;
+                                provisional = p;
+                            }
+                            at_head = false;
+                        } else {
+                            stack.push((dir.clone(), provisional));
+                            provisional = false;
+                            at_head = true;
+                            all_and = true;
+                        }
+                        in_tick = !in_tick;
+                    }
+                }
+                continue;
+            }
+            Piece::Seg(s) => s,
+        };
+        let Some(words) = shlex::split(seg) else {
+            if mentions_test_or_merge(seg) {
+                return Judged::Deny(if what.is_empty() {
+                    format!(
+                        "condukt testscope cannot tokenize `{seg}`, and it mentions a cargo \
+                         test / git merge: {FULL_SUITE_REASON}"
+                    )
+                } else {
+                    format!(
+                        "condukt testscope cannot tokenize `{seg}` in {what}: \
+                         {FULL_SUITE_REASON}"
+                    )
+                });
+            }
+            at_head = false;
+            continue;
+        };
+        let stripped_words = strip_prefixes(&words);
+        if let Some(first) = stripped_words.first() {
+            if matches!(first.as_str(), "cd" | "pushd" | "popd") {
+                let next = pieces[idx + 1..]
+                    .iter()
+                    .find_map(|p| match p {
+                        Piece::Op(Op::Redirect) => None,
+                        Piece::Op(o) => Some(Some(*o)),
+                        Piece::Seg(_) => Some(None),
+                    })
+                    .flatten();
+                let target = resolve_cd(stripped_words, &dir, ctx.home.as_deref());
+                if at_head && matches!(next, None | Some(Op::Seq | Op::And | Op::Close)) {
+                    dir = target;
+                    provisional = false;
+                } else if all_and && next == Some(Op::And) {
+                    dir = target;
+                    provisional = true;
+                } else {
+                    dir = Dir::undetermined(format!(
+                        "`{}` is not certain to have run before the commands after it",
+                        words.join(" ")
+                    ));
+                    provisional = false;
+                }
+                at_head = false;
+                continue;
+            }
+        }
+        at_head = false;
+        match judge_words(&words, &dir, ctx, depth) {
+            Judged::Deny(r) => return Judged::Deny(r),
+            Judged::Test(t) => found.extend(t),
+            Judged::Other => {}
+        }
+    }
+    if found.is_empty() {
+        Judged::Other
+    } else {
+        Judged::Test(found)
+    }
+}
+
+/// The directory `cd <args>` moves into from `dir`, resolved statically:
+/// a literal absolute path, a literal relative path (lexically against
+/// `dir`), `~` / `~/…` against `$HOME`, or no argument (`$HOME`). Anything
+/// else — `-`, a variable, a glob, command substitution, several operands,
+/// `pushd` / `popd`, a bare relative name while `CDPATH` is set — is
+/// undetermined.
+fn resolve_cd(words: &[String], dir: &Dir, home: Option<&Path>) -> Dir {
+    let shown = words.join(" ");
+    if words[0] != "cd" {
+        return Dir::undetermined(format!("`{shown}` changes the directory stack"));
+    }
+    let mut ops: Vec<&str> = Vec::new();
+    let mut opts_done = false;
+    for a in &words[1..] {
+        if !opts_done && a == "--" {
+            opts_done = true;
+        } else if !opts_done && a.starts_with('-') && a != "-" {
+            if !matches!(a.as_str(), "-L" | "-P" | "-e" | "-LP" | "-PL") {
+                return Dir::undetermined(format!("`{shown}`: unknown cd option `{a}`"));
+            }
+        } else {
+            ops.push(a.as_str());
+        }
+    }
+    let home_dir = || match home {
+        Some(h) => Dir::Known(h.to_path_buf()),
+        None => Dir::undetermined(format!("`{shown}` moves to $HOME, which is unknown")),
+    };
+    let arg = match ops.as_slice() {
+        [] => return home_dir(),
+        [a] => *a,
+        _ => return Dir::undetermined(format!("`{shown}` has several operands")),
+    };
+    if arg.is_empty() || arg == "-" || arg.contains(['$', '`', '*', '?', '[', '{']) {
+        return Dir::undetermined(format!("`{shown}`: the target is not a literal path"));
+    }
+    let target = if arg == "~" {
+        match home_dir() {
+            Dir::Known(h) => h,
+            u => return u,
+        }
+    } else if let Some(rest) = arg.strip_prefix("~/") {
+        match home_dir() {
+            Dir::Known(h) => h.join(rest),
+            u => return u,
+        }
+    } else if arg.starts_with('~') {
+        return Dir::undetermined(format!("`{shown}`: `~user` is not resolved"));
+    } else if Path::new(arg).is_absolute() {
+        PathBuf::from(arg)
+    } else {
+        let dotted = arg == "." || arg == ".." || arg.starts_with("./") || arg.starts_with("../");
+        if !dotted && std::env::var_os("CDPATH").is_some_and(|v| !v.is_empty()) {
+            return Dir::undetermined(format!("`{shown}`: CDPATH is set"));
+        }
+        match dir {
+            Dir::Known(d) => d.join(arg),
+            Dir::Undetermined(why) => return Dir::Undetermined(why.clone()),
+        }
+    };
+    Dir::Known(normalize_lexically(&target))
+}
+
+/// Resolve `.` and `..` components without touching the filesystem (the
+/// logical `cd -L` view).
+fn normalize_lexically(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+fn judge_words(words: &[String], dir: &Dir, ctx: &Ctx, depth: usize) -> Judged {
+    let in_task_worktree = ctx.in_task_worktree(dir);
     let w = strip_prefixes(words);
     let Some(first) = w.first() else {
         return Judged::Other;
@@ -140,7 +434,7 @@ fn judge_words(words: &[String], in_task_worktree: bool, depth: usize) -> Judged
         "bash" | "sh" | "zsh" if depth < 4 => {
             if let Some(pos) = w.iter().position(|a| a == "-c" || a == "-lc") {
                 if let Some(payload) = w.get(pos + 1) {
-                    return judge_payload(payload, in_task_worktree, depth + 1);
+                    return judge_payload(payload, dir, ctx, depth + 1);
                 }
             }
             Judged::Other
@@ -149,7 +443,7 @@ fn judge_words(words: &[String], in_task_worktree: bool, depth: usize) -> Judged
         // the program is judged like a `-c` payload.
         "condukt" if depth < 4 && w.get(1).map(String::as_str) == Some("sandbox") => {
             match cmd_flag(w) {
-                Some(p) => judge_payload(&p, in_task_worktree, depth + 1),
+                Some(p) => judge_payload(&p, dir, ctx, depth + 1),
                 None => Judged::Other,
             }
         }
@@ -158,19 +452,21 @@ fn judge_words(words: &[String], in_task_worktree: bool, depth: usize) -> Judged
         // same rerun-ledger key), so routing a test through tdd changes nothing.
         "tdd" if depth < 4 && matches!(w.get(1).map(String::as_str), Some("red" | "green")) => {
             match cmd_flag(w) {
-                Some(p) => judge_payload(&p, in_task_worktree, depth + 1),
+                Some(p) => judge_payload(&p, dir, ctx, depth + 1),
                 None => Judged::Other,
             }
         }
-        "cargo" => judge_cargo(&w[1..]),
+        "cargo" => judge_cargo(&w[1..], dir),
         "git" if in_task_worktree => judge_git(&w[1..]),
         _ => Judged::Other,
     }
 }
 
-fn judge_payload(payload: &str, in_task_worktree: bool, depth: usize) -> Judged {
+/// A nested program (`bash -c`, `--cmd`) starts in the directory of the
+/// command that runs it; its own `cd`s do not leak out.
+fn judge_payload(payload: &str, dir: &Dir, ctx: &Ctx, depth: usize) -> Judged {
     let stripped = strip_heredoc_bodies(payload);
-    let Some(segs) = split_segments(&stripped) else {
+    let Some(pieces) = split_pieces(&stripped) else {
         return if mentions_test_or_merge(&stripped) {
             Judged::Deny(format!(
                 "condukt testscope cannot tokenize the -c program: {FULL_SUITE_REASON}"
@@ -179,28 +475,7 @@ fn judge_payload(payload: &str, in_task_worktree: bool, depth: usize) -> Judged 
             Judged::Other
         };
     };
-    let mut found: Vec<Words> = Vec::new();
-    for seg in segs {
-        let Some(words) = shlex::split(&seg) else {
-            if mentions_test_or_merge(&seg) {
-                return Judged::Deny(format!(
-                    "condukt testscope cannot tokenize `{seg}` in the -c program: \
-                     {FULL_SUITE_REASON}"
-                ));
-            }
-            continue;
-        };
-        match judge_words(&words, in_task_worktree, depth) {
-            Judged::Deny(r) => return Judged::Deny(r),
-            Judged::Test(t) => found.extend(t),
-            Judged::Other => {}
-        }
-    }
-    if found.is_empty() {
-        Judged::Other
-    } else {
-        Judged::Test(found)
-    }
+    judge_pieces(&pieces, dir, ctx, depth, "the -c program")
 }
 
 /// The value of `--cmd <v>` / `--cmd=<v>` in `w`, if any.
@@ -252,7 +527,7 @@ fn is_assignment(w: &str) -> bool {
     }
 }
 
-fn judge_cargo(args: &[String]) -> Judged {
+fn judge_cargo(args: &[String], dir: &Dir) -> Judged {
     let mut i = 0;
     // `cargo +toolchain …` and global flags before the subcommand.
     while args
@@ -289,7 +564,7 @@ fn judge_cargo(args: &[String]) -> Judged {
     }
     let mut norm = vec!["cargo".to_string()];
     norm.extend(args.iter().cloned());
-    Judged::Test(vec![norm])
+    Judged::Test(vec![(norm, dir.clone())])
 }
 
 fn judge_git(args: &[String]) -> Judged {
@@ -422,10 +697,49 @@ fn heredoc_delims(line: &str) -> Vec<(String, bool)> {
 /// Split a command line into simple-command segments at `;`, `&`, `|`,
 /// newlines and parentheses outside quotes. `None` when a quote is unbalanced.
 fn split_segments(cmd: &str) -> Option<Vec<String>> {
-    let mut segs = Vec::new();
+    Some(
+        split_pieces(cmd)?
+            .into_iter()
+            .filter_map(|p| match p {
+                Piece::Seg(s) => Some(s),
+                Piece::Op(_) => None,
+            })
+            .collect(),
+    )
+}
+
+/// The control operator that separated two segments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Op {
+    /// `;` or newline.
+    Seq,
+    And,
+    Or,
+    /// `|` or `|&`.
+    Pipe,
+    /// A lone `&` (background).
+    Bg,
+    Open,
+    Close,
+    Tick,
+    /// The `&` of a redirection (`2>&1`, `<&0`, `&>file`): not a separator,
+    /// but the segment is still split there as before.
+    Redirect,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Piece {
+    Seg(String),
+    Op(Op),
+}
+
+/// [`split_segments`] with the operators kept, so the walk can tell which
+/// commands a `cd` is certain to precede. `None` when a quote is unbalanced.
+fn split_pieces(cmd: &str) -> Option<Vec<Piece>> {
+    let mut segs: Vec<Piece> = Vec::new();
     let mut cur = String::new();
     let mut quote: Option<char> = None;
-    let mut chars = cmd.chars();
+    let mut chars = cmd.chars().peekable();
     while let Some(c) = chars.next() {
         match quote {
             Some(q) => {
@@ -454,10 +768,34 @@ fn split_segments(cmd: &str) -> Option<Vec<String>> {
                     }
                 }
                 ';' | '&' | '|' | '\n' | '(' | ')' | '`' => {
+                    let op = match c {
+                        ';' | '\n' => Op::Seq,
+                        '&' if cur.ends_with(['>', '<']) => Op::Redirect,
+                        '&' if chars.peek() == Some(&'>') => Op::Redirect,
+                        '&' if chars.peek() == Some(&'&') => {
+                            chars.next();
+                            Op::And
+                        }
+                        '&' => Op::Bg,
+                        '|' if chars.peek() == Some(&'|') => {
+                            chars.next();
+                            Op::Or
+                        }
+                        '|' => {
+                            if chars.peek() == Some(&'&') {
+                                chars.next();
+                            }
+                            Op::Pipe
+                        }
+                        '(' => Op::Open,
+                        ')' => Op::Close,
+                        _ => Op::Tick,
+                    };
                     if !cur.trim().is_empty() {
-                        segs.push(std::mem::take(&mut cur));
+                        segs.push(Piece::Seg(std::mem::take(&mut cur)));
                     }
                     cur.clear();
+                    segs.push(Piece::Op(op));
                 }
                 _ => cur.push(c),
             },
@@ -467,7 +805,7 @@ fn split_segments(cmd: &str) -> Option<Vec<String>> {
         return None;
     }
     if !cur.trim().is_empty() {
-        segs.push(cur);
+        segs.push(Piece::Seg(cur));
     }
     Some(segs)
 }
@@ -502,16 +840,108 @@ fn tree_identity(cwd: &Path) -> Result<(String, String), String> {
     Ok((top, format!("{head}:{dirty:016x}")))
 }
 
-fn check_rerun(tests: &[Words], cwd: &Path, ledger: &Path) -> Decision {
-    let (top, tree) = match tree_identity(cwd) {
-        Ok(t) => t,
-        Err(e) => {
-            return Decision::Deny(format!(
-                "condukt testscope cannot determine the tree this test runs against ({e}), so \
-                 whether it re-runs a test already run on the same tree is undetermined"
-            ));
+/// One rerun-ledger record: the tree a test ran in, the command, and — for a
+/// test run through a leading `cd` from a payload cwd whose tree differs — that
+/// payload cwd's tree.
+///
+/// Line format: `<top>\t<head:dirty>\t<cmd>` (no context; the format written
+/// before backlog 214b39b5) or `<top>\t<head:dirty>\t@from=<top>:<head:dirty>\t<cmd>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LedgerKey {
+    top: String,
+    tree: String,
+    from: Option<String>,
+    cmd: String,
+}
+
+impl LedgerKey {
+    fn line(&self) -> String {
+        match &self.from {
+            None => format!("{}\t{}\t{}", self.top, self.tree, self.cmd),
+            Some(f) => format!("{}\t{}\t@from={f}\t{}", self.top, self.tree, self.cmd),
         }
-    };
+    }
+
+    fn parse(line: &str) -> Option<Self> {
+        let mut it = line.splitn(3, '\t');
+        let top = it.next()?.to_string();
+        let tree = it.next()?.to_string();
+        let rest = it.next()?;
+        let (from, cmd) = match rest.strip_prefix("@from=") {
+            Some(r) => {
+                let (f, c) = r.split_once('\t')?;
+                (Some(f.to_string()), c.to_string())
+            }
+            None => (None, rest.to_string()),
+        };
+        Some(LedgerKey {
+            top,
+            tree,
+            from,
+            cmd,
+        })
+    }
+
+    /// Same command on the same tree, and not provably launched from two
+    /// different payload trees. A record without context (a test run in its
+    /// own cwd) collides with every `cd` route into that tree and vice versa,
+    /// so `cd`-ing in from elsewhere never re-runs a test already run there.
+    fn collides(&self, other: &LedgerKey) -> bool {
+        self.top == other.top
+            && self.tree == other.tree
+            && self.cmd == other.cmd
+            && (self.from.is_none() || other.from.is_none() || self.from == other.from)
+    }
+}
+
+/// Rule 3. `by_dir` maps each directory a test runs in (the payload cwd, or
+/// the target of a leading `cd`) to its tests. The identity is taken of the
+/// tree each test actually runs in (backlog 214b39b5: it used to be the
+/// payload cwd's tree whatever `cd` preceded the test).
+///
+/// When the run directory's tree differs from the payload cwd's tree, the key
+/// also records the payload cwd's tree (`from`): editing the payload cwd's
+/// tree then permits a rerun through the same `cd`, as it did before the run
+/// directory was keyed (pinned by
+/// `backlog_20261114_testscope_cd_tree_identity.rs`
+/// `control_editing_payload_cwd_tree_allows_rerun`). A payload cwd whose tree
+/// cannot be identified contributes no context, which only makes collisions
+/// more likely (never fewer).
+fn check_rerun(by_dir: &[(PathBuf, Vec<Words>)], cwd: &Path, ledger: &Path) -> Decision {
+    let mut cwd_identity: Option<Option<(String, String)>> = None;
+    let mut keys: Vec<LedgerKey> = Vec::new();
+    for (dir, tests) in by_dir {
+        let (top, tree) = match tree_identity(dir) {
+            Ok(t) => t,
+            Err(e) => {
+                return Decision::Deny(format!(
+                    "condukt testscope cannot determine the tree this test runs against in {} \
+                     ({e}), so whether it re-runs a test already run on the same tree is \
+                     undetermined",
+                    dir.display()
+                ));
+            }
+        };
+        let from = if dir.as_path() == cwd {
+            None
+        } else {
+            let c = cwd_identity.get_or_insert_with(|| tree_identity(cwd).ok());
+            match c.as_ref() {
+                Some((ctop, ctree)) if (ctop, ctree) != (&top, &tree) => {
+                    Some(format!("{ctop}:{ctree}"))
+                }
+                _ => None,
+            }
+        };
+        for w in tests {
+            keys.push(LedgerKey {
+                top: top.clone(),
+                tree: tree.clone(),
+                from: from.clone(),
+                cmd: w.join(" "),
+            });
+        }
+    }
     let existing = match std::fs::read_to_string(ledger) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -522,17 +952,16 @@ fn check_rerun(tests: &[Words], cwd: &Path, ledger: &Path) -> Decision {
             ));
         }
     };
-    let keys: Vec<String> = tests
-        .iter()
-        .map(|w| format!("{top}\t{tree}\t{}", w.join(" ")))
-        .collect();
+    // A line that does not parse as a key never matched a key before either
+    // (the old check was exact line equality), so skipping it changes nothing.
+    let recorded: Vec<LedgerKey> = existing.lines().filter_map(LedgerKey::parse).collect();
     for k in &keys {
-        if existing.lines().any(|l| l == k) {
-            let cmd = k.rsplit('\t').next().unwrap_or_default();
+        if recorded.iter().any(|r| r.collides(k)) {
             return Decision::Deny(format!(
-                "rerun refused: `{cmd}` already ran on this exact tree ({tree}); running the same \
+                "rerun refused: `{}` already ran on this exact tree ({} at {}); running the same \
                  test twice is forbidden (user ruling 2026-11-07). Change the code first, or \
-                 move on"
+                 move on",
+                k.cmd, k.tree, k.top
             ));
         }
     }
@@ -545,7 +974,7 @@ fn check_rerun(tests: &[Words], cwd: &Path, ledger: &Path) -> Decision {
             .append(true)
             .open(ledger)?;
         for k in &keys {
-            writeln!(f, "{k}")?;
+            writeln!(f, "{}", k.line())?;
         }
         Ok(())
     };
@@ -797,7 +1226,46 @@ fn check_task_scope(tests: &[Words], cwd: &Path) -> Decision {
     };
     let owners = crate::subagent_stop::tasks_owning_cwd(cwd, &runs);
     let (rs, task) = match owners.as_slice() {
-        [] => return Decision::Allow,
+        [] => {
+            // A task whose recorded worktree is empty or relative names no
+            // directory, so it owns no cwd (backlog b4a2780b: `""` used to own
+            // every cwd). But while such a task is still live, a cwd under the
+            // condukt worktree base could be its worktree, so ownership there
+            // is undetermined. Outside the worktree base, and for terminal
+            // tasks, it can be no-one's.
+            let live_unusable: Vec<String> =
+                crate::subagent_stop::tasks_with_unusable_worktree(&runs)
+                    .iter()
+                    .filter(|(_, t)| {
+                        matches!(
+                            t.status,
+                            crate::state::Status::Pending
+                                | crate::state::Status::Running
+                                | crate::state::Status::Done
+                                | crate::state::Status::Failed
+                        )
+                    })
+                    .map(|(rs, t)| {
+                        format!(
+                            "{}/{} (worktree {:?})",
+                            rs.run_id,
+                            t.id,
+                            t.worktree.as_deref().unwrap_or_default()
+                        )
+                    })
+                    .collect();
+            if !live_unusable.is_empty() && cwd.starts_with(&cfg.worktree_base) {
+                return undetermined(format!(
+                    "cwd {} is under the condukt worktree base {} and non-terminal task(s) {} \
+                     record a worktree that is not an absolute path, so whether one of them \
+                     owns this cwd is undetermined",
+                    cwd.display(),
+                    cfg.worktree_base.display(),
+                    live_unusable.join(", ")
+                ));
+            }
+            return Decision::Allow;
+        }
         [one] => *one,
         many => {
             let ids: Vec<String> = many
@@ -910,12 +1378,18 @@ mod tests {
     /// asserted before `state test` moved onto [`judge`].
     #[test]
     fn rule1_flags_bare_cargo_test() {
+        let ctx = Ctx {
+            wt_root: None,
+            cwd_in_wt: false,
+            home: None,
+        };
+        let dir = Dir::Known(PathBuf::from("/r"));
         assert!(matches!(
-            judge_words(&words("cargo test"), false, 0),
+            judge_words(&words("cargo test"), &dir, &ctx, 0),
             Judged::Deny(_)
         ));
         assert!(matches!(
-            judge_words(&words("cargo test -p x --test y"), false, 0),
+            judge_words(&words("cargo test -p x --test y"), &dir, &ctx, 0),
             Judged::Test(_)
         ));
     }

@@ -118,10 +118,33 @@ pub fn resolve_owner(payload_cwd: &str, runs: &[RunState]) -> Determination<Owne
     let matches = tasks_owning_cwd(Path::new(cwd), runs);
 
     match matches.as_slice() {
-        [] => Determination::undetermined(format!(
-            "subagent-stop: cwd '{cwd}' is not inside any task worktree recorded in \
-             this project's run state; the payload names no task of ours"
-        )),
+        [] => {
+            let unusable: Vec<String> = tasks_with_unusable_worktree(runs)
+                .iter()
+                .filter(|(_, t)| t.status == Status::Running)
+                .map(|(rs, t)| {
+                    format!(
+                        "{}/{} (worktree {:?})",
+                        rs.run_id,
+                        t.id,
+                        t.worktree.as_deref().unwrap_or_default()
+                    )
+                })
+                .collect();
+            let extra = if unusable.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; running task(s) {} record a worktree that is not an absolute path, \
+                     so whether one of them owns this cwd cannot be determined",
+                    unusable.join(", ")
+                )
+            };
+            Determination::undetermined(format!(
+                "subagent-stop: cwd '{cwd}' is not inside any task worktree recorded in \
+                 this project's run state; the payload names no task of ours{extra}"
+            ))
+        }
         [(rs, t)] => {
             if t.status != Status::Running {
                 return Determination::undetermined(format!(
@@ -157,6 +180,13 @@ pub fn resolve_owner(payload_cwd: &str, runs: &[RunState]) -> Determination<Owne
 /// (which additionally requires exactly one match that is `running`) and the
 /// `condukt testscope` task-scope rule (which needs to tell "no task" from
 /// "several tasks" itself).
+///
+/// Only an ABSOLUTE recorded worktree can own a path (backlog `b4a2780b`). An
+/// empty string names no directory, yet `Path::starts_with("")` is true for
+/// every path, so a stale task with `"worktree": ""` used to own every cwd; a
+/// relative string names no directory either (relative to what?). Such tasks
+/// are reported by [`tasks_with_unusable_worktree`] instead, so callers that
+/// must not ignore them can resolve them to "undetermined" themselves.
 pub(crate) fn tasks_owning_cwd<'a>(
     cwd: &Path,
     runs: &'a [RunState],
@@ -166,12 +196,35 @@ pub(crate) fn tasks_owning_cwd<'a>(
         for t in &rs.tasks {
             let Some(wt) = &t.worktree else { continue };
             let wt_path = PathBuf::from(wt);
+            if !wt_path.is_absolute() {
+                continue;
+            }
             if cwd == wt_path || cwd.starts_with(&wt_path) {
                 matches.push((rs, t));
             }
         }
     }
     matches
+}
+
+/// Every task across `runs` that records a worktree which is not an absolute
+/// path (empty or relative), whatever its status. Such a record names no
+/// directory, so [`tasks_owning_cwd`] never lets it own a path; this lists
+/// them so a caller can say why ownership could not be decided.
+pub(crate) fn tasks_with_unusable_worktree(
+    runs: &[RunState],
+) -> Vec<(&RunState, &state::TaskState)> {
+    let mut out = Vec::new();
+    for rs in runs {
+        for t in &rs.tasks {
+            if let Some(wt) = &t.worktree {
+                if !Path::new(wt).is_absolute() {
+                    out.push((rs, t));
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Advance `owner`'s `updated_at` to `now`, under the per-run state lock.

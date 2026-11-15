@@ -1,7 +1,9 @@
 //! Thin adapter over `harness_core::gate::runner`: run a test command as a
 //! subprocess and map the raw outcome onto tdd's `Outcome`. Shared by `tdd red`
 //! and `tdd green`. The dangerous spawn/timeout/bounded-tail logic lives in
-//! harness-core; this only fixes the log path and maps types.
+//! harness-core; this only picks a unique per-run log path (pid + nanos +
+//! sequence, created exclusively with `create_new`, removed after the tail is
+//! read) and maps types.
 
 use std::fs::OpenOptions;
 use std::path::Path;
@@ -46,16 +48,17 @@ pub fn run_cmd(cmd: &str, root: &Path, timeout: u64, tail_lines: usize, tmp_dir:
         }
     }
     let Some(log_path) = log_path else {
-        // Fail closed: cannot capture output => not a passing run.
+        // No test ran. passed=false, so `tdd green` rejects this. `tdd red`'s
+        // judge_red does not inspect spawn_error and would still record a RED
+        // (pre-existing, tracked separately); the message is carried in
+        // output_tail so such an artifact says why.
+        let msg = format!("could not create a unique run log in {}", tmp_dir.display());
         return Outcome {
             passed: false,
             exit_code: None,
             timed_out: false,
-            spawn_error: Some(format!(
-                "could not create a unique run log in {}",
-                tmp_dir.display()
-            )),
-            output_tail: String::new(),
+            spawn_error: Some(msg.clone()),
+            output_tail: msg,
         };
     };
     let raw = runner::run(cmd, root, timeout, tail_lines, &log_path);

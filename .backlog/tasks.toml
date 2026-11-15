@@ -2447,3 +2447,31 @@ exit 101: uard v0.2.608 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/cra
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
      Running tests/backlog_20261115_dq_dollar_literal_dup_fd.rs (target/debug/deps/backlog_20261115_dq_dollar_literal_dup_fd-c7223dcbc93d47c9)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_dq_dollar_literal_dup_fd`"""
+
+[[task]]
+id = "7671c79f"
+title = "blastguard FP: Rust closure inside a Python triple-quoted string in python3 - <<'EOF' is read as a pipe into a brace group (Ask/Deny)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "F16. Observed 2026-11-15 at 0.2.603, re-observed by main with RED 784eba77f (only the allow assertion failing was observed; reason text not checked). Main ruling 2026-11-15: python heredoc body is not shell -> allow is intended."
+created_at = 1794730749
+updated_at = 1794730749
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_heredoc_rust_text_brace_pipe_fp -- --include-ignored"
+rev = "bdfdc064af6abf8c9d8cbde6b9f1ba790bfc7e4a"
+observed_at = 1794730749
+detail = """
+exit 101: /yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s
+     Running tests/backlog_20261115_heredoc_rust_text_brace_pipe_fp.rs (target/debug/deps/backlog_20261115_heredoc_rust_text_brace_pipe_fp-3da92e4b4c49e59c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_heredoc_rust_text_brace_pipe_fp`"""

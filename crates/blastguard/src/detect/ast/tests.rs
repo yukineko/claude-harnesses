@@ -264,6 +264,78 @@ mod parse_caps {
         }
     }
 
+    /// Boundary: the caps are `>`, not `>=`. A fixture of exactly the cap must
+    /// get past the pre-parse caps (`parse` is `Ok`, and `analyze` is neither
+    /// `TooDeep` nor `TooLong`); one more must be the cap's own `Cause`.
+    /// `parse` is checked directly because the evaluator may still be a
+    /// skeleton (`Undetermined(NotImplemented)`), which is not a cap answer.
+    fn assert_passes_caps(kind: &str, command: &str) {
+        if let Err(c) = super::parse::parse(command) {
+            panic!("{kind}: expected the caps to let {command:?} through, parse failed with {c:?}");
+        }
+        if let Analysis::Undetermined(c @ (Cause::TooDeep | Cause::TooLong)) =
+            analyze_bounded(command.to_string(), LIMIT)
+        {
+            panic!("{kind}: {c:?} at exactly the cap for {command:?}");
+        }
+    }
+
+    /// `n` nested brace groups: plain-bracket depth is exactly `n` (one `{`
+    /// per level, closers all after the openers).
+    fn brace_groups(n: usize) -> String {
+        let command = format!("{}echo hi;{}", "{ ".repeat(n), " }".repeat(n));
+        assert_eq!(command.matches('{').count(), n);
+        assert_eq!(command.matches('}').count(), n);
+        command
+    }
+
+    /// `n` nested subshells: plain-bracket depth is exactly `n`.
+    fn subshells(n: usize) -> String {
+        let command = format!("{}echo hi{}", "(".repeat(n), ")".repeat(n));
+        assert_eq!(command.matches('(').count(), n);
+        assert_eq!(command.matches(')').count(), n);
+        command
+    }
+
+    #[test]
+    fn brace_groups_at_exactly_max_depth_pass_the_cap() {
+        assert_passes_caps("brace groups depth 16", &brace_groups(16));
+    }
+
+    #[test]
+    fn brace_groups_one_over_max_depth_are_too_deep() {
+        assert_too_deep("brace groups depth 17", brace_groups(17));
+    }
+
+    #[test]
+    fn subshells_at_exactly_max_depth_pass_the_cap() {
+        assert_passes_caps("subshells depth 16", &subshells(16));
+    }
+
+    #[test]
+    fn subshells_one_over_max_depth_are_too_deep() {
+        assert_too_deep("subshells depth 17", subshells(17));
+    }
+
+    fn padded_echo(total: usize) -> String {
+        let command = format!("echo {}", "a".repeat(total - "echo ".len()));
+        assert_eq!(command.len(), total);
+        command
+    }
+
+    #[test]
+    fn exactly_max_parse_bytes_passes_the_cap() {
+        assert_passes_caps("8192 bytes", &padded_echo(8192));
+    }
+
+    #[test]
+    fn one_byte_over_max_parse_bytes_is_too_long() {
+        match analyze_bounded(padded_echo(8193), LIMIT) {
+            Analysis::Undetermined(Cause::TooLong) => {}
+            other => panic!("expected Undetermined(TooLong) at 8193 bytes, got {other:?}"),
+        }
+    }
+
     #[test]
     fn zsh_process_substitution_equals_is_zsh_only() {
         match analyze_bounded("diff =(ls) /tmp/a".to_string(), LIMIT) {

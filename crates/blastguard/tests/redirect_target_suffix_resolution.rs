@@ -467,6 +467,14 @@ fn control_bare_variable_targets_keep_resolving() {
 /// answers there (`<pid>/x`, `/x`) are not merely unknown, they are a RELATIVE
 /// path and a write at the filesystem root. Resolving either to something under
 /// the session tree would be an invention, not a guess.
+///
+/// SUPERSEDED for `export P=…` and for a prefix glued before the reference
+/// (`pre$P`) — user rulings 2026-11-15, verbatim: 「`export X=lit` は「解決して
+/// 判定」する。`X=lit` と同じく解決し、literal と同じに判定する。」 and 「`pre$P` の
+/// ように、前に文字列をつなげた形は「連結を解決」する。裁定の「その連結」に含め、展開した
+/// 後の literal と同じに判定する。」 Those two shapes are no longer refused; they are
+/// pinned after the table as "judged like the literal spelling". The other
+/// STRICTER rows above (`true && P=…`, `declare P=…`, `{ P=…; }`) are unchanged.
 #[test]
 fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
     let mut violations: Vec<String> = Vec::new();
@@ -525,12 +533,6 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
             OK_LEAF,
             "an array's first element depends on IFS / [0]-vs-[@] / quoting \
              (measured: [aa] for P=(aa bb))",
-        ),
-        (
-            "export P=/home/yuki/proj; echo hi > $P/x.log",
-            OK_LEAF,
-            "`export NAME=v` is not a pure assignment list to this scan; bash \
-             does bind it, so refusing is the safe error",
         ),
         (
             "declare P=/home/yuki/proj; echo hi > $P/x.log",
@@ -607,13 +609,6 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
              one at its end",
         ),
         (
-            "P=/home/yuki/proj; echo hi > pre$P/x.log",
-            OK_LEAF,
-            "a PREFIX glued before the reference names a different path \
-             (measured: [pre/aa/x]); the existing resolver already refuses \
-             `pre$BIN` and this must stay so",
-        ),
-        (
             "echo hi > ${P:-/home/yuki/proj}/x.log",
             OK_LEAF,
             "`${P:-default}` names the default only when P is unset — a run-time fact",
@@ -673,6 +668,27 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
         violations.len(),
         violations.join("\n  ")
     );
+    // SUPERSEDED rows (user rulings 2026-11-15): 「`export X=lit` は「解決して判定」
+    // する。`X=lit` と同じく解決し、literal と同じに判定する。」 and 「`pre$P` のように、
+    // 前に文字列をつなげた形は「連結を解決」する。裁定の「その連結」に含め、展開した後の
+    // literal と同じに判定する。」 The two rows formerly in the table above (export
+    // refused; `pre$P` refused) are pinned here as "judged like the literal".
+    for (cmd, literal) in [
+        (
+            "export P=/home/yuki/proj; echo hi > $P/x.log",
+            "echo hi > /home/yuki/proj/x.log",
+        ),
+        (
+            "P=/home/yuki/proj; echo hi > pre$P/x.log",
+            "echo hi > pre/home/yuki/proj/x.log",
+        ),
+    ] {
+        assert_eq!(
+            scoped(cmd),
+            scoped(literal),
+            "`{cmd}` must be judged like its literal spelling `{literal}` (user ruling 2026-11-15)"
+        );
+    }
 }
 
 /// A suffix carrying GLOB metacharacters must NOT be resolved, and the reason

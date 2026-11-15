@@ -31,7 +31,8 @@
 //!   word, e.g. `of=~/f`), `$((..))`, `$( )` output and parameter operations
 //!   other than plain `$x` / `${x}` are `Undetermined`. Arithmetic (`((..))`,
 //!   `$((..))`, `let`, `[[ a -eq b ]]` unless both operands are literal
-//!   integers) makes every tracked variable `Undetermined`.
+//!   integers, a builtin's name operand `a[i]` with a non-digit `i`, e.g.
+//!   `read 'a[x=8]'`) makes every tracked variable `Undetermined`.
 //! * Function definitions and `coproc` make the whole analysis
 //!   `Undetermined(Unsupported)` (their bodies run at a time this evaluator
 //!   does not model), as does a `$( )` / backquote inside a parameter
@@ -261,6 +262,15 @@ impl Env {
     fn forget(&mut self, name: &str, why: &str) {
         self.vars
             .insert(name.to_string(), undet(format!("{name}: {why}")));
+    }
+
+    fn forget_operand(&mut self, operand: &str, why: &str) {
+        if super::subscript_may_assign(operand) {
+            self.havoc_vars(&format!("the subscript of {operand} may assign variables"));
+        }
+        if let Some(base) = operand.split('[').next().filter(|b| is_ident(b)) {
+            self.forget(base, why);
+        }
     }
 
     fn havoc_vars(&mut self, why: &str) {
@@ -1132,8 +1142,7 @@ impl Ev {
         let args = sc.argv.get(1..).unwrap_or(&[]);
         if SPECIAL_BUILTINS.contains(&name) {
             for (n, _) in &sc.assignments {
-                let base = n.split('[').next().unwrap_or(n);
-                env.forget(base, "prefix assignment of a special builtin");
+                env.forget_operand(n, "prefix assignment of a special builtin");
             }
         }
         match name {
@@ -1159,10 +1168,7 @@ impl Ev {
                 while let Some(a) = it.next() {
                     match &a.value {
                         Value::Literal(s) if s == "-v" => match it.next().map(|w| &w.value) {
-                            Some(Value::Literal(n)) => {
-                                let base = n.split('[').next().unwrap_or(n);
-                                env.forget(base, "assigned by printf -v");
-                            }
+                            Some(Value::Literal(n)) => env.forget_operand(n, "set by printf -v"),
                             _ => env.make_opaque("printf -v with an undetermined name"),
                         },
                         Value::Literal(_) => {}
@@ -1177,12 +1183,7 @@ impl Ev {
             n if ASSIGNING_BUILTINS.contains(&n) => {
                 for a in args {
                     match &a.value {
-                        Value::Literal(s) => {
-                            let base = s.split('[').next().unwrap_or(s);
-                            if is_ident(base) {
-                                env.forget(base, &format!("assigned by {n}"));
-                            }
-                        }
+                        Value::Literal(s) => env.forget_operand(s, &format!("assigned by {n}")),
                         Value::Undetermined(_) => {
                             env.make_opaque(&format!("{n} with an undetermined operand"));
                         }
@@ -1220,17 +1221,17 @@ impl Ev {
             match s.split_once('=') {
                 Some((lhs, rhs)) => {
                     if let Some(n) = lhs.strip_suffix('+') {
-                        env.forget(n, "+= appends to a value");
+                        env.forget_operand(n, "+= appends to a value");
                     } else if is_ident(lhs) {
                         env.bind(lhs, Value::Literal(rhs.to_string()));
                     } else {
-                        let base = lhs.split('[').next().unwrap_or(lhs);
-                        env.forget(base, "indexed assignment");
+                        env.forget_operand(lhs, "indexed assignment");
                     }
                     if builtin == "readonly" {
                         env.readonly.insert(lhs.to_string());
                     }
                 }
+                None if s.contains('[') => env.forget_operand(s, "declared element"),
                 None => {
                     if builtin == "readonly" {
                         env.readonly.insert(s.clone());

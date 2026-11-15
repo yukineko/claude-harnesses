@@ -598,3 +598,19 @@ fn plain_int(v: &Value) -> bool {
     let d = d.strip_prefix(['-', '+']).unwrap_or(d);
     !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())
 }
+
+/// Whether a builtin's name operand (`read`, `printf -v`, `unset`, `declare`
+/// family, ...) carries a subscript the shell evaluates as arithmetic that
+/// may assign variables: `read 'a[x=8]'` sets `x` (bash and zsh). Only no
+/// subscript or exactly `name[<decimal digits>]` is side-effect free; any
+/// other `[` (including text that only looks like an operand) counts as
+/// possibly assigning.
+fn subscript_may_assign(operand: &str) -> bool {
+    let Some((_, rest)) = operand.split_once('[') else {
+        return false;
+    };
+    let Some(idx) = rest.strip_suffix(']') else {
+        return true;
+    };
+    idx.is_empty() || !idx.bytes().all(|b| b.is_ascii_digit())
+}

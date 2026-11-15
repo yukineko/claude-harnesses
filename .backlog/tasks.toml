@@ -2774,3 +2774,32 @@ exit 101: rktrees/session-6dcca0ad/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.05s
      Running tests/backlog_20261115_python_heredoc_write_then_sh_fail_open.rs (target/debug/deps/backlog_20261115_python_heredoc_write_then_sh_fail_open-a43835431492e487)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_heredoc_write_then_sh_fail_open`"""
+
+[[task]]
+id = "84bcfe57"
+title = "tdd red records a RED proof when the test command never ran (judge_red ignores spawn_error)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "proof.rs:41 judge_red(passed) only checks passed; proof.rs:221 ignores out.spawn_error. harness-core gate/runner.rs:103-111 spawn_failed => passed:false,exit_code:None,spawn_error:Some. Observed: with a regular file at $HOME/.tdd/state, 'tdd red' exits 0 printing 'RED recorded ... (could not open log file: Not a directory)' and writes .tdd/<task>.red.json although the command never ran. F->P oracle fail-open. Two readings (defect vs intended) documented in the test module doc. Repro: crates/tdd/tests/backlog_20261115_red_spawn_error_records_red.rs (branch backlog/tdd-red-spawn-error, commit 6848636f7)."
+created_at = 1794746168
+updated_at = 1794746168
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261115_red_spawn_error_records_red -- --include-ignored"
+rev = "6848636f7128e51e47400e5c11fc67a76251e99b"
+observed_at = 1794746168
+detail = """
+exit 101: v0.1.77 (/Users/yuki/src/.harness-worktrees/backlog-tdd-red-spawn-error/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.92s
+     Running tests/backlog_20261115_red_spawn_error_records_red.rs (target/debug/deps/backlog_20261115_red_spawn_error_records_red-c1bc05e7f5189bbb)
+error: test failed, to rerun pass `-p tdd --test backlog_20261115_red_spawn_error_records_red`"""

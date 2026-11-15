@@ -1,6 +1,6 @@
 {
   "name": "answerlang",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "description": "Keeps answers and conclusions in the user's language: injects the target language and blocks a Stop whose final answer is in another script.",
   "author": {
     "name": "yukineko"

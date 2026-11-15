@@ -125,11 +125,18 @@ note) and injects what can still be determined.
 2. Config absent → `systemMessage` only.
 3. Payload unparseable → block (see "bounded re-entry").
 4. Explicit unknown language / target undetermined → `systemMessage`, no block.
-5. Read the transcript. The checked text is the last entry with
+5. Pick the checked text. The Stop payload's `last_assistant_message` is
+   judged first: a non-blank string is the checked text and the transcript is
+   not read; a value that is present but not a string makes the check
+   undetermined. When the field is missing, `null`, or empty/whitespace-only,
+   fall back to the transcript: the checked text is the last entry with
    `"type":"assistant"` (skipping `"isSidechain": true`) whose
    `message.content` has at least one non-empty `text` block; all its text
    blocks are joined with `\n`. A line that cannot be parsed AFTER that entry
-   makes the check undetermined (it could be a later answer).
+   makes the check undetermined (it could be a later answer), and so does a
+   non-sidechain `user` entry with a `tool_result` block AFTER it (the turn
+   continued past that text, so it is an interim text, not the final answer).
+   A violation's block reason names the source it judged.
 
 ### What is stripped before counting
 
@@ -165,8 +172,10 @@ A per-session marker `~/.answerlang/state/<session>.block` records "the
 previous stop of this session was blocked by answerlang".
 
 - First stop of a chain (`stop_hook_active: false`) with a violation or an
-  undetermined check (no `transcript_path`, unreadable transcript, no assistant
-  text, unreadable prompt-language record) → record the marker and block. The
+  undetermined check (non-string `last_assistant_message`, or on the transcript
+  fallback: no `transcript_path`, unreadable transcript, no assistant text, a
+  `tool_result` after the last assistant text; or an unreadable prompt-language
+  record) → record the marker and block. The
   reason names the failure (and contains `transcript` for transcript failures).
 - Re-entry (`stop_hook_active: true`) and the marker is present → clear it and
   **allow** with a `systemMessage` containing `answerlang` and `failed twice`.

@@ -232,12 +232,45 @@ pub fn stop() -> ! {
     let hook = HookInput::parse(&raw);
     let stop_hook_active = hook.as_ref().is_some_and(|h| h.stop_hook_active);
     harness_core::gate::run::run_guarded("answerlang", interactive, stop_hook_active, move || {
-        stop_body(hook)
+        let last = classify_last_message(&raw);
+        stop_body(hook, last)
     });
     std::process::exit(0)
 }
 
-fn stop_body(hook: Option<HookInput>) -> ! {
+/// The Stop payload's `last_assistant_message` field, classified.
+#[derive(Debug, PartialEq, Eq)]
+enum LastMessage {
+    /// A non-blank string: the final answer, judged instead of the transcript.
+    Text(String),
+    /// Field missing or `null` (or the payload is not a JSON object):
+    /// fall back to the transcript.
+    Absent,
+    /// Empty / whitespace-only string. Treated like `Absent` (transcript
+    /// fallback) — never as a too-short clean pass.
+    Blank,
+    /// Present but not a string: undetermined (bounded block).
+    Malformed(&'static str),
+}
+
+fn classify_last_message(raw: &str) -> LastMessage {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(raw.trim()) else {
+        // Unparseable payloads are handled (blocked) by `stop_body` before
+        // this value is consulted.
+        return LastMessage::Absent;
+    };
+    match v.get("last_assistant_message") {
+        None | Some(serde_json::Value::Null) => LastMessage::Absent,
+        Some(serde_json::Value::String(s)) if s.trim().is_empty() => LastMessage::Blank,
+        Some(serde_json::Value::String(s)) => LastMessage::Text(s.clone()),
+        Some(serde_json::Value::Bool(_)) => LastMessage::Malformed("a boolean"),
+        Some(serde_json::Value::Number(_)) => LastMessage::Malformed("a number"),
+        Some(serde_json::Value::Array(_)) => LastMessage::Malformed("an array"),
+        Some(serde_json::Value::Object(_)) => LastMessage::Malformed("an object"),
+    }
+}
+
+fn stop_body(hook: Option<HookInput>, last: LastMessage) -> ! {
     // Operator escapes first (panic-free), per run_guarded's caller contract.
     let loaded = config::load();
     let cfg = &loaded.config;
@@ -292,14 +325,29 @@ fn stop_body(hook: Option<HookInput>) -> ! {
         }
     };
 
-    let text = match transcript::last_assistant_text(&input.transcript_path) {
-        Ok(t) => t,
-        Err(e) => bounded_block(
+    let undetermined = |e: &str| -> ! {
+        bounded_block(
             session.as_ref(),
             active,
             &format!("answerlang: the answer-language check could not run: {e}. Make sure your final answer is in {}, then stop again.", lang.name()),
-            &e,
-        ),
+            e,
+        )
+    };
+    let (text, source) = match last {
+        LastMessage::Text(t) => (t, "the Stop payload's last_assistant_message"),
+        LastMessage::Malformed(kind) => undetermined(&format!(
+            "the Stop payload's last_assistant_message is {kind}, not a string"
+        )),
+        LastMessage::Absent | LastMessage::Blank => {
+            match transcript::last_assistant_text(&input.transcript_path) {
+                Ok(t) if t.stale => undetermined(&format!(
+                    "the Stop payload has no last_assistant_message and the last assistant text in the transcript {} is followed by a tool_result, so the final answer is not in the transcript",
+                    input.transcript_path
+                )),
+                Ok(t) => (t.text, "the transcript"),
+                Err(e) => undetermined(&e),
+            }
+        }
     };
     match measure::judge(&text, lang, cfg.min_share) {
         Outcome::TooShort(_) | Outcome::Clean(_) => {
@@ -309,7 +357,7 @@ fn stop_body(hook: Option<HookInput>) -> ! {
         Outcome::Violation { counts, share } => {
             let name = lang.name();
             let reason = format!(
-                "answerlang: your final answer is not in {name}: only {pct:.0}% of its {letters} prose letters are in {name} script (minimum {min:.0}%). Restate your answer and conclusions in {name}. Keep code, identifiers, commit messages and verbatim quotes (gate messages, test output) in their original form.",
+                "answerlang: your final answer (read from {source}) is not in {name}: only {pct:.0}% of its {letters} prose letters are in {name} script (minimum {min:.0}%). Restate your answer and conclusions in {name}. Keep code, identifiers, commit messages and verbatim quotes (gate messages, test output) in their original form.",
                 pct = share * 100.0,
                 letters = counts.letters,
                 min = cfg.min_share * 100.0,

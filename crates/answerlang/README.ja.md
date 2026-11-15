@@ -104,9 +104,15 @@ stdin 読み取り失敗や内部エラーは、注入が実行されなかっ�
 2. 設定ファイル無し → `systemMessage` のみ。
 3. ペイロードがパース不能 → ブロック（「有界な再入」参照）。
 4. 表に無い明示言語 / 対象言語未決定 → `systemMessage`、ブロックしない。
-5. transcript を読む。検査対象は `"type":"assistant"` の最後のエントリ（`"isSidechain": true` は除く）
+5. 検査対象を選ぶ。まず Stop ペイロードの `last_assistant_message` を判定する: 空白でない文字列ならそれを
+   検査対象とし、transcript は読まない。存在するが文字列でない値なら判定不能とする。
+   フィールドが無い・`null`・空／空白のみの場合は transcript にフォールバックする: 検査対象は
+   `"type":"assistant"` の最後のエントリ（`"isSidechain": true` は除く）
    のうち、`message.content` に空でない `text` ブロックを 1 つ以上持つもの。その text ブロックを `\n` で連結する。
    そのエントリより**後ろ**にパースできない行があれば判定不能とする（後の回答かもしれないため）。
+   そのエントリより**後ろ**に `tool_result` ブロックを持つ sidechain でない `user` エントリがあっても判定不能とする
+   （ターンがそのテキストの後も続いており、最終回答ではなく途中のテキストのため）。
+   違反時のブロック理由は判定したソースを名指しする。
 
 ### 数える前に除去するもの
 
@@ -135,8 +141,9 @@ share = 対象文字体系の文字数 / 文字数。`share < min_share`（ま�
 
 セッションごとのマーカー `~/.answerlang/state/<session>.block` が「このセッションの直前の stop は answerlang がブロックした」を記録する。
 
-- チェーン最初の stop（`stop_hook_active: false`）で違反、または判定不能（`transcript_path` 無し・transcript が読めない・
-  assistant テキスト無し・prompt 言語の記録が読めない）→ マーカーを記録してブロック。理由は失敗内容を名指しする
+- チェーン最初の stop（`stop_hook_active: false`）で違反、または判定不能（文字列でない `last_assistant_message`、または transcript フォールバック時の
+  `transcript_path` 無し・transcript が読めない・assistant テキスト無し・最後の assistant テキストの後に `tool_result`、
+  または prompt 言語の記録が読めない）→ マーカーを記録してブロック。理由は失敗内容を名指しする
   （transcript の失敗なら `transcript` を含む）。
 - 再入（`stop_hook_active: true`）でマーカーあり → マーカーを消して `answerlang` と `failed twice` を含む
   `systemMessage` 付きで**通す**。

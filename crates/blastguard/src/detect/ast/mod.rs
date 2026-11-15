@@ -575,3 +575,26 @@ mod prog {
         }
     }
 }
+
+/// `[[ a OP b ]]` operators whose operands bash evaluates as arithmetic.
+fn arith_test_op(op: &brush_parser::ast::BinaryPredicate) -> bool {
+    use brush_parser::ast::BinaryPredicate as P;
+    matches!(
+        op,
+        P::ArithmeticEqualTo
+            | P::ArithmeticNotEqualTo
+            | P::ArithmeticLessThan
+            | P::ArithmeticLessThanOrEqualTo
+            | P::ArithmeticGreaterThan
+            | P::ArithmeticGreaterThanOrEqualTo
+    )
+}
+
+/// A literal decimal integer: evaluating it as arithmetic has no side effect.
+/// Anything else (a name, `x=1`, `x++`, an undetermined value) may assign.
+fn plain_int(v: &Value) -> bool {
+    let Value::Literal(s) = v else { return false };
+    let d = s.trim();
+    let d = d.strip_prefix(['-', '+']).unwrap_or(d);
+    !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())
+}

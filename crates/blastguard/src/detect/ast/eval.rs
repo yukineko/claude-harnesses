@@ -27,8 +27,11 @@
 //!   make it `Undetermined`. A relative `cd` from the hook's cwd, a relative
 //!   `cd` while `CDPATH` may apply, and any `..` component are `Undetermined`.
 //! * Unquoted expansions that would be word-split or pathname-expanded, globs
-//!   and brace expansions in unquoted text, `~`, `$((..))`, `$( )` output and
-//!   parameter operations other than plain `$x` / `${x}` are `Undetermined`.
+//!   and brace expansions in unquoted text, `~` (also after `=` / `:` in any
+//!   word, e.g. `of=~/f`), `$((..))`, `$( )` output and parameter operations
+//!   other than plain `$x` / `${x}` are `Undetermined`. Arithmetic (`((..))`,
+//!   `$((..))`, `let`, `[[ a -eq b ]]` unless both operands are literal
+//!   integers) makes every tracked variable `Undetermined`.
 //! * Function definitions and `coproc` make the whole analysis
 //!   `Undetermined(Unsupported)` (their bodies run at a time this evaluator
 //!   does not model), as does a `$( )` / backquote inside a parameter
@@ -722,9 +725,14 @@ impl Ev {
                 self.word(text, w, Mode::Assign, env)?;
                 Ok(())
             }
-            ast::ExtendedTestExpr::BinaryTest(_, a, b) => {
-                self.word(text, a, Mode::Assign, env)?;
-                self.word(text, b, Mode::Assign, env)?;
+            ast::ExtendedTestExpr::BinaryTest(op, a, b) => {
+                let va = self.word(text, a, Mode::Assign, env)?.value;
+                let vb = self.word(text, b, Mode::Assign, env)?.value;
+                // -eq/-ne/-lt/... evaluate both operands as arithmetic, which
+                // may assign (`x=5`, `x++`, or a name whose value does).
+                if super::arith_test_op(op) && ![va, vb].iter().all(super::plain_int) {
+                    env.havoc_vars("arithmetic in [[ ]] may assign variables");
+                }
                 Ok(())
             }
         }
@@ -1692,21 +1700,26 @@ fn finish(acc: Acc, mode: Mode, env: &Env) -> Value {
     };
     let starts_with_tilde = matches!(acc.segs.first(),
         Some((s, Some(Seg::UnquotedLit))) if s.starts_with('~'));
+    // Bash also tilde-expands after `=` / `:` in an argv word shaped like an
+    // assignment (`of=~/f`, `c=x:~/y`), so Field treats those like Assign
+    // (also when the `=` / `:` ends the previous segment).
+    let tilde = starts_with_tilde
+        || unquoted_lits().any(|s| s.contains(":~") || s.contains("=~"))
+        || acc.segs.windows(2).any(|w| {
+            w[0].0.ends_with(['=', ':'])
+                && matches!(&w[1], (s, Some(Seg::UnquotedLit)) if s.starts_with('~'))
+        });
+    if tilde && mode != Mode::Heredoc {
+        return undet("~ expands to a home directory at run time");
+    }
     match mode {
         Mode::Heredoc => {
             if acc.expansion {
                 return undet("unquoted heredoc holds expansions");
             }
         }
-        Mode::Assign => {
-            if starts_with_tilde || unquoted_lits().any(|s| s.contains(":~") || s.contains("=~")) {
-                return undet("~ expands to a home directory at run time");
-            }
-        }
+        Mode::Assign => {}
         Mode::Field => {
-            if starts_with_tilde {
-                return undet("~ expands to a home directory at run time");
-            }
             let ifs: Option<String> = if env.opaque {
                 None
             } else {

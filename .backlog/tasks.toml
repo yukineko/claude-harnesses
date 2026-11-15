@@ -2539,6 +2539,8 @@ notes = "Observed 2026-11-15 session 6dcca0ad transcript lines 2117/2123/2124/21
 created_at = 1794733932
 updated_at = 1794733932
 weight = 0.0
+issue_number = 1798
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1798"
 rev = 0
 
 [task.repro]

@@ -1,22 +1,1985 @@
-//! Static evaluator of `detect::ast`: AST -> [`Script`].
+//! Static evaluator of `detect::ast`: brush-parser AST -> [`Script`].
 //!
-//! Skeleton: not implemented. [`evaluate`] is `Undetermined(NotImplemented)`
-//! and [`program_source`] is `Some(ProgramSource::Undetermined(..))` for every
-//! input — never a literal, never `None`, never an empty `Script`.
+//! The evaluator walks the program in execution order with an abstract shell
+//! state ([`Env`]: variables, cwd, stdin) and emits one [`SimpleCommand`] per
+//! simple command that may execute. Every value it cannot prove from the
+//! command text is `Undetermined`; nothing is guessed.
+//!
+//! # What is tracked (and what is deliberately not)
+//!
+//! * Variables: only values assigned on the line from literal text
+//!   (`S=/a`, `export S=/a`, `for v in a b`). Every variable the line does not
+//!   assign (environment, `$HOME`, positional / special parameters, shell
+//!   dynamic variables such as `$RANDOM` / `$PWD`) is `Undetermined`.
+//!   Subshells, pipeline stages, `$( )`, `<( )` and `&` get a copy that does
+//!   not leak back. Where two paths can reach a point (`&&` / `||`, `if`,
+//!   `case`, loops) the states are joined: a variable keeps its value only if
+//!   every path agrees, otherwise it is `Undetermined`.
+//! * Anything that may change variables in a way not modelled — `eval`,
+//!   `source`, `.`, `trap`, `alias`, `shopt`, `builtin`, `command`, an
+//!   undetermined command word, `declare`-family options, `set` with options
+//!   other than the plain ones — makes the state *opaque*: from there on every
+//!   variable, the cwd and stdin are `Undetermined`.
+//! * cwd: `cd <literal>` moves the tracked cwd for the commands that run only
+//!   if it succeeded (`cd x && ...`); after `cd x;` the cd may have failed, so
+//!   the cwd is the join of both and `Undetermined`. `cd -`, `cd` alone,
+//!   `cd` with options, `cd $(..)`, an undetermined operand, `pushd` / `popd`
+//!   make it `Undetermined`. A relative `cd` from the hook's cwd, a relative
+//!   `cd` while `CDPATH` may apply, and any `..` component are `Undetermined`.
+//! * Unquoted expansions that would be word-split or pathname-expanded, globs
+//!   and brace expansions in unquoted text, `~`, `$((..))`, `$( )` output and
+//!   parameter operations other than plain `$x` / `${x}` are `Undetermined`.
+//! * Function definitions and `coproc` make the whole analysis
+//!   `Undetermined(Unsupported)` (their bodies run at a time this evaluator
+//!   does not model), as does a `$( )` / backquote inside a parameter
+//!   operation or an arithmetic expression (the commands it runs would be
+//!   invisible).
+//!
+//! The whole evaluation runs under `catch_unwind` (a panic is
+//! `Undetermined(Panic)`) and under a work budget (`Undetermined(Unsupported)`
+//! when exceeded).
 
-use super::{Analysis, Cause, ProgramSource, SimpleCommand};
+use super::{
+    parse, Analysis, Cause, Context, FdTarget, HereDoc, Quoting, RedirOp, RedirTarget, Redirect,
+    Script, SimpleCommand, StdinSource, Value, Word,
+};
+use brush_parser::ast;
+use brush_parser::word::{Parameter, ParameterExpr, WordPiece, WordPieceWithSource};
+use brush_parser::SourceSpan;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
-#[cfg(doc)]
-use super::Script;
+/// The reason carried by [`SimpleCommand::cwd`] when no `cd` applies to the
+/// command: it runs in the hook's cwd, which the command text does not name.
+pub(super) const HOOK_CWD: &str = "cwd: the hook's cwd (no cd applies to this command)";
+
+/// Simple commands evaluated (including the dry passes of loop fixpoints)
+/// before the analysis gives up as `Unsupported`.
+const MAX_WORK: usize = 100_000;
+/// Commands emitted before the analysis gives up as `Unsupported`.
+const MAX_COMMANDS: usize = 10_000;
+/// A `for` over more literal words than this is not unrolled; its loop
+/// variable is `Undetermined` instead.
+const MAX_UNROLL: usize = 256;
+/// Dry passes over a loop body before every variable is made `Undetermined`.
+const MAX_FIXPOINT: usize = 4;
 
 /// Evaluate a parsed program.
-pub(super) fn evaluate(_command: &str, _program: &brush_parser::ast::Program) -> Analysis {
-    Analysis::Undetermined(Cause::NotImplemented)
+pub(super) fn evaluate(command: &str, program: &ast::Program) -> Analysis {
+    match catch_unwind(AssertUnwindSafe(|| run(command, program))) {
+        Ok(Ok(script)) => Analysis::Known(script),
+        Ok(Err(cause)) => Analysis::Undetermined(cause),
+        Err(_) => Analysis::Undetermined(Cause::Panic),
+    }
 }
 
-/// See [`super::program_source`].
-pub(super) fn program_source(_cmd: &SimpleCommand) -> Option<ProgramSource> {
-    Some(ProgramSource::Undetermined(
-        "program_source: not implemented".to_string(),
-    ))
+fn run(command: &str, program: &ast::Program) -> Result<Script, Cause> {
+    let text = Text::new(command, Origin::root(command.len()));
+    let mut ev = Ev {
+        out: Vec::new(),
+        emit: true,
+        work: 0,
+        accums: Vec::new(),
+    };
+    ev.program(&text, program, Env::initial(), &Context::TopLevel)?;
+    Ok(Script { commands: ev.out })
+}
+
+// ---------------------------------------------------------------- spans
+
+/// Where a piece of (possibly nested) program text sits in the original
+/// command. `base: Some(b)`: local byte `i` is global byte `b + i`. `None`:
+/// the text was rewritten (backquote unescaping, heredoc tab stripping), so
+/// every span inside it is reported as `whole`.
+#[derive(Debug, Clone)]
+struct Origin {
+    base: Option<usize>,
+    whole: Range<usize>,
+}
+
+impl Origin {
+    fn root(len: usize) -> Self {
+        Origin {
+            base: Some(0),
+            whole: 0..len,
+        }
+    }
+
+    fn map(&self, r: &Range<usize>) -> Range<usize> {
+        match self.base {
+            Some(b) => b + r.start..b + r.end,
+            None => self.whole.clone(),
+        }
+    }
+
+    fn sub(&self, r: &Range<usize>, exact: bool) -> Origin {
+        let whole = self.map(r);
+        let base = if exact && self.base.is_some() {
+            Some(whole.start)
+        } else {
+            None
+        };
+        Origin { base, whole }
+    }
+
+    fn inexact(&self) -> Origin {
+        Origin {
+            base: None,
+            whole: self.whole.clone(),
+        }
+    }
+}
+
+/// One program text (the command, or the body of a `$( )`): brush reports
+/// CHARACTER indices; `c2b` turns them into byte offsets.
+struct Text<'t> {
+    s: &'t str,
+    origin: Origin,
+    c2b: Vec<usize>,
+}
+
+impl<'t> Text<'t> {
+    fn new(s: &'t str, origin: Origin) -> Self {
+        let mut c2b: Vec<usize> = s.char_indices().map(|(i, _)| i).collect();
+        c2b.push(s.len());
+        Text { s, origin, c2b }
+    }
+
+    fn local(&self, span: &SourceSpan) -> Option<Range<usize>> {
+        let a = *self.c2b.get(span.start.index)?;
+        let b = *self.c2b.get(span.end.index)?;
+        (a <= b).then_some(a..b)
+    }
+
+    fn global(&self, span: Option<&SourceSpan>) -> Range<usize> {
+        match span.and_then(|s| self.local(s)) {
+            Some(r) => self.origin.map(&r),
+            None => self.origin.whole.clone(),
+        }
+    }
+
+    fn word_origin(&self, w: &ast::Word) -> Origin {
+        match w.loc.as_ref().and_then(|l| self.local(l)) {
+            Some(r) => {
+                let exact = self.s.get(r.clone()) == Some(w.value.as_str());
+                self.origin.sub(&r, exact)
+            }
+            None => self.origin.inexact(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------- state
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Cwd {
+    /// No `cd` applies: the hook's cwd.
+    Hook,
+    Known(String),
+    Undetermined(String),
+}
+
+impl Cwd {
+    fn value(&self) -> Value {
+        match self {
+            Cwd::Hook => Value::Undetermined(HOOK_CWD.to_string()),
+            Cwd::Known(c) => Value::Literal(c.clone()),
+            Cwd::Undetermined(r) => Value::Undetermined(r.clone()),
+        }
+    }
+
+    fn from_value(v: &Value) -> Cwd {
+        match v {
+            Value::Literal(c) => Cwd::Known(c.clone()),
+            Value::Undetermined(r) if r == HOOK_CWD => Cwd::Hook,
+            Value::Undetermined(r) => Cwd::Undetermined(r.clone()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Env {
+    /// Variables assigned on the line. Absent = not assigned here (its value,
+    /// if any, comes from outside the text): `Undetermined` on lookup.
+    vars: BTreeMap<String, Value>,
+    /// `readonly` names: a later assignment fails, so it is not trusted.
+    readonly: BTreeSet<String>,
+    /// Something unmodelled may have changed any variable / attribute.
+    opaque: bool,
+    cwd: Cwd,
+    stdin: StdinSource,
+}
+
+/// Variables the shell itself sets or changes at run time (whitespace
+/// separated).
+const DYNAMIC_VARS: &str = "RANDOM SRANDOM SECONDS LINENO EPOCHSECONDS EPOCHREALTIME BASHPID \
+    BASH_SUBSHELL BASH_COMMAND HISTCMD PWD OLDPWD PIPESTATUS REPLY OPTARG OPTIND FUNCNAME \
+    BASH_LINENO BASH_SOURCE BASH_ARGV BASH_ARGC BASH_REMATCH GROUPS DIRSTACK UID EUID PPID \
+    BASHOPTS SHELLOPTS BASH_VERSINFO _";
+
+impl Env {
+    fn initial() -> Self {
+        Env {
+            vars: BTreeMap::new(),
+            readonly: BTreeSet::new(),
+            opaque: false,
+            cwd: Cwd::Hook,
+            stdin: StdinSource::Inherited,
+        }
+    }
+
+    fn lookup(&self, name: &str) -> Value {
+        if self.opaque {
+            return undet(format!(
+                "${name}: an earlier command may have changed any variable"
+            ));
+        }
+        if DYNAMIC_VARS.split_whitespace().any(|v| v == name) {
+            return undet(format!("${name}: set by the shell at run time"));
+        }
+        match self.vars.get(name) {
+            Some(v) => v.clone(),
+            None => undet(format!("${name}: not assigned on this command line")),
+        }
+    }
+
+    fn bind(&mut self, name: &str, v: Value) {
+        let v = if self.opaque || self.readonly.contains(name) {
+            undet(format!(
+                "{name}: assignment not trusted (readonly / opaque)"
+            ))
+        } else {
+            v
+        };
+        self.vars.insert(name.to_string(), v);
+    }
+
+    fn forget(&mut self, name: &str, why: &str) {
+        self.vars
+            .insert(name.to_string(), undet(format!("{name}: {why}")));
+    }
+
+    fn havoc_vars(&mut self, why: &str) {
+        for (k, v) in self.vars.iter_mut() {
+            *v = undet(format!("{k}: {why}"));
+        }
+    }
+
+    fn make_opaque(&mut self, why: &str) {
+        self.opaque = true;
+        self.havoc_vars(why);
+        self.cwd = Cwd::Undetermined(format!("cwd: {why}"));
+        self.stdin = StdinSource::Undetermined(format!("stdin: {why}"));
+    }
+}
+
+fn undet(s: impl Into<String>) -> Value {
+    Value::Undetermined(s.into())
+}
+
+/// The state at a point two paths can reach.
+fn join(a: Env, b: Env) -> Env {
+    if a == b {
+        return a;
+    }
+    let mut vars = BTreeMap::new();
+    let keys: BTreeSet<&String> = a.vars.keys().chain(b.vars.keys()).collect();
+    for k in keys {
+        let v = match (a.vars.get(k), b.vars.get(k)) {
+            (Some(x), Some(y)) if x == y => x.clone(),
+            _ => undet(format!("{k}: differs between the paths that reach here")),
+        };
+        vars.insert(k.clone(), v);
+    }
+    let readonly = a.readonly.union(&b.readonly).cloned().collect();
+    let cwd = if a.cwd == b.cwd {
+        a.cwd
+    } else {
+        Cwd::Undetermined(
+            "cwd: differs between the paths that reach here (a cd may have failed)".into(),
+        )
+    };
+    let stdin = if a.stdin == b.stdin {
+        a.stdin
+    } else {
+        StdinSource::Undetermined("stdin: differs between the paths that reach here".into())
+    };
+    Env {
+        vars,
+        readonly,
+        opaque: a.opaque || b.opaque,
+        cwd,
+        stdin,
+    }
+}
+
+fn join_opt(a: Option<Env>, b: Env) -> Env {
+    match a {
+        Some(a) => join(a, b),
+        None => b,
+    }
+}
+
+/// The states after a command that succeeded / failed.
+struct Outcome {
+    ok: Env,
+    fail: Env,
+}
+
+impl Outcome {
+    fn same(env: Env) -> Self {
+        Outcome {
+            ok: env.clone(),
+            fail: env,
+        }
+    }
+}
+
+// ---------------------------------------------------------------- words
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// argv / for-list / redirect target: word splitting and pathname
+    /// expansion apply.
+    Field,
+    /// Assignment value, here-string, case / `[[ ]]` operand: no splitting,
+    /// no pathname expansion.
+    Assign,
+    /// Unquoted heredoc body.
+    Heredoc,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Seg {
+    QuotedLit,
+    UnquotedLit,
+    QuotedExp,
+    UnquotedExp,
+}
+
+#[derive(Default)]
+struct Acc {
+    segs: Vec<(String, Option<Seg>)>,
+    undet: Option<String>,
+    unquoted: bool,
+    single: bool,
+    double: bool,
+    ansic: bool,
+    escape: bool,
+    expansion: bool,
+}
+
+impl Acc {
+    fn push(&mut self, s: String, seg: Seg) {
+        self.segs.push((s, Some(seg)));
+    }
+
+    fn undet(&mut self, why: impl Into<String>) {
+        if self.undet.is_none() {
+            self.undet = Some(why.into());
+        }
+    }
+
+    fn quoting(&self) -> Quoting {
+        let kinds = [
+            (self.unquoted, Quoting::Unquoted),
+            (self.single, Quoting::Single),
+            (self.double, Quoting::Double),
+            (self.ansic, Quoting::AnsiC),
+            (self.escape, Quoting::Mixed),
+        ];
+        let present: Vec<Quoting> = kinds.iter().filter(|k| k.0).map(|k| k.1).collect();
+        match present.as_slice() {
+            [] => Quoting::Unquoted,
+            [one] => *one,
+            _ => Quoting::Mixed,
+        }
+    }
+
+    fn any_quote(&self) -> bool {
+        self.single || self.double || self.ansic || self.escape
+    }
+}
+
+/// `$( )`, backquotes or process substitution in raw text.
+fn has_subst(s: &str) -> bool {
+    s.contains("$(") || s.contains('`') || s.contains("<(") || s.contains(">(")
+}
+
+fn is_ident(s: &str) -> bool {
+    let mut c = s.chars();
+    matches!(c.next(), Some(ch) if ch == '_' || ch.is_ascii_alphabetic())
+        && c.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+/// `$'..'` with simple escapes only; anything else (`\x`, `\u`, octal, `\c`)
+/// is `None`.
+fn decode_ansi_c(s: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut it = s.chars();
+    while let Some(c) = it.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        out.push(match it.next()? {
+            'n' => '\n',
+            't' => '\t',
+            'r' => '\r',
+            'a' => '\x07',
+            'b' => '\x08',
+            'e' | 'E' => '\x1b',
+            'f' => '\x0c',
+            'v' => '\x0b',
+            '\\' => '\\',
+            '\'' => '\'',
+            '"' => '"',
+            '?' => '?',
+            _ => return None,
+        });
+    }
+    Some(out)
+}
+
+/// The program inside backquotes: `\$`, `` \` ``, `\\` (and `\"` inside
+/// double quotes) lose their backslash. The bool says whether anything
+/// changed (then spans inside it are not exact).
+fn unescape_backquote(s: &str, in_dq: bool) -> (String, bool) {
+    let mut out = String::new();
+    let mut changed = false;
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        if c == '\\' {
+            if let Some(&n) = it.peek() {
+                if n == '$' || n == '`' || n == '\\' || (in_dq && n == '"') {
+                    out.push(n);
+                    it.next();
+                    changed = true;
+                    continue;
+                }
+            }
+        }
+        out.push(c);
+    }
+    (out, changed)
+}
+
+fn parse_heredoc_contained(body: &str) -> Result<Vec<WordPieceWithSource>, Cause> {
+    let options = parse::parser_options();
+    match catch_unwind(AssertUnwindSafe(|| {
+        brush_parser::word::parse_heredoc(body, &options)
+    })) {
+        Ok(Ok(pieces)) => Ok(pieces),
+        Ok(Err(e)) => Err(Cause::Parse(e.to_string())),
+        Err(_) => Err(Cause::Panic),
+    }
+}
+
+// ---------------------------------------------------------------- paths
+
+/// A redirect target / script operand as the pinned representation wants
+/// it: absolute stays as written; relative stays as written when no `cd`
+/// applies (the consumer reads it against the hook's cwd); relative after a
+/// literal `cd` is joined to it; relative after an undetermined `cd` (or
+/// with a `..` component after a `cd`) is `Undetermined`.
+fn resolve(cwd: &Cwd, v: Value) -> Value {
+    let p = match v {
+        Value::Literal(p) => p,
+        u => return u,
+    };
+    if p.starts_with('/') {
+        return Value::Literal(p);
+    }
+    match cwd {
+        Cwd::Hook => Value::Literal(p),
+        Cwd::Undetermined(r) => undet(format!(
+            "relative path `{p}` after an undetermined cd ({r})"
+        )),
+        Cwd::Known(c) => match join_path(c, &p) {
+            Some(j) => Value::Literal(j),
+            None => undet(format!(
+                "`{p}` after cd {c}: `..` / empty path not resolved (symlinks make it unsound)"
+            )),
+        },
+    }
+}
+
+/// `base` (absolute, normalised) + relative `rel`, lexically; `None` for a
+/// `..` component or an empty `rel`.
+fn join_path(base: &str, rel: &str) -> Option<String> {
+    if rel.is_empty() {
+        return None;
+    }
+    let mut out = base.trim_end_matches('/').to_string();
+    for part in rel.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => return None,
+            p => {
+                out.push('/');
+                out.push_str(p);
+            }
+        }
+    }
+    if out.is_empty() {
+        out.push('/');
+    }
+    Some(out)
+}
+
+/// An absolute `cd` target, normalised (`.` and empty components dropped);
+/// `None` for `..`.
+fn normalise_abs(p: &str) -> Option<String> {
+    join_path("/", p.trim_start_matches('/')).or_else(|| {
+        if p.trim_matches('/').is_empty() {
+            Some("/".to_string())
+        } else {
+            None
+        }
+    })
+}
+
+// ---------------------------------------------------------------- evaluator
+
+const DECL_BUILTINS: &[&str] = &["export", "declare", "typeset", "local", "readonly"];
+const ASSIGNING_BUILTINS: &[&str] = &["read", "mapfile", "readarray", "getopts", "unset", "wait"];
+const OPAQUE_BUILTINS: &[&str] = &[
+    "eval", "source", ".", "trap", "alias", "unalias", "enable", "shopt", "builtin", "command",
+];
+const SPECIAL_BUILTINS: &[&str] = &[
+    ":", ".", "break", "continue", "eval", "exec", "exit", "export", "readonly", "return", "set",
+    "shift", "times", "trap", "unset", "source",
+];
+
+struct Ev {
+    out: Vec<SimpleCommand>,
+    /// False during the dry passes of a loop fixpoint.
+    emit: bool,
+    work: usize,
+    /// One slot per enclosing loop: the join of the states at `break` /
+    /// `continue`.
+    accums: Vec<Option<Env>>,
+}
+
+impl Ev {
+    fn tick(&mut self) -> Result<(), Cause> {
+        self.work += 1;
+        if self.work > MAX_WORK {
+            return Err(Cause::Unsupported("evaluation budget exceeded".into()));
+        }
+        Ok(())
+    }
+
+    fn push(&mut self, c: SimpleCommand) -> Result<(), Cause> {
+        if self.emit {
+            if self.out.len() >= MAX_COMMANDS {
+                return Err(Cause::Unsupported("too many commands".into()));
+            }
+            self.out.push(c);
+        }
+        Ok(())
+    }
+
+    fn program(
+        &mut self,
+        text: &Text,
+        p: &ast::Program,
+        mut env: Env,
+        ctx: &Context,
+    ) -> Result<Env, Cause> {
+        for cl in &p.complete_commands {
+            env = self.list(text, cl, env, ctx)?;
+        }
+        Ok(env)
+    }
+
+    fn list(
+        &mut self,
+        text: &Text,
+        l: &ast::CompoundList,
+        mut env: Env,
+        ctx: &Context,
+    ) -> Result<Env, Cause> {
+        for ast::CompoundListItem(ao, sep) in &l.0 {
+            match sep {
+                ast::SeparatorOperator::Async => {
+                    self.and_or(text, ao, env.clone(), &Context::Background)?;
+                }
+                ast::SeparatorOperator::Sequence => env = self.and_or(text, ao, env, ctx)?,
+            }
+        }
+        Ok(env)
+    }
+
+    fn and_or(
+        &mut self,
+        text: &Text,
+        ao: &ast::AndOrList,
+        env: Env,
+        ctx: &Context,
+    ) -> Result<Env, Cause> {
+        let first = self.pipeline(text, &ao.first, env, ctx)?;
+        let (mut ok, mut fail) = (first.ok, first.fail);
+        for item in &ao.additional {
+            match item {
+                ast::AndOr::And(p) => {
+                    let o = self.pipeline(text, p, ok, ctx)?;
+                    ok = o.ok;
+                    fail = join(fail, o.fail);
+                }
+                ast::AndOr::Or(p) => {
+                    let o = self.pipeline(text, p, fail, ctx)?;
+                    fail = o.fail;
+                    ok = join(ok, o.ok);
+                }
+            }
+        }
+        Ok(join(ok, fail))
+    }
+
+    fn pipeline(
+        &mut self,
+        text: &Text,
+        p: &ast::Pipeline,
+        env: Env,
+        ctx: &Context,
+    ) -> Result<Outcome, Cause> {
+        let out = match p.seq.as_slice() {
+            [only] => self.command(text, only, env, ctx)?.0,
+            stages => {
+                let len = stages.len();
+                let mut stdin = env.stdin.clone();
+                for (pos, c) in stages.iter().enumerate() {
+                    let mut st = env.clone();
+                    st.stdin = stdin;
+                    let (_, produced) =
+                        self.command(text, c, st, &Context::Pipeline { pos, len })?;
+                    stdin = piped_stdin(produced.as_ref());
+                }
+                Outcome::same(env)
+            }
+        };
+        Ok(if p.bang {
+            Outcome {
+                ok: out.fail,
+                fail: out.ok,
+            }
+        } else {
+            out
+        })
+    }
+
+    fn command(
+        &mut self,
+        text: &Text,
+        c: &ast::Command,
+        env: Env,
+        ctx: &Context,
+    ) -> Result<(Outcome, Option<SimpleCommand>), Cause> {
+        match c {
+            ast::Command::Simple(s) => {
+                let (o, sc) = self.simple(text, s, env, ctx)?;
+                Ok((o, Some(sc)))
+            }
+            ast::Command::Compound(cc, redirs) => {
+                let span = text.global(compound_loc(cc));
+                let e = self.with_redirects(text, redirs.as_ref(), span, env, ctx, |ev, e| {
+                    ev.compound(text, cc, e, ctx)
+                })?;
+                Ok((Outcome::same(e), None))
+            }
+            ast::Command::Function(_) => Err(Cause::Unsupported(
+                "function definition: its body is not evaluated".into(),
+            )),
+            ast::Command::ExtendedTest(t, redirs) => {
+                let span = text.global(Some(&t.loc));
+                let e =
+                    self.with_redirects(text, redirs.as_ref(), span, env, ctx, |ev, mut e| {
+                        ev.test_expr(text, &t.expr, &mut e)?;
+                        Ok(e)
+                    })?;
+                Ok((Outcome::same(e), None))
+            }
+        }
+    }
+
+    fn test_expr(
+        &mut self,
+        text: &Text,
+        x: &ast::ExtendedTestExpr,
+        env: &mut Env,
+    ) -> Result<(), Cause> {
+        match x {
+            ast::ExtendedTestExpr::And(a, b) | ast::ExtendedTestExpr::Or(a, b) => {
+                self.test_expr(text, a, env)?;
+                self.test_expr(text, b, env)
+            }
+            ast::ExtendedTestExpr::Not(a) | ast::ExtendedTestExpr::Parenthesized(a) => {
+                self.test_expr(text, a, env)
+            }
+            ast::ExtendedTestExpr::UnaryTest(_, w) => {
+                self.word(text, w, Mode::Assign, env)?;
+                Ok(())
+            }
+            ast::ExtendedTestExpr::BinaryTest(_, a, b) => {
+                self.word(text, a, Mode::Assign, env)?;
+                self.word(text, b, Mode::Assign, env)?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Evaluate a compound command's own redirections (emitted as one
+    /// empty-argv command spanning the compound), then its body with the
+    /// resulting stdin. A literal stdin is shared by every command inside,
+    /// so inside it is `Undetermined`.
+    fn with_redirects(
+        &mut self,
+        text: &Text,
+        redirs: Option<&ast::RedirectList>,
+        span: Range<usize>,
+        mut env: Env,
+        ctx: &Context,
+        body: impl FnOnce(&mut Self, Env) -> Result<Env, Cause>,
+    ) -> Result<Env, Cause> {
+        let saved = env.stdin.clone();
+        if let Some(rl) = redirs.filter(|rl| !rl.0.is_empty()) {
+            self.tick()?;
+            let mut stdin = env.stdin.clone();
+            let mut redirects = Vec::new();
+            for r in &rl.0 {
+                let red = self.redirect(text, r, &mut env, &span)?;
+                apply_stdin(&mut stdin, &red);
+                redirects.push(red);
+            }
+            self.push(SimpleCommand {
+                argv: Vec::new(),
+                assignments: Vec::new(),
+                redirects,
+                cwd: env.cwd.value(),
+                stdin: stdin.clone(),
+                context: ctx.clone(),
+                span: span.clone(),
+            })?;
+            env.stdin = stdin;
+        }
+        if matches!(env.stdin, StdinSource::Literal(_)) {
+            env.stdin = StdinSource::Undetermined(
+                "stdin: a literal shared by the commands of a compound command".into(),
+            );
+        }
+        let given = env.stdin.clone();
+        let mut after = body(self, env)?;
+        after.stdin = if after.stdin == given {
+            saved
+        } else {
+            StdinSource::Undetermined("stdin: changed inside a compound command".into())
+        };
+        Ok(after)
+    }
+
+    fn compound(
+        &mut self,
+        text: &Text,
+        cc: &ast::CompoundCommand,
+        mut env: Env,
+        ctx: &Context,
+    ) -> Result<Env, Cause> {
+        use ast::CompoundCommand as C;
+        match cc {
+            C::Arithmetic(a) => {
+                check_arith(&a.expr.value)?;
+                env.havoc_vars("arithmetic may assign variables");
+                Ok(env)
+            }
+            C::ArithmeticForClause(f) => {
+                for e in [&f.initializer, &f.condition, &f.updater]
+                    .into_iter()
+                    .flatten()
+                {
+                    check_arith(&e.value)?;
+                }
+                env.havoc_vars("arithmetic may assign variables");
+                self.fix_loop(env, |ev, e| {
+                    let mut e = ev.list(text, &f.body.list, e, ctx)?;
+                    e.havoc_vars("arithmetic may assign variables");
+                    Ok(e)
+                })
+            }
+            C::BraceGroup(b) => self.list(text, &b.list, env, ctx),
+            C::Subshell(s) => {
+                self.list(text, &s.list, env.clone(), &Context::Subshell)?;
+                Ok(env)
+            }
+            C::ForClause(f) => self.for_clause(text, f, env, ctx),
+            C::CaseClause(c) => self.case_clause(text, c, env, ctx),
+            C::IfClause(i) => self.if_clause(text, i, env, ctx),
+            C::WhileClause(w) | C::UntilClause(w) => {
+                let j = self.fix_loop(env, |ev, e| {
+                    let c = ev.list(text, &w.0, e, ctx)?;
+                    ev.list(text, &w.1.list, c, ctx)
+                })?;
+                // The loop ends after a final evaluation of the condition.
+                let saved = self.emit;
+                self.emit = false;
+                let exit = self.list(text, &w.0, j.clone(), ctx);
+                self.emit = saved;
+                Ok(join(exit?, j))
+            }
+            C::Coprocess(_) => Err(Cause::Unsupported("coproc is not evaluated".into())),
+        }
+    }
+
+    /// Run a loop body to a fixpoint without emitting, then once emitting.
+    /// Returns a state that covers every iteration count (including 0) and
+    /// every `break` / `continue`.
+    fn fix_loop(
+        &mut self,
+        entry: Env,
+        mut iter: impl FnMut(&mut Self, Env) -> Result<Env, Cause>,
+    ) -> Result<Env, Cause> {
+        let saved = self.emit;
+        self.emit = false;
+        let mut j = entry;
+        let mut converged = false;
+        for _ in 0..MAX_FIXPOINT {
+            self.accums.push(None);
+            let end = iter(self, j.clone());
+            let acc = self.accums.pop().flatten();
+            let end = match end {
+                Ok(e) => e,
+                Err(c) => {
+                    self.emit = saved;
+                    return Err(c);
+                }
+            };
+            let next = join_opt(acc, join(j.clone(), end));
+            if next == j {
+                converged = true;
+                break;
+            }
+            j = next;
+        }
+        if !converged {
+            j.make_opaque("loop state did not converge");
+        }
+        self.emit = saved;
+        self.accums.push(None);
+        let end = iter(self, j.clone());
+        let acc = self.accums.pop().flatten();
+        Ok(join_opt(acc, join(j, end?)))
+    }
+
+    fn for_clause(
+        &mut self,
+        text: &Text,
+        f: &ast::ForClauseCommand,
+        mut env: Env,
+        ctx: &Context,
+    ) -> Result<Env, Cause> {
+        let mut values = Some(Vec::new());
+        match &f.values {
+            None => values = None,
+            Some(words) => {
+                for w in words {
+                    let ev = self.word(text, w, Mode::Field, &mut env)?;
+                    match (&mut values, ev.value) {
+                        (Some(vs), Value::Literal(s)) => vs.push(s),
+                        _ => values = None,
+                    }
+                }
+            }
+        }
+        let var = f.variable_name.as_str();
+        match values.filter(|v| v.len() <= MAX_UNROLL) {
+            Some(vs) => {
+                let mut exits: Option<Env> = None;
+                for v in vs {
+                    env.bind(var, Value::Literal(v));
+                    self.accums.push(None);
+                    let end = self.list(text, &f.body.list, env.clone(), ctx);
+                    let acc = self.accums.pop().flatten();
+                    let end = end?;
+                    env = match acc {
+                        Some(a) => {
+                            exits = Some(join_opt(exits, a.clone()));
+                            join(end, a)
+                        }
+                        None => end,
+                    };
+                }
+                Ok(join_opt(exits, env))
+            }
+            None => self.fix_loop(env, |ev, mut e| {
+                e.forget(
+                    var,
+                    "loop variable over a list not determined from the text",
+                );
+                ev.list(text, &f.body.list, e, ctx)
+            }),
+        }
+    }
+
+    fn case_clause(
+        &mut self,
+        text: &Text,
+        c: &ast::CaseClauseCommand,
+        mut env: Env,
+        ctx: &Context,
+    ) -> Result<Env, Cause> {
+        self.word(text, &c.value, Mode::Assign, &mut env)?;
+        let mut result: Option<Env> = None;
+        let mut carry: Option<Env> = None;
+        for item in &c.cases {
+            for p in &item.patterns {
+                self.word(text, p, Mode::Assign, &mut env)?;
+            }
+            let entry = join_opt(carry.take(), env.clone());
+            let end = match &item.cmd {
+                Some(l) => self.list(text, l, entry, ctx)?,
+                None => entry,
+            };
+            result = Some(join_opt(result, end.clone()));
+            carry = match item.post_action {
+                ast::CaseItemPostAction::ExitCase => None,
+                _ => Some(end),
+            };
+        }
+        Ok(join_opt(result, env))
+    }
+
+    fn if_clause(
+        &mut self,
+        text: &Text,
+        i: &ast::IfClauseCommand,
+        env: Env,
+        ctx: &Context,
+    ) -> Result<Env, Cause> {
+        let mut cur = self.list(text, &i.condition, env, ctx)?;
+        let mut result = self.list(text, &i.then, cur.clone(), ctx)?;
+        let mut has_else = false;
+        for e in i.elses.iter().flatten() {
+            match &e.condition {
+                Some(cond) => {
+                    cur = self.list(text, cond, cur, ctx)?;
+                    let b = self.list(text, &e.body, cur.clone(), ctx)?;
+                    result = join(result, b);
+                }
+                None => {
+                    let b = self.list(text, &e.body, cur.clone(), ctx)?;
+                    result = join(result, b);
+                    has_else = true;
+                }
+            }
+        }
+        Ok(if has_else { result } else { join(result, cur) })
+    }
+
+    // ------------------------------------------------------------ simple
+
+    fn simple(
+        &mut self,
+        text: &Text,
+        s: &ast::SimpleCommand,
+        mut env: Env,
+        ctx: &Context,
+    ) -> Result<(Outcome, SimpleCommand), Cause> {
+        use ast::CommandPrefixOrSuffixItem as I;
+        self.tick()?;
+        let prefix: &[I] = s.prefix.as_ref().map_or(&[], |p| p.0.as_slice());
+        let suffix: &[I] = s.suffix.as_ref().map_or(&[], |p| p.0.as_slice());
+        let mut spans: Vec<Range<usize>> = Vec::new();
+
+        // 1. Words (command word, then arguments), in the current state.
+        let mut argv = Vec::new();
+        if let Some(w) = &s.word_or_name {
+            argv.push(self.word(text, w, Mode::Field, &mut env)?);
+        }
+        let decl = matches!(argv.first().map(|w| &w.value),
+            Some(Value::Literal(n)) if DECL_BUILTINS.contains(&n.as_str()));
+        // argv index -> assignment name, for declaration builtins.
+        let mut decl_names: BTreeMap<usize, String> = BTreeMap::new();
+        for item in suffix {
+            match item {
+                I::Word(w) => argv.push(self.word(text, w, Mode::Field, &mut env)?),
+                I::AssignmentWord(a, w) => {
+                    let mode = if decl { Mode::Assign } else { Mode::Field };
+                    if decl {
+                        if let ast::AssignmentName::VariableName(n) = &a.name {
+                            decl_names.insert(argv.len(), n.clone());
+                        }
+                    }
+                    argv.push(self.word(text, w, mode, &mut env)?);
+                }
+                I::ProcessSubstitution(_, sub) => {
+                    argv.push(self.proc_subst_word(text, sub, &env)?);
+                }
+                I::IoRedirect(_) => {}
+            }
+        }
+        spans.extend(argv.iter().map(|w| w.span.clone()));
+
+        // brush puts only assignments and redirections in a prefix; anything
+        // else would be a word this evaluator did not expand.
+        if prefix
+            .iter()
+            .any(|i| matches!(i, I::Word(_) | I::ProcessSubstitution(..)))
+        {
+            return Err(Cause::Unsupported(
+                "word or process substitution in a command prefix".into(),
+            ));
+        }
+
+        // 2. Redirections, in source order.
+        let fallback = text.origin.whole.clone();
+        let mut redirects = Vec::new();
+        let mut stdin = env.stdin.clone();
+        for item in prefix.iter().chain(suffix.iter()) {
+            if let I::IoRedirect(r) = item {
+                let red = self.redirect(text, r, &mut env, &fallback)?;
+                apply_stdin(&mut stdin, &red);
+                redirects.push(red);
+            }
+        }
+
+        // 3. Prefix assignments.
+        let mut assignments = Vec::new();
+        let assignment_only = argv.is_empty();
+        let mut hidden: Vec<String> = Vec::new();
+        let mut scratch = env.clone();
+        for item in prefix {
+            if let I::AssignmentWord(a, w) = item {
+                let (name, base, word, bound) = if assignment_only {
+                    self.assignment(text, a, w, &mut env)?
+                } else {
+                    for h in &hidden {
+                        scratch.forget(h, "assigned earlier in the same prefix");
+                    }
+                    self.assignment(text, a, w, &mut scratch)?
+                };
+                spans.push(text.global(w.loc.as_ref()));
+                if assignment_only {
+                    match bound {
+                        Some(v) => env.bind(&base, v),
+                        None => env.forget(&base, "array / indexed assignment"),
+                    }
+                } else {
+                    hidden.push(base);
+                }
+                assignments.push((name, word));
+            }
+        }
+        if !assignment_only {
+            // Side effects of evaluating the prefix values (arithmetic,
+            // `${x:=}`) still happen in this shell.
+            for (k, v) in &scratch.vars {
+                if matches!(v, Value::Undetermined(_))
+                    && !hidden.contains(k)
+                    && matches!(env.vars.get(k), Some(Value::Literal(_)))
+                {
+                    env.forget(k, "changed while expanding a prefix assignment");
+                }
+            }
+        }
+        spans.extend(redirects.iter().map(|r| r.span.clone()));
+
+        let span = match (
+            spans.iter().map(|r| r.start).min(),
+            spans.iter().map(|r| r.end).max(),
+        ) {
+            (Some(a), Some(b)) if a <= b => a..b,
+            _ => fallback,
+        };
+        let sc = SimpleCommand {
+            argv,
+            assignments,
+            redirects,
+            cwd: env.cwd.value(),
+            stdin,
+            context: ctx.clone(),
+            span,
+        };
+
+        // 4. Effects on the shell state.
+        let outcome = self.effects(&sc, &decl_names, env)?;
+        self.push(sc.clone())?;
+        Ok((outcome, sc))
+    }
+
+    fn effects(
+        &mut self,
+        sc: &SimpleCommand,
+        decl_names: &BTreeMap<usize, String>,
+        mut env: Env,
+    ) -> Result<Outcome, Cause> {
+        let name = match sc.argv.first().map(|w| &w.value) {
+            None => return Ok(Outcome::same(env)),
+            Some(Value::Undetermined(_)) => {
+                env.make_opaque("an undetermined command word ran");
+                return Ok(Outcome::same(env));
+            }
+            Some(Value::Literal(n)) => n.as_str(),
+        };
+        let args = sc.argv.get(1..).unwrap_or(&[]);
+        if SPECIAL_BUILTINS.contains(&name) {
+            for (n, _) in &sc.assignments {
+                let base = n.split('[').next().unwrap_or(n);
+                env.forget(base, "prefix assignment of a special builtin");
+            }
+        }
+        match name {
+            "cd" => return Ok(self.cd(sc, args, env)),
+            "pushd" | "popd" => {
+                env.cwd = Cwd::Undetermined(format!("cwd: changed by {name}"));
+            }
+            "break" | "continue" => {
+                for a in self.accums.iter_mut() {
+                    *a = Some(join_opt(a.take(), env.clone()));
+                }
+            }
+            "let" => env.havoc_vars("`let` may assign variables"),
+            "exec" if args.is_empty() => {
+                if sc.stdin != env.stdin {
+                    env.stdin =
+                        StdinSource::Undetermined("stdin: redirected by a bare `exec`".into());
+                }
+            }
+            "set" if !set_is_harmless(args) => env.make_opaque("`set` with an unmodelled option"),
+            "printf" => {
+                let mut it = args.iter();
+                while let Some(a) = it.next() {
+                    match &a.value {
+                        Value::Literal(s) if s == "-v" => match it.next().map(|w| &w.value) {
+                            Some(Value::Literal(n)) => {
+                                let base = n.split('[').next().unwrap_or(n);
+                                env.forget(base, "assigned by printf -v");
+                            }
+                            _ => env.make_opaque("printf -v with an undetermined name"),
+                        },
+                        Value::Literal(_) => {}
+                        Value::Undetermined(_) => {
+                            env.make_opaque("printf with an undetermined option");
+                            break;
+                        }
+                    }
+                }
+            }
+            n if DECL_BUILTINS.contains(&n) => self.declaration(n, args, decl_names, &mut env),
+            n if ASSIGNING_BUILTINS.contains(&n) => {
+                for a in args {
+                    match &a.value {
+                        Value::Literal(s) => {
+                            let base = s.split('[').next().unwrap_or(s);
+                            if is_ident(base) {
+                                env.forget(base, &format!("assigned by {n}"));
+                            }
+                        }
+                        Value::Undetermined(_) => {
+                            env.make_opaque(&format!("{n} with an undetermined operand"));
+                        }
+                    }
+                }
+            }
+            n if OPAQUE_BUILTINS.contains(&n) => env.make_opaque(&format!("`{n}` ran")),
+            _ => {}
+        }
+        Ok(Outcome::same(env))
+    }
+
+    fn declaration(
+        &mut self,
+        builtin: &str,
+        args: &[Word],
+        decl_names: &BTreeMap<usize, String>,
+        env: &mut Env,
+    ) {
+        for (i, a) in args.iter().enumerate() {
+            let s = match &a.value {
+                Value::Literal(s) => s,
+                Value::Undetermined(_) => {
+                    match decl_names.get(&(i + 1)) {
+                        Some(n) => env.forget(n, &format!("assigned by {builtin}")),
+                        None => env.make_opaque(&format!("{builtin} with an undetermined operand")),
+                    }
+                    continue;
+                }
+            };
+            if s.starts_with('-') || s.starts_with('+') {
+                env.make_opaque(&format!("{builtin} with an option"));
+                continue;
+            }
+            match s.split_once('=') {
+                Some((lhs, rhs)) => {
+                    if let Some(n) = lhs.strip_suffix('+') {
+                        env.forget(n, "+= appends to a value");
+                    } else if is_ident(lhs) {
+                        env.bind(lhs, Value::Literal(rhs.to_string()));
+                    } else {
+                        let base = lhs.split('[').next().unwrap_or(lhs);
+                        env.forget(base, "indexed assignment");
+                    }
+                    if builtin == "readonly" {
+                        env.readonly.insert(lhs.to_string());
+                    }
+                }
+                None => {
+                    if builtin == "readonly" {
+                        env.readonly.insert(s.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    fn cd(&mut self, sc: &SimpleCommand, args: &[Word], env: Env) -> Outcome {
+        let new = match args {
+            [] => Cwd::Undetermined("cwd: cd without an operand goes to $HOME".into()),
+            [one] => match &one.value {
+                Value::Undetermined(r) => {
+                    Cwd::Undetermined(format!("cwd: cd to an undetermined dir ({r})"))
+                }
+                Value::Literal(t) if t.starts_with('-') || t.starts_with('+') || t.is_empty() => {
+                    Cwd::Undetermined(format!("cwd: `cd {t}` is not a literal directory"))
+                }
+                Value::Literal(t) if t.starts_with('/') => match normalise_abs(t) {
+                    Some(c) => Cwd::Known(c),
+                    None => Cwd::Undetermined(format!("cwd: `cd {t}` has a `..` component")),
+                },
+                Value::Literal(t) => {
+                    let cdpath = !sc.assignments.is_empty()
+                        || env.opaque
+                        || env.vars.contains_key("CDPATH")
+                        || env.vars.contains_key("cdpath")
+                        || std::env::var_os("CDPATH").is_some_and(|v| !v.is_empty());
+                    match &env.cwd {
+                        _ if cdpath => {
+                            Cwd::Undetermined(format!("cwd: `cd {t}` may search CDPATH"))
+                        }
+                        Cwd::Hook => Cwd::Undetermined(format!(
+                            "cwd: `cd {t}` is relative to the hook's cwd"
+                        )),
+                        Cwd::Undetermined(r) => Cwd::Undetermined(r.clone()),
+                        Cwd::Known(c) => match join_path(c, t) {
+                            Some(j) => Cwd::Known(j),
+                            None => {
+                                Cwd::Undetermined(format!("cwd: `cd {t}` has a `..` component"))
+                            }
+                        },
+                    }
+                }
+            },
+            _ => Cwd::Undetermined("cwd: cd with more than one operand".into()),
+        };
+        let mut ok = env.clone();
+        ok.cwd = new;
+        Outcome { ok, fail: env }
+    }
+
+    /// `(display name, base variable, value word, binding)`. The binding is
+    /// `None` for array / indexed assignments.
+    fn assignment(
+        &mut self,
+        text: &Text,
+        a: &ast::Assignment,
+        w: &ast::Word,
+        env: &mut Env,
+    ) -> Result<(String, String, Word, Option<Value>), Cause> {
+        let (name, base) = match &a.name {
+            ast::AssignmentName::VariableName(n) => (n.clone(), n.clone()),
+            ast::AssignmentName::ArrayElementName(n, idx) => {
+                if has_subst(idx) {
+                    return Err(Cause::Unsupported(format!(
+                        "command substitution in the index of {n}[{idx}]"
+                    )));
+                }
+                env.havoc_vars("array index arithmetic may assign variables");
+                (format!("{n}[{idx}]"), n.clone())
+            }
+        };
+        let word_origin = text.word_origin(w);
+        let lhs_len = w.value.find('=').map_or(0, |i| i + 1);
+        let value_raw = w.value.get(lhs_len..).unwrap_or("").to_string();
+        let value_range = lhs_len..w.value.len();
+        let origin = word_origin.sub(&value_range, true);
+        let (value, quoting) = match &a.value {
+            ast::AssignmentValue::Scalar(v) => {
+                let vorigin = if v.value == value_raw {
+                    origin.clone()
+                } else {
+                    origin.inexact()
+                };
+                self.eval_word(&vorigin, &v.value, Mode::Assign, env)?
+            }
+            ast::AssignmentValue::Array(elems) => {
+                for (k, v) in elems {
+                    for x in k.iter().chain(std::iter::once(v)) {
+                        self.eval_word(&origin.inexact(), &x.value, Mode::Field, env)?;
+                    }
+                }
+                (undet("array assignment"), Quoting::Mixed)
+            }
+        };
+        let value = if a.append {
+            undet(format!("{name}+=: appends to a value"))
+        } else {
+            value
+        };
+        let bound = match (&a.name, &a.value) {
+            (ast::AssignmentName::VariableName(_), ast::AssignmentValue::Scalar(_)) => {
+                Some(value.clone())
+            }
+            _ => None,
+        };
+        let word = Word {
+            raw: value_raw,
+            value,
+            quoting,
+            span: origin.whole.clone(),
+        };
+        Ok((name, base, word, bound))
+    }
+
+    fn proc_subst_word(
+        &mut self,
+        text: &Text,
+        sub: &ast::SubshellCommand,
+        env: &Env,
+    ) -> Result<Word, Cause> {
+        self.list(text, &sub.list, env.clone(), &Context::ProcessSubstitution)?;
+        let (raw, span) = match text.local(&sub.loc) {
+            Some(r) => {
+                let r = r.start.saturating_sub(1)..r.end;
+                (
+                    text.s.get(r.clone()).unwrap_or("").to_string(),
+                    text.origin.map(&r),
+                )
+            }
+            None => (String::new(), text.origin.whole.clone()),
+        };
+        Ok(Word {
+            raw,
+            value: undet("process substitution: a /dev/fd path"),
+            quoting: Quoting::Unquoted,
+            span,
+        })
+    }
+
+    // ------------------------------------------------------------ redirects
+
+    fn redirect(
+        &mut self,
+        text: &Text,
+        r: &ast::IoRedirect,
+        env: &mut Env,
+        fallback: &Range<usize>,
+    ) -> Result<Redirect, Cause> {
+        match r {
+            ast::IoRedirect::File(fd, kind, target) => {
+                let fd = conv_fd(*fd)?;
+                let mut op = match kind {
+                    ast::IoFileRedirectKind::Read => RedirOp::In,
+                    ast::IoFileRedirectKind::Write => RedirOp::Out,
+                    ast::IoFileRedirectKind::Append => RedirOp::Append,
+                    ast::IoFileRedirectKind::ReadAndWrite => RedirOp::InOut,
+                    ast::IoFileRedirectKind::Clobber => RedirOp::Clobber,
+                    ast::IoFileRedirectKind::DuplicateInput => RedirOp::DupIn,
+                    ast::IoFileRedirectKind::DuplicateOutput => RedirOp::DupOut,
+                };
+                let (target, span) = match target {
+                    ast::IoFileRedirectTarget::Filename(w) => {
+                        let ew = self.word(text, w, Mode::Field, env)?;
+                        let span = redir_span(text, w, fd);
+                        (RedirTarget::Path(resolve(&env.cwd, ew.value)), span)
+                    }
+                    ast::IoFileRedirectTarget::Fd(n) => {
+                        let n = u32::try_from(*n).map_err(|_| {
+                            Cause::Unsupported(format!("negative fd {n} in a redirection"))
+                        })?;
+                        (RedirTarget::Fd(FdTarget::Number(n)), fallback.clone())
+                    }
+                    ast::IoFileRedirectTarget::ProcessSubstitution(_, sub) => {
+                        self.list(text, &sub.list, env.clone(), &Context::ProcessSubstitution)?;
+                        let span = match text.local(&sub.loc) {
+                            Some(l) => text.origin.map(&(l.start.saturating_sub(1)..l.end)),
+                            None => fallback.clone(),
+                        };
+                        (RedirTarget::ProcessSubstitution, span)
+                    }
+                    ast::IoFileRedirectTarget::Duplicate(w) => {
+                        let ew = self.word(text, w, Mode::Field, env)?;
+                        let span = redir_span(text, w, fd);
+                        let t = match ew.value {
+                            Value::Undetermined(r) => RedirTarget::Fd(FdTarget::Undetermined(r)),
+                            Value::Literal(s) => match parse_fd_target(&s) {
+                                Some(t) => RedirTarget::Fd(t),
+                                // `>&word` with no fd number is `&>word`.
+                                None if op == RedirOp::DupOut && fd.is_none() => {
+                                    op = RedirOp::OutErr;
+                                    RedirTarget::Path(resolve(&env.cwd, Value::Literal(s)))
+                                }
+                                None => RedirTarget::Fd(FdTarget::Undetermined(format!(
+                                    "`{s}` is not an fd number"
+                                ))),
+                            },
+                        };
+                        (t, span)
+                    }
+                };
+                Ok(Redirect {
+                    fd,
+                    op,
+                    target,
+                    span,
+                })
+            }
+            ast::IoRedirect::HereDocument(fd, h) => {
+                let fd = conv_fd(*fd)?;
+                let quoted = !h.requires_expansion;
+                let (body_local, exact) = heredoc_body(text, h);
+                let body_span = match &body_local {
+                    Some(r) => text.origin.map(r),
+                    None => text.origin.whole.clone(),
+                };
+                let body = if quoted {
+                    Value::Literal(h.doc.value.clone())
+                } else {
+                    let origin = match &body_local {
+                        Some(r) => text.origin.sub(r, exact),
+                        None => text.origin.inexact(),
+                    };
+                    self.eval_word(&origin, &h.doc.value, Mode::Heredoc, env)?.0
+                };
+                Ok(Redirect {
+                    fd,
+                    op: RedirOp::HereDoc,
+                    target: RedirTarget::HereDoc(HereDoc {
+                        quoted,
+                        strip_tabs: h.remove_tabs,
+                        body,
+                        body_span,
+                    }),
+                    span: redir_span(text, &h.here_end, fd),
+                })
+            }
+            ast::IoRedirect::HereString(fd, w) => {
+                let fd = conv_fd(*fd)?;
+                let ew = self.word(text, w, Mode::Assign, env)?;
+                Ok(Redirect {
+                    fd,
+                    op: RedirOp::HereString,
+                    target: RedirTarget::HereString(ew.value),
+                    span: redir_span(text, w, fd),
+                })
+            }
+            ast::IoRedirect::OutputAndError(w, append) => {
+                let ew = self.word(text, w, Mode::Field, env)?;
+                Ok(Redirect {
+                    fd: None,
+                    op: if *append {
+                        RedirOp::AppendOutErr
+                    } else {
+                        RedirOp::OutErr
+                    },
+                    target: RedirTarget::Path(resolve(&env.cwd, ew.value)),
+                    span: redir_span(text, w, None),
+                })
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ words
+
+    fn word(
+        &mut self,
+        text: &Text,
+        w: &ast::Word,
+        mode: Mode,
+        env: &mut Env,
+    ) -> Result<Word, Cause> {
+        let origin = text.word_origin(w);
+        let (value, quoting) = self.eval_word(&origin, &w.value, mode, env)?;
+        Ok(Word {
+            raw: w.value.clone(),
+            value,
+            quoting,
+            span: origin.whole,
+        })
+    }
+
+    /// Statically expand one word. Every `$( )` / backquote / `<( )` inside it
+    /// is evaluated (its commands are emitted) even when the value is already
+    /// known to be `Undetermined`.
+    fn eval_word(
+        &mut self,
+        origin: &Origin,
+        raw: &str,
+        mode: Mode,
+        env: &mut Env,
+    ) -> Result<(Value, Quoting), Cause> {
+        let pieces = match mode {
+            Mode::Heredoc => parse_heredoc_contained(raw)?,
+            Mode::Field | Mode::Assign => parse::parse_word(raw)?,
+        };
+        let mut acc = Acc::default();
+        self.pieces(origin, raw, &pieces, mode == Mode::Heredoc, env, &mut acc)?;
+        let quoting = acc.quoting();
+        Ok((finish(acc, mode, env), quoting))
+    }
+
+    fn pieces(
+        &mut self,
+        origin: &Origin,
+        raw: &str,
+        pieces: &[WordPieceWithSource],
+        quoted: bool,
+        env: &mut Env,
+        acc: &mut Acc,
+    ) -> Result<(), Cause> {
+        let lit = if quoted {
+            Seg::QuotedLit
+        } else {
+            Seg::UnquotedLit
+        };
+        let exp = if quoted {
+            Seg::QuotedExp
+        } else {
+            Seg::UnquotedExp
+        };
+        for p in pieces {
+            let prange = p.start_index..p.end_index;
+            let praw = raw.get(prange.clone()).unwrap_or("");
+            match &p.piece {
+                WordPiece::Text(s) => {
+                    if !quoted {
+                        acc.unquoted = true;
+                    }
+                    if s.contains("\\\n") {
+                        acc.undet("backslash-newline inside quotes / heredoc");
+                    }
+                    acc.push(s.clone(), lit);
+                }
+                WordPiece::SingleQuotedText(s) => {
+                    acc.single = true;
+                    acc.push(s.clone(), Seg::QuotedLit);
+                }
+                WordPiece::AnsiCQuotedText(s) => {
+                    acc.ansic = true;
+                    match decode_ansi_c(s) {
+                        Some(d) => acc.push(d, Seg::QuotedLit),
+                        None => acc.undet(format!("$'{s}': escape not decoded")),
+                    }
+                }
+                WordPiece::DoubleQuotedSequence(inner) => {
+                    acc.double = true;
+                    self.pieces(origin, raw, inner, true, env, acc)?;
+                }
+                WordPiece::GettextDoubleQuotedSequence(inner) => {
+                    acc.double = true;
+                    self.pieces(origin, raw, inner, true, env, acc)?;
+                    acc.undet("$\"..\" is translated at run time");
+                }
+                WordPiece::TildeExpansion(_) => {
+                    acc.unquoted = true;
+                    acc.expansion = true;
+                    acc.undet("~ expands to a home directory at run time");
+                }
+                WordPiece::ParameterExpansion(expr) => {
+                    if !quoted {
+                        acc.unquoted = true;
+                    }
+                    acc.expansion = true;
+                    match param(expr, praw, env)? {
+                        Value::Literal(s) => acc.push(s, exp),
+                        Value::Undetermined(r) => acc.undet(r),
+                    }
+                }
+                WordPiece::CommandSubstitution(s) => {
+                    if !quoted {
+                        acc.unquoted = true;
+                    }
+                    acc.expansion = true;
+                    let inner = prange.start + 2..prange.end.saturating_sub(1);
+                    let exact = raw.get(inner.clone()) == Some(s.as_str());
+                    self.nested(s, origin.sub(&inner, exact), env)?;
+                    acc.undet(format!("{praw}: output only known at run time"));
+                }
+                WordPiece::BackquotedCommandSubstitution(s) => {
+                    if !quoted {
+                        acc.unquoted = true;
+                    }
+                    acc.expansion = true;
+                    let (prog, changed) = unescape_backquote(s, quoted);
+                    let inner = prange.start + 1..prange.end.saturating_sub(1);
+                    let exact = !changed && raw.get(inner.clone()) == Some(s.as_str());
+                    self.nested(&prog, origin.sub(&inner, exact), env)?;
+                    acc.undet(format!("{praw}: output only known at run time"));
+                }
+                WordPiece::EscapeSequence(s) => {
+                    acc.escape = true;
+                    let c = s.strip_prefix('\\').unwrap_or(s);
+                    if !(c == "\n" && !quoted) {
+                        acc.push(c.to_string(), Seg::QuotedLit);
+                    }
+                }
+                WordPiece::ArithmeticExpression(e) => {
+                    if !quoted {
+                        acc.unquoted = true;
+                    }
+                    acc.expansion = true;
+                    check_arith(&e.value)?;
+                    env.havoc_vars("arithmetic may assign variables");
+                    acc.undet(format!("{praw}: arithmetic is evaluated at run time"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A `$( )` / backquote program: a subshell with a copy of the state.
+    fn nested(&mut self, prog: &str, origin: Origin, env: &Env) -> Result<(), Cause> {
+        let program = parse::parse(prog)?;
+        let text = Text::new(prog, origin);
+        self.program(&text, &program, env.clone(), &Context::CommandSubstitution)?;
+        Ok(())
+    }
+}
+
+fn check_arith(expr: &str) -> Result<(), Cause> {
+    if has_subst(expr) {
+        return Err(Cause::Unsupported(format!(
+            "command substitution inside arithmetic `{expr}`"
+        )));
+    }
+    Ok(())
+}
+
+fn param(expr: &ParameterExpr, praw: &str, env: &mut Env) -> Result<Value, Cause> {
+    match expr {
+        ParameterExpr::Parameter {
+            parameter: Parameter::Named(n),
+            indirect: false,
+        } => Ok(env.lookup(n)),
+        ParameterExpr::Parameter {
+            parameter: Parameter::Positional(_) | Parameter::Special(_),
+            indirect: false,
+        } => Ok(undet(format!("{praw}: positional / special parameter"))),
+        _ => {
+            if has_subst(praw) {
+                return Err(Cause::Unsupported(format!(
+                    "command substitution inside the parameter operation {praw}"
+                )));
+            }
+            if praw.contains('=') || praw.contains('[') {
+                env.havoc_vars("a parameter operation may assign variables");
+            }
+            Ok(undet(format!("{praw}: parameter operation not evaluated")))
+        }
+    }
+}
+
+/// The value of an expanded word, after the checks of its `mode`.
+fn finish(acc: Acc, mode: Mode, env: &Env) -> Value {
+    if let Some(r) = acc.undet {
+        return undet(r);
+    }
+    let full: String = acc.segs.iter().map(|(s, _)| s.as_str()).collect();
+    let unquoted_lits = || {
+        acc.segs
+            .iter()
+            .filter(|(_, k)| *k == Some(Seg::UnquotedLit))
+            .map(|(s, _)| s.as_str())
+    };
+    let starts_with_tilde = matches!(acc.segs.first(),
+        Some((s, Some(Seg::UnquotedLit))) if s.starts_with('~'));
+    match mode {
+        Mode::Heredoc => {
+            if acc.expansion {
+                return undet("unquoted heredoc holds expansions");
+            }
+        }
+        Mode::Assign => {
+            if starts_with_tilde || unquoted_lits().any(|s| s.contains(":~") || s.contains("=~")) {
+                return undet("~ expands to a home directory at run time");
+            }
+        }
+        Mode::Field => {
+            if starts_with_tilde {
+                return undet("~ expands to a home directory at run time");
+            }
+            let ifs: Option<String> = if env.opaque {
+                None
+            } else {
+                match env.vars.get("IFS") {
+                    None => Some(" \t\n".to_string()),
+                    Some(Value::Literal(v)) => Some(v.clone()),
+                    Some(Value::Undetermined(_)) => None,
+                }
+            };
+            for (s, k) in &acc.segs {
+                if *k != Some(Seg::UnquotedExp) {
+                    continue;
+                }
+                match &ifs {
+                    None => return undet("unquoted expansion with an undetermined IFS"),
+                    Some(ifs) if s.chars().any(|c| ifs.contains(c)) => {
+                        return undet(format!("unquoted expansion `{s}` is word-split"));
+                    }
+                    _ => {}
+                }
+                if s.contains(['*', '?', '[']) {
+                    return undet(format!("unquoted expansion `{s}` is pathname-expanded"));
+                }
+            }
+            for s in unquoted_lits() {
+                if s.contains(['*', '?', '(']) || (s.contains('[') && full.contains(']')) {
+                    return undet(format!("`{full}` is a glob pattern"));
+                }
+                if s.contains('{')
+                    && full.contains('}')
+                    && (full.contains(',') || full.contains(".."))
+                {
+                    return undet(format!("`{full}` is brace-expanded"));
+                }
+            }
+            if full.is_empty() && !acc.any_quote() {
+                return undet("an empty unquoted expansion removes the word");
+            }
+        }
+    }
+    Value::Literal(full)
+}
+
+/// Bash reads `<&N` / `>&N` with the word already dequoted.
+fn parse_fd_target(s: &str) -> Option<FdTarget> {
+    if s == "-" {
+        return Some(FdTarget::Close);
+    }
+    let digits = |d: &str| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit());
+    if let Some(d) = s.strip_suffix('-') {
+        if digits(d) {
+            return d.parse().ok().map(FdTarget::Move);
+        }
+    }
+    if digits(s) {
+        return s.parse().ok().map(FdTarget::Number);
+    }
+    None
+}
+
+fn conv_fd(fd: Option<ast::IoFd>) -> Result<Option<u32>, Cause> {
+    fd.map(|n| {
+        u32::try_from(n)
+            .map_err(|_| Cause::Unsupported(format!("negative fd {n} in a redirection")))
+    })
+    .transpose()
+}
+
+/// What a redirection does to stdin (fd 0), applied in order.
+fn apply_stdin(stdin: &mut StdinSource, r: &Redirect) {
+    let default_in = matches!(
+        r.op,
+        RedirOp::In | RedirOp::InOut | RedirOp::DupIn | RedirOp::HereDoc | RedirOp::HereString
+    );
+    let on_stdin = match r.fd {
+        Some(0) => true,
+        Some(_) => false,
+        None => default_in,
+    };
+    if !on_stdin {
+        return;
+    }
+    *stdin = match (r.op, &r.target) {
+        (RedirOp::In | RedirOp::InOut, RedirTarget::Path(v)) => StdinSource::File(v.clone()),
+        (RedirOp::In, RedirTarget::ProcessSubstitution) => StdinSource::FromCommand,
+        (RedirOp::DupIn, RedirTarget::Fd(t)) => StdinSource::Fd(t.clone()),
+        (RedirOp::HereDoc, RedirTarget::HereDoc(h)) => match &h.body {
+            Value::Literal(b) => StdinSource::Literal(b.clone()),
+            Value::Undetermined(r) => StdinSource::Undetermined(r.clone()),
+        },
+        (RedirOp::HereString, RedirTarget::HereString(v)) => match v {
+            Value::Literal(s) => StdinSource::Literal(format!("{s}\n")),
+            Value::Undetermined(r) => StdinSource::Undetermined(r.clone()),
+        },
+        _ => StdinSource::Undetermined("stdin: redirected in an unmodelled way".into()),
+    };
+}
+
+/// The span of a redirection: the target word, extended back over the
+/// operator (and the fd number when there is one). Falls back to the word.
+fn redir_span(text: &Text, w: &ast::Word, fd: Option<u32>) -> Range<usize> {
+    let local = match w.loc.as_ref().and_then(|l| text.local(l)) {
+        Some(r) if text.origin.base.is_some() => r,
+        _ => return text.word_origin(w).whole,
+    };
+    let b = text.s.as_bytes();
+    let mut i = local.start;
+    while i > 0 && matches!(b.get(i - 1), Some(b' ' | b'\t')) {
+        i -= 1;
+    }
+    while i > 0 && matches!(b.get(i - 1), Some(b'<' | b'>' | b'&' | b'|' | b'-')) {
+        i -= 1;
+    }
+    if let Some(n) = fd {
+        for _ in 0..n.to_string().len() {
+            if i > 0 && b.get(i - 1).is_some_and(u8::is_ascii_digit) {
+                i -= 1;
+            }
+        }
+    }
+    text.origin.map(&(i..local.end))
+}
+
+/// The raw body of a heredoc (without its terminator line), and whether it
+/// equals brush's `doc.value` byte for byte (then spans inside are exact).
+fn heredoc_body(text: &Text, h: &ast::IoHereDocument) -> (Option<Range<usize>>, bool) {
+    let r = match h.doc.loc.as_ref().and_then(|l| text.local(l)) {
+        Some(r) => r,
+        None => return (None, false),
+    };
+    let sl = text.s.get(r.clone()).unwrap_or("");
+    let trimmed = sl.strip_suffix('\n').unwrap_or(sl);
+    let last_start = trimmed.rfind('\n').map_or(0, |i| i + 1);
+    let last = trimmed.get(last_start..).unwrap_or("");
+    let last = if h.remove_tabs {
+        last.trim_start_matches('\t')
+    } else {
+        last
+    };
+    let delim: String = h
+        .here_end
+        .value
+        .chars()
+        .filter(|c| !matches!(c, '\'' | '"' | '\\'))
+        .collect();
+    let end = if last == delim {
+        r.start + last_start
+    } else {
+        r.end
+    };
+    let body = r.start..end;
+    let exact = text.s.get(body.clone()) == Some(h.doc.value.as_str());
+    (Some(body), exact)
+}
+
+fn compound_loc(cc: &ast::CompoundCommand) -> Option<&SourceSpan> {
+    use ast::CompoundCommand as C;
+    Some(match cc {
+        C::Arithmetic(a) => &a.loc,
+        C::ArithmeticForClause(f) => &f.loc,
+        C::BraceGroup(b) => &b.loc,
+        C::Subshell(s) => &s.loc,
+        C::ForClause(f) => &f.loc,
+        C::CaseClause(c) => &c.loc,
+        C::IfClause(i) => &i.loc,
+        C::WhileClause(w) | C::UntilClause(w) => &w.2,
+        C::Coprocess(c) => &c.loc,
+    })
+}
+
+/// `set` arguments that change nothing this evaluator tracks.
+fn set_is_harmless(args: &[Word]) -> bool {
+    const SAFE_O: &[&str] = &[
+        "errexit",
+        "nounset",
+        "pipefail",
+        "xtrace",
+        "verbose",
+        "noglob",
+        "noclobber",
+        "errtrace",
+        "functrace",
+        "notify",
+        "monitor",
+        "hashall",
+        "allexport",
+    ];
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let s = match &a.value {
+            Value::Literal(s) => s.as_str(),
+            Value::Undetermined(_) => return false,
+        };
+        if s == "--" {
+            return true;
+        }
+        if s == "-o" || s == "+o" {
+            match it.next().map(|w| &w.value) {
+                Some(Value::Literal(o)) if SAFE_O.contains(&o.as_str()) => continue,
+                _ => return false,
+            }
+        }
+        let flags = match s.strip_prefix('-').or_else(|| s.strip_prefix('+')) {
+            Some(f) if !f.is_empty() => f,
+            _ => return false,
+        };
+        if !flags.chars().all(|c| "euxvfnhbmCBEHPTa".contains(c)) {
+            return false;
+        }
+    }
+    true
+}
+
+/// What the next pipeline stage reads from a stage: `Literal` only for a
+/// simple `echo` with literal operands and no option / backslash, or a
+/// `printf` with one literal format holding only simple escapes, without
+/// redirections; anything else is `FromCommand` (content not determined).
+fn piped_stdin(stage: Option<&SimpleCommand>) -> StdinSource {
+    let sc = match stage {
+        Some(sc) if sc.redirects.is_empty() => sc,
+        _ => return StdinSource::FromCommand,
+    };
+    let mut lits = Vec::new();
+    for w in &sc.argv {
+        match &w.value {
+            Value::Literal(s) => lits.push(s.as_str()),
+            Value::Undetermined(_) => return StdinSource::FromCommand,
+        }
+    }
+    let out = match lits.split_first() {
+        Some((&"echo", args)) => {
+            let opt = args.first().is_some_and(|a| {
+                a.len() > 1 && a.starts_with('-') && a.chars().skip(1).all(|c| "neE".contains(c))
+            });
+            (!opt && !args.iter().any(|a| a.contains('\\')))
+                .then(|| format!("{}\n", args.join(" ")))
+        }
+        Some((&"printf", [fmt])) if !fmt.starts_with('-') => printf_simple(fmt),
+        _ => None,
+    };
+    out.map_or(StdinSource::FromCommand, StdinSource::Literal)
+}
+
+/// [`resolve`] against a [`SimpleCommand::cwd`] value (for
+/// `ProgramSource::File`).
+pub(super) fn resolve_at(cwd: &Value, v: Value) -> Value {
+    resolve(&Cwd::from_value(cwd), v)
+}
+
+fn printf_simple(fmt: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut it = fmt.chars();
+    while let Some(c) = it.next() {
+        match c {
+            '\\' => out.push(match it.next()? {
+                'n' => '\n',
+                't' => '\t',
+                'r' => '\r',
+                'a' => '\x07',
+                'b' => '\x08',
+                'f' => '\x0c',
+                'v' => '\x0b',
+                '\\' => '\\',
+                '"' => '"',
+                '\'' => '\'',
+                _ => return None,
+            }),
+            '%' => match it.next()? {
+                '%' => out.push('%'),
+                _ => return None,
+            },
+            c => out.push(c),
+        }
+    }
+    Some(out)
 }

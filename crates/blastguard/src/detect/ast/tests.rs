@@ -187,7 +187,6 @@ mod parse_caps {
     }
 
     #[test]
-    #[ignore = "RED: ast parse_caps"]
     fn positive_control_plain_echo_is_known() {
         match analyze_bounded("echo hi".to_string(), LIMIT) {
             Analysis::Known(s) => {
@@ -359,7 +358,6 @@ mod eval {
     // ---------------- literal assignment resolution ----------------
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn assignment_then_semicolon_resolves_rm_operand() {
         let s = known("S=/tmp/a; rm -rf $S");
         let rm = one_named(&s, "rm");
@@ -369,7 +367,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn assignment_then_and_resolves_redirect_target() {
         let s = known("S=/tmp/a && cat > $S/x");
         let cat = one_named(&s, "cat");
@@ -379,21 +376,18 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn assignment_then_or_and_newline_bind() {
         let s = known("S=/tmp/a || true\nrm -rf \"${S}/y\"");
         assert_eq!(arg(one_named(&s, "rm"), 2), &lit("/tmp/a/y"));
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn export_assignment_binds() {
         let s = known("export S=/tmp/a; rm -rf $S");
         assert_eq!(arg(one_named(&s, "rm"), 2), &lit("/tmp/a"));
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn prefix_assignment_is_not_used_for_word_expansion_unbound() {
         // `S=x cmd $S`: the prefix binds S in cmd's ENVIRONMENT only; the
         // word `$S` is expanded before that, with S unbound.
@@ -409,7 +403,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn prefix_assignment_word_uses_pre_existing_binding() {
         let s = known("S=/a; S=/b rm -rf $S");
         let rm = one_named(&s, "rm");
@@ -418,35 +411,30 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn reassignment_uses_latest() {
         let s = known("S=/a; S=/b; rm -rf $S");
         assert_eq!(arg(one_named(&s, "rm"), 2), &lit("/b"));
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn assignment_inside_subshell_does_not_leak() {
         let s = known("(S=/a); rm -rf $S");
         assert!(is_undet(arg(one_named(&s, "rm"), 2)));
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn assignment_in_pipeline_stage_does_not_leak() {
         let s = known("S=/a | cat; rm -rf $S");
         assert!(is_undet(arg(one_named(&s, "rm"), 2)));
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn assignment_inside_command_substitution_does_not_leak() {
         let s = known("echo $(S=/a); rm -rf $S");
         assert!(is_undet(arg(one_named(&s, "rm"), 2)));
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn value_from_command_substitution_is_undetermined() {
         for c in ["S=$(pwd); rm -rf $S", "S=`pwd`; rm -rf $S"] {
             let s = known(c);
@@ -455,35 +443,30 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn value_from_read_is_undetermined() {
         let s = known("S=/a; read S; rm -rf $S");
         assert!(is_undet(arg(one_named(&s, "rm"), 2)));
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn unset_makes_undetermined() {
         let s = known("S=/a; unset S; rm -rf $S");
         assert!(is_undet(arg(one_named(&s, "rm"), 2)));
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn arithmetic_value_is_undetermined() {
         let s = known("S=$((1+2)); rm -rf /tmp/$S");
         assert!(is_undet(arg(one_named(&s, "rm"), 2)));
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn unbound_variable_is_undetermined() {
         let s = known("rm -rf $BLASTGUARD_AST_TEST_SURELY_UNBOUND/x");
         assert!(is_undet(arg(one_named(&s, "rm"), 2)));
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn default_from_unbound_is_undetermined() {
         let s = known("rm -rf ${BLASTGUARD_AST_TEST_SURELY_UNBOUND:-/tmp/a}");
         assert!(is_undet(arg(one_named(&s, "rm"), 2)));
@@ -492,7 +475,6 @@ mod eval {
     // ---------------- for loops ----------------
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn for_over_literal_words_yields_one_instance_per_value() {
         let s = known("for v in a b; do rm -rf /tmp/$v; done");
         let rms = all_named(&s, "rm");
@@ -505,7 +487,6 @@ mod eval {
     /// The body must still appear (a 0-iteration fold would drop the `rm` and
     /// read as "nothing runs" = clean), and its loop variable is Undetermined.
     #[test]
-    #[ignore = "RED: ast eval"]
     fn for_over_expansion_keeps_body_with_undetermined_var() {
         for c in [
             "for f in $(ls); do rm $f; done",
@@ -525,7 +506,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn for_over_glob_is_undetermined() {
         let s = known("for f in *.txt; do rm $f; done");
         let rms = all_named(&s, "rm");
@@ -556,13 +536,11 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn relative_redirect_without_cd_stays_relative() {
         assert_path_target("echo x > f", "f");
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn literal_cd_sets_cwd_for_relative_redirect() {
         let s = known("cd /tmp/w && echo x > f");
         let e = one_named(&s, "echo");
@@ -575,7 +553,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn cd_through_literal_variable_sets_cwd() {
         let s = known("S=/tmp/w; cd $S && echo x > f");
         let e = one_named(&s, "echo");
@@ -588,13 +565,11 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn cd_to_etc_joins_relative_redirect() {
         assert_path_target("cd /etc && echo x > f", "/etc/f");
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn absolute_redirect_after_cd_stays_as_written() {
         assert_path_target("cd /tmp/w && echo x > /etc/passwd", "/etc/passwd");
     }
@@ -604,7 +579,6 @@ mod eval {
     /// both are contract-conforming). A Literal that still contains `..`, or
     /// any other literal, is not.
     #[test]
-    #[ignore = "RED: ast eval"]
     fn dotdot_redirect_after_cd_is_normalised_or_undetermined() {
         let command = "cd /tmp/w && echo x > ../../etc/passwd";
         match echo_out_target(command) {
@@ -618,14 +592,12 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn relative_cd_is_relative_to_previous_cwd() {
         let s = known("cd /tmp/w && cd sub && echo x");
         assert_eq!(one_named(&s, "echo").cwd, lit("/tmp/w/sub"));
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn cd_dash_and_cd_substitution_make_cwd_undetermined() {
         for c in [
             "cd /tmp/w && cd - && echo x > f",
@@ -653,7 +625,6 @@ mod eval {
     // ---------------- stdin ----------------
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn echo_piped_into_bash_is_literal_stdin() {
         let s = known("echo hi | bash");
         let b = one_named(&s, "bash");
@@ -662,7 +633,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn printf_piped_into_python_is_literal_stdin() {
         let s = known("printf 'print(1)\\n' | python3");
         assert_eq!(
@@ -672,7 +642,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn here_string_is_literal_stdin_with_newline() {
         let s = known("bash <<< 'x'");
         assert_eq!(
@@ -682,7 +651,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn quoted_heredoc_is_literal_stdin() {
         let s = known("bash <<'EOF'\nrm -rf /tmp/z\nEOF");
         assert_eq!(
@@ -692,7 +660,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn unquoted_heredoc_with_substitution_is_undetermined_stdin() {
         let s = known("bash <<EOF\n$(id)\nEOF");
         let b = one_named(&s, "bash");
@@ -707,7 +674,6 @@ mod eval {
     /// before `bash` starts): it must appear as a command, and the heredoc
     /// must not be reported as literal stdin.
     #[test]
-    #[ignore = "RED: ast eval"]
     fn unquoted_heredoc_substitution_command_is_visible() {
         let s = known("bash <<EOF\n$(rm -rf /etc)\nEOF");
         let rm = one_named(&s, "rm");
@@ -722,7 +688,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn non_literal_producer_is_from_command() {
         let s = known("curl x | bash");
         assert_eq!(one_named(&s, "bash").stdin, StdinSource::FromCommand);
@@ -736,7 +701,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn script_operand_is_the_program_and_dev_stdin_is_an_arg() {
         assert_eq!(
             ps("bash x.sh /dev/stdin", "bash"),
@@ -745,7 +709,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn dash_c_program_is_inline_and_dev_stdin_is_dollar_zero() {
         assert_eq!(
             ps("bash -c echo /dev/stdin", "bash"),
@@ -754,7 +717,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn dev_stdin_operand_reads_program_from_stdin() {
         assert!(matches!(
             ps("bash /dev/stdin", "bash"),
@@ -767,7 +729,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn dash_s_and_lone_dash_read_program_from_stdin() {
         assert!(matches!(
             ps("bash -s", "bash"),
@@ -777,7 +738,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn python_dash_c_is_inline_literal() {
         assert_eq!(
             ps("python3 -c 'print(1)'", "python3"),
@@ -789,7 +749,6 @@ mod eval {
     /// `xargs bash`) must not read as "not an interpreter" (`None` = no
     /// program to inspect = clean). Which `Some(_)` is not fixed here.
     #[test]
-    #[ignore = "RED: ast eval"]
     fn interpreter_wrappers_have_a_program_source() {
         for (command, wrapper) in [
             ("env bash -s", "env"),
@@ -802,7 +761,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn non_interpreter_has_no_program_source() {
         assert_eq!(ps("ls -la", "ls"), None);
     }
@@ -820,7 +778,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn quoted_heredoc_flag_and_literal_body() {
         let command = "cat <<'EOF'\nx $y\nEOF";
         let h = heredoc_of(command, "cat");
@@ -831,7 +788,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn dash_heredoc_strips_tabs() {
         let h = heredoc_of("cat <<-EOF\n\tx\n\tEOF", "cat");
         assert!(h.strip_tabs);
@@ -840,7 +796,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn unquoted_heredoc_with_expansion_has_undetermined_body() {
         let h = heredoc_of("cat <<EOF\n$y\nEOF", "cat");
         assert!(!h.quoted);
@@ -860,7 +815,6 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn dup_in_number() {
         assert_eq!(fd_target("bash <&3"), FdTarget::Number(3));
         let s = known("bash <&3");
@@ -871,26 +825,22 @@ mod eval {
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn dup_in_move() {
         assert_eq!(fd_target("bash <&3-"), FdTarget::Move(3));
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn dup_in_close() {
         assert_eq!(fd_target("bash <&-"), FdTarget::Close);
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn dup_in_quoted_number_is_dequoted() {
         // bash dequotes the word before reading it as an fd number.
         assert_eq!(fd_target("bash <&'3'"), FdTarget::Number(3));
     }
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn dup_in_unbound_variable_is_undetermined() {
         assert!(matches!(fd_target("bash <&$fd"), FdTarget::Undetermined(_)));
     }
@@ -898,7 +848,6 @@ mod eval {
     // ---------------- spans ----------------
 
     #[test]
-    #[ignore = "RED: ast eval"]
     fn spans_are_byte_offsets() {
         // `é` is 2 bytes in UTF-8: a char-offset span would be off by one.
         let command = "echo é && rm -rf x";

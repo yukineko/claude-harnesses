@@ -77986,3 +77986,208 @@ rev = "84a565a34b22b9fad79b53b199fa96459440c69d"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "5ef2d51f"
+title = "blastguard fail-open: export F=/etc/hosts; sed -i ... $F is Ask in main (system harm must be Deny)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-14 with blastguard 0.2.588 by an independent RED author. 'F=/etc/hosts; sed -i ... $F' is deny/deny, but the 'export F=' form is ask in main with reason 'path depends on an expansion blastguard cannot resolve'. System harm must be Deny through any form. RED 8bd245b23."
+created_at = 1794650187
+updated_at = 1794712771
+weight = 0.0
+issue_number = 1773
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1773"
+issue_closed_at = 1794712774
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_static_literal_var_resolution red_export_etc_hosts_is_system_harm_deny -- --include-ignored"
+rev = "0eb2e03f923ed040f586881d5041ca0869ef7b93"
+observed_at = 1794650187
+detail = """
+exit 101: /Users/yuki/src/.harness-worktrees/session-7e01fcf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.36s
+     Running tests/backlog_20261114_static_literal_var_resolution.rs (target/debug/deps/backlog_20261114_static_literal_var_resolution-da48bb690206911d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_static_literal_var_resolution`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_static_literal_var_resolution red_export_etc_hosts_is_system_harm_deny -- --include-ignored"
+exit = 0
+passed = 1
+rev = "454fb4cb488697aff24909f2c058349e46599192"
+observed_at = 1794712766
+output_digest = "sha256:4c215bf8aa31581273882be9a8d324911478a90e9ff2095f2f65b2a2830260c2"
+excerpt = """
+
+running 1 test
+test red_export_etc_hosts_is_system_harm_deny ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 22 filtered out; finished in 0.62s
+
+   Compiling blastguard v0.2.604 (/Users/yuki/src/.harness-worktrees/bg-impl-x/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.11s
+     Running tests/backlog_20261114_static_literal_var_resolution.rs (target/debug/deps/backlog_20261114_static_literal_var_resolution-9c20d9de5991dcdd)
+"""
+
+[task.closure.red]
+rev = "0eb2e03f923ed040f586881d5041ca0869ef7b93"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "3a950c6c"
+title = "blastguard: statically resolve same-command literal variables (sed -i target, command word, export, concat) instead of 'cannot resolve'"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "static-analysis",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """User ruling 2026-11-14: '静的に判定できないblastguardの実装がゴミなので、それをなおす' / '必ず静的に判定し、判断する'. Values fixed by the command text (a literal assignment in an earlier statement, export X=lit, concatenations like "$T"bin/tdd or ${W}/a) must be resolved and judged on the resolved value. Only runtime-only values ($(cmd), unassigned, conditional, subshell or function assignment, loop vars) stay undetermined, which means restrictive. RED 8bd245b23: 12 RED and 11 guards/controls. See also 574a751c (subagent sed form)."""
+created_at = 1794650212
+updated_at = 1794712775
+weight = 0.0
+issue_number = 1774
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1774"
+issue_closed_at = 1794712777
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_static_literal_var_resolution -- --include-ignored"
+rev = "0eb2e03f923ed040f586881d5041ca0869ef7b93"
+observed_at = 1794650212
+detail = """
+exit 101: ; 12 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261114_static_literal_var_resolution.rs (target/debug/deps/backlog_20261114_static_literal_var_resolution-da48bb690206911d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_static_literal_var_resolution`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_static_literal_var_resolution -- --include-ignored"
+exit = 0
+passed = 23
+rev = "454fb4cb488697aff24909f2c058349e46599192"
+observed_at = 1794712774
+output_digest = "sha256:56b4ea4464f16267b9090bb66a72ea925557e7ab27275825787dc95b9139ddbb"
+excerpt = """
+
+running 23 tests
+test control_resolved_etc_hosts_stays_deny ... ok
+test control_reassigned_from_substitution_is_not_allow ... ok
+test control_command_substitution_is_not_allow ... ok
+test control_unassigned_is_not_allow ... ok
+test control_subshell_assignment_is_not_allow ... ok
+test control_function_assignment_is_not_allow ... ok
+test control_conditional_assignment_is_not_allow ... ok
+test control_loop_variable_over_substitution_is_not_allow ... ok
+test guard_command_word_plain_assignment_resolves ... ok
+test guard_glob_as_argument_is_not_a_command_word ... ok
+test red_command_word_export_assignment ... ok
+test red_export_etc_hosts_is_system_harm_deny ... ok
+test guard_glob_in_for_list_is_not_a_command_word ... ok
+test red_glob_under_resolved_dir_as_command_word ... ok
+test red_command_word_brace_concat_after_and_and ... ok
+test red_command_word_quoted_concat ... ok
+test red_command_word_unquoted_concat ... ok
+test red_sed_brace_ref_after_and_and ... ok
+test red_sed_scratch_var_main_thread ... ok
+test red_sed_export_assignment ... ok
+test red_sed_newline_separated ... ok
+test red_sed_quoted_assignment_and_quoted_ref ... ok
+test red_sed_worktree_var_semicolon ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261114_static_literal_var_resolution.rs (target/debug/deps/backlog_20261114_static_literal_var_resolution-9c20d9de5991dcdd)
+"""
+
+[task.closure.red]
+rev = "0eb2e03f923ed040f586881d5041ca0869ef7b93"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "574a751c"
+title = "blastguard FP: sed -i on a path built from a variable literally assigned earlier in the same command is denied in subagent mode"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. S=<wt>; sed -i '' 's/a/b/' $S/full.py => deny (subagent): "`sed` rewrites in place `$S/full.py`, whose path depends on an expansion blastguard cannot resolve". Control with the literal path is allow. Readings: (a) FP - S is a literal assigned in an earlier statement of the same line and vars.rs resolve_expanded_command_word can resolve it for other verbs; (b) intended - sed -i operand resolution deliberately does not consult same-line assignments. Tell apart: check whether the sed in-place target path goes through the same variable resolution as rm operands."""
+created_at = 1794634270
+updated_at = 1794712779
+weight = 0.0
+issue_number = 1762
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1762"
+issue_closed_at = 1794712781
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_sed_inplace_literal_var_path_fp -- --include-ignored"
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634270
+detail = """
+exit 101: ukt/worktrees/run-20261114-125811-45041-integ/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261114_sed_inplace_literal_var_path_fp.rs (target/debug/deps/backlog_20261114_sed_inplace_literal_var_path_fp-91907d4df13df58b)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_sed_inplace_literal_var_path_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_sed_inplace_literal_var_path_fp -- --include-ignored"
+exit = 0
+passed = 2
+rev = "454fb4cb488697aff24909f2c058349e46599192"
+observed_at = 1794712778
+output_digest = "sha256:aac2df03454905dc04bf4631e50c529dfa57a89dbcab4be760d026662acab6f1"
+excerpt = """
+
+running 2 tests
+test sed_inplace_on_same_command_literal_var_path_is_not_denied ... ok
+test control_sed_inplace_on_literal_path_is_allow ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+
+   Compiling blastguard v0.2.604 (/Users/yuki/src/.harness-worktrees/bg-impl-x/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261114_sed_inplace_literal_var_path_fp.rs (target/debug/deps/backlog_20261114_sed_inplace_literal_var_path_fp-fc7d6bc715e12dc9)
+"""
+
+[task.closure.red]
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

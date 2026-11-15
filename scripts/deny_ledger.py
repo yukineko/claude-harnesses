@@ -203,6 +203,7 @@ RESIDUALS (recorded, not hidden — CLAUDE.md 4):
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import stat
@@ -1039,9 +1040,14 @@ def writes_stop_check(session_id: str, own_root: str) -> str | None:
     """Signal 3. None to allow; otherwise the block reason. Only entries whose
     root is `own_root` are looked at, and only in that tree.
 
-    Filters out paths whose mtime is > max(epoch) + 30 seconds, since those are
-    foreign writes made after this session's last recorded write. Keeps paths
-    with unreadable mtime or invalid epoch (fail-closed)."""
+    A dirty recorded path is skipped (treated as a foreign write) only when every
+    record epoch for it is finite AND its lstat mtime > max(epoch) + 30 seconds.
+    Blocks (keeps the path) when: the mtime is unreadable, any epoch for the path
+    is non-finite (NaN/inf), or the path is not found in the epoch map.
+
+    Limitation: a path this session wrote and left uncommitted is also skipped if
+    its mtime is more than 30s after this session's last recorded write (a
+    foreign writer touching it later, a delayed record, or clock skew)."""
     try:
         entries = read_writes(session_id)
     except Undetermined as e:
@@ -1063,7 +1069,13 @@ def writes_stop_check(session_id: str, own_root: str) -> str | None:
                 rel_path = e["path"]
             folded = _fold(rel_path)
             epoch = e["epoch"]
-            path_max_epoch[folded] = max(path_max_epoch.get(folded, -float('inf')), epoch)
+            prev = path_max_epoch.get(folded, -float('inf'))
+            if not math.isfinite(epoch) or not math.isfinite(prev) and prev != -float('inf'):
+                # Non-finite epoch: max() with NaN/-inf is order-dependent, so
+                # mark the path undeterminable (None => kept/blocked below).
+                path_max_epoch[folded] = float('nan')
+            else:
+                path_max_epoch[folded] = max(prev, epoch)
 
     dirty: list[str] = []
     for i in range(0, len(paths), _PATHSPEC_CHUNK):
@@ -1089,8 +1101,8 @@ def writes_stop_check(session_id: str, own_root: str) -> str | None:
     for path_str in dirty:
         folded = _fold(path_str)
         max_epoch = path_max_epoch.get(folded)
-        if max_epoch is None:
-            # Path not in record (shouldn't happen, but keep it to block)
+        if max_epoch is None or not math.isfinite(max_epoch):
+            # Path not in the epoch map, or an epoch was non-finite: keep it (block)
             filtered_dirty.append(path_str)
             continue
         try:
@@ -1102,7 +1114,7 @@ def writes_stop_check(session_id: str, own_root: str) -> str | None:
             filtered_dirty.append(path_str)
             continue
 
-        # If mtime > max_epoch + 30, it's a foreign write: skip it
+        # mtime later than every recorded epoch + 30s: treated as a foreign write, skipped
         if mtime > max_epoch + 30:
             continue
         # Otherwise, keep it (this session's write or same-call concurrent write)

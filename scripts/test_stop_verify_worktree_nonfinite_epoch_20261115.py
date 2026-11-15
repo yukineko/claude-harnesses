@@ -103,12 +103,10 @@ class NonFiniteEpoch(unittest.TestCase):
         self._record(repr(self.t + 0.5))
         self._assert_blocks("control finite epoch")
 
-    @pytest.mark.xfail(strict=True, reason=RED)
     def test_nan_epoch_blocks(self):
         self._record("NaN")
         self._assert_blocks("epoch NaN")
 
-    @pytest.mark.xfail(strict=True, reason=RED)
     def test_neg_infinity_epoch_blocks(self):
         self._record("-Infinity")
         self._assert_blocks("epoch -Infinity")

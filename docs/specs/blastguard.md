@@ -1269,8 +1269,11 @@ forge・condukt のスケジューラが再利用）。
   （`arith.rs`。ユーザー裁定 2026-11-16 strict reading）は解析全体を `Undetermined(Unsupported)` にする。
   `declare -i` された name への代入は算術。opaque 状態（`eval`・`source`・`.`・不定の command word 等の後。
   分岐合流では OR）では任意の name が integer 属性を持ちうる（ユーザー裁定 2026-11-16 reading A）ため、
-  以後の全代入経路（plain・prefix・declare 系 operand・`printf -v`・`read` 対象）が算術として検査され、
-  本文で決まらない値や name を読む値（`X=bar`・`FOO=/abs/path` を含む）は `Undetermined(Unsupported)`。
+  以後、次の代入が算術として検査される: plain `n=v`・prefix `n=v cmd`・`export`/`declare`/`typeset`/
+  `local`/`readonly` の operand（opacity は当該コマンド実行前のもの）・`printf -v` 対象・`read`/`mapfile`/
+  `readarray`/`getopts`/`wait` の literal operand 全部と暗黙対象（`REPLY`・`MAPFILE`・`OPTARG`/`OPTIND`）・
+  `for` 変数（literal list の各語、不定 list は不定値として）。本文で決まらない値や name を読む値
+  （`X=bar`・`FOO=/abs/path` を含む）は `Undetermined(Unsupported)`。`${n:=v}` / `${n=v}` の代入は**未検査**。
   `support.rs` は状態を持たない補助関数（escape 展開・パス正規化・fd/stdin・pipe stdin）。
   **現状どの検出器からも呼ばれない**（判定に影響しない）。検出器の移行は migrate-path / migrate-stdin-program 段で行う。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ

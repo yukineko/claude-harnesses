@@ -50,13 +50,19 @@
 //!   `declare -i` (also `local` / `typeset`) names are remembered: a later
 //!   assignment to one is arithmetic. Once the state is opaque (`eval`,
 //!   `source`, `.`, an undetermined command word, ...) any name may have the
-//!   integer attribute (user ruling 2026-11-16, reading A), so from there on
-//!   every assignment (plain, prefix, declaration operand, `printf -v`,
-//!   `read` target) is arithmetic — and, the variables being `Undetermined`,
-//!   one whose value is not determined by the text or reads a name is
-//!   `Unsupported` (even a literal word such as `bar` or `/abs/path`: `bar` /
-//!   `abs` name variables). The
-//!   opaque flag is OR-ed where paths join. An undetermined non-assignment operand
+//!   integer attribute (user ruling 2026-11-16, reading A). From there on (and
+//!   for a `declare -i` name) these assignments are checked as arithmetic:
+//!   plain `n=v` and prefix `n=v cmd`; the operands of `export` / `declare` /
+//!   `typeset` / `local` / `readonly` (with the opacity from before the
+//!   command); the `printf -v` target; every literal operand of `read` /
+//!   `mapfile` / `readarray` / `getopts` / `wait` plus their implicit targets
+//!   (`REPLY`, `MAPFILE`, `OPTARG` / `OPTIND`); and a `for` variable (each
+//!   literal word, or an undetermined value for an undetermined list). The
+//!   variables being `Undetermined`, a value not determined by the text or
+//!   that reads a name is `Unsupported` (even a literal word such as `bar` or
+//!   `/abs/path`: `bar` / `abs` name variables). NOT checked: the assignment
+//!   of `${n:=v}` / `${n=v}`. The opaque flag is OR-ed where paths join.
+//!   An undetermined non-assignment operand
 //!   of a declaration builtin (`declare $opt n=v`) counts as a possible `-i`.
 //!   The keys of a compound value are arithmetic in a declaration builtin
 //!   too (`declare -a a=([i]=1)`), checked in operand order; a compound
@@ -316,9 +322,8 @@ impl Env {
     /// Assigning `v` to `name` (`name` may carry a subscript): arithmetic if
     /// `name` may have the integer attribute — it was declared `-i` here, or
     /// the state is opaque (an `eval` / `source` / ... may have given any
-    /// name the attribute; user ruling 2026-11-16, reading A). Every
-    /// assignment path (plain, prefix, declaration operands, `printf -v`,
-    /// `read` targets) goes through here.
+    /// name the attribute; user ruling 2026-11-16, reading A). The paths
+    /// that go through here are listed in the module doc (`${n:=v}` does not).
     fn int_assign(&self, name: &str, v: &Value) -> Result<(), Cause> {
         self.int_assign_if(self.opaque, name, v)
     }
@@ -911,7 +916,10 @@ impl Ev {
             Some(vs) => {
                 let mut exits: Option<Env> = None;
                 for v in vs {
-                    env.bind(var, Value::Literal(v));
+                    // `declare -i v; for v in 1+1` assigns 2: arithmetic.
+                    let v = Value::Literal(v);
+                    env.int_assign(var, &v)?;
+                    env.bind(var, v);
                     self.accums.push(None);
                     let end = self.list(text, &f.body.list, env.clone(), ctx);
                     let acc = self.accums.pop().flatten();
@@ -927,10 +935,9 @@ impl Ev {
                 Ok(join_opt(exits, env))
             }
             None => self.fix_loop(env, |ev, mut e| {
-                e.forget(
-                    var,
-                    "loop variable over a list not determined from the text",
-                );
+                let why = "loop variable over a list not determined from the text";
+                e.int_assign(var, &undet(format!("{var}: {why}")))?;
+                e.forget(var, why);
                 ev.list(text, &f.body.list, e, ctx)
             }),
         }
@@ -1208,6 +1215,20 @@ impl Ev {
             }
             n if DECL_BUILTINS.contains(&n) => self.declaration(n, args, decl_names, &mut env)?,
             n if ASSIGNING_BUILTINS.contains(&n) => {
+                // The variables these set without naming them (bare `read`
+                // sets REPLY, bare `mapfile` MAPFILE, getopts OPTARG /
+                // OPTIND): which operand is a name is not modelled, so they
+                // count as assigned whatever the operands are (superset).
+                let implicit: &[&str] = match n {
+                    "read" => &["REPLY"],
+                    "mapfile" | "readarray" => &["MAPFILE"],
+                    "getopts" => &["OPTARG", "OPTIND"],
+                    _ => &[],
+                };
+                for t in implicit {
+                    env.int_assign(t, &undet(format!("a value set by {n}")))?;
+                    env.forget(t, &format!("set by {n}"));
+                }
                 for a in args {
                     match &a.value {
                         Value::Literal(s) => {
@@ -1238,6 +1259,10 @@ impl Ev {
         // An `i` in any option may give the integer attribute (superset); so
         // may an undetermined operand that is not an assignment (`declare
         // $opt n=v` with opt=-i): its value is not known not to be `-i`.
+        // A nameref (`declare -n r=n r=v` assigns `n`) needs no rule here: a
+        // name gets into `integer` only through an option or an undetermined
+        // operand, both of which make the state opaque, so a target that may
+        // be integer was declared while opaque and `start.opaque` holds.
         let int_attr = args.iter().enumerate().any(|(i, a)| match &a.value {
             Value::Literal(s) => s.starts_with('-') && s.contains('i'),
             Value::Undetermined(_) => !decl_names.contains_key(&(i + 1)),

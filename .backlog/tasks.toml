@@ -2406,6 +2406,8 @@ notes = "Observed 2026-11-15 (run-20261114-161340-68728): condukt worktree merge
 created_at = 1794712104
 updated_at = 1794712104
 weight = 0.0
+issue_number = 1786
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1786"
 rev = 0
 
 [task.repro]

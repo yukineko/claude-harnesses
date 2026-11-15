@@ -17,12 +17,12 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-const SESSION: &str = "relay-hide-dismissed-sess-20261116";
+const SESSION: &str = "relay-hide-sess-20261116";
 const AGENT: &str = "a0c1d2e3f4a5b6c7d";
 
 fn setup(tag: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!(
-        "bg-relay-hide-dismissed-{tag}-{}",
+        "bg-relay-hide-{tag}-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&root);

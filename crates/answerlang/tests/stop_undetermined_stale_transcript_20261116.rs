@@ -19,10 +19,10 @@
 //! 2. `control_transcript_ending_in_final_text_is_clean`: same Japanese text as
 //!    the LAST entry (no later tool_result) is allowed. Proves test 1's block is
 //!    caused by the trailing tool_result, not by the text or config.
-//! 3a. `payload_english_message_blocks_and_reason_names_last_assistant_message`:
+//! 3. (3a) `payload_english_message_blocks_and_reason_names_last_assistant_message`:
 //!    an English payload field blocks even though the transcript is Japanese,
 //!    and the reason mentions `last_assistant_message`.
-//! 3b. `transcript_fallback_english_blocks_and_reason_names_transcript`: absent
+//! 4. (3b) `transcript_fallback_english_blocks_and_reason_names_transcript`: absent
 //!    field + English final transcript text blocks with a reason mentioning
 //!    `transcript`.
 //!
@@ -69,7 +69,6 @@ fn stop_payload(t: &std::path::Path, last_message: Option<&str>) -> Value {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-16 c80effc2 — remove when fixed"]
 fn stale_transcript_tool_result_after_last_text_is_undetermined_not_clean() {
     let env = ja_env();
     let t = env.transcript(
@@ -110,7 +109,6 @@ fn control_transcript_ending_in_final_text_is_clean() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-16 c80effc2 — remove when fixed"]
 fn payload_english_message_blocks_and_reason_names_last_assistant_message() {
     let env = ja_env();
     let t = env.answer_transcript("t.jsonl", &ja(300));
@@ -125,7 +123,6 @@ fn payload_english_message_blocks_and_reason_names_last_assistant_message() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-16 c80effc2 — remove when fixed"]
 fn transcript_fallback_english_blocks_and_reason_names_transcript() {
     let env = ja_env();
     let t = env.answer_transcript("t.jsonl", &en(200));

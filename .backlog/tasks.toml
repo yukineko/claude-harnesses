@@ -2590,6 +2590,37 @@ exit 101: /yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_for_loop_literal_list_tmp_mv_fp`"""
 
 [[task]]
+id = "3109dbf3"
+title = "blastguard: python3 - heredoc program with rmtree only inside a plain (single-line) string literal asked/denied (no exec/eval sink)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-15 at main 8c135610e (installed blastguard 0.2.613), actor=subagent, Bash tool call: python3 - <<'PY' heredoc whose program only built a dict of strings and wrote JSON via json.dump; one plain double-quoted string contained backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp; rmtree only inside an ordinary literal, never executed, no exec/eval/os.system sink. Verbatim hook reason: "PreToolUse:Bash hook error: `python3 - <<'PY'` takes its program from stdin, and a quoted string in its program spells `rmtree`, which deletes files or directories outright if that string is run as code; blastguard cannot show it is not". Minimised repro at worktree rev (c82d97250 + test): main session gets ask with reason 'spells rmtree only inside plain quoted string literals ... cannot show that string is never run as code'. Readings: (a) real FP - literal never run as code; per 2026-11-08 ruling use the Python lexer (detect/interpreter/python_semantics.rs) to show no sink reaches the literal -> allow. (b) intended Ask from 27795e6e - tell apart: if the program has an exec/eval/compile/os.system/subprocess/importlib/getattr sink the literal can reach, or one cannot be excluded, Ask is correct and the test must be narrowed with a stated reason; the minimised repro has none, so (a). Related: row on triple-quoted literal case (tests/backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp.rs)."""
+created_at = 1794743490
+updated_at = 1794743490
+weight = 0.0
+issue_number = 1805
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1805"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_stdin_plain_string_names_rmtree_fp -- --include-ignored"
+rev = "fa1d871cfefb8dcf500171af98ba6018933ada63"
+observed_at = 1794743490
+detail = """
+exit 101: iteral-20261115/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.98s
+     Running tests/backlog_20261115_python_stdin_plain_string_names_rmtree_fp.rs (target/debug/deps/backlog_20261115_python_stdin_plain_string_names_rmtree_fp-d7b066629f23631d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_stdin_plain_string_names_rmtree_fp`"""
+
+[[task]]
 id = "4551f633"
 title = "blastguard FP: python3 -c print(vars)/print(locals())/print(globals()) with harmful piped text is deny though -c never reads stdin (new with 9d0b60188)"
 project = "/Users/yuki/src/harness"
@@ -2710,34 +2741,3 @@ exit 101: ession-6dcca0ad/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
      Running tests/backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp-50023bed9ac872cf)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp`"""
-
-[[task]]
-id = "3109dbf3"
-title = "blastguard: python3 - heredoc program with rmtree only inside a plain (single-line) string literal asked/denied (no exec/eval sink)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-15 at main 8c135610e (installed blastguard 0.2.613), actor=subagent, Bash tool call: python3 - <<'PY' heredoc whose program only built a dict of strings and wrote JSON via json.dump; one plain double-quoted string contained backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp; rmtree only inside an ordinary literal, never executed, no exec/eval/os.system sink. Verbatim hook reason: "PreToolUse:Bash hook error: `python3 - <<'PY'` takes its program from stdin, and a quoted string in its program spells `rmtree`, which deletes files or directories outright if that string is run as code; blastguard cannot show it is not". Minimised repro at worktree rev (c82d97250 + test): main session gets ask with reason 'spells rmtree only inside plain quoted string literals ... cannot show that string is never run as code'. Readings: (a) real FP - literal never run as code; per 2026-11-08 ruling use the Python lexer (detect/interpreter/python_semantics.rs) to show no sink reaches the literal -> allow. (b) intended Ask from 27795e6e - tell apart: if the program has an exec/eval/compile/os.system/subprocess/importlib/getattr sink the literal can reach, or one cannot be excluded, Ask is correct and the test must be narrowed with a stated reason; the minimised repro has none, so (a). Related: row on triple-quoted literal case (tests/backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp.rs)."""
-created_at = 1794743490
-updated_at = 1794743490
-weight = 0.0
-issue_number = 1805
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1805"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261115_python_stdin_plain_string_names_rmtree_fp -- --include-ignored"
-rev = "fa1d871cfefb8dcf500171af98ba6018933ada63"
-observed_at = 1794743490
-detail = """
-exit 101: iteral-20261115/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.98s
-     Running tests/backlog_20261115_python_stdin_plain_string_names_rmtree_fp.rs (target/debug/deps/backlog_20261115_python_stdin_plain_string_names_rmtree_fp-d7b066629f23631d)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_stdin_plain_string_names_rmtree_fp`"""

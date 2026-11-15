@@ -1497,36 +1497,6 @@ exit 101: /crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_heredoc_backtick_string_write_target_fp`"""
 
 [[task]]
-id = "7c430e87"
-title = "tdd red/green output_tail uses a shared fixed tdd-run.log; concurrent runs in other cwds contaminate each other"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "tdd",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b)"
-created_at = 1794626790
-updated_at = 1794626790
-weight = 0.0
-issue_number = 1754
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1754"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p tdd --test backlog_20261114_red_output_capture_shared_log -- --include-ignored"
-rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
-observed_at = 1794626790
-detail = """
-exit 101:  tdd v0.1.76 (/Users/yuki/src/.harness-worktrees/session-7e01fcf0/crates/tdd)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.08s
-     Running tests/backlog_20261114_red_output_capture_shared_log.rs (target/debug/deps/backlog_20261114_red_output_capture_shared_log-e14c357d581c124e)
-error: test failed, to rerun pass `-p tdd --test backlog_20261114_red_output_capture_shared_log`"""
-
-[[task]]
 id = "234cae6f"
 title = """git commit -m "$(cat <<'EOF' ... backtick ... EOF)" is Ask/Deny though the quoted heredoc body is literal (FP)"""
 project = "/Users/yuki/src/harness"
@@ -2524,39 +2494,6 @@ exit 101:
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.70s
      Running tests/stop_payload_final_message_20261115.rs (target/debug/deps/stop_payload_final_message_20261115-a069576d5a9a4563)
 error: test failed, to rerun pass `-p answerlang --test stop_payload_final_message_20261115`"""
-
-[[task]]
-id = "f7bba5f0"
-title = "stop-verify-worktree blocks on another writer's dirt on a recorded, since-committed main-tree path"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "worktree-hygiene",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-15 (session 6dcca0ad, Stop feedback at 09:02:34Z and 09:06:14Z on .backlog/tasks.toml while main was clean right after). writes_stop_check (scripts/deny_ledger.py:1038) uses the path set only; entry epoch unused. Candidate: skip a recorded path whose mtime is after every record epoch for it (+30s); keep blocking own uncommitted writes (control test). Existing test_stop_verify_worktree.py dirty() fixture uses epoch=1.0 and must be updated visibly. Writer in the observed windows is UNVERIFIED; reading (2) intended over-attribution (deny_ledger.py:928-934) would instead mean not recording auto-merged backlog rows."
-created_at = 1794733957
-updated_at = 1794733957
-weight = 0.0
-issue_number = 1799
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1799"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest -q --runxfail scripts/test_stop_verify_worktree_foreign_writer_20261115.py"
-rev = "c19614ef3c14d2ac117f8b6b01eff9ad9223a929"
-observed_at = 1794733957
-detail = '''
-exit 1: t is NOT in this record is another session's and does not block.\n").returncode
-
-scripts/test_stop_verify_worktree_foreign_writer_20261115.py:125: AssertionError
-=========================== short test summary info ============================
-FAILED scripts/test_stop_verify_worktree_foreign_writer_20261115.py::test_foreign_rewrite_after_my_committed_write_does_not_block
-1 failed, 1 passed in 0.55s'''
 
 [[task]]
 id = "dc053fcf"

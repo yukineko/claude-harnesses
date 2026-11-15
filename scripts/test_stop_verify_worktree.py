@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -51,10 +52,12 @@ def dirty(repo, e=None, sid=None, name="dirty.txt"):
     p = repo / name
     p.write_text("x")
     if e is not None and sid is not None:
+        # Use realistic epoch: the file's actual mtime (when was it written)
+        epoch = os.stat(p).st_mtime
         d = Path(e["HOME"]) / ".claude" / "state" / "maintree-writes"
         d.mkdir(parents=True, exist_ok=True)
         with open(d / (sid + ".jsonl"), "a") as f:
-            f.write(json.dumps({"v": 1, "kind": "write", "epoch": 1.0,
+            f.write(json.dumps({"v": 1, "kind": "write", "epoch": epoch,
                                 "root": os.path.realpath(repo),
                                 "path": os.path.realpath(p), "by": "test"}) + "\n")
 

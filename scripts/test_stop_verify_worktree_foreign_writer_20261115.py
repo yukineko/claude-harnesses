@@ -107,7 +107,6 @@ def _write_at(p, text, mtime):
     os.utime(p, (mtime, mtime))
 
 
-@pytest.mark.xfail(strict=True, reason="RED 2026-11-15: foreign dirt on a recorded path is attributed to this session")
 def test_foreign_rewrite_after_my_committed_write_does_not_block(env):
     """This session wrote tasks.toml at T and the row was committed (clean).
     Later another writer dirties it (mtime T+60). Dirt not made by this

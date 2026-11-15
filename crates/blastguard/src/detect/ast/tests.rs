@@ -1466,3 +1466,83 @@ mod env_arith_opaque_assign_default {
         assert_known("eval foo; : ${n:=5}; cat > /tmp/f");
     }
 }
+
+// The `builtin` / `command` wrappers must not hide the wrapped builtin's
+// assignment from the integer-name check.
+mod env_arith_wrapped_builtins {
+    use super::*;
+
+    fn assert_unsupported(command: &str) {
+        match analyze(command) {
+            Analysis::Undetermined(Cause::Unsupported(_)) => {}
+            other => panic!(
+                "{command:?}: the wrapped builtin assigns a non-text-determined value to a \
+                 possibly-integer name, so this must be Undetermined(Unsupported), \
+                 got {other:#?}"
+            ),
+        }
+    }
+
+    fn assert_known(command: &str) {
+        match analyze(command) {
+            Analysis::Known(_) => {}
+            other => panic!("{command:?} is fully determined by its text; got {other:#?}"),
+        }
+    }
+
+    #[test]
+    fn opaque_then_builtin_read_is_unsupported() {
+        assert_unsupported("eval true; builtin read n; cat > /tmp/f");
+    }
+
+    #[test]
+    fn opaque_then_command_read_is_unsupported() {
+        assert_unsupported("eval true; command read n; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declared_integer_builtin_read_is_unsupported() {
+        assert_unsupported("declare -i n; builtin read n; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declared_integer_command_read_is_unsupported() {
+        assert_unsupported("declare -i n; command read n; cat > /tmp/f");
+    }
+
+    #[test]
+    fn opaque_then_builtin_declare_assign_is_unsupported() {
+        assert_unsupported("eval true; builtin declare n='a[$(echo hi)]'; cat > /tmp/f");
+    }
+
+    #[test]
+    fn opaque_then_command_export_assign_is_unsupported() {
+        assert_unsupported("eval true; command export n='a[$(echo hi)]'; cat > /tmp/f");
+    }
+
+    #[test]
+    fn opaque_then_command_printf_v_is_unsupported() {
+        assert_unsupported("eval true; command printf -v n %s 'a[$(echo hi)]'; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declared_integer_nested_builtin_read_is_unsupported() {
+        assert_unsupported("declare -i n; builtin builtin read n; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declared_integer_command_p_read_is_unsupported() {
+        assert_unsupported("declare -i n; command -p read n; cat > /tmp/f");
+    }
+
+    // Controls.
+    #[test]
+    fn control_plain_redirect_stays_known() {
+        assert_known("cat > /tmp/f");
+    }
+
+    #[test]
+    fn control_command_v_stays_known() {
+        assert_known("command -v git; cat > /tmp/f");
+    }
+}

@@ -187,12 +187,105 @@ pub(super) fn python_program_source(argv: &[&str]) -> ProgramSource {
     }
 }
 
+/// Modules whose `python -m MODULE` runs a console or debugger that executes
+/// its stdin: `code`, `pdb`, `asyncio` (the asyncio REPL, observed to run
+/// `print(12345)` piped in), `_pyrepl` / `pyrepl` (3.13 REPL) and the
+/// third-party consoles `IPython` / `ipython` / `ipdb` / `pudb` / `bpython` /
+/// `ptpython`. A CLOSED list; `-m sqlite3` is not on it (it reads SQL, not
+/// Python).
+const STDIN_REPL_MODULES: &[&str] = &[
+    "code", "pdb", "asyncio", "_pyrepl", "pyrepl", "IPython", "ipython", "ipdb", "pudb", "bpython",
+    "ptpython",
+];
+
+/// Whether the raw text of one shell word is free of anything the shell
+/// expands (`$`, backtick, and an unquoted glob / tilde / brace character), so
+/// its unquoted value is the text the interpreter receives.
+fn shell_word_is_literal(raw: &str) -> bool {
+    let mut quote: Option<char> = None;
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (None | Some('"'), '\\') => {
+                chars.next();
+            }
+            (None, '\'' | '"') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            (Some('\''), _) => {}
+            (_, '$' | '`') => return false,
+            (None, '*' | '?' | '[' | '~' | '{' | '(' | ')' | '!') => return false,
+            _ => {}
+        }
+    }
+    quote.is_none()
+}
+
+/// Whether the `-c` program word at `argv[at]` may run stdin as a Python
+/// program: its text is read (`source` is the stage the words were split from)
+/// and judged by `python_program_enters_stdin_console`; a word that is not a
+/// plain literal, or cannot be read, is undetermined and counts as reading
+/// stdin.
+fn dash_c_program_reads_stdin(argv: &[&str], at: usize, source: &str) -> bool {
+    if at >= argv.len() {
+        return false;
+    }
+    let Some(span) = super::shell_word_token_span(argv, at) else {
+        return true;
+    };
+    let words = &argv[at..at + span];
+    let Some(raw) = super::faithful_tail(Some(source), words, 0) else {
+        return true;
+    };
+    if !shell_word_is_literal(raw) {
+        return true;
+    }
+    match crate::detect::words::first_shell_word(raw) {
+        Some(program) => crate::detect::interpreter::python_program_enters_stdin_console(&program),
+        None => true,
+    }
+}
+
+/// Whether `python -m MODULE` names a [`STDIN_REPL_MODULES`] console. `raw` is
+/// the module shell word (the text glued after `-m`, or the next argv word);
+/// it is decoded as ONE shell word with the crate's shell-word reader, so
+/// `-m 'asyncio'` and `-m "asyncio"` match `asyncio` the same as the unquoted
+/// form. A trailing `.__main__` is stripped first (`-m asyncio.__main__` runs
+/// the same REPL as `-m asyncio`). A value the shell would expand
+/// ([`shell_word_is_literal`] false) or one that cannot be decoded is
+/// undetermined and counts as reading stdin; an empty value (`python -m` with
+/// no module) is not a reader here.
+fn dash_m_module_reads_stdin(raw: &str) -> bool {
+    if raw.is_empty() {
+        return false;
+    }
+    if !shell_word_is_literal(raw) {
+        return true;
+    }
+    let Some(decoded) = crate::detect::words::first_shell_word(raw) else {
+        return true;
+    };
+    let module = decoded.strip_suffix(".__main__").unwrap_or(&decoded);
+    STDIN_REPL_MODULES.contains(&module)
+}
+
+/// [`python_reads_stdin_program`] for the python head `tokens[idx]` (false for
+/// any other head).
+pub(super) fn python_head_reads_stdin(
+    tokens: &[&str],
+    idx: usize,
+    argv: &[&str],
+    source: &str,
+) -> bool {
+    super::is_python_head(tokens[idx]) && python_reads_stdin_program(argv, source)
+}
+
 /// Whether a python invocation reads its stdin as a PROGRAM even though a
-/// script operand or `-m` module is named: `-i` (inspect: after the script it
-/// runs stdin as an interactive interpreter) and `-m code` / `-m pdb` (a console
-/// / debugger that executes stdin). Options end at the first non-option word,
-/// `--` or `-`; `-c` ends the scan (stdin stays data there).
-pub(super) fn python_reads_stdin_program(argv: &[&str]) -> bool {
+/// script operand, `-m` module or `-c` program is named: `-i` (inspect: after
+/// the script it runs stdin as an interactive interpreter), `-m` on a
+/// [`STDIN_REPL_MODULES`] module, and a `-c` program that may enter a stdin
+/// console ([`dash_c_program_reads_stdin`]). Options end at the first
+/// non-option word, `--` or `-`.
+pub(super) fn python_reads_stdin_program(argv: &[&str], source: &str) -> bool {
     let mut k = 0;
     while k < argv.len() {
         let w = argv[k];
@@ -205,15 +298,18 @@ pub(super) fn python_reads_stdin_program(argv: &[&str]) -> bool {
         for (pos, c) in letters.char_indices() {
             match c {
                 'i' => return true,
-                'c' => return false,
+                'c' => {
+                    let glued = !letters[pos + 1..].is_empty();
+                    return glued || dash_c_program_reads_stdin(argv, k + 1, source);
+                }
                 'm' => {
                     let glued = &letters[pos + 1..];
-                    let module = if glued.is_empty() {
+                    let raw = if glued.is_empty() {
                         argv.get(k + 1).copied().unwrap_or("")
                     } else {
                         glued
                     };
-                    return matches!(module, "code" | "pdb");
+                    return dash_m_module_reads_stdin(raw);
                 }
                 'W' | 'X' => {
                     if pos + 1 == letters.len() {

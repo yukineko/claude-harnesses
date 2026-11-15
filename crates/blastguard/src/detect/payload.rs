@@ -17,7 +17,7 @@ mod program_source;
 use exec_fds::{exec_opened_fds, ExecFd};
 use node_source::{is_node_head, node_program_source};
 use program_source::{
-    interpreter_program_source, python_program_source, python_reads_stdin_program,
+    interpreter_program_source, python_head_reads_stdin, python_program_source,
     shell_program_source, shell_startup_file_values, source_program_source, ProgramSource,
 };
 
@@ -363,7 +363,7 @@ tell whether the shell runs that stdin or a script file",
                 };
                 match source {
                     ProgramSource::File(_) | ProgramSource::Inline
-                        if is_python_head(tokens[idx]) && python_reads_stdin_program(&words) =>
+                        if python_head_reads_stdin(&tokens, idx, &words, stage) =>
                     {
                         false
                     }

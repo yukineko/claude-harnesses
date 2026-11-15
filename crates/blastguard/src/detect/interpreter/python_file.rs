@@ -57,7 +57,7 @@ pub(in crate::detect) struct PythonFileVerdict {
 ///     an f-string replacement field is judged too;
 ///   * a call whose command is computed ([`shell_calls::computed_shell_call`]:
 ///     `os.system(cmd)`) is an Ask;
-///   * a [`super::CODE_BUILDING`] marker in the code view (`exec(`, `eval(`,
+///   * a [`super::code_building::CODE_BUILDING`] marker in the code view (`exec(`, `eval(`,
 ///     `__import__`, …) is an Ask: the text is not the program that runs;
 ///   * a runner referenced without being called (`f(os.system)`, a module
 ///     like `os` passed as a value; [`sem::escaped_runner`]) is an Ask;
@@ -379,7 +379,7 @@ const DATA_ONLY_MODULES: &[&str] = &[
 /// guessed from the shell spelling:
 ///   * the program tokenises ([`code_view`]): string and comment boundaries
 ///     are known. A program that does not tokenise answers `false`;
-///   * no [`super::CODE_BUILDING`] marker in the raw text or in the code view
+///   * no [`super::code_building::CODE_BUILDING`] marker in the raw text or in the code view
 ///     (`exec(`, `eval(`, `getattr(`, `__import__`, …);
 ///   * no relative import and no star import from a runner module, and every
 ///     imported module is in [`DATA_ONLY_MODULES`];
@@ -576,6 +576,88 @@ pub(in crate::detect) fn python_program_only_prints(program: &str) -> bool {
             };
             head_ok && parts.all(|p| number(p) || PRINT_ONLY_ATTRIBUTES.contains(&p))
         }
+    })
+}
+
+/// Modules whose IMPORT into a `python -c` program means the program may run
+/// the text on ITS stdin as Python: an interactive console or a debugger that
+/// reads stdin, or the `builtins` namespace used to reach an executor by
+/// string. Matched against the modules a program imports ([`sem::bindings`]'s
+/// `imported`: an `import X`, `import X as y` or `from X import …`), so an
+/// alias or a `from X import *` still counts. A CLOSED list; a module not on
+/// it (`sys`, `json`, `re`, …) read as a value loader is not a match.
+const STDIN_CONSOLE_MODULES: &[&str] = &[
+    "code", "codeop", "pdb", "bdb", "_pyrepl", "pyrepl", "IPython", "ipdb", "pudb", "bpython",
+    "ptpython", "builtins",
+];
+
+/// Builtins that execute text as code when CALLED as a bare name — not an
+/// attribute such as `re.compile`, a dict key `d["compile"]`, or a plain
+/// variable `code = …`: a program calling one can be fed `sys.stdin.read()`.
+/// A CLOSED list. `__import__("code").interact()` is caught here, not by an
+/// import statement.
+const STDIN_EXEC_BUILTINS: &[&str] = &["exec", "eval", "compile", "breakpoint", "__import__"];
+
+/// Bare names whose mere reference reaches code execution through a path that
+/// cannot be followed statically — a name resolved from a string, or the
+/// builtins namespace reachable without an import (`__builtins__["exec"](…)`,
+/// `getattr(o, s)(…)`). Judged restrictively: undetermined ⇒ stdin executes.
+/// A CLOSED list.
+const STDIN_DYNAMIC_NAMES: &[&str] = &["getattr", "__builtins__"];
+
+/// Whether a literal `python -c` program may run its stdin as a Python
+/// program (an interactive console, a debugger, or `exec`/`eval`/`compile`
+/// of what it reads).
+///
+/// Fail-closed: a program that does not tokenise ([`python_program_tokenises`])
+/// is `true` (undetermined). Otherwise it matches only REAL references, read
+/// with the Python lexer ([`sem::lex`]) so a word inside a string literal (a
+/// dict key `d["code"]`), an attribute (`re.compile`, `json.load(…)["code"]`)
+/// or a plain variable (`code = sys.stdin.read()`) is NOT a match. It is
+/// `true` when:
+///   * an `import` / `from … import` names a [`STDIN_CONSOLE_MODULES`] module
+///     ([`sem::bindings`], aliases and `from … import` included);
+///   * a bare-name call to a [`STDIN_EXEC_BUILTINS`] builtin (`exec(`, `eval(`,
+///     `compile(` as a builtin rather than `re.compile`, `breakpoint(`,
+///     `__import__(`);
+///   * a reference to a [`STDIN_DYNAMIC_NAMES`] dynamic-execution reach.
+///
+/// LIMIT (CLAUDE.md §4): detection is by static reference. A program that
+/// reaches an executor through a path these closed lists do not name — a name
+/// built by string concatenation then resolved off an object other than
+/// `builtins` / `__builtins__`, say — is NOT caught here and is read as
+/// treating stdin as data; the `builtins` / `__builtins__` / `getattr` reaches
+/// cover the dynamic shapes that are statically visible. A program that
+/// forwards its stdin to a child process or a shell (`os.system(input())`) is
+/// out of scope here (filed separately as backlog 7cccad0a).
+pub(in crate::detect) fn python_program_enters_stdin_console(program: &str) -> bool {
+    let program = &*python_newlines(program);
+    if !python_program_tokenises(program) {
+        return true;
+    }
+    if sem::bindings(program)
+        .imported
+        .iter()
+        .any(|m| STDIN_CONSOLE_MODULES.contains(&m.as_str()))
+    {
+        return true;
+    }
+    let toks = sem::lex(program);
+    toks.iter().enumerate().any(|(k, t)| {
+        let sem::Tok::Name { text, .. } = t else {
+            return false;
+        };
+        // The lexer folds dotted access (`re.compile`) into one Name whose
+        // text holds the `.`, and a method on a call result (`f().exec(…)`)
+        // has a leading `.` token: neither is a bare builtin.
+        if text.contains('.') || (k > 0 && toks[k - 1] == sem::Tok::Punct('.')) {
+            return false;
+        }
+        if STDIN_DYNAMIC_NAMES.contains(&text.as_str()) {
+            return true;
+        }
+        STDIN_EXEC_BUILTINS.contains(&text.as_str())
+            && toks.get(k + 1) == Some(&sem::Tok::Punct('('))
     })
 }
 

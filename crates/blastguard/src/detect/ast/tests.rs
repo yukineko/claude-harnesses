@@ -1102,4 +1102,37 @@ mod env_arith_unsupported {
     fn control_literal_subscript_assignment_stays_known() {
         assert_known("a[0]=v");
     }
+
+    // The declare family binds a compound value; bash arithmetic-evaluates
+    // each indexed-array key (observed: `i='x[$(echo RAN >&2)]'; declare -a
+    // a=([i]=1)` runs the substitution).
+    #[test]
+    fn declare_dash_a_compound_bare_name_key_is_unsupported() {
+        assert_unsupported("declare -a a=([i]=1)");
+    }
+
+    #[test]
+    fn declare_compound_bare_name_key_is_unsupported() {
+        assert_unsupported("declare a=([i]=1)");
+    }
+
+    #[test]
+    fn local_dash_a_compound_bare_name_key_is_unsupported() {
+        assert_unsupported("local -a a=([i]=1)");
+    }
+
+    #[test]
+    fn typeset_dash_a_compound_bare_name_key_is_unsupported() {
+        assert_unsupported("typeset -a a=([i]=1)");
+    }
+
+    #[test]
+    fn control_declare_compound_literal_key_stays_known() {
+        assert_known("declare -a a=([0]=1)");
+    }
+
+    #[test]
+    fn control_declare_compound_assigned_var_key_stays_known() {
+        assert_known("i=2; declare -a a=([i]=1)");
+    }
 }

@@ -20,8 +20,12 @@
 //! may also be read as shell (see [`PythonFileVerdict::also_shell`]).
 
 use super::super::heredoc::HereDocumentParts;
-use super::super::{is_assignment, normalized_command, quote_aware_words, split_segments};
-use super::{code_building_marker, python_semantics as sem, shell_calls, Ctx, Decision};
+use super::super::{
+    is_assignment, is_shell, normalized_command, quote_aware_words, split_segments,
+};
+use super::{
+    code_building_marker, is_code_interpreter, python_semantics as sem, shell_calls, Ctx, Decision,
+};
 
 /// The Python judge's answer for one here-document body.
 pub(in crate::detect) struct PythonFileVerdict {
@@ -629,9 +633,19 @@ const STDIN_DYNAMIC_NAMES: &[&str] = &["getattr", "__builtins__", "globals", "lo
 /// built by string concatenation then resolved off an object other than
 /// `builtins` / `__builtins__`, say — is NOT caught here and is read as
 /// treating stdin as data; the `builtins` / `__builtins__` / `getattr` / `globals` / `locals` / `vars` reaches
-/// cover the dynamic shapes that are statically visible. A program that
-/// forwards its stdin to a child process or a shell (`os.system(input())`) is
-/// out of scope here (filed separately as backlog 7cccad0a).
+/// cover the dynamic shapes that are statically visible.
+///
+/// A CHILD process the program starts inherits its stdin
+/// ([`child_process_may_read_stdin`], backlog 3da14bbd): the child can be an
+/// interpreter, shell or REPL that runs that stdin as a program
+/// (`os.system("python3 -m asyncio")`, `os.system("bash")`). A literal
+/// `os.system` / `os.popen` command is judged by its words; any other child
+/// start (a computed command such as `os.system(input())`, an argv list,
+/// `subprocess.*`) is undetermined and counts as reading stdin. Importing a
+/// module (`import os`) or calling a non-starting function (`os.getcwd()`)
+/// starts no child. LIMIT: a literal command naming a stdin-reading program
+/// outside the closed shell / interpreter / [`STDIN_READING_PROGRAMS`] lists
+/// is read as not reading stdin.
 pub(in crate::detect) fn python_program_enters_stdin_console(program: &str) -> bool {
     let program = &*python_newlines(program);
     if !python_program_tokenises(program) {
@@ -642,6 +656,9 @@ pub(in crate::detect) fn python_program_enters_stdin_console(program: &str) -> b
         .iter()
         .any(|m| STDIN_CONSOLE_MODULES.contains(&m.as_str()))
     {
+        return true;
+    }
+    if child_process_may_read_stdin(program) {
         return true;
     }
     let toks = sem::lex(program);
@@ -660,6 +677,49 @@ pub(in crate::detect) fn python_program_enters_stdin_console(program: &str) -> b
         }
         STDIN_EXEC_BUILTINS.contains(&text.as_str())
             && toks.get(k + 1) == Some(&sem::Tok::Punct('('))
+    })
+}
+
+/// Programs, beyond the code interpreters and shells, that run text on their
+/// stdin as code. A CLOSED list.
+const STDIN_READING_PROGRAMS: &[&str] = &[
+    "ipython", "ipython3", "irb", "pry", "bpython", "ptpython", "ipdb", "pudb", "pdb", "pdb3",
+];
+
+/// Whether `program` (which tokenises) starts a child process that may run
+/// the program's own, inherited stdin as code. Names are read with the
+/// program's aliases resolved ([`sem::bindings`] / [`sem::rewrite`]). The
+/// child starts are read by [`sem::child_start_lines`]; an undetermined one,
+/// or a `from <runner module> import *` (whose bare names are not resolved),
+/// is `true`. Otherwise `true` iff some literal command line may read stdin
+/// as code ([`shell_line_may_read_stdin`]).
+fn child_process_may_read_stdin(program: &str) -> bool {
+    let names = sem::bindings(program);
+    if names.star_runner.is_some() {
+        return true;
+    }
+    match sem::child_start_lines(&sem::rewrite(program, &names)) {
+        None => true,
+        Some(lines) => lines.iter().any(|l| shell_line_may_read_stdin(l)),
+    }
+}
+
+/// Whether the shell command line `line`, run by a child that inherits stdin,
+/// may run that stdin as code: some word of some segment is a code
+/// interpreter, a shell or a [`STDIN_READING_PROGRAMS`] entry (after an exec
+/// wrapper such as `env` or `nohup` too, since every word is checked), or a
+/// word holds an expansion (`$`, a backquote) that can build one.
+fn shell_line_may_read_stdin(line: &str) -> bool {
+    split_segments(line).iter().any(|seg| {
+        quote_aware_words(seg).iter().any(|w| {
+            if w.contains(['$', '`']) {
+                return true;
+            }
+            let cmd = normalized_command(w);
+            is_shell(&cmd)
+                || is_code_interpreter(&cmd)
+                || STDIN_READING_PROGRAMS.contains(&cmd.as_str())
+        })
     })
 }
 
@@ -1041,5 +1101,42 @@ mod tests {
         assert_eq!(code_view("f(x\n"), None);
         assert_eq!(code_view("x)\n"), None);
         assert!(code_view("\"\"\"\nmulti\nline\n\"\"\"\n").is_some());
+    }
+
+    #[test]
+    fn child_process_stdin_reading_is_judged_by_the_child_started() {
+        use super::child_process_may_read_stdin as reads;
+        // A child that may run the inherited stdin as code, or one not read statically.
+        for p in [
+            "import os; os.system(\"python3 -m asyncio\")",
+            "import os; os.system(\"bash\")",
+            "import os; os.system('env sh')",
+            "import os; os.system(\"$X\")",
+            "import os; c=\"python3\"; os.system(c)",
+            "import os; os.system(input())",
+            "import os; os.system(f\"bash\")",
+            "import os; os.system(\"ba\" + \"sh\")",
+            "import subprocess; subprocess.run([\"ls\"])",
+            "from os import system; system(\"bash\")",
+            "import os as o; s = o.system; s(\"bash\")",
+            "from os import *; system(\"ls\")",
+            "import os; g(os)",
+            "__import__(\"os\").system(\"ls\")",
+            "import os; os.execv(\"/bin/ls\", [])",
+        ] {
+            assert!(reads(p), "{p}");
+        }
+        // No child, or a literal child that does not read stdin as code.
+        for p in [
+            "import os",
+            "import os, sys; print(len(sys.stdin.read()))",
+            "import os; print(os.getcwd())",
+            "import shutil; print(shutil.which(\"ls\"))",
+            "import os; os.system(\"ls\")",
+            "import os; os.system(\"grep chmod\")",
+            "import os; os.remove(\"x\")",
+        ] {
+            assert!(!reads(p), "{p}");
+        }
     }
 }

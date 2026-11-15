@@ -495,6 +495,77 @@ pub(super) fn escaped_runner(code: &str) -> Option<String> {
     None
 }
 
+/// The command lines of the CHILD processes `code` (a code view with aliases
+/// rewritten, see [`rewrite`]) may start, read statically (backlog 3da14bbd:
+/// a child inherits the program's stdin). `Some(lines)` when every child
+/// start is `os.system("LITERAL")` / `os.popen("LITERAL", …)` with a plain
+/// (non-f) string literal as its only first argument: the literal lines, empty
+/// when no child is started. `None` (undetermined) for any other reach of a
+/// process starter, read as [`references_runner`] reads one minus the
+/// callables that only remove a file (`os.remove`, `shutil.rmtree`): a
+/// computed command (`os.system(c)`, `os.system("a" + b)`), an argv list or
+/// any `subprocess` / `pty` / `commands` / `asyncio` attribute, a bare runner
+/// module used as a value (`g(os)`), a starter not called directly, or an
+/// attribute reached through a call result whose last component starts a
+/// process (`__import__("os").system`). The binding statements (`import …`,
+/// `from … import …`, and the rewritten alias `os.system = os.system`) are
+/// skipped, so `import os` alone starts nothing.
+pub(super) fn child_start_lines(code: &str) -> Option<Vec<String>> {
+    const FILE_REMOVERS: &[&str] = &[
+        "os.remove",
+        "os.unlink",
+        "os.rmdir",
+        "os.removedirs",
+        "shutil.rmtree",
+    ];
+    let toks = lex(code);
+    let mut lines = Vec::new();
+    for st in statements(&toks) {
+        if matches!(name(st.first()), Some("import" | "from")) {
+            continue;
+        }
+        if st.len() == 3 && st[1] == Tok::Punct('=') && name(st.first()) == name(st.get(2)) {
+            continue;
+        }
+        for (k, t) in st.iter().enumerate() {
+            let Some(n) = name(Some(t)) else { continue };
+            let last = n.rsplit('.').next().unwrap_or(n);
+            if k > 0 && st[k - 1] == Tok::Punct('.') {
+                if PROCESS_STARTING_ATTRS.contains(&last) {
+                    return None;
+                }
+                continue;
+            }
+            if FILE_REMOVERS.contains(&n) {
+                continue;
+            }
+            let runner = RUNNERS
+                .iter()
+                .any(|r| n == *r || n.strip_prefix(r).is_some_and(|x| x.starts_with('.')));
+            if !(runner
+                || RUNNER_MODULES.contains(&n)
+                || ["subprocess", "pty", "commands", "asyncio"].contains(&top(n))
+                || PROCESS_STARTING_ATTRS.contains(&last))
+            {
+                continue;
+            }
+            match (n, st.get(k + 1), st.get(k + 2), st.get(k + 3)) {
+                (
+                    "os.system" | "os.popen",
+                    Some(Tok::Punct('(')),
+                    Some(Tok::Str {
+                        text,
+                        fstring: false,
+                    }),
+                    Some(Tok::Punct(')' | ',')),
+                ) => lines.push(text.clone()),
+                _ => return None,
+            }
+        }
+    }
+    Some(lines)
+}
+
 /// A path a program names, as far as it can be read statically: a literal
 /// (Python never expands `~` in one), the user's home plus a suffix, or — for
 /// a path computed by iterating a directory ([`values`]) — "somewhere at or

@@ -24,14 +24,18 @@
 //! The types and signatures are frozen (run-20261115-212659-5759). Both
 //! stages are implemented: the parse stage (`parse.rs`: caps, depth
 //! pre-scan, zsh-only syntax, brush-parser under `catch_unwind`) and the
-//! static evaluator (`eval.rs`, which documents what it tracks).
+//! static evaluator (`eval.rs`, which documents what it tracks, with its
+//! arithmetic contexts in `arith.rs` and its stateless helpers in
+//! `support.rs`).
 //!
 //! * [`analyze`] returns the parse stage's `Undetermined` cause
 //!   (`TooLong` / `TooDeep` / `ZshOnly` / `Parse` / `Panic`) for inputs it
 //!   rejects; for an input that parses, `Known(Script)`, or
 //!   `Undetermined(Unsupported(_))` when the script holds something whose
 //!   commands the evaluator cannot list (a function definition, `coproc`, a
-//!   `$( )` inside a parameter operation or arithmetic, the work budget
+//!   `$( )` inside a parameter operation or arithmetic, a subscript or
+//!   arithmetic expression that reads a value not determined by the text —
+//!   user ruling 2026-11-16, see `arith.rs` — the work budget
 //!   exceeded), or the parse stage's cause when a word, heredoc body or
 //!   `$( )` body inside it does not parse, or `Undetermined(Panic)` if the
 //!   evaluator panicked. `Undetermined(NotImplemented)` is no longer
@@ -49,8 +53,10 @@
 // wire it in and remove this allow.
 #![allow(dead_code)]
 
+mod arith;
 mod eval;
 mod parse;
+mod support;
 #[cfg(test)]
 mod tests;
 
@@ -314,7 +320,7 @@ pub(crate) enum ProgramSource {
 
 /// [`program_source`]: option parsing per interpreter family over an
 /// already-evaluated [`SimpleCommand`]. (Kept here rather than in `eval.rs`,
-/// which is at the repository's 2000-line file cap.)
+/// which is near the repository's 2000-line file cap.)
 mod prog {
     use super::{ProgramSource, SimpleCommand, Value, Word};
 
@@ -576,64 +582,8 @@ mod prog {
     }
 }
 
-/// `[[ a OP b ]]` operators whose operands bash evaluates as arithmetic.
-fn arith_test_op(op: &brush_parser::ast::BinaryPredicate) -> bool {
-    use brush_parser::ast::BinaryPredicate as P;
-    matches!(
-        op,
-        P::ArithmeticEqualTo
-            | P::ArithmeticNotEqualTo
-            | P::ArithmeticLessThan
-            | P::ArithmeticLessThanOrEqualTo
-            | P::ArithmeticGreaterThan
-            | P::ArithmeticGreaterThanOrEqualTo
-    )
-}
-
-/// A literal decimal integer: evaluating it as arithmetic has no side effect.
-/// Anything else (a name, `x=1`, `x++`, an undetermined value) may assign.
-fn plain_int(v: &Value) -> bool {
-    let Value::Literal(s) = v else { return false };
-    let d = s.trim();
-    let d = d.strip_prefix(['-', '+']).unwrap_or(d);
-    !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())
-}
-
-/// Whether a builtin's name operand (`read`, `printf -v`, `unset`, `declare`
-/// family, ...) carries a subscript the shell evaluates as arithmetic that
-/// may assign variables: `read 'a[x=8]'` sets `x` (bash and zsh). Only no
-/// subscript or exactly `name[<decimal digits>]` is side-effect free; any
-/// other `[` (including text that only looks like an operand) counts as
-/// possibly assigning.
-fn subscript_may_assign(operand: &str) -> bool {
-    let Some((_, rest)) = operand.split_once('[') else {
-        return false;
-    };
-    let Some(idx) = rest.strip_suffix(']') else {
-        return true;
-    };
-    idx.is_empty() || !idx.bytes().all(|b| b.is_ascii_digit())
-}
-
-/// A builtin's name operand whose subscript holds `$( )`, `$(( ))`, `${ }`,
-/// a backquote or `<( )` / `>( )`: the shell expands it when it evaluates the
-/// subscript, so `read 'a[$(cmd)]'` runs `cmd` (bash and zsh; `unset`,
-/// `declare`, `printf -v` in bash). The command would be invisible, so the
-/// whole analysis is `Undetermined(Unsupported)` — the same as a prefix
-/// assignment `a[$(cmd)]=v`.
-fn subscript_subst(operand: &str) -> Result<(), Cause> {
-    let Some((_, idx)) = operand.split_once('[') else {
-        return Ok(());
-    };
-    if has_subst(idx) || idx.contains("${") {
-        return Err(Cause::Unsupported(format!(
-            "command substitution in the subscript of {operand}"
-        )));
-    }
-    Ok(())
-}
-
-/// `$( )` (also `$(( ))`), backquotes or process substitution in raw text.
+/// `$( )` (also `$(( ))`), the legacy arithmetic `$[ ]`, backquotes or
+/// process substitution in raw text.
 fn has_subst(s: &str) -> bool {
-    s.contains("$(") || s.contains('`') || s.contains("<(") || s.contains(">(")
+    s.contains("$(") || s.contains("$[") || s.contains('`') || s.contains("<(") || s.contains(">(")
 }

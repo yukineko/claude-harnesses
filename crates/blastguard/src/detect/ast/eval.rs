@@ -39,14 +39,38 @@
 //!   operation, an arithmetic expression or a subscript (also a builtin's
 //!   quoted name operand, `read 'a[$(c)]'`; `${` too there): the commands it
 //!   runs would be invisible.
+//! * So does an arithmetic context (a subscript, `$(( ))`, `(( ))`, `let`,
+//!   `[[ a -eq b ]]`, a `declare -i` name's value, ...) that reads a value not
+//!   determined by the text (user ruling 2026-11-16): bash evaluates such a
+//!   value recursively, so `x='a[$(c)]'` from the environment runs `c`. Only
+//!   names bound to literals on the line are determined; `arith.rs` has the
+//!   list of contexts and what an expression may hold. Variables after an
+//!   arithmetic assignment are `Undetermined`, so a later read of them in
+//!   arithmetic (a loop counter `i=$((i+1))`) is `Unsupported` too.
+//!   `declare -i` (also `local` / `typeset`) names are remembered: a later
+//!   assignment to one is arithmetic. An undetermined non-assignment operand
+//!   of a declaration builtin (`declare $opt n=v`) counts as a possible `-i`.
+//!   The keys of a compound value are arithmetic in a declaration builtin
+//!   too (`declare -a a=([i]=1)`), checked in operand order; a compound
+//!   operand leaves its name `Undetermined` (it is an array, not the text
+//!   `( ... )`), and a key that is not a decimal integer may assign, so it
+//!   makes the tracked variables `Undetermined`.
 //!
 //! The whole evaluation runs under `catch_unwind` (a panic is
 //! `Undetermined(Panic)`) and under a work budget (`Undetermined(Unsupported)`
 //! when exceeded).
+//!
+//! Stateless helpers (escape decoding, path joining, fd / stdin bookkeeping,
+//! `set` options, pipeline stdin) live in `support.rs`; the arithmetic checks
+//! in `arith.rs`.
 
+use super::support::{
+    apply_stdin, conv_fd, decode_ansi_c, join_path, normalise_abs, parse_fd_target,
+    parse_heredoc_contained, piped_stdin, set_is_harmless, unescape_backquote,
+};
 use super::{
-    has_subst, parse, Analysis, Cause, Context, FdTarget, HereDoc, Quoting, RedirOp, RedirTarget,
-    Redirect, Script, SimpleCommand, StdinSource, Value, Word,
+    arith, has_subst, parse, Analysis, Cause, Context, FdTarget, HereDoc, Quoting, RedirOp,
+    RedirTarget, Redirect, Script, SimpleCommand, StdinSource, Value, Word,
 };
 use brush_parser::ast;
 use brush_parser::word::{Parameter, ParameterExpr, WordPiece, WordPieceWithSource};
@@ -210,6 +234,9 @@ struct Env {
     vars: BTreeMap<String, Value>,
     /// `readonly` names: a later assignment fails, so it is not trusted.
     readonly: BTreeSet<String>,
+    /// Names that may have the integer attribute (`declare -i`): every
+    /// assignment to one is evaluated as arithmetic.
+    integer: BTreeSet<String>,
     /// Something unmodelled may have changed any variable / attribute.
     opaque: bool,
     cwd: Cwd,
@@ -228,6 +255,7 @@ impl Env {
         Env {
             vars: BTreeMap::new(),
             readonly: BTreeSet::new(),
+            integer: BTreeSet::new(),
             opaque: false,
             cwd: Cwd::Hook,
             stdin: StdinSource::Inherited,
@@ -266,14 +294,28 @@ impl Env {
     }
 
     fn forget_operand(&mut self, operand: &str, why: &str) -> Result<(), Cause> {
-        super::subscript_subst(operand)?;
-        if super::subscript_may_assign(operand) {
+        arith::check_operand(operand, &|n| self.lookup(n))?;
+        if arith::subscript_may_assign(operand) {
             self.havoc_vars(&format!("the subscript of {operand} may assign variables"));
         }
         if let Some(base) = operand.split('[').next().filter(|b| is_ident(b)) {
             self.forget(base, why);
         }
         Ok(())
+    }
+
+    /// Assigning `v` to `name` (`name` may carry a subscript): arithmetic if
+    /// `name` may have the integer attribute.
+    fn int_assign(&self, name: &str, v: &Value) -> Result<(), Cause> {
+        match name.split('[').next() {
+            Some(base) if self.integer.contains(base) => arith::check_value(v, &|n| self.lookup(n)),
+            _ => Ok(()),
+        }
+    }
+
+    /// The arithmetic `expr` (raw text) evaluated in this state.
+    fn arith(&self, expr: &str) -> Result<(), Cause> {
+        arith::check_text(expr, &|n| self.lookup(n))
     }
 
     fn havoc_vars(&mut self, why: &str) {
@@ -309,6 +351,7 @@ fn join(a: Env, b: Env) -> Env {
         vars.insert(k.clone(), v);
     }
     let readonly = a.readonly.union(&b.readonly).cloned().collect();
+    let integer = a.integer.union(&b.integer).cloned().collect();
     let cwd = if a.cwd == b.cwd {
         a.cwd
     } else {
@@ -324,6 +367,7 @@ fn join(a: Env, b: Env) -> Env {
     Env {
         vars,
         readonly,
+        integer,
         opaque: a.opaque || b.opaque,
         cwd,
         stdin,
@@ -424,69 +468,6 @@ fn is_ident(s: &str) -> bool {
         && c.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
-/// `$'..'` with simple escapes only; anything else (`\x`, `\u`, octal, `\c`)
-/// is `None`.
-fn decode_ansi_c(s: &str) -> Option<String> {
-    let mut out = String::new();
-    let mut it = s.chars();
-    while let Some(c) = it.next() {
-        if c != '\\' {
-            out.push(c);
-            continue;
-        }
-        out.push(match it.next()? {
-            'n' => '\n',
-            't' => '\t',
-            'r' => '\r',
-            'a' => '\x07',
-            'b' => '\x08',
-            'e' | 'E' => '\x1b',
-            'f' => '\x0c',
-            'v' => '\x0b',
-            '\\' => '\\',
-            '\'' => '\'',
-            '"' => '"',
-            '?' => '?',
-            _ => return None,
-        });
-    }
-    Some(out)
-}
-
-/// The program inside backquotes: `\$`, `` \` ``, `\\` (and `\"` inside
-/// double quotes) lose their backslash. The bool says whether anything
-/// changed (then spans inside it are not exact).
-fn unescape_backquote(s: &str, in_dq: bool) -> (String, bool) {
-    let mut out = String::new();
-    let mut changed = false;
-    let mut it = s.chars().peekable();
-    while let Some(c) = it.next() {
-        if c == '\\' {
-            if let Some(&n) = it.peek() {
-                if n == '$' || n == '`' || n == '\\' || (in_dq && n == '"') {
-                    out.push(n);
-                    it.next();
-                    changed = true;
-                    continue;
-                }
-            }
-        }
-        out.push(c);
-    }
-    (out, changed)
-}
-
-fn parse_heredoc_contained(body: &str) -> Result<Vec<WordPieceWithSource>, Cause> {
-    let options = parse::parser_options();
-    match catch_unwind(AssertUnwindSafe(|| {
-        brush_parser::word::parse_heredoc(body, &options)
-    })) {
-        Ok(Ok(pieces)) => Ok(pieces),
-        Ok(Err(e)) => Err(Cause::Parse(e.to_string())),
-        Err(_) => Err(Cause::Panic),
-    }
-}
-
 // ---------------------------------------------------------------- paths
 
 /// A redirect target / script operand as the pinned representation wants
@@ -516,44 +497,20 @@ fn resolve(cwd: &Cwd, v: Value) -> Value {
     }
 }
 
-/// `base` (absolute, normalised) + relative `rel`, lexically; `None` for a
-/// `..` component or an empty `rel`.
-fn join_path(base: &str, rel: &str) -> Option<String> {
-    if rel.is_empty() {
-        return None;
-    }
-    let mut out = base.trim_end_matches('/').to_string();
-    for part in rel.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => return None,
-            p => {
-                out.push('/');
-                out.push_str(p);
-            }
-        }
-    }
-    if out.is_empty() {
-        out.push('/');
-    }
-    Some(out)
-}
-
-/// An absolute `cd` target, normalised (`.` and empty components dropped);
-/// `None` for `..`.
-fn normalise_abs(p: &str) -> Option<String> {
-    join_path("/", p.trim_start_matches('/')).or_else(|| {
-        if p.trim_matches('/').is_empty() {
-            Some("/".to_string())
-        } else {
-            None
-        }
-    })
-}
-
 // ---------------------------------------------------------------- evaluator
 
 const DECL_BUILTINS: &[&str] = &["export", "declare", "typeset", "local", "readonly"];
+
+/// An assignment operand of a declaration builtin, as parsed by brush.
+struct DeclArg {
+    /// The variable name (`None` for `a[i]=v`).
+    name: Option<String>,
+    /// Raw keys `k` of a compound value `a=([k]=v)`: arithmetic text the
+    /// shell expands and evaluates when the operand is assigned.
+    keys: Vec<String>,
+    /// The value is compound `( ... )`: an array, not a scalar.
+    compound: bool,
+}
 const ASSIGNING_BUILTINS: &[&str] = &["read", "mapfile", "readarray", "getopts", "unset", "wait"];
 const OPAQUE_BUILTINS: &[&str] = &[
     "eval", "source", ".", "trap", "alias", "unalias", "enable", "shopt", "builtin", "command",
@@ -729,8 +686,15 @@ impl Ev {
             ast::ExtendedTestExpr::Not(a) | ast::ExtendedTestExpr::Parenthesized(a) => {
                 self.test_expr(text, a, env)
             }
-            ast::ExtendedTestExpr::UnaryTest(_, w) => {
-                self.word(text, w, Mode::Assign, env)?;
+            ast::ExtendedTestExpr::UnaryTest(op, w) => {
+                let v = self.word(text, w, Mode::Assign, env)?.value;
+                // `-v a[i]` evaluates the subscript.
+                if matches!(op, ast::UnaryPredicate::ShellVariableIsSetAndAssigned) {
+                    match &v {
+                        Value::Literal(s) => arith::check_operand(s, &|n| env.lookup(n))?,
+                        Value::Undetermined(_) => arith::check_value(&v, &|n| env.lookup(n))?,
+                    }
+                }
                 Ok(())
             }
             ast::ExtendedTestExpr::BinaryTest(op, a, b) => {
@@ -738,8 +702,13 @@ impl Ev {
                 let vb = self.word(text, b, Mode::Assign, env)?.value;
                 // -eq/-ne/-lt/... evaluate both operands as arithmetic, which
                 // may assign (`x=5`, `x++`, or a name whose value does).
-                if super::arith_test_op(op) && ![va, vb].iter().all(super::plain_int) {
-                    env.havoc_vars("arithmetic in [[ ]] may assign variables");
+                if arith::arith_test_op(op) {
+                    for v in [&va, &vb] {
+                        arith::check_value(v, &|n| env.lookup(n))?;
+                    }
+                    if ![va, vb].iter().all(arith::plain_int) {
+                        env.havoc_vars("arithmetic in [[ ]] may assign variables");
+                    }
                 }
                 Ok(())
             }
@@ -805,21 +774,26 @@ impl Ev {
         use ast::CompoundCommand as C;
         match cc {
             C::Arithmetic(a) => {
-                check_arith(&a.expr.value)?;
+                env.arith(&a.expr.value)?;
                 env.havoc_vars("arithmetic may assign variables");
                 Ok(env)
             }
             C::ArithmeticForClause(f) => {
-                for e in [&f.initializer, &f.condition, &f.updater]
-                    .into_iter()
-                    .flatten()
-                {
-                    check_arith(&e.value)?;
-                }
-                env.havoc_vars("arithmetic may assign variables");
-                self.fix_loop(env, |ev, e| {
-                    let mut e = ev.list(text, &f.body.list, e, ctx)?;
+                // Each expression is checked in the state it runs in: the
+                // initializer once, the condition before and the updater
+                // after every pass of the body.
+                let step = |e: &mut Env, x: &Option<ast::UnexpandedArithmeticExpr>| {
+                    if let Some(x) = x {
+                        e.arith(&x.value)?;
+                    }
                     e.havoc_vars("arithmetic may assign variables");
+                    Ok::<(), Cause>(())
+                };
+                step(&mut env, &f.initializer)?;
+                self.fix_loop(env, |ev, mut e| {
+                    step(&mut e, &f.condition)?;
+                    let mut e = ev.list(text, &f.body.list, e, ctx)?;
+                    step(&mut e, &f.updater)?;
                     Ok(e)
                 })
             }
@@ -1014,17 +988,36 @@ impl Ev {
         }
         let decl = matches!(argv.first().map(|w| &w.value),
             Some(Value::Literal(n)) if DECL_BUILTINS.contains(&n.as_str()));
-        // argv index -> assignment name, for declaration builtins.
-        let mut decl_names: BTreeMap<usize, String> = BTreeMap::new();
+        // argv index -> assignment operand, for declaration builtins.
+        let mut decl_names: BTreeMap<usize, DeclArg> = BTreeMap::new();
         for item in suffix {
             match item {
                 I::Word(w) => argv.push(self.word(text, w, Mode::Field, &mut env)?),
                 I::AssignmentWord(a, w) => {
                     let mode = if decl { Mode::Assign } else { Mode::Field };
                     if decl {
-                        if let ast::AssignmentName::VariableName(n) = &a.name {
-                            decl_names.insert(argv.len(), n.clone());
-                        }
+                        let name = match &a.name {
+                            ast::AssignmentName::VariableName(n) => Some(n.clone()),
+                            ast::AssignmentName::ArrayElementName(..) => None,
+                        };
+                        let (keys, compound) = match &a.value {
+                            ast::AssignmentValue::Array(elems) => (
+                                elems
+                                    .iter()
+                                    .filter_map(|(k, _)| k.as_ref().map(|k| k.value.clone()))
+                                    .collect(),
+                                true,
+                            ),
+                            ast::AssignmentValue::Scalar(_) => (Vec::new(), false),
+                        };
+                        decl_names.insert(
+                            argv.len(),
+                            DeclArg {
+                                name,
+                                keys,
+                                compound,
+                            },
+                        );
                     }
                     argv.push(self.word(text, w, mode, &mut env)?);
                 }
@@ -1074,6 +1067,9 @@ impl Ev {
                     }
                     self.assignment(text, a, w, &mut scratch)?
                 };
+                // Before the binding: the value is evaluated in the old state.
+                let before = if assignment_only { &env } else { &scratch };
+                before.int_assign(&name, &word.value)?;
                 spans.push(text.global(w.loc.as_ref()));
                 if assignment_only {
                     match bound {
@@ -1126,7 +1122,7 @@ impl Ev {
     fn effects(
         &mut self,
         sc: &SimpleCommand,
-        decl_names: &BTreeMap<usize, String>,
+        decl_names: &BTreeMap<usize, DeclArg>,
         mut env: Env,
     ) -> Result<Outcome, Cause> {
         let name = match sc.argv.first().map(|w| &w.value) {
@@ -1153,7 +1149,12 @@ impl Ev {
                     *a = Some(join_opt(a.take(), env.clone()));
                 }
             }
-            "let" => env.havoc_vars("`let` may assign variables"),
+            "let" => {
+                for a in args {
+                    arith::check_value(&a.value, &|n| env.lookup(n))?;
+                }
+                env.havoc_vars("`let` may assign variables");
+            }
             "exec" if args.is_empty() => {
                 if sc.stdin != env.stdin {
                     env.stdin =
@@ -1166,7 +1167,10 @@ impl Ev {
                 while let Some(a) = it.next() {
                     match &a.value {
                         Value::Literal(s) if s == "-v" => match it.next().map(|w| &w.value) {
-                            Some(Value::Literal(n)) => env.forget_operand(n, "set by printf -v")?,
+                            Some(Value::Literal(n)) => {
+                                env.int_assign(n, &undet("output of printf -v"))?;
+                                env.forget_operand(n, "set by printf -v")?;
+                            }
                             _ => env.make_opaque("printf -v with an undetermined name"),
                         },
                         Value::Literal(_) => {}
@@ -1181,7 +1185,12 @@ impl Ev {
             n if ASSIGNING_BUILTINS.contains(&n) => {
                 for a in args {
                     match &a.value {
-                        Value::Literal(s) => env.forget_operand(s, &format!("assigned by {n}"))?,
+                        Value::Literal(s) => {
+                            if n != "unset" {
+                                env.int_assign(s, &undet(format!("a value read by {n}")))?;
+                            }
+                            env.forget_operand(s, &format!("assigned by {n}"))?;
+                        }
                         Value::Undetermined(_) => {
                             env.make_opaque(&format!("{n} with an undetermined operand"));
                         }
@@ -1198,15 +1207,67 @@ impl Ev {
         &mut self,
         builtin: &str,
         args: &[Word],
-        decl_names: &BTreeMap<usize, String>,
+        decl_names: &BTreeMap<usize, DeclArg>,
         env: &mut Env,
     ) -> Result<(), Cause> {
+        // An `i` in any option may give the integer attribute (superset); so
+        // may an undetermined operand that is not an assignment (`declare
+        // $opt n=v` with opt=-i): its value is not known not to be `-i`.
+        let int_attr = args.iter().enumerate().any(|(i, a)| match &a.value {
+            Value::Literal(s) => s.starts_with('-') && s.contains('i'),
+            Value::Undetermined(_) => !decl_names.contains_key(&(i + 1)),
+        });
+        // The keys of a compound value `a=([k]=v)` are arithmetic, evaluated
+        // when that operand is assigned. An option of this command (which
+        // makes `env` opaque below) changes only the names this command
+        // declares, so a key reads the state from before the command for a
+        // name not yet operated on here, and the current state otherwise —
+        // and always once an undetermined operand or a key's own arithmetic
+        // (which may assign) ran.
+        let start = env.clone();
+        let mut touched: BTreeSet<String> = BTreeSet::new();
+        let mut current_only = false;
         for (i, a) in args.iter().enumerate() {
+            let decl = decl_names.get(&(i + 1));
+            for k in decl.map_or(&[][..], |d| d.keys.as_slice()) {
+                let lookup = |n: &str| {
+                    if current_only || touched.contains(n) {
+                        env.lookup(n)
+                    } else {
+                        start.lookup(n)
+                    }
+                };
+                arith::check_text(k, &lookup)?;
+                if !arith::plain_int(&Value::Literal(k.clone())) {
+                    env.havoc_vars("an array key's arithmetic may assign variables");
+                    current_only = true;
+                }
+            }
+            match &a.value {
+                Value::Literal(s) if !s.starts_with('-') && !s.starts_with('+') => {
+                    let lhs = s.split_once('=').map_or(s.as_str(), |(l, _)| l);
+                    let lhs = lhs.strip_suffix('+').unwrap_or(lhs);
+                    touched.insert(lhs.split('[').next().unwrap_or(lhs).to_string());
+                }
+                Value::Literal(_) => {}
+                Value::Undetermined(_) => match decl.and_then(|d| d.name.as_ref()) {
+                    Some(n) => {
+                        touched.insert(n.clone());
+                    }
+                    None => current_only = true,
+                },
+            }
             let s = match &a.value {
                 Value::Literal(s) => s,
                 Value::Undetermined(_) => {
-                    match decl_names.get(&(i + 1)) {
-                        Some(n) => env.forget(n, &format!("assigned by {builtin}")),
+                    match decl_names.get(&(i + 1)).and_then(|d| d.name.as_ref()) {
+                        Some(n) => {
+                            if int_attr {
+                                env.integer.insert(n.clone());
+                            }
+                            env.int_assign(n, &a.value)?;
+                            env.forget(n, &format!("assigned by {builtin}"));
+                        }
                         None => env.make_opaque(&format!("{builtin} with an undetermined operand")),
                     }
                     continue;
@@ -1216,10 +1277,25 @@ impl Ev {
                 env.make_opaque(&format!("{builtin} with an option"));
                 continue;
             }
+            let name = s.split_once('=').map_or(s.as_str(), |(l, _)| l);
+            if int_attr {
+                let base = name.strip_suffix('+').unwrap_or(name);
+                env.integer
+                    .insert(base.split('[').next().unwrap_or(base).to_string());
+            }
             match s.split_once('=') {
                 Some((lhs, rhs)) => {
+                    // `n+=v` under `declare -i` evaluates `n + v`.
+                    let expr = match lhs.strip_suffix('+') {
+                        Some(n) => format!("{n} + {rhs}"),
+                        None => rhs.to_string(),
+                    };
+                    env.int_assign(lhs.strip_suffix('+').unwrap_or(lhs), &Value::Literal(expr))?;
                     if let Some(n) = lhs.strip_suffix('+') {
                         env.forget_operand(n, "+= appends to a value")?;
+                    } else if decl.is_some_and(|d| d.compound) {
+                        // `a=(x y)` sets an array; `$a` is not the text `(x y)`.
+                        env.forget_operand(lhs, "compound assignment")?;
                     } else if is_ident(lhs) {
                         env.bind(lhs, Value::Literal(rhs.to_string()));
                     } else {
@@ -1301,6 +1377,7 @@ impl Ev {
                         "command substitution in the index of {n}[{idx}]"
                     )));
                 }
+                env.arith(idx)?;
                 env.havoc_vars("array index arithmetic may assign variables");
                 (format!("{n}[{idx}]"), n.clone())
             }
@@ -1321,9 +1398,16 @@ impl Ev {
             }
             ast::AssignmentValue::Array(elems) => {
                 for (k, v) in elems {
-                    for x in k.iter().chain(std::iter::once(v)) {
-                        self.eval_word(&origin.inexact(), &x.value, Mode::Field, env)?;
+                    if let Some(k) = k {
+                        // `[k]=v`: the key of an indexed array is arithmetic.
+                        let (kv, _) =
+                            self.eval_word(&origin.inexact(), &k.value, Mode::Field, env)?;
+                        arith::check_value(&kv, &|n| env.lookup(n))?;
+                        if !arith::plain_int(&kv) {
+                            env.havoc_vars("an array key's arithmetic may assign variables");
+                        }
                     }
+                    self.eval_word(&origin.inexact(), &v.value, Mode::Field, env)?;
                 }
                 (undet("array assignment"), Quoting::Mixed)
             }
@@ -1635,7 +1719,7 @@ impl Ev {
                         acc.unquoted = true;
                     }
                     acc.expansion = true;
-                    check_arith(&e.value)?;
+                    env.arith(&e.value)?;
                     env.havoc_vars("arithmetic may assign variables");
                     acc.undet(format!("{praw}: arithmetic is evaluated at run time"));
                 }
@@ -1651,15 +1735,6 @@ impl Ev {
         self.program(&text, &program, env.clone(), &Context::CommandSubstitution)?;
         Ok(())
     }
-}
-
-fn check_arith(expr: &str) -> Result<(), Cause> {
-    if has_subst(expr) {
-        return Err(Cause::Unsupported(format!(
-            "command substitution inside arithmetic `{expr}`"
-        )));
-    }
-    Ok(())
 }
 
 fn param(expr: &ParameterExpr, praw: &str, env: &mut Env) -> Result<Value, Cause> {
@@ -1678,6 +1753,7 @@ fn param(expr: &ParameterExpr, praw: &str, env: &mut Env) -> Result<Value, Cause
                     "command substitution inside the parameter operation {praw}"
                 )));
             }
+            arith::check_param(expr, &|n| env.lookup(n))?;
             if praw.contains('=') || praw.contains('[') {
                 env.havoc_vars("a parameter operation may assign variables");
             }
@@ -1763,61 +1839,6 @@ fn finish(acc: Acc, mode: Mode, env: &Env) -> Value {
     Value::Literal(full)
 }
 
-/// Bash reads `<&N` / `>&N` with the word already dequoted.
-fn parse_fd_target(s: &str) -> Option<FdTarget> {
-    if s == "-" {
-        return Some(FdTarget::Close);
-    }
-    let digits = |d: &str| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit());
-    if let Some(d) = s.strip_suffix('-') {
-        if digits(d) {
-            return d.parse().ok().map(FdTarget::Move);
-        }
-    }
-    if digits(s) {
-        return s.parse().ok().map(FdTarget::Number);
-    }
-    None
-}
-
-fn conv_fd(fd: Option<ast::IoFd>) -> Result<Option<u32>, Cause> {
-    fd.map(|n| {
-        u32::try_from(n)
-            .map_err(|_| Cause::Unsupported(format!("negative fd {n} in a redirection")))
-    })
-    .transpose()
-}
-
-/// What a redirection does to stdin (fd 0), applied in order.
-fn apply_stdin(stdin: &mut StdinSource, r: &Redirect) {
-    let default_in = matches!(
-        r.op,
-        RedirOp::In | RedirOp::InOut | RedirOp::DupIn | RedirOp::HereDoc | RedirOp::HereString
-    );
-    let on_stdin = match r.fd {
-        Some(0) => true,
-        Some(_) => false,
-        None => default_in,
-    };
-    if !on_stdin {
-        return;
-    }
-    *stdin = match (r.op, &r.target) {
-        (RedirOp::In | RedirOp::InOut, RedirTarget::Path(v)) => StdinSource::File(v.clone()),
-        (RedirOp::In, RedirTarget::ProcessSubstitution) => StdinSource::FromCommand,
-        (RedirOp::DupIn, RedirTarget::Fd(t)) => StdinSource::Fd(t.clone()),
-        (RedirOp::HereDoc, RedirTarget::HereDoc(h)) => match &h.body {
-            Value::Literal(b) => StdinSource::Literal(b.clone()),
-            Value::Undetermined(r) => StdinSource::Undetermined(r.clone()),
-        },
-        (RedirOp::HereString, RedirTarget::HereString(v)) => match v {
-            Value::Literal(s) => StdinSource::Literal(format!("{s}\n")),
-            Value::Undetermined(r) => StdinSource::Undetermined(r.clone()),
-        },
-        _ => StdinSource::Undetermined("stdin: redirected in an unmodelled way".into()),
-    };
-}
-
 /// The span of a redirection: the target word, extended back over the
 /// operator (and the fd number when there is one). Falls back to the word.
 fn redir_span(text: &Text, w: &ast::Word, fd: Option<u32>) -> Range<usize> {
@@ -1890,109 +1911,8 @@ fn compound_loc(cc: &ast::CompoundCommand) -> Option<&SourceSpan> {
     })
 }
 
-/// `set` arguments that change nothing this evaluator tracks.
-fn set_is_harmless(args: &[Word]) -> bool {
-    const SAFE_O: &[&str] = &[
-        "errexit",
-        "nounset",
-        "pipefail",
-        "xtrace",
-        "verbose",
-        "noglob",
-        "noclobber",
-        "errtrace",
-        "functrace",
-        "notify",
-        "monitor",
-        "hashall",
-        "allexport",
-    ];
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        let s = match &a.value {
-            Value::Literal(s) => s.as_str(),
-            Value::Undetermined(_) => return false,
-        };
-        if s == "--" {
-            return true;
-        }
-        if s == "-o" || s == "+o" {
-            match it.next().map(|w| &w.value) {
-                Some(Value::Literal(o)) if SAFE_O.contains(&o.as_str()) => continue,
-                _ => return false,
-            }
-        }
-        let flags = match s.strip_prefix('-').or_else(|| s.strip_prefix('+')) {
-            Some(f) if !f.is_empty() => f,
-            _ => return false,
-        };
-        if !flags.chars().all(|c| "euxvfnhbmCBEHPTa".contains(c)) {
-            return false;
-        }
-    }
-    true
-}
-
-/// What the next pipeline stage reads from a stage: `Literal` only for a
-/// simple `echo` with literal operands and no option / backslash, or a
-/// `printf` with one literal format holding only simple escapes, without
-/// redirections; anything else is `FromCommand` (content not determined).
-fn piped_stdin(stage: Option<&SimpleCommand>) -> StdinSource {
-    let sc = match stage {
-        Some(sc) if sc.redirects.is_empty() => sc,
-        _ => return StdinSource::FromCommand,
-    };
-    let mut lits = Vec::new();
-    for w in &sc.argv {
-        match &w.value {
-            Value::Literal(s) => lits.push(s.as_str()),
-            Value::Undetermined(_) => return StdinSource::FromCommand,
-        }
-    }
-    let out = match lits.split_first() {
-        Some((&"echo", args)) => {
-            let opt = args.first().is_some_and(|a| {
-                a.len() > 1 && a.starts_with('-') && a.chars().skip(1).all(|c| "neE".contains(c))
-            });
-            (!opt && !args.iter().any(|a| a.contains('\\')))
-                .then(|| format!("{}\n", args.join(" ")))
-        }
-        Some((&"printf", [fmt])) if !fmt.starts_with('-') => printf_simple(fmt),
-        _ => None,
-    };
-    out.map_or(StdinSource::FromCommand, StdinSource::Literal)
-}
-
 /// [`resolve`] against a [`SimpleCommand::cwd`] value (for
 /// `ProgramSource::File`).
 pub(super) fn resolve_at(cwd: &Value, v: Value) -> Value {
     resolve(&Cwd::from_value(cwd), v)
-}
-
-fn printf_simple(fmt: &str) -> Option<String> {
-    let mut out = String::new();
-    let mut it = fmt.chars();
-    while let Some(c) = it.next() {
-        match c {
-            '\\' => out.push(match it.next()? {
-                'n' => '\n',
-                't' => '\t',
-                'r' => '\r',
-                'a' => '\x07',
-                'b' => '\x08',
-                'f' => '\x0c',
-                'v' => '\x0b',
-                '\\' => '\\',
-                '"' => '"',
-                '\'' => '\'',
-                _ => return None,
-            }),
-            '%' => match it.next()? {
-                '%' => out.push('%'),
-                _ => return None,
-            },
-            c => out.push(c),
-        }
-    }
-    Some(out)
 }

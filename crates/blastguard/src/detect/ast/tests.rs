@@ -1009,3 +1009,207 @@ mod subscript_command_substitution_fail_open {
         let _ = known("read 'a[1]' </dev/null");
     }
 }
+
+/// User ruling 2026-11-16: a subscript or arithmetic expression whose value
+/// comes from the environment (not fixed by the command text) is
+/// `Undetermined(Unsupported)`, because bash re-evaluates it recursively.
+mod env_arith_unsupported {
+    use super::*;
+
+    fn assert_unsupported(command: &str) {
+        match analyze(command) {
+            Analysis::Undetermined(Cause::Unsupported(_)) => {}
+            other => panic!(
+                "{command:?} depends on an environment value in a subscript/arithmetic \
+                 context; expected Undetermined(Unsupported), got {other:#?}"
+            ),
+        }
+    }
+
+    fn assert_known(command: &str) {
+        match analyze(command) {
+            Analysis::Known(_) => {}
+            other => panic!("{command:?} is fully determined by its text; got {other:#?}"),
+        }
+    }
+
+    #[test]
+    fn read_subscript_unassigned_var_is_unsupported() {
+        assert_unsupported("read 'a[$x]' </dev/null");
+    }
+
+    #[test]
+    fn read_subscript_bare_name_is_unsupported() {
+        assert_unsupported("read 'a[i]' </dev/null");
+    }
+
+    #[test]
+    fn unset_subscript_bare_name_is_unsupported() {
+        assert_unsupported("unset 'a[i]'");
+    }
+
+    #[test]
+    fn printf_v_subscript_bare_name_is_unsupported() {
+        assert_unsupported("printf -v 'a[i]' hi");
+    }
+
+    #[test]
+    fn arith_expansion_unassigned_var_is_unsupported() {
+        assert_unsupported("echo $(( x + 1 ))");
+    }
+
+    #[test]
+    fn arith_command_unassigned_var_is_unsupported() {
+        assert_unsupported("(( x ))");
+    }
+
+    #[test]
+    fn double_bracket_arith_unassigned_var_is_unsupported() {
+        assert_unsupported("[[ x -eq 1 ]]");
+    }
+
+    #[test]
+    fn let_unassigned_var_is_unsupported() {
+        assert_unsupported("let 'y = x'");
+    }
+
+    #[test]
+    fn assignment_with_unknown_subscript_is_unsupported() {
+        assert_unsupported("a[i]=v");
+    }
+
+    #[test]
+    fn control_read_literal_subscript_stays_known() {
+        assert_known("read 'a[1]' </dev/null");
+    }
+
+    #[test]
+    fn control_read_assigned_var_subscript_stays_known() {
+        assert_known("x=1; read 'a[$x]' </dev/null");
+    }
+
+    #[test]
+    fn control_arith_assigned_var_stays_known() {
+        assert_known("i=2; echo $(( i + 1 ))");
+    }
+
+    #[test]
+    fn control_double_bracket_literal_arith_stays_known() {
+        assert_known("[[ 3 -eq 1 ]]");
+    }
+
+    #[test]
+    fn control_literal_subscript_assignment_stays_known() {
+        assert_known("a[0]=v");
+    }
+
+    // The declare family binds a compound value; bash arithmetic-evaluates
+    // each indexed-array key (observed: `i='x[$(echo RAN >&2)]'; declare -a
+    // a=([i]=1)` runs the substitution).
+    #[test]
+    fn declare_dash_a_compound_bare_name_key_is_unsupported() {
+        assert_unsupported("declare -a a=([i]=1)");
+    }
+
+    #[test]
+    fn declare_compound_bare_name_key_is_unsupported() {
+        assert_unsupported("declare a=([i]=1)");
+    }
+
+    #[test]
+    fn local_dash_a_compound_bare_name_key_is_unsupported() {
+        assert_unsupported("local -a a=([i]=1)");
+    }
+
+    #[test]
+    fn typeset_dash_a_compound_bare_name_key_is_unsupported() {
+        assert_unsupported("typeset -a a=([i]=1)");
+    }
+
+    #[test]
+    fn control_declare_compound_literal_key_stays_known() {
+        assert_known("declare -a a=([0]=1)");
+    }
+
+    #[test]
+    fn control_declare_compound_assigned_var_key_stays_known() {
+        assert_known("i=2; declare -a a=([i]=1)");
+    }
+}
+
+mod env_arith_followups {
+    use super::*;
+
+    fn assert_unsupported(command: &str) {
+        match analyze(command) {
+            Analysis::Undetermined(Cause::Unsupported(_)) => {}
+            other => panic!(
+                "{command:?} depends on an environment value in an arithmetic context; \
+                 expected Undetermined(Unsupported), got {other:#?}"
+            ),
+        }
+    }
+
+    fn assert_known(command: &str) {
+        match analyze(command) {
+            Analysis::Known(_) => {}
+            other => panic!("{command:?} is fully determined by its text; got {other:#?}"),
+        }
+    }
+
+    /// The `cat` redirect target of a Known analysis.
+    fn cat_target(command: &str) -> RedirTarget {
+        let s = known(command);
+        let cat = one_named(&s, "cat");
+        one_redirect(cat).target.clone()
+    }
+
+    fn assert_target_undetermined(command: &str) {
+        match cat_target(command) {
+            RedirTarget::Path(Value::Undetermined(_)) => {}
+            other => panic!("{command:?}: expected Path(Undetermined), got {other:#?}"),
+        }
+    }
+
+    // (A) declare args are key-checked in argument order: `i` is reassigned to
+    // a non-integer literal before the compound's key `[i]` is evaluated.
+    #[test]
+    fn declare_args_checked_in_order_reassigned_key_is_unsupported() {
+        assert_unsupported("declare i='x[$(c)]' a=([i]=1)");
+    }
+
+    // (B) `declare -a a=(x y)` must not bind $a as the literal "(x y)".
+    // NOTE: RED was not observed against the pre-fix evaluator (43ede5450);
+    // this test passed there too, so it is only a regression guard, not
+    // evidence that the fix changed this behaviour.
+    #[test]
+    fn declare_dash_a_compound_is_not_bound_as_literal_string() {
+        assert_target_undetermined("declare -a a=(x y); cat > $a");
+    }
+
+    // (C) an undetermined option word may have made `n` an integer, so a later
+    // `n=$Y` is arithmetic on an environment value.
+    #[test]
+    fn declare_undetermined_option_word_may_make_integer() {
+        assert_unsupported("declare $opt n=1; n=$Y; cat > /tmp/f");
+    }
+
+    #[test]
+    fn control_declare_readonly_plain_assignment_stays_known() {
+        assert_known("declare -r n=1; cat > /tmp/f");
+    }
+
+    // (D) a non-integer compound key havocs tracked variables.
+    #[test]
+    fn non_integer_compound_key_havocs_tracked_var() {
+        assert_target_undetermined("x=/a; a=([x=3]=v); cat > $x");
+    }
+
+    #[test]
+    fn control_literal_compound_key_keeps_tracked_var() {
+        assert_eq!(
+            cat_target("x=/a; a=([0]=v); cat > $x"),
+            RedirTarget::Path(lit("/a"))
+        );
+    }
+}

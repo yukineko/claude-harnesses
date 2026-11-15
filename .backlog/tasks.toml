@@ -2777,6 +2777,8 @@ notes = """Observed live 2026-11-16: next --claim AUTO-CANCELLED 214b39b5 (close
 created_at = 1794764254
 updated_at = 1794764254
 weight = 0.0
+issue_number = 1809
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1809"
 rev = 0
 
 [task.repro]

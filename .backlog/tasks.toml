@@ -2357,3 +2357,31 @@ exit 101: ers/yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
      Running tests/backlog_20261115_python_c_spaced_exec_fail_open.rs (target/debug/deps/backlog_20261115_python_c_spaced_exec_fail_open-528e4870bc24d1f9)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_c_spaced_exec_fail_open`"""
+
+[[task]]
+id = "cf0bf4ca"
+title = "blastguard fail-open: exec 3<<<'chmod 777 /etc/hosts'; bash <&'3' (quoted fd) is Allow while <&3 is Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "F11. Observed 2026-11-15 at 0.2.603, re-observed by main with RED 784eba77f. bash strips quotes before the redirect, so <&'3' == <&3. Readings: (a) defect; (b) quoted fd treated as undeterminable -> but then must be Ask/Deny, never allow."
+created_at = 1794730681
+updated_at = 1794730681
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_quoted_numeric_dup_target -- --include-ignored"
+rev = "bdfdc064af6abf8c9d8cbde6b9f1ba790bfc7e4a"
+observed_at = 1794730681
+detail = """
+exit 101: d v0.2.608 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
+     Running tests/backlog_20261115_quoted_numeric_dup_target.rs (target/debug/deps/backlog_20261115_quoted_numeric_dup_target-c281c6c9d662af65)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_numeric_dup_target`"""

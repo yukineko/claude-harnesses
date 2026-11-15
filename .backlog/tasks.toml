@@ -1558,38 +1558,6 @@ exit 101: ofile [unoptimized + debuginfo] target(s) in 0.44s
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp`"""
 
 [[task]]
-id = "214b39b5"
-title = "condukt testscope: rerun guard keys tree identity on hook payload cwd, not on a leading cd target, so a rerun after editing the cd target tree is refused"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "testscope",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Side finding of run-20261114-110017-12373 (flow session b3435a5e), measured 2026-11-14 at e9d58cccb. crates/condukt/src/testscope.rs check_rerun / tree_identity(cwd) uses the hook payload cwd; a Bash call 'cd <worktree> && cargo test ...' whose payload cwd is another tree is keyed on the wrong tree, so after editing the cd-target tree the rerun is refused as unchanged. RED: crates/condukt/tests/backlog_20261114_testscope_cd_tree_identity.rs rerun_after_editing_the_cd_target_tree_is_allowed (panics at :138). Non-ignored control control_editing_payload_cwd_tree_allows_rerun passes. Observed in the wild: several rerun refusals during that run. Readings: (a) real defect (FP refusing a legitimate rerun); (b) intended (guard only keys payload cwd by design) - distinguish by whether testscope docs promise cd-target awareness. Fix must stay fail-closed when the cd target cannot be resolved."
-created_at = 1794624843
-updated_at = 1794624843
-weight = 0.0
-issue_number = 1749
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1749"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261114_testscope_cd_tree_identity -- --ignored rerun_after_editing_the_cd_target_tree_is_allowed"
-rev = "e9d58cccb086bd62368e4c702f3f037f71c9497d"
-observed_at = 1794624843
-detail = """
-exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.96s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
-     Running tests/backlog_20261114_testscope_cd_tree_identity.rs (target/debug/deps/backlog_20261114_testscope_cd_tree_identity-eb881238f9300bcf)
-error: test failed, to rerun pass `-p condukt --test backlog_20261114_testscope_cd_tree_identity`"""
-
-[[task]]
 id = "9d88d739"
 title = """blastguard FP: quoted heredoc bodies judged as code (python3 - <<'EOF' with a backticked gh span is Ask; .rs append heredoc with "rm -rf ./a" literal followed by a command is Deny)"""
 project = "/Users/yuki/src/harness"
@@ -2354,33 +2322,6 @@ exit 101: -worktrees/session-6dcca0ad/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.21s
      Running tests/backlog_20261115_quoted_heredoc_backtick_commit_msg_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_backtick_commit_msg_fp-17f6762ef1215f15)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_heredoc_backtick_commit_msg_fp`"""
-
-[[task]]
-id = "b4a2780b"
-title = 'condukt testscope: a task with recorded worktree "" owns every cwd, so check_task_scope denies every cargo test'
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = '''Observed 2026-11-15 at main 2ace975d1: every cargo test in every cwd of the harness project was denied by condukt testscope. Trigger: stale run state run-20260702-081932 (task requeue-lock, status verified, "worktree": ""), quarantined at ~/.condukt/quarantine/run-20260702-081932.json. Mechanism: crates/condukt/src/subagent_stop.rs:160-175 tasks_owning_cwd skips only worktree None; for Some("") cwd.starts_with("") is true, so the task owns every cwd; crates/condukt/src/testscope.rs:853 PathBuf::from(task.worktree.unwrap_or_default()) = "" and worktree_changed_tests runs git with current_dir("") -> ENOENT -> undetermined Deny. RED (independent author) at 14f889dd9 (branch red/testscope-empty-worktree-20261115), verbatim: 'repo root with a stale task whose worktree is "": expected allow (empty stdout), got "{...\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"condukt testscope cannot determine whether this test is in a condukt task's scope (which tests worktree  changed is unknown: git diff --name-only main...HEAD: No such file or directory (os error 2)), so it is refused: ...'. In-test control (same repo before the "" worktree is written) is allowed. Readings: (a) defect - an empty recorded worktree names no directory and must not own an unrelated cwd; (b) intended - fail-closed on malformed run state. Tell apart: under (b) the reason would name the malformed run state; the observed reason claims cwd is inside worktree "" and fails a git diff in a nonexistent dir, i.e. ownership misattributed. Fix direction: an empty or relative recorded worktree must not own every cwd (skip or surface it as malformed state, not as an owner), while genuinely owned cwds stay fail-closed (pinned by testscope_enforcement_20261114.rs c_unrelated_existing_test_in_task_worktree_is_denied). Same pattern exists in resolve_owner (subagent_stop.rs:118/137). DOES NOT PROVE: relative non-empty worktree handling; how "" was written.'''
-created_at = 1794732006
-updated_at = 1794732006
-weight = 0.0
-issue_number = 1794
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1794"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261115_testscope_empty_worktree_owns_every_cwd -- --ignored empty_string_worktree_task_does_not_own_unrelated_cwd"
-rev = "14f889dd93aa4f81081f00146e49639b8b9fd5a1"
-observed_at = 1794732006
-detail = """
-exit 101: rness-wt-red-empty-worktree/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.36s
-     Running tests/backlog_20261115_testscope_empty_worktree_owns_every_cwd.rs (target/debug/deps/backlog_20261115_testscope_empty_worktree_owns_every_cwd-bfa1f975ba682c1a)
-error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_empty_worktree_owns_every_cwd`"""
 
 [[task]]
 id = "a826bdab"

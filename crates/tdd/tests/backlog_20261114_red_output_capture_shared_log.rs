@@ -83,7 +83,6 @@ const A_CMD: &str = "echo AAA-START; sleep 2; echo AAA-END; exit 1";
 const B_CMD: &str = "sleep 1; echo BBB-ONLY; exit 1";
 
 #[test]
-#[ignore = "RED: 2026-11-14 concurrent tdd red runs share $HOME/.tdd/state/tmp/tdd-run.log so output_tail mixes worktrees — remove the ignore when fixed"]
 fn concurrent_red_runs_in_different_roots_do_not_mix_output_tail() {
     let d = unique_dir("red");
     let home = d.0.join("home");

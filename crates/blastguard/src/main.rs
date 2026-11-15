@@ -464,10 +464,12 @@ drifted from what Claude Code sends and needs updating.";
 
 /// Harden, write the block log, print, and only then record telemetry.
 ///
-/// The block log ([`blocklog`], user ruling 2026-11-14) is the one write that
-/// precedes the print, so a failure to record can be surfaced in the printed
-/// reason; it is panic-guarded in [`record_block`] and can only append text to
-/// the reason, never change the verdict. Everything said below about
+/// The block log ([`blocklog`], user ruling 2026-11-14) and the relay record
+/// (a subagent's queued Ask, [`relay_annotation`]; a main-session deny of a
+/// relayed command, [`relay_denial_annotation`]) are the writes that precede
+/// the print, so a failure to record can be surfaced in the printed reason;
+/// each is panic-guarded and can only append text to the reason, never change
+/// the verdict. Everything said below about
 /// telemetry concerns the overwatch ledger write, which stays after the print.
 ///
 /// # The order is the invariant
@@ -568,7 +570,60 @@ fn emit(
         blocklog::DecisionKind::Deny
     };
 
-    emit_line_annotated(decision, input, actor, None, BlockSource { raw, kind });
+    // A main-session Deny of a Bash call may be the re-run of a relayed
+    // subagent Ask (backlog b72b1c4d): record it on the matching entry. The
+    // verdict is already fixed; this can only append a line to its reason.
+    let annotation = match &decision {
+        Decision::Deny(reason) => relay_denial_annotation(reason, input),
+        _ => None,
+    };
+    emit_line_annotated(
+        decision,
+        input,
+        actor,
+        annotation.as_deref(),
+        BlockSource { raw, kind },
+    );
+}
+
+/// Record a main-session `Deny` on the relay entry whose `cwd` and command are
+/// byte-identical to this call's ([`relay::mark_denied`]) and return the line
+/// appended to the printed reason.
+///
+/// `None` when the call is not a parsed Bash command or no entry matched (an
+/// absent queue included). A queue that cannot be read or written, or a panic
+/// while doing so, records NOTHING (an undetermined match never marks an
+/// entry) and is annotated as a warning, so the failure to record is visible
+/// where the agent reads the deny. Runs after the verdict is decided and
+/// cannot change it.
+fn relay_denial_annotation(deny_reason: &str, input: Option<&HookInput>) -> Option<String> {
+    let input = input?;
+    let command = bash_command(input)?;
+    let session = relay::session_of(&input.session_id);
+    let cwd = input.cwd.clone();
+    let dir = relay::relay_dir();
+    let reason = deny_reason.to_string();
+    let marked = std::panic::catch_unwind(move || {
+        relay::mark_denied(&dir, &session, &cwd, &command, &reason)
+    });
+    match marked {
+        Ok(Ok(None)) => None,
+        Ok(Ok(Some(id))) => Some(format!(
+            "\n\nblastguard relay: this is the re-run of relayed subagent Ask {id}; the denial is \
+             recorded on it. It stays pending on this session's Stop until you record the outcome \
+             with `blastguard relay dismiss {id} --reason \"<why>\"` (and tell the subagent)."
+        )),
+        Ok(Err(why)) => Some(format!(
+            "\n\nblastguard relay: WARNING could not check or record whether this denied call is \
+             the re-run of a relayed subagent Ask ({why}); nothing was recorded."
+        )),
+        Err(_) => Some(
+            "\n\nblastguard relay: WARNING could not check or record whether this denied call is \
+             the re-run of a relayed subagent Ask (internal error while reading the relay \
+             queue); nothing was recorded."
+                .to_string(),
+        ),
+    }
 }
 
 /// What the block log needs beyond the decision: the raw stdin payload (the

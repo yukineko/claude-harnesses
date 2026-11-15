@@ -53,7 +53,10 @@ fn forged_agent_id_is_not_queued_as_pending_relay() {
     let transcript = root.join("transcript.jsonl");
     std::fs::write(
         &transcript,
-        format!("{}\n", json!({"type":"user","sessionId":SESSION,"message":{"role":"user","content":"hi"}})),
+        format!(
+            "{}\n",
+            json!({"type":"user","sessionId":SESSION,"message":{"role":"user","content":"hi"}})
+        ),
     )
     .unwrap();
 
@@ -71,7 +74,8 @@ fn forged_agent_id_is_not_queued_as_pending_relay() {
     let o = run(&root, &[], &pre);
     let v: Value = serde_json::from_slice(&o.stdout).expect("verdict json");
     assert_eq!(
-        v["hookSpecificOutput"]["permissionDecision"], "deny",
+        v["hookSpecificOutput"]["permissionDecision"],
+        "deny",
         "control: the forged call must still be judged (hardened Ask -> deny); stdout: {}",
         String::from_utf8_lossy(&o.stdout)
     );

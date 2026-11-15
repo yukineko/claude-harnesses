@@ -77827,3 +77827,162 @@ rev = "202d33f253a309ae4f937db656f1d4694d9ae4c1"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "cc8eed3f"
+title = "blastguard fail-open: bash <&$fd (stdin dup from an expansion-spelled fd) is Allow in main and subagent"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. plain `bash <&$fd` => allow/allow (and before t1's fix also `fd=3; exec 3<<< 'chmod 777 /etc/hosts'; bash <&$fd`). The fd source is undeterminable, so it must be Ask in main / Deny in subagent. Readings: (a) defect - an expansion-spelled stdin dup is not modelled and falls to allow; (b) intended - an fd nothing on the line opens is treated as inherited and harmless. Tell apart: compare with `bash <&3` (Ask in main) - the two should not differ."
+created_at = 1794634290
+updated_at = 1794711966
+weight = 0.0
+issue_number = 1763
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1763"
+issue_closed_at = 1794711969
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_exec_fd_var_dup_reader -- --include-ignored"
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634290
+detail = """
+exit 101: v0.2.588 (/Users/yuki/.condukt/worktrees/run-20261114-125811-45041-integ/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261114_exec_fd_var_dup_reader.rs (target/debug/deps/backlog_20261114_exec_fd_var_dup_reader-466cc94938df81ce)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_exec_fd_var_dup_reader`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_exec_fd_var_dup_reader --test backlog_20261114_dup_target_quoted_dollar_fp"
+exit = 0
+passed = 7
+rev = "60294a8fe80675131c76fd527ba74709a50548fc"
+observed_at = 1794711960
+output_digest = "sha256:72109e8aa51ef0b664dd3735b0ea99c9c33f42ec05b727416b5f04eff6b4fe0c"
+excerpt = """
+
+running 4 tests
+test bash_dup_single_quoted_dollar_fd_should_allow ... ok
+test control_bash_dup_unquoted_dollar_fd_is_not_allow ... ok
+test control_bash_dup_double_quoted_dollar_fd_is_not_allow ... ok
+test bash_dup_backslash_escaped_dollar_fd_should_allow ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+
+running 3 tests
+test control_assign_and_echo_fd_is_allow ... ok
+test plain_bash_dup_var_fd_is_not_allowed ... ok
+test exec_herestring_then_bash_dup_var_fd_is_not_allowed ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+   Compiling blastguard v0.2.602 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.49s
+     Running tests/backlog_20261114_dup_target_quoted_dollar_fp.rs (target/debug/deps/backlog_20261114_dup_target_quoted_dollar_fp-d6ffa187e6940ede)
+     Running tests/backlog_20261114_exec_fd_var_dup_reader.rs (target/debug/deps/backlog_20261114_exec_fd_var_dup_reader-bb71adc9580b49f6)
+"""
+
+[task.closure.red]
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "2e5e080c"
+title = "blastguard fail-open: harmful program piped to python3 -m asyncio / PYTHONINSPECT=1 python3 script.py / python3 -c 'import code; code.interact()' is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. Side finding of 6f4ec5ce verification (verifier probe on t2 worktree). All three are allow/allow; each executes stdin (asyncio REPL printed '>>> 12345' for piped print(12345); PYTHONINSPECT likewise). program_source.rs python_reads_stdin_program covers only -i / -m code / -m pdb. Readings: (a) defect - more stdin-executing python modes; (b) intended - only flag-visible modes modelled. Tell apart: run the shapes with a benign print and observe stdin execution."
+created_at = 1794634367
+updated_at = 1794711972
+weight = 0.0
+issue_number = 1767
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1767"
+issue_closed_at = 1794711974
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_python_stdin_repl_variants -- --include-ignored"
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634367
+detail = """
+exit 101: rees/run-20261114-125811-45041-integ/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running tests/backlog_20261114_pipe_to_python_stdin_repl_variants.rs (target/debug/deps/backlog_20261114_pipe_to_python_stdin_repl_variants-582dfeec1c0cd7ab)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_pipe_to_python_stdin_repl_variants`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_pipe_to_python_stdin_repl_variants --test backlog_20261114_python_stdin_repl_quoted_module_and_name_fp --test backlog_20261115_python_c_benign_names_fp"
+exit = 0
+passed = 16
+rev = "60294a8fe80675131c76fd527ba74709a50548fc"
+observed_at = 1794711969
+output_digest = "sha256:9554817a0cc804d53a3880e219b4cfe2ec7caf8b11b63f9b3d4fe332dc16042b"
+excerpt = """
+
+running 3 tests
+test harmful_program_piped_to_python_m_asyncio_is_deny ... ok
+test control_harmful_program_piped_to_bare_python_is_deny ... ok
+test harmful_program_piped_to_code_interact_is_deny ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+
+running 9 tests
+test control_harmful_program_piped_to_code_interact_is_deny ... ok
+test control_harmful_program_piped_to_python_m_unquoted_asyncio_is_deny ... ok
+test harmful_program_piped_to_python_m_quoted_asyncio_is_deny ... ok
+test harmful_program_piped_to_python_m_asyncio_dunder_main_is_deny ... ok
+test harmful_program_piped_to_python_m_doublequoted_asyncio_is_deny ... ok
+test control_json_load_from_stdin_without_key_is_allow ... ok
+test regex_findall_on_stdin_read_is_allow ... ok
+test json_load_from_stdin_with_code_key_is_allow ... ok
+test stdin_code_variable_assignment_is_allow ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+
+running 4 tests
+test control_harmful_program_to_python_m_asyncio_is_deny ... ok
+test control_harmful_program_to_exec_input_is_deny ... ok
+test globals_name_lookup_in_python_c_is_not_deny ... ok
+test re_compile_in_python_c_is_not_deny ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+   Compiling blastguard v0.2.602 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
+     Running tests/backlog_20261114_pipe_to_python_stdin_repl_variants.rs (target/debug/deps/backlog_20261114_pipe_to_python_stdin_repl_variants-80c6c172c1373453)
+     Running tests/backlog_20261114_python_stdin_repl_quoted_module_and_name_fp.rs (target/debug/deps/backlog_20261114_python_stdin_repl_quoted_module_and_name_fp-5e9de8a8599eb323)
+     Running tests/backlog_20261115_python_c_benign_names_fp.rs (target/debug/deps/backlog_20261115_python_c_benign_names_fp-3f51c9cbad8943d5)
+"""
+
+[task.closure.red]
+rev = "84a565a34b22b9fad79b53b199fa96459440c69d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

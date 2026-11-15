@@ -208,7 +208,6 @@ fn assert_deny(fx: &Fx, cmd: &str) {
 // ---------------------------------------------------------------- RED: sed -i
 
 #[test]
-#[ignore = "RED: 2026-11-14 shape 1 main thread: S=lit; sed -i $S/full.py asks 'cannot resolve' — remove when fixed"]
 fn red_sed_scratch_var_main_thread() {
     let fx = fixture("s1");
     let wt = fx.wt();
@@ -221,7 +220,6 @@ fn red_sed_scratch_var_main_thread() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 shape 2: W=lit; sed -i $W/... is 'cannot resolve' — remove when fixed"]
 fn red_sed_worktree_var_semicolon() {
     let fx = fixture("s2");
     let lit = sed_cargo_literal(&fx);
@@ -237,7 +235,6 @@ fn red_sed_worktree_var_semicolon() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 W=\"lit\"; sed -i \"$W\"/... is 'cannot resolve' — remove when fixed"]
 fn red_sed_quoted_assignment_and_quoted_ref() {
     let fx = fixture("s2q");
     let lit = sed_cargo_literal(&fx);
@@ -253,7 +250,6 @@ fn red_sed_quoted_assignment_and_quoted_ref() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 W=lit && sed -i ${W}/... is 'cannot resolve' — remove when fixed"]
 fn red_sed_brace_ref_after_and_and() {
     let fx = fixture("s2b");
     let lit = sed_cargo_literal(&fx);
@@ -269,7 +265,6 @@ fn red_sed_brace_ref_after_and_and() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 export W=lit; sed -i $W/... is 'cannot resolve' — remove when fixed"]
 fn red_sed_export_assignment() {
     let fx = fixture("s2e");
     let lit = sed_cargo_literal(&fx);
@@ -285,7 +280,6 @@ fn red_sed_export_assignment() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 W=lit<newline>sed -i $W/... is 'cannot resolve' — remove when fixed"]
 fn red_sed_newline_separated() {
     let fx = fixture("s2n");
     let lit = sed_cargo_literal(&fx);
@@ -310,7 +304,6 @@ fn tdd_literal(fx: &Fx) -> String {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 shape 3: T=lit; \"$T\"bin/tdd is 'command word ... only exists at run time' — remove when fixed"]
 fn red_command_word_quoted_concat() {
     let fx = fixture("t3");
     let lit = tdd_literal(&fx);
@@ -326,7 +319,6 @@ fn red_command_word_quoted_concat() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 T=lit && ${T}bin/tdd is 'command word ... only exists at run time' — remove when fixed"]
 fn red_command_word_brace_concat_after_and_and() {
     let fx = fixture("t3b");
     let lit = tdd_literal(&fx);
@@ -342,7 +334,6 @@ fn red_command_word_brace_concat_after_and_and() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 T=lit; $T/bin/tdd is 'command word ... only exists at run time' — remove when fixed"]
 fn red_command_word_unquoted_concat() {
     let fx = fixture("t3c");
     let lit = format!(
@@ -361,7 +352,6 @@ fn red_command_word_unquoted_concat() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 shape 4 (export form): export B=lit; $B list is 'command word $B ... run time' — remove when fixed"]
 fn red_command_word_export_assignment() {
     let fx = fixture("b4e");
     let bl = fx.backlog_bin();
@@ -374,7 +364,6 @@ fn red_command_word_export_assignment() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 shape 5: W=lit; $W/.../*.rs as command word is 'only exists at run time' while the literal is allow — remove when fixed"]
 fn red_glob_under_resolved_dir_as_command_word() {
     let fx = fixture("g5m");
     let wt = fx.wt();
@@ -389,7 +378,6 @@ fn red_glob_under_resolved_dir_as_command_word() {
 // ------------------------------------------------- RED: system harm via export
 
 #[test]
-#[ignore = "RED: 2026-11-14 export F=/etc/hosts; sed -i $F is ask 'cannot resolve' instead of system-harm deny — remove when fixed"]
 fn red_export_etc_hosts_is_system_harm_deny() {
     let fx = fixture("c8");
     assert_deny(&fx, "export F=/etc/hosts; sed -i '' 's/a/b/' $F");

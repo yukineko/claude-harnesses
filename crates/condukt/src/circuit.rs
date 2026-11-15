@@ -78,7 +78,7 @@ pub enum CircuitReason {
     /// times, and a long-lived session replays its whole (compacted) context on
     /// every turn. The remedy is a hand-off to a FRESH session, not a retry, so
     /// this is its own reason rather than a `Stall`. Lowest precedence: every
-    /// other reason (cost, failures, stall, unmeasurable idle) is reported
+    /// other reason (cost, failures, stall, unmeasurable idle/budget/streak) is reported
     /// under its own label first.
     SessionCompacted,
 }
@@ -700,19 +700,23 @@ pub fn run_circuit_check(
         compactions.unwrap_or(0),
         max_compactions,
     ) {
-        // All Trip verdicts (measured outcomes) keep their labels, including
-        // BudgetOverCap, Stall, FailureStreak. Fixed precedence: a measured
-        // outcome is not relabeled by an unmeasured input.
-        CircuitVerdict::Trip(reason) => CircuitVerdict::Trip(reason),
-        // Continue can be relabeled if one of the measured factors could not be
-        // determined. Budget unknown is tried first (highest cost), then streak
-        // unknown (if streak axis is on), then compactions unknown. Lowest
-        // precedence: every other outcome (measured or measured-unmeasured) is
-        // reported first.
-        CircuitVerdict::Continue if budget_unknown_reason.is_some() => {
+        // Precedence (highest first): every core Trip EXCEPT SessionCompacted
+        // (BudgetOverCap, FailureStreak, Stall, IdleUnmeasured) keeps its own
+        // label; then BudgetUnmeasured; then StreakUnmeasured (streak axis
+        // on); then SessionCompacted. So an unmeasured budget/streak outranks
+        // a compacted session (never Continue, never relabeled the other way),
+        // while a measured Stall keeps its label over an unmeasured budget.
+        CircuitVerdict::Trip(reason) if reason != CircuitReason::SessionCompacted => {
+            CircuitVerdict::Trip(reason)
+        }
+        CircuitVerdict::Trip(CircuitReason::SessionCompacted) | CircuitVerdict::Continue
+            if budget_unknown_reason.is_some() =>
+        {
             CircuitVerdict::Trip(CircuitReason::BudgetUnmeasured)
         }
-        CircuitVerdict::Continue if streak_cap > 0 && streak_unknown_reason.is_some() => {
+        CircuitVerdict::Trip(CircuitReason::SessionCompacted) | CircuitVerdict::Continue
+            if streak_cap > 0 && streak_unknown_reason.is_some() =>
+        {
             CircuitVerdict::Trip(CircuitReason::StreakUnmeasured)
         }
         // A transcript that was located but could not be counted is not a

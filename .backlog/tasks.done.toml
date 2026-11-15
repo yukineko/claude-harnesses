@@ -78734,3 +78734,121 @@ rev = "95fbd0631f8642c53b2f5e7ad960e95f24fb4374"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "84bcfe57"
+title = "tdd red records a RED proof when the test command never ran (judge_red ignores spawn_error)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "proof.rs:41 judge_red(passed) only checks passed; proof.rs:221 ignores out.spawn_error. harness-core gate/runner.rs:103-111 spawn_failed => passed:false,exit_code:None,spawn_error:Some. Observed: with a regular file at $HOME/.tdd/state, 'tdd red' exits 0 printing 'RED recorded ... (could not open log file: Not a directory)' and writes .tdd/<task>.red.json although the command never ran. F->P oracle fail-open. Two readings (defect vs intended) documented in the test module doc. Repro: crates/tdd/tests/backlog_20261115_red_spawn_error_records_red.rs (branch backlog/tdd-red-spawn-error, commit 6848636f7)."
+created_at = 1794746168
+updated_at = 1794764009
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261115_red_spawn_error_records_red -- --include-ignored"
+rev = "6848636f7128e51e47400e5c11fc67a76251e99b"
+observed_at = 1794746168
+detail = """
+exit 101: v0.1.77 (/Users/yuki/src/.harness-worktrees/backlog-tdd-red-spawn-error/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.92s
+     Running tests/backlog_20261115_red_spawn_error_records_red.rs (target/debug/deps/backlog_20261115_red_spawn_error_records_red-c1bc05e7f5189bbb)
+error: test failed, to rerun pass `-p tdd --test backlog_20261115_red_spawn_error_records_red`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p tdd --test backlog_20261115_red_spawn_error_records_red"
+exit = 0
+passed = 2
+rev = "bbe7b7bac36670e5237f073d2ef0c829723aeaa9"
+observed_at = 1794764008
+output_digest = "sha256:5f52af4faa4799ebd6030faa68676f09a2318eed8e5e4be131d7cc5971577abc"
+excerpt = """
+
+running 2 tests
+test red_is_not_recorded_when_the_command_never_ran ... ok
+test control_failing_command_that_ran_records_red ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261115_red_spawn_error_records_red.rs (target/debug/deps/backlog_20261115_red_spawn_error_records_red-155d7cea77a01791)
+"""
+
+[task.closure.red]
+rev = "12ae96ea56b6093dbed91b10e51b071bd7206cf7"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "b8aa9d43"
+title = "condukt: state set failed on a verified task auto-rolls back the whole run state and git-resets the task branch"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-14 in run-20261114-161340-68728 (journal auto_rollback label verified:t1): marking verified t1 failed restored every task's status from the checkpoint (t2 back to running with its worktree deleted, t3/t4 worktree entries lost) and ran git reset --hard on t1's branch, discarding a later merge-of-main commit. User ruling 2026-11-15: fix as a bug (both the whole-run restore and the branch reset). RED by an independent author (sonnet): crates/condukt/tests/backlog_20261115_failed_verdict_rollback_scope.rs, observed 0 passed / 2 failed. NOTE: the existing test crates/condukt/tests/checkpoint_cli.rs::verified_task_that_fails_auto_rolls_back_and_journals pins the current behaviour and must be revisited by the fix (do not delete or loosen it outside that fix). Fix is out of scope of run-20261114-161340-68728."
+created_at = 1794680180
+updated_at = 1794764011
+weight = 0.0
+issue_number = 1784
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1784"
+issue_closed_at = 1794764013
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261115_failed_verdict_rollback_scope -- --include-ignored"
+rev = "509a7b57ceff1a739255e047e27185f7516f2609"
+observed_at = 1794680180
+detail = """
+exit 101: ki/.condukt/worktrees/run-20261114-161340-68728-side-reds/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.15s
+     Running tests/backlog_20261115_failed_verdict_rollback_scope.rs (target/debug/deps/backlog_20261115_failed_verdict_rollback_scope-a4b399bd240c9f02)
+error: test failed, to rerun pass `-p condukt --test backlog_20261115_failed_verdict_rollback_scope`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261115_failed_verdict_rollback_scope"
+exit = 0
+passed = 2
+rev = "bbe7b7bac36670e5237f073d2ef0c829723aeaa9"
+observed_at = 1794764009
+output_digest = "sha256:49313a89f17024c8094f0b5270de9f3c99b6cc59168625471f276eddfb9c2784"
+excerpt = """
+
+running 2 tests
+test a_failing_verified_task_leaves_other_tasks_status_untouched ... ok
+test b_failing_verified_task_does_not_move_its_worktree_branch_head ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.23s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261115_failed_verdict_rollback_scope.rs (target/debug/deps/backlog_20261115_failed_verdict_rollback_scope-8a2d00e3d6f70be9)
+"""
+
+[task.closure.red]
+rev = "f5cc4349f15d62e0c19d1bb973265493ed3bd802"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

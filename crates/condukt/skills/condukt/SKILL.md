@@ -542,9 +542,10 @@ worker / verifier の Bash も PreToolUse の `condukt testscope` が同じ規�
 untracked）だけ。`--lib`/`--bin`/`--doc` は `reproduction_tests` に同じ selector があるときだけ。だから
 `reproduction_tests` には worker が走らせるべき selector を `--test <file>` / `--lib` の形で書くこと。
 
-**初期 checkpoint (auto-rollback の復元フロア)**: ベースライン取得の直後、実装で run-state が動く前に
-run の初期 checkpoint を1本書く。これが無いと後段の auto-rollback (Phase 6) は `latest_checkpoint=None`
-で常に no-op になる (＝休眠) ため、ここが安全ネットの起点になる。checkpoint 書き込みは fail-soft
+**初期 checkpoint (明示 `condukt state rollback` の復元フロア)**: ベースライン取得の直後、実装で run-state が動く前に
+run の初期 checkpoint を1本書く。これが無いと明示 rollback の復元先が無くなる。なお verified→failed への遷移は
+checkpoint を復元せず branch も reset しない (そのタスクだけが `failed` になり journal に `verified_failed` が残る。
+backlog b8aa9d43)。checkpoint 書き込みは fail-soft
 (失敗しても log されるだけでターンを壊さない) なので無条件に呼んでよい:
 ```bash
 condukt state checkpoint --run "$RID" --label baseline   # 復元フロア: 実装前の run-state を snapshot
@@ -1088,9 +1089,9 @@ snippet を打つのではなく **condukt バイナリが決定論的に発火�
      --model <worker に使ったモデル> ${GAUGE_COST:+--cost "$GAUGE_COST"}
 
    # タスクが verified になった直後に checkpoint を1本書く: これで「良好な run-state」が
-   # snapshot され、後続タスクが後で fail (verified→failed) したとき auto-rollback
-   # (main.rs の verified→failed 遷移) が直前のこの checkpoint へ復元できる。書かないと
-   # 復元対象が生じず安全ネットは休眠のまま。checkpoint は fail-soft なので無条件に呼ぶ。
+   # snapshot され、明示的な `condukt state rollback` で直前のこの checkpoint へ復元できる。
+   # verified→failed 遷移は自動では復元しない (そのタスクのみ failed、branch は reset されない)。
+   # checkpoint は fail-soft なので無条件に呼ぶ。
    condukt state checkpoint --run "$RID" --label "verified:<t.id>"
    ```
    `--model` を省略すると decomposition の `suggested_model` にフォールバックし、`--agent-id`/`--cost`

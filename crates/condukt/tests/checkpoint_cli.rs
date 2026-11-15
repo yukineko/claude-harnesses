@@ -166,7 +166,7 @@ impl Fixture {
 }
 
 #[test]
-fn verified_task_that_fails_auto_rolls_back_and_journals() {
+fn verified_task_that_fails_stays_failed_without_restore_and_journals() {
     let fx = Fixture::new("autorollback");
     let decomp = write_decomp(&fx);
     let init = fx.condukt(&["state", "init", "--file", decomp.to_str().unwrap()]);
@@ -181,30 +181,35 @@ fn verified_task_that_fails_auto_rolls_back_and_journals() {
     ]);
     assert!(verify.status.success(), "verify failed: {verify:?}");
 
-    // A verified task that now FAILS must auto-roll-back to the checkpoint.
+    // A verified task that now FAILS changes only itself (backlog b8aa9d43):
+    // no checkpoint restore.
     let fail = fx.condukt(&[
         "state", "set", "--run", &rid, "--task", "t1", "--status", "failed",
     ]);
     assert!(fail.status.success(), "fail-set failed: {fail:?}");
 
-    // Run-state restored to the snapshot: task is pending again, not failed.
+    // The task ends `failed` — NOT restored to the pending snapshot.
     let show = fx.condukt(&["state", "show", "--run", &rid]);
     let after = String::from_utf8_lossy(&show.stdout);
     assert!(
-        after.contains("\"status\": \"pending\"") || after.contains("Pending"),
-        "auto-rollback did not restore snapshot: {after}"
+        after.contains("\"status\": \"failed\""),
+        "task is not failed after verified->failed: {after}"
     );
     assert!(
-        !after.contains("failed"),
-        "task still failed after auto-rollback: {after}"
+        !after.contains("\"status\": \"pending\""),
+        "verified->failed restored the snapshot: {after}"
     );
 
-    // The auto-rollback is journaled.
+    // The transition is journaled as verified_failed, not as an auto_rollback.
     let journal = fx.state_dir_journal(&rid);
     let jtext = std::fs::read_to_string(&journal).unwrap();
     assert!(
-        jtext.contains("auto_rollback"),
-        "no auto_rollback journal entry: {jtext}"
+        jtext.contains("verified_failed"),
+        "no verified_failed journal entry: {jtext}"
+    );
+    assert!(
+        !jtext.contains("auto_rollback"),
+        "a restore was journaled although none happens: {jtext}"
     );
 }
 

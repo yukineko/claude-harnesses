@@ -134,7 +134,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autoflow"
-version = "0.1.49"
+version = "0.1.50"
 dependencies = [
  "clap",
  "harness-core",
@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.127"
+version = "0.3.128"
 dependencies = [
  "anyhow",
  "clap",
@@ -214,7 +214,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.655"
+version = "0.2.656"
 dependencies = [
  "brush-parser",
  "globset",
@@ -434,7 +434,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.427"
+version = "0.7.428"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -468,7 +468,7 @@ dependencies = [
 
 [[package]]
 name = "context-governor"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "anyhow",
  "harness-core",
@@ -1230,7 +1230,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.120"
+version = "0.2.121"
 dependencies = [
  "anyhow",
  "clap",

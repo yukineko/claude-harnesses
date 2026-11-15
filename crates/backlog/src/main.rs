@@ -903,6 +903,12 @@ fn run(cli: Cli) -> Result<()> {
                     tags.push(p);
                 }
             }
+            // User ruling 2026-11-14: refused BEFORE the repro runs and before
+            // any gh / store write.
+            if let Some(why) = task::blastguard_classification_error(&title, &tags) {
+                eprintln!("backlog add: {why}");
+                std::process::exit(2);
+            }
             let now = now_unix();
             // GitHub mirror (Phase 1, one-way): resolve the project's git
             // remote URL (`git config --get remote.origin.url`, empty on any

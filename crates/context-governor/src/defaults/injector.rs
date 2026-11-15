@@ -18,7 +18,7 @@ use std::hash::{Hash, Hasher};
 use super::classifier::{split_sections, Section};
 use crate::handlers::ContextInjector;
 use crate::io::HookOutput;
-use crate::ledger::{was_injected, Action, Ledger, LedgerNode};
+use crate::ledger::{was_injected_in_session, Action, Ledger, LedgerNode};
 use crate::types::ItemId;
 use harness_core::hook::HookInput;
 
@@ -138,8 +138,12 @@ impl ContextInjector for DefaultInjector {
     /// heading-match path or the ToC-sentinel path), this method emits exactly
     /// one `Action::Injected` ledger row as a pure side effect. The `{}` no-op
     /// paths (env unset, unreadable file, empty doc, no sections, no headings)
-    /// never emit a row. The returned `HookOutput` is byte-identical to what
-    /// `inject_for` would return — the ledger write is an invisible side effect.
+    /// never emit a row. The dedup and the row are keyed on the hook input's
+    /// `session_id`; an input with an empty `session_id` returns `{}` and writes
+    /// no row, because no session ledger can answer its dedup. Except for those
+    /// `{}` cases (empty `session_id`, or a dedup hit), the returned `HookOutput`
+    /// is byte-identical to what `inject_for` would return — the ledger write is
+    /// an invisible side effect.
     fn inject(&self, input: &HookInput) -> HookOutput {
         let path = match std::env::var("CONTEXT_GOVERNOR_REFERENCE_DOC") {
             Ok(p) if !p.is_empty() => p,
@@ -166,8 +170,17 @@ impl ContextInjector for DefaultInjector {
             // this session — observed via the ledger seen-state — skip the
             // re-injection entirely and write no new row, so the model never pays
             // for the same reference body twice.
+            //
+            // The dedup reads and the row is written in the ledger of the session
+            // named by the hook input's `session_id` — not `CLAUDE_CODE_SESSION_ID`
+            // (backlog 04f53dbe). An input with no `session_id` cannot name the
+            // ledger that would answer the dedup, so the injector does not inject
+            // rather than guess a session (no env fallback, no `default` bucket).
+            if input.session_id.is_empty() {
+                return HookOutput::default();
+            }
             let id = injection_id(text);
-            if was_injected(&input.cwd, id) {
+            if was_injected_in_session(&input.cwd, &input.session_id, id) {
                 return HookOutput::default();
             }
             let resident = (text.chars().count().div_ceil(4)).max(1) as u32;
@@ -178,7 +191,7 @@ impl ContextInjector for DefaultInjector {
                 action: Action::Injected,
                 reason: "reference-injection",
             };
-            Ledger::open(&input.cwd).append(&node, resident);
+            Ledger::open_session(&input.cwd, &input.session_id).append(&node, resident);
         }
 
         out
@@ -339,6 +352,12 @@ Token: an opaque string identifying a session.
         // ── injection path ────────────────────────────────────────────────────
         std::env::set_var("CONTEXT_GOVERNOR_REFERENCE_DOC", doc_file.path());
         std::env::set_var("CONTEXT_GOVERNOR_STATE_DIR", state_dir.path());
+        // The injector writes the ledger of the input's `session_id`, while
+        // `rollup(cwd)` reads the ledger of `CLAUDE_CODE_SESSION_ID`. Pin the env
+        // to the input's session so `rollup` reads the ledger the injector wrote
+        // (and the no-op check below reads that same session, not an ambient one).
+        let prev_sid = std::env::var_os("CLAUDE_CODE_SESSION_ID");
+        std::env::set_var("CLAUDE_CODE_SESSION_ID", "ledger-test-session");
 
         let input: HookInput = serde_json::from_value(serde_json::json!({
             "session_id": "ledger-test-session",
@@ -395,6 +414,10 @@ Token: an opaque string identifying a session.
 
         // Clean up env.
         std::env::remove_var("CONTEXT_GOVERNOR_STATE_DIR");
+        match prev_sid {
+            Some(v) => std::env::set_var("CLAUDE_CODE_SESSION_ID", v),
+            None => std::env::remove_var("CLAUDE_CODE_SESSION_ID"),
+        }
     }
 
     /// Dedup (I6 observe→act): repeating the *same* injection within a session is
@@ -476,6 +499,82 @@ Token: an opaque string identifying a session.
         std::env::remove_var("CONTEXT_GOVERNOR_REFERENCE_DOC");
         std::env::remove_var("CONTEXT_GOVERNOR_STATE_DIR");
         std::env::remove_var("CLAUDE_CODE_SESSION_ID");
+    }
+
+    /// An input with an empty `session_id` names no ledger that could answer the
+    /// dedup, so the injector returns `{}` and writes no row anywhere — it does
+    /// not fall back to the env session or a `default` bucket. CONTROL: the same
+    /// prompt with a non-empty `session_id` does inject, so the `{}` is caused by
+    /// the missing session, not by the doc or prompt.
+    #[test]
+    fn inject_without_input_session_id_does_not_inject_or_record() {
+        use std::io::Write as _;
+        let _g = ENV_MUTEX_LOCK();
+
+        let mut doc_file = tempfile::NamedTempFile::new().expect("temp doc file");
+        doc_file
+            .write_all(b"# Endpoints\nGET /users - list all users\n")
+            .expect("write doc");
+        doc_file.flush().expect("flush");
+
+        let state_dir = tempfile::tempdir().expect("temp state dir");
+        let cwd = format!("/nonexistent/inject-no-session-{}", std::process::id());
+        let prev_sid = std::env::var_os("CLAUDE_CODE_SESSION_ID");
+        std::env::set_var("CONTEXT_GOVERNOR_REFERENCE_DOC", doc_file.path());
+        std::env::set_var("CONTEXT_GOVERNOR_STATE_DIR", state_dir.path());
+        std::env::set_var("CLAUDE_CODE_SESSION_ID", "no-input-session-env");
+
+        let mk = |session: &str| -> HookInput {
+            serde_json::from_value(serde_json::json!({
+                "session_id": session,
+                "transcript_path": "",
+                "cwd": cwd,
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": "show me the endpoints",
+            }))
+            .expect("build HookInput")
+        };
+
+        let out = DefaultInjector.inject(&mk(""));
+        assert_eq!(out.to_json(), "{}", "empty session_id must not inject");
+        let any_ledger = walk_has_ledger(state_dir.path());
+        assert!(
+            !any_ledger,
+            "empty session_id must not write a ledger row in any session"
+        );
+
+        let control = DefaultInjector.inject(&mk("no-input-session-control"));
+        assert!(
+            control.to_json().contains("additionalContext"),
+            "control: a non-empty session_id must inject; got {}",
+            control.to_json()
+        );
+        assert!(
+            walk_has_ledger(state_dir.path()),
+            "control: a non-empty session_id must write a ledger row"
+        );
+
+        std::env::remove_var("CONTEXT_GOVERNOR_REFERENCE_DOC");
+        std::env::remove_var("CONTEXT_GOVERNOR_STATE_DIR");
+        match prev_sid {
+            Some(v) => std::env::set_var("CLAUDE_CODE_SESSION_ID", v),
+            None => std::env::remove_var("CLAUDE_CODE_SESSION_ID"),
+        }
+    }
+
+    /// True iff any `ledger.jsonl` exists under `dir` (recursive).
+    fn walk_has_ledger(dir: &std::path::Path) -> bool {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return false;
+        };
+        entries.flatten().any(|e| {
+            let p = e.path();
+            if p.is_dir() {
+                walk_has_ledger(&p)
+            } else {
+                p.file_name().is_some_and(|n| n == "ledger.jsonl")
+            }
+        })
     }
 
     // ── proptest invariant ────────────────────────────────────────────────────

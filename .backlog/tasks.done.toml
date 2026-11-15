@@ -71810,6 +71810,272 @@ exit = 101
 kind = "behavioural"
 
 [[task]]
+id = "04f53dbe"
+title = "context-governor injector dedup keys on the hook input session_id, not env"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = '''
+Audit B item 11 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: cg-injector-dedup-env-session.
+Observed RED 2026-11-07 at c564dbb9 (base fc7b5dd9) (verbatim): session X's ledger was written for a hook whose input names session Y: .../audit-b11-env-x/ledger.jsonl = "{\"event\":\"injected\",...\"session\":\"audit-b11-env-x\"...}" / test result: FAILED
+Readings: (A) hook input session_id is authoritative (audit; pinned); (B) env session authoritative - memory says they always match in production, so defect is only test hermeticity. To tell apart: capture a live hook stdin/env pair and see whether session_id can differ from env. Extra: the written row's session field shows the env session although LedgerNode.session is set from input.session_id (Ledger::open overrides it).
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.'''
+created_at = 1793998442
+updated_at = 1794099776
+weight = 0.0
+issue_number = 1580
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1580"
+issue_closed_at = 1794099779
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p context-governor --test audit_b11_injector_session -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998931
+detail = """
+exit 101: ed in 0.00s
+
+   Compiling context-governor v0.1.28 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/context-governor)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.16s
+     Running tests/audit_b11_injector_session.rs (target/debug/deps/audit_b11_injector_session-b6edd85e362a07e4)
+error: test failed, to rerun pass `-p context-governor --test audit_b11_injector_session`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p context-governor --test audit_b11_injector_session -- --include-ignored"
+exit = 0
+passed = 1
+rev = "3fc0637f78d05048849d020e7f72a7e405545dd2"
+observed_at = 1794099726
+output_digest = "sha256:2ae3b0c1cccaa26960704748774bec8942c52215f8d945031ac6a977943f5ca7"
+excerpt = """
+
+running 1 test
+test injector_dedup_uses_the_hook_input_session_not_the_env_session ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/audit_b11_injector_session.rs (target/debug/deps/audit_b11_injector_session-6fa4915df60757ec)
+"""
+
+[task.closure.red]
+rev = "b88bbb123613d71c2523408b678f75c355c90919"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "4f9189da"
+title = "UserPromptSubmit blocks /flow unless permission_mode is bypassPermissions"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 17 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: flow-bypass-permissions-mode.
+Observed RED 2026-11-07 at ee3e6d1a (base fc7b5dd9) (verbatim): prompt "/flow" with permission_mode Some("auto") must be blocked until the session is in bypassPermissions; got exit Some(0) stdout="" stderr="" (same for "default" and None) / test result: FAILED. 2 passed; 3 failed
+Owner readings: (A) autoflow prompt-submit, the existing UserPromptSubmit hook that already knows /flow (pinned); (B) a new hook in the flow plugin (crates/flow is skill-only today) - test moves, property same. Either way prompt_submit_command goes through run_hook (never blocks); giving it a verdict means moving it off run_hook per CLAUDE.md s1. Missing permission_mode = cannot determine -> block (s3). Controls: /flow under bypassPermissions and 'hello' under auto pass.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998479
+updated_at = 1794099930
+weight = 0.0
+issue_number = 1583
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1583"
+issue_closed_at = 1794099935
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p autoflow --test audit_b_flow_bypass -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998936
+detail = """
+exit 101: 0 ignored; 0 measured; 0 filtered out; finished in 3.25s
+
+   Compiling autoflow v0.1.45 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/autoflow)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.84s
+     Running tests/audit_b_flow_bypass.rs (target/debug/deps/audit_b_flow_bypass-f04d2fd96b42467a)
+error: test failed, to rerun pass `-p autoflow --test audit_b_flow_bypass`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p autoflow --test audit_b_flow_bypass -- --include-ignored"
+exit = 0
+passed = 5
+rev = "a844ad3fff129ff7246ed1695fbacaf1484ae5ec"
+observed_at = 1794099862
+output_digest = "sha256:9a65ffab3f39cf56144ccab560e562bf4795d2d322a551cbe64da73215bd12db"
+excerpt = """
+
+running 5 tests
+test flow_prompt_in_auto_mode_is_blocked ... ok
+test control_flow_prompt_in_bypass_mode_is_not_blocked ... ok
+test flow_prompt_in_default_mode_is_blocked ... ok
+test flow_prompt_with_unknown_mode_is_blocked ... ok
+test control_ordinary_prompt_in_auto_mode_is_not_blocked ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/audit_b_flow_bypass.rs (target/debug/deps/audit_b_flow_bypass-ef13d90a4985ba5c)
+"""
+
+[task.closure.red]
+rev = "b88bbb123613d71c2523408b678f75c355c90919"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "4620134f"
+title = "pre-commit ratchet: refuse new thread::scope spawns without catch_unwind in gate crates"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 9 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: thread-scope-reraises-panic.
+Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): no pre-commit scanner refuses a newly added thread::scope spawn without catch_unwind in crates/blastguard/src/store.rs. Scanners accepting the wrapped control: ['check-backlog-store.py', 'check-clippy-lints.py', ... 'check-version-bumped.py']; their exit codes on the bare diff: {... all 0}
+Test runs every `run X.py` scanner in .githooks/pre-commit against a fixture repo (independent of the new scanner's name); only scanners passing the wrapped control count, so the new scanner must be runnable in a minimal fixture repo. Ratchet guard (an existing bare spawn is not refused) passes today. Runtime ~30s.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.
+User ruling 2026-11-07 (AskUserQuestion): accept the ~80s added to the pre-push python suites; do not shrink detection strength for speed."""
+created_at = 1793998463
+updated_at = 1794100183
+weight = 0.0
+issue_number = 1582
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1582"
+issue_closed_at = 1794100189
+rev = 4
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_audit_b_scoped_spawn_unwind.py"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998951
+detail = """
+exit 1: _pytest.outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_audit_b_scoped_spawn_unwind.py::ScopedSpawnNeedsCatchUnwind::test_added_scoped_spawn_without_catch_unwind_is_refused
+========================= 1 failed, 2 passed in 8.93s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_audit_b_scoped_spawn_unwind.py"
+exit = 0
+passed = 3
+rev = "f70bafb6fdb3186d6943edde751ee4f00f51389b"
+observed_at = 1794100125
+output_digest = "sha256:a4811d16d361b74d6e926d18899e1f3b24ceed4cf62311b47f8d097da31704fb"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-bf349dd5
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 3 items
+
+scripts/test_audit_b_scoped_spawn_unwind.py ...                          [100%]
+
+============================== 3 passed in 23.29s ==============================
+"""
+
+[task.closure.red]
+rev = "b88bbb123613d71c2523408b678f75c355c90919"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "32ac2ceb"
+title = "pre-commit ratchet: refuse newly added never-executed constructs in crates src"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 20 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: fail-open-review-checklist s7 (new item; user ruling 2026-11-07 絶対に処理されないコードはプログラムとコンパイラのゴミ).
+Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): no pre-commit scanner refuses a newly added `if false {` in crates/fixturecrate/src/lib.rs. Scanners accepting the live control: ['check-backlog-store.py', ... 'check-version-bumped.py']; their exit codes on the dead diff: {... all 0} (same for `while false {` and `if false && flag {`)
+Diff-scoped ratchet: existing occurrences counted, nothing new added (ratchet guard and live control pass today). Only `run` lines in .githooks/pre-commit are tried, so wiring is implied; the new scanner must run in a minimal fixture repo. Runtime ~50s.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.
+User ruling 2026-11-07 (AskUserQuestion): accept the ~80s added to the pre-push python suites; do not shrink detection strength for speed."""
+created_at = 1793998491
+updated_at = 1794100911
+weight = 0.0
+issue_number = 1586
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1586"
+issue_closed_at = 1794100915
+rev = 4
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_audit_b_never_executed_ratchet.py"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998963
+detail = """
+exit 1: it_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_if_false_and_guard_is_refused
+FAILED scripts/test_audit_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_if_false_block_is_refused
+FAILED scripts/test_audit_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_while_false_is_refused
+========================= 3 failed, 2 passed in 12.26s ========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_audit_b_never_executed_ratchet.py"
+exit = 0
+passed = 5
+rev = "6ff5c2642b4b1a5c08e9db299d38ba708f846e7a"
+observed_at = 1794100860
+output_digest = "sha256:1a8534c646c92044bb91491f738637e597c9bdff970f5310adc251910445f571"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-bf349dd5
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 5 items
+
+scripts/test_audit_b_never_executed_ratchet.py .....                     [100%]
+
+============================== 5 passed in 23.50s ==============================
+"""
+
+[task.closure.red]
+rev = "5e1c00ec441f9d418ffdd670640c4f03792ac5ac"
+exit = 1
+kind = "behavioural"
+
+[[task]]
 id = "e103cd56"
 title = "blastguard: キーの後ろの --get 等を読み取りと誤認し core.hooksPath 書き込みを Allow する fail-open"
 project = "/Users/yuki/src/harness"
@@ -71868,6 +72134,74 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 452 filtered out; fi
 [task.closure.red]
 rev = "e12712e25074e4ed40accea0eb4eb178c51feb03"
 exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "d425cfc3"
+title = "check-fail-open-mutation.py: mutate by deleting the construct, not if false"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 19 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: fail-open-review-checklist s7 (formerly mutation-remove-dont-disable); ruled 2026-11-07.
+Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): - ['parallelguard (crates/parallelguard/src/model.rs): +1 `if false`'] / + [] : mutants must delete the construct, not wrap it in `if false` (ruling 2026-11-07)
+Control: each scenario's anchor occurs exactly once in its target file. Untested reading: the stuckguard scenario replaces the threshold guard with `if true { return None; }` (always-taken early return, also 'neutralize in place'); the RED asserts only 'no if false' per the ruling - human to decide whether `if true {` is also out.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.
+User ruling 2026-11-07 (AskUserQuestion): `if true { return ...; }` (always-taken early return) is ALSO banned as neutralize-in-place; the mutant must delete the guard. Extend the RED to assert no `if true {` either."""
+created_at = 1793998489
+updated_at = 1794101002
+weight = 0.0
+issue_number = 1585
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1585"
+issue_closed_at = 1794101006
+rev = 4
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_audit_b_mutation_deletes.py"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998962
+detail = """
+exit 1: 
+E           _pytest.outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_audit_b_mutation_deletes.py::MutantsDeleteRatherThanDisable::test_generated_mutant_contains_no_if_false
+========================= 1 failed, 1 passed in 0.07s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_audit_b_mutation_deletes.py"
+exit = 0
+passed = 3
+rev = "afb1cda821df297f373278664400b052ef3a15cd"
+observed_at = 1794100994
+output_digest = "sha256:c5077855c1bb8c59a572e3011e96978ef7494624b92c7c47d39ab22852916efe"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-bf349dd5
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 3 items
+
+scripts/test_audit_b_mutation_deletes.py ...                             [100%]
+
+============================== 3 passed in 0.40s ===============================
+"""
+
+[task.closure.red]
+rev = "5e1c00ec441f9d418ffdd670640c4f03792ac5ac"
+exit = 1
 kind = "behavioural"
 
 [[task]]

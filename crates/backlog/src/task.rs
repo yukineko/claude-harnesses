@@ -438,6 +438,35 @@ impl Task {
 /// `next --claim`) excludes every task carrying it (backlog 016c2562).
 pub const TAG_WONTFIX: &str = "wontfix";
 
+/// The classification tags a blastguard task must carry (user ruling
+/// 2026-11-14). At least one is required; both is allowed.
+pub const BLASTGUARD_CLASSIFICATION_TAGS: [&str; 2] = ["fail-open", "false-positive"];
+
+/// User ruling 2026-11-14: a blastguard backlog item must be classified, so the
+/// weekly metric `scripts/blastguard-discovery-rate.py` can count it.
+///
+/// A task is "blastguard" when its tags contain `blastguard` or its title
+/// starts with `blastguard`, both compared case-insensitively. This is the
+/// selection `is_blastguard` in that script uses. Returns the refusal message
+/// when the task is blastguard and carries neither tag in
+/// [`BLASTGUARD_CLASSIFICATION_TAGS`], else `None`. Both `backlog add` and
+/// `backlog edit` (when `--tag` or `--title` is given) call this.
+pub fn blastguard_classification_error(title: &str, tags: &[String]) -> Option<String> {
+    let has = |want: &str| tags.iter().any(|t| t.trim().eq_ignore_ascii_case(want));
+    let is_blastguard =
+        has("blastguard") || title.trim_start().to_lowercase().starts_with("blastguard");
+    if !is_blastguard || BLASTGUARD_CLASSIFICATION_TAGS.iter().any(|t| has(t)) {
+        return None;
+    }
+    Some(format!(
+        "REFUSED, nothing written: a blastguard task (tag `blastguard` or a title starting \
+         with `blastguard`) must carry `--tag fail-open` or `--tag false-positive` (user \
+         ruling 2026-11-14; the weekly metric scripts/blastguard-discovery-rate.py counts \
+         unclassified items as unknown). Tags given: [{}]",
+        tags.join(", ")
+    ))
+}
+
 /// Returns an error message when `status` is `Some` but not a recognised value,
 /// else `None`. Centralised here (next to `STATUSES`) so the `--status` filter in
 /// `main` can refuse it with a non-zero exit — a typo'd status used to silently
@@ -511,6 +540,33 @@ pub fn hashkey(title: &str, project: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tags(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Dies if either selection arm (tag / case-insensitive title prefix) is
+    /// dropped, or if an unrelated tag counts as a classification.
+    #[test]
+    fn blastguard_without_classification_is_an_error() {
+        let msg = blastguard_classification_error("x", &tags(&["blastguard", "p1"]))
+            .expect("blastguard tag, no classification");
+        assert!(msg.contains("fail-open") && msg.contains("false-positive"));
+        assert!(blastguard_classification_error("BlastGuard: allows X", &[]).is_some());
+        assert!(blastguard_classification_error("blastguard", &tags(&["fp"])).is_some());
+    }
+
+    /// Dies if a classification tag is ignored or non-blastguard tasks are gated.
+    #[test]
+    fn classified_or_non_blastguard_is_ok() {
+        assert!(blastguard_classification_error("blastguard: x", &tags(&["fail-open"])).is_none());
+        assert!(
+            blastguard_classification_error("x", &tags(&["Blastguard", "FALSE-POSITIVE"]))
+                .is_none()
+        );
+        assert!(blastguard_classification_error("statusline gap", &[]).is_none());
+        assert!(blastguard_classification_error("not blastguard first", &tags(&["p0"])).is_none());
+    }
 
     fn make_task(tags: Vec<&str>, status: Status) -> Task {
         Task {

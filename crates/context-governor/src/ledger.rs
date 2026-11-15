@@ -75,16 +75,26 @@ pub struct LedgerNode {
 /// beside the backing store for the same project+session. Returns
 /// `(state_dir, session)`.
 fn resolve_state(cwd: &str) -> (PathBuf, String) {
+    let sid = std::env::var("CLAUDE_CODE_SESSION_ID").unwrap_or_default();
+    resolve_state_for(cwd, &sid)
+}
+
+/// Explicit-session core of [`resolve_state`]: the `(state_dir, session)` for
+/// `cwd` and the given session id `sid`, with no env read for the session. An
+/// empty `sid` resolves to the `default` session (same as `context_state_dir`).
+/// Callers that hold the hook input's `session_id` use this so the ledger they
+/// read and write is the one named by the input, not by `CLAUDE_CODE_SESSION_ID`
+/// (backlog 04f53dbe).
+fn resolve_state_for(cwd: &str, sid: &str) -> (PathBuf, String) {
     // Delegate the drift-prone path assembly (base env + canonicalize +
     // project_key) to the shared `context_state_dir`, so the ledger writer, the
     // backing store, and the session-insights reader can never diverge. The
     // session string is returned alongside for row tagging.
-    let sid = std::env::var("CLAUDE_CODE_SESSION_ID").unwrap_or_default();
-    let state_dir = context_state_dir(Path::new(cwd), &sid);
+    let state_dir = context_state_dir(Path::new(cwd), sid);
     let session = if sid.is_empty() {
         safe_session("default")
     } else {
-        safe_session(&sid)
+        safe_session(sid)
     };
     (state_dir, session)
 }
@@ -102,8 +112,26 @@ impl Ledger {
     /// Open (or lazily create) the ledger under `cwd`. Best-effort: directory
     /// creation failures degrade rather than propagate, so this returns `Self`
     /// directly — call sites stay panic-free.
+    ///
+    /// The session is taken from the env var `CLAUDE_CODE_SESSION_ID`. Callers
+    /// that hold the hook input's `session_id` should use
+    /// [`Ledger::open_session`] instead so the row lands in that session's ledger.
     pub fn open(cwd: &str) -> Self {
         let (state_dir, session) = resolve_state(cwd);
+        Self::from_state(state_dir, session)
+    }
+
+    /// Open the ledger of the explicitly named session `sid` under `cwd`, with
+    /// no env read for the session. Rows are tagged with `safe_session(sid)`,
+    /// the same session that scopes the sink path. Best-effort like [`open`].
+    ///
+    /// [`open`]: Ledger::open
+    pub fn open_session(cwd: &str, sid: &str) -> Self {
+        let (state_dir, session) = resolve_state_for(cwd, sid);
+        Self::from_state(state_dir, session)
+    }
+
+    fn from_state(state_dir: PathBuf, session: String) -> Self {
         let _ = std::fs::create_dir_all(&state_dir);
         let sink = state_dir.join("ledger.jsonl");
         Self { sink, session }
@@ -129,8 +157,9 @@ impl Ledger {
             "item": node.item.map(|i| i.0),
         });
 
-        // Use the resolved, env-derived session (the one that scopes `sink`), so
-        // every line in this file shares one canonical session id.
+        // Use the resolved session that scopes `sink` (env-derived for `open`,
+        // explicit for `open_session`) rather than `node.session`, so every line
+        // in this file shares one canonical session id.
         metrics::emit(&self.sink, &self.session, event, extra);
 
         // Best-effort GC after the write. Gated on a cheap stat so the O(n)
@@ -263,8 +292,19 @@ fn summarize_jsonl(sink: &Path) -> LedgerSummary {
 /// row whose `item` equals `item_id`. A missing/corrupt file or absent match
 /// yields `false`, so the caller treats "unknown" as "not yet injected" and
 /// proceeds — the ledger becomes the control input without ever breaking a turn.
+///
+/// The session is taken from the env var `CLAUDE_CODE_SESSION_ID`; see
+/// [`was_injected_in_session`] for the explicit-session form the injector uses.
 pub fn was_injected(cwd: &str, item_id: u64) -> bool {
     let (state_dir, _session) = resolve_state(cwd);
+    seen_injected_in(&state_dir.join("ledger.jsonl"), item_id)
+}
+
+/// [`was_injected`] against the ledger of the explicitly named session `sid`
+/// (no env read for the session), so the dedup is answered by the same ledger
+/// [`Ledger::open_session`] writes for that session. Same fail-soft semantics.
+pub fn was_injected_in_session(cwd: &str, sid: &str, item_id: u64) -> bool {
+    let (state_dir, _session) = resolve_state_for(cwd, sid);
     seen_injected_in(&state_dir.join("ledger.jsonl"), item_id)
 }
 

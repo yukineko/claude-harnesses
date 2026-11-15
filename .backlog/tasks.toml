@@ -1,35 +1,4 @@
 [[task]]
-id = "38fb077c"
-title = "blastguard library callers (condukt/specguard/daily) bypass the scratch-place rule via SafeRoots::none"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "memory-audit-b",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1794100802
-updated_at = 1794100802
-weight = 0.0
-issue_number = 1637
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1637"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test library_detect_scratch_place_gap_20261108 -- --include-ignored library_entry_refuses_git_clone_into_home"
-rev = "7e49ecf7ecdd537afb21bd625099a2c6919ae3fa"
-observed_at = 1794100802
-detail = """
-exit 101: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.01s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
-     Running tests/library_detect_scratch_place_gap_20261108.rs (target/debug/deps/library_detect_scratch_place_gap_20261108-6a62c0159486a056)
-error: test failed, to rerun pass `-p blastguard --test library_detect_scratch_place_gap_20261108`"""
-
-[[task]]
 id = "d039872d"
 title = "不正な CONDUKT_MAX_PARALLEL / CONDUKT_STUCK_TTL_SECS を黙って無視しない"
 project = "/Users/yuki/src/harness"

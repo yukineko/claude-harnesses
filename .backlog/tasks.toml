@@ -2743,3 +2743,168 @@ exit 101: ession-6dcca0ad/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
      Running tests/backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp-50023bed9ac872cf)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp`"""
+
+[[task]]
+id = "245a4c5f"
+title = "blastguard fail-open: python heredoc writes a harmful .sh and the same call runs it (sh/bash/source/./) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-15 at blastguard 0.2.616 by independent RED designer: python3 - <<'PY' open('t_test.sh','w').write('<system-harm chmod of /etc/hosts or rm -rf ~>') PY then sh|bash|. ./|chmod +x && ./ t_test.sh is allow/allow (main/subagent); the shell-heredoc writer (cat > t_test.sh <<'EOF') is deny. Readings: (a) fail-open: the python-written .sh body is never judged as shell though run in the same call; (b) intended only if python writes are opaque, but then they must be undetermined (ask), never allow. Pending ruling: python write-only of a harmful .sh (not asserted). RED: crates/blastguard/tests/backlog_20261115_python_heredoc_write_then_sh_fail_open.rs"
+created_at = 1794744257
+updated_at = 1794744257
+weight = 0.0
+issue_number = 1806
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1806"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_heredoc_write_then_sh_fail_open -- --include-ignored"
+rev = "1ae570887c5b0d2650c213df87b0e344ae8b9d44"
+observed_at = 1794744257
+detail = """
+exit 101: rktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.05s
+     Running tests/backlog_20261115_python_heredoc_write_then_sh_fail_open.rs (target/debug/deps/backlog_20261115_python_heredoc_write_then_sh_fail_open-a43835431492e487)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_heredoc_write_then_sh_fail_open`"""
+
+[[task]]
+id = "84bcfe57"
+title = "tdd red records a RED proof when the test command never ran (judge_red ignores spawn_error)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "proof.rs:41 judge_red(passed) only checks passed; proof.rs:221 ignores out.spawn_error. harness-core gate/runner.rs:103-111 spawn_failed => passed:false,exit_code:None,spawn_error:Some. Observed: with a regular file at $HOME/.tdd/state, 'tdd red' exits 0 printing 'RED recorded ... (could not open log file: Not a directory)' and writes .tdd/<task>.red.json although the command never ran. F->P oracle fail-open. Two readings (defect vs intended) documented in the test module doc. Repro: crates/tdd/tests/backlog_20261115_red_spawn_error_records_red.rs (branch backlog/tdd-red-spawn-error, commit 6848636f7)."
+created_at = 1794746168
+updated_at = 1794746168
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261115_red_spawn_error_records_red -- --include-ignored"
+rev = "6848636f7128e51e47400e5c11fc67a76251e99b"
+observed_at = 1794746168
+detail = """
+exit 101: v0.1.77 (/Users/yuki/src/.harness-worktrees/backlog-tdd-red-spawn-error/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.92s
+     Running tests/backlog_20261115_red_spawn_error_records_red.rs (target/debug/deps/backlog_20261115_red_spawn_error_records_red-c1bc05e7f5189bbb)
+error: test failed, to rerun pass `-p tdd --test backlog_20261115_red_spawn_error_records_red`"""
+
+[[task]]
+id = "b6543e39"
+title = "condukt testscope: rerun ledger tree identity hashes untracked file names, not contents (edits to a new untracked test are refused as same tree)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = 'Observed 2026-11-15 at main a8e92b562 (condukt 0.7.413). crates/condukt/src/testscope.rs tree_identity: dirty hash = hash(git diff HEAD --binary) + hash(git ls-files --others --exclude-standard); the second lists untracked NAMES only, so editing an untracked new file (e.g. a not-yet-added tests/*.rs) leaves the identity unchanged and the same test is refused. Verbatim at RED: "rerun refused: `cargo test -p foo --test new_test` already ran on this exact tree (80ecd6fb2f4ca01463e506c66253ab22d23c033a:1703e7542cf25299)" after rewriting the untracked new_test.rs. Controls GREEN: tracked edit allows rerun; unchanged tree refuses. Not covered by unmerged fix/testscope-cwd-20261115 (HEAD 501535dac): its tree_identity body is byte-identical; that branch fixes only WHICH directory is fingerprinted (cd target, backlog 214b39b5), so the cd-target half of the original observation (subagent refused with main HEAD 3a92067ba fingerprint) is NOT filed here. Readings: (a) defect - docstring says identity of "the tree a test runs against", untracked contents are compiled; (b) intended cheapness - names only to avoid hashing large untracked trees; then the refusal text "this exact tree" is false. Fix constraint: hashing contents must not make cd/copy a ledger dodge. RED: crates/condukt/tests/backlog_20261115_testscope_untracked_content_identity.rs (commit 4e3c2b396, branch filings/offtopic-20261115).'
+created_at = 1794746091
+updated_at = 1794746091
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261115_testscope_untracked_content_identity -- --ignored rerun_after_editing_an_untracked_file_is_allowed"
+rev = "4e3c2b39620a9a02f017e343bddf08609510eaf5"
+observed_at = 1794746091
+detail = """
+exit 101: worktrees/offtopic-filings-20261115/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 42.23s
+     Running tests/backlog_20261115_testscope_untracked_content_identity.rs (target/debug/deps/backlog_20261115_testscope_untracked_content_identity-2e79efc353b9b127)
+error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_untracked_content_identity`"""
+
+[[task]]
+id = "c7cc67c1"
+title = "blastguard_fp_replay.py: --binary accepts any executable; a silent exit-0 non-blastguard binary (/bin/true) is counted as allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = 'Observed 2026-11-15 at main a8e92b562 (script from 4d1d74f6c). main() checks --binary only with os.access(X_OK); parse_output reads exit 0 + empty stdout as allow (the hookio Allow shape). Replaying a log through /usr/bin/true therefore turns every replayable record into allow, silently zeroing the FP measurement instead of reporting undetermined (CLAUDE.md s3). Verbatim RED (--runxfail): AssertionError "/usr/bin/true (not blastguard) was accepted as --binary and its silent exit 0 was counted as allow: rc=0 decisions=[allow]". Readings: (a) defect - the measuring stick cannot tell a wrong binary from one that allows everything; (b) operator responsibility to pass the right binary - even then a wrong path silently yields a plausible all-allow result, which is the fail-open shape. DOES NOT PROVE how to identify blastguard (e.g. a --version probe). RED: scripts/test_blastguard_fp_replay_non_blastguard_binary_20261115.py (xfail strict, commit 4e3c2b396, branch filings/offtopic-20261115).'
+created_at = 1794746224
+updated_at = 1794746224
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_blastguard_fp_replay_non_blastguard_binary_20261115.py"
+rev = "4e3c2b39620a9a02f017e343bddf08609510eaf5"
+observed_at = 1794746224
+detail = """
+exit 1: blastguard_fp_replay_non_blastguard_binary_20261115.py:71: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_blastguard_fp_replay_non_blastguard_binary_20261115.py::NonBlastguardBinary::test_silent_exit_zero_non_blastguard_binary_is_not_counted_as_allow
+============================== 1 failed in 0.07s ==============================="""
+
+[[task]]
+id = "e5f8e5b7"
+title = "blastguard block log omits CLAUDE_PROJECT_DIR and TMPDIR, which the verdict depends on, so a logged block cannot be replayed faithfully"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = 'Observed 2026-11-15 at main a8e92b562 (blastguard 0.2.619). Verdict inputs: src/main.rs safe_roots reads std::env::var("CLAUDE_PROJECT_DIR") and std::env::var("TMPDIR") (lines ~813-815); src/detect/scratch_place.rs process_place_model likewise (~110-112); they decide which places are managed. src/blocklog.rs record (~172-215) writes neither. scripts/blastguard_fp_replay.py must approximate CLAUDE_PROJECT_DIR from cwd and inherit its own TMPDIR (its docstring, WHAT STILL DIFFERS). Verbatim RED: "the record does not carry CLAUDE_PROJECT_DIR (/var/folders/.../project-dir-marker-7f3a), an input of the verdict: {...actor:interactive,...cwd:.../cwd-dir,...v:2}". Readings: (a) defect - blocklog module doc says the record holds exactly what was blocked for reproduction (user ruling 2026-11-14 記録をとること / 切り分け), a missing verdict input makes it non-reproducible; (b) intended - the log deliberately minimises fields to payload + verdict, env out of scope (then the replay docstring is the only statement of the gap). Test asserts (a). DOES NOT PROVE which other env inputs (HOME, PATH, CDPATH) a faithful replay needs. RED: crates/blastguard/tests/backlog_20261115_block_record_verdict_env.rs (#[ignore], commit 4e3c2b396, branch filings/offtopic-20261115).'
+created_at = 1794746259
+updated_at = 1794746259
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_block_record_verdict_env -- --ignored block_record_carries_project_dir_and_tmpdir"
+rev = "4e3c2b39620a9a02f017e343bddf08609510eaf5"
+observed_at = 1794746259
+detail = """
+exit 101: v0.2.620 (/Users/yuki/.condukt/worktrees/offtopic-filings-20261115/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.40s
+     Running tests/backlog_20261115_block_record_verdict_env.rs (target/debug/deps/backlog_20261115_block_record_verdict_env-bf1dff4f406ff803)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_block_record_verdict_env`"""
+
+[[task]]
+id = "68bd7d93"
+title = "scripts/test_backlog_audit_b1_0.py Backlog06a9d33fDirectInvocationRunsTests red on main: test_gate_severity_probe_b.py, test_precommit_timing_b.py, test_stop_verify_worktree_foreign_writer_20261115.py"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "audit",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-15 at a8e92b562, worktree c 03a066401, and acf8a59bd: pytest -q scripts/test_backlog_audit_b1_0.py fails with "['test_gate_severity_probe_b.py', 'test_precommit_timing_b.py', 'test_stop_verify_worktree_foreign_writer_20261115.py'] : 06a9d33f: these suites run ZERO tests and exit 0 when invoked directly" (06a9d33f is done = regression). Facts: test_gate_severity_probe_b.py:229 and test_precommit_timing_b.py:147 DO have 'if __name__ == "__main__": raise SystemExit(pytest.main([__file__]))' (pytest-by-design: pytest.mark.xfail RED suites) so they are not zero-test; the audit AST check (_has_main_guard_calling_unittest_main) only accepts unittest.main => reading (b) audit check too narrow for those two. test_stop_verify_worktree_foreign_writer_20261115.py has NO __main__ guard at all (pytest fixtures + xfail) => reading (a) real regression, direct run runs zero tests. Precedent: 16b69d09 (same defect, closed f2p). Fix: add guard to the third file; decide for the two: accept pytest.main in the audit or switch to unittest.main."""
+created_at = 1794746822
+updated_at = 1794746822
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest -q scripts/test_backlog_audit_b1_0.py -k test_every_scripts_suite_has_a_main_guard_calling_unittest_main"
+rev = "acf8a59bda2e65d2f612a1eed804eab98e6485dd"
+observed_at = 1794746822
+detail = """
+exit 1: 1115.py'] : 06a9d33f: these suites run ZERO tests and exit 0 when invoked directly
+
+scripts/test_backlog_audit_b1_0.py:96: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_backlog_audit_b1_0.py::Backlog06a9d33fDirectInvocationRunsTests::test_every_scripts_suite_has_a_main_guard_calling_unittest_main
+1 failed, 10 deselected in 0.36s"""

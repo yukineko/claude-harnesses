@@ -2619,3 +2619,32 @@ exit 101: rees/session-6dcca0ad/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.73s
      Running tests/backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp.rs (target/debug/deps/backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp-e57a8e5a7562487d)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp`"""
+
+[[task]]
+id = "8ce33823"
+title = "blastguard FP: python3 -c print(vars()) refused as 'builds or decodes the code it runs (vars()' while print(locals()) is allowed"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794743432
+updated_at = 1794743432
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_c_vars_call_inline_eval_ask_fp -- --include-ignored"
+rev = "c82d9725085e6bd5c378274f0ebad8fb810665ab"
+observed_at = 1794743432
+detail = """
+exit 101: -worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.04s
+     Running tests/backlog_20261115_python_c_vars_call_inline_eval_ask_fp.rs (target/debug/deps/backlog_20261115_python_c_vars_call_inline_eval_ask_fp-8afe83282daea963)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_c_vars_call_inline_eval_ask_fp`"""

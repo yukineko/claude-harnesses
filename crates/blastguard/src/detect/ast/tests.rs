@@ -1546,3 +1546,88 @@ mod env_arith_wrapped_builtins {
         assert_known("command -v git; cat > /tmp/f");
     }
 }
+
+// bash sets `_` to the last argument of every simple command; when the text gives `_` the
+// integer attribute that assignment is arithmetic (observed bash 3.2.57:
+// `declare -i _; true 'a[$(echo RAN-underscore >&2)]'` ran the substitution).
+// Ruling 2026-11-16: opaque state does NOT make `_` possibly-integer (accepted residual).
+// Function-definition form (`f() { local -i _; ...; }`) is not used: function definitions are
+// already Undetermined(Unsupported) ("its body is not evaluated"), so it would prove nothing;
+// `local -i _` is tested at top level instead.
+mod underscore_integer {
+    use super::*;
+
+    fn assert_unsupported(command: &str) {
+        match analyze(command) {
+            Analysis::Undetermined(Cause::Unsupported(_)) => {}
+            other => panic!(
+                "{command:?}: `_` is integer by text, so the last argument is arithmetic; \
+                 this must be Undetermined(Unsupported), got {other:#?}"
+            ),
+        }
+    }
+
+    fn assert_known(command: &str) {
+        match analyze(command) {
+            Analysis::Known(_) => {}
+            other => panic!("{command:?} is fully determined by its text; got {other:#?}"),
+        }
+    }
+
+    #[test]
+    fn declare_i_underscore_arith_subscript_arg_is_unsupported() {
+        assert_unsupported("declare -i _; true 'a[$(echo hi)]'; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declare_i_underscore_variable_arg_is_unsupported() {
+        assert_unsupported("declare -i _; echo $X; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declare_i_underscore_literal_word_is_variable_name_unsupported() {
+        assert_unsupported("declare -i _; echo bar; cat > /tmp/f");
+    }
+
+    #[test]
+    fn typeset_i_underscore_is_unsupported() {
+        assert_unsupported("typeset -i _; echo bar; cat > /tmp/f");
+    }
+
+    #[test]
+    fn local_i_underscore_top_level_is_unsupported() {
+        assert_unsupported("local -i _; echo bar; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declare_ri_underscore_combined_flags_is_unsupported() {
+        assert_unsupported("declare -ri _; echo bar; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declare_i_other_name_then_underscore_is_unsupported() {
+        assert_unsupported("declare -i x _; echo bar; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declare_i_underscore_last_word_is_command_name_unsupported() {
+        // Redirections are not arguments; `_` gets `cat`, a non-numeric name.
+        assert_unsupported("declare -i _; cat > /tmp/f");
+    }
+
+    // Controls.
+    #[test]
+    fn control_opaque_does_not_make_underscore_integer() {
+        assert_known("eval foo; echo bar; cat > /tmp/f");
+    }
+
+    #[test]
+    fn control_declare_i_underscore_all_decimal_last_args_stay_known() {
+        assert_known("declare -i _; echo 5; true 7");
+    }
+
+    #[test]
+    fn control_declare_i_other_name_stays_known() {
+        assert_known("declare -i n; echo bar; cat > /tmp/f");
+    }
+}

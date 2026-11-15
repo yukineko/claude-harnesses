@@ -758,3 +758,8 @@ reason = "'module 責務' bullet `detect/ast`: brush-parser front end with MAX_P
 path = "crates/blastguard/src/detect/ast/eval.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `detect/ast`: static evaluation (program_source; skeleton returns Some(ProgramSource::Undetermined))."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/tests.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/ast`: contract tests (RED, #[ignore]) of the parser + static-eval layer: caps/parse failure -> Undetermined, literal assignment/for/cd resolution, relative redirect after cd joined or Undetermined (user ruling 2026-11-16), stdin/program sources."

@@ -4814,8 +4814,10 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // ends `failed`). No checkpoint restore, no branch reset — a whole-run
             // restore overwrote other tasks' state and `git reset --hard` discarded
             // later commits. Reverting is the explicit `condukt state rollback`.
-            // The transition is journaled (kind `verified_failed`); a journal
-            // failure is reported on stderr, never silent.
+            // The transition is journaled (kind `verified_failed`). Only an
+            // unlocatable journal dir is reported on stderr; `append_journal`
+            // itself is fail-silent (it drops serialize/open/write errors), so
+            // the stderr line below does not prove the record was written.
             if st == state::Status::Failed && prior_status == state::Status::Verified {
                 match checkpoint_project_dir(cfg, cwd, &run) {
                     Ok(d) => {

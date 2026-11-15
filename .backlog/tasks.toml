@@ -2878,3 +2878,33 @@ exit 101: v0.2.620 (/Users/yuki/.condukt/worktrees/offtopic-filings-20261115/cra
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.40s
      Running tests/backlog_20261115_block_record_verdict_env.rs (target/debug/deps/backlog_20261115_block_record_verdict_env-bf1dff4f406ff803)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_block_record_verdict_env`"""
+
+[[task]]
+id = "68bd7d93"
+title = "scripts/test_backlog_audit_b1_0.py Backlog06a9d33fDirectInvocationRunsTests red on main: test_gate_severity_probe_b.py, test_precommit_timing_b.py, test_stop_verify_worktree_foreign_writer_20261115.py"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "audit",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-15 at a8e92b562, worktree c 03a066401, and acf8a59bd: pytest -q scripts/test_backlog_audit_b1_0.py fails with "['test_gate_severity_probe_b.py', 'test_precommit_timing_b.py', 'test_stop_verify_worktree_foreign_writer_20261115.py'] : 06a9d33f: these suites run ZERO tests and exit 0 when invoked directly" (06a9d33f is done = regression). Facts: test_gate_severity_probe_b.py:229 and test_precommit_timing_b.py:147 DO have 'if __name__ == "__main__": raise SystemExit(pytest.main([__file__]))' (pytest-by-design: pytest.mark.xfail RED suites) so they are not zero-test; the audit AST check (_has_main_guard_calling_unittest_main) only accepts unittest.main => reading (b) audit check too narrow for those two. test_stop_verify_worktree_foreign_writer_20261115.py has NO __main__ guard at all (pytest fixtures + xfail) => reading (a) real regression, direct run runs zero tests. Precedent: 16b69d09 (same defect, closed f2p). Fix: add guard to the third file; decide for the two: accept pytest.main in the audit or switch to unittest.main."""
+created_at = 1794746822
+updated_at = 1794746822
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest -q scripts/test_backlog_audit_b1_0.py -k test_every_scripts_suite_has_a_main_guard_calling_unittest_main"
+rev = "acf8a59bda2e65d2f612a1eed804eab98e6485dd"
+observed_at = 1794746822
+detail = """
+exit 1: 1115.py'] : 06a9d33f: these suites run ZERO tests and exit 0 when invoked directly
+
+scripts/test_backlog_audit_b1_0.py:96: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_backlog_audit_b1_0.py::Backlog06a9d33fDirectInvocationRunsTests::test_every_scripts_suite_has_a_main_guard_calling_unittest_main
+1 failed, 10 deselected in 0.36s"""

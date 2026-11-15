@@ -21,8 +21,10 @@
 //!
 //! Asserted: with a run whose only task has `worktree: ""` (status verified),
 //! `cargo test -p x --test old_t` in the repo root (no task worktree) is
-//! allowed. Control: the same command in the same repo before the empty
-//! worktree is written is allowed (so the denial is caused by the "" task).
+//! allowed. Control: a different test command (`--test ctl_t`, so it does not
+//! occupy the rerun-ledger key of the asserted call) in the same repo before
+//! the empty worktree is written is allowed (so a denial is caused by the ""
+//! task, not by the rerun ledger).
 //! Fail-closed for genuinely owned cwds is pinned by
 //! testscope_enforcement_20261114.rs `c_unrelated_existing_test_in_task_worktree_is_denied`.
 //!
@@ -56,6 +58,7 @@ fn repo() -> TempDir {
     git(d.path(), &["init", "-q", "-b", "main"]);
     std::fs::create_dir_all(d.path().join("tests")).unwrap();
     std::fs::write(d.path().join("tests/old_t.rs"), "#[test] fn o() {}\n").unwrap();
+    std::fs::write(d.path().join("tests/ctl_t.rs"), "#[test] fn c() {}\n").unwrap();
     git(d.path(), &["add", "."]);
     git(d.path(), &["commit", "-q", "-m", "init"]);
     d
@@ -187,9 +190,14 @@ fn empty_string_worktree_task_does_not_own_unrelated_cwd() {
 
     let cmd = "cargo test -p x --test old_t";
     // Control: before the empty worktree is recorded, the repo root is owned by
-    // no task and the command is allowed.
+    // no task and a test command is allowed. The control uses a DIFFERENT test
+    // (`ctl_t`) from the asserted call: both calls share one rerun ledger and
+    // one unchanged tree, so reusing `cmd` would make the asserted call hit
+    // rule 3 (rerun refused: "already ran on this exact tree") instead of being
+    // judged on worktree ownership (observed at 501535dac: the original fixture
+    // was refused with exactly that text).
     assert_allow(
-        &hook(&env, cmd, r.path()),
+        &hook(&env, "cargo test -p x --test ctl_t", r.path()),
         "control: no task worktree recorded",
     );
 

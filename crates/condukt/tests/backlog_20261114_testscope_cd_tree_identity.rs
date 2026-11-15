@@ -20,8 +20,13 @@
 //! testscope.rs: it speaks of the tree a test runs against.
 //!
 //! Controls (GREEN at HEAD, not ignored): an identical command on an unchanged
-//! `cd` target is still refused; changing the payload cwd's own tree allows a
-//! rerun.
+//! `cd` target is still refused; with no `cd`, the tree the test runs in IS the
+//! payload cwd, so editing it allows a rerun.
+//!
+//! User ruling (binding): the rerun fingerprint is taken ONLY from the tree the
+//! test actually runs in. The payload cwd's tree must not contribute when a
+//! `cd` moved the test elsewhere, so editing only the payload cwd must NOT
+//! allow a rerun of the same `cd <target> && ...` command (RED test below).
 //!
 //! DOES NOT PROVE: how `cd` should be parsed (chains, `pushd`, `git -C`,
 //! subshells), only that a leading `cd <dir> &&` target edit must change the
@@ -150,13 +155,33 @@ fn control_identical_command_on_unchanged_cd_target_is_refused() {
     assert!(denied(&second), "same command, same trees: {second:?}");
 }
 
-// Control: editing the payload cwd's tree allows the rerun (existing behaviour).
+// test-weakening-justified: new RED for an unfixed defect (user ruling
+// 2026-11-15; replaces the removed control that pinned the overruled
+// behaviour); the ignore is removed in the fixing commit.
 #[test]
-fn control_editing_payload_cwd_tree_allows_rerun() {
+#[ignore = "RED: rerun key still includes the payload cwd tree when a cd moved the test elsewhere"]
+fn rerun_after_editing_only_the_payload_cwd_tree_is_refused_when_test_runs_in_cd_target() {
     let fx = Fx::new();
     let cmd = fx.cmd();
-    assert!(!denied(&fx.go(&cmd)));
+    let first = fx.go(&cmd);
+    assert!(!denied(&first), "first run must be allowed: {first:?}");
+    // Only the payload cwd (session root) changes; the run tree (cd target) is identical.
     std::fs::write(fx.session_root.path().join("a.txt"), "two\n").unwrap();
     let second = fx.go(&cmd);
+    assert!(
+        denied(&second),
+        "run tree unchanged, only payload cwd edited, yet the rerun was allowed: {second:?}"
+    );
+}
+
+// Control: no cd, so the run tree equals the payload cwd; editing it allows a rerun.
+#[test]
+fn control_editing_run_tree_equal_to_payload_cwd_allows_rerun_without_cd() {
+    let fx = Fx::new();
+    let cmd = "cargo test -p foo --test bar";
+    let first = fx.go(cmd);
+    assert!(!denied(&first), "first run must be allowed: {first:?}");
+    std::fs::write(fx.session_root.path().join("a.txt"), "two\n").unwrap();
+    let second = fx.go(cmd);
     assert!(!denied(&second), "{second:?}");
 }

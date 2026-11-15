@@ -78,7 +78,6 @@ fn run_as(command: &str, home: &Home, subagent: bool) -> (String, String) {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 bash /dev/fd/3 allowed — remove the ignore when fixed"]
 fn bash_dev_fd_operand_is_not_allowed() {
     let home = unique_home("red");
     let cmd = "bash /dev/fd/3";

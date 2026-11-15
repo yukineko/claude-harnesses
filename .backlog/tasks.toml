@@ -2417,3 +2417,31 @@ exit 101: 8 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastgua
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
      Running tests/backlog_20261115_python_os_system_nested_repl.rs (target/debug/deps/backlog_20261115_python_os_system_nested_repl-d35551448481b324)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_os_system_nested_repl`"""
+
+[[task]]
+id = "392097d7"
+title = """blastguard FP: bash <&"$"fd (literal $fd) is Ask/Deny while <&'$fd' is Allow"""
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = 'F12. Observed 2026-11-15 at 0.2.603, re-observed by main with RED 784eba77f. A lone "$" is a literal dollar; standing ruling: text-determined values are resolved, not undetermined.'
+created_at = 1794730727
+updated_at = 1794730727
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_dq_dollar_literal_dup_fd -- --include-ignored"
+rev = "bdfdc064af6abf8c9d8cbde6b9f1ba790bfc7e4a"
+observed_at = 1794730727
+detail = """
+exit 101: uard v0.2.608 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/backlog_20261115_dq_dollar_literal_dup_fd.rs (target/debug/deps/backlog_20261115_dq_dollar_literal_dup_fd-c7223dcbc93d47c9)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_dq_dollar_literal_dup_fd`"""

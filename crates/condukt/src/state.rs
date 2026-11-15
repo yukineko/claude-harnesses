@@ -74,7 +74,7 @@ pub enum Status {
 /// gate- and learning-signal-bearing — outcome without the work being undone).
 /// A verified task is not cancellable by either route; reclassifying a
 /// verified result stays possible only through the explicit
-/// `state set --status failed` path, which triggers the auto-rollback.
+/// `state set --status failed` path, which marks only that task failed (no run restore).
 pub fn ensure_cancellable(task: &str, from: Status) -> Result<()> {
     if from == Status::Verified {
         bail!("task '{task}' is already verified and cannot be cancelled");
@@ -270,7 +270,7 @@ pub struct TaskState {
     pub verifier_started_at: Option<i64>,
     /// End of the VERIFIER phase — stamped set-once on the first settle to
     /// `verified` or `failed` (a verdict was reached). Set-once so a later
-    /// re-settle (e.g. verified→failed auto-rollback) does not move it. Same
+    /// re-settle (e.g. a verified→failed transition) does not move it. Same
     /// contract as `worker_started_at`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verifier_ended_at: Option<i64>,

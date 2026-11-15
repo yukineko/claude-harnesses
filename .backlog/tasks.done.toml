@@ -78632,3 +78632,295 @@ rev = "a8e92b562439a36c84486b33d575815b813e3196"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "214b39b5"
+title = "condukt testscope: rerun guard keys tree identity on hook payload cwd, not on a leading cd target, so a rerun after editing the cd target tree is refused"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "testscope",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Side finding of run-20261114-110017-12373 (flow session b3435a5e), measured 2026-11-14 at e9d58cccb. crates/condukt/src/testscope.rs check_rerun / tree_identity(cwd) uses the hook payload cwd; a Bash call 'cd <worktree> && cargo test ...' whose payload cwd is another tree is keyed on the wrong tree, so after editing the cd-target tree the rerun is refused as unchanged. RED: crates/condukt/tests/backlog_20261114_testscope_cd_tree_identity.rs rerun_after_editing_the_cd_target_tree_is_allowed (panics at :138). Non-ignored control control_editing_payload_cwd_tree_allows_rerun passes. Observed in the wild: several rerun refusals during that run. Readings: (a) real defect (FP refusing a legitimate rerun); (b) intended (guard only keys payload cwd by design) - distinguish by whether testscope docs promise cd-target awareness. Fix must stay fail-closed when the cd target cannot be resolved.
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-demonstrated; exit 0; cmd: cargo test -p condukt --test backlog_20261114_testscope_cd_tree_identity -- --ignored rerun_after_editing_the_cd_target_tree_is_allowed; rev: b330f94618d22acb9153246f779e861751f6a13b; observed: exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. An `#[ignore]`d repro must be run with `-- --ignored` (e.g. `cargo test -p <crate> --test <file> -- --ignored`), and a test-name filter must match the repro: v0.2.621 (/Users/yuki/src/.harness-worktrees/session-06c2bd77/crates/blastguard)
+   Compiling condukt v0.7.421 (/Users/yuki/src/.harness-worktrees/session-06c2bd77/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.75s
+     Running tests/backlog_20261114_testscope_cd_tree_identity.rs (target/debug/deps/backlog_20261114_testscope_cd_tree_identity-4a446d18a4ffee50)"""
+created_at = 1794624843
+updated_at = 1794762224
+weight = 0.0
+issue_number = 1749
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1749"
+issue_closed_at = 1794762227
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261114_testscope_cd_tree_identity -- --ignored rerun_after_editing_the_cd_target_tree_is_allowed"
+rev = "e9d58cccb086bd62368e4c702f3f037f71c9497d"
+observed_at = 1794624843
+detail = """
+exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.96s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/backlog_20261114_testscope_cd_tree_identity.rs (target/debug/deps/backlog_20261114_testscope_cd_tree_identity-eb881238f9300bcf)
+error: test failed, to rerun pass `-p condukt --test backlog_20261114_testscope_cd_tree_identity`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-demonstrated; exit 0; cmd: cargo test -p condukt --test backlog_20261114_testscope_cd_tree_identity -- --ignored rerun_after_editing_the_cd_target_tree_is_allowed; rev: b330f94618d22acb9153246f779e861751f6a13b; observed: exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. An `#[ignore]`d repro must be run with `-- --ignored` (e.g. `cargo test -p <crate> --test <file> -- --ignored`), and a test-name filter must match the repro: v0.2.621 (/Users/yuki/src/.harness-worktrees/session-06c2bd77/crates/blastguard)
+   Compiling condukt v0.7.421 (/Users/yuki/src/.harness-worktrees/session-06c2bd77/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.75s
+     Running tests/backlog_20261114_testscope_cd_tree_identity.rs (target/debug/deps/backlog_20261114_testscope_cd_tree_identity-4a446d18a4ffee50)"""
+
+[[task]]
+id = "b4a2780b"
+title = 'condukt testscope: a task with recorded worktree "" owns every cwd, so check_task_scope denies every cargo test'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = '''Observed 2026-11-15 at main 2ace975d1: every cargo test in every cwd of the harness project was denied by condukt testscope. Trigger: stale run state run-20260702-081932 (task requeue-lock, status verified, "worktree": ""), quarantined at ~/.condukt/quarantine/run-20260702-081932.json. Mechanism: crates/condukt/src/subagent_stop.rs:160-175 tasks_owning_cwd skips only worktree None; for Some("") cwd.starts_with("") is true, so the task owns every cwd; crates/condukt/src/testscope.rs:853 PathBuf::from(task.worktree.unwrap_or_default()) = "" and worktree_changed_tests runs git with current_dir("") -> ENOENT -> undetermined Deny. RED (independent author) at 14f889dd9 (branch red/testscope-empty-worktree-20261115), verbatim: 'repo root with a stale task whose worktree is "": expected allow (empty stdout), got "{...\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"condukt testscope cannot determine whether this test is in a condukt task's scope (which tests worktree  changed is unknown: git diff --name-only main...HEAD: No such file or directory (os error 2)), so it is refused: ...'. In-test control (same repo before the "" worktree is written) is allowed. Readings: (a) defect - an empty recorded worktree names no directory and must not own an unrelated cwd; (b) intended - fail-closed on malformed run state. Tell apart: under (b) the reason would name the malformed run state; the observed reason claims cwd is inside worktree "" and fails a git diff in a nonexistent dir, i.e. ownership misattributed. Fix direction: an empty or relative recorded worktree must not own every cwd (skip or surface it as malformed state, not as an owner), while genuinely owned cwds stay fail-closed (pinned by testscope_enforcement_20261114.rs c_unrelated_existing_test_in_task_worktree_is_denied). Same pattern exists in resolve_owner (subagent_stop.rs:118/137). DOES NOT PROVE: relative non-empty worktree handling; how "" was written.'''
+created_at = 1794732006
+updated_at = 1794762277
+weight = 0.0
+issue_number = 1794
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1794"
+issue_closed_at = 1794762280
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261115_testscope_empty_worktree_owns_every_cwd -- --ignored empty_string_worktree_task_does_not_own_unrelated_cwd"
+rev = "14f889dd93aa4f81081f00146e49639b8b9fd5a1"
+observed_at = 1794732006
+detail = """
+exit 101: rness-wt-red-empty-worktree/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.36s
+     Running tests/backlog_20261115_testscope_empty_worktree_owns_every_cwd.rs (target/debug/deps/backlog_20261115_testscope_empty_worktree_owns_every_cwd-bfa1f975ba682c1a)
+error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_empty_worktree_owns_every_cwd`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261115_testscope_empty_worktree_owns_every_cwd"
+exit = 0
+passed = 1
+rev = "a9982166002322c14f02bca73454f968998da031"
+observed_at = 1794762276
+output_digest = "sha256:978d3c4a59f08ed4af8a5cc8d3990db32d81bf1405a85d0bec4f7def8a353fc7"
+excerpt = """
+
+running 1 test
+test empty_string_worktree_task_does_not_own_unrelated_cwd ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.06s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261115_testscope_empty_worktree_owns_every_cwd.rs (target/debug/deps/backlog_20261115_testscope_empty_worktree_owns_every_cwd-f9ce3f4a1b05099d)
+"""
+
+[task.closure.red]
+rev = "95fbd0631f8642c53b2f5e7ad960e95f24fb4374"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "84bcfe57"
+title = "tdd red records a RED proof when the test command never ran (judge_red ignores spawn_error)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "proof.rs:41 judge_red(passed) only checks passed; proof.rs:221 ignores out.spawn_error. harness-core gate/runner.rs:103-111 spawn_failed => passed:false,exit_code:None,spawn_error:Some. Observed: with a regular file at $HOME/.tdd/state, 'tdd red' exits 0 printing 'RED recorded ... (could not open log file: Not a directory)' and writes .tdd/<task>.red.json although the command never ran. F->P oracle fail-open. Two readings (defect vs intended) documented in the test module doc. Repro: crates/tdd/tests/backlog_20261115_red_spawn_error_records_red.rs (branch backlog/tdd-red-spawn-error, commit 6848636f7)."
+created_at = 1794746168
+updated_at = 1794764009
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261115_red_spawn_error_records_red -- --include-ignored"
+rev = "6848636f7128e51e47400e5c11fc67a76251e99b"
+observed_at = 1794746168
+detail = """
+exit 101: v0.1.77 (/Users/yuki/src/.harness-worktrees/backlog-tdd-red-spawn-error/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.92s
+     Running tests/backlog_20261115_red_spawn_error_records_red.rs (target/debug/deps/backlog_20261115_red_spawn_error_records_red-c1bc05e7f5189bbb)
+error: test failed, to rerun pass `-p tdd --test backlog_20261115_red_spawn_error_records_red`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p tdd --test backlog_20261115_red_spawn_error_records_red"
+exit = 0
+passed = 2
+rev = "bbe7b7bac36670e5237f073d2ef0c829723aeaa9"
+observed_at = 1794764008
+output_digest = "sha256:5f52af4faa4799ebd6030faa68676f09a2318eed8e5e4be131d7cc5971577abc"
+excerpt = """
+
+running 2 tests
+test red_is_not_recorded_when_the_command_never_ran ... ok
+test control_failing_command_that_ran_records_red ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261115_red_spawn_error_records_red.rs (target/debug/deps/backlog_20261115_red_spawn_error_records_red-155d7cea77a01791)
+"""
+
+[task.closure.red]
+rev = "12ae96ea56b6093dbed91b10e51b071bd7206cf7"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "b8aa9d43"
+title = "condukt: state set failed on a verified task auto-rolls back the whole run state and git-resets the task branch"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-14 in run-20261114-161340-68728 (journal auto_rollback label verified:t1): marking verified t1 failed restored every task's status from the checkpoint (t2 back to running with its worktree deleted, t3/t4 worktree entries lost) and ran git reset --hard on t1's branch, discarding a later merge-of-main commit. User ruling 2026-11-15: fix as a bug (both the whole-run restore and the branch reset). RED by an independent author (sonnet): crates/condukt/tests/backlog_20261115_failed_verdict_rollback_scope.rs, observed 0 passed / 2 failed. NOTE: the existing test crates/condukt/tests/checkpoint_cli.rs::verified_task_that_fails_auto_rolls_back_and_journals pins the current behaviour and must be revisited by the fix (do not delete or loosen it outside that fix). Fix is out of scope of run-20261114-161340-68728."
+created_at = 1794680180
+updated_at = 1794764011
+weight = 0.0
+issue_number = 1784
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1784"
+issue_closed_at = 1794764013
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261115_failed_verdict_rollback_scope -- --include-ignored"
+rev = "509a7b57ceff1a739255e047e27185f7516f2609"
+observed_at = 1794680180
+detail = """
+exit 101: ki/.condukt/worktrees/run-20261114-161340-68728-side-reds/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.15s
+     Running tests/backlog_20261115_failed_verdict_rollback_scope.rs (target/debug/deps/backlog_20261115_failed_verdict_rollback_scope-a4b399bd240c9f02)
+error: test failed, to rerun pass `-p condukt --test backlog_20261115_failed_verdict_rollback_scope`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261115_failed_verdict_rollback_scope"
+exit = 0
+passed = 2
+rev = "bbe7b7bac36670e5237f073d2ef0c829723aeaa9"
+observed_at = 1794764009
+output_digest = "sha256:49313a89f17024c8094f0b5270de9f3c99b6cc59168625471f276eddfb9c2784"
+excerpt = """
+
+running 2 tests
+test a_failing_verified_task_leaves_other_tasks_status_untouched ... ok
+test b_failing_verified_task_does_not_move_its_worktree_branch_head ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.23s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261115_failed_verdict_rollback_scope.rs (target/debug/deps/backlog_20261115_failed_verdict_rollback_scope-8a2d00e3d6f70be9)
+"""
+
+[task.closure.red]
+rev = "f5cc4349f15d62e0c19d1bb973265493ed3bd802"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "c80effc2"
+title = "answerlang Stop judges a stale interim transcript text instead of the final answer (prefer payload last_assistant_message)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "answerlang",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-15 session 6dcca0ad transcript lines 2117/2123/2124/2126: Stop fired 140ms after the Japanese final answer but judged the 101-letter English interim text. Fix candidate: read payload last_assistant_message first, transcript as fallback; include the judged source in the block reason so the next firing shows which was read. UNVERIFIED: whether the MAIN-session Stop payload carries last_assistant_message (SubagentStop does: overwatch subagents.json; changelog says Stop too; context-governor io.rs:10 claims otherwise). If absent, this fix does not cure the FP — then treat 'last assistant text precedes the last tool_result' as undetermined."
+created_at = 1794733932
+updated_at = 1794764625
+weight = 0.0
+issue_number = 1798
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1798"
+issue_closed_at = 1794764628
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p answerlang --test stop_payload_final_message_20261115 -- --ignored"
+rev = "c19614ef3c14d2ac117f8b6b01eff9ad9223a929"
+observed_at = 1794733932
+detail = """
+exit 101: 
+   Compiling answerlang v0.1.1 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/answerlang)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.70s
+     Running tests/stop_payload_final_message_20261115.rs (target/debug/deps/stop_payload_final_message_20261115-a069576d5a9a4563)
+error: test failed, to rerun pass `-p answerlang --test stop_payload_final_message_20261115`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p answerlang --test stop_undetermined_stale_transcript_20261116 --test stop_payload_final_message_20261115"
+exit = 0
+passed = 6
+rev = "5c21adda126411fbfd45fbceef250106bd60eaf3"
+observed_at = 1794764624
+output_digest = "sha256:274608c694ed7995c8c0b8aee9ee909b316f8a662b2580ab9fe91d51c92a31e8"
+excerpt = """
+
+running 2 tests
+test payload_last_assistant_message_wins_over_stale_transcript_line ... ok
+test payload_english_final_message_still_blocks ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+
+running 4 tests
+test control_transcript_ending_in_final_text_is_clean ... ok
+test stale_transcript_tool_result_after_last_text_is_undetermined_not_clean ... ok
+test transcript_fallback_english_blocks_and_reason_names_transcript ... ok
+test payload_english_message_blocks_and_reason_names_last_assistant_message ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/stop_payload_final_message_20261115.rs (target/debug/deps/stop_payload_final_message_20261115-c4d25fd703909595)
+     Running tests/stop_undetermined_stale_transcript_20261116.rs (target/debug/deps/stop_undetermined_stale_transcript_20261116-a9d09b45bf2e322e)
+"""
+
+[task.closure.red]
+rev = "befece7321899497c711f5de9bb32b537c34948a"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -46,8 +46,15 @@ pub struct Checkpoint {
 #[serde(rename_all = "snake_case")]
 pub enum JournalKind {
     Checkpoint,
+    /// An explicit `condukt state rollback` (whole-run restore).
     Rollback,
+    /// LEGACY: written by older condukt versions when a verified->failed
+    /// verdict restored the whole run. No longer written (backlog b8aa9d43);
+    /// kept only so old journals still deserialize.
     AutoRollback,
+    /// A task went verified->failed. Only that task changed; NO checkpoint was
+    /// restored and NO branch was reset. `label` is the task id.
+    VerifiedFailed,
 }
 
 /// One append-only journal event.

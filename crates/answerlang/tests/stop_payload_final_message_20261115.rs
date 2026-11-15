@@ -53,7 +53,6 @@ fn ja_env() -> Env {
 /// Transcript still ends at the English interim text (the Japanese final answer
 /// is not flushed yet); the payload carries the Japanese final message.
 #[test]
-#[ignore = "RED: 2026-11-15 answerlang Stop judges stale transcript text instead of payload last_assistant_message — remove when fixed"]
 fn payload_last_assistant_message_wins_over_stale_transcript_line() {
     let env = ja_env();
     let t = env.answer_transcript("t.jsonl", &en(200));
@@ -75,7 +74,6 @@ fn payload_last_assistant_message_wins_over_stale_transcript_line() {
 
 /// Control: the payload field must not launder an English final answer.
 #[test]
-#[ignore = "RED pair: 2026-11-15 HEAD ignores the payload field so this control fails until the fix lands — remove when fixed"]
 fn payload_english_final_message_still_blocks() {
     let env = ja_env();
     let t = env.answer_transcript("t.jsonl", &ja(300));

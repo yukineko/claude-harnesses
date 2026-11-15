@@ -4810,34 +4810,39 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
             let (done, total) = rs.counts();
             eprintln!("run '{run}': {done}/{total} verified");
-            // Auto-rollback (charter #7): a task that fails after having been
-            // verified restores the run to the last checkpoint — the safety net
-            // that makes unattended proceeding reversible. Fail-soft: a missing
-            // checkpoint or any restore error is logged, never breaks the turn.
+            // verified -> failed (backlog b8aa9d43): ONLY this task changes (it
+            // ends `failed`). No checkpoint restore, no branch reset — a whole-run
+            // restore overwrote other tasks' state and `git reset --hard` discarded
+            // later commits. Reverting is the explicit `condukt state rollback`.
+            // The transition is journaled (kind `verified_failed`). Only an
+            // unlocatable journal dir is reported on stderr; `append_journal`
+            // itself is fail-silent (it drops serialize/open/write errors), so
+            // the stderr line below does not prove the record was written.
             if st == state::Status::Failed && prior_status == state::Status::Verified {
-                let dir = match checkpoint_project_dir(cfg, cwd, &run) {
-                    Ok(d) => Some(d),
-                    Err(e) => {
-                        eprintln!("auto-rollback: NOT attempted, checkpoints unlocatable: {e:#}");
-                        None
+                match checkpoint_project_dir(cfg, cwd, &run) {
+                    Ok(d) => {
+                        let seq = checkpoint::latest_checkpoint(&d, &run).map_or(0, |c| c.seq);
+                        checkpoint::append_journal(
+                            &d,
+                            &run,
+                            &checkpoint::JournalEntry {
+                                seq,
+                                kind: checkpoint::JournalKind::VerifiedFailed,
+                                label: task.to_string(),
+                                created_at: state::now_secs(),
+                                note: Some(
+                                    "verified->failed; no checkpoint restored, no branch reset"
+                                        .to_string(),
+                                ),
+                            },
+                        );
+                        eprintln!(
+                            "verified task '{task}' marked failed; no checkpoint restored and no branch reset (use `condukt state rollback` to revert explicitly)"
+                        );
                     }
-                };
-                if let Some((dir, cp)) = dir.and_then(|d| {
-                    let cp = checkpoint::latest_checkpoint(&d, &run)?;
-                    Some((d, cp))
-                }) {
-                    restore_checkpoint(
-                        cfg,
-                        cwd,
-                        &dir,
-                        &run,
-                        &cp,
-                        checkpoint::JournalKind::AutoRollback,
-                    );
-                    eprintln!(
-                        "auto-rollback: verified task '{task}' failed; restored checkpoint {}",
-                        cp.seq
-                    );
+                    Err(e) => eprintln!(
+                        "verified task '{task}' marked failed; journal record NOT written, journal dir unlocatable: {e:#}"
+                    ),
                 }
             }
             // Claim upkeep (PDO): release this task's files once it reaches a
@@ -6067,7 +6072,7 @@ pub(crate) fn capture_branch_shas(cwd: &Path, rs: &state::RunState) -> BTreeMap<
 /// Restore a checkpoint's run-state snapshot as the current run-state, then
 /// best-effort git-reset each recorded worktree to its snapshot SHA, and journal
 /// the event. Every side effect is fail-soft: a git or journal error is logged
-/// and skipped so a rollback (incl. the auto-rollback path) never breaks a turn.
+/// and skipped so an explicit rollback does not abort mid-way.
 fn restore_checkpoint(
     cfg: &Config,
     cwd: &Path,

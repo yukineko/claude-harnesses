@@ -2327,3 +2327,32 @@ exit 101: 0261114-161340-68728-side-reds/crates/condukt)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.67s
      Running tests/backlog_20261115_worktree_merge_no_task_trailer_refusal.rs (target/debug/deps/backlog_20261115_worktree_merge_no_task_trailer_refusal-4806af8c846a3078)
 error: test failed, to rerun pass `-p condukt --test backlog_20261115_worktree_merge_no_task_trailer_refusal`"""
+
+[[task]]
+id = "e21b891c"
+title = "blastguard FP: python3 --check-hash-based-pycs always x.py fed from a pipe is Deny; python long options must be modelled and the option scans must not stop at them"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794715649
+updated_at = 1794715649
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_long_option_scan -- --include-ignored"
+rev = "d04fcb2ff2bde5c1fe021af061715bc41f8a6dbf"
+observed_at = 1794715649
+detail = """
+exit 101: g blastguard v0.2.605 (/Users/yuki/src/.harness-worktrees/py-long-opt/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running tests/backlog_20261115_python_long_option_scan.rs (target/debug/deps/backlog_20261115_python_long_option_scan-d14c0e0040427045)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_long_option_scan`"""

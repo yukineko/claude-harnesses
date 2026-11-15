@@ -2822,3 +2822,32 @@ exit 101: s-worktrees/sidereds-20261116/crates/tdd)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.84s
      Running tests/backlog_20261116_committed_peer_files_labelled_uncommitted.rs (target/debug/deps/backlog_20261116_committed_peer_files_labelled_uncommitted-3ed7d6413e72ff5c)
 error: test failed, to rerun pass `-p tdd --test backlog_20261116_committed_peer_files_labelled_uncommitted`"""
+
+[[task]]
+id = "188d2f29"
+title = "tdd green: a test command that never ran (spawn / run-log failure) is reported as 'tests still failing — keep implementing'"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "message-mismatch",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Code (crates/tdd/src/proof.rs at 9a989926b): green() calls judge_green(out.passed, has_red) and never judge_ran(&out) (red() does since 9c58c590d); runner maps spawn/run-log failure to passed:false + spawn_error:Some. RED (commit 168d912bf, branch backlog/sidereds-20261116, 2026-11-16): RED recorded with usable state, then <HOME>/.tdd/state replaced by a regular file so the run log cannot be created; marker file shows the command did not run. Verbatim failure: 'the command never ran, yet tdd green said the tests are still failing. stdout: (empty) stderr: tdd: tests still failing — keep implementing until they pass, then run `tdd green` again.' Controls in the same test pass: GREEN refused (non-zero), no green.json. Readings: (a) defect - environment failure misattributed to code; the message must name the spawn error / never ran; (b) cosmetic, the refusal is what matters. Both agree GREEN must be refused (it is: no fail-open). DOES NOT PROVE: real Command::spawn ENOENT path, timeout path."
+created_at = 1794764532
+updated_at = 1794764532
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261116_green_spawn_error_misreported -- --ignored green_names_the_spawn_failure_not_failing_tests"
+rev = "9d0e7defaee17d5e84aefa974a8b9cbfb6d439b7"
+observed_at = 1794764532
+detail = """
+exit 101: tdd v0.1.83 (/Users/yuki/src/.harness-worktrees/sidereds-20261116/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.81s
+     Running tests/backlog_20261116_green_spawn_error_misreported.rs (target/debug/deps/backlog_20261116_green_spawn_error_misreported-e2fe1fa60285e999)
+error: test failed, to rerun pass `-p tdd --test backlog_20261116_green_spawn_error_misreported`"""

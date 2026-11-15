@@ -6,12 +6,11 @@
 //! Observed (main / subagent), P = `echo 'import os; os.chmod("/etc/hosts", 0o777)' | `:
 //!   P python3                                          deny  / deny  (control)
 //!   P python3 -m asyncio                               allow / allow <- fail-open
-//!   P PYTHONINSPECT=1 python3 script.py                allow / allow <- fail-open
 //!   P python3 -c 'import code; code.interact()'        allow / allow <- fail-open
 //! The asyncio REPL executes piped stdin (`echo 'print(12345)' | /usr/bin/python3
-//! -m asyncio` printed `>>> 12345`); PYTHONINSPECT=1 makes python read stdin as
-//! interactive after the script; `code.interact()` runs an interactive console
-//! on stdin.
+//! -m asyncio` printed `>>> 12345`); `code.interact()` runs an interactive
+//! console on stdin. (A `PYTHONINSPECT=1 python3 script.py` case was dropped by
+//! user ruling 2026-11-15: piped stdin was observed NOT to execute under it.)
 //!
 //! Two readings: (1) real fail-open: the gate judges stdin as executed only for
 //! a known list of stdin-reading flags/modules and misses these entry points;
@@ -21,8 +20,8 @@
 //! and system harm must be Deny (user ruling: Deny in main and subagent).
 //!
 //! DOES NOT PROVE: other REPL entry points (`-m pdb`, `-m idlelib`, ipython),
-//! other interpreters, or that `python3 script.py` without PYTHONINSPECT stays
-//! Allow (stdin is then only data).
+//! other interpreters, PYTHONINSPECT (removed, see above), or that
+//! `python3 script.py` stays Allow (stdin is then only data).
 //!
 //! RED written by an independent test author, not the implementer.
 
@@ -103,24 +102,19 @@ fn undenied(cmds: &[String], tag: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 harmful program piped to python3 -m asyncio is Allow — remove the ignore when fixed"]
 fn harmful_program_piped_to_python_m_asyncio_is_deny() {
     let bad = undenied(&[format!("{PY}python3 -m asyncio")], "asyncio");
     assert!(bad.is_empty(), "expected Deny:\n{}", bad.join("\n"));
 }
 
-#[test]
-#[ignore = "RED: 2026-11-14 harmful program piped to PYTHONINSPECT=1 python3 script.py is Allow — remove the ignore when fixed"]
-fn harmful_program_piped_to_pythoninspect_script_is_deny() {
-    let bad = undenied(
-        &[format!("{PY}PYTHONINSPECT=1 python3 script.py")],
-        "inspect",
-    );
-    assert!(bad.is_empty(), "expected Deny:\n{}", bad.join("\n"));
-}
+// test-weakening-justified: the `PYTHONINSPECT=1 python3 script.py` case was
+// removed by user ruling 2026-11-15 ("削除して実装も外す"). Observed on
+// Python 3.12.11 / macOS: `echo 'print(12345)' | PYTHONINSPECT=1 python3 s.py`
+// printed nothing (rc=0) while `python3 -i s.py` printed `>>> 12345`, so the
+// premise that PYTHONINSPECT executes piped stdin did not hold; the matching
+// judgement in program_source.rs was removed in the same commit.
 
 #[test]
-#[ignore = "RED: 2026-11-14 harmful program piped to python3 -c code.interact() is Allow — remove the ignore when fixed"]
 fn harmful_program_piped_to_code_interact_is_deny() {
     let bad = undenied(
         &[format!("{PY}python3 -c 'import code; code.interact()'")],

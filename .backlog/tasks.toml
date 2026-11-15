@@ -2389,3 +2389,64 @@ exit 101: 61340-68728-side-reds/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.24s
      Running tests/backlog_20261114_python_stdin_forward_shell_literal_harm.rs (target/debug/deps/backlog_20261114_python_stdin_forward_shell_literal_harm-eacd53911bd95b16)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_stdin_forward_shell_literal_harm`"""
+
+[[task]]
+id = "b8aa9d43"
+title = "condukt: state set failed on a verified task auto-rolls back the whole run state and git-resets the task branch"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 in run-20261114-161340-68728 (journal auto_rollback label verified:t1): marking verified t1 failed restored every task's status from the checkpoint (t2 back to running with its worktree deleted, t3/t4 worktree entries lost) and ran git reset --hard on t1's branch, discarding a later merge-of-main commit. User ruling 2026-11-15: fix as a bug (both the whole-run restore and the branch reset). RED by an independent author (sonnet): crates/condukt/tests/backlog_20261115_failed_verdict_rollback_scope.rs, observed 0 passed / 2 failed. NOTE: the existing test crates/condukt/tests/checkpoint_cli.rs::verified_task_that_fails_auto_rolls_back_and_journals pins the current behaviour and must be revisited by the fix (do not delete or loosen it outside that fix). Fix is out of scope of run-20261114-161340-68728."
+created_at = 1794680180
+updated_at = 1794680180
+weight = 0.0
+issue_number = 1784
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1784"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261115_failed_verdict_rollback_scope -- --include-ignored"
+rev = "509a7b57ceff1a739255e047e27185f7516f2609"
+observed_at = 1794680180
+detail = """
+exit 101: ki/.condukt/worktrees/run-20261114-161340-68728-side-reds/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.15s
+     Running tests/backlog_20261115_failed_verdict_rollback_scope.rs (target/debug/deps/backlog_20261115_failed_verdict_rollback_scope-a4b399bd240c9f02)
+error: test failed, to rerun pass `-p condukt --test backlog_20261115_failed_verdict_rollback_scope`"""
+
+[[task]]
+id = "64fe4e19"
+title = "condukt testscope: rerun guard records a test command at PreToolUse, so an attempt a later hook blocked (never executed) refuses the real run"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "testscope",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-15 in run-20261114-161340-68728: a combined heredoc+cargo test Bash call was denied by blastguard at PreToolUse; every later run of that cargo test was refused by testscope as 'already ran on this exact tree' although it never executed. crates/condukt/src/testscope.rs check_rerun writes the ledger line and returns Allow in the same PreToolUse; there is no PostToolUse confirmation. RED by an independent author (sonnet): crates/condukt/tests/backlog_20261115_testscope_counts_unexecuted_attempt.rs. Readings: (a) defect - a never-executed attempt counts as a run; (b) intended - recording at Pre is the only hook point. Distinguish: whether testscope docs promise 'ran'. Related (separate row): cd-target tree identity (backlog_20261114_testscope_cd_tree_identity). Fix must stay fail-closed."
+created_at = 1794680589
+updated_at = 1794680589
+weight = 0.0
+issue_number = 1785
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1785"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261115_testscope_counts_unexecuted_attempt -- --include-ignored"
+rev = "8fc672062940920906b2f947a5bf2cccc4f7ccdc"
+observed_at = 1794680589
+detail = """
+exit 101: _unexecuted_attempt" -p condukt` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.03s
+     Running tests/backlog_20261115_testscope_counts_unexecuted_attempt.rs (target/debug/deps/backlog_20261115_testscope_counts_unexecuted_attempt-bf799c7a4f6b54c1)
+error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_counts_unexecuted_attempt`"""

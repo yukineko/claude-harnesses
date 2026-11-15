@@ -2427,6 +2427,8 @@ notes = '''Observed 2026-11-15 at main 2ace975d1: every cargo test in every cwd 
 created_at = 1794732006
 updated_at = 1794732006
 weight = 0.0
+issue_number = 1794
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1794"
 rev = 0
 
 [task.repro]

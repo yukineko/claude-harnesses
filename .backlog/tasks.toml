@@ -2522,13 +2522,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "Code (crates/tdd/src/proof.rs at 9a989926b): green() calls judge_green(out.passed, has_red) and never judge_ran(&out) (red() does since 9c58c590d); runner maps spawn/run-log failure to passed:false + spawn_error:Some. RED (commit 168d912bf, branch backlog/sidereds-20261116, 2026-11-16): RED recorded with usable state, then <HOME>/.tdd/state replaced by a regular file so the run log cannot be created; marker file shows the command did not run. Verbatim failure: 'the command never ran, yet tdd green said the tests are still failing. stdout: (empty) stderr: tdd: tests still failing — keep implementing until they pass, then run `tdd green` again.' Controls in the same test pass: GREEN refused (non-zero), no green.json. Readings: (a) defect - environment failure misattributed to code; the message must name the spawn error / never ran; (b) cosmetic, the refusal is what matters. Both agree GREEN must be refused (it is: no fail-open). DOES NOT PROVE: real Command::spawn ENOENT path, timeout path."
+notes = "Code (crates/tdd/src/proof.rs at 9a989926b): green() calls judge_green(out.passed, has_red) and never judge_ran(&out) (red() does since 9c58c590d); runner maps spawn/run-log failure to passed:false + spawn_error:Some. RED (commit 168d912bf, branch backlog/sidereds-20261116, 2026-11-16): RED recorded with usable state, then <HOME>/.tdd/state replaced by a regular file so the run log cannot be created; marker file shows the command did not run. Verbatim failure: 'the command never ran, yet tdd green said the tests are still failing. stdout: (empty) stderr: tdd: tests still failing — keep implementing until they pass, then run `tdd green` again.' Controls in the same test pass: GREEN refused (non-zero), no green.json. Readings: (a) defect - environment failure misattributed to code; the message must name the spawn error / never ran; (b) cosmetic, the refusal is what matters. Both agree GREEN must be refused (it is: no fail-open). DOES NOT PROVE: real Command::spawn ENOENT path, timeout path. | User ruling 2026-11-16 (AskUserQuestion, session 06c2bd77): 「欠陥 → 未実行と表示する (推奨)」 — reading (a): green() must pass through judge_ran like red() and name the spawn error / never ran."
 created_at = 1794764532
-updated_at = 1794764532
+updated_at = 1794784236
 weight = 0.0
 issue_number = 1811
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1811"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -2553,13 +2553,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "Code (crates/tdd/src/proof.rs at 9a989926b): red() = judge_ran(&out) (inspects only spawn_error) then judge_red(out.passed) (accepts any passed==false); status_str prints 'killed' for exit_code None. RED (commit 9d0e7defa, branch backlog/sidereds-20261116, 2026-11-16), cmd 'touch ran.marker; kill -KILL $$', verbatim: 'command was killed by SIGKILL (no assertion observed) yet tdd red exit=Some(0), RED proof exists=true stdout: 🔴 RED recorded for `t1` — tests fail as expected (killed).' Control control_command_exiting_1_records_red passes. Readings: (a) asserted - a kill/crash is not a demonstrated assertion failure -> undetermined -> no RED (CLAUDE.md 2(b)/3: crash is undetermined, F->P oracle fails open otherwise); (b) a crashing test is a failing test, RED correct - under (b) this RED is wrong. The test is NOT independent of the reading; a human ruling distinguishes them. Note a Rust test panic exits 101 (not a signal), so (a) only affects OS/harness kills (SIGKILL, OOM, SIGSEGV). DOES NOT PROVE: timeout path (timed_out:true, likely same acceptance, untested), tdd green."
+notes = "Code (crates/tdd/src/proof.rs at 9a989926b): red() = judge_ran(&out) (inspects only spawn_error) then judge_red(out.passed) (accepts any passed==false); status_str prints 'killed' for exit_code None. RED (commit 9d0e7defa, branch backlog/sidereds-20261116, 2026-11-16), cmd 'touch ran.marker; kill -KILL $$', verbatim: 'command was killed by SIGKILL (no assertion observed) yet tdd red exit=Some(0), RED proof exists=true stdout: 🔴 RED recorded for `t1` — tests fail as expected (killed).' Control control_command_exiting_1_records_red passes. Readings: (a) asserted - a kill/crash is not a demonstrated assertion failure -> undetermined -> no RED (CLAUDE.md 2(b)/3: crash is undetermined, F->P oracle fails open otherwise); (b) a crashing test is a failing test, RED correct - under (b) this RED is wrong. The test is NOT independent of the reading; a human ruling distinguishes them. Note a Rust test panic exits 101 (not a signal), so (a) only affects OS/harness kills (SIGKILL, OOM, SIGSEGV). DOES NOT PROVE: timeout path (timed_out:true, likely same acceptance, untested), tdd green. | User ruling 2026-11-16 (AskUserQuestion, session 06c2bd77): 「判定不能 → RED にしない (推奨)」 — reading (a): a kill/crash with no observed assertion failure is undetermined; tdd red must refuse non-zero and write no RED proof."
 created_at = 1794764566
-updated_at = 1794764566
+updated_at = 1794784236
 weight = 0.0
 issue_number = 1812
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1812"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

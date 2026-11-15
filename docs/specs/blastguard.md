@@ -1251,7 +1251,16 @@ forge・condukt のスケジューラが再利用）。
   記録は判定確定後・表示前に書き、判定を変えない。書けない（panic を含む）ときは表示理由に
   `could NOT be recorded` とエラーを付け stderr にも警告する（沈黙しない）。relay（subagent の Bash Ask の
   再実行 queue）とは別物で、block log は真の `Deny` と main の `Ask` を含む全 block を記録する。
-- **`hookio`** — PreToolUse `deny` の単一行 JSON 生成（`deny_json`）。
+- **`detect/ast`**（`mod.rs` / `parse.rs` / `eval.rs`）— shell parser（brush-parser `=0.4.0`）＋静的評価層
+  （ユーザー裁定 2026-11-15「parser ＋ 静的評価で一体にする」）。`analyze(&str) -> Analysis`
+  （`Known(Script)` / `Undetermined(Cause)`、`Cause` = `NotImplemented`/`TooLong`/`TooDeep`/`Timeout`/
+  `Parse`/`Panic`/`ZshOnly`/`Unsupported`）と `program_source(&SimpleCommand) -> Option<ProgramSource>`。
+  quoted heredoc 本文・quoted word・comment は data、実行される command word と展開だけが code。
+  parse 不能・上限超過・zsh 専用構文は `Undetermined` で、呼び出し側は Ask/Deny に倒す（fail-closed）。
+  **現状は skeleton**: `analyze` は常に `Undetermined(NotImplemented)`、`program_source` は常に
+  `Some(ProgramSource::Undetermined)` を返し、どの検出器からも呼ばれない（判定に影響しない）。
+  `MAX_PARSE_BYTES`（64 KiB）/`MAX_PARSE_DEPTH`（64）は仮値で、測定（brace nesting 200 = 48s を観測済み）
+  に基づく確定は ast-parse 段で行う。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。
 

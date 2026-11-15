@@ -2495,3 +2495,126 @@ exit 101: ng condukt v0.7.413 (/Users/yuki/src/harness-wt-red-empty-worktree/cra
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.50s
      Running tests/backlog_20261115_testscope_cd_prefix_rule_c.rs (target/debug/deps/backlog_20261115_testscope_cd_prefix_rule_c-98af5fb69044e43b)
 error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_cd_prefix_rule_c`"""
+
+[[task]]
+id = "4270601a"
+title = "blastguard: quoted heredoc body of python3 - (<<'EOF') judged as shell redirect, Denied in both main and subagent (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-15 in a subagent (main at 72cb90009): 'cd <tests dir> && python3 - <<'EOF' ... EOF' whose Python body held Rust doc text in a raw string was denied with: '> ' destroys the file's current contents and `` is a relative path and blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable. RED cf3e7a684 (independent author), measured 2026-11-15 with main at e889149e7: f0 (cd scratch && python3 - <<'EOF' with a raw string containing '`check_rerun` -> `tree_identity(cwd)`', '`cd <task worktree> && cargo test --test' / '<out of scope>` is allowed', open('out.rs','w').write(header); EOF; cd .. && ls scratch): left: ("deny", "deny") with the verbatim reason above (Deny, not Ask, even in main). Narrowing control f1 (python3 - body with only '-> `tree_identity(cwd)`') = allow/allow, so that token alone is not the trigger. Control c1 (cd scratch && echo x > `printf %s "$T"`, a real shell redirect) = deny both modes: "'> `printf' destroys the file's current contents and ``printf` contains a shell expansion ...". Readings: (a) defect - a quoted heredoc fed to python3 - is Python source the shell never parses, so '>' in it is not a redirect; (b) intended - interpreter-bound body judged conservatively. Tell apart: the reason uses shell redirect semantics with an empty target on text only Python reads; (b) would need a Python-level reason (the open(...,'w') target out.rs is a literal relative path in scratch). Suspected trigger (unproven): the angle-bracket text '<task worktree> &&' / '<out of scope>' inside the body being tokenized as shell. Related: a826bdab (quoted heredoc JSON backtick). Fix must keep c1 non-Allow. DOES NOT PROVE: exact trigger token; node/ruby stdin."""
+created_at = 1794733637
+updated_at = 1794733637
+weight = 0.0
+issue_number = 1797
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1797"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_stdin_heredoc_backtick_redirect_fp -- --ignored f0_recovered_shape_is_allow_in_subagent_and_main"
+rev = "cf3e7a684c35c5abb71891d7e54b5503021fd04c"
+observed_at = 1794733637
+detail = """
+exit 101: -empty-worktree/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.88s
+     Running tests/backlog_20261115_python_stdin_heredoc_backtick_redirect_fp.rs (target/debug/deps/backlog_20261115_python_stdin_heredoc_backtick_redirect_fp-1edf72d723701cc4)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_stdin_heredoc_backtick_redirect_fp`"""
+
+[[task]]
+id = "c80effc2"
+title = "answerlang Stop judges a stale interim transcript text instead of the final answer (prefer payload last_assistant_message)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "answerlang",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-15 session 6dcca0ad transcript lines 2117/2123/2124/2126: Stop fired 140ms after the Japanese final answer but judged the 101-letter English interim text. Fix candidate: read payload last_assistant_message first, transcript as fallback; include the judged source in the block reason so the next firing shows which was read. UNVERIFIED: whether the MAIN-session Stop payload carries last_assistant_message (SubagentStop does: overwatch subagents.json; changelog says Stop too; context-governor io.rs:10 claims otherwise). If absent, this fix does not cure the FP — then treat 'last assistant text precedes the last tool_result' as undetermined."
+created_at = 1794733932
+updated_at = 1794733932
+weight = 0.0
+issue_number = 1798
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1798"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p answerlang --test stop_payload_final_message_20261115 -- --ignored"
+rev = "c19614ef3c14d2ac117f8b6b01eff9ad9223a929"
+observed_at = 1794733932
+detail = """
+exit 101: 
+   Compiling answerlang v0.1.1 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/answerlang)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.70s
+     Running tests/stop_payload_final_message_20261115.rs (target/debug/deps/stop_payload_final_message_20261115-a069576d5a9a4563)
+error: test failed, to rerun pass `-p answerlang --test stop_payload_final_message_20261115`"""
+
+[[task]]
+id = "f7bba5f0"
+title = "stop-verify-worktree blocks on another writer's dirt on a recorded, since-committed main-tree path"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-15 (session 6dcca0ad, Stop feedback at 09:02:34Z and 09:06:14Z on .backlog/tasks.toml while main was clean right after). writes_stop_check (scripts/deny_ledger.py:1038) uses the path set only; entry epoch unused. Candidate: skip a recorded path whose mtime is after every record epoch for it (+30s); keep blocking own uncommitted writes (control test). Existing test_stop_verify_worktree.py dirty() fixture uses epoch=1.0 and must be updated visibly. Writer in the observed windows is UNVERIFIED; reading (2) intended over-attribution (deny_ledger.py:928-934) would instead mean not recording auto-merged backlog rows."
+created_at = 1794733957
+updated_at = 1794733957
+weight = 0.0
+issue_number = 1799
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1799"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest -q --runxfail scripts/test_stop_verify_worktree_foreign_writer_20261115.py"
+rev = "c19614ef3c14d2ac117f8b6b01eff9ad9223a929"
+observed_at = 1794733957
+detail = '''
+exit 1: t is NOT in this record is another session's and does not block.\n").returncode
+
+scripts/test_stop_verify_worktree_foreign_writer_20261115.py:125: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_stop_verify_worktree_foreign_writer_20261115.py::test_foreign_rewrite_after_my_committed_write_does_not_block
+1 failed, 1 passed in 0.55s'''
+
+[[task]]
+id = "dc053fcf"
+title = "blastguard FP: for-loop over a literal word list writing $D/$f.tmp then mv is refused (loop var left unresolved)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-15 (relay bgr-d51baecd617b; probe by independent designer on 0.2.611): for f in a b; do ... > $D/$f.tmp && mv ...; done is ask/deny with "a command that may relink it runs first and the path cannot be placed"; $D resolves but $f is shown unexpanded. Same literal paths without the variable = allow; no-loop with $D = allow; unrelated mv gives the same reason. Candidate cause crates/blastguard/src/detect/relink.rs ~394 (absolute(...).ok_or_else on loop/relink lines). Secondary (not asserted): loop write without mv / with rm / cp is deny 'destroys the file's current contents' with $f unexpanded — check after fix. Controls kept restrictive: $(ls) list, ln -s /etc write."""
+created_at = 1794734286
+updated_at = 1794734286
+weight = 0.0
+issue_number = 1800
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1800"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_for_loop_literal_list_tmp_mv_fp -- --ignored"
+rev = "cfa64022e3b6c2bde0dcb838e92f156cf050269b"
+observed_at = 1794734286
+detail = """
+exit 101: /yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.07s
+     Running tests/backlog_20261115_for_loop_literal_list_tmp_mv_fp.rs (target/debug/deps/backlog_20261115_for_loop_literal_list_tmp_mv_fp-8f7ede9a6c651cbc)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_for_loop_literal_list_tmp_mv_fp`"""

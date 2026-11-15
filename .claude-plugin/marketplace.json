@@ -57,7 +57,7 @@
     {
       "name": "blastguard",
       "description": "PreToolUse hook that denies or asks before project-destroying Bash commands and file operations, as a single self-contained Rust binary.",
-      "version": "0.2.611",
+      "version": "0.2.613",
       "category": "security",
       "keywords": [
         "hooks",
@@ -1176,7 +1176,7 @@
     {
       "name": "answerlang",
       "description": "Keeps answers and conclusions in the user's language: injects the target language and blocks a Stop whose final answer is in another script.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "quality",
       "keywords": [
         "hooks",

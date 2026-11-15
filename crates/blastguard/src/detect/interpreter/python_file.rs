@@ -628,7 +628,7 @@ const STDIN_DYNAMIC_NAMES: &[&str] = &["getattr", "__builtins__", "globals", "lo
 /// reaches an executor through a path these closed lists do not name — a name
 /// built by string concatenation then resolved off an object other than
 /// `builtins` / `__builtins__`, say — is NOT caught here and is read as
-/// treating stdin as data; the `builtins` / `__builtins__` / `getattr` reaches
+/// treating stdin as data; the `builtins` / `__builtins__` / `getattr` / `globals` / `locals` / `vars` reaches
 /// cover the dynamic shapes that are statically visible. A program that
 /// forwards its stdin to a child process or a shell (`os.system(input())`) is
 /// out of scope here (filed separately as backlog 7cccad0a).

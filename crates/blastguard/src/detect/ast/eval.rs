@@ -57,11 +57,13 @@
 //!   command); the `printf -v` target; every literal operand of `read` /
 //!   `mapfile` / `readarray` / `getopts` / `wait` plus their implicit targets
 //!   (`REPLY`, `MAPFILE`, `OPTARG` / `OPTIND`); and a `for` variable (each
-//!   literal word, or an undetermined value for an undetermined list). The
+//!   literal word, or an undetermined value for an undetermined list); and
+//!   `${n:=v}` / `${n=v}` (also `${a[i]:=v}`; an indirect `${!x:=v}` counts
+//!   as possibly integer while opaque or any name is `declare -i`). The
 //!   variables being `Undetermined`, a value not determined by the text or
 //!   that reads a name is `Unsupported` (even a literal word such as `bar` or
-//!   `/abs/path`: `bar` / `abs` name variables). NOT checked: the assignment
-//!   of `${n:=v}` / `${n=v}`. The opaque flag is OR-ed where paths join.
+//!   `/abs/path`: `bar` / `abs` name variables). The opaque flag is OR-ed
+//!   where paths join.
 //!   An undetermined non-assignment operand
 //!   of a declaration builtin (`declare $opt n=v`) counts as a possible `-i`.
 //!   The keys of a compound value are arithmetic in a declaration builtin
@@ -323,7 +325,7 @@ impl Env {
     /// `name` may have the integer attribute — it was declared `-i` here, or
     /// the state is opaque (an `eval` / `source` / ... may have given any
     /// name the attribute; user ruling 2026-11-16, reading A). The paths
-    /// that go through here are listed in the module doc (`${n:=v}` does not).
+    /// that go through here are listed in the module doc.
     fn int_assign(&self, name: &str, v: &Value) -> Result<(), Cause> {
         self.int_assign_if(self.opaque, name, v)
     }
@@ -1805,11 +1807,35 @@ fn param(expr: &ParameterExpr, praw: &str, env: &mut Env) -> Result<Value, Cause
                 )));
             }
             arith::check_param(expr, &|n| env.lookup(n))?;
+            assign_default(expr, env)?;
             if praw.contains('=') || praw.contains('[') {
                 env.havoc_vars("a parameter operation may assign variables");
             }
             Ok(undet(format!("{praw}: parameter operation not evaluated")))
         }
+    }
+}
+
+/// `${n:=v}` / `${n=v}` assign `v` (the raw word: a `$` in it is not
+/// determined) to `n`: arithmetic if `n` may be integer. An indirect
+/// `${!x:=v}` (or any target this does not name) may assign any name, so it
+/// counts as integer while the state is opaque or any name is `declare -i`.
+fn assign_default(expr: &ParameterExpr, env: &Env) -> Result<(), Cause> {
+    let ParameterExpr::AssignDefaultValues {
+        parameter,
+        indirect,
+        default_value,
+        ..
+    } = expr
+    else {
+        return Ok(());
+    };
+    let v = Value::Literal(default_value.clone().unwrap_or_default());
+    match parameter {
+        Parameter::Named(n) | Parameter::NamedWithIndex { name: n, .. } if !*indirect => {
+            env.int_assign(n, &v)
+        }
+        _ => env.int_assign_if(env.opaque || !env.integer.is_empty(), "", &v),
     }
 }
 

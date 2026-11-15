@@ -920,3 +920,47 @@ mod tilde_and_arith_fail_open {
         );
     }
 }
+
+mod arith_subscript_fail_open {
+    use super::*;
+
+    fn cat_target(command: &str) -> RedirTarget {
+        let s = known(command);
+        one_redirect(one_named(&s, "cat")).target.clone()
+    }
+
+    #[test]
+    fn printf_v_arith_subscript_makes_variable_undetermined() {
+        let t = cat_target("x=/a; printf -v 'a[x=6]' hi; cat > $x");
+        match t {
+            RedirTarget::Path(v) if is_undet(&v) => {}
+            other => panic!("printf -v 'a[x=6]' assigns x in zsh; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_arith_subscript_makes_variable_undetermined() {
+        let t = cat_target("x=/a; read 'a[x=8]' < /dev/null; cat > $x");
+        match t {
+            RedirTarget::Path(v) if is_undet(&v) => {}
+            other => panic!("read 'a[x=8]' assigns x; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn declare_i_arith_assignment_makes_variable_undetermined() {
+        let t = cat_target("x=/a; declare -i n; n=x=9; cat > $x");
+        match t {
+            RedirTarget::Path(v) if is_undet(&v) => {}
+            other => panic!("n=x=9 under declare -i assigns x; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn control_read_plain_name_keeps_literal() {
+        assert_eq!(
+            cat_target("x=/a; read y < /dev/null; cat > $x"),
+            RedirTarget::Path(lit("/a"))
+        );
+    }
+}

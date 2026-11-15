@@ -16,6 +16,15 @@
 - **network-infra** — VPC/サブネット/セキュリティグループ・DNS・ロードバランサ等、
   ネットワーク経路そのものの設定・疎通に起因する作業（アプリケーションコードの不具合とは区別する）。
 
+- **fail-open** / **false-positive** — blastguard 所見の分類タグ（ユーザー裁定 2026-11-14）。
+  `fail-open` は危険な操作が通ってしまった（判定不能・誤判定で制限側に倒れなかった）所見、
+  `false-positive` は無害な操作を Deny/Ask した所見。**blastguard タスク**（tag に `blastguard`、
+  または title が大文字小文字を問わず `blastguard` で始まる）は少なくとも一方が**必須**で、
+  `backlog add` は repro 実行前に、`backlog edit`（`--tag` / `--title` 指定時）は store を変えずに、
+  無分類を非0終了で拒否する。週次指標 `scripts/blastguard-discovery-rate.py` に未分類
+  （fail-open / FP のどちらにも数えられない行）を生まないための規約（判定は `crates/backlog/src/task.rs` の
+  `blastguard_classification_error`）。
+
 ## 運用ルール
 
 - 既存 backlog エントリが上記カテゴリに該当すると判明した時点で `--tag <category>` を付けて

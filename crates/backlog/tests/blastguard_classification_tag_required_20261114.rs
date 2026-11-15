@@ -44,7 +44,11 @@ fn add(f: &Fixture, title: &str, tags: &[&str]) -> (Out, Option<String>) {
 fn assert_refused_naming_tags(f: &Fixture, before: &[u8], o: &Out, why: &str) {
     assert_ne!(o.code, 0, "{why}: must be refused: {}", o.both());
     for t in TAGS {
-        assert!(o.stderr.contains(t), "{why}: stderr must name `{t}`: {}", o.both());
+        assert!(
+            o.stderr.contains(t),
+            "{why}: stderr must name `{t}`: {}",
+            o.both()
+        );
     }
     assert_eq!(f.store_bytes(), before, "{why}: store must be unchanged");
 }
@@ -89,7 +93,12 @@ fn add_blastguard_title_is_case_insensitive() {
     let f = fixture("bgc-add-case");
     let before = f.store_bytes();
     let (o, _) = add(&f, "BlastGuard allows X", &["p1"]);
-    assert_refused_naming_tags(&f, &before, &o, "mixed-case blastguard title, unrelated tag");
+    assert_refused_naming_tags(
+        &f,
+        &before,
+        &o,
+        "mixed-case blastguard title, unrelated tag",
+    );
 }
 
 #[test]

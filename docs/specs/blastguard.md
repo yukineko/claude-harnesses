@@ -832,6 +832,12 @@ forge・condukt のスケジューラが再利用）。
     `pty.spawn`・`asyncio.create_subprocess_exec` は `subprocess.run`、`asyncio.create_subprocess_shell` は
     `os.system` として判定。f-string の `{…}` 内の code も対象。command が計算される call
     （`computed_shell_call`）と `CODE_BUILDING` marker は Ask。
+    `CODE_BUILDING` marker（`interpreter/code_building.rs`）は case-fold した本文の substring で拾い、
+    2 つだけ出現ごとに Python token から免除する: `re.compile(`/`regex.compile(`（module 名が module-level の
+    素の `import` だけで束縛され、他では `name.attr` の読み取りにしか使われない時）と、定数 metadata key の
+    `globals()[...]` 読み取り（backlog 80b18990 / 2e5e080c）。tokenise できない program と、免除を積極的に
+    確定できない出現は marker のまま Ask。substring なので `exec (`・`globals ()[` のように `(` の前に空白が
+    ある綴りは marker に掛からない（list の穴であり免除の穴ではない。未修正）。
   - **filesystem 破壊**: `shutil.rmtree(p)` → `rm -rf p`、`os.remove`/`os.unlink`/`os.rmdir`/`os.removedirs`/
     `Path.unlink()`/`.rmdir()` → `rm p`、`open(p,'w'|'x'|…)`・`Path.open('w')`・`write_text`/`write_bytes`
     → `: > p`（`a`/`+` は `: >> p`）、`shutil.copy`/`copy2`/`copyfile`/`copytree`/`move`・

@@ -195,6 +195,21 @@ class Undetermined(Base):
         self.assertUndetermined(record("TWOLINES", cwd=self.cwd), "more than one line")
         self.assertUndetermined(record("BADWORD", cwd=self.cwd), "unexpected decision")
 
+    def test_timeout_is_undetermined(self):
+        slow = os.path.join(self.tmp, "slow-blastguard")
+        with open(slow, "w") as fh:
+            fh.write(f"#!{sys.executable}\nimport sys, time\nsys.stdin.read()\ntime.sleep(30)\n")
+        os.chmod(slow, os.stat(slow).st_mode | stat.S_IXUSR)
+        saved = replay.HOOK_TIMEOUT_S
+        replay.HOOK_TIMEOUT_S = 1
+        try:
+            d, reason, _ = replay.replay_record(record("ALLOW", cwd=self.cwd), slow,
+                                                "sandbox", self.cwd)
+        finally:
+            replay.HOOK_TIMEOUT_S = saved
+        self.assertEqual(d, "undetermined", reason)
+        self.assertIn("timed out", reason)
+
     def test_unparseable_log_line(self):
         log = self.write_log(["{not json", record("DENY", cwd=self.cwd)])
         res = replay.replay_log(log, self.binary, "sandbox", self.cwd)

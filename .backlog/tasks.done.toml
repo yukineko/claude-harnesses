@@ -78258,3 +78258,142 @@ rev = "d04fcb2ff2bde5c1fe021af061715bc41f8a6dbf"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "0065d086"
+title = "blastguard fail-open: bash /dev/fd/3 (program operand on an fd nothing on the line opens) is Allow while bash <&3 is Ask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. `bash /dev/fd/3` => allow in main (control `bash <&3` => ask in main). Readings: (a) defect - /dev/fd/N as a program operand is not treated as an undeterminable program source; (b) intended - inherited fds are assumed benign. Tell apart: the two spellings read the same fd, so their verdicts should match.
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_inherited_dev_fd_program_operand -- --include-ignored; rev: 901603d404135dba3da8e97661c798458d22e9e2; observed: exit 0: iled; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+   Compiling blastguard v0.2.607 (/Users/yuki/src/.harness-worktrees/session-f01b1dd4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.26s
+     Running tests/backlog_20261114_inherited_dev_fd_program_operand.rs (target/debug/deps/backlog_20261114_inherited_dev_fd_program_operand-ee8a97b9f1c3983b)"""
+created_at = 1794634309
+updated_at = 1794730231
+weight = 0.0
+issue_number = 1764
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1764"
+issue_closed_at = 1794730234
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_inherited_dev_fd_program_operand -- --include-ignored"
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634309
+detail = """
+exit 101: /worktrees/run-20261114-125811-45041-integ/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261114_inherited_dev_fd_program_operand.rs (target/debug/deps/backlog_20261114_inherited_dev_fd_program_operand-f942a51f6a25c4c9)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_inherited_dev_fd_program_operand`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_inherited_dev_fd_program_operand -- --include-ignored; rev: 901603d404135dba3da8e97661c798458d22e9e2; observed: exit 0: iled; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+   Compiling blastguard v0.2.607 (/Users/yuki/src/.harness-worktrees/session-f01b1dd4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.26s
+     Running tests/backlog_20261114_inherited_dev_fd_program_operand.rs (target/debug/deps/backlog_20261114_inherited_dev_fd_program_operand-ee8a97b9f1c3983b)"""
+
+[[task]]
+id = "2210e1db"
+title = "blastguard: exec <<< 'chmod 777 /etc/hosts'; bash (fd 0 here-string, literal system harm) is Ask in main, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. Literal system harm reaching a shell via `exec <<< ...` on fd 0 is main Ask (subagent Deny). User ruling: literal harm is Deny in main too. spec bg-exec-fd-tracking only models N>=3, so fd 0 was left out of e686a85e. Readings: (a) defect - fd 0 here-text should be judged like fd N; (b) out of model by the spec. Tell apart: spec canon section 'exec が開く fd の文をまたいだ追跡' scope.
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_exec_stdin_herestring_literal_harm -- --include-ignored; rev: 901603d404135dba3da8e97661c798458d22e9e2; observed: exit 0: ; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+   Compiling blastguard v0.2.607 (/Users/yuki/src/.harness-worktrees/session-f01b1dd4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/backlog_20261114_exec_stdin_herestring_literal_harm.rs (target/debug/deps/backlog_20261114_exec_stdin_herestring_literal_harm-038b7df97c097946)"""
+created_at = 1794634328
+updated_at = 1794730236
+weight = 0.0
+issue_number = 1765
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1765"
+issue_closed_at = 1794730238
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_exec_stdin_herestring_literal_harm -- --include-ignored"
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634328
+detail = """
+exit 101: rees/run-20261114-125811-45041-integ/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running tests/backlog_20261114_exec_stdin_herestring_literal_harm.rs (target/debug/deps/backlog_20261114_exec_stdin_herestring_literal_harm-a50a6e1d71704f6c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_exec_stdin_herestring_literal_harm`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_exec_stdin_herestring_literal_harm -- --include-ignored; rev: 901603d404135dba3da8e97661c798458d22e9e2; observed: exit 0: ; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+   Compiling blastguard v0.2.607 (/Users/yuki/src/.harness-worktrees/session-f01b1dd4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/backlog_20261114_exec_stdin_herestring_literal_harm.rs (target/debug/deps/backlog_20261114_exec_stdin_herestring_literal_harm-038b7df97c097946)"""
+
+[[task]]
+id = "a3a8cdcf"
+title = "blastguard fail-open: source /dev/stdin <&3 (and . /dev/stdin, /dev/fd/0, <&$fd) is Allow while bash /dev/stdin <&3 is Ask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-14 (run-20261114-161340-68728 t1 verifier + side-reds agent, main dde31f11b): source /dev/stdin <&3, . /dev/stdin <&3, source /dev/stdin <&$fd, source /dev/fd/0 <&$fd are allow/allow; bash /dev/stdin <&3 is ask/deny. source runs a program read from an unseen fd; source_program_source likely treats the operand as a File. Readings: (a) fail-open; (b) intended only if source of /dev/stdin is modelled elsewhere — the RED shows it is not.
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_source_dev_stdin_dup -- --include-ignored; rev: 901603d404135dba3da8e97661c798458d22e9e2; observed: exit 0: sult: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+   Compiling blastguard v0.2.607 (/Users/yuki/src/.harness-worktrees/session-f01b1dd4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261114_source_dev_stdin_dup.rs (target/debug/deps/backlog_20261114_source_dev_stdin_dup-369861d9bd6e5f6e)"""
+created_at = 1794656966
+updated_at = 1794730244
+weight = 0.0
+issue_number = 1782
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1782"
+issue_closed_at = 1794730246
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_source_dev_stdin_dup -- --include-ignored"
+rev = "b7903d36f4c6501380f6ae3a95d12d6b8dae69bc"
+observed_at = 1794656966
+detail = """
+exit 101: d v0.2.596 (/Users/yuki/.condukt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/backlog_20261114_source_dev_stdin_dup.rs (target/debug/deps/backlog_20261114_source_dev_stdin_dup-66f175671539ba93)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_source_dev_stdin_dup`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_source_dev_stdin_dup -- --include-ignored; rev: 901603d404135dba3da8e97661c798458d22e9e2; observed: exit 0: sult: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+   Compiling blastguard v0.2.607 (/Users/yuki/src/.harness-worktrees/session-f01b1dd4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261114_source_dev_stdin_dup.rs (target/debug/deps/backlog_20261114_source_dev_stdin_dup-369861d9bd6e5f6e)"""

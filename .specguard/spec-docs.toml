@@ -770,6 +770,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `detect/ast`: stateless helpers of the static evaluator (escape decoding, path join/normalise, fd/stdin handling, piped-stdin literal printf/echo)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/ast/eval/words.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/ast`: child module of eval.rs — parameter-expansion values (incl. the ${n:=v} integer check) and the final value of an expanded word (tilde / word split / pathname / brace / heredoc checks)."
+
+[[spec]]
 path = "crates/blastguard/src/detect/ast/tests.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `detect/ast`: contract tests of the parser + static-eval layer: caps/parse failure -> Undetermined, literal assignment/for/cd resolution, relative redirect after cd joined or Undetermined (user ruling 2026-11-16), stdin/program sources, tilde/arithmetic/subscript fail-open regressions."

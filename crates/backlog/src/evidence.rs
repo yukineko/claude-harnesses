@@ -265,9 +265,27 @@ pub fn is_ancestor(root: &Path, ancestor: &str, descendant: &str) -> Result<bool
     }
 }
 
-/// Task ids named by a `(backlog <id>)` marker in the subject of any commit
+/// Task ids named by a `(backlog <id>...)` marker in the subject of any commit
 /// reachable from HEAD (backlog a04b2b87): the fix commit of such a task has
 /// already landed, so `next` must not hand it out again.
+///
+/// Marker grammar (`fix_marker_id`, backlog 536e2811): the text between
+/// `(backlog ` and the next `)` is trimmed; `<id>` is its leading run of
+/// characters up to the first whitespace or `;`. The marker names `<id>` as
+/// fixed only when the remainder after `<id>` (trimmed) is
+/// - empty: `(backlog <id>)`;
+/// - starts with `;` (everything after it is commentary, e.g. a version):
+///   `(backlog <id>; 0.2.395)`;
+/// - exactly `wave <digits>` (one space, at least one ASCII digit),
+///   optionally followed by `;...`:
+///   `(backlog <id> wave 2)`, `(backlog <id> wave 2; x)`.
+///
+/// Any other remainder -- e.g. `(backlog <id> RED repro)`, a RED-repro commit
+/// that is not a fix -- names nothing. Comma lists such as
+/// `(backlog A, B; 0.2.395)` are deliberately NOT recognised for either id
+/// (an id token containing `,` names nothing): whether a multi-id
+/// subject means "all fixed" is undecided, and counting an id as fixed drops
+/// it from `next`, so an unrecognised marker resolves to "not fixed".
 ///
 /// HEAD is first checked with `git rev-parse --verify -q HEAD`: exit 0 proceeds
 /// to `git log --format=%s HEAD --`. An UNBORN HEAD (a valid repo with no
@@ -302,15 +320,42 @@ pub fn fixed_task_ids(root: &Path) -> Result<std::collections::HashSet<String>, 
         let mut rest = line;
         while let Some(i) = rest.find("(backlog ") {
             rest = &rest[i + "(backlog ".len()..];
-            if let Some(j) = rest.find(')') {
-                let id = rest[..j].trim();
-                if !id.is_empty() {
-                    ids.insert(id.to_string());
-                }
+            if let Some(id) = rest.find(')').and_then(|j| fix_marker_id(&rest[..j])) {
+                ids.insert(id.to_string());
             }
         }
     }
     Ok(ids)
+}
+
+/// The id a `(backlog <inner>)` marker names as fixed, per the grammar on
+/// [`fixed_task_ids`]; `None` for an empty id or any unrecognised suffix.
+fn fix_marker_id(inner: &str) -> Option<&str> {
+    let inner = inner.trim();
+    let end = inner
+        .find(|c: char| c.is_whitespace() || c == ';')
+        .unwrap_or(inner.len());
+    let (id, rest) = inner.split_at(end);
+    if id.is_empty() || id.contains(',') {
+        return None;
+    }
+    let rest = rest.trim();
+    if rest.is_empty() || rest.starts_with(';') {
+        return Some(id);
+    }
+    let wave = rest.strip_prefix("wave ")?;
+    let digits_end = wave
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(wave.len());
+    if digits_end == 0 {
+        return None;
+    }
+    let tail = wave[digits_end..].trim();
+    if tail.is_empty() || tail.starts_with(';') {
+        Some(id)
+    } else {
+        None
+    }
 }
 
 /// `Ok(())` only when HEAD is positively observed to be an unborn branch:

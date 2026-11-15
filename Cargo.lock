@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.125"
+version = "0.3.127"
 dependencies = [
  "anyhow",
  "clap",
@@ -214,7 +214,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.630"
+version = "0.2.634"
 dependencies = [
  "brush-parser",
  "globset",
@@ -434,7 +434,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.424"
+version = "0.7.427"
 dependencies = [
  "anyhow",
  "blastguard",

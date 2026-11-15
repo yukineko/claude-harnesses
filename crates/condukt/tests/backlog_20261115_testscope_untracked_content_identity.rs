@@ -106,7 +106,6 @@ fn denied(stdout: &str) -> bool {
 // 2026-11-15 with this test as its repro); the ignore is removed in the fixing
 // commit.
 #[test]
-#[ignore = "RED: 2026-11-15 testscope tree identity hashes untracked file names, not contents — remove the ignore when fixed"]
 fn rerun_after_editing_an_untracked_file_is_allowed() {
     let fx = Fx::new();
     let first = fx.go();

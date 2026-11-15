@@ -160,7 +160,6 @@ fn assert_allow(res: &(Option<i32>, String), what: &str) {
 
 // test-weakening-justified: new RED for an unfixed defect (2026-11-15).
 #[test]
-#[ignore = "RED: 2026-11-15 a task with worktree \"\" owns every cwd, so testscope denies every cargo test — remove when fixed"]
 fn empty_string_worktree_task_does_not_own_unrelated_cwd() {
     let env = Env {
         home: tempfile::tempdir().unwrap(),

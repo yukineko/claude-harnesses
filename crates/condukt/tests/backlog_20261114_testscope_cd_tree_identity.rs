@@ -159,7 +159,6 @@ fn control_identical_command_on_unchanged_cd_target_is_refused() {
 // 2026-11-15; replaces the removed control that pinned the overruled
 // behaviour); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: rerun key still includes the payload cwd tree when a cd moved the test elsewhere"]
 fn rerun_after_editing_only_the_payload_cwd_tree_is_refused_when_test_runs_in_cd_target() {
     let fx = Fx::new();
     let cmd = fx.cmd();

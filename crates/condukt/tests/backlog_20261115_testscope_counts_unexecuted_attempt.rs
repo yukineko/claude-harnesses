@@ -94,7 +94,10 @@ fn second_pretooluse_after_never_executed_first_is_allowed() {
     let root = repo();
     let cmd = "cargo test -p foo --test bar";
     let first = run(home.path(), &ledger, cmd, root.path());
-    assert!(!denied(&first), "first PreToolUse must be allowed: {first:?}");
+    assert!(
+        !denied(&first),
+        "first PreToolUse must be allowed: {first:?}"
+    );
     // No PostToolUse is sent: the tool never ran (blocked by another hook).
     let second = run(home.path(), &ledger, cmd, root.path());
     assert!(

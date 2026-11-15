@@ -54,10 +54,11 @@
 //! `timeout N cd` run an external `cd` and move nothing, so they leave the
 //! directory unchanged; a `cd` behind assignments or `command` leaves it
 //! undetermined. See [`judge_pieces`].
-//! When the run directory's tree differs from the payload cwd's tree, the
-//! rerun key also records the payload cwd's tree, so editing the payload cwd
-//! permits a rerun through the same `cd`; a test run directly in a tree and a
-//! `cd` route into the same tree always collide.
+//! The rerun key is that run tree's identity plus the command only (user
+//! ruling 2026-11-15): the payload cwd's tree never contributes, so editing
+//! only the payload cwd does not permit a rerun, and a test run directly in a
+//! tree and a `cd` route into the same tree always collide. The identity
+//! covers untracked file contents, not just their names (backlog b6543e39).
 //!
 //! Not covered (stated, not hidden): `--manifest-path` and `git -C`-style
 //! redirection inside cargo, directory changes by anything other than a
@@ -150,7 +151,7 @@ pub fn judge(command: &str, cwd: &Path, home: Option<&Path>, ledger: &Path) -> D
             }
         }
     }
-    check_rerun(&by_dir, cwd, ledger)
+    check_rerun(&by_dir, ledger)
 }
 
 /// Where a simple command runs, as far as the leading `cd`s of its command
@@ -844,8 +845,20 @@ fn split_pieces(cmd: &str) -> Option<Vec<Piece>> {
 }
 
 /// The identity of the tree a test runs against: the repo top level, HEAD and
-/// a hash of everything that differs from HEAD (tracked diff + untracked list).
+/// a hash of everything that differs from HEAD — the tracked diff, the list of
+/// untracked (not ignored) paths, and the CONTENTS of each untracked path
+/// (backlog b6543e39: hashing the names only made an edit to a new, not yet
+/// added test file look like the same tree). An untracked file is hashed by
+/// its bytes, an untracked symlink by its target, and an untracked nested
+/// repository (`git ls-files` lists it as `dir/`) by its own identity. A path
+/// that cannot be read makes the identity undetermined (`Err`), never "same".
+/// A tree with no untracked paths hashes exactly as before this change, so
+/// existing ledger records for clean trees keep colliding.
 fn tree_identity(cwd: &Path) -> Result<(String, String), String> {
+    tree_identity_at(cwd, 0)
+}
+
+fn tree_identity_at(cwd: &Path, depth: usize) -> Result<(String, String), String> {
     let git = |args: &[&str]| -> Result<String, String> {
         let out = Command::new("git")
             .args(args)
@@ -869,30 +882,64 @@ fn tree_identity(cwd: &Path) -> Result<(String, String), String> {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     std::hash::Hash::hash(&diff, &mut h);
     std::hash::Hash::hash(&untracked, &mut h);
+    // The list above C-quotes unusual names and, from a subdirectory, covers
+    // only that subdirectory; for the contents take the raw (`-z`) names of the
+    // whole repository (`:/`), printed relative to the cwd.
+    let raw = git(&[
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+        ":/",
+    ])?;
+    if !raw.is_empty() {
+        for rel in raw.split('\0').filter(|s| !s.is_empty()) {
+            let p = cwd.join(rel);
+            std::hash::Hash::hash(rel, &mut h);
+            let meta = std::fs::symlink_metadata(&p)
+                .map_err(|e| format!("untracked {}: {e}", p.display()))?;
+            if meta.file_type().is_symlink() {
+                let t = std::fs::read_link(&p)
+                    .map_err(|e| format!("untracked symlink {}: {e}", p.display()))?;
+                std::hash::Hash::hash(&t, &mut h);
+            } else if meta.is_dir() {
+                if depth >= 4 {
+                    return Err(format!(
+                        "untracked nested repository {} is nested too deep to identify",
+                        p.display()
+                    ));
+                }
+                let (ntop, ntree) = tree_identity_at(&p, depth + 1)?;
+                std::hash::Hash::hash(&ntop, &mut h);
+                std::hash::Hash::hash(&ntree, &mut h);
+            } else {
+                let bytes =
+                    std::fs::read(&p).map_err(|e| format!("untracked {}: {e}", p.display()))?;
+                std::hash::Hash::hash(&bytes, &mut h);
+            }
+        }
+    }
     let dirty = std::hash::Hasher::finish(&h);
     Ok((top, format!("{head}:{dirty:016x}")))
 }
 
-/// One rerun-ledger record: the tree a test ran in, the command, and — for a
-/// test run through a leading `cd` from a payload cwd whose tree differs — that
-/// payload cwd's tree.
+/// One rerun-ledger record: the tree a test ran in and the command.
 ///
-/// Line format: `<top>\t<head:dirty>\t<cmd>` (no context; the format written
-/// before backlog 214b39b5) or `<top>\t<head:dirty>\t@from=<top>:<head:dirty>\t<cmd>`.
+/// Line format: `<top>\t<head:dirty>\t<cmd>`. Lines written by condukt
+/// 0.7.413-0.7.418 may carry `@from=<top>:<head:dirty>\t` before the command
+/// (the payload cwd's tree); that context is read and ignored, so such a
+/// record collides with every later run of the same command on the same tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LedgerKey {
     top: String,
     tree: String,
-    from: Option<String>,
     cmd: String,
 }
 
 impl LedgerKey {
     fn line(&self) -> String {
-        match &self.from {
-            None => format!("{}\t{}\t{}", self.top, self.tree, self.cmd),
-            Some(f) => format!("{}\t{}\t@from={f}\t{}", self.top, self.tree, self.cmd),
-        }
+        format!("{}\t{}\t{}", self.top, self.tree, self.cmd)
     }
 
     fn parse(line: &str) -> Option<Self> {
@@ -900,48 +947,30 @@ impl LedgerKey {
         let top = it.next()?.to_string();
         let tree = it.next()?.to_string();
         let rest = it.next()?;
-        let (from, cmd) = match rest.strip_prefix("@from=") {
-            Some(r) => {
-                let (f, c) = r.split_once('\t')?;
-                (Some(f.to_string()), c.to_string())
-            }
-            None => (None, rest.to_string()),
+        let cmd = match rest.strip_prefix("@from=") {
+            Some(r) => r.split_once('\t')?.1.to_string(),
+            None => rest.to_string(),
         };
-        Some(LedgerKey {
-            top,
-            tree,
-            from,
-            cmd,
-        })
+        Some(LedgerKey { top, tree, cmd })
     }
 
-    /// Same command on the same tree, and not provably launched from two
-    /// different payload trees. A record without context (a test run in its
-    /// own cwd) collides with every `cd` route into that tree and vice versa,
-    /// so `cd`-ing in from elsewhere never re-runs a test already run there.
+    /// Same command on the same tree. Where it was launched from (the payload
+    /// cwd) plays no part (user ruling 2026-11-15: the fingerprint is taken
+    /// only from the tree the test actually runs in).
     fn collides(&self, other: &LedgerKey) -> bool {
-        self.top == other.top
-            && self.tree == other.tree
-            && self.cmd == other.cmd
-            && (self.from.is_none() || other.from.is_none() || self.from == other.from)
+        self.top == other.top && self.tree == other.tree && self.cmd == other.cmd
     }
 }
 
 /// Rule 3. `by_dir` maps each directory a test runs in (the payload cwd, or
-/// the target of a leading `cd`) to its tests. The identity is taken of the
-/// tree each test actually runs in (backlog 214b39b5: it used to be the
-/// payload cwd's tree whatever `cd` preceded the test).
-///
-/// When the run directory's tree differs from the payload cwd's tree, the key
-/// also records the payload cwd's tree (`from`): editing the payload cwd's
-/// tree then permits a rerun through the same `cd`, as it did before the run
-/// directory was keyed (pinned by
-/// `backlog_20261114_testscope_cd_tree_identity.rs`
-/// `control_editing_payload_cwd_tree_allows_rerun`). A payload cwd whose tree
-/// cannot be identified contributes no context, which only makes collisions
-/// more likely (never fewer).
-fn check_rerun(by_dir: &[(PathBuf, Vec<Words>)], cwd: &Path, ledger: &Path) -> Decision {
-    let mut cwd_identity: Option<Option<(String, String)>> = None;
+/// the target of a leading `cd`) to its tests. The key is the identity of the
+/// tree each test actually runs in plus the command, nothing else (backlog
+/// 214b39b5: it used to be the payload cwd's tree whatever `cd` preceded the
+/// test; user ruling 2026-11-15: the payload cwd's tree must not contribute
+/// either, so editing only the payload cwd does not permit a rerun on an
+/// unchanged run tree, pinned by `backlog_20261114_testscope_cd_tree_identity.rs`
+/// `rerun_after_editing_only_the_payload_cwd_tree_is_refused_when_test_runs_in_cd_target`).
+fn check_rerun(by_dir: &[(PathBuf, Vec<Words>)], ledger: &Path) -> Decision {
     let mut keys: Vec<LedgerKey> = Vec::new();
     for (dir, tests) in by_dir {
         let (top, tree) = match tree_identity(dir) {
@@ -955,22 +984,10 @@ fn check_rerun(by_dir: &[(PathBuf, Vec<Words>)], cwd: &Path, ledger: &Path) -> D
                 ));
             }
         };
-        let from = if dir.as_path() == cwd {
-            None
-        } else {
-            let c = cwd_identity.get_or_insert_with(|| tree_identity(cwd).ok());
-            match c.as_ref() {
-                Some((ctop, ctree)) if (ctop, ctree) != (&top, &tree) => {
-                    Some(format!("{ctop}:{ctree}"))
-                }
-                _ => None,
-            }
-        };
         for w in tests {
             keys.push(LedgerKey {
                 top: top.clone(),
                 tree: tree.clone(),
-                from: from.clone(),
                 cmd: w.join(" "),
             });
         }

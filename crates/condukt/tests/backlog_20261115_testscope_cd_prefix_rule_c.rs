@@ -371,7 +371,6 @@ fn c_default() -> WtFx {
 
 // test-weakening-justified: new RED for an unfixed defect (2026-11-15).
 #[test]
-#[ignore = "RED: 2026-11-15 testscope Rule C judges the payload cwd, not a leading cd target, so cd <task wt> && cargo test <out of scope> is allowed — remove when fixed"]
 fn out_of_scope_test_via_cd_into_task_worktree_is_denied() {
     let fx = c_default();
     let cmd = format!("cd {} && cargo test -p x --test old_t", fx.wt.display());

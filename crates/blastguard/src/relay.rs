@@ -33,7 +33,9 @@
 //! The human may decline the prompt; then no PostToolUse fires. That is what
 //! [`dismiss`] is for: it requires a non-empty reason, and every dismissal of
 //! the session is shown by the Stop hook from then on, so a dismissal is
-//! never silent.
+//! never silent. That includes a repeated dismissal of the same id: each
+//! reason is listed on its own line, oldest first, and a later one never
+//! replaces an earlier one.
 //!
 //! # What this module never does
 //!
@@ -102,13 +104,21 @@ pub struct Entry {
     /// `Some(exit_code)` once executed (the exit code itself may be unknown).
     pub executed: Option<Option<i64>>,
     pub relayed: bool,
-    pub dismissed: Option<String>,
+    /// Every dismissal reason of this entry, oldest first. A later dismissal
+    /// is appended, never substituted, so no earlier reason disappears from
+    /// the Stop text (backlog b82e882a).
+    pub dismissed: Vec<String>,
 }
 
 impl Entry {
     /// Resolved: executed AND relayed, or dismissed with a reason.
     pub fn is_resolved(&self) -> bool {
-        self.dismissed.is_some() || (self.executed.is_some() && self.relayed)
+        self.is_dismissed() || (self.executed.is_some() && self.relayed)
+    }
+
+    /// At least one dismissal was recorded.
+    pub fn is_dismissed(&self) -> bool {
+        !self.dismissed.is_empty()
     }
 }
 
@@ -272,7 +282,7 @@ pub fn load(path: &Path) -> Result<Queue, String> {
                 reason,
                 executed: None,
                 relayed: false,
-                dismissed: None,
+                dismissed: Vec::new(),
             }),
             Event::Executed { id, exit_code, .. } => {
                 let e = entries
@@ -293,7 +303,7 @@ pub fn load(path: &Path) -> Result<Queue, String> {
                     .iter_mut()
                     .find(|e| e.id == id)
                     .ok_or_else(|| unknown(&id))?;
-                e.dismissed = Some(reason);
+                e.dismissed.push(reason);
             }
         }
     }
@@ -321,7 +331,7 @@ pub fn mark_executed(
     let path = queue_path(dir, session);
     let entries = known_entries(&path)?;
     let Some(hit) = entries.iter().find(|e| {
-        e.executed.is_none() && e.dismissed.is_none() && e.command == command && e.cwd == cwd
+        e.executed.is_none() && !e.is_dismissed() && e.command == command && e.cwd == cwd
     }) else {
         return Ok(None);
     };
@@ -346,7 +356,7 @@ pub fn mark_relayed(dir: &Path, session: &str, message_text: &str) -> Result<Vec
     for e in entries.iter().filter(|e| {
         e.executed.is_some()
             && !e.relayed
-            && e.dismissed.is_none()
+            && !e.is_dismissed()
             && message_text.contains(e.id.as_str())
     }) {
         append(
@@ -473,12 +483,13 @@ fn indent(s: &str) -> String {
         .join("\n")
 }
 
+/// One line per dismissal of `e`, oldest first: a second `relay dismiss` on
+/// the same id adds a line and never hides the first (backlog b82e882a).
 fn describe_dismissed(e: &Entry) -> String {
-    format!(
-        "- relay id: {} dismissed — reason: {}\n",
-        e.id,
-        e.dismissed.as_deref().unwrap_or("")
-    )
+    e.dismissed
+        .iter()
+        .map(|r| format!("- relay id: {} dismissed — reason: {r}\n", e.id))
+        .collect()
 }
 
 /// The Stop verdict for `session`. Blocks on any unresolved entry and on any
@@ -501,7 +512,7 @@ pub fn stop_outcome(dir: &Path, session: &str) -> StopOutcome {
         }
     };
     let pending: Vec<&Entry> = entries.iter().filter(|e| !e.is_resolved()).collect();
-    let dismissed: Vec<&Entry> = entries.iter().filter(|e| e.dismissed.is_some()).collect();
+    let dismissed: Vec<&Entry> = entries.iter().filter(|e| e.is_dismissed()).collect();
     let dismissed_text = if dismissed.is_empty() {
         None
     } else {

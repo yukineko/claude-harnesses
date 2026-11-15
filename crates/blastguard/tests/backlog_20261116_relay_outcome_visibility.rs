@@ -141,7 +141,6 @@ fn ask_cmd(root: &Path) -> String {
 }
 
 #[test]
-#[ignore]
 // test-weakening-justified: new RED for an unfixed defect (backlog pending, 2026-11-16); the ignore is removed in the fixing commit.
 fn second_dismissal_does_not_erase_the_first_from_stop_text() {
     let root = setup("dismiss2");

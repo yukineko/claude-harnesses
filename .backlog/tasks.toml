@@ -314,69 +314,6 @@ FAILED scripts/test_scout_20261112_f3_cap_clean_failed_repro.py::CapCleanMarker:
 ========================= 1 failed, 1 passed in 0.77s =========================="""
 
 [[task]]
-id = "eeeb2ed3"
-title = "condukt: budget_unmeasured が stall の trip 理由を上書きして隠す問題を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "audit-20261113",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """C6. circuit.rs ~705 '_ if budget_unknown_reason.is_some() => Trip(BudgetUnmeasured)' matches before Trip(Stall). RED (verbatim): a 2h-stalled run with a corrupt budget ledger must still report the stall (alone or together with budget_unmeasured); got reason="budget_unmeasured". Covers the stall axis only, not the failure-streak axis. source: audit 2026-11-13 (condukt run run-20261112-072718-37987 follow-ups; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."""
-created_at = 1794516638
-updated_at = 1794516638
-weight = 0.0
-issue_number = 1656
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1656"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261113_c5_c6_circuit_budget_unmeasured -- --ignored unmeasured_budget_does_not_relabel_a_measured_stall"
-rev = "99e1d092f0fe8213c94668b9757b20be93d0a46d"
-observed_at = 1794516638
-detail = """
-exit 101: 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.77s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
-     Running tests/backlog_20261113_c5_c6_circuit_budget_unmeasured.rs (target/debug/deps/backlog_20261113_c5_c6_circuit_budget_unmeasured-c6ed3d07a4e141db)
-error: test failed, to rerun pass `-p condukt --test backlog_20261113_c5_c6_circuit_budget_unmeasured`"""
-
-[[task]]
-id = "536e2811"
-title = "backlog: fix コミット件名の (backlog <id> wave 2) / (backlog <id>; x) 形式を修正済みと認識しない問題を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "audit-20261113",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "K2. evidence.rs:303-309 takes rest[..j].trim() so ids become '<id> wave 2' / '<id>; y'. RED (verbatim, both tests): backlog next handed out X (4daacf35) although its fix commit names it; expected Y (6e56a66b). Fix hazard: history has '(backlog 38a44b30 RED repro)' and '(backlog 0fbfe00d, e34eb0be; 0.2.395)'; a naive first-token fix would count a RED-repro commit as a fix and silently drop the ticket. Add a negative case before/with the fix. source: audit 2026-11-13 (condukt run run-20261112-072718-37987 follow-ups; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."
-created_at = 1794516646
-updated_at = 1794516646
-weight = 0.0
-issue_number = 1658
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1658"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test backlog_20261113_k2_fixed_subject_variants -- --ignored subject_with_"
-rev = "99e1d092f0fe8213c94668b9757b20be93d0a46d"
-observed_at = 1794516646
-detail = """
-exit 101: backlog v0.3.110 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
-     Running tests/backlog_20261113_k2_fixed_subject_variants.rs (target/debug/deps/backlog_20261113_k2_fixed_subject_variants-06451842777c5f4f)
-error: test failed, to rerun pass `-p backlog --test backlog_20261113_k2_fixed_subject_variants`"""
-
-[[task]]
 id = "2072023d"
 title = "backlog: shallow clone で履歴が切れると修正済みタスクを next が払い出す問題を直す"
 project = "/Users/yuki/src/harness"
@@ -2759,37 +2696,6 @@ exit 101: rc/.harness-worktrees/sidereds-20261116/crates/backlog)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.52s
      Running tests/backlog_20261116_zero_tests_filtered_out_not_discard.rs (target/debug/deps/backlog_20261116_zero_tests_filtered_out_not_discard-e511e6be63ab2a45)
 error: test failed, to rerun pass `-p backlog --test backlog_20261116_zero_tests_filtered_out_not_discard`"""
-
-[[task]]
-id = "9e565d01"
-title = "tdd gate: committed peer-commit files (folded in by include_committed) are reported as 'uncommitted file(s) not attributed to this session' with a clean working tree"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "tdd",
-    "message-mismatch",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed live 2026-11-16 in session 06c2bd77: tdd Stop gate said '10 uncommitted file(s) not attributed to this session were excluded: .backlog/tasks.done.toml, .specguard/spec-docs.toml, crates/blastguard/...' while git status --short in the judged checkout /Users/yuki/src/harness was empty. Diff source (gate.rs at 9a989926b): evaluate -> include_committed folds added lines of every non-merge commit on HEAD since session start (peer commits merged into main included) -> scope_to_session -> excluded list printed by attribution_note / generic_block_reason as 'uncommitted'. RED (commit a85bbe389, branch backlog/sidereds-20261116, 2026-11-16) fails verbatim: 'a COMMITTED peer file was reported as an uncommitted file with a clean working tree (git status --porcelain empty). stdout: (empty) stderr: tdd: 1 uncommitted file(s) not attributed to this session were excluded from the scan (no Edit/Write/MultiEdit/NotebookEdit of them and no Bash command naming them outside a read-only statement in this session's transcript): peer/other.rs'. Readings: (a) defect - message names a committed file 'uncommitted' (prose vs behaviour, CLAUDE.md 4), sending the reader to a non-existent working-tree change; (b) only loose wording, exclusion correct. Both agree the exclusion itself is right; the RED asserts only the label, a relabel passes it. Also observed (NOT filed, no RED): 'implementation changed: crates/tdd/src/proof.rs' was this session's own commit 9c58c590d folded in by design (ruling 2026-10-27 Hybrid); that commit's test change was only removing a #[ignore] line (1 deletion, 0 added test lines), so committed_test_evidence may find no test evidence for an un-ignore fix commit - unverified lead. DOES NOT PROVE: the un-ignore lead, merge-commit handling, block_reason path (only the stderr note was observed in the RED)."
-created_at = 1794764414
-updated_at = 1794764414
-weight = 0.0
-issue_number = 1810
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1810"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p tdd --test backlog_20261116_committed_peer_files_labelled_uncommitted -- --ignored committed_peer_file_is_not_reported_as_uncommitted"
-rev = "a85bbe38919fc6f1c3b5e59f788f4a2674b7c7b0"
-observed_at = 1794764414
-detail = """
-exit 101: s-worktrees/sidereds-20261116/crates/tdd)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.84s
-     Running tests/backlog_20261116_committed_peer_files_labelled_uncommitted.rs (target/debug/deps/backlog_20261116_committed_peer_files_labelled_uncommitted-3ed7d6413e72ff5c)
-error: test failed, to rerun pass `-p tdd --test backlog_20261116_committed_peer_files_labelled_uncommitted`"""
 
 [[task]]
 id = "188d2f29"

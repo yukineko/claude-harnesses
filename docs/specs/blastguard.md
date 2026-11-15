@@ -1230,7 +1230,7 @@ forge・condukt のスケジューラが再利用）。
   `run_guarded("blastguard-relay")` 下）: 未解決（executed∧relayed でも dismissed でもない）entry が
   あれば `stop_hook_active` に関わらず block し、id・agent_id・cwd・command と手順を列挙。queue 読み取り
   失敗・パース不能行・未知 id の event・パース不能な Stop payload は block（path を明示）。queue 不在は
-  allow。dismiss 済みは `systemMessage`（pending があれば block 理由）に毎回列挙。(5) `relay dismiss
+  allow。dismiss 済みは queue に記録されるだけで Stop には列挙しない（ユーザー裁定 2026-11-16「表示をやめてほしい」）。(5) `relay dismiss
   <id> --reason <text>`: 空白のみ/欠落の理由・未知 id は exit 2、queue 読み書き失敗は exit 3。
   コマンドを実行する経路は持たず、cwd は不透明な文字列として比較するだけで解決・stat しない。
 - **`blocklog`** — block log（ユーザー裁定 2026-11-14 逐語:「…完全なコマンドが残っていないため、

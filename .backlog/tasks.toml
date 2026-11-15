@@ -2619,3 +2619,125 @@ exit 101: iteral-20261115/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.98s
      Running tests/backlog_20261115_python_stdin_plain_string_names_rmtree_fp.rs (target/debug/deps/backlog_20261115_python_stdin_plain_string_names_rmtree_fp-d7b066629f23631d)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_stdin_plain_string_names_rmtree_fp`"""
+
+[[task]]
+id = "4551f633"
+title = "blastguard FP: python3 -c print(vars)/print(locals())/print(globals()) with harmful piped text is deny though -c never reads stdin (new with 9d0b60188)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794743394
+updated_at = 1794743394
+weight = 0.0
+issue_number = 1801
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1801"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp -- --include-ignored"
+rev = "c82d9725085e6bd5c378274f0ebad8fb810665ab"
+observed_at = 1794743394
+detail = """
+exit 101: rees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.73s
+     Running tests/backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp.rs (target/debug/deps/backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp-e57a8e5a7562487d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp`"""
+
+[[task]]
+id = "8ce33823"
+title = "blastguard FP: python3 -c print(vars()) refused as 'builds or decodes the code it runs (vars()' while print(locals()) is allowed"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794743432
+updated_at = 1794743432
+weight = 0.0
+issue_number = 1802
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1802"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_c_vars_call_inline_eval_ask_fp -- --include-ignored"
+rev = "c82d9725085e6bd5c378274f0ebad8fb810665ab"
+observed_at = 1794743432
+detail = """
+exit 101: -worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.04s
+     Running tests/backlog_20261115_python_c_vars_call_inline_eval_ask_fp.rs (target/debug/deps/backlog_20261115_python_c_vars_call_inline_eval_ask_fp-8afe83282daea963)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_c_vars_call_inline_eval_ask_fp`"""
+
+[[task]]
+id = "72d1a972"
+title = "blastguard FP: Python string literal holding subprocess.run('chmod 777 /etc/hosts', ...) is denied as system harm though only data"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794743461
+updated_at = 1794743461
+weight = 0.0
+issue_number = 1803
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1803"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_string_literal_subprocess_chmod_data_fp -- --include-ignored"
+rev = "c82d9725085e6bd5c378274f0ebad8fb810665ab"
+observed_at = 1794743461
+detail = """
+exit 101: /crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/backlog_20261115_python_string_literal_subprocess_chmod_data_fp.rs (target/debug/deps/backlog_20261115_python_string_literal_subprocess_chmod_data_fp-d9104b1b6d256d13)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_string_literal_subprocess_chmod_data_fp`"""
+
+[[task]]
+id = "0bc46ca0"
+title = "blastguard FP: quoted heredoc body backtick span with $ text judged as live shell when a later rm/mv/cp/git add follows"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794743487
+updated_at = 1794743487
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp -- --include-ignored"
+rev = "c82d9725085e6bd5c378274f0ebad8fb810665ab"
+observed_at = 1794743487
+detail = """
+exit 101: ession-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp-50023bed9ac872cf)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp`"""

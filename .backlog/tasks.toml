@@ -2650,3 +2650,32 @@ exit 101: -worktrees/session-6dcca0ad/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.04s
      Running tests/backlog_20261115_python_c_vars_call_inline_eval_ask_fp.rs (target/debug/deps/backlog_20261115_python_c_vars_call_inline_eval_ask_fp-8afe83282daea963)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_c_vars_call_inline_eval_ask_fp`"""
+
+[[task]]
+id = "72d1a972"
+title = "blastguard FP: Python string literal holding subprocess.run('chmod 777 /etc/hosts', ...) is denied as system harm though only data"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794743461
+updated_at = 1794743461
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_string_literal_subprocess_chmod_data_fp -- --include-ignored"
+rev = "c82d9725085e6bd5c378274f0ebad8fb810665ab"
+observed_at = 1794743461
+detail = """
+exit 101: /crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/backlog_20261115_python_string_literal_subprocess_chmod_data_fp.rs (target/debug/deps/backlog_20261115_python_string_literal_subprocess_chmod_data_fp-d9104b1b6d256d13)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_string_literal_subprocess_chmod_data_fp`"""

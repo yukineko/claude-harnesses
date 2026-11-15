@@ -661,9 +661,13 @@ fn fd_path(word: &str) -> Option<u32> {
 
 /// The mentions of fd `n` in `raw`, counted on the text: `<&N` / `>&N`
 /// (spaces allowed after `&`) and `/fd/N`, each with N not followed by a digit.
+/// A dup target is also a mention when the shell word that follows `&`
+/// decodes (quote removal, as [`dup_fd_number`] reads it) to text that starts
+/// with N: `<&'3'` and `<&"3"` are `<&3`, and `<&'3'-` is `<&3-`, so the
+/// quoted spelling is counted exactly where the unquoted one is.
 /// Compared against the mentions the word reading recognised, so a mention in
-/// a shape it does not read (quoted, inside a substitution, glued to other
-/// text) is not silently passed over.
+/// a shape it does not read (inside a substitution, glued to other text, a
+/// move `<&3-`) is not silently passed over.
 fn raw_fd_mentions(raw: &str, n: u32) -> usize {
     let chars: Vec<char> = raw.chars().collect();
     let digits_at = |mut k: usize| -> Option<u32> {
@@ -682,7 +686,7 @@ fn raw_fd_mentions(raw: &str, n: u32) -> usize {
             while k < chars.len() && chars[k] == ' ' {
                 k += 1;
             }
-            if digits_at(k) == Some(n) {
+            if digits_at(k) == Some(n) || decoded_word_fd_prefix(&chars[k..]) == Some(n) {
                 count += 1;
             }
         }
@@ -691,6 +695,36 @@ fn raw_fd_mentions(raw: &str, n: u32) -> usize {
         }
     }
     count
+}
+
+/// The leading fd number of the shell word at the start of `chars`, read
+/// after quote removal: the word runs up to the first unquoted blank or
+/// operator character (`;|&<>()`) and is decoded by [`decode_literal_word`].
+/// `None` when the word does not decode (left to the plain-digit reading) or
+/// its text does not start with a digit.
+fn decoded_word_fd_prefix(chars: &[char]) -> Option<u32> {
+    let mut end = 0;
+    let mut quote: Option<char> = None;
+    while end < chars.len() {
+        let c = chars[end];
+        match quote {
+            Some('\'') if c == '\'' => quote = None,
+            Some('"') if c == '"' => quote = None,
+            Some('"') if c == '\\' => end += 1,
+            Some(_) => {}
+            None => match c {
+                '\'' | '"' => quote = Some(c),
+                '\\' => end += 1,
+                c if c.is_whitespace() || ";|&<>()".contains(c) => break,
+                _ => {}
+            },
+        }
+        end += 1;
+    }
+    let word: String = chars[..end.min(chars.len())].iter().collect();
+    let text = decode_literal_word(&word).ok()?;
+    let digits: String = text.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
 }
 
 /// The reader heads (shells, code interpreters; `source` / `.` read as `sh`)
@@ -1465,6 +1499,22 @@ mod tests {
         assert_eq!(raw_fd_mentions("bash /dev/fd/3 <&33", 3), 1);
         assert_eq!(raw_fd_mentions("echo '<&3' >&3", 3), 2);
         assert_eq!(raw_fd_mentions("bash 3<&-", 3), 0);
+    }
+
+    #[test]
+    fn raw_fd_mentions_counts_quoted_dup_targets_like_dup_fd_number() {
+        // Quoted spellings count where the unquoted one does (backlog cf0bf4ca).
+        for t in ["'3'", "\"3\"", "''3", "'3'-", "\"3\"-", "\"3\"x"] {
+            assert_eq!(raw_fd_mentions(&format!("bash <&{t}"), 3), 1, "{t}");
+        }
+        assert_eq!(raw_fd_mentions("eval 'bash <&3' 2>&'3'", 3), 2);
+        assert_eq!(raw_fd_mentions("bash <&'33'", 3), 0);
+        assert_eq!(raw_fd_mentions("bash <&\"$fd\"", 3), 0);
+        // Every target the word reading resolves to fd 3 is a raw mention too.
+        for t in ["3", "'3'", "\"3\"", "''3", "3''"] {
+            assert_eq!(dup_fd_number(t), Some(3), "{t}");
+            assert_eq!(raw_fd_mentions(&format!("cat <&{t}"), 3), 1, "{t}");
+        }
     }
 
     #[test]

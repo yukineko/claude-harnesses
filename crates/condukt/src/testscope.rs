@@ -48,7 +48,8 @@
 //! and rule 4 is judged both in `<dir>` and in the payload cwd. A `cd` whose
 //! target is not a literal path (`$VAR`, `-`, globs, `pushd`/`popd`, `~user`,
 //! a bare relative name while `CDPATH` is set) or which is conditional
-//! (`||`, `|`, `&`, after a non-head `&&` member followed by `;`) leaves the
+//! (`||`, `|`, `&`, after a non-head `&&` member followed by `;`) or followed
+//! by an `&` redirection (`cd x &>f | …`; its effect is not modelled) leaves the
 //! directory undetermined, and a test there is denied. See [`judge_pieces`].
 //! When the run directory's tree differs from the payload cwd's tree, the
 //! rerun key also records the payload cwd's tree, so editing the payload cwd
@@ -211,8 +212,9 @@ enum Judged {
 ///   directory becomes undetermined (an earlier member may have failed, so
 ///   the `cd` may not have run).
 ///
-/// Any other `cd` (after `||` / `|` / `&`, or followed by them, `pushd`,
-/// `popd`) makes the directory undetermined. `( … )` and `` ` … ` `` restore
+/// Any other `cd` (after `||` / `|` / `&`, or followed by them or by any
+/// redirection with `&` such as `&>f` / `>&2`, `pushd`, `popd`) makes the
+/// directory undetermined. `( … )` and `` ` … ` `` restore
 /// the directory they started with.
 fn judge_pieces(pieces: &[Piece], start: &Dir, ctx: &Ctx, depth: usize, what: &str) -> Judged {
     let mut dir = start.clone();
@@ -300,14 +302,16 @@ fn judge_pieces(pieces: &[Piece], start: &Dir, ctx: &Ctx, depth: usize, what: &s
         let stripped_words = strip_prefixes(&words);
         if let Some(first) = stripped_words.first() {
             if matches!(first.as_str(), "cd" | "pushd" | "popd") {
-                let next = pieces[idx + 1..]
-                    .iter()
-                    .find_map(|p| match p {
-                        Piece::Op(Op::Redirect) => None,
-                        Piece::Op(o) => Some(Some(*o)),
-                        Piece::Seg(_) => Some(None),
-                    })
-                    .flatten();
+                // The piece right after the `cd`. A redirection `&` (`&>f`,
+                // `>&2`) is reported as `Op::Redirect`, which no arm below
+                // accepts: what follows the redirect target (`&>f | …`,
+                // `&>f & …`) is not looked at, so such a `cd` is undetermined
+                // rather than taken as certain.
+                let next = match pieces.get(idx + 1) {
+                    None => None,
+                    Some(Piece::Op(o)) => Some(*o),
+                    Some(Piece::Seg(_)) => Some(Op::Redirect),
+                };
                 let target = resolve_cd(stripped_words, &dir, ctx.home.as_deref());
                 if at_head && matches!(next, None | Some(Op::Seq | Op::And | Op::Close)) {
                     dir = target;

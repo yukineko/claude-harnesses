@@ -956,7 +956,11 @@ forge・condukt のスケジューラが再利用）。
   未確定として制限側（`python_semantics::lex_marking_inexact`）。解決した command line のどれかの語が
   code interpreter・shell・`STDIN_READING_PROGRAMS`（`ipython` 等の閉じた list）、または `$`・backtick、あるいは sh の glob・brace・tilde
   展開の metacharacter（`*`・`?`・`[`・`{`・`~`）を含む語なら stdin を読みうる（`/bin/ba*`・`/bin/b?sh`・`{bash,}` は実行時に shell になりうる。
-  quote 内で sh が展開しない場合も保守的に数える）。
+  quote 内で sh が展開しない場合も保守的に数える）。command line を実行する sh 自身が stdin を code として読む形も
+  stdin を読みうる（tests/backlog_20261116_python_os_system_source_stdin.rs）: quote と backslash を外した語が stdin / fd を
+  file として名指す（`/dev/stdin`・`/dev/fd/N`・`/proc/…/fd/N`）、`source` か `eval` である（位置を問わず保守的に数える）、
+  または command 位置の `.`（前に assignment・option・`(` を含む語・`command`/`builtin`/`exec` 等の閉じた prefix しか無い。
+  `ls .`・`find . -name x` の `.` は operand なので数えない）。`os.system(". /dev/stdin")` と `"source /dev/stdin"` は Allow にしない。
   literal の command がどれでもなければ（`os.system("ls")`・`"cat"`・`"grep chmod"`）stdin は data のまま。
   それ以外の子プロセス起動（computed な command `os.system(c)`・argv list・`subprocess.*`・`os.exec*`/`os.spawn*`・`pty.spawn`・
   `asyncio.*`・runner module の値としての参照 `g(os)`・call 結果の属性 `__import__("os").system`・runner module からの

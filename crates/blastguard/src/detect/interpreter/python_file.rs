@@ -715,10 +715,33 @@ fn child_process_may_read_stdin(program: &str) -> bool {
 /// (`/bin/ba*`, `/bin/b?sh`, `{bash,}`): the run-time program is not the
 /// written word, so the word check cannot resolve it. Conservative: such a
 /// metacharacter counts even where sh would not expand it (inside quotes).
+///
+/// The sh that runs `line` can also read stdin as code itself (backlog
+/// 3da14bbd follow-up, `os.system(". /dev/stdin")`): a word naming stdin or
+/// an fd as a file (`/dev/stdin`, `/dev/fd/N`, `/proc/…/fd/N`), any word
+/// `source` or `eval`, and a `.` in command position
+/// ([`dot_in_command_position`]) count as reading stdin. Words are compared
+/// with quotes and backslashes removed (`'.'`, `sour''ce`). Conservative:
+/// `source` / `eval` / an fd path count wherever they appear (`grep eval`).
 fn shell_line_may_read_stdin(line: &str) -> bool {
     split_segments(line).iter().any(|seg| {
-        quote_aware_words(seg).iter().any(|w| {
+        let words = quote_aware_words(seg);
+        let bare: Vec<String> = words
+            .iter()
+            .map(|w| w.replace(['\'', '"', '\\'], ""))
+            .collect();
+        if dot_in_command_position(&bare) {
+            return true;
+        }
+        words.iter().zip(&bare).any(|(w, b)| {
             if w.contains(['$', '`', '*', '?', '[', '{', '~']) {
+                return true;
+            }
+            if matches!(b.as_str(), "source" | "eval")
+                || b.contains("/dev/stdin")
+                || b.contains("/dev/fd/")
+                || (b.contains("/proc/") && b.contains("/fd/"))
+            {
                 return true;
             }
             let cmd = normalized_command(w);
@@ -727,6 +750,31 @@ fn shell_line_may_read_stdin(line: &str) -> bool {
                 || STDIN_READING_PROGRAMS.contains(&cmd.as_str())
         })
     })
+}
+
+/// Whether some word of a segment (`bare`: quotes and backslashes removed) is
+/// `.` with only command-position prefixes before it: assignments (`X=1`),
+/// options, a word holding `(`, or a closed list of prefix words (`command`,
+/// `builtin`, `exec`, `time`, `nohup`, `env`, `!`, and the compound keywords).
+/// `ls .` / `find . -name x` are not: `.` there is an operand.
+fn dot_in_command_position(bare: &[String]) -> bool {
+    const PREFIXES: &[&str] = &[
+        "command", "builtin", "exec", "time", "nohup", "env", "!", "if", "then", "else", "elif",
+        "do", "while", "until",
+    ];
+    for w in bare {
+        if w == "." {
+            return true;
+        }
+        let prefix = PREFIXES.contains(&w.as_str())
+            || w.starts_with('-')
+            || w.contains('(')
+            || is_assignment(w);
+        if !prefix {
+            return false;
+        }
+    }
+    false
 }
 
 /// True when `program` tokenises as Python ([`code_view`] is `Some`): every
@@ -1136,6 +1184,14 @@ mod tests {
             "import os; os.system(\"~/bash\")",
             "import os; os.system(\"\\N{LATIN SMALL LETTER B}ash\")",
             "import os; os.system(r\"b\\ash\")",
+            "import os; os.system(\". /dev/stdin\")",
+            "import os; os.system(\"source /dev/stdin\")",
+            "import os; os.system(\"X=1 . -\")",
+            "import os; os.system(\"command . /tmp/x\")",
+            "import os; os.system(\"'.' /tmp/x\")",
+            "import os; os.system(\"eval x\")",
+            "import os; os.system(\"cat /dev/fd/0\")",
+            "import os; os.system(\"cat /proc/self/fd/0\")",
         ] {
             assert!(reads(p), "{p}");
         }
@@ -1147,6 +1203,8 @@ mod tests {
             "import shutil; print(shutil.which(\"ls\"))",
             "import os; os.system(\"ls\")",
             "import os; os.system(\"grep chmod\")",
+            "import os; os.system(\"ls .\")",
+            "import os; os.system(\"find . -name x\")",
             "import os; os.remove(\"x\")",
         ] {
             assert!(!reads(p), "{p}");

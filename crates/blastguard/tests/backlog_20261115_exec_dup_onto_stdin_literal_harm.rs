@@ -100,16 +100,11 @@ fn assert_not_deny(tag: &str, cmd: &str) {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-15 fd-0 dup of an exec-opened here-text is not judged — remove when fixed"]
 fn dup_fd3_onto_stdin_then_bash_is_deny_in_both_modes() {
-    assert_deny_both(
-        "dup0",
-        "exec 3<<< 'chmod 777 /etc/hosts'; exec 0<&3; bash",
-    );
+    assert_deny_both("dup0", "exec 3<<< 'chmod 777 /etc/hosts'; exec 0<&3; bash");
 }
 
 #[test]
-#[ignore = "RED: 2026-11-15 fd-0 dup of an exec-opened here-text is not judged — remove when fixed"]
 fn dup_fd3_onto_stdin_close_fd3_then_sh_is_deny_in_both_modes() {
     assert_deny_both(
         "dupclose",
@@ -118,23 +113,29 @@ fn dup_fd3_onto_stdin_close_fd3_then_sh_is_deny_in_both_modes() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-15 fd-0 dup of an exec-opened here-text is not judged — remove when fixed"]
 fn dup_fd3_short_form_then_bash_is_deny_in_both_modes() {
-    assert_deny_both("dupshort", "exec 3<<< 'chmod 777 /etc/hosts'; exec <&3; bash");
+    assert_deny_both(
+        "dupshort",
+        "exec 3<<< 'chmod 777 /etc/hosts'; exec <&3; bash",
+    );
 }
 
 #[test]
-#[ignore = "RED: 2026-11-15 fd-0 dup of an exec-opened here-text is not judged — remove when fixed"]
-fn control_a_harmless_text_dup_onto_stdin_is_not_deny() {
-    assert_not_deny("ctla", "exec 3<<< 'echo hi'; exec 0<&3; bash");
+fn control_a_harmless_text_dup_onto_stdin_is_ask_in_main_deny_in_subagent() {
+    // user ruling 2026-11-15 (option 1): fd 0 stays unresolved; the benign dup form
+    // matches the direct form `exec <<< 'echo hi'; bash` (ask in main / deny in subagent)
+    let cmd = "exec 3<<< 'echo hi'; exec 0<&3; bash";
+    let home = unique_home("ctla");
+    let (m, mr) = run_as(cmd, &home, false);
+    let (s, sr) = run_as(cmd, &home, true);
+    assert_ne!(m, "deny", "main reason={mr}");
+    assert_eq!(m, "ask", "main reason={mr}");
+    assert_eq!(s, "deny", "subagent reason={sr}");
 }
 
 #[test]
 fn control_b_cat_reads_stdin_as_data_is_not_deny() {
-    assert_not_deny(
-        "ctlb",
-        "exec 3<<< 'chmod 777 /etc/hosts'; exec 0<&3; cat",
-    );
+    assert_not_deny("ctlb", "exec 3<<< 'chmod 777 /etc/hosts'; exec 0<&3; cat");
 }
 
 #[test]

@@ -400,10 +400,12 @@ fn here_text_fds(stages: &[Stage]) -> Vec<u32> {
 }
 
 /// Whether some `exec` on the line opens fd 0 on a here-string or a
-/// here-document (`exec <<< '…'`, `exec 0<<'EOF'`). Its text is judged by
-/// [`cross_statement_fd_verdict`] only for a literal harm (a Deny); fd 0 is
-/// never resolved, so [`super::procsub_programs`] keeps its Ask.
-fn stdin_here_text(stages: &[Stage]) -> bool {
+/// here-document (`exec <<< '…'`, `exec 0<<'EOF'`), or duplicates onto fd 0
+/// an fd in `tracked` (`exec 0<&3`, `exec <&3`, where an `exec` opens fd 3 on
+/// literal text). fd 0's text is judged by [`cross_statement_fd_verdict`]
+/// only for a literal harm (a Deny); fd 0 is never resolved, so
+/// [`super::procsub_programs`] keeps its Ask.
+fn stdin_here_text(stages: &[Stage], tracked: &[u32]) -> bool {
     stages.iter().any(|st| {
         let Some((at, _)) = exec_word(&st.words) else {
             return false;
@@ -411,9 +413,11 @@ fn stdin_here_text(stages: &[Stage]) -> bool {
         let Some(redirects) = exec_only_redirects(&st.words[at + 1..]) else {
             return false;
         };
-        redirects.iter().any(|(fd, op, _)| {
+        redirects.iter().any(|(fd, op, target)| {
             fd.unwrap_or(if op.starts_with('<') { 0 } else { 1 }) == 0
-                && matches!(op.as_str(), "<<<" | "<<" | "<<-")
+                && (matches!(op.as_str(), "<<<" | "<<" | "<<-")
+                    || (matches!(op.as_str(), "<&" | ">&")
+                        && target.parse::<u32>().is_ok_and(|m| tracked.contains(&m))))
         })
     })
 }
@@ -752,9 +756,10 @@ pub(super) struct FdTracking {
 /// order — holds a known text (`FdState::Text`): the pipeline as written,
 /// that reader given the text inline. A Deny there is the verdict in both
 /// modes; any other verdict is dropped. After a close (`exec 0<&-`) or a
-/// reopen on a file fd 0 holds no text; an undetermined fd 0 (a copy
-/// `exec 0<&N`, an unquoted here-document, an `exec` in a subshell or behind
-/// `&&`) is not judged. fd 0 is never in `resolved`, so every case not
+/// reopen on a file fd 0 holds no text; after a copy `exec 0<&N` / `exec <&N`
+/// from an fd N that holds a known text at that point, fd 0 holds that text;
+/// an undetermined fd 0 (a copy of an fd whose text is not known, an unquoted
+/// here-document, an `exec` in a subshell or behind `&&`) is not judged. fd 0 is never in `resolved`, so every case not
 /// denied here keeps the Ask (a Deny in a subagent)
 /// [`super::procsub_programs`] gives a stdin-program reader of it.
 pub(super) fn cross_statement_fd_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> FdTracking {
@@ -768,7 +773,7 @@ pub(super) fn cross_statement_fd_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>)
     let stages = structured_stages(cmd);
     let tracked = here_text_fds(&stages);
     let named = named_fd_texts(cmd, &stages);
-    let stdin_tracked = stdin_here_text(&stages);
+    let stdin_tracked = stdin_here_text(&stages, &tracked);
     if tracked.is_empty() && named.is_empty() && !stdin_tracked {
         return none;
     }
@@ -957,9 +962,11 @@ runs that text",
             // Only the text fd 0 holds for certain at this point, the
             // `exec`s before it applied in order: after a close (`exec 0<&-`)
             // or a reopen on a file it holds none, after a reassignment the
-            // new text, and an undetermined fd 0 (a copy `exec 0<&N`, an
-            // unquoted here-document, an `exec` in a subshell or behind
-            // `&&`) is left to `procsub_programs`' Ask.
+            // new text, after a copy `exec 0<&N` of an fd holding a known
+            // text that text, and an undetermined fd 0 (a copy of an fd
+            // whose text is not known, an unquoted here-document, an `exec`
+            // in a subshell or behind `&&`) is left to `procsub_programs`'
+            // Ask.
             let texts = match fds.get(&0) {
                 Some(FdState::Text(h)) => vec![h.clone()],
                 _ => Vec::new(),
@@ -1205,6 +1212,12 @@ opened on"
             Ok(m) if m <= 2 => Some(FdState::Other),
             Ok(m) => match fds.get(&m) {
                 Some(FdState::Other) => Some(FdState::Other),
+                // fd 0 duplicated from an fd that holds a known text
+                // (`exec 3<<< '…'; exec 0<&3`, backlog 2210e1db): fd 0 reads
+                // that text, so a later stdin-program reader is judged on it.
+                // Any other source (untracked, undetermined) falls through to
+                // the undetermined arm below.
+                Some(FdState::Text(h)) if n == 0 => Some(FdState::Text(h.clone())),
                 other => Some(FdState::Undetermined {
                     texts: other.map(FdState::texts).unwrap_or_default(),
                     why: format!(

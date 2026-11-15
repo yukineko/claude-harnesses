@@ -467,6 +467,14 @@ fn control_bare_variable_targets_keep_resolving() {
 /// answers there (`<pid>/x`, `/x`) are not merely unknown, they are a RELATIVE
 /// path and a write at the filesystem root. Resolving either to something under
 /// the session tree would be an invention, not a guess.
+///
+/// SUPERSEDED for `export P=…` and for a prefix glued before the reference
+/// (`pre$P`) — user rulings 2026-11-15, verbatim: 「`export X=lit` は「解決して
+/// 判定」する。`X=lit` と同じく解決し、literal と同じに判定する。」 and 「`pre$P` の
+/// ように、前に文字列をつなげた形は「連結を解決」する。裁定の「その連結」に含め、展開した
+/// 後の literal と同じに判定する。」 Those two shapes are no longer refused; they are
+/// pinned after the table as "judged like the literal spelling". The other
+/// STRICTER rows above (`true && P=…`, `declare P=…`, `{ P=…; }`) are unchanged.
 #[test]
 fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
     let mut violations: Vec<String> = Vec::new();
@@ -525,12 +533,6 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
             OK_LEAF,
             "an array's first element depends on IFS / [0]-vs-[@] / quoting \
              (measured: [aa] for P=(aa bb))",
-        ),
-        (
-            "export P=/home/yuki/proj; echo hi > $P/x.log",
-            OK_LEAF,
-            "`export NAME=v` is not a pure assignment list to this scan; bash \
-             does bind it, so refusing is the safe error",
         ),
         (
             "declare P=/home/yuki/proj; echo hi > $P/x.log",
@@ -607,13 +609,6 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
              one at its end",
         ),
         (
-            "P=/home/yuki/proj; echo hi > pre$P/x.log",
-            OK_LEAF,
-            "a PREFIX glued before the reference names a different path \
-             (measured: [pre/aa/x]); the existing resolver already refuses \
-             `pre$BIN` and this must stay so",
-        ),
-        (
             "echo hi > ${P:-/home/yuki/proj}/x.log",
             OK_LEAF,
             "`${P:-default}` names the default only when P is unset — a run-time fact",
@@ -673,6 +668,27 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
         violations.len(),
         violations.join("\n  ")
     );
+    // SUPERSEDED rows (user rulings 2026-11-15): 「`export X=lit` は「解決して判定」
+    // する。`X=lit` と同じく解決し、literal と同じに判定する。」 and 「`pre$P` のように、
+    // 前に文字列をつなげた形は「連結を解決」する。裁定の「その連結」に含め、展開した後の
+    // literal と同じに判定する。」 The two rows formerly in the table above (export
+    // refused; `pre$P` refused) are pinned here as "judged like the literal".
+    for (cmd, literal) in [
+        (
+            "export P=/home/yuki/proj; echo hi > $P/x.log",
+            "echo hi > /home/yuki/proj/x.log",
+        ),
+        (
+            "P=/home/yuki/proj; echo hi > pre$P/x.log",
+            "echo hi > pre/home/yuki/proj/x.log",
+        ),
+    ] {
+        assert_eq!(
+            scoped(cmd),
+            scoped(literal),
+            "`{cmd}` must be judged like its literal spelling `{literal}` (user ruling 2026-11-15)"
+        );
+    }
 }
 
 /// A suffix carrying GLOB metacharacters must NOT be resolved, and the reason
@@ -712,6 +728,13 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
 /// `NothingToDestroy`). The single-match row above shows bash truncating a real
 /// file for that same text. Per CLAUDE.md §3 a target the text does not
 /// determine is not a permissive target.
+///
+/// SUPERSEDED (user ruling 2026-11-15, 「`P=/abs; echo hi > $P/*.log` のように、
+/// 解決できる変数の後ろに glob を付けた形は、literal と同じに判定する。」): the
+/// paragraphs above record the earlier policy. The assertion below now pins
+/// only that the variable form is judged exactly like the literal spelling; the
+/// glob hazard measured above is the LITERAL form's verdict to answer, not the
+/// resolver's.
 #[test]
 fn unresolvable_glob_suffix_is_not_resolved_to_a_literal_path() {
     // Pin the trap first, so the test says WHY it is restrictive: if this ever
@@ -722,24 +745,39 @@ fn unresolvable_glob_suffix_is_not_resolved_to_a_literal_path() {
         "fixture precondition: a literal `*.log` under the project root is Allowed, \
          which is what makes resolving a glob suffix the permissive error"
     );
-    for cmd in [
-        "P=/home/yuki/proj; echo hi > $P/*.log",
-        "P=/home/yuki/proj; echo hi > $P/?.log",
-        "P=/home/yuki/proj; echo hi > $P/[ab].log",
-        "P=/home/yuki/proj; echo hi > ${P}/*.log",
-        "P=/home/yuki/proj; echo hi > \"$P\"/*.log",
+    // User ruling 2026-11-15: 「`P=/abs; echo hi > $P/*.log` のように、解決できる変数の
+    // 後ろに glob を付けた形は、literal と同じに判定する。」 The earlier assertion
+    // here (the variable form must block) pinned the policy that ruling
+    // replaced; the expectation is now "the same verdict as the same shape
+    // written literally". The precondition above stays: it documents what that
+    // literal verdict is.
+    for (cmd, literal) in [
+        (
+            "P=/home/yuki/proj; echo hi > $P/*.log",
+            "echo hi > /home/yuki/proj/*.log",
+        ),
+        (
+            "P=/home/yuki/proj; echo hi > $P/?.log",
+            "echo hi > /home/yuki/proj/?.log",
+        ),
+        (
+            "P=/home/yuki/proj; echo hi > $P/[ab].log",
+            "echo hi > /home/yuki/proj/[ab].log",
+        ),
+        (
+            "P=/home/yuki/proj; echo hi > ${P}/*.log",
+            "echo hi > /home/yuki/proj/*.log",
+        ),
+        (
+            "P=/home/yuki/proj; echo hi > \"$P\"/*.log",
+            "echo hi > /home/yuki/proj/*.log",
+        ),
     ] {
-        let d = scoped(cmd);
-        assert!(
-            d.is_blocking(),
-            "`{cmd}` names whichever file the filesystem happens to match at run \
-             time (measured: an existing `one.log` was truncated), so it must not \
-             be resolved to a literal path; got {d:?}"
-        );
-        assert!(
-            d.clone().hardened().is_deny(),
-            "`{cmd}` must harden to Deny when no human is available; got {:?}",
-            d.clone().hardened()
+        assert_eq!(
+            scoped(cmd),
+            scoped(literal),
+            "`{cmd}` must be judged exactly like its literal spelling `{literal}` \
+             (user ruling 2026-11-15)"
         );
     }
 }

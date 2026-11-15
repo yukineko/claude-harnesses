@@ -4,7 +4,8 @@
 //!
 //! Two groups, so later tasks can un-ignore them separately:
 //!
-//! * [`parse_caps`] (`#[ignore = "RED: ast parse_caps"]`): the pre-scan and
+//! * [`parse_caps`] (un-ignored; only `positive_control_plain_echo_is_known`
+//!   stays `#[ignore = "RED: ast parse_caps"]` until eval lands): the pre-scan and
 //!   parser limits — unbalanced quotes, unterminated heredoc, the
 //!   `MAX_PARSE_BYTES` / `MAX_PARSE_DEPTH` caps, zsh-only syntax — plus ONE
 //!   positive control (`echo hi` is `Known`), so the group cannot pass by
@@ -168,10 +169,12 @@ mod parse_caps {
     }
 
     /// Depths checked for every nesting kind: just over the cap, and far over
-    /// it (deep enough that an unguarded recursive parser would blow the
-    /// default thread stack), both still under `MAX_PARSE_BYTES`.
+    /// it, both still under `MAX_PARSE_BYTES`. The second depth is bounded by
+    /// the byte cap: the widest fixture (`if true; then ` + `fi; `, 18 bytes
+    /// per level) must fit in 8 KiB, so 400 (7200 B + tail) is used; 4000 did
+    /// not fit (user ruling 2026-11-16, esc-38006305).
     fn depths() -> [usize; 2] {
-        [MAX_PARSE_DEPTH + 1, 4000]
+        [MAX_PARSE_DEPTH + 1, 400]
     }
 
     fn assert_under_byte_cap(command: &str) {
@@ -222,7 +225,6 @@ mod parse_caps {
     }
 
     #[test]
-    #[ignore = "RED: ast parse_caps"]
     fn nested_brace_groups_over_cap_are_too_deep() {
         for n in depths() {
             let command = format!("{}echo hi;{}", "{ ".repeat(n), " }".repeat(n));
@@ -241,7 +243,6 @@ mod parse_caps {
     }
 
     #[test]
-    #[ignore = "RED: ast parse_caps"]
     fn nested_if_over_cap_is_too_deep() {
         for n in depths() {
             let command = format!(
@@ -255,7 +256,6 @@ mod parse_caps {
     }
 
     #[test]
-    #[ignore = "RED: ast parse_caps"]
     fn nested_command_substitution_over_cap_is_too_deep() {
         for n in depths() {
             let command = format!("echo {}echo hi{}", "$(".repeat(n), ")".repeat(n));

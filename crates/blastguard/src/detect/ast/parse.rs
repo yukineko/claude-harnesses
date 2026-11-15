@@ -57,8 +57,9 @@
 //!   depth-32 brace groups side by side, 8832 B: 3.0 / 1.2 ms), ~10–21 ms
 //!   debug. Even 64 KiB stayed ≤ ~11 ms release.
 //! * No wall-clock cap (`Cause::Timeout` is not produced here): with both
-//!   caps the measured worst case is two orders of magnitude under 100 ms in
-//!   release, and a watchdog thread could not stop a runaway brush call anyway
+//!   caps the measured worst case is about one order of magnitude under
+//!   100 ms in release (64 KiB: ~9-11 ms; at the actual 8 KiB cap: ~1-3 ms),
+//!   and a watchdog thread could not stop a runaway brush call anyway
 //!   (it can only stop waiting for it).
 //!
 //! # The depth pre-scan is conservative (it over-counts)
@@ -81,7 +82,9 @@
 //!    one command. A closer (`)`, `}`, `fi` / `done` / `esac`, a closing
 //!    backtick) only removes the innermost frame when it is of the matching
 //!    kind; a mismatched closer is ignored, so an input the scanner misreads
-//!    only ever looks *deeper*, never shallower. Text is skipped only where
+//!    only ever looks *deeper*, never shallower. This scan is a
+//!    restrictive-only pre-filter, accepted as such by user ruling 2026-11-16.
+//!    Text is skipped only where
 //!    bash cannot execute it: single-quoted strings, `$'..'`, comments, and
 //!    the body of a heredoc whose delimiter is quoted (only once its
 //!    terminator line is found). Unquoted heredoc bodies are scanned for

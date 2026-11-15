@@ -747,19 +747,29 @@ reason = "'振る舞い' interpreter bullet '`CODE_BUILDING` marker は Ask' and
 [[spec]]
 path = "crates/blastguard/src/detect/ast/mod.rs"
 doc = "docs/specs/blastguard.md"
-reason = "'module 責務' bullet `detect/ast`: Analysis/Cause/Script/SimpleCommand contract of the parser + static-eval layer; skeleton (always Undetermined(NotImplemented), not called by any detector)."
+reason = "'module 責務' bullet `detect/ast`: Analysis/Cause/Script/SimpleCommand contract of the parser + static-eval layer (RedirTarget / SimpleCommand.cwd relative-target representation); not yet called by any detector."
 
 [[spec]]
 path = "crates/blastguard/src/detect/ast/parse.rs"
 doc = "docs/specs/blastguard.md"
-reason = "'module 責務' bullet `detect/ast`: brush-parser front end with MAX_PARSE_BYTES / MAX_PARSE_DEPTH caps (placeholder values, fixed by measurement in the ast-parse stage); unparsable / over-cap -> Undetermined."
+reason = "'module 責務' bullet `detect/ast`: brush-parser front end with MAX_PARSE_BYTES = 8 KiB / bracket depth MAX_PARSE_DEPTH = 16 caps (user ruling 2026-11-16) checked before brush, restrictive-only Scan pre-filter, catch_unwind; unparsable / over-cap -> Undetermined."
 
 [[spec]]
 path = "crates/blastguard/src/detect/ast/eval.rs"
 doc = "docs/specs/blastguard.md"
-reason = "'module 責務' bullet `detect/ast`: static evaluation (program_source; skeleton returns Some(ProgramSource::Undetermined))."
+reason = "'module 責務' bullet `detect/ast`: static evaluation — only text-provable values are Literal (literal assignment / for-list / cd, stdin literal programs, heredoc consumer, program_source); everything else Undetermined."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/arith.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/ast`: arithmetic / subscript determination — a value not determined by the text read in arithmetic or a subscript makes the analysis Undetermined(Unsupported) (user ruling 2026-11-16, strict reading)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/support.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/ast`: stateless helpers of the static evaluator (escape decoding, path join/normalise, fd/stdin handling, piped-stdin literal printf/echo)."
 
 [[spec]]
 path = "crates/blastguard/src/detect/ast/tests.rs"
 doc = "docs/specs/blastguard.md"
-reason = "'module 責務' bullet `detect/ast`: contract tests (RED, #[ignore]) of the parser + static-eval layer: caps/parse failure -> Undetermined, literal assignment/for/cd resolution, relative redirect after cd joined or Undetermined (user ruling 2026-11-16), stdin/program sources."
+reason = "'module 責務' bullet `detect/ast`: contract tests of the parser + static-eval layer: caps/parse failure -> Undetermined, literal assignment/for/cd resolution, relative redirect after cd joined or Undetermined (user ruling 2026-11-16), stdin/program sources, tilde/arithmetic/subscript fail-open regressions."

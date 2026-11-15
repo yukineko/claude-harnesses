@@ -1251,16 +1251,24 @@ forge・condukt のスケジューラが再利用）。
   記録は判定確定後・表示前に書き、判定を変えない。書けない（panic を含む）ときは表示理由に
   `could NOT be recorded` とエラーを付け stderr にも警告する（沈黙しない）。relay（subagent の Bash Ask の
   再実行 queue）とは別物で、block log は真の `Deny` と main の `Ask` を含む全 block を記録する。
-- **`detect/ast`**（`mod.rs` / `parse.rs` / `eval.rs`）— shell parser（brush-parser `=0.4.0`）＋静的評価層
+- **`detect/ast`**（`mod.rs` / `parse.rs` / `eval.rs` / `arith.rs` / `support.rs`）— shell parser（brush-parser `=0.4.0`）＋静的評価層
   （ユーザー裁定 2026-11-15「parser ＋ 静的評価で一体にする」）。`analyze(&str) -> Analysis`
   （`Known(Script)` / `Undetermined(Cause)`、`Cause` = `NotImplemented`/`TooLong`/`TooDeep`/`Timeout`/
   `Parse`/`Panic`/`ZshOnly`/`Unsupported`）と `program_source(&SimpleCommand) -> Option<ProgramSource>`。
   quoted heredoc 本文・quoted word・comment は data、実行される command word と展開だけが code。
   parse 不能・上限超過・zsh 専用構文は `Undetermined` で、呼び出し側は Ask/Deny に倒す（fail-closed）。
-  **現状は skeleton**: `analyze` は常に `Undetermined(NotImplemented)`、`program_source` は常に
-  `Some(ProgramSource::Undetermined)` を返し、どの検出器からも呼ばれない（判定に影響しない）。
-  `MAX_PARSE_BYTES`（64 KiB）/`MAX_PARSE_DEPTH`（64）は仮値で、測定（brace nesting 200 = 48s を観測済み）
-  に基づく確定は ast-parse 段で行う。
+  上限はユーザー裁定 2026-11-16: `MAX_PARSE_BYTES` = 8 KiB 超 → `TooLong`、括弧カウンタ
+  （`({[` で +1 / `)}]` で −1、quote 無視）深さ `MAX_PARSE_DEPTH` = 16 超 → `TooDeep`。どちらも brush-parser
+  より前に判定し、検出器はこれを Deny に解決する。quote-aware な構造 pre-scan（`Scan`）は拒否を増やす方向
+  だけの pre-filter として裁定で許容。brush-parser は `catch_unwind` 下で呼び、parse error → `Parse`、panic → `Panic`。
+  静的評価（`eval.rs`）は本文から証明できる値だけを `Literal` にし、それ以外は `Undetermined`（推測した literal
+  を返さない）: literal 代入・literal for-list・literal cd（相対 redirect 先は cd が無ければ相対のまま、literal cd
+  の後は join した絶対パス、不定の cd の後は `Undetermined`）・stdin の literal program・heredoc。
+  `=~`/`:~` を含む argv の tilde、`[[ a -eq b ]]` 等の算術代入、subscript 付き name operand は havoc または
+  `Undetermined`。subscript 内の command substitution、および本文で決まらない値を読む算術・subscript
+  （`arith.rs`。ユーザー裁定 2026-11-16 strict reading）は解析全体を `Undetermined(Unsupported)` にする。
+  `support.rs` は状態を持たない補助関数（escape 展開・パス正規化・fd/stdin・pipe stdin）。
+  **現状どの検出器からも呼ばれない**（判定に影響しない）。検出器の移行は migrate-path / migrate-stdin-program 段で行う。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。
 

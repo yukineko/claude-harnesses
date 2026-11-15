@@ -861,3 +861,62 @@ mod eval {
         assert_eq!(&command[e.argv[1].span.clone()], "é");
     }
 }
+
+/// RED tests for two fail-opens found by an independent verifier and observed
+/// in bash on 2026-11-16 (`HOME=/h; echo a=~/x b=~ c=x:~/y of=~/f` prints
+/// `a=/h/x b=/h c=x:/h/y of=/h/f`; `x=/a; [[ 0 -eq x=5 ]]` leaves `x=5`).
+/// Contract (criterion 2): a value not provably determined from the text is
+/// Undetermined, never a guessed literal.
+mod tilde_and_arith_fail_open {
+    use super::*;
+
+    fn word(command: &str, cmd: &str, i: usize) -> Value {
+        let s = known(command);
+        arg(one_named(&s, cmd), i).clone()
+    }
+
+    fn cat_target(command: &str) -> RedirTarget {
+        let s = known(command);
+        one_redirect(one_named(&s, "cat")).target.clone()
+    }
+
+    #[test]
+    fn dd_of_tilde_word_is_undetermined() {
+        let v = word("dd if=/dev/zero of=~/f", "dd", 2);
+        assert!(is_undet(&v), "of=~/f is tilde-expanded by bash: {v:?}");
+    }
+
+    #[test]
+    fn name_equals_tilde_word_is_undetermined() {
+        let v = word("echo a=~/x", "echo", 1);
+        assert!(is_undet(&v), "a=~/x is tilde-expanded by bash: {v:?}");
+    }
+
+    #[test]
+    fn colon_tilde_word_is_undetermined() {
+        let v = word("echo c=x:~/y", "echo", 1);
+        assert!(is_undet(&v), "c=x:~/y is tilde-expanded by bash: {v:?}");
+    }
+
+    #[test]
+    fn control_equals_word_without_tilde_stays_literal() {
+        assert_eq!(word("echo a=x", "echo", 1), lit("a=x"));
+    }
+
+    #[test]
+    fn arith_compare_assignment_makes_variable_undetermined() {
+        let t = cat_target("x=/a; [[ 0 -eq x=1 ]]; cat > $x");
+        match t {
+            RedirTarget::Path(v) if is_undet(&v) => {}
+            other => panic!("[[ 0 -eq x=1 ]] assigns x; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn control_arith_compare_without_assignment_keeps_literal() {
+        assert_eq!(
+            cat_target("x=/a; [[ 0 -eq 1 ]]; cat > $x"),
+            RedirTarget::Path(lit("/a"))
+        );
+    }
+}

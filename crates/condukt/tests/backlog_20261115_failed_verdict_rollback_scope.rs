@@ -185,7 +185,10 @@ fn b_failing_verified_task_does_not_move_its_worktree_branch_head() {
     fx.ok(&["state", "checkpoint", "--run", &rid]);
     std::fs::write(wt.join("later.txt"), "later").unwrap();
     git(&wt, &["add", "later.txt"]);
-    git(&wt, &["commit", "-q", "-m", "later commit after checkpoint"]);
+    git(
+        &wt,
+        &["commit", "-q", "-m", "later commit after checkpoint"],
+    );
     let head_before = git(&wt, &["rev-parse", "HEAD"]);
 
     fx.set(&rid, "t1", "verified", &[]);

@@ -2742,31 +2742,6 @@ exit 101: v0.1.77 (/Users/yuki/src/.harness-worktrees/backlog-tdd-red-spawn-erro
 error: test failed, to rerun pass `-p tdd --test backlog_20261115_red_spawn_error_records_red`"""
 
 [[task]]
-id = "b6543e39"
-title = "condukt testscope: rerun ledger tree identity hashes untracked file names, not contents (edits to a new untracked test are refused as same tree)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = 'Observed 2026-11-15 at main a8e92b562 (condukt 0.7.413). crates/condukt/src/testscope.rs tree_identity: dirty hash = hash(git diff HEAD --binary) + hash(git ls-files --others --exclude-standard); the second lists untracked NAMES only, so editing an untracked new file (e.g. a not-yet-added tests/*.rs) leaves the identity unchanged and the same test is refused. Verbatim at RED: "rerun refused: `cargo test -p foo --test new_test` already ran on this exact tree (80ecd6fb2f4ca01463e506c66253ab22d23c033a:1703e7542cf25299)" after rewriting the untracked new_test.rs. Controls GREEN: tracked edit allows rerun; unchanged tree refuses. Not covered by unmerged fix/testscope-cwd-20261115 (HEAD 501535dac): its tree_identity body is byte-identical; that branch fixes only WHICH directory is fingerprinted (cd target, backlog 214b39b5), so the cd-target half of the original observation (subagent refused with main HEAD 3a92067ba fingerprint) is NOT filed here. Readings: (a) defect - docstring says identity of "the tree a test runs against", untracked contents are compiled; (b) intended cheapness - names only to avoid hashing large untracked trees; then the refusal text "this exact tree" is false. Fix constraint: hashing contents must not make cd/copy a ledger dodge. RED: crates/condukt/tests/backlog_20261115_testscope_untracked_content_identity.rs (commit 4e3c2b396, branch filings/offtopic-20261115).'
-created_at = 1794746091
-updated_at = 1794746091
-weight = 0.0
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261115_testscope_untracked_content_identity -- --ignored rerun_after_editing_an_untracked_file_is_allowed"
-rev = "4e3c2b39620a9a02f017e343bddf08609510eaf5"
-observed_at = 1794746091
-detail = """
-exit 101: worktrees/offtopic-filings-20261115/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 42.23s
-     Running tests/backlog_20261115_testscope_untracked_content_identity.rs (target/debug/deps/backlog_20261115_testscope_untracked_content_identity-2e79efc353b9b127)
-error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_untracked_content_identity`"""
-
-[[task]]
 id = "c7cc67c1"
 title = "blastguard_fp_replay.py: --binary accepts any executable; a silent exit-0 non-blastguard binary (/bin/true) is counted as allow"
 project = "/Users/yuki/src/harness"

@@ -2861,6 +2861,8 @@ notes = """Observed 2026-11-15 at fix/testscope-cwd-20261115 76909ce81 (condukt 
 created_at = 1794748773
 updated_at = 1794748773
 weight = 0.0
+issue_number = 1807
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1807"
 rev = 0
 
 [task.repro]

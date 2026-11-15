@@ -2743,3 +2743,32 @@ exit 101: ession-6dcca0ad/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
      Running tests/backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp-50023bed9ac872cf)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp`"""
+
+[[task]]
+id = "245a4c5f"
+title = "blastguard fail-open: python heredoc writes a harmful .sh and the same call runs it (sh/bash/source/./) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-15 at blastguard 0.2.616 by independent RED designer: python3 - <<'PY' open('t_test.sh','w').write('<system-harm chmod of /etc/hosts or rm -rf ~>') PY then sh|bash|. ./|chmod +x && ./ t_test.sh is allow/allow (main/subagent); the shell-heredoc writer (cat > t_test.sh <<'EOF') is deny. Readings: (a) fail-open: the python-written .sh body is never judged as shell though run in the same call; (b) intended only if python writes are opaque, but then they must be undetermined (ask), never allow. Pending ruling: python write-only of a harmful .sh (not asserted). RED: crates/blastguard/tests/backlog_20261115_python_heredoc_write_then_sh_fail_open.rs"
+created_at = 1794744257
+updated_at = 1794744257
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_heredoc_write_then_sh_fail_open -- --include-ignored"
+rev = "1ae570887c5b0d2650c213df87b0e344ae8b9d44"
+observed_at = 1794744257
+detail = """
+exit 101: rktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.05s
+     Running tests/backlog_20261115_python_heredoc_write_then_sh_fail_open.rs (target/debug/deps/backlog_20261115_python_heredoc_write_then_sh_fail_open-a43835431492e487)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_heredoc_write_then_sh_fail_open`"""

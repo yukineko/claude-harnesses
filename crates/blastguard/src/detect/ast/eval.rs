@@ -48,7 +48,15 @@
 //!   arithmetic assignment are `Undetermined`, so a later read of them in
 //!   arithmetic (a loop counter `i=$((i+1))`) is `Unsupported` too.
 //!   `declare -i` (also `local` / `typeset`) names are remembered: a later
-//!   assignment to one is arithmetic. An undetermined non-assignment operand
+//!   assignment to one is arithmetic. Once the state is opaque (`eval`,
+//!   `source`, `.`, an undetermined command word, ...) any name may have the
+//!   integer attribute (user ruling 2026-11-16, reading A), so from there on
+//!   every assignment (plain, prefix, declaration operand, `printf -v`,
+//!   `read` target) is arithmetic — and, the variables being `Undetermined`,
+//!   one whose value is not determined by the text or reads a name is
+//!   `Unsupported` (even a literal word such as `bar` or `/abs/path`: `bar` /
+//!   `abs` name variables). The
+//!   opaque flag is OR-ed where paths join. An undetermined non-assignment operand
 //!   of a declaration builtin (`declare $opt n=v`) counts as a possible `-i`.
 //!   The keys of a compound value are arithmetic in a declaration builtin
 //!   too (`declare -a a=([i]=1)`), checked in operand order; a compound
@@ -237,7 +245,8 @@ struct Env {
     /// Names that may have the integer attribute (`declare -i`): every
     /// assignment to one is evaluated as arithmetic.
     integer: BTreeSet<String>,
-    /// Something unmodelled may have changed any variable / attribute.
+    /// Something unmodelled may have changed any variable / attribute; while
+    /// set, every name may have the integer attribute (see `int_assign`).
     opaque: bool,
     cwd: Cwd,
     stdin: StdinSource,
@@ -305,11 +314,27 @@ impl Env {
     }
 
     /// Assigning `v` to `name` (`name` may carry a subscript): arithmetic if
-    /// `name` may have the integer attribute.
+    /// `name` may have the integer attribute — it was declared `-i` here, or
+    /// the state is opaque (an `eval` / `source` / ... may have given any
+    /// name the attribute; user ruling 2026-11-16, reading A). Every
+    /// assignment path (plain, prefix, declaration operands, `printf -v`,
+    /// `read` targets) goes through here.
     fn int_assign(&self, name: &str, v: &Value) -> Result<(), Cause> {
-        match name.split('[').next() {
-            Some(base) if self.integer.contains(base) => arith::check_value(v, &|n| self.lookup(n)),
-            _ => Ok(()),
+        self.int_assign_if(self.opaque, name, v)
+    }
+
+    /// [`Env::int_assign`] with the "any name may be integer" flag given by
+    /// the caller: a declaration builtin passes the opacity from *before* the
+    /// command, since an option of the command itself (which makes the state
+    /// opaque) gives the integer attribute only to the names it declares, and
+    /// only with an `i` (or an undetermined option) — `int_attr`, which puts
+    /// those names in `integer` first.
+    fn int_assign_if(&self, any_integer: bool, name: &str, v: &Value) -> Result<(), Cause> {
+        let base = name.split('[').next().unwrap_or(name);
+        if any_integer || self.integer.contains(base) {
+            arith::check_value(v, &|n| self.lookup(n))
+        } else {
+            Ok(())
         }
     }
 
@@ -1265,7 +1290,7 @@ impl Ev {
                             if int_attr {
                                 env.integer.insert(n.clone());
                             }
-                            env.int_assign(n, &a.value)?;
+                            env.int_assign_if(start.opaque, n, &a.value)?;
                             env.forget(n, &format!("assigned by {builtin}"));
                         }
                         None => env.make_opaque(&format!("{builtin} with an undetermined operand")),
@@ -1290,7 +1315,8 @@ impl Ev {
                         Some(n) => format!("{n} + {rhs}"),
                         None => rhs.to_string(),
                     };
-                    env.int_assign(lhs.strip_suffix('+').unwrap_or(lhs), &Value::Literal(expr))?;
+                    let target = lhs.strip_suffix('+').unwrap_or(lhs);
+                    env.int_assign_if(start.opaque, target, &Value::Literal(expr))?;
                     if let Some(n) = lhs.strip_suffix('+') {
                         env.forget_operand(n, "+= appends to a value")?;
                     } else if decl.is_some_and(|d| d.compound) {

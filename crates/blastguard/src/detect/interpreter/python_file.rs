@@ -638,8 +638,10 @@ const STDIN_DYNAMIC_NAMES: &[&str] = &["getattr", "__builtins__", "globals", "lo
 /// A CHILD process the program starts inherits its stdin
 /// ([`child_process_may_read_stdin`], backlog 3da14bbd): the child can be an
 /// interpreter, shell or REPL that runs that stdin as a program
-/// (`os.system("python3 -m asyncio")`, `os.system("bash")`). A literal
-/// `os.system` / `os.popen` command is judged by its words; any other child
+/// (`os.system("python3 -m asyncio")`, `os.system("bash")`). A fully decoded
+/// literal `os.system` / `os.popen` command is judged by its words, and a
+/// word carrying an sh expansion, glob, brace or tilde metacharacter counts as
+/// reading stdin; any other child
 /// start (a computed command such as `os.system(input())`, an argv list,
 /// `subprocess.*`) is undetermined and counts as reading stdin. Importing a
 /// module (`import os`) or calling a non-starting function (`os.getcwd()`)
@@ -708,11 +710,15 @@ fn child_process_may_read_stdin(program: &str) -> bool {
 /// may run that stdin as code: some word of some segment is a code
 /// interpreter, a shell or a [`STDIN_READING_PROGRAMS`] entry (after an exec
 /// wrapper such as `env` or `nohup` too, since every word is checked), or a
-/// word holds an expansion (`$`, a backquote) that can build one.
+/// word holds an expansion (`$`, a backquote) or an sh glob / brace / tilde
+/// metacharacter (`*`, `?`, `[`, `{`, `~`) that can build one at run time
+/// (`/bin/ba*`, `/bin/b?sh`, `{bash,}`): the run-time program is not the
+/// written word, so the word check cannot resolve it. Conservative: such a
+/// metacharacter counts even where sh would not expand it (inside quotes).
 fn shell_line_may_read_stdin(line: &str) -> bool {
     split_segments(line).iter().any(|seg| {
         quote_aware_words(seg).iter().any(|w| {
-            if w.contains(['$', '`']) {
+            if w.contains(['$', '`', '*', '?', '[', '{', '~']) {
                 return true;
             }
             let cmd = normalized_command(w);
@@ -1123,6 +1129,13 @@ mod tests {
             "import os; g(os)",
             "__import__(\"os\").system(\"ls\")",
             "import os; os.execv(\"/bin/ls\", [])",
+            "import os; os.system(\"/bin/ba*\")",
+            "import os; os.system(\"/bin/b?sh\")",
+            "import os; os.system(\"{bash,}\")",
+            "import os; os.system(\"/bin/[b]ash\")",
+            "import os; os.system(\"~/bash\")",
+            "import os; os.system(\"\\N{LATIN SMALL LETTER B}ash\")",
+            "import os; os.system(r\"b\\ash\")",
         ] {
             assert!(reads(p), "{p}");
         }

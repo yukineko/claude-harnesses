@@ -90,7 +90,10 @@ fn assert_not_allow_both(tag: &str, cmd: &str) {
     let (m, mr) = run_as(cmd, &home, false);
     let (s, sr) = run_as(cmd, &home, true);
     assert_ne!(m, "allow", "main must not allow; cmd={cmd:?} reason={mr}");
-    assert_ne!(s, "allow", "subagent must not allow; cmd={cmd:?} reason={sr}");
+    assert_ne!(
+        s, "allow",
+        "subagent must not allow; cmd={cmd:?} reason={sr}"
+    );
 }
 
 #[test]

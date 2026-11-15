@@ -949,10 +949,14 @@ forge・condukt のスケジューラが再利用）。
   program として読みうるなら pipe の program を判定する（backlog 3da14bbd、
   `interpreter::python_file::python_program_enters_stdin_console` の `child_process_may_read_stdin` と
   `python_semantics::child_start_lines`、tests/backlog_20261115_python_os_system_nested_repl.rs・
-  tests/backlog_20261115_python_c_import_os_stdin_data_fp.rs）** — `echo 'import os; os.chmod("/etc/hosts", 0o777)' |
+  tests/backlog_20261115_python_c_import_os_stdin_data_fp.rs・tests/backlog_20261116_python_os_system_literal_spelling_bypass.rs）** — `echo 'import os; os.chmod("/etc/hosts", 0o777)' |
   python3 -c 'import os; os.system("python3 -m asyncio")'` と `echo 'chmod 777 /etc/hosts' | python3 -c 'import os; os.system("bash")'`
-  は main・subagent とも Deny。**literal な `os.system("…")` / `os.popen("…")` は静的に解決**し、command line のどれかの語が
-  code interpreter・shell・`STDIN_READING_PROGRAMS`（`ipython` 等の閉じた list）、または `$`・backtick を含む語なら stdin を読みうる。
+  は main・subagent とも Deny。**literal な `os.system("…")` / `os.popen("…")` は、その literal が完全に decode できる
+  （`Decoded::Value`。raw literal は backslash を含まない）ときだけ静的に解決**する。`\N{…}`・不正な escape・backslash を含む raw literal は
+  未確定として制限側（`python_semantics::lex_marking_inexact`）。解決した command line のどれかの語が
+  code interpreter・shell・`STDIN_READING_PROGRAMS`（`ipython` 等の閉じた list）、または `$`・backtick、あるいは sh の glob・brace・tilde
+  展開の metacharacter（`*`・`?`・`[`・`{`・`~`）を含む語なら stdin を読みうる（`/bin/ba*`・`/bin/b?sh`・`{bash,}` は実行時に shell になりうる。
+  quote 内で sh が展開しない場合も保守的に数える）。
   literal の command がどれでもなければ（`os.system("ls")`・`"cat"`・`"grep chmod"`）stdin は data のまま。
   それ以外の子プロセス起動（computed な command `os.system(c)`・argv list・`subprocess.*`・`os.exec*`/`os.spawn*`・`pty.spawn`・
   `asyncio.*`・runner module の値としての参照 `g(os)`・call 結果の属性 `__import__("os").system`・runner module からの

@@ -2496,39 +2496,6 @@ exit 101:
 error: test failed, to rerun pass `-p answerlang --test stop_payload_final_message_20261115`"""
 
 [[task]]
-id = "f7bba5f0"
-title = "stop-verify-worktree blocks on another writer's dirt on a recorded, since-committed main-tree path"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "worktree-hygiene",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-15 (session 6dcca0ad, Stop feedback at 09:02:34Z and 09:06:14Z on .backlog/tasks.toml while main was clean right after). writes_stop_check (scripts/deny_ledger.py:1038) uses the path set only; entry epoch unused. Candidate: skip a recorded path whose mtime is after every record epoch for it (+30s); keep blocking own uncommitted writes (control test). Existing test_stop_verify_worktree.py dirty() fixture uses epoch=1.0 and must be updated visibly. Writer in the observed windows is UNVERIFIED; reading (2) intended over-attribution (deny_ledger.py:928-934) would instead mean not recording auto-merged backlog rows."
-created_at = 1794733957
-updated_at = 1794733957
-weight = 0.0
-issue_number = 1799
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1799"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest -q --runxfail scripts/test_stop_verify_worktree_foreign_writer_20261115.py"
-rev = "c19614ef3c14d2ac117f8b6b01eff9ad9223a929"
-observed_at = 1794733957
-detail = '''
-exit 1: t is NOT in this record is another session's and does not block.\n").returncode
-
-scripts/test_stop_verify_worktree_foreign_writer_20261115.py:125: AssertionError
-=========================== short test summary info ============================
-FAILED scripts/test_stop_verify_worktree_foreign_writer_20261115.py::test_foreign_rewrite_after_my_committed_write_does_not_block
-1 failed, 1 passed in 0.55s'''
-
-[[task]]
 id = "dc053fcf"
 title = "blastguard FP: for-loop over a literal word list writing $D/$f.tmp then mv is refused (loop var left unresolved)"
 project = "/Users/yuki/src/harness"

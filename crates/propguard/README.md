@@ -94,6 +94,7 @@ Session state lives under `~/.propguard/state` (config key `state_dir`; the `PRO
 See [`propguard.example.toml`](./propguard.example.toml).
 Key knobs: `mode`, `min_properties`/`max_properties` (`max_properties` is capped at 5; `min_properties` = 1 is accepted, not raised to 3), `threshold`, `max_attempts`, `reset_after_secs`, `min_changed_files`, `max_diff_bytes`, `criteria_file`, `include`/`exclude`, `enabled`, and (subprocess mode) `checker_cmd` / `checker_timeout_secs`.
 A project `propguard.toml` is honored only once the root is **trusted**.
+Until then every stop BLOCKS `config-untrusted` naming the file (a refusal, never the built-in defaults). Trust is per root: a linked worktree does not inherit its main tree's trust (user ruling 2026-11-08).
 Trust a root with `propguard trust`.
 
 `propguard status` shows the resolved config and the properties derived for the current task.

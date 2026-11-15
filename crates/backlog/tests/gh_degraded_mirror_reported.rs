@@ -43,6 +43,7 @@ fn setup(tag: &str) -> Env {
     };
     common::linked_checkout(&repo);
     g(&["remote", "add", "origin", "https://github.com/o/r.git"]);
+    common::local_push_origin(&repo.with_file_name("repo.main"));
     // Close-evidence fixture: only a `pending` row (a REPRODUCED, committed
     // repro test) is live work that `sync` mirrors; without one `add`
     // writes nothing, which would leave sync with nothing to do. Commit a failing repro

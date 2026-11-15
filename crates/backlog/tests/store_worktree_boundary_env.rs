@@ -10,6 +10,8 @@
 //! GIT_INDEX_FILE removed unless a test sets them on purpose, so a leaked
 //! variable from an outer git hook cannot change what is measured.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -84,6 +86,7 @@ fn fixture(seed: bool) -> Fixture {
         &primary,
         &["remote", "add", "origin", "https://github.com/o/r.git"],
     );
+    common::local_push_origin(&primary);
     std::fs::write(primary.join("README"), "x\n").unwrap();
     // `add` writes a task only for a reproduced finding (intake contract v2):
     // commit a repro that exits 1 BEFORE the worktree is cut, so the primary
@@ -258,7 +261,11 @@ fn git_dir_of_primary_does_not_lock_a_linked_worktree_cwd() {
     );
     let body = std::fs::read_to_string(store(&fx.linked)).expect("store written in the worktree");
     assert!(body.contains("env-probe"), "{body}");
-    assert!(!fx.primary.join(".backlog").exists());
+    // Changed with backlog f6795f52 (user ruling 「backlog addの時点で台帳も更新
+    // される。mainにいく、issueができる」): on this GitHub origin the row reaches
+    // main by a MERGE, so the primary tree holds the store, but only through
+    // that merge. Was: `assert!(!fx.primary.join(".backlog").exists())`.
+    common::assert_primary_only_merged(&fx.primary);
 }
 
 // ---- 2. cancel / fail ------------------------------------------------------

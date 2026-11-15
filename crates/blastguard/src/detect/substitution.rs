@@ -127,6 +127,43 @@ thread_local! {
     /// Set when a scan under [`under_bash32_reading`] met a shape whose bash
     /// 3.2 parse is not modelled ([`Scan32::Undetermined`]).
     static BASH32_UNDETERMINED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while [`assuming_comment_hides_quotes`] runs: [`scan_bash32`] then
+    /// reads a [`Comments::On`] comment whose line holds a quote, backtick or
+    /// backslash as a comment that hides them (instead of
+    /// [`Scan32::Undetermined`]).
+    static BASH32_COMMENT_HIDES_QUOTES: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// Resets [`BASH32_COMMENT_HIDES_QUOTES`] when dropped (panic-safe, as
+/// [`Bash32Guard`]).
+struct CommentAssumptionGuard;
+
+impl Drop for CommentAssumptionGuard {
+    fn drop(&mut self) {
+        BASH32_COMMENT_HIDES_QUOTES.with(|f| f.set(false));
+    }
+}
+
+/// Run `f` with [`scan_bash32`] resolving ONE unmodelled shape to a candidate
+/// parse instead of [`Scan32::Undetermined`] (issue #1614): under
+/// [`Comments::On`], a comment whose line holds a quote, backtick or backslash
+/// is read as hiding them, as a comment hides parens (observed:
+/// `echo $(cat <<'EOF'` / `x # it's` / `hi) ; touch M` / `EOF` / `)` RAN
+/// `touch M` in /bin/bash 3.2 and /bin/sh, D1-D3 of
+/// `tests/heredoc_paren_bash32_verifier_20261107.rs`).
+///
+/// This is a CANDIDATE reading, not a determination: other shapes of the same
+/// kind are known to parse otherwise (see [`scan_bash32`]). Its only use is to
+/// find a Deny the candidate parse exposes — the caller
+/// ([`super::readings::detect_bash_every_reading`]) runs it only after the
+/// ordinary bash 3.2 pass reported the shape undetermined, keeps that Ask,
+/// and lets this reading's verdict only ADD to it (the most restrictive
+/// verdict winning). It never turns an undetermined shape into Allow.
+pub(super) fn assuming_comment_hides_quotes<R>(f: impl FnOnce() -> R) -> R {
+    let _guard = CommentAssumptionGuard;
+    BASH32_COMMENT_HIDES_QUOTES.with(|m| m.set(true));
+    f()
 }
 
 /// Resets both flags when dropped, so a panic inside the bash 3.2 analysis
@@ -218,7 +255,7 @@ pub(super) enum Comments {
 /// here-document that could change the quoting state), where it is
 /// [`Comments::Off`] inside double quotes and [`Comments::On`] outside.
 /// [`Comments::Unknown`] otherwise.
-fn entry_comments(chars: &[char], start: usize, stop: Stop) -> Comments {
+pub(super) fn entry_comments(chars: &[char], start: usize, stop: Stop) -> Comments {
     if stop != Stop::Paren || start < 2 || chars[start - 2] != '$' || chars[start - 1] != '(' {
         return Comments::Unknown;
     }
@@ -298,7 +335,10 @@ pub(super) enum Scan32 {
 /// backslash (`x # it's` / `ok'` parsed but failed at expansion, `` a # `) b ``
 /// was a parse error: quotes inside a comment still count, in a way not
 /// modelled here); under [`Comments::Unknown`] a comment candidate whose line
-/// holds any of those or a paren; and the depth cap.
+/// holds any of those or a paren; and the depth cap. Inside
+/// [`assuming_comment_hides_quotes`] (a candidate reading used only to ADD a
+/// Deny, never to clear the Ask) the `Comments::On` quote case is instead
+/// read as a comment that hides its quotes.
 pub(super) fn scan_bash32(
     chars: &[char],
     start: usize,
@@ -340,7 +380,10 @@ pub(super) fn scan_bash32(
                     .position(|&ch| ch == '\n')
                     .map_or(chars.len(), |p| k + p);
                 let line = &chars[k + 1..line_end];
-                if line.iter().any(|&ch| matches!(ch, '\'' | '"' | '`' | '\\')) {
+                if line.iter().any(|&ch| matches!(ch, '\'' | '"' | '`' | '\\'))
+                    && !(comments == Comments::On
+                        && BASH32_COMMENT_HIDES_QUOTES.with(std::cell::Cell::get))
+                {
                     return Scan32::Undetermined;
                 }
                 if comments == Comments::Unknown && line.iter().any(|&ch| matches!(ch, '(' | ')')) {
@@ -434,8 +477,10 @@ pub(super) fn scan_balanced_strict(
     })
 }
 
-/// [`scan_balanced_strict`]'s modern (bash 4+ / zsh) reading.
-fn scan_balanced_strict_modern(
+/// [`scan_balanced_strict`]'s modern (bash 4+ / zsh) reading, whatever
+/// reading is active (the shell lexer uses it to delimit a `$(` inside an
+/// unquoted here-document body).
+pub(super) fn scan_balanced_strict_modern(
     chars: &[char],
     start: usize,
     stop: Stop,
@@ -757,9 +802,11 @@ pub(super) fn backtick_payloads(stage: &str) -> Vec<String> {
 /// feeds the FULL rule engine, so literal single-quoted text must not be
 /// mistaken for code. Each body is found with [`scan_balanced`], so quoting
 /// and nesting inside the body cannot end it early. An unterminated
-/// substitution ends the scan: [`split_segments`] keeps a CLOSED `$(a; b)` in
-/// one segment (see [`closed_substitution_end`]) but cuts an unclosed one
-/// apart, and those pieces are analysed as segments of their own.
+/// substitution ends the scan: [`split_segments`] keeps a CLOSED `$(a; b)` —
+/// and an unquoted closed `<(a; b)` / `>(a; b)` — in one segment (see
+/// [`closed_substitution_end`] and
+/// [`super::segment::closed_process_substitution_end`]) but cuts an unclosed
+/// one apart, and those pieces are analysed as segments of their own.
 pub(super) fn executed_substitution_payloads(seg: &str) -> Vec<String> {
     let chars: Vec<char> = seg.chars().collect();
     let mut out = Vec::new();

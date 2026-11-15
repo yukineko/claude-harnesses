@@ -81,6 +81,7 @@ fn fx(tag: &str) -> Fx {
             .success();
         assert!(ok, "git {a:?} failed: fixture is void");
     }
+    common::local_push_origin(&common::linked_primary(&f.repo));
     // `gh issue create` prints an issue URL; `gh issue close` succeeds.
     let gh = "#!/bin/sh\n\
               if [ \"$2\" = create ]; then echo https://github.com/o/r/issues/7; fi\n\

@@ -19,6 +19,12 @@
 //!
 //! Repro: `cargo test -p blastguard --test backlog_2287ebae` (was `#[ignore]`d
 //! RED until the redirect axes judged the real landing, `detect::physical_landing`).
+//!
+//! Issue #1554 (user ruling 2026-11-08): where `chmod 000` does not make
+//! resolution fail with EACCES (v9fs `/mnt/c`, root), the locked-ancestor row
+//! neither passes nor skips; it fails with [`PRECONDITION_NOT_BUILDABLE`] and
+//! the reason, distinct from its verdict assertion. That branch is exercised
+//! here only with a simulated `NotFound`; a real v9fs run was not observed.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
@@ -198,14 +204,97 @@ fn unresolvable_real_landing_is_not_allowed() {
     let cmd = format!(": > {}/sub/new.log", locked.display());
     let out = f.verdict(&cmd);
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let kind = probe.as_ref().err().map(std::io::Error::kind);
-    assert_eq!(
-        kind,
-        Some(std::io::ErrorKind::PermissionDenied),
-        "fixture: the locked ancestor must make resolution fail with EACCES (running as root?)"
+    let precondition = precondition_failure(&probe);
+    assert!(
+        precondition.is_none(),
+        "{}",
+        precondition.unwrap_or_default()
     );
     assert!(
         !out.trim().is_empty(),
         "`{cmd}`: where it lands could not be resolved; got Allow"
     );
+}
+
+/// The fixed head of the failure message [`precondition_failure`] builds, so a
+/// run that could not build the fixture reads differently from a run whose
+/// verdict assertion failed (issue #1554, user ruling 2026-11-08).
+const PRECONDITION_NOT_BUILDABLE: &str =
+    "PRECONDITION NOT BUILDABLE HERE (this is not a blastguard verdict failure)";
+
+/// Whether the "unsearchable ancestor" precondition of
+/// [`unresolvable_real_landing_is_not_allowed`] was actually built, judged
+/// from the result of resolving a path below a `chmod 000` directory.
+#[derive(Debug, PartialEq, Eq)]
+enum LockedAncestor {
+    /// Resolution failed with `PermissionDenied`: the kernel really refused
+    /// to search the directory, so the hook ran against the intended fixture.
+    Built,
+    /// Anything else, with why. Observed on v9fs (`/mnt/c`, WSL): `NotFound`,
+    /// because the filesystem ignores `chmod 000` (issue #1554). As root the
+    /// permission check is bypassed.
+    NotBuildable(String),
+}
+
+fn classify_locked_ancestor(probe: &std::io::Result<PathBuf>) -> LockedAncestor {
+    match probe {
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => LockedAncestor::Built,
+        Err(e) => LockedAncestor::NotBuildable(format!(
+            "resolving a path below a `chmod 000` directory failed with {:?} ({e}) instead of \
+             PermissionDenied, so the directory was still searchable: this filesystem does not \
+             enforce POSIX permissions (e.g. v9fs under /mnt/c on WSL, issue #1554) or the test \
+             runs as root. Put CARGO_TARGET_DIR on a POSIX filesystem and run as a normal user.",
+            e.kind()
+        )),
+        Ok(p) => LockedAncestor::NotBuildable(format!(
+            "resolving a path below a `chmod 000` directory succeeded ({}), so the directory was \
+             still searchable: the test runs as root, or the filesystem does not enforce POSIX \
+             permissions. Put CARGO_TARGET_DIR on a POSIX filesystem and run as a normal user.",
+            p.display()
+        )),
+    }
+}
+
+/// Fail — never pass, never skip — when the precondition was not built, with a
+/// message that says so instead of an assertion about the verdict.
+/// `Some(message)` when the precondition was not built; the caller asserts it
+/// is `None`, so such a run fails with this message instead of a verdict one.
+fn precondition_failure(probe: &std::io::Result<PathBuf>) -> Option<String> {
+    match classify_locked_ancestor(probe) {
+        LockedAncestor::Built => None,
+        LockedAncestor::NotBuildable(why) => Some(format!("{PRECONDITION_NOT_BUILDABLE}: {why}")),
+    }
+}
+
+/// The v9fs result (#1554), simulated: this host cannot reproduce v9fs, so the
+/// `NotFound` that `/mnt/c` produced is fed to the helper directly.
+#[test]
+fn simulated_v9fs_not_found_fails_as_precondition_not_buildable() {
+    let probe: std::io::Result<PathBuf> = Err(std::io::ErrorKind::NotFound.into());
+    let msg = precondition_failure(&probe).expect("NotFound must be a precondition failure");
+    assert!(
+        msg.starts_with("PRECONDITION NOT BUILDABLE HERE") && msg.contains("NotFound"),
+        "{msg}"
+    );
+    let denied: std::io::Result<PathBuf> = Err(std::io::ErrorKind::PermissionDenied.into());
+    assert_eq!(precondition_failure(&denied), None);
+}
+
+#[test]
+fn locked_ancestor_classification() {
+    let denied: std::io::Result<PathBuf> = Err(std::io::ErrorKind::PermissionDenied.into());
+    assert_eq!(classify_locked_ancestor(&denied), LockedAncestor::Built);
+    let not_found: std::io::Result<PathBuf> = Err(std::io::ErrorKind::NotFound.into());
+    match classify_locked_ancestor(&not_found) {
+        LockedAncestor::NotBuildable(why) => assert!(
+            why.contains("NotFound") && why.contains("v9fs") && why.contains("root"),
+            "the reason must name the observed error and the likely causes: {why}"
+        ),
+        LockedAncestor::Built => panic!("NotFound must not count as the precondition"),
+    }
+    let resolved: std::io::Result<PathBuf> = Ok(PathBuf::from("/x/locked/sub/new.log"));
+    assert!(matches!(
+        classify_locked_ancestor(&resolved),
+        LockedAncestor::NotBuildable(_)
+    ));
 }

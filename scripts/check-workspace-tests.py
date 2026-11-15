@@ -136,7 +136,11 @@ the thing CLAUDE.md 4 forbids.
       that looks like this repository (crates/ missing, OR scripts/ missing —
       EITHER ONE is enough, they are not required together), or an argument
       other than a lone `--python-only` was passed (an unrecognized argument is
-      refused rather than ignored, per the no-bypass note above). Ranked highest because
+      refused rather than ignored, per the no-bypass note above), or a `cargo
+      test` is already live in this worktree (#1581: its cwd, read with lsof,
+      is the repo directory or inside it; cargo tests in other directories are
+      ignored), or that could not be determined (ps or lsof failed or timed
+      out). In both #1581 cases nothing is launched. Ranked highest because
       nothing below it was computed. A repo with crates/ but no scripts/ must
       NOT fall through to the python body and surface as a discovery problem:
       the remedy for "you are not in the repo" is not the remedy for "the suites
@@ -1000,6 +1004,111 @@ def _print_block(header, items, fix):
 PYTHON_ONLY_FLAG = "--python-only"
 
 
+# A process is a live `cargo test` when its ps command line has `cargo` as a
+# whole path component (bare, or the last component of a path), optionally a
+# `+toolchain`, then `test` as the next word. Mirrored in scripts/mutation-gate.sh.
+CARGO_TEST_RE = re.compile(r"(?:^|/)cargo(?:\s+\+\S+)?\s+test(?:\s|$)")
+LIVE_PROBE_DEADLINE = 10.0
+LiveProbe = namedtuple("LiveProbe", ["live", "problem"])
+
+
+def _bounded_output(argv, deadline):
+    """(returncode, stdout) of a short probe, or (None, reason) if it could not
+    be run or did not finish within `deadline` seconds."""
+    try:
+        done = subprocess.run(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=deadline,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "%s did not finish within %ss" % (argv[0], deadline)
+    except OSError as e:
+        return None, "%s could not be run: %s" % (argv[0], e)
+    return done.returncode, done.stdout
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def live_cargo_tests_in(root):
+    """Live `cargo test` processes whose cwd is `root` or inside it.
+
+    Keyed on: the process's current working directory (as reported by
+    `lsof -a -d cwd -p <pid> -Fn`), resolved with realpath and compared by path
+    prefix against realpath(root). root is the directory this gate measures
+    (main()'s `repo`, the cwd it was started in — the worktree top level, since
+    it refuses to run anywhere without crates/ and scripts/). A cargo test in
+    any other directory (another worktree, another session) is not looked at
+    further (user ruling 2026-11-08, #1581). CARGO_TARGET_DIR is NOT consulted:
+    macOS offers no cheap, reliable way to read another process's environment.
+
+    Fail-closed: if the process table cannot be listed, or a matching process
+    is still alive but its cwd cannot be read, the answer is `problem` (a
+    string), never an empty list. A matching process that exited between the
+    listing and the cwd lookup is not live and is skipped.
+    """
+    real_root = os.path.realpath(root)
+    rc, out = _bounded_output(
+        ["ps", "-ax", "-ww", "-o", "pid=", "-o", "command="], LIVE_PROBE_DEADLINE
+    )
+    if rc is None:
+        return LiveProbe((), "the process table could not be listed: %s" % out)
+    if rc != 0 or not out.strip():
+        return LiveProbe(
+            (), "the process table could not be listed: `ps` exited %s with %s"
+            % (rc, "no output" if not out.strip() else "output")
+        )
+    candidates = []
+    for line in out.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2 or not parts[0].isdigit():
+            continue
+        if CARGO_TEST_RE.search(parts[1]):
+            candidates.append((int(parts[0]), parts[1]))
+    if not candidates:
+        return LiveProbe((), None)
+    lsof = shutil.which("lsof") or next(
+        (p for p in ("/usr/sbin/lsof", "/usr/bin/lsof") if os.path.isfile(p)), None
+    )
+    if lsof is None:
+        return LiveProbe(
+            (), "%d live `cargo test` process(es) found but `lsof` is not "
+            "available, so their working directories cannot be read"
+            % len(candidates)
+        )
+    live = []
+    for pid, cmd in candidates:
+        rc, out = _bounded_output(
+            [lsof, "-a", "-b", "-w", "-d", "cwd", "-p", str(pid), "-Fn"],
+            LIVE_PROBE_DEADLINE,
+        )
+        cwd = None
+        if rc == 0:
+            cwd = next((ln[1:] for ln in out.splitlines() if ln.startswith("n")), None)
+        if cwd is None:
+            if not _pid_alive(pid):
+                continue
+            return LiveProbe(
+                (), "the working directory of live `cargo test` pid %d (%s) "
+                "could not be read%s" % (pid, cmd, "" if rc is not None else ": " + out)
+            )
+        real = os.path.realpath(cwd)
+        if real == real_root or real.startswith(real_root.rstrip(os.sep) + os.sep):
+            live.append((pid, real, cmd))
+    return LiveProbe(tuple(live), None)
+
+
 def main(argv=None, runner=None, repo=None):
     """Run both bodies (or, with exactly `--python-only`, only the python body),
     print everything, return the highest-ranked class."""
@@ -1033,6 +1142,31 @@ def main(argv=None, runner=None, repo=None):
             "repository (missing: %s), so NEITHER test body could even be "
             "located. Nothing below this line was computed, and that is not a "
             "pass." % (repo, ", ".join(missing)),
+            file=sys.stderr,
+        )
+        return RC_ENVIRONMENT
+
+    # Refuse to start while a `cargo test` is already live in THIS worktree
+    # (#1581): two runs share target/ and several crates' fixture paths, so a
+    # measurement taken beside one is void. Other directories are not looked at.
+    probe = live_cargo_tests_in(repo)
+    if probe.problem is not None:
+        print(
+            "check-workspace-tests: BLOCKED — could not determine whether a "
+            "`cargo test` is already live in %s: %s. Undetermined is not "
+            "clear; nothing was launched." % (repo, probe.problem),
+            file=sys.stderr,
+        )
+        return RC_ENVIRONMENT
+    if probe.live:
+        print(
+            "check-workspace-tests: BLOCKED — a `cargo test` is already live in "
+            "this worktree (%s), so a measurement taken now would be void. "
+            "Nothing was launched. Wait for it to finish or stop it, then rerun:\n%s"
+            % (
+                repo,
+                "\n".join("  pid %d cwd %s: %s" % p for p in probe.live),
+            ),
             file=sys.stderr,
         )
         return RC_ENVIRONMENT

@@ -25,7 +25,12 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 
 fn project(name: &str) -> PathBuf {
-    let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("pending_undet_{name}"));
+    // Per-process: concurrent runs of this binary over one target dir used to
+    // `remove_dir_all` each other's fixture, so the config vanished and
+    // `pending` (correctly) saw "no specguard project" — a false RED observed
+    // 2026-11-08 under donegate's test-changed running beside another cargo test.
+    let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("pending_undet_{}_{name}", std::process::id()));
     let _ = fs::remove_dir_all(&d);
     fs::create_dir_all(&d).unwrap();
     d

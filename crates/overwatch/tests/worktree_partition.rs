@@ -8,8 +8,8 @@
 //! `projkey::repo_root(cwd)`, which stops at the first ancestor holding a
 //! `.git` ENTRY — for a linked git worktree that is the worktree itself. A
 //! lease begun in a linked worktree was therefore invisible to `overwatch
-//! status` run from the main checkout (and vice versa), which is exactly where
-//! condukt's main-tree guard runs it. These tests drive the REAL binary.
+//! status` run from the main checkout (and vice versa). These tests drive the
+//! REAL binary.
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

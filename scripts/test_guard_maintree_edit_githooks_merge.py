@@ -13,7 +13,9 @@ Every case runs under BOTH anchors (CLAUDE_PROJECT_DIR = main, = worktree):
 
   1. main mid-merge (a real `git merge --no-commit`, and separately a written
      MERGE_HEAD holding a valid sha) -> Write/Edit/MultiEdit into
-     <main>/.githooks/x allowed (exit 0);
+     <main>/.githooks/x allowed (exit 0) from the main anchor (cwd main) and,
+     since user ruling 2026-11-08 (gates read only their own tree), refused
+     from the worktree anchor (main's MERGE_HEAD is not read from there);
   2. no MERGE_HEAD -> refused (exit 2);
   3. MERGE_HEAD present but unreadable (chmod 000) -> refused (exit 2);
   4. MERGE_HEAD in the WORKTREE's gitdir only -> main's `.githooks` still
@@ -97,27 +99,33 @@ class PrimaryGithooksMergeExemption(_Fixture):
             f.write(self.head_sha(self.main) + "\n")
         return marker
 
-    def assert_all(self, targets, expected: int, label: str) -> None:
+    def assert_all(self, targets, expected: int, label: str,
+                   expected_wt: int | None = None) -> None:
         for name, project in self.anchors():
+            want = expected_wt if (name == "wt" and expected_wt is not None) else expected
             for tool in TOOLS:
                 for path in targets:
                     with self.subTest(case=label, anchor=name, tool=tool, path=path):
                         r = self.call(tool, path, project,
                                       sid=f"{label}-{name}-{tool}")
                         self.assertEqual(
-                            r.returncode, expected,
+                            r.returncode, want,
                             f"{label}: {tool} {path} with anchor={name} exited "
-                            f"{r.returncode}, expected {expected}; "
+                            f"{r.returncode}, expected {want}; "
                             f"stderr={r.stderr!r}")
 
     # -- 1. merge in progress lifts the refusal --------------------------
+    # RE-SCOPED by user ruling 2026-11-08 ("donegateそのものが他のworktreeを見たり
+    # 検証したりテストしたりすることは禁止とする。..."): main's MERGE_HEAD is read
+    # only when main is the session's own tree (cwd main). From the worktree
+    # anchor (cwd = worktree) main's `.githooks` is refused by path, merge or not.
     def test_real_merge_in_main_allows_main_githooks(self):
         self.start_real_merge_in_main()
-        self.assert_all(self.main_targets, 0, "real-merge")
+        self.assert_all(self.main_targets, 0, "real-merge", expected_wt=2)
 
     def test_written_merge_head_in_main_allows_main_githooks(self):
         self.write_merge_head(self.main_gitdir)
-        self.assert_all(self.main_targets, 0, "written-merge-head")
+        self.assert_all(self.main_targets, 0, "written-merge-head", expected_wt=2)
 
     # -- 2. no merge -> refused ------------------------------------------
     def test_no_merge_head_refuses_main_githooks(self):

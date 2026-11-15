@@ -102,8 +102,10 @@ class CorruptBound(_Fixture):
             entries = [json.loads(line) for line in f if line.strip()]
         denies = [e for e in entries if e.get("kind") == "deny"]
         self.assertEqual([e["target_abs"] for e in denies], [self.target])
-        # … so Stop still blocks on the refused-then-changed target.
-        r = self.run_hook(STOP, {"session_id": "v2", "hook_event_name": "Stop", "cwd": self.wt})
+        # … so Stop still blocks on the refused-then-changed target. (Stop cwd
+        # is MAIN, was the worktree: re-scoped by user ruling 2026-11-08 — a
+        # deny against main is re-checked only when main is the session's tree.)
+        r = self.run_hook(STOP, {"session_id": "v2", "hook_event_name": "Stop", "cwd": self.main})
         self.assertEqual(r.returncode, 2, r.stderr)
 
     def test_fallback_ledger_used_when_home_unwritable(self):

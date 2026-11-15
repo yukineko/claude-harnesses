@@ -5,6 +5,9 @@
 //! gitignored file in a git tree under a temp root keeps its existing Allow, per
 //! the 2026-09-18 ruling; see the 2026-10-28 revert.)
 
+#[path = "support/fixed_tmp.rs"]
+mod fixed_tmp;
+
 #[path = "support/neutral_base.rs"]
 mod neutral_base;
 
@@ -21,7 +24,8 @@ struct Fx {
     base: PathBuf,
     home: PathBuf,
     proj: PathBuf,
-    /// unique dir under /private/tmp
+    /// unique dir under the canonical fixed temp root (`/private/tmp` on
+    /// macOS, `/tmp` on Linux; `support/fixed_tmp.rs`)
     tmp: PathBuf,
     session: String,
 }
@@ -39,7 +43,7 @@ impl Fx {
         let proj = base.join("src/proj");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&proj).unwrap();
-        let tmp = PathBuf::from(format!("/private/tmp/bg-truncref-{uniq}"));
+        let tmp = fixed_tmp::canonical_fixed_temp_root().join(format!("bg-truncref-{uniq}"));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         Fx {
@@ -168,7 +172,7 @@ fn g3_tmpdir_is_not_a_temp_root_not_allow() {
     assert_not_allow("g3", &out);
 }
 
-// ---- control: plain single-link file under /private/tmp, no git -> Allow ----
+// ---- control: plain single-link file under the fixed temp root, no git -> Allow
 
 #[test]
 fn c1_plain_existing_single_link_file_in_tmp_allows() {

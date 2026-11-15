@@ -16,13 +16,132 @@
 //! (CLAUDE.md §3). The rule only RAISES an `Allow` to an `Ask`; a `Deny`/`Ask`
 //! another rule produced always stands (callers apply it to `Allow` only).
 //!
-//! With no location model ([`crate::scope::SafeRoots::none`], the
-//! library-consumer entry [`crate::detect::detect`]) the rule does not apply:
-//! that entry's contract is the verdict it had before the location model
-//! existed, and the hook binary always builds a model.
+//! The rule judges against [`SafeRoots::managed_place_model`] and resolves a
+//! relative landing against [`PlaceBases`] (`Ctx::places`). For the hook
+//! binary both are the session's own model and `raw_base`. The
+//! library-consumer entry [`crate::detect::detect`] (condukt, specguard,
+//! daily) keeps [`SafeRoots::none`] for every other rule and attaches
+//! [`process_place_model`] here (GitHub #1637), so no other rule gains a
+//! location model. Before #1637 that entry skipped this rule and answered
+//! `Allow`, so those unattended callers (which harden `Ask` into `Deny`) got a
+//! MORE permissive verdict than the hook for the same command. Building that
+//! model reads the process environment and the filesystem.
+//!
+//! With no location model at all (a bare [`SafeRoots::none`] handed to
+//! [`crate::detect::detect_scoped`]) the rule STILL applies: no landing can be
+//! shown to be managed, so every tree-creating shape is `Ask`. The shapes that
+//! create no tree (`git clone` with no repository, `cp -r` with one operand)
+//! keep their verdict either way.
 
 use super::{Ctx, Decision, Determination};
-use crate::scope::Placement;
+use crate::scope::{Placement, SafeRoots};
+
+impl SafeRoots {
+    /// Attach `places` as the model the scratch-place rule consults instead
+    /// of `self`. Every other rule keeps judging against `self`.
+    #[must_use]
+    pub(crate) fn with_managed_places(mut self, places: SafeRoots) -> SafeRoots {
+        self.managed_places = Some(std::sync::Arc::new(places));
+        self
+    }
+
+    /// The model the scratch-place rule consults: the attached
+    /// [`SafeRoots::with_managed_places`] model, else `self`.
+    pub(crate) fn managed_place_model(&self) -> &SafeRoots {
+        self.managed_places.as_deref().unwrap_or(self)
+    }
+}
+
+/// The bases the scratch-place rule resolves a relative landing against:
+/// `raw` / `cd` mirror `Ctx::raw_base` / `Ctx::rewritten_base` exactly
+/// (same `cd` tracking), starting from [`SafeRoots::managed_place_model`]'s
+/// session cwd instead of the scope's — so they are identical to `Ctx`'s own
+/// whenever no separate place model is attached (the hook). `None` = unknown.
+#[derive(Clone)]
+pub(super) struct PlaceBases<'a> {
+    raw: Option<String>,
+    cd: Option<&'a str>,
+}
+
+impl<'a> PlaceBases<'a> {
+    pub(super) fn new(scope: &'a SafeRoots) -> PlaceBases<'a> {
+        let cwd = scope.managed_place_model().session_cwd();
+        PlaceBases {
+            raw: cwd.map(str::to_string),
+            cd: cwd,
+        }
+    }
+
+    /// After a `cd` the analysis resolved to `dir` (`Ctx::after_cd`).
+    pub(super) fn after_cd(&self, dir: &str) -> PlaceBases<'a> {
+        let raw = if dir.starts_with('/') {
+            Some(dir.to_string())
+        } else {
+            self.cd
+                .map(|base| format!("{}/{}", base.trim_end_matches('/'), dir))
+        };
+        PlaceBases { raw, cd: self.cd }
+    }
+
+    /// After a `cd` the analysis could not resolve (`Ctx::after_unknown_cd`).
+    pub(super) fn unknown() -> PlaceBases<'a> {
+        PlaceBases {
+            raw: None,
+            cd: None,
+        }
+    }
+
+    fn base(&self) -> Option<&str> {
+        self.raw.as_deref()
+    }
+}
+
+/// The managed places of the PROCESS the library entry runs in, for the
+/// scratch-place rule only: the process cwd (where the library callers'
+/// `sh -c` runs, since none of them sets a different `current_dir`),
+/// `CLAUDE_PROJECT_DIR`, `HOME` (for `$HOME/.condukt/worktrees`; never a
+/// root itself) and `TMPDIR`, built by [`SafeRoots::new`] with the same
+/// derivation rules the hook binary uses. Every read that fails is `None`,
+/// which only removes managed places (more `Ask`), never adds one.
+pub(super) fn process_place_model() -> SafeRoots {
+    let cwd = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.to_str().map(str::to_string));
+    let project = std::env::var("CLAUDE_PROJECT_DIR").ok();
+    let home = std::env::var("HOME").ok();
+    let tmpdir = std::env::var("TMPDIR").ok();
+    SafeRoots::new(
+        cwd.as_deref(),
+        project.as_deref(),
+        home.as_deref(),
+        tmpdir.as_deref(),
+        Some(real_path),
+    )
+}
+
+/// `path`'s real path, symlinked components resolved, without requiring that
+/// `path` itself exists: the deepest existing ancestor is canonicalised and
+/// the missing components re-attached (the same resolution the hook binary's
+/// resolver performs). `None` when nothing resolves, which
+/// [`SafeRoots::classify_managed_place`] reads as `Undetermined` (so `Ask`).
+fn real_path(path: &str) -> Option<String> {
+    let mut cur = std::path::PathBuf::from(path);
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        if let Ok(real) = cur.canonicalize() {
+            let mut out = real;
+            for name in tail.iter().rev() {
+                out.push(name);
+            }
+            return out.to_str().map(str::to_string);
+        }
+        let name = cur.file_name()?.to_os_string();
+        if !cur.pop() {
+            return None;
+        }
+        tail.push(name);
+    }
+}
 
 /// The `Ask` (or `None` = managed) for a new tree `verb` creates at
 /// `landing`, relative paths resolved against `base`.
@@ -32,7 +151,15 @@ fn landing_verdict(
     landing: &str,
     base: Option<&str>,
 ) -> Option<Decision> {
-    match ctx.scope.classify_managed_place(landing, base) {
+    let places = ctx.scope.managed_place_model();
+    if !places.has_location_model() {
+        return Some(Decision::ask(format!(
+            "blastguard has no location model on this entry (no session cwd / project dir / temp \
+roots), so it cannot tell whether the tree {verb} creates at `{landing}` lands in a managed place \
+(session scratchpad / temp roots, worktrees, the project) and refuses to guess"
+        )));
+    }
+    match places.classify_managed_place(landing, base) {
         Determination::Known(Placement::Inside { .. } | Placement::IsRoot { .. }) => None,
         Determination::Known(Placement::Outside { path }) => Some(Decision::ask(format!(
             "{verb} creates a tree at `{path}`, outside the managed places (session scratchpad / \
@@ -65,7 +192,7 @@ pub(super) fn cp_recursive_verdict(
     target_dir: Option<String>,
     operands: &[&str],
 ) -> Decision {
-    if !matches!(verdict, Decision::Allow) || !ctx.scope.has_location_model() {
+    if !matches!(verdict, Decision::Allow) {
         return verdict;
     }
     let landing = match target_dir {
@@ -76,7 +203,7 @@ pub(super) fn cp_recursive_verdict(
             _ => return verdict,
         },
     };
-    landing_verdict(ctx, "cp -r", &landing, ctx.base_for("cp")).unwrap_or(verdict)
+    landing_verdict(ctx, "cp -r", &landing, ctx.places.base()).unwrap_or(verdict)
 }
 
 /// `git clone` options that take a value, accepted in separate form
@@ -147,9 +274,6 @@ const CLONE_BOOL_SHORT: &str = "lsqvn46";
 /// words after `clone`. Ask when the new tree (and a `--separate-git-dir`)
 /// does not land in a managed place; Allow otherwise.
 pub(super) fn clone_verdict(ctx: &Ctx<'_>, globals: &[&str], args: &[&str]) -> Decision {
-    if !ctx.scope.has_location_model() {
-        return Decision::Allow;
-    }
     const VERB: &str = "git clone";
     // Where git runs: `-C` moves it (cumulatively); anything that names a
     // different work tree / git dir is not modelled for clone.
@@ -162,14 +286,17 @@ pub(super) fn clone_verdict(ctx: &Ctx<'_>, globals: &[&str], args: &[&str]) -> D
             "a global --work-tree / --git-dir is not modelled for clone",
         );
     }
-    let base: Option<String> =
-        match super::git::git_moved_dir(ctx.scope, globals, ctx.base_for("git")) {
-            Determination::Known(Some(d)) => Some(d),
-            Determination::Known(None) => ctx.base_for("git").map(str::to_string),
-            Determination::Undetermined(why) => {
-                return unparsed(VERB, &format!("git -C: {}", why.reason().as_str()))
-            }
-        };
+    let base: Option<String> = match super::git::git_moved_dir(
+        ctx.scope.managed_place_model(),
+        globals,
+        ctx.places.base(),
+    ) {
+        Determination::Known(Some(d)) => Some(d),
+        Determination::Known(None) => ctx.places.base().map(str::to_string),
+        Determination::Undetermined(why) => {
+            return unparsed(VERB, &format!("git -C: {}", why.reason().as_str()))
+        }
+    };
     let mut positionals: Vec<&str> = Vec::new();
     let mut extra_landings: Vec<String> = Vec::new();
     let mut i = 0;

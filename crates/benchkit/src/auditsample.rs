@@ -738,6 +738,13 @@ mod tests {
             session_id: "s1".to_string(),
             ts: 1000,
             detail: None,
+            decision: None,
+            tool: None,
+            command: None,
+            target: None,
+            cwd: None,
+            actor: None,
+            system_harm: None,
         }
     }
 

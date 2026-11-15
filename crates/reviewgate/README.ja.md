@@ -57,13 +57,13 @@ reviewgate install       # Stop フックを ~/.claude/settings.json に配線�
 - `reviewgate init [--force]` — 雛形の `reviewgate.toml` を書き出す。
 - `reviewgate status` — 解決済みの設定と、いま何がレビュー対象になるかを表示する。
 - `reviewgate trust` — 現在のプロジェクトを信頼し、その `./reviewgate.toml`（`reviewer_cmd` を含む）を honored にする。
-- 信頼するまで、リポジトリ同梱の設定は無視される。
+- 信頼するまで、リポジトリ同梱の設定は honored されず、Stop フックはそのファイルを名指しして `config-untrusted` でブロックする（`off` 既定には倒さない）。session init と condukt は自分が作る worktree を登録する。
 - `reviewgate skip --reason "<理由>"` — 一度だけ・セッション限定のスキップ（下記参照）。
 
 `reviewgate review` を stdin 無しで手実行するとドライチェックになり、ブロック時は exit 1 でフック JSON を出さない。
 
 [`reviewgate.example.toml`](reviewgate.example.toml) を参照。
-プロジェクトの `./reviewgate.toml` が `~/.reviewgate/config.toml` より、それが組み込みデフォルトより優先される（ただし `reviewer_cmd` を subprocess 実行するため、project root を **trust**（`reviewgate trust`）して初めて project 設定が honored される）。
+プロジェクトの `./reviewgate.toml` が `~/.reviewgate/config.toml` より、それが組み込みデフォルトより優先される（ただし `reviewer_cmd` を subprocess 実行するため、project root を **trust**（`reviewgate trust`）して初めて project 設定が honored される。trust されていない root に `reviewgate.toml` がある場合、停止は `config-untrusted` でブロックされる（`off` 既定には倒さない）。linked worktree は main の trust を継承しない — ユーザー裁定 2026-11-08）。
 
 主なフィールド：`mode`、`max_attempts`、`reset_after_secs`（既定 600、セッションごとの試行カウンタがこの無操作秒数でリセットされる）、`min_changed_files`、`max_diff_bytes`（既定 200000）、`include`/`exclude` の glob、`rubric`、`state_dir`、そして（subprocess 用の）`reviewer_cmd` / `reviewer_timeout_secs`。
 `max_attempts` / `min_changed_files` の `0` は 1 に clamp され、`max_diff_bytes` の `0` は既定値に戻る。

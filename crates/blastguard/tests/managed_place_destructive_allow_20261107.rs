@@ -31,6 +31,8 @@
 //! The base is [`neutral_base::neutral_base`] (see that module) so the fixture
 //! location itself cannot decide the verdict.
 
+#[path = "support/fixed_tmp.rs"]
+mod fixed_tmp;
 #[path = "support/git_env.rs"]
 mod git_env;
 #[path = "support/neutral_base.rs"]
@@ -228,7 +230,9 @@ fn assert_verdict(case: &str, out: &str, want: &str) {
     assert_eq!(verdict(out), want, "{case}: must be {want}; got {out}");
 }
 
-/// A uniquely named dir directly under `/private/tmp`, removed on drop.
+/// A uniquely named dir directly under the canonical fixed temp root
+/// (`/private/tmp` on macOS, `/tmp` on Linux; `support/fixed_tmp.rs`),
+/// removed on drop.
 struct TmpPlace(PathBuf);
 
 impl TmpPlace {
@@ -237,8 +241,8 @@ impl TmpPlace {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let p = PathBuf::from(format!(
-            "/private/tmp/blastguard-managed-place-{tag}-{}-{nanos}",
+        let p = fixed_tmp::canonical_fixed_temp_root().join(format!(
+            "blastguard-managed-place-{tag}-{}-{nanos}",
             std::process::id()
         ));
         std::fs::create_dir(&p).unwrap();

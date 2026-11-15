@@ -45,6 +45,9 @@ pub enum CircuitReason {
     /// `updated_at`, or the run state could not be loaded) while the idle axis
     /// was switched on. Also used, with the idle axis on or off, when the
     /// session transcript was located but its compactions could not be counted.
+    /// In `circuit check` it ranks below `BudgetUnmeasured` and
+    /// `StreakUnmeasured` (streak axis on): when either of those is also
+    /// unmeasured, that label is reported instead.
     ///
     /// # Why this trips rather than continuing
     ///
@@ -67,22 +70,34 @@ pub enum CircuitReason {
     /// item-outcome log (written by `state release-task`) exists but is
     /// unreadable or holds an unparseable line. Same reasoning as
     /// [`CircuitReason::IdleUnmeasured`]: an uncountable streak is not a streak
-    /// of 0, so it trips, under its own label (backlog cccc9c43).
+    /// of 0, so it trips, under its own label (backlog cccc9c43). Also used
+    /// when the run state itself is unreadable/corrupt. In `circuit check` it
+    /// ranks below a measured `BudgetOverCap`/`Stall` and below
+    /// `BudgetUnmeasured`, and above `IdleUnmeasured` and `SessionCompacted`
+    /// (it relabels those, so a corrupt run state reports this, not
+    /// `idle_unmeasured`).
     StreakUnmeasured,
+    /// A budget cap is set but budgetguard's day-usage ledger is present and
+    /// unreadable or corrupt: the day total cannot be determined, which is not
+    /// `$0`, so it trips under its own label (backlog f5b4d0a1). In
+    /// `circuit check` it ranks below a MEASURED trip (`FailureStreak`,
+    /// `Stall`; `BudgetOverCap` cannot co-occur) and above every other reason.
+    BudgetUnmeasured,
     /// The owning session's transcript holds at least `max_compactions`
     /// `compact_boundary` lines: the session has been compacted that many
     /// times, and a long-lived session replays its whole (compacted) context on
     /// every turn. The remedy is a hand-off to a FRESH session, not a retry, so
     /// this is its own reason rather than a `Stall`. Lowest precedence: every
-    /// other reason (cost, failures, stall, unmeasurable idle) is reported
-    /// under its own label first.
+    /// other reason (cost, failures, stall, unmeasurable idle/budget/streak) is reported
+    /// under its own label first. (In the core this arises only when nothing
+    /// else tripped; in `circuit check` an unmeasured budget/streak relabels it.)
     SessionCompacted,
 }
 
 impl CircuitReason {
     /// A stable lowercase slug for journaling (`"failure_streak"` /
     /// `"budget_over_cap"` / `"stall"` / `"idle_unmeasured"` /
-    /// `"streak_unmeasured"` / `"session_compacted"`).
+    /// `"streak_unmeasured"` / `"budget_unmeasured"` / `"session_compacted"`).
     pub fn as_str(&self) -> &'static str {
         match self {
             CircuitReason::FailureStreak => "failure_streak",
@@ -90,6 +105,7 @@ impl CircuitReason {
             CircuitReason::Stall => "stall",
             CircuitReason::IdleUnmeasured => "idle_unmeasured",
             CircuitReason::StreakUnmeasured => "streak_unmeasured",
+            CircuitReason::BudgetUnmeasured => "budget_unmeasured",
             CircuitReason::SessionCompacted => "session_compacted",
         }
     }
@@ -511,7 +527,9 @@ impl TranscriptAxes<'_> {
 ///
 /// The budget axis is off unless `--budget-cap-usd` is supplied, and an absent
 /// budget ledger is not an over-cap observation (`/flow` passes no cap, so its
-/// budget axis is disabled — stated, not hidden).
+/// budget axis is disabled — stated, not hidden). With a cap set, a present
+/// but unreadable/corrupt ledger trips [`CircuitReason::BudgetUnmeasured`]
+/// (JSON `budget_over_cap: null` plus `budget_unknown_reason`).
 ///
 /// The streak axis is counted from the run state's task statuses; for a run
 /// whose run state is ABSENT (a stateless `/flow` driver) it is the trailing
@@ -520,7 +538,8 @@ impl TranscriptAxes<'_> {
 /// `--outcome done` counts as a failure; `--outcome excluded` entries are
 /// skipped: neither counted nor a reset). A streak that cannot be counted (an
 /// unreadable run state, an unreadable or unparseable outcome log) trips
-/// [`CircuitReason::StreakUnmeasured`] while the streak axis is on, and the
+/// [`CircuitReason::StreakUnmeasured`] while the streak axis is on (unless a
+/// measured trip outranks it, see "Reason precedence" below), and the
 /// JSON's `streak` is then `null` with `streak_unknown_reason` set
 /// (backlog cccc9c43).
 ///
@@ -572,6 +591,19 @@ impl TranscriptAxes<'_> {
 /// `compactions_unknown_reason`) trips `idle_unmeasured` even with the idle axis
 /// off. The stdout JSON carries `compactions` and `max_compactions`, and so does
 /// the journal record.
+///
+/// # Reason precedence (first match wins)
+///
+/// 1. a MEASURED core trip — `budget_over_cap`, `failure_streak`, `stall` —
+///    keeps its own label, even when the budget or streak is also unmeasured;
+/// 2. else a budget cap is set and the ledger is unreadable → `budget_unmeasured`;
+/// 3. else the streak axis is on and the streak is uncountable → `streak_unmeasured`;
+/// 4. else an uncountable transcript turns a `Continue` into `idle_unmeasured`;
+/// 5. else the core verdict as is (`idle_unmeasured`, `session_compacted`, or continue).
+///
+/// So the verdict is never continue while the budget (cap set) or the streak
+/// (axis on) is unmeasured, and an unmeasured budget/streak outranks an
+/// unmeasured idle and a compacted session.
 pub fn run_circuit_check(
     cfg: &Config,
     cwd: &Path,
@@ -587,7 +619,8 @@ pub fn run_circuit_check(
     } = transcript;
     let max_compactions = max_compactions.max(1);
     // 1. failure-streak — load the run; an unloadable run's streak is
-    //    Undetermined (trips `streak_unmeasured`). Whether the load failed because the file is ABSENT (as opposed to
+    //    Undetermined (trips `streak_unmeasured` with the streak axis on,
+    //    unless a measured trip or an unmeasured budget outranks it). Whether the load failed because the file is ABSENT (as opposed to
     //    unreadable/corrupt) is kept: only an absent run state may be a
     //    stateless /flow driver whose idleness the claim registry can measure.
     let run_load = RunState::load(cfg, cwd, run_id);
@@ -624,17 +657,27 @@ pub fn run_circuit_check(
     //    coupling — we do NOT add a `budgetguard = { path }` dependency (and
     //    budgetguard is a binary-only crate with no lib target to depend on
     //    anyway), and we do NOT parse budgetguard's private config. The cap is
-    //    injected via `--budget-cap-usd`; an absent/<=0 cap, or an unavailable/
-    //    absent ledger, fail-softs to `false` (non-trip). No network calls.
-    let budget_over_cap = match budget_cap_usd {
+    //    injected via `--budget-cap-usd`; an absent/<=0 cap switches the axis
+    //    off (`false`: the axis was not consulted). With a cap set, a MISSING ledger is a genuine $0 day
+    //    (`load_checked` → default), but a present-and-unreadable/corrupt one
+    //    is cannot-determine: `budget_unknown_reason` is set and the breaker
+    //    trips `budget_unmeasured` (CLAUDE.md §3). In that unreadable case the
+    //    bool below is a placeholder `false`; it is never journaled as a
+    //    measurement (the journal gets `None`/null, see the record below).
+    //    No network calls.
+    let (budget_over_cap, budget_unknown_reason) = match budget_cap_usd {
         Some(cap) if cap > 0.0 => {
             let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-            let day_usd =
-                harness_core::ledger::Ledger::load(&harness_core::ledger::default_state_dir())
-                    .day_total(&today);
-            day_usd >= cap
+            let dir = harness_core::ledger::default_state_dir();
+            match harness_core::ledger::Ledger::load_checked(&dir) {
+                Ok(l) => (l.day_total(&today) >= cap, None),
+                Err(e) => (
+                    false,
+                    Some(format!("budget ledger in {}: {e:?}", dir.display())),
+                ),
+            }
         }
-        _ => false,
+        _ => (false, None),
     };
 
     // 3. idle — now minus the run's most-recent progress, as a TRI-STATE, so
@@ -683,10 +726,24 @@ pub fn run_circuit_check(
         compactions.unwrap_or(0),
         max_compactions,
     ) {
-        // An uncountable streak with the streak axis on cannot continue; only
-        // a budget trip (higher precedence) keeps its own label.
-        CircuitVerdict::Trip(CircuitReason::BudgetOverCap) => {
-            CircuitVerdict::Trip(CircuitReason::BudgetOverCap)
+        // Precedence (highest first):
+        // 1. a MEASURED core trip — BudgetOverCap, FailureStreak, Stall — keeps
+        //    its own label;
+        // 2. else an unmeasured budget (cap set) → BudgetUnmeasured;
+        // 3. else an unmeasured streak (streak axis on) → StreakUnmeasured;
+        // 4. else an uncountable transcript turns Continue into IdleUnmeasured;
+        // 5. else the core verdict as is (IdleUnmeasured, SessionCompacted,
+        //    Continue).
+        // So an unmeasured budget/streak relabels the core's IdleUnmeasured,
+        // SessionCompacted and Continue (never Continue while either is
+        // unmeasured), but never a measured observation.
+        CircuitVerdict::Trip(
+            reason @ (CircuitReason::BudgetOverCap
+            | CircuitReason::FailureStreak
+            | CircuitReason::Stall),
+        ) => CircuitVerdict::Trip(reason),
+        _ if budget_unknown_reason.is_some() => {
+            CircuitVerdict::Trip(CircuitReason::BudgetUnmeasured)
         }
         _ if streak_cap > 0 && streak_unknown_reason.is_some() => {
             CircuitVerdict::Trip(CircuitReason::StreakUnmeasured)
@@ -741,6 +798,13 @@ pub fn run_circuit_check(
         if streak_unknown_reason.is_some() {
             obj.insert("streak".to_string(), serde_json::Value::Null);
         }
+        obj.insert(
+            "budget_unknown_reason".to_string(),
+            serde_json::json!(budget_unknown_reason),
+        );
+        if budget_unknown_reason.is_some() {
+            obj.insert("budget_over_cap".to_string(), serde_json::Value::Null);
+        }
     }
     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
 
@@ -764,12 +828,19 @@ pub fn run_circuit_check(
         Determination::Known(secs) => *secs,
         Determination::Undetermined(_) => 0,
     };
+    // `budget_over_cap` is journaled as `None` (JSON null) whenever the budget
+    // could not be measured, so a trail reader never sees `false` ("not over
+    // cap") for an unmeasured budget; the reason is in the printed JSON.
     let record = crate::gatelog::CircuitRecord {
         verdict: verdict_str.to_string(),
         reason,
         streak,
         streak_cap,
-        budget_over_cap,
+        budget_over_cap: if budget_unknown_reason.is_some() {
+            None
+        } else {
+            Some(budget_over_cap)
+        },
         idle_secs: journaled_idle_secs,
         idle_ttl_secs,
         compactions,

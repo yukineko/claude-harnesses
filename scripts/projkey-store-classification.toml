@@ -158,6 +158,14 @@ kind = "store-key"
 evidence = "lock_path() = lock_path_in_project(cfg, &repo_root(cwd), run_id), used only by RunLock::acquire_or_skip, whose one production caller is repo_commit::commit (`condukt repo commit`). That lock serialises staging+commit into ONE checkout's index; every linked worktree has its own index, so a per-checkout lock file is the correct granularity (repo_commit.rs module doc: it deliberately does not contend with merge/prune on main). Run state no longer goes through here (acquire_run_state_or_skip uses state::run_dir), and the repo-primary lock uses main_worktree_root."
 
 [[consumer]]
+file = "crates/condukt/src/run_cap.rs"
+symbol = "main_worktree_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "acquire_run_cap_lock() keys <state_dir>/<project-key>/__run_cap__.<run>.lock, held across enforce_run_cap + create_namespaced (backlog 32b69400); every checkout creating worktrees for one run must contend one file; Undetermined is an Err (refuse create), no repo_root fallback."
+
+[[consumer]]
 file = "crates/condukt/src/state.rs"
 symbol = "main_worktree_root"
 count = 1

@@ -322,7 +322,30 @@ def _write_baseline(count: int) -> None:
     BASELINE_FILE.write_text(f"{count}\n", encoding="utf-8")
 
 
+def _staged_scope():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import staged_scope
+
+    return staged_scope
+
+
 def main(argv: list[str]) -> int:
+    # `--staged` (pre-commit, user ruling 2026-11-08): the count is a global
+    # property against one baseline, so it cannot be split per file. It runs in
+    # full only when the staged diff touches an input (a gate crate's src .rs,
+    # the baseline, this script or the scoping helper); otherwise it exits 0.
+    if "--staged" in argv:
+        argv = _staged_scope().gate_on_inputs(
+            REPO,
+            "raw-io-ratchet",
+            argv,
+            [f"crates/{c}/src/*.rs" for c in GATE_CRATES]
+            + [
+                "scripts/check-raw-io-ratchet.py",
+                "scripts/check-raw-io-ratchet.baseline",
+                "scripts/staged_scope.py",
+            ],
+        )
     args = argv[1:]
 
     if "--list" in args:

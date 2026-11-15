@@ -397,6 +397,13 @@ mod tests {
             session_id: "s".into(),
             ts: 1_700_000_000,
             detail: None,
+            decision: None,
+            tool: None,
+            command: None,
+            target: None,
+            cwd: None,
+            actor: None,
+            system_harm: None,
         };
         store::append_violation(&dir, &ev).unwrap();
         let path = store::violations_path(&dir).unwrap();

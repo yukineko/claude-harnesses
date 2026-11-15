@@ -19,7 +19,7 @@ harness-core は `plugin.json`・hook・バイナリのいずれも持たない�
 - `estimate`: `estimate_transcript_cost` は `usage::aggregate` に続けて `pricing::session_cost` を呼んだ場合と同じ cost を返す；未知のモデルがあるとコストは判定不能になる；`estimate_transcript_cost` は crate ルートに re-export されている。
 - `metrics`: 追記専用 JSONL のメトリクス SINK；`emit` ごとに 1 行を書く。
 - `pricing`: モデル→USD のコスト表；cache read/write の倍率を含む；使用量のある未知のモデルは $0 ではなく判定不能。
-- `ledger`: 日次の支出台帳：セッションのコストは日合計に加算され、同じセッションの再記録は上書きになる；壊れたファイルはエラーとなり保全される；既定の state dir は `~/.budgetguard/state` で、そこに `ledger.json` を置く。
+- `ledger`: 日次の支出台帳：セッションのコストは日合計に加算され、同じセッションの再記録は上書きになる；各日はそのセッションのその日の増分（累積コストから前日以前のエントリを引いたもの）だけを持つので 0 時をまたぐセッションを二重に数えず、`session_cost` はセッションの全日のエントリを合計する；壊れたファイルはエラーとなり保全される；既定の state dir は `~/.budgetguard/state` で、そこに `ledger.json` を置く。
 - `daily`: カレンダー日ごとに一度だけのガード：初回は実行し、`mark_done` 後は実行せず、日付が変わると再び実行する。
 - `inject`: context-injection hook の階層 config：project が global を、global が default を上書きし、文字数予算が受け入れ量を制限する。
 - `inject_metrics`: UserPromptSubmit インジェクションサイズのメトリクス；`turn_key` は安定で、セッションまたはプロンプトが変わると変わる。

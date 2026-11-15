@@ -119,20 +119,6 @@ if log:
 sys.exit({code})
 """
 
-# main-tree-guard (.githooks/pre-commit, CLAUDE.md #8) shells out to a real
-# `condukt guard main-tree` and blocks (exit 1) if it can't find one — this
-# harness never built/vendored the condukt binary, so every seed commit in
-# every test used to fail here before pre-commit ever reached the scanners
-# above. The guard's own documented pass condition is "... or when no peer
-# session is reported"; a throwaway single-process temp repo never has a peer
-# session, so a stub that always exits 0 is not loosening the gate, it is the
-# correct verdict for this harness's repos. Real main-tree-guard behavior is
-# unit-tested separately in crates/condukt/src/maintree.rs.
-_CONDUKT_STUB = """#!/usr/bin/env python3
-import sys
-sys.exit(0)
-"""
-
 
 def _which(name):
     path = shutil.which(name)
@@ -210,11 +196,6 @@ class GateHarness:
         # scripts/check-compile-fail.py (backlog 034b6620), so the stub has to
         # be committed by the seed commit below, not merely present on disk.
         self.set_stub("check-compile-fail.py", 0)
-
-        condukt_stub = scripts / "condukt-stub"
-        condukt_stub.write_text(_CONDUKT_STUB)
-        condukt_stub.chmod(0o755)
-        self.env["CONDUKT_BIN"] = str(condukt_stub)
 
         self.git("config", "core.hooksPath", ".githooks")
         self.git("config", "commit.gpgsign", "false")

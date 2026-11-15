@@ -25,6 +25,8 @@ g add crates/foo/src/main.rs   # staged, no commit: HEAD is unborn
 printf '#!/usr/bin/env bash\nif [ "$*" = "ls-files" ]; then exit 128; fi\nexec "%s" "$@"\n' "$REAL_GIT" >"$TMP/bin/git"
 chmod +x "$TMP/bin/git"
 rc=0
+passed=0
+failed=0
 # Control (no shim): the staged crate change is seen -> not "no crate touched".
 for s in test-changed-crates.sh lint-changed-crates.sh; do
   ( cd "$R" && bash "$REPO/scripts/$s" >"$TMP/ctl" 2>&1 )
@@ -42,6 +44,14 @@ for s in test-changed-crates.sh lint-changed-crates.sh; do
     echo "FAIL: $s exited 0 although 'git ls-files' failed (128) on an unborn HEAD" >&2
     sed 's/^/  | /' "$TMP/out" >&2
     rc=1
+    failed=$((failed + 1))
+  else
+    passed=$((passed + 1))
   fi
 done
+if [ "$rc" -eq 0 ]; then
+  echo "test result: ok. $passed passed; $failed failed"
+else
+  echo "test result: FAILED. $passed passed; $failed failed"
+fi
 exit $rc

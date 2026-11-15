@@ -231,12 +231,29 @@ fn assert_second_identical_stop_does_not_reblock(f: &Fixture, cwd: &Path) {
     );
 }
 
-/// The observed shape: hook cwd = primary tree, the red root is a linked
-/// worktree the session wrote into (the per-root loop in gate_run).
+/// Re-scoped by user rulings 2026-11-08 ("donegateのworktreeテストは問題ありすぎる
+/// ので即時に停止"; "donegateそのものが他のworktreeを見たり検証したりテストしたり
+/// することは禁止とする"). Was: hook cwd = primary tree, the red linked worktree
+/// blocked once and its identical repeat was waived. Now that worktree is not
+/// judged at all: neither stop blocks and neither names its check.
 #[test]
 fn second_identical_stop_on_extra_root_is_not_a_block_but_says_nothing_new() {
     let f = Fixture::new();
-    assert_second_identical_stop_does_not_reblock(&f, &f.primary.clone());
+    let tp = f.transcript();
+    for active in [false, true] {
+        let o = f.stop(&f.primary, &tp, active);
+        assert_ne!(
+            o.decision, "block",
+            "another worktree must not be judged; stdout={:?} stderr={:?}",
+            o.stdout, o.stderr
+        );
+        assert!(
+            !o.stdout.contains(RED_CHECK) && !o.stderr.contains(RED_CHECK),
+            "the other worktree's check must not run or be reported; stdout={:?} stderr={:?}",
+            o.stdout,
+            o.stderr
+        );
+    }
 }
 
 /// Same property on the hook-cwd root (the single-root flow in gate_run).
@@ -246,17 +263,19 @@ fn second_identical_stop_on_cwd_root_is_not_a_block_but_says_nothing_new() {
     assert_second_identical_stop_does_not_reblock(&f, &f.wt.clone());
 }
 
-/// CONTROL (passes today, must keep passing): the check output is identical
-/// but the TREE changed between the stops — that is new work to verify, so the
-/// second stop must still block. Guards a fix that keys on the output alone.
+/// CONTROL: the check output is identical but the TREE changed between the
+/// stops — that is new work to verify, so the second stop must still block.
+/// Guards a fix that keys on the output alone. Re-scoped by user rulings
+/// 2026-11-08 (donegate judges only the hook cwd): the red tree is now the
+/// hook cwd (was: cwd = primary with the red tree as an extra root).
 #[test]
 fn control_changed_tree_with_same_red_output_still_blocks() {
     let f = Fixture::new();
     let tp = f.transcript();
-    let first = f.stop(&f.primary, &tp, false);
+    let first = f.stop(&f.wt, &tp, false);
     assert_eq!(first.decision, "block", "apparatus: {:?}", first.stdout);
     std::fs::write(f.wt.join("session_edit.rs"), "fn edited_again() {}\n").unwrap();
-    let second = f.stop(&f.primary, &tp, true);
+    let second = f.stop(&f.wt, &tp, true);
     assert_eq!(
         second.decision, "block",
         "a changed tree is new work: the stop must still block even though the red output \

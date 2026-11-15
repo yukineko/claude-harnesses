@@ -136,6 +136,98 @@ MUTANTS_EXTRA="${MUTANTS_EXTRA:-$default_mutants_extra}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+# LIVE CARGO TEST GUARD (#1581, user ruling 2026-11-08). Refuse (exit 2) while a
+# `cargo test` is already live in THIS worktree: it shares target/ and fixture
+# paths with the run we would start, so the measurement would be void.
+# Keyed on: each live process whose ps command line has `cargo` as a whole path
+# component followed by `test` (optionally `+toolchain` between), and whose cwd
+# (read with `lsof -a -d cwd -p <pid> -Fn`, physical path) is $repo_root or inside
+# it. $repo_root is this script's parent directory, i.e. the worktree top level.
+# Processes in any other directory (other worktrees/sessions) are ignored.
+# CARGO_TARGET_DIR is NOT consulted: macOS has no cheap, reliable way to read
+# another process's environment. Same rule as scripts/check-workspace-tests.py.
+# Fail-closed: if ps fails, lsof is missing, or a matching process that is still
+# alive has an unreadable cwd, refuse with exit 2. Each probe is bounded in time.
+guard_deadline_tenths=100
+_bounded() { # _bounded <cmd...>: run with a wall-clock bound; rc 124 on expiry
+  local out rc i=0 p
+  out="$(mktemp)" || return 125
+  "$@" >"$out" 2>/dev/null </dev/null &
+  p=$!
+  while kill -0 "$p" 2>/dev/null; do
+    if [ "$i" -ge "$guard_deadline_tenths" ]; then
+      kill -9 "$p" 2>/dev/null
+      wait "$p" 2>/dev/null
+      rm -f "$out"
+      return 124
+    fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+  set +e
+  wait "$p"
+  rc=$?
+  set -e
+  cat "$out"
+  rm -f "$out"
+  return "$rc"
+}
+_guard_refuse() {
+  echo "mutation-gate: could not determine whether a \`cargo test\` is already live" >&2
+  echo "  in ${repo_root}: $1." >&2
+  echo "  Undetermined is not clear; refusing before running cargo-mutants." >&2
+  exit 2
+}
+real_root="$(pwd -P)"
+set +e
+ps_out="$(_bounded ps -ax -ww -o pid= -o command=)"
+ps_status=$?
+set -e
+if [ "$ps_status" -ne 0 ] || [ -z "$ps_out" ]; then
+  _guard_refuse "the process table could not be listed (ps status ${ps_status})"
+fi
+cargo_test_re='(^|/)cargo([[:space:]]+\+[^[:space:]]+)?[[:space:]]+test([[:space:]]|$)'
+lsof_bin=""
+live_here=""
+while read -r pid cmd; do
+  case "$pid" in '' | *[!0-9]*) continue ;; esac
+  [[ "$cmd" =~ $cargo_test_re ]] || continue
+  if [ -z "$lsof_bin" ]; then
+    lsof_bin="$(command -v lsof || true)"
+    for c in /usr/sbin/lsof /usr/bin/lsof; do
+      [ -n "$lsof_bin" ] && break
+      [ -x "$c" ] && lsof_bin="$c"
+    done
+    [ -n "$lsof_bin" ] || _guard_refuse "a live \`cargo test\` exists but lsof is not available to read its cwd"
+  fi
+  set +e
+  lsof_out="$(_bounded "$lsof_bin" -a -b -w -d cwd -p "$pid" -Fn)"
+  lsof_status=$?
+  set -e
+  cwd=""
+  if [ "$lsof_status" -eq 0 ]; then
+    cwd="$(printf '%s\n' "$lsof_out" | sed -n 's/^n//p' | head -n 1)"
+  fi
+  if [ -z "$cwd" ]; then
+    # Exited between the listing and the lookup: not live, skip it.
+    ps -p "$pid" >/dev/null 2>&1 || continue
+    _guard_refuse "the cwd of live \`cargo test\` pid ${pid} could not be read (lsof status ${lsof_status})"
+  fi
+  if ! real_cwd="$(cd "$cwd" && pwd -P)"; then
+    _guard_refuse "the cwd ${cwd} of live \`cargo test\` pid ${pid} could not be resolved"
+  fi
+  case "$real_cwd/" in
+    "$real_root"/*) live_here="${live_here}  pid ${pid} cwd ${real_cwd}: ${cmd}"$'\n' ;;
+  esac
+done <<<"$ps_out"
+if [ -n "$live_here" ]; then
+  echo "mutation-gate: a \`cargo test\` is already live in this worktree (${repo_root})," >&2
+  echo "  so a mutation run started now would be void. Refusing before running" >&2
+  echo "  cargo-mutants; wait for it to finish or stop it, then rerun:" >&2
+  printf '%s' "$live_here" >&2
+  exit 2
+fi
+
 # Make cargo available in non-login shells (rustup layout).
 if [ -f "$HOME/.cargo/env" ]; then
   # shellcheck disable=SC1091

@@ -1,7 +1,8 @@
 use super::{
     confined_ask, dotgit_link_deny, exclude, glob_literal_prefix, has_glob_meta,
-    has_unresolvable_expansion, home_asset_deny, is_short_flag, protected_disarm_deny,
-    protected_tree_deny, Ctx, Decision, Determination, Placement, SafeRoots,
+    has_unresolvable_expansion, home_asset_deny, is_assignment, is_short_flag,
+    protected_disarm_deny, protected_tree_deny, split_segments_with_separators, Ctx, Decision,
+    Determination, Placement, SafeRoots, SegmentSep,
 };
 
 mod operand_words;
@@ -59,15 +60,24 @@ fn rm_is_recursive(rest: &[&str]) -> bool {
 ///     (`rm $(echo /etc/passwd)`).
 ///
 /// Every other expansion is left unresolved here (and so stays an Ask in
-/// [`analyze_rm`]); this function only ever adds a Deny.
+/// [`analyze_rm`]). For `rm` and the mutators this function only ever adds a
+/// Deny; the exception is a `cp` / `mv` / `install` DESTINATION spelled through
+/// an expansion (backlog 21b3faad), which `analyze_copy_move` never judged: a
+/// resolvable one gets the literal verdict, an unresolvable one is an Ask.
 ///
 /// The non-`rm` system-file mutators (`unlink`, `rmdir`, `mv`, `sed -i`,
 /// `perl -i`, `chmod`, `chown`, `chgrp`, `rsync`) get the same resolution for
 /// the files they modify: [`super::system_paths::known_mutation_harm`], so
 /// `X=/etc/passwd; unlink $X` is the same system-harm Deny as
 /// `unlink /etc/passwd`, not the expansion Ask.
+///
+/// `seg` is the raw segment `tokens` came from: the commands inside its
+/// executed substitution bodies get the same resolution against `line`
+/// ([`known_path_harm_in_substitutions`], backlog e5a8fcc2). That second pass
+/// only ever contributes a Deny; any other verdict is this segment's own.
 pub(super) fn known_path_harm(
     tokens: &[&str],
+    seg: &str,
     line: &str,
     seg_idx: usize,
     ctx: &Ctx<'_>,
@@ -78,13 +88,36 @@ pub(super) fn known_path_harm(
             CommandWordOrigin::Literal(v) => Some(v),
             _ => None,
         };
-    let resolve = |word: &str| match expand_operand_with(word, ctx.scope.home_real(), Some(&vars)) {
+    let own = known_path_harm_with(tokens, ctx, &vars);
+    if own.is_deny() {
+        return own;
+    }
+    let inner = known_path_harm_in_substitutions(seg, line, seg_idx, ctx);
+    if inner.is_deny() {
+        return inner;
+    }
+    own
+}
+
+/// [`known_path_harm`] with the variable lookup supplied by the caller, so the
+/// same judgement can run on a command that sits INSIDE a command
+/// substitution while its `$NAME` operands are resolved against the line that
+/// encloses it ([`known_path_harm_in_substitutions`]).
+fn known_path_harm_with(tokens: &[&str], ctx: &Ctx<'_>, vars: VarLookup<'_>) -> Decision {
+    let resolve = |word: &str| match expand_operand_with(word, ctx.scope.home_real(), Some(vars)) {
         OperandSpelling::Paths(p) => Some(p),
         OperandSpelling::Unresolvable(_) => None,
     };
     for idx in super::words::command_candidates(tokens) {
         let cmd = super::words::normalized_command(tokens[idx]);
         let rest = &tokens[idx + 1..];
+        if matches!(cmd.as_str(), "cp" | "mv" | "install") {
+            // Backlog 21b3faad: the DESTINATION may be spelled through a variable.
+            let verdict = super::fileops::analyze_copy_move_expanded(&cmd, rest, ctx, &resolve);
+            if !matches!(verdict, Decision::Allow) {
+                return verdict;
+            }
+        }
         if cmd != "rm" {
             let deny = super::system_paths::known_mutation_harm(&cmd, rest, ctx, &resolve);
             if deny.is_deny() {
@@ -97,12 +130,115 @@ pub(super) fn known_path_harm(
             continue;
         }
         if let SystemHarm::Deny(deny) =
-            rm_system_harm(ctx, &words, rm_is_recursive(rest), Some(&vars))
+            rm_system_harm(ctx, &words, rm_is_recursive(rest), Some(vars))
         {
             return deny;
         }
     }
     Decision::Allow
+}
+
+/// The system-harm Deny of [`known_path_harm`] for a command that runs INSIDE
+/// a command substitution of segment `seg` (at `seg_idx` of `line`), with its
+/// `$NAME` operands resolved against `line` — else `Allow`.
+///
+/// A `$(…)` / backtick / `<(…)` body runs in a subshell that inherits every
+/// shell variable of the enclosing shell, so in
+/// `L=/etc/hosts; x=$(echo a; rm -f $L)` the `rm` really removes `/etc/hosts`.
+/// The body is otherwise judged on its own (`analyze_shell_payload`), where
+/// `L` has no assignment and the operand is an expansion Ask (backlog
+/// e5a8fcc2: a main-mode Ask for system harm). This pass reaches every command
+/// of every executed body — later statements, `{ …; }` groups and nested
+/// substitutions alike, to `MAX_SHELL_DEPTH` levels — and resolves its
+/// variables as the ENCLOSING segment sees them.
+///
+/// It only ever ADDS a Deny: it never returns an Ask and never clears one, so
+/// an operand it cannot resolve stays whatever the body's own analysis said.
+/// A name is resolved from `line` only when nothing between that assignment
+/// and the use can have rebound it, which is established restrictively
+/// (refusing means "unresolved", i.e. the existing Ask):
+///
+///   * `seg` (which contains every body) names the variable nowhere except as
+///     a `$NAME` / `${NAME}` reference — so no `NAME=…`, `export NAME=…`,
+///     `read NAME`, `for NAME in`, `unset NAME` inside a body, nor in the
+///     segment's own assignment prefix (`L=/tmp/x y=$(rm -f $L)`: bash applies
+///     `L=/tmp/x` before it expands `y`'s value);
+///   * neither `seg` nor any body command is a segment
+///     [`super::vars::segment_may_rebind`] distrusts (`eval`, `source`, `.`);
+///   * `line` defines no shell function (one called inside a body could assign
+///     the name);
+///   * and the whole pass is skipped when a body changes directory
+///     (`cd`/`pushd`/`popd`), because the body's relative operands would then
+///     no longer be relative to the cwd `ctx` describes.
+fn known_path_harm_in_substitutions(
+    seg: &str,
+    line: &str,
+    seg_idx: usize,
+    ctx: &Ctx<'_>,
+) -> Decision {
+    use super::vars::{
+        defines_shell_function, mentions_name_outside_reference, resolve_expanded_command_word,
+        segment_may_rebind, CommandWordOrigin,
+    };
+    let mut commands: Vec<String> = Vec::new();
+    if !collect_substitution_commands(seg, 0, &mut commands) {
+        return Decision::Allow;
+    }
+    if !commands.iter().any(|c| has_unresolvable_expansion(c)) || defines_shell_function(line) {
+        return Decision::Allow;
+    }
+    let vars = |name: &str| {
+        if mentions_name_outside_reference(seg, name)
+            || segment_may_rebind(seg, name)
+            || commands.iter().any(|c| segment_may_rebind(c, name))
+        {
+            return None;
+        }
+        match resolve_expanded_command_word(line, seg_idx, &format!("${{{name}}}")) {
+            CommandWordOrigin::Literal(v) => Some(v),
+            _ => None,
+        }
+    };
+    for command in &commands {
+        let tokens =
+            super::split_substitution_opening_assignments(command.split_whitespace().collect());
+        let verdict = known_path_harm_with(&tokens, ctx, &vars);
+        if verdict.is_deny() {
+            return verdict;
+        }
+    }
+    Decision::Allow
+}
+
+/// Every simple command run by the executed substitution bodies of `text`,
+/// recursively (nested substitutions included, bounded by `MAX_SHELL_DEPTH`),
+/// with compound syntax (`{`, `then`, `do`, …) removed by
+/// [`super::compound_views`]. Returns `false` — the caller must not judge —
+/// when a body changes directory or the depth bound is reached.
+fn collect_substitution_commands(text: &str, depth: usize, out: &mut Vec<String>) -> bool {
+    let payloads = super::substitution::executed_substitution_payloads(text);
+    if payloads.is_empty() {
+        return true;
+    }
+    if depth >= super::MAX_SHELL_DEPTH {
+        return false;
+    }
+    for payload in payloads {
+        for view in super::compound_views(&payload) {
+            let command = view.command.trim();
+            if let Some(first) = command.split_whitespace().next() {
+                let head = super::words::normalized_command(first);
+                if matches!(head.as_str(), "cd" | "pushd" | "popd") {
+                    return false;
+                }
+            }
+            if !collect_substitution_commands(command, depth + 1, out) {
+                return false;
+            }
+            out.push(command.to_string());
+        }
+    }
+    true
 }
 
 pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
@@ -276,6 +412,42 @@ fn analyze_rm_placed(rest: &[&str], ctx: &Ctx<'_>, unplaced: &mut Option<String>
             crate::deletion::RmJudgement::Allow => return Decision::Allow,
             crate::deletion::RmJudgement::Deny(reason) => return Decision::deny(reason),
             crate::deletion::RmJudgement::FallThrough => {}
+        }
+    }
+    // The same deletion principle for operands spelled with `.`/`..`
+    // components (GH #1661): a line `deletion_rm_eligible` refuses ONLY for
+    // that spelling ([`deletion_rm_dotted_eligible`]). Every operand is first
+    // resolved PHYSICALLY (`SafeRoots::physical_absolute`: a `..` is popped
+    // only from a prefix that is an existing real directory and its own real
+    // path), then judged by the unchanged class table. One operand that cannot
+    // be resolved that way skips this whole step and keeps the logic below.
+    if recursive
+        && !wildcard
+        && !ctx.deletion_rm_eligible.literal
+        && ctx.deletion_rm_eligible.dotted
+    {
+        let base = ctx.base_for("rm");
+        // Known only when EVERY operand resolved; the first undetermined one
+        // makes the whole list undetermined (and skips this step).
+        let mut physical: Determination<Vec<String>> = Determination::known(Vec::new());
+        for o in &operands {
+            physical = match (physical, ctx.scope.physical_absolute(o, base)) {
+                (Determination::Known(mut v), Determination::Known(p)) => {
+                    v.push(p);
+                    Determination::Known(v)
+                }
+                (Determination::Undetermined(u), _) | (_, Determination::Undetermined(u)) => {
+                    Determination::Undetermined(u)
+                }
+            };
+        }
+        if let Determination::Known(physical) = physical {
+            let physical: Vec<&str> = physical.iter().map(String::as_str).collect();
+            match crate::deletion::judge_rm(ctx.scope, &physical, base) {
+                crate::deletion::RmJudgement::Allow => return Decision::Allow,
+                crate::deletion::RmJudgement::Deny(reason) => return Decision::deny(reason),
+                crate::deletion::RmJudgement::FallThrough => {}
+            }
         }
     }
 
@@ -516,6 +688,186 @@ impl Ctx<'_> {
             | Determination::Undetermined(_) => false,
         }
     }
+
+    /// [`Ctx::in_worktree_checkout`] for ONE question only: is the
+    /// git-recoverable file a truncating redirect overwrites this session's
+    /// tree (the whose-tree check of the redirect arm, #1625)? Never used to
+    /// lift the protected-path rule.
+    ///
+    /// True when [`Ctx::in_worktree_checkout`] is, or — for a chained line
+    /// that is not one plain command — when ALL of these hold:
+    ///   * the redirect sits in segment `seg_idx` of `line` and nothing that
+    ///     runs before it, or with it, can change which file the path names
+    ///     ([`write_prefix_cannot_relink`]): the placement observed at judge
+    ///     time is then the one the redirect opens;
+    ///   * `path` is absolute, with no glob or unresolvable expansion;
+    ///   * [`SafeRoots::classify_worktree_checkout`] places it
+    ///     [`Placement::Inside`] a linked worktree checkout under a worktree
+    ///     storage root, no symlink below the checkout.
+    ///
+    /// Every other answer, `seg_idx` unknown included, is `false`.
+    pub(in crate::detect) fn in_worktree_checkout_for_redirect(
+        &self,
+        path: &str,
+        line: &str,
+        seg_idx: Option<usize>,
+    ) -> bool {
+        if self.in_worktree_checkout(path) {
+            return true;
+        }
+        let Some(idx) = seg_idx else {
+            return false;
+        };
+        if !path.starts_with('/')
+            || has_glob_meta(path)
+            || has_unresolvable_expansion(path)
+            || !write_prefix_cannot_relink(line, idx)
+        {
+            return false;
+        }
+        matches!(
+            self.scope.classify_worktree_checkout(path, None),
+            Determination::Known(Placement::Inside { .. })
+        )
+    }
+}
+
+/// Verbs [`write_prefix_cannot_relink`] admits before the write: none of them
+/// creates, renames or removes a directory entry, and `cp` (admitted only
+/// with no option word) writes regular files and never creates a symlink.
+const PREFIX_INERT_VERBS: &[&str] = &["cp", "echo", "printf", "true", "pwd", "ls", "cat", "test"];
+
+/// True ONLY when no command of `line` that runs before, or concurrently
+/// with, segment `idx` (the one holding a truncating redirect) can create,
+/// move or remove a directory entry — so the target's placement observed when
+/// the hook runs is the file the redirect opens. A refusal is the restrictive
+/// direction: the whose-tree refusal then stands exactly as before.
+///
+/// `line` must start with segments `0..=idx` joined by `&&` alone (no `;`,
+/// `||`, `|`, `&` or newline before the write, so each runs only after the
+/// previous one succeeded, in the same shell and in order), and segment `idx`
+/// must not be followed by `|` or `&` (a later stage would run concurrently).
+/// No segment of `0..=idx` contains `` ` ``, `(`, `)`, `{`, `}`, `<`, `\`,
+/// `&` or a line break (no substitution, subshell, group, here-doc or fd
+/// trick). Each segment before `idx` is one of:
+///   * segment 0 only: `cd D`, `D` absolute and spelled with alphanumerics and
+///     `/ . _ - + , @ %` only, no `.`/`..` component;
+///   * only `NAME=value` words, no quote, `$`, glob, and no `NAME` that can
+///     change how a later command runs ([`shell_behaviour_variable`]: `PATH`,
+///     `IFS`, `LD_*`, any name already in the environment, …);
+///   * a [`PREFIX_INERT_VERBS`] command with no quote and no `>`. For `cp`,
+///     every `$NAME` must name a value assigned by an earlier prefix segment
+///     and, after substituting it, no word may start with `-` or carry a glob.
+pub(super) fn write_prefix_cannot_relink(line: &str, idx: usize) -> bool {
+    let segs = split_segments_with_separators(line);
+    let Some(write) = segs.get(idx) else {
+        return false;
+    };
+    if matches!(write.sep_after, SegmentSep::Pipe | SegmentSep::Background) {
+        return false;
+    }
+    let joined: Vec<&str> = segs[..=idx].iter().map(|s| s.text.as_str()).collect();
+    if !line.starts_with(&joined.join("&&")) {
+        return false;
+    }
+    let mut assigned: Vec<(String, String)> = Vec::new();
+    for (k, seg) in segs[..=idx].iter().enumerate() {
+        let text = seg.text.as_str();
+        if text.contains(['`', '(', ')', '{', '}', '<', '\\', '&', '\n', '\r']) {
+            return false;
+        }
+        if k == idx {
+            break;
+        }
+        if text.contains(['\'', '"', '>']) {
+            return false;
+        }
+        let words: Vec<&str> = text.split_whitespace().collect();
+        let Some(&head) = words.first() else {
+            return false;
+        };
+        let dir_ok = |d: &str| {
+            d.starts_with('/')
+                && d.chars().all(|c| {
+                    c.is_alphanumeric()
+                        || matches!(c, '/' | '.' | '_' | '-' | '+' | ',' | '@' | '%')
+                })
+                && !d.split('/').any(|c| c == "." || c == "..")
+        };
+        if head == "cd" {
+            if k != 0 || words.len() != 2 || !dir_ok(words[1]) {
+                return false;
+            }
+        } else if words.iter().all(|w| is_assignment(w)) {
+            for w in &words {
+                let (name, value) = w.split_once('=').unwrap_or((w, ""));
+                if shell_behaviour_variable(name) || value.contains('$') || has_glob_meta(value) {
+                    return false;
+                }
+                assigned.retain(|(n, _)| n != name);
+                assigned.push((name.to_string(), value.to_string()));
+            }
+        } else if !PREFIX_INERT_VERBS.contains(&head) {
+            return false;
+        } else if head == "cp" {
+            for w in &words[1..] {
+                let Some(w) = substitute_prefix_vars(w, &assigned) else {
+                    return false;
+                };
+                if w.starts_with('-') || has_glob_meta(&w) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+/// True when assigning `name` in the prefix may change what a later prefix
+/// command runs or how the shell splits and resolves it: a shell special
+/// variable (`PATH` picks the `cp` binary, `IFS` splits words, `CDPATH`,
+/// `BASH_ENV`, `ENV`, `GLOBIGNORE`, `SHELLOPTS`, `BASHOPTS`, `HOME`,
+/// `POSIXLY_CORRECT`), a loader variable (`LD_*`, `DYLD_*`), or any name the
+/// hook's own environment already holds — assigning an exported name changes
+/// the environment of every later child. Only a fresh, unexported name such
+/// as `S=<dir>` is a plain shell variable that affects nothing but `$S`.
+fn shell_behaviour_variable(name: &str) -> bool {
+    const SPECIAL: &[&str] = &[
+        "PATH",
+        "IFS",
+        "CDPATH",
+        "BASH_ENV",
+        "ENV",
+        "GLOBIGNORE",
+        "SHELLOPTS",
+        "BASHOPTS",
+        "HOME",
+        "POSIXLY_CORRECT",
+    ];
+    SPECIAL.contains(&name)
+        || name.starts_with("LD_")
+        || name.starts_with("DYLD_")
+        || name.starts_with("BASH")
+        || std::env::var_os(name).is_some()
+}
+
+/// `word` with every `$NAME` replaced by its value from `assigned`, or `None`
+/// when a `$` is not followed by a name assigned there.
+fn substitute_prefix_vars(word: &str, assigned: &[(String, String)]) -> Option<String> {
+    let mut out = String::new();
+    let mut rest = word;
+    while let Some(at) = rest.find('$') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let len = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(after.len());
+        let (_, value) = assigned.iter().find(|(n, _)| n == &after[..len])?;
+        out.push_str(value);
+        rest = &after[len..];
+    }
+    out.push_str(rest);
+    Some(out)
 }
 
 /// Whole-command precondition for [`Ctx::in_worktree_checkout`]: may a
@@ -773,8 +1125,11 @@ pub(super) fn worktree_rm_eligible(command: &str) -> bool {
 /// segment:
 ///
 ///   * no word after `rm` has a component that is exactly `.` or `..`
-///     (split on `/` and `=`): the spec withholds the Allow for any such
-///     spelling, harmless or not;
+///     (split on `/` and `=`): this predicate feeds `judge_rm` the operands
+///     as spelled, and `scope` collapses such components lexically. A line
+///     refused ONLY for that reason (an operand, not an option word, spelled
+///     `./x`, `../x`, `a/./b`, …) is [`deletion_rm_dotted_eligible`] instead,
+///     and the rm arm resolves those operands physically before judging them;
 ///   * the words after `rm` are a run of option words followed only by
 ///     operands: no lone `-` (an operand named `-` that the arm's `-`-prefix
 ///     filter would drop), no `--`, and no option-looking word after the
@@ -800,6 +1155,66 @@ pub(super) fn deletion_rm_eligible(command: &str) -> bool {
         })
         .filter(|w| w.first().copied() == Some("rm"))
         .all(|w| rm_words_are_plain_options_then_operands(&w[1..]))
+}
+
+/// Whole-command precondition for the deletion-principle verdicts on
+/// operands spelled with `.`/`..` components (GH #1661): EXACTLY
+/// [`deletion_rm_eligible`] once every `.`/`..` component of every `rm`
+/// OPERAND word is stood in for by a plain name. Only `/`-separated
+/// components of operand words are masked: an option word (`--opt=../x`,
+/// any word starting with `-`) and a `.`/`..` after an `=` keep their
+/// refusal, and every other rule — bare `rm`/`cd` segments of plain word
+/// characters, only absolute `rm` operands when a `cd` is present (so a
+/// relative `..` is always judged against the payload cwd, never against a
+/// lexically joined `cd` target), options before operands, no `-`/`--` —
+/// applies unchanged. Through [`Ctx::new`] it is also read on the `REST` of a
+/// [`literal_cd_and_rest`] line, which contains no `..` at all.
+///
+/// Accepting the line grants nothing by itself: [`analyze_rm`] resolves each
+/// operand physically (`SafeRoots::physical_absolute`) and an operand it
+/// cannot resolve keeps the pre-existing verdict.
+pub(super) fn deletion_rm_dotted_eligible(command: &str) -> bool {
+    let masked: String = command
+        .split_inclusive([';', '&', '|'])
+        .map(mask_rm_operand_dot_components)
+        .collect();
+    deletion_rm_eligible(&masked)
+}
+
+/// One segment (with its trailing separator, if any) of
+/// [`deletion_rm_dotted_eligible`]: when its first word is `rm`, every later
+/// word not starting with `-` has each `/`-separated `.`/`..` component
+/// replaced by `x`. Spacing and the separator are kept, so the masked line
+/// splits into the same segments and words.
+fn mask_rm_operand_dot_components(seg: &str) -> String {
+    let (body, sep) = match seg.char_indices().last() {
+        Some((i, ';' | '&' | '|')) => (&seg[..i], &seg[i..]),
+        _ => (seg, ""),
+    };
+    if body.split(' ').find(|w| !w.is_empty()) != Some("rm") {
+        return seg.to_string();
+    }
+    let mut seen_verb = false;
+    let words: Vec<String> = body
+        .split(' ')
+        .map(|w| {
+            if w.is_empty() {
+                return String::new();
+            }
+            if !seen_verb {
+                seen_verb = true;
+                return w.to_string();
+            }
+            if w.starts_with('-') {
+                return w.to_string();
+            }
+            w.split('/')
+                .map(|c| if c == "." || c == ".." { "x" } else { c })
+                .collect::<Vec<&str>>()
+                .join("/")
+        })
+        .collect();
+    format!("{}{sep}", words.join(" "))
 }
 
 /// See [`deletion_rm_eligible`]: options first, then operands; no `-`, no
@@ -929,15 +1344,20 @@ pub(super) struct DeletionEligibility {
     /// [`tmp_glob_rm_eligible`]: the `/tmp` wildcard `Allow` of
     /// [`tmp_glob_confined`].
     pub(super) tmp_glob: bool,
+    /// [`deletion_rm_dotted_eligible`]: the literal-operand verdicts for
+    /// operands spelled with `.`/`..`, resolved physically first.
+    pub(super) dotted: bool,
 }
 
 impl DeletionEligibility {
     /// `literal` is [`deletion_rm_eligible`] already combined by `eligible`;
-    /// `eligible` combines [`tmp_glob_rm_eligible`] the same way.
+    /// `eligible` combines [`tmp_glob_rm_eligible`] and
+    /// [`deletion_rm_dotted_eligible`] the same way.
     pub(super) fn of(literal: bool, eligible: impl Fn(fn(&str) -> bool) -> bool) -> Self {
         DeletionEligibility {
             literal,
             tmp_glob: eligible(tmp_glob_rm_eligible),
+            dotted: eligible(deletion_rm_dotted_eligible),
         }
     }
 }

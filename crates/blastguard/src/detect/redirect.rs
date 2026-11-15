@@ -484,6 +484,32 @@ pub(super) fn is_redirect_token_end(b: u8) -> bool {
     b.is_ascii_whitespace() || b == b';' || b == b'|' || b == b'&' || b == b'>' || b == b')'
 }
 
+/// Step over the blanks between a redirect operator and its word, starting at
+/// `j`. Only the shell's blanks (space, tab) are crossed, NEVER a newline:
+/// a redirect word cannot sit on the next line (`echo x >` + newline +
+/// `f` is a syntax error in bash and zsh, so nothing is opened).
+///
+/// Crossing the newline was backlog 0fccf1eb: a here-document body line
+/// ending in `>` (`Co-Authored-By: A <n@a.com>`) followed by the closing
+/// delimiter line was read as the redirect `> EOF`, and on a line with an
+/// earlier `cd` the per-segment scan (which splits at that newline) could not
+/// corroborate it, so the bogus target was reported as unplaceable.
+pub(super) fn skip_redirect_word_gap(bytes: &[u8], mut j: usize) -> usize {
+    while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
+        j += 1;
+    }
+    j
+}
+
+/// True when the redirect word `bytes[start..end]` is empty because the line
+/// ends right there (a newline, or the end of the text). That `>` names no
+/// file: it is either here-document / quoted data or a shell syntax error, and
+/// in neither case does the shell open anything. Any other empty word (`> ;`,
+/// `> |`, `>\r`) keeps the empty target it always produced.
+pub(super) fn redirect_word_missing_at_line_end(bytes: &[u8], start: usize, end: usize) -> bool {
+    start == end && bytes.get(end).is_none_or(|b| *b == b'\n')
+}
+
 /// Every single `>` truncating-redirect target on the line, in order, outside
 /// quotes. Skips `>>`, `&>>`, `>&<digit>` (fd dup), quoted `>`, Rust
 /// arrows (`->`) and angle-bracket placeholders (`<value>`); catches every
@@ -588,9 +614,7 @@ pub(super) fn redirect_targets(seg: &str) -> Vec<String> {
             if bytes.get(j) == Some(&b'&') {
                 j += 1;
             }
-            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                j += 1;
-            }
+            j = skip_redirect_word_gap(bytes, j);
             let start = j;
             while j < bytes.len() {
                 if is_redirect_token_end(bytes[j]) {
@@ -601,7 +625,10 @@ pub(super) fn redirect_targets(seg: &str) -> Vec<String> {
             let tok = &seg[start..j];
             // A bare `-` target is an fd CLOSE (`>&-` / `>& -`), not a file —
             // bash touches no file, so it is non-destructive.
-            if tok != "-" {
+            //
+            // An EMPTY word at a line end (`x>` + newline, or `x>` at the end
+            // of the text) is no redirect either: see `skip_redirect_word_gap`.
+            if tok != "-" && !redirect_word_missing_at_line_end(bytes, start, j) {
                 targets.push(tok.to_string());
             }
             i = j;
@@ -641,10 +668,7 @@ pub(super) fn append_redirect_targets(seg: &str) -> Vec<String> {
         if c == b'>' && !in_s && !in_d && bytes.get(i + 1) == Some(&b'>') {
             // Same target-token scan as `redirect_targets`: ASCII-only
             // delimiters, so `seg[start..j]` never splits a multi-byte char.
-            let mut j = i + 2;
-            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                j += 1;
-            }
+            let mut j = skip_redirect_word_gap(bytes, i + 2);
             let start = j;
             while j < bytes.len() {
                 let cj = bytes[j];

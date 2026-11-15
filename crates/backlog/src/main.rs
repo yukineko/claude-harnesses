@@ -12,9 +12,11 @@ mod evidence;
 mod github;
 mod hooks;
 mod install;
+mod integrate;
 mod liveness;
 mod lock;
 mod merge_driver;
+mod recheck;
 mod store;
 mod task;
 mod timefmt;
@@ -88,7 +90,9 @@ enum Command {
     },
 
     /// Read-only classification of every terminal row's closure evidence
-    /// (observed-f2p, doc-only, duplicate, discard, cited-only, judgment,
+    /// (observed-f2p = legacy close with an executed RED, green-only = GREEN
+    /// at HEAD with a claimed, not executed RED, doc-only, duplicate, discard,
+    /// cited-only, judgment,
     /// none — plus the legacy class of rows closed by the removed human-approval
     /// command) and the legacy untestable reasons grouped by crate. Never
     /// reopens anything; the store is not written.
@@ -159,6 +163,11 @@ enum Command {
 
     /// Show the next highest-priority pending task. Scoped, by default, to the
     /// project this checkout resolves to — the same default `list` uses.
+    /// A task whose fix landed (a commit subject containing `(backlog <id>)`
+    /// reachable from HEAD of the repo holding the store; per ticket project
+    /// root for a pinned store) is skipped with a stderr notice. When that
+    /// cannot be determined (git fails, corrupt ref; an unborn HEAD counts as
+    /// no fixes) `next` is REFUSED non-zero, not "no pending tasks".
     Next {
         /// Filter by tag
         #[arg(long)]
@@ -188,8 +197,10 @@ enum Command {
     },
 
     /// Mark a task as done WITH evidence. Exactly one of: `--test CMD
-    /// --red-rev REV` (an executed committed test that FAILS behaviourally at
-    /// REV and PASSES at HEAD; `--reason fixed|already-fixed|obsolete`),
+    /// --red-rev REV` (an executed committed test that PASSES at HEAD; REV,
+    /// the claimed pre-fix commit, is resolved, ancestry-checked and recorded
+    /// with `executed = false` — the test is NOT run at REV, user ruling
+    /// 2026-11-08; `--reason fixed|already-fixed|obsolete`),
     /// `--doc-only COMMIT` (an ancestor commit touching doc paths only), or
     /// `--duplicate-of ID`. A bare `done ID` is refused. There is no
     /// evidence-free close: an item no test reproduces is `cancel`led.
@@ -201,18 +212,12 @@ enum Command {
         #[arg(long)]
         test: Option<String>,
 
-        /// The revision at which the test must FAIL behaviourally (RED).
+        /// The pre-fix commit (required with --test). It must resolve to a
+        /// commit that is an ancestor of HEAD; it is recorded as a claim
+        /// (closure.red.executed = false). The test is NOT run there: the
+        /// RED run was abolished by user ruling 2026-11-08.
         #[arg(long = "red-rev")]
         red_rev: Option<String>,
-
-        /// Narrow the RED run's overlay to this HEAD test file (repeatable).
-        /// By default the RED worktree at --red-rev gets every HEAD test file
-        /// (cargo) or the named ones (pytest); when the fix itself lives in a
-        /// test file, that copies the fix in. Name only the repro side here.
-        /// Each path must already be in the default overlay (narrow, never
-        /// widen); the narrowed set is recorded as closure.red.overlay.
-        #[arg(long = "red-overlay")]
-        red_overlay: Vec<String>,
 
         /// fixed (default) | already-fixed | obsolete
         #[arg(long)]
@@ -251,10 +256,10 @@ enum Command {
         reason: String,
     },
 
-    /// Record a user ruling deferring a task (見送り): its status becomes
-    /// `ruled-deferred`, which `next` / `next --claim` never hand out and
-    /// nothing requeues. Exits are `cancel` / `done` only
+    /// ABOLISHED (user ruling 2026-11-13): always refused; use `recheck`
     Defer(defer::DeferArgs),
+    /// Re-run open rows' repros: reproduced stays open, else auto-cancelled
+    Recheck(recheck::RecheckArgs),
 
     /// Reconcile this store against its GitHub issues (one-way: local wins)
     Sync {
@@ -269,8 +274,9 @@ enum Command {
 
         /// Which half of the mirror to reconcile. `close` catches up on issues
         /// whose task is already finished; `create` PUBLISHES a new public
-        /// issue per unmirrored pending task. Defaults to `both`, which is what
-        /// `sync` has always done.
+        /// issue per unmirrored pending task. Defaults to `both`, which also
+        /// reads each locally-open mirrored issue's state via `gh` (even on a
+        /// dry run) and plans a reopen for one closed on GitHub.
         #[arg(long, value_enum, default_value = "both")]
         only: store::SyncOnly,
     },
@@ -898,14 +904,12 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
             let now = now_unix();
-            // Fail-soft GitHub push (Phase 1, one-way): resolve the project's
-            // git remote URL for real (`git config --get remote.origin.url`,
-            // best-effort empty on any failure) and inject the real `gh`
-            // spawn via `gh_probe`, mirroring condukt::pr's real-closure-at-
-            // the-call-site / fake-closure-in-tests pattern. The pure
-            // decision (`github::decide_issue_create`, driven from
-            // `store::add_with_weight_and_github_push`) never runs a process
-            // itself, so unit tests exercise it with fake closures only.
+            // GitHub mirror (Phase 1, one-way): resolve the project's git
+            // remote URL (`git config --get remote.origin.url`, empty on any
+            // failure = no mirror, no issue) and inject the real `gh` spawn
+            // (`gh_probe`) and the real row-to-main merge+push
+            // (`integrate::land_row_on_main`); `store::add_finding` never
+            // runs a process itself and creates no issue unless land is Ok.
             let remote_url = git_remote_origin_url(&project);
             // The repro runs BEFORE the store lock is taken (a test can run
             // for up to BACKLOG_TEST_TIMEOUT_SECS). Its outcome decides
@@ -938,6 +942,7 @@ fn run(cli: Cli) -> Result<()> {
                 .map(|r| (r.outcome.clone(), r.detail.clone()));
             let id = store::add_finding(
                 &tasks_path,
+                location.project_root(),
                 &title,
                 &project,
                 tags,
@@ -947,6 +952,7 @@ fn run(cli: Cli) -> Result<()> {
                 now,
                 &remote_url,
                 gh_probe,
+                integrate::land_row_on_main,
                 intake,
             )?;
             println!("added: {id}");
@@ -959,7 +965,7 @@ fn run(cli: Cli) -> Result<()> {
             // ADVISORY: the task above is already written, this cannot fail the
             // command, and it never blocks — the ruling was
             // 「blocking しないまま、ただし必ず可視化」.
-            report_near_duplicates(&tasks_path, &id);
+            dedup::report_near_duplicates(&tasks_path, &id, location.project_root());
         }
 
         Command::Overlap { project, all } => {
@@ -1253,17 +1259,22 @@ fn run(cli: Cli) -> Result<()> {
                     effective_project.as_deref(),
                     &identity,
                     session_id.as_deref(),
+                    location.project_root(), // row identity (claim_recheck::rerun_dir)
                 )?
             } else {
                 // A pure read, but claim-aware: a task holding a live lease in
                 // the project-wide ledger (claimed in this or any other
                 // checkout) is not handed out. An unreadable ledger refused
                 // above (backlog f09db5ce).
-                store::next_excluding(
+                // A task whose fix commit `(backlog <id>)` is already an
+                // ancestor of HEAD is skipped; undetermined ancestry refuses
+                // (backlog a04b2b87).
+                claim_recheck::next_unfixed(
                     &tasks_path,
                     tag.as_deref(),
                     effective_project.as_deref(),
                     &leased,
+                    location.project_root(),
                 )?
             };
             match task {
@@ -1292,9 +1303,12 @@ fn run(cli: Cli) -> Result<()> {
                         // explicitly, which is why it is emitted unconditionally
                         // rather than only when peers were found.
                         let peers = match store::load(&tasks_path) {
-                            Ok(all) => {
-                                dedup::near_duplicates(&t, &all, dedup::NEAR_DUPLICATE_THRESHOLD)
-                            }
+                            Ok(all) => dedup::near_duplicates(
+                                &t,
+                                &all,
+                                dedup::NEAR_DUPLICATE_THRESHOLD,
+                                location.project_root(),
+                            ),
                             Err(e) => {
                                 // Re-reading the store failed AFTER the claim
                                 // succeeded. Say so; do not print an empty
@@ -1341,7 +1355,6 @@ fn run(cli: Cli) -> Result<()> {
             id,
             test,
             red_rev,
-            red_overlay,
             reason,
             duplicate_of,
             doc_only,
@@ -1353,7 +1366,6 @@ fn run(cli: Cli) -> Result<()> {
                     id: id.clone(),
                     test,
                     red_rev,
-                    red_overlay,
                     reason,
                     duplicate_of,
                     doc_only,
@@ -1380,7 +1392,8 @@ fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Sync { apply, limit, only } => {
-            // The dry run is a read; only `--apply` writes (and calls `gh`).
+            // The dry run never writes; only `--apply` writes and mutates
+            // GitHub. Both READ GitHub for `--only both` (`gh issue view`, below).
             let tasks_path = if apply {
                 write_store_path("backlog sync --apply")?
             } else {
@@ -1390,6 +1403,20 @@ fn run(cli: Cli) -> Result<()> {
             // Scope BEFORE truncating: `--only close --limit 50` must mean
             // fifty closes, not the first fifty actions of a mixed plan.
             let mut plan = store::filter_sync_plan(store::sync_plan(&tasks), only);
+            // Remote read (backlog e787b168, GH #1667): `sync_plan` sees only
+            // the local store, so a row open locally whose issue was closed on
+            // GitHub is invisible to it. Read each such row's remote state via
+            // `gh`; a closed one is planned for reopen (local wins), and one
+            // that could not be read is UNDETERMINED, reported below with a
+            // non-zero exit — never counted as "nothing to reconcile".
+            let mut undetermined: Vec<String> = Vec::new();
+            if matches!(only, store::SyncOnly::Both) {
+                let remote_url = git_remote_origin_url(&store_repo_root(&tasks_path));
+                let (reopens, unread) =
+                    github::remote_reopens(&tasks, &remote_url, gh_probe_stdout);
+                plan.extend(reopens);
+                undetermined = unread;
+            }
             if limit > 0 && plan.len() > limit {
                 plan.truncate(limit);
             }
@@ -1464,7 +1491,7 @@ fn run(cli: Cli) -> Result<()> {
                     println!("  ... and {} more", plan.len() - 20);
                 }
                 println!("(dry run; pass --apply to perform)");
-                return Ok(());
+                return github::finish_undetermined(&undetermined);
             }
 
             // The `gh` calls run OUTSIDE the tasks lock on purpose: at ~1s per
@@ -1556,24 +1583,8 @@ fn run(cli: Cli) -> Result<()> {
             }
             let updated = store::record_sync_outcomes(&tasks_path, &outcomes, now_unix())?;
             println!("sync: {} confirmed, {} recorded", outcomes.len(), updated);
-            if !failures.is_empty() {
-                eprintln!(
-                    "sync: {} action(s) FAILED and were not recorded:",
-                    failures.len()
-                );
-                for f in &failures {
-                    eprintln!("  {f}");
-                }
-                // A partially-applied reconciliation that exits 0 reads as
-                // "the mirror is in sync". It is not — say so in the exit code
-                // as well as on stderr (CLAUDE.md §3), and re-running picks the
-                // failures up again because nothing was recorded for them.
-                return Err(anyhow::anyhow!(
-                    "{} of {} sync action(s) did not complete; re-run `backlog sync --apply` to retry",
-                    failures.len(),
-                    plan.len()
-                ));
-            }
+            // Failed actions AND undetermined rows, both listed; non-zero if either.
+            github::finish_apply(&failures, plan.len(), &undetermined)?;
         }
 
         Command::Cancel { id, reason } => {
@@ -1586,7 +1597,16 @@ fn run(cli: Cli) -> Result<()> {
             mirror_close_for(&tasks_path, &id);
         }
 
-        Command::Defer(args) => defer::run(&write_store_path("backlog defer")?, &args)?,
+        Command::Defer(args) => defer::run(&args)?,
+
+        Command::Recheck(args) => {
+            let tasks_path = write_store_path("backlog recheck")?;
+            let effective_project = read_project_scope(&location, None, false, "recheck")?;
+            let leased: HashSet<String> = live_lease_view(effective_project.as_deref(), "recheck")?
+                .into_keys()
+                .collect();
+            recheck::run(&tasks_path, &args, &leased, location.project_root())?;
+        }
 
         Command::Fail { id, reason } => {
             let tasks_path = write_store_path("backlog fail")?;
@@ -1908,51 +1928,12 @@ fn store_repo_root(tasks_path: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// (f7b018f8) Print the near-duplicate scan for task `id` to stderr.
-///
-/// ADVISORY by construction: it returns `()`, carries no verdict, and cannot
-/// change any exit code — the ruling was 「blocking しないまま、ただし必ず
-/// 可視化」 (do not block; always make it visible). It runs AFTER the write, so
-/// a task is never lost to a failing scan.
-///
-/// Every failure path says WHY the scan did not run instead of printing an
-/// empty peer list: "could not scan" and "scanned, found nothing" must not
-/// render the same (CLAUDE.md §3). Note that even a successful empty scan is
-/// not a clean bill of health here — see `dedup`'s module docs: a lexical
-/// scorer cannot see a reworded duplicate (backlog 7b6bcfe6) — which is
-/// why `dedup::near_duplicate_report` renders that case explicitly rather than
-/// staying silent.
-fn report_near_duplicates(tasks_path: &Path, id: &str) {
-    let all = match store::load(tasks_path) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!(
-                "warning: near-duplicate scan for {id} could not run (store re-read \
-                 failed: {e}) — this is NOT \"no duplicates\""
-            );
-            return;
-        }
-    };
-    let Some(anchor) = all.iter().find(|t| t.id == id) else {
-        eprintln!(
-            "warning: near-duplicate scan for {id} could not run (the task is absent from \
-             the store it was just written to) — this is NOT \"no duplicates\""
-        );
-        return;
-    };
-    let peers = dedup::near_duplicates(anchor, &all, dedup::NEAR_DUPLICATE_THRESHOLD);
-    eprintln!(
-        "{}",
-        dedup::near_duplicate_report(anchor, &peers, dedup::NEAR_DUPLICATE_THRESHOLD)
-    );
-}
-
 /// Close the GitHub issue mirroring task `id`, if the store says there is one
 /// to close. Prints what happened either way; never returns an error, because
 /// the caller has already committed the local state change and the mirror is
 /// downstream of it. A failure deliberately records NOTHING, so the task keeps
 /// its `issue_closed_at: None` and the next `backlog sync` retries.
-fn mirror_close_for(tasks_path: &Path, id: &str) {
+pub(crate) fn mirror_close_for(tasks_path: &Path, id: &str) {
     let Ok(tasks) = store::load(tasks_path) else {
         eprintln!("warning: could not re-read the store to close {id}'s issue; run `backlog sync`");
         return;
@@ -2002,10 +1983,10 @@ fn mirror_close_for(tasks_path: &Path, id: &str) {
 }
 
 /// Bound on how long `gh_probe` waits for `gh` before treating it as absent.
-/// `add_with_weight_and_github_push` calls `gh_probe` from inside the
-/// tasks-file lock's critical section, so an unbounded spawn (`gh` hanging on
-/// a network auth prompt) would hold that lock indefinitely and block every
-/// other session's `backlog add`/`next --claim`. Mirrors `propguard::git`'s
+/// `add` runs it after its locked write (`sync --apply` likewise), and an
+/// unbounded spawn (`gh` hanging on a network auth prompt) would hang that
+/// command indefinitely, with the row already on main but no issue (or, in
+/// older binaries, while holding the tasks lock). Mirrors `propguard::git`'s
 /// `GIT_TIMEOUT` use of `boundary::run_with_timeout`.
 const GH_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -2018,6 +1999,18 @@ const GH_TIMEOUT: Duration = Duration::from_secs(20);
 /// `gh_status`-style detection pattern, plus the timeout bound from
 /// `boundary::run_with_timeout` (kills the whole process group on timeout).
 fn gh_probe(argv: &[&str]) -> Option<(bool, String)> {
+    gh_run(argv).map(|(ok, out, err)| (ok, format!("{out}{err}")))
+}
+
+/// [`gh_probe`] for callers that PARSE the output (`gh issue view --json`):
+/// on success only stdout, so a stderr warning is not mistaken for part of the
+/// JSON; on failure stdout+stderr, as `gh_probe`.
+fn gh_probe_stdout(argv: &[&str]) -> Option<(bool, String)> {
+    gh_run(argv).map(|(ok, out, err)| (ok, if ok { out } else { format!("{out}{err}") }))
+}
+
+/// Spawn `gh <argv>`, bounded by `GH_TIMEOUT`: `Some((success, stdout, stderr))`.
+fn gh_run(argv: &[&str]) -> Option<(bool, String, String)> {
     let mut cmd = std::process::Command::new("gh");
     cmd.args(argv).stdin(std::process::Stdio::null());
     match boundary::run_with_timeout(&mut cmd, GH_TIMEOUT) {
@@ -2030,7 +2023,7 @@ fn gh_probe(argv: &[&str]) -> Option<(bool, String)> {
                     "stdout_allowing given the command's own exit code always succeeds"
                 ),
             };
-            Some((code == 0, format!("{stdout}{stderr}")))
+            Some((code == 0, stdout, stderr))
         }
         Determination::Undetermined(_) => None,
     }
@@ -2044,8 +2037,8 @@ mod gh_probe_tests {
     // ── gh-probe-timeout: gh_probe must be timeout-bounded ──────────────────
     //
     // Before this fix, `gh_probe` spawned `gh` with no timeout at all. Since
-    // `add_with_weight_and_github_push` calls it from inside the tasks-file
-    // lock's critical section, a hung `gh` (e.g. stuck on an interactive
+    // `add` then called it from inside the tasks-file lock's critical
+    // section (it now runs after the lock is released), a hung `gh` (e.g. stuck on an interactive
     // network-auth prompt) would hold that lock indefinitely and block every
     // other session's `backlog add`/`next --claim`. Actually reproducing a
     // hung `gh` binary is too heavy for a unit test, so this checks the two

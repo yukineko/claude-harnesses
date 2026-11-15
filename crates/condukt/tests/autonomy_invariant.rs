@@ -601,6 +601,16 @@ fn policy_answer_conflict_beats_approval() {
 ///   case needed separating out: a finding whose effect cannot be measured was
 ///   riding that same permissive path. Category (c), identical rationale to the
 ///   condukt rows above; a new residual stop, deliberately.
+///   Lowered 10 -> 4 on 2026-11-13 (user ruling 「起票しますか?というのはもう
+///   聞かないこと。実証されたら起票、そうでないなら破棄。それは自動で実行していく
+///   こと。それを仕組みとしていれて」): the Phase 4 selection prompt, its policy-
+///   answer escalate/fallback lines, the `--untestable` escalate/fallback lines
+///   and the hard-rule prose about skipping that prompt were all FILING asks and
+///   are gone — every Phase-3 candidate is filed iff `backlog add --repro-test`
+///   observes a reproduction, otherwise discarded and listed. The 4 remaining
+///   lines: HDR x1 (allowed-tools), PROSE x2 (invariant 4 and Phase 4 both
+///   PROHIBIT the selection prompt — not call sites), and the Phase 6
+///   auto-handoff line (the non-filing `/flow` proposal, skipped under autonomy).
 /// overwatch SKILL (2): PROSE x1 (the prohibition "制御コマンド（pause / resume /
 ///   reassign / reap / end）は AskUserQuestion で確認せずに実行しない。") + heading x1
 ///   (the control-command section heading). Was 7 (heading + 5 per-command
@@ -685,7 +695,7 @@ const ASK_ALLOWLIST: &[(&str, usize)] = &[
     ("overwatch/skills/overwatch/SKILL.md", 2),
     // fd2d2362: allowed-tools header only; manual pay-down surface.
     ("refactor/skills/refactor/SKILL.md", 1),
-    ("scout/skills/scout/SKILL.md", 10),
+    ("scout/skills/scout/SKILL.md", 4),
     // 81c41b1b: re-audited 2026-11-04; 12 sites, all HOTL/PROSE/BLOCKED/GATED-style.
     ("sitecraft/skills/sitecraft/SKILL.md", 12),
     ("tdd/skills/tdd/SKILL.md", 1),

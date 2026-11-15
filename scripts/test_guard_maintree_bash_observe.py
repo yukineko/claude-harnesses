@@ -106,6 +106,8 @@ class ObserveGuardBase(unittest.TestCase):
             del payload["hook_event_name"]
         env = _clean_env()
         env["CLAUDE_PROJECT_DIR"] = str(project_dir or self.main)
+        # the per-session write record lives under $HOME: keep it in the sandbox
+        env["HOME"] = str(self.tmp / "home")
         if env_override:
             env.update(env_override)
         return subprocess.run([sys.executable, str(SCRIPT)],
@@ -251,11 +253,13 @@ class BlocksWritesIntoMain(ObserveGuardBase):
 
     def test_project_dir_is_linked_worktree_but_main_is_written(self) -> None:
         # CLAUDE_PROJECT_DIR may be a linked worktree; main is still the
-        # primary worktree of that repository and is still guarded.
+        # primary worktree of that repository and is still guarded for a call
+        # whose cwd is main. (Re-scoped by user ruling 2026-11-08: a cwd in
+        # the linked worktree is no longer judged against main at all.)
         tid, _ = self.pre_ok(f"echo hi > {self.main}/from_wt.txt",
-                             project_dir=self.wt, cwd=self.wt)
+                             project_dir=self.wt, cwd=self.main)
         (self.main / "from_wt.txt").write_text("hi\n")
-        self.assert_blocked_d(self.post(tid, project_dir=self.wt, cwd=self.wt),
+        self.assert_blocked_d(self.post(tid, project_dir=self.wt, cwd=self.main),
                               "from_wt.txt")
 
 
@@ -443,6 +447,17 @@ class HeadMoveIntegrationOnly(ObserveGuardBase):
     missing / unreadable reflog is still refused (see
     test_guard_maintree_bash_ff_source_gone.py). c2 = the existing
     test_completed_fast_forward_merge_clean, c3 = test_completed_non_ff_merge_commit_clean.
+
+    RE-SCOPED by user ruling 2026-11-08 (read no other branch's refs): the
+    first two accepted cases above ("any merge commit" and "contained in
+    another ref", i.e. integration_head's for-each-ref) are gone. A HEAD move
+    is now allowed only by main's own branch reflog chain (integration_move:
+    "merge ..." / "commit (merge): ..." merge commits whose first parent is the
+    old HEAD, and "merge|pull...: Fast-forward" entries that descend from it).
+    The refusals pinned here (c1, c4) are unchanged; c5 still refuses because
+    integration_move's rev-list / merge-base calls are intercepted by the stub.
+    _only_main_contains_head() runs for-each-ref in the TEST only, as fixture
+    anti-vacuity. See test_guard_maintree_bash_own_state_only.py.
     """
 
     def _head(self) -> str:
@@ -827,7 +842,37 @@ class RouteIndependence(ObserveGuardBase):
         return rows
 
     def test_every_route_that_really_writes_main_is_reported(self) -> None:
+        """Every route, run with cwd = MAIN, is reported.
+
+        Re-scoped by user ruling 2026-11-08 ("donegateそのものが他のworktreeを
+        見たり検証したりテストしたりすることは禁止とする。他のgateでも禁止とする。
+        ..."): the guard observes main only when the call runs in main, so the
+        table (whose rows mostly ran from the linked worktree) is now run from
+        main. The routes still write main by absolute path, so route
+        independence is still what this proves. The worktree-cwd spelling is
+        the accepted detection loss pinned by the next test."""
+        for name, cmd, _cwd, tools, env_extra in self._main_writes():
+            with self.subTest(route=name):
+                miss = self._missing(tools)
+                if miss:
+                    self.skipTest(f"{name}: {miss} not installed")
+                self._reset()
+                before = self._fingerprint()
+                r, post = self._cycle(cmd, self.main, env_extra)
+                self.assertNotEqual(before, self._fingerprint(),
+                                    f"anti-vacuity: {name} did not change main "
+                                    f"(rc={r.returncode} stderr={r.stderr[:200]!r})")
+                self.assert_blocked_d(post)
+
+    def test_routes_from_a_worktree_cwd_are_not_observed(self) -> None:
+        """Accepted detection loss (user ruling 2026-11-08; dropped with no
+        compensating mechanism): a call whose cwd is a linked worktree is not
+        judged against main, even when it really writes main. Pinned so the
+        loss stays visible; a future change that re-observes main from a
+        worktree cwd breaks this on purpose."""
         for name, cmd, cwd, tools, env_extra in self._main_writes():
+            if cwd != self.wt:
+                continue
             with self.subTest(route=name):
                 miss = self._missing(tools)
                 if miss:
@@ -838,7 +883,7 @@ class RouteIndependence(ObserveGuardBase):
                 self.assertNotEqual(before, self._fingerprint(),
                                     f"anti-vacuity: {name} did not change main "
                                     f"(rc={r.returncode} stderr={r.stderr[:200]!r})")
-                self.assert_blocked_d(post)
+                self.assert_allowed(post)
 
     def _non_main_effects(self):
         M, W, S = self.main, self.wt, self.scratch
@@ -950,7 +995,10 @@ class RouteIndependence(ObserveGuardBase):
         """backlog 1a73a49b: `git -C <main> checkout -- <file>` discarding a
         dirty main file was rc 0 under the static guard. It changes main's
         dirty state outside integration (no MERGE_HEAD, HEAD unmoved), so the
-        observing guard reports it (case d) whatever cwd it is spelled from."""
+        observing guard reports it (case d) when the call runs in main.
+        Re-scoped by user ruling 2026-11-08 (a gate judges only the tree the
+        call runs in): from a linked-worktree cwd it is no longer observed
+        (accepted detection loss, dropped with no compensating mechanism)."""
         for cwd_name in ("wt", "main"):
             with self.subTest(cwd=cwd_name):
                 cwd = self.wt if cwd_name == "wt" else self.main
@@ -962,7 +1010,10 @@ class RouteIndependence(ObserveGuardBase):
                 self.assertEqual((self.main / "tracked.txt").read_text(), "v1\n",
                                  "anti-vacuity: checkout did not revert the dirty file")
                 self.assertNotEqual(before, self._fingerprint())
-                self.assert_blocked_d(post, "tracked.txt")
+                if cwd_name == "main":
+                    self.assert_blocked_d(post, "tracked.txt")
+                else:
+                    self.assert_allowed(post)
 
     def test_1a73a49b_control_git_checkout_on_clean_main_file_is_allowed(self) -> None:
         """Control: the same spelling on an already-clean file changes nothing."""
@@ -1032,6 +1083,7 @@ class BadPayloads(ObserveGuardBase):
     def _raw(self, raw: str) -> subprocess.CompletedProcess:
         env = _clean_env()
         env["CLAUDE_PROJECT_DIR"] = str(self.main)
+        env["HOME"] = str(self.tmp / "home")
         return subprocess.run([sys.executable, str(SCRIPT)], input=raw, cwd=str(self.main),
                               env=env, capture_output=True, text=True, timeout=60)
 

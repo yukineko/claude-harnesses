@@ -61,7 +61,7 @@
 use blastguard::model::Decision;
 use blastguard::rule_id::INTERNAL_ERROR_REASON;
 use blastguard::scope::SafeRoots;
-use blastguard::{approve, detect, hookio, interactive, retro, rule_id};
+use blastguard::{approve, blocklog, detect, hookio, interactive, log, relay, retro, rule_id};
 use harness_core::hook::{self, HookInput};
 use std::process::exit;
 
@@ -90,6 +90,9 @@ fn main() {
             "retro" => {
                 exit(run_retro(&args[i + 1..]));
             }
+            "log" => {
+                exit(log::run_log(&args[i + 1..]));
+            }
             "record-approval" => {
                 // PostToolUse. This path has NO verdict: it prints nothing and
                 // decides nothing, so `run_hook`'s panic-to-exit-0 barrier is
@@ -97,6 +100,12 @@ fn main() {
                 // asks again, which is the restrictive side.
                 // `run_hook` never returns — it exits 0 itself.
                 hook::run_hook(record_approval);
+            }
+            "relay" => {
+                // The subagent Ask relay (see `blastguard::relay`). Its Stop
+                // subcommand has a verdict and runs under the fail-closed
+                // Stop barrier; the PostToolUse markers have none.
+                exit(run_relay(&args[i + 1..]));
             }
             _ => {}
         }
@@ -124,7 +133,24 @@ fn main() {
 /// do something else.
 fn run_verdict_guarded<F: FnOnce()>(body: F) -> ! {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
-    exit(verdict_exit_code(outcome))
+    let code = verdict_exit_code(outcome);
+    if code != 0 {
+        // A panic-blocked call is a block too: record it with the payload
+        // that was read, if any (`RAW_STDIN`). A failure is reported on
+        // stderr, which Claude Code shows the model for an exit-2 block.
+        let raw = RAW_STDIN.get().map(String::as_str).unwrap_or("");
+        let block = blastguard::blocklog::Block {
+            decision: "deny",
+            kind: blastguard::blocklog::DecisionKind::PanicBlocked,
+            actor: "unknown",
+            system_harm: false,
+            reason: "internal error (panic) on the verdict path; blocked with exit 2",
+            rule_id: "internal-error-panic",
+        };
+        // Its failure note is already on stderr; there is no reason text to add it to.
+        record_block(raw, false, &block);
+    }
+    exit(code)
 }
 
 /// Pure core of [`run_verdict_guarded`]: 0 when the verdict path completed
@@ -264,7 +290,8 @@ fn print_help() {
     println!(
         "blastguard {ver}\n\
 A Claude Code PreToolUse hook that denies project-destroying operations.\n\n\
-USAGE:\n  blastguard                  read a PreToolUse payload from stdin (normal mode)\n  blastguard record-approval  read a PostToolUse payload from stdin and record\n                              that this exact effect was approved\n  blastguard --protects       print what this gate protects, from what, and why\n  blastguard --version        print version\n  blastguard --help           this help\n\n\
+USAGE:\n  blastguard                  read a PreToolUse payload from stdin (normal mode)\n  blastguard record-approval  read a PostToolUse payload from stdin and record\n                              that this exact effect was approved\n  blastguard log [OPTIONS]    list decision/command history from violation ledger\n  blastguard relay mark-executed | mark-relayed | stop\n                              subagent Ask relay hooks (PostToolUse / Stop)\n  blastguard relay dismiss <id> --reason <text>\n                              record why a relayed subagent Ask is not re-run\n  blastguard --protects       print what this gate protects, from what, and why\n  blastguard --version        print version\n  blastguard --help           this help\n\n\
+blastguard log lists blastguard lines from overwatch's violations.jsonl ledger:\n  blastguard log                           list all entries in file order\n  blastguard log --decision deny|ask       filter by decision (default: all)\n  blastguard log --rule <id>               filter by rule ID (default: all)\n  blastguard log --since <RFC3339|Ns|Nm|Nh|Nd>  filter by timestamp (RFC3339 only in UTC 'Z' form)\n  blastguard log --system-harm             show only system-harm lines\n  blastguard log --subagent                show only subagent lines\n  blastguard log --interactive             show only interactive lines\n  blastguard log --json                    output JSON instead of text\n\nExit codes: 0=success, 2=usage error, 3=ledger path-resolution failure, ledger\nunreadable, unparsable ledger line, or stdout write failure.\nText format prints: decision= actor= system_harm= rule= tool= cwd= then command=\n(Bash) or target= (file tools); values are escaped (\\n \\r \\t, \\xHH, \\\\) so one\nentry is one line. Absent fields print as 'unknown' (text) or null (JSON).\n\n\
 It denies recursive/wildcard rm, git reset --hard, git clean -fdx, truncate,\n\
 shred, mkfs, dd of=, recursive chmod/chown, find -delete, and single-> file\n\
 overwrites — while exempting repo CONFIG files (.claude/** config, *.toml,\n\
@@ -276,6 +303,7 @@ config, and is judged by the path it would have outside that directory.",
 
 fn run() {
     let raw = hook::read_stdin();
+    let _ = RAW_STDIN.set(raw.clone());
 
     // EMPTY stdin is the case that genuinely determined there is nothing to
     // judge: no tool call was described, so silence is an accurate answer.
@@ -287,6 +315,7 @@ fn run() {
     // `agent_id` field, and a payload `HookInput::parse` rejects must still be
     // classified (see `payload_is_subagent` for the fail-closed rules).
     let subagent = interactive::payload_is_subagent(&raw);
+    let agent_id = payload_agent_id(&raw);
 
     let input = match HookInput::parse(&raw) {
         Some(i) => i,
@@ -298,7 +327,13 @@ fn run() {
             // via `.ok()`, so the two cases are indistinguishable downstream —
             // which is why they are separated HERE, at the only point that
             // still has the raw bytes.
-            emit(Decision::ask(UNREADABLE_PAYLOAD), None, subagent);
+            emit(
+                Decision::ask(UNREADABLE_PAYLOAD),
+                None,
+                &raw,
+                subagent,
+                agent_id.as_deref(),
+            );
             return;
         }
     };
@@ -306,7 +341,97 @@ fn run() {
     let decision = analyse(&input);
     let decision = consult_memory(&input, decision);
 
-    emit(decision, Some(&input), subagent);
+    emit(decision, Some(&input), &raw, subagent, agent_id.as_deref());
+}
+
+/// The raw stdin of the verdict path, kept so a PANIC on that path (blocked
+/// with exit 2 by [`run_verdict_guarded`]) can still be recorded in the block
+/// log with the call it blocked. Set once, right after the read.
+static RAW_STDIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Append one block record and return the note to add to the printed reason
+/// when it could not be written (`None` = recorded). A panic while recording
+/// counts as a failure to record; it can never change the verdict, which the
+/// caller decided before calling this.
+fn record_block(raw: &str, parsed: bool, block: &blocklog::Block<'_>) -> Option<String> {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        blocklog::write(&blocklog::log_dir(), raw, parsed, block)
+    }));
+    let err = match outcome {
+        Ok(Ok(_)) => return None,
+        Ok(Err(e)) => e,
+        Err(_) => "internal error (panic) while writing the record".to_string(),
+    };
+    eprintln!(
+        "blastguard: WARNING this `{}` ({}) {} in the blastguard block log: {err}",
+        block.decision,
+        block.kind.as_str(),
+        blocklog::UNRECORDED_MARK
+    );
+    Some(blocklog::unrecorded_note(&err))
+}
+
+/// The payload's `agent_id` as a string, for the relay record only. Subagent
+/// DETECTION stays with [`interactive::payload_is_subagent`]; this never
+/// decides anything.
+fn payload_agent_id(raw: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(raw.trim())
+        .ok()?
+        .get("agent_id")?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// Queue a subagent's hardened Ask for the main session and return the line
+/// appended to the printed deny reason (user ruling 2026-11-14:
+/// 「sub agentのAskはmainで裁定する」; see [`blastguard::relay`]).
+///
+/// `None` — nothing queued, nothing appended — when the main session could not
+/// ask either ([`interactive::ask_available`] is false: there is no human to
+/// adjudicate it, and the main thread's own Asks are hardened to Deny there
+/// too), or when the call is not a parsed Bash command (only a command string
+/// can be re-run verbatim).
+///
+/// This runs AFTER the verdict is decided and cannot change it: every outcome,
+/// including a panic in the queue write, is an annotation. A failed write is
+/// annotated rather than dropped, because a silently lost record would read
+/// as "nothing to relay".
+fn relay_annotation(
+    ask_reason: &str,
+    input: Option<&HookInput>,
+    agent_id: Option<&str>,
+) -> Option<String> {
+    if !interactive::ask_available() {
+        return None;
+    }
+    let input = input?;
+    let command = bash_command(input)?;
+    let session = relay::session_of(&input.session_id);
+    let cwd = input.cwd.clone();
+    let dir = relay::relay_dir();
+    let agent = agent_id.map(str::to_string);
+    let reason = ask_reason.to_string();
+    let queued = std::panic::catch_unwind(move || {
+        relay::queue(&dir, &session, agent.as_deref(), &cwd, &command, &reason)
+    });
+    Some(match queued {
+        Ok(Ok(id)) => format!(
+            "\n\nblastguard relay: queued for the main session as relay id {id} (user ruling \
+             「sub agentのAskはmainで裁定する」). Put the relay id, the cwd and the exact command \
+             in your report. The main session re-runs it under its own permission prompt and \
+             sends you the result."
+        ),
+        Ok(Err(why)) => format!(
+            "\n\nblastguard relay: WARNING this Ask could NOT be queued for the main session \
+             ({why}). Report the exact command and cwd to your parent agent yourself; the main \
+             session's Stop gate does not know about it."
+        ),
+        Err(_) => "\n\nblastguard relay: WARNING this Ask could NOT be queued for the main \
+                   session (internal error while writing the relay queue). Report the exact \
+                   command and cwd to your parent agent yourself; the main session's Stop gate \
+                   does not know about it."
+            .to_string(),
+    })
 }
 
 /// Turn an `Ask` into a `Deny` for a call made inside a subagent.
@@ -337,7 +462,15 @@ const UNREADABLE_PAYLOAD: &str =
 analysed — refusing to guess. If this recurs, the hook's payload schema has \
 drifted from what Claude Code sends and needs updating.";
 
-/// Harden, print, and only then record telemetry.
+/// Harden, write the block log, print, and only then record telemetry.
+///
+/// The block log ([`blocklog`], user ruling 2026-11-14) and the relay record
+/// (a subagent's queued Ask, [`relay_annotation`]; a main-session deny of a
+/// relayed command, [`relay_denial_annotation`]) are the writes that precede
+/// the print, so a failure to record can be surfaced in the printed reason;
+/// each is panic-guarded and can only append text to the reason, never change
+/// the verdict. Everything said below about
+/// telemetry concerns the overwatch ledger write, which stays after the print.
 ///
 /// # The order is the invariant
 ///
@@ -361,15 +494,44 @@ drifted from what Claude Code sends and needs updating.";
 /// should not be able to re-open the hole silently. Printing first makes the
 /// ordering enforce that, and the inner `catch_and_log` means telemetry can
 /// only ever lose ITSELF.
-fn emit(decision: Decision, input: Option<&HookInput>, subagent: bool) {
+fn emit(
+    decision: Decision,
+    input: Option<&HookInput>,
+    raw: &str,
+    subagent: bool,
+    agent_id: Option<&str>,
+) {
+    // How the printed decision is reached is recorded in the block log
+    // (`blastguard::blocklog`): an `Ask` that is printed as a `Deny` must not
+    // read as a plain `Deny` there.
+    let was_ask = decision.is_ask();
     // A subagent can never answer an `ask` — user ruling 2026-11-01, after a
     // background subagent waited 10.6 h on one. Its env is inherited from the
     // main thread and looks interactive, so this check comes FIRST and is not
     // overridable by `BLASTGUARD_ASK=always`.
     if subagent {
+        // The relay record (user ruling 2026-11-14, 「sub agentのAskはmainで
+        // 裁定する」) is taken for an `Ask` only — a `Deny`, system harm
+        // included, is never queued. It annotates the printed reason; the
+        // verdict is `harden_for_subagent`'s, unchanged.
+        let annotation = match &decision {
+            Decision::Ask(reason) => relay_annotation(reason, input, agent_id),
+            _ => None,
+        };
         // The repeat-deny downgrade is skipped on purpose: inside a subagent
         // its `Ask` would stall exactly like any other. A repeat stays a deny.
-        emit_line(harden_for_subagent(decision), input);
+        let kind = if was_ask {
+            blocklog::DecisionKind::AskHardenedToDeny
+        } else {
+            blocklog::DecisionKind::Deny
+        };
+        emit_line_annotated(
+            harden_for_subagent(decision),
+            input,
+            "subagent",
+            annotation.as_deref(),
+            BlockSource { raw, kind },
+        );
         return;
     }
 
@@ -377,10 +539,16 @@ fn emit(decision: Decision, input: Option<&HookInput>, subagent: bool) {
     // or agent-driven session it is not a pause, it is a block the agent cannot
     // clear — so it is hardened to a deny instead. Never to an allow: "ask に
     // できないときは fail".
-    let decision = if interactive::ask_available() {
+    let interactive_session = interactive::ask_available();
+    let decision = if interactive_session {
         decision
     } else {
         decision.hardened()
+    };
+    let actor = if interactive_session {
+        "interactive"
+    } else {
+        "headless"
     };
 
     // Operator ruling 2026-09-18 —「ユーザの指示を2度やぶるgateはいらない。
@@ -389,19 +557,136 @@ fn emit(decision: Decision, input: Option<&HookInput>, subagent: bool) {
     // 「全 gate で 2度目は無条件に通す」, so the downgrade has to survive the
     // hardening that would otherwise fold it straight back into a deny.
     // Subagents are the one exception (user ruling 2026-11-01, handled above).
+    let was_deny = decision.is_deny();
+    let hardened_ask = was_ask && was_deny;
     let decision = downgrade_on_repeat(input, decision);
-
-    emit_line(decision, input);
-}
-
-/// Print the decision, then record telemetry (see [`emit`] for why the order
-/// is the invariant).
-fn emit_line(decision: Decision, input: Option<&HookInput>) {
-    let Some(line) = hookio::decision_line(&decision) else {
-        return; // Allow → print nothing.
+    let kind = if was_deny && decision.is_ask() {
+        blocklog::DecisionKind::DenyDowngradedToAsk { hardened_ask }
+    } else if hardened_ask {
+        blocklog::DecisionKind::AskHardenedToDeny
+    } else if decision.is_ask() {
+        blocklog::DecisionKind::Ask
+    } else {
+        blocklog::DecisionKind::Deny
     };
 
-    // The decision reaches Claude Code FIRST. Nothing below can retract it.
+    // A main-session Deny of a Bash call may be the re-run of a relayed
+    // subagent Ask (backlog b72b1c4d): record it on the matching entry. The
+    // verdict is already fixed; this can only append a line to its reason.
+    let annotation = match &decision {
+        Decision::Deny(reason) => relay_denial_annotation(reason, input),
+        _ => None,
+    };
+    emit_line_annotated(
+        decision,
+        input,
+        actor,
+        annotation.as_deref(),
+        BlockSource { raw, kind },
+    );
+}
+
+/// Record a main-session `Deny` on the relay entry whose `cwd` and command are
+/// byte-identical to this call's ([`relay::mark_denied`]) and return the line
+/// appended to the printed reason.
+///
+/// `None` when the call is not a parsed Bash command or no entry matched (an
+/// absent queue included). A queue that cannot be read or written, or a panic
+/// while doing so, records NOTHING (an undetermined match never marks an
+/// entry) and is annotated as a warning, so the failure to record is visible
+/// where the agent reads the deny. Runs after the verdict is decided and
+/// cannot change it.
+fn relay_denial_annotation(deny_reason: &str, input: Option<&HookInput>) -> Option<String> {
+    let input = input?;
+    let command = bash_command(input)?;
+    let session = relay::session_of(&input.session_id);
+    let cwd = input.cwd.clone();
+    let dir = relay::relay_dir();
+    let reason = deny_reason.to_string();
+    let marked = std::panic::catch_unwind(move || {
+        relay::mark_denied(&dir, &session, &cwd, &command, &reason)
+    });
+    match marked {
+        Ok(Ok(None)) => None,
+        Ok(Ok(Some(id))) => Some(format!(
+            "\n\nblastguard relay: this is the re-run of relayed subagent Ask {id}; the denial is \
+             recorded on it. It stays pending on this session's Stop until you record the outcome \
+             with `blastguard relay dismiss {id} --reason \"<why>\"` (and tell the subagent)."
+        )),
+        Ok(Err(why)) => Some(format!(
+            "\n\nblastguard relay: WARNING could not check or record whether this denied call is \
+             the re-run of a relayed subagent Ask ({why}); nothing was recorded."
+        )),
+        Err(_) => Some(
+            "\n\nblastguard relay: WARNING could not check or record whether this denied call is \
+             the re-run of a relayed subagent Ask (internal error while reading the relay \
+             queue); nothing was recorded."
+                .to_string(),
+        ),
+    }
+}
+
+/// What the block log needs beyond the decision: the raw stdin payload (the
+/// only complete description of the blocked call) and how the printed
+/// decision was reached.
+struct BlockSource<'a> {
+    raw: &'a str,
+    kind: blocklog::DecisionKind,
+}
+
+/// Record the block, print the decision, then record telemetry.
+///
+/// `annotation` is appended to the PRINTED reason only. The violation ledger
+/// records the unannotated reason, so its rule id (`rule_id::rule_id`, a
+/// `contains` classifier) cannot be moved by the annotation's wording. An
+/// `Allow` is never annotated, never recorded, and prints nothing.
+///
+/// # Order
+///
+/// The verdict is fixed before anything here runs. The block-log record
+/// ([`record_block`]) is written BEFORE the print so that a failure to write
+/// it can be surfaced in the printed reason itself (user ruling 2026-11-14:
+/// 「止めたなら止めた責任をとる」 — an unrecorded block must say so, where the
+/// agent reads it). It cannot change the verdict: every outcome, a panic
+/// included, is at most an extra paragraph of reason text. The overwatch
+/// ledger write stays AFTER the print (see [`emit`]).
+fn emit_line_annotated(
+    decision: Decision,
+    input: Option<&HookInput>,
+    actor: &str,
+    annotation: Option<&str>,
+    source: BlockSource<'_>,
+) {
+    let printed = match (&decision, annotation) {
+        (Decision::Deny(r), Some(a)) => Decision::Deny(format!("{r}{a}")),
+        (Decision::Ask(r), Some(a)) => Decision::Ask(format!("{r}{a}")),
+        _ => decision.clone(),
+    };
+    let (decision_word, printed_reason, base_reason) = match (&printed, &decision) {
+        (Decision::Deny(p), Decision::Deny(b)) => ("deny", p.as_str(), b.as_str()),
+        (Decision::Ask(p), Decision::Ask(b)) => ("ask", p.as_str(), b.as_str()),
+        _ => return, // Allow → record nothing, print nothing.
+    };
+    let rid = rule_id::rule_id(base_reason);
+    let block = blocklog::Block {
+        decision: decision_word,
+        kind: source.kind,
+        actor,
+        system_harm: decision.is_system_harm(),
+        reason: printed_reason,
+        rule_id: rid,
+    };
+    let unrecorded = record_block(source.raw, input.is_some(), &block);
+    let printed = match (printed, unrecorded) {
+        (Decision::Deny(r), Some(n)) => Decision::Deny(format!("{r}{n}")),
+        (Decision::Ask(r), Some(n)) => Decision::Ask(format!("{r}{n}")),
+        (p, _) => p,
+    };
+    let Some(line) = hookio::decision_line(&printed) else {
+        return; // unreachable: `printed` is a Deny or an Ask here.
+    };
+
+    // The decision reaches Claude Code here. Nothing below can retract it.
     println!("{line}");
 
     // Fail-soft fleet violation record for overwatch's cross-task
@@ -412,8 +697,10 @@ fn emit_line(decision: Decision, input: Option<&HookInput>) {
     // simply not recorded; inventing a task key for it would pollute the
     // recurrence signature with a synthetic one.
     if let (Some(input), Decision::Deny(reason) | Decision::Ask(reason)) = (input, &decision) {
+        let kind = if decision.is_deny() { "deny" } else { "ask" };
+        let system_harm = decision.is_system_harm();
         let _ = hook::catch_and_log("blastguard-violation-record", || {
-            record_violation(input, reason)
+            record_violation(input, reason, kind, actor, system_harm)
         });
     }
 }
@@ -565,9 +852,13 @@ fn analyse(input: &HookInput) -> Decision {
 /// and cache roots (`$HOME/.cache`, `$HOME/Library/Caches`) — each only when it
 /// is a real, non-symlinked directory right now — and this function attaches
 /// the git work-tree probe (`reversible::probe_tree`) that its project classes
-/// need. Recursive rm strictly inside them is Allow under the same
-/// whole-command conditions as the worktree Allow plus a few more (no `.`
-/// component, plain options-then-operands); see `deletion`'s module doc.
+/// need, plus the absent-path index probe (`reversible::probe_absent_path`)
+/// the `git checkout -- <pathspec>` verdict uses for a path missing on disk.
+/// Recursive rm strictly inside them is Allow under the same
+/// whole-command conditions as the worktree Allow plus a few more (plain
+/// options-then-operands; an operand spelled with `.`/`..` components is
+/// judged only after they are resolved physically, GH #1661); see
+/// `deletion`'s module doc.
 ///
 /// A missing or empty `cwd` yields a model with only the temp roots in it, and
 /// an unresolvable one yields no model at all — both of which simply keep the
@@ -585,6 +876,8 @@ fn safe_roots(input: &HookInput) -> SafeRoots {
         Some(real_path),
     )
     .with_git_tree_probe(blastguard::reversible::probe_tree)
+    .with_git_absent_probe(blastguard::reversible::probe_absent_path)
+    .with_git_restore_probe(blastguard::reversible::probe_restore_content)
 }
 
 /// Resolve `path` to its real path — symlinked components included — WITHOUT
@@ -633,7 +926,7 @@ fn real_path(path: &str) -> Option<String> {
 /// reported on stderr rather than dropped. `reason` is free text (may embed a
 /// variable path/target) — `rule_id::rule_id` normalizes it to a stable
 /// discriminator before it becomes the violation signature.
-fn record_violation(input: &HookInput, reason: &str) {
+fn record_violation(input: &HookInput, reason: &str, kind: &str, actor: &str, system_harm: bool) {
     let target = input.target();
     let task_key = match &target {
         Some(t) => format!("{}:{}", input.tool_name, t),
@@ -642,6 +935,16 @@ fn record_violation(input: &HookInput, reason: &str) {
     let raw = overwatch::violation::RawViolation {
         rule_id: Some(rule_id::rule_id(reason)),
         ..Default::default()
+    };
+    let command = if input.tool_name == "Bash" {
+        input
+            .tool_input
+            .as_ref()
+            .and_then(|ti| ti.get("command"))
+            .and_then(|c| c.as_str())
+            .map(str::to_string)
+    } else {
+        None
     };
     let event = overwatch::violation::build_event(
         overwatch::violation::ViolationSource::Blastguard,
@@ -653,7 +956,14 @@ fn record_violation(input: &HookInput, reason: &str) {
     );
     let cwd = input.cwd_or_current();
     match event {
-        Some(event) => {
+        Some(mut event) => {
+            event.decision = Some(kind.to_string());
+            event.tool = Some(input.tool_name.clone());
+            event.command = command;
+            event.target = input.target();
+            event.cwd = Some(input.cwd.clone());
+            event.actor = Some(actor.to_string());
+            event.system_harm = Some(system_harm);
             // The verdict itself is unaffected, but a lost record must not be
             // silent: overwatch reads this ledger as "what blastguard denied"
             // (backlog f738a79a).
@@ -785,6 +1095,193 @@ fn record_approval() {
     // `promote` is a no-op when nothing is pending, which is the ordinary case:
     // most tool calls were allowed outright and were never asked about.
     let _ = approve::Store::open(memo_dir()).promote(&key);
+}
+
+/// `blastguard relay <sub>` — the subagent Ask relay (user ruling 2026-11-14,
+/// 「sub agentのAskはmainで裁定する」; see [`blastguard::relay`]).
+///
+/// * `mark-executed` — PostToolUse / PostToolUseFailure on Bash.
+/// * `mark-relayed`  — PostToolUse on SendMessage.
+/// * `stop`          — the main-session Stop gate (has a verdict).
+/// * `dismiss <id> --reason <text>` — record why an entry will not be re-run.
+///
+/// None of these executes a command. The `cwd` stored in an entry is never
+/// resolved, stat'ed or entered (user ruling 2026-11-14,
+/// 「gateもconduktも絶対に勝手に他のworktreeを参照してはならない」).
+fn run_relay(rest: &[String]) -> i32 {
+    match rest.first().map(String::as_str) {
+        // The markers have no verdict: a lost mark leaves the entry pending,
+        // so the Stop gate keeps blocking — the restrictive side. Failures are
+        // reported on stderr, never dropped. `run_hook` never returns.
+        Some("mark-executed") => hook::run_hook(relay_mark_executed),
+        Some("mark-relayed") => hook::run_hook(relay_mark_relayed),
+        Some("stop") => relay_stop(),
+        Some("dismiss") => relay_dismiss(&rest[1..]),
+        _ => {
+            eprintln!(
+                "usage: blastguard relay mark-executed | mark-relayed | stop | \
+                 dismiss <id> --reason <text>"
+            );
+            2
+        }
+    }
+}
+
+/// Main-session Bash call finished (successfully or not): mark the matching
+/// relay entry executed. A call made inside a subagent marks nothing — only
+/// the main session adjudicates.
+fn relay_mark_executed() {
+    let raw = hook::read_stdin();
+    if raw.trim().is_empty() || interactive::payload_is_subagent(&raw) {
+        return;
+    }
+    let (Some(input), Ok(value)) = (
+        HookInput::parse(&raw),
+        serde_json::from_str::<serde_json::Value>(raw.trim()),
+    ) else {
+        eprintln!("blastguard relay mark-executed: unparseable payload; nothing marked");
+        return;
+    };
+    let Some(command) = bash_command(&input) else {
+        return;
+    };
+    let session = relay::session_of(&input.session_id);
+    if let Err(e) = relay::mark_executed(
+        &relay::relay_dir(),
+        &session,
+        &input.cwd,
+        &command,
+        relay::exit_code_of(&value),
+    ) {
+        eprintln!(
+            "blastguard relay mark-executed: WARNING could not mark ({e}); the entry stays \
+             pending and the Stop gate keeps listing it"
+        );
+    }
+}
+
+/// Main-session SendMessage: mark executed entries whose relay id the message
+/// names. The whole `tool_input` is searched, so the id may sit in any field.
+fn relay_mark_relayed() {
+    let raw = hook::read_stdin();
+    if raw.trim().is_empty() || interactive::payload_is_subagent(&raw) {
+        return;
+    }
+    let Some(input) = HookInput::parse(&raw) else {
+        eprintln!("blastguard relay mark-relayed: unparseable payload; nothing marked");
+        return;
+    };
+    if input.tool_name != "SendMessage" {
+        return;
+    }
+    let Some(tool_input) = input.tool_input.as_ref() else {
+        return;
+    };
+    let text = tool_input.to_string();
+    let session = relay::session_of(&input.session_id);
+    if let Err(e) = relay::mark_relayed(&relay::relay_dir(), &session, &text) {
+        eprintln!(
+            "blastguard relay mark-relayed: WARNING could not mark ({e}); the entry stays \
+             pending and the Stop gate keeps listing it"
+        );
+    }
+}
+
+/// The main-session Stop gate. Runs under the shared fail-closed Stop barrier
+/// (`run_guarded`): a panic blocks. An unparseable payload from a hook (stdin
+/// not a terminal) blocks too — the session could not be identified, so its
+/// queue could not be read.
+fn relay_stop() -> ! {
+    const NAME: &str = "blastguard-relay";
+    let terminal = std::io::IsTerminal::is_terminal(&std::io::stdin());
+    let raw =
+        harness_core::gate::run::read_stop_payload_guarded(NAME, terminal, hook::try_read_stdin());
+    let input = HookInput::parse(&raw);
+    let stop_hook_active = input.as_ref().is_some_and(|h| h.stop_hook_active);
+    harness_core::gate::run::run_guarded(NAME, terminal, stop_hook_active, move || {
+        let Some(input) = input else {
+            if terminal {
+                eprintln!("blastguard relay stop: expects a Stop hook payload on stdin");
+                exit(2);
+            }
+            println!(
+                "{}",
+                serde_json::json!({
+                    "decision": "block",
+                    "reason": "blastguard relay: the Stop payload could not be parsed, so this \
+                               session's subagent Ask relay queue could not be checked; the stop \
+                               is blocked (fail-closed)."
+                })
+            );
+            exit(0);
+        };
+        let session = relay::session_of(&input.session_id);
+        match relay::stop_outcome(&relay::relay_dir(), &session) {
+            relay::StopOutcome::Block(reason) => println!(
+                "{}",
+                serde_json::json!({ "decision": "block", "reason": reason })
+            ),
+            relay::StopOutcome::Allow(Some(msg)) => {
+                println!("{}", serde_json::json!({ "systemMessage": msg }))
+            }
+            relay::StopOutcome::Allow(None) => {}
+        }
+        exit(0)
+    })
+}
+
+/// `blastguard relay dismiss <id> --reason <text>`. Exit 0 on success, 2 for
+/// a usage error / blank reason / unknown id, 3 when a queue could not be read
+/// or written.
+fn relay_dismiss(rest: &[String]) -> i32 {
+    let mut id: Option<&str> = None;
+    let mut reason: Option<&str> = None;
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--reason" => match it.next() {
+                Some(r) => reason = Some(r),
+                None => {
+                    eprintln!("blastguard relay dismiss: --reason needs a value");
+                    return 2;
+                }
+            },
+            other if id.is_none() && !other.starts_with("--") => id = Some(other),
+            other => {
+                eprintln!("blastguard relay dismiss: unexpected argument `{other}`");
+                return 2;
+            }
+        }
+    }
+    let Some(id) = id else {
+        eprintln!("usage: blastguard relay dismiss <id> --reason <text>");
+        return 2;
+    };
+    let Some(reason) = reason else {
+        eprintln!("blastguard relay dismiss: --reason <text> is required");
+        return 2;
+    };
+    match relay::dismiss(&relay::relay_dir(), id, reason) {
+        Ok(path) => {
+            println!(
+                "dismissed {id} ({}); the dismissal is recorded in the queue file and is no longer shown on Stop",
+                path.display()
+            );
+            0
+        }
+        Err(relay::DismissError::EmptyReason) => {
+            eprintln!("blastguard relay dismiss: the reason must not be blank");
+            2
+        }
+        Err(relay::DismissError::UnknownId(id)) => {
+            eprintln!("blastguard relay dismiss: no relay entry {id}");
+            2
+        }
+        Err(relay::DismissError::Io(e)) => {
+            eprintln!("blastguard relay dismiss: {e}");
+            3
+        }
+    }
 }
 
 /// How much of a file is read to fingerprint its contents.

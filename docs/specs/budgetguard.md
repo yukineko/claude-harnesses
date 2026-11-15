@@ -10,7 +10,9 @@ budgetguard は制御（turn を止める）を担う。`budgetguard gate` が C
 （`hooks/hooks.json`: `${CLAUDE_PLUGIN_ROOT}/bin/budgetguard gate`, `timeout` 30s）、各 Stop で
 (1) セッション transcript (JSONL) を読んでモデル別トークンを集計し、(2) `harness-core` 組み込み料金表で
 USD を見積もり（`estimate_transcript_cost` → `TranscriptCostEstimate::cost_usd`、gauge と同一）、
-(3) 日次台帳 `ledger.json` を更新し、(4) セッション合計と当日累計を上限と照合して verdict を出す。
+(3) 日次台帳 `ledger.json` を更新し（当日エントリ＝セッション累積コスト − 同セッションの前日以前のエントリ合計。
+0 時またぎの二重計上を防ぐ〈#1553〉。前日以前のエントリが負・非有限、または累積を上回るときは累積をそのまま当日に置き、
+当日を過大側〈制限側〉に倒す）、(4) セッション合計と当日累計を上限と照合して verdict を出す。
 コスト計算・料金表・台帳（`harness_core::ledger::Ledger`）はすべて `harness-core` に委譲し、本 crate は
 gate 判定・config 層・ledger ロック・hook 配線という薄い周辺に徹する。判定に API キーは不要（transcript は
 既にディスク上にあり決定論的に読むだけ）。

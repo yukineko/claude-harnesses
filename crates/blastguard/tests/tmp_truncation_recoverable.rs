@@ -6,6 +6,12 @@
 //! variables must stay non-Allow.
 //!
 //! The payload cwd is a neutral_base project dir that is NOT under /private/tmp.
+//!
+//! The tmp fixtures live under the canonical fixed temp root (`/private/tmp`
+//! on macOS, `/tmp` on Linux; `support/fixed_tmp.rs`).
+
+#[path = "support/fixed_tmp.rs"]
+mod fixed_tmp;
 
 #[path = "support/neutral_base.rs"]
 mod neutral_base;
@@ -24,7 +30,7 @@ struct Fx {
     base: PathBuf,
     home: PathBuf,
     proj: PathBuf,
-    /// unique dir under /private/tmp
+    /// unique dir under the canonical fixed temp root
     tmp: PathBuf,
     session: String,
 }
@@ -42,7 +48,7 @@ impl Fx {
         let proj = base.join("src/proj");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&proj).unwrap();
-        let tmp = PathBuf::from(format!("/private/tmp/bg-trunc-{uniq}"));
+        let tmp = fixed_tmp::canonical_fixed_temp_root().join(format!("bg-trunc-{uniq}"));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         Fx {
@@ -173,8 +179,9 @@ fn g1_dotdot_escape_out_of_tmp_onto_existing_outside_file_not_allow() {
     let f = Fx::new("g1");
     let victim = f.proj.join("victim.txt");
     f.write(&victim, "keep\n");
-    // /private/tmp/<d>/../../<rest> : two levels up from <d> is /private, so
-    // climb enough levels to reach / then spell the absolute victim path.
+    // /private/tmp/<d>/../../<rest> : two levels up from <d> is /private (on
+    // Linux, /tmp/<d>/../.. is already /), so climb enough levels to reach /
+    // on either OS (`..` at / stays at /) then spell the absolute victim path.
     let rel = victim.strip_prefix("/").unwrap();
     let out = f.run(&format!(
         "echo a > {}/../../../{}",

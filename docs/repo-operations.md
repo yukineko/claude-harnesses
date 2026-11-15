@@ -55,19 +55,53 @@
   `Blocking waiting for file lock` は記録しない: hook の cargo 呼び出しはすべて `--quiet`
   （または stderr を捕捉して失敗時にしか出さない `check-compile-fail.py` 経由）で、cargo はその
   status 行を `--quiet` で抑止するため、拾うには利用者に見える出力を変える必要がある。
-- **pre-push の共有 target dir の上限付き掃除** — `$GIT_COMMON/prepush-typecheck-target` は push を
-  またいで残り、誰も prune していなかった（2026-11-03 実測: main clone の `debug/deps` に 488,578 entry、
-  最古は 2026-08-06）。typecheck の前の `target-cleanup` フェーズで、`debug/deps` の entry 数が
-  `PREPUSH_TARGET_MAX_DEPS`（既定 20000。非負整数でなければ既定値）を超えていたら target dir ごと
-  `rm -rf` し、その push は cold build になる。entry 数は python3 の `os.scandir` で閾値+1 まで数える
-  （同日実測: `ls -f | awk` 60 秒、全件 scandir 3.55 秒、20001 で打ち切り 0.19 秒）。**削除が破壊側なので、
-  判定不能は削除しない**: python3 が無い・数えられない・別の pre-push の `prepush-typecheck.<pid>` worktree
-  があり pid が生きている・target 配下の `.cargo-lock`（debug / release / `<triple>/debug` /
-  `tests/trybuild[/<triple>]/debug`）のどれかが flock で保持されているかその状態を読めない — いずれも
-  理由を 1 行出して削除せず続行する。lock test から `rm` までの間に始まった cargo は成果物を失って失敗し
-  得るが、それはその push を block する側にしか倒れない。block/allow は変えない。結果は timing の
-  `target-cleanup` フェーズ（`deps_entries_seen` / `threshold` / `action` = kept・removed・skipped-busy・
-  skipped-undetermined・rm-failed）に記録される。
+- **pre-commit のゲート別計時（observability のみ、#1551）** — `.githooks/pre-commit` も同じ方式で
+  ゲート（scanner）ごとに 1 フェーズを測り、EXIT trap で `pre-commit timing: <label> <N>s, ...; total <N>s (exit <rc>)`
+  の 1 行を stderr に出し、`$(git rev-parse --git-common-dir)/precommit-timing.jsonl` に 1 回 1 行の JSON
+  （`start` / `phases`〈`phase` / `secs` / `rc`=そのゲート自身の終了コード、scanner 欠落時は `null`〉/ `total` / `exit`）を追記する。
+  時計は開始時に `date +%s` が使えればそれ、使えなければ shell の `$SECONDS`（bash/ksh/zsh）、どちらも無ければ
+  秒数は `?`（JSON では `null`）。ログを書けない時は 1 行の警告だけ。**判定を持たない**（下流消費者は
+  stderr と jsonl を読む人間だけ）: block/allow・exit code・ゲート順は変えない。
+- **pre-commit / pre-push の範囲（2026-11-08 ユーザー裁定）** — hook は他の worktree に干渉せず、
+  検査はその時の変更範囲に限る。pre-commit の全リポジトリ走査型スキャナは `--staged` で stage された
+  差分だけを見る（または差分が入力に触れたときだけ走る。`scripts/staged_scope.py`）。pre-push は
+  使い捨て worktree・共有 target dir（旧 `$GIT_COMMON/prepush-typecheck-target`。撤去後もディスクに
+  残っている場合は手で消してよい）・`target-cleanup` フェーズを持たず、push される commit が触った crate
+  だけを、push される sha が clean な HEAD のときにその場で検査する。同じ tree・同じ test id の pass は
+  `scripts/test-pass-record.py`（`<git common dir>/test-pass-record/`）に記録し、記録があれば再実行しない。
+  記録が無い・壊れている・tree が違うときは実行し、その場で実行できないなら block する。
+  `gate-bypass.py` の到達判定はこの worktree の HEAD だけを見る（他 worktree の HEAD は見ない）。
+- **pre-push の crate 単独 typecheck（issue #1641 / backlog 38a44b30）** — `typecheck` フェーズは
+  range に応じた `cargo check --all-targets`（`--workspace` または `-p a -p b ...`）の後に、range が触った
+  各 `crates/<dir>`（push される sha に `Cargo.toml` があるもの）を `cargo check --all-targets --quiet -p <crate>`
+  で **1 crate ずつ単独に**検査する。複数 package を 1 回で検査すると Cargo が共有依存（harness-core の
+  `fault-injection` 等）の feature を統合するため、自分の manifest に feature が欠けた crate のテスト
+  target（例: tdd の E0432）が通ってしまうからである。Cargo.lock を触る range（lockstep bump のたび）で
+  `--workspace` に広がった場合も同様に走る。どれか 1 つでも失敗すれば `typecheck` フェーズ内で block。
+  test id は crate ごとの `cargo-check:<dir>` で、その tree にその id の pass があるときだけ再実行しない
+  （`cargo-check:workspace` や複数 crate の id の pass ではスキップしない。単一 crate の狭い range では
+  前段の検査がまさに同じコマンド・同じ id なので二重に走らせない）。range が計算できないときは crate 集合が
+  不明なので全 workspace member を単独検査する。dir が 1 package に対応しない・metadata が読めないときは block。
+  追加コスト（2026-11-11 実測、rev 329b4700 + 本修正、warm な共有 target dir）: `--workspace` 検査直後の
+  `cargo check --all-targets --quiet -p blastguard` 1 回目 8.9s、2 回目 0.16s。
+- **pre-push の fail-open mutation（issue #1584 / backlog 4f19b628）** — push される range が
+  `crates/<gate>/`（GATE_CRATES の 7 crate）を触ったとき、その gate crate ごとに
+  `scripts/check-fail-open-mutation.py --crate <gate> --keep-going` をその場で実行する（test id
+  `fail-open-mutation:<gate>`、同じ tree で pass 記録があれば再実行しない）。range が計算できない時と
+  スクリプト自身が変わった時は全 gate crate。root の Cargo.toml / Cargo.lock だけの変更では走らない。
+  粒度は crate であって、変更された個々の `Undetermined` arm ではない（スクリプトに arm 単位の選択子は
+  無く、scenario が登録されていない arm はここでは測られない）。非0終了（NOT CAUGHT / inconclusive /
+  error / revert 失敗 / crash）・スクリプト不在・python3 不在はすべて block。
+  各 scenario は `tests`（`--lib` / `--test <name>` の cargo test-target 選択子）を宣言し、mutation 後は
+  `cargo test -p <gate> <tests>` だけを走らせる（crate 全体ではない）。選択子は推測ではなく実測で選ぶ:
+  mutation を当てた `cargo test -p <gate> --no-fail-fast` で RED になった target のうち、単独でも
+  RED になり、かつ mutation 無しでは pass するものを登録する（実測値はスクリプトの各 scenario 横に記録）。
+  宣言した target が mutation を捕まえなければ NOT CAUGHT（exit 1）、cargo が拒否する選択子
+  （`no test target named`）は inconclusive（exit 1）で、どちらも block — 絞り込みで見逃しが pass に
+  変わることはない。mutation 無しで pass することを条件にしたのは、blastguard では mutation 無しの
+  `cargo test -p blastguard --no-fail-fast` が 60〜61 target 失敗する（2 回の実行。commit 済みの RED repro。rev 91046d26、
+  2026-11-14 実測）ため、旧来の crate 全体実行は mutation の有無に関係なく RED で、何も証明していなかった
+  からである。
 
 ## 記録そのものの定期監査 — `scripts/record-audit.py`（backlog 0f55003a）
 
@@ -127,6 +161,47 @@ linked worktree から走らせると**全次元が 0 を返す**（存在しな
 `record_audit.record_root()` が `git rev-parse --git-common-dir` で main worktree を解決してそこを読む。
 解決できなければ REPO へフォールバックせず **undetermined** にする。テストは
 `scripts/test_record_audit.py`（45 ケース。13 の fail-open 変異がそれぞれ名前の付いたテストで殺されることを確認済み）。
+
+## gate が壊れたら何が漏れるか — `scripts/gate-severity-probe.py`（GitHub #1552 / backlog dfa2c9d3）
+
+「どの gate を毎 commit で回すか」を決める前に、gate ごとの重大度を**実測**する道具（判断材料であって
+ゲートではない。pre-commit / pre-push には配線しない）。gate ごとに代表違反 fixture を 1 つ注入し、
+ユーザー定義（2026-11-06）の 3 指標を出す。time-to-detect は対象外。契約は
+`docs/specs/gate-severity-probe.md`。
+
+```sh
+python3 scripts/gate-severity-probe.py --json                          # 全 gate・全層（遅い。下記）
+python3 scripts/gate-severity-probe.py --json --gate launcher-exec-bit # 指定 gate だけ（繰り返し可）
+python3 scripts/gate-severity-probe.py --json --commit-layers-only     # pre-push / cargo-test を省く（約 1.5 分）
+python3 scripts/gate-severity-probe.py --json --cargo-target-dir ~/.cache/gsp-target  # cargo 成果物を再利用
+```
+
+| key | 意味 |
+|---|---|
+| `fires` | gate 単体で代表違反を今ブロックするか（`true` / `false` / `"undetermined"`） |
+| `caught_by` | その gate **だけ**を外したとき、なお止める層（他の pre-commit gate のラベル・`commit-msg`・`pre-push`・`cargo-test`） |
+| `leak` | `caught_by` が空のときの到達点（`push` / `rollout` / `undetermined`）。他層が止めるなら `null` |
+| `security_relevant` | **人間が宣言した**一覧（`SECURITY_RELEVANT`。現在 injectguard / secret-guard）に入っているか。データから推論しない |
+| `undetermined_layers` | control（違反なし）で既に止まる・timeout・起動不能だった層。`caught_by` には入れず、未捕捉なら `leak` を `undetermined` にする |
+
+- **隔離**: caller repo には `rev-parse` しかしない。caller の HEAD を temp dir へ `git clone --shared`
+  した私有 clone とその中の linked worktree だけで fixture を適用・commit し、終了時に丸ごと消す
+  （caller の作業ツリー・index・HEAD・worktree 一覧・bypass ledger・pass 記録は不変。caller の staged /
+  untracked 変更は測定対象外）。
+- **帰属**: 各 scanner をまず違反なし（何も stage しない）で走らせ、そこで既に止まる gate のブロックは
+  fixture に帰属できないので `fires: "undetermined"`。pre-push と cargo-test も同じ crate dir を触る
+  neutral commit / clean HEAD を control にする。
+- **fixture の作り方**: plugin crate を触る fixture は lockstep bump も同時に入れる（version 系 gate を除く）。
+  そうしないと bump-on-change が全部を「捕まえて」しまい、bump すれば通る違反を見誤る。
+  fixture の anchor が消えた（ファイル改名等）ときは skip ではなく `fires: "undetermined"` と理由を出す。
+- **対象**: 今 hook が走らせている gate だけ（ユーザー裁定 2026-11-11）。hook から外した gate は一覧から消える。
+- **所要時間**（実測。2026-11-11、rev `cf954b43`、開発機 Mac 1 台、cargo target は空から）:
+  `--commit-layers-only` の全 gate 82 秒、全層の全 gate 546 秒（約 9 分。最長は crossx-constants の
+  235 秒＝backlog の cargo test）。`--gate launcher-exec-bit` 単体の全層は約 2 分。
+  数字は継承せず、使う前に測り直すこと。
+- exit 0 = JSON を出した。exit 2 = probe 自体が走れなかった（未知の `--gate`、caller が git repo でない、
+  clone 失敗）で、JSON は出さない（空の clean レポートに見せない）。
+
 ## ビルド成果物ディレクトリの上限（`scripts/cap-target-dir.sh`）
 
 `.cargo/config.toml`（`/.cargo/` は gitignore 済みの machine-local 設定）で `target-dir` を
@@ -185,6 +260,27 @@ scripts/rollout-plugins.sh --plugin specguard --canary             # GATE クレ
 ```
 
 - 冪等（version 不変なら no-op）。`--force` で無変更でも再コピー、`--no-rebuild`/`--no-sync` で段階分け。
+- **committed HEAD 以外からは反映しない（exit 9, backlog ff8cebd0）**: 2026-11-14、pre-push の
+  fail-open mutation（`check-fail-open-mutation.py`）が `crates/blastguard/src/model.rs` を in-place で
+  `Decision::Ask(_reason) => Decision::Allow` に書き換えている最中に rollout が走り、その mutant を
+  blastguard 0.2.548 として配布した。mutation は今の場所に残す（ユーザー裁定）ので、反映側が拒否する。
+  `scripts/rollout_source_guard.py` が判定し、判定不能は拒否:
+  (1) コピー前に build 入力（`crates/`・`Cargo.toml`・`Cargo.lock`・`.cargo/`）に staged/unstaged/untracked
+  の差分が無いこと・HEAD が起動時のままであること・mutation 中マーカー `<git-dir>/fail-open-mutation.active`
+  が無いこと、(2) 各 plugin のコピー直後に、HEAD が追跡する全ファイルが HEAD の blob と一致すること
+  （不一致は cache 側を HEAD の内容に戻してから拒否）、(3) registry 書き込み前、(4) `rebuild-plugins.sh` 内で
+  `cargo build` の後・**バイナリ swap の前**、(5) rebuild+sync 後（in-flight restore で registry は元へ戻る）に、
+  (1) に加えて HEAD と mutation カウンタ `<git-dir>/fail-open-mutation.seq` が不変であることを再確認する。
+  mutation スクリプトはファイルを書き換える**前**にカウンタを増やしマーカーを作り、revert をバイト一致で
+  確認した**後**にマーカーを消すので、build 中に始まって戻された mutation もカウンタで検出される。
+  マーカー/カウンタは自 worktree の git dir だけを見る（他 worktree は参照しない）。`--dry-run` は対象外。
+  `rebuild-plugins.sh` を**単体で**叩いた場合はこの検査を通らない（rollout 経由でのみ有効）。
+  **残る穴（未対処・明示）**: (a) gitignored ファイルは `git status` に出ず rsync でコピーされ、(2) は HEAD
+  追跡ファイルしか比べないので cache 側の余剰ファイルは検出しない。(b) 汚れ検査は上記 build 入力のみで、
+  `scripts/`（sync-plugin-assets.sh 等）は対象外。(c) (5) で拒否した場合、registry は戻るが cache の
+  version dir には swap 済みバイナリが残る（(4) を通過済みのビルド物）。(d) canary 経路は E2E テスト未整備。
+  プロセスが死んで `.active` が残った場合は rollout が拒否し続けるので、`git status` が clean なことを
+  確認してから手で消す。
 - **GATE クレートは canary 必須**: canary 無しでの反映はエラーで止まる（fleet 防御ゲートを
   無検証で入れ替えないための安全策）。`--no-canary` は明示的な例外指定としてのみ用いる。
 - **手動 `cp` は禁止**: cache の binary/asset を手で上書きするだけだと **version dir が旧名のまま残り**

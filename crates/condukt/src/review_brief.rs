@@ -394,6 +394,13 @@ mod tests {
             detail: Some(
                 "post-execution diff-risk: public-API change on a sensitive path".to_string(),
             ),
+            decision: None,
+            tool: None,
+            command: None,
+            target: None,
+            cwd: None,
+            actor: None,
+            system_harm: None,
         }
     }
 
@@ -405,6 +412,13 @@ mod tests {
             session_id: "s2".to_string(),
             ts: 50,
             detail: Some("unrelated failure".to_string()),
+            decision: None,
+            tool: None,
+            command: None,
+            target: None,
+            cwd: None,
+            actor: None,
+            system_harm: None,
         }
     }
 

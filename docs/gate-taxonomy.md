@@ -57,8 +57,11 @@
   ローカルの advisory 速報層。fail-soft（python3/スクリプト不在時は素通り）。
 - **pre-push** — `.githooks/pre-push`。**4 本のブロックするチェック**と 3 本の advisory を持つ。
   ブロックするのは (1) bypass ledger に未ゲート commit が残っていないか（`scripts/gate-bypass.py`）、
-  (2) push される各 tip の `cargo check --workspace --all-targets`（使い捨て worktree に checkout して
-  判定する。作業ツリーではない）、(3) 同じ tip に対する `scripts/check-compile-fail.py`（trybuild の
+  (2) push される各 tip の `cargo check --all-targets`（2026-11-08 のユーザー裁定以降、範囲は push される
+  commit が触った crate だけ〈`cargo metadata --no-deps` で名前を解決。root の `Cargo.toml`/`Cargo.lock`/
+  `rust-toolchain.toml`/`.cargo` を触ったら `--workspace`〉。使い捨て worktree は作らず、push される sha が
+  clean な HEAD のときだけ作業ツリーでその場実行する。そうでなければ、同じ tree・同じ test id の pass 記録
+  〈`scripts/test-pass-record.py`、git common dir〉が無い限り block。記録があれば再実行しない）、(3) 同じ tip に対する `scripts/check-compile-fail.py`（trybuild の
   compile-fail 型契約。target ごとに、入力〈その crate と推移的 path 依存の git tree・その crate の依存閉包
   （全 dep kind・registry/git 依存を含む全 package）の resolved package id 一覧〈`cargo metadata` の
   `resolve` 由来。`Cargo.lock` ファイル自体は入力にも dirty 判定にも含めないので、閉包外の package
@@ -68,9 +71,9 @@
   binding か理由付き ack で覆われているか。backlog 0c277117、2026-10-02 配線）。いずれも判定不能は
   block に倒す。advisory は GATE_CRATES 変更検知・rollout drift・autonomy chain の 3 本で、これらは
   push を止めない。各フェーズの所要秒数は判定に関与しない observability として stderr の 1 行と
-  `prepush-timing.jsonl`（git common dir）に記録される。typecheck の前に、肥大した共有 target dir を
-  上限付きで掃除する判定に関与しない保守フェーズ（`target-cleanup`。判定不能なら削除しない）がある
-  （詳細はどちらも `docs/repo-operations.md`）。
+  `prepush-timing.jsonl`（git common dir）に記録される（詳細は `docs/repo-operations.md`）。
+  (3)(4) も (2) と同じく、push される commit の範囲が入力に触れたときだけ走り、pass 記録で再実行を省く。
+  かつての共有 target dir 掃除フェーズ（`target-cleanup`）は使い捨て worktree と共に撤去した。
   この行はかつて「push 自体は止めない設計（fail-soft）」と書いていたが、bypass ledger 以降の実装と
   食い違っていた（CLAUDE.md 第4節: 散文が実装と食い違ったら散文を直す）。chronically-red CI の
   チェックは GitHub Actions 禁止（CLAUDE.md 第7節）に伴い撤去済みで、もう存在しない。

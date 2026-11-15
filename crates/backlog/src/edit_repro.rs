@@ -133,10 +133,11 @@ fn apply(path: &Path, id: &str, fields: Fields<'_>, repro: Option<Repro>) -> Res
             // out again with the ruling still in its notes.
             if task.status == Status::RuledDeferred {
                 return Err(anyhow!(
-                    "refused: task {id} is ruled-deferred (a recorded user ruling); \
-                     `edit --status {v}` would put it back on the queue. Close it with \
-                     `backlog cancel {id} --reason R`, or file a new task if the ruling \
-                     was lifted"
+                    "refused: task {id} is ruled-deferred (a legacy row of the abolished \
+                     deferral state, user ruling 2026-11-13); `edit --status {v}` would put it \
+                     back on the queue without re-observing it. Resolve it with `backlog \
+                     recheck --id {id}` (reproduced -> pending, otherwise auto-cancelled) or \
+                     `backlog cancel {id} --reason R`"
                 ));
             }
         }
@@ -175,8 +176,9 @@ fn apply(path: &Path, id: &str, fields: Fields<'_>, repro: Option<Repro>) -> Res
 fn parse_edit_status(status: Option<&str>) -> Result<Option<Status>> {
     if status == Some(Status::RuledDeferred.as_str()) {
         return Err(anyhow!(
-            "refused: `edit --status ruled-deferred` is not allowed; a deferral records the \
-             user's ruling: `backlog defer ID --ruling QUOTE`"
+            "refused: `edit --status ruled-deferred` is not allowed; the deferral state is \
+             abolished (user ruling 2026-11-13: an open row stays open only while its repro \
+             reproduces — `backlog recheck`)"
         ));
     }
     if let Some(w) = crate::task::stored_status_error(status) {

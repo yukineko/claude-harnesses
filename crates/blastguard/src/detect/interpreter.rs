@@ -1,22 +1,34 @@
 use super::{
-    analyze_shell_payload, confined_ask, glob_literal_prefix, has_glob_meta,
-    here_document_delimiter_is_quoted, here_string_operands, inline_command_payloads,
-    interpreter_payloads_after, interpreter_stdin_operand, is_redirect_token, is_short_flag,
-    opens_here_document, positional_operands, process_substitution_payloads, recommend_against,
-    Ctx, Decision,
+    analyze_shell_payload, confined_ask, glob_literal_prefix, has_glob_meta, is_redirect_token,
+    is_short_flag, positional_operands, recommend_against, Ctx, Decision,
 };
 use crate::exclude;
 
+mod code_building;
 mod comments;
 mod inert_literal;
+mod invocation;
+mod open_mode;
 mod osascript;
+mod python_escape;
+mod python_file;
+mod python_literal_target;
+mod python_semantics;
 mod shell_calls;
 #[cfg(test)]
 mod unit_tests;
+use code_building::code_building_marker;
+#[cfg(test)]
+use code_building::compile_call_is_regex_method;
 use comments::strip_hash_comments;
 use inert_literal::{has_dynamic_code_execution, inert_literal_bodies};
+pub(super) use invocation::analyze_code_interpreter;
 use osascript::osascript_app_delete;
 pub(super) use osascript::osascript_program_delete;
+pub(super) use python_file::{
+    python_file_body_verdict, python_program_enters_stdin_console, python_program_only_prints,
+    python_redirect_view, python_stdin_body_reading, python_written_program_verdict,
+};
 pub(super) use shell_calls::python_body_segment_verdict;
 
 /// Non-shell interpreters that run an inline program supplied as a string
@@ -298,11 +310,22 @@ const INTERPRETER_WRITE_CALLS: &[&str] = &[
     "o_rdwr",
     "o_trunc",
     "o_creat",
+    "o_append",
     "writefilesync(",
+    // Backlog 569b9b9d: node's append APIs and pathlib's write methods write
+    // the path they name exactly like `writeFileSync` / `open(p,'w')`.
+    "appendfilesync(",
+    "appendfile(",
+    ".write_text(",
+    ".write_bytes(",
     "createwritestream(",
     "file.write(",
-    // `open(path, 'w')` and friends. The mode operand is matched WITH its
-    // quotes and closing paren so an identifier ending in `w` cannot match.
+    // `open(path, <mode>)` is NOT decided by these spellings any more: every
+    // `open(`-family call's mode is parsed by `open_mode::write_capable_open`
+    // (append/update/create/keyword/undetermined modes included, backlog
+    // 6cac93af). The `'w'` spellings below stay as a net for non-`open` calls
+    // taking a mode operand (`zipfile.ZipFile(p,'w')`). They are matched WITH
+    // their quotes so an identifier ending in `w` cannot match.
     ",'w')",
     ", 'w')",
     ",\"w\")",
@@ -329,11 +352,27 @@ const INTERPRETER_WRITE_CALLS: &[&str] = &[
 /// `writeFileSync(dir)` all fail on a directory (EISDIR), so a directory
 /// literal is not their target. `shutil.copy2(src, dir)` DOES write into a
 /// directory (`dir/<basename>`), so when the program spells it this answers
-/// `false` and the literal is probed exactly as before. A path whose kind
-/// cannot be read (`metadata` fails, relative with no base) is also `false`:
-/// unknown stays on the probing side.
-fn names_unwritable_directory(candidate: &str, payload: &str, base: Option<&str>) -> bool {
-    if payload.to_ascii_lowercase().contains("shutil.copy2(") {
+/// `false` for an UNPADDED literal and the literal is probed exactly as before.
+///
+/// Backlog 8bb1cec8: under `shutil.copy2(` a literal with leading or trailing
+/// whitespace is not that exception. `copy2` (Python) receives the string
+/// verbatim, so `" / "` names the relative path `" / "`, never the directory
+/// `/` the trimmed candidate resolves to; such a literal is in practice the
+/// path-join operator `new / "target"` paired out of the program by
+/// [`quoted_string_literals`], and probing its trimmed form reported "it
+/// writes `/`" with recoverability facts about the filesystem root. A padded
+/// directory literal is therefore treated like any other directory literal:
+/// not a write target. `literal` is the untrimmed text; `candidate` its trim.
+///
+/// A path whose kind cannot be read (`metadata` fails, relative with no base)
+/// is also `false`: unknown stays on the probing side.
+fn names_unwritable_directory(
+    literal: &str,
+    candidate: &str,
+    payload: &str,
+    base: Option<&str>,
+) -> bool {
+    if payload.to_ascii_lowercase().contains("shutil.copy2(") && literal == candidate {
         return false;
     }
     crate::reversible::resolve(candidate, base)
@@ -343,12 +382,24 @@ fn names_unwritable_directory(candidate: &str, payload: &str, base: Option<&str>
 
 /// The overwrite-shaped call in `payload`, if any. Case-folded for the same
 /// reason as [`interpreter_destructive_call`].
-fn interpreter_write_call(payload: &str) -> Option<&'static str> {
+///
+/// Two sources, either one suffices: the fixed spellings in
+/// [`INTERPRETER_WRITE_CALLS`], and the STRUCTURAL mode judgement of every
+/// `open(...)`-family call in [`open_mode::write_capable_open`] (backlog
+/// 6cac93af) — a literal mode containing `w`/`a`/`x`/`+` (or Perl's `>`) is
+/// write-capable, a non-zero integer mode/flags is write-capable, a mode that
+/// cannot be determined statically is treated as write-capable, and so is any
+/// program that uses the name `open` other than as a call (an import or
+/// alias); an absent or read-only mode (`'r'`, `'rb'`, `'rt'`) is not.
+/// `python_code` says `payload` is known Python program text, which lets that
+/// judgement look only at code tokens (see the module doc of `open_mode`).
+fn interpreter_write_call(payload: &str, python_code: bool) -> Option<&'static str> {
     let lowered = payload.to_ascii_lowercase();
     INTERPRETER_WRITE_CALLS
         .iter()
         .find(|needle| lowered.contains(**needle))
         .copied()
+        .or_else(|| open_mode::write_capable_open(payload, python_code))
 }
 
 /// Whether EVERY occurrence of `literal` in `payload` is positively a
@@ -815,6 +866,36 @@ pub(super) fn quoted_string_literals(payload: &str) -> Vec<String> {
     out
 }
 
+/// Which reader runs the program [`interpreter_code_verdict`] judges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PythonReader {
+    /// Not Python (another interpreter, or a reader not known to be Python).
+    NotPython,
+    /// `python -c '…'`: the inline-eval program.
+    InlineEval,
+    /// A program `python` reads from stdin (a here-document, a here-string,
+    /// `/dev/stdin`, a pipe).
+    Stdin,
+}
+
+/// What [`Ctx::program_text_redirects`] points at while
+/// [`interpreter_code_verdict`] runs its shell pass over program text.
+pub(super) struct ProgramTextSink {
+    /// The R2 rows: truncating redirects whose target cannot be determined,
+    /// recorded instead of denied (see [`Ctx::program_text_redirects`]).
+    pub(super) rows: std::cell::RefCell<Vec<String>>,
+    /// True ONLY for an inline PYTHON program the Python tokenizer showed never
+    /// hands a string to a shell or a process (#1626, user ruling 2026-11-07;
+    /// see "PYTHON STRINGS ARE DATA" on [`interpreter_code_verdict`]). Then a
+    /// truncating redirect with a DETERMINABLE target, which the redirect arm
+    /// would otherwise deny on its recoverability, is not denied: it is a `>`
+    /// inside a Python string, or Python's comparison operator. Undeterminable
+    /// targets still become R2 rows (an Ask), and every earlier refusal of the
+    /// redirect arm (protected path, system directory, unplaceable target)
+    /// still applies.
+    pub(super) redirects_are_data: bool,
+}
+
 /// Judge interpreter code that this command will execute.
 ///
 /// The arm this replaces returned a flat `Deny` on the SHAPE of the invocation,
@@ -839,14 +920,63 @@ pub(super) fn quoted_string_literals(payload: &str) -> Vec<String> {
 /// still wins. When another Ask is the result, the redirect finding and the
 /// marker are appended to it, so the downgrade never disappears from the
 /// reason.
+///
+/// PYTHON STRINGS ARE DATA (#1626, user ruling 2026-11-07). `python` is true
+/// only for an inline-eval PYTHON program (`python3 -c '…'`). When, in
+/// addition, every payload passes
+/// [`python_file::python_strings_never_reach_a_shell`] (read with the Python
+/// tokenizer) and no payload carries a [`SHELL_STRING_EXEC_MARKERS`] or
+/// dynamic-execution marker anywhere, the shell pass runs with
+/// [`ProgramTextSink::redirects_are_data`]: a `>` whose target IS determinable is
+/// not denied, because in that program it is a string's contents or Python's
+/// comparison operator — `python3 -c 's="> F"; print(s)'` is Allow. Any other
+/// program (one that does not tokenise, imports a module outside the
+/// allowlist, or references a runner) is judged exactly as before; an
+/// undeterminable target still resolves to the R2 Ask; every other check is
+/// unchanged. `strings_are_data` (only from the `python3 - <<'EOF'` audit,
+/// [`python_file::python_stdin_body_reading`]) stops the descent at layer 0:
+/// the parser showed no string of that program reaches a shell or a process.
+///
+/// `reader` says whether PYTHON reads the layer-0 program
+/// ([`PythonReader`]). `python` above is [`PythonReader::InlineEval`] only;
+/// the Python literal reading (backlog 47b20647) applies to both Python
+/// readers: each non-raw literal's decoded value is judged as well, and a
+/// literal that is not fully decoded (`\N{…}`, a malformed escape) is judged
+/// by [`python_literal_target::unknown_literal_target_verdict`].
 pub(super) fn interpreter_code_verdict(
     shape: &str,
     payloads: &[String],
     depth: usize,
     ctx: &Ctx<'_>,
     expansion_possible: bool,
+    reader: PythonReader,
+    strings_are_data: bool,
 ) -> Decision {
-    let redirects = std::cell::RefCell::new(Vec::new());
+    let python = reader == PythonReader::InlineEval;
+    let python_reader = reader != PythonReader::NotPython;
+    // Python ends a line at CR and CRLF too (backlog a66c115c); every reader
+    // below ends one only at `\n`, so a Python program is judged as CPython
+    // reads it ([`python_file::python_newlines`]).
+    let translated: Vec<String>;
+    let payloads = if python_reader {
+        translated = payloads
+            .iter()
+            .map(|p| python_file::python_newlines(p).into_owned())
+            .collect();
+        &translated[..]
+    } else {
+        payloads
+    };
+    let redirects = ProgramTextSink {
+        rows: std::cell::RefCell::new(Vec::new()),
+        redirects_are_data: python
+            && !payloads.is_empty()
+            && payloads.iter().all(|p| {
+                !runs_shell_strings(p)
+                    && !has_dynamic_code_execution(p)
+                    && python_file::python_strings_never_reach_a_shell(p)
+            }),
+    };
     let program_ctx = Ctx {
         program_text_redirects: Some(&redirects),
         ..ctx.clone()
@@ -858,7 +988,7 @@ pub(super) fn interpreter_code_verdict(
         depth,
         ctx,
         &program_ctx,
-        expansion_possible,
+        (expansion_possible, strings_are_data, python, python_reader),
         &mentions,
     );
     // A destructive spelling that `inert_literal_bodies` showed sits only inside
@@ -907,7 +1037,7 @@ files or directories outright) is not called"
             }
         }
     };
-    let redirects = redirects.into_inner();
+    let redirects = redirects.rows.into_inner();
     let Some(first) = redirects.first() else {
         return verdict;
     };
@@ -985,7 +1115,7 @@ fn interpreter_program_verdict(
     depth: usize,
     ctx: &Ctx<'_>,
     program_ctx: &Ctx<'_>,
-    expansion_possible: bool,
+    (expansion_possible, strings_are_data, python, python_reader): (bool, bool, bool, bool),
     mentions: &Mentions,
 ) -> Decision {
     // Descend through nested quoting rather than stopping at the first layer.
@@ -1030,7 +1160,8 @@ fn interpreter_program_verdict(
     }
     let mut layer: Vec<String> = payloads.to_vec();
     for depth_of_layer in 0..MAX_QUOTE_LAYERS {
-        if layer.is_empty() {
+        // Deeper layers are string contents: not code when `strings_are_data`.
+        if layer.is_empty() || (strings_are_data && depth_of_layer > 0) {
             break;
         }
         let mut next = Vec::new();
@@ -1118,11 +1249,13 @@ files or directories outright if that string is run as code; blastguard cannot s
             // the program text itself (layer 0) keeps them, and a Deny from the
             // literal still returns below. A program that hands strings to a
             // shell keeps every row.
-            let sink_rows = program_ctx.program_text_redirects.map(|s| s.borrow().len());
+            let sink_rows = program_ctx
+                .program_text_redirects
+                .map(|s| s.rows.borrow().len());
             let verdict = super::detect_bash(payload, depth + 1, program_ctx);
             if depth_of_layer > 0 && !shell_strings {
                 if let (Some(sink), Some(rows)) = (program_ctx.program_text_redirects, sink_rows) {
-                    sink.borrow_mut().truncate(rows);
+                    sink.rows.borrow_mut().truncate(rows);
                 }
             }
             match verdict {
@@ -1140,7 +1273,32 @@ files or directories outright if that string is run as code; blastguard cannot s
                 }
                 Decision::Ask(_) | Decision::Allow => {}
             }
-            let literals = quoted_string_literals(payload);
+            let mut literals = quoted_string_literals(payload);
+            // PYTHON LITERAL VALUES (backlog 47b20647). The bodies above are
+            // the text between the quotes; Python's value of a non-raw literal
+            // decodes its escapes and REMOVES a backslash-newline, so
+            // `open('/etc/ho\<LF>sts','w')` writes `/etc/hosts` while its body
+            // holds an LF the candidate loop below skips as whitespace. The
+            // layer-0 text of a program PYTHON reads (`python -c`, or a
+            // program fed to `python` on stdin: `python_reader`) is read with
+            // the Python lexer and every decoded value that differs from the
+            // bodies is judged as well — an added reading, never a
+            // replacement. A literal that is not fully decoded (`\N{…}`, a
+            // malformed escape) is judged below by
+            // `python_literal_target::unknown_literal_target_verdict`.
+            let mut unknown_values = Vec::new();
+            if python_reader && depth_of_layer == 0 {
+                for value in python_semantics::literal_values(payload) {
+                    match value {
+                        python_escape::Decoded::Value(text) => {
+                            if !text.trim().is_empty() && !literals.contains(&text) {
+                                literals.push(text);
+                            }
+                        }
+                        other => unknown_values.push(other),
+                    }
+                }
+            }
             // GATE-DISABLING axis, checked on the OBJECTS rather than the verbs.
             //
             // `perl -e "unlink q{.githooks/pre-commit}"` reached Allow while
@@ -1188,7 +1346,9 @@ files or directories outright if that string is run as code; blastguard cannot s
                     return Decision::Deny(reason);
                 }
             }
-            let write_call = interpreter_write_call(payload);
+            // Only the layer-0 text of a `python` invocation is known to be
+            // Python, so only it is read with the Python lexer.
+            let write_call = interpreter_write_call(payload, python && depth_of_layer == 0);
             let mut probed = 0usize;
             for literal in &literals {
                 let candidate = literal.trim();
@@ -1234,12 +1394,16 @@ path — changing it changes which hooks and gates run, and blastguard will not 
                 // read-only `open(...)` consumed by a read is not the target
                 // (backlog 658b7839); anything not positively attributed that
                 // way is still probed.
-                if write_call.is_some()
-                    && probed < MAX_RECOVERY_PROBES
+                let write_target_candidate = write_call.is_some()
                     && candidate.contains('/')
                     && !literal_is_read_only_open(candidate, payload)
-                    && !names_unwritable_directory(candidate, payload, ctx.raw_base.as_deref())
-                {
+                    && !names_unwritable_directory(
+                        literal,
+                        candidate,
+                        payload,
+                        ctx.raw_base.as_deref(),
+                    );
+                if write_target_candidate && probed < MAX_RECOVERY_PROBES {
                     probed += 1;
                     let recovery = crate::reversible::probe(candidate, ctx.raw_base.as_deref());
                     if let crate::reversible::Recovery::Unrecoverable(why) = &recovery {
@@ -1270,10 +1434,81 @@ path — changing it changes which hooks and gates run, and blastguard will not 
                         }
                     }
                 }
+                // SYSTEM-DIRECTORY axis (backlog 0fbfe00d / e34eb0be). The
+                // probe above answers `NothingToDestroy` for a path that does
+                // not exist yet, which is the right answer about bytes and the
+                // wrong question for `/etc/sudoers.d/evil` or a new
+                // LaunchAgents plist: the file's EXISTENCE is the change. The
+                // direct forms (`>`, `tee`, `cp`) ask `system_path_block` for
+                // exactly this reason, and an interpreter carrying the same
+                // write must not answer less restrictively (user ruling
+                // 2026-11-07: system harm is Deny through any wrapper). Checked
+                // for every write-target literal, including those past the
+                // probe cap — it spawns nothing. A Deny returns at once; an Ask
+                // (the LaunchAgents ruling, or a landing whose symlinks cannot
+                // be resolved) is pending and outranked by any Deny later.
+                if write_target_candidate {
+                    let block = match super::system_path_block("interpreter write", candidate, ctx)
+                    {
+                        Some(d) => Some(d),
+                        None => {
+                            match super::real_system_path_block("interpreter write", candidate, ctx)
+                            {
+                                Ok(d) => d,
+                                Err(why) => Some(Decision::ask(format!(
+                                "{shape}, and it writes `{candidate}`, which could not be resolved \
+through its symlinks ({why}) — blastguard cannot tell whether it lands in a system directory, so \
+it refuses to guess"
+                            ))),
+                            }
+                        }
+                    };
+                    match block {
+                        Some(d) if d.is_deny() => return d,
+                        Some(ask) if pending_ask.is_none() => pending_ask = Some(ask),
+                        _ => {}
+                    }
+                }
+            }
+            // A Python literal that is not fully decoded is never a known,
+            // harmless path (backlog 47b20647): judged when the program writes.
+            if let Some(call) = write_call {
+                for value in &unknown_values {
+                    match python_literal_target::unknown_literal_target_verdict(
+                        shape, call, value, ctx,
+                    ) {
+                        Some(d) if d.is_deny() => return d,
+                        Some(ask) if pending_ask.is_none() => pending_ask = Some(ask),
+                        _ => {}
+                    }
+                }
             }
             next.extend(literals);
         }
         layer = next;
+    }
+    // Backlog f6dbff5b: a program PYTHON reads also has the paths of its
+    // path-mutating calls RESOLVED, not matched token by token
+    // (`os.chmod('/' 'etc/hosts', 0)` is a chmod of `/etc/hosts`), an
+    // unresolvable path being an Ask (`python_semantics::path_mutation_verdict`).
+    // Since backlog 17d985f1 that covers the `open`-family and pathlib writes
+    // too, a method's receiver resolved through `/` / `joinpath`
+    // (`(Path('/etc') / 'hosts').write_text('x')`), and the destination of a
+    // one-argument `.replace(dst)` / `.rename(dst)`. Since backlog c8bf27ea
+    // also those callables reached other than by a direct call (unbound
+    // `Path.m(recv, …)`, `w = X.m; w(…)`, `.__call__`, a passed reference).
+    // Run after the descent, so a Deny the descent earned keeps its reason; a
+    // Deny here still outranks any Ask the descent recorded.
+    if python_reader {
+        for payload in payloads {
+            match python_semantics::path_mutation_verdict(payload, depth, ctx) {
+                d @ Decision::Deny(_) => return d,
+                a @ Decision::Ask(_) => {
+                    pending_ask.get_or_insert(a);
+                }
+                Decision::Allow => {}
+            }
+        }
     }
     // The whole descent ran without a Deny; an Ask it recorded now stands.
     if let Some(ask) = pending_ask {
@@ -1311,83 +1546,9 @@ read, so it cannot tell whether anything here is irreversible"
     // placeholder", and the mirror closure in
     // `tests/inline_eval_mirror_closure.rs` would be re-opened through a
     // spelling it does not enumerate.
-    // NOR IS TEXT THAT BUILDS ITS OWN CODE. Same principle as the shell
-    // expansion below, one level in: a program that decodes, concatenates or
-    // looks up the name of what it is about to call is not described by its own
-    // source. `getattr(__import__('os'), 'sys' + 'tem')('wipefs -a /dev/sda')`
-    // contains no `os.system` for any scan to find, and
-    // `exec(bytes.fromhex('…'))` contains no operation at all until it runs.
-    // All four spellings were measured reaching Allow on 2026-09-09.
-    //
-    // Be clear about what this is and is not. It IS a list, and a list can be
-    // short. It is not the v0.2.57 mistake, because it does not enumerate
-    // effects (open-ended, and a miss there meant "allow"); it enumerates the
-    // constructs that make the text unfaithful to the program, and a miss means
-    // the text is taken at face value — the same standing this arm already
-    // gives text with no marker in it at all. Adding a spelling here is a
-    // strict improvement; the set never has to be complete to be sound in the
-    // direction it moves.
-    const CODE_BUILDING: &[&str] = &[
-        "exec(",
-        "eval(",
-        "compile(",
-        "getattr(",
-        "__import__",
-        "__builtins__",
-        "__getattribute__",
-        "globals()[",
-        "vars(",
-        "sys.modules[",
-        "b64decode",
-        "fromhex(",
-        "decode('hex'",
-        "instance_eval",
-        "class_eval",
-        "kernel.send",
-        ".send \"",
-        ".send '",
-        "new function(",
-        "settimeout(\"",
-        "settimeout('",
-        // Execution reached through a PATH or a SERIALISED OBJECT rather than
-        // through source text. Each of these runs code the command line does
-        // not contain, so the text that was read describes the loader and not
-        // the program. All measured reaching Allow on 2026-09-09.
-        "runpy.",
-        "run_path(",
-        "import_module(",
-        "pickle.load",
-        "marshal.load",
-        "functiontype(",
-        "yaml.unsafe_load",
-        "yaml.load(",
-        // `os.system(open(…).read())` — a shell command assembled at run time.
-        // The literal-argument spellings never reach here: the descent hands
-        // them to `analyze_shell_payload`, which denies `os.system('mkfs …')`
-        // several lines above.
-        "system(open(",
-        "system(f\"",
-        "system(f'",
-        "popen(open(",
-    ];
+    // NOR IS TEXT THAT BUILDS ITS OWN CODE: see [`code_building::CODE_BUILDING`].
     for payload in payloads {
-        let lowered = payload.to_ascii_lowercase();
-        // `compile(` is the one marker with a common unrelated spelling:
-        // `re.compile(` builds a regex, not code (backlog 80b18990). It is
-        // exempted only occurrence by occurrence, and only when
-        // `compile_call_is_regex_method` positively establishes the regex
-        // module; any other occurrence still fires.
-        let fires = |m: &&&str| {
-            let m: &str = m;
-            if m == "compile(" {
-                lowered
-                    .match_indices("compile(")
-                    .any(|(at, _)| !compile_call_is_regex_method(payload, at))
-            } else {
-                lowered.contains(m)
-            }
-        };
-        if let Some(marker) = CODE_BUILDING.iter().find(fires) {
+        if let Some(marker) = code_building_marker(payload) {
             return Decision::ask(format!(
                 "{shape}, and that program builds or decodes the code it runs (`{marker}`) — the \
 text on the command line is not the program that will execute, so blastguard cannot tell whether \
@@ -1511,340 +1672,4 @@ anything here is irreversible"
     // unchanged. Nothing beyond that downgrade was ruled; the rest still needs
     // the ruling again.
     Decision::Allow
-}
-
-/// The operand that makes an interpreter read its program from STDIN rather
-/// than from a file. `python3 -` and `python3 /dev/stdin` execute whatever is
-/// piped, here-doc'd or here-string'd in — the same capability as `-c`, which
-/// is why leaving these at `Allow` was the mirror fail-open: the `-c` shape was
-/// denied while every stdin spelling of it went unjudged.
-/// Judge a code-interpreter invocation: `python3`, `perl`, `ruby`, `node`,
-/// `php`, `lua`.
-///
-/// Two shapes reach the same capability — running arbitrary code — and before
-/// this function only the first was judged at all:
-///
-/// 1. **Inline eval** (`python3 -c "…"`): was a flat `Deny` on shape, with the
-///    program never read. Now the program is audited; see
-///    [`interpreter_code_verdict`].
-/// 2. **stdin / substituted source** (`python3 -`, `python3 /dev/stdin`,
-///    `python3 - <<EOF`, `python3 <<<"…"`, `python3 <(…)`): every one of these
-///    was `Allow`. That is the mirror fail-open — the same file already treats
-///    `… | python3` as a code-exec sink in [`stage_is_interpreter_terminal`],
-///    so it reached opposite conclusions about the same capability.
-///
-/// Running a script FILE (`python3 app.py`, `python3 -m http.server`) stays
-/// `Allow`: the interpreter is not being handed a program on the command line,
-/// and the file's contents are outside what a command-line gate can see. The
-/// one exception is an in-place edit (`perl -i -p t.pl <file>`,
-/// `ruby -i -n s.rb <file>`): its operands are files it rewrites, so they go
-/// through the same [`protected_operand_ask`] check as the inline-eval arm, and
-/// a protected gate/config operand asks.
-pub(super) fn analyze_code_interpreter(
-    cmd: &str,
-    rest: &[&str],
-    depth: usize,
-    ctx: &Ctx<'_>,
-) -> Decision {
-    if strip_version_suffix(cmd) == "osascript" {
-        if let Some(deny) = osascript_app_delete(rest) {
-            return deny;
-        }
-    }
-    if let Some(pos) = interpreter_inline_eval_pos(cmd, rest) {
-        let mut payloads = interpreter_payloads_after(rest, pos);
-        // Glued forms, where the program is in the SAME token as the flag:
-        // short `-c<payload>` and long `--eval=<payload>`.
-        let flag = rest[pos];
-        if let Some((_, value)) = flag.split_once('=') {
-            payloads.extend(inline_command_payloads(rest, pos, value));
-        } else if is_short_flag(flag) {
-            let letters = interpreter_eval_flag_letters(cmd);
-            if let Some(idx) = flag[1..].find(|c: char| letters.contains(c)) {
-                payloads.extend(inline_command_payloads(rest, pos, &flag[1 + idx + 1..]));
-            }
-        }
-        let verdict = interpreter_code_verdict(
-            &format!("`{cmd}` is invoked with an inline-eval flag"),
-            &payloads,
-            depth,
-            ctx,
-            true,
-        );
-        if !matches!(verdict, Decision::Allow) {
-            return verdict;
-        }
-        // An interpreter is also an EDITOR. `perl -i -pe 's/x//' .githooks/pre-commit`
-        // has a harmless program and a gate file for an operand, and until the
-        // arm above started allowing benign programs, its blanket Ask was the
-        // only thing stopping it.
-        if let Some(ask) = protected_operand_ask(cmd, rest, interpreter_edits_in_place(cmd, rest)) {
-            return ask;
-        }
-        return Decision::Allow;
-    }
-
-    // `analyze_command_at` is handed TOKENS, not the raw segment, so the
-    // operand text is reassembled here. Whitespace-joining is lossless for the
-    // purpose of auditing: the here-document body, the here-string and the
-    // process-substitution payload all survive as text.
-    let text = rest.join(" ");
-    let stdin_operand = interpreter_stdin_operand(rest);
-    let opens_heredoc = opens_here_document(&text);
-    let mut payloads: Vec<String> = here_string_operands(&text)
-        .into_iter()
-        .map(|(payload, _)| payload)
-        .collect();
-    // A PROCESS SUBSTITUTION IS A COMMAND, NOT A PROGRAM. `python3 <(cat
-    // evil.py)` hands the interpreter a `/dev/fd/…` file whose contents are the
-    // OUTPUT of `cat evil.py` — so the substitution's own text says as little
-    // about the program as the upstream stage of `cat evil.py | python3` does,
-    // which is nothing. Pushing it verbatim made `payloads` non-empty and so
-    // walked straight past the empty-set guard below; measured 2026-09-09,
-    // `python3 <(cat evil.py)` and `node <(cat evil.js)` reached Allow while
-    // their pipe twins asked, and the Deny on the destructive spellings was
-    // incidental — it came from analysing the inner `echo`'s literal, not from
-    // any reading of the program.
-    //
-    // Taking the inner command's string LITERALS is the same rule the pipe arm
-    // in `analyze_interpreter_stdin_exec` already uses: `<(echo "console.log(1)")`
-    // is readable and benign, `<(cat evil.py)` yields nothing and falls to the
-    // empty-set Ask. The two mirrors now answer alike.
-    let subs = process_substitution_payloads(&text);
-    let has_process_substitution = !subs.is_empty();
-    for sub in &subs {
-        payloads.extend(quoted_string_literals(sub));
-    }
-    if opens_heredoc {
-        // The here-document body is whatever follows the `<<TAG` token; hand
-        // the whole operand text to the auditor rather than trying to find the
-        // terminator, since a missed terminator must not silence the audit.
-        payloads.push(text.clone());
-    }
-
-    // An in-place editor is an EDITOR whatever supplies its program. The
-    // inline-eval arm above is not the only way to hand `perl -i` / `ruby -i`
-    // a program: `perl -i.bak -p t.pl .githooks/pre-commit` reads it from a
-    // script FILE and rewrites the protected operand exactly as
-    // `perl -i -pe …` does. Before CA-blastguard-01 (2026W39) this shape fell
-    // straight through to the script-file `Allow` below with no protected-path
-    // check at all, so the gate file was rewritten without ever being asked.
-    // Only in-place invocations are judged here: they are the ones whose
-    // trailing tokens are file operands with certainty (see
-    // [`interpreter_edits_in_place`]).
-    let in_place_ask = if interpreter_edits_in_place(cmd, rest) {
-        protected_operand_ask(cmd, rest, true)
-    } else {
-        None
-    };
-
-    if stdin_operand.is_none() && !opens_heredoc && !has_process_substitution && payloads.is_empty()
-    {
-        // A script file, a module, or a bare REPL. Nothing on this command line
-        // is a program to audit — but an in-place edit of a protected operand
-        // is still a gate-disabling write and asks.
-        return in_place_ask.unwrap_or(Decision::Allow);
-    }
-
-    let shape = match stdin_operand {
-        Some(op) => format!("`{cmd} {op}` reads its program from stdin"),
-        None if opens_heredoc => format!("`{cmd}` is fed a here-document"),
-        None => format!("`{cmd}` is fed a substituted source"),
-    };
-    let verdict = interpreter_code_verdict(
-        &shape,
-        &payloads,
-        depth,
-        ctx,
-        !here_document_delimiter_is_quoted(&text),
-    );
-    if matches!(verdict, Decision::Allow) {
-        if let Some(ask) = in_place_ask {
-            return ask;
-        }
-    }
-    verdict
-}
-
-fn is_python_ident_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
-/// Whether the `compile(` occurrence at byte offset `at` of `payload` is a
-/// regex-module method call, `re.compile(` or `regex.compile(`, and so not the
-/// builtin `compile` that turns a string into code (backlog 80b18990).
-///
-/// `at` is an offset into the ASCII-lowercased payload; lowercasing preserves
-/// byte offsets, and every check here is made case-sensitively on the original
-/// text (Python is case-sensitive: `RE.compile(` or `re.COMPILE(` is not
-/// exempt).
-///
-/// Accepted only when ALL of these hold:
-/// - the text at `at` is exactly `compile(`, immediately preceded by `re.` or
-///   `regex.`, and the character before the module name is neither an
-///   identifier character nor `.` (so `myre.compile(` and `x.re.compile(` are
-///   not exempt);
-/// - `module_bound_only_by_import` establishes that the name is bound by a
-///   plain module-level `import` and is used nowhere else except as
-///   `name.attr` reads.
-///
-/// What this does NOT prove: that the program cannot reach code execution by
-/// some other route (e.g. `c = builtins.compile; c(src, 'f', 'exec')`, which
-/// contains no `compile(` at all, or replacing `re.compile` through a module
-/// handle obtained without writing the name). Such programs already evade the
-/// `CODE_BUILDING` scan with or without this helper; this helper only removes
-/// the misattribution of the regex call and never exempts an occurrence it
-/// cannot positively identify — anything it does not recognise returns
-/// `false`, so the marker still fires.
-fn compile_call_is_regex_method(payload: &str, at: usize) -> bool {
-    let Some(tail) = payload.get(at..) else {
-        return false;
-    };
-    if !tail.starts_with("compile(") {
-        return false;
-    }
-    let Some(head) = payload.get(..at) else {
-        return false;
-    };
-    for module in ["re", "regex"] {
-        let Some(before_module) = head.strip_suffix('.').and_then(|h| h.strip_suffix(module))
-        else {
-            continue;
-        };
-        if before_module
-            .chars()
-            .next_back()
-            .is_some_and(|c| is_python_ident_char(c) || c == '.')
-        {
-            continue;
-        }
-        return module_bound_only_by_import(payload, module);
-    }
-    false
-}
-
-/// Whether `name` is bound in `payload` only by a plain module-level import
-/// and otherwise used only to read attributes of it.
-///
-/// Accepted only when ALL of these hold (checked case-sensitively):
-/// - there is an UNINDENTED line that is `import <items>` where one
-///   comma-separated item, trimmed, is exactly `name` (`import re`,
-///   `import os, re`), and no triple quote (`'''` / `"""`) appears anywhere
-///   before that line (so the line is not inside a multi-line string);
-/// - every other whole-word occurrence of `name` comes after that line, is not
-///   preceded by `.`, and is followed by `.` and an attribute name that does
-///   not start with `_`, after which the next non-blank character is none of
-///   `.`, `[`, `:`, or an assignment `=` (a lone `=`, or `=` following an
-///   operator character other than in `==`);
-/// - the payload contains no star import anywhere (`payload_has_star_import`):
-///   `from m import *` can rebind `name` without spelling it.
-///
-/// This rejects the rebinding spellings that write the name
-/// (`import builtins as re`, `from x import y as re`, `re = …`,
-/// `from … import re`, `global re`, `for re in`, `def re(`, `class re`,
-/// `lambda re`, `del re`, `re` passed as an argument, `'re'` in a string,
-/// `re.compile = …`, `re.__dict__`) because none of them is an attribute read,
-/// and the star import, which rebinds without writing the name. Rejection is
-/// the conservative direction.
-///
-/// What this does NOT prove:
-/// - that the module object has not been altered through a handle that never
-///   spells `name` as a word (for example via `sys.modules.get('r' + 'e')`);
-/// - that an imported module (e.g. a local `.py` file next to the program)
-///   does not monkeypatch `re` / `re.compile` when it is imported. That code is
-///   not in the program text. The gap predates this exemption: importing such
-///   a module already runs arbitrary code that no scan of this text sees.
-///
-/// See `compile_call_is_regex_method`.
-fn module_bound_only_by_import(payload: &str, name: &str) -> bool {
-    if payload_has_star_import(payload) {
-        return false;
-    }
-    // Locate the binding import line: [start, end) byte range.
-    let mut binding: Option<(usize, usize)> = None;
-    let mut offset = 0;
-    for raw in payload.split_inclusive('\n') {
-        let start = offset;
-        offset += raw.len();
-        let line = raw.trim_end_matches(['\n', '\r']).trim_end();
-        let Some(items) = line.strip_prefix("import ") else {
-            continue;
-        };
-        if !items.split(',').any(|item| item.trim() == name) {
-            continue;
-        }
-        let Some(before) = payload.get(..start) else {
-            return false;
-        };
-        if before.contains("'''") || before.contains("\"\"\"") {
-            return false;
-        }
-        binding = Some((start, offset));
-        break;
-    }
-    let Some((bind_start, bind_end)) = binding else {
-        return false;
-    };
-
-    for (at, _) in payload.match_indices(name) {
-        let (Some(head), Some(tail)) = (payload.get(..at), payload.get(at + name.len()..)) else {
-            return false;
-        };
-        let prev = head.chars().next_back();
-        if prev.is_some_and(is_python_ident_char) {
-            continue; // part of a longer identifier (`myre`)
-        }
-        if tail.chars().next().is_some_and(is_python_ident_char) {
-            continue; // part of a longer identifier (`regex`, `rest`)
-        }
-        if at >= bind_start && at < bind_end {
-            continue; // the binding import itself
-        }
-        if at < bind_start || prev == Some('.') {
-            return false;
-        }
-        let Some(attr) = tail.strip_prefix('.') else {
-            return false;
-        };
-        if !attr.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
-            return false;
-        }
-        let after_attr = attr.trim_start_matches(is_python_ident_char);
-        let after_attr = after_attr.trim_start_matches([' ', '\t']);
-        let mut chars = after_attr.chars();
-        let next = chars.next();
-        let second = chars.next();
-        match next {
-            Some('.' | '[' | ':') => return false,
-            Some('=') if second != Some('=') => return false,
-            Some('+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '<' | '>' | '@' | '!')
-                if second == Some('=') || matches!(second, Some('<' | '>' | '*' | '/')) =>
-            {
-                // Augmented assignment (`+=`, `<<=`, `**=`, `//=`, …) or a
-                // comparison; either way not a plain attribute read we vouch for.
-                return false;
-            }
-            _ => {}
-        }
-    }
-    true
-}
-
-/// Whether `payload` may contain a star import (`from m import *`).
-///
-/// Deliberately over-approximate (fail-closed): it returns true when ANY
-/// occurrence of the text `import`, anywhere in the payload (indented or not,
-/// after `;`, inside a string or comment), is followed — after any run of
-/// whitespace, newlines, `\` line continuations and `(` — by `*`. That covers
-/// `import *`, `import*`, `import (*`, `import(*` and
-/// `import \` + newline + `*`. A false positive only means the `re.compile(`
-/// exemption is withheld and the marker asks.
-fn payload_has_star_import(payload: &str) -> bool {
-    payload.match_indices("import").any(|(at, kw)| {
-        payload
-            .get(at + kw.len()..)
-            .unwrap_or("*")
-            .trim_start_matches(|c: char| c.is_whitespace() || c == '\\' || c == '(')
-            .starts_with('*')
-    })
 }

@@ -144,9 +144,10 @@ impl Config {
         // Workspace-trust gate: the escape-hatch `command` is run via `sh -c`, so
         // a project-local `beacon.toml` shipped by an untrusted repository must not
         // be allowed to execute it. Drop the project-sourced command unless the
-        // project root is trusted: explicitly listed, HARNESS_TRUST_ALL set, or a
-        // linked git worktree of a trusted main worktree (`trust::resolve`, the
-        // same worktree-inheritance rule donegate uses).
+        // project root is trusted: explicitly listed or HARNESS_TRUST_ALL set
+        // (`trust::resolve`; no worktree inheritance since 2026-11-08). beacon
+        // is a notifier, not a gate: dropping the command loses a notification,
+        // never a verdict.
         // Built-in channels (desktop/slack/webhook) and the home/default config
         // are unaffected — only the project-derived command is gated.
         if from_project && cfg.command.is_some() && !harness_core::trust::resolve(root).is_trusted()

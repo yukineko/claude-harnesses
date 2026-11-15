@@ -66,7 +66,11 @@ Fail→Pass ゲート（`condukt state check-oracle`）が `fix`/`feature` タ�
 
 ### 設定（`tdd.toml`）
 
-プロジェクト直下の `./tdd.toml`（無ければ `~/.tdd/config.toml`、それも無ければ言語を見た既定値）を読む。主なキー:
+プロジェクト直下の `./tdd.toml`（無ければ `~/.tdd/config.toml`、それも無ければ言語を見た既定値）を読む。
+読むべき設定ファイルが存在するのに読めない・parse できない（例: `mode = "strictt"`、閉じていない配列）場合は
+既定値へ黙って倒さない。Stop hook はファイル名と error を示してブロックし、`tdd red`/`green`/`verify`/
+`oracle` は exit 1 で拒否する（ファイルを直すか、既定値を意図して使うなら削除する。1 回だけ通すなら
+`tdd skip --reason "..."`）。主なキー:
 
 ```toml
 enabled = true

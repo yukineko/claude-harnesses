@@ -15,17 +15,25 @@ use crate::config::Config;
 use crate::lock;
 
 mod dirty_tracked;
-mod lint_gate;
 mod merge_gate;
+mod merge_recovery;
 pub use dirty_tracked::refuse_uncommitted_task_worktree;
 use merge_gate::{ensure_base_on_default_branch, ensure_commits_carry_task_trailer};
+use merge_recovery::{abort_state_phrase, abort_trial_merge, run_merge_recovering_timeout};
 
 /// Every `git` subprocess spawned by this module is bounded by this timeout.
 /// worktree lifecycle ops (add/remove/merge/status) are expected to be local
 /// and fast, but a hung `git` (lock contention, a stuck credential helper
 /// prompt, a network-mounted repo, corrupted pack, etc.) must not block a
 /// condukt run indefinitely. 45s is generous for any of the local ops this
-/// module performs while still bounding worst-case hangs.
+/// module performs while still bounding worst-case hangs. A killed `git merge`
+/// can leave the tree half-applied or a stale `index.lock`; every merge that
+/// commits onto the default branch ([`merge`]'s final merge, the store-diff
+/// path, and [`resolve_merge`]'s strategies) goes through
+/// [`run_merge_recovering_timeout`], which rolls back and verifies
+/// ([`merge_recovery::recover_timed_out_merge`]) or reports the tree HALF-APPLIED / the lock
+/// (`tests/backlog_merge_timeout_other_paths_20261108.rs`). The no-commit trial
+/// merge is aborted by [`abort_trial_merge`], which names a stale lock.
 const GIT_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Output captured from a (possibly timed-out) git invocation.
@@ -570,7 +578,7 @@ pub fn registered_branch(repo: &Path, path: &Path) -> Determination<Option<Strin
 /// exists, join the rest" shape used in `harness-core::store::write_note_named`
 /// so a raw (non-canonical) prefix — a symlinked temp dir, a WSL/DrvFs mount —
 /// can't make an identity/prefix check disagree with what git will actually see.
-fn canonicalize_prefix(path: &Path) -> PathBuf {
+pub(crate) fn canonicalize_prefix(path: &Path) -> PathBuf {
     if let Ok(c) = path.canonicalize() {
         return c;
     }
@@ -1073,42 +1081,6 @@ fn git_diff_range(repo: &Path, from: &str, to: &str) -> String {
     git(repo, &["diff", &format!("{from}...{to}")]).unwrap_or_default()
 }
 
-/// Abort an in-progress trial merge and say truthfully what state it left.
-/// `Ok(())` when no merge is in progress afterwards: either `git merge --abort`
-/// succeeded, or it failed AND a probe shows MERGE_HEAD absent (git refused the
-/// trial before creating merge state, so there is nothing to abort and the tree
-/// is untouched). A merge still in progress, or a probe that cannot be run or
-/// returns an unexpected status, is `Err(detail)` (cannot-determine stays
-/// fail-closed: the repo may be left mid-merge).
-fn abort_trial_merge(repo: &Path) -> std::result::Result<(), String> {
-    let detail = match git_try(repo, &["merge", "--abort"]) {
-        Ok((true, _, _)) => return Ok(()),
-        Ok((false, out, err)) => format!("{} {}", out.trim(), err.trim()).trim().to_string(),
-        Err(e) => format!("{e:#}"),
-    };
-    // `rev-parse -q --verify`: exit 0 = MERGE_HEAD present, 1 = absent.
-    match git_exit_code(repo, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]) {
-        Ok(1) => Ok(()),
-        Ok(0) => Err(format!("{detail}; MERGE_HEAD is still present")),
-        Ok(c) => Err(format!(
-            "{detail}; MERGE_HEAD probe returned unexpected status {c}"
-        )),
-        Err(e) => Err(format!("{detail}; MERGE_HEAD probe failed: {e:#}")),
-    }
-}
-
-/// Self-contained sentence describing the trial-merge state, for a fail-closed
-/// error.
-fn abort_state_phrase(r: &std::result::Result<(), String>) -> String {
-    match r {
-        Ok(()) => "The trial merge was aborted (no merge in progress).".to_string(),
-        Err(d) => format!(
-            "The trial merge could NOT be aborted ({d}); the repository may be left \
-             mid-merge - run `git merge --abort`."
-        ),
-    }
-}
-
 /// Merge `branch` into the configured default branch. Verifies the repo is
 /// actually on the default branch first (verify -> act).
 ///
@@ -1124,6 +1096,9 @@ fn abort_state_phrase(r: &std::result::Result<(), String>) -> String {
 ///    cannot be written the trial is still aborted but `merge` returns `Err`
 ///    (nothing is on the review surface, so `Conflict` would be a false claim).
 /// 3. **Clean**: abort the trial and perform the real merge → [`MergeOutcome::Merged`].
+///    A timed-out real merge is rolled back ([`merge_recovery::recover_timed_out_merge`]) and
+///    is an `Err` saying "timed out" plus whether the rollback succeeded (else
+///    the manual recovery). See [`run_merge_recovering_timeout`].
 pub fn merge(
     cfg: &Config,
     repo: &Path,
@@ -1185,9 +1160,6 @@ pub fn merge(
     // exactly it, so a commit added to the branch after this check is not
     // carried along unchecked.
     let tip = ensure_commits_carry_task_trailer(repo, branch, default_branch, &base, cli_task)?;
-
-    // The pinned tip must be fmt/clippy clean (backlog 0a68823d); pre-checkout.
-    lint_gate::ensure_tip_lint_clean(repo, branch, default_branch, &base, &tip)?;
 
     // ── Pre-merge hold gate (decision A) ─────────────────────────────────────
     // A detected mid-flight actual-diff overlap HOLDS this branch for review.
@@ -1311,21 +1283,20 @@ pub fn merge(
 
     let short = branch.strip_prefix("refs/heads/").unwrap_or(branch);
     if let Some(pending) = pending_store {
-        merge_carrying_store_diff(repo, branch, short, &tip, &pending)?;
+        merge_carrying_store_diff(repo, branch, default_branch, short, &tip, &pending)?;
         finalize_landed_branch(repo, branch);
         return Ok(MergeOutcome::Merged);
     }
-    git(
-        repo,
-        &[
-            "merge",
-            "--no-edit",
-            "-m",
-            &format!("Merge branch '{short}'"),
-            &tip,
-        ],
-    )
-    .with_context(|| format!("merge of {branch} into {default_branch} failed"))?;
+    let head_before = git(repo, &["rev-parse", "--verify", "HEAD"])
+        .with_context(|| format!("could not read {default_branch}'s HEAD before the merge"))?;
+    let merge_msg = format!("Merge branch '{short}'");
+    let merge_args = ["merge", "--no-edit", "-m", &merge_msg, &tip];
+    let what = format!("merge of {branch} into {default_branch}");
+    // Backlog 8ada7ad9: a timed-out merge is rolled back and reported; nothing
+    // landed, so no `finalize_landed_branch`.
+    let out = run_merge_recovering_timeout(repo, &merge_args, &head_before, default_branch, &what)?;
+    git_output_to_result(out, repo, &merge_args, GIT_TIMEOUT)
+        .with_context(|| format!("{what} failed"))?;
     finalize_landed_branch(repo, branch);
     Ok(MergeOutcome::Merged)
 }
@@ -1455,6 +1426,7 @@ fn capture_pending_store_diff(
 fn merge_carrying_store_diff(
     repo: &Path,
     branch: &str,
+    default_branch: &str,
     short: &str,
     tip: &str,
     pending: &PendingStoreDiff,
@@ -1468,10 +1440,33 @@ fn merge_carrying_store_diff(
             abort_state_phrase(&aborted)
         )
     };
-    match git_try(repo, &["merge", "--no-commit", "--no-ff", tip]) {
-        Ok((true, _, _)) => {}
-        Ok((false, o, e)) => return Err(fail(format!("merge failed: {} {}", o.trim(), e.trim()))),
-        Err(e) => return Err(fail(format!("merge failed: {e:#}"))),
+    // Read before any mutation: the timed-out-merge rollback verifies HEAD
+    // against it. Unreadable is a refusal, not a merge without a rollback.
+    let head_before = git(repo, &["rev-parse", "--verify", "HEAD"]).with_context(|| {
+        format!(
+            "could not read HEAD before merging '{branch}' (nothing was merged; the .backlog \
+             diff in {} is left intact)",
+            pending.worktree.display()
+        )
+    })?;
+    // GH #1638: a timed-out merge is NOT handed to `fail` (its `merge --abort`
+    // fails on a stale index.lock and the absent MERGE_HEAD then read as
+    // "aborted"); it is rolled back and verified by the shared timeout path.
+    let merge_args = ["merge", "--no-commit", "--no-ff", tip];
+    let what = format!(
+        "merge of '{branch}' (carrying the .backlog diff of {}, left intact)",
+        pending.worktree.display()
+    );
+    match run_merge_recovering_timeout(repo, &merge_args, &head_before, default_branch, &what) {
+        Ok(out) if out.status.is_some_and(|s| s.success()) => {}
+        Ok(out) => {
+            let (o, e) = (
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr),
+            );
+            return Err(fail(format!("merge failed: {} {}", o.trim(), e.trim())));
+        }
+        Err(e) => return Err(e),
     }
     let patch = pending.patch.path().to_string_lossy().to_string();
     if let Err(e) = git(repo, &["apply", "--3way", "--index", &patch]) {
@@ -1600,10 +1595,6 @@ pub fn resolve_merge(cfg: &Config, repo: &Path, conflict_id: &str) -> Result<Res
     // the strategies below merge the verified `tip`, not the branch name.
     let base = ensure_base_on_default_branch(repo, branch, default_branch)?;
     let tip = ensure_commits_carry_task_trailer(repo, branch, default_branch, &base, None)?;
-    if !matches!(resolution.choice, ResolveChoice::Ours) {
-        // Twin of `merge`'s lint gate; `ours` lands nothing of the tip.
-        lint_gate::ensure_tip_lint_clean(repo, branch, default_branch, &base, &tip)?;
-    }
 
     git(repo, &["checkout", default_branch])
         .with_context(|| format!("could not checkout {default_branch} before resolve-merge"))?;
@@ -1616,27 +1607,33 @@ pub fn resolve_merge(cfg: &Config, repo: &Path, conflict_id: &str) -> Result<Res
         "Merge branch '{}'",
         branch.strip_prefix("refs/heads/").unwrap_or(branch)
     );
+    // Every strategy below commits onto `default_branch`; a timed-out merge
+    // (GH #1639: `-X theirs` killed in `pre-merge-commit` left the result
+    // staged with no MERGE_HEAD, unannounced) is rolled back and verified
+    // against this HEAD by `run_merge_recovering_timeout`, then is an `Err`.
+    let head_before = git(repo, &["rev-parse", "--verify", "HEAD"])
+        .with_context(|| format!("could not read {default_branch}'s HEAD before resolve-merge"))?;
     match resolution.choice {
         ResolveChoice::Ours => {
             // Keep our side; still record the merge so the branch is considered
             // merged and leaves the in-flight set.
-            git(
-                repo,
-                &["merge", "-s", "ours", "--no-edit", "-m", &msg, &tip],
-            )
-            .with_context(|| format!("`merge -s ours` of {branch} into {default_branch} failed"))?;
+            let args = ["merge", "-s", "ours", "--no-edit", "-m", &msg, &tip];
+            let what = format!("`merge -s ours` of {branch} into {default_branch}");
+            let out =
+                run_merge_recovering_timeout(repo, &args, &head_before, default_branch, &what)?;
+            git_output_to_result(out, repo, &args, GIT_TIMEOUT)
+                .with_context(|| format!("{what} failed"))?;
             finalize_landed_branch(repo, branch);
             Ok(ResolveOutcome::Reconciled(ResolveChoice::Ours))
         }
         ResolveChoice::Theirs => {
             // Favor the branch on conflicting hunks.
-            git(
-                repo,
-                &["merge", "-X", "theirs", "--no-edit", "-m", &msg, &tip],
-            )
-            .with_context(|| {
-                format!("`merge -X theirs` of {branch} into {default_branch} failed")
-            })?;
+            let args = ["merge", "-X", "theirs", "--no-edit", "-m", &msg, &tip];
+            let what = format!("`merge -X theirs` of {branch} into {default_branch}");
+            let out =
+                run_merge_recovering_timeout(repo, &args, &head_before, default_branch, &what)?;
+            git_output_to_result(out, repo, &args, GIT_TIMEOUT)
+                .with_context(|| format!("{what} failed"))?;
             finalize_landed_branch(repo, branch);
             Ok(ResolveOutcome::Reconciled(ResolveChoice::Theirs))
         }
@@ -1644,7 +1641,17 @@ pub fn resolve_merge(cfg: &Config, repo: &Path, conflict_id: &str) -> Result<Res
             // Materialize the merge. If the branch merges cleanly (e.g. a worker
             // already resolved it on the branch), commit and report Reconciled;
             // otherwise leave the markers in place for a human/worker to finish.
-            let (ok, _, _) = git_try(repo, &["merge", "--no-edit", "-m", &msg, &tip])?;
+            // A timed-out merge is an `Err` (rolled back), never `ManualPending`.
+            let args = ["merge", "--no-edit", "-m", &msg, &tip];
+            let what = format!("manual-resolution merge of {branch} into {default_branch}");
+            let out =
+                run_merge_recovering_timeout(repo, &args, &head_before, default_branch, &what)?;
+            let Some(status) = out.status else {
+                bail!(
+                    "{what}: git reported no exit status without timing out; outcome undetermined"
+                );
+            };
+            let ok = status.success();
             let unmerged = git(repo, &["ls-files", "--unmerged"]).unwrap_or_default();
             let pending = parse_unmerged_paths(&unmerged);
             if ok && pending.is_empty() {
@@ -1662,6 +1669,7 @@ pub fn resolve_merge(cfg: &Config, repo: &Path, conflict_id: &str) -> Result<Res
 
 #[cfg(test)]
 mod worktree_remove_tests {
+    use super::merge_recovery::recover_timed_out_merge;
     use super::*;
     use std::fs;
     use tempfile::TempDir;
@@ -1974,6 +1982,77 @@ mod worktree_remove_tests {
         assert!(
             !merge_head.exists(),
             "MERGE_HEAD should not exist after aborted pre-flight"
+        );
+    }
+
+    /// Backlog 8ada7ad9: the observed timed-out state (result staged, no
+    /// MERGE_HEAD). With an `index.lock` present the rollback refuses from its
+    /// own pre-check (not git's "File exists") and touches nothing; without
+    /// it, `git reset --merge` rolls back and is verified.
+    #[test]
+    fn recover_timed_out_merge_refuses_a_lock_then_resets_a_staged_half_merge() {
+        let (_tmp, repo) = init_repo();
+        let head = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        fs::write(repo.join("incoming.txt"), "incoming\n").unwrap();
+        git(&repo, &["add", "incoming.txt"]).unwrap();
+        let (lock, staged) = (
+            repo.join(".git/index.lock"),
+            ["diff", "--cached", "--name-only"],
+        );
+        fs::write(&lock, "").unwrap();
+        let err = recover_timed_out_merge(&repo, &head).expect_err("must refuse");
+        assert!(
+            err.contains("index.lock") && err.contains("did NOT remove it"),
+            "{err}"
+        );
+        assert!(lock.exists(), "the lock must NOT be removed");
+        fs::remove_file(&lock).unwrap();
+        assert_eq!(
+            git(&repo, &staged).unwrap(),
+            "incoming.txt",
+            "index untouched"
+        );
+
+        let how = recover_timed_out_merge(&repo, &head).expect("rollback must succeed");
+        assert_eq!(how, "git reset --merge");
+        assert_eq!(git(&repo, &staged).unwrap(), "");
+        assert_eq!(git(&repo, &["rev-parse", "HEAD"]).unwrap(), head);
+        assert!(
+            !repo.join("incoming.txt").exists(),
+            "incoming file must be gone"
+        );
+    }
+
+    /// With a MERGE_HEAD the rollback is `git merge --abort`; a HEAD that moved
+    /// (the merge committed before the kill) is not a successful rollback.
+    #[test]
+    fn recover_timed_out_merge_aborts_on_merge_head_and_fails_when_head_moved() {
+        let (_tmp, repo) = init_repo();
+        let commit = |b: &str, f: &str| {
+            git(&repo, &["checkout", "-q", "-B", b]).unwrap();
+            fs::write(repo.join(f), "x\n").unwrap();
+            git(&repo, &["add", f]).unwrap();
+            git(&repo, &["commit", "-m", f]).unwrap();
+        };
+        commit("side", "side.txt");
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        let before = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        commit("main", "main.txt");
+        let head = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        git(&repo, &["merge", "--no-commit", "--no-ff", "side"]).unwrap();
+        assert!(repo.join(".git/MERGE_HEAD").exists());
+        let how = recover_timed_out_merge(&repo, &head).expect("rollback must succeed");
+        assert_eq!(how, "git merge --abort");
+        assert!(!repo.join(".git/MERGE_HEAD").exists());
+        assert_eq!(
+            git(&repo, &["diff", "--cached", "--name-only"]).unwrap(),
+            ""
+        );
+
+        let err = recover_timed_out_merge(&repo, &before).expect_err("HEAD moved");
+        assert!(
+            err.contains("HEAD is"),
+            "error must name the moved HEAD: {err}"
         );
     }
 

@@ -37,18 +37,32 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_prepush_hook import HookHarness  # noqa: E402
+import json  # noqa: E402
+
+from test_prepush_hook import CRATE_DIR, CRATE_PKG, HookHarness  # noqa: E402
 
 # A cargo stand-in that, like a concurrent `git merge` in another session,
 # moves refs/heads/main while the hook is running. MOVE_TO is set per test.
+# Since the 2026-11-08 ruling the hook asks `cargo metadata` for package names
+# before `cargo check`, so the stand-in answers that (unchanged from the
+# harness's own stub) and moves main only from `cargo check` — the point where
+# the old stand-in moved it too.
 _CARGO_MOVES_MAIN = """#!/bin/sh
+if [ "${{1:-}}" = "metadata" ]; then
+    cat <<'JSON'
+{metadata}
+JSON
+    exit 0
+fi
 git update-ref refs/heads/main {move_to}
 exit 0
 """
 
 
 def _harness_with_moving_main(add_cleanup):
-    h = HookHarness(gate_bypass_exit=0)
+    # crate=True: cargo runs only when the pushed range touches a crate
+    # (2026-11-08 ruling); without it the stand-in below is never invoked.
+    h = HookHarness(gate_bypass_exit=0, crate=True)
     add_cleanup(h.cleanup)
     git = ["git", "-C", str(h.root)]
     tree = subprocess.run(
@@ -67,7 +81,15 @@ def _harness_with_moving_main(add_cleanup):
              "GIT_COMMITTER_EMAIL": "t@x", "PATH": "/usr/bin:/bin"},
     ).stdout.strip()
     cargo = h.bindir / "cargo"
-    cargo.write_text(_CARGO_MOVES_MAIN.format(move_to=moved))
+    metadata = json.dumps({
+        "packages": [{"name": CRATE_PKG, "version": "0.1.0", "id": CRATE_PKG + " 0.1.0",
+                      "manifest_path": str(h.root / CRATE_DIR / "Cargo.toml")}],
+        "workspace_members": [CRATE_PKG + " 0.1.0"],
+        "target_directory": str(h.root / "target"),
+        "workspace_root": str(h.root),
+        "version": 1,
+    })
+    cargo.write_text(_CARGO_MOVES_MAIN.format(move_to=moved, metadata=metadata))
     cargo.chmod(0o755)
     return h, moved
 
@@ -76,10 +98,12 @@ class RefMovedDuringHookTests(unittest.TestCase):
     def test_control_unmoved_ref_is_allowed(self):
         """Anti-vacuity: the same harness with main left alone is ALLOWED, so the
         block asserted below is about the moved ref and not a harness defect."""
-        h = HookHarness(gate_bypass_exit=0)
+        h = HookHarness(gate_bypass_exit=0, crate=True)
         self.addCleanup(h.cleanup)
         proc = h.run()
         assert proc.returncode == 0, proc.stderr
+        # The same check the moving stand-in hooks into really runs here.
+        assert h.cargo_checks(), "cargo check never ran\n" + proc.stderr
 
     def test_ref_moved_during_hook_blocks(self):
         h, moved = _harness_with_moving_main(self.addCleanup)

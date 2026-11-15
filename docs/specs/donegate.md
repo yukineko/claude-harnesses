@@ -22,10 +22,16 @@
   ことで停止をブロックし、exit code 自体は常に 0（`gate_run`）。exit 1 を返すのは interactive（manual CLI）モードのみ。
 - **default-safe（オプトイン）** — `[[check]]` が 1 つも無い、または `enabled=false` なら、ゲートは全停止を通す
   （`gate_run`：`!cfg.enabled || cfg.checks.is_empty()` で exit 0）。フックを入れただけでは決してブロックしない。
-  セッションが書き込んだ root がすべて設定を一切持たない（`Declaration::Absent`）場合も許可し、stdout は空
+  セッションが hook cwd 内に書き込んだが cwd が設定を一切持たない（`Declaration::Absent`）場合も許可し、stdout は空
   （`systemMessage` なし、2026-10-27 ユーザー裁定）。痕跡は stderr の 1 行と `<state_dir>/log.jsonl` の
-  `"verdict":"unconfigured"` 行（session と `roots`）に残す（`tests/no_config_quiet_allow.rs`）。設定はあるが
-  チェックが空の root に書き込んだ場合はブロックする。
+  `"verdict":"unconfigured"` 行（session と `roots` = cwd）に残す（`tests/no_config_quiet_allow.rs`）。設定はあるが
+  チェックが空の cwd に書き込んだ場合はブロックする。
+- **判定対象は hook cwd だけ**（2026-11-08 ユーザー裁定、原文:「donegateのworktreeテストは問題ありすぎるので
+  即時に停止」「donegateそのものが他のworktreeを見たり検証したりテストしたりすることは禁止とする」）— Stop も
+  SubagentStop（`subagent-gate`）も cwd の root だけを判定する。セッションが書き込んだ他の worktree・root は
+  解決・列挙・実行・ブロック・名指しのいずれもしない（`harness_core::session_roots` は使わない）。transcript から
+  読むのは書き込みパスが cwd の内側にあるか（`rootcheck::wrote_in_cwd` / `writes_in`、パス比較のみ）だけで、
+  transcript が読めなければブロックする。cwd 内にネストした worktree への書き込みは cwd への書き込みとして数える。
 - **project config はトラストゲート付き** — project の `donegate.toml` が honor されるのは root が信頼済み
   （`harness_core::trust::is_trusted`）のときだけ。未信頼なら無視して home config（`~/.donegate/config.toml`）へ
   フォールバックし、無ければ built-in defaults（`Config::load`）。project の `cmd` は後で `sh -c` で実行されるため、

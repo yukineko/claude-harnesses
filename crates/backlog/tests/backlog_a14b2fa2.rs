@@ -5,6 +5,12 @@
 //! from the record: re-running the stored command without that env skips at
 //! the red rev.
 //!
+//! Since user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止で
+//! いい」) `done` no longer runs CMD at R at all, so the env-dependence that
+//! matters is the GREEN run at HEAD: under the cleared env the test skips at
+//! HEAD and reports no `<N> passed`, so `done` refuses. Both tests below still
+//! hold; the control's refusal now comes from GREEN, not from a skipped RED.
+//!
 //! Property under test (either resolution satisfies it): a closure that
 //! `done` ACCEPTS must be reproducible from the record — so either the record
 //! names the env the RED depended on, or `done` refuses the env-dependent
@@ -30,8 +36,9 @@ fn env_gated_bug_then_fix(f: &Fixture) -> (String, String) {
     (a, b)
 }
 
-/// Control: without the env var the red rev does not go RED, so `done`
-/// refuses — i.e. the stored command alone does NOT reproduce the RED.
+/// Control: without the env var the test skips (formerly at the red rev; since
+/// the 2026-11-08 ruling, at HEAD, where GREEN reports no `<N> passed`), so
+/// `done` refuses.
 #[test]
 fn control_without_env_the_red_rev_is_not_red() {
     let f = Fixture::new("a14b-ctl");

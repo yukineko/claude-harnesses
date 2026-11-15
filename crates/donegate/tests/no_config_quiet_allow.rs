@@ -231,12 +231,36 @@ fn no_config_wrote_files_allows_quietly_and_logs_trace() {
     assert_quiet_allow_with_trace(&f, &o, &f.primary);
 }
 
+/// Re-scoped by user rulings 2026-11-08 ("donegateのworktreeテストは問題ありすぎる
+/// ので即時に停止"; "donegateそのものが他のworktreeを見たり検証したりテストしたり
+/// することは禁止とする"). Was: the linked worktree's unconfigured root was
+/// logged as `verdict:"unconfigured"` naming it. Now donegate does not look at
+/// that worktree: the stop allows quietly (the cwd itself was not written) and
+/// nothing donegate prints or logs names the worktree.
 #[test]
 fn no_config_linked_worktree_allows_quietly_and_logs_trace() {
     let f = Fixture::new(None);
     let tp = f.transcript(&f.wt.join("session_edit.rs"));
     let o = f.stop(&f.primary, &tp);
-    assert_quiet_allow_with_trace(&f, &o, &f.wt);
+    assert_ne!(
+        o.field("decision"),
+        "block",
+        "stdout={:?} stderr={:?}",
+        o.stdout,
+        o.stderr
+    );
+    assert!(
+        o.stdout.trim().is_empty(),
+        "stdout must be empty; stdout={:?}",
+        o.stdout
+    );
+    let wt = f.wt.display().to_string();
+    let log = std::fs::read_to_string(f.home.join(".donegate/state/log.jsonl")).unwrap_or_default();
+    assert!(
+        !o.stderr.contains(&wt) && !log.contains(&wt),
+        "donegate must not report on another worktree ({wt}); stderr={:?} log={log:?}",
+        o.stderr
+    );
 }
 
 /// CONTROL (already implemented): config exists but declares no checks, the

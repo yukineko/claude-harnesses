@@ -63,6 +63,7 @@ from pathlib import Path
 cfg = json.loads(Path(%(cfg)r).read_text())
 env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 env["CLAUDE_PROJECT_DIR"] = cfg["main"]
+env["HOME"] = str(Path(cfg["main"]).parent / "home")  # sandbox the write record
 def g(*a):
     return subprocess.run(["git", "-C", cfg["main"], *a], env=env,
                           capture_output=True, text=True).stdout

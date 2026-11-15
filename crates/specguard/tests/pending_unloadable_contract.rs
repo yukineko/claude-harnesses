@@ -12,7 +12,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn project(name: &str) -> PathBuf {
-    let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("pending_contract_{name}"));
+    // Per-process (see tests/pending_undetermined.rs): concurrent runs over one
+    // target dir deleted each other's fixture mid-test (observed 2026-11-08).
+    let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("pending_contract_{}_{name}", std::process::id()));
     let _ = fs::remove_dir_all(&d);
     fs::create_dir_all(&d).unwrap();
     d

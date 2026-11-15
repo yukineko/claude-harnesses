@@ -61,8 +61,8 @@ pub const LEASE_TTL_SECS: i64 = 1800;
 /// Keying on `projkey::repo_root` partitioned the store per linked worktree
 /// (`repo_root` stops at the worktree's own `.git` FILE), so a lease begun in
 /// `.harness-worktrees/<x>` was invisible to `overwatch status` run from the
-/// main checkout — exactly where condukt's CLAUDE.md §8 main-tree guard runs
-/// it. Every checkout of one repository (main checkout, linked worktrees, and
+/// main checkout (where condukt's §8 main-tree guard, removed 2026-11-08, ran
+/// it). Every checkout of one repository (main checkout, linked worktrees, and
 /// any subdirectory of either) now shares ONE store.
 ///
 /// For the main checkout itself `main_worktree_root` returns the very path
@@ -1919,14 +1919,14 @@ mod tests {
     use super::*;
 
     fn viol_event(sig: &str, ts: i64) -> ViolationEvent {
-        ViolationEvent {
-            source: crate::violation::ViolationSource::Blastguard,
-            signature: sig.to_string(),
-            task_key: "task-key".to_string(),
-            session_id: "session".to_string(),
-            ts,
-            detail: None,
-        }
+        serde_json::from_value(serde_json::json!({
+            "source": "blastguard",
+            "signature": sig,
+            "task_key": "task-key",
+            "session_id": "session",
+            "ts": ts,
+        }))
+        .unwrap()
     }
 
     fn scan_test_home() -> (std::path::PathBuf, Option<std::ffi::OsString>) {

@@ -1,7 +1,8 @@
-//! backlog 4cacdfae: a LINKED git worktree whose main working tree is in the
-//! trust store must load its own project `tdd.toml`. Exact-match
-//! `is_trusted` does not do that, so these tests pin the worktree-inheritance
-//! behaviour (and the two controls that must keep holding).
+//! backlog 4cacdfae, INVERTED by the user ruling 2026-11-08: a LINKED git
+//! worktree whose main working tree is in the trust store does NOT inherit that
+//! trust, so it must NOT load its own project `tdd.toml`; the file is recorded
+//! in `untrusted_project` (the Stop gate then blocks). The two controls must
+//! keep holding.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::config::{Config, HOME_ENV_LOCK};
@@ -53,7 +54,7 @@ fn isolate_home(home: &Path) {
 }
 
 #[test]
-fn linked_worktree_of_trusted_main_loads_project_config() {
+fn linked_worktree_of_trusted_main_does_not_inherit_and_flags_untrusted_project() {
     let _g = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (home, base) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     isolate_home(home.path());
@@ -64,10 +65,20 @@ fn linked_worktree_of_trusted_main_loads_project_config() {
         "wt-cmd",
         "apparatus: main loads"
     );
+    let cfg = Config::load(&wt);
     assert_eq!(
-        Config::load(&wt).test_cmd,
-        "wt-cmd",
-        "a linked worktree of a TRUSTED main must load its project tdd.toml"
+        cfg.test_cmd, "cargo test",
+        "a linked worktree of a TRUSTED main must NOT load its project tdd.toml (no inheritance)"
+    );
+    assert_eq!(
+        cfg.untrusted_project,
+        Some(Config::project_path(&wt)),
+        "the existing-but-untrusted project file must be recorded so the gate blocks"
+    );
+    assert_eq!(
+        Config::load(&main).untrusted_project,
+        None,
+        "main is trusted"
     );
 }
 
@@ -77,11 +88,12 @@ fn linked_worktree_of_untrusted_main_still_ignores_project_config() {
     let (home, base) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     isolate_home(home.path());
     let (_main, wt) = fixture(base.path());
+    let cfg = Config::load(&wt);
     assert_eq!(
-        Config::load(&wt).test_cmd,
-        "cargo test",
+        cfg.test_cmd, "cargo test",
         "a worktree of an UNTRUSTED main must not load the project config"
     );
+    assert_eq!(cfg.untrusted_project, Some(Config::project_path(&wt)));
 }
 
 #[test]

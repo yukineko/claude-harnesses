@@ -2,8 +2,13 @@
 """guard-maintree-bash in_flight_merge_window: what it must still REFUSE, and the
 documented residual (backlog 2dee8b0e).
 
-After an integration HEAD move (a first `git merge --no-ff`), the guard accepts a
-dirty tree only if it is exactly a later merge caught in its pre-merge-commit
+RE-SCOPED by user ruling 2026-11-08: in_flight_merge_window was deleted with
+its merge-tree scan over every local branch (dropped, no compensating
+mechanism); every shape below is now REFUSED, the pure window and the former
+residual included.
+
+Formerly: after an integration HEAD move (a first `git merge --no-ff`), the guard accepted a
+dirty tree only if it was exactly a later merge caught in its pre-merge-commit
 window. These tests pin the near-misses that must stay refused, and the one
 documented residual (`git reset -q HEAD` + `git cherry-pick -n <one-commit
 branch>`), including that the residual never turns into a COMMIT on main.
@@ -41,6 +46,7 @@ if n != 2:
     sys.exit(0)
 env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 env["CLAUDE_PROJECT_DIR"] = cfg["main"]
+env["HOME"] = str(Path(cfg["main"]).parent / "home")  # sandbox the write record
 main = Path(cfg["main"])
 mode = cfg["mode"]
 if mode == "unstaged":
@@ -110,10 +116,17 @@ class WindowRefusals(ObserveGuardBase):
         self.assertTrue(out.exists(), "anti-vacuity: window hook ran the guard: " + m2.stderr)
         return json.loads(out.read_text())
 
-    # -- baseline: the pure window is allowed (so the refusals below are not vacuous)
-    def test_pure_window_allowed(self) -> None:
+    # -- baseline. RE-SCOPED by user ruling 2026-11-08 ("donegateそのものが他の
+    # worktreeを見たり検証したりテストしたりすることは禁止とする。..."): the pure
+    # window used to be allowed via a `git merge-tree` of HEAD against every
+    # local branch (other sessions' branches). That scan was dropped, with no
+    # compensating mechanism, so the pure window is now REFUSED too. The
+    # near-miss refusals below therefore no longer prove anything about the
+    # window evidence; they only pin that each shape is still refused.
+    def test_pure_window_refused(self) -> None:
         res = self.window("none")
-        self.assertEqual(res["rc"], 0, res["stderr"])
+        self.assertEqual(res["rc"], 2, res["stderr"])
+        self.assertIn("mb-two.txt", res["stderr"])
 
     def test_window_plus_unstaged_edit_refused(self) -> None:
         res = self.window("unstaged")
@@ -158,7 +171,9 @@ class WindowRefusals(ObserveGuardBase):
 
     # -- the documented residual and its limits
     def test_residual_reset_plus_cherry_pick_n_state_and_no_commit(self) -> None:
-        """Documented residual: allowed, but ONLY as an uncommitted state."""
+        """Former residual (allowed as an uncommitted state). Since the
+        2026-11-08 ruling dropped the merge-tree window evidence, it is
+        REFUSED: the residual is closed."""
         tid, _ = self.pre_ok(self.CMD)
         self.merge_one()
         merged = self.head()
@@ -169,16 +184,17 @@ class WindowRefusals(ObserveGuardBase):
         r = self.post(tid, self.CMD)
         sys.stderr.write("\n[residual] guard rc=%d stderr=%r\n" % (r.returncode, r.stderr))
         self.assertEqual(self.head(), merged, "no commit was created by the residual path")
-        self.assertEqual(r.returncode, 0, "residual currently documented as allowed")
+        self.assertEqual(r.returncode, 2, "former residual is refused now: %s" % r.stderr)
 
     def test_residual_followed_by_commit_in_next_call_refused(self) -> None:
-        # call 1 leaves the residual state (allowed); call 2 commits it as a
-        # NON-merge commit on main -> must be refused.
+        # call 1 leaves the former residual state (refused since the
+        # 2026-11-08 ruling); call 2 commits it as a NON-merge commit on main
+        # -> must be refused.
         tid1, _ = self.pre_ok(self.CMD)
         self.merge_one()
         git(self.main, "reset", "-q", "HEAD")
         git(self.main, "cherry-pick", "-n", "mb-two")
-        self.assertEqual(self.post(tid1, self.CMD).returncode, 0)
+        self.assertEqual(self.post(tid1, self.CMD).returncode, 2)
         before = self.head()
         tid2, _ = self.pre_ok("git commit -m x")
         c = git(self.main, "commit", "-q", "-m", "sneaky non-merge commit")

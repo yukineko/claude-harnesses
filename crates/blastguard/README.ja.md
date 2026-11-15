@@ -15,7 +15,8 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
 止めるのは「明らかに破壊的で、取り消しが難しい」操作に限られる。
 
 - **Bash コマンド**: 再帰 `rm`（`rm -rf dir` など）、ワイルドカード `rm`（`rm *`,
-  `rm path/*`）、`git clean -fdx` / `-fd`、`git reset --hard`、作業ツリー破棄
+  `rm path/*`）、`git clean -fdx` / `-fd`、`git reset --hard`（例外: rev が文字どおり `HEAD` で、`git status --ignore-submodules=none` が clean と
+  確認でき、index に assume-unchanged / skip-worktree の entry が無い linked worktree checkout 内なら allow。probe 失敗は deny のまま）、作業ツリー破棄
   （`git checkout -- .`, `git checkout --force`）、上書きリダイレクト（単一の
   `>`）、ファイル切り詰め / 抹消（`truncate -s0`, `shred`）、ファイルシステム /
   デバイス書き込み（`mkfs.*`, `dd of=/dev/sda`）、再帰的なパーミッション / 所有者
@@ -309,9 +310,10 @@ directory tree` で拒否されたこと。
     `--work-tree` 以外のグローバルオプション（`--git-dir`、`-c`、`--config-env` …）があれば対象外。
   - **据え置き（従来の判定のまま）**: primary の作業ツリー（`.git` ディレクトリ）、チェックアウトの
     サブディレクトリ、置き場そのもの、symlink 経由の綴り、展開できない `-C "$WT"`、`..` を含む綴り、
-    複合コマンド、チェックアウトの probe 失敗。`git stash drop` / `clear` は**対象外**
+    複合コマンド、チェックアウトの probe 失敗。`git stash clear` は**対象外**で常に deny
     （`refs/stash` は全 worktree で共有され、linked worktree から primary の stash が見えることを
-    実測した — 消すと管理外の作業が消える）。オブジェクトストア破壊（`gc --prune` 等）と
+    実測した — clear は他セッションの stash も全部消す）。`git stash drop [<stash>]` は
+    2026-11-08 のユーザー裁定（「drop のみ Allow」）で**どこでも allow**。オブジェクトストア破壊（`gc --prune` 等）と
     保護パスの判定も変わらない。
   - 併せて `git clean` の閉じ込め判定は `-C` / `--work-tree` が示すディレクトリを基準にする
     （以前はセッションの cwd で判定していた）。綴りが解決できない場合は従来の基準のまま。
@@ -583,18 +585,123 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   本文を読む。引用無しの区切り・閉じていない本文・インタプリタ/シェルの読み手・
 >   here-document の後のコマンドがあれば従来通り本文も走査する
 >   （`src/detect/heredoc.rs` の `redirect_view_without_quoted_here_document_body`）。
+>   例外（user ruling 2026-11-08、issue #1602）: 引用付き区切りの本文を `cat`/`tee` が**全て**非 shell の
+>   コードファイル（`.rs`・`.go`・`.c`・`.ts`・`.js` 等。`.sh`・拡張子無し・`.py` は含まない）へ書き、
+>   後続行が `ls`・`cat`・`wc`・`grep` 等の閉じた一覧のコマンドだけ（書いたファイルを実行・source・build
+>   しうるものが無い）なら、後続コマンドがあっても本文は shell 行として走査しない
+>   （`non_shell_code_file_here_document`。`cat > x.rs <<'EOF'` / `` ` `` / `EOF` / `ls` は allow）。
+>   `cargo test`・`sh x.rs` 等が後続にあれば従来通り本文も走査する。
 >   例外（backlog ffce9c59）: 読み手が `git commit -F -` で区切りが引用付きのとき、opener 行の
 >   `|`・`;`・`&&`・`||` 以降（`2>&1 | grep …; git log -1` 等）は git の stdout を受けるか本文を
 >   見ない別コマンドなので、本文は data として全ルールから外す。後続部分は本文から独立した
 >   コマンドとして従来通り判定する（`<<'EOF'; rm -rf /etc` は deny）。`&`・`|&`、`$`・backtick・`\`、
 >   `cat`/`grep`/`egrep`/`fgrep`/`head`/`tail`/`wc` 以外の pipe 先や `<`/`>`/`(`/`)` を含む pipe 段が
 >   あれば従来通り本文も走査する（`git_commit_reader_before_tail`）。
+>   0.2.388 以降（backlog 0fccf1eb）、`>` / `>>` の書き込み先の語は改行をまたいで読まない
+>   （空白・タブだけを飛ばす。`src/detect/redirect.rs` の `skip_redirect_word_gap`）。行末の
+>   `>`（改行またはテキスト末尾の直前）は書き込み先を持たず、シェルでは本文データか構文エラーで
+>   何も開かないため、書き込み先として数えない。以前は本文を走査する形（`cd D; A && cat <<'EOF'`
+>   等）で `>` で終わる本文行（`Co-Authored-By: … <…>`）の次の区切り行が `> EOF` と読まれ、
+>   unplaceable な相対リダイレクトとして deny されていた。
 > - **code-interpreter-inline-eval**: 「形」での一律 deny は廃止され、プログラム本文を
->   監査する（`analyze_code_interpreter` / `interpreter_code_verdict`、`src/detect/interpreter.rs`）。破壊的な呼び出し
+>   監査する（`analyze_code_interpreter` は `src/detect/interpreter/invocation.rs`、
+>   `interpreter_code_verdict` は `src/detect/interpreter.rs`）。破壊的な呼び出し
 >   や破壊的なシェル行を含めば `deny`、保護パスを名指しすれば `ask`、
 >   `python3 -c "print(1)"` のような無害なものは allow（0.2.59）。stdin からプログラムを
 >   読む形（`… | python3 -`、`python3 /dev/stdin`、here-doc）は判定を拒否する。
 >   rule id も所見に応じたもの（例: `rm-recursive`）になる。
+>   0.2.481 以降（backlog 2026-11-13）、監査するプログラム本文（`-c`/`-e` の引数、
+>   `sh -c`・`eval`・`xargs` の内側、here-string・プロセス置換）は、空白で割ったトークンを
+>   空白 1 個で繋ぎ直したものではなく、**コマンド行の原文から読んだ引数そのもの**
+>   （改行・連続空白を保つ。`src/detect/payload.rs` の `faithful_tail`）である。以前は改行が
+>   空白に潰れ、`python3 -c "import os # x<改行>os.chmod('/etc/…',0)"` の `#` コメントが
+>   次行の呼び出しを飲み込んで allow になっていた。原文が読めず、かつ語が複数トークンに
+>   またがる（＝区切りが失われた）ときは allow せず ask に倒す（`word_separators_lost`）。
+>   0.2.491 以降（backlog 6cac93af 第 4 ラウンド）、その語の quote 除去は POSIX の行継続に従う
+>   （`src/detect/words.rs` の `first_shell_word`）。unquoted か double quote 内の
+>   バックスラッシュ＋改行は取り除き（`python3 -c "o\<改行>pen('/etc/hosts','a')"` は python が
+>   受け取る `open('/etc/hosts','a')` として判定する）、single quote 内（`$'…'` 内も）では
+>   そのまま残す。バックスラッシュの付かない本物の改行は繋がない。
+>   0.2.522 以降（backlog e4523bfd、spec blastguard-comment-collapse-residual R1/R2）、
+>   未知の wrapper の後ろの行（`myrunner python3 -c "…"`）も原文から読む（原文が読めず区切りが
+>   失われたときは ask。`src/detect/payload.rs` の `reanalysis_text`）。0.2.525 以降、`env -S` の
+>   引数は env 自身の分割規則（GNU coreutils と FreeBSD/macOS の共通部分: 空白類の連続で区切る、
+>   `'…'`・`"…"`、`\n` `\t` `\"` `\\` などのエスケープ、`\_`、`\c`、語頭の `#`）で argv に分割し、
+>   `env <argv…>` として判定する（`src/detect/executors.rs` の `env_split_argv` /
+>   `env_split_string_verdict`）。規則で確定できないもの（`$`／`${VAR}`、未知のエスケープや
+>   `\<空白>` のように実装で結果が違うもの、閉じない quote、shell 側の展開）は ask
+>   （subagent では deny）。従来の「引数を shell の文字列として読む」判定も追加の読みとして残す。
+>   `env -S 'ls   -la'` は `ls -la` に分割されて allow。
+  0.2.535 以降（backlog a66c115c）、Python が読む program（`python3 -c`・here-string・stdin の here-document・
+  `.py` に書いて実行するもの）は、CPython と同じく `\r\n` と裸の CR を改行に変換してから読む
+  （`src/detect/interpreter/python_file.rs` の `python_newlines`）。CPython は CR で `#` コメントを終えるので
+  （3.12.11 で観測）、以前は `python3 -c "import os # x<CR>os.chmod('/etc/hosts',0)"` の chmod をコメントの
+  一部と読んで allow にしていた。今は deny。一重引用符の文字列内の CR は CPython でも SyntaxError なので、
+  LF の同形と同じく「字句解析できない」ask になる。ruby・perl・sh の `#` コメントは CR で終わらない（観測）ので、
+  それらの読みは変わらない。
+>   0.2.483 以降（backlog 6cac93af）、プログラムが**書き込むか**（パスリテラルへの
+>   回復可能性／システムディレクトリ判定を起動するか）は、`'w'` 系の綴りの列挙ではなく、
+>   `open(` 系呼び出し（`open`・`io.open`・`codecs.open`・`os.fdopen`・`pathlib.Path.open`・
+>   Node の `fs.open`/`openSync`・Ruby の `File.open`・Perl の 3 引数 `open`）のモードを
+>   構文的に読んで決める（`src/detect/interpreter/open_mode.rs`）。リテラルのモードが
+>   `w`・`a`・`x`・`+`（または Perl の `>`）のいずれかを含めば書き込み、静的に決まらない
+>   モード（変数・式・`*args`/`**kwargs`）は書き込みとみなし（判定不能は制限側）、
+>   モード無し・読み取り専用モード（`'r'`・`'rb'`・`'rt'`）は書き込みではない。`os.open` の
+>   フラグは、全項が読み取り専用フラグ（`O_RDONLY`・`O_CLOEXEC` 等）でない限り書き込み。
+>   モード／フラグ位置の整数は `0` 以外なら書き込み。0.2.485 以降、呼び出しは「名前・
+>   任意の空白（改行含む）・`(`」で認識し（`open ('/etc/hosts','a')`）、モードを取る
+>   ファイルクラス（`FileIO`・`ZipFile`・`GzipFile`・`TarFile`・`BZ2File`・`LZMAFile`）と
+>   `shelve`/`dbm` の `open` も同じ規則で判定する（dbm のフラグは `'r'` だけが読み取り、
+>   `shelve` の既定 `'c'` は書き込み）。名前 `open` の呼び出し以外の出現（`from io import
+>   open as o`・`from os import open`・`o = open`）があればプログラム全体を判定不能＝
+>   書き込みとみなす。0.2.489 以降、Python と確定したプログラム（`exec`/`eval`/`getattr`
+>   等の動的実行の印も f-string も無いもの）は Python の字句解析器で読み、文字列・`#`
+>   コメント中の `open` は数えない。コード中のトークンに非 ASCII 文字があれば（全角
+>   `ｏｐｅｎ` は Python が NFKC 正規化で `open` にする）判定不能＝書き込みとみなす。それ
+>   以外のプログラム本文は字句解析せずに走査し、どこかに非 ASCII の文字・数字があれば
+>   判定不能とする。これにより `open('/etc/hosts','a')`・`'r+'`・`'x'`・`mode='a'` も `'w'` と同様に deny
+>   される。`Path.write_text` や Node の `appendFileSync` はこの規則の対象外（未対応）。
+>   0.2.523 以降（backlog f6dbff5b）、Python が読むプログラム（`python3 -c`・stdin から読む
+>   プログラム）の path 変更系呼び出し（`os.chmod`/`os.lchmod`/`Path.chmod()`・`os.chown`/
+>   `os.lchown`/`shutil.chown`・`os.remove`/`unlink`/`rmdir`/`shutil.rmtree`・copy/move/rename の
+>   転送先・`os.truncate`）は、path 引数を文字列トークンの一致ではなく静的評価で解決して
+>   判定する（`src/detect/interpreter/python_semantics.rs` の `path_mutation_verdict`）。Python は
+>   隣接する文字列 literal を連結するので `os.chmod('/''etc/hosts',0)` は `/etc/hosts` の
+>   chmod として system-harm deny になる（以前は `'/'` と `'etc/hosts'` のどちらもシステム
+>   ディレクトリではないため allow だった）。`os.chmod('a' 'b',0o644)` のような repo 相対は
+>   allow のまま。path を静的に解決できない呼び出し（`os.chmod(sys.argv[1],0o755)`）は ask
+>   （人間が答えられない場では deny）。0.2.526 以降（backlog 17d985f1）、同じ判定が
+>   `open(p,'w')`・`Path.open('w')`・`write_text`/`write_bytes`・`touch`・`symlink_to`/
+>   `hardlink_to` にもかかり、pathlib method は **receiver** を `/`・`joinpath` 込みで解決する:
+>   `(Path('/etc') / 'hosts').write_text('x')` と `Path('/etc').joinpath('hosts').write_text('x')`
+>   は `/etc/hosts` への書き込みとして deny、`(Path('build') / 'x').write_text('y')` は allow。
+>   引数 1 個（位置引数か `target=`）の `.replace(…)`/`.rename(…)` は `Path.replace`/`Path.rename`
+>   として**転送先**を `: > dst`、receiver を `rm src` として判定する
+>   （`Path('/tmp/y').replace('/etc/hosts')` は deny、`Path('a').replace('b')` は allow、
+>   引数 2 個の `s.replace('a','b')` は対象外）。receiver・転送先が解決できない
+>   （変数 receiver の `p.write_text(..)`・1 引数の `x.rename(y)` 等）ものは ask。
+>   0.2.542 以降（backlog c8bf27ea、`src/detect/interpreter/python_semantics/method_refs.rs`）、
+>   これらの callable を直接呼び出し以外で使う形も判定する: unbound の
+>   `Path.replace(Path('/tmp/z'), '/etc/hosts')`（第 1 引数が receiver）、
+>   `w = Path('/etc/hosts').write_text; w('x')`、`Path('/etc/hosts').write_text.__call__('x')` は
+>   直接呼び出しと同じく deny、`w = Path('build/x').write_text; w('y')` と
+>   `Path.replace(Path('a'), 'b')` は allow。それ以外の参照（引数・container・別名への受け渡し・
+>   literal 名の `getattr`/`methodcaller` 等）は receiver が解決できればその path で判定し、
+>   できなければ ask（`str.replace`・`'a'.replace`・`webbrowser.open` は対象外で allow のまま。
+>   receiver が解決できない `args.replace` のような同名の属性読み出しは ask になる）。
+>   0.2.544 以降（backlog 67219006）、解決した書き込み先が shell の redirect 規則で特定できない
+>   もの（payload に `cwd` が無いときの相対 path、`$`・backtick を含む path）は deny ではなく
+>   保留 ask（人間が答えられない場では deny）: `python3 -c "open('a/b','w')"`（cwd 無し）は
+>   ask。system directory・保護 path への書き込みと、同じ program の他の deny は従来どおり
+>   deny が優先する。shell の `echo x > a/b`（cwd 無し）は deny のまま。
+>   束縛を「呼び出し時に判定する別名」として扱うのは module 直下（行頭 column 0）の単純代入で、
+>   名前が直接呼び出し以外に現れないときだけ。class 属性（`class C:` 本体の
+>   `w = Path('/etc/hosts').write_text` → `C.w('x')`）・`self.w =`・subscript・連鎖/tuple/
+>   注釈付き/augmented の代入先・関数 local は参照として判定する（`/etc/hosts` なら deny）。
+>   `zipfile.ZipFile(..)`/`tarfile.open(..)` の結果（とそれだけで束縛された名前）の `.open` 等は
+>   path method ではないので allow、`map(open, ['a.txt'])`（literal だけを 1 引数で開く＝読み込み）は
+>   allow、`map(os.remove, [...])` は各 literal の `rm` として判定、それ以外の `map` 形や
+>   `from zipfile import ZipFile` の綴りは ask のまま。
 
 当時、overwatch の continuous-audit 再発トラッカー（`overwatch violations --json`）が
 `blastguard:truncating-redirect` と `blastguard:code-interpreter-inline-eval` を
@@ -727,7 +834,29 @@ backtick で引用されたものも判定対象に残る。
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/blastguard record-approval", "timeout": 10 }
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/blastguard record-approval", "timeout": 10 },
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/blastguard relay mark-executed", "timeout": 10 }
+        ]
+      },
+      {
+        "matcher": "SendMessage",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/blastguard relay mark-relayed", "timeout": 10 }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/blastguard relay mark-executed", "timeout": 10 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/blastguard relay stop", "timeout": 10 }
         ]
       }
     ]
@@ -735,7 +864,51 @@ backtick で引用されたものも判定対象に残る。
 }
 ```
 
-PostToolUse 側は承認の記憶（上記）を昇格する recorder である。
+PostToolUse 側の `record-approval` は承認の記憶（上記）を昇格する recorder である。
+`relay mark-executed` / `relay mark-relayed` / Stop の `relay stop` は下記
+「subagent の Ask は main で裁定する」の relay である。
+
+### subagent の Ask は main で裁定する（relay）— ユーザー裁定 2026-11-14
+
+裁定（逐語）: 「sub agentのAskはmainで裁定する」（本機能を統べる裁定）、
+「この仕組みはコードで強制する、どうせわすれる」、「gateにそんな例外は追加してほしくない」、
+「gateもconduktも絶対に勝手に他のworktreeを参照してはならない」。
+
+subagent の中では誰も permission prompt に答えられないので、`Ask` は `Deny` に硬化される。
+この判定は変えない。relay は、それを main session が裁定し忘れないことを機械で強制する
+（`src/relay.rs`）:
+
+1. **記録（PreToolUse）** — subagent の Bash の `Ask` が硬化され、かつ main session 自身が
+   ask できる（`interactive::ask_available`）とき、`queued` レコード（id `bgr-<12 hex>`・ts・
+   session_id・agent_id・cwd・コマンド文字列そのまま・Ask の理由）を
+   `~/.blastguard/relay/<session_id>.jsonl`（`BLASTGUARD_RELAY_DIR` で上書き）へ追記し、
+   id を deny 理由の末尾に付ける。真の `Deny`（system harm を含む）・main session の `Ask`・
+   ask できない（headless）session の subagent の `Ask` は記録しない。記録に失敗しても判定は
+   `Deny` のままで、失敗とその理由を deny 理由に書く（沈黙しない）。
+2. **実行済み（PostToolUse / PostToolUseFailure、Bash、`blastguard relay mark-executed`）** —
+   main session の Bash 呼び出しで、コマンドと cwd が pending entry とバイト一致したものを
+   実行済みにする（payload に exit code があれば記録）。subagent の呼び出しは何も付けない。
+3. **返送済み（PostToolUse、SendMessage、`blastguard relay mark-relayed`）** — main session の
+   SendMessage が relay id を含めば、実行済みの entry を返送済みにする。実行前の送信は付けない。
+4. **Stop（`blastguard relay stop`）** — その session に「実行済みかつ返送済み」でも
+   「dismiss 済み」でもない entry があれば block し、各 entry の id・agent_id・cwd・
+   コマンドと手順を列挙する。`stop_hook_active` でも block する（出口は解消か dismiss）。
+   queue が読めない・行がパースできない・未知 id を指す event・Stop payload がパースできない
+   は block（fail-closed、queue の path を示す）。panic は共有 Stop barrier で block。
+   queue ファイルが無ければ allow。
+5. **dismiss（`blastguard relay dismiss <id> --reason "<理由>"`）** — 人間が prompt を
+   拒否した、またはコマンドを再実行できないとき用。理由が空・欠落なら拒否（exit 2）、
+   未知 id も exit 2、queue が読めなければ exit 3。dismiss は queue ファイルに記録される
+   が、以後の Stop には表示されない（pending が無ければ allow、あれば pending だけを列挙して block）。
+
+しないこと: コマンドを実行しない（保存したコマンドを 1 回の Bash 呼び出しの中で実行する
+道具は、そのコマンドを blastguard から隠す fail-open になる。main agent が自分の Bash
+tool で実行し、blastguard が通常どおり判定する）。どの判定にも例外を足さない。保存した
+cwd を解決・stat・実行に使わず、不透明な文字列として比較するだけである。
+
+既知の限界: relay するのは Bash だけ（subagent の `Edit`/`Write` の Ask は従来どおり硬化
+されるが記録されない）。同じコマンドを main で並行実行すると同じ entry を二重に付けうる。
+`mark-*` hook の書き込み失敗は stderr にだけ出る（entry は pending のまま＝制限側）。
 
 `bin/blastguard` はホストの OS / アーキテクチャに合う `blastguard-<os>-<arch>` を
 exec する POSIX-sh ランチャである。**該当プラットフォーム向けの同梱ビルドが無い場合は
@@ -748,8 +921,10 @@ stderr に警告を出したうえで「評価していない」旨の PreToolUs
 
 CLI 表面は最小限で、stdin を触る前に `--version` / `-V`、`--help` / `-h`、
 `--protects`（`src/protection.rs` の PROTECTS / AGAINST / GROUNDS を表示）が短絡する。
-サブコマンドは `retro`（事後検証、下記）と `record-approval`（PostToolUse の承認記録）。
+サブコマンドは `retro`（事後検証、下記）と `record-approval`（PostToolUse の承認記録）と
+`relay mark-executed | mark-relayed | stop | dismiss`（上記 relay）。
 環境変数: `BLASTGUARD_ASK`（ask の可否）、`BLASTGUARD_APPROVALS_DIR`（承認ストア）、
+`BLASTGUARD_RELAY_DIR`（relay queue）、`BLASTGUARD_BLOCK_LOG_DIR`（block log）、
 `CLAUDE_PROJECT_DIR`・`TMPDIR`・`HOME`（安全ルートの構築）、`CLAUDE_CODE_SESSION_ID`
 （2 度目の deny の台帳）。
 
@@ -760,6 +935,29 @@ cargo build --release -p blastguard   # -> target/release/blastguard
 make bins                             # 各プラットフォーム向け同梱バイナリを更新
 cargo test -p blastguard              # ユニット + 統合テスト
 ```
+
+### 統合テストの fixture の置き場所（backlog 37955e32）
+
+hook を実バイナリで叩く統合テストの fixture（`git init` / `git worktree add` した repo を含む）は
+`tests/support/neutral_base.rs` の `neutral_base()` の下に作る。置き場所は
+`$HOME/.blastguard-test-fixtures/blastguard-worktree-root-fixtures/run-<pid>-<nanos>[-n]`
+（`BLASTGUARD_TEST_FIXTURE_DIR` を設定すればそれが唯一の候補になり、その下の
+`blastguard-worktree-root-fixtures/run-*`）。テストバイナリの実行ごとに `create_dir` で一意に作る。
+
+- **`target/` には置かない**: worktree の `target/`（無視されたビルド出力）に入れ子の `.git` が残ると、
+  forced な `git worktree remove` の検査が正しく Ask（subagent では Deny）になり、その worktree を撤去できなくなる。
+- **safe root にも置かない**: `/tmp`・`/private/tmp`・`/var/tmp` は temp safe root、`$TMPDIR`
+  （macOS は `/private/var/folders/...`）は temp root かつ削除原則上のシステムディレクトリで、
+  どちらも fixture の場所が判定を左右する。使用前に実 hook で 2 本の較正（cwd 外の `rm -rf` が厳密に Deny、
+  cwd 内の `rm -rf` が厳密に Ask）を通し、通らない場所は panic で拒否する。
+- **自己掃除**: 各実行はプロセス終了時（`atexit`）に**自分の** run ディレクトリだけを消す。
+  `symlink_metadata` で実ディレクトリ（symlink でない）かつ正準パスが作成時と一致する場合に限る。
+  失敗は stderr に出すだけで、panic せず、他は何も消さない。
+- **prune**: 実行開始時、専用ディレクトリ `blastguard-worktree-root-fixtures` の**直下**にある
+  `run-*` のうち、実ディレクトリ（symlink・非ディレクトリは skip）で 24 時間更新が無く、正準パスが
+  `<正準な専用ディレクトリ>/<名前>` と一致するものだけを消す（kill されて自己掃除できなかった実行の残骸）。
+  疑わしいものは消さずに skip する。`remove_dir_all` はツリー内の symlink を辿らない。
+- git repo を作らない一部のテストは引き続き `CARGO_TARGET_TMPDIR` 配下に scratch を作る。
 
 ## 事後検証（`blastguard retro`）
 
@@ -829,3 +1027,84 @@ Deny が 0 件であることは弱い保証ではあるが事実である — �
 **正しく拒否している**）、`"$D/bin/tool"` のように参照へテキストが貼り付いた head 9
 （残る機会。backlog `2fb05132`）、前置代入 1、条件付き 1。
 **見積りの数字を実測として転記しない** — この節が置かれている理由がそれである。
+
+## block log — 止めたものは必ず逐語で記録する（ユーザー裁定 2026-11-14）
+
+裁定原文:「…完全なコマンドが残っていないため、これ以上は切り分けられません。というのは
+大変愚かなので記録をとること。止めたなら止めた責任をとる」
+
+表示した `Deny` / `Ask`（subagent・headless で硬化した Ask、2 度目で Ask に戻した Deny を含む）は
+すべて、overwatch の有無に関係なく blastguard 自身の `~/.blastguard/blocks/blocks.jsonl`
+（`BLASTGUARD_BLOCK_LOG_DIR` で dir を上書き、ファイルは `<dir>/blocks.jsonl`）へ 1 行追記する
+（`src/blocklog.rs`）。`Allow` は記録しない。
+
+各行: `v`(2)・`ts`・`blastguard_version`・`session_id`・`agent_id`（subagent 外は null）・
+`cwd`（payload 値。不透明な文字列で検査しない）・`tool_name`・`command`（Bash、バイト一致・
+切り詰めない）・`file_path`（ファイル系 tool）・`tool_input`（payload の値そのもの）・
+`tool_input_capped`・`tool_input_bytes`・`tool_input_sha256`（compact JSON の sha256）・
+`decision`（表示した `deny`/`ask`）・`decision_kind`（`deny` / `ask` / `ask-hardened-to-deny` /
+`deny-downgraded-to-ask` / `panic-blocked`）・`original_decision`（硬化・2 度目の降格前の検出器の
+判定。`deny` / `ask` / `undetermined`〈panic〉。全 `decision_kind` で必ず出し null にしない。headless で
+硬化した Ask の 2 度目は `ask`、真の Deny の 2 度目は `deny`。欠落は v1 レコードのみで `deny` を意味しない）・`actor`・`system_harm`・`reason`（表示した文そのもの）・
+`rule_id`・`raw_payload`（payload をパースできなかったとき・verdict 経路の panic 時のみ、raw stdin）。
+
+サイズ: `tool_input` の複製だけは compact JSON が 1 MiB を超えると `null`・`tool_input_capped: true`
+にする（長さ・hash・`command`・`file_path` は残す）。redaction はしない。ログは `$HOME` 配下の
+ローカルにあり、どこにも送らない。
+
+記録は判定が決まった後・表示の前に書く。判定は変えない。書けない（panic を含む）ときは、表示する
+理由に `could NOT be recorded` とエラーを付け、stderr にも警告する（記録の欠落を沈黙させない）。
+下の overwatch 台帳への記録も従来どおり行う。relay（subagent の Bash Ask を main で再実行させる
+queue）とは役割が違い、block log は真の `Deny` と main session の `Ask` も含む全 block を記録する。
+
+## violation 台帳（overwatch）に残る文脈
+
+Deny / Ask は出力（stdout）を出した**後に**1行だけ、overwatch の
+`~/.overwatch/<project-key>/overwatch/violations.jsonl` へ追記される（失敗は stderr の
+警告のみで、判定は変わらない）。各行は次の任意フィールドを持つ:
+
+| フィールド | 内容 |
+|---|---|
+| `decision` | 実際に出力した最終判定 `deny` / `ask` |
+| `tool` | ツール名（`Bash` 等） |
+| `command` | Bash コマンド（そのまま） |
+| `target` | Write/Edit/MultiEdit/NotebookEdit の対象パス |
+| `cwd` | payload の cwd（そのまま） |
+| `actor` | `subagent` / `interactive` / `headless` |
+| `system_harm` | system-harm の Deny のとき `true`（Ask は `false`） |
+
+これらを持たない古い行は「未記録＝**不明**」であり、`false` や「該当なし」ではない。
+**コマンドはそのまま保存され、秘密情報を含みうる。** 台帳は `$HOME` 配下のローカルにあり、
+マスキング（redaction）はしない。
+
+### `blastguard log` — 台帳の読み取り専用一覧
+
+```
+blastguard log [--decision deny|ask] [--rule <id>] [--since <RFC3339|Ns|Nm|Nh|Nd>]
+               [--system-harm] [--subagent | --interactive] [--json]
+```
+
+カレントディレクトリのプロジェクトの `violations.jsonl` から `source=blastguard` の行だけを
+**ファイル順**に出す。stdin は読まず、台帳は変更しない（他 source の行は読み飛ばす）。
+`--since` は RFC3339（UTC の `Z` 付きのみ）か「N 秒/分/時間/日前」。
+
+- テキスト: 1 行 1 件、`decision=<v> actor=<v> system_harm=<v> rule=<id> tool=<v> cwd=<v>` の後に
+  `command=<v>`（Bash）または `target=<v>`（ファイルツール）が続く。tool が不明な行は
+  `command=unknown target=unknown` を両方出す。記録されていないフィールドは `unknown`
+  （`false` / `interactive` / `deny` に推測しない）。
+  値はエスケープされる: `\n` `\r` `\t` は 2 文字のエスケープ、その他の 0x20 未満と 0x7f は
+  `\xHH`（小文字 16 進）、バックスラッシュは `\\`、C1 制御文字（U+0080〜U+009F）・U+2028/U+2029・
+  bidi 制御文字（U+061C、U+200E、U+200F、U+202A〜U+202E、U+2066〜U+2069）は `\u{XXXX}`（大文字 16 進）。
+  クォートはしない。これにより 1 件は常に 1 行になり、記録された値が行の表示順を入れ替えることもない。
+  **限界**: 値はクォートされず、空白と `=` もエスケープされないため、` key=...` を含む値
+  （例: cwd が `/tmp/x command=ls`）は同じ行内の別トークンに見えうる。
+  曖昧さのない厳密なパースには `--json` を使う。
+- `--json`: 1 行 1 オブジェクト。キーは `ts, rule, decision, tool, command, target, cwd, actor, system_harm`。
+  未記録は `null`。
+- **フィルタは不明なフィールドに決してマッチしない。** 古い行（コンテキスト欄なし）は
+  フィルタ対象の欄が不明なので除外され、除外件数が stderr に `N entries excluded ...` と出る。
+- 終了コード: `0` 成功（該当 0 件も成功。台帳が無いときは stderr に `no ledger at <path>`）/
+  `2` 使い方の誤り（未知フラグ・値の欠落/不正・不正な `--since`・`--subagent` と `--interactive` の併用）/
+  `3` 台帳のパス解決または読み取り不能（stdout は空、stderr にパスとエラー）、
+  パースできない行がある（stderr に `line <N>`、読めた行は出力する）、または stdout への書き込み失敗。
+- **コマンドはそのまま出力され、秘密情報を含みうる**（台帳は `$HOME` 配下のローカル）。

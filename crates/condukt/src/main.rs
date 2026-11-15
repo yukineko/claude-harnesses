@@ -29,7 +29,6 @@ mod install;
 mod learning_signal;
 mod lessons;
 mod lock;
-mod maintree;
 mod model;
 mod oracle;
 mod pass_cache;
@@ -41,6 +40,7 @@ mod replan;
 mod review_brief;
 mod review_order;
 mod review_worthiness;
+mod run_cap;
 mod run_policy;
 mod runtime_conflict;
 mod schedule;
@@ -50,6 +50,7 @@ mod status;
 mod store;
 mod subagent_stop;
 mod teardown_gate;
+mod testscope;
 mod timings;
 #[cfg(test)]
 mod verifier_f7a0cadc;
@@ -91,6 +92,14 @@ enum Command {
     /// the same turn. A panic in the gate body also blocks (fail-closed via
     /// `run_posttooluse_guarded`); other non-broken outcomes print nothing.
     Editgate,
+    /// PreToolUse(Bash) hook: deny a full-suite `cargo test`, a mid-run
+    /// main merge inside a condukt task worktree, a same-tree rerun of a
+    /// test (bare, via `tdd red|green --cmd`, or `state test`), and a test
+    /// target outside the owning task's scope inside its worktree; records
+    /// the per-session marker `state set --status running` requires (see
+    /// `testscope.rs`). Prints a `permissionDecision: deny` JSON or
+    /// nothing; a panic exits 2 (fail-closed via `run_pretooluse_guarded`).
+    Testscope,
     /// SubagentStop hook: when a child sub-agent terminates, advance the owning
     /// run task's durable `updated_at` — the timestamp `state probe`, `circuit
     /// check` and the claim reap gate measure idleness against — to that moment.
@@ -182,14 +191,6 @@ enum Command {
     Gate {
         #[command(subcommand)]
         action: GateAction,
-    },
-    /// Local commit-time guards. Currently one: `main-tree`, the machine
-    /// enforcement of CLAUDE.md §8 (do not share-edit the primary working
-    /// tree). Blocks by exiting non-zero, so `.githooks/pre-commit` — not a CI
-    /// job, per §7 — is the enforcement point.
-    Guard {
-        #[command(subcommand)]
-        action: GuardAction,
     },
     /// Opt-in worker sandboxing: run a worker's build/test command through the
     /// docker exec backend (network + filesystem + resource isolation) when
@@ -1773,27 +1774,6 @@ enum GateAction {
 }
 
 #[derive(Subcommand)]
-enum GuardAction {
-    /// Refuse a commit made from the SHARED primary working tree while another
-    /// session is live (CLAUDE.md §8). Exits 0 when it passes, 1 on a
-    /// violation, 2 when the answer could not be determined — an undetermined
-    /// answer blocks exactly like a violation (§3).
-    ///
-    /// It passes when the commit comes from a linked worktree, when an
-    /// integration (merge/rebase/cherry-pick/revert) is in progress, when
-    /// nothing is staged, or when no other session is live.
-    ///
-    /// `CONDUKT_MAINTREE_OVERRIDE="<reason>"` bypasses it; the reason must be
-    /// non-blank and is echoed to stderr. It is an environment variable, never
-    /// a file, so it cannot leak into another session's commit.
-    MainTree {
-        /// Emit the decision as one JSON line instead of prose.
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
 enum PrAction {
     /// Prepare (dry-run) or, with --execute, open a PR via `gh pr create`.
     ///
@@ -1873,6 +1853,9 @@ fn main() {
                 run_editgate();
             })
         }
+        Command::Testscope => {
+            harness_core::hook::run_pretooluse_guarded("condukt testscope", run_testscope)
+        }
         Command::SessionHeartbeat => {
             let heartbeat = try_read_stdin()
                 .context(
@@ -1933,6 +1916,87 @@ fn editgate_block_reason(verdict: &serde_json::Value) -> String {
     {
         Some(diag) => format!("{reason}\n{diag}"),
         None => reason.to_string(),
+    }
+}
+
+/// PreToolUse(Bash) test-scope gate (see `testscope.rs`). Writes the
+/// per-session marker `<ledger parent>/sessions/<session_id>` whenever the
+/// payload carries a session id (what `state set --status running` requires),
+/// then judges the command and prints a `permissionDecision: deny` JSON or
+/// nothing. An unreadable / unparseable payload, a Bash payload without a
+/// command, an undeterminable cwd and an unset `$HOME` (no ledger location)
+/// deny. Called under `harness_core::hook::run_pretooluse_guarded`: a panic
+/// exits 2 (fail-closed).
+fn run_testscope() {
+    // An unreadable payload is undetermined: which command is about to run is
+    // unknown, so deny (CLAUDE.md §3).
+    let deny = |reason: String| {
+        let out = serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        });
+        println!("{out}");
+    };
+    let raw = match try_read_stdin() {
+        Ok(raw) => raw,
+        Err(e) => {
+            deny(format!(
+                "condukt testscope could not read the PreToolUse payload: {e}"
+            ));
+            return;
+        }
+    };
+    let v: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            deny(format!(
+                "condukt testscope could not parse the PreToolUse payload: {e}"
+            ));
+            return;
+        }
+    };
+    if v.get("tool_name").and_then(|t| t.as_str()) != Some("Bash") {
+        return;
+    }
+    let Some(command) = v.pointer("/tool_input/command").and_then(|c| c.as_str()) else {
+        deny("condukt testscope: Bash payload carries no tool_input.command".to_string());
+        return;
+    };
+    let cwd = match v.get("cwd").and_then(|c| c.as_str()) {
+        Some(c) => std::path::PathBuf::from(c),
+        None => match std::env::current_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                deny(format!("condukt testscope cannot determine the cwd: {e}"));
+                return;
+            }
+        },
+    };
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let Some(ledger) = testscope::ledger_path(home.as_deref()) else {
+        deny("condukt testscope: HOME is unset, so the rerun ledger has no location".to_string());
+        return;
+    };
+    // Rule A: record that this hook is loaded in this session, so `condukt
+    // state set --status running` can refuse a session that never loaded it. A
+    // marker that cannot be written leaves the session unmarked, which is the
+    // restricted side (its `state set running` is refused); it is named on
+    // stderr, and this command is still judged below.
+    if let Some(sid) = v.get("session_id").and_then(|s| s.as_str()) {
+        if let Err(e) = testscope::write_session_marker(&ledger, sid) {
+            eprintln!(
+                "condukt testscope: could not write the session marker for '{sid}' ({e}); \
+                 `condukt state set --status running` will be refused in this session"
+            );
+        }
+    }
+    if let testscope::Decision::Deny(reason) =
+        testscope::judge(command, &cwd, home.as_deref(), &ledger)
+    {
+        deny(reason);
     }
 }
 
@@ -2559,14 +2623,6 @@ fn run_user(cmd: Command) -> Result<()> {
                 std::process::exit(finding_reconcile::run_cli(&cfg, &cwd, json));
             }
         },
-        Command::Guard { action } => match action {
-            GuardAction::MainTree { json } => {
-                // Exit directly with the gate's own status so the pre-commit
-                // hook can tell violation (1) from undetermined (2).
-                let code = maintree::run_guard(&cwd, json);
-                std::process::exit(code);
-            }
-        },
         Command::Consensus { action } => run_consensus(&cfg, action)?,
         Command::Adversarial { action } => run_adversarial(&cfg, action)?,
         Command::Init => init(&cfg)?,
@@ -2778,6 +2834,7 @@ fn run_user(cmd: Command) -> Result<()> {
         Command::Restore
         | Command::Statusline
         | Command::Editgate
+        | Command::Testscope
         | Command::SubagentStop
         | Command::SessionHeartbeat => {
             bail!("internal: hook subcommands must be dispatched in main(), not run_user()")
@@ -3624,6 +3681,18 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
     let repo = worktree::toplevel(cwd)?;
     match action {
         WtAction::Create { topic, branch, run } => {
+            // The run-cap lock is held across the cap check AND the create
+            // (dropped at the end of this arm), so two concurrent creates for
+            // the same run cannot both pass the check (backlog 32b69400).
+            // Cannot-acquire refuses the create (fail-closed).
+            let _cap_lock = match run.as_deref() {
+                Some(r) => {
+                    let guard = run_cap::acquire_run_cap_lock(cfg, &repo, r)?;
+                    run_cap::enforce_run_cap(&repo, &cfg.worktree_base, r, cfg.max_parallel)?;
+                    Some(guard)
+                }
+                None => None,
+            };
             let path = worktree::create_namespaced(
                 &repo,
                 &cfg.worktree_base,
@@ -4369,6 +4438,16 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // but that is now distinguishable from a task whose touched_files
             // could not be READ, which is named on stderr instead of passing as
             // "nothing to guard" (see `task_files`).
+            // Testscope session guard (user ruling 2026-11-14): a task may only
+            // start in a session where the `condukt testscope` PreToolUse hook
+            // is actually loaded — otherwise its test-scope rules are prompt
+            // prose again. The hook leaves a per-session marker; no session id,
+            // no marker, or a marker whose existence cannot be told refuses the
+            // transition before anything is claimed or written.
+            if st == state::Status::Running {
+                ensure_testscope_session()?;
+            }
+
             if st == state::Status::Running {
                 match task_files(cfg, cwd, &run, &task).require() {
                     Required::Blocked(verdict) => {
@@ -4731,34 +4810,39 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
             let (done, total) = rs.counts();
             eprintln!("run '{run}': {done}/{total} verified");
-            // Auto-rollback (charter #7): a task that fails after having been
-            // verified restores the run to the last checkpoint — the safety net
-            // that makes unattended proceeding reversible. Fail-soft: a missing
-            // checkpoint or any restore error is logged, never breaks the turn.
+            // verified -> failed (backlog b8aa9d43): ONLY this task changes (it
+            // ends `failed`). No checkpoint restore, no branch reset — a whole-run
+            // restore overwrote other tasks' state and `git reset --hard` discarded
+            // later commits. Reverting is the explicit `condukt state rollback`.
+            // The transition is journaled (kind `verified_failed`). Only an
+            // unlocatable journal dir is reported on stderr; `append_journal`
+            // itself is fail-silent (it drops serialize/open/write errors), so
+            // the stderr line below does not prove the record was written.
             if st == state::Status::Failed && prior_status == state::Status::Verified {
-                let dir = match checkpoint_project_dir(cfg, cwd, &run) {
-                    Ok(d) => Some(d),
-                    Err(e) => {
-                        eprintln!("auto-rollback: NOT attempted, checkpoints unlocatable: {e:#}");
-                        None
+                match checkpoint_project_dir(cfg, cwd, &run) {
+                    Ok(d) => {
+                        let seq = checkpoint::latest_checkpoint(&d, &run).map_or(0, |c| c.seq);
+                        checkpoint::append_journal(
+                            &d,
+                            &run,
+                            &checkpoint::JournalEntry {
+                                seq,
+                                kind: checkpoint::JournalKind::VerifiedFailed,
+                                label: task.to_string(),
+                                created_at: state::now_secs(),
+                                note: Some(
+                                    "verified->failed; no checkpoint restored, no branch reset"
+                                        .to_string(),
+                                ),
+                            },
+                        );
+                        eprintln!(
+                            "verified task '{task}' marked failed; no checkpoint restored and no branch reset (use `condukt state rollback` to revert explicitly)"
+                        );
                     }
-                };
-                if let Some((dir, cp)) = dir.and_then(|d| {
-                    let cp = checkpoint::latest_checkpoint(&d, &run)?;
-                    Some((d, cp))
-                }) {
-                    restore_checkpoint(
-                        cfg,
-                        cwd,
-                        &dir,
-                        &run,
-                        &cp,
-                        checkpoint::JournalKind::AutoRollback,
-                    );
-                    eprintln!(
-                        "auto-rollback: verified task '{task}' failed; restored checkpoint {}",
-                        cp.seq
-                    );
+                    Err(e) => eprintln!(
+                        "verified task '{task}' marked failed; journal record NOT written, journal dir unlocatable: {e:#}"
+                    ),
                 }
             }
             // Claim upkeep (PDO): release this task's files once it reaches a
@@ -5689,6 +5773,43 @@ fn session_id_from_env() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// `Ok` only when `$CLAUDE_CODE_SESSION_ID` names a session whose `condukt
+/// testscope` hook left its marker (see `testscope::write_session_marker`).
+/// Every other shape — no session id, no ledger location, no marker, or a
+/// marker whose existence cannot be told — is an `Err` (CLAUDE.md §3).
+fn ensure_testscope_session() -> Result<()> {
+    const RESTART: &str = "the testscope hook is not loaded in this session \
+         (この session では testscope hook が読み込まれていない); restart the session \
+         (session を再起動すること) so the hook is active, then retry";
+    let Some(sid) = session_id_from_env() else {
+        bail!(
+            "refusing `state set --status running`: CLAUDE_CODE_SESSION_ID is unset, so \
+             this session's testscope hook cannot be confirmed: {RESTART}"
+        );
+    };
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let Some(ledger) = testscope::ledger_path(home.as_deref()) else {
+        bail!(
+            "refusing `state set --status running`: HOME is unset, so the testscope session \
+             marker has no location; {RESTART}"
+        );
+    };
+    match testscope::session_marker_present(&ledger, &sid) {
+        Ok(true) => Ok(()),
+        Ok(false) => bail!(
+            "refusing `state set --status running` for session '{sid}': no testscope session \
+             marker under {}; {RESTART}",
+            ledger
+                .parent()
+                .map(|p| p.join("sessions").display().to_string())
+                .unwrap_or_else(|| ledger.display().to_string())
+        ),
+        Err(e) => {
+            bail!("refusing `state set --status running` for session '{sid}': {e}; {RESTART}")
+        }
+    }
+}
+
 /// Is this status *finished* work, so the task's file claims must go back?
 ///
 /// Exhaustive with no wildcard on purpose, and deliberately identical to
@@ -5951,7 +6072,7 @@ pub(crate) fn capture_branch_shas(cwd: &Path, rs: &state::RunState) -> BTreeMap<
 /// Restore a checkpoint's run-state snapshot as the current run-state, then
 /// best-effort git-reset each recorded worktree to its snapshot SHA, and journal
 /// the event. Every side effect is fail-soft: a git or journal error is logged
-/// and skipped so a rollback (incl. the auto-rollback path) never breaks a turn.
+/// and skipped so an explicit rollback does not abort mid-way.
 fn restore_checkpoint(
     cfg: &Config,
     cwd: &Path,
@@ -6419,7 +6540,7 @@ fn init(cfg: &Config) -> Result<()> {
          worktree_base = \"{}\"\n\
          # Branch completed work merges back into.\n\
          default_branch = \"{}\"\n\
-         # Soft cap on concurrent workers (advisory; the skill honors it).\n\
+         # Hard cap on live worktrees per run; `condukt worktree create --run <id>` refuses when exceeded or undeterminable.\n\
          max_parallel = {}\n\
          # Globs that force a touching task to run serially (never in parallel),\n\
          # e.g. [\"**/models.py\", \"**/migrations/**\", \"docs/glossary.md\"].\n\

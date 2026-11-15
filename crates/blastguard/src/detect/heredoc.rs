@@ -574,7 +574,14 @@ pub(super) fn program_body_segments_fed_to(cmd: &str, reader: impl Fn(&str) -> b
 ///     backslash (with an unquoted delimiter the shell expands those);
 ///   * every line AFTER the closing delimiter is blank or a comment. A later
 ///     line could reach the written file by any spelling, so no later command
-///     is allowed at all;
+///     is allowed — with ONE exception: a QUOTED-delimiter `git … commit -F -`
+///     reader with no output redirect may be followed by commands that
+///     [`later_commands_cannot_run_stored_message`] accepts (`git log -1`,
+///     `git status --short`, `echo "rc=$?"`). git stores the message in
+///     `.git/COMMIT_EDITMSG` and the commit object, so any other later command
+///     (`sh .git/COMMIT_EDITMSG`, `git log -1 --format=%B | sh`, an unknown
+///     word) keeps the body judged. The later lines stay in the text and are
+///     judged by every rule;
 ///   * no line outside the body contains whitespace other than space, tab and
 ///     newline. A carriage return in particular: bash keeps a `\r` in the
 ///     delimiter word, so `<<'EOF'\r` is closed only by a line `EOF\r`, while
@@ -612,6 +619,279 @@ pub(super) enum OutputTargets {
     /// `>` / `>>` scans ([`redirect_view_without_quoted_here_document_body`]);
     /// every other rule still reads the body.
     AnyTarget,
+    /// At least one literal `.py` file ([`is_python_file_target`]) and only
+    /// literal targets, by `cat` or `tee`, with a QUOTED delimiter. Used ONLY
+    /// by [`python_file_here_document`], whose body is then judged as Python;
+    /// lines after the close are allowed and stay judged as shell.
+    PythonFiles,
+    /// Only literal non-shell code files ([`is_non_shell_code_file_target`]:
+    /// `.rs`, `.go`, `.c`, …), by `cat` or `tee`, with a QUOTED delimiter.
+    /// Used ONLY by [`non_shell_code_file_here_document`], whose body is then
+    /// judged by no shell rule; lines after the close are checked there.
+    NonShellCodeFiles,
+    /// NO output target: the reader is a Python interpreter that runs the body
+    /// as its program (`python3 - <<'EOF'`, `python3 <<'EOF'`), with a QUOTED
+    /// delimiter. Used ONLY by [`python_stdin_redirect_view`], whose body is
+    /// then tokenised as Python for the redirect view; lines after the close
+    /// are allowed and stay in the view.
+    PythonStdin,
+}
+
+/// A here-document split by [`here_document_body_parts`].
+pub(super) struct HereDocumentParts {
+    /// The command with the body removed (opener and delimiter lines kept).
+    pub(super) without_body: String,
+    /// The body, up to the closing delimiter line.
+    pub(super) body: String,
+    /// Every line after the closing delimiter line.
+    pub(super) after: String,
+    /// The files the reader writes the body to, quotes removed (only for
+    /// [`OutputTargets::PythonFiles`]; empty otherwise).
+    pub(super) targets: Vec<String>,
+    /// The byte length of the text before the body in `without_body` (every
+    /// line up to and including the opener line).
+    pub(super) head_len: usize,
+    /// The operand of every `cd` that runs before the reader, in order: a
+    /// permitted `cd <literal>` line before the opener, or a `cd <literal>`
+    /// head peeled off the opener line. The body's relative paths are relative
+    /// to where these lead, not to the session's directory.
+    pub(super) cds_before: Vec<String>,
+}
+
+/// User ruling 2026-11-08 (narrows the extension part of 6cf12ce9): a QUOTED
+/// here-document body that `cat`/`tee` writes to a literal `.py` file is judged
+/// by the language of that file, not read line by line as shell. The shell
+/// never parses that body (quoted delimiter: no expansion, no substitution),
+/// so a `` `git stash clear` `` in a Python comment or docstring is not a
+/// command; but the body is CODE (a later `python3 edit.py` runs it), so it is
+/// not data either. The caller judges `body` with the Python program judge
+/// ([`super::interpreter::python_file_body_verdict`]) and `without_body` with
+/// every shell rule — or, when that judge says the body may also be read as
+/// shell (a non-`.py` target in `targets`, or a later line that references the
+/// file other than as a `python3 <file>` script argument), the WHOLE command,
+/// body included, with every shell rule, Deny over Ask over Allow.
+///
+/// The shape rule is [`strip_data_here_document_bodies`]'s (permitted lines
+/// before the opener, one opener line with no `$`/backtick, a CLOSED body, no
+/// odd whitespace), with three differences: the delimiter MUST be quoted; the
+/// reader is `cat` or `tee` writing at least one literal `.py` file and only
+/// literal targets ([`OutputTargets::PythonFiles`]; `targets` lists them); and
+/// ANY lines may follow the close — they stay in `without_body` and are judged
+/// as shell. An empty body answers
+/// `None` (nothing to judge), as does every other shape: the body then stays in
+/// the command and is judged as shell lines, exactly as before.
+///
+/// The opener line may also carry `cd <literal>` heads joined by `;`
+/// (`cd <wt>; cat > scripts/x.py <<'EOF'`, tests/subagent_heredoc_fp_20261108.rs;
+/// [`python_reader_consumer`]). `cds_before` lists every `cd` operand that
+/// runs before the reader, so the judge places the body's relative paths there.
+pub(super) fn python_file_here_document(cmd: &str) -> Option<HereDocumentParts> {
+    here_document_body_parts(cmd, OutputTargets::PythonFiles).filter(|p| !p.body.is_empty())
+}
+
+/// The redirect view ([`redirect_view_without_quoted_here_document_body`]) of a
+/// command whose QUOTED here-document body a Python interpreter runs as its
+/// program (`cd <wt> && python3 - <<'EOF'`, tests/subagent_heredoc_fp_20261108.rs:
+/// the Rust text `Ok(how) => anyhow!(` inside a Python triple-quoted string
+/// was read as the relative redirect `> anyhow!(`). The shape is
+/// [`python_file_here_document`]'s with [`OutputTargets::PythonStdin`]: the
+/// reader is `python`, `python3` or `python3.N` spelled bare, with only
+/// flag-only options (never `-c`, `-m`), at most a `-` operand and no
+/// redirect ([`python_stdin_reader`]); any lines may follow the close.
+///
+/// The body is tokenised as Python ([`super::interpreter::python_redirect_view`])
+/// and the text of each string literal and comment is blanked (newlines kept),
+/// so a `>` there is not read as a shell redirect, EXCEPT a literal or comment
+/// whose own text holds a `>` AND a `$` or a backtick (a superset of the `>`
+/// whose target carries an expansion): that text is kept (its `'`, `"` and `\`
+/// blanked, so it cannot open a shell quote over later lines) and its `>` is
+/// judged as before (user ruling R2, 2026-10-14: an undeterminable `>` in
+/// program text is an Ask, never Allow). One narrowing (backlog b2330a21): a
+/// text whose `>` comes with a backtick but no `$` is blanked too when the
+/// lexer shows the whole program only prints to its stdout
+/// ([`super::interpreter::python_program_only_prints`]: no import, `open`,
+/// `file=`, runner or f-string), which this shape leaves unredirected — no
+/// string of it can reach a shell or a file. A `$` text is always kept. The
+/// literals' quote delimiters are
+/// blanked too. Code outside
+/// literals is kept as is. A body that does not tokenise answers `None`, and
+/// the view keeps the body. Only the line-level redirect scans read this view;
+/// every other rule (the interpreter scans included) still reads the full body.
+pub(super) fn python_stdin_redirect_view(cmd: &str) -> Option<String> {
+    let parts = python_stdin_here_document(cmd)?;
+    let prints_only = super::interpreter::python_program_only_prints(&parts.body);
+    let keep = |text: &str| {
+        text.contains('>') && (text.contains('$') || (text.contains('`') && !prints_only))
+    };
+    let body = super::interpreter::python_redirect_view(&parts.body, keep)?;
+    let (head, tail) = parts.without_body.split_at(parts.head_len);
+    Some(format!("{head}{body}{tail}"))
+}
+
+/// The QUOTED here-document whose body a bare Python interpreter runs as its
+/// program, split as [`python_stdin_redirect_view`] reads it
+/// ([`OutputTargets::PythonStdin`]); `cds_before` lists the `cd`s that run
+/// before the reader. Also read by the stdin-program audit
+/// (`payload::analyze_interpreter_stdin_exec`), which judges the body with the
+/// Python judge ([`super::interpreter::python_stdin_body_reading`]).
+pub(super) fn python_stdin_here_document(cmd: &str) -> Option<HereDocumentParts> {
+    here_document_body_parts(cmd, OutputTargets::PythonStdin)
+}
+
+/// [`opener_consumer`], then further `cd <literal>` heads ([`permitted_prefix_line`])
+/// followed by `;` are peeled too, for the two Python shapes
+/// ([`python_file_here_document`], [`python_stdin_redirect_view`]) only. A
+/// `cd` runs before the reader and never sees the body; the opener line, `cd`
+/// included, stays in the command and is judged by every shell rule, and the
+/// `cd` operand goes into `cds_before`.
+fn python_reader_consumer(line: &str) -> &str {
+    let mut rest = opener_consumer(line);
+    while let Some((head, tail)) = rest.split_once(';') {
+        let words = quote_aware_words(head);
+        if !(words.first().is_some_and(|w| w == "cd") && permitted_prefix_line(head)) {
+            break;
+        }
+        rest = opener_consumer(tail);
+    }
+    rest
+}
+
+/// The `cd` operands of `heads` (text split at `&&` / `;`), in order: only
+/// heads [`permitted_prefix_line`] accepts as `cd <literal>`.
+fn cd_operands(heads: &str) -> Vec<String> {
+    heads
+        .split([';', '&'])
+        .filter_map(|h| match quote_aware_words(h).as_slice() {
+            [cd, dir] if cd == "cd" && permitted_prefix_line(h) => Some(dir.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// True when `words` (the reader text, quote-aware, redirects and the
+/// here-document opener removed) are a bare Python interpreter that runs its
+/// stdin: `python`, `python3` or `python3.N`, then only flag-only options
+/// (`-u`, `-B`, …; never `-c`, `-m`, `-W`, `-X`), then at most `-`.
+fn python_stdin_reader(words: &[&str]) -> bool {
+    let Some((head, rest)) = words.split_first() else {
+        return false;
+    };
+    let versioned = head.strip_prefix("python").is_some_and(|v| {
+        v.is_empty()
+            || v == "3"
+            || v.strip_prefix("3.")
+                .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+    });
+    let rest = rest.strip_suffix(&["-"]).unwrap_or(rest);
+    versioned
+        && rest.iter().all(|w| {
+            w.strip_prefix('-')
+                .is_some_and(|f| !f.is_empty() && f.chars().all(|c| "bBdEiIOPqsSuvR".contains(c)))
+        })
+}
+
+/// User ruling 2026-11-08 (issue #1602, the non-Python half of the ruling
+/// [`python_file_here_document`] implements): a QUOTED here-document body that
+/// `cat`/`tee` writes ONLY to literal non-shell code files
+/// ([`is_non_shell_code_file_target`]: `.rs`, `.go`, `.c`, …) is not shell
+/// lines. With a quoted delimiter the shell neither expands nor parses that
+/// body — it is the reader's stdin, byte for byte — so a lone backtick or a
+/// `git stash clear` in a Rust comment is not a command. Answers the command
+/// with the body removed (opener and delimiter lines kept, so the opener's
+/// targets and every later line are still judged by every shell rule), or
+/// `None` to keep the body in the text, judged as shell lines exactly as
+/// before.
+///
+/// The shape rule is [`python_file_here_document`]'s (permitted lines before
+/// the opener, one opener line with no `$`/backtick, a quoted delimiter, a
+/// CLOSED non-empty body, no odd whitespace), plus:
+///   * EVERY target is a non-shell code file (a `.sh`, extension-less or other
+///     target keeps the body; so does a `.py` one, which is step 0b's);
+///   * the body's first line is not a `#!` interpreter line (`#![…]`, a Rust
+///     inner attribute, is not one): a script for an interpreter is shell-run
+///     code;
+///   * every line after the close is blank, a whole-line comment, or a list of
+///     simple commands each headed by a word on [`INERT_LATER_COMMANDS`]
+///     (`ls`, `cat`, `wc`, …, read-only tools that run no file), with no `$`,
+///     backtick, `\`, `(`, `)`, `{`, `}`, `<`, `>`, `#` or unbalanced quote on
+///     the line. Any later command that could run, source or build the written
+///     file — `cargo test`, `rustc x.rs`, `node x.js`, `sh x.rs`, `make`, an
+///     unknown word — keeps the body judged.
+///
+/// RESIDUAL, as for data files: a LATER, separate tool call that builds or
+/// runs the file is judged on its own text; this gate never re-reads the file.
+pub(super) fn non_shell_code_file_here_document(cmd: &str) -> Option<String> {
+    let parts = here_document_body_parts(cmd, OutputTargets::NonShellCodeFiles)?;
+    let first = parts.body.lines().next()?;
+    if first.starts_with("#!") && !first.starts_with("#![") {
+        return None;
+    }
+    let mut commands = String::new();
+    for line in parts.after.lines() {
+        let t = line.trim_matches([' ', '\t']);
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        if t.contains(['$', '`', '\\', '(', ')', '{', '}', '<', '>', '#']) || !quotes_balance(t) {
+            return None;
+        }
+        commands.push_str(t);
+        commands.push('\n');
+    }
+    let inert = split_segments_with_separators(&commands).iter().all(|s| {
+        quote_aware_words(&s.text)
+            .first()
+            .is_none_or(|w| INERT_LATER_COMMANDS.contains(&w.as_str()))
+    });
+    inert.then_some(parts.without_body)
+}
+
+/// Commands [`non_shell_code_file_here_document`] accepts after the close: each
+/// reads or lists files, or prints its arguments, and none runs, sources or
+/// builds a file. The program word must be spelled exactly so (no path, no
+/// assignment, no wrapper). A CLOSED list: an unlisted command keeps the body.
+///
+/// Only tools with NO option that runs a program are listed, so no per-option
+/// check is needed. Deliberately absent: `rg` (`--pre <cmd>` and
+/// `--hostname-bin <cmd>` run a program of the caller's choice, `-z` runs
+/// decompressors; tests/non_shell_code_heredoc_failopen_probe_20261111.rs),
+/// `diff` (macOS `diff -l` pipes through `pr`) and `file` (`-z` may run
+/// decompressors). Adding a tool here needs the same check of its options.
+pub(super) const INERT_LATER_COMMANDS: &[&str] = &[
+    "ls", "cat", "head", "tail", "wc", "grep", "cmp", "stat", "pwd", "echo", "printf", "true",
+];
+
+/// Extensions of source files no shell runs as a script and that are not
+/// Python (`.py` is [`python_file_here_document`]'s): the targets whose
+/// quoted here-document body [`non_shell_code_file_here_document`] keeps out
+/// of the shell rules. `.sh` and extension-less names are deliberately absent
+/// (user ruling 2026-11-08: those bodies are judged as shell).
+pub(super) const NON_SHELL_CODE_EXTENSIONS: &[&str] = &[
+    "rs", "go", "c", "h", "cc", "cpp", "hpp", "java", "kt", "swift", "ts", "tsx", "js", "jsx",
+];
+
+/// True when `target` (one shell word, quotes still on) is a literal path
+/// whose extension is on [`NON_SHELL_CODE_EXTENSIONS`].
+pub(super) fn is_non_shell_code_file_target(target: &str) -> bool {
+    let inner = unquote_data_file_target(target);
+    is_data_file_target_shape(inner)
+        && std::path::Path::new(inner)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| NON_SHELL_CODE_EXTENSIONS.contains(&e))
+}
+
+/// `.py` files whose here-document body [`python_file_here_document`] judges
+/// as Python. `.sh` and extension-less targets stay shell-judged; the
+/// [`NON_SHELL_CODE_EXTENSIONS`] are [`non_shell_code_file_here_document`]'s,
+/// and every other extension stays shell-judged.
+pub(super) fn is_python_file_target(target: &str) -> bool {
+    let inner = unquote_data_file_target(target);
+    is_data_file_target_shape(inner)
+        && std::path::Path::new(inner)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e == "py")
 }
 
 /// The text the line-level truncating (`>`) and append (`>>`) redirect scans
@@ -636,10 +916,12 @@ pub(super) enum OutputTargets {
 ///   * the opener's output redirect may name ANY literal target, not only a
 ///     data file. Its target is still judged: the opener line stays in the
 ///     view, so `> src/x.rs` goes through every redirect axis as before;
-///   * when the reader stores the body in no file
-///     ([`here_document_reader_stores_nothing`]: bare `cat`, `git commit -F -`,
-///     no output redirect), ANY lines may follow the closing delimiter. They
-///     stay in the view and are judged like every other line;
+///   * when the reader is a bare `cat` with no output redirect (it stores the
+///     body in no file, [`here_document_reader_stores_nothing`]), ANY lines may
+///     follow the closing delimiter; for `git commit -F -` with no output
+///     redirect, which stores the message in `.git/COMMIT_EDITMSG`, only lines
+///     [`later_commands_cannot_run_stored_message`] accepts may. They stay in
+///     the view and are judged like every other line;
 ///   * the consumer text is [`redirect_view_consumer`]'s: besides the heads
 ///     [`opener_consumer`] splits, further `cd <one word>` heads split at `;`
 ///     or `&&` are peeled, even with an unresolvable operand like `"$WT"`. The
@@ -650,10 +932,16 @@ pub(super) enum OutputTargets {
 ///
 /// Every other rule (the per-segment loop, the interpreter and egress scans)
 /// still reads the full text, body included.
+///
+/// When that shape does not apply, a QUOTED body run by `python3 -` gets the
+/// Python-tokenised view of [`python_stdin_redirect_view`] instead.
 pub(super) fn redirect_view_without_quoted_here_document_body(
     cmd: &str,
 ) -> std::borrow::Cow<'_, str> {
-    strip_here_document_body(cmd, OutputTargets::AnyTarget)
+    match here_document_body_parts(cmd, OutputTargets::AnyTarget) {
+        Some(parts) => std::borrow::Cow::Owned(parts.without_body),
+        None => python_stdin_redirect_view(cmd).map_or(std::borrow::Cow::Borrowed(cmd), Into::into),
+    }
 }
 
 /// The shared shape rule of [`strip_data_here_document_bodies`] and
@@ -666,9 +954,17 @@ pub(super) fn strip_here_document_body(
     cmd: &str,
     targets: OutputTargets,
 ) -> std::borrow::Cow<'_, str> {
-    let unchanged = std::borrow::Cow::Borrowed(cmd);
+    match here_document_body_parts(cmd, targets) {
+        Some(parts) => std::borrow::Cow::Owned(parts.without_body),
+        None => std::borrow::Cow::Borrowed(cmd),
+    }
+}
+
+/// The shape rule behind [`strip_here_document_body`] and
+/// [`python_file_here_document`]: `None` when the body must stay in the text.
+fn here_document_body_parts(cmd: &str, targets: OutputTargets) -> Option<HereDocumentParts> {
     if !cmd.contains("<<") {
-        return unchanged;
+        return None;
     }
     let lines: Vec<&str> = cmd.split_inclusive('\n').collect();
     let text = |l: &str| l.strip_suffix('\n').unwrap_or(l).to_string();
@@ -685,22 +981,20 @@ pub(super) fn strip_here_document_body(
     while idx < lines.len() {
         let l = text(lines[idx]);
         if odd_whitespace(&l) {
-            return unchanged;
+            return None;
         }
         if !(inert(&l) || permitted_prefix_line(&l)) {
             break;
         }
         idx += 1;
     }
-    let Some(opener_line) = lines.get(idx).map(|l| text(l)) else {
-        return unchanged;
-    };
+    let opener_line = lines.get(idx).map(|l| text(l))?;
     let openers = here_document_openers(&opener_line);
     // The redirect view removes a body only when the shell cannot expand it.
     let redirect_view_of_quoted =
         targets == OutputTargets::AnyTarget && here_document_delimiter_is_quoted(&opener_line);
-    if targets == OutputTargets::AnyTarget && !redirect_view_of_quoted {
-        return unchanged;
+    if targets != OutputTargets::DataFilesOnly && !here_document_delimiter_is_quoted(&opener_line) {
+        return None;
     }
     // Quoted delimiter, redirect view: further `cd <word>` heads (split at `;`
     // or `&&`) are peeled too, even with an unresolvable operand like "$WT".
@@ -708,11 +1002,24 @@ pub(super) fn strip_here_document_body(
     // command text so every rule still judges them; `$` / backtick are then
     // refused only in the remaining reader text. [`opener_consumer`]'s own
     // contract is unchanged.
+    let python_reader = matches!(
+        targets,
+        OutputTargets::PythonFiles | OutputTargets::PythonStdin
+    );
     let consumer = if redirect_view_of_quoted {
         redirect_view_consumer(&opener_line)
+    } else if python_reader {
+        python_reader_consumer(&opener_line)
     } else {
         opener_consumer(&opener_line)
     };
+    let mut cds_before: Vec<String> = lines[..idx]
+        .iter()
+        .flat_map(|l| cd_operands(&text(l)))
+        .collect();
+    cds_before.extend(cd_operands(
+        &opener_line[..opener_line.len() - consumer.len()],
+    ));
     // Backlog ffce9c59: `git commit -F - <<'EOF' | cat` / `<<'EOF'; git log`.
     // The body is git's stdin only; the tail stays in the text and is judged.
     let git_reader = if here_document_delimiter_is_quoted(&opener_line) {
@@ -732,33 +1039,105 @@ pub(super) fn strip_here_document_body(
         || !quotes_balance(&opener_line)
         || !here_document_consumer_is_data(consumer, targets)
     {
-        return unchanged;
+        return None;
     }
     // The body, up to the first exact delimiter line.
-    let Some(close) = (idx + 1..lines.len())
-        .find(|&j| segment_closes_here_document(&text(lines[j]), &openers[0]))
-    else {
-        return unchanged;
-    };
+    let close = (idx + 1..lines.len())
+        .find(|&j| segment_closes_here_document(&text(lines[j]), &openers[0]))?;
     let body: String = lines[idx + 1..close].concat();
     if !here_document_delimiter_is_quoted(&opener_line) && body.contains(['$', '`', '\\']) {
-        return unchanged;
+        return None;
     }
-    // Lines after the close. The redirect view may keep LATER commands when the
-    // reader stores the body nowhere a later command could run it from
-    // ([`here_document_reader_stores_nothing`]): those lines stay in the view
-    // and every redirect rule still judges them; only the body leaves.
-    let later_commands_ok =
-        targets == OutputTargets::AnyTarget && here_document_reader_stores_nothing(consumer);
+    // Lines after the close. LATER commands may follow (and stay in the text,
+    // judged by every rule; only the body leaves) when no later command can
+    // reach the body: a bare `cat` reader leaves it in no file
+    // ([`here_document_reader_stores_nothing`]), which suffices for the
+    // redirect view; a QUOTED `git commit -F -` reader stores it in
+    // `.git/COMMIT_EDITMSG` and the commit object, so for both the redirect
+    // view and the every-rule strip each later command must also be unable to
+    // run that stored message ([`later_commands_cannot_run_stored_message`]).
+    // The Python-file split keeps every later line too: the body is judged as
+    // Python whether or not a later line runs it, and the later lines are
+    // judged as shell. So does the Python-stdin redirect view: its later lines
+    // stay in the view.
+    // The non-shell-code split checks its later lines itself
+    // ([`non_shell_code_file_here_document`]).
+    let stores_nothing = here_document_reader_stores_nothing(consumer);
+    let git_reader_head = quote_aware_words(consumer).first().map(String::as_str) == Some("git");
+    let stored_message_unreachable = || {
+        here_document_delimiter_is_quoted(&opener_line)
+            && later_commands_cannot_run_stored_message(&lines[close + 1..].concat())
+    };
+    let later_commands_ok = matches!(
+        targets,
+        OutputTargets::PythonFiles | OutputTargets::PythonStdin | OutputTargets::NonShellCodeFiles
+    ) || (matches!(
+        targets,
+        OutputTargets::AnyTarget | OutputTargets::DataFilesOnly
+    ) && stores_nothing
+        && if git_reader_head {
+            stored_message_unreachable()
+        } else {
+            targets == OutputTargets::AnyTarget
+        });
     if lines[close + 1..]
         .iter()
         .any(|l| odd_whitespace(&text(l)) || !(later_commands_ok || inert(&text(l))))
     {
-        return unchanged;
+        return None;
     }
     let mut out: String = lines[..=idx].concat();
+    let head_len = out.len();
     out.push_str(&lines[close..].concat());
-    std::borrow::Cow::Owned(out)
+    Some(HereDocumentParts {
+        without_body: out,
+        body,
+        after: lines[close + 1..].concat(),
+        targets: if targets == OutputTargets::PythonFiles {
+            here_document_write_targets(consumer)
+        } else {
+            Vec::new()
+        },
+        head_len,
+        cds_before,
+    })
+}
+
+/// The files a `cat`/`tee` here-document reader `line` writes to, quotes
+/// removed: every output-redirect target and every `tee` operand other than
+/// `-a` / `--append`. Only meaningful for a line
+/// [`here_document_consumer_is_data`] accepted under
+/// [`OutputTargets::PythonFiles`], or a `cat`/`tee` here-string writer
+/// ([`super::here_string_file`], here-strings removed from `line`).
+pub(super) fn here_document_write_targets(line: &str) -> Vec<String> {
+    let raw = quote_aware_words(line);
+    let mut out = Vec::new();
+    let (mut head_seen, mut tee) = (false, false);
+    let mut i = 0;
+    while i < raw.len() {
+        let w = raw[i].as_str();
+        if let Some(rest) = w.strip_prefix("<<") {
+            let rest = rest.strip_prefix('-').unwrap_or(rest);
+            i += if rest.is_empty() { 2 } else { 1 };
+            continue;
+        }
+        if let Some(glued) = strip_output_redirect_operator(w) {
+            let target = if glued.is_empty() {
+                i += 1;
+                raw.get(i).map(String::as_str).unwrap_or("")
+            } else {
+                glued
+            };
+            out.push(unquote_data_file_target(target).to_string());
+        } else if !head_seen {
+            head_seen = true;
+            tee = w == "tee";
+        } else if tee && !matches!(w, "-a" | "--append") {
+            out.push(unquote_data_file_target(w).to_string());
+        }
+        i += 1;
+    }
+    out
 }
 
 /// The part of the opener line [`here_document_consumer_is_data`] judges: the
@@ -889,9 +1268,14 @@ fn redirect_view_extra_head(head: &str, and_joined: bool) -> bool {
 ///
 /// The here-document redirects the stdin of the simple command it is attached
 /// to, so the body is `git commit`'s stdin and nothing else's: a `|` after the
-/// opener takes git's STDOUT, and a `;`/`&&`/`||` starts a command that never
-/// sees the body. The tail is not removed: it stays in the command text and
-/// every rule judges it as its own command (`<<'EOF'; rm -rf /etc` is Deny).
+/// opener takes git's STDOUT, and a `;`/`&&`/`||` starts a command that does
+/// not get the body on its stdin. It CAN still read the body back: git stores
+/// the message verbatim in `.git/COMMIT_EDITMSG` and in the commit object, so
+/// `<<'EOF'; sh .git/COMMIT_EDITMSG` runs it. The commands after the pipeline
+/// stages must therefore pass [`later_commands_cannot_run_stored_message`]
+/// (`; git log -1` does, `; sh .git/COMMIT_EDITMSG` does not). The tail is not
+/// removed either way: it stays in the command text and every rule judges it
+/// as its own command (`<<'EOF'; rm -rf /etc` is Deny).
 ///
 /// Refused (`None`): no unquoted operator, a `\`, `$` or backtick anywhere in
 /// the consumer text, a single `&` (background) or `|&`, a reader that is not
@@ -900,6 +1284,8 @@ fn redirect_view_extra_head(head: &str, and_joined: bool) -> bool {
 /// next `;`/`&&`/`||`) whose program is not `cat`/`grep`/`egrep`/`fgrep`/
 /// `head`/`tail`/`wc` or that holds `<`, `>`, `(`, `)`. git prints the commit
 /// subject on stdout, so a stage that could run its stdin keeps the body judged.
+/// Also refused: commands after those stages that
+/// [`later_commands_cannot_run_stored_message`] does not accept.
 fn git_commit_reader_before_tail(consumer: &str) -> Option<String> {
     if consumer.contains(['\\', '$', '`']) {
         return None;
@@ -967,21 +1353,28 @@ fn git_commit_reader_before_tail(consumer: &str) -> Option<String> {
         }
         k += 1;
     }
+    // The commands after the pipeline run after git stored the message.
+    if let Some(&(at, op)) = ops.get(k) {
+        if !later_commands_cannot_run_stored_message(&consumer[at + op.len()..]) {
+            return None;
+        }
+    }
     Some(reader)
 }
 
 /// True when `consumer` (the opener-line text [`opener_consumer`] returns, which
-/// [`here_document_consumer_is_data`] has already accepted) hands the body to a
-/// reader that leaves it in NO file: a bare `cat` with no output redirect (the
-/// body goes to the tool's stdout) or `git commit -F -` with no output redirect
-/// (the body becomes a commit message).
+/// [`here_document_consumer_is_data`] has already accepted) is a bare `cat` or a
+/// `git` reader with no output redirect. Despite the name, only `cat` leaves
+/// the body in NO file (it goes to the tool's stdout). `git commit -F -` STORES
+/// it: git writes the message verbatim to `.git/COMMIT_EDITMSG` and into the
+/// commit object, where a later line can read it back and run it
+/// (`sh .git/COMMIT_EDITMSG`, `git log -1 --format=%B | sh`).
 ///
-/// Only for the redirect view ([`OutputTargets::AnyTarget`]), where it lets
-/// commands follow the closing delimiter line (FP1, backlog e0085090:
-/// `git commit -F - <<'EOF'` … `EOF` then `git log -1` had a message line ending
-/// in `>` read as the redirect `> EOF`). The reason the shape rule otherwise
-/// forbids later commands is that one of them could execute a FILE the body was
-/// written to; with no file there is nothing for it to execute. `tee` writes
+/// So [`here_document_body_parts`] lets commands follow the closing delimiter
+/// line on this answer alone only for `cat`; for a `git` reader every later
+/// line must also pass [`later_commands_cannot_run_stored_message`] (FP1,
+/// backlog e0085090: `git commit -F - <<'EOF'` … `EOF` then `git log -1` had a
+/// message line ending in `>` read as the redirect `> EOF`). `tee` writes
 /// files, and any output redirect names one, so both answer false.
 pub(super) fn here_document_reader_stores_nothing(consumer: &str) -> bool {
     let words = quote_aware_words(consumer);
@@ -992,6 +1385,72 @@ pub(super) fn here_document_reader_stores_nothing(consumer: &str) -> bool {
         return false;
     }
     matches!(words.first().map(String::as_str), Some("cat" | "git"))
+}
+
+/// The `git` subcommands [`later_commands_cannot_run_stored_message`] accepts:
+/// each only prints history or the working-tree state and runs no file. A
+/// CLOSED list; any other subcommand (`push`, `rebase -x`, an alias, …) keeps
+/// the body judged.
+const LATER_GIT_READS: &[&str] = &["log", "status", "show"];
+
+/// True when no command in `text` (the commands that run AFTER a quoted
+/// `git … commit -F -` here-document reader: the lines after the closing
+/// delimiter, or the opener-line tail [`git_commit_reader_before_tail`] splits
+/// off) can run the stored commit message. git keeps that message verbatim in
+/// `.git/COMMIT_EDITMSG` and in the commit object, so a later
+/// `sh .git/COMMIT_EDITMSG`, `bash < …`, `source …`, `. …`, or
+/// `git log -1 --format=%B | sh` runs the body as shell code; when this answers
+/// false the body stays in the judged text and every rule reads it.
+///
+/// `text` is split with the segment parser ([`split_segments_with_separators`]:
+/// `;`, `&&`, `||`, `|`, `&`, newline) and every segment must be headed by:
+///   * a word on [`INERT_LATER_COMMANDS`], spelled bare (no quote, path or
+///     assignment). Those tools have no option that runs a program, so any
+///     operand — `$` expansions included, which can only add operands — leaves
+///     them reading or printing;
+///   * `git` followed DIRECTLY by a subcommand on [`LATER_GIT_READS`] (no global
+///     option such as `-c`), whose words hold no `$` (an expansion could add any
+///     option) and none starting `--ou` (`--output=<file>` and its unambiguous
+///     abbreviations write the printed message to a file).
+///
+/// Whole-line comments and blank lines are skipped. A line holding a backtick,
+/// `\`, `(`, `)`, `{`, `}`, `<`, `>`, `#` or an unbalanced quote answers false:
+/// substitutions, groups, redirects and continued quotes are not judged here.
+/// Empty `text` answers true (nothing runs after the reader).
+///
+/// RESIDUALS, not covered: a LATER, separate tool call that runs the stored
+/// message is judged on its own text; programs git itself runs from existing
+/// configuration (hooks, pager, diff drivers) are the repository's, not the
+/// body's.
+pub(super) fn later_commands_cannot_run_stored_message(text: &str) -> bool {
+    let mut commands = String::new();
+    for line in text.lines() {
+        let t = line.trim_matches([' ', '\t']);
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        if t.contains(['`', '\\', '(', ')', '{', '}', '<', '>', '#']) || !quotes_balance(t) {
+            return false;
+        }
+        commands.push_str(t);
+        commands.push('\n');
+    }
+    split_segments_with_separators(&commands).iter().all(|s| {
+        let words = quote_aware_words(&s.text);
+        match words.split_first() {
+            None => true,
+            Some((head, _)) if INERT_LATER_COMMANDS.contains(&head.as_str()) => true,
+            Some((head, rest)) if head == "git" => {
+                rest.split_first().is_some_and(|(sub, options)| {
+                    LATER_GIT_READS.contains(&sub.as_str())
+                        && options
+                            .iter()
+                            .all(|w| !w.contains('$') && !w.starts_with("--ou"))
+                })
+            }
+            _ => false,
+        }
+    })
 }
 
 /// True when `line` has no unterminated `'` or `"` quote.
@@ -1060,6 +1519,12 @@ pub(super) fn permitted_prefix_line(line: &str) -> bool {
 /// `yml`, `xml`/plist, `patch`/`diff`, which `git apply` turns into code) are
 /// deliberately absent, as are `.sh`, `.py` and extension-less names (the
 /// 6cf12ce9 ruling `cat > run.sh <<'EOF'`): a body headed there stays judged.
+/// A `.sh` or extension-less body is judged as shell lines. A `.py` body
+/// written by `cat`/`tee` under a QUOTED delimiter is judged as Python instead
+/// (user ruling 2026-11-08, [`python_file_here_document`]): still code, never
+/// data, but not shell either. A body written only to non-shell code files
+/// (`.rs`, …) is likewise not read as shell lines when nothing later in the
+/// command can run it ([`non_shell_code_file_here_document`]).
 ///
 /// This is a statement about the NAME only. Any file can be executed
 /// (`sh notes.txt`). Within one command that is covered by the shape rule in
@@ -1085,12 +1550,7 @@ pub(super) fn unquote_data_file_target(target: &str) -> &str {
 /// answers false.
 pub(super) fn is_data_file_target(target: &str) -> bool {
     let inner = unquote_data_file_target(target);
-    if inner.is_empty()
-        || inner.contains([
-            '$', '`', '\\', '\'', '"', '*', '?', '[', ']', '{', '}', '(', ')', '<', '>', '|', ';',
-            '&',
-        ])
-    {
+    if !is_data_file_target_shape(inner) {
         return false;
     }
     if inner == "/dev/null" {
@@ -1104,6 +1564,16 @@ pub(super) fn is_data_file_target(target: &str) -> bool {
                 .iter()
                 .any(|d| d.eq_ignore_ascii_case(e))
         })
+}
+
+/// True when the unquoted target word `inner` is a literal path: non-empty,
+/// with no expansion, glob, escape, quote or shell operator in it.
+fn is_data_file_target_shape(inner: &str) -> bool {
+    !inner.is_empty()
+        && !inner.contains([
+            '$', '`', '\\', '\'', '"', '*', '?', '[', ']', '{', '}', '(', ')', '<', '>', '|', ';',
+            '&',
+        ])
 }
 
 /// True when a here-document delimiter is spelled as a plain word: `TAG`,
@@ -1172,11 +1642,18 @@ pub(super) fn strip_output_redirect_operator(word: &str) -> Option<&str> {
 /// [`redirect_view_without_quoted_here_document_body`]) lets a redirect name
 /// any target word free of shell syntax (`\`, backtick, `(`, `)`, `;`, `&`,
 /// `|`, `<`, `>`, `$`). Everything else, including the `tee` operand rule
-/// (DATA files only), is the same for both.
+/// (DATA files only), is the same for both. [`OutputTargets::PythonFiles`]
+/// (only from [`python_file_here_document`]) accepts ONLY `cat` or `tee`, and
+/// only when every redirect target and `tee` operand is a literal path and at
+/// least one of them is a `.py` file ([`is_python_file_target`]).
+/// [`OutputTargets::PythonStdin`] (only from [`python_file_here_document`]) accepts
+/// ONLY a bare Python interpreter running its stdin ([`python_stdin_reader`])
+/// with no redirect at all.
 pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets) -> bool {
     let raw = quote_aware_words(line);
     let mut words: Vec<&str> = Vec::new();
     let mut saw_here_document = false;
+    let mut python_targets = 0usize;
     let mut i = 0;
     while i < raw.len() {
         let w = raw[i].as_str();
@@ -1217,9 +1694,18 @@ pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets)
                     !target.is_empty()
                         && !target.contains(['\\', '`', '(', ')', ';', '&', '|', '<', '>', '$'])
                 }
+                OutputTargets::PythonFiles => {
+                    is_data_file_target_shape(unquote_data_file_target(target))
+                }
+                OutputTargets::NonShellCodeFiles => is_non_shell_code_file_target(target),
+                // The interpreter's own output is not the body; no redirect.
+                OutputTargets::PythonStdin => false,
             };
             if !target_ok {
                 return false;
+            }
+            if is_python_file_target(target) {
+                python_targets += 1;
             }
             i += 1;
             continue;
@@ -1233,6 +1719,47 @@ pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets)
             .any(|w| w.contains(['<', '>', '\\', '`', '(', ')', ';', '&', '|']))
     {
         return false;
+    }
+    // [`OutputTargets::PythonFiles`]: `cat`/`tee` writing at least one `.py`
+    // file, every target a literal path (a `tee` operand counts as a target).
+    // A non-`.py` target is allowed here; the caller then judges the body as
+    // shell lines too ([`python_file_here_document`]).
+    // [`OutputTargets::NonShellCodeFiles`]: `cat`/`tee` writing ONLY non-shell
+    // code files, at least one (a `tee` operand counts as a target).
+    if targets == OutputTargets::NonShellCodeFiles {
+        let redirects = raw
+            .iter()
+            .filter(|w| strip_output_redirect_operator(w).is_some());
+        return match words.first().copied() {
+            Some("cat") => redirects.count() > 0 && words[1..].iter().all(|w| *w == "-"),
+            Some("tee") => {
+                let files: Vec<&&str> = words[1..]
+                    .iter()
+                    .filter(|w| !matches!(**w, "-a" | "--append"))
+                    .collect();
+                redirects.count() + files.len() > 0
+                    && files.iter().all(|w| is_non_shell_code_file_target(w))
+            }
+            _ => false,
+        };
+    }
+    if targets == OutputTargets::PythonStdin {
+        return python_stdin_reader(&words);
+    }
+    if targets == OutputTargets::PythonFiles {
+        return match words.first().copied() {
+            Some("cat") => python_targets > 0 && words[1..].iter().all(|w| *w == "-"),
+            Some("tee") => {
+                let files = words[1..]
+                    .iter()
+                    .filter(|w| !matches!(**w, "-a" | "--append"));
+                python_targets + files.clone().filter(|w| is_python_file_target(w)).count() > 0
+                    && files
+                        .into_iter()
+                        .all(|w| is_data_file_target_shape(unquote_data_file_target(w)))
+            }
+            _ => false,
+        };
     }
     match words.first().copied() {
         Some("cat") => words[1..].iter().all(|w| *w == "-"),

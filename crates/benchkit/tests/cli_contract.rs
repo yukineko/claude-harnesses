@@ -996,6 +996,13 @@ fn claim_from_violations_flag_routes() {
                 session_id: "s1".into(),
                 ts: 1000,
                 detail: None,
+                decision: None,
+                tool: None,
+                command: None,
+                target: None,
+                cwd: None,
+                actor: None,
+                system_harm: None,
             };
             overwatch::store::append_violation(&sb.cwd(), &ev).unwrap();
         }

@@ -1,8 +1,8 @@
 use super::{
     analyze_code_interpreter, command_candidates, compound_views, confined_ask, depth_exhausted,
-    detect_bash, git_subcommand_index, is_code_interpreter, is_exec_wrapper, is_shell,
-    normalized_command, split_segments_with_separators, wrapped_command_heads, Ctx, Decision,
-    SegmentSep, VerdictAcc, MAX_SHELL_DEPTH,
+    detect_bash, faithful_tail, git_subcommand_index, is_code_interpreter, is_exec_wrapper,
+    is_shell, normalized_command, split_segments_with_separators, word_separators_lost,
+    wrapped_command_heads, Ctx, Decision, SegmentSep, VerdictAcc, MAX_SHELL_DEPTH,
 };
 
 /// find's own global options, which sit BEFORE the search roots and are not
@@ -105,7 +105,15 @@ fn find_confined_root(rest: &[&str], ctx: &Ctx<'_>) -> Option<String> {
     None
 }
 
-pub(super) fn analyze_find(rest: &[&str], depth: usize, ctx: &Ctx<'_>) -> Decision {
+/// Judge a `find` invocation. `seg` is the segment `rest` was whitespace-split
+/// from: an `-exec <interpreter> -c '…'` program is read off it with its
+/// newlines intact (see `payload::faithful_tail`).
+pub(super) fn analyze_find(
+    rest: &[&str],
+    seg: Option<&str>,
+    depth: usize,
+    ctx: &Ctx<'_>,
+) -> Decision {
     // The search roots bound everything `find` can touch, so they are what
     // decides whether this invocation is confined. Computed once, up front,
     // because both the `-delete` arm and every `-exec` arm need the same
@@ -164,7 +172,7 @@ pub(super) fn analyze_find(rest: &[&str], depth: usize, ctx: &Ctx<'_>) -> Decisi
             // the identical command classified under two different rule ids
             // depending on whether a `find` wrapped it.
             if is_code_interpreter(c) {
-                let verdict = analyze_code_interpreter(c, &tail[ci + 1..], depth, ctx);
+                let verdict = analyze_code_interpreter(c, &tail[ci + 1..], seg, depth, ctx);
                 if !matches!(verdict, Decision::Allow) {
                     return verdict;
                 }
@@ -282,18 +290,34 @@ pub(super) fn analyze_find(rest: &[&str], depth: usize, ctx: &Ctx<'_>) -> Decisi
 /// payload (`find … | xargs rm -rf`, `xargs -I{} sh -c "rm -rf {}"`) fell through
 /// to the catch-all Allow arm. Re-analyse the inner command through `detect_bash`
 /// so it reuses the rm / shell-`-c` / find logic (and the recursion bound).
-pub(super) fn analyze_xargs(rest: &[&str], depth: usize, ctx: &Ctx<'_>) -> Decision {
+///
+/// The inner command is read off `seg` (the segment `rest` was split from) so a
+/// quoted `-c` program keeps its newlines (backlog 2026-11-13); without a
+/// source the tokens are re-joined, and an Allow on a re-join that lost a
+/// word's separators is an Ask instead (see `payload::word_separators_lost`).
+pub(super) fn analyze_xargs(
+    rest: &[&str],
+    seg: Option<&str>,
+    depth: usize,
+    ctx: &Ctx<'_>,
+) -> Decision {
     if depth >= MAX_SHELL_DEPTH {
         return depth_exhausted();
     }
     match xargs_command_start(rest) {
         Some(start) => {
-            let inner = rest[start..].join(" ");
+            let inner = faithful_tail(seg, rest, start)
+                .map_or_else(|| rest[start..].join(" "), str::to_string);
             if inner.trim().is_empty() {
-                Decision::Allow
-            } else {
-                detect_bash(&inner, depth + 1, ctx)
+                return Decision::Allow;
             }
+            let verdict = detect_bash(&inner, depth + 1, ctx);
+            if matches!(verdict, Decision::Allow) && word_separators_lost(seg, rest, start) {
+                return Decision::ask(
+                    "the command `xargs` runs could not be read with its line breaks intact",
+                );
+            }
+            verdict
         }
         None => Decision::Allow,
     }

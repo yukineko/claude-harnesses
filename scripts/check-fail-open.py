@@ -624,10 +624,25 @@ def scan_file(path: Path) -> list[tuple[int, str, str]]:
     return filter_allowlisted(rel, raw_hits)
 
 
+def _staged_scope():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import staged_scope
+
+    return staged_scope
+
+
 def main(argv: list[str]) -> int:
+    # `--staged` (pre-commit, user ruling 2026-11-08): judge only the staged
+    # files of the gate surface. The zero-discovery guard still runs on the
+    # unfiltered surface first; an unreadable staged set exits 2.
+    staged = None
+    if "--staged" in argv:
+        ss = _staged_scope()
+        _, argv = ss.pop_flag(argv)
+        staged = ss.staged_paths_or_exit(REPO, "fail-open-guard")
     args = argv[1:]
 
-    # Only `--all` and explicit paths are recognised. Any other dash-prefixed
+    # Only `--all`, `--staged` and explicit paths are recognised. Any other dash-prefixed
     # argument (a typo, or a retired mode flag) must not be silently ignored:
     # that would run a different check than the caller asked for and report
     # clean. Refuse instead (cannot-determine -> exit 2).
@@ -664,6 +679,12 @@ def main(argv: list[str]) -> int:
                 file=sys.stderr,
             )
             return 1
+    if staged is not None:
+        ss = _staged_scope()
+        files = [p for p in files if ss.rel(p, REPO) in staged]
+        if not files:
+            ss.print_nothing_in_scope("fail-open-guard")
+            return 0
     total = 0
     advisory_class = 0
     for path in files:

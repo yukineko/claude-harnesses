@@ -53,16 +53,15 @@ pub(super) fn git_subcommand_index(rest: &[&str]) -> Option<usize> {
 /// The shared reason for every way of repointing `core.hooksPath`. One wording
 /// so [`crate::rule_id`] gives the whole class one signature.
 ///
-/// The second clause is there for the one-argument READ, `git config
-/// core.hooksPath`, which the `config` arm denies on purpose (see there). Every
-/// field occurrence of this rule measured on 2026-09-24 (backlog 326edfee) was
-/// that read, retried until it tripped the repeat signal. The verdict stays the
-/// same. The reason now names the spelling that is actually allowed, so the
-/// caller can read the value without asking.
+/// The second clause names the explicit read spelling, so a caller whose
+/// command was refused can read the value without asking (backlog 326edfee:
+/// every field occurrence measured on 2026-09-24 was a read retried until it
+/// tripped the repeat signal). The bare one-argument read `git config
+/// core.hooksPath` is itself Allow since user ruling 2026-11-08 (backlog
+/// 8fe3a5c3, `config_argv_is_read`), so it never carries this reason.
 const HOOKSPATH_REASON: &str =
     "git config core.hooksPath repoints every git hook at once, disabling the repo's hook gates \
-     — to only READ the current value, use `git config --get core.hooksPath` \
-     (the bare one-argument form is refused because it is not told apart from a write)";
+     — to only READ the current value, use `git config --get core.hooksPath`";
 
 /// Config assignments carried by git's GLOBAL options, in every spelling git
 /// accepts: `-c k=v`, `-ck=v` (glued), `--config-env k=v`, `--config-env=k=v`.
@@ -296,10 +295,105 @@ fn managed_worktree_git(ctx: &Ctx<'_>, rest: &[&str], idx: usize) -> bool {
     }
 }
 
+/// `git reset --hard HEAD` discards nothing when the checkout it runs in has
+/// no changes. True ONLY when: the line is one plain git command; the words
+/// after `reset` are exactly `--hard` and the literal `HEAD`; the only global
+/// option is at most one `-C <dir>`; the directory git runs in is placed and
+/// has a `.git` FILE (a linked worktree checkout, observed on disk);
+/// `git status --porcelain -z --untracked-files=all --ignore-submodules=none`
+/// there exits 0 with empty output; and `git ls-files -v -z` there exits 0
+/// with every index entry tagged `H` (no assume-unchanged / skip-worktree
+/// entry, whose local edits status would not show). Anything else (probe
+/// failure, timeout, non-zero exit, any status output: staged, unstaged,
+/// untracked or dirty submodule; any non-`H` tag) is false and the caller
+/// keeps its Deny.
+fn reset_hard_head_in_clean_linked_worktree(ctx: &Ctx<'_>, rest: &[&str], idx: usize) -> bool {
+    if ctx.git_eligible_rest.as_deref() != Some(rest.join(" ").as_str()) {
+        return false;
+    }
+    let mut ops: Vec<&str> = rest[idx + 1..].to_vec();
+    ops.sort_unstable();
+    if ops != ["--hard", "HEAD"] {
+        return false;
+    }
+    let globals = &rest[..idx];
+    let base = ctx.base_for("git");
+    let dir = match globals {
+        [] => match base {
+            Some(b) => b.to_string(),
+            None => return false,
+        },
+        ["-C", d] => match ctx.scope.lexical_absolute(d, base) {
+            Determination::Known(d) => d,
+            Determination::Undetermined(_) => return false,
+        },
+        _ => return false,
+    };
+    if !dir.starts_with('/') || dir.split('/').any(|c| c == "..") {
+        return false;
+    }
+    match std::fs::symlink_metadata(std::path::Path::new(&dir).join(".git")) {
+        Ok(m) if m.file_type().is_file() => {}
+        // Not a `.git` file, or the probe failed: not observed as a linked
+        // worktree checkout, so the Deny stays.
+        Ok(_) | Err(_) => return false,
+    }
+    // One bounded git probe in `dir`: Known(stdout) only on exit 0; spawn
+    // failure, timeout, signal or any other exit is Undetermined (the caller
+    // keeps its Deny).
+    let probe = |args: &[&str]| -> Determination<String> {
+        let mut cmd = std::process::Command::new("git");
+        harness_core::git_env::scrub(&mut cmd).arg("-C").arg(&dir);
+        cmd.args(["--no-optional-locks", "-c", "core.fsmonitor=false"]);
+        cmd.args(args);
+        match harness_core::boundary::run_with_timeout(
+            &mut cmd,
+            std::time::Duration::from_millis(3000),
+        ) {
+            Determination::Known(out) => out.stdout_allowing(&[0]),
+            Determination::Undetermined(why) => Determination::Undetermined(why),
+        }
+    };
+    // `--ignore-submodules=none` overrides `submodule.<name>.ignore` /
+    // `diff.ignoreSubmodules` config that would otherwise hide dirty
+    // submodule content from the status probe.
+    match probe(&[
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+    ]) {
+        Determination::Known(s) if s.is_empty() => {}
+        Determination::Known(_) | Determination::Undetermined(_) => return false,
+    }
+    // Index entries marked assume-unchanged (lowercase tag) or skip-worktree
+    // (`S`) can carry local edits that `git status` does not show. Every
+    // entry must carry the plain `H` tag; anything else, or an unparseable
+    // record, is not clean.
+    match probe(&["ls-files", "-v", "-z"]) {
+        Determination::Known(s) => s
+            .split('\0')
+            .filter(|r| !r.is_empty())
+            .all(|r| r.starts_with("H ")),
+        Determination::Undetermined(_) => false,
+    }
+}
+
 /// One pathspec of `git checkout [<tree-ish>] -- <pathspec>`: Allow only when
 /// git reports nothing at or below it that the overwrite would destroy; Deny
 /// when it reports uncommitted changes; Ask whenever that cannot be observed.
-fn checkout_pathspec_verdict(ctx: &Ctx<'_>, op: &str) -> Decision {
+///
+/// A path that does not exist on disk (the work-tree probe cannot examine it)
+/// has no working-tree bytes to destroy; it is Allow when the absent-path
+/// probe ([`crate::reversible::probe_absent_path`]) observes that nothing at
+/// or below it is staged differently from HEAD, Deny when something is, and
+/// Ask otherwise. That Allow is withheld (Ask) when `op` starts with `:`
+/// (pathspec magic such as `:/x` names a different path than the literal one
+/// probed) or when `pathspec_globals` (a `--*-pathspecs` global option, e.g.
+/// `--icase-pathspecs`, which can match an existing file by another
+/// spelling).
+fn checkout_pathspec_verdict(ctx: &Ctx<'_>, op: &str, pathspec_globals: bool) -> Decision {
     let undetermined = |why: &str| {
         Decision::ask(format!(
             "git checkout -- `{op}` overwrites the file from git and would destroy any \
@@ -318,7 +412,26 @@ uncommitted changes in it, and blastguard cannot tell whether it has any ({why})
     };
     let facts = match probe(&real, &crate::deletion::build_candidates(&real)) {
         Determination::Known(f) => f,
-        Determination::Undetermined(_) => return undetermined("git could not be asked"),
+        Determination::Undetermined(_) => {
+            if op.starts_with(':') || pathspec_globals {
+                return undetermined("git could not be asked");
+            }
+            let Some(absent) = ctx.scope.git_absent_probe() else {
+                return undetermined("git could not be asked");
+            };
+            return match absent(&real) {
+                Determination::Known(crate::reversible::AbsentPathIndex::MatchesHead) => {
+                    Decision::Allow
+                }
+                Determination::Known(crate::reversible::AbsentPathIndex::DiffersFromHead) => {
+                    Decision::deny(format!(
+                        "git checkout -- `{op}` would overwrite a staged version that differs \
+from HEAD. Commit or stash it first."
+                    ))
+                }
+                Determination::Undetermined(_) => undetermined("git could not be asked"),
+            };
+        }
     };
     if facts.hidden_index_state {
         return undetermined("an index entry is assume-unchanged / skip-worktree / unmerged");
@@ -338,6 +451,115 @@ uncommitted changes in it, and blastguard cannot tell whether it has any ({why})
 them first.",
         examples.join(", ")
     ))
+}
+
+/// The fixed prefix of every working-tree `git restore` Deny.
+const RESTORE_DISCARD_REASON: &str = "git restore discards working-tree changes";
+
+/// The working-tree `git restore` verdict (user ruling 2026-11-08, issue
+/// #1604): when the index content AND the working-tree content of every path
+/// the restore would discard are already held by a commit
+/// ([`crate::reversible::probe_restore_content`]), nothing is lost and the
+/// verdict is Allow. Everything else is Deny:
+///
+///   * a protected operand (same classification as the `checkout` arm) — even
+///     when its content is committed, `--source` can bring back an older,
+///     disarmed version;
+///   * content in no commit ([`crate::reversible::RestoreContent::NotInAnyCommit`]);
+///   * anything blastguard cannot determine: a global option before `restore`
+///     (`-C`, `--git-dir`, `--*-pathspecs`, …), an option outside the modelled
+///     set (`--patch`, `--pathspec-from-file`, `--merge`, `--ours`, …), no
+///     pathspec, a pathspec that is not a literal path (glob characters, `:`
+///     magic, a directory, an untracked or absent file — the probe needs
+///     exactly one ordinary index entry), no probe in this session model, or a
+///     git that fails or times out.
+fn restore_discard_verdict(ctx: &Ctx<'_>, rest: &[&str], idx: usize) -> Decision {
+    let refuse = |why: &str| Decision::deny(format!("{RESTORE_DISCARD_REASON} ({why})"));
+    if idx > 0 {
+        return refuse(
+            "a git global option before `restore` changes how its paths are found, so blastguard \
+cannot tell whether their content is in a commit",
+        );
+    }
+    let args = &rest[idx + 1..];
+    let mut paths: Vec<&str> = Vec::new();
+    let mut after_dd = false;
+    let mut i = 0;
+    while i < args.len() {
+        let t = args[i];
+        i += 1;
+        if after_dd {
+            paths.push(t);
+            continue;
+        }
+        match t {
+            "--" => after_dd = true,
+            "--staged" | "--worktree" | "-q" | "--quiet" | "--progress" | "--no-progress" => {}
+            "-s" | "--source" => {
+                if i >= args.len() {
+                    return refuse("`--source` has no value");
+                }
+                i += 1;
+            }
+            _ if t.starts_with("--source=") || (t.starts_with("-s") && t.len() > 2) => {}
+            _ if t.len() > 1
+                && t.starts_with('-')
+                && !t.starts_with("--")
+                && t[1..].chars().all(|c| matches!(c, 'S' | 'W' | 'q')) => {}
+            _ if t.starts_with('-') => {
+                return refuse(&format!(
+                    "option `{t}` is outside what blastguard models for this check"
+                ));
+            }
+            _ => paths.push(t),
+        }
+    }
+    if paths.is_empty() {
+        return refuse("no pathspec");
+    }
+    for op in &paths {
+        if let Some(deny) = protected_disarm_deny(ctx, "git restore", op) {
+            return deny;
+        }
+        if let Some(deny) = protected_tree_deny(ctx, "git restore", op) {
+            return deny;
+        }
+        if let Some(deny) = protected_glob_deny("git restore operand", op) {
+            return deny;
+        }
+    }
+    let Some(probe) = ctx.scope.git_restore_probe else {
+        return refuse("no git probe in this session model");
+    };
+    for op in paths {
+        if op.starts_with(':') {
+            return refuse(&format!("`{op}` uses pathspec magic"));
+        }
+        let lexical = match ctx.scope.lexical_absolute(op, ctx.base_for("git")) {
+            Determination::Known(l) => l,
+            Determination::Undetermined(_) => {
+                return refuse(&format!("`{op}` is not a placeable literal path"))
+            }
+        };
+        let Some(real) = ctx.scope.resolve(&lexical) else {
+            return refuse(&format!("`{op}` could not be resolved"));
+        };
+        match probe(&real) {
+            Determination::Known(crate::reversible::RestoreContent::InCommits) => {}
+            Determination::Known(crate::reversible::RestoreContent::NotInAnyCommit(which)) => {
+                return Decision::deny(format!(
+                    "{RESTORE_DISCARD_REASON}: the {which} content of `{op}` is in no commit, so \
+restoring it loses that content. Commit or stash it first."
+                ));
+            }
+            Determination::Undetermined(u) => {
+                return refuse(&format!(
+                    "blastguard cannot tell whether the content of `{op}` is in a commit: {u}"
+                ))
+            }
+        }
+    }
+    Decision::Allow
 }
 
 /// Reason for the head-brace Ask: an unexpanded brace list among the words up
@@ -851,24 +1073,35 @@ fn git_config_write_exec(args: &[String]) -> Option<GitExecBan> {
     exec_ban(&format!("config {key} …"), Some(cmd))
 }
 
-/// Does the legacy `git config` argv (the words AFTER `config`) select a
-/// read-only mode (`--get`, `--get-all`, `--get-regexp`, `--get-urlmatch`,
-/// `--list`, `-l`) in its option prefix?
+/// Is this `git config` argv (the words AFTER `config`) a READ?
 ///
 /// git stops option parsing at the first non-option word (observed with git
 /// 2.50.1, table in `hookspath_read_tests.rs`): every word after the key is a
 /// positional, even one that looks like a flag, so `git config core.hooksPath
-/// --get` writes the value `--get`. Only the prefix is scanned, therefore:
+/// --get` writes the value `--get` (backlog e103cd56). The option prefix is
+/// scanned:
 ///
 ///   * `--` ends the prefix (what follows is positional).
 ///   * the first word not starting with `-` ends the prefix.
+///   * a read-mode flag (`--get`, `--get-all`, `--get-regexp`,
+///     `--get-urlmatch`, `--list`, `-l`) in the prefix → read.
 ///   * a known value-taking option (`-f`/`--file`, `--blob`, `--type`,
 ///     `--default`, `--comment`) in separate form consumes the next word.
 ///   * a known value-free option is skipped.
-///   * ANY other option word returns `false`: whether it consumes the next
-///     word is unknown, so the prefix cannot be delimited and the read is not
-///     established (the caller then treats the line as a write — fail-closed).
-fn config_read_mode_in_prefix(args: &[&str]) -> bool {
+///   * ANY other option word (the write modes `--unset`, `--add`,
+///     `--replace-all`, … and every unknown option) returns `false`: either it
+///     is a write, or whether it consumes the next word is unknown, so the
+///     read is not established (the caller then treats the line as a write —
+///     fail-closed).
+///
+/// With no mode flag, the positionals after the prefix decide (user ruling
+/// 2026-11-08, backlog 8fe3a5c3): exactly ONE positional (the key) is the
+/// legacy read `git config core.hooksPath`; a first positional `get` is the
+/// new-style `git config get <key>` read (on a git without that subcommand it
+/// is the invalid key `get`, an error that writes nothing). Two or more
+/// positionals otherwise — `K value`, `K ''`, `K --`, `set K v`, `unset K` —
+/// are a write.
+fn config_argv_is_read(args: &[&str]) -> bool {
     const READ_MODES: &[&str] = &[
         "--get",
         "--get-all",
@@ -900,10 +1133,15 @@ fn config_read_mode_in_prefix(args: &[&str]) -> bool {
         "--no-type",
     ];
     let mut i = 0;
-    while i < args.len() {
-        let t = args[i];
-        if t == "--" || !t.starts_with('-') {
-            return false;
+    let positionals: &[&str] = loop {
+        let Some(&t) = args.get(i) else {
+            break &[];
+        };
+        if t == "--" {
+            break args.get(i + 1..).unwrap_or(&[]);
+        }
+        if !t.starts_with('-') {
+            break &args[i..];
         }
         if READ_MODES.contains(&t) {
             return true;
@@ -917,8 +1155,12 @@ fn config_read_mode_in_prefix(args: &[&str]) -> bool {
             continue;
         }
         return false;
+    };
+    match positionals {
+        [_key] => true,
+        [first, ..] => normalized_command(first) == "get",
+        [] => false,
     }
-    false
 }
 
 fn analyze_git_words(rest: &[&str], seg: Option<&str>, ctx: &Ctx<'_>) -> Decision {
@@ -951,7 +1193,7 @@ fn analyze_git_words(rest: &[&str], seg: Option<&str>, ctx: &Ctx<'_>) -> Decisio
     // User ruling 2026-11-07: discarding working-tree changes of a linked
     // worktree checkout under a worktree storage root (a managed disposable
     // place) is Allow. Consulted only by the working-tree-discard arms below;
-    // the object-store rule right after this, `stash clear/drop` and every
+    // the object-store rule right after this, `stash clear` and every
     // protected-path check are unaffected. See `managed_worktree_git`.
     let managed = managed_worktree_git(ctx, rest, idx);
     // Object-store destruction, checked before the per-subcommand arms below.
@@ -1036,7 +1278,15 @@ actually delete is undetermined."
         }
         "reset" => {
             if rest.contains(&"--hard") && !managed {
-                Decision::deny("git reset --hard discards working-tree changes")
+                if reset_hard_head_in_clean_linked_worktree(ctx, rest, idx) {
+                    Decision::Allow
+                } else {
+                    Decision::deny(
+                        "git reset --hard discards working-tree changes (allowed only for \
+`git reset --hard HEAD` run in a linked worktree checkout that a git status probe positively \
+reports clean)",
+                    )
+                }
             } else {
                 Decision::Allow
             }
@@ -1121,6 +1371,7 @@ directory",
                         .any(|f| t == f || t.starts_with(&format!("{f}=")))
                         || (t.starts_with("-C") && t.len() > 2)
                 });
+                let pathspec_globals = rest[..idx].iter().any(|t| t.ends_with("-pathspecs"));
                 let mut acc = VerdictAcc::default();
                 for op in &rest[pos + 1..] {
                     let v = if moved_base {
@@ -1129,7 +1380,7 @@ directory",
 option, so blastguard cannot tell whether the file has uncommitted changes it would discard"
                         ))
                     } else {
-                        checkout_pathspec_verdict(ctx, op)
+                        checkout_pathspec_verdict(ctx, op, pathspec_globals)
                     };
                     if let Some(deny) = acc.record(v) {
                         return deny;
@@ -1191,13 +1442,15 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
             // `git restore --staged <path>` (without `--worktree`) only unstages
             // and leaves the working tree intact, so it stays allowed. Inside a
             // managed linked worktree checkout every form is allowed (user
-            // ruling 2026-11-07, `managed_worktree_git`).
+            // ruling 2026-11-07, `managed_worktree_git`). Every other form is
+            // judged by what it discards (user ruling 2026-11-08, issue
+            // #1604): see `restore_discard_verdict`.
             let staged = rest.contains(&"--staged") || has_short(rest, 'S');
             let worktree = rest.contains(&"--worktree") || has_short(rest, 'W');
             if (staged && !worktree) || managed {
                 Decision::Allow
             } else {
-                Decision::deny("git restore discards working-tree changes")
+                restore_discard_verdict(ctx, rest, idx)
             }
         }
         "config" => {
@@ -1208,19 +1461,20 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
             // direction (it disarms the repo's opt-in `.githooks` tree), so it
             // is denied too.
             //
-            // Read-only forms are allowed: they change nothing. A read-mode
-            // flag only selects a read when it sits in the OPTION PREFIX, before
-            // the first non-option word — see `config_read_mode_in_prefix`
-            // (backlog e103cd56: `git config core.hooksPath --get` WRITES the
-            // value `--get`). Anything that mentions the key WITHOUT a read-mode
-            // flag in that prefix is treated as a write (the bare one-argument
-            // read included) — an unrecognised shape of a hook-repointing
-            // command resolves to the restrictive side.
+            // Read-only forms are allowed: they change nothing. What is a read
+            // is decided by git's own argv grammar — see `config_argv_is_read`:
+            // a read-mode flag counts only in the OPTION PREFIX (backlog
+            // e103cd56: `git config core.hooksPath --get` WRITES the value
+            // `--get`), and the bare one-positional `git config core.hooksPath`
+            // and `git config get core.hooksPath` are reads (user ruling
+            // 2026-11-08, backlog 8fe3a5c3). Anything else that mentions the
+            // key is treated as a write — an unrecognised shape of a
+            // hook-repointing command resolves to the restrictive side.
             let mentions_hookspath = rest[idx + 1..].iter().any(|t| {
                 let t = normalized_command(t).to_ascii_lowercase();
                 t == "core.hookspath" || t.starts_with("core.hookspath=")
             });
-            let read_only = config_read_mode_in_prefix(&rest[idx + 1..]);
+            let read_only = config_argv_is_read(&rest[idx + 1..]);
             if mentions_hookspath && !read_only {
                 Decision::deny(HOOKSPATH_REASON)
             } else {
@@ -1228,12 +1482,16 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
             }
         }
         "stash" => {
-            // `git stash clear` drops every stash entry and `git stash drop`
-            // drops one — both irreversibly delete stashed work, the same
-            // hazard class as the working-tree-discard forms above. Every
-            // other subcommand (list/show/push/save/pop/apply/branch and the
-            // bare `git stash` push) is non-destructive, so only the two
-            // discard forms are denied. The stash subcommand is the first
+            // `git stash clear` drops EVERY stash entry. `refs/stash` is shared
+            // by every worktree of the repository, so it irreversibly deletes
+            // other sessions' stashed work too — denied.
+            //
+            // `git stash drop [<stash>]` drops ONE entry and is Allow: user
+            // ruling 2026-11-08, "stashは自分で消していいとしたい" narrowed to
+            // "drop のみ Allow". Every other subcommand
+            // (list/show/push/save/pop/apply/branch and the bare `git stash`
+            // push) is non-destructive, apart from the untracked-sweep flags
+            // judged below. The stash subcommand is the first
             // non-flag token *after* the resolved `stash` token (`idx`) — not a
             // fresh naive scan, which under a global prefix would land on the
             // prefix value (`git -C DIR stash clear`).
@@ -1242,8 +1500,11 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
                 .find(|t| !t.starts_with('-'))
                 .map(|t| normalized_command(t))
                 .unwrap_or_default();
-            if subcmd == "clear" || subcmd == "drop" {
-                return Decision::deny("git stash clear/drop irreversibly deletes stashed changes");
+            if subcmd == "clear" {
+                return Decision::deny(
+                    "git stash clear irreversibly deletes every stash entry, and refs/stash is \
+shared by all worktrees (other sessions' stashes too)",
+                );
             }
             // Round 2: the scan above is `.find(|t| !t.starts_with('-'))`, so it
             // SKIPS every flag — and the flags are where the destruction is.

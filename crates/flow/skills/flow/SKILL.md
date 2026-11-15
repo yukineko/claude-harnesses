@@ -185,7 +185,7 @@ compass / charter を先頭で引いてはならない。1 と 2 がどちらも
       backlog next --claim --project "$PWD"   # 選択と予約を同一クリティカルセクションで行う。N 回繰り返すこと。
       ```
       `next --claim` は選んだ task を untracked な claim ledger に lease として記録するため、どの checkout からでも 2 つの driver が同じ task を受け取ることは無い。
-      トラックされた `.backlog/tasks.toml` は書かれない。
+      lease のためにトラックされた `.backlog/tasks.toml` は書かれない。ただし候補の repro が再現しなくなっていれば、`next --claim` はその行を自動 cancel して（store を書き換えて）次の候補へ進む（ユーザー裁定 2026-11-13）。その store 変更は commit すること。main から実行すると自動 cancel が要る候補で claim が拒否される。
       `list` は lease 中の task を `claimed` と表示する。素の `next` はそれを返さない。
       - 出力が `no pending tasks` になるまで、または N 件（既定 N=condukt の `max_parallel` で、無指定なら 4）に達するまで繰り返すこと。
       - 各件の `id` / `title` / `notes` / `hashkey` を控えること（`hashkey` は `next --claim` の出力に含まれる）。N=1 の場合は従来どおり単一課題として扱うこと。
@@ -537,7 +537,12 @@ session の transcript が `--max-compactions`（既定 2、0 は 1 に丸める
   「testがないなら起票してはならない」）。気づいたことは、起票するかどうかを判断せず常に起票すること。
   起票は **(1) 再現テスト（RED）を書いてコミット → (2) `backlog add --repro-test "<cmd>"`** の順で行うこと。
   `backlog add` は再現した時だけ task を書き、それ以外は拒否して store に何も書かない。
-  テストが書けないなら Ask すること。
+  起票するかを人に聞かないこと（ユーザー裁定 2026-11-13「起票しますか?というのはもう聞かないこと。実証されたら起票、そうでないなら破棄。それは自動で実行していくこと」）。
+  テストが書けない・`backlog add` が拒否した（再現しない・判定不能）ものは Ask せず**破棄し、報告に逐語の観測とともに列挙する**こと。
+  保留（見送り）という状態は無い（同日裁定「保留はありえない実証されないならclose,実証されたらopen」。`backlog defer` は廃止）。
+  `backlog next --claim` は払い出す前に候補の repro を再実行し、再現しなくなった行を**自動で cancel** して次の候補へ進む
+  （インフラ要因で判定不能なら claim を拒否する）。自動 cancel はこのセッションの worktree の store を書き換えるので、
+  その store 変更は他の変更と一緒に commit すること。
   「些細だ」「意図的な仕様かもしれない」「今回のスコープ外だ」を理由にこの手順を省かないこと。
   **それが本当に課題かどうかは、後でチケットから判定すること**。
   **起票の中身**には逐語の実測値・測定点（rev と日付）・判定不能なら**両方の読み**（(a) 実在の欠陥 / (b) 意図的な仕様）と、

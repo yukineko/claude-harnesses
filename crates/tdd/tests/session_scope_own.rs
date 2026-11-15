@@ -149,7 +149,14 @@ fn git(dir: &Path, args: &[&str]) -> bool {
 }
 
 fn lines(uses: &[(&str, serde_json::Value)]) -> String {
-    let mut body = String::from(r#"{"type":"user","message":{"role":"user","content":"go"}}"#);
+    // A real transcript always carries record timestamps. Without one the
+    // session start is undetermined and tdd now BLOCKS (committed work cannot
+    // be scoped, CLAUDE.md §3), which is not what these uncommitted-scope
+    // scenarios test. The start is placed after the fixture's setup commits so
+    // none of them counts as this session's.
+    let mut body = String::from(
+        r#"{"type":"user","timestamp":"2099-01-01T00:00:00.000Z","message":{"role":"user","content":"go"}}"#,
+    );
     body.push('\n');
     for (tool, input) in uses {
         body.push_str(

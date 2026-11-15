@@ -220,6 +220,26 @@ def read_baseline() -> int:
 
 
 def main(argv: list[str]) -> int:
+    # `--staged` (pre-commit, user ruling 2026-11-08): the adopter count is a
+    # whole-workspace property against one baseline, so it runs in full only
+    # when the staged diff touches a manifest, the baseline, this script or the
+    # scoping helper; otherwise it exits 0. An unreadable staged set exits 2.
+    if "--staged" in argv:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import staged_scope
+
+        argv = staged_scope.gate_on_inputs(
+            REPO,
+            LABEL,
+            argv,
+            [
+                "Cargo.toml",
+                "crates/*/Cargo.toml",
+                "scripts/check-fault-injection-adoption.baseline",
+                "scripts/check-fault-injection-adoption.py",
+                "scripts/staged_scope.py",
+            ],
+        )
     args = set(argv[1:])
     unknown = args - {"--list", "--update-baseline"}
     if unknown:

@@ -310,17 +310,39 @@ def _repo_escape(manifest: dict, crate_dir: str) -> Undetermined | None:
     return None
 
 
-def scan(repo: str) -> Undetermined | list[str]:
-    """Findings (human-readable), or Undetermined. Empty list = determined clean."""
-    changed = changed_paths(repo)
+def _staged_dirs(changed: frozenset[str]) -> set[str]:
+    out = set()
+    for path in changed:
+        if path.startswith(CRATES_PREFIX):
+            head, sep, _ = path[len(CRATES_PREFIX) :].partition("/")
+            if sep and head:
+                out.add(head)
+    return out
+
+
+def scan(repo: str, staged: frozenset[str] | None = None) -> Undetermined | list[str]:
+    """Findings (human-readable), or Undetermined. Empty list = determined clean.
+
+    `staged` (the `--staged` mode, user ruling 2026-11-08): the changed set is
+    the staged diff instead of the working tree's, and the every-manifest
+    sanity parse below covers only the staged crates' manifests. Manifest
+    content is still read from the working tree."""
+    if staged is not None:
+        changed: Undetermined | frozenset[str] = staged
+    else:
+        changed = changed_paths(repo)
     if isinstance(changed, Undetermined):
         return changed
 
     # Every opted-in crate's working-tree manifest: unreadable/unparsable or a
-    # repo-escaping target path is Undetermined, regardless of what changed.
+    # repo-escaping target path is Undetermined, regardless of what changed
+    # (in `--staged` mode: every STAGED crate's manifest).
     all_dirs = _crate_dirs_with_manifests(repo)
     if isinstance(all_dirs, Undetermined):
         return all_dirs
+    if staged is not None:
+        in_range = _staged_dirs(staged)
+        all_dirs = tuple(d for d in all_dirs if d in in_range)
     for crate_dir in all_dirs:
         manifest = _read_manifest(os.path.join(repo, "crates", crate_dir, "Cargo.toml"))
         if isinstance(manifest, Undetermined):
@@ -416,7 +438,13 @@ def main() -> int:
         )
         return 2
 
-    result = scan(repo)
+    staged = None
+    if "--staged" in sys.argv[1:]:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import staged_scope
+
+        staged = frozenset(staged_scope.staged_paths_or_exit(repo, "clippy-lints"))
+    result = scan(repo, staged)
     if isinstance(result, Undetermined):
         sys.stderr.write(UNDETERMINED_NOTE.format(reason=result.reason))
         return 2

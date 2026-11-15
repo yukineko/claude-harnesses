@@ -1,0 +1,66 @@
+#!/bin/sh
+# answerlang plugin launcher — execs the bundled `answerlang-<os>-<arch>` build.
+#
+# With no build for the host nothing is checked, and that is never silent:
+#
+# * `stop` (Stop hook): the answer-language check did NOT run, which is
+#   "cannot determine" — so the first stop of a chain is BLOCKED
+#   (`{"decision":"block"}`, CLAUDE.md §3). On a re-entry
+#   (`"stop_hook_active": true` in the payload) the stop is allowed with a
+#   systemMessage saying the check did not run, so a missing binary cannot
+#   trap the session. (The launcher has no per-gate marker, so here
+#   `stop_hook_active` alone bounds the block; another gate's block also sets
+#   it.)
+# * `session-start` / `prompt`: exit 0 (the session/prompt goes through) with a
+#   JSON systemMessage + additionalContext saying language injection did NOT
+#   run — silence would read as "nothing to inject".
+# * anything else: exit 1.
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+case "$(uname -s)" in
+  Linux)  os=linux ;;
+  Darwin) os=darwin ;;
+  MINGW*|MSYS*|CYGWIN*) os=windows ;;
+  *)      os="$(uname -s)" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64)   arch=x86_64 ;;
+  arm64|aarch64)  arch=arm64 ;;
+  *)              arch="$(uname -m)" ;;
+esac
+
+ext=""
+[ "$os" = windows ] && ext=".exe"
+
+binary="$root/answerlang-$os-$arch$ext"
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
+fi
+
+fix="Build it with scripts/build-plugin-bin.sh on that platform."
+
+case "${1:-}" in
+  stop)
+    payload="$(cat)"
+    echo "answerlang: no bundled binary for $os-$arch ($binary); the answer-language check did NOT run. $fix" >&2
+    if printf '%s' "$payload" | grep -Eq '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
+      msg="answerlang: the answer-language check did NOT run (no bundled binary for $os-$arch); this re-entry is allowed WITHOUT a check. $fix"
+      printf '{"systemMessage":"%s"}\n' "$msg"
+    else
+      msg="answerlang: the answer-language check did NOT run (no bundled binary for $os-$arch), so this stop is blocked once. Stop again to continue without the check. $fix"
+      printf '{"decision":"block","reason":"%s"}\n' "$msg"
+    fi
+    exit 0
+    ;;
+  session-start|prompt)
+    if [ "$1" = prompt ]; then event=UserPromptSubmit; else event=SessionStart; fi
+    echo "answerlang: no bundled binary for $os-$arch ($binary); language injection did NOT run. $fix" >&2
+    msg="answerlang: language injection did NOT run (no bundled binary for $os-$arch); the answer language was not injected. $fix"
+    printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$msg" "$event" "$msg"
+    exit 0
+    ;;
+  *)
+    echo "answerlang: no bundled binary for $os-$arch ($binary); '$*' did NOT run. $fix" >&2
+    exit 1
+    ;;
+esac

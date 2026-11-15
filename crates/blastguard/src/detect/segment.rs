@@ -121,6 +121,30 @@ pub(super) fn closed_substitution_end_strict(chars: &[char], i: usize) -> Option
     substitution_end_with(chars, i, scan_balanced_strict)
 }
 
+/// When `chars[i]` OPENS an unquoted process substitution — a `<(` or `>(`
+/// whose `<`/`>` is not backslash-escaped — that is closed later in `chars`,
+/// the index of its closing `)`. `None` otherwise. The caller checks that
+/// `chars[i]` is outside single AND double quotes (inside `"…"` the `<(` is
+/// literal text, and treating it as a span there would swallow the quote's
+/// end and the separators after it).
+///
+/// Used by [`split_segments`] and [`split_segments_with_separators`] exactly
+/// like [`closed_substitution_end`], and for the same reason: a `;`/newline
+/// inside the body separates the BODY's commands. Cutting there left the
+/// fragment `cat <(rm -rf /etc`, whose process substitution no longer closes
+/// inside the segment, so [`executed_substitution_payloads`] stopped at it and
+/// the body was judged nowhere (`cat <(rm -rf /etc;)` and the bash 3.2 shape
+/// `echo $(cat <<'EOF'` / `x)<(rm -rf /etc` / `EOF` / `)` were Allow).
+/// Uses the extraction scan [`scan_balanced`] (bash 3.2's end under
+/// [`super::substitution::under_bash32_reading`]).
+pub(super) fn closed_process_substitution_end(chars: &[char], i: usize) -> Option<usize> {
+    let escaped = chars[..i].iter().rev().take_while(|&&c| c == '\\').count() % 2 == 1;
+    if escaped || !matches!(chars[i], '<' | '>') || chars.get(i + 1) != Some(&'(') {
+        return None;
+    }
+    scan_balanced(chars, i + 2, Stop::Paren, 0)
+}
+
 fn substitution_end_with(
     chars: &[char],
     i: usize,
@@ -137,8 +161,54 @@ fn substitution_end_with(
     }
 }
 
+/// When the backslash at `chars[i]` is one the shell reads as ESCAPING a
+/// character that would otherwise change the quote state, the two-char pair
+/// it forms (the backslash and the escaped character). `None` otherwise.
+///
+/// Backlog 9a2f5a08: the splitters tracked `'`/`"` without knowing backslash
+/// escapes, so an escaped quote inside a double-quoted grep pattern
+/// (`grep -E "gh\", *\"pr\""`) flipped their quote state. Every later quoted
+/// span was then read inside-out: the `|` that the shell reads as text inside
+/// `"…|install"` cut the line, and the fragment `install" f | head -6` was
+/// judged as an `install` command with the unknown option `-6`. The same flip
+/// also worked the other way (`echo \"; <cmd>` hid `<cmd>` from this reading;
+/// only the shell-lexed reading of [`super::shell_lex`] judged it).
+///
+/// The rules are the shell's (POSIX 2.2.1-2.2.3), restricted to the
+/// characters that affect quote tracking:
+///   * inside single quotes a backslash is literal (never an escape);
+///   * inside double quotes it escapes `"`, `\` and `` ` `` (it also escapes
+///     `$` and newline, which do not change quote state and are left as
+///     before);
+///   * unquoted, it escapes `'`, `"`, `\` and `` ` ``.
+///
+/// A doubled backslash is consumed as a pair so `"a\\"` still closes at its
+/// last `"`. An unquoted backslash before `;`, `|`, `&` or a newline is NOT
+/// treated as an escape here: the splitters keep cutting there, which can only
+/// produce more segments to judge (the pre-existing, conservative reading).
+/// An escaped backtick is the same one [`closed_substitution_end`] already
+/// refuses to open, so substitution spans are unchanged.
+pub(super) fn quote_escape_pair(
+    chars: &[char],
+    i: usize,
+    in_s: bool,
+    in_d: bool,
+) -> Option<&[char]> {
+    if in_s || chars[i] != '\\' {
+        return None;
+    }
+    let next = *chars.get(i + 1)?;
+    let escapes = if in_d {
+        matches!(next, '"' | '\\' | '`')
+    } else {
+        matches!(next, '\'' | '"' | '\\' | '`')
+    };
+    escapes.then(|| &chars[i..i + 2])
+}
+
 /// Quote-aware split of a command line into individual simple-command segments
-/// on `;`, newline, `&&`, `||`, `|`, `&`.
+/// on `;`, newline, `&&`, `||`, `|`, `&`. Backslash-escaped quotes do not
+/// change the quote state (see [`quote_escape_pair`]).
 ///
 /// An `&` that is part of a redirection operator (`2>&1`, `>&2`) does NOT end a
 /// segment — see [`ampersand_is_redirect_operator`].
@@ -172,8 +242,16 @@ pub(super) fn split_segments(cmd: &str) -> Vec<String> {
             i += 1;
             continue;
         }
+        if let Some(pair) = quote_escape_pair(&chars, i, in_s, in_d) {
+            cur.extend(pair);
+            line_code.extend(pair);
+            i += 2;
+            continue;
+        }
         if !in_s {
-            if let Some(end) = closed_substitution_end(&chars, i) {
+            let end = closed_substitution_end(&chars, i)
+                .or_else(|| (!in_d).then(|| closed_process_substitution_end(&chars, i))?);
+            if let Some(end) = end {
                 cur.extend(&chars[i..=end]);
                 line_code.push('_');
                 i = end + 1;
@@ -274,6 +352,12 @@ pub(super) fn split_segments_paren_aware(cmd: &str) -> Vec<String> {
             i += 1;
             continue;
         }
+        if let Some(pair) = quote_escape_pair(&chars, i, in_s, in_d) {
+            cur.extend(pair);
+            line_code.extend(pair);
+            i += 2;
+            continue;
+        }
         // Backtick bodies too (paren depth does not see them); see
         // `closed_substitution_end`.
         if !in_s {
@@ -366,8 +450,10 @@ pub(super) enum SegmentSep {
     /// the two answer different questions and the answers differ. For SCOPE
     /// they are alike ([`assignments_reach_parent_shell`] accepts both); for
     /// EXECUTION they are not ([`assignment_execution_is_unconditional`]
-    /// rejects this one). Folding them together is what let a guarded
-    /// assignment be reported as a literal program name.
+    /// rejects an assignment that this one precedes within the same and-or
+    /// list; a later `;`/`&`/newline ends that list and that guard). Folding
+    /// them together is what let a guarded assignment be reported as a
+    /// literal program name.
     Conditional,
     /// `|`: every stage of a pipeline runs in its own subshell, so an
     /// assignment in a stage does not survive into the parent shell.
@@ -427,10 +513,18 @@ pub(super) fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment>
             i += 1;
             continue;
         }
+        if let Some(pair) = quote_escape_pair(&chars, i, in_s, in_d) {
+            cur.extend(pair);
+            line_code.extend(pair);
+            i += 2;
+            continue;
+        }
         // Same substitution span as `split_segments`, so the two stay
         // element-for-element equal.
         if !in_s {
-            if let Some(end) = closed_substitution_end(&chars, i) {
+            let end = closed_substitution_end(&chars, i)
+                .or_else(|| (!in_d).then(|| closed_process_substitution_end(&chars, i))?);
+            if let Some(end) = end {
                 cur.extend(&chars[i..=end]);
                 line_code.push('_');
                 i = end + 1;
@@ -557,14 +651,38 @@ pub(super) fn assignments_reach_parent_shell(segs: &[SeparatedSegment], idx: usi
 /// the use's separator instead would refuse this shape — 70 of the 115 measured
 /// interventions, i.e. every one this function was written to resolve.
 ///
-/// DELIBERATELY COARSE, stated because it costs resolutions a sharper rule
-/// would keep: this asks whether a conditional separator appears ANYWHERE
-/// before `idx`, not whether the nearest and-or list still encloses it. In
-/// `a && b; BIN=x` the `;` ends the and-or list, so the shell really does run
-/// `BIN=x` on both branches, and this still answers false. Tracking where each
-/// and-or list ends would need real grammar, not a flat separator scan, and the
-/// error direction of guessing wrong there is permissive. So the coarse rule
-/// stands: it forgoes a resolution, and never invents one.
+/// THE `&&`/`||` CHECK IS SCOPED TO THE ASSIGNMENT'S OWN AND-OR LIST. A
+/// conditional separator guards only the rest of the and-or list it stands in,
+/// and at top level an and-or list ends at `;`, `&` or a newline. So the scan
+/// walks back from `idx - 1` while the separators are [`SegmentSep::Conditional`]
+/// or [`SegmentSep::Pipe`] (a pipeline is an element of an and-or list, so `|`
+/// does not end one), answers false if it saw any `Conditional` in that run, and
+/// stops at the first [`SegmentSep::Sequential`] / [`SegmentSep::Background`] /
+/// [`SegmentSep::EndOfLine`]. In `a && b; BIN=x` the `;` ends the list, so the
+/// shell runs `BIN=x` on both branches, and this answers true; in
+/// `a; b && BIN=x` it answers false. Measured: `bash -c 'false && true;
+/// RM=/bin/echo; $RM reached'` prints `reached`.
+///
+/// Bash also lets an and-or list continue onto the next line after a trailing
+/// `&&`, `||` or `|` (optionally followed by a comment), and the splitter then
+/// emits a segment that is blank or comment-only, separated by a newline, in
+/// between. Such a segment is not a command and ends nothing, so the walk steps
+/// over it instead of stopping: `true &&`, newline, `BIN=x` is still refused.
+/// Measured: `false &&`, newline, `RM=/bin/echo; echo "word=[$RM]"` prints
+/// `word=[]`, and so does the spelling with `# c` after the `&&`.
+///
+/// The narrower scan is sound only because a `;`/`&`/newline that is NOT at top
+/// level never reaches it as a terminator. Most constructs that could put one
+/// inside an enclosing guard — `if`/`while`/`until`/`for`/`case`, `( … )`, a
+/// here-document body — are refused outright by the two checks below, which
+/// still scan ALL earlier segments rather than only the and-or list. A brace
+/// group is the exception: [`opens_unmodelled_construct`] deliberately lets
+/// `{ … }` through (it runs in the current shell), yet in `false && { true;
+/// BIN=x; }` the `;` inside the braces does not end the guarded list. So when
+/// any earlier segment contains a bare `{` word, the scan does not try to find
+/// list boundaries at all and falls back to the coarse rule: a conditional
+/// separator ANYWHERE before `idx` answers false. That costs resolutions
+/// (`{ a && b; BIN=x; }` is refused) and never invents one.
 ///
 /// `&&`/`||` are not the only way execution stops being guaranteed, so the scan
 /// also refuses anything standing after a segment that OPENS a compound command
@@ -577,7 +695,7 @@ pub(super) fn assignments_reach_parent_shell(segs: &[SeparatedSegment], idx: usi
 /// [`resolve_expanded_command_word`]: `then BIN=x` is not an assignment list.
 /// Only the newline spellings need this scan.)
 ///
-/// That check is coarse in the same direction as the separator one: it never
+/// That check is DELIBERATELY COARSE, in the restrictive direction: it never
 /// looks for the `fi`/`done`/`)` that closes the construct, so an assignment
 /// AFTER a completed `if … fi` is refused too. Tracking where a construct ends
 /// needs real grammar, and the error direction of guessing wrong there is
@@ -604,7 +722,52 @@ pub(super) fn assignment_execution_is_unconditional(segs: &[SeparatedSegment], i
     if unclosed_here_doc.map(|o| o < idx).unwrap_or(false) {
         return false;
     }
-    !segs.iter().take(idx).any(|s| {
-        matches!(s.sep_after, SegmentSep::Conditional) || opens_unmodelled_construct(&s.text)
-    })
+    if segs
+        .iter()
+        .take(idx)
+        .any(|s| opens_unmodelled_construct(&s.text))
+    {
+        return false;
+    }
+    !guarded_within_own_and_or_list(segs, idx)
+}
+
+/// True when a [`SegmentSep::Conditional`] precedes segment `idx` inside the
+/// same and-or list. See [`assignment_execution_is_unconditional`] for why the
+/// walk stops where it does. `idx` past the end is clamped to the line's
+/// length, so the walk starts from the last segment rather than panicking.
+fn guarded_within_own_and_or_list(segs: &[SeparatedSegment], idx: usize) -> bool {
+    let earlier = &segs[..idx.min(segs.len())];
+    // A brace group makes an inner `;` non-top-level without being refused by
+    // `opens_unmodelled_construct`, so list boundaries cannot be read from
+    // the separators: any conditional earlier on the line counts.
+    if earlier
+        .iter()
+        .any(|s| s.text.split_whitespace().any(|w| w == "{"))
+    {
+        return earlier
+            .iter()
+            .any(|s| matches!(s.sep_after, SegmentSep::Conditional));
+    }
+    for s in earlier.iter().rev() {
+        match s.sep_after {
+            SegmentSep::Conditional => return true,
+            SegmentSep::Pipe => continue,
+            SegmentSep::Sequential | SegmentSep::Background | SegmentSep::EndOfLine => {
+                // A blank or comment-only segment is the line break after a
+                // trailing `&&`/`||`/`|`: it is not a command and ends nothing.
+                if is_line_continuation_filler(&s.text) {
+                    continue;
+                }
+                return false;
+            }
+        }
+    }
+    false
+}
+
+/// A segment with no command in it: only whitespace, or a `#` comment.
+fn is_line_continuation_filler(text: &str) -> bool {
+    let t = text.trim_start();
+    t.is_empty() || t.starts_with('#')
 }

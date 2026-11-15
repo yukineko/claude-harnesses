@@ -13,6 +13,15 @@
 //! resolved (path gone / not a git repo), the stop BLOCKS with a reason naming
 //! the roots. A session with no recorded writes still allows.
 //!
+//! SUPERSEDED by user rulings 2026-11-08, verbatim: "donegateのworktreeテストは
+//! 問題ありすぎるので即時に停止" and "donegateそのものが他のworktreeを見たり検証
+//! したりテストしたりすることは禁止とする". donegate judges ONLY the hook cwd. It
+//! no longer resolves the roots of writes outside the cwd: a linked worktree
+//! (or any other path) the session wrote into is not run, not blocked on, and
+//! not named. The tests that pinned the old per-root contract are re-scoped to
+//! that; each says what it used to assert. Re-scoped by the implementer of the
+//! ruling (not a disinterested author).
+//!
 //! Fixture: `$HOME` is a tempdir; its `.harness/trust.toml` lists BOTH the
 //! primary tree and the linked worktree (canonical paths); `HARNESS_TRUST_ALL`
 //! is removed. So an allow cannot come from an untrusted-root degrade.
@@ -235,47 +244,113 @@ fn control_cwd_is_the_worktree_runs_its_check() {
     assert_eq!(decision, "block", "reason={reason:?} err={err:?}");
 }
 
-/// THE BUG. Hook cwd = primary tree, the session's Edit names a file in the
-/// linked worktree: donegate must run the WORKTREE's declared check.
-#[test]
-fn worktree_check_runs_when_cwd_is_the_primary_tree() {
-    let f = Fixture::new(&exit0_toml(), &marker_fail_toml());
-    let tp = f.transcript(&[edit(&f.wt.join("session_edit.rs"))]);
-    let (decision, reason, out, err) = f.stop(&f.primary, &tp);
+/// No output stream of a stop may name `wt` (donegate does not report on
+/// another worktree; user rulings 2026-11-08).
+fn assert_not_named(wt: &Path, out: &str, err: &str) {
+    let w = wt.display().to_string();
     assert!(
-        f.wt.join(MARKER).exists(),
-        "donegate never ran the linked worktree's check (checks:[] / green at cwd=primary). \
-         decision={decision:?} out={out:?} err={err:?}"
-    );
-    assert_eq!(
-        decision, "block",
-        "the worktree check exits 1 so the stop must block; reason={reason:?}"
+        !out.contains(&w) && !err.contains(&w),
+        "donegate must not report on another worktree ({w}); out={out:?} err={err:?}"
     );
 }
 
-/// The session wrote files but every root's check set is empty: that is
-/// "nothing was verified", not "green". Must block, naming the roots.
+/// Re-scoped by user rulings 2026-11-08 (module docs). Was
+/// `worktree_check_runs_when_cwd_is_the_primary_tree`: the worktree's check
+/// ran and blocked. Now: hook cwd = primary tree, the session's Edit names a
+/// file in the linked worktree — the worktree's RED check does not run, does
+/// not block and is not named; the primary tree's own check still runs.
 #[test]
-fn wrote_files_but_empty_check_set_blocks_naming_roots() {
+fn worktree_check_not_run_when_cwd_is_the_primary_tree() {
+    let primary_marker = "max_attempts = 50\n\n[[check]]\nname = \"primary-ok\"\n\
+                          cmd = \"echo ran > primary-ran.txt; exit 0\"\n";
+    let f = Fixture::new(primary_marker, &marker_fail_toml());
+    let tp = f.transcript(&[
+        edit(&f.wt.join("session_edit.rs")),
+        edit(&f.primary.join("seed.rs")),
+    ]);
+    let (decision, reason, out, err) = f.stop(&f.primary, &tp);
+    assert!(
+        !f.wt.join(MARKER).exists(),
+        "the linked worktree's check must not run. decision={decision:?} out={out:?} err={err:?}"
+    );
+    assert_ne!(
+        decision, "block",
+        "another worktree must not block; reason={reason:?}"
+    );
+    assert_not_named(&f.wt, &out, &err);
+    assert!(
+        f.primary.join("primary-ran.txt").exists(),
+        "the primary tree's own check must still run; err={err:?}"
+    );
+}
+
+/// The other direction (added for the 2026-11-08 rulings): a RED check in the
+/// hook cwd still blocks even when the session also wrote another worktree.
+#[test]
+fn red_primary_still_blocks_when_another_worktree_was_written() {
+    let primary_red = "max_attempts = 50\n\n[[check]]\nname = \"primary-red\"\n\
+                       cmd = \"echo ran > primary-ran.txt; exit 1\"\n";
+    let f = Fixture::new(primary_red, &marker_fail_toml());
+    let tp = f.transcript(&[
+        edit(&f.wt.join("session_edit.rs")),
+        edit(&f.primary.join("seed.rs")),
+    ]);
+    let (decision, reason, out, err) = f.stop(&f.primary, &tp);
+    assert_eq!(
+        decision, "block",
+        "the cwd's red check must block; out={out:?} err={err:?}"
+    );
+    assert!(
+        reason.contains("primary-red"),
+        "the block must name the cwd's red check; reason={reason:?}"
+    );
+    assert!(
+        !f.wt.join(MARKER).exists(),
+        "the other worktree's check must not run; err={err:?}"
+    );
+    assert_not_named(&f.wt, &out, &err);
+}
+
+/// Re-scoped by user rulings 2026-11-08 (module docs). Was
+/// `wrote_files_but_empty_check_set_blocks_naming_roots`: writes only in the
+/// worktree + empty check sets blocked, naming both roots. Now: writes only in
+/// the worktree are not the cwd's writes, so the stop allows without naming
+/// it; a write in the cwd itself with an empty check set still blocks, naming
+/// the cwd (unchanged for the cwd).
+#[test]
+fn wrote_files_but_empty_check_set_blocks_only_for_the_primary_root() {
     let empty = "max_attempts = 50\n";
     let f = Fixture::new(empty, empty);
     let tp = f.transcript(&[edit(&f.wt.join("session_edit.rs"))]);
     let (decision, reason, out, err) = f.stop(&f.primary, &tp);
+    assert_ne!(
+        decision, "block",
+        "writes only in another worktree must not block; reason={reason:?} err={err:?}"
+    );
+    assert_not_named(&f.wt, &out, &err);
+
+    let tp = f.transcript(&[
+        edit(&f.wt.join("session_edit.rs")),
+        edit(&f.primary.join("seed.rs")),
+    ]);
+    let (decision, reason, out, err) = f.stop(&f.primary, &tp);
     assert_eq!(
         decision, "block",
-        "session wrote files, check set empty: must block. out={out:?} err={err:?}"
+        "primary written, check set empty: must block. out={out:?} err={err:?}"
     );
     assert!(
-        reason.contains(&f.wt.display().to_string())
-            && reason.contains(&f.primary.display().to_string()),
-        "reason must name both roots; reason={reason:?}"
+        reason.contains(&f.primary.display().to_string()),
+        "reason must name the primary root; reason={reason:?}"
     );
 }
 
-/// A written root that is gone cannot be resolved: undetermined -> block,
-/// naming the root.
+/// Re-scoped by user rulings 2026-11-08 (module docs). Was
+/// `written_root_gone_blocks_naming_the_root`: an unresolvable written root
+/// outside the cwd blocked. donegate no longer resolves roots outside the
+/// cwd, so such a write is not looked at: the stop allows (the cwd's green
+/// check ran) and the path is not named.
 #[test]
-fn written_root_gone_blocks_naming_the_root() {
+fn written_root_gone_outside_cwd_is_not_looked_at() {
     let f = Fixture::new(&exit0_toml(), &exit0_toml());
     // user ruling 2026-10-27: a gone dir under a NON-repo base is now excluded;
     // this keeps its property (unresolvable written root blocks, naming it) with
@@ -285,30 +360,22 @@ fn written_root_gone_blocks_naming_the_root() {
     let tp = f.transcript(&[edit(&gone)]);
     let _unlock = LockedDir::new(&locked);
     let (decision, reason, out, err) = f.stop(&f.primary, &tp);
-    assert_eq!(
+    assert_ne!(
         decision, "block",
-        "unresolvable written root must block. out={out:?} err={err:?}"
+        "a write outside the cwd must not be looked at. reason={reason:?} err={err:?}"
     );
     assert!(
-        reason.contains("gone-root-4711"),
-        "reason must name the unresolvable root; reason={reason:?}"
-    );
-    assert!(
-        reason.contains("cannot be determined"),
-        "reason must say the roots are undetermined; reason={reason:?}"
+        !out.contains("gone-root-4711") && !err.contains("gone-root-4711"),
+        "the outside path must not be named; out={out:?} err={err:?}"
     );
 }
 
-/// A written file whose directory exists but whose git root cannot be
-/// determined (a corrupt `.git` gitfile pointing nowhere): same.
-///
-/// Re-anchored for backlog 775e5bc8 (GitHub 1459): this test used a plain
-/// non-git directory, which the user ruling now treats as POSITIVELY outside
-/// every repo and excludes from the roots. A corrupt gitfile makes git say
-/// "not a git repository" without "(or any of the parent directories)", so the
-/// root stays undetermined and must still block.
+/// Re-scoped by user rulings 2026-11-08 (module docs). Was
+/// `written_root_corrupt_gitfile_blocks_naming_the_root` (re-anchored earlier
+/// for backlog 775e5bc8): a written directory outside the cwd whose git root
+/// could not be determined blocked. Now it is not looked at: allow, not named.
 #[test]
-fn written_root_corrupt_gitfile_blocks_naming_the_root() {
+fn written_root_corrupt_gitfile_outside_cwd_is_not_looked_at() {
     let f = Fixture::new(&exit0_toml(), &exit0_toml());
     let plain = f.home.join("plain-dir-4712");
     std::fs::create_dir_all(&plain).unwrap();
@@ -316,14 +383,51 @@ fn written_root_corrupt_gitfile_blocks_naming_the_root() {
     std::fs::write(plain.join("x.rs"), "fn x() {}\n").unwrap();
     let tp = f.transcript(&[edit(&plain.join("x.rs"))]);
     let (decision, reason, out, err) = f.stop(&f.primary, &tp);
-    assert_eq!(
+    assert_ne!(
         decision, "block",
-        "non-git written root must block. out={out:?} err={err:?}"
+        "a write outside the cwd must not be looked at. reason={reason:?} err={err:?}"
     );
     assert!(
-        reason.contains("plain-dir-4712"),
-        "reason must name the unresolvable root; reason={reason:?}"
+        !out.contains("plain-dir-4712") && !err.contains("plain-dir-4712"),
+        "the outside path must not be named; out={out:?} err={err:?}"
     );
+}
+
+/// Fail-closed for the one thing donegate still reads (added for the
+/// 2026-11-08 rulings): an unreadable session transcript means whether the
+/// cwd was written cannot be determined — the stop blocks.
+#[test]
+fn unreadable_transcript_blocks() {
+    let f = Fixture::new(&exit0_toml(), &exit0_toml());
+    let tp = f.transcript(&[edit(&f.primary.join("seed.rs"))]);
+    let _lock = LockedFile::new(&tp);
+    let (decision, reason, out, err) = f.stop(&f.primary, &tp);
+    assert_eq!(
+        decision, "block",
+        "an unreadable transcript must block. out={out:?} err={err:?}"
+    );
+    assert!(
+        reason.contains("cannot be determined"),
+        "reason must say it cannot be determined; reason={reason:?}"
+    );
+}
+
+/// Mode 000 on construction, 0o644 restored on drop.
+struct LockedFile(PathBuf);
+
+impl LockedFile {
+    fn new(p: &Path) -> LockedFile {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o000)).unwrap();
+        LockedFile(p.to_path_buf())
+    }
+}
+
+impl Drop for LockedFile {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o644));
+    }
 }
 
 /// CONTROL: a transcript recording no writes (only a Read) still allows, and

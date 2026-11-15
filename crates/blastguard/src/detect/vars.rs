@@ -53,8 +53,9 @@ pub(super) enum CommandWordOrigin {
     NoReachingAssignment,
     /// (3) An assignment DOES reach this use, but the text still does not name
     /// a program. Every way that happens:
-    ///   * its execution is guarded — by a `&&`/`||`, or by a compound command
-    ///     or subshell opened earlier on the line — so whether it ran in THIS
+    ///   * its execution is guarded — by a `&&`/`||` earlier in its own and-or
+    ///     list, or by a compound command or subshell opened anywhere earlier
+    ///     on the line — so whether it ran in THIS
     ///     shell is a run-time fact the text does not contain (see
     ///     [`assignment_execution_is_unconditional`]). This case differs from
     ///     the others below in that the VALUE may be perfectly readable; the
@@ -357,6 +358,71 @@ pub(super) fn is_shell_identifier(name: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// True when `text` spells the identifier `name` anywhere OTHER than as the
+/// plain reference `$name` / `${name…`: `name=…`, `export name`, `read name`,
+/// `for name in`, `unset name`, `${#name}`, an escaped `\$name`, or the bare
+/// word inside some string. Any of those may bind the name (or is text this
+/// helper does not try to tell apart from one), so a caller that needs "nothing
+/// here can rebind `name`" must refuse on `true`. Over-reporting only costs a
+/// resolution; it never invents one.
+pub(super) fn mentions_name_outside_reference(text: &str, name: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut i = 0;
+    while i < chars.len() {
+        if !is_ident(chars[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && is_ident(chars[i]) {
+            i += 1;
+        }
+        let run: String = chars[start..i].iter().collect();
+        if run != name {
+            continue;
+        }
+        let before = |back: usize| start.checked_sub(back).map(|k| chars[k]);
+        let plain = before(1) == Some('$') && before(2) != Some('\\');
+        let braced = before(1) == Some('{') && before(2) == Some('$') && before(3) != Some('\\');
+        if !plain && !braced {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when `line` may define a shell function: a `function` word, or a `(`
+/// followed (after optional blanks) by `)` that is not the opening of a
+/// `$(…)` / `<(…)` / `>(…)` substitution (`f() { … }`, `f ( ) …`). A function
+/// called later can assign any variable, so a caller that must know nothing
+/// rebinds a name refuses on `true`. Over-reporting only costs a resolution.
+pub(super) fn defines_shell_function(line: &str) -> bool {
+    if line
+        .split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')'))
+        .any(|w| w == "function")
+    {
+        return true;
+    }
+    let chars: Vec<char> = line.chars().collect();
+    for (k, c) in chars.iter().enumerate() {
+        if *c != '(' {
+            continue;
+        }
+        if k > 0 && matches!(chars[k - 1], '$' | '<' | '>') {
+            continue;
+        }
+        let mut j = k + 1;
+        while j < chars.len() && chars[j].is_whitespace() {
+            j += 1;
+        }
+        if chars.get(j) == Some(&')') {
+            return true;
+        }
+    }
+    false
+}
+
 /// The variable name a command word REFERS to, when the word is a plain single
 /// reference and nothing else.
 ///
@@ -426,8 +492,13 @@ pub(super) fn referenced_variable_name(word: &str) -> Option<String> {
 /// The LAST such assignment wins, since each later one overwrites the earlier.
 ///
 /// One further condition applies to that winner alone, and it is about
-/// EXECUTION rather than scope: no `&&`/`||` may stand before it
-/// ([`assignment_execution_is_unconditional`]). A guarded winner answers
+/// EXECUTION rather than scope: no `&&`/`||` may stand before it within its
+/// OWN and-or list, and no compound command, subshell or unclosed
+/// here-document may be opened anywhere before it on the line
+/// ([`assignment_execution_is_unconditional`]). A `&&`/`||` in an earlier
+/// and-or list already closed by `;`, `&` or a newline does not guard it:
+/// `foo && BIN=/bin/a; BIN=/bin/b; $BIN x` resolves to `/bin/b`. A guarded
+/// winner answers
 /// `AssignedButUnknowable` however readable its value is — including when an
 /// earlier UNGUARDED assignment to the same name exists, because then the two
 /// branches genuinely run two different programs and the text does not say

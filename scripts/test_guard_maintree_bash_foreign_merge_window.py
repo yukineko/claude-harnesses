@@ -44,6 +44,7 @@ from pathlib import Path
 cfg = json.loads(Path(%(cfg)r).read_text())
 env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 env["CLAUDE_PROJECT_DIR"] = cfg["main"]
+env["HOME"] = str(Path(cfg["main"]).parent / "home")  # sandbox the write record
 r = subprocess.run([sys.executable, cfg["guard"]], input=cfg["payload"],
                    env=env, capture_output=True, text=True, cwd=cfg["main"])
 Path(cfg["out"]).write_text(json.dumps({"rc": r.returncode, "stderr": r.stderr}))

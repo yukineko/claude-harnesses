@@ -42,7 +42,31 @@ def cargo_package_version(path):
     return m.group(1) if m else None
 
 
+def _staged_scope():
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import staged_scope
+
+    return staged_scope
+
+
 def main():
+    # `--staged` (pre-commit, user ruling 2026-11-08): lockstep is a cross-file
+    # property, so it runs in full only when the staged diff touches one of the
+    # three version files of any plugin (or this script / the scoping helper);
+    # otherwise it exits 0. An unreadable staged set exits 2.
+    if "--staged" in sys.argv:
+        sys.argv = _staged_scope().gate_on_inputs(
+            REPO,
+            "check-plugin-versions",
+            sys.argv,
+            [
+                "crates/*/Cargo.toml",
+                "crates/*/.claude-plugin/plugin.json",
+                ".claude-plugin/marketplace.json",
+                "scripts/check-plugin-versions.py",
+                "scripts/staged_scope.py",
+            ],
+        )
     mp = json.load(open(MP_PATH, encoding="utf-8"))
     plugins = mp.get("plugins") if isinstance(mp, dict) else mp
     mp_ver = {p["name"]: p.get("version") for p in plugins if isinstance(p, dict) and "name" in p}

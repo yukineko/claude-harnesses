@@ -17,6 +17,10 @@ unmerged but leaves OUR side verbatim with NO conflict markers. It parses, so a
 plain `git add` + commit silently discards the other side's edits, moves
 (tasks.toml -> tasks.done.toml) and deletions.
 
+With `--staged` (what pre-commit passes; user ruling 2026-11-08) only the
+staged store files are judged by 1-2, and 3 reports only ids a staged file
+carries; see main(). Without it, everything below applies to the whole store.
+
 What it checks
 --------------
 Every `.backlog/*.toml` blob recorded in the git INDEX — the content the commit
@@ -170,7 +174,25 @@ def lost_changes(tomllib, indexed: dict[str, tuple]) -> list[str]:
     return out
 
 
-def main() -> int:
+def _staged_scope():
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import staged_scope
+
+    return staged_scope
+
+
+def main(argv: list[str] | None = None) -> int:
+    # `--staged` (pre-commit, user ruling 2026-11-08): only the indexed
+    # .backlog/*.toml files that are in the staged diff are judged for markers
+    # and TOML validity; an unstaged indexed file is still parsed for the
+    # duplicate-id check but is skipped there if it does not parse (it is not
+    # in this change's range), and a duplicate is reported only for an id a
+    # staged file carries. No staged store file exits 0. The merge-loss check
+    # (4) is unchanged. An unreadable staged set exits 2.
+    argv = sys.argv if argv is None else argv
+    staged = None
+    if "--staged" in argv:
+        staged = _staged_scope().staged_paths_or_exit(os.getcwd(), "backlog-store")
     try:
         import tomllib
     except ImportError:
@@ -180,26 +202,41 @@ def main() -> int:
         listing = git("ls-files", "-z", "--cached", "--", ".backlog")
         # An unmerged path is listed once per stage; dedupe, keep order.
         paths = list(dict.fromkeys(p for p in listing.decode().split("\0") if p.endswith(".toml")))
+        if staged is not None and not any(p in staged for p in paths):
+            _staged_scope().print_nothing_in_scope("backlog-store")
+            return 0
 
         bad = []
         recs = []
+        staged_ids: set[str] = set()
         for path in paths:
+            in_range = staged is None or path in staged
             try:
                 text = git("show", f":{path}").decode("utf-8")
             except UnicodeDecodeError as e:
+                if not in_range:
+                    continue
                 raise Undetermined(f"cannot read the indexed {path}: {e}") from e
             m = MARKER_RE.search(text)
             if m:
-                line = text.count("\n", 0, m.start()) + 1
-                bad.append(f"{path}:{line}: conflict marker {m.group(0).strip()!r}")
+                if in_range:
+                    line = text.count("\n", 0, m.start()) + 1
+                    bad.append(f"{path}:{line}: conflict marker {m.group(0).strip()!r}")
                 continue
             try:
-                recs.extend(records(tomllib.loads(text), path))
+                file_recs = records(tomllib.loads(text), path)
             except tomllib.TOMLDecodeError as e:
-                bad.append(f"{path}: not valid TOML: {e}")
+                if in_range:
+                    bad.append(f"{path}: not valid TOML: {e}")
+                continue
+            recs.extend(file_recs)
+            if in_range:
+                staged_ids.update(r[0] for r in file_recs)
 
         indexed = by_id(recs)
         for tid, where in sorted(indexed.items()):
+            if staged is not None and tid not in staged_ids:
+                continue
             if len(where) > 1:
                 bad.append(f"task id {tid} appears {len(where)} times in the index: "
                            + ", ".join(p for p, _ in where))

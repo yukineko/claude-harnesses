@@ -909,6 +909,32 @@ mod test_hook {
     }
 }
 
+/// `.claude-plugin/marketplace.json`, `Cargo.lock`, and each crate's
+/// `crates/<c>/Cargo.toml` / `crates/<c>/.claude-plugin/plugin.json`: the files
+/// the version-lockstep rule makes every plugin bump touch.
+/// True only when both runs carry a session id and the ids differ.
+fn is_other_session(mine: Option<&str>, holder: Option<&str>) -> bool {
+    matches!((mine, holder), (Some(a), Some(b)) if a != b)
+}
+
+fn is_lockstep_version_file(f: &str) -> bool {
+    let f = f.trim_start_matches("./");
+    if f == ".claude-plugin/marketplace.json" || f == "Cargo.lock" {
+        return true;
+    }
+    let Some(rest) = f.strip_prefix("crates/") else {
+        return false;
+    };
+    match rest.split_once('/') {
+        Some((krate, tail)) => {
+            !krate.is_empty()
+                && !krate.contains(['*', '?', '['])
+                && (tail == "Cargo.toml" || tail == ".claude-plugin/plugin.json")
+        }
+        None => false,
+    }
+}
+
 fn ttl_secs(cfg: &Config) -> i64 {
     // Reuse the STUCK TTL: a task silent past it is already considered stuck, so
     // its claim should likewise be reclaimable. Clamp to i64 defensively.
@@ -971,13 +997,28 @@ fn claim_files_with_deadline(
 
     let mut outcome = ClaimOutcome::default();
     for f in files {
-        // Does any *other* run hold an overlapping claim? Clone the holder out so
-        // the immutable borrow ends before we mutate `reg` below.
+        // Version-lockstep files are never exclusive: every plugin bump edits
+        // them, two sessions' edits are line-disjoint and git merges them, and
+        // scripts/check-plugin-versions.py guards the result. Serializing runs
+        // on them only stalls parallel work (backlog: claim over-serialization,
+        // 2026-11-14), so they are granted without a registry entry.
+        if is_lockstep_version_file(f) {
+            outcome.claimed.push(f.clone());
+            continue;
+        }
+        // Does any *other* run of THIS session hold an overlapping claim? A run of a
+        // different session is not exclusive: CLAUDE.md §8 separates sessions by
+        // worktree and settles overlap at integration ("avoid simultaneous editing,
+        // not conflicts"; user ruling 2026-11-14), and the task hashkey claim keeps
+        // two sessions off the same task. An absent session id on either side
+        // cannot show the runs are different sessions, so it stays exclusive.
+        // Clone the holder out so the immutable borrow ends before we mutate `reg`.
         let conflict = reg
             .files
             .iter()
             .find(|(k, c)| {
                 c.run_id != run_id
+                    && !is_other_session(session_id, c.session_id.as_deref())
                     && files_conflict(std::slice::from_ref(f), std::slice::from_ref(*k))
             })
             .map(|(_, c)| c.clone());
@@ -989,6 +1030,18 @@ fn claim_files_with_deadline(
                 holder_pid: holder.pid,
                 holder_session: holder.session_id,
             });
+            continue;
+        }
+
+        // The exact key held by another session's run: granted, but its entry is
+        // left as it is, so that session's later runs still see their holder.
+        if let Some(c) = reg.files.get(f).filter(|c| c.run_id != run_id) {
+            eprintln!(
+                "condukt: {f} is also claimed by run {} of another session; \
+                 granted (sessions integrate by merge, CLAUDE.md §8)",
+                c.run_id
+            );
+            outcome.claimed.push(f.clone());
             continue;
         }
 

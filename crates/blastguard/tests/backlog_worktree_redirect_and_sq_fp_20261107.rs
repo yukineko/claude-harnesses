@@ -20,6 +20,8 @@
 
 #[path = "support/bounded.rs"]
 mod bounded;
+#[path = "support/neutral_base.rs"]
+mod neutral_base;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -54,9 +56,11 @@ impl Fx {
     fn new(name: &str) -> Fx {
         // NOT under /tmp or /var/tmp: those are blastguard TEMP safe roots, which
         // would make every path in the fixture "inside the session's safe roots"
-        // (measured: the fixture then allows, the real layout denies).
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join(format!("bg-wt-fp-{}-{name}", std::process::id()));
+        // (measured: the fixture then allows, the real layout denies). The
+        // calibrated fixture base (support/neutral_base.rs) is neither, and is
+        // not under the workspace `target/` (backlog 37955e32).
+        let root =
+            neutral_base::neutral_base().join(format!("bg-wt-fp-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let base = std::fs::canonicalize(&root).unwrap();
@@ -159,7 +163,6 @@ const WHOSE_TREE: &str = "not one of this session's trees";
 /// fixture). The target file is tracked in a linked worktree under
 /// `$HOME/.condukt/worktrees`; git can restore it.
 #[test]
-#[ignore = "blastguard FP: RED, remove ignore when fixed"]
 fn case1_overwrite_of_tracked_file_in_session_created_worktree_is_not_whose_tree_refusal() {
     let fx = Fx::new("case1");
     let wt = fx.wt.display();
@@ -189,7 +192,6 @@ session's tree, but got decision {d}: {out}",
 /// is in a git worktree that is NOT one of the session's trees (a second repo
 /// outside every safe root), so attribution is irrelevant: the text is data.
 #[test]
-#[ignore = "blastguard FP: RED, remove ignore when fixed"]
 fn case3_gt_path_inside_single_quoted_python_program_is_not_a_redirect() {
     let fx = Fx::new("case3");
     // Another project entirely, tracked file present.

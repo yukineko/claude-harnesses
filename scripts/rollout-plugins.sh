@@ -131,6 +131,12 @@
 #     before reading the registry and releases it on exit. A held lock (live
 #     OR dead holder) makes the run exit 6 before anything is touched; a stale
 #     lock is never stolen — the message prints the `rm -r` to remove it.
+#   - Committed source only (backlog ff8cebd0): a non-dry-run refuses (exit 9)
+#     to deploy unless the build inputs (crates/, Cargo.toml, Cargo.lock,
+#     .cargo/) are exactly HEAD and no fail-open mutation is in flight, checked
+#     before the copy, after the copy, between cargo build and the binary swap,
+#     and after the rebuild. See "the source must be exactly the committed
+#     tree" below and scripts/rollout_source_guard.py.
 #   - Idempotent: re-running with no version change is a no-op.
 #   - Prunes SUPERSEDED version dirs at the end of the run, but never the
 #     current one, never one held by a live session (`.in_use/<live pid>`),
@@ -1122,6 +1128,52 @@ while IFS= read -r _row; do
   PLAN_ROWS+=("$_row")
 done <<<"$PLAN_TXT"
 
+# --- the source must be exactly the committed tree (backlog ff8cebd0) --------
+# Observed 2026-11-14: a `--plugin blastguard` rollout ran while the pre-push
+# fail-open mutation (check-fail-open-mutation.py) had rewritten
+# crates/blastguard/src/model.rs in place (`Decision::Ask(_reason) =>
+# Decision::Allow`). This script copied and built THAT working tree, and the
+# deployed GATE turned every Ask into Allow; check-plugin-rollout.py noticed
+# only afterwards. The mutation stays where it is (user ruling), so the deploy
+# side refuses instead. scripts/rollout_source_guard.py decides; every "cannot
+# tell" is a refusal, and every refusal exits 9:
+#   1. here, BEFORE anything is copied or repointed: the build inputs (crates/,
+#      Cargo.toml, Cargo.lock, .cargo/) have no staged/unstaged/untracked
+#      change, HEAD is still $GIT_SHA, and no fail-open mutation is in flight
+#      (<git-dir>/fail-open-mutation.active, written by the mutation script);
+#   2. after each plugin dir is copied: every file HEAD tracks under it holds
+#      HEAD's blob (a mismatch is restored from HEAD in the cache, then refused);
+#   3. after the copy, before the registry write: step 1 again, plus HEAD and
+#      the mutation counter <git-dir>/fail-open-mutation.seq unchanged;
+#   4. inside rebuild-plugins.sh, after `cargo build` and BEFORE any binary is
+#      swapped into the cache (HARNESS_ROLLOUT_SOURCE_SNAPSHOT): step 3 again.
+#      A mutate-then-revert that happened entirely during the build still moved
+#      the counter, so it is caught although the tree is clean again;
+#   5. after rebuild+sync: step 3 again. A refusal here exits while the
+#      in-flight restore is armed, so the registry goes back to its prior entry.
+# The marker and counter live in THIS worktree's git dir only; no other
+# worktree is ever looked at. --dry-run deploys nothing and is not gated.
+SOURCE_GUARD="$REPO/scripts/rollout_source_guard.py"
+SOURCE_SNAPSHOT=""
+source_guard_verify() {
+  [ "$dry" = 1 ] && return 0
+  python3 "$SOURCE_GUARD" verify --repo "$REPO" --snapshot "$SOURCE_SNAPSHOT" --stage "$1" || exit 9
+}
+source_guard_verify_deployed() {
+  [ "$dry" = 1 ] && return 0
+  python3 "$SOURCE_GUARD" verify-deployed --repo "$REPO" --snapshot "$SOURCE_SNAPSHOT" \
+    --src "$1" --dst "$2" || exit 9
+}
+if [ "$dry" != 1 ]; then
+  if ! SOURCE_SNAPSHOT="$(python3 "$SOURCE_GUARD" snapshot --repo "$REPO" --expect-head "$GIT_SHA")" \
+     || [ -z "$SOURCE_SNAPSHOT" ]; then
+    echo "rollout: nothing was copied and the registry was not touched." >&2
+    exit 9
+  fi
+  export HARNESS_ROLLOUT_SOURCE_SNAPSHOT="$SOURCE_SNAPSHOT"
+  echo "source guard: build inputs are clean at HEAD (snapshot: $SOURCE_SNAPSHOT)"
+fi
+
 # =============================================================================
 # CANARY STAGED ROLLOUT (opt-in) — only runs with --canary. This block is a
 # SELF-CONTAINED alternative to the normal single-pass path below; it never
@@ -1147,6 +1199,7 @@ canary_copy_row() {
       echo "  [dry-run] would copy $srcdir/ -> $target/"
     else
       copy_plugin_dir "$srcdir" "$target"
+      source_guard_verify_deployed "$src" "$target"
       echo "  copied $name -> $target"
     fi
   fi
@@ -1376,6 +1429,7 @@ run_canary() {
         stage_reg_args+=("$name" "$version" "$target")
       fi
     done
+    source_guard_verify "post-copy (stage $s)"
     if [ "${#stage_reg_args[@]}" -gt 0 ]; then
       if [ "$dry" = 1 ]; then
         registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" --dry-run ${ALLOW_DOWNGRADE_FLAG[@]+"${ALLOW_DOWNGRADE_FLAG[@]}"} "${stage_reg_args[@]}" | sed 's/^/  /'
@@ -1513,6 +1567,8 @@ run_canary() {
     [ -f "$srcdir2/scripts/sync-plugin-assets.sh" ] && canary_synced+=("$sname:$srcdir2")
   done
   run_rebuild_and_sync ${canary_synced[@]+"${canary_synced[@]}"}
+  # Still in flight: a refusal here rolls every applied stage back.
+  source_guard_verify "post-rebuild"
   # The rebuild seeded the host binaries: the applied stages are live now.
   canary_inflight=0
 }
@@ -1738,6 +1794,7 @@ while IFS=$'\t' read -r name version src target needs_copy needs_registry mismat
       echo "[dry-run] would copy $srcdir/ -> $target/ (rsync -a --delete, exclude target/ .git/ .in_use/ .claude/, protect bin/*-<platform>)"
     else
       copy_plugin_dir "$srcdir" "$target"
+      source_guard_verify_deployed "$src" "$target"
       echo "copied $name -> $target"
     fi
   fi
@@ -1771,6 +1828,7 @@ while IFS=$'\t' read -r name version src target needs_copy needs_registry mismat
 done <<<"$PLAN_TXT"
 
 echo
+source_guard_verify "post-copy"
 if [ "$any_reg_change" = 1 ]; then
   if [ "$dry" = 1 ]; then
     registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" --dry-run ${ALLOW_DOWNGRADE_FLAG[@]+"${ALLOW_DOWNGRADE_FLAG[@]}"} "${reg_args[@]}"
@@ -1789,6 +1847,8 @@ fi
 
 # --- rebuild + asset sync (shared with the canary success path) --------------
 run_rebuild_and_sync ${synced_plugins[@]+"${synced_plugins[@]}"}
+# Still armed (default_inflight=1): a refusal here restores the registry.
+source_guard_verify "post-rebuild"
 # rebuild+sync returned: the repointed entries are final now (with
 # --no-rebuild nothing was seeded; that is the caller's explicit choice and
 # verify_rollout_complete below is what judges it).

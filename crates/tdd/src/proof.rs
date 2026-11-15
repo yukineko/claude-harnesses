@@ -48,6 +48,19 @@ fn judge_red(passed: bool) -> Result<()> {
     Ok(())
 }
 
+/// Refuse to treat a run as evidence when the test command never ran
+/// (`spawn_error` set): the runner reports that as `passed: false`, which
+/// `judge_red` would otherwise read as "tests fail as expected".
+fn judge_ran(out: &runner::Outcome) -> Result<()> {
+    if let Some(e) = &out.spawn_error {
+        bail!(
+            "test command never ran ({e}) — no RED recorded. Fix the environment/command \
+             and run `tdd red` again."
+        );
+    }
+    Ok(())
+}
+
 /// Decide whether a RED proof exists — the single canonical definition of the
 /// "no RED proof found" judgment. Shared by [`judge_green`] (the exhaustive
 /// GREEN-run judgment) and by `green()`'s own early check, which MUST run
@@ -218,6 +231,7 @@ pub fn red(
         cfg.output_tail_lines,
         &tmp,
     );
+    judge_ran(&out)?;
     judge_red(out.passed)?;
     let path = artifact_path(root, cfg, task, "red");
     let author = resolve_author(author);

@@ -38,6 +38,7 @@
 //!     occurrence so the session is never trapped.
 
 mod config;
+mod config_refusal;
 mod derive;
 #[cfg(test)]
 mod fault_injection_tests;
@@ -580,6 +581,13 @@ fn status() {
     println!("criteria_file:  {}", cfg.criteria_file);
     println!("state_dir:      {}", cfg.state_dir.display());
 
+    if let Some(p) = &cfg.untrusted_project {
+        println!(
+            "config error:   {} exists but this root is NOT trusted — not honored; every stop \
+             is BLOCKED (config-untrusted) until `propguard trust` is run here",
+            p.display()
+        );
+    }
     if let Some(why) = &cfg.load_error {
         println!(
             "config error:   {why} — built-in defaults shown above; every stop is BLOCKED \

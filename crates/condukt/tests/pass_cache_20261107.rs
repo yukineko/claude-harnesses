@@ -24,6 +24,8 @@
 //! Written by a disinterested author (CLAUDE.md section 2(a)). Do NOT weaken a
 //! test to make it pass; remove the `#[ignore]` on a RED test when fixed.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -118,10 +120,15 @@ impl Fx {
     }
 
     fn condukt(&self, args: &[&str]) -> Output {
+        common::prime_if_running(args, &self.home, "sess-pcache");
         harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
+            .env(
+                "CONDUKT_TESTSCOPE_LEDGER",
+                common::testscope_ledger(&self.home),
+            )
             .env("CLAUDE_CODE_SESSION_ID", "sess-pcache")
             .env("CONDUKT_AUTONOMOUS", "0")
             .env_remove("CONDUKT_DISABLE")

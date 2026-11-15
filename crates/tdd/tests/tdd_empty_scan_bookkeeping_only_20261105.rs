@@ -1,4 +1,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+//! NOTE 2026-11-08 (user ruling 2026-11-08: gates judge own worktree only): the
+//! rule this file was written against ("the session wrote files but no
+//! implementation change was evaluated in any root", the `sr.roots.len() > 1
+//! && sr.wrote_any && !evaluated_something` arm and `session_roots`) has been
+//! REMOVED from the tdd Stop hook, which now judges only the hook cwd checkout.
+//! Part (a) below therefore passes trivially and is kept as a regression guard
+//! that bookkeeping sessions are never blocked; part (b) is inverted/re-scoped
+//! (see its header). The text below is the 2026-11-05 history.
+//!
 //! Spec (user ruling 2026-11-05, session 2d8f4149, main 09508f0b): a session
 //! whose writes are only integration / bookkeeping must NOT be blocked by the
 //! rule "the session wrote files but no implementation change was evaluated in
@@ -317,18 +326,24 @@ impl Fixture {
 
     /// Run the real `tdd gate` with hook cwd = primary; (stdout, stderr).
     fn stop(&mut self) -> (String, String) {
+        let cwd = self.primary.clone();
+        self.stop_at(&cwd)
+    }
+
+    /// Run the real `tdd gate` with hook cwd = `cwd`; (stdout, stderr).
+    fn stop_at(&mut self, cwd: &Path) -> (String, String) {
         let transcript = self.finish();
         let payload = serde_json::json!({
             "session_id": "s-bk",
             "transcript_path": transcript.to_string_lossy(),
-            "cwd": self.primary.to_string_lossy(),
+            "cwd": cwd.to_string_lossy(),
             "hook_event_name": "Stop",
             "stop_hook_active": false,
         })
         .to_string();
         let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_tdd")))
             .arg("gate")
-            .current_dir(&self.primary)
+            .current_dir(cwd)
             .env("HOME", &self.home)
             .env("CLAUDE_CODE_SESSION_ID", "s-bk")
             .env_remove("TDD_DISABLE")
@@ -455,30 +470,38 @@ fn full_integration_session_is_not_blocked() {
 }
 
 // ---------------------------------------------------------------------------
-// (b) GREEN now and after the fix: an implementation write with an empty or
-// undetermined scan still blocks, bookkeeping or not.
+// (b) RE-SCOPED 2026-11-08 (user ruling 2026-11-08: gates judge own worktree
+// only). The "session wrote files but no implementation change was evaluated in
+// any root" block existed only for >1 roots (hook cwd + the worktrees the
+// session wrote into); that rule and the multi-root resolution are removed
+// from the Stop hook, so "an implementation write in ANOTHER worktree with an
+// empty scan blocks" no longer exists as a property and its tests are
+// inverted below (the other worktree is not judged from a primary cwd). The
+// fail-closed intent that survives is about the checkout the hook runs in:
+// an undetermined committed-work scan of the cwd checkout still blocks.
 // ---------------------------------------------------------------------------
 
-/// Empty scan: the session Wrote src/lib.rs in the worktree with content
-/// identical to what is committed (pre-session), so no diff and no
-/// in-session commit carries an implementation line.
+/// INVERTED (user ruling 2026-11-08: gates judge own worktree only). Was
+/// `impl_write_with_empty_scan_still_blocks`: the session Wrote src/lib.rs in
+/// the worktree (content identical to the pre-session commit; empty scan) and
+/// the stop, with cwd = primary, blocked with the >1-roots empty-scan message.
+/// That rule is gone; the other worktree is not judged, so no block and no
+/// empty-scan message.
 #[test]
-fn impl_write_with_empty_scan_still_blocks() {
+fn impl_write_in_other_worktree_with_empty_scan_is_not_blocked() {
     let mut f = Fixture::new();
     let p = f.wt.join("src/lib.rs");
     let primary = f.primary.clone();
     f.write_tool(&p, &primary);
     let (o, e) = f.stop();
-    assert!(
-        blocks(&o),
-        "an implementation write whose scan is empty must still block; stdout={o:?} stderr={e:?}"
-    );
+    assert_allowed("impl write (empty scan) in another worktree", &o, &e);
 }
 
-/// Same, mixed with every bookkeeping action: bookkeeping must not launder a
-/// real implementation write.
+/// INVERTED (user ruling 2026-11-08). Was
+/// `impl_write_with_empty_scan_amid_bookkeeping_still_blocks`. Bookkeeping plus
+/// an implementation write in ANOTHER worktree is not judged from cwd = primary.
 #[test]
-fn impl_write_with_empty_scan_amid_bookkeeping_still_blocks() {
+fn impl_write_in_other_worktree_amid_bookkeeping_is_not_blocked() {
     let mut f = Fixture::new();
     f.merge_ff_in_worktree();
     f.backlog_done_and_commit();
@@ -488,31 +511,52 @@ fn impl_write_with_empty_scan_amid_bookkeeping_still_blocks() {
     f.rollout_writes_outside();
     f.state_writes_outside();
     let (o, e) = f.stop();
-    assert!(
-        blocks(&o),
-        "bookkeeping alongside an implementation write with an empty scan must still block; \
-         stdout={o:?} stderr={e:?}"
-    );
+    assert_allowed("bookkeeping + impl write in another worktree", &o, &e);
 }
 
-/// Undetermined scan: the session wrote and committed new untested impl in
-/// the worktree, but no transcript record carries a timestamp, so the session
-/// start (and with it the committed-work fold) is undetermined.
+/// RE-SCOPED and WEAKENED (user ruling 2026-11-08). Was
+/// `impl_write_with_undetermined_scan_still_blocks`: the session wrote and
+/// committed new untested impl in the worktree, but no transcript record
+/// carries a timestamp, so the session start (and with it the committed-work
+/// fold) is undetermined; with cwd = primary the stop blocked, via the removed
+/// more-than-one-root rule. With cwd = the worktree itself (the only checkout judged now)
+/// the remaining behaviour is the single-root one: the committed work is not
+/// scanned and `gate::committed_note` says so on stderr. This test pins that
+/// disclosure and does NOT pin allow/block: whether an undetermined session
+/// start should block (CLAUDE.md section 3) is an open question for the user
+/// (see the report of the 2026-11-08 test-author pass), not a fact this test
+/// establishes.
 #[test]
-fn impl_write_with_undetermined_scan_still_blocks() {
+fn impl_write_with_undetermined_scan_in_cwd_reports_not_scanned() {
     let mut f = Fixture::new();
     let p = f.wt.join("src/new.rs");
     std::fs::write(&p, IMPL).unwrap();
     let wt = f.wt.clone();
     commit_all_at(&wt, "impl", IN_SESSION_COMMIT);
-    let primary = f.primary.clone();
-    f.write_tool(&p, &primary);
+    f.write_tool(&p, &wt);
     f.rollout_writes_outside();
     f.timestamps = false;
-    let (o, e) = f.stop();
+    let (o, e) = f.stop_at(&wt);
+    assert!(
+        e.contains("NOT scanned"),
+        "an undetermined committed-work scan must be disclosed; stdout={o:?} stderr={e:?}"
+    );
+}
+
+/// Same fixture with timestamps present and cwd = the worktree: the committed
+/// untested impl in the cwd checkout blocks, proving the allow-side tests above
+/// are not an inert gate.
+#[test]
+fn committed_untested_impl_in_cwd_worktree_blocks() {
+    let mut f = Fixture::new();
+    let p = f.wt.join("src/new.rs");
+    std::fs::write(&p, IMPL).unwrap();
+    let wt = f.wt.clone();
+    commit_all_at(&wt, "impl", IN_SESSION_COMMIT);
+    f.write_tool(&p, &wt);
+    let (o, e) = f.stop_at(&wt);
     assert!(
         blocks(&o),
-        "an implementation write whose committed-work scan is undetermined must still block; \
-         stdout={o:?} stderr={e:?}"
+        "committed untested impl in the cwd checkout must block; stdout={o:?} stderr={e:?}"
     );
 }

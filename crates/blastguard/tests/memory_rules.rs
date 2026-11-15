@@ -152,13 +152,21 @@ fn rule2_git_checkout_of_a_dirty_file_is_blocked_clean_file_allowed() {
     f.git(&["add", "-A"]);
     f.git(&["commit", "-q", "-m", "init"]);
     std::fs::write(f.repo.join("dirty.txt"), "uncommitted fix\n").unwrap();
+    std::fs::write(f.repo.join("staged-gone.txt"), "staged only\n").unwrap();
+    f.git(&["add", "staged-gone.txt"]);
+    std::fs::remove_file(f.repo.join("staged-gone.txt")).unwrap();
 
     for cmd in [
         "git checkout -- dirty.txt",
         "git checkout HEAD -- dirty.txt",
         "git restore dirty.txt",
-        // Cannot determine dirtiness (no such path) -> restrictive side.
-        "git checkout -- no-such-file.txt",
+        // Absent from disk but STAGED (index differs from HEAD): the checkout
+        // would overwrite the staged version -> restrictive side (probe gives
+        // DiffersFromHead; see c2 in checkout_absent_path_fp_20261108.rs).
+        // Re-anchored from `no-such-file.txt`: since blastguard 0.2.428 (user
+        // FP ruling 2026-11-08) an absent path that matches HEAD is determined
+        // (Allow), so it no longer exercises the restrictive side.
+        "git checkout -- staged-gone.txt",
     ] {
         let out = f.run(cmd);
         let d = decision(&out);
@@ -167,6 +175,13 @@ fn rule2_git_checkout_of_a_dirty_file_is_blocked_clean_file_allowed() {
             "`{cmd}` must be blocked (deny/ask); got {d}: {out:?}"
         );
     }
+    // Absent path matching HEAD: nothing to destroy (determined since 0.2.428).
+    let out = f.run("git checkout -- no-such-file.txt");
+    assert_eq!(
+        decision(&out),
+        "allow",
+        "absent path matching HEAD must be Allow; got {out:?}"
+    );
     // Control: a clean tracked file loses nothing.
     let out = f.run("git checkout -- clean.txt");
     assert_eq!(

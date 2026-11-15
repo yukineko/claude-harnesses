@@ -59,26 +59,34 @@ use crate::exclude;
 use crate::model::Decision;
 use crate::scope::{Placement, SafeRoots};
 use harness_core::verdict::Determination;
-
+mod ast;
+mod budget;
 mod compound;
+mod condukt;
 mod cwd;
 mod denoise;
+mod echo_script_file;
 mod executors;
+mod file_tool;
 mod fileops;
 mod find_xargs;
+mod function_calls;
 mod gh;
 mod git;
 mod git_stage;
 mod git_unmerged;
 mod harm_mark;
+mod here_string_file;
 mod heredoc;
 mod high_blast;
 mod interpreter;
 mod payload;
+mod printf_eval;
 mod protected;
 mod readings;
 mod readonly;
 mod redirect;
+mod relink;
 mod rm;
 mod scratch_place;
 mod segment;
@@ -92,7 +100,13 @@ mod words;
 
 use verdict_acc::VerdictAcc;
 
+#[cfg(test)]
+use budget::VISIT_PROBE;
+use budget::{depth_exhausted, take_budget, ANALYSIS_BUDGET, MAX_ANALYSIS_NODES, MAX_SHELL_DEPTH};
+
+pub(crate) use condukt::AUTONOMY_SELF_GRANT;
 use denoise::denoised_eval_rescan;
+use file_tool::{detect_edit, detect_write};
 use gh::analyze_gh;
 use readings::detect_bash_every_reading;
 
@@ -130,12 +144,13 @@ use protected::{
 use interpreter::{
     analyze_code_interpreter, interpreter_code_verdict, irreversible_device_verb,
     irreversible_git_subcommand, is_code_interpreter, quoted_string_literals, strip_version_suffix,
+    PythonReader,
 };
 
 use payload::{
-    analyze_interpreter_stdin_exec, dash_c_payloads, inline_command_payloads,
+    analyze_interpreter_stdin_exec, dash_c_payloads, faithful_tail, inline_command_payloads,
     interpreter_payloads_after, interpreter_stdin_operand, payloads_after,
-    split_substitution_opening_assignments, strip_wrapping_quotes,
+    split_substitution_opening_assignments, strip_wrapping_quotes, word_separators_lost,
 };
 
 use compound::{
@@ -237,10 +252,12 @@ pub fn detect_scoped(tool_name: &str, tool_input: Option<&Value>, scope: &SafeRo
 /// [`crate::scope`] existed, because [`SafeRoots::none`] makes every placement
 /// question `Undetermined`. This is the entry point for every library consumer
 /// that hands commands to `sh -c` with no human present (condukt's check
-/// runner, specguard's forge, daily's task runner): they get the strict gate,
-/// unchanged.
+/// runner, specguard's forge, daily's task runner): they get the strict gate.
+/// Except the scratch-place rule, judged against the PROCESS's managed places
+/// (env + filesystem; `detect/scratch_place.rs`, GitHub #1637).
 pub fn detect(tool_name: &str, tool_input: Option<&Value>) -> Decision {
-    detect_scoped(tool_name, tool_input, &SafeRoots::none())
+    let scope = SafeRoots::none().with_managed_places(scratch_place::process_place_model());
+    detect_scoped(tool_name, tool_input, &scope)
 }
 
 /// The location model, plus the working directory the CURRENT segment resolves
@@ -276,12 +293,15 @@ struct Ctx<'a> {
     rewritten_base: Option<&'a str>,
     /// Base for operands that rewrite left alone. `None` = not known.
     raw_base: Option<String>,
+    /// The scratch-place rule's bases ([`scratch_place::PlaceBases`]).
+    places: scratch_place::PlaceBases<'a>,
     /// Whether the TOP-LEVEL command may use the worktree-storage `Allow` at
     /// all — see [`worktree_rm_eligible`]. Computed once from the whole command
     /// line in [`Ctx::new`] and carried unchanged into every derived context.
     worktree_rm_eligible: bool,
     /// Whether the TOP-LEVEL command may use the deletion-principle verdicts
-    /// at all — literal ([`deletion_rm_eligible`]) and `/tmp` wildcard — see
+    /// at all — literal ([`deletion_rm_eligible`]), literal with `.`/`..`
+    /// operand components resolved physically, and `/tmp` wildcard — see
     /// [`DeletionEligibility`]. Computed once in [`Ctx::new`], carried unchanged.
     deletion_rm_eligible: DeletionEligibility,
     /// Whether the TOP-LEVEL command may lift the protected-path rule for a
@@ -307,8 +327,11 @@ struct Ctx<'a> {
     /// Deny. In program text such a `>` is far more often an operator inside a
     /// string or expression (`print(1 > 0)`, `'x > \`y\`'`) than a redirect,
     /// but it cannot be shown NOT to be one, so it is never cleared to Allow.
-    /// `None` everywhere else: an ordinary command line keeps today's Deny.
-    program_text_redirects: Option<&'a std::cell::RefCell<Vec<String>>>,
+    /// `None` everywhere else (today's Deny). See [`interpreter::ProgramTextSink`] (#1626).
+    program_text_redirects: Option<&'a interpreter::ProgramTextSink>,
+    /// `cd <dir> && ` that [`analyze_shell_payload`] puts before its payload: the
+    /// directory a here-document's Python program runs in (`python_file_body_verdict`).
+    cwd_prefix: Option<String>,
 }
 
 /// Marker every Ask produced under the user's 2026-10-14 rulings R1/R2 carries
@@ -355,12 +378,14 @@ impl<'a> Ctx<'a> {
             scope,
             rewritten_base: scope.session_cwd(),
             raw_base: scope.session_cwd().map(str::to_string),
+            places: scratch_place::PlaceBases::new(scope),
             worktree_rm_eligible: eligible(worktree_rm_eligible),
             deletion_rm_eligible: DeletionEligibility::of(eligible(deletion_rm_eligible), eligible),
             checkout_exempt_eligible: eligible(checkout_exempt_eligible),
             git_eligible_rest: git_worktree_eligible(command)
                 .or_else(|| tied_rest.and_then(git_worktree_eligible)),
             program_text_redirects: None,
+            cwd_prefix: None,
         }
     }
 
@@ -376,11 +401,13 @@ impl<'a> Ctx<'a> {
             scope: self.scope,
             rewritten_base: self.rewritten_base,
             raw_base,
+            places: self.places.after_cd(dir),
             worktree_rm_eligible: self.worktree_rm_eligible,
             deletion_rm_eligible: self.deletion_rm_eligible,
             checkout_exempt_eligible: self.checkout_exempt_eligible,
             git_eligible_rest: self.git_eligible_rest.clone(),
             program_text_redirects: self.program_text_redirects,
+            cwd_prefix: self.cwd_prefix.clone(),
         }
     }
 
@@ -393,11 +420,13 @@ impl<'a> Ctx<'a> {
             scope: self.scope,
             rewritten_base: None,
             raw_base: None,
+            places: scratch_place::PlaceBases::unknown(),
             worktree_rm_eligible: self.worktree_rm_eligible,
             deletion_rm_eligible: self.deletion_rm_eligible,
             checkout_exempt_eligible: self.checkout_exempt_eligible,
             git_eligible_rest: self.git_eligible_rest.clone(),
             program_text_redirects: self.program_text_redirects,
+            cwd_prefix: self.cwd_prefix.clone(),
         }
     }
 
@@ -629,161 +658,8 @@ fn unreadable_operand(tool: &str, field: &str) -> Decision {
 }
 
 // ---------------------------------------------------------------------------
-// File-write handling
-// ---------------------------------------------------------------------------
-
-fn extract_path(ti: Option<&Value>) -> Option<String> {
-    let v = ti?;
-    for key in ["file_path", "notebook_path", "path"] {
-        if let Some(p) = v.get(key).and_then(|p| p.as_str()) {
-            if !p.is_empty() {
-                return Some(p.to_string());
-            }
-        }
-    }
-    None
-}
-
-fn detect_write(ti: Option<&Value>, ctx: &Ctx<'_>) -> Decision {
-    let path = match extract_path(ti) {
-        Some(p) => p,
-        None => return unreadable_operand("Write", "file_path"),
-    };
-    // Git internals first: a whole-file Write over `.git/<x>` has always been a
-    // flat Deny. `.git/config` (and `.git/hooks/**`) are ALSO protected paths,
-    // whose verdict is the weaker Ask — checking the protected list first would
-    // downgrade that Deny (backlog 03885f11). The stricter verdict wins.
-    if exclude::is_git_internal(&path) {
-        return Decision::deny(format!(
-            "Write would overwrite git internals ({path}) — refusing"
-        ));
-    }
-    // BEFORE the config-file allowlist, not after: `.claude/**`, `*.toml` and
-    // `settings.local.json` are all matched by `is_config_file`, so the
-    // exemption used to swallow exactly the paths that decide whether the gates
-    // run at all. "It is a config file" is the reason to look harder here, not
-    // the reason to stop looking.
-    if let Some(deny) = protected_path_block(ctx, "Write", &path) {
-        return deny;
-    }
-    // Also before the config-file allowlist: `/etc/<x>.toml` is a config file
-    // by name and a system-directory drop-in by location.
-    if let Some(deny) = file_tool_system_block(ctx, "Write", &path) {
-        return deny;
-    }
-    if exclude::is_config_file(&path) {
-        return Decision::Allow;
-    }
-    let content = ti
-        .and_then(|v| v.get("content"))
-        .and_then(|c| c.as_str())
-        .unwrap_or("");
-    if content.trim().is_empty() {
-        return Decision::deny(format!(
-            "Write would replace {path} with empty content, wiping the file"
-        ));
-    }
-    Decision::Allow
-}
-
-/// Edit / MultiEdit / NotebookEdit: a partial edit of an ordinary file is
-/// allowed, but a partial edit of a protected gate/hook/policy path is exactly
-/// how a guard gets switched off, and an edit inside a system directory is the
-/// same payload as a redirect there ([`file_tool_system_block`]), so the target
-/// is classified rather than assumed harmless. `NotebookEdit` addresses its
-/// target via `notebook_path`, which `extract_path` already covers.
-fn detect_edit(ti: Option<&Value>, ctx: &Ctx<'_>) -> Decision {
-    let path = match extract_path(ti) {
-        Some(p) => p,
-        None => return unreadable_operand("Edit", "file_path/notebook_path"),
-    };
-    if let Some(deny) = protected_path_block(ctx, "Edit", &path) {
-        return deny;
-    }
-    if let Some(deny) = file_tool_system_block(ctx, "Edit", &path) {
-        return deny;
-    }
-    Decision::Allow
-}
-
-/// The system-directory axis for the file tools (Write / Edit / MultiEdit /
-/// NotebookEdit), user ruling 2026-11-01: the same rule, reason and directory
-/// set as a Bash redirect — [`system_path_block`] on the path as written, then
-/// [`real_system_path_block`] on the path the kernel really writes, so a
-/// dangling file symlink, a chain of them, or a directory symlink into `/etc`
-/// is the same Deny as the direct spelling. The `confined_root` exemption in
-/// [`system_path_block`] applies unchanged (a project checked out under `/opt`).
-///
-/// When the landing cannot be resolved (a symlink loop, an `lstat`/`read_link`
-/// error other than "does not exist") the answer is Ask, never Allow: "could
-/// not resolve" is not "not a system directory" (CLAUDE.md §3).
-fn file_tool_system_block(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
-    if let Some(deny) = system_path_block(action, path, ctx) {
-        return Some(deny);
-    }
-    match real_system_path_block(action, path, ctx) {
-        Ok(verdict) => verdict,
-        Err(why) => Some(Decision::ask(format!(
-            "{action} target ({path}) could not be resolved through its symlinks ({why}) — \
-blastguard cannot tell whether it lands in a system directory, so it refuses to guess"
-        ))),
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Bash handling
 // ---------------------------------------------------------------------------
-
-/// How deep we recurse into shell-evaluation wrappers (`eval`, `sh -c`, …)
-/// before giving up. Bounds work and guards against pathological nesting; no
-/// realistic command line wraps a destructive payload this many layers deep.
-const MAX_SHELL_DEPTH: usize = 8;
-
-/// Total number of `detect_bash` invocations allowed for ONE top-level command.
-///
-/// D4 (verified availability defect, fixed): a depth cap alone does NOT bound
-/// the work, because the re-analysis arms FAN OUT. `analyze_find` loops over
-/// every `-exec` position and re-analyses the whole remaining tail, which still
-/// contains the other `-exec` tokens, so the branching factor is the number of
-/// `-exec` tokens and the tree is O(N^MAX_SHELL_DEPTH). Measured on a single
-/// invocation of `find . ` + `-exec find . `×N + `-exec echo {} ` + `+ `×(N+1):
-/// N=20 → 2.2s, N=24 → 8.2s, N=28 → 30s, N=32 (a 503-byte command) → >60s,
-/// killed. blastguard is a PreToolUse hook, so that hangs the user's turn.
-///
-/// This caps total NODE VISITS across the whole recursion tree, not just its
-/// depth. Ordinary commands use fewer than a dozen visits; the cap is three
-/// orders of magnitude above that, so it cannot be reached by real work.
-const MAX_ANALYSIS_NODES: u32 = 2_000;
-
-thread_local! {
-    /// Remaining node budget for the top-level command currently being analysed.
-    static ANALYSIS_BUDGET: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-thread_local! {
-    /// Test-only work probe: when installed, counts EVERY `detect_bash` entry
-    /// (admitted or budget-rejected) on this thread. It is an atomic shared via
-    /// `Arc` so a watcher thread can observe the count while the analysis is
-    /// still running, and fail on an unbounded tree instead of hanging. It is
-    /// deliberately independent of `ANALYSIS_BUDGET`: removing the budget must
-    /// make this count explode, not leave it untouched.
-    static VISIT_PROBE: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicU64>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Consume one unit of the analysis budget. Returns false when it is exhausted.
-fn take_budget() -> bool {
-    ANALYSIS_BUDGET.with(|b| {
-        let left = b.get();
-        if left == 0 {
-            false
-        } else {
-            b.set(left - 1);
-            true
-        }
-    })
-}
 
 /// Re-analyse a payload string that a shell-evaluation position will EXECUTE
 /// (`sh -c <payload>`, `eval <payload>`, `flock -c <payload>`).
@@ -803,7 +679,10 @@ fn take_budget() -> bool {
 pub(super) const EXPANSION_HEAD_TAIL: &str = " is an expansion whose value only exists at run time — blastguard cannot tell what program this runs";
 
 fn analyze_shell_payload(payload: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
-    let d = detect_bash(payload, depth + 1, ctx);
+    let prefixed = ctx.cwd_prefix.as_ref().map(|p| format!("{p}{payload}"));
+    let payload = prefixed.as_deref().unwrap_or(payload);
+    // With and without its line continuations (backlog 040b959b).
+    let d = readings::shell_payload_verdict(payload, depth, ctx);
     if d.is_blocking() {
         return d;
     }
@@ -813,29 +692,6 @@ fn analyze_shell_payload(payload: &str, depth: usize, ctx: &Ctx<'_>) -> Decision
         ));
     }
     Decision::Allow
-}
-
-/// The recursion cap was reached, so analysis DID NOT FINISH. That is the same
-/// condition as budget exhaustion a few lines up (`detect_bash`'s D4 guard) —
-/// "we did not finish looking, so we have no verdict" — and it gets the same
-/// answer: an Ask, which `Decision::hardened` turns into the pre-existing Deny
-/// whenever no human is available to answer.
-///
-/// Every one of the five depth-capped sites used to resolve to `Allow`, either
-/// by returning it outright or by skipping the recursion and falling through to
-/// `acc.finish()`. A destructive payload nested past the cap was therefore
-/// waved through *unanalysed* — the exact fail-open this module exists to
-/// prevent, sitting one line away from the sibling condition that handles it
-/// correctly.
-///
-/// The reason deliberately differs from the budget ask so the two unfinished-
-/// analysis causes stay distinguishable in the logs.
-fn depth_exhausted() -> Decision {
-    Decision::ask(
-        "command nests shell/wrapper invocations deeper than blastguard analyses \
-         (recursion depth limit) — analysis did not finish, so blastguard cannot \
-         vouch for it either way",
-    )
 }
 
 fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
@@ -863,15 +719,49 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
 
     // 0. When the command is effectively ONE here-document fed to a data-only
     // reader (`cat > notes.txt <<'EOF'`, `git commit -F - <<'EOF'`), with no
-    // other command before or after it, its body is removed before EVERY rule
-    // below — the line-level scans as much as the per-segment loop — so its
-    // text is not judged as a command (backlog fa1fce21 / 7037df97). In every
-    // other shape the body stays and is judged as code. RESIDUAL, not covered:
-    // a data file written here can still be executed by a LATER, separate tool
-    // call. See `strip_data_here_document_bodies` for the exact shape rule.
+    // other command around it (a quoted `git commit -F -` may be followed by
+    // commands that cannot run the stored .git/COMMIT_EDITMSG; those stay
+    // judged), its body is removed before EVERY rule below, so its text is not
+    // judged as a command (backlog fa1fce21 / 7037df97). In every other shape
+    // the body stays and is judged as code. RESIDUAL, not covered: a data file
+    // written here can still be run by a LATER, separate tool call. Shape rule: `strip_data_here_document_bodies`.
     let stripped = strip_data_here_document_bodies(cmd);
     let cmd: &str = &stripped;
+    // 0b. A QUOTED here-document body written to a literal `.py` file is judged
+    // as Python, not as shell lines (user ruling 2026-11-08); the rest of the
+    // command, later lines included, is judged here without it — or, when the
+    // body may also be read as shell (`also_shell`), the whole command, body
+    // included. `None` keeps the body in the text. See
+    // `heredoc::python_file_here_document`.
+    if let Some(parts) = heredoc::python_file_here_document(cmd) {
+        if let Some(py) = interpreter::python_file_body_verdict(&parts, depth, ctx) {
+            if py.verdict.is_deny() {
+                return py.verdict;
+            }
+            // Neither branch can recurse here again: the body is empty, or
+            // the rules below are entered past this step.
+            let rest = if py.also_shell {
+                detect_bash_rules(cmd, depth, ctx)
+            } else {
+                detect_bash(&parts.without_body, depth, ctx)
+            };
+            return match (py.verdict, rest) {
+                (_, d @ Decision::Deny(_)) | (d @ Decision::Ask(_), _) => d,
+                (_, rest) => rest,
+            };
+        }
+    }
+    // 0c. A QUOTED body written only to non-shell code files (`.rs`, …) is not
+    // shell lines (user ruling 2026-11-08, #1602); no later line may run it.
+    if let Some(rest) = heredoc::non_shell_code_file_here_document(cmd) {
+        return detect_bash(&rest, depth, ctx);
+    }
+    detect_bash_rules(cmd, depth, ctx)
+}
 
+/// Every rule of [`detect_bash`] after its budget guard and here-document
+/// steps 0 / 0b, on `cmd` as given.
+fn detect_bash_rules(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // 1. Fork bomb (whitespace-insensitive signature).
     let compact: String = cmd.chars().filter(|c| !c.is_whitespace()).collect();
     if compact.contains(":(){") && compact.contains(":|:") {
@@ -948,6 +838,17 @@ primitive, not a filesystem path",
         if let Some(deny) = protected_path_block_at(ctx, "redirect", &target, &physical) {
             return deny;
         }
+        // Relinked earlier on the line: judge where it really lands (relink.rs).
+        let landing =
+            relink::redirect_landing(ctx, ">", rcmd, seg_idx, &seg_cwds, target, physical);
+        let (target, physical) = match landing {
+            relink::Step::Judge(t, p) => (t, p),
+            relink::Step::Decided(d) => return d,
+            relink::Step::Ask(a) => {
+                line_level_asks.push(a);
+                continue;
+            }
+        };
         if !redirect_target_is_safe(&target, ctx) {
             // SYSTEM-DIRECTORY axis, checked BEFORE recoverability for the same
             // reason the protected-path axis above is: the recoverability probe
@@ -1030,12 +931,11 @@ whether it lands in a system directory"
                 // 2026-10-03: refusing edits inside a worktree is itself the
                 // defect), even when the session runs in the main tree and the
                 // checkout is therefore not one of its safe roots. Judged by
-                // `Ctx::in_worktree_checkout`: absolute target, one plain
-                // command, placement observed with no symlink below the
-                // checkout.
+                // `Ctx::in_worktree_checkout_for_redirect`: absolute target, one plain command
+                // or an inert `&&` prefix (#1625), no symlink below the checkout.
                 crate::reversible::Recovery::RecoverableFromGit => {
                     ctx.confined_root("redirect", &[target.as_str()]).is_some()
-                        || ctx.in_worktree_checkout(&target)
+                        || ctx.in_worktree_checkout_for_redirect(&target, rcmd, seg_idx)
                 }
                 // An existing file whose bytes git does not hold, but which
                 // sits in a fixed temp root (`/tmp`, `/private/tmp`; never
@@ -1110,8 +1010,11 @@ overwrite this session's to make",
                 if matches!(recovery, crate::reversible::Recovery::Undetermined(_))
                     && redirect_target_undeterminable(&target, ctx.raw_base.as_deref())
                 {
-                    sink.borrow_mut().push(reason);
+                    sink.rows.borrow_mut().push(reason);
                     continue;
+                }
+                if sink.redirects_are_data {
+                    continue; // #1626: Python data, see `ProgramTextSink`
                 }
             }
             // The same ruling at LINE level (4a1cf1ad): this `>` sits in the
@@ -1168,6 +1071,16 @@ does not parse that body, but blastguard cannot show the program does not use it
         if let Some(deny) = protected_path_block_at(ctx, "append redirect", &target, &physical) {
             return deny;
         }
+        let landing =
+            relink::redirect_landing(ctx, ">>", rcmd, seg_idx, &seg_cwds, target, physical);
+        let (target, physical) = match landing {
+            relink::Step::Judge(t, p) => (t, p),
+            relink::Step::Decided(d) => return d,
+            relink::Step::Ask(a) => {
+                line_level_asks.push(a);
+                continue;
+            }
+        };
         // The system-directory axis does not care about the truncate/append
         // distinction either: `>>` is how a `paths.d` entry or an
         // `authorized_keys` line gets added, and one appended line is the
@@ -1274,6 +1187,7 @@ cannot tell whether it is a protected gate/config file or a system directory"
     let mut walks = CwdWalks::new(cmd, &views);
     // `for`/`select` variables bound so far on this line; see `loop_variants`.
     let mut bindings: Vec<LoopBinding> = Vec::new();
+    let line_cwds = segment_cwd_states(cmd);
     for (seg_idx, seg) in split_segments(cmd).into_iter().enumerate() {
         let walk = walks.walk_for(seg_idx);
         let cwd = walk.cwd.clone();
@@ -1353,6 +1267,14 @@ through it, and refuses to guess"
                 return deny;
             }
         }
+        // Target operands another segment relinks, judged where they land
+        // (relink.rs); first, so a landing's Deny names that landing.
+        let landed = relink::operand_landing_verdict(
+            command, cmd, seg_idx, &line_cwds, depth, ctx, &seg_ctx,
+        );
+        if let Some(deny) = acc.record(landed) {
+            return deny;
+        }
         if let Some(deny) = acc.record(analyze_segment(
             &effective_seg,
             depth,
@@ -1406,14 +1328,14 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
                 let rest = &tokens[i + 1..];
                 // Both spellings of flock's command flag: the short `-c` (via
                 // `dash_c_payloads`) and the long `--command`/`--command=…`.
-                let mut payloads = dash_c_payloads(rest);
+                let mut payloads = dash_c_payloads(rest, Some(seg));
                 if let Some(pos) = rest
                     .iter()
                     .position(|t| *t == "--command" || t.starts_with("--command="))
                 {
                     // Detached long form `--command <payload>`: payload is the
                     // token(s) AFTER the flag.
-                    payloads.extend(payloads_after(rest, pos));
+                    payloads.extend(payloads_after(rest, pos, Some(seg)));
                     // Attached long form `--command=<payload>`: the value is
                     // glued to the flag token by `=`. Reconstruct it so the
                     // same candidate logic applies — otherwise the inline value
@@ -1421,7 +1343,7 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
                     // stayed Allow at depth 0 (138607bc).
                     if let Some(eq) = rest[pos].find('=') {
                         let inline = &rest[pos][eq + 1..];
-                        payloads.extend(inline_command_payloads(rest, pos, inline));
+                        payloads.extend(inline_command_payloads(rest, pos, inline, Some(seg)));
                     }
                 }
                 for payload in payloads {
@@ -1448,10 +1370,9 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
             if normalized_command(t) != "env" {
                 continue;
             }
-            for payload in executors::env_split_string_payloads(&tokens[i + 1..]) {
-                if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth, ctx)) {
-                    return deny;
-                }
+            let verdict = executors::env_split_string_verdict(&tokens[i + 1..], seg, depth, ctx);
+            if let Some(deny) = acc.record(verdict) {
+                return deny;
             }
         }
         // 675eb991: `GIT_PAGER='rm -rf ~/x' git log` — an environment
@@ -1487,7 +1408,8 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
         let _ = acc.record(ask);
     }
 
-    if let Some(deny) = acc.record(rm::known_path_harm(&tokens, line, seg_idx, ctx)) {
+    // `seg` too: commands inside its `$(…)` bodies see this line's variables (e5a8fcc2).
+    if let Some(deny) = acc.record(rm::known_path_harm(&tokens, seg, line, seg_idx, ctx)) {
         return deny;
     }
     // D3: analyse EVERY candidate command-word position; deny if ANY is
@@ -1509,7 +1431,7 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
 
     // ASK-2: an UNRECOGNISED wrapper standing in front of a destructive command
     // line. See `unknown_wrapper_ask`.
-    if let Some(deny) = acc.record(unknown_wrapper_ask(&tokens, depth, line, seg_idx, ctx)) {
+    if let Some(deny) = acc.record(unknown_wrapper_ask(&tokens, seg, depth, line, seg_idx, ctx)) {
         return deny;
     }
 
@@ -1551,6 +1473,7 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
 /// is not a regression — that case was, and remains, the pre-existing Allow.
 fn unknown_wrapper_ask(
     tokens: &[&str],
+    seg: &str,
     depth: usize,
     line: &str,
     seg_idx: usize,
@@ -1729,20 +1652,20 @@ fn unknown_wrapper_ask(
     // line and were already judged in full by the caller before this rule ran;
     // re-analysing them here attributes the OUTER line's redirect to the head,
     // which turned `cargo test 2>&1`, `make >&2` and `echo x >&2` into asks
-    // about `cargo` / `make` / `echo`. Re-joining tokens with a single space
-    // also re-serialises redirect punctuation into a shape the redirect
-    // classifier reads differently from the original text, so the re-parse was
-    // not even asking about the same redirect.
-    //
-    // Dropping them costs nothing: a destructive REDIRECT is a deny from the
-    // outer analysis regardless of what the head is, so nothing is missed.
+    // about `cargo` / `make` / `echo`; a destructive REDIRECT is a deny from the
+    // outer analysis anyway. The tail is read off `seg` with its newlines
+    // (e4523bfd: a one-space re-join let a `#` comment swallow the next line).
     let end = tokens
         .iter()
         .enumerate()
         .skip(start)
         .find(|(_, t)| is_redirect_token(t))
         .map_or(tokens.len(), |(j, _)| j);
-    let tail = tokens[start..end].join(" ");
+    let what = format!("the command line behind `{}`", tokens[idx]);
+    let tail = match payload::reanalysis_text(Some(seg), &tokens[..end], start, &what) {
+        Ok(tail) => tail,
+        Err(undetermined) => return undetermined,
+    };
     if tail.trim().is_empty() {
         return Decision::Allow;
     }
@@ -1889,7 +1812,8 @@ fn analyze_command_at(
         // ASK-1: this is a shell-EVALUATION position, so `eval "$CMD"` asks
         // rather than falling through unanalysed.
         if matches!(cmd, "eval" | "exec" | "source" | ".") && !rest.is_empty() {
-            let joined = rest.join(" ");
+            // Read off `seg` so a quoted program keeps its newlines.
+            let joined = faithful_tail(seg, rest, 0).map_or_else(|| rest.join(" "), str::to_string);
             let inline = strip_wrapping_quotes(&joined);
             if let Some(deny) = acc.record(analyze_shell_payload(inline, depth, ctx)) {
                 return deny;
@@ -1903,11 +1827,21 @@ fn analyze_command_at(
         // `sh -c "<payload>"` and friends evaluate the `-c` argument.
         // ASK-1: likewise a shell-evaluation position — `bash -c "$CMD"` asks.
         if is_shell(cmd) {
-            for payload in dash_c_payloads(rest) {
+            for payload in dash_c_payloads(rest, seg) {
                 if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth, ctx)) {
                     return deny;
                 }
             }
+        }
+        // The `eval`/`-c` text lost its newlines (no source to read it off):
+        // what runs is not what was judged. See `word_separators_lost`.
+        let evaluates = is_shell(cmd) || matches!(cmd, "eval" | "exec" | "source" | ".");
+        if evaluates && word_separators_lost(seg, rest, 0) {
+            let _ = acc.record(Decision::ask(format!(
+                "`{cmd}`'s command string could not be read with its line breaks intact"
+            )));
+        }
+        if is_shell(cmd) {
             // daf7611b: a shell whose language this module cannot parse. The
             // POSIX pass above may still Deny; if it did not, that is a
             // failure to analyse, not a clean result (CLAUDE.md §3).
@@ -1946,9 +1880,13 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         // denied. Recognising a segment whose command word is an exec predicate
         // and routing it back through `analyze_find` restores the multi-exec
         // scan for the `\;` form without depending on where the split fell.
-        "-exec" | "-execdir" | "-ok" | "-okdir" => analyze_find(&tokens[idx..], depth, ctx),
+        "-exec" | "-execdir" | "-ok" | "-okdir" => analyze_find(&tokens[idx..], seg, depth, ctx),
         "rm" => analyze_rm(rest, ctx),
         "gh" => analyze_gh(rest),
+        // 12ba5845: granting autonomy is human-only. `tokens[..idx]` carries the
+        // env-assignment prefix (`CONDUKT_AUTONOMOUS=1 condukt …`) that
+        // `command_candidates` skipped to reach this command word.
+        "condukt" => condukt::analyze_condukt(&tokens[..idx], rest),
         "git" => {
             // daf7611b: `git -c core.pager="rm -rf ~/x" log` — command-valued
             // config set for this one command. Either side's Deny wins.
@@ -1996,8 +1934,8 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         "sort" => analyze_sort(rest, ctx),
         "uniq" => analyze_uniq(rest, ctx),
         "sed" => analyze_sed(rest, ctx),
-        "find" => analyze_find(rest, depth, ctx),
-        "xargs" => analyze_xargs(rest, depth, ctx),
+        "find" => analyze_find(rest, seg, depth, ctx),
+        "xargs" => analyze_xargs(rest, seg, depth, ctx),
         // Both of these were location-blind: `truncate -s 0 target/log.txt`
         // and `truncate -s 0 /usr/lib/libc.so` were the same verdict. The
         // target list is computed the same way every other rule computes one
@@ -2203,7 +2141,7 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         // `find -exec`/`-ok` (handled in analyze_find). Judge it here too, not
         // only inside the find-exec path — and judge the PROGRAM, not the shape
         // of the invocation. See `analyze_code_interpreter`.
-        cmd if is_code_interpreter(cmd) => analyze_code_interpreter(cmd, rest, depth, ctx),
+        cmd if is_code_interpreter(cmd) => analyze_code_interpreter(cmd, rest, seg, depth, ctx),
         other => {
             if other.starts_with("mkfs") {
                 Decision::deny("mkfs formats a filesystem, destroying all data")
@@ -2285,3 +2223,6 @@ mod heredoc_subst_tests;
 
 #[cfg(test)]
 mod hookspath_read_tests;
+
+#[cfg(test)]
+mod restore_content_tests;

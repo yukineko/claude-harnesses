@@ -35,9 +35,13 @@ The ledger is cleared by a pre-commit run that goes green, not by this script â€
 and only by a run over a non-empty staged diff, and only for entries whose
 commit is an ancestor of the HEAD that run judged (backlog c767cb47).
 
-In the status form, an entry whose commit is reachable from no ref and no
-worktree HEAD (e.g. the pre-rebase original that survives only in a reflog)
-cannot leave this machine, and no pre-commit run can ever clear it. It is
+In the status form, an entry whose commit is reachable from no ref and not from
+THIS worktree's HEAD (e.g. the pre-rebase original that survives only in a
+reflog) is not pushable from here, and no pre-commit run here can clear it.
+Other worktrees' HEADs are not consulted (user ruling 2026-11-08: hooks look
+only at the change's own range, never at other worktrees); a commit reachable
+only from another worktree's detached HEAD is not counted (coverage dropped
+deliberately by that ruling) and blocks the moment a push carries it. It is
 listed as "unreachable" and does not count as outstanding; it is never removed
 from the ledger, and it blocks again the moment anything makes it reachable.
 An entry that cannot be placed (malformed or abbreviated id, a non-commit
@@ -150,23 +154,28 @@ def _git(
         raise Undetermined("git could not be executed: %s" % exc) from exc
 
 
-def head_tips(repo: Path | None) -> list[str]:
-    """The HEAD commit of every worktree, detached or not.
+def own_head(repo: Path | None) -> list[str]:
+    """THIS worktree's HEAD commit, as a one-element list ([] on an unborn
+    branch).
 
-    `for-each-ref` does not list HEAD, but a detached HEAD can still be pushed
-    (`git push origin HEAD:main`), so a commit reachable from one is live.
+    `for-each-ref` does not list HEAD, but a detached HEAD here can still be
+    pushed (`git push origin HEAD:main`), so a commit reachable from it is
+    live. Other worktrees' HEADs are deliberately NOT consulted (user ruling
+    2026-11-08: hooks must not look at other worktrees); a commit reachable
+    only from another worktree's detached HEAD is not counted here â€” that
+    coverage was dropped deliberately, and it blocks once a push carries it.
+    Any failure other than an unborn HEAD is Undetermined.
     """
-    proc = _git(repo, ["worktree", "list", "--porcelain"])
-    if proc.returncode != 0:
-        raise Undetermined(
-            "`git worktree list` exited %d: %s"
-            % (proc.returncode, proc.stderr.strip() or "(no stderr)")
-        )
-    return [
-        line.split(" ", 1)[1]
-        for line in proc.stdout.splitlines()
-        if line.startswith("HEAD ")
-    ]
+    proc = _git(repo, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
+    if proc.returncode == 0 and proc.stdout.strip():
+        return [proc.stdout.strip()]
+    unborn = _git(repo, ["symbolic-ref", "--quiet", "HEAD"])
+    if proc.returncode == 1 and unborn.returncode == 0:
+        return []
+    raise Undetermined(
+        "`git rev-parse --verify HEAD` exited %d: %s"
+        % (proc.returncode, proc.stderr.strip() or "(no stderr)")
+    )
 
 
 HASH_HEX_LEN = {"sha1": 40, "sha256": 64}
@@ -209,7 +218,7 @@ def object_is_missing(repo: Path | None, sha: str, full_len: int) -> bool:
 
 def is_reachable(repo: Path | None, sha: str, tips: list[str]) -> bool:
     """True if the PRESENT commit `sha` is contained in some ref or one of
-    `tips` (the worktree HEADs; call `object_is_missing` first).
+    `tips` (this worktree's HEAD; call `object_is_missing` first).
 
     Raises Undetermined when that cannot be established (a git call that
     fails): an entry we cannot place is never treated as unreachable (backlog
@@ -292,8 +301,8 @@ def split_unreachable(
     """Partition entries into (outstanding, unreachable) when no push is being
     judged (the status form, invoked without `--push`).
 
-    A commit reachable from no ref and no worktree HEAD
-    cannot leave this machine, and no pre-commit run can ever clear it (it is
+    A commit reachable from no ref and not from this worktree's HEAD
+    is not pushable from here, and no pre-commit run can ever clear it (it is
     an ancestor of no HEAD). It is reported, never deleted, and does not block.
     A commit whose object is definitively missing is unreachable too (user
     ruling 2026-10-20, backlog 860c43db): it has no content to push.
@@ -301,7 +310,7 @@ def split_unreachable(
     if not entries:
         return [], []
     full_len = object_id_length(repo)
-    tips = head_tips(repo)
+    tips = own_head(repo)
     outstanding, unreachable = [], []
     for e in entries:
         sha = e["commit"]
@@ -367,7 +376,7 @@ def main(argv: list[str]) -> int:
     if unreachable:
         print(
             "gate-bypass: %d ledger entr%s for commits reachable from no ref\n"
-            "or worktree HEAD, or absent from the object store\n"
+            "or this worktree's HEAD, or absent from the object store\n"
             "(unreachable; cannot be pushed, kept in the ledger, not blocking):" % (len(unreachable), "y" if len(unreachable) == 1 else "ies"),
             file=sys.stderr,
         )

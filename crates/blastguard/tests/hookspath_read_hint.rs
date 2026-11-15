@@ -3,12 +3,16 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Regression tests for item 326edfee.
 //!
-//! Spec: `git config core.hooksPath` with no value must stay DENIED exactly as
-//! today — nothing about the VERDICT changes. Only the deny REASON changes: it
-//! must now tell the caller how to read the value safely
-//! (`git config --get core.hooksPath`), because the bare one-argument form is
-//! ambiguous between "I want to read this" and "I want to write this" and the
-//! gate cannot tell which the caller meant from the command line alone.
+//! Spec (326edfee): every hooksPath deny reason tells the caller how to read
+//! the value safely (`git config --get core.hooksPath`).
+//!
+//! Re-scoped by user ruling 2026-11-08 (backlog 8fe3a5c3). This file used to
+//! pin the bare `git config core.hooksPath` as DENIED, on the premise that the
+//! one-argument form cannot be told apart from a write. git's grammar
+//! (observed with git 2.50.1, table in `src/detect/hookspath_read_tests.rs`)
+//! does tell them apart: exactly one positional is a read. The bare form is
+//! now Allow, so the hint is asserted on a write form that stays denied, and
+//! the bare form joins the allowed reads.
 //!
 //! These are end-to-end tests against the real built binary, following the
 //! pattern in `tests/integration.rs`: a PreToolUse Bash JSON payload on stdin,
@@ -71,17 +75,17 @@ fn verdict(command: &str) -> (String, String) {
 const HOOKSPATH_CLASS_REASON: &str =
     "git config core.hooksPath repoints every git hook at once, disabling the repo's hook gates";
 
-/// EXPECTED RED TODAY. The bare read/write-ambiguous form must stay denied
-/// (verdict unchanged), but the reason must now steer the caller to the safe
-/// read spelling. Today's reason carries the class explanation but not the
-/// `git config --get core.hooksPath` hint.
+/// A hooksPath deny reason steers the caller to the safe read spelling.
+/// Re-scoped by user ruling 2026-11-08 (backlog 8fe3a5c3): the subject used to
+/// be the bare `git config core.hooksPath`, which is now an Allowed read; the
+/// hint is asserted on a write that stays denied.
 #[test]
-fn bare_hookspath_deny_reason_points_to_the_safe_read_form() {
-    let cmd = "git config core.hooksPath";
+fn hookspath_deny_reason_points_to_the_safe_read_form() {
+    let cmd = "git config core.hooksPath .githooks";
     let (decision, reason) = verdict(cmd);
     assert_eq!(
         decision, "deny",
-        "`{cmd}` must stay denied — the verdict itself does not change, got reason: {reason}"
+        "`{cmd}` writes core.hooksPath and must be denied, got reason: {reason}"
     );
     assert!(
         reason.contains("git config --get core.hooksPath"),
@@ -90,13 +94,15 @@ core.hooksPath`, got reason: {reason:?}"
     );
 }
 
-/// Every deny in this class — including the bare read/write-ambiguous form —
-/// must still carry the shared class reason, since `rule_id.rs` maps rule ids
-/// by that exact substring (`rule_id.rs:225`).
+/// Every deny in this class must still carry the shared class reason, since
+/// `rule_id.rs` maps rule ids by that exact substring. The bare
+/// `git config core.hooksPath` was dropped from the cases: it is an Allowed
+/// read since user ruling 2026-11-08 (backlog 8fe3a5c3); `git config
+/// core.hooksPath ''` (a write of the empty string) takes its place.
 #[test]
 fn every_hookspath_deny_still_carries_the_shared_class_reason() {
     let cases = [
-        "git config core.hooksPath",
+        "git config core.hooksPath ''",
         "git config core.hooksPath .githooks",
         "git -c core.hooksPath=/tmp/evil status",
         "git config --unset core.hooksPath",
@@ -133,13 +139,19 @@ fn write_and_repoint_shapes_stay_denied() {
     }
 }
 
-/// Non-regression: the read-only form stays allowed (silent, no `ask`/`deny`).
+/// Non-regression: the read-only forms stay allowed (silent, no `ask`/`deny`).
+/// The bare one-positional read was added by user ruling 2026-11-08 (backlog
+/// 8fe3a5c3).
 #[test]
 fn get_form_stays_read_only_allowed() {
-    let cmd = "git config --get core.hooksPath";
-    let (decision, reason) = verdict(cmd);
-    assert!(
-        decision != "deny" && decision != "ask",
-        "`{cmd}` is a read-only form and must not be deny/ask, got decision={decision:?} reason={reason:?}"
-    );
+    for cmd in [
+        "git config --get core.hooksPath",
+        "git config core.hooksPath",
+    ] {
+        let (decision, reason) = verdict(cmd);
+        assert!(
+            decision != "deny" && decision != "ask",
+            "`{cmd}` is a read-only form and must not be deny/ask, got decision={decision:?} reason={reason:?}"
+        );
+    }
 }

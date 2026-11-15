@@ -355,12 +355,10 @@ fn status_does_not_render_an_untrusted_refusal_as_no_checks() {
 }
 
 // ---------------------------------------------------------------------------
-// The ordering hazard: worktree trust inheritance.
-//
-// Blocking on an untrusted declared check set is only shippable if there is a
-// path by which the ~90 existing session worktrees are trusted. Trust is
-// resolved by exact canonical path, so a linked worktree of an ALREADY-TRUSTED
-// repository was untrusted even though its contents are that repository's.
+// Worktree trust inheritance was REMOVED (user ruling 2026-11-08): trust is
+// exact canonical-path membership, and worktree creators register each new
+// worktree at creation. A linked worktree of an already-trusted repository is
+// untrusted unless it is itself listed.
 // ---------------------------------------------------------------------------
 
 fn git(cwd: &std::path::Path, args: &[&str]) -> bool {
@@ -417,14 +415,14 @@ fn repo_with_linked_worktree(base: &std::path::Path) -> Option<(PathBuf, PathBuf
     Some((main, wt))
 }
 
-/// A linked worktree of a TRUSTED repository inherits that repository's trust:
-/// its committed `donegate.toml` is honored, so a passing check set lets the
-/// stop through instead of hitting the refusal.
+/// A linked worktree of a TRUSTED repository does NOT inherit that
+/// repository's trust (user ruling 2026-11-08): its committed `donegate.toml`
+/// is refused until the worktree itself is trusted.
 #[test]
-fn worktree_of_a_trusted_repo_inherits_trust() {
+fn worktree_of_a_trusted_repo_does_not_inherit_trust() {
     let base = isolated_dir("wt-inherit");
     let Some((main, wt)) = repo_with_linked_worktree(&base) else {
-        eprintln!("SKIPPED worktree_of_a_trusted_repo_inherits_trust: git unavailable");
+        eprintln!("SKIPPED worktree_of_a_trusted_repo_does_not_inherit_trust: git unavailable");
         return;
     };
 
@@ -468,12 +466,25 @@ fn worktree_of_a_trusted_repo_inherits_trust() {
     let (tc, to, te) = with_home(&main, &["trust"], "");
     assert_eq!(tc, 0, "`donegate trust` in the main checkout: {to} {te}");
 
+    // User ruling 2026-11-08: NO inheritance. The worktree of a trusted main is
+    // still refused.
+    let (code, stdout, stderr) = with_home(&wt, &["gate"], STOP_PAYLOAD);
+    assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
+    assert!(
+        stdout.contains(r#""decision":"block""#),
+        "a linked worktree of a TRUSTED repo must NOT inherit that trust; it must still be \
+         refused; got stdout: {stdout:?} stderr: {stderr:?}"
+    );
+
+    // Positive control: trusting the worktree itself runs its checks and lets
+    // the stop through, so the block above is caused by missing trust alone.
+    let (tc, to, te) = with_home(&wt, &["trust"], "");
+    assert_eq!(tc, 0, "`donegate trust` in the worktree: {to} {te}");
     let (code, stdout, stderr) = with_home(&wt, &["gate"], STOP_PAYLOAD);
     assert_eq!(code, 0, "stdout: {stdout} stderr: {stderr}");
     assert!(
         !stdout.contains(r#""decision":"block""#),
-        "a linked worktree of a TRUSTED repo must inherit that trust and run its checks; got \
-         stdout: {stdout:?} stderr: {stderr:?}"
+        "an explicitly trusted worktree must run its checks; got stdout: {stdout:?} stderr: {stderr:?}"
     );
 }
 

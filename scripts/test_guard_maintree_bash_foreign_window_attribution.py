@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
-"""guard-maintree-bash: a foreign `git merge` window in main is only attributed
-to ANOTHER process when attribution is determinable; otherwise it stays refused
-(CLAUDE.md 3).
+"""guard-maintree-bash: a foreign `git merge` window in main, judged by the PRE
+cwd alone.
 
-Companion to test_guard_maintree_bash_foreign_merge_window.py (which proves the
-allow for a command whose Pre/Post cwd is a linked worktree and whose text
-cannot point at main). Every case here runs the guard's Post inside a REAL
-foreign `git merge --no-ff` pre-merge-commit window in main and asserts that an
-undeterminable attribution (cwd missing / not a git work tree / main itself,
-command text naming main or a redirect marker, Pre snapshot without `cwd`)
-still refuses (rc 2). A positive case in the same harness proves the window is
-one the guard would otherwise allow, so the refusals are not vacuous.
+RE-SCOPED by user ruling 2026-11-08 ("donegateそのものが他のworktreeを見たり検証
+したりテストしたりすることは禁止とする。他のgateでも禁止とする。合理的理由があって
+確認するなら、それを提示すること。基本的に認めない" / "...定期的にまとまったauditの
+実施での担保とする。"). The old contract attributed a foreign window to ANOTHER
+process only when Pre/Post cwd and command text proved the call could not
+target main (command_cannot_target_main). That attribution was deleted: a call
+whose PRE cwd is a linked worktree is no longer judged against main at all
+(Post cwd, command text and redirect markers are irrelevant), and a call whose
+PRE cwd is main is still refused inside a foreign window with the AMBIGUOUS
+ORIG_HEAD wording. Every case runs the guard's Post inside a REAL foreign
+`git merge --no-ff` pre-merge-commit window in main.
 
-Written by the implementer of the attribution change (stated plainly, CLAUDE.md
-2.(a)): an independent review of these cases is still owed.
+What this does NOT prove: that a worktree-cwd command which really writes main
+is caught — it is not (accepted detection loss, dropped with no compensating
+mechanism).
+
+Originally written by the implementer of the attribution change; re-scoped by
+the implementer of the 2026-11-08 change (stated plainly, CLAUDE.md 2.(a)).
 
     python3 -m pytest scripts/test_guard_maintree_bash_foreign_window_attribution.py
 """
@@ -40,6 +46,7 @@ from pathlib import Path
 cfg = json.loads(Path(%(cfg)r).read_text())
 env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 env["CLAUDE_PROJECT_DIR"] = cfg["main"]
+env["HOME"] = str(Path(cfg["main"]).parent / "home")  # sandbox the write record
 pre = json.loads(Path(cfg["pre_snapshot"]).read_text()) if cfg.get("strip_pre_cwd") else None
 if pre is not None:
     pre.pop("cwd", None)
@@ -101,49 +108,45 @@ class ForeignWindowAttribution(ObserveGuardBase):
         self.assertEqual(res["rc"], 2, "undeterminable attribution must refuse:\n" + res["stderr"])
         self.assertIn("ORIG_HEAD was rewritten", res["stderr"])
 
-    # positive control: same harness, attribution determinable -> allowed
-    def test_control_linked_worktree_cwd_plain_command_allowed(self) -> None:
-        res = self._window(OK_CMD, self.wt, OK_CMD, str(self.wt))
-        self.assertEqual(res["rc"], 0, res["stderr"])
+    def assert_not_judged(self, res: dict) -> None:
+        self.assertEqual(res["rc"], 0, "a worktree-cwd call is not judged against main:\n"
+                         + res["stderr"])
 
-    def test_post_cwd_missing_refuses(self) -> None:
-        self.assert_refused(self._window(OK_CMD, self.wt, OK_CMD, None))
+    def test_linked_worktree_cwd_plain_command_allowed(self) -> None:
+        self.assert_not_judged(self._window(OK_CMD, self.wt, OK_CMD, str(self.wt)))
 
-    def test_post_cwd_not_a_string_refuses(self) -> None:
-        self.assert_refused(self._window(OK_CMD, self.wt, OK_CMD, 42))
-
-    def test_post_cwd_nonexistent_refuses(self) -> None:
-        self.assert_refused(self._window(OK_CMD, self.wt, OK_CMD, str(self.tmp / "nope")))
-
-    def test_post_cwd_not_a_git_work_tree_refuses(self) -> None:
+    def test_pre_cwd_worktree_post_cwd_anything_allowed(self) -> None:
+        """Only the PRE cwd decides; Post cwd (missing, wrong type, gone, not a
+        tree, main's subdir) no longer makes the call judged."""
         plain = self.tmp / "plain"
         plain.mkdir()
-        self.assert_refused(self._window(OK_CMD, self.wt, OK_CMD, str(plain)))
-
-    def test_pre_cwd_is_main_refuses(self) -> None:
-        self.assert_refused(self._window(OK_CMD, self.main, OK_CMD, str(self.wt)))
-
-    def test_post_cwd_is_main_subdir_refuses(self) -> None:
         sub = self.main / "sub"
         sub.mkdir()
-        self.assert_refused(self._window(OK_CMD, self.wt, OK_CMD, str(sub)))
+        for post_cwd in (None, 42, str(self.tmp / "nope"), str(plain), str(sub)):
+            with self.subTest(post_cwd=post_cwd):
+                self.tearDown_window()
+                self.assert_not_judged(self._window(OK_CMD, self.wt, OK_CMD, post_cwd))
 
-    def test_pre_snapshot_without_cwd_refuses(self) -> None:
-        self.assert_refused(self._window(OK_CMD, self.wt, OK_CMD, str(self.wt),
-                                         strip_pre_cwd=True))
+    def test_pre_cwd_is_main_refuses(self) -> None:
+        """Main-cwd calls are still observed: a foreign window landing in this
+        call's Pre/Post is refused with the ambiguous wording (CLAUDE.md 3)."""
+        self.assert_refused(self._window(OK_CMD, self.main, OK_CMD, str(self.wt)))
 
-    def test_command_naming_main_path_refuses(self) -> None:
-        cmd = "ls %s" % self.main
-        self.assert_refused(self._window(cmd, self.wt, cmd, str(self.wt)))
+    def test_pre_cwd_main_subdir_refuses(self) -> None:
+        sub = self.main / "sub"
+        sub.mkdir()
+        self.assert_refused(self._window(OK_CMD, sub, OK_CMD, str(sub)))
 
-    def test_command_with_redirect_markers_refuses(self) -> None:
-        for cmd in ("cd .. && git status", "git -C ../main status",
+    def test_command_text_is_irrelevant_from_a_worktree_cwd(self) -> None:
+        """Accepted detection loss: command text that names main or redirects
+        to it is not consulted for a worktree-cwd call."""
+        for cmd in ("ls %s" % self.main, "cd .. && git status", "git -C ../main status",
                     "git --git-dir=../main/.git status", "GIT_DIR=x git status",
                     "pushd ..", "make --directory=..",
                     "python3 -c 'import os; os.chdir(\"..\")'"):
             with self.subTest(cmd=cmd):
                 self.tearDown_window()
-                self.assert_refused(self._window(cmd, self.wt, cmd, str(self.wt)))
+                self.assert_not_judged(self._window(cmd, self.wt, cmd, str(self.wt)))
 
     def tearDown_window(self) -> None:
         """Reset main and the hook dir so _window can run again in one test."""
@@ -152,6 +155,9 @@ class ForeignWindowAttribution(ObserveGuardBase):
             for f in hooks.iterdir():
                 f.unlink()
             hooks.rmdir()
+        out = self.tmp / "hook-result.json"
+        if out.exists():
+            out.unlink()  # so _window's anti-vacuity check sees THIS run's result
         if git(self.main, "rev-parse", "-q", "--verify", "ORIG_HEAD", check=False).returncode == 0:
             git(self.main, "reset", "-q", "--hard", "ORIG_HEAD")
 

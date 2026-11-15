@@ -8,6 +8,10 @@
 //!
 //! Before C2 the gate denied a Bash call only when the payload `cwd` lay in a
 //! guarded area or when the command TEXT contained the root / worktree path.
+//! (Since the user ruling 2026-11-08 — gates judge own worktree only — a
+//! guarded target's area is its registered root alone; a linked worktree of the
+//! target is no longer part of it, see
+//! `relative_word_reaching_linked_worktree_is_not_denied`.)
 //! Every DENY case below deliberately avoids both: the payload cwd is the
 //! parent `P` of the target `T` (`P/proj`), a sibling dir, or an unrelated temp
 //! dir, and the target is only reached through a relative word, a symlink
@@ -349,10 +353,17 @@ fn option_and_assignment_values_reaching_unratified_target_are_denied() {
     check_all(&l, &cases, true, "--opt=/NAME= value");
 }
 
-/// C2 rule 3 over the whole guarded area: a relative word reaching a linked
-/// worktree of the target (created outside the target dir) is denied.
+/// INVERTED (user ruling 2026-11-08: gates judge own worktree only — "donegate
+/// そのものが他のworktreeを見たり検証したりテストしたりすることは禁止とする。
+/// 他のgateでも禁止とする"). Was `relative_word_reaching_linked_worktree_is_denied`
+/// (C2 rule 3 "over the whole guarded area": a guarded target's area included
+/// every `git worktree list` entry). A guarded target's area is now its
+/// registered root ONLY, so a relative word reaching a linked worktree of the
+/// target (created outside the target dir) is NOT denied. Anti-vacuity, same
+/// fixture: a relative word reaching the root itself is still denied while
+/// unratified (and allowed after ratify).
 #[test]
-fn relative_word_reaching_linked_worktree_is_denied() {
+fn relative_word_reaching_linked_worktree_is_not_denied() {
     let l = Layout::new(Reg::Unratified);
     let wt = l.p().join("wt");
     common::git(
@@ -363,11 +374,21 @@ fn relative_word_reaching_linked_worktree_is_denied() {
     let cases: Vec<Case> = vec![(l.p().to_path_buf(), "touch wt/x".into())];
     assert_old_rules_cannot_see(&l, &cases);
     assert!(!cases[0].1.contains(wt.to_str().unwrap()));
-    check_all(&l, &cases, true, "worktree word");
-    // Partner: after ratification the same call is allowed.
+    check_all(&l, &cases, false, "worktree word, unratified");
+    // Also by absolute text and by cwd inside the worktree.
+    let abs: Vec<Case> = vec![
+        (l.p().to_path_buf(), format!("touch {}/x", wt.display())),
+        (wt.clone(), "touch y".into()),
+    ];
+    check_all(&l, &abs, false, "worktree path/cwd, unratified");
+    // (c) the root itself is still judged in the same fixture.
+    let root_case: Vec<Case> = vec![(l.p().to_path_buf(), "touch proj/x".into())];
+    assert_old_rules_cannot_see(&l, &root_case);
+    check_all(&l, &root_case, true, "root word, unratified");
+    // Partner: after ratification the root call is allowed too.
     let spec = l.spec_dir.path.join("spec.toml");
     l.fde_ok(&["ratify", "--spec", spec.to_str().unwrap()]);
-    check_all(&l, &cases, false, "worktree word, ratified");
+    check_all(&l, &root_case, false, "root word, ratified");
 }
 
 /// C2 rules 2 and 4: an unresolvable word (`$`, backtick, unquoted glob,

@@ -78,9 +78,33 @@
 //!    observed (they become the record's `head` / `dirty`) and the step-1
 //!    ancestry check is repeated against that HEAD; any failure is
 //!    `Undetermined` and `CMD` does not run.
-//!    `CMD` runs as `/bin/sh -c CMD` with cwd = the target root, stdin null,
-//!    the repo-relocating `GIT_*` variables removed, bounded by
-//!    [`CMD_TIMEOUT`]. The **exit status** decides: RED needs a non-zero
+//!    `CMD` runs **confined** (spec `fde-evidence-confine`) as
+//!    `sandbox-exec -p PROFILE /bin/sh -c CMD` (macOS `/usr/bin/sandbox-exec`)
+//!    with cwd = the target root, stdin null, the repo-relocating `GIT_*`
+//!    variables removed, `TMPDIR` set to a fresh private per-invocation
+//!    directory (mode 0700, under the parent temp dir), bounded by
+//!    [`CMD_TIMEOUT`]. The generated profile is `(allow default)` plus
+//!    `(deny file-write*)`, re-allowing writes only to this allow-set (paths
+//!    symlink-resolved, since the sandbox matches real paths): the target
+//!    root, the private TMPDIR, `/dev/null`, `/dev/tty`, `$CARGO_TARGET_DIR`
+//!    when set, `$CARGO_HOME/registry` and `$CARGO_HOME/git` (else
+//!    `$HOME/.cargo/registry` / `$HOME/.cargo/git`), and `$RUSTUP_HOME` (else
+//!    `$HOME/.rustup`). Every other write — the parent `$TMPDIR`,
+//!    `/private/tmp`, `/private/var/folders`, `$HOME` — is denied; reads and
+//!    network are not restricted. Before **every** `CMD` the preflight
+//!    `sandbox-exec -p PROFILE /usr/bin/true` runs; a refusal — the private
+//!    TMPDIR or the profile cannot be made, sandbox-exec is missing or cannot
+//!    be spawned, the probe exits non-zero, or the host is not macOS — is
+//!    `Undetermined` (exit 2, reason on stderr), `CMD` does not run and
+//!    nothing is recorded. The non-macOS refusal is compile-checked only
+//!    (`#[cfg(not(target_os = "macos"))]`); it has not been observed running
+//!    on this (macOS) development host. There is no env var or flag to change
+//!    or skip the confinement (the test overrides exist only under
+//!    `#[cfg(test)]`). A write the sandbox denies is part of `CMD`'s
+//!    environment: `CMD` simply sees the error and its exit status is judged
+//!    as usual. The private TMPDIR is removed after `CMD`; a failed removal is
+//!    a stderr warning and changes neither the answer nor the record.
+//!    The **exit status** decides: RED needs a non-zero
 //!    exit, GREEN and PASS need exit 0; the other outcome is `Violation`. A
 //!    spawn failure, a signal (no exit code), a timeout, unreadable output, or
 //!    exit 126/127 (the shell could not execute / find the command, so nothing
@@ -744,19 +768,353 @@ fn check_history(
     })
 }
 
-/// Run `cmd` at the target root. `Known(output)` only for a process that
-/// ran to completion with an exit code other than 126/127.
+/// The macOS sandbox launcher every evidence `CMD` runs under.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+
+/// Upper bound on the preflight probe (`sandbox-exec -p PROFILE /usr/bin/true`).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// One writable entry of the confinement allow-set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Writable {
+    /// Exactly this path (`(literal "...")`).
+    Literal(PathBuf),
+    /// This path and everything below it (`(subpath "...")`).
+    Subpath(PathBuf),
+}
+
+/// An environment path variable: unset and empty are both "not present". A
+/// relative value is taken relative to the target root (the `CMD`'s cwd,
+/// where cargo would resolve it too). The result is canonicalized leniently
+/// (the longest existing prefix symlink-resolved) because the sandbox matches
+/// real paths (`/tmp` and `/var` are symlinks to `/private/...` on macOS).
+#[track_caller]
+fn env_path(
+    env: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+    key: &str,
+    root: &Path,
+) -> Determination<Option<PathBuf>> {
+    let Some(v) = env(key).filter(|v| !v.is_empty()) else {
+        return Determination::known(None);
+    };
+    let p = PathBuf::from(v);
+    let abs = if p.is_absolute() { p } else { root.join(p) };
+    match crate::gate::canonical_lenient(&abs) {
+        Determination::Known(c) => Determination::known(Some(c)),
+        Determination::Undetermined(why) => Determination::undetermined(format!(
+            "${key} ({}) cannot be resolved for the evidence CMD write allow-set: {}",
+            abs.display(),
+            why.as_str()
+        )),
+    }
+}
+
+/// The write allow-set for one evidence `CMD` (spec fde-evidence-confine R1):
+/// the target root, the private TMPDIR, `/dev/null`, `/dev/tty`,
+/// `$CARGO_TARGET_DIR` when set, `$CARGO_HOME/{registry,git}` (else
+/// `$HOME/.cargo/{registry,git}`) and `$RUSTUP_HOME` (else `$HOME/.rustup`).
+/// Entries whose variables are absent are left out (fewer writes, never
+/// more). A path that cannot be resolved is `Undetermined`.
+#[track_caller]
+fn allow_set(
+    root: &Path,
+    private_tmp: &Path,
+    env: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) -> Determination<Vec<Writable>> {
+    let canon = |p: &Path, what: &str| -> Determination<PathBuf> {
+        match p.canonicalize() {
+            Ok(c) => Determination::known(c),
+            Err(e) => Determination::undetermined(format!(
+                "the {what} {} cannot be canonicalized for the evidence CMD write allow-set: {e}",
+                p.display()
+            )),
+        }
+    };
+    let mut set = Vec::new();
+    for (p, what) in [(root, "target root"), (private_tmp, "private TMPDIR")] {
+        match canon(p, what) {
+            Determination::Known(c) => set.push(Writable::Subpath(c)),
+            Determination::Undetermined(why) => return Determination::Undetermined(why),
+        }
+    }
+    set.push(Writable::Literal(PathBuf::from("/dev/null")));
+    set.push(Writable::Literal(PathBuf::from("/dev/tty")));
+    let var = |key: &str| env_path(env, key, root);
+    let home = match var("HOME") {
+        Determination::Known(h) => h,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    match var("CARGO_TARGET_DIR") {
+        Determination::Known(Some(t)) => set.push(Writable::Subpath(t)),
+        Determination::Known(None) => {}
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    }
+    let cargo_home = match var("CARGO_HOME") {
+        Determination::Known(Some(c)) => Some(c),
+        Determination::Known(None) => home.as_ref().map(|h| h.join(".cargo")),
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    if let Some(c) = cargo_home {
+        set.push(Writable::Subpath(c.join("registry")));
+        set.push(Writable::Subpath(c.join("git")));
+    }
+    match var("RUSTUP_HOME") {
+        Determination::Known(Some(r)) => set.push(Writable::Subpath(r)),
+        Determination::Known(None) => {
+            if let Some(h) = &home {
+                set.push(Writable::Subpath(h.join(".rustup")));
+            }
+        }
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    }
+    Determination::known(set)
+}
+
+/// `p` as an SBPL string literal (`"` and `\` escaped). A path that is not
+/// UTF-8 or holds a control character is `Undetermined`: it cannot be written
+/// into the profile without guessing.
+#[track_caller]
+fn sbpl_string(p: &Path) -> Determination<String> {
+    let Some(s) = p.to_str() else {
+        return Determination::undetermined(format!(
+            "path {} is not UTF-8 and cannot be written into the sandbox profile",
+            p.display()
+        ));
+    };
+    if s.chars().any(char::is_control) {
+        return Determination::undetermined(format!(
+            "path {s:?} holds a control character and cannot be written into the sandbox profile"
+        ));
+    }
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        if ch == '"' || ch == '\\' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out.push('"');
+    Determination::known(out)
+}
+
+/// The sandbox profile for `set`: everything allowed except file writes,
+/// which are denied and then re-allowed for exactly the entries of `set`
+/// (later SBPL rules win). Reads and network are not restricted.
+#[track_caller]
+fn profile(set: &[Writable]) -> Determination<String> {
+    let mut p = String::from("(version 1)\n(allow default)\n(deny file-write*)\n");
+    for w in set {
+        let (filter, path) = match w {
+            Writable::Literal(path) => ("literal", path),
+            Writable::Subpath(path) => ("subpath", path),
+        };
+        match sbpl_string(path) {
+            Determination::Known(s) => {
+                p.push_str(&format!("(allow file-write* ({filter} {s}))\n"));
+            }
+            Determination::Undetermined(why) => return Determination::Undetermined(why),
+        }
+    }
+    Determination::known(p)
+}
+
+/// The sandbox-exec binary to run. Tests may point it elsewhere through
+/// [`seam`]; a release build has no override (spec R8).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn sandbox_exec_path() -> PathBuf {
+    #[cfg(test)]
+    if let Some(p) = seam::SANDBOX_EXEC.with(|c| c.borrow().clone()) {
+        return p;
+    }
+    PathBuf::from(SANDBOX_EXEC)
+}
+
+/// The profile to load: the generated one. Tests may replace it through
+/// [`seam`]; a release build has no override (spec R8).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn effective_profile(generated: String) -> String {
+    #[cfg(test)]
+    if let Some(p) = seam::PROFILE.with(|c| c.borrow().clone()) {
+        return p;
+    }
+    generated
+}
+
+/// Print a warning on stderr (a failed stderr write changes nothing).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn warn(msg: &str) {
+    use std::io::Write as _;
+    #[cfg(test)]
+    seam::WARNINGS.with(|w| w.borrow_mut().push(msg.to_owned()));
+    let _ = writeln!(std::io::stderr(), "fde: warning: {msg}");
+}
+
+/// Create the private per-invocation TMPDIR (mode 0700) under the parent
+/// temp dir. Any failure is `Undetermined`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[track_caller]
+fn make_private_tmp() -> Determination<PathBuf> {
+    use std::os::unix::fs::DirBuilderExt as _;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let parent = std::env::temp_dir();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut last = None;
+    for _ in 0..16 {
+        let dir = parent.join(format!(
+            "fde-evidence-{}-{nanos}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => return Determination::known(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "the private TMPDIR {} for the evidence CMD cannot be created: {e}",
+                    dir.display()
+                ))
+            }
+        }
+    }
+    Determination::undetermined(format!(
+        "no fresh private TMPDIR for the evidence CMD could be created under {}: {}",
+        parent.display(),
+        last.map(|e| e.to_string()).unwrap_or_default()
+    ))
+}
+
+/// Remove the private TMPDIR. Tests may make this fail through [`seam`].
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn remove_private_tmp(dir: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if seam::FAIL_REMOVE.with(std::cell::Cell::get) {
+        return Err(std::io::Error::other(
+            "removal failure injected by a unit test",
+        ));
+    }
+    std::fs::remove_dir_all(dir)
+}
+
+/// Run `cmd` at the target root, confined (spec fde-evidence-confine): a
+/// private TMPDIR is created, the write allow-set profile generated, the
+/// preflight probe `sandbox-exec -p PROFILE /usr/bin/true` run, and only
+/// when it exits 0 `cmd` runs as `sandbox-exec -p PROFILE /bin/sh -c CMD`
+/// with `TMPDIR` = the private dir. The private dir is removed afterwards;
+/// a failed removal is a stderr warning and changes nothing else.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[track_caller]
+fn run_confined(
+    cmd: &str,
+    root: &Path,
+    env: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) -> Determination<boundary::CommandOutput> {
+    let private = match make_private_tmp() {
+        Determination::Known(d) => d,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    let out = run_in_sandbox(cmd, root, &private, env);
+    if let Err(e) = remove_private_tmp(&private) {
+        warn(&format!(
+            "could not remove the private TMPDIR {} of the evidence CMD: {e}",
+            private.display()
+        ));
+    }
+    out
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[track_caller]
+fn run_in_sandbox(
+    cmd: &str,
+    root: &Path,
+    private: &Path,
+    env: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) -> Determination<boundary::CommandOutput> {
+    let set = match allow_set(root, private, env) {
+        Determination::Known(s) => s,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    let prof = match profile(&set) {
+        Determination::Known(p) => effective_profile(p),
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    let exec = sandbox_exec_path();
+    let build = |c: &mut Command| {
+        harness_core::git_env::scrub(c);
+        c.env("TMPDIR", private)
+            .current_dir(root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+    };
+
+    // Preflight, before every CMD: the profile must load under this
+    // sandbox-exec, or the CMD does not run at all.
+    let mut probe = Command::new(&exec);
+    probe.arg("-p").arg(&prof).arg("/usr/bin/true");
+    build(&mut probe);
+    match boundary::run_with_timeout(&mut probe, PROBE_TIMEOUT) {
+        Determination::Known(o) if o.code() == 0 => {}
+        Determination::Known(o) => {
+            let tail: String = o.stderr().chars().take(400).collect();
+            return Determination::undetermined(format!(
+                "the confinement preflight `{} -p <profile> /usr/bin/true` exited {}, so the \
+                 evidence CMD {cmd:?} was not run and nothing is recorded. stderr: {}",
+                exec.display(),
+                o.code(),
+                if tail.is_empty() { "<empty>" } else { &tail }
+            ));
+        }
+        Determination::Undetermined(why) => {
+            return Determination::undetermined(format!(
+                "the confinement preflight could not run sandbox-exec ({}), so the evidence CMD \
+                 {cmd:?} was not run and nothing is recorded: {}",
+                exec.display(),
+                why.as_str()
+            ))
+        }
+    }
+
+    let mut c = Command::new(&exec);
+    c.arg("-p").arg(&prof).arg("/bin/sh").arg("-c").arg(cmd);
+    build(&mut c);
+    boundary::run_with_timeout(&mut c, CMD_TIMEOUT)
+}
+
+#[cfg(target_os = "macos")]
+#[track_caller]
+fn confined(cmd: &str, root: &Path) -> Determination<boundary::CommandOutput> {
+    run_confined(cmd, root, &|k| std::env::var_os(k))
+}
+
+/// Not macOS: there is no sandbox-exec to confine `cmd`, so it is not run.
+/// This path is compile-checked only; it has not been observed running on
+/// the macOS development host.
+#[cfg(not(target_os = "macos"))]
+#[track_caller]
+fn confined(cmd: &str, _root: &Path) -> Determination<boundary::CommandOutput> {
+    Determination::undetermined(format!(
+        "the evidence CMD {cmd:?} was not run: its write confinement needs macOS \
+         sandbox-exec, and this host is not macOS"
+    ))
+}
+
+/// Run `cmd` at the target root under the write confinement (module docs,
+/// step 6). `Known(output)` only for a process that ran to completion with an
+/// exit code other than 126/127. A refusal by the confinement — the private
+/// TMPDIR or the profile cannot be made, sandbox-exec is missing or cannot be
+/// spawned, the preflight probe exits non-zero, or the host is not macOS —
+/// is `Undetermined` and `cmd` is not run.
 #[track_caller]
 fn run_cmd(cmd: &str, root: &Path) -> Determination<boundary::CommandOutput> {
-    let mut c = Command::new("/bin/sh");
-    harness_core::git_env::scrub(&mut c);
-    c.arg("-c")
-        .arg(cmd)
-        .current_dir(root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let out = match boundary::run_with_timeout(&mut c, CMD_TIMEOUT) {
+    let out = match confined(cmd, root) {
         Determination::Known(o) => o,
         Determination::Undetermined(why) => return Determination::Undetermined(why),
     };
@@ -784,8 +1142,9 @@ fn run_cmd(cmd: &str, root: &Path) -> Determination<boundary::CommandOutput> {
 ///   current-fingerprint record without `ratified_head`, a legacy
 ///   ratification without a recorded HEAD, a target HEAD that cannot be
 ///   observed or is not a descendant of (or equal to) the ratification head,
-///   a dirty flag that cannot be observed, `cmd` could not be run to an exit
-///   code, or the target HEAD changed while `cmd` ran (or cannot be observed
+///   a dirty flag that cannot be observed, the write confinement refused
+///   (module docs, step 6: no sandbox-exec, the preflight probe failed, not
+///   macOS), `cmd` could not be run to an exit code, or the target HEAD changed while `cmd` ran (or cannot be observed
 ///   after it; checked before the exit status). Nothing is recorded.
 #[track_caller]
 pub fn record(
@@ -1188,4 +1547,363 @@ pub fn report(target: &ResolvedTarget, state_dir: &Path) -> Determination<Report
         ))
     };
     Determination::known(Report { text: out, verdict })
+}
+
+/// Test-only overrides of the confinement (spec R8: none of this exists in a
+/// release build, so no env var or flag can change or skip the confinement).
+#[cfg(test)]
+mod seam {
+    use std::cell::{Cell, RefCell};
+    use std::path::PathBuf;
+
+    thread_local! {
+        /// Replaces [`super::SANDBOX_EXEC`] for this thread.
+        pub static SANDBOX_EXEC: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+        /// Replaces the generated profile for this thread.
+        pub static PROFILE: RefCell<Option<String>> = const { RefCell::new(None) };
+        /// Makes the private TMPDIR removal fail for this thread.
+        pub static FAIL_REMOVE: Cell<bool> = const { Cell::new(false) };
+        /// Every warning printed on this thread.
+        pub static WARNINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+}
+
+// Test assertions panic by design; production keeps the workspace deny.
+#[cfg(test)]
+#[allow(clippy::panic)]
+mod confine_tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let mut c = Command::new("git");
+        harness_core::git_env::scrub(&mut c);
+        let out = c.current_dir(dir).args(args).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    /// A ratified target with requirement R1, its state dir, and the temp
+    /// dirs keeping them alive.
+    struct Fixture {
+        _dirs: Vec<TempDir>,
+        target: ResolvedTarget,
+        state: PathBuf,
+    }
+
+    fn tmp(prefix: &str) -> (TempDir, PathBuf) {
+        let d = tempfile::Builder::new().prefix(prefix).tempdir().unwrap();
+        let p = d.path().canonicalize().unwrap();
+        (d, p)
+    }
+
+    fn ratified() -> Fixture {
+        let (rd, root) = tmp("fde-unit-target-");
+        git(&root, &["init", "-q"]);
+        git(&root, &["config", "user.name", "fde-test"]);
+        git(&root, &["config", "user.email", "fde-test@example.invalid"]);
+        git(&root, &["config", "commit.gpgsign", "false"]);
+        fs::write(root.join("README.md"), "fixture\n").unwrap();
+        git(&root, &["add", "README.md"]);
+        git(&root, &["commit", "-q", "-m", "initial"]);
+        let (sd, state) = tmp("fde-unit-state-");
+        let (pd, spec_dir) = tmp("fde-unit-spec-");
+        let spec = spec_dir.join("spec.toml");
+        fs::write(
+            &spec,
+            "[spec]\nid = \"unit\"\n\n[[requirement]]\nid = \"R1\"\nstatement = \"s\"\n",
+        )
+        .unwrap();
+        let target = match crate::target::resolve(Some(&root), &root) {
+            Determination::Known(t) => t,
+            Determination::Undetermined(why) => panic!("resolve: {}", why.as_str()),
+        };
+        assert!(matches!(
+            ratify::begin(&target, &spec, &state),
+            Verdict::Clean(_)
+        ));
+        assert!(matches!(
+            ratify::ratify(&target, Some(&spec), &state),
+            Verdict::Clean(_)
+        ));
+        Fixture {
+            _dirs: vec![rd, sd, pd],
+            target,
+            state,
+        }
+    }
+
+    impl Fixture {
+        fn root(&self) -> &Path {
+            &self.target.root
+        }
+        fn ledger(&self) -> Option<Vec<u8>> {
+            fs::read(ledger_path(&self.target, &self.state)).ok()
+        }
+        fn red(&self, cmd: &str) -> Verdict {
+            record(Kind::Red, "R1", cmd, &self.target, &self.state)
+        }
+    }
+
+    fn reason(v: &Verdict) -> String {
+        match v {
+            Verdict::Undetermined(why) => why.as_str().to_owned(),
+            other => panic!("expected Undetermined, got {other:?}"),
+        }
+    }
+
+    /// A wrapper around the real sandbox-exec that logs, per invocation, the
+    /// program it is asked to run (`$3`, after `-p PROFILE`), then execs it.
+    fn logging_sandbox_exec(dir: &Path) -> (PathBuf, PathBuf) {
+        use std::os::unix::fs::PermissionsExt as _;
+        let log = dir.join("sandbox-exec.log");
+        let script = dir.join("sandbox-exec-wrapper");
+        let body = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$3\" >> '{}'\nexec {SANDBOX_EXEC} \"$@\"\n",
+            log.display()
+        );
+        fs::write(&script, body).unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        (script, log)
+    }
+
+    fn reset_seam() {
+        seam::SANDBOX_EXEC.with(|c| *c.borrow_mut() = None);
+        seam::PROFILE.with(|c| *c.borrow_mut() = None);
+        seam::FAIL_REMOVE.with(|c| c.set(false));
+        seam::WARNINGS.with(|w| w.borrow_mut().clear());
+    }
+
+    /// R3: sandbox-exec missing -> Undetermined (exit 2), CMD not run,
+    /// reason names sandbox-exec, ledger byte-identical.
+    #[test]
+    fn missing_sandbox_exec_is_undetermined_and_records_nothing() {
+        reset_seam();
+        let f = ratified();
+        assert!(matches!(f.red("false"), Verdict::Clean(_)));
+        let before = f.ledger();
+        assert!(before.is_some());
+        seam::SANDBOX_EXEC.with(|c| *c.borrow_mut() = Some("/nonexistent/sandbox-exec".into()));
+        let side = f.root().join("side-effect");
+        let v = f.red(&format!("touch {} && false", side.display()));
+        reset_seam();
+        let why = reason(&v);
+        assert!(why.contains("sandbox-exec"), "{why}");
+        assert!(!side.exists(), "CMD ran without sandbox-exec");
+        assert_eq!(f.ledger(), before, "ledger changed after a refusal");
+        assert_eq!(crate::verdict_exit(v), 2);
+    }
+
+    /// R3: an invalid profile makes the probe exit 65; the CMD is not run.
+    #[test]
+    fn probe_failure_exit_65_is_undetermined_and_cmd_not_run() {
+        reset_seam();
+        let f = ratified();
+        let (_d, dir) = tmp("fde-unit-wrap-");
+        let (wrapper, log) = logging_sandbox_exec(&dir);
+        let before = f.ledger();
+        seam::SANDBOX_EXEC.with(|c| *c.borrow_mut() = Some(wrapper));
+        seam::PROFILE.with(|c| *c.borrow_mut() = Some("(version 1)(no-such-rule".into()));
+        let side = f.root().join("side-effect");
+        let v = f.red(&format!("touch {} && false", side.display()));
+        reset_seam();
+        let why = reason(&v);
+        assert!(why.contains("exited 65"), "{why}");
+        assert!(!side.exists());
+        let calls = fs::read_to_string(&log).unwrap();
+        assert_eq!(calls, "/usr/bin/true\n", "only the probe may run");
+        assert_eq!(f.ledger(), before);
+        assert_eq!(crate::verdict_exit(v), 2);
+    }
+
+    /// R3: the probe runs before every CMD, not once per process.
+    #[test]
+    fn probe_runs_before_every_cmd() {
+        reset_seam();
+        let f = ratified();
+        let (_d, dir) = tmp("fde-unit-wrap-");
+        let (wrapper, log) = logging_sandbox_exec(&dir);
+        seam::SANDBOX_EXEC.with(|c| *c.borrow_mut() = Some(wrapper));
+        let a = f.red("false");
+        let b = f.red("exit 3");
+        reset_seam();
+        assert!(matches!(a, Verdict::Clean(_)), "{a:?}");
+        assert!(matches!(b, Verdict::Clean(_)), "{b:?}");
+        let calls = fs::read_to_string(&log).unwrap();
+        assert_eq!(calls, "/usr/bin/true\n/bin/sh\n/usr/bin/true\n/bin/sh\n");
+    }
+
+    /// R7: a failed TMPDIR removal warns (naming the dir) and changes neither
+    /// the verdict nor the record.
+    #[test]
+    fn tmpdir_removal_failure_only_warns() {
+        reset_seam();
+        let f = ratified();
+        let ok = f.red("false");
+        assert!(matches!(ok, Verdict::Clean(_)));
+        assert!(seam::WARNINGS.with(|w| w.borrow().is_empty()));
+        seam::FAIL_REMOVE.with(|c| c.set(true));
+        let failed = f.red("false");
+        seam::FAIL_REMOVE.with(|c| c.set(false));
+        let warnings = seam::WARNINGS.with(|w| w.borrow().clone());
+        reset_seam();
+        assert!(matches!(failed, Verdict::Clean(_)), "{failed:?}");
+        assert_eq!(crate::verdict_exit(ok), crate::verdict_exit(failed));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        let w = &warnings[0];
+        let dir = w
+            .split_whitespace()
+            .find(|t| t.contains("fde-evidence-"))
+            .unwrap_or_else(|| panic!("warning names no dir: {w}"));
+        let dir = PathBuf::from(dir);
+        assert!(dir.is_dir(), "the dir the warning names: {w}");
+        fs::remove_dir_all(&dir).unwrap();
+        let ledger: Ledger = serde_json::from_slice(&f.ledger().unwrap()).unwrap();
+        assert_eq!(ledger.records.len(), 2);
+        assert_eq!(ledger.records[0], ledger.records[1]);
+    }
+
+    fn env_of(pairs: Vec<(&'static str, PathBuf)>) -> impl Fn(&str) -> Option<OsString> {
+        move |k| {
+            pairs
+                .iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.clone().into_os_string())
+        }
+    }
+
+    /// R1/R2: deny file-write*, one allow per present entry, nothing else.
+    #[test]
+    fn profile_has_exactly_the_allow_set() {
+        let (_a, root) = tmp("fde-unit-root-");
+        let (_b, priv_tmp) = tmp("fde-unit-priv-");
+        let (_c, ch) = tmp("fde-unit-cargo-");
+        let (_d, rh) = tmp("fde-unit-rustup-");
+        let (_e, td) = tmp("fde-unit-target-dir-");
+        let (_f, home) = tmp("fde-unit-home-");
+        let env = env_of(vec![
+            ("HOME", home.clone()),
+            ("CARGO_HOME", ch.clone()),
+            ("RUSTUP_HOME", rh.clone()),
+            ("CARGO_TARGET_DIR", td.clone()),
+        ]);
+        let set = match allow_set(&root, &priv_tmp, &env) {
+            Determination::Known(s) => s,
+            Determination::Undetermined(why) => panic!("{}", why.as_str()),
+        };
+        let p = match profile(&set) {
+            Determination::Known(p) => p,
+            Determination::Undetermined(why) => panic!("{}", why.as_str()),
+        };
+        let mut want = vec![
+            format!("(allow file-write* (subpath \"{}\"))", root.display()),
+            format!("(allow file-write* (subpath \"{}\"))", priv_tmp.display()),
+            "(allow file-write* (literal \"/dev/null\"))".to_owned(),
+            "(allow file-write* (literal \"/dev/tty\"))".to_owned(),
+            format!("(allow file-write* (subpath \"{}\"))", td.display()),
+            format!(
+                "(allow file-write* (subpath \"{}/registry\"))",
+                ch.display()
+            ),
+            format!("(allow file-write* (subpath \"{}/git\"))", ch.display()),
+            format!("(allow file-write* (subpath \"{}\"))", rh.display()),
+        ];
+        let mut got: Vec<String> = p
+            .lines()
+            .filter(|l| l.starts_with("(allow file-write*"))
+            .map(str::to_owned)
+            .collect();
+        want.sort();
+        got.sort();
+        assert_eq!(got, want, "{p}");
+        let denies: Vec<&str> = p.lines().filter(|l| l.contains("deny")).collect();
+        assert_eq!(denies, ["(deny file-write*)"], "{p}");
+        assert!(!p.contains(&home.display().to_string()), "{p}");
+
+        // Without CARGO_HOME / RUSTUP_HOME / CARGO_TARGET_DIR: the HOME fallbacks.
+        let env = env_of(vec![("HOME", home.clone())]);
+        let Determination::Known(set) = allow_set(&root, &priv_tmp, &env) else {
+            panic!("allow_set");
+        };
+        assert_eq!(
+            set[4..],
+            [
+                Writable::Subpath(home.join(".cargo/registry")),
+                Writable::Subpath(home.join(".cargo/git")),
+                Writable::Subpath(home.join(".rustup")),
+            ]
+        );
+        // No HOME either: only the four fixed entries.
+        let env = env_of(vec![]);
+        let Determination::Known(set) = allow_set(&root, &priv_tmp, &env) else {
+            panic!("allow_set");
+        };
+        assert_eq!(set.len(), 4);
+    }
+
+    #[test]
+    fn sbpl_strings_escape_quote_and_backslash() {
+        let Determination::Known(s) = sbpl_string(Path::new("/a\"b\\c")) else {
+            panic!("sbpl_string");
+        };
+        assert_eq!(s, "\"/a\\\"b\\\\c\"");
+        assert!(matches!(
+            sbpl_string(Path::new("/a\nb")),
+            Determination::Undetermined(_)
+        ));
+    }
+
+    /// R1 under the real sandbox: cargo/rustup dirs and CARGO_TARGET_DIR are
+    /// writable, $CARGO_HOME/bin, $HOME and the parent TMPDIR are not.
+    #[test]
+    fn real_sandbox_allows_exactly_the_cargo_dirs() {
+        let (_a, root) = tmp("fde-unit-root-");
+        let (_c, ch) = tmp("fde-unit-cargo-");
+        let (_d, rh) = tmp("fde-unit-rustup-");
+        let (_e, td) = tmp("fde-unit-target-dir-");
+        for d in ["registry", "git", "bin"] {
+            fs::create_dir_all(ch.join(d)).unwrap();
+        }
+        let env = env_of(vec![
+            ("CARGO_HOME", ch.clone()),
+            ("RUSTUP_HOME", rh.clone()),
+            ("CARGO_TARGET_DIR", td.clone()),
+        ]);
+        let run = |cmd: &str| match run_confined(cmd, &root, &env) {
+            Determination::Known(o) => o.code(),
+            Determination::Undetermined(why) => panic!("{}", why.as_str()),
+        };
+        let ok = format!(
+            "touch {0}/registry/x {0}/git/x {1}/x {2}/x in-root && echo x > /dev/null",
+            ch.display(),
+            rh.display(),
+            td.display()
+        );
+        assert_eq!(run(&ok), 0);
+        assert!(root.join("in-root").exists());
+        assert_ne!(run(&format!("touch {}/bin/x", ch.display())), 0);
+        assert!(!ch.join("bin/x").exists());
+
+        let (_h, home) = tmp("fde-unit-home-");
+        fs::create_dir_all(home.join(".cargo/registry")).unwrap();
+        fs::create_dir_all(home.join(".cargo/bin")).unwrap();
+        let env = env_of(vec![("HOME", home.clone())]);
+        let run = |cmd: &str| match run_confined(cmd, &root, &env) {
+            Determination::Known(o) => o.code(),
+            Determination::Undetermined(why) => panic!("{}", why.as_str()),
+        };
+        assert_eq!(
+            run(&format!("touch {}/.cargo/registry/x", home.display())),
+            0
+        );
+        assert_ne!(run(&format!("touch {}/.cargo/bin/x", home.display())), 0);
+        assert_ne!(run(&format!("touch {}/x", home.display())), 0);
+        assert!(!home.join("x").exists());
+
+        let parent = std::env::temp_dir().canonicalize().unwrap();
+        let escaped = parent.join(format!("fde-unit-escape-{}", std::process::id()));
+        assert_ne!(run(&format!("touch {}", escaped.display())), 0);
+        assert!(!escaped.exists());
+    }
 }

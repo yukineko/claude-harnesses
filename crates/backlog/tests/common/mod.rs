@@ -11,6 +11,7 @@
 //! flag spelling; the implementer must match, or raise the spelling with the
 //! test author rather than weaken a test):
 //!   backlog done ID --test CMD [--red-rev REV] [--reason fixed|already-fixed|obsolete]
+//!     (since user ruling 2026-11-08 REV is recorded, never run: no RED execution)
 //!   backlog done ID --duplicate-of ID
 //!   backlog done ID --doc-only COMMIT
 //!   backlog add ... [--repro-test CMD]   (only a REPRODUCED outcome lands pending; else refused, nothing written)
@@ -451,6 +452,126 @@ pub fn path_with_condukt_shim() -> String {
     format!("{}:{}", condukt_shim_dir().display(), old)
 }
 
+// ---- Pushable origin for GitHub-mirrored fixtures (backlog f6795f52) ----
+
+/// `add` on a GitHub remote merges its row into the primary tree's branch and
+/// PUSHES that branch to `origin` before it files the issue. Fixtures whose
+/// `remote.origin.url` is github.com (so the mirror engages) must therefore
+/// have a push target that is not the network: this creates a bare repo
+/// `<primary>.origin.git` and sets `remote.origin.pushurl` to it. Call after
+/// `remote add origin`. Returns the bare repo path.
+pub fn local_push_origin(primary: &Path) -> PathBuf {
+    let bare = primary.with_file_name(format!(
+        "{}.origin.git",
+        primary.file_name().unwrap().to_string_lossy()
+    ));
+    std::fs::create_dir_all(&bare).expect("mkdir bare origin");
+    let git = |cwd: &Path, args: &[&str]| {
+        let out = harness_core::git_env::scrub(&mut Command::new("git"))
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?} in {} failed: {}",
+            cwd.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&bare, &["init", "-q", "--bare"]);
+    git(
+        primary,
+        &["config", "remote.origin.pushurl", bare.to_str().unwrap()],
+    );
+    bare
+}
+
+/// The sibling primary checkout `<dir>.main` that [`linked_checkout`] and
+/// [`Fixture::new`] create for the linked worktree `dir`.
+pub fn linked_primary(dir: &Path) -> PathBuf {
+    dir.with_file_name(format!(
+        "{}.main",
+        dir.file_name().unwrap().to_string_lossy()
+    ))
+}
+
+/// [`local_push_origin`] for a primary whose checked-out branch may be
+/// UNBORN ([`Fixture::new`]'s `primary`): the row can only be merged onto a
+/// branch that has a commit, so give it an empty root commit first.
+pub fn born_primary_with_push_origin(primary: &Path) -> PathBuf {
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args(["commit", "-q", "--allow-empty", "-m", "primary base"])
+        .current_dir(primary)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "primary base commit: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    local_push_origin(primary)
+}
+
+/// For a [`Fixture::new`] checkout `linked`: add the github.com `origin`
+/// (`git remote add origin https://github.com/o/r.git`, as the callers did
+/// inline before) plus [`born_primary_with_push_origin`] on its primary.
+pub fn fixture_github_origin(linked: &Path) {
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
+        .args(["remote", "add", "origin", "https://github.com/o/r.git"])
+        .current_dir(linked)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "remote add: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    born_primary_with_push_origin(&linked_primary(linked));
+}
+
+/// After a GitHub-mirrored `add` from a linked worktree, the primary tree
+/// (on `main`) holds the store — but only through the merge (§8): the tree is
+/// clean, its store is exactly `main`'s committed store, and `main`'s tip is
+/// a merge commit.
+pub fn assert_primary_only_merged(primary: &Path) {
+    let git = |args: &[&str]| {
+        let out = harness_core::git_env::scrub(&mut Command::new("git"))
+            .arg("-C")
+            .arg(primary)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .expect("git runs");
+        assert!(out.status.success(), "git {args:?} failed");
+        out.stdout
+    };
+    let porcelain = git(&["status", "--porcelain"]);
+    assert!(
+        porcelain.is_empty(),
+        "the primary tree must only receive the merge (clean tree): {:?}",
+        String::from_utf8_lossy(&porcelain)
+    );
+    assert_eq!(
+        std::fs::read(primary.join(".backlog/tasks.toml")).expect("primary store"),
+        git(&["show", "main:.backlog/tasks.toml"]),
+        "the primary tree's store must be exactly main's merged store"
+    );
+    let parents = git(&["rev-list", "--parents", "-n1", "main"]);
+    assert_eq!(
+        String::from_utf8_lossy(&parents).split_whitespace().count(),
+        3,
+        "main's tip must be a merge commit (§8: the primary tree only integrates)"
+    );
+}
+
 // ---- Linked-worktree checkouts (backlog 1e6f00ae) ----
 
 /// Turn the (empty or not-yet-existing) `dir` into a linked worktree of a
@@ -662,4 +783,108 @@ pub fn commit_repro(dir: &Path) -> &'static str {
     git(&["add", "-f", "--", rel]);
     git(&["commit", "-q", "-m", "fixture repro"]);
     COMMITTED_REPRO
+}
+
+impl Fixture {
+    /// Rewrite the stored `project` label of row `id` (as if it was filed on
+    /// another machine / from another root). `add` refuses a foreign
+    /// `--project`, so the label is planted straight into the store.
+    pub fn plant_project_label(&self, id: &str, label: &str) {
+        let p = self.tasks_path();
+        let text = std::fs::read_to_string(&p).unwrap();
+        let mut in_row = false;
+        let mut replaced = false;
+        let out: Vec<String> = text
+            .lines()
+            .map(|l| {
+                if l.starts_with("[[task]]") {
+                    in_row = false;
+                }
+                if l.trim() == format!("id = \"{id}\"") {
+                    in_row = true;
+                }
+                if in_row && l.starts_with("project = ") && !replaced {
+                    replaced = true;
+                    return format!("project = \"{label}\"");
+                }
+                l.to_string()
+            })
+            .collect();
+        assert!(replaced, "setup: {id}'s project line not found in:\n{text}");
+        std::fs::write(&p, out.join("\n") + "\n").unwrap();
+    }
+}
+
+/// A REAL, EXISTING git repository (one commit) that is a different repo from
+/// any fixture repo. The premise is asserted so a test using it is not vacuous.
+pub fn make_other_repo(tag: &str) -> PathBuf {
+    let dir = unique_dir(&format!("{tag}-otherrepo"))
+        .canonicalize()
+        .unwrap();
+    let git = |args: &[&str]| {
+        let mut c = Command::new("git");
+        harness_core::git_env::scrub(&mut c);
+        let o = c
+            .current_dir(&dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .expect("git runs");
+        assert!(
+            o.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "other"]);
+    assert!(dir.exists(), "premise: other repo dir must exist");
+    assert!(
+        dir.join(".git").is_dir(),
+        "premise: other repo has a real git dir"
+    );
+    let top = git(&["rev-parse", "--show-toplevel"]);
+    assert_eq!(
+        PathBuf::from(top).canonicalize().unwrap(),
+        dir,
+        "premise: other repo is its own toplevel"
+    );
+    dir
+}
+
+/// An EXISTING directory whose git entry is a FILE pointing at a nonexistent
+/// gitdir, so its repo identity is really undeterminable. Premise asserted
+/// (git itself cannot resolve it).
+pub fn make_dangling_gitfile_dir(tag: &str) -> PathBuf {
+    let dir = unique_dir(&format!("{tag}-dangling"))
+        .canonicalize()
+        .unwrap();
+    let missing = dir.join("nonexistent-gitdir-target");
+    std::fs::write(dir.join(".git"), format!("gitdir: {}\n", missing.display())).unwrap();
+    assert!(
+        dir.exists() && dir.join(".git").is_file(),
+        "premise: dir with a gitfile"
+    );
+    assert!(!missing.exists(), "premise: gitdir target must not exist");
+    let mut c = Command::new("git");
+    harness_core::git_env::scrub(&mut c);
+    let o = c
+        .current_dir(&dir)
+        .args(["rev-parse", "--git-dir"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("git runs");
+    assert!(
+        !o.status.success(),
+        "premise: git must fail to resolve the dangling gitfile dir, got: {}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+    dir
 }

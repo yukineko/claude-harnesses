@@ -33,7 +33,7 @@
     {
       "name": "beacon",
       "description": "Desktop and webhook notifications for Claude Code: Stop and Notification hooks that ping you via desktop, Slack, webhook or a custom command when a turn finishes or input is needed.",
-      "version": "0.1.16",
+      "version": "0.1.17",
       "category": "notifications",
       "keywords": [
         "hooks",
@@ -57,7 +57,7 @@
     {
       "name": "blastguard",
       "description": "PreToolUse hook that denies or asks before project-destroying Bash commands and file operations, as a single self-contained Rust binary.",
-      "version": "0.2.392",
+      "version": "0.2.647",
       "category": "security",
       "keywords": [
         "hooks",
@@ -82,7 +82,7 @@
     {
       "name": "backlog",
       "description": "Cross-project task queue for Claude Code with cycle-type tags, a SessionStart hook that injects pending work, and subcommands to add, list, claim and finish tasks.",
-      "version": "0.3.102",
+      "version": "0.3.127",
       "category": "workflow",
       "keywords": [
         "backlog",
@@ -107,7 +107,7 @@
     {
       "name": "budgetguard",
       "description": "Real-time cost budget gate for Claude Code: on Stop it computes the session's USD cost from the transcript and blocks the turn when the session or daily limit is exceeded.",
-      "version": "0.1.49",
+      "version": "0.1.50",
       "category": "cost",
       "keywords": [
         "hooks",
@@ -132,7 +132,7 @@
     {
       "name": "compass",
       "description": "Goal re-grounding and next-move derivation for Claude Code, sitting upstream of condukt to decide what to work on.",
-      "version": "0.1.55",
+      "version": "0.1.56",
       "category": "planning",
       "keywords": [
         "compass",
@@ -156,7 +156,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: schedules parallel and serial task batches by file-conflict analysis, manages git worktrees, tracks run state and gates completion.",
-      "version": "0.7.377",
+      "version": "0.7.428",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -331,7 +331,7 @@
     {
       "name": "donegate",
       "description": "Completion-verification gate for Claude Code: on Stop it runs your acceptance commands and blocks until every applicable check is green, feeding failures back for an auto-fix loop.",
-      "version": "0.1.90",
+      "version": "0.1.94",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -380,7 +380,7 @@
     {
       "name": "benchkit",
       "description": "External-benchmark (SWE-bench Verified) runner skeleton: a typed instance model, a fixture-based JSONL loader, and a gated download subcommand that fetches the dataset only on explicit request.",
-      "version": "0.1.18",
+      "version": "0.1.19",
       "category": "quality",
       "keywords": [
         "benchmark",
@@ -405,7 +405,7 @@
     {
       "name": "flow",
       "description": "Backlog-draining loop skill for Claude Code that picks tasks from sources such as compass, backlog and hypothesis and hands them to condukt for execution, without locking the whole queue.",
-      "version": "0.2.33",
+      "version": "0.2.34",
       "category": "orchestration",
       "keywords": [
         "flow",
@@ -533,7 +533,7 @@
     {
       "name": "precommit-audit",
       "description": "Config-driven pre-commit static audit hook with generic built-in checks and project rules in a TOML file, running on Linux, macOS and Windows.",
-      "version": "0.1.25",
+      "version": "0.1.27",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -557,7 +557,7 @@
     {
       "name": "reviewgate",
       "description": "Code-review gate for Claude Code whose Stop hook defaults to off; opt in to inject a review rubric for self-review or to spawn an independent reviewer command.",
-      "version": "0.1.65",
+      "version": "0.1.67",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -653,7 +653,7 @@
     {
       "name": "specguard",
       "description": "Project-agnostic spec and implementation drift audit harness that drives a read-only LLM agent to check an implementation against its canonical specs and the specs against each other.",
-      "version": "0.2.107",
+      "version": "0.2.110",
       "category": "quality",
       "keywords": [
         "spec",
@@ -703,7 +703,7 @@
     {
       "name": "tdd",
       "description": "Test-first gate for Claude Code: on Stop it blocks when implementation lines were added with no test visible in the uncommitted changes, and red/green/verify subcommands record RED before GREEN.",
-      "version": "0.1.72",
+      "version": "0.1.85",
       "category": "quality",
       "keywords": [
         "tdd",
@@ -752,7 +752,7 @@
     {
       "name": "autoflow",
       "description": "Session-end auto-flow gate for Claude Code: a Stop hook that prompts /record once, then keeps looping /condukt while the in-flight run still has pending tasks.",
-      "version": "0.1.47",
+      "version": "0.1.50",
       "category": "orchestration",
       "keywords": [
         "hooks",
@@ -800,7 +800,7 @@
     {
       "name": "overwatch",
       "description": "Lease and event store for condukt task orchestration that manages the claim registry, heartbeat lifecycle and runtime state so parallel sessions do not duplicate work.",
-      "version": "0.2.117",
+      "version": "0.2.120",
       "category": "observability",
       "keywords": [
         "pdo",
@@ -854,7 +854,7 @@
     {
       "name": "scout",
       "description": "Multi-lens project audit skill that fans out read-only sub-agents across five lenses, scores the findings into prioritized tasks, writes them to the backlog and hands execution to /flow.",
-      "version": "0.1.15",
+      "version": "0.1.16",
       "category": "planning",
       "keywords": [
         "scout",
@@ -957,7 +957,7 @@
     {
       "name": "propguard",
       "description": "Property gate for Claude Code that derives invariants from a task's done_criteria and checks the code against them; its Stop hook is not wired by default and must be installed explicitly.",
-      "version": "0.1.77",
+      "version": "0.1.78",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -982,7 +982,7 @@
     {
       "name": "fde",
       "description": "Forward Deployed Engineer harness: resolves a target repo, keeps a ratified spec per target outside it, denies edits to unratified registered targets, and records a red/green evidence ledger. Implemented: resolve, begin, ratify, status, gate, evidence red/green/pass/verify and report.",
-      "version": "0.1.35",
+      "version": "0.1.41",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -1170,6 +1170,30 @@
         "source": "git-subdir",
         "url": "https://github.com/yukineko/claude-harnesses.git",
         "path": "crates/hostaudit",
+        "ref": "main"
+      }
+    },
+    {
+      "name": "answerlang",
+      "description": "Keeps answers and conclusions in the user's language: injects the target language and blocks a Stop whose final answer is in another script.",
+      "version": "0.1.3",
+      "category": "quality",
+      "keywords": [
+        "hooks",
+        "language",
+        "i18n",
+        "stop-gate",
+        "rust"
+      ],
+      "license": "MIT",
+      "homepage": "https://github.com/yukineko/claude-harnesses/tree/main/crates/answerlang",
+      "author": {
+        "name": "yukineko"
+      },
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/yukineko/claude-harnesses.git",
+        "path": "crates/answerlang",
         "ref": "main"
       }
     }

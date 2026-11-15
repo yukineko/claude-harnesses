@@ -274,6 +274,16 @@ else
   fi
   echo ">>> cargo build --release --workspace --bins"
   cargo build --release --workspace --bins
+  # Run by rollout-plugins.sh, which snapshotted the source as exactly the
+  # committed tree before copying (backlog ff8cebd0): re-check it NOW, between
+  # the build and the first binary swap, so a source that changed while cargo
+  # compiled it (e.g. the pre-push fail-open mutation, even one already
+  # reverted) never reaches the cache. A refusal exits 9 before any copy below.
+  # Standalone runs (no snapshot) are not gated here.
+  if [ -n "${HARNESS_ROLLOUT_SOURCE_SNAPSHOT:-}" ]; then
+    python3 "$REPO/scripts/rollout_source_guard.py" verify --repo "$REPO" \
+      --snapshot "$HARNESS_ROLLOUT_SOURCE_SNAPSHOT" --stage "post-build (before binary swap)" || exit 9
+  fi
 fi
 echo
 

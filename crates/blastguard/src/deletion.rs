@@ -94,13 +94,36 @@
 //! that does not exist or cannot be resolved; a root that is not a real
 //! directory right now; a symlink anywhere between the root and the operand
 //! (the operand included — for the git classes the root is the work-tree
-//! root); an operand spelled with a `..` or `.` component; a payload cwd that
+//! root); an operand whose `.`/`..` components cannot be resolved
+//! physically (below); a payload cwd that
 //! is not canonical; any `cd` with a relative `rm` operand; any segment of the
 //! command that is not a bare `rm` or `cd`; shell expansion, quoting or glob
-//! characters; a lone `-` operand, `--`, or an option word after the first
+//! characters; a `.`/`..` in an option word or after an `=`; a lone `-`
+//! operand, `--`, or an option word after the first
 //! operand. The whole-command conditions are checked in [`crate::detect`]
-//! (`deletion_rm_eligible`); the per-operand ones here and in
-//! [`crate::scope`].
+//! (`deletion_rm_eligible`, and `deletion_rm_dotted_eligible` for a line
+//! refused only for `.`/`..` operand components); the per-operand ones here
+//! and in [`crate::scope`].
+//!
+//! ## Operands spelled with `.` or `..` (GH #1661)
+//!
+//! `./proj/target` and `../sbx/proj/target` name the same directory as
+//! `proj/target`, so they get the same verdict — but never through a LEXICAL
+//! collapse, which disagrees with the kernel after a symlink (`lnk/../x`
+//! deletes `<lnk target's parent>/x`). The rm arm first resolves each such
+//! operand PHYSICALLY (`SafeRoots::physical_absolute` in [`crate::scope`]),
+//! left to right from the canonical payload cwd: a `.` is dropped once the
+//! prefix before it is an existing real directory; a `..` pops the last
+//! component only when the prefix before it is an existing real directory
+//! that IS its own real path (no symlinked component anywhere in it), so the
+//! lexical parent is the physical one. The resulting absolute path is then
+//! judged by this table exactly like a plain spelling — the root-itself
+//! refusal (`rm -rf ../..` landing on `/private/tmp` is `Refused`), the
+//! system / home refusals, and the no-symlink-below walk for everything
+//! after the last `..` all apply unchanged. A prefix that does not exist, is
+//! not a directory, or resolves elsewhere (any symlink, even `/tmp` ->
+//! `/private/tmp`), a `..` above `/`, or any IO / resolver failure leaves the
+//! operand undetermined: the whole `rm` keeps its pre-existing verdict.
 //!
 //! A directory named like build output that git does NOT report ignored (it
 //! is tracked, or simply not excluded) is not class 4 — the name alone grants

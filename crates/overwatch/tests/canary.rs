@@ -23,6 +23,13 @@ fn viol(sig: &str, task: &str, session: &str, ts: i64) -> ViolationEvent {
         session_id: session.to_string(),
         ts,
         detail: None,
+        decision: None,
+        tool: None,
+        command: None,
+        target: None,
+        cwd: None,
+        actor: None,
+        system_harm: None,
     }
 }
 

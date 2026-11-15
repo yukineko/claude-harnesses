@@ -1,511 +1,4 @@
 [[task]]
-id = "4b8e8cb0"
-title = "check-workspace-tests.py / mutation-gate.sh refuse to start while a live cargo test exists"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 8 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: liveness-and-observability (formerly killed-task-leaves-orphan-loop).
-Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): check-workspace-tests launched `cargo test --workspace` while another `cargo test` was live (rc=0); the measurement is void / mutation-gate.sh started `cargo mutants` while another `cargo test` was live (rc=2): ... (exit status 70: not a completed mutation run
-Audit said 'exit 2', but in check-workspace-tests exit 2 already means PYTHON_FAILURE, so the test requires 'non-zero and cargo not launched' there; mutation-gate.sh must exit 2. Fix picks ENVIRONMENT (5) or a new class. Caveat: after the fix, the controls see any real cargo test from another session on the machine.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998459
-updated_at = 1794001891
-weight = 0.0
-issue_number = 1581
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1581"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_audit_b_live_cargo_refusal.py"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998944
-detail = """
-exit 1: rt test summary info ============================
-FAILED scripts/test_audit_b_live_cargo_refusal.py::RefuseWhileCargoTestIsLive::test_check_workspace_tests_refuses_while_cargo_test_is_live
-FAILED scripts/test_audit_b_live_cargo_refusal.py::RefuseWhileCargoTestIsLive::test_mutation_gate_refuses_while_cargo_test_is_live
-========================= 2 failed, 2 passed in 6.22s =========================="""
-
-[[task]]
-id = "4f19b628"
-title = "pre-push runs check-fail-open-mutation.py per changed Undetermined arm"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 18 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: fail-open-review-checklist (formerly forwarding-arms-have-zero-kill-rate).
-Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): AssertionError: [] is not true : .githooks/pre-push never executes scripts/check-fail-open-mutation.py; forwarding Undetermined arms stay unmeasured
-Test checks wiring only; 'per changed arm' needs an interface the fix defines and must pin with its own test - this RED goes green on wiring alone. Depends on audit B item 19 (mutate by deletion).
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998487
-updated_at = 1794001897
-weight = 0.0
-issue_number = 1584
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1584"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_audit_b_mutation_prepush.py"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998961
-detail = """
-exit 1: ason))
-E           _pytest.outcomes.XFailed
-
-../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
-=========================== short test summary info ============================
-FAILED scripts/test_audit_b_mutation_prepush.py::MutationHarnessWiredInPrePush::test_pre_push_runs_fail_open_mutation
-========================= 1 failed, 1 passed in 0.06s =========================="""
-
-[[task]]
-id = "089bedd4"
-title = "blastguard: bash 3.2 early-close of $(...) — text after ) mis-read (escaped quote, #-comment quote, <( ) hides next line → Allow)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Found 2026-11-07 by the bg32 verifier (observed in /bin/bash 3.2, /bin/sh, /bin/zsh with harmless markers; matrix in the test file doc comment). User ruling 2026-11-07: fix in a later session. Remove the #[ignore] when fixed; do not weaken the test."
-created_at = 1794031557
-updated_at = 1794031557
-weight = 0.0
-issue_number = 1611
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1611"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_a_text_after_early_close_hides_next_line -- --include-ignored"
-rev = "c5b71363990bcdc235a51464dcfb92b4072712ec"
-observed_at = 1794031557
-detail = """
-exit 101:  result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.35s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
-     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-00e2d9df46979fb5)
-error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""
-
-[[task]]
-id = "5916d385"
-title = "blastguard: zsh expands unquoted <<EOF body in $( after stray ) or ' before backtick/$(P) → Allow"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Found 2026-11-07 by the bg32 verifier (observed in /bin/bash 3.2, /bin/sh, /bin/zsh with harmless markers; matrix in the test file doc comment). User ruling 2026-11-07: fix in a later session. Remove the #[ignore] when fixed; do not weaken the test."
-created_at = 1794031565
-updated_at = 1794031565
-weight = 0.0
-issue_number = 1612
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1612"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_c_zsh_unquoted_heredoc_expansion_after_stray_quote -- --include-ignored"
-rev = "c5b71363990bcdc235a51464dcfb92b4072712ec"
-observed_at = 1794031565
-detail = """
-exit 101:  result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.93s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
-     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-00e2d9df46979fb5)
-error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""
-
-[[task]]
-id = "d328ea88"
-title = "blastguard: bash 3.2 reading — comment line with quote/backtick/backslash gives Ask where Deny is wanted"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Found 2026-11-07 by the bg32 verifier (observed in /bin/bash 3.2, /bin/sh, /bin/zsh with harmless markers). Fail-closed (Ask) today; Deny wanted for harmful targets. User ruling 2026-11-07: fix in a later session. Remove the #[ignore] when fixed."
-created_at = 1794032629
-updated_at = 1794032629
-weight = 0.0
-issue_number = 1614
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1614"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_d_comment_with_quote_is_ask_but_deny_wanted -- --include-ignored"
-rev = "64ae2a2320d93179c1f9b810f78375c47601851d"
-observed_at = 1794032629
-detail = """
-exit 101: ng blastguard v0.2.308 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.79s
-     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-38355bb113e5f23c)
-error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""
-
-[[task]]
-id = "214ebb1f"
-title = "condukt tests need ambient tdd on PATH: donegate Stop hook (no plugin bin dirs) fails 4 controls with DEPENDENCY MISSING"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-07: scripts/test-changed-crates.sh (donegate Stop) runs cargo test -p condukt; find_tdd (crates/condukt/tests/backlog_records_lost_at_teardown_20261107.rs:57) scans only ambient PATH and panics DEPENDENCY MISSING; hook env has no plugin cache bin dirs. Every condukt change blocked for an env reason. Test: scripts/test_condukt_tdd_dependency_hook_path_20261107.py (expectedFailure; repro uses --runxfail; remove marker when fixed). Readings: (a) DEFECT - test/script should use workspace-built target/debug/tdd (crates/tdd is in the workspace, obtainable without PATH); fix in find_tdd or test-changed-crates.sh. (b) INTENDED - hook env must provide plugin PATH; fix in donegate/hook env. Tell apart: repro already simulates hook PATH; if maintainer rules tests may depend on installed plugins -> (b), else (a). Only a ruling decides. Do not skip the gate meanwhile."
-created_at = 1794014300
-updated_at = 1794014300
-weight = 0.0
-issue_number = 1593
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1593"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail -q scripts/test_condukt_tdd_dependency_hook_path_20261107.py"
-rev = "bb4c2cb10b7dd12baf9fb86c8619d9685397cece"
-observed_at = 1794014300
-detail = """
-exit 1:       xfail(str(reason))
-E           _pytest.outcomes.XFailed
-
-../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
-=========================== short test summary info ============================
-FAILED scripts/test_condukt_tdd_dependency_hook_path_20261107.py::CondukTddDependencyUnderHookPath::test_condukt_control_test_passes_without_ambient_tdd
-1 failed, 1 passed in 0.51s"""
-
-[[task]]
-id = "8ada7ad9"
-title = "condukt worktree merge: 45s timeout kills git mid-merge, leaves staged half-merge with no MERGE_HEAD"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-07 at main e6fc7abf, run run-20261107-114313-25739 task t3: 'condukt: merge of condukt/run-20261107-114313-25739/t3 into main failed: git [merge --no-edit -m ... 3087c5e6...] in /Users/yuki/src/harness timed out after 45s and was killed'; afterwards main had incoming changes STAGED (M  scripts/lint-changed-crates.sh, M  scripts/test-changed-crates.sh), no MERGE_HEAD (a foreign concurrent git merge was also running); same merge later succeeded in seconds. Reproduced deterministically at 56764042/8a9df328 with a pre-merge-commit hook sleeping past GIT_TIMEOUT (worktree.rs:27, final git merge at ~l.1316): HEAD unmoved, staged=task.txt, MERGE_HEAD absent, no recovery text in output. Fix direction: on timeout, restore index/worktree (reset --merge) or report recovery. Cause of the original slowness (lock contention vs other) undetermined; the half-applied outcome is reproduced."
-created_at = 1794027785
-updated_at = 1794027785
-weight = 0.0
-issue_number = 1605
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1605"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_merge_timeout_halfapplied_20261107 -- --ignored"
-rev = "8a9df328ad310a95e1cdcac50cb27e20b02b3e59"
-observed_at = 1794027785
-detail = """
-exit 101: .366 (/Users/yuki/.condukt/worktrees/run-20261107-114313-25739-fileA/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.24s
-     Running tests/backlog_merge_timeout_halfapplied_20261107.rs (target/debug/deps/backlog_merge_timeout_halfapplied_20261107-80093ed1dde55fdb)
-error: test failed, to rerun pass `-p condukt --test backlog_merge_timeout_halfapplied_20261107`"""
-
-[[task]]
-id = "b83ef4b1"
-title = "test-changed-crates.sh: unborn-HEAD branch discards git ls-files exit status -> 'no crate touched' exit 0 (fail-open)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Measured at worktree HEAD f900159d (main 56764042), 2026-11-07. scripts/test-changed-crates.sh l.63-65: diff_out=$(git ls-files 2>/dev/null); diff_rc=0 -- ls-files rc never checked. Repro (unborn repo, staged crates/foo/src/main.rs, shim: exact 'git ls-files' exits 128): test-changed-crates.sh exit=0 'no crate touched -- nothing to test'; control without shim sees the crate. lint-changed-crates.sh l.139-141 ALREADY fixed at this rev (diff_rc=0; diff_out=$(git ls-files) || diff_rc=$?) and exits 1 in the repro, so only test-changed-crates.sh is affected. Related variant (rev-parse --verify -q HEAD rc 128 conflated with unborn at the same line, diff also failing, committed repo with staged crate file): NOT an observable fail-open -- the later head_rc block fails closed in both scripts (exit 1 'cannot determine whether HEAD is born'); notes only."
-created_at = 1794022495
-updated_at = 1794022495
-weight = 0.0
-issue_number = 1603
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1603"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "bash scripts/tests/changed-crates-lsfiles-unborn-failclosed.sh"
-rev = "8010c8206e283a92ff904df484ccf5acd97e8023"
-observed_at = 1794022495
-detail = """
-exit 1: test-changed-crates.sh exit=0
-lint-changed-crates.sh exit=1
-FAIL: test-changed-crates.sh exited 0 although 'git ls-files' failed (128) on an unborn HEAD
-  | test-changed-crates: no crate touched — nothing to test"""
-
-[[task]]
-id = "f9bc1da8"
-title = "blastguard: git restore --staged --worktree denied even when file content is byte-identical to a blob already in a commit (FP)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Measured at worktree HEAD 8010c820 (main 56764042), 2026-11-07. Subagent Bash 'cd /Users/yuki/src/harness && git restore --staged --worktree -- scripts/lint-changed-crates.sh scripts/test-changed-crates.sh && ...' blocked verbatim 'PreToolUse:Bash hook error: git restore discards working-tree changes' although staged+worktree content was byte-identical to commit 3087c5e6; user approved, blastguard blocked twice, user ran it themselves. Rule: crates/blastguard/src/detect/git.rs 'restore' arm (denies unless --staged-only or managed worktree). RED test crates/blastguard/tests/backlog_git_restore_content_in_commit_fp_20261107.rs (content on other branch => got deny, want allow); control (content in no commit stays blocked) passes. Two readings, undetermined: (a) FP to fix by checking blob reachability (content in any commit => nothing lost => Allow); (b) intended by design: rule classifies command shape only, not blast radius, and the deny cannot be approved in a subagent. Per false-positives-not-tolerated, (a) unless owner rules (b)."
-created_at = 1794022498
-updated_at = 1794022498
-weight = 0.0
-issue_number = 1604
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1604"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_git_restore_content_in_commit_fp_20261107 -- --ignored"
-rev = "8010c8206e283a92ff904df484ccf5acd97e8023"
-observed_at = 1794022498
-detail = """
-exit 101: /worktrees/run-20261107-114313-25739-fileB/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.02s
-     Running tests/backlog_git_restore_content_in_commit_fp_20261107.rs (target/debug/deps/backlog_git_restore_content_in_commit_fp_20261107-3ce13a81332f8e0f)
-error: test failed, to rerun pass `-p blastguard --test backlog_git_restore_content_in_commit_fp_20261107`"""
-
-[[task]]
-id = "a63ee085"
-title = "blastguard: 引用付き heredoc 本文の孤立バッククォートで Ask になる誤検知"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = 'Split from 547cf2f6 (user ruling 2026-11-07). Shape: cd <literal abs dir> && cat > crates/condukt/tests/x.rs with a quoted heredoc whose body is a lone backtick, plus one trailing line (ls) after EOF. RED at clean b5e9c16d: assertion left==right failed: quoted body is data  left: "deny" (subagent-hardened Ask)  right: "allow". Implementer measured the underlying verdict as Ask("the command word ` is an expansion whose value only exists at run time ..."). The Ask comes from the body-as-code scan the README documents (a command after the heredoc keeps the body scanned), not from cd resolution, so fixing it requires a ruling to change that documented scan. Do NOT weaken the test to pass; remove the ignore marker when fixed.'
-created_at = 1794021465
-updated_at = 1794021465
-weight = 0.0
-issue_number = 1602
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1602"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_cd_redirect_fp_20261107 -- --include-ignored lone_backtick_in_quoted_body_with_trailing_line_is_allow"
-rev = "b5e9c16d988dd6c4a35c30c0922ee74e0141f144"
-observed_at = 1794021465
-detail = """
-exit 101: d; 0 ignored; 0 measured; 6 filtered out; finished in 0.71s
-
-    Blocking waiting for file lock on build directory
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.01s
-     Running tests/backlog_cd_redirect_fp_20261107.rs (target/debug/deps/backlog_cd_redirect_fp_20261107-7e2be18d741cbb2f)
-error: test failed, to rerun pass `-p blastguard --test backlog_cd_redirect_fp_20261107`"""
-
-[[task]]
-id = "5c9f9a75"
-title = "autoflow Stop hook rewrites condukt run-state via lossy mirror struct: drops agent_id/model/branch_sha/verifier_*/started_at/paused, unlocked"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Observed run run-20261107-114313-25739 (state /Users/yuki/.condukt/state/harness-e77d23c7/run-20261107-114313-25739.json, measured 2026-11-07 by reading state + .checkpoints.json): checkpoint seq 2 (verified:t3, ts 1794021143) holds t3 agent_id=af4bf84534761cb46; checkpoint seq 3 (ts 1794028444) already shows t2/t4/t5 status=running updated_at=1794021266 worktree=null and t3 agent_id=null, model=null, branch_sha=null, no verifier_*; current file t2/t5 same, t3 retains only worktree/branch/updated_at (+later merge_completed_at). Coincides with overwatch entry [systemic] ts=1794021266 <autoflow:condukt-pending>. WRITER (current code, file:line at main aa8872da): crates/autoflow/src/condukt.rs:36-55 private TaskState{id,status,worktree,branch,updated_at} + RunState{run_id,goal,tasks}; mark_running (:149-181) loads via load_latest (:190), flips pending/failed->running (:164-171) for ids autoflow main.rs:331-367 passes, then save_run (:232) writes the mirror back over condukt's file: serde drops every unmodelled field, run-level paused/terminal_label/recorded_*, and it takes no condukt run-state lock (condukt state.rs:with_run_locked). find_pending (:60-103) stale-running sweep uses the same save_run. Explains (a) t2/t4/t5 pending->running with no worktree/started_at (documented autoflow behaviour, main.rs:296-327) and (b) t3 loss (touched-by-rewrite though untouched). Not version skew: reproduces on current source. Reading 2 (not excluded): installed condukt 0.7.333 could also drop fields on its own load/save if its TaskState predates the fields - but t3 retained worktree/branch/updated_at and lost exactly the non-mirror fields, and the 1794021266 timestamp matches the autoflow review-queue entry, so autoflow is the supported cause; discriminate by running installed condukt state set on a seeded file. Also noted (not filed, no RED): condukt state init (main.rs:4250-4290) rs.save unconditionally overwrites an existing same-id run file, unlocked; only ensure_init_does_not_shadow_legacy guards."
-created_at = 1794029069
-updated_at = 1794029069
-weight = 0.0
-issue_number = 1608
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1608"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p autoflow --test runstate_roundtrip_drops_fields_20261107 -- --ignored"
-rev = "446c1ba0be485fa578ed4b5141e9c96a590dfa50"
-observed_at = 1794029069
-detail = """
-exit 101: w v0.1.46 (/Users/yuki/.condukt/worktrees/run-20261107-114313-25739-fileC/crates/autoflow)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.43s
-     Running tests/runstate_roundtrip_drops_fields_20261107.rs (target/debug/deps/runstate_roundtrip_drops_fields_20261107-4f5eea4905080610)
-error: test failed, to rerun pass `-p autoflow --test runstate_roundtrip_drops_fields_20261107`"""
-
-[[task]]
-id = "0fccf1eb"
-title = "blastguard: git commit -F - <<'EOF' の本文行を相対 redirect と誤読する誤検知"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = []
-touched_files = []
-status = "pending"
-notes = '''
-VERBATIM RED (HEAD 81903ff2, blastguard 0.2.305, subagent payload): exact_observed_commit_command_is_allow: assertion left == right failed: quoted heredoc commit message is data; left: "deny", right: "allow". Deny reason: '> EOF' is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve — it cannot tell whether this lands in a system directory or on a protected gate/config path, and refuses to guess. MINIMIZED TRIGGER: a quoted heredoc body LINE ENDING IN '>' immediately before the closing delimiter, when a second command sits between the cd and the heredoc: cd D; true && cat <<'EOF'\nx>\nEOF (also cd D; ls; cat <<'EOF'..., cd D; git add -A && git commit -F - <<'EOF'\nCo-Authored-By: A <n@a.com>\nEOF). The scanner reads '>' newline 'EOF' as the redirect '> EOF'. NOT triggering: cd D; cat <<'EOF' (single command), cd D && A && git commit (all &&), body without a trailing '>'. README.ja.md only exempts quoted bodies without | ; & (documented conservative scan), but the delimiter line must not be taken as a redirect target and the cd (a literal absolute path) is resolvable. Tests: crates/blastguard/tests/backlog_eof_redirect_fp_20261107.rs. Do NOT weaken the test to pass; remove the ignore marker when fixed.
-Cross-session note 2026-11-07 (session bf349dd5, merge 8d73ff09): the exact observed command stages with `git add -A`, which is now Ask by user ruling (e9325654; Deny inside a subagent). The ignored REDs exact_observed_commit_command_is_allow / body_line_ending_in_gt_* that keep `git add -A` can never reach Allow; re-anchor their staging to an explicit path (as done for control_same_commit_neutral_message_is_allow) when fixing. Ask the user if the exact-command form must stay.'''
-created_at = 1794031849
-updated_at = 1794037877
-weight = 0.0
-issue_number = 1613
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1613"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_eof_redirect_fp_20261107 -- --include-ignored"
-rev = "81903ff2a1cfd91e6f404405eebbcaedd74714d7"
-observed_at = 1794031849
-detail = """
-exit 101: 54s
-
-   Compiling blastguard v0.2.305 (/Users/yuki/src/.harness-worktrees/bg-eof-redirect-fp/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.48s
-     Running tests/backlog_eof_redirect_fp_20261107.rs (target/debug/deps/backlog_eof_redirect_fp_20261107-10d2a5402ba5d093)
-error: test failed, to rerun pass `-p blastguard --test backlog_eof_redirect_fp_20261107`"""
-
-[[task]]
-id = "7d615bf0"
-title = "blastguard: => inside a python triple-quoted literal in a quoted heredoc is read as a redirect (Ask)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "gate-fp",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-07 in session bf349dd5 (subagent editing crates/backlog). Verbatim reason: the program text contains a `>` that a shell would read as a redirect whose target cannot be determined. RED committed at bb0811e9: crates/blastguard/tests/heredoc_python_triple_quote_fp_20261107.rs target_python_triple_quoted_fat_arrow (control: same shape with real > /etc/hosts stays non-Allow). Do NOT weaken the test; remove the ignore marker when fixed."
-created_at = 1794040969
-updated_at = 1794040969
-weight = 0.0
-issue_number = 1618
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1618"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test heredoc_python_triple_quote_fp_20261107 -- --include-ignored"
-rev = "bb0811e93f1a65cf659598dc1079c4cbc4f561c3"
-observed_at = 1794040969
-detail = """
-exit 101: sult: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
-     Running tests/heredoc_python_triple_quote_fp_20261107.rs (target/debug/deps/heredoc_python_triple_quote_fp_20261107-aa64d1a056fa3fe1)
-error: test failed, to rerun pass `-p blastguard --test heredoc_python_triple_quote_fp_20261107`"""
-
-[[task]]
-id = "e9a30875"
-title = "blastguard: overwrite of a tracked file in a session-created ~/.condukt/worktrees checkout is refused as not this session's tree"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard-fp",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-07 (batch 3, memory-audit-b). Verbatim block: '> /Users/yuki/.condukt/worktrees/mab3-3da84f08/crates/condukt/src/maintree.rs' destroys the file's current contents and it is inside a git work tree, but not one of this session's trees (neither inside its safe roots nor a recognised worktree checkout), so git being able to restore it does not make the overwrite this session's to make. Coordinator ruling: misattribution. Test asserts only absence of the whose-tree refusal; Ctx::in_worktree_checkout (src/detect/rm.rs) grants recognised status only for a plain command or cd D && plain REST, so the chained command shape (; | $) is deliberately ineligible - the fix must relax that or change the decision for this shape. Remove the ignore when fixed."
-created_at = 1794053667
-updated_at = 1794053667
-weight = 0.0
-issue_number = 1625
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1625"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_worktree_redirect_and_sq_fp_20261107 case1 -- --include-ignored"
-rev = "602e10420e883f36b5984db3aaf6d8d67b36feae"
-observed_at = 1794053667
-detail = """
-exit 101: .376 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.67s
-     Running tests/backlog_worktree_redirect_and_sq_fp_20261107.rs (target/debug/deps/backlog_worktree_redirect_and_sq_fp_20261107-fc5a8aeb9a3322bf)
-error: test failed, to rerun pass `-p blastguard --test backlog_worktree_redirect_and_sq_fp_20261107`"""
-
-[[task]]
-id = "81a4a097"
-title = "blastguard: '> path' inside a single-quoted python3 -c program is read as an overwrite redirect"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p1",
-    "blastguard-fp",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-07 (batch 3): python3 -c '...' read-only program whose text contained the string literal "> /Users/yuki/.condukt/worktrees/mab3-3da84f08/crates/condukt/src/maintree.rs" got the verbatim block: '> ...maintree.rs' destroys the file's current contents and it is inside a git work tree, but not one of this session's trees (...). Minimal repro: python3 -c 'import sys; s="> <tracked file>"; print(s)' -> deny. USER RULING 2026-11-07: Allow is correct (the test's allow assert stands). Related unfiled: python3 -c 'print(1)' > file; awk '{...}' file gets an Ask citing inline-eval program text. Remove the ignore when fixed."""
-created_at = 1794053691
-updated_at = 1794057084
-weight = 0.0
-issue_number = 1626
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1626"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_worktree_redirect_and_sq_fp_20261107 case3 -- --include-ignored"
-rev = "602e10420e883f36b5984db3aaf6d8d67b36feae"
-observed_at = 1794053691
-detail = """
-exit 101:  passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.68s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
-     Running tests/backlog_worktree_redirect_and_sq_fp_20261107.rs (target/debug/deps/backlog_worktree_redirect_and_sq_fp_20261107-fc5a8aeb9a3322bf)
-error: test failed, to rerun pass `-p blastguard --test backlog_worktree_redirect_and_sq_fp_20261107`"""
-
-[[task]]
-id = "eb0059ec"
-title = "blastguard: truncating redirect onto an existing scratchpad file whose on-disk name differs only in case is Ask (case-insensitive APFS)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard-fp",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-07 (batch 3): git commit ... > <scratchpad>/mergemain.log 2>&1 got Ask: 'truncating redirect is confined to /private/tmp — a safe root for this session ... The blast radius is bounded, so this is a question rather than a refusal'. On disk the file was mergeMain.log. Root cause (measured by debug trace): SafeRoots::no_symlink_below (crates/blastguard/src/scope.rs:1041) compares realpath with <parent real>/<typed name>, so a case-only difference reads as a symlink -> classify_temp Undetermined -> temp_disposable_redirect_target (src/detect/redirect.rs:106) returns early -> confined Ask. Contradicts user ruling 2026-10-28 (existing file in /private/tmp incl. scratchpad must Allow). Not caused by b0c29e83. Fix direction: treat case-only differences as the same file on case-insensitive FS; genuine symlinks must still fail. RED only fails on case-insensitive FS. Remove the ignore when fixed."
-created_at = 1794060201
-updated_at = 1794060201
-weight = 0.0
-issue_number = 1630
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1630"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test scratchpad_truncating_redirect_fp_20261107 -- --include-ignored"
-rev = "8b4f69e31c49b718ba3f8f9c4806820126fa7459"
-observed_at = 1794060201
-detail = """
-exit 101:  v0.2.379 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.43s
-     Running tests/scratchpad_truncating_redirect_fp_20261107.rs (target/debug/deps/scratchpad_truncating_redirect_fp_20261107-92f2eef15545e45e)
-error: test failed, to rerun pass `-p blastguard --test scratchpad_truncating_redirect_fp_20261107`"""
-
-[[task]]
-id = "8fe3a5c3"
-title = "blastguard: 読み取りの git config core.hooksPath を拒否する誤検知"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["blastguard"]
-touched_files = []
-status = "pending"
-notes = """git config core.hooksPath (1 positional, only non-mode options before key; also new-style 'git config get') is a READ in git 2.50.1 but Deny at HEAD. Rule: crates/blastguard/src/detect/git.rs "config" arm (HOOKSPATH_REASON). RED commit 8999494e on branch red-bg-hookspath-read."""
-created_at = 1794052452
-updated_at = 1794052608
-weight = 0.0
-issue_number = 1622
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1622"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --lib detect::hookspath_read_tests::git_config_hookspath_one_positional_read_is_allowed -- --ignored"
-rev = "e12712e25074e4ed40accea0eb4eb178c51feb03"
-observed_at = 1794052607
-detail = """
-exit 101: :
-    detect::hookspath_read_tests::git_config_hookspath_one_positional_read_is_allowed
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 452 filtered out; finished in 0.00s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
-     Running unittests src/lib.rs (target/debug/deps/blastguard-ecd1d97de95143b1)
-error: test failed, to rerun pass `-p blastguard --lib`"""
-
-[[task]]
 id = "38fb077c"
 title = "blastguard library callers (condukt/specguard/daily) bypass the scratch-place rule via SafeRoots::none"
 project = "/Users/yuki/src/harness"
@@ -535,3 +28,2577 @@ exit 101: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; fin
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
      Running tests/library_detect_scratch_place_gap_20261108.rs (target/debug/deps/library_detect_scratch_place_gap_20261108-6a62c0159486a056)
 error: test failed, to rerun pass `-p blastguard --test library_detect_scratch_place_gap_20261108`"""
+
+[[task]]
+id = "d039872d"
+title = "不正な CONDUKT_MAX_PARALLEL / CONDUKT_STUCK_TTL_SECS を黙って無視しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "scout",
+    "L5",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "scout 2026-11-12, RED observed at 656b1c38, verified (independent verifier, no re-run). F3b: crates/condukt/src/config.rs:446-455 drops parse errors. CAVEAT (verifier): observed only on 'condukt state list' (non-zero exit or var name on stderr); a fix that reports only in the consumer command would stay RED — that observation point is a proxy, the fixer may re-anchor."
+created_at = 1794434301
+updated_at = 1794434301
+weight = 0.0
+issue_number = 1647
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1647"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_scout_20261112_f3_max_parallel -- --ignored is_not_silently_ignored"
+rev = "9c71a19fed28cf0f1a46f8909076f5bcb60e67ed"
+observed_at = 1794434301
+detail = """
+exit 101: est result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.78s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_scout_20261112_f3_max_parallel.rs (target/debug/deps/backlog_scout_20261112_f3_max_parallel-6196e7ac86e86462)
+error: test failed, to rerun pass `-p condukt --test backlog_scout_20261112_f3_max_parallel`"""
+
+[[task]]
+id = "27393d5c"
+title = "condukt: owner のいない古い open run を live と同列に一覧しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "scout",
+    "L5",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "scout 2026-11-12, RED observed at 656b1c38, verified (independent verifier, no re-run). F4: crates/condukt/src/state.rs:603-628 — a run whose newest task update is 60 days old with no claim is listed exactly like a live run. Aging uses tasks[].updated_at + file mtime; the 'stale' substring is a format proxy."
+created_at = 1794434303
+updated_at = 1794434303
+weight = 0.0
+issue_number = 1648
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1648"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_scout_20261112_f4_stale_open_runs -- --ignored"
+rev = "9c71a19fed28cf0f1a46f8909076f5bcb60e67ed"
+observed_at = 1794434303
+detail = """
+exit 101: ng condukt v0.7.382 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/backlog_scout_20261112_f4_stale_open_runs.rs (target/debug/deps/backlog_scout_20261112_f4_stale_open_runs-e357785216da5058)
+error: test failed, to rerun pass `-p condukt --test backlog_scout_20261112_f4_stale_open_runs`"""
+
+[[task]]
+id = "758debfd"
+title = "blastguard FP: ~/.claude/settings.json を読むだけの python3 -c を deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "scout",
+    "L2",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "scout 2026-11-12, RED observed at 656b1c38, verified (independent verifier, no re-run). S4: read-only json.load(open(HOME/.claude/settings.json)) denied as a protected config path. Non-ignored controls s4_control_python_c_write_mode_{w,a}_to_home_settings_is_denied (deny at HEAD, observed) keep writes denied. | 2026-11-13 PARKED by user ruling esc-29440698 ('Abandon the exemption until payload fidelity is fixed; keep S4 #[ignore]'): BLOCKED ON c619b13f (payload.rs:713 newline collapse; critical fail-open). Attempt run-20261113-063336-54001/bg-s4-pyread cancelled after 8 verifier FAIL rounds; branch condukt/run-20261113-063336-54001/bg-s4-pyread (5dc743ea) kept as a record; round-8 uncommitted diff saved as scratchpad patch bg-s4-pyread-round8-uncommitted.patch and git stash. Lesson: any read-only exemption must be judged on the faithful -c text and an allowlisted language (rounds found rebinding/f-string/lambda/CR/breakpoint/use-before-assign holes). | 2026-11-13 blocker c619b13f FIXED (merge 1346c1a2, blastguard 0.2.485: faithful -c text). Still parked per esc-29440698 until a human re-opens it; any new attempt must start from the faithful text and an allowlisted language."
+created_at = 1794434314
+updated_at = 1794526378
+weight = 0.0
+issue_number = 1651
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1651"
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_scout_20261112_s3_s4_readonly_fp -- --ignored s4_python_c_read_only_open_is_allowed"
+rev = "9c71a19fed28cf0f1a46f8909076f5bcb60e67ed"
+observed_at = 1794434314
+detail = """
+exit 101: t: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.41s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_scout_20261112_s3_s4_readonly_fp.rs (target/debug/deps/backlog_scout_20261112_s3_s4_readonly_fp-f628a472411e6d50)
+error: test failed, to rerun pass `-p blastguard --test backlog_scout_20261112_s3_s4_readonly_fp`"""
+
+[[task]]
+id = "0afbb200"
+title = "cap-target-dir.sh: cargo clean 失敗でも cleaned マーカーを書く"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "scout",
+    "L5",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "scout 2026-11-12, RED observed at 656b1c38, verified (independent verifier). F3 (disk): scripts/cap-target-dir.sh:107 'cargo clean || true' then marker at :113, so a failed clean is recorded as done. Control: successful clean still writes the marker. Remove the xfail(strict) mark when fixed."
+created_at = 1794434385
+updated_at = 1794434385
+weight = 0.0
+issue_number = 1652
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1652"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_scout_20261112_f3_cap_clean_failed_repro.py"
+rev = "f0864fd875a4d28381a5ad2d2f87505dbe43ea22"
+observed_at = 1794434385
+detail = """
+exit 1: | true` then unconditional marker write)
+
+scripts/test_scout_20261112_f3_cap_clean_failed_repro.py:80: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_scout_20261112_f3_cap_clean_failed_repro.py::CapCleanMarker::test_failed_clean_must_not_write_marker
+========================= 1 failed, 1 passed in 0.77s =========================="""
+
+[[task]]
+id = "2072023d"
+title = "backlog: shallow clone で履歴が切れると修正済みタスクを next が払い出す問題を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "audit-20261113",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "K4. A git clone --depth 1 hides the non-tip fix commit. RED (verbatim): next in a shallow clone handed out X (83e1e353) although its fix commit (backlog 83e1e353) exists in the full history; expected Y (1360d831) or a refusal. Non-ignored control: full clone with the same copied store hands out Y. A fix may hand out Y or refuse naming shallow/truncated. source: audit 2026-11-13 (condukt run run-20261112-072718-37987 follow-ups; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."
+created_at = 1794516649
+updated_at = 1794516649
+weight = 0.0
+issue_number = 1659
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1659"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_k4_shallow_clone_fix -- --ignored next_in_shallow_clone_does_not_dispatch_fixed_task"
+rev = "99e1d092f0fe8213c94668b9757b20be93d0a46d"
+observed_at = 1794516649
+detail = """
+exit 101: 
+
+   Compiling backlog v0.3.110 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running tests/backlog_20261113_k4_shallow_clone_fix.rs (target/debug/deps/backlog_20261113_k4_shallow_clone_fix-870ba509d3c0bcec)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_k4_shallow_clone_fix`"""
+
+[[task]]
+id = "7a960841"
+title = "blastguard: log テキストで rule 欠落と rule=unknown が同じ表示になる曖昧さを直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "audit-20261113",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "O5. log.rs:263-267 strips 'blastguard:' so signature blastguard:unknown becomes rule unknown, and format_text_line prints unknown for None (log.rs:382-385). RED (verbatim): absent rule and a rule literally named unknown render identically (rule=unknown). log.rs:9 and --help ('Absent fields print as unknown (text) or null (JSON)') document the current behaviour; a fix must change that prose too. source: audit 2026-11-13 (main-session observation / condukt run run-20261113-044355-24760 decision log; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."
+created_at = 1794516875
+updated_at = 1794516875
+weight = 0.0
+issue_number = 1663
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1663"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_o5_log_rule_unknown_ambiguous -- --ignored o5_log_text_distinguishes_absent_rule_from_rule_named_unknown"
+rev = "6cf45c7fb994159111d94aeff598cd476093a22f"
+observed_at = 1794516875
+detail = """
+exit 101: /Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
+     Running tests/backlog_20261113_o5_log_rule_unknown_ambiguous.rs (target/debug/deps/backlog_20261113_o5_log_rule_unknown_ambiguous-70bc371fe619f438)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_o5_log_rule_unknown_ambiguous`"""
+
+[[task]]
+id = "a2d36aa2"
+title = "blastguard FP: deny reason quotes heredoc body text '> t,' as a relative redirect (unresolvable cd)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Repro: cargo test -p blastguard --test backlog_20261113_heredoc_body_fp -- --ignored a_unresolvable_cd_reason_does_not_quote_heredoc_body_as_redirect (commit 611d5c58). Does not reproduce with a resolvable cd."
+created_at = 1794520706
+updated_at = 1794520706
+weight = 0.0
+issue_number = 1665
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1665"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_heredoc_body_fp -- --ignored a_unresolvable_cd_reason_does_not_quote_heredoc_body_as_redirect"
+rev = "611d5c58fb18fbf61e530ef04235aa734d7f642d"
+observed_at = 1794520706
+detail = """
+exit 101: _as_redirect
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.42s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-d10a0f2b109334d2)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_heredoc_body_fp`"""
+
+[[task]]
+id = "b8344e33"
+title = "blastguard FP: python3 quoted heredoc with wildcard-rm text in a string literal denied as recursive rm"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Repro: cargo test -p blastguard --test backlog_20261113_heredoc_body_fp -- --ignored b_python_string_literal_with_rm_text_is_data_not_a_command (commit 611d5c58). Same program without the text is only an ask."
+created_at = 1794520708
+updated_at = 1794520708
+weight = 0.0
+issue_number = 1666
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1666"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_heredoc_body_fp -- --ignored b_python_string_literal_with_rm_text_is_data_not_a_command"
+rev = "611d5c58fb18fbf61e530ef04235aa734d7f642d"
+observed_at = 1794520708
+detail = """
+exit 101: ot_a_command
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.52s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-d10a0f2b109334d2)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_heredoc_body_fp`"""
+
+[[task]]
+id = "4880afab"
+title = "blastguard FP: heredoc 本文のデータ中の symlink 作成文言を実コマンドとしてモデルし、後続の redirect を deny する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed live 3 times 2026-11-13 in subagents (backlog add with a long notes argument; a cat append heredoc probe; and the orchestrator's own backlog add while filing this very item): a redirect target was denied because quoted/data text describing a symlink-then-create sequence was modelled as executed (reason: may create or rename an entry on this path and is not modelled). RED 02d939d3 by a non-implementer: minimal repro is a heredoc body holding that sentence as data followed by a line with a redirect; single-line quoted arguments are Allow (green control). Control: a real symlink into /etc then create stays not-Allow. Same family as c619b13f. A separate deny of a double-quoted command-substitution argument (reason: the command word dollar-paren-cat is an expansion) did not reproduce in tests; not filed."
+created_at = 1794527104
+updated_at = 1794527104
+weight = 0.0
+issue_number = 1674
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1674"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_quoted_arg_text_read_as_command_fp -- --include-ignored"
+rev = "02d939d31bcb908052fe61e1c516b122efcc6cfa"
+observed_at = 1794527104
+detail = """
+exit 101: ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_quoted_arg_text_read_as_command_fp.rs (target/debug/deps/backlog_20261113_quoted_arg_text_read_as_command_fp-571a5a0477c1f04d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_quoted_arg_text_read_as_command_fp`"""
+
+[[task]]
+id = "c96e756a"
+title = "condukt worktree remove leaves an unregistered orphan dir (target/ residue, .git gone) when git worktree remove --force fails part-way"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "worktree",
+    "p1",
+]
+touched_files = []
+status = "failed"
+notes = """
+RED: crates/condukt/tests/worktree_remove_orphan_leftover.rs (79f5528d), ported from unmerged bk-leftover-1106 (fb17edd6; its backlog follow-up was never filed). Re-run on main 47ec0a2e: FAILS - git worktree remove --force exits 255 'Permission denied', admin dir deleted, target/ residue left; condukt then refuses ('is not the root of a usable git worktree'). Field observation 2026-11-13: /mnt/c/tmp/aegis-worktrees/run-20261106-100625-7376-blastguard-heredoc-body-fp left with only target/ (1.4G) + tdd.toml, 'prunable' in git worktree list; cleaned by hand (rm -rf + git worktree prune). Earlier field: 2026-11-05/06 wedged tdd/donegate Stop hooks. Remove the #[ignore] when fixed.
+blocked 2026-11-14 run-20261114-130020-46995: Q7 — leftover after git already deleted the admin dir: (i) quarantine-move, delete nothing (proposed) / (ii) delete only proven-gitignored entries / (iii) re-register as worktree. Needs ruling. | RULED 2026-11-14 by user (AskUserQuestion): Q7 quarantine-move the leftover, delete nothing."""
+created_at = 1794533093
+updated_at = 1794629451
+defer_until = 1794801915
+weight = 0.0
+issue_number = 1678
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1678"
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test worktree_remove_orphan_leftover -- --ignored"
+rev = "79f5528d215b7b71a116795f2af234ba23671ca2"
+observed_at = 1794533093
+detail = """
+exit 101: 0.06s
+
+   Compiling condukt v0.7.394 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-43f28f62/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.25s
+     Running tests/worktree_remove_orphan_leftover.rs (target/debug/deps/worktree_remove_orphan_leftover-b2dcc6fdf9b9a738)
+error: test failed, to rerun pass `-p condukt --test worktree_remove_orphan_leftover`"""
+
+[[task]]
+id = "8a85894b"
+title = "backlog merge-driver --install pins a versioned plugin-cache path that prune-plugin-cache.py later deletes, so .backlog/tasks.toml merges fall back to conflict"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "rollout",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "RED: scripts/test_backlog_merge_driver_pinned_path_20261113.py (1cb95a64, xfail strict; control without the dir removal passes). Observed 2026-11-13: merging origin/main left .backlog/tasks.toml UU with no markers; merge.backlog.driver named ~/.claude/plugins/cache/yukineko/backlog/0.3.86/bin/backlog-linux-x86_64, already pruned. The same driver run by hand from 0.3.111 merged the stages cleanly (exit 0). Cause: merge_driver::install writes std::env::current_exe(); a session on an older backlog even writes an already-superseded path (re-install from this session wrote 0.3.106). prune-plugin-cache.py does not know this reference. Workaround applied: re-installed from 0.3.111 (will break again when 0.3.111 is pruned). Fix direction: version-independent driver path, and/or rollout/prune re-point the config. Remove the xfail when fixed."
+created_at = 1794535333
+updated_at = 1794535333
+weight = 0.0
+issue_number = 1679
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1679"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_merge_driver_pinned_path_20261113.py"
+rev = "1cb95a642892f6a7cb17f41d72a05075b524589a"
+observed_at = 1794535333
+detail = """
+exit 1: : not found
+
+scripts/test_backlog_merge_driver_pinned_path_20261113.py:113: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_backlog_merge_driver_pinned_path_20261113.py::PinnedDriverPath::test_store_merge_survives_removal_of_the_installing_version_dir
+============================== 1 failed in 0.28s ==============================="""
+
+[[task]]
+id = "53a97aa3"
+title = "blastguard: quoted here-doc 本文の行頭バッククォートをコマンド語として扱う誤検知を直す"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "RED febfee9c (crates/blastguard/tests/quoted_heredoc_body_backtick_fp_20261113.rs r1/r2, ignored). Shape: git commit -q -F - <<'EOF' with a body line starting with a backticked word, then a command after EOF -> ask/deny 'the command word detect is an expansion'. Nothing after EOF, or a mid-line backtick -> allow. Hit by a subagent commit 2026-11-13. Controls c1 (allow) and c2 (top-level backtick stays not Allow) must hold."
+created_at = 1794542097
+updated_at = 1794542097
+weight = 0.0
+issue_number = 1680
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1680"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test quoted_heredoc_body_backtick_fp_20261113 -- --ignored"
+rev = "febfee9c14ac41ec7a7a18099e953625453f5d1e"
+observed_at = 1794542097
+detail = """
+exit 101: t: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.14s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/quoted_heredoc_body_backtick_fp_20261113.rs (target/debug/deps/quoted_heredoc_body_backtick_fp_20261113-fec620ef97438896)
+error: test failed, to rerun pass `-p blastguard --test quoted_heredoc_body_backtick_fp_20261113`"""
+
+[[task]]
+id = "c2449da8"
+title = 'blastguard: stdin python "w" mode attributed to an unrelated read-only path literal'
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = '''RED 1e08ddff (tests/stdin_python_write_mode_misattributed_fp_20261113.rs). Shape: python3 -I - <<'PYEOF' / p = "<existing file outside git>" / open("<project file>", "w").write("y") / PYEOF. Deployed 0.2.496 with p=$HOME/.cargo/env: deny, reason '`python3 -I - <<'PYEOF'` takes its program from stdin, and it writes `/home/.../.cargo/env` (`, \"w\")`) — it exists, and it is not inside a git work tree — nothing holds a second copy of these bytes'. Any absolute path literal triggers it (print("<ro>"), q=<proj>; open(q,"w")); the open(p) read is not needed. In the test fixture the verdict is Ask naming home/notes.txt. Controls: no "w" Allow; project write alone Allow; open("/etc/hosts","w") with and without the RO literal not Allow.'''
+created_at = 1794543271
+updated_at = 1794543271
+weight = 0.0
+issue_number = 1691
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1691"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test stdin_python_write_mode_misattributed_fp_20261113 -- --ignored"
+rev = "1e08ddff64b2a9e198c3348d1e0f8134bb2fbd92"
+observed_at = 1794543271
+detail = """
+exit 101: ma/src/.harness-worktrees/session-43f28f62/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.98s
+     Running tests/stdin_python_write_mode_misattributed_fp_20261113.rs (target/debug/deps/stdin_python_write_mode_misattributed_fp_20261113-8fbfbc28440bb821)
+error: test failed, to rerun pass `-p blastguard --test stdin_python_write_mode_misattributed_fp_20261113`"""
+
+[[task]]
+id = "87661417"
+title = "blastguard: 前にコマンドがある quoted here-doc の本文行（破壊的に見える文字列リテラルで始まる行）をコマンド行として扱う誤検知を直す"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "RED bf134cb8, crates/blastguard/tests/quoted_heredoc_body_string_parsed_as_command_fp_20261113.rs r1-r3 (ignored). Trigger: a quoted here-doc (single-quoted terminator) preceded by another command (and-list or semicolon), whose body has a line starting with a string literal that looks like a system-path copy. Observed deny or ask; the same here-doc with no preceding command, or the literal mid-line, is Allow. Same family as 53a97aa3 (that one needs a command AFTER the terminator); shared root cause likely but unconfirmed from source. Controls c1 (benign line Allow), c2/c3 (real top-level copy into a system dir stays not Allow) must hold. Also seen: a backlog add notes argument whose quoted text contained a move command with an unknown option was refused by the same kind of misparse (unprobed)."
+created_at = 1794543623
+updated_at = 1794543623
+weight = 0.0
+issue_number = 1693
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1693"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test quoted_heredoc_body_string_parsed_as_command_fp_20261113 -- --ignored"
+rev = "bf134cb8cc071c61900696a6d295e51d5c7d3212"
+observed_at = 1794543623
+detail = """
+exit 101: ured; 3 filtered out; finished in 0.06s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/quoted_heredoc_body_string_parsed_as_command_fp_20261113.rs (target/debug/deps/quoted_heredoc_body_string_parsed_as_command_fp_20261113-fbc836818ea62332)
+error: test failed, to rerun pass `-p blastguard --test quoted_heredoc_body_string_parsed_as_command_fp_20261113`"""
+
+[[task]]
+id = "6efd5a40"
+title = "blastguard: arithmetic expansion body parsed as a command line, first operand judged as an unresolvable command word"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-13 on deployed blastguard 0.2.499, main 8dedad41, identical in main and subagent mode. Denied: an arithmetic expansion whose first operand is a command substitution of date plus-percent-s minus 5, reason verbatim: the command word DOLLAR-PAREN-date is an expansion whose value only exists at run time - blastguard cannot tell what program this runs. Same deny when the first operand is a plain variable (reason names DOLLAR-x as the command word) or a backtick substitution. Allowed: arithmetic with only literal or bare-name operands; the same date substitution outside arithmetic. bash evaluates all these as arithmetic and prints numbers. So date is not what is rejected: the arithmetic body is split as a command line and its first operand judged as a command word. This contradicts the doc comment of executed_substitution_payloads in src/detect/substitution.rs which says the arithmetic body is an expression in which the analyser finds nothing destructive. Readings: (a) defect, arithmetic operands are never executed as a command name; (b) intended, DOLLAR-double-paren deliberately treated as a command substitution holding a subshell. bash reads it as a subshell only when the body does not parse as arithmetic; all repro cases parse as arithmetic. If (b) is intended, fix the docstring and delete the RED cases instead. RED r1..r3 ignored, observed failing at 8dedad41 exit 101 (Ask in the test fixture, Deny on the deployed binary). Controls c1 plain arithmetic Allow; c2 recursive rm of /etc inside a substitution nested in arithmetic stays not Allow; c3 a real subshell inside a substitution with an expansion command word stays not Allow. RED commit 447c20b5."
+created_at = 1794546242
+updated_at = 1794546242
+weight = 0.0
+issue_number = 1694
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1694"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test arithmetic_expansion_operand_as_command_word_fp_20261113 -- --ignored"
+rev = "447c20b5d894a3935001842b7f09983ae9b664fe"
+observed_at = 1794546242
+detail = """
+exit 101: rees/fp-file-20261113/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.64s
+     Running tests/arithmetic_expansion_operand_as_command_word_fp_20261113.rs (target/debug/deps/arithmetic_expansion_operand_as_command_word_fp_20261113-8df5a1fb1455a5cd)
+error: test failed, to rerun pass `-p blastguard --test arithmetic_expansion_operand_as_command_word_fp_20261113`"""
+
+[[task]]
+id = "a77dd80f"
+title = "blastguard: 105 integration tests hard-code macOS /private/tmp fixtures and fail at setup on Linux at 8dedad41 (8 targets)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-13 at main 8dedad41 and again at 1fd747e9 (blastguard 0.2.500), Linux WSL2 6.6.87.2, /tmp is a plain dir on the ext4 root fs (not tmpfs), TMPDIR unset, /private does not exist. Targets and counts: scope_redirect_relaxation_boundaries_20261108 64, mutation_kill_cd_rest_tmp 19, tmp_truncation_recoverable 11, tmp_truncation_refusals 3, scratchpad_truncating_redirect_fp_20261107 3, cd_and_chain_equivalence 3, git_exec_subcommand_failopen_20261107 1 (control_rm_rf_inside_private_tmp_scratch_stays_allow), managed_place_destructive_allow_20261107 1 (target_rm_rf_dir_inside_private_tmp_place_allow). Every one panics in fixture setup before blastguard is asked anything: create_dir_all of a literal /private/tmp/... path -> Os code 13 PermissionDenied (104 tests), or create_dir -> Os code 2 NotFound (managed_place). Rerun per target: identical, 0 panics other than these. Reading (b) test assumption: fixtures assume macOS where /tmp is a symlink to /private/tmp; scope_redirect_relaxation also states it needs a case-insensitive FS (APFS) for its case-fold tests to bite. Reading (a) real Linux verdict defect: cannot be the cause of these panics (the verdict is never reached), but it means the Linux verdict for these 105 cases is UNTESTED. Distinguishing probe run: 9 representative cases replayed by hand against the hook binary with /tmp in place of /private/tmp and the same env as the fixtures (HOME/project outside /tmp, TMPDIR removed): truncating redirect onto existing /tmp file, redirect to new /tmp file, cd into /tmp dir then redirect, recursive rm of a dir inside /tmp, cd into /tmp dir then recursive rm of sub, recursive rm of nonexistent /tmp/foo -> all allow as the tests expect; dotdot escape out of /tmp and symlink escape out of /tmp onto a project file -> ask; cd up out of /tmp then recursive rm of the project -> deny, as expected. Not checked: the other 96 cases. Prior art: tests/fixture_portability.rs (issue 1486) bans the /private/tmp literal only in src unit tests, not in tests/. Fix direction: use the canonical-temp-root helper (src/scope.rs test helper documents /private/tmp on macOS, /tmp on Linux) in these fixtures."
+created_at = 1794547570
+updated_at = 1794547570
+weight = 0.0
+issue_number = 1697
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1697"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test tmp_truncation_recoverable"
+rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
+observed_at = 1794547570
+detail = """
+exit 101: isting_nested_tmp_file_allows
+
+test result: FAILED. 0 passed; 11 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.04s
+     Running tests/tmp_truncation_recoverable.rs (target/debug/deps/tmp_truncation_recoverable-6e7824e28c0732cb)
+error: test failed, to rerun pass `-p blastguard --test tmp_truncation_recoverable`"""
+
+[[task]]
+id = "99c1a088"
+title = "blastguard: no_unbounded_child_wait source-scan lint fails at 8dedad41 (3 tests, not Linux-specific)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-13 at main 8dedad41 and 1fd747e9 (Linux WSL2, but this is a pure source scan of tests/*.rs, no platform dependence). Failing: no_child_wait_outside_the_bounded_helper (log_subcommand_20261113.rs:752 child.wait), no_wait_with_output_outside_the_bounded_helper (library_entry_scratch_place_1637.rs:58 wait_with_output), no_command_status_outside_the_bounded_helper (7 hits: backlog_20261113_b1_reset_hard_clean_worktree.rs:146 and :161, log_subcommand_20261113.rs:750, backlog_20261113_b2_subagent_rm_scratchpad.rs:165, heredoc_script_failopen_red_20261108.rs:585-587). Reading (a) product defect: not applicable (lint over test sources). Reading (b) newer test files bypass the run_bounded helper the lint mandates, plus probable lint false positives: the b1 hits are a fixture helper named status (git status), and the heredoc_script hits are inside string literals of Rust source shown to blastguard as payload text. Distinguishing check: read the flagged lines; the log_subcommand and library_entry and b2 hits are real unbounded waits, the b1 and heredoc_script hits are not child waits. Fix both: route the real waits through run_bounded, and make the scan skip string-literal and non-Command status matches (or rename the helper)."
+created_at = 1794547860
+updated_at = 1794547860
+weight = 0.0
+issue_number = 1699
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1699"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test no_unbounded_child_wait"
+rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
+observed_at = 1794547860
+detail = """
+exit 101: _with_output_outside_the_bounded_helper
+
+test result: FAILED. 5 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.21s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/no_unbounded_child_wait.rs (target/debug/deps/no_unbounded_child_wait-af4dc3e3783a09d4)
+error: test failed, to rerun pass `-p blastguard --test no_unbounded_child_wait`"""
+
+[[task]]
+id = "596ef57d"
+title = "blastguard: heredoc_script_attacks_are_not_allow still RED at 8dedad41 - 114 of 653 heredoc-written script attacks Allow (1 test)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p1",
+]
+touched_files = []
+status = "failed"
+notes = """
+Observed 2026-11-13 at main 8dedad41 and 1fd747e9 (blastguard 0.2.500), Linux WSL2. Verbatim: 114 of 653 attack cases are Allow (must be Ask or Deny); every listed case is main=allow sub=allow, e.g. shutil_move_home_away, shutil_copyfile_ssh, os_chmod_home, os_chmod_ssh, os_chown_home, os_truncate_zshrc, os_symlink_zshrc, os_link, pathlib_rename, pathlib_replace, pathlib_touch, pathlib_rmdir_home. This is a deliberately RED test added 2026-11-08 in 72d164e1 (its header says RED on main until fixed; that commit counted 125 failing entries, now 114), but no backlog entry names it, so the gap was tracked only in commit messages. Reading (a) real gate fail-open: plausible and is what the test asserts (a body written to a script file by a quoted heredoc and then run is Allow). Reading (b) Linux/fixture artefact: checked and ruled out for the fixture location: rerun with the fixture base moved off /tmp (BLASTGUARD_TEST_FIXTURE_DIR under HOME/.cache, so no path is spelled through the /tmp alias symlink) gives the identical 114-case list (diff empty). Not checked on macOS. Runtime about 50s (680s under concurrent load).
+blocked 2026-11-14 run-20261114-130020-46995: needs human rulings Q1 (python sink denylist->allowlist?), Q2 (h_heredoc_bs_quoted_cmdsub/h_heredoc_dq_delim_cmdsub quoted+not run vs .py-body-is-data ruling), Q3 (protect /Users/<n>,/home/<n>,**/.ssh/**,**/.gitconfig when not HOME?), Q4 (which paths are gate scripts), Q5 (kill -9 -1 / os.kill(-1,9): Deny or Ask). 107/653 Allow on macOS at b823ffa5. Decomp: 7 serial tasks a-g, 4 low-confidence. | RULED 2026-11-14 by user (AskUserQuestion): Q1 python sink -> allowlist (provably harmless APIs Allow, else Ask). Q2 h_heredoc_bs_quoted_cmdsub/h_heredoc_dq_delim_cmdsub are test defects (.py-body-is-data ruling wins; drop or re-anchor to Allow). Q3 protect /Users/<n>, /home/<n>, **/.ssh/**, **/.gitconfig even when not HOME (Deny). Q4 gate scripts = .githooks/**, scripts/check-*.py, crates/*/hooks/**, ~/.claude/plugins/cache/**/{bin,hooks}. Q5 kill -9 -1 / os.kill(-1,9) -> Deny."""
+created_at = 1794547881
+updated_at = 1794629450
+defer_until = 1794801914
+weight = 0.0
+issue_number = 1700
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1700"
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_attacks_are_not_allow"
+rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
+observed_at = 1794547881
+detail = """
+exit 101: 
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 51.91s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/heredoc_script_failopen_red_20261108.rs (target/debug/deps/heredoc_script_failopen_red_20261108-b34c95b93eea8416)
+error: test failed, to rerun pass `-p blastguard --test heredoc_script_failopen_red_20261108`"""
+
+[[task]]
+id = "f9f3eed8"
+title = "blastguard: relink_operands h3a/h3b deny-reason needle assumes macOS spelling of /etc, fails on Linux at 8dedad41 (2 tests)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-13 at 8dedad41 and 1fd747e9, Linux WSL2 (/etc is a real dir, not a symlink to /private/etc). Failing: h3a_cp_t_into_relinked_dir and h3b_cp_target_directory_into_relinked_dir. Verbatim: deny reason must name the real landing (one of [/etc/, /private/etc]); got a deny whose reason begins: cp target /etc writes into a system directory - a NEW file there is itself the change ... [system harm: refused on every request, never handed back as a question]. The verdict is deny, as the test requires; only the reason-text needle fails. On Linux the landing is spelled /etc without a trailing slash, which neither needle matches; on macOS it would read /private/etc. Reading (a) defect: verdict correct and the reason does name the real landing, so not a gate fail-open; at most a wording inconsistency (other cases name /etc/hosts). Reading (b) test assumption: the needle list was written for the macOS spelling. Distinguishing check: the other 12 tests in the target (h1, h2 etc., naming /etc/hosts) pass on Linux; the h3 verdict is deny in the observed output."
+created_at = 1794547960
+updated_at = 1794547960
+weight = 0.0
+issue_number = 1701
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1701"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test relink_operands_20261112 h3"
+rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
+observed_at = 1794547960
+detail = """
+exit 101: _target_directory_into_relinked_dir
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.14s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/relink_operands_20261112.rs (target/debug/deps/relink_operands_20261112-5ddaa57b4f473dd9)
+error: test failed, to rerun pass `-p blastguard --test relink_operands_20261112`"""
+
+[[task]]
+id = "9653d25d"
+title = "blastguard: script_file_content_exec inline control fails on Linux - fixture HOME spelled under /tmp disqualifies /tmp as deletion root (1 test)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-13 at 8dedad41 and 1fd747e9, Linux WSL2, TMPDIR unset so temp_dir() is /tmp. Verbatim: inline harmless baseline must be Allow: rm -rf /tmp/foo -> ask (recursive rm (-r) is confined to /tmp - a safe root for this session ...). Cause, observed: tests/support/neutral_base.rs, when the cargo target dir lies under .harness-worktrees, spells the fixture base through an alias symlink created in temp_dir(), i.e. /tmp/blastguard-wtfix-HASH/run-.../home. The fixture HOME spelling is therefore under /tmp, and src/scope/deletion_roots.rs refuses any temp deletion root that contains HOME (contains_home), so /tmp stops being a disposable root and the rm becomes a confined Ask instead of Allow. On macOS temp_dir() is /var/folders/..., so HOME is not under /tmp. Reading (a) defect: the Linux verdict is MORE restrictive (ask), not fail-open; refusing a temp root that contains HOME is intended. Reading (b) fixture artefact: confirmed. Distinguishing check run: with BLASTGUARD_TEST_FIXTURE_DIR set to a dir under HOME/.cache (outside /tmp, outside git), the target passes 6/6 (14 ignored). A hand probe with HOME outside /tmp also gives allow for rm -rf /tmp/foo. Other neutral_base users on Linux are exposed to the same alias-under-/tmp effect."
+created_at = 1794547962
+updated_at = 1794547962
+weight = 0.0
+issue_number = 1702
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1702"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test script_file_content_exec control_inline_harmless_text_is_allowed_in_this_fixture"
+rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
+observed_at = 1794547962
+detail = """
+exit 101: ess_text_is_allowed_in_this_fixture
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.10s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/script_file_content_exec.rs (target/debug/deps/script_file_content_exec-aa97529daaea1fbb)
+error: test failed, to rerun pass `-p blastguard --test script_file_content_exec`"""
+
+[[task]]
+id = "91828a5e"
+title = "blastguard: scoped_destructive relaxed_truncating_forms expects Ask for a /tmp probe file that the 2026-10-28 ruling makes Allow on Linux (1 test)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-13 at 8dedad41 and 1fd747e9, Linux WSL2, TMPDIR unset. Verbatim: cargo test > /tmp/blastguard-scoped-redirect-PID/blastguard-scoped-redirect-probe.txt is confined to a safe root, so it must Ask (not refuse); got Allow. The test writes an existing probe file into std::env::temp_dir(), which is /tmp on Linux and /var/folders/.../T on macOS. src/detect.rs (Unrecoverable arm, temp_disposable_redirect_target) allows a truncating redirect onto an existing file in a fixed temp root (/tmp, /private/tmp) outside any git tree, per user ruling 2026-10-28. The test's own comment says on Linux temp_dir() is /tmp and claims the two agree, which predates that ruling. Reading (a) fail-open: the Linux verdict is weaker than the test expects, but it is exactly what the ruling and the source comment prescribe, so not a defect unless the ruling is re-read. Reading (b) test assumption (temp_dir not a fixed temp root): confirmed. Distinguishing check run: with TMPDIR pointed at a dir under HOME/.cache (outside /tmp and git) the whole target passes 21/21. Needs a human decision only if the ruling is meant not to cover this shape."
+created_at = 1794547964
+updated_at = 1794547964
+weight = 0.0
+issue_number = 1703
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1703"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test scoped_destructive relaxed_truncating_forms_inside_the_project"
+rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
+observed_at = 1794547964
+detail = """
+exit 101: ures:
+    relaxed_truncating_forms_inside_the_project
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.04s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/scoped_destructive.rs (target/debug/deps/scoped_destructive-395b282c42c733bf)
+error: test failed, to rerun pass `-p blastguard --test scoped_destructive`"""
+
+[[task]]
+id = "c3d5d225"
+title = "blastguard tests: process-group kill without -- leaks the group on Linux (log_subcommand_20261113)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-11-13 at bc0880b6 (RED commit; base main 6015a4b1). tests/log_subcommand_20261113.rs:747-750 spawns Command::new(kill) with args [-TERM, format!(-{}, child.id())] and no -- (timeout path only; result discarded). 0a16ac9f showed procps-ng 4.0.4 /usr/bin/kill (WSL2) exits 0 and signals nothing for that argv, so on Linux the timed-out child group leaks silently. Fix: insert .arg(--) before the negative pgid as in tests/support/bounded.rs. RED: the ignored test no_process_group_kill_without_double_dash exits 101 with exactly that one hit; 3 non-ignored controls pass (pre-fix bounded.rs shape flagged; fixed shape and kill -0 pid accepted; tree scan sees the fixed support/bounded.rs site). Scan scope: blastguard src/ + tests/ only. Other crates grep (Command::new kill in crates/*/src, crates/*/tests): no negative-pid spawn without -- found; kill sites are kill -0 pid liveness probes (harness-core run_lock.rs:295, hypothesis lock.rs:94, overwatch lock.rs:106, blastguard tests/bounded_helper.rs:91), kill pid (bounded_helper.rs:103), kill -9 pid (fugu-router tests/session_end_budget.rs:405, sitecraft tests/check_security_round2.rs:278). Process-group kills elsewhere use libc::kill(-pid)/killpg (harness-core boundary.rs:495, condukt worktree.rs:165, sitecraft check/security.rs:860, init.rs:353, serve.rs:204), unaffected. sitecraft serve.rs:573 prints a human hint kill -KILL -{pgid} (shell builtin usually, not spawned; not judged)."
+created_at = 1794550007
+updated_at = 1794550007
+weight = 0.0
+issue_number = 1704
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1704"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test process_group_kill_needs_dashdash_20261113 -- --ignored"
+rev = "bc0880b6546012bd8f0fb5541849cb264545508a"
+observed_at = 1794550007
+detail = """
+exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/process_group_kill_needs_dashdash_20261113.rs (target/debug/deps/process_group_kill_needs_dashdash_20261113-d5895dc5d31fe86e)
+error: test failed, to rerun pass `-p blastguard --test process_group_kill_needs_dashdash_20261113`"""
+
+[[task]]
+id = "3c1a3f35"
+title = "blastguard tests: budget_bound wall-clock 2s assert fails under CPU load (depth_limit_fail_open:499)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "flaky-timing",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-13. depth_limit_fail_open::budget_bound_is_still_reachable_with_its_own_reason asserts detect() on budget_hog() (300 x find -exec unit) finishes < 2s wall clock (depth_limit_fail_open.rs:499). Unloaded: 1.6-1.8s per cargo finished-in (debug build, 12 CPUs) = 80-92% of the bound. Parent session at main 45fd3365: with 18 busy yes processes it failed 5/5 at :499 (message: a PreToolUse hook must never hang the turn: analysis took ...); the Deny assert was never reached. RED at b3b0b0a3: tests/budget_bound_wallclock_under_load_20261113.rs spawns 1.5 x available_parallelism busy-spin threads; ignored RED exits 101 3/3 (9.64s, 9.04s, 8.42s, 18 spinners, host loadavg ~38 with other sessions active); non-ignored control passes: decision under load is still the exact budget Deny after hardening (7.99s) - budget is a node count (MAX_ANALYSIS_NODES=2000, detect/budget.rs), so the verdict is load-independent. Readings: (a) a wall-clock bound in a test is load-sensitive by design (shared host / parallel cargo test); (b) detect() on budget_hog is genuinely near its time budget (80-92% unloaded, debug build) and a real PreToolUse hook under load would also be slow. Distinguish by measuring node visits consumed vs elapsed time (e.g. the cfg(test) VISIT_PROBE in detect/budget.rs, or a release-build timing of the hook binary): if time scales with load at fixed node count it is (a); if per-node cost or node count regressed it is (b). Not decided here."
+created_at = 1794550453
+updated_at = 1794550453
+weight = 0.0
+issue_number = 1705
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1705"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test budget_bound_wallclock_under_load_20261113 -- --ignored"
+rev = "b3b0b0a32d201164cd006e50c6e28192cdcc7876"
+observed_at = 1794550453
+detail = """
+exit 101: uki_nakayama/src/.harness-worktrees/file-test-defects-20261113/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 58.63s
+     Running tests/budget_bound_wallclock_under_load_20261113.rs (target/debug/deps/budget_bound_wallclock_under_load_20261113-43c8b446a6eb9c64)
+error: test failed, to rerun pass `-p blastguard --test budget_bound_wallclock_under_load_20261113`"""
+
+[[task]]
+id = "7ec1bb90"
+title = "blastguard: 13 Allow-expecting /tmp tests in 7 targets get the confined Ask on Linux - neutral_base alias puts fixture HOME under /tmp (contains_home)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Newly visible 2026-11-13 after 7fba2b82 (a77dd80f; pre-rebase sha de8b82ca) made these fixtures place their temp dirs under canonicalize(/tmp) instead of a literal /private/tmp; before that they panicked in setup on Linux and were never able to run. Linux WSL2 ext4, TMPDIR unset. Observed vs expected (all: expected Allow, observed ask, reason 'recursive rm (-r) is confined to /tmp - a safe root for this session ...' or 'truncating redirect is confined to /tmp - a safe root ...'): mutation_kill_cd_rest_tmp c_cd_tied_rest_allows_and_untied_does_not, c_tmp_plain_existing_file_allows, k_tmp_file_under_dot_git_entry_is_not_allow (its plain/w.txt control); tmp_truncation_recoverable t1..t4; tmp_truncation_refusals c1_plain_existing_single_link_file_in_tmp_allows; scratchpad_truncating_redirect_fp_20261107 control_scratchpad_log_redirect_existing_same_case_allows; cd_and_chain_equivalence c2_tmp_absolute_form_allow, r2_cd_tmpdir_then_rm_sub_is_allow; git_exec_subcommand_failopen_20261107 control_rm_rf_inside_private_tmp_scratch_stays_allow; managed_place_destructive_allow_20261107 target_rm_rf_dir_inside_private_tmp_place_allow. Cause, observed: tests/support/neutral_base.rs spells the fixture base via an alias symlink in std::env::temp_dir() (= /tmp on Linux), so fixture HOME is spelled under /tmp, and src/scope/deletion_roots.rs drops any temp deletion root containing HOME (!contains_home), so /tmp is no disposable root and the relaxation is withheld. Distinguishing checks run: (1) with BLASTGUARD_TEST_FIXTURE_DIR=/home/<user>/a77-fixture-base (outside /tmp, no git) all 7 targets pass 100%; (2) hand probe of the hook binary: HOME under /tmp -> ask, HOME outside /tmp -> allow, project location irrelevant. Linux verdict is MORE restrictive (not fail-open); refusing a temp root containing HOME is intended. Same root cause as 9653d25d (script_file_content_exec); fix both in neutral_base (alias location on Linux) together."
+created_at = 1794551632
+updated_at = 1794552219
+weight = 0.0
+issue_number = 1706
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1706"
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test tmp_truncation_recoverable"
+rev = "de8b82ca2fa4a46938bcb38559e7156697c6bc5f"
+observed_at = 1794551632
+detail = """
+exit 101: )
+   Compiling blastguard v0.2.503 (/home/hiroyuki_nakayama/src/.harness-worktrees/fix-private-tmp-a77dd80f-bl/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 28.29s
+     Running tests/tmp_truncation_recoverable.rs (target/debug/deps/tmp_truncation_recoverable-134965f141cc1ad8)
+error: test failed, to rerun pass `-p blastguard --test tmp_truncation_recoverable`"""
+
+[[task]]
+id = "070b696c"
+title = "blastguard FP: quoted heredoc appending Rust source to a .rs file is Ask/Deny when its body has multi-line python3 -c string literals and a command follows"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "failed"
+notes = '''
+Observed 2026-11-13 at main 50474876 (blastguard 0.2.506) by the flow-8cca7ef5 orchestrator in subagent mode: cat >> <wt>/crates/blastguard/tests/x.rs <<'EOF' with Rust string literals "python3 -c \"... Path('/etc/hosts').chmod(0o777)\"" followed by cd <wt> && cargo test was denied: 'python3 is invoked with an inline-eval flag, and its program cannot be tokenised as Python (an unterminated string or an unbalanced bracket)'. Main mode: ask. Standing ruling: .rs heredoc body is data. RED bccf0730 (merged 4fb5d734) written by an independent subagent; one-line body is allow (control).
+blocked 2026-11-14 run-20261114-130020-46995: Q6 — the command runs cargo test which compiles the appended tests/x.rs (ruling exception 'unless run in the same command'); conflicts with 596ef57d cases h_rs_rustc/h_rs_cargo_script/h_rs_build_rs. Proposal: Allow only if body is provably inert Rust (const/static literals). Needs ruling. | RULED 2026-11-14 by user (AskUserQuestion): Q6 Allow only when the .rs body compiled in the same command is provably inert Rust (const/static literals); anything else stays not-Allow.'''
+created_at = 1794569079
+updated_at = 1794629450
+defer_until = 1794801914
+weight = 0.0
+issue_number = 1707
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1707"
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes fp1_rs_heredoc_body_with_python_c_text_is_allowed -- --include-ignored"
+rev = "706e25e16a8558ac93233aeb4b8e991c92189f54"
+observed_at = 1794569079
+detail = """
+exit 101: -cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.61s
+     Running tests/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs (target/debug/deps/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes-a8fc5a5e6c06304a)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes`"""
+
+[[task]]
+id = "f6028f18"
+title = "blastguard FP: git commit text with nested escaped quotes inside a .rs heredoc body is read as an unclosed double quote (whole-tree staging Ask/Deny) when a command follows"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-13 at main 50474876 (blastguard 0.2.506): orchestrator's explicit-path git add && git commit -m ... -m "python3 -c \"...\" ..." was denied with 'blastguard cannot determine whether this git add/commit is whole-tree staging (an unclosed double quote)'. The plain command did NOT reproduce in isolation (independent subagent, both modes allow); the reproducing shape (FP2b) is a cat >> x.rs <<'EOF' body containing a git add/commit Rust string with nested escaped quotes followed by cargo test. RED bccf0730 (merged 4fb5d734). The exact trigger of the orchestrator's original block is not identified.'''
+created_at = 1794569092
+updated_at = 1794569092
+weight = 0.0
+issue_number = 1708
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1708"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes fp2b_rs_heredoc_body_with_git_commit_text_is_allowed -- --include-ignored"
+rev = "706e25e16a8558ac93233aeb4b8e991c92189f54"
+observed_at = 1794569092
+detail = """
+exit 101: d; 6 filtered out; finished in 0.45s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs (target/debug/deps/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes-a8fc5a5e6c06304a)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes`"""
+
+[[task]]
+id = "84277e41"
+title = "blastguard: shutil.copy2 の読み取り専用の source（'/etc/hosts' など）を書き込み先として Deny する false positive を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "FP, RED 34937f3f by a non-implementer (flow-8cca7ef5 orchestrator) at main 33464587 2026-11-14: python3 -c shutil.copy2('/etc/hosts','/tmp/x') is Deny ('it writes /etc/hosts (shutil.copy2()') while the /tmp/y-source twin is Ask (main session). Reported as 別件 by the 569b9b9d implementer (INTERPRETER_WRITE_CALLS 'shutil.copy2('). Live hit 2026-11-14: a python3 - <<'EOF' heredoc that only edited docs/specs/blastguard.md and .specguard/spec-docs.toml (its string literals contained the text shutil.copy2('/etc/hosts','/tmp/x')) was denied verbatim: python3 - <<'EOF' takes its program from stdin, and it writes /etc/hosts (shutil.copy2() - it exists, and it is not inside a git work tree. Control control_tmp_source_copy2_is_not_denied_in_main_session non-ignored."
+created_at = 1794583403
+updated_at = 1794583403
+weight = 0.0
+issue_number = 1723
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1723"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_shutil_copy2_source_judged_as_write_fp -- --include-ignored copy2_decision_does_not_depend_on_read_only_source"
+rev = "34937f3fa91c897bc6127934c75d01fc6ec298ce"
+observed_at = 1794583403
+detail = """
+exit 101: e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.11s
+     Running tests/backlog_20261114_shutil_copy2_source_judged_as_write_fp.rs (target/debug/deps/backlog_20261114_shutil_copy2_source_judged_as_write_fp-dd5429a9b98ba464)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_shutil_copy2_source_judged_as_write_fp`"""
+
+[[task]]
+id = "7bf91f5a"
+title = "blastguard: printf の二重引用符 operand（エスケープした PY 変数と command 風の文言を含む）を実行される command line と判定して Ask にする false positive を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "FP, RED ae5e7750 by the flow-8cca7ef5 orchestrator at main a473ba71 2026-11-14. Exact commands are the MENTIONS/HARMLESS constants of the test file. printf whose double-quoted operand holds escaped PY-variable text plus a find -exec sh -c / os.chmod phrase is Ask in main and Deny in subagent with reason: printf is not a command blastguard recognises, and what follows it parses as a destructive command line. The twin without the PY text is Allow (control). Live hits in the same family on 2026-11-14: a printf append to .specguard/spec-docs.toml, a python3 /dev/stdin heredoc editing the RED file, and the first attempt at this very backlog add whose notes quoted the operand (reason listed backlog, add, p1 ... as unrecognised commands, then: plus is not a command blastguard recognises, and what follows it parses as a destructive command line)."
+created_at = 1794589692
+updated_at = 1794589692
+weight = 0.0
+issue_number = 1725
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1725"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_printf_operand_judged_as_command_fp -- --include-ignored printf_operand_text_is_not_judged_as_a_command"
+rev = "ae5e7750029010af16850a08159b21c171b6a971"
+observed_at = 1794589692
+detail = """
+exit 101: -c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.22s
+     Running tests/backlog_20261114_printf_operand_judged_as_command_fp.rs (target/debug/deps/backlog_20261114_printf_operand_judged_as_command_fp-90eba1c145325263)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_printf_operand_judged_as_command_fp`"""
+
+[[task]]
+id = "efd4ec4b"
+title = "blastguard: quoted heredoc .rs body containing a match arrow (=>) is judged as a redirect (false positive)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-14 by a condukt worker at main 144906a1 (blastguard 0.2.523 live); reproduced at 279e5a66 (0.2.524). Denied with reason: '> format!("{v:.p$}"' destroys the file's current contents and `format!("{v:.p$}"` contains a shell expansion, so blastguard cannot tell which file this names, let alone whether its contents are recoverable. Minimal shape: cat > x.rs <<'EOF' / b'f' => format!("{v:.p$}"), / EOF followed by python3 - <<'EOF' / print(1) / EOF (the .rs heredoc alone is Allow). Controls ': > /etc/hosts' and an executed heredoc stay Deny. RED commit 1f211cef on branch test/bg-fp-heredoc-arrow-red (worktree /Users/yuki/src/.harness-worktrees/bg-fp-heredoc-arrow-red)."""
+created_at = 1794598391
+updated_at = 1794598391
+weight = 0.0
+issue_number = 1731
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1731"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_heredoc_rs_body_match_arrow_fp -- --include-ignored"
+rev = "1f211cef0eed508277602d09c44d3aeb5b72e14c"
+observed_at = 1794598391
+detail = """
+exit 101: 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/backlog_20261114_heredoc_rs_body_match_arrow_fp.rs (target/debug/deps/backlog_20261114_heredoc_rs_body_match_arrow_fp-c2e07066c7408162)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_heredoc_rs_body_match_arrow_fp`"""
+
+[[task]]
+id = "cec1ff7b"
+title = "blastguard: single-quoted perl -ne program using a perl special variable (dollar-dot) is refused as a shell expansion (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "RED 7b96fb5e (tests/backlog_20261114_perl_single_quoted_dollar_fp.rs) by the flow-8cca7ef5 orchestrator at main 3423cc72 2026-11-14: the read-only single-quoted perl -ne print-if-line-9 program on /dev/null is ask in main and deny in subagent, reason 'that program contains a shell expansion'. Single quotes pass the variable through literally, so the command text IS the program. Observed live on the deployed 0.2.527/0.2.529 hook several times this run (also when the perl text was only data inside a heredoc or a commit-message heredoc). Control: double-quoted perl -ne with HOME expansion is not Allow (passes)."
+created_at = 1794599022
+updated_at = 1794599022
+weight = 0.0
+issue_number = 1732
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1732"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_perl_single_quoted_dollar_fp -- --include-ignored"
+rev = "7b96fb5e164a16db916880d687e8843f9dd18039"
+observed_at = 1794599022
+detail = """
+exit 101: rktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.57s
+     Running tests/backlog_20261114_perl_single_quoted_dollar_fp.rs (target/debug/deps/backlog_20261114_perl_single_quoted_dollar_fp-78124a0de3e79bba)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_perl_single_quoted_dollar_fp`"""
+
+[[task]]
+id = "dc27f669"
+title = "blastguard: printf (format-reuse) file passed as a data argument to a python script is judged as the python program (Ask / subagent Deny)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-14 in flow session: printf '%s\n' 'echo hi | bash' 'echo hi |& bash' > c.txt && python3 p.py bin c.txt refused in subagent mode: printf writes the file, another part may run it with Python, written text judged as the Python program; printf option/format-reuse rules not modelled. Reproduced at main 4139f1d2 (0.2.539): printf '%s\n' a b > d.txt && python3 s.py d.txt is ask (main) / deny (subagent); single-conversion printf is Allow; true-positive controls (file is the program) stay non-Allow. RED commit fa080792 on branch test/bg-red-pipe-reader-and-py-argv.'''
+created_at = 1794601343
+updated_at = 1794601343
+weight = 0.0
+issue_number = 1735
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1735"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_printf_file_as_python_data_arg_fp -- --include-ignored"
+rev = "fa080792966cccefbe3e040a53de25b6add39720"
+observed_at = 1794601343
+detail = """
+exit 101: orktrees/bg-red-pipe-reader-and-py-argv/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/backlog_20261114_printf_file_as_python_data_arg_fp.rs (target/debug/deps/backlog_20261114_printf_file_as_python_data_arg_fp-232693ec2b1af97c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_printf_file_as_python_data_arg_fp`"""
+
+[[task]]
+id = "ab2097c5"
+title = "blastguard: wait with the last-background-PID argument inside sh -c is judged as a command word (FP; bare form is Allow)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 in a subagent: a sh -c script with a background subshell followed by wait and the last-background-PID parameter was blocked with the reason that the command word is an expansion whose value only exists at run time. The real command word is wait; the parameter is only its argument. Reproduced at c4336b61 on 2026-11-14: the bare form (sleep 1 in background, then wait with that parameter) is Allow, but the same text wrapped in /bin/sh -c is Ask with that reason. Controls stay non-Allow: the parameter as a real command word, and wait followed by a destructive rm of /etc. Test file: crates/blastguard/tests/wait_bang_argument_fp_20261114.rs (r2 is the ignored RED). Second shape, UNVERIFIED: the same family blocked this very backlog add (rev 3feeb8bc, 2026-11-14) when its quoted title contained the text wait backslash-dollar-bang; the block said wait is not a command blastguard recognises and the following token parses as a destructive command line. Not isolated into a test."
+created_at = 1794602089
+updated_at = 1794602089
+weight = 0.0
+issue_number = 1737
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1737"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test wait_bang_argument_fp_20261114 -- --ignored"
+rev = "ccd48c0bf99a794e7a1c88104a968cd2e9800ca1"
+observed_at = 1794602089
+detail = """
+exit 101: d out; finished in 1.09s
+
+   Compiling blastguard v0.2.543 (/Users/yuki/src/harness-wt-fp-wait-bang/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.71s
+     Running tests/wait_bang_argument_fp_20261114.rs (target/debug/deps/wait_bang_argument_fp_20261114-3e368ab0dd0b3bd6)
+error: test failed, to rerun pass `-p blastguard --test wait_bang_argument_fp_20261114`"""
+
+[[task]]
+id = "d462444e"
+title = "blastguard false positive: multi-line backtick span in quoted heredoc body after a preceding command"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 in a subagent. A command that runs one command, then a semicolon or double ampersand, then a command with a quoted heredoc whose body has a backtick span crossing a line break, is judged Ask because the word on the second line inside the span is read as a command word. Quoted heredoc bodies are data. Minimal repro is test f2. Without the preceding command (f1), with a single-line span (f3), it is Allow. Unquoted heredoc stays non-Allow (c1)."
+created_at = 1794603914
+updated_at = 1794603914
+weight = 0.0
+issue_number = 1739
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1739"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test quoted_heredoc_multiline_backtick_fp_20261114 -- --ignored"
+rev = "4f2b114bd20f55b8647925ba3c6f7e2c038cee57"
+observed_at = 1794603914
+detail = """
+exit 101: 2.545 (/Users/yuki/src/harness-wt-fp-heredoc-backtick2/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.11s
+     Running tests/quoted_heredoc_multiline_backtick_fp_20261114.rs (target/debug/deps/quoted_heredoc_multiline_backtick_fp_20261114-a0bd5b5b0b5f77e4)
+error: test failed, to rerun pass `-p blastguard --test quoted_heredoc_multiline_backtick_fp_20261114`"""
+
+[[task]]
+id = "32b414d2"
+title = "blastguard: zsh -c / bash -c with literal program containing 'echo - foo' is refused as a stdin program"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 (subagent refusal: program is taken from stdin and is not on the command line); reproduced on 0.2.540 worktree build: ask/deny (main/subagent) for zsh -c 'echo - foo', bash -c 'echo - foo', and the longer multi-echo shapes. Allow for zsh -c 'echo hi', 'echo -- x', 'echo -nE a', 'echo -x y'; zsh -c 'chmod 777 /etc/hosts' is Deny. Trigger is the lone dash operand. RED commit 0ab93794 on branch test/bg-red-pipe-reader-and-py-argv."
+created_at = 1794604359
+updated_at = 1794604359
+weight = 0.0
+issue_number = 1756
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1756"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_zsh_c_literal_echo_dash_fp -- --include-ignored"
+rev = "0ab93794b711e8c74d0dfaed9183824ac6493d90"
+observed_at = 1794604359
+detail = """
+exit 101: s/yuki/src/.harness-worktrees/bg-red-pipe-reader-and-py-argv/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.52s
+     Running tests/backlog_20261114_zsh_c_literal_echo_dash_fp.rs (target/debug/deps/backlog_20261114_zsh_c_literal_echo_dash_fp-5e83884faa4461ec)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_zsh_c_literal_echo_dash_fp`"""
+
+[[task]]
+id = "b663c5f5"
+title = "fail-open mutation script leaves test-written files behind in the working tree"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open-mutation",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794606394
+updated_at = 1794606394
+weight = 0.0
+issue_number = 1741
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1741"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_fail_open_mutation_leaves_no_artifacts.py"
+rev = "bd13fa12b73aedfc460f596f77cdf42a0c4fef40"
+observed_at = 1794606394
+detail = """
+exit 1: nd still exited 0
+
+scripts/test_fail_open_mutation_leaves_no_artifacts.py:102: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_fail_open_mutation_leaves_no_artifacts.py::MutationRunArtifacts::test_run_created_untracked_file_is_not_silently_left_behind
+========================= 1 failed, 1 passed in 0.51s =========================="""
+
+[[task]]
+id = "7eb86bb3"
+title = "blastguard FP: harmless brace-group feeder piped to bash is Ask/Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """Measured at dc9b00c7b (0.2.565) 2026-11-14 in run-20261114-075136-6996 follow-up. main/subagent: "{ echo 'echo hi'; } | bash" ask/deny; '{ echo a; echo b; } | bash' ask/deny; "echo 'echo hi' | bash" allow/allow. Two readings: (FP) group output is statically known harmless; (intended) multi-command group feeding a shell is deliberately unmodelled so Ask is fail-closed. RED asserts Allow."""
+created_at = 1794613011
+updated_at = 1794613011
+weight = 0.0
+issue_number = 1747
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1747"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_brace_group_feeder_piped_to_bash_fp -- --include-ignored"
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+observed_at = 1794613011
+detail = """
+exit 101: arness-worktrees/side-reds-075136/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/backlog_20261114_brace_group_feeder_piped_to_bash_fp.rs (target/debug/deps/backlog_20261114_brace_group_feeder_piped_to_bash_fp-0d22514ccaecfe2b)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_brace_group_feeder_piped_to_bash_fp`"""
+
+[[task]]
+id = "7a5f65bd"
+title = "blastguard FP: read-only python3 -c json.load of ~/.claude/plugins/installed_plugins.json is Ask/Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Measured at dc9b00c7b (0.2.565) 2026-11-14 in run-20261114-075136-6996 follow-up; noticed when a subagent's read-only command was denied with 'a protected gate/config path — changing it changes which hooks and gates run'. main/subagent: ask/deny. Control python3 -c print(open('/tmp/x.json').read()) allow/allow. Two readings: (FP) a read is not changing the path; (intended) detect/interpreter.rs ~1308 says naming a protected path in program literals is deliberately asked on ('naming it is how it gets there'); docs/specs/blastguard.md has no ruling. RED asserts Allow."
+created_at = 1794613034
+updated_at = 1794613034
+weight = 0.0
+issue_number = 1748
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1748"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_read_of_protected_plugin_file_fp -- --include-ignored"
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+observed_at = 1794613034
+detail = """
+exit 101: rees/side-reds-075136/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261114_python_read_of_protected_plugin_file_fp.rs (target/debug/deps/backlog_20261114_python_read_of_protected_plugin_file_fp-0c08f20d853bc41d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_read_of_protected_plugin_file_fp`"""
+
+[[task]]
+id = "e79485cb"
+title = "quoted here-document body containing $(f) is Ask/Deny though never expanded (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b)"
+created_at = 1794626746
+updated_at = 1794626746
+weight = 0.0
+issue_number = 1752
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1752"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_quoted_heredoc_substitution_text_fp -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626746
+detail = """
+exit 101: arness-worktrees/session-7e01fcf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/backlog_20261114_quoted_heredoc_substitution_text_fp.rs (target/debug/deps/backlog_20261114_quoted_heredoc_substitution_text_fp-6bbbfefd6bbb24e2)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_quoted_heredoc_substitution_text_fp`"""
+
+[[task]]
+id = "c9da0437"
+title = "python3 - heredoc: backtick span with / in an unrelated string literal is read as the open(...,'w') target (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b)"
+created_at = 1794626768
+updated_at = 1794626768
+weight = 0.0
+issue_number = 1753
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1753"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_heredoc_backtick_string_write_target_fp -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626768
+detail = """
+exit 101: /crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running tests/backlog_20261114_python_heredoc_backtick_string_write_target_fp.rs (target/debug/deps/backlog_20261114_python_heredoc_backtick_string_write_target_fp-f9925a4af716991a)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_heredoc_backtick_string_write_target_fp`"""
+
+[[task]]
+id = "234cae6f"
+title = """git commit -m "$(cat <<'EOF' ... backtick ... EOF)" is Ask/Deny though the quoted heredoc body is literal (FP)"""
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b)"
+created_at = 1794626818
+updated_at = 1794626818
+weight = 0.0
+issue_number = 1755
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1755"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626818
+detail = """
+exit 101: ession-7e01fcf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp.rs (target/debug/deps/backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp-8f521eb05a2af65d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp`"""
+
+[[task]]
+id = "9d347af5"
+title = "quoted heredoc body line resembling git commit -m with backtick is judged as a command when the heredoc is not the first statement (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b)"
+created_at = 1794626839
+updated_at = 1794626839
+weight = 0.0
+issue_number = 1759
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1759"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626839
+detail = """
+exit 101: ofile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp.rs (target/debug/deps/backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp-99b7743c0d81c17f)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp`"""
+
+[[task]]
+id = "9d88d739"
+title = """blastguard FP: quoted heredoc bodies judged as code (python3 - <<'EOF' with a backticked gh span is Ask; .rs append heredoc with "rm -rf ./a" literal followed by a command is Deny)"""
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "heredoc-fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Side finding of run-20261114-120314-34769 (flow session b3435a5e), RED committed 86d9b0dea, measured 2026-11-14. FP-A: python3 - <<'EOF' program with a `gh` span inside a Python string -> Ask, reason 'gh: no subcommand given — blastguard cannot tell what this does' (relay bgr-5dc49e87261a). FP-B: quoted heredoc appending "rm -rf ./a", to a .rs file followed by a cargo test line -> Deny 'recursive rm (-r) can delete an entire directory tree' even in main mode; without the trailing command Allow (blocks.jsonl ts=1794625871). Same class as open FP1/FP2b in backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs with different content; may share a root cause with GH #1664/#1680/#1739. RED: 2 ignored fail, 3 controls pass. Readings: (a) real FP (quoted heredoc body is data); (b) intended fail-closed for python stdin programs — distinguish: FP-A's span is inside a Python string literal, so a real parser of the target language separates it (memory: gate text vs code via parser)."""
+created_at = 1794626779
+updated_at = 1794626779
+weight = 0.0
+issue_number = 1758
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1758"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_quoted_heredoc_body_side_fps -- --ignored"
+rev = "7f5be37a64217094031a083db1b808e6e0ee4061"
+observed_at = 1794626779
+detail = """
+exit 101: 0 (/Users/yuki/src/.harness-worktrees/session-b3435a5e/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.67s
+     Running tests/backlog_20261114_quoted_heredoc_body_side_fps.rs (target/debug/deps/backlog_20261114_quoted_heredoc_body_side_fps-e32d5314fa6568e9)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_quoted_heredoc_body_side_fps`"""
+
+[[task]]
+id = "f869115c"
+title = "blastguard FP: quoted heredoc writing .json whose body has backticked sh <<'EOF' text is denied as a stdin program"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "heredoc-fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Side finding run-20261114-130020-46995, RED in 3d99f03e (2026-11-14). Observed live: relay bgr-028db5975780, reason '`sh <<'EOF'` takes its program from stdin'. Readings: (a) FP, .json body is data; (b) intended — distinguish: nothing executes the .json."
+created_at = 1794629115
+updated_at = 1794629115
+weight = 0.0
+issue_number = 1760
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1760"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_json_heredoc_body_sh_heredoc_text_fp -- --include-ignored"
+rev = "3d99f03eacaeefa68c963747d3dbb7d17c599b3a"
+observed_at = 1794629115
+detail = """
+exit 101: ess-worktrees/session-b3435a5e/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.88s
+     Running tests/backlog_20261114_json_heredoc_body_sh_heredoc_text_fp.rs (target/debug/deps/backlog_20261114_json_heredoc_body_sh_heredoc_text_fp-021fb1a9b8d57db3)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_json_heredoc_body_sh_heredoc_text_fp`"""
+
+[[task]]
+id = "ec087b02"
+title = "blastguard FP: perl $. inside a single-quoted -e program is denied as a shell expansion"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Side finding run-20261114-130020-46995, RED in 3d99f03e (2026-11-14). Observed live: relay bgr-b57a7fb9f47c, reason 'that program contains a shell expansion'. Possibly same as GH #1732. Readings: (a) FP — single quotes do not expand; (b) intended — distinguish via a real shell quoting parser."
+created_at = 1794629181
+updated_at = 1794629181
+weight = 0.0
+issue_number = 1761
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1761"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_perl_single_quoted_dollar_dot_fp -- --include-ignored"
+rev = "3d99f03eacaeefa68c963747d3dbb7d17c599b3a"
+observed_at = 1794629181
+detail = """
+exit 101: ki/src/.harness-worktrees/session-b3435a5e/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.66s
+     Running tests/backlog_20261114_perl_single_quoted_dollar_dot_fp.rs (target/debug/deps/backlog_20261114_perl_single_quoted_dollar_dot_fp-5b415bce532c3ab8)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_perl_single_quoted_dollar_dot_fp`"""
+
+[[task]]
+id = "bf90fa9d"
+title = "blastguard FP: printf writing a .json data file and python3 script.py reading it as an argument is denied in subagent mode"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. `printf '%s\n' '[{"cmd":"echo hi"}]' > cases5.json && python3 probe.py cases5.json` => deny (subagent) with reason that the written file may be run with Python. The json is a data argument to a script, not the program. Readings: (a) FP - argument-position file treated as program; (b) intended conservative pairing of printf writes with later interpreter runs. Tell apart: python3 runs probe.py, cases5.json is argv[1].'''
+created_at = 1794634347
+updated_at = 1794634347
+weight = 0.0
+issue_number = 1766
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1766"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_printf_json_then_python_script_arg_fp -- --include-ignored"
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634347
+detail = """
+exit 101: 20261114-125811-45041-integ/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running tests/backlog_20261114_printf_json_then_python_script_arg_fp.rs (target/debug/deps/backlog_20261114_printf_json_then_python_script_arg_fp-2333295ec2028b8d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_printf_json_then_python_script_arg_fp`"""
+
+[[task]]
+id = "6cd305a9"
+title = "blastguard FP: rm $L inside $(...) is denied as system harm although L is rebound before the rm (body assignment, prefix assignment, function)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. `L=/etc/hosts; x=$(L=/tmp/x; rm -f $L)`, `L=/etc/hosts; L=/tmp/x y=$(rm -f $L)`, `f() { L=/tmp/x; }; L=/etc/hosts; x=$(f; rm -f $L)` => deny/deny ('this rm deletes from a system directory: `$L)`'), but bash deletes /tmp/x. Pre-existing path: rm::known_path_harm on the outer segment after split_substitution_opening_assignments (the operand keeps the closing paren). Readings: (a) FP; (b) intended over-approximation. Tell apart: run in bash with a dry-run echo."
+created_at = 1794634387
+updated_at = 1794634387
+weight = 0.0
+issue_number = 1768
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1768"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_rm_substitution_body_rebind_false_deny -- --include-ignored"
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634387
+detail = """
+exit 101: 61114-125811-45041-integ/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261114_rm_substitution_body_rebind_false_deny.rs (target/debug/deps/backlog_20261114_rm_substitution_body_rebind_false_deny-c7f67f061b9d2b24)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_rm_substitution_body_rebind_false_deny`"""
+
+[[task]]
+id = "40dc52c0"
+title = 'blastguard tests: egress_exec_closure anti-vacuity controls fail (bash <(echo "$(echo hi)") and bash <(echo hi | cat) are Ask, expected Allow)'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. Observed by the t1 worker on base 56084c672 and on the t1 tree (identical): command_substitution_recursion_anti_vacuity_controls_stay_allow - left Ask ('`bash` takes its program from stdin, and that program contains a shell expansion (`$(echo hi)`) ...'); process_substitution_recursion_anti_vacuity_controls_stay_allow - left Ask ('... that program is not on the command line ...'). Readings: (a) the controls are stale after a later tightening (assert proxy); (b) a real FP. Tell apart: frozen-assert rule - check the hedge in the assert message."
+created_at = 1794634406
+updated_at = 1794634406
+weight = 0.0
+issue_number = 1769
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1769"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test egress_exec_closure"
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634406
+detail = """
+exit 101:  0 filtered out; finished in 0.46s
+
+   Compiling blastguard v0.2.588 (/Users/yuki/.condukt/worktrees/run-20261114-125811-45041-integ/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/egress_exec_closure.rs (target/debug/deps/egress_exec_closure-be7dc7ee5ca00e48)
+error: test failed, to rerun pass `-p blastguard --test egress_exec_closure`"""
+
+[[task]]
+id = "42741ea3"
+title = "blastguard fail-open: git apply/git am fed a quoted heredoc patch that creates run.sh, then 'sh run.sh', is Allow (system harm)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 by the independent verifier of condukt run run-20261114-163341-69351 task e70b6a71 at commit 1420ba8ee and again on main 5decb21e2 (pinned as #[ignore]d e_prime test). Command: git apply <<'EOF' / <diff creating run.sh with +rm -rf ~> / EOF / sh run.sh (and the same with git am) is Allow in main and subagent. here_document_consumer_is_data rejects non-commit git, so the e70b6a71 diff did not touch this path; the verifier reports it pre-existing (Allow at 1420ba8ee; base eeaa73843 not directly measured because the testscope rerun hook refused). Expected: Deny (system harm through a file the heredoc writes via git). Distinguish: if base eeaa73843 is also Allow it is pre-existing (a); if not, it regressed (b) — measure with the e_prime test at both revs."
+created_at = 1794646180
+updated_at = 1794646180
+weight = 0.0
+issue_number = 1770
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1770"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test verify_e70b6a71_commit_heredoc_later_cmds -- --ignored e_prime_git_apply_or_am_patch_then_running_the_written_file_is_not_allowed"
+rev = "5decb21e2f604f4eb450256c59378909525b19c9"
+observed_at = 1794646180
+detail = """
+exit 101: /Users/yuki/src/.harness-worktrees/side-run-20261114-163341-69351/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.25s
+     Running tests/verify_e70b6a71_commit_heredoc_later_cmds.rs (target/debug/deps/verify_e70b6a71_commit_heredoc_later_cmds-d7445c9c13b531bf)
+error: test failed, to rerun pass `-p blastguard --test verify_e70b6a71_commit_heredoc_later_cmds`"""
+
+[[task]]
+id = "3764e463"
+title = "blastguard FP: python3 -c の文字列リテラル内 '>> `y`' を run-time append redirect と誤読して ask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-14 at main a67c5d23f: python3 -c 'print("x >> BACKTICKy BACKTICK")' => ask "'>> BACKTICKyBACKTICK' appends to a path that only exists at run time". Python never executes backticks. Suspected (unverified): detect/interpreter.rs redirects_are_data ~968. RED: crates/blastguard/tests/backlog_20261114_python_c_append_backtick_fp.rs (commit b58fa9a63 on side/run-20261114-163341-69351). Control: os.system('echo x >> $v') still not Allow (green)."""
+created_at = 1794647064
+updated_at = 1794647064
+weight = 0.0
+issue_number = 1771
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1771"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_c_append_backtick_fp -- --ignored python_c_string_literal_append_backtick_text_is_not_a_redirect"
+rev = "b58fa9a63a03827b24c6f6d6de6d5ea10a003092"
+observed_at = 1794647064
+detail = """
+exit 101: uki/src/.harness-worktrees/side-run-20261114-163341-69351/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.11s
+     Running tests/backlog_20261114_python_c_append_backtick_fp.rs (target/debug/deps/backlog_20261114_python_c_append_backtick_fp-4b2a0245b29c3102)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_c_append_backtick_fp`"""
+
+[[task]]
+id = "b2d9cb6b"
+title = "condukt: suffixed-topic retry worktree (--topic <task>-r1) records identity of a task the run lacks; verified task's worktree cannot be removed/merged"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "worktree",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 run run-20261114-163341-69351 task e70b6a71. worktree create --run R --topic <task>-r1 records branch identity R/<task>-r1 (worktree.rs create_namespaced). Then worktree merge --task <task> => merge-task-mismatch, and worktree remove of the VERIFIED task's recorded worktree refuses: 'cannot determine whether the task that owns it is verified (branch identity names task <task>-r1 of run R, which that run does not have)' (teardown_gate.rs). RED: crates/condukt/tests/backlog_20261114_retry_suffixed_topic_worktree_unremovable.rs (commit bbffde1cb, side/run-20261114-163341-69351). Two readings: (a) binary: teardown gate should fall back to the task whose recorded worktree is this path, or create should not mint identity for a nonexistent task; (b) skill: SKILL.md retry step (L1038 'new per-task worktree') gives no naming rule; correct invocation keeps --topic <task>. Distinguish: if a documented invocation yields a fresh retry worktree with identity R/<task>, it is (b); if none exists, (a)."
+created_at = 1794647180
+updated_at = 1794647180
+weight = 0.0
+issue_number = 1772
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1772"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261114_retry_suffixed_topic_worktree_unremovable -- --ignored verified_task_with_suffixed_topic_retry_worktree_can_be_removed"
+rev = "bbffde1cbf508b54ea9de97004e080e219cd7d1d"
+observed_at = 1794647180
+detail = """
+exit 101: 20261114-163341-69351/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.29s
+     Running tests/backlog_20261114_retry_suffixed_topic_worktree_unremovable.rs (target/debug/deps/backlog_20261114_retry_suffixed_topic_worktree_unremovable-302e92890b4d4139)
+error: test failed, to rerun pass `-p condukt --test backlog_20261114_retry_suffixed_topic_worktree_unremovable`"""
+
+[[task]]
+id = "d5c404c0"
+title = "test_fail_open_mutation_leaves_no_artifacts.py passes vacuously: stub lacks test_args so it never runs"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "scripts",
+    "test-vacuous",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-14 at main 670f82987 (side finding of run-20261114-163341-69351 task b793fddc, worker + main loop). scripts/test_fail_open_mutation_leaves_no_artifacts.py:74 defines stub(crate, timeout=600); check-fail-open-mutation.py:580 calls run_crate_tests(scenario.crate, timeout=timeout, test_args=scenario.test_args()). Verbatim output: unexpected exception: TypeError("MutationRunArtifacts._drive.<locals>.stub() got an unexpected keyword argument 'test_args'"); status error, so the artifact-writing stub never runs and test_run_created_untracked_file_is_not_silently_left_behind sees no leak. Also fails the same at 202d33f25 (pre-b793fddc). After b793fddc the run happens in a scratch copy, so a fixed stub must write its artifact relative to the cwd/scratch it is given, not cfom.REPO. RED: scripts/test_fail_open_mutation_leaves_no_artifacts_stub_invoked_20261114.py (commit 9fe913745, xfail strict)."""
+created_at = 1794653933
+updated_at = 1794653933
+weight = 0.0
+issue_number = 1775
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1775"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_fail_open_mutation_leaves_no_artifacts_stub_invoked_20261114.py"
+rev = "9fe913745a6a0634dc83723658f0c131086eacc3"
+observed_at = 1794653933
+detail = """
+exit 1: _leaves_no_artifacts_stub_invoked_20261114.py:44: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_fail_open_mutation_leaves_no_artifacts_stub_invoked_20261114.py::LeavesNoArtifactsStubIsInvoked::test_drive_reaches_the_stub_instead_of_raising_typeerror
+============================== 1 failed in 0.24s ==============================="""
+
+[[task]]
+id = "bf8d8fab"
+title = "test_rollout_refuses_dirty_source.py MutationMarker test_f fails: fake_tests lacks test_args and asserts in-place mutation"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "scripts",
+    "test-stale",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-14 at main 670f82987 and at 202d33f25 (side finding of run-20261114-163341-69351 task b793fddc). Verbatim: scripts/test_rollout_refuses_dirty_source.py:253 AssertionError: None is not true : fixture: mutation not applied while tests ran (error: unexpected exception: TypeError("MutationMarker.test_f_evaluate_scenario_brackets_mutation_with_marker_and_seq.<locals>.fake_tests() got an unexpected keyword argument 'test_args'")). Second defect in the same test: it checks seen['mutated_on_disk'] = 'NEW' in the invoking tree's file, which contradicts USER RULING 2026-11-14 (mutate a scratch copy, never the invoking tree; landed in a53976406). A fix must re-anchor that assertion on the scratch copy (cwd/_ACTIVE_SCRATCH) while keeping the marker+seq bracketing property; per frozen-assert rules, ask if the assertion's named property is ambiguous."""
+created_at = 1794653953
+updated_at = 1794653953
+weight = 0.0
+issue_number = 1776
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1776"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_rollout_refuses_dirty_source.py::MutationMarker::test_f_evaluate_scenario_brackets_mutation_with_marker_and_seq"
+rev = "9fe913745a6a0634dc83723658f0c131086eacc3"
+observed_at = 1794653953
+detail = """
+exit 1: expected keyword argument 'test_args'"))
+
+scripts/test_rollout_refuses_dirty_source.py:253: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_rollout_refuses_dirty_source.py::MutationMarker::test_f_evaluate_scenario_brackets_mutation_with_marker_and_seq
+============================== 1 failed in 0.22s ==============================="""
+
+[[task]]
+id = "3ab6109f"
+title = "blastguard: quoted git commit -F - heredoc body judged when opener has a quoted $ option value (protected path in message read as command)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-14 at main 9bab9873e (blastguard 0.2.594 built from that rev; RED committed eb8811f70, 0.2.595). First seen in run-20261114-163341-69351, task worktree run-20261114-163341-69351-b793fddc, relay bgr-5f4e253e177a (installed 0.2.588, subagent deny; main re-run committed). Verbatim reason: '`second` is a command blastguard has no rule for, and .githooks/pre-push, is a protected gate/config path — blastguard cannot tell whether this reads it, rewrites it or removes it, and refuses to guess'. Observed splits (main): git commit -q -F - <<'EOF' + body allow; --trailer "T: lit" allow; --trailer "T: $X" ask; --author "$X" ask; $ opener with body without the protected path allow; git add -- a.py .githooks/pre-push (alone, and && commit without $) allow. So the cause is the $ on the opener line, not git add of the protected path nor the line-initial word. Suspected site (UNVERIFIED): crates/blastguard/src/detect/heredoc.rs ~1031-1035 expansion_free refusing any $ in consumer/opener_line. Controls green: $ opener + later sh .git/COMMIT_EDITMSG with rm -rf /etc or echo x > .githooks/pre-push body is not Allow."""
+created_at = 1794654114
+updated_at = 1794654114
+weight = 0.0
+issue_number = 1777
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1777"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_git_commit_heredoc_opener_expansion_body_fp -- --ignored quoted_commit_heredoc_body_with_dollar_option_value_is_not_judged"
+rev = "eb8811f703a54920bf6db2621db0b07e0eaf89be"
+observed_at = 1794654114
+detail = """
+exit 101: ered out; finished in 0.44s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261114_git_commit_heredoc_opener_expansion_body_fp.rs (target/debug/deps/backlog_20261114_git_commit_heredoc_opener_expansion_body_fp-567942cab59131fd)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_git_commit_heredoc_opener_expansion_body_fp`"""
+
+[[task]]
+id = "4c15fa35"
+title = "blastguard: python3 - heredoc program with rmtree only inside a triple-quoted string literal denied as destructive call"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 at main 9bab9873e (blastguard 0.2.594 built from that rev; RED committed eb8811f70, 0.2.595). First seen in run-20261114-163341-69351, task worktree run-20261114-163341-69351-b793fddc (blocks.jsonl, installed 0.2.588, actor=subagent, rule interpreter-destructive-call): program rewrote scripts/check-fail-open-mutation.py via p.write_text(s), rmtree only inside r'''...''' text; verbatim reason \"`python3 - <<'EOF'` takes its program from stdin, and it runs `rmtree`, which deletes files or directories outright\" (it calls no rmtree). Minimised reason: '... a quoted string in its program spells `rmtree`, which deletes files or directories outright if that string is run as code; blastguard cannot show it is not'. Splits (main): plain 'shutil.rmtree(x)' literal ask (27795e6e downgrade, not asserted); '''...''' print deny; r'''...''' write_text deny; same with copy allow; real shutil.rmtree call deny. Judged FP under user ruling 2026-11-08 (text vs code via a real parser): quoted delimiter, no sink. Suspected (UNVERIFIED): layer-0 substring scan in crates/blastguard/src/detect/interpreter.rs ~1165 whose only downgrade is heuristic inert_literal_bodies (detect/interpreter/inert_literal.rs ~123) returning None on any ''' or \"\"\"; the Python lexer (python_semantics.rs lex) is not consulted. The verbatim 'it runs' wording comes from the strip_hash_comments(payload, true) quote toggler (detect/interpreter/comments.rs:29), cause UNVERIFIED. Controls green: real rmtree call, call after a triple literal, exec of a literal are not Allow."
+created_at = 1794654144
+updated_at = 1794654144
+weight = 0.0
+issue_number = 1778
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1778"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp -- --ignored python_stdin_triple_quoted_rmtree_text_is_not_a_call"
+rev = "eb8811f703a54920bf6db2621db0b07e0eaf89be"
+observed_at = 1794654144
+detail = """
+exit 101: d out; finished in 0.44s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp.rs (target/debug/deps/backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp-7b85eef629c6ed87)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp`"""
+
+[[task]]
+id = "762f38bd"
+title = "blastguard FP: python3 - heredoc that only writes a file whose string literal holds chmod 777 /etc/hosts is system-harm Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 (run-20261114-161340-68728, t3 worker + side-reds agent, main dde31f11b): the exact recovered t3 spec-edit command (python3 - <<'PY' reading docs/specs/blastguard.md, str.replace with triple-quoted literals, open(p,'w').write) is Deny in main: verbatim reason '`chmod` re-permissions `/etc/hosts` ... [system harm: refused on every request, never handed back as a question]'. Minimised single-line forms are NOT denied (same verdict as echo hi), so trigger not localised. Controls (subprocess.run/os.system/os.chmod on /etc/hosts) stay Deny. Readings: (a) FP — harm text is Python string data written to a file; (b) intended over-approximation. Tell apart: localise which part of the full program flips the verdict."
+created_at = 1794656868
+updated_at = 1794656868
+weight = 0.0
+issue_number = 1779
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1779"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_py_heredoc_harm_string_literal -- --include-ignored"
+rev = "b7903d36f4c6501380f6ae3a95d12d6b8dae69bc"
+observed_at = 1794656868
+detail = """
+exit 101: kt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.80s
+     Running tests/backlog_20261114_py_heredoc_harm_string_literal.rs (target/debug/deps/backlog_20261114_py_heredoc_harm_string_literal-3cfcc4cc8634a2c8)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_py_heredoc_harm_string_literal`"""
+
+[[task]]
+id = "eb52d2e5"
+title = "blastguard FP: a .txt data heredoc whose body has echo hi >&$fd raises python3 probe.py from allow to Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-14 (run-20261114-161340-68728 t1 verifier, side-reds agent, main dde31f11b): python3 <wt>/probe.py <wt> alone = allow; cat > <wt>/cmds.txt <<'EOF' (body: echo hi >&$fd / probe 3<<< x) EOF then python3 <wt>/probe.py <wt> = deny in main and subagent, verbatim: "'> $fd' destroys the file's current contents and `$fd` contains a shell expansion, so blastguard cannot tell which file this names, let alone whether its contents are recoverable". Readings: (a) FP — .txt body is data (heredoc-body-by-target-language ruling); (b) intended — an unseen python script might exec the .txt. Tell apart: ruling says .txt is not judged as shell unless run as shell in the same command."""
+created_at = 1794656915
+updated_at = 1794656915
+weight = 0.0
+issue_number = 1780
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1780"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_txt_data_heredoc_python_probe -- --include-ignored"
+rev = "b7903d36f4c6501380f6ae3a95d12d6b8dae69bc"
+observed_at = 1794656915
+detail = """
+exit 101: ndukt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.05s
+     Running tests/backlog_20261114_txt_data_heredoc_python_probe.rs (target/debug/deps/backlog_20261114_txt_data_heredoc_python_probe-8821daae300377ea)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_txt_data_heredoc_python_probe`"""
+
+[[task]]
+id = "967fd65c"
+title = "blastguard fail-open: bash <&3- (move inherited fd to stdin) is Allow while bash <&3 is Ask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 (run-20261114-161340-68728 t1 verifier + side-reds agent, main dde31f11b): bash <&3- and bash 0<&3- are allow/allow (main/subagent) while bash <&3 is ask/deny. crates/blastguard/src/detect/payload.rs:~824 procsub_programs: target '3-' fails parse::<u32>() and is neither a dup nor unreadable. exec 3<<< 'chmod 777 /etc/hosts'; bash <&3- is Deny (other path). Readings: (a) fail-open — fd 3 contents unknown, same as bash <&3; (b) none plausible. "
+created_at = 1794656943
+updated_at = 1794656943
+weight = 0.0
+issue_number = 1781
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1781"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_stdin_dup_move_fd_suffix -- --include-ignored"
+rev = "b7903d36f4c6501380f6ae3a95d12d6b8dae69bc"
+observed_at = 1794656943
+detail = """
+exit 101: /Users/yuki/.condukt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/backlog_20261114_stdin_dup_move_fd_suffix.rs (target/debug/deps/backlog_20261114_stdin_dup_move_fd_suffix-9ced7a051e26aaa3)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_stdin_dup_move_fd_suffix`"""
+
+[[task]]
+id = "7cccad0a"
+title = "blastguard fail-open: harmful literal piped to python3 -c that forwards stdin to a shell (os.system(input()), subprocess.run(stdin, shell=True)) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-14 (run-20261114-161340-68728 t4 verifier + side-reds agent, main c158cd573 and t4 wt): echo 'rm -rf /' | python3 -c 'import os; os.system(input())' and ... subprocess.run(sys.stdin.read(), shell=True) are allow/allow (main/subagent). The -c program forwards stdin to a shell. Readings: (a) fail-open — literal system harm reaches a shell; (b) intended only if -c programs are never modelled as stdin forwarders — conflicts with system-harm-always-deny. Control: echo hi | python3 -c 'import sys; print(sys.stdin.read())' allow."
+created_at = 1794657413
+updated_at = 1794657413
+weight = 0.0
+issue_number = 1783
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1783"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_stdin_forward_shell_literal_harm -- --include-ignored"
+rev = "95197ae5b4457c7d6c8328cdd42f7693fbf06446"
+observed_at = 1794657413
+detail = """
+exit 101: 61340-68728-side-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.24s
+     Running tests/backlog_20261114_python_stdin_forward_shell_literal_harm.rs (target/debug/deps/backlog_20261114_python_stdin_forward_shell_literal_harm-eacd53911bd95b16)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_stdin_forward_shell_literal_harm`"""
+
+[[task]]
+id = "64fe4e19"
+title = "condukt testscope: rerun guard records a test command at PreToolUse, so an attempt a later hook blocked (never executed) refuses the real run"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "testscope",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-15 in run-20261114-161340-68728: a combined heredoc+cargo test Bash call was denied by blastguard at PreToolUse; every later run of that cargo test was refused by testscope as 'already ran on this exact tree' although it never executed. crates/condukt/src/testscope.rs check_rerun writes the ledger line and returns Allow in the same PreToolUse; there is no PostToolUse confirmation. RED by an independent author (sonnet): crates/condukt/tests/backlog_20261115_testscope_counts_unexecuted_attempt.rs. Readings: (a) defect - a never-executed attempt counts as a run; (b) intended - recording at Pre is the only hook point. Distinguish: whether testscope docs promise 'ran'. Related (separate row): cd-target tree identity (backlog_20261114_testscope_cd_tree_identity). Fix must stay fail-closed."
+created_at = 1794680589
+updated_at = 1794680589
+weight = 0.0
+issue_number = 1785
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1785"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261115_testscope_counts_unexecuted_attempt -- --include-ignored"
+rev = "8fc672062940920906b2f947a5bf2cccc4f7ccdc"
+observed_at = 1794680589
+detail = """
+exit 101: _unexecuted_attempt" -p condukt` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.03s
+     Running tests/backlog_20261115_testscope_counts_unexecuted_attempt.rs (target/debug/deps/backlog_20261115_testscope_counts_unexecuted_attempt-bf799c7a4f6b54c1)
+error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_counts_unexecuted_attempt`"""
+
+[[task]]
+id = "3a45a57d"
+title = "condukt worktree merge --branch with no --run/--task still applies the task-trailer guard (merge-task-trailer-missing) via the branch's recorded conduktTask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-15 (run-20261114-161340-68728): condukt worktree merge --branch condukt/run-20261114-161340-68728/side-reds (no --run/--task) refused with merge-task-trailer-missing. crates/condukt/src/worktree/merge_gate.rs resolves the task as (recorded branch.<b>.conduktTask, cli) -> recorded wins, so the guard applies even without flags; the --run help says 'Omit for a merge with no task association (behavior otherwise unchanged)'. RED (independent, sonnet): crates/condukt/tests/backlog_20261115_worktree_merge_no_task_trailer_refusal.rs. CONFLICT: existing crates/condukt/tests/task_trailer_merge.rs::foreign_trailerless_commit_is_refused freezes the refusal for a recorded branch with no flags -> readings: (a) defect (help text is the contract) vs (b) intended (help text wrong); needs a human ruling before fixing; do not loosen either test without it. | User ruling 2026-11-15: the refusal is the defect (a trailer check must not apply to a merge that names no task); fix the part of task_trailer_merge.rs::foreign_trailerless_commit_is_refused that pins this case, with a test-weakening-justified line. Same root, also observed 2026-11-15: 'condukt worktree remove' refused the merged side-reds worktree with 'cannot determine whether the task that owns it is verified (branch identity names task 'side-reds' of run 'run-20261114-161340-68728', which that run does not have)'; main removed it with git worktree remove + git branch -d per user ruling."
+created_at = 1794712104
+updated_at = 1794731472
+weight = 0.0
+issue_number = 1786
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1786"
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261115_worktree_merge_no_task_trailer_refusal -- --include-ignored"
+rev = "85bef6669e6bd8c23bd121fcf909508e40e95942"
+observed_at = 1794712104
+detail = """
+exit 101: 0261114-161340-68728-side-reds/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.67s
+     Running tests/backlog_20261115_worktree_merge_no_task_trailer_refusal.rs (target/debug/deps/backlog_20261115_worktree_merge_no_task_trailer_refusal-4806af8c846a3078)
+error: test failed, to rerun pass `-p condukt --test backlog_20261115_worktree_merge_no_task_trailer_refusal`"""
+
+[[task]]
+id = "cf0bf4ca"
+title = "blastguard fail-open: exec 3<<<'chmod 777 /etc/hosts'; bash <&'3' (quoted fd) is Allow while <&3 is Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "F11. Observed 2026-11-15 at 0.2.603, re-observed by main with RED 784eba77f. bash strips quotes before the redirect, so <&'3' == <&3. Readings: (a) defect; (b) quoted fd treated as undeterminable -> but then must be Ask/Deny, never allow."
+created_at = 1794730681
+updated_at = 1794730681
+weight = 0.0
+issue_number = 1789
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1789"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_quoted_numeric_dup_target -- --include-ignored"
+rev = "bdfdc064af6abf8c9d8cbde6b9f1ba790bfc7e4a"
+observed_at = 1794730681
+detail = """
+exit 101: d v0.2.608 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
+     Running tests/backlog_20261115_quoted_numeric_dup_target.rs (target/debug/deps/backlog_20261115_quoted_numeric_dup_target-c281c6c9d662af65)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_numeric_dup_target`"""
+
+[[task]]
+id = "3da14bbd"
+title = """blastguard fail-open: harmful stdin into python3 -c 'os.system("python3 -m asyncio")' (nested REPL) is Allow"""
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "F13. Observed 2026-11-15 at 0.2.603, re-observed by main with RED 784eba77f. The child REPL inherits stdin and runs the piped program. Readings: (a) defect - wrapper descent misses inherited stdin; (b) child stdin out of scope. Ruling: system harm Deny through any wrapper -> (a)."
+created_at = 1794730703
+updated_at = 1794730703
+weight = 0.0
+issue_number = 1790
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1790"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_os_system_nested_repl -- --include-ignored"
+rev = "bdfdc064af6abf8c9d8cbde6b9f1ba790bfc7e4a"
+observed_at = 1794730703
+detail = """
+exit 101: 8 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/backlog_20261115_python_os_system_nested_repl.rs (target/debug/deps/backlog_20261115_python_os_system_nested_repl-d35551448481b324)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_os_system_nested_repl`"""
+
+[[task]]
+id = "392097d7"
+title = """blastguard FP: bash <&"$"fd (literal $fd) is Ask/Deny while <&'$fd' is Allow"""
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = 'F12. Observed 2026-11-15 at 0.2.603, re-observed by main with RED 784eba77f. A lone "$" is a literal dollar; standing ruling: text-determined values are resolved, not undetermined.'
+created_at = 1794730727
+updated_at = 1794730727
+weight = 0.0
+issue_number = 1791
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1791"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_dq_dollar_literal_dup_fd -- --include-ignored"
+rev = "bdfdc064af6abf8c9d8cbde6b9f1ba790bfc7e4a"
+observed_at = 1794730727
+detail = """
+exit 101: uard v0.2.608 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/backlog_20261115_dq_dollar_literal_dup_fd.rs (target/debug/deps/backlog_20261115_dq_dollar_literal_dup_fd-c7223dcbc93d47c9)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_dq_dollar_literal_dup_fd`"""
+
+[[task]]
+id = "7671c79f"
+title = "blastguard FP: Rust closure inside a Python triple-quoted string in python3 - <<'EOF' is read as a pipe into a brace group (Ask/Deny)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "F16. Observed 2026-11-15 at 0.2.603, re-observed by main with RED 784eba77f (only the allow assertion failing was observed; reason text not checked). Main ruling 2026-11-15: python heredoc body is not shell -> allow is intended."
+created_at = 1794730749
+updated_at = 1794730749
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_heredoc_rust_text_brace_pipe_fp -- --include-ignored"
+rev = "bdfdc064af6abf8c9d8cbde6b9f1ba790bfc7e4a"
+observed_at = 1794730749
+detail = """
+exit 101: /yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s
+     Running tests/backlog_20261115_heredoc_rust_text_brace_pipe_fp.rs (target/debug/deps/backlog_20261115_heredoc_rust_text_brace_pipe_fp-3da92e4b4c49e59c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_heredoc_rust_text_brace_pipe_fp`"""
+
+[[task]]
+id = "d292ce6e"
+title = "blastguard FP: quoted heredoc body line starting with a backtick is judged as a command word (true && git commit -F - <<'EOF' ... `import re` ...)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "F18. Original command: relay bgr-837357910fb9 (t4 worker commit), reproduced verbatim by independent author on 0.2.606; RED 0633bb8ec observed by main with reason 'the command word ``import` is an expansion whose value only exists at run time'. Fires only when the heredoc command is not the first bare command and the backtick is at column 0. Readings: (a) defect - quoted heredoc body is data; (b) intended - column-0 backtick deliberately shell. Tell apart: same body mid-line, or bare first git commit, is allow."
+created_at = 1794730885
+updated_at = 1794730885
+weight = 0.0
+issue_number = 1793
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1793"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_quoted_heredoc_backtick_commit_msg_fp -- --include-ignored"
+rev = "6fbcfcb7fd03418ea503c61e6ab0529ea29e2e29"
+observed_at = 1794730885
+detail = """
+exit 101: -worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.21s
+     Running tests/backlog_20261115_quoted_heredoc_backtick_commit_msg_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_backtick_commit_msg_fp-17f6762ef1215f15)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_heredoc_backtick_commit_msg_fp`"""
+
+[[task]]
+id = "a826bdab"
+title = "blastguard: backtick text inside a quoted heredoc body (<<'EOF') is judged as a command-word expansion (FP; Deny in subagent, Ask in main)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-15 in a subagent: cat > decomp.json <<'EOF' ... EOF with a JSON body containing "done_criteria":"`cargo test -p x` passes" was denied with: the command word `"done_criteria":"`cargo` is an expansion whose value only exists at run time — blastguard cannot tell what program this runs. Measured 2026-11-15 at main 2ace975d1 (RED committed ef03ba804, branch fp/quoted-heredoc-json-backtick-20261115): f0 (recovered shape: cd scratch && cat > decomp.json <<'EOF' JSON EOF; cd .. && ls scratch) and f1 (minimal: cat > scratch/d.json <<'EOF' {"done_criteria":"`cargo test -p x` passes"} EOF) both: assertion `left == right` failed: (subagent, main) left: ("deny", "ask") right: ("allow", "allow"). Control c1 (unquoted <<EOF with `$X`) passes non-Allow: subagent deny / main ask with 'the command word `$X` is an expansion ...'. Subagent mode = payload agent_id (same as backlog_20261113_heredoc_body_fp.rs). Readings: (a) defect - a quoted-delimiter heredoc body is literal data and is never expanded, so the backtick span is not a command; the quoted body of a cat > file target is not executed; (b) intended - body is treated as possibly-executed. Tell apart: (b) would also need the body to reach an interpreter; here it is cat into a .json file, and the reason names a 'command word' that only exists if the body is shell-parsed, i.e. the quoted body was tokenized as shell. Fix must keep c1 (unquoted heredoc backtick substitution) non-Allow. DOES NOT PROVE: whether the "key":" prefix glued to the backtick, line position, or trailing commands is the trigger; other delimiters (<<"EOF", <<-'EOF')."""
+created_at = 1794732083
+updated_at = 1794732083
+weight = 0.0
+issue_number = 1795
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1795"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_quoted_heredoc_json_backtick_subagent_fp -- --ignored"
+rev = "ef03ba804a8e6a1d1a431edd51bf6e2cad911d2d"
+observed_at = 1794732083
+detail = """
+exit 101: wt-fp-heredoc-json/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.24s
+     Running tests/backlog_20261115_quoted_heredoc_json_backtick_subagent_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_json_backtick_subagent_fp-83306c7d27f04712)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_heredoc_json_backtick_subagent_fp`"""
+
+[[task]]
+id = "4242986e"
+title = "condukt testscope: Rule C (task scope) judges the hook payload cwd, not a leading cd target, so cd <task worktree> && cargo test <out of scope> is allowed (fail-open)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-15 at main 2ace975d1: two rerun refusals carried byte-identical fingerprint (2ace975d1fc8783b496cc853711bed7992c900a7:1dcbe1ce95dcba8e); the second command was 'cd /Users/yuki/.condukt/worktrees/run-20261115-173313-90185-t1 && cargo check -p blastguard && tdd green ...' while that worktree was at ddefb055b with payload.rs modified; 2ace975d1 is HEAD of the main checkout = hook payload cwd. Measured: 1dcbe1ce95dcba8e is the dirty-hash of an empty diff + empty untracked list (any clean temp repo gives it), so the payload cwd tree was fingerprinted. Probe with payload cwd = edited tree (uncommitted removal of two #[ignore] lines) allowed the rerun -> the uncommitted-edit hypothesis does NOT reproduce; root cause is cd-prefix. Rerun-ledger half already filed as 214b39b5 (RED backlog_20261114_testscope_cd_tree_identity still fails at 2ace975d1). THIS row: Rule C half. crates/condukt/src/testscope.rs judge(command, cwd) takes cwd from the payload; check_task_scope(tests, cwd) never sees the cd target. RED at 70d8e2116 (independent author), measured 2026-11-15 with main at 95fbd0631, verbatim: 'payload cwd = repo root, cd into task worktree, --test old_t (out of scope): expected a deny, stdout not JSON (EOF while parsing a value at line 1 column 0): ""' (empty stdout = Allow). Control control_out_of_scope_test_with_payload_cwd_in_task_worktree_is_denied passes. Readings: (a) defect - the tree a test runs against is the cd target, both rules must judge it; (b) intended - cd prefix not modelled; even then fail-closed must hold: an unmodelled cd that may move into a task worktree is cannot-determine and must not resolve to Allow. Either reading makes the asserted case non-Allow; they differ only in reason text. Fix constraint: cd must not become a way to dodge the rerun ledger (e.g. cd to a fresh copy to re-run the same test on the same code); a fix that keys on the cd target must keep same-code reruns refused. Also observed live while writing this RED: the hook recorded attempts that never ran (blastguard-blocked / no-test-target), keyed on main's clean tree, and refused the first real run twice (see the unexecuted-attempt row). DOES NOT PROVE: cd chains, pushd, git -C, subshells, cargo --manifest-path."""
+created_at = 1794733334
+updated_at = 1794733334
+weight = 0.0
+issue_number = 1796
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1796"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261115_testscope_cd_prefix_rule_c -- --ignored out_of_scope_test_via_cd_into_task_worktree_is_denied"
+rev = "70d8e2116e4c7c05a0913a0c85aae7e55bcaef51"
+observed_at = 1794733334
+detail = """
+exit 101: ng condukt v0.7.413 (/Users/yuki/src/harness-wt-red-empty-worktree/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.50s
+     Running tests/backlog_20261115_testscope_cd_prefix_rule_c.rs (target/debug/deps/backlog_20261115_testscope_cd_prefix_rule_c-98af5fb69044e43b)
+error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_cd_prefix_rule_c`"""
+
+[[task]]
+id = "4270601a"
+title = "blastguard: quoted heredoc body of python3 - (<<'EOF') judged as shell redirect, Denied in both main and subagent (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-15 in a subagent (main at 72cb90009): 'cd <tests dir> && python3 - <<'EOF' ... EOF' whose Python body held Rust doc text in a raw string was denied with: '> ' destroys the file's current contents and `` is a relative path and blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable. RED cf3e7a684 (independent author), measured 2026-11-15 with main at e889149e7: f0 (cd scratch && python3 - <<'EOF' with a raw string containing '`check_rerun` -> `tree_identity(cwd)`', '`cd <task worktree> && cargo test --test' / '<out of scope>` is allowed', open('out.rs','w').write(header); EOF; cd .. && ls scratch): left: ("deny", "deny") with the verbatim reason above (Deny, not Ask, even in main). Narrowing control f1 (python3 - body with only '-> `tree_identity(cwd)`') = allow/allow, so that token alone is not the trigger. Control c1 (cd scratch && echo x > `printf %s "$T"`, a real shell redirect) = deny both modes: "'> `printf' destroys the file's current contents and ``printf` contains a shell expansion ...". Readings: (a) defect - a quoted heredoc fed to python3 - is Python source the shell never parses, so '>' in it is not a redirect; (b) intended - interpreter-bound body judged conservatively. Tell apart: the reason uses shell redirect semantics with an empty target on text only Python reads; (b) would need a Python-level reason (the open(...,'w') target out.rs is a literal relative path in scratch). Suspected trigger (unproven): the angle-bracket text '<task worktree> &&' / '<out of scope>' inside the body being tokenized as shell. Related: a826bdab (quoted heredoc JSON backtick). Fix must keep c1 non-Allow. DOES NOT PROVE: exact trigger token; node/ruby stdin."""
+created_at = 1794733637
+updated_at = 1794733637
+weight = 0.0
+issue_number = 1797
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1797"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_stdin_heredoc_backtick_redirect_fp -- --ignored f0_recovered_shape_is_allow_in_subagent_and_main"
+rev = "cf3e7a684c35c5abb71891d7e54b5503021fd04c"
+observed_at = 1794733637
+detail = """
+exit 101: -empty-worktree/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.88s
+     Running tests/backlog_20261115_python_stdin_heredoc_backtick_redirect_fp.rs (target/debug/deps/backlog_20261115_python_stdin_heredoc_backtick_redirect_fp-1edf72d723701cc4)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_stdin_heredoc_backtick_redirect_fp`"""
+
+[[task]]
+id = "dc053fcf"
+title = "blastguard FP: for-loop over a literal word list writing $D/$f.tmp then mv is refused (loop var left unresolved)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-15 (relay bgr-d51baecd617b; probe by independent designer on 0.2.611): for f in a b; do ... > $D/$f.tmp && mv ...; done is ask/deny with "a command that may relink it runs first and the path cannot be placed"; $D resolves but $f is shown unexpanded. Same literal paths without the variable = allow; no-loop with $D = allow; unrelated mv gives the same reason. Candidate cause crates/blastguard/src/detect/relink.rs ~394 (absolute(...).ok_or_else on loop/relink lines). Secondary (not asserted): loop write without mv / with rm / cp is deny 'destroys the file's current contents' with $f unexpanded — check after fix. Controls kept restrictive: $(ls) list, ln -s /etc write."""
+created_at = 1794734286
+updated_at = 1794734286
+weight = 0.0
+issue_number = 1800
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1800"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_for_loop_literal_list_tmp_mv_fp -- --ignored"
+rev = "cfa64022e3b6c2bde0dcb838e92f156cf050269b"
+observed_at = 1794734286
+detail = """
+exit 101: /yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.07s
+     Running tests/backlog_20261115_for_loop_literal_list_tmp_mv_fp.rs (target/debug/deps/backlog_20261115_for_loop_literal_list_tmp_mv_fp-8f7ede9a6c651cbc)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_for_loop_literal_list_tmp_mv_fp`"""
+
+[[task]]
+id = "3109dbf3"
+title = "blastguard: python3 - heredoc program with rmtree only inside a plain (single-line) string literal asked/denied (no exec/eval sink)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-15 at main 8c135610e (installed blastguard 0.2.613), actor=subagent, Bash tool call: python3 - <<'PY' heredoc whose program only built a dict of strings and wrote JSON via json.dump; one plain double-quoted string contained backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp; rmtree only inside an ordinary literal, never executed, no exec/eval/os.system sink. Verbatim hook reason: "PreToolUse:Bash hook error: `python3 - <<'PY'` takes its program from stdin, and a quoted string in its program spells `rmtree`, which deletes files or directories outright if that string is run as code; blastguard cannot show it is not". Minimised repro at worktree rev (c82d97250 + test): main session gets ask with reason 'spells rmtree only inside plain quoted string literals ... cannot show that string is never run as code'. Readings: (a) real FP - literal never run as code; per 2026-11-08 ruling use the Python lexer (detect/interpreter/python_semantics.rs) to show no sink reaches the literal -> allow. (b) intended Ask from 27795e6e - tell apart: if the program has an exec/eval/compile/os.system/subprocess/importlib/getattr sink the literal can reach, or one cannot be excluded, Ask is correct and the test must be narrowed with a stated reason; the minimised repro has none, so (a). Related: row on triple-quoted literal case (tests/backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp.rs)."""
+created_at = 1794743490
+updated_at = 1794743490
+weight = 0.0
+issue_number = 1805
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1805"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_stdin_plain_string_names_rmtree_fp -- --include-ignored"
+rev = "fa1d871cfefb8dcf500171af98ba6018933ada63"
+observed_at = 1794743490
+detail = """
+exit 101: iteral-20261115/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.98s
+     Running tests/backlog_20261115_python_stdin_plain_string_names_rmtree_fp.rs (target/debug/deps/backlog_20261115_python_stdin_plain_string_names_rmtree_fp-d7b066629f23631d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_stdin_plain_string_names_rmtree_fp`"""
+
+[[task]]
+id = "4551f633"
+title = "blastguard FP: python3 -c print(vars)/print(locals())/print(globals()) with harmful piped text is deny though -c never reads stdin (new with 9d0b60188)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794743394
+updated_at = 1794743394
+weight = 0.0
+issue_number = 1801
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1801"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp -- --include-ignored"
+rev = "c82d9725085e6bd5c378274f0ebad8fb810665ab"
+observed_at = 1794743394
+detail = """
+exit 101: rees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.73s
+     Running tests/backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp.rs (target/debug/deps/backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp-e57a8e5a7562487d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp`"""
+
+[[task]]
+id = "8ce33823"
+title = "blastguard FP: python3 -c print(vars()) refused as 'builds or decodes the code it runs (vars()' while print(locals()) is allowed"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794743432
+updated_at = 1794743432
+weight = 0.0
+issue_number = 1802
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1802"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_c_vars_call_inline_eval_ask_fp -- --include-ignored"
+rev = "c82d9725085e6bd5c378274f0ebad8fb810665ab"
+observed_at = 1794743432
+detail = """
+exit 101: -worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.04s
+     Running tests/backlog_20261115_python_c_vars_call_inline_eval_ask_fp.rs (target/debug/deps/backlog_20261115_python_c_vars_call_inline_eval_ask_fp-8afe83282daea963)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_c_vars_call_inline_eval_ask_fp`"""
+
+[[task]]
+id = "72d1a972"
+title = "blastguard FP: Python string literal holding subprocess.run('chmod 777 /etc/hosts', ...) is denied as system harm though only data"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794743461
+updated_at = 1794743461
+weight = 0.0
+issue_number = 1803
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1803"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_string_literal_subprocess_chmod_data_fp -- --include-ignored"
+rev = "c82d9725085e6bd5c378274f0ebad8fb810665ab"
+observed_at = 1794743461
+detail = """
+exit 101: /crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/backlog_20261115_python_string_literal_subprocess_chmod_data_fp.rs (target/debug/deps/backlog_20261115_python_string_literal_subprocess_chmod_data_fp-d9104b1b6d256d13)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_string_literal_subprocess_chmod_data_fp`"""
+
+[[task]]
+id = "0bc46ca0"
+title = "blastguard FP: quoted heredoc body backtick span with $ text judged as live shell when a later rm/mv/cp/git add follows"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794743487
+updated_at = 1794743487
+weight = 0.0
+issue_number = 1804
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1804"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp -- --include-ignored"
+rev = "c82d9725085e6bd5c378274f0ebad8fb810665ab"
+observed_at = 1794743487
+detail = """
+exit 101: ession-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp-50023bed9ac872cf)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp`"""
+
+[[task]]
+id = "245a4c5f"
+title = "blastguard fail-open: python heredoc writes a harmful .sh and the same call runs it (sh/bash/source/./) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-15 at blastguard 0.2.616 by independent RED designer: python3 - <<'PY' open('t_test.sh','w').write('<system-harm chmod of /etc/hosts or rm -rf ~>') PY then sh|bash|. ./|chmod +x && ./ t_test.sh is allow/allow (main/subagent); the shell-heredoc writer (cat > t_test.sh <<'EOF') is deny. Readings: (a) fail-open: the python-written .sh body is never judged as shell though run in the same call; (b) intended only if python writes are opaque, but then they must be undetermined (ask), never allow. Pending ruling: python write-only of a harmful .sh (not asserted). RED: crates/blastguard/tests/backlog_20261115_python_heredoc_write_then_sh_fail_open.rs"
+created_at = 1794744257
+updated_at = 1794744257
+weight = 0.0
+issue_number = 1806
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1806"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_heredoc_write_then_sh_fail_open -- --include-ignored"
+rev = "1ae570887c5b0d2650c213df87b0e344ae8b9d44"
+observed_at = 1794744257
+detail = """
+exit 101: rktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.05s
+     Running tests/backlog_20261115_python_heredoc_write_then_sh_fail_open.rs (target/debug/deps/backlog_20261115_python_heredoc_write_then_sh_fail_open-a43835431492e487)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_heredoc_write_then_sh_fail_open`"""
+
+[[task]]
+id = "c7cc67c1"
+title = "blastguard_fp_replay.py: --binary accepts any executable; a silent exit-0 non-blastguard binary (/bin/true) is counted as allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = 'Observed 2026-11-15 at main a8e92b562 (script from 4d1d74f6c). main() checks --binary only with os.access(X_OK); parse_output reads exit 0 + empty stdout as allow (the hookio Allow shape). Replaying a log through /usr/bin/true therefore turns every replayable record into allow, silently zeroing the FP measurement instead of reporting undetermined (CLAUDE.md s3). Verbatim RED (--runxfail): AssertionError "/usr/bin/true (not blastguard) was accepted as --binary and its silent exit 0 was counted as allow: rc=0 decisions=[allow]". Readings: (a) defect - the measuring stick cannot tell a wrong binary from one that allows everything; (b) operator responsibility to pass the right binary - even then a wrong path silently yields a plausible all-allow result, which is the fail-open shape. DOES NOT PROVE how to identify blastguard (e.g. a --version probe). RED: scripts/test_blastguard_fp_replay_non_blastguard_binary_20261115.py (xfail strict, commit 4e3c2b396, branch filings/offtopic-20261115).'
+created_at = 1794746224
+updated_at = 1794746224
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_blastguard_fp_replay_non_blastguard_binary_20261115.py"
+rev = "4e3c2b39620a9a02f017e343bddf08609510eaf5"
+observed_at = 1794746224
+detail = """
+exit 1: blastguard_fp_replay_non_blastguard_binary_20261115.py:71: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_blastguard_fp_replay_non_blastguard_binary_20261115.py::NonBlastguardBinary::test_silent_exit_zero_non_blastguard_binary_is_not_counted_as_allow
+============================== 1 failed in 0.07s ==============================="""
+
+[[task]]
+id = "e5f8e5b7"
+title = "blastguard block log omits CLAUDE_PROJECT_DIR and TMPDIR, which the verdict depends on, so a logged block cannot be replayed faithfully"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = 'Observed 2026-11-15 at main a8e92b562 (blastguard 0.2.619). Verdict inputs: src/main.rs safe_roots reads std::env::var("CLAUDE_PROJECT_DIR") and std::env::var("TMPDIR") (lines ~813-815); src/detect/scratch_place.rs process_place_model likewise (~110-112); they decide which places are managed. src/blocklog.rs record (~172-215) writes neither. scripts/blastguard_fp_replay.py must approximate CLAUDE_PROJECT_DIR from cwd and inherit its own TMPDIR (its docstring, WHAT STILL DIFFERS). Verbatim RED: "the record does not carry CLAUDE_PROJECT_DIR (/var/folders/.../project-dir-marker-7f3a), an input of the verdict: {...actor:interactive,...cwd:.../cwd-dir,...v:2}". Readings: (a) defect - blocklog module doc says the record holds exactly what was blocked for reproduction (user ruling 2026-11-14 記録をとること / 切り分け), a missing verdict input makes it non-reproducible; (b) intended - the log deliberately minimises fields to payload + verdict, env out of scope (then the replay docstring is the only statement of the gap). Test asserts (a). DOES NOT PROVE which other env inputs (HOME, PATH, CDPATH) a faithful replay needs. RED: crates/blastguard/tests/backlog_20261115_block_record_verdict_env.rs (#[ignore], commit 4e3c2b396, branch filings/offtopic-20261115).'
+created_at = 1794746259
+updated_at = 1794746259
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_block_record_verdict_env -- --ignored block_record_carries_project_dir_and_tmpdir"
+rev = "4e3c2b39620a9a02f017e343bddf08609510eaf5"
+observed_at = 1794746259
+detail = """
+exit 101: v0.2.620 (/Users/yuki/.condukt/worktrees/offtopic-filings-20261115/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.40s
+     Running tests/backlog_20261115_block_record_verdict_env.rs (target/debug/deps/backlog_20261115_block_record_verdict_env-bf1dff4f406ff803)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_block_record_verdict_env`"""
+
+[[task]]
+id = "68bd7d93"
+title = "scripts/test_backlog_audit_b1_0.py Backlog06a9d33fDirectInvocationRunsTests red on main: test_gate_severity_probe_b.py, test_precommit_timing_b.py, test_stop_verify_worktree_foreign_writer_20261115.py"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "audit",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-15 at a8e92b562, worktree c 03a066401, and acf8a59bd: pytest -q scripts/test_backlog_audit_b1_0.py fails with "['test_gate_severity_probe_b.py', 'test_precommit_timing_b.py', 'test_stop_verify_worktree_foreign_writer_20261115.py'] : 06a9d33f: these suites run ZERO tests and exit 0 when invoked directly" (06a9d33f is done = regression). Facts: test_gate_severity_probe_b.py:229 and test_precommit_timing_b.py:147 DO have 'if __name__ == "__main__": raise SystemExit(pytest.main([__file__]))' (pytest-by-design: pytest.mark.xfail RED suites) so they are not zero-test; the audit AST check (_has_main_guard_calling_unittest_main) only accepts unittest.main => reading (b) audit check too narrow for those two. test_stop_verify_worktree_foreign_writer_20261115.py has NO __main__ guard at all (pytest fixtures + xfail) => reading (a) real regression, direct run runs zero tests. Precedent: 16b69d09 (same defect, closed f2p). Fix: add guard to the third file; decide for the two: accept pytest.main in the audit or switch to unittest.main."""
+created_at = 1794746822
+updated_at = 1794746822
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest -q scripts/test_backlog_audit_b1_0.py -k test_every_scripts_suite_has_a_main_guard_calling_unittest_main"
+rev = "acf8a59bda2e65d2f612a1eed804eab98e6485dd"
+observed_at = 1794746822
+detail = """
+exit 1: 1115.py'] : 06a9d33f: these suites run ZERO tests and exit 0 when invoked directly
+
+scripts/test_backlog_audit_b1_0.py:96: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_backlog_audit_b1_0.py::Backlog06a9d33fDirectInvocationRunsTests::test_every_scripts_suite_has_a_main_guard_calling_unittest_main
+1 failed, 10 deselected in 0.36s"""
+
+[[task]]
+id = "7e6f6ac5"
+title = "condukt testscope: cd forms not at the head of a simple command ({ cd X; }, if cd X; then, time cd X, builtin cd X) are not modelled, so the test is keyed on the payload cwd tree (rerun-ledger dodge)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-15 at fix/testscope-cwd-20261115 76909ce81 (condukt 0.7.420) by an independent test author on a verifier's static suspicion. After `cd X && cargo test -p foo --test bar` from P, each of `{ cd X; } && cargo test ...`, `if cd X; then cargo test ...; fi`, `time cd X && cargo test ...`, `builtin cd X && cargo test ...` from P (X unchanged) is ALLOWED: (Some(0), ""). Mechanism (testscope.rs judge_pieces): only a segment whose first word (after assignments/command) is cd/pushd/popd moves dir; a leading {, if, then, time, builtin hides the cd, so the test is attributed to the payload cwd. Violates the user ruling (2026-11-15) that the fingerprint comes only from the tree the test runs in. Controls GREEN: `bash -c 'cd X && ...'` denied, `cd X; cargo ...` denied. A3 assumes bash runs `time cd X` in the current shell (not verified). Fix must be fail-closed (unrecognised cd word -> undetermined) without false positives on non-cd uses."""
+created_at = 1794748773
+updated_at = 1794748773
+weight = 0.0
+issue_number = 1807
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1807"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261115_testscope_verifier_suspicions -- --ignored"
+rev = "caa2ae0b6990d5230c80b11896fc8946da0bdaeb"
+observed_at = 1794748773
+detail = """
+exit 101: ssed; 4 failed; 0 ignored; 0 measured; 4 filtered out; finished in 1.14s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261115_testscope_verifier_suspicions.rs (target/debug/deps/backlog_20261115_testscope_verifier_suspicions-c2916ab2cf2e0ae4)
+error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_verifier_suspicions`"""
+
+[[task]]
+id = "f2750dde"
+title = "blastguard relay: forged session_id/agent_id payload is queued and main Stop hook orders byte-for-byte re-run (cross-session command injection)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-16 main ec356662, peer cbe8af8e fed a synthetic PreToolUse (session_id=ec356662-..., agent_id=a7f9e57c28c3b88e5) to the blastguard binary; queued as bgr-d6e6d207c7fc / bgr-9c12da6932b3; the relay Stop hook told main to 'Run the EXACT command, byte-for-byte' and main ran a python3 heredoc that overwrote a real scratchpad file. No provenance: relay::queue never checks agent_id against the session transcript / no nonce. relay.rs and README state no trust boundary (grep trust/forg/provenance in relay.rs, README, docs/specs/blastguard.md: none), so reading (a) defect. Mitigation today only the normal permission prompt. RED: crates/blastguard/tests/backlog_20261116_relay_forged_session_entry.rs. Related FP by same peer (do NOT file separately; heredoc-body-interp class, in scope of the ongoing AST migration): python3 - <<'EOF' with open(<own scratchpad>/msg.txt,'w') is ask(main)/deny(subagent) while > redirect to the same path is allow."
+created_at = 1794762252
+updated_at = 1794762252
+weight = 0.0
+issue_number = 1808
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1808"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261116_relay_forged_session_entry -- --ignored"
+rev = "e053f6faebf1b7c41ddc034ddbc72ce385205e4f"
+observed_at = 1794762252
+detail = """
+exit 101: blastguard v0.2.622 (/Users/yuki/src/harness-wt-relay-forged/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.56s
+     Running tests/backlog_20261116_relay_forged_session_entry.rs (target/debug/deps/backlog_20261116_relay_forged_session_entry-5d22a94ba37e4155)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261116_relay_forged_session_entry`"""
+
+[[task]]
+id = "7fc71b27"
+title = "backlog next --claim: a repro run that executed ZERO tests because the named test is now filtered out (fix removed #[ignore]) is auto-cancelled with closure reason discard"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed live 2026-11-16: next --claim AUTO-CANCELLED 214b39b5 (closed:discard) although its fix 795b6699b landed (subject uses '(214b39b5, b4a2780b)', not '(backlog 214b39b5)', so fixed_task_ids did not see it). Stored repro 'cargo test -p condukt --test backlog_20261114_testscope_cd_tree_identity -- --ignored rerun_after_editing_the_cd_target_tree_is_allowed' at main bbe7b7bac prints verbatim: 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s'. Code: crates/backlog/src/evidence.rs zero_tests_ran -> RecheckVerdict::NotDemonstrated -> closes() -> claim_recheck::auto_cancel -> store::mark_cancelled (discard). RED (commit 6717c33e6, branch backlog/sidereds-20261116, base 9a989926b, 2026-11-16) fails verbatim: 'AUTO-CANCELLED dac175a7 (user ruling 2026-11-13: not demonstrated -> close): its stored repro is not-demonstrated (...): exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. ...' then 'left: String("discard") right: "discard"'. Readings: (a) defect - a run that executed no test observed nothing; recording discard (= defect not real) is a judgment without observation; at least the 'N filtered out' shape (named test exists but was not selected) must not be discarded: refuse/leave pending or close non-discard. (b) intended - user ruling 2026-11-13 「実証されないならclose」, pinned for the no-'filtered out' shape by backlog_20261113_no_deferral_auto_close.rs::g_cargo_zero_tests_at_head_is_auto_cancelled; under (b) this RED is wrong. Telling them apart needs a human ruling on whether 'filtered out' differs from 'no such test' (the RED does not conflict with test g, whose fake output has no 'filtered out'). DOES NOT PROVE: that the row's fix landed (fake cargo), the '(backlog <id>)' subject-grammar gap, real libtest beyond the measured shape."""
+created_at = 1794764254
+updated_at = 1794764254
+weight = 0.0
+issue_number = 1809
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1809"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261116_zero_tests_filtered_out_not_discard -- --ignored claim_does_not_discard_row_whose_ignored_repro_is_now_filtered_out"
+rev = "6717c33e6085f121f7b84fcc944d2f0888d38a5c"
+observed_at = 1794764254
+detail = """
+exit 101: rc/.harness-worktrees/sidereds-20261116/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.52s
+     Running tests/backlog_20261116_zero_tests_filtered_out_not_discard.rs (target/debug/deps/backlog_20261116_zero_tests_filtered_out_not_discard-e511e6be63ab2a45)
+error: test failed, to rerun pass `-p backlog --test backlog_20261116_zero_tests_filtered_out_not_discard`"""
+
+[[task]]
+id = "188d2f29"
+title = "tdd green: a test command that never ran (spawn / run-log failure) is reported as 'tests still failing — keep implementing'"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "message-mismatch",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Code (crates/tdd/src/proof.rs at 9a989926b): green() calls judge_green(out.passed, has_red) and never judge_ran(&out) (red() does since 9c58c590d); runner maps spawn/run-log failure to passed:false + spawn_error:Some. RED (commit 168d912bf, branch backlog/sidereds-20261116, 2026-11-16): RED recorded with usable state, then <HOME>/.tdd/state replaced by a regular file so the run log cannot be created; marker file shows the command did not run. Verbatim failure: 'the command never ran, yet tdd green said the tests are still failing. stdout: (empty) stderr: tdd: tests still failing — keep implementing until they pass, then run `tdd green` again.' Controls in the same test pass: GREEN refused (non-zero), no green.json. Readings: (a) defect - environment failure misattributed to code; the message must name the spawn error / never ran; (b) cosmetic, the refusal is what matters. Both agree GREEN must be refused (it is: no fail-open). DOES NOT PROVE: real Command::spawn ENOENT path, timeout path."
+created_at = 1794764532
+updated_at = 1794764532
+weight = 0.0
+issue_number = 1811
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1811"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261116_green_spawn_error_misreported -- --ignored green_names_the_spawn_failure_not_failing_tests"
+rev = "9d0e7defaee17d5e84aefa974a8b9cbfb6d439b7"
+observed_at = 1794764532
+detail = """
+exit 101: tdd v0.1.83 (/Users/yuki/src/.harness-worktrees/sidereds-20261116/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.81s
+     Running tests/backlog_20261116_green_spawn_error_misreported.rs (target/debug/deps/backlog_20261116_green_spawn_error_misreported-e2fe1fa60285e999)
+error: test failed, to rerun pass `-p tdd --test backlog_20261116_green_spawn_error_misreported`"""
+
+[[task]]
+id = "b423c0c1"
+title = "tdd red: a test command killed by a signal (exit_code None, no spawn_error) is recorded as RED ('tests fail as expected (killed)')"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Code (crates/tdd/src/proof.rs at 9a989926b): red() = judge_ran(&out) (inspects only spawn_error) then judge_red(out.passed) (accepts any passed==false); status_str prints 'killed' for exit_code None. RED (commit 9d0e7defa, branch backlog/sidereds-20261116, 2026-11-16), cmd 'touch ran.marker; kill -KILL $$', verbatim: 'command was killed by SIGKILL (no assertion observed) yet tdd red exit=Some(0), RED proof exists=true stdout: 🔴 RED recorded for `t1` — tests fail as expected (killed).' Control control_command_exiting_1_records_red passes. Readings: (a) asserted - a kill/crash is not a demonstrated assertion failure -> undetermined -> no RED (CLAUDE.md 2(b)/3: crash is undetermined, F->P oracle fails open otherwise); (b) a crashing test is a failing test, RED correct - under (b) this RED is wrong. The test is NOT independent of the reading; a human ruling distinguishes them. Note a Rust test panic exits 101 (not a signal), so (a) only affects OS/harness kills (SIGKILL, OOM, SIGSEGV). DOES NOT PROVE: timeout path (timed_out:true, likely same acceptance, untested), tdd green."
+created_at = 1794764566
+updated_at = 1794764566
+weight = 0.0
+issue_number = 1812
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1812"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261116_red_killed_by_signal_records_red -- --ignored red_is_not_recorded_when_the_command_was_killed_by_a_signal"
+rev = "9d0e7defaee17d5e84aefa974a8b9cbfb6d439b7"
+observed_at = 1794764566
+detail = """
+exit 101: 83 (/Users/yuki/src/.harness-worktrees/sidereds-20261116/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.48s
+     Running tests/backlog_20261116_red_killed_by_signal_records_red.rs (target/debug/deps/backlog_20261116_red_killed_by_signal_records_red-53c8e72309bcc7b8)
+error: test failed, to rerun pass `-p tdd --test backlog_20261116_red_killed_by_signal_records_red`"""

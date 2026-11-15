@@ -205,7 +205,6 @@ fn run_all(name: &str, tmpl_cases: &[(&str, &str)], want: &str) {
 }
 
 #[test]
-#[ignore = "backlog 089bedd4: open defect, remove ignore when fixed"]
 fn red_a_text_after_early_close_hides_next_line() {
     run_all(
         "a",
@@ -250,7 +249,6 @@ fn red_b_same_hole_without_any_heredoc() {
 }
 
 #[test]
-#[ignore = "backlog 5916d385: open defect, remove ignore when fixed"]
 fn red_c_zsh_unquoted_heredoc_expansion_after_stray_quote() {
     run_all(
         "c",
@@ -263,7 +261,6 @@ fn red_c_zsh_unquoted_heredoc_expansion_after_stray_quote() {
 }
 
 #[test]
-#[ignore = "backlog d328ea88: open defect, remove ignore when fixed"]
 fn red_d_comment_with_quote_is_ask_but_deny_wanted() {
     run_all(
         "d",

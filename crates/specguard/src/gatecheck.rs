@@ -16,7 +16,8 @@
 //!   that entry. A triggered entry passes only with one of:
 //!   - a non-empty map `spec_doc`. The map is a gitignored machine-local cache,
 //!     so this source is invisible to every other clone; the pre-push hook
-//!     builds a fresh map, in which it is always empty;
+//!     builds a fresh map in a temp file (`--map-path`), in which it is always
+//!     empty;
 //!   - a tracked spec binding (`.specguard/spec-docs.toml`,
 //!     `[[spec]] path/doc/reason`): `path` names the entry key or one of its
 //!     impl files, `reason` is not blank, and `doc` is a relative
@@ -48,8 +49,9 @@
 //! read, or an absent map while a gate path changed — is exit 2, never 0
 //! (CLAUDE.md §3). An absent ack or spec-binding file is an empty set (the
 //! restrictive reading: no escapes). The ack, binding and doc files are read
-//! from the working tree under the repo root; the pre-push hook runs this in a
-//! checkout of the pushed commit, so there they are the pushed files.
+//! from the working tree under the repo root; the pre-push hook runs this only
+//! when the pushed commit is the clean checkout HEAD of the pushing worktree,
+//! so there they are the pushed files.
 
 use crate::scope::is_safe_ref;
 use crate::specmap::{MapEntry, SpecMap};

@@ -471,7 +471,25 @@ def _mismatch_detail(crates, mode, canonical, by_path):
     return "; ".join(detail) if detail else "ok"
 
 
+def _staged_scope():
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import staged_scope
+
+    return staged_scope
+
+
 def main():
+    # `--staged` (pre-commit, user ruling 2026-11-08): cross-file agreement, so
+    # it runs in full only when the staged diff touches a SOURCES path, an extra
+    # prose path, or the scoping helper; otherwise it exits 0. An unreadable
+    # staged set exits 2.
+    if "--staged" in sys.argv:
+        sys.argv = _staged_scope().gate_on_inputs(
+            os.getcwd(),
+            "check-gate-crates-sync",
+            sys.argv,
+            [p for p, _, _ in SOURCES] + list(_PROSE_EXTRA_PATHS) + ["scripts/staged_scope.py"],
+        )
     ok, canonical, parsed = check(repo=os.getcwd())
     if canonical is None:
         print("check-gate-crates-sync: could not parse canonical GATE_CRATES from "

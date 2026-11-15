@@ -72,6 +72,40 @@ const PATH_MUTATING_CALLS: &[&str] = &[
     "lchown",
 ];
 
+/// `pathlib` methods that write, remove, move or re-permission the path the
+/// RECEIVER names (backlog 569b9b9d): `Path('/etc/hosts').chmod(0o777)`,
+/// `pathlib.Path('/etc/hosts').write_text('x')`. Judged together with
+/// [`PATH_MUTATING_CALLS`] (which already holds `chmod`, `unlink`, `rename`,
+/// `rmdir`, …) only when the method is called directly on a `Path(…)`
+/// constructor call ([`PATH_RECEIVERS`]); the receiver's string literals are
+/// then the path the method acts on.
+const PATH_METHOD_WRITES: &[&str] = &[
+    "replace",
+    "write_text",
+    "write_bytes",
+    "touch",
+    "symlink_to",
+    "hardlink_to",
+];
+
+/// Constructor names (last dotted component) whose call result is a path
+/// object: `Path(…)`, `pathlib.Path(…)`, `PosixPath(…)`, `WindowsPath(…)`.
+const PATH_RECEIVERS: &[&str] = &["Path", "PosixPath", "WindowsPath"];
+
+/// Copy calls that WRITE the destination they are given (backlog 569b9b9d):
+/// every string literal after the first top-level argument (the source, which
+/// is only read) is a destination operand. Matched on the last dotted
+/// component, except `copy`, which is matched only as `shutil.copy` or the
+/// bare `copy` of `from shutil import copy` (`x.copy()` is everywhere).
+const COPY_DEST_CALLS: &[&str] = &[
+    "copy2",
+    "copyfile",
+    "copytree",
+    "copyFile",
+    "copyFileSync",
+    "cpSync",
+];
+
 /// Shell commands that harm a system file named by ANY operand.
 const ANY_OPERAND_MUTATORS: &[&str] = &[
     "rm", "rmdir", "unlink", "mv", "shred", "truncate", "chmod", "chown", "chgrp", "srm",
@@ -101,8 +135,30 @@ const DEST_OPERAND_MUTATORS: &[&str] = &["cp", "ln", "install"];
 /// A string literal that is not such an argument is data and is not judged
 /// here (`note = "os.system('$CMD')"`, `s.replace("`$CMD`", "")`). A call
 /// whose argument is not a literal (a variable) is not judged here either; it
-/// stays with the rest of the program audit, as before.
+/// stays with the rest of the program audit, as before. For a program Python
+/// reads, the path arguments of path-mutating calls are also RESOLVED, not
+/// matched token by token (`'/' 'etc/hosts'`), by
+/// `python_semantics::path_mutation_verdict` (backlog f6dbff5b), which also
+/// resolves the receiver of a pathlib write method and the destination of
+/// `Path.replace` / `Path.rename` (backlog 17d985f1).
 pub(super) fn program_call_verdict(payload: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+    program_calls(payload, depth, ctx, false)
+}
+
+/// [`program_call_verdict`], except that an Ask on the re-assembled argv of an
+/// exec-style or argv-list `subprocess` call is kept, not dropped
+/// (`subprocess.check_output(["git", "clean", "-fdx"])` reaches the git
+/// rules' Ask). Used by the Python-file judge
+/// ([`super::python_file_body_verdict`]), whose program is the whole file.
+pub(super) fn program_call_verdict_keeping_argv_asks(
+    payload: &str,
+    depth: usize,
+    ctx: &Ctx<'_>,
+) -> Decision {
+    program_calls(payload, depth, ctx, true)
+}
+
+fn program_calls(payload: &str, depth: usize, ctx: &Ctx<'_>, argv_asks: bool) -> Decision {
     let toks = lex(payload);
     let mut pending: Option<Decision> = None;
     for call in calls(&toks) {
@@ -117,6 +173,39 @@ pub(super) fn program_call_verdict(payload: &str, depth: usize, ctx: &Ctx<'_>) -
                     "the program calls `{}` on `{p}`, a file in a system directory — removing, \
 moving or re-permissioning an OS file can break the machine itself, so blastguard refuses it \
 (user ruling 2026-11-07: a command harmful to the system is denied through any wrapper)",
+                    call.name
+                ));
+            }
+        }
+        if call.on_path_receiver()
+            && (PATH_MUTATING_CALLS.contains(&last) || PATH_METHOD_WRITES.contains(&last))
+        {
+            if let Some(p) = call
+                .receiver_strings()
+                .into_iter()
+                .find(|s| crate::scope::is_inside_system_dir(s))
+            {
+                return Decision::deny_system_harm(format!(
+                    "the program calls `.{last}()` on the path `{p}`, a file in a system \
+directory — writing, removing, moving or re-permissioning an OS file can break the machine \
+itself, so blastguard refuses it (user ruling 2026-11-07: a command harmful to the system is \
+denied through any wrapper)"
+                ));
+            }
+        }
+        let copy_call =
+            COPY_DEST_CALLS.contains(&last) || call.name == "shutil.copy" || call.name == "copy";
+        if copy_call {
+            if let Some(p) = call
+                .strings_after_first_arg()
+                .into_iter()
+                .find(|s| crate::scope::is_inside_system_dir(s))
+            {
+                return Decision::deny_system_harm(format!(
+                    "the program calls `{}` with the destination `{p}`, a file in a system \
+directory — overwriting or creating an OS file can break the machine itself, so blastguard \
+refuses it (user ruling 2026-11-07: a command harmful to the system is denied through any \
+wrapper)",
                     call.name
                 ));
             }
@@ -137,9 +226,9 @@ moving or re-permissioning an OS file can break the machine itself, so blastguar
                 }
                 other => other.to_vec(),
             };
-            argv_verdict(&call.name, &words, depth, ctx)
+            argv_verdict(&call.name, &words, depth, ctx, argv_asks)
         } else if SUBPROCESS_CALLS.contains(&last) && call.name.starts_with("subprocess.") {
-            argv_verdict(&call.name, &strings, depth, ctx)
+            argv_verdict(&call.name, &strings, depth, ctx, argv_asks)
         } else {
             Decision::Allow
         };
@@ -152,6 +241,49 @@ moving or re-permissioning an OS file can break the machine itself, so blastguar
         }
     }
     pending.unwrap_or(Decision::Allow)
+}
+
+/// The first call in `payload` that hands the OS a command the program
+/// COMPUTES, which [`program_call_verdict`] leaves unjudged (its argument is
+/// not a literal): a shell-line call (`os.system`, `os.popen`, `system`,
+/// `popen`, `subprocess.*` / `commands.*` `getoutput`/`getstatusoutput`, a
+/// `subprocess.*` call with `shell=True`) whose first argument is not one
+/// string literal, an argv-list `subprocess.*` call whose program (first
+/// element) is not a literal, or an exec-style call ([`EXEC_CALLS`]) with no
+/// string literal at all. `platform.system()` and other unrelated methods named
+/// like these are not matched: the name must be bare or `os.` / `subprocess.`
+/// / `commands.` qualified. Used by the Python-file judge
+/// ([`super::python_file_body_verdict`]), where it is an Ask.
+pub(super) fn computed_shell_call(payload: &str) -> Option<String> {
+    let toks = lex(payload);
+    for call in calls(&toks) {
+        let (module, last) = match call.name.rsplit_once('.') {
+            Some((m, l)) => (m, l),
+            None => ("", call.name.as_str()),
+        };
+        if !matches!(module, "" | "os" | "subprocess" | "commands") {
+            continue;
+        }
+        let literal_head = matches!(
+            call.args,
+            [Tok::Str(_), ..] | [Tok::Punct('[' | '('), Tok::Str(_), ..]
+        );
+        let computed = if SHELL_LINE_CALLS.contains(&last)
+            || (module == "subprocess" && SUBPROCESS_CALLS.contains(&last) && call.shell_true())
+        {
+            call.first_arg_string().is_none()
+        } else if module == "subprocess" && SUBPROCESS_CALLS.contains(&last) {
+            !literal_head
+        } else if EXEC_CALLS.contains(&last) && module != "subprocess" {
+            call.strings().is_empty()
+        } else {
+            false
+        };
+        if computed {
+            return Some(call.name.clone());
+        }
+    }
+    None
 }
 
 /// The verdict of one top-level segment, with the "command word is an
@@ -201,8 +333,14 @@ fn shell_line_verdict(call: &str, line: &str, depth: usize, ctx: &Ctx<'_>) -> De
     }
 }
 
-/// An argv a call executes directly.
-fn argv_verdict(call: &str, words: &[&str], depth: usize, ctx: &Ctx<'_>) -> Decision {
+/// An argv a call executes directly. Its Ask is kept only when `keep_ask`.
+fn argv_verdict(
+    call: &str,
+    words: &[&str],
+    depth: usize,
+    ctx: &Ctx<'_>,
+    keep_ask: bool,
+) -> Decision {
     if words.is_empty() {
         return Decision::Allow;
     }
@@ -216,9 +354,12 @@ fn argv_verdict(call: &str, words: &[&str], depth: usize, ctx: &Ctx<'_>) -> Deci
         .join(" ");
     match analyze_shell_payload(&line, depth, ctx) {
         Decision::Deny(r) => Decision::Deny(r),
-        // Only a Deny is taken from the re-joined argv, as for the argv-list
-        // `subprocess` re-join in the program audit: the join is a model of
-        // the exec, not a line a shell parses.
+        Decision::Ask(r) if keep_ask => {
+            Decision::ask(format!("the program runs `{line}` through `{call}`: {r}"))
+        }
+        // Otherwise only a Deny is taken from the re-joined argv, as for the
+        // argv-list `subprocess` re-join in the program audit: the join is a
+        // model of the exec, not a line a shell parses.
         _ => Decision::Allow,
     }
 }
@@ -377,9 +518,47 @@ fn lex(src: &str) -> Vec<Tok> {
 struct Call<'a> {
     name: String,
     args: &'a [Tok],
+    /// For a method called directly on a call result (`Path('/x').chmod(…)`):
+    /// the receiver call's name (`Path`) and its argument tokens. `None` for
+    /// every other call.
+    receiver: Option<(&'a str, &'a [Tok])>,
 }
 
 impl Call<'_> {
+    /// The method is called directly on a path constructor ([`PATH_RECEIVERS`]).
+    fn on_path_receiver(&self) -> bool {
+        self.receiver.is_some_and(|(name, _)| {
+            PATH_RECEIVERS.contains(&name.rsplit('.').next().unwrap_or(name))
+        })
+    }
+
+    /// Every string literal among the receiver call's arguments.
+    fn receiver_strings(&self) -> Vec<&str> {
+        self.receiver
+            .map(|(_, args)| str_toks(args))
+            .unwrap_or_default()
+    }
+
+    /// Every string literal after the first top-level `,` of the arguments
+    /// (nested lists included). A first argument that is not a literal is
+    /// skipped all the same: the literals after it are the later operands.
+    fn strings_after_first_arg(&self) -> Vec<&str> {
+        let mut depth = 0usize;
+        let mut split = self.args.len();
+        for (k, t) in self.args.iter().enumerate() {
+            match t {
+                Tok::Punct('(' | '[' | '{') => depth += 1,
+                Tok::Punct(')' | ']' | '}') => depth = depth.saturating_sub(1),
+                Tok::Punct(',') if depth == 0 => {
+                    split = k;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        str_toks(&self.args[split..])
+    }
+
     /// Every string literal among the arguments, nested lists included.
     fn strings(&self) -> Vec<&str> {
         self.args
@@ -435,9 +614,54 @@ fn calls(toks: &[Tok]) -> Vec<Call<'_>> {
         out.push(Call {
             name: name.clone(),
             args: &toks[start.min(toks.len())..end],
+            receiver: receiver_call(toks, i),
         });
     }
     out
+}
+
+/// Every [`Tok::Str`] in `toks`.
+fn str_toks(toks: &[Tok]) -> Vec<&str> {
+    toks.iter()
+        .filter_map(|t| match t {
+            Tok::Str(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// When the call whose name is at `toks[at]` is a method on a call result —
+/// `NAME ( … ) . method (` — that receiver call's name and argument tokens.
+fn receiver_call(toks: &[Tok], at: usize) -> Option<(&str, &[Tok])> {
+    if at < 2
+        || toks.get(at - 1) != Some(&Tok::Punct('.'))
+        || toks.get(at - 2) != Some(&Tok::Punct(')'))
+    {
+        return None;
+    }
+    let close = at - 2;
+    let mut depth = 0usize;
+    let mut k = close;
+    loop {
+        match toks[k] {
+            Tok::Punct(')' | ']' | '}') => depth += 1,
+            Tok::Punct('(' | '[' | '{') => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            _ => {}
+        }
+        k = k.checked_sub(1)?;
+    }
+    if toks.get(k) != Some(&Tok::Punct('(')) {
+        return None;
+    }
+    let Tok::Name(name) = toks.get(k.checked_sub(1)?)? else {
+        return None;
+    };
+    Some((name.as_str(), &toks[k + 1..close]))
 }
 
 #[cfg(test)]

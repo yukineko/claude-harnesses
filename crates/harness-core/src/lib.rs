@@ -63,6 +63,7 @@ pub mod progress;
 pub mod projkey;
 pub mod repeat;
 pub mod retrieval;
+pub mod run_lock;
 pub mod scorer;
 pub mod session;
 pub mod session_roots;

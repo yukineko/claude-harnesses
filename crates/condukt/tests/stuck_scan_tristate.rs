@@ -23,6 +23,8 @@
 //! that must stay GREEN; R6 is a pure empirical probe with no fixed
 //! expectation baked in ahead of running it.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -59,10 +61,16 @@ impl Fixture {
     }
 
     fn condukt(&self, args: &[&str]) -> std::process::Output {
+        common::prime_if_running(args, &self.home, common::TESTSCOPE_SESSION);
         harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
+            .env(
+                "CONDUKT_TESTSCOPE_LEDGER",
+                common::testscope_ledger(&self.home),
+            )
+            .env("CLAUDE_CODE_SESSION_ID", common::TESTSCOPE_SESSION)
             // Multi-sample without sleeping: a frozen fingerprint may harden on
             // the very next observation. It still takes TWO observations — the
             // engine never calls a single sample "frozen".

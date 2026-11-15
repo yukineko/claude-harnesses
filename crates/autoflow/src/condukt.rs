@@ -4,6 +4,7 @@ use harness_core::config::home;
 // Shared with condukt (the single source of truth) so autoflow reads the exact
 // run-state directory condukt writes — see harness_core::projkey.
 use harness_core::projkey::{main_worktree_root, project_key, repo_root};
+use harness_core::run_lock;
 use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 
@@ -33,32 +34,48 @@ fn project_dirs(cwd: &Path) -> Determination<Vec<PathBuf>> {
 /// 2 hours in seconds. Running tasks older than this are considered interrupted.
 const STUCK_SECS: i64 = 7200;
 
+/// The part of one condukt task autoflow reads or writes.
+///
+/// condukt owns the schema; autoflow models only `id`, `status` and
+/// `updated_at` (the fields it reads or flips) and carries EVERY other field
+/// verbatim in `extra`, so a write-back is a faithful round trip of what
+/// condukt recorded (`agent_id`, `model`, `branch_sha`, `verifier_*`, ...).
+/// Before GH #1608 this mirror modelled a fixed field list and serde dropped
+/// the rest on every write-back. `updated_at` serializes as `null` when unset,
+/// as condukt's own `TaskState` writes it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskState {
     pub id: String,
     pub status: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub updated_at: Option<i64>,
+    /// Every field autoflow does not model, preserved as read.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
+/// The part of a condukt run-state autoflow reads or writes: its `tasks`.
+/// Every run-level field (`run_id`, `goal`, `paused`, `terminal_label`, ...)
+/// is carried verbatim in `extra`.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct RunState {
     #[serde(default)]
-    pub run_id: String,
-    #[serde(default)]
-    pub goal: String,
-    #[serde(default)]
-    pub tasks: Vec<TaskState>,
+    tasks: Vec<TaskState>,
+    /// Every run-level field autoflow does not model, preserved as read.
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Find pending/failed tasks for the repo containing `cwd`.
 ///
 /// Before returning, reverts any `running` task whose `updated_at` is older
-/// than 2 hours — those were almost certainly interrupted mid-session.
+/// than 2 hours — those were almost certainly interrupted mid-session. That
+/// revert is a read-modify-write of condukt's file and runs under condukt's
+/// per-run state lock (see [`update_run`]): the file is re-read under the lock
+/// and the sweep re-applied to that fresh copy. If the lock cannot be taken
+/// (contended past [`run_lock::DEADLINE`]) or any IO fails, nothing is written
+/// and the refusal is reported on stderr; the returned set is then the sweep
+/// applied to the unlocked read (the stale tasks still count as pending).
 ///
 /// Three answers, not two. `Known(vec![])` means the run-state was read and
 /// holds no pending work; `Undetermined` means it could not be read (see
@@ -76,23 +93,10 @@ pub fn find_pending(cwd: &Path) -> Determination<Vec<TaskState>> {
     };
 
     let now = now_secs();
-    let mut modified = false;
-    for task in &mut run.tasks {
-        if task.status == "running" {
-            let age = task.updated_at.map(|t| now - t).unwrap_or(i64::MAX);
-            if age > STUCK_SECS {
-                task.status = "pending".to_string();
-                task.updated_at = None;
-                modified = true;
-            }
-        }
-    }
-    if modified {
-        if let Err(e) = save_run(&path, &run) {
-            eprintln!(
-                "autoflow: failed to persist condukt run state to {}: {e}",
-                path.display()
-            );
+    if sweep_stale_running(&mut run, now) {
+        match update_run(&path, |fresh| sweep_stale_running(fresh, now)) {
+            Ok(fresh) => run = fresh,
+            Err(why) => report_not_written(&path, &why),
         }
     }
 
@@ -144,11 +148,33 @@ pub fn has_completed_tasks_for_run(cwd: &Path, run_id: &str) -> bool {
         .any(|t| matches!(t.status.as_str(), "verified" | "failed"))
 }
 
+/// Revert every `running` task whose `updated_at` is older than
+/// [`STUCK_SECS`] (or unset) back to `pending`. Returns whether anything changed.
+fn sweep_stale_running(run: &mut RunState, now: i64) -> bool {
+    let mut modified = false;
+    for task in &mut run.tasks {
+        if task.status == "running" {
+            let age = task.updated_at.map(|t| now - t).unwrap_or(i64::MAX);
+            if age > STUCK_SECS {
+                task.status = "pending".to_string();
+                task.updated_at = None;
+                modified = true;
+            }
+        }
+    }
+    modified
+}
+
 /// Mark the given task IDs as `running` (with current timestamp) in the most
 /// recent condukt run for the repo containing `cwd`.
+///
+/// A read-modify-write of condukt's file under condukt's per-run state lock
+/// (see [`update_run`]). If the lock is contended past [`run_lock::DEADLINE`]
+/// or any IO fails, nothing is written and the refusal is reported on stderr
+/// (`autoflow: condukt run-state <path> NOT written (fail closed): <why>`).
 pub fn mark_running(cwd: &Path, task_ids: &[&str]) {
-    let (path, mut run) = match load_latest(cwd) {
-        Determination::Known(Some(x)) => x,
+    let path = match latest_run_path(cwd) {
+        Determination::Known(Some(p)) => p,
         Determination::Known(None) => return,
         // Bookkeeping, not a verdict: failing to mark tasks running cannot make
         // autoflow conclude anything, it only means the next Stop re-observes
@@ -160,24 +186,71 @@ pub fn mark_running(cwd: &Path, task_ids: &[&str]) {
         }
     };
     let now = now_secs();
-    let mut modified = false;
-    for task in &mut run.tasks {
-        if task_ids.contains(&task.id.as_str())
-            && matches!(task.status.as_str(), "pending" | "failed")
-        {
-            task.status = "running".to_string();
-            task.updated_at = Some(now);
-            modified = true;
+    let result = update_run(&path, |run| {
+        let mut modified = false;
+        for task in &mut run.tasks {
+            if task_ids.contains(&task.id.as_str())
+                && matches!(task.status.as_str(), "pending" | "failed")
+            {
+                task.status = "running".to_string();
+                task.updated_at = Some(now);
+                modified = true;
+            }
         }
+        modified
+    });
+    if let Err(why) = result {
+        report_not_written(&path, &why);
     }
-    if modified {
-        if let Err(e) = save_run(&path, &run) {
-            eprintln!(
-                "autoflow: failed to persist condukt run state to {}: {e}",
-                path.display()
-            );
-        }
+}
+
+/// Report on stderr that a run-state write-back was refused. The wording is
+/// stable (`autoflow: condukt run-state <path> NOT written (fail closed): `)
+/// so an observer can tell a refused write from a silent one.
+fn report_not_written(path: &Path, why: &str) {
+    eprintln!(
+        "autoflow: condukt run-state {} NOT written (fail closed): {why}",
+        path.display()
+    );
+}
+
+/// The per-run state lock condukt takes for the run file at `path`
+/// (`<run_dir>/<run>.json` → `<run_dir>/<run>.lock`, via the shared
+/// [`run_lock::lock_path`]). The file stem IS `safe_session(run_id)` — that is
+/// how condukt names the file — and `safe_session` leaves an already-safe stem
+/// unchanged, so this is the exact file condukt's
+/// `RunLock::acquire_run_state_or_skip` contends.
+fn run_state_lock_path(path: &Path) -> Result<PathBuf, String> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| format!("run-state path {} has no parent dir", path.display()))?;
+    let stem = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_suffix(".json"))
+        .ok_or_else(|| format!("run-state path {} is not <run>.json", path.display()))?;
+    Ok(run_lock::lock_path(dir, stem))
+}
+
+/// Read-modify-write the run file at `path` under condukt's per-run state lock.
+///
+/// Takes the lock (bounded by [`run_lock::DEADLINE`]), re-reads and parses the
+/// file under it, applies `mutate`, and saves only if `mutate` reports a
+/// change. Returns the (possibly mutated) run as read under the lock.
+///
+/// **Fails closed.** A contended lock, an unreadable/unparseable file or a
+/// failed save is `Err(why)` and NOTHING is written (a failed save leaves at
+/// most a stray `<run>.json.tmp`; the rename never happened). The caller
+/// reports it; this never writes unlocked.
+fn update_run(path: &Path, mutate: impl FnOnce(&mut RunState) -> bool) -> Result<RunState, String> {
+    let lock_path = run_state_lock_path(path)?;
+    let held = run_lock::acquire(lock_path, run_lock::DEADLINE)
+        .map_err(|e| format!("could not acquire condukt's run-state lock: {e}"))?;
+    let mut run = read_run(path).map_err(|e| format!("re-read under the lock failed: {e}"))?;
+    if mutate(&mut run) {
+        save_run(&held, path, &run).map_err(|e| format!("save failed: {e}"))?;
     }
+    Ok(run)
 }
 
 /// Load this project's most recent condukt run-state.
@@ -188,6 +261,28 @@ pub fn mark_running(cwd: &Path, task_ids: &[&str]) {
 /// not fit the schema — e.g. one task missing `status`, which fails the WHOLE
 /// document and would otherwise hide every healthy task alongside it).
 fn load_latest(cwd: &Path) -> Determination<Option<(PathBuf, RunState)>> {
+    let path = match latest_run_path(cwd) {
+        Determination::Known(Some(p)) => p,
+        Determination::Known(None) => return Determination::Known(None),
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    match read_run(&path) {
+        Ok(run) => Determination::Known(Some((path, run))),
+        Err(why) => Determination::undetermined(why),
+    }
+}
+
+/// Read and parse the run file at `path`. `Err` names the path and the cause.
+fn read_run(path: &Path) -> Result<RunState, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("could not read condukt run-state {}: {e}", path.display()))?;
+    serde_json::from_str::<RunState>(&text)
+        .map_err(|e| format!("could not parse condukt run-state {}: {e}", path.display()))
+}
+
+/// The path of this project's most recent condukt run file (see
+/// [`load_latest`] for the three answers).
+fn latest_run_path(cwd: &Path) -> Determination<Option<PathBuf>> {
     let dirs = match project_dirs(cwd) {
         Determination::Known(d) => d,
         Determination::Undetermined(why) => return Determination::Undetermined(why),
@@ -204,32 +299,18 @@ fn load_latest(cwd: &Path) -> Determination<Option<(PathBuf, RunState)>> {
             Determination::Undetermined(why) => return Determination::Undetermined(why),
         }
     }
-    let Some(path) = found else {
-        return Determination::Known(None);
-    };
-    let text = match std::fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(e) => {
-            return Determination::undetermined(format!(
-                "could not read condukt run-state {}: {e}",
-                path.display()
-            ))
-        }
-    };
-    match serde_json::from_str::<RunState>(&text) {
-        Ok(run) => Determination::Known(Some((path, run))),
-        Err(e) => Determination::undetermined(format!(
-            "could not parse condukt run-state {}: {e}",
-            path.display()
-        )),
-    }
+    Determination::Known(found)
 }
 
 /// Persist run-state. Returns the IO/serialize error instead of swallowing it,
 /// so a failed save can no longer leave callers acting on a stale on-disk state
 /// (which would re-mark or lose tasks). Writes atomically (tmp→rename) to match
 /// condukt's own `RunState::save` and avoid a torn file under a concurrent read.
-fn save_run(path: &Path, run: &RunState) -> std::io::Result<()> {
+///
+/// `_held` is the witness that condukt's per-run state lock for `path` is held:
+/// the only caller is [`update_run`], whose load→mutate→save runs under it, so
+/// a save cannot interleave with condukt's own read-modify-write.
+fn save_run(_held: &run_lock::LockGuard, path: &Path, run: &RunState) -> std::io::Result<()> {
     let text = serde_json::to_string_pretty(run)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     let mut tmp = path.as_os_str().to_owned();

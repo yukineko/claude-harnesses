@@ -13,7 +13,11 @@
 //!
 //! Fixture: fake HOME, a repo and a real linked worktree under
 //! `<base>/src/.harness-worktrees`, and a fake scratchpad of the same shape under
-//! /private/tmp. The verdict is asserted, never message text.
+//! the canonical fixed temp root (`/private/tmp` on macOS, `/tmp` on Linux;
+//! `support/fixed_tmp.rs`). The verdict is asserted, never message text.
+
+#[path = "support/fixed_tmp.rs"]
+mod fixed_tmp;
 
 #[path = "support/neutral_base.rs"]
 mod neutral_base;
@@ -83,7 +87,7 @@ impl Fx {
                 wt.to_str().unwrap(),
             ],
         );
-        let tmp_root = PathBuf::from(format!("/private/tmp/bg-scratch-fp-{uniq}"));
+        let tmp_root = fixed_tmp::canonical_fixed_temp_root().join(format!("bg-scratch-fp-{uniq}"));
         let _ = std::fs::remove_dir_all(&tmp_root);
         let session = "bf349dd5-8e0c-4418-af43-0de710b93593".to_string();
         let scratch = tmp_root
@@ -192,7 +196,6 @@ fn control_scratchpad_log_redirect_existing_same_case_allows() {
 /// On a case-sensitive filesystem `mergemain.log` is a different, absent file,
 /// which is Allow, so this test passes there; it bites on the dev machines.
 #[test]
-#[ignore = "blastguard FP: RED, remove ignore when fixed"]
 fn scratchpad_log_redirect_existing_file_with_case_only_difference_allows() {
     let f = Fx::new("case");
     std::fs::write(f.scratch.join("mergeMain.log"), "old\n").unwrap();

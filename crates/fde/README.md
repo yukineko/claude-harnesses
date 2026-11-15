@@ -61,7 +61,10 @@ counting. A record from an
 earlier fde that matches the fingerprint but has no `ratified_head` is not
 placed in any epoch: recording, `verify` and `report` exit 2 while it exists.
 
-Before ratification the gate denies Bash run in, or naming, the target. A
+Before ratification the gate denies Bash run in, or naming, the target. The
+guarded area is the registered target dir alone: the target repository's other
+git worktrees are not listed or checked (user ruling 2026-11-08: a gate must not
+look at any other worktree). A
 command is split into words by a small conservative lexer (quotes, backslash
 escapes, `;&|()<>` operators, redirect targets, `~` as `$HOME`, the value of
 `--opt=value` / `NAME=value`); each word is resolved against the payload cwd

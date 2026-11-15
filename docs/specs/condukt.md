@@ -75,7 +75,19 @@
   横断走査し、見つかれば何も変更せず `{"duplicate_completion":[{hashkey,runs:[run_id...]}]}` を出力して **exit 2**
   （escalate = 人間/HOTL がどちらの実装を残すか選ぶ。exit code 契約 0=auto/2=escalate/3=block に従う）。重複が無い
   通常パス（自動 verified・exit 0）は不変。`record-run --all` は fugu-router 向けに outcome を冪等記録（Stop hook は `record-run --all --stop-hook`: stdout/stderr 無出力・exit 0 で、失敗と進捗行は `<state_dir>/record-run-failures.log` へ追記。未記録 episode は次回再試行。`--stop-hook` 無しの CLI は失敗時 exit 1 のまま。2026-10-27 ユーザー裁定）。`test` は
-  `[test].command`→自動検出（cargo/npm/pytest）で `sh -c` 実行し exit code 伝播。
+  `[test].command`→自動検出（cargo/npm/pytest）で `sh -c` 実行し exit code 伝播。実行前に `testscope::judge`
+  （PreToolUse hook と同一の判定・同一の rerun ledger）に掛け、フルスイート / task scope 外 / 同一ツリーでの再実行は
+  実行せず非 0 で拒否し、許可した実行は ledger に記録する。
+- **`testscope`（PreToolUse(Bash)、2026-11-14 ユーザー裁定「規則からはずれた点は許さないので、余計な実行はシステムで
+  できないようにする」）** — (1) フルスイート deny、(2) task worktree 内の main merge/pull/rebase deny、(3) 同一ツリーでの
+  同一テスト再実行 deny（ledger key は repo top・tree identity・正規化コマンド。素の `cargo test`・`tdd red|green --cmd <c>` /
+  `--cmd=<c>`・`bash -c`・`condukt sandbox run --cmd`・`state test` で共通）、(4) cwd が run task の記録済み worktree
+  の中なら、`--test <name>` はその task の `reproduction_tests` に現れるものか worktree が base（`default_branch`）から
+  追加・変更した `tests/<name>.rs`（`<base>...HEAD`・未 commit・untracked）だけ、`--lib`/`--bin`/`--doc`
+  （と `--example`/`--bench`）は `reproduction_tests` に同じ selector がある場合だけ許す。cwd が複数 task に一致・
+  run state（全 run-state ファイル）が読めない・decomposition が読めない・git が失敗 は deny。payload の
+  `session_id` ごとに `<ledger 親>/sessions/<session_id>` marker を書き、`state set --status running` は
+  `CLAUDE_CODE_SESSION_ID` が無いか marker が無ければ非 0 で拒否する（hook 未読み込み session では task を始められない）。
 - **`state check-oracle|check-criteria`** — F→P 再現証明の判定 / `done_criteria` の機械ゲート＋`skip_verifier`
   導出。`verify::classify_criteria` は **3 つの veto の AND**（振る舞い系 / 実行可能コマンド無し /
   coverage が `Single` でない）で `skip_eligible` を決め、いずれか 1 つでも立てば `skip_verifier:false`。

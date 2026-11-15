@@ -404,8 +404,31 @@ def load_table(table_path: Path) -> list[dict]:
     return entries
 
 
+def _staged_scope():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import staged_scope
+
+    return staged_scope
+
+
 def main(argv: list[str]) -> int:
     root = Path(os.environ.get("PROJKEY_CLASS_ROOT", str(Path(__file__).resolve().parent.parent)))
+    # `--staged` (pre-commit, user ruling 2026-11-08): the classification is a
+    # whole-tree count, so it runs in full only when the staged diff touches an
+    # input (any crate's src .rs, the classification table, this script or the
+    # scoping helper); otherwise it exits 0.
+    if "--staged" in argv:
+        argv = _staged_scope().gate_on_inputs(
+            root,
+            "projkey-classification",
+            argv,
+            [
+                "crates/*/src/*.rs",
+                "scripts/projkey-store-classification.toml",
+                "scripts/check-projkey-store-classification.py",
+                "scripts/staged_scope.py",
+            ],
+        )
     table_path = Path(
         os.environ.get(
             "PROJKEY_CLASS_TABLE",

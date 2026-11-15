@@ -30,6 +30,8 @@
 //! *some* process on PATH emitting the documented JSON shape; `condukt`'s
 //! `resolve_agent_tokens`/`resolve_agent_cost` only care about that shape.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -175,10 +177,13 @@ fn record_run_populates_model_route_basis_and_tokens_in_episode() {
     let combined_path = std::env::join_paths(paths).expect("join PATH");
     let condukt_bin = env!("CARGO_BIN_EXE_condukt");
     let run_condukt_multi = |args: &[&str]| -> (i32, String, String) {
+        common::prime_if_running(args, &home, common::TESTSCOPE_SESSION);
         let out = harness_core::git_env::scrub(&mut Command::new(condukt_bin))
             .args(args)
             .current_dir(&dir)
             .env("HOME", &home)
+            .env("CONDUKT_TESTSCOPE_LEDGER", common::testscope_ledger(&home))
+            .env("CLAUDE_CODE_SESSION_ID", common::TESTSCOPE_SESSION)
             .env("PATH", &combined_path)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -310,10 +315,13 @@ fn record_run_emits_worker_and_verifier_episodes_when_verifier_model_set() {
     let combined_path = std::env::join_paths(paths).expect("join PATH");
     let condukt_bin = env!("CARGO_BIN_EXE_condukt");
     let run_condukt = |args: &[&str]| -> (i32, String, String) {
+        common::prime_if_running(args, &home, common::TESTSCOPE_SESSION);
         let out = harness_core::git_env::scrub(&mut Command::new(condukt_bin))
             .args(args)
             .current_dir(&dir)
             .env("HOME", &home)
+            .env("CONDUKT_TESTSCOPE_LEDGER", common::testscope_ledger(&home))
+            .env("CLAUDE_CODE_SESSION_ID", common::TESTSCOPE_SESSION)
             .env("PATH", &combined_path)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

@@ -278,6 +278,10 @@ class Backlog06ec3503(Base):
             # stubs for the heavy collaborators; everything else is the script's own code
             f"plan_or_die() {{ PLAN_TXT={sh_q(row)}; }}",
             "copy_plugin_dir() { :; }",
+            # the source guard (ff8cebd0) needs the snapshot taken outside this
+            # slice; it is exercised end-to-end by test_rollout_refuses_dirty_source.py
+            "source_guard_verify() { :; }",
+            "source_guard_verify_deployed() { :; }",
             ("run_rebuild_and_sync() { echo 'rebuild ok'; }" if rebuild_ok else
              "run_rebuild_and_sync() { echo 'rebuild-plugins.sh: cargo build failed' >&2; return 1; }"),
             "acquire_rollout_lock",

@@ -1,16 +1,20 @@
 // このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! RED reproduction: the session worked in a LINKED git worktree while the
-//! Stop-hook `cwd` was the primary tree. tdd uses `input.cwd_or_current()` as
-//! its only root, so it evaluated a clean tree and allowed, never looking at
-//! the implementation file the session wrote in the worktree.
+//! tdd judges ONLY the checkout the Stop hook runs in (the payload `cwd`) —
+//! user ruling 2026-11-08: gates judge own worktree only ("donegateそのものが
+//! 他のworktreeを見たり検証したりテストしたりすることは禁止とする。他のgateでも
+//! 禁止とする"). Nothing replaces the dropped cross-worktree judging.
 //!
-//! Intended contract: roots = hook cwd + git toplevel of every file the
-//! session transcript records as written; evaluated per root. If the session
-//! wrote files but nothing was evaluated, or a written root cannot be resolved
-//! (path gone / not a git repo), the stop BLOCKS with a reason naming the
-//! roots. A session with no recorded writes still allows.
+//! History: this file began (2026-10-22) as the RED reproduction for the
+//! opposite contract — roots = hook cwd + git toplevel of every file the
+//! session transcript records as written, evaluated per root; "wrote files but
+//! nothing evaluated" and "a written root cannot be resolved" BLOCKED. That
+//! contract is withdrawn (the `session_roots` resolution and the >1-root
+//! "wrote but nothing evaluated" rule are gone from the Stop hook). Tests that
+//! pinned it are inverted: another worktree the session wrote into — dirty,
+//! unreadable, or with a broken git probe — does NOT affect the verdict, while
+//! the cwd checkout is still judged (`control_*`, `red_cwd_root_*`).
 //!
 //! Fixture: `$HOME` is a tempdir with a trust list naming BOTH trees;
 //! `HARNESS_TRUST_ALL` removed. `control_cwd_is_the_worktree_blocks_the_impl_file`
@@ -101,7 +105,12 @@ impl Fixture {
         let d = self.home.join(".claude/projects/-slug");
         std::fs::create_dir_all(&d).unwrap();
         let p = d.join("sess.jsonl");
-        let mut body = String::from(r#"{"type":"user","message":{"role":"user","content":"go"}}"#);
+        // Real transcripts carry record timestamps; without one the session
+        // start is undetermined and tdd BLOCKS (CLAUDE.md §3), which these
+        // scenarios do not test. Placed after the fixture's setup commits.
+        let mut body = String::from(
+            r#"{"type":"user","timestamp":"2099-01-01T00:00:00.000Z","message":{"role":"user","content":"go"}}"#,
+        );
         body.push('\n');
         for (tool, input) in uses {
             body.push_str(
@@ -187,6 +196,13 @@ impl LockedDir {
     }
 }
 
+impl LockedDir {
+    /// Locks a directory that already exists (e.g. a linked worktree).
+    fn new_existing(dir: &Path) -> LockedDir {
+        LockedDir::new(dir)
+    }
+}
+
 impl Drop for LockedDir {
     fn drop(&mut self) {
         use std::os::unix::fs::PermissionsExt;
@@ -222,83 +238,148 @@ fn control_cwd_is_the_worktree_blocks_the_impl_file() {
     );
 }
 
-/// THE BUG. cwd = primary tree, Edit names the worktree impl file: tdd must
-/// evaluate it (block: impl without a test) and the reason names the file.
+/// INVERTED (user ruling 2026-11-08: gates judge own worktree only). Was
+/// `worktree_impl_file_is_evaluated_when_cwd_is_the_primary_tree`, which demanded
+/// the linked worktree's untested impl file be evaluated from a primary-tree
+/// cwd. Now the other worktree is not evaluated: cwd = clean primary => allow,
+/// and no block names the worktree file.
 #[test]
-fn worktree_impl_file_is_evaluated_when_cwd_is_the_primary_tree() {
+fn dirty_other_worktree_impl_is_not_evaluated_when_cwd_is_the_primary_tree() {
     let f = Fixture::new();
     let tp = f.transcript(&[edit(&f.wt.join("session_edit.rs"))]);
     let o = f.stop(&f.primary, &tp);
-    assert_eq!(
+    assert_ne!(
         o.decision, "block",
-        "tdd judged the primary tree only; stdout={:?} stderr={:?}",
+        "a dirty OTHER worktree must not affect the verdict; stdout={:?} stderr={:?}",
         o.stdout, o.stderr
     );
     assert!(
-        o.reason.contains("session_edit.rs"),
-        "reason must name the worktree file; reason={:?}",
-        o.reason
+        !o.reason.contains("session_edit.rs") && !o.stderr.contains("session_edit.rs"),
+        "the other worktree's file must not be evaluated; reason={:?} stderr={:?}",
+        o.reason,
+        o.stderr
     );
 }
 
-/// The session wrote files (recorded Edit of a clean worktree file: nothing
-/// evaluated). Must block, naming the roots.
+/// NEW (user ruling 2026-11-08), (c) anti-vacuity in the same fixture: the cwd
+/// (primary) holds an untested impl file the session wrote => still BLOCKS,
+/// naming the cwd file and the cwd checkout; the dirty linked worktree the
+/// session also wrote into is not named.
 #[test]
-fn wrote_files_but_nothing_evaluated_blocks_naming_roots() {
+fn red_cwd_root_still_blocks_and_other_worktree_is_not_named() {
     let f = Fixture::new();
-    let tp = f.transcript(&[edit(&f.wt.join("seed.rs"))]);
+    std::fs::write(f.primary.join("primary_impl.rs"), BODY).unwrap();
+    let tp = f.transcript(&[
+        edit(&f.wt.join("session_edit.rs")),
+        edit(&f.primary.join("primary_impl.rs")),
+    ]);
     let o = f.stop(&f.primary, &tp);
     assert_eq!(
         o.decision, "block",
-        "session wrote files, nothing evaluated: must block. stdout={:?} stderr={:?}",
+        "red cwd must block. stdout={:?} stderr={:?}",
         o.stdout, o.stderr
     );
     assert!(
-        o.reason.contains(&f.wt.display().to_string())
-            && o.reason.contains(&f.primary.display().to_string()),
-        "reason must name both roots; reason={:?}",
+        o.reason.contains("primary_impl.rs"),
+        "reason must name the cwd file; reason={:?}",
+        o.reason
+    );
+    assert!(
+        !o.reason.contains("session_edit.rs") && !o.reason.contains("linked-wt"),
+        "reason must not mention the other worktree; reason={:?}",
         o.reason
     );
 }
 
+/// NEW (user ruling 2026-11-08), (b) "not read": the other worktree is
+/// unreadable (mode 000, restored on Drop) while a red cwd is judged. The cwd
+/// still blocks on its own file and the unreadable neighbour adds no
+/// "undetermined" block.
 #[test]
-fn written_root_gone_blocks_naming_the_root() {
+fn red_cwd_blocks_with_own_file_even_when_other_worktree_is_unreadable() {
     let f = Fixture::new();
-    // user ruling 2026-10-27: a gone dir under a NON-repo base is now excluded;
-    // this keeps its property (unresolvable written root blocks, naming it) with
-    // a gone dir whose nearest existing ancestor git cannot enter (mode 000).
+    std::fs::write(f.primary.join("primary_impl.rs"), BODY).unwrap();
+    let tp = f.transcript(&[
+        edit(&f.wt.join("session_edit.rs")),
+        edit(&f.primary.join("primary_impl.rs")),
+    ]);
+    let _unlock = LockedDir::new_existing(&f.wt);
+    let o = f.stop(&f.primary, &tp);
+    assert_eq!(
+        o.decision, "block",
+        "red cwd must block. stdout={:?} stderr={:?}",
+        o.stdout, o.stderr
+    );
+    assert!(
+        o.reason.contains("primary_impl.rs") && !o.reason.contains("cannot be determined"),
+        "reason must be the cwd's own missing-test block, not an undetermined-roots one; reason={:?}",
+        o.reason
+    );
+}
+
+/// NEW (user ruling 2026-11-08), (b): the linked worktree the session wrote
+/// into is unreadable and the cwd is clean => allow (no undetermined block).
+#[test]
+fn unreadable_other_worktree_does_not_block() {
+    let f = Fixture::new();
+    let tp = f.transcript(&[edit(&f.wt.join("session_edit.rs"))]);
+    let _unlock = LockedDir::new_existing(&f.wt);
+    let o = f.stop(&f.primary, &tp);
+    assert_ne!(
+        o.decision, "block",
+        "an unreadable OTHER worktree must not block. stdout={:?} stderr={:?}",
+        o.stdout, o.stderr
+    );
+}
+
+/// INVERTED (user ruling 2026-11-08: gates judge own worktree only). Was
+/// `wrote_files_but_nothing_evaluated_blocks_naming_roots` (the >1-roots
+/// "wrote files but no implementation change was evaluated" rule, removed). A
+/// recorded Edit of a clean file in another worktree, cwd = clean primary, is
+/// now a plain allow.
+#[test]
+fn wrote_files_in_clean_other_worktree_allows() {
+    let f = Fixture::new();
+    let tp = f.transcript(&[edit(&f.wt.join("seed.rs"))]);
+    let o = f.stop(&f.primary, &tp);
+    assert_ne!(
+        o.decision, "block",
+        "the other worktree must not produce a block. stdout={:?} stderr={:?}",
+        o.stdout, o.stderr
+    );
+}
+
+/// INVERTED (user ruling 2026-11-08: gates judge own worktree only). Was
+/// `written_root_gone_blocks_naming_the_root`: a written path under a dir git
+/// cannot enter (mode 000) was an undetermined root and blocked ("roots cannot
+/// be determined"). That block is gone; the location is never probed.
+#[test]
+fn unprobeable_written_path_does_not_block() {
+    let f = Fixture::new();
     let locked = f.home.join("gone-root-4711");
     let gone = locked.join("gone").join("x.rs");
     let tp = f.transcript(&[edit(&gone)]);
     let _unlock = LockedDir::new(&locked);
     let o = f.stop(&f.primary, &tp);
-    assert_eq!(
+    assert_ne!(
         o.decision, "block",
-        "unresolvable written root must block. stdout={:?} stderr={:?}",
+        "an unprobeable OTHER location must not block. stdout={:?} stderr={:?}",
         o.stdout, o.stderr
     );
     assert!(
-        o.reason.contains("gone-root-4711"),
-        "reason must name the root; reason={:?}",
-        o.reason
-    );
-    assert!(
-        o.reason.contains("cannot be determined"),
-        "reason must say the roots are undetermined; reason={:?}",
+        !o.reason.contains("gone-root-4711") && !o.reason.contains("cannot be determined"),
+        "reason must not report undetermined roots; reason={:?}",
         o.reason
     );
 }
 
-/// A written file whose git root cannot be determined (a corrupt `.git`
-/// gitfile pointing nowhere) must block, naming the root.
-///
-/// Re-anchored for backlog 775e5bc8 (GitHub 1459): this test used a plain
-/// non-git directory, which the user ruling now treats as POSITIVELY outside
-/// every repo and excludes from the roots. A corrupt gitfile makes git say
-/// "not a git repository" without "(or any of the parent directories)", so the
-/// root stays undetermined and must still block.
+/// INVERTED (user ruling 2026-11-08: gates judge own worktree only). Was
+/// `written_root_corrupt_gitfile_blocks_naming_the_root` (re-anchored for
+/// backlog 775e5bc8): a written file whose repo has a corrupt `.git` gitfile
+/// used to leave the root undetermined and block. Its git probe is no longer
+/// run, so it cannot block.
 #[test]
-fn written_root_corrupt_gitfile_blocks_naming_the_root() {
+fn written_path_with_corrupt_gitfile_does_not_block() {
     let f = Fixture::new();
     let plain = f.home.join("plain-dir-4712");
     std::fs::create_dir_all(&plain).unwrap();
@@ -306,14 +387,14 @@ fn written_root_corrupt_gitfile_blocks_naming_the_root() {
     std::fs::write(plain.join("x.rs"), BODY).unwrap();
     let tp = f.transcript(&[edit(&plain.join("x.rs"))]);
     let o = f.stop(&f.primary, &tp);
-    assert_eq!(
+    assert_ne!(
         o.decision, "block",
-        "non-git written root must block. stdout={:?} stderr={:?}",
+        "a broken OTHER repo must not block. stdout={:?} stderr={:?}",
         o.stdout, o.stderr
     );
     assert!(
-        o.reason.contains("plain-dir-4712"),
-        "reason must name the root; reason={:?}",
+        !o.reason.contains("plain-dir-4712") && !o.reason.contains("cannot be determined"),
+        "reason must not report the other location; reason={:?}",
         o.reason
     );
 }
@@ -332,7 +413,9 @@ fn control_session_with_no_writes_still_allows() {
 /// removed before any resolve recorded it (isolated HOME, so no store record).
 /// Its directory is gone under a base that is positively outside every repo:
 /// the path is excluded, so the stop must NOT block with undetermined roots.
-/// RED on the unfixed code. The mode-000 control above still blocks.
+/// (Stale note, user ruling 2026-11-08: gates judge own worktree only — the
+/// mode-000 "control" that used to block is now also an allow, see
+/// `unprobeable_written_path_does_not_block`; this property holds trivially.)
 #[test]
 fn removed_unrecorded_worktree_under_non_repo_base_does_not_block() {
     let f = Fixture::new();

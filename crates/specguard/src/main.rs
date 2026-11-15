@@ -106,6 +106,15 @@ struct Cli {
     #[arg(short, long, default_value = "specguard.toml", global = true)]
     config: PathBuf,
 
+    /// Read and write the spec map at this path instead of
+    /// `<project.root>/<[map].path>`, for every `map` action and for
+    /// `map gate-check` (a relative path resolves against the current
+    /// directory). The pre-push hook points this at a fresh temp file so the
+    /// machine-local map — whose `spec_doc` would otherwise satisfy
+    /// `gate-check` — never decides a push. Other commands ignore it.
+    #[arg(long, global = true)]
+    map_path: Option<PathBuf>,
+
     /// Override the baseline ref (also via SPECGUARD_BASELINE_REF).
     #[arg(short, long, global = true)]
     baseline: Option<String>,
@@ -521,7 +530,7 @@ fn run(cli: &Cli) -> Result<u8> {
     // `reconcile-findings` must report even when the config cannot be loaded
     // (then nothing can be re-detected: every finding is undetermined).
     if let Some(Command::ReconcileFindings { json }) = &cli.command {
-        return Ok(reconcile_findings(cli, *json));
+        return Ok(reconcile::run_command(cli, *json));
     }
 
     // `map gate-check` audits nothing, so it must not require audit areas.
@@ -2239,8 +2248,16 @@ fn run_map_search(l: &Loaded, map_path: &Path, query: &str, k: usize, json: bool
     Ok(EXIT_OK)
 }
 
+/// The spec map path: `--map-path` when given, else `<repo_root>/<[map].path>`.
+fn resolve_map_path(cli: &Cli, repo_root: &Path, configured: &str) -> PathBuf {
+    match &cli.map_path {
+        Some(p) => p.clone(),
+        None => repo_root.join(configured),
+    }
+}
+
 fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
-    let map_path = l.repo_root.join(&l.cfg.map.path);
+    let map_path = resolve_map_path(cli, &l.repo_root, &l.cfg.map.path);
     let spec_dir = &l.cfg.map.spec_doc_dir;
 
     match action {
@@ -2445,7 +2462,7 @@ fn gate_check(cli: &Cli, base: &str, head: &str) -> Result<u8> {
         .unwrap_or_else(|| Path::new("."));
     let repo_root = canonicalize(&config_dir.join(&cfg.project.root))
         .with_context(|| "resolving project.root")?;
-    let map_path = repo_root.join(&cfg.map.path);
+    let map_path = resolve_map_path(cli, &repo_root, &cfg.map.path);
     let exclude = specmap::compile_globs(&cfg.map.exclude)?;
     let ack_path = repo_root.join(gatecheck::ACK_PATH);
     let spec_docs_path = repo_root.join(gatecheck::SPEC_DOCS_PATH);
@@ -2488,38 +2505,6 @@ fn gate_check(cli: &Cli, base: &str, head: &str) -> Result<u8> {
         }
     })
 }
-
-/// `specguard reconcile-findings`: close structural review findings the
-/// re-run detection no longer reports (see `reconcile.rs`). Returns 0, or 3
-/// when anything stayed open for lack of a determination.
-fn reconcile_findings(cli: &Cli, json: bool) -> u8 {
-    const TOOL: &str = "specguard reconcile-findings";
-    let report = match load(cli) {
-        Ok(l) => {
-            let map_path = l.repo_root.join(&l.cfg.map.path);
-            reconcile::reconcile(&l.repo_root, Determination::known(map_path.as_path()))
-        }
-        Err(e) => {
-            // No config → no repo root from it; the store is still keyed by the
-            // cwd's repo, so judge (as undetermined) the findings found there.
-            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            reconcile::reconcile(
-                &cwd,
-                Determination::undetermined(format!(
-                    "specguard config could not be loaded ({e:#}), so the structural \
-                     detection cannot run"
-                )),
-            )
-        }
-    };
-    match report.emit(TOOL, json) {
-        0 => EXIT_OK,
-        _ => EXIT_RECONCILE_UNDETERMINED,
-    }
-}
-
-/// `reconcile-findings`: at least one finding stayed open undetermined.
-const EXIT_RECONCILE_UNDETERMINED: u8 = 3;
 
 /// Map-driven CORRECTNESS audit (read-only). Loads the persisted spec-map store
 /// (built by `map build`/`sync`), computes deterministic structural findings

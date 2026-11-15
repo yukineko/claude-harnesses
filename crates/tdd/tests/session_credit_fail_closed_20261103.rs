@@ -1,14 +1,20 @@
 // このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! Fail-closed side of the per-session test credit (user ruling 2026-11-03,
-//! backlog 49e95d32; tdd 0.1.62). Companion to
-//! `cross_worktree_test_credit_20261103.rs`, which pins the credited cases.
+//! Fail-closed side of the test credit. Originally the per-session,
+//! cross-worktree credit (user ruling 2026-11-03, backlog 49e95d32; tdd
+//! 0.1.62); RE-SCOPED 2026-11-08 by the user ruling 2026-11-08: gates judge
+//! own worktree only ("donegateそのものが他のworktreeを見たり検証したりテスト
+//! したりすることは禁止とする"). The Stop hook now judges ONLY the cwd
+//! checkout; it never reads sibling worktrees, so no sibling test can credit
+//! it and no sibling's broken git can make the verdict undetermined.
 //!
-//! Each test here pins a case where credit must NOT be given (or must be
-//! attributed correctly): unreadable transcript, an undeterminable sibling root,
-//! a pre-session test commit, an uncommitted sibling test, and the reason naming
-//! the root it judged. Written by a disinterested author (CLAUDE.md 2(a)).
+//! Each hook run here uses cwd = the checkout holding the implementation
+//! (`wt-impl`, or `wt-a`). Tests pin: unreadable transcript never credits, a
+//! pre-session / uncommitted / sibling-only test never credits, the reason
+//! names only the checkout it judged, and a corrupt OTHER worktree neither
+//! blocks nor changes the verdict (while a red cwd still blocks).
+//! Written by a disinterested author (CLAUDE.md 2(a)).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -145,10 +151,6 @@ impl Fixture {
         p
     }
 
-    fn stop(&self, transcript: &Path) -> Outcome {
-        self.stop_in(transcript, &self.primary)
-    }
-
     fn stop_in(&self, transcript: &Path, cwd: &Path) -> Outcome {
         let payload = serde_json::json!({
             "session_id": "s-xwt",
@@ -211,7 +213,6 @@ fn no_test_block(o: &Outcome) -> bool {
 
 struct Layout {
     f: Fixture,
-    integ: PathBuf,
     red: PathBuf,
     imp: PathBuf,
     test_file: PathBuf,
@@ -246,7 +247,6 @@ fn layout(test_date: Option<&str>, commit_test: bool, commit_impl: bool) -> Layo
     f.trust(&[&f.primary, &integ, &red, &imp]);
     Layout {
         f,
-        integ,
         red,
         imp,
         test_file,
@@ -254,7 +254,10 @@ fn layout(test_date: Option<&str>, commit_test: bool, commit_impl: bool) -> Layo
     }
 }
 
-/// Case 1: Credit needs verified attribution. The impl is left uncommitted in
+/// Case 1 (note, user ruling 2026-11-08: gates judge own worktree only — the
+/// "sibling" test below is not read at all now; the property that survives is
+/// that an unreadable transcript yields a block and no claimed credit):
+/// Credit needs verified attribution. The impl is left uncommitted in
 /// wt-impl (so it is scanned even without a transcript); hook runs there; the transcript
 /// is missing / unreadable, so the sibling's test cannot be shown to be this
 /// session's. Must still block, and must not claim a credit.
@@ -290,67 +293,127 @@ fn unreadable_transcript_never_credits_a_sibling_test() {
     );
 }
 
-/// Case 2: A session root whose git cannot be scanned makes the session-wide
-/// evidence undetermined: the test in the readable sibling must not be credited.
-/// wt-dead is named by the transcript, then its index is corrupted so the
-/// root still resolves but its git scan fails. The same session with wt-dead healthy IS credited
-/// (control: the apparatus can produce the credited verdict).
+/// Case 2: INVERTED/RE-SCOPED (user ruling 2026-11-08: gates judge own worktree
+/// only). Was `undeterminable_session_root_blocks_instead_of_crediting`: a
+/// sibling root with a corrupt index made the session-wide evidence
+/// undetermined and withheld credit ("NOT credited"). Sibling roots are no
+/// longer read, so a corrupt OTHER worktree (wt-dead, named by the transcript,
+/// index garbage) must change nothing:
+///  * (a)/(b) cwd = wt-impl holding its OWN committed session test + impl: the
+///    verdict is allow, identical to the healthy run, with no undetermined block;
+///  * (c) the same layout with the test removed from wt-impl: still BLOCKS
+///    ("no test is visible"), so the allow above is not a vacuous pass.
 #[test]
-fn undeterminable_session_root_blocks_instead_of_crediting() {
-    let l = layout(None, true, true);
-    let dead = l.f.worktree("wt-dead", "integ");
+fn corrupt_other_worktree_does_not_change_the_verdict() {
+    let f = Fixture::new();
+    let integ = f.worktree("integ", "main");
+    let imp = f.worktree("wt-impl", "integ");
+    let dead = f.worktree("wt-dead", "integ");
     let d = put(&dead, "src/other.rs", IMPL);
-    l.f.trust(&[&l.f.primary, &l.integ, &l.red, &l.imp, &dead]);
-    let tp = l.f.transcript(&[&l.test_file, &l.impl_file, &d]);
+    let t = put(&imp, "tests/adds.rs", TEST);
+    let i = put(&imp, "src/lib.rs", IMPL);
+    git(&imp, &["add", "-A"]);
+    commit(&imp, "impl + test");
+    f.trust(&[&f.primary, &integ, &imp, &dead]);
+    let tp = f.transcript(&[&t, &i, &d]);
 
-    let gitdir = l.f.primary.join(".git/worktrees/wt-dead");
-    let ok = l.f.stop(&tp);
+    let healthy = f.stop_in(&tp, &imp);
     assert!(
-        !no_test_block(&ok),
-        "control: with every root healthy the sibling test must be credited: {}",
-        ok.raw
+        healthy.decision != "block",
+        "control: own committed test + impl must be accepted: {}",
+        healthy.raw
     );
 
-    // The root still resolves (rev-parse works) but its git scan fails.
-    std::fs::write(gitdir.join("index"), "not an index\n").unwrap();
-    let o = l.f.stop(&tp);
-    assert_eq!(
-        o.decision, "block",
-        "an unscannable root must not pass: {}",
+    // wt-dead still resolves (rev-parse works) but its git scan would fail.
+    std::fs::write(
+        f.primary.join(".git/worktrees/wt-dead").join("index"),
+        "not an index\n",
+    )
+    .unwrap();
+    let o = f.stop_in(&tp, &imp);
+    assert!(
+        o.decision != "block",
+        "a corrupt OTHER worktree must not block: {}",
         o.raw
     );
     assert!(
-        !o.reason.contains("credited with"),
-        "reason claims credit: {}",
+        !o.reason.contains("wt-dead") && !o.reason.contains("NOT credited"),
+        "{}",
         o.raw
     );
-    // wt-impl (a readable root with no test of its own) is the one reported, and
-    // the reason says the sibling test was NOT credited because the session-wide
-    // evidence is undetermined — not that it was credited or that nothing exists.
+
+    // (c) anti-vacuity: drop the test from wt-impl's HEAD; the cwd is red again.
+    git(&imp, &["rm", "-q", "tests/adds.rs"]);
+    commit(&imp, "drop test");
+    let tp2 = f.transcript(&[&i, &d]);
+    let red = f.stop_in(&tp2, &imp);
     assert!(
-        o.reason.contains("NOT credited"),
-        "reason must say the sibling credit was withheld: {}",
-        o.raw
+        no_test_block(&red),
+        "red cwd must still block with a corrupt neighbour: {}",
+        red.raw
     );
 }
 
-/// Case 3: A test committed in the sibling BEFORE the session started is not the
-/// session's work and must not be credited.
+/// Case 3: A test committed BEFORE the session started is not the session's
+/// work and must not be credited. RE-SCOPED (user ruling 2026-11-08: gates
+/// judge own worktree only): was a pre-session test in wt-red (a sibling); the
+/// sibling is no longer read, so the pre-session test is now committed in
+/// wt-impl itself (the only checkout judged) and the hook runs there.
 #[test]
-fn pre_session_test_commit_in_sibling_is_not_credited() {
-    let l = layout(Some(PRE_SESSION), true, true);
-    let tp = l.f.transcript(&[&l.test_file, &l.impl_file]);
-    let o = l.f.stop(&tp);
+fn pre_session_test_commit_in_cwd_is_not_credited() {
+    let f = Fixture::new();
+    let integ = f.worktree("integ", "main");
+    let imp = f.worktree("wt-impl", "integ");
+    let t = put(&imp, "tests/adds.rs", TEST);
+    git(&imp, &["add", "-A"]);
+    git_env(
+        &imp,
+        &["-c", "commit.gpgsign=false", "commit", "-qm", "old test"],
+        &[
+            ("GIT_AUTHOR_DATE", PRE_SESSION),
+            ("GIT_COMMITTER_DATE", PRE_SESSION),
+        ],
+    );
+    let i = put(&imp, "src/lib.rs", IMPL);
+    git(&imp, &["add", "-A"]);
+    commit(&imp, "impl");
+    f.trust(&[&f.primary, &integ, &imp]);
+    let tp = f.transcript(&[&t, &i]);
+    let o = f.stop_in(&tp, &imp);
     assert!(
         no_test_block(&o),
         "a pre-session test must not lift the block: {}",
         o.raw
     );
-    assert!(o.reason.contains(&l.imp.display().to_string()), "{}", o.raw);
+    assert!(o.reason.contains(&imp.display().to_string()), "{}", o.raw);
 }
 
-/// Case 4: Two roots both lack tests: the block reason names the root it judged and
-/// not the other one.
+/// Case 3b: NEW (user ruling 2026-11-08: gates judge own worktree only). The
+/// session's committed test lives in a SIBLING worktree (wt-red), the
+/// implementation in wt-impl (cwd). Was the credited case (cross-worktree
+/// credit, 2026-11-03); now the sibling test is not read, so it does not lift
+/// the block, and the reason says nothing was credited.
+#[test]
+fn committed_test_in_sibling_worktree_is_not_credited() {
+    let l = layout(None, true, true);
+    let tp = l.f.transcript(&[&l.test_file, &l.impl_file]);
+    let o = l.f.stop_in(&tp, &l.imp);
+    assert!(
+        no_test_block(&o),
+        "a sibling worktree's test must not lift the block: {}",
+        o.raw
+    );
+    assert!(
+        !o.raw.contains("credited with") && !o.reason.contains(&l.red.display().to_string()),
+        "must not claim or name the sibling's credit: {}",
+        o.raw
+    );
+}
+
+/// Case 4: Two roots both lack tests: the block reason names the root it judged
+/// (the cwd, wt-a) and not the other one. RE-SCOPED (user ruling 2026-11-08):
+/// the hook runs in wt-a, so the judged checkout is deterministically wt-a and
+/// wt-b is never named (was: whichever of the two roots was evaluated first).
 #[test]
 fn block_reason_names_only_the_root_it_judged() {
     let f = Fixture::new();
@@ -365,13 +428,13 @@ fn block_reason_names_only_the_root_it_judged() {
     commit(&b, "impl b");
     f.trust(&[&f.primary, &integ, &a, &b]);
     let tp = f.transcript(&[&ia, &ib]);
-    let o = f.stop(&tp);
+    let o = f.stop_in(&tp, &a);
     assert!(no_test_block(&o), "apparatus must block: {}", o.raw);
     let (sa, sb) = (a.display().to_string(), b.display().to_string());
     let (na, nb) = (o.reason.contains(&sa), o.reason.contains(&sb));
     assert!(
-        na ^ nb,
-        "reason must name exactly the one root it judged (a={na}, b={nb}): {:?}",
+        na && !nb,
+        "reason must name exactly the one root it judged, wt-a (a={na}, b={nb}): {:?}",
         o.reason
     );
     let judged = o
@@ -379,20 +442,19 @@ fn block_reason_names_only_the_root_it_judged() {
         .split("Checkout judged: ")
         .nth(1)
         .unwrap_or_else(|| panic!("no 'Checkout judged:' line: {:?}", o.reason));
-    assert!(
-        judged.starts_with(&sa) || judged.starts_with(&sb),
-        "{judged:?}"
-    );
+    assert!(judged.starts_with(&sa), "{judged:?}");
 }
 
 /// Case 5: the ruling credits a test the session "wrote and committed". A test
 /// left UNCOMMITTED in a sibling root must not credit wt-impl's implementation.
-/// (Intentionally RED on tdd 0.1.62: root_test_evidence counts uncommitted files.)
+/// RE-SCOPED (user ruling 2026-11-08: gates judge own worktree only): the hook
+/// now runs with cwd = wt-impl (it used to run in the primary tree and fold
+/// every root); a sibling's uncommitted test is not read either way.
 #[test]
 fn uncommitted_sibling_test_is_not_credited() {
     let l = layout(None, false, true);
     let tp = l.f.transcript(&[&l.test_file, &l.impl_file]);
-    let o = l.f.stop(&tp);
+    let o = l.f.stop_in(&tp, &l.imp);
     assert!(
         no_test_block(&o),
         "an uncommitted sibling test must not credit: {}",

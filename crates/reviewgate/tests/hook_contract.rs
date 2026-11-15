@@ -991,7 +991,16 @@ fn claim_trust_cli_honors_project_config() {
         before.stdout
     );
     assert!(!before.stdout.contains("distinct-reviewer-xyz"));
-    assert!(before.stderr.contains("not trusted"), "{}", before.stderr);
+    // The refusal must stay VISIBLE to the user (stdout or stderr): since
+    // 2026-11-08 the Stop hook blocks `config-untrusted` for this state, and
+    // `status` is where the reason is looked up.
+    let seen = format!("{}\n{}", before.stdout, before.stderr).to_lowercase();
+    assert!(
+        seen.contains("not trusted") && seen.contains("reviewgate.toml"),
+        "status must say the project reviewgate.toml is not trusted: stdout={} stderr={}",
+        before.stdout,
+        before.stderr
+    );
 
     let t = sb.cli(&["trust"]);
     assert_eq!(t.code, 0, "{}", t.stderr);

@@ -272,8 +272,27 @@ def check(repo):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--repo", default=".", help="repository root (default: cwd)")
+    ap.add_argument(
+        "--staged",
+        action="store_true",
+        help="pre-commit mode (user ruling 2026-11-08): run only when the staged "
+        "diff touches fleet.rs, any crate's src/ (a superset of the blocking "
+        "gates' src/, so no gate list has to be parsed to narrow), the baseline, "
+        "this script or the scoping helper; otherwise exit 0. An unreadable "
+        "staged set exits 2.",
+    )
     args = ap.parse_args(argv)
     repo = Path(args.repo).resolve()
+    if args.staged:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import staged_scope
+
+        staged_scope.gate_on_inputs(
+            repo,
+            "gate-protection",
+            ["--staged"],
+            [FLEET, BASELINE, "crates/*/src/*", "scripts/check-gate-protection.py", "scripts/staged_scope.py"],
+        )
 
     violations, undetermined, report = check(repo)
     for line in report:

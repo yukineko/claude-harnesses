@@ -28,20 +28,19 @@ Code subscription.
 On each stop `tdd gate`:
 
 1. reads the hook JSON from stdin (`session_id`, `cwd`, `transcript_path`) and
-   resolves the roots to judge: the hook `cwd` plus the git toplevel of every file
-   the transcript records as written (`harness_core::session_roots`); each root is
-   evaluated, not only the cwd. An unresolvable written root, or a session that wrote
-   files while no root had an implementation change to evaluate, blocks naming the
-   roots. The gate judges **per session**: a test this session wrote (per its
-   transcript) and committed since the session started in any of those roots is
-   credited to the session's implementation change in every root, so an
-   implementation worktree whose test lives in a sibling worktree is not blocked
-   (the credit is printed on stderr). A test left uncommitted counts only for the
-   root it is in, never across roots. An undetermined root (a failed `git`
-   command), an undetermined attribution (no / unreadable transcript) or an
-   undetermined session start credits nothing — each root is then judged on its
-   own changes. A missing-test block names
-   the checkout path it judged;
+   judges **only the hook `cwd`'s checkout** (user ruling 2026-11-08: a gate must
+   not look at, verify or test any other worktree; nothing judges them in its place).
+   A file the session wrote into another worktree is neither scanned nor credited
+   here. A test this session wrote (per its transcript) and committed since the
+   session started in this checkout is credited to its implementation change (the
+   credit is printed on stderr); a test in another worktree is never credited. An
+   undetermined attribution (no / unreadable transcript) or an undetermined
+   session start credits nothing. When the hook's transcript yields no session
+   start (unreadable, or no record carries a `timestamp`), this session's commits
+   cannot be scoped, so a stop that the uncommitted changes alone would allow
+   BLOCKS instead (`committed-scope-undetermined`, bounded by `max_attempts`) —
+   it is not read as "nothing committed". A missing-test block names the
+   checkout path it judged;
 2. loads `./tdd.toml` (or `~/.tdd/config.toml`, or language-aware defaults);
 3. asks `git` what changed and which lines were **added**, then keeps only the
    files **this session wrote**: a file counts as this session's when its
@@ -132,7 +131,11 @@ RED/GREEN proofs deterministically.
 ## Config & other subcommands
 
 `tdd` reads `./tdd.toml` (trusted projects only — its `test_cmd` is executed
-verbatim), else `~/.tdd/config.toml`, else language-aware defaults. Common keys:
+verbatim), else `~/.tdd/config.toml`, else language-aware defaults. A `./tdd.toml`
+in an untrusted root is a refusal, not a fallback: every stop BLOCKS naming the file
+until `tdd trust` is run there (a linked worktree does not inherit its main tree's
+trust — user ruling 2026-11-08; the session init and condukt register the worktrees
+they create). Common keys:
 
 | Key | Default | Meaning |
 |---|---|---|

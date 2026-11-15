@@ -26,20 +26,19 @@ pub enum Status {
     /// live claim-ledger lease. A legacy row persisted with `claimed` is read
     /// back as `Pending` by `store::load`.
     Claimed,
-    /// Not terminal, not queued: a user ruling (見送り / defer) recorded by
-    /// `backlog defer ID --ruling QUOTE` (backlog b3f5e3af; user ruling
-    /// 2026-11-07 「実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない」).
-    /// `next` / `next --claim` never hand it out and nothing requeues it: it
-    /// is untimed, unlike the DERIVED `deferred` display of a row whose
-    /// `defer_until` is in the future (which comes back on its own). Its only
-    /// exits are `cancel` / `done` (a recorded closure); `edit --status` and
-    /// `fail` refuse to move it back onto the queue.
+    /// LEGACY, no longer writable: a user ruling (見送り / defer) recorded by
+    /// the ABOLISHED `backlog defer` (backlog b3f5e3af; abolished by user
+    /// ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」).
+    /// Still parsed so stores holding such rows load. `next` / `next --claim`
+    /// never hand it out; `backlog recheck` resolves it (reproduced ->
+    /// `pending`, otherwise auto-cancelled), and `cancel` / `done` close it.
+    /// `edit --status` and `fail` refuse to move it back onto the queue.
     RuledDeferred,
 }
 
 impl Status {
     /// Every status: the core lifecycle, then the derived `Claimed`, then
-    /// `RuledDeferred` (stored, but written only by `backlog defer`).
+    /// the legacy `RuledDeferred` (parsed, no longer written: `defer` is abolished).
     pub const ALL: [Status; 6] = [
         Status::Pending,
         Status::Done,

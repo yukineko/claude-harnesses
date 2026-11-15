@@ -10,6 +10,8 @@
 mod bounded;
 #[path = "support/git_env.rs"]
 mod git_env;
+#[path = "support/neutral_base.rs"]
+mod neutral_base;
 
 use std::process::{Command, Stdio};
 
@@ -369,7 +371,8 @@ fn backlog_7037df97_quoted_heredoc_body_is_inert_on_the_fetch_exec_axis() {
 // ---------------------------------------------------------------- fixture-based (symlink / cd / base)
 use std::path::{Path, PathBuf};
 
-/// A hermetic tree under CARGO_TARGET_TMPDIR (NOT a safe root, unlike /tmp):
+/// A hermetic tree under the calibrated fixture base (`support/neutral_base.rs`:
+/// NOT a safe root, unlike /tmp, and not under the workspace `target/`):
 /// `<base>/proj`, `<base>/outside/deep`, and `<base>/proj/lnk -> outside/deep`.
 struct Tree {
     proj: PathBuf,
@@ -382,7 +385,7 @@ struct Tree {
 }
 
 fn tree(name: &str) -> Tree {
-    let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("backlog_audit_s02");
+    let parent = neutral_base::neutral_base().join("backlog_audit_s02");
     std::fs::create_dir_all(&parent).unwrap();
     let dir = tempfile::Builder::new()
         .prefix(&format!("{name}-"))

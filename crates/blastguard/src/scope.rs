@@ -44,10 +44,16 @@
 //!     placement. Lexical collapse is NOT what the kernel does: it resolves
 //!     `a/lnk/..` to the parent of `lnk`'s TARGET. So a `..` that follows a
 //!     symlinked component is placed at a path the kernel will not touch
-//!     (`<root>/lnk/../x` is classified as `<root>/x`). This module does not
-//!     close that; its callers must not grant anything on the strength of a
-//!     `..`-bearing spelling (the worktree `Allow` refuses any `..` — see
-//!     below; the safe-root `Ask` does NOT, see "Known gap" at the end);
+//!     (`<root>/lnk/../x` is classified as `<root>/x`). The classifiers do not
+//!     close that; their callers must not grant anything on the strength of a
+//!     `..`-bearing spelling as such (the worktree `Allow` refuses any `..` —
+//!     see below; the safe-root `Ask` does NOT, see "Known gap" at the end).
+//!     The one route that does judge such a spelling, the deletion-principle
+//!     verdicts of `crate::deletion` (GH #1661), first rewrites it with
+//!     [`SafeRoots::physical_absolute`], which pops a `..` only from a prefix
+//!     that is an existing real directory and its own real path, and answers
+//!     `Undetermined` for anything else — so the classifiers never see the
+//!     `..` at all on that route;
 //!   * `~`, `$VAR`, backticks, `$(…)`, globs, braces, quotes, `{}` (a
 //!     `find -exec` placeholder) — the operand is not a literal path at all, so
 //!     it is `Undetermined`. This module NEVER expands a shell construct and
@@ -304,9 +310,13 @@
 
 use harness_core::verdict::Determination;
 
+mod case_fold;
 mod checkout;
+mod deletion_roots;
 
+use case_fold::is_case_only_same_entry;
 use checkout::{is_linked_checkout, CheckoutProbe};
+use deletion_roots::{deletion_roots, DELETION_TEMP_ROOTS};
 
 /// A function that maps a lexically-normalised absolute path to its REAL path,
 /// resolving symlinked components against the filesystem.
@@ -607,6 +617,14 @@ pub struct SafeRoots {
     /// classes can never answer `Allow`. Set only by the hook binary through
     /// [`SafeRoots::with_git_tree_probe`].
     git_tree_probe: Option<crate::reversible::GitTreeProbe>,
+    /// The index probe for a `git checkout -- <pathspec>` whose path does not
+    /// exist on disk ([`crate::reversible::probe_absent_path`]). `None` (the
+    /// default, and always for [`SafeRoots::none`]) keeps such a pathspec at
+    /// Ask. Set only by the hook binary through
+    /// [`SafeRoots::with_git_absent_probe`].
+    git_absent_probe: Option<crate::reversible::GitAbsentProbe>,
+    /// #1604 content-in-a-commit probe; `None` keeps working-tree `git restore` denied.
+    pub(crate) git_restore_probe: Option<crate::reversible::GitRestoreProbe>,
     /// The "is this directory a linked git worktree checkout" probe behind
     /// [`SafeRoots::classify_worktree_checkout`] and
     /// [`SafeRoots::is_linked_worktree_checkout`] (module doc, "Protected-named
@@ -616,6 +634,9 @@ pub struct SafeRoots {
     /// `None` (always for [`SafeRoots::none`]) means no operand is ever placed
     /// inside a checkout.
     checkout_probe: Option<CheckoutProbe>,
+    /// The model only the scratch-place rule consults; `None` = `self`. See
+    /// `detect/scratch_place.rs` (GitHub #1637).
+    pub(crate) managed_places: Option<std::sync::Arc<SafeRoots>>,
 }
 
 impl SafeRoots {
@@ -623,10 +644,10 @@ impl SafeRoots {
     /// `Undetermined`, so every caller keeps the verdict it had before this
     /// module existed.
     ///
-    /// This is what [`crate::detect::detect`] uses, which is why the library
-    /// consumers that hand commands to `sh -c` with no human present (condukt's
-    /// check runner, specguard's forge, daily's task runner) are unaffected by
-    /// this whole feature.
+    /// This is what [`crate::detect::detect`] uses for every rule except the
+    /// scratch-place rule (which gets a process model, GitHub #1637), so the
+    /// library consumers that hand commands to `sh -c` with no human present
+    /// (condukt, specguard's forge, daily) get no placement-based `Allow`.
     pub fn none() -> SafeRoots {
         SafeRoots {
             roots: Vec::new(),
@@ -638,7 +659,10 @@ impl SafeRoots {
             cache_roots: Vec::new(),
             home_real: None,
             git_tree_probe: None,
+            git_absent_probe: None,
+            git_restore_probe: None,
             checkout_probe: None,
+            managed_places: None,
         }
     }
 
@@ -744,7 +768,10 @@ impl SafeRoots {
             cache_roots,
             home_real,
             git_tree_probe: None,
+            git_absent_probe: None,
+            git_restore_probe: None,
             checkout_probe: resolver.map(|_| is_linked_checkout as CheckoutProbe),
+            managed_places: None,
         }
     }
 
@@ -761,6 +788,27 @@ impl SafeRoots {
     /// The attached git work-tree probe, if any.
     pub(crate) fn git_tree_probe(&self) -> Option<crate::reversible::GitTreeProbe> {
         self.git_tree_probe
+    }
+
+    /// Attach the absent-path index probe the `git checkout -- <pathspec>`
+    /// verdict uses when the path does not exist on disk. Only the hook binary
+    /// does this; without it such a pathspec stays Ask.
+    #[must_use]
+    pub fn with_git_absent_probe(mut self, probe: crate::reversible::GitAbsentProbe) -> SafeRoots {
+        self.git_absent_probe = Some(probe);
+        self
+    }
+
+    /// The attached absent-path index probe, if any.
+    pub(crate) fn git_absent_probe(&self) -> Option<crate::reversible::GitAbsentProbe> {
+        self.git_absent_probe
+    }
+
+    /// Attach [`crate::reversible::probe_restore_content`] (only the hook binary does).
+    #[must_use]
+    pub fn with_git_restore_probe(mut self, p: crate::reversible::GitRestoreProbe) -> Self {
+        self.git_restore_probe = Some(p);
+        self
     }
 
     /// The canonical home directory, if known.
@@ -1033,7 +1081,12 @@ is not decided by where it is spelled"
     /// resolve to exactly `<real path of its parent>/<its own name>` — a
     /// component that is a symlink resolves somewhere else and fails that.
     /// The binary's resolver re-attaches non-existent tail components by name,
-    /// so a path that does not exist yet passes.
+    /// so a path that does not exist yet passes. A component whose real path
+    /// differs from the expected one ONLY in letter case is accepted when it is
+    /// verifiably the same non-symlink entry ([`is_case_only_same_entry`]:
+    /// same parent, `lstat` of neither name is a symlink, same device and
+    /// inode) — a case-insensitive filesystem reporting the on-disk spelling
+    /// (#1630). A genuine symlink still fails.
     ///
     /// `Known(false)`: a symlink below the root. `Undetermined`: a prefix that
     /// does not resolve, or no prefix that resolves to `root` (the spelling
@@ -1053,7 +1106,7 @@ is not decided by where it is spelled"
             if found {
                 let parent = prev_real.as_deref().unwrap_or("");
                 let expected = format!("{}/{comp}", parent.trim_end_matches('/'));
-                if real != expected {
+                if real != expected && !is_case_only_same_entry(&expected, &real) {
                     return Determination::known(false);
                 }
             } else if real == root {
@@ -1068,6 +1121,113 @@ is not decided by where it is spelled"
                 "`{lexical}` is not spelled through the root {root}"
             ))
         }
+    }
+
+    /// The operand as an absolute path with every `.` and `..` component
+    /// resolved PHYSICALLY (GH #1661), or why it cannot be.
+    ///
+    /// [`SafeRoots::lexical_absolute`] collapses `..` lexically, which is not
+    /// what the kernel does: it resolves `a/lnk/..` against the REAL parent of
+    /// `lnk`'s target. This function walks the spelling left to right,
+    /// starting from `cwd` for a relative operand (or `/` for an absolute
+    /// one), and answers a path whose prefix before every removed `..` was
+    /// verified to be exactly what the kernel walks:
+    ///
+    ///  * `.` (and an empty component, `//`): the prefix so far must be an
+    ///    existing real directory ([`SafeRoots::resolves_to_existing_dir`]);
+    ///    the component is then dropped;
+    ///  * `..`: the prefix so far must be an existing real directory AND its
+    ///    own real path per the injected resolver — no symlinked component
+    ///    anywhere in it, above or below any root. Only then is the last
+    ///    component popped: for such a prefix the lexical parent IS the
+    ///    physical parent. A prefix that does not exist, is not a directory,
+    ///    does not resolve, or resolves anywhere else (a symlink, also a
+    ///    harmless one such as `/tmp` -> `/private/tmp`, or a differently
+    ///    cased spelling on a case-insensitive filesystem) is `Undetermined`;
+    ///  * a `..` with nothing left to pop (above `/`) is `Undetermined`, even
+    ///    though the kernel would stay at `/`;
+    ///  * any other component is appended by name, unresolved: the caller
+    ///    judges the result exactly as it judges a plain spelling (symlinks
+    ///    between a root and the operand still withhold its `Allow` there —
+    ///    [`SafeRoots::no_symlink_below`]).
+    ///
+    /// `cwd` must be absolute and free of `.`/`..` components; a literal-path
+    /// violation ([`SafeRoots::lexical_absolute`]'s character rules), an empty
+    /// operand, no resolver, or a relative operand with no `cwd` is
+    /// `Undetermined`. A spelling with no `.`, `..` or empty component comes
+    /// back as its lexical absolute path.
+    pub(crate) fn physical_absolute(
+        &self,
+        operand: &str,
+        cwd: Option<&str>,
+    ) -> Determination<String> {
+        if operand.is_empty() {
+            return Determination::undetermined("empty operand");
+        }
+        if operand
+            .chars()
+            .any(|c| NOT_A_LITERAL_PATH.contains(&c) || c.is_control())
+        {
+            return Determination::undetermined(
+                "operand is not a literal path (expansion, glob, quoting or a find -exec placeholder)",
+            );
+        }
+        if self.resolver.is_none() {
+            return Determination::undetermined("no symlink resolver in this session model");
+        }
+        let mut comps: Vec<&str> = Vec::new();
+        if !operand.starts_with('/') {
+            let Some(base) = cwd else {
+                return Determination::undetermined(
+                    "relative operand with no known working directory",
+                );
+            };
+            if !base.starts_with('/') {
+                return Determination::undetermined("working directory is not absolute");
+            }
+            for c in base.split('/').filter(|c| !c.is_empty()) {
+                if c == "." || c == ".." {
+                    return Determination::undetermined(
+                        "working directory has a `.` or `..` component",
+                    );
+                }
+                comps.push(c);
+            }
+        }
+        let joined = |comps: &[&str]| format!("/{}", comps.join("/"));
+        for (i, c) in operand.split('/').enumerate() {
+            // The leading empty piece of an absolute operand is not a `//`.
+            if i == 0 && c.is_empty() {
+                continue;
+            }
+            match c {
+                "" | "." => {
+                    let prefix = joined(&comps);
+                    if !self.resolves_to_existing_dir(&prefix) {
+                        return Determination::undetermined(format!(
+                            "`{prefix}` (before a `.` or `/`) is not an existing real directory"
+                        ));
+                    }
+                }
+                ".." => {
+                    if comps.is_empty() {
+                        return Determination::undetermined("`..` climbs above `/`");
+                    }
+                    let prefix = joined(&comps);
+                    if !self.resolves_to_existing_dir(&prefix)
+                        || self.resolve(&prefix).as_deref() != Some(prefix.as_str())
+                    {
+                        return Determination::undetermined(format!(
+                            "`{prefix}` (before a `..`) is not an existing real directory that is \
+its own real path, so its physical parent is not its lexical one"
+                        ));
+                    }
+                    comps.pop();
+                }
+                name => comps.push(name),
+            }
+        }
+        Determination::known(joined(&comps))
     }
 
     /// True when there is no model at all — [`SafeRoots::classify`] can only
@@ -1125,11 +1285,10 @@ is not decided by where it is spelled"
     /// (a resolver was supplied). [`SafeRoots::none`] — the no-model entry
     /// [`crate::detect::detect`] uses for library consumers — answers `false`.
     ///
-    /// The scratch-place rule ([`SafeRoots::classify_managed_place`]) applies
-    /// only when this is `true`: the no-model entry keeps the verdict it had
-    /// before that rule existed (its contract, see [`SafeRoots::none`]). A
-    /// model WITH a resolver whose roots all failed to resolve is still a
-    /// model, so there every landing is `Undetermined` and the rule asks.
+    /// When `false`, the scratch-place rule asks for every landing (GitHub
+    /// #1637; before, it answered `Allow`). A model WITH a resolver whose
+    /// roots all failed to resolve is still a model, so there every landing
+    /// is `Undetermined` and the rule asks too.
     pub(crate) fn has_location_model(&self) -> bool {
         self.resolver.is_some()
     }
@@ -1384,132 +1543,6 @@ fn real_root_below_anchor(
         return None;
     }
     Some(cur)
-}
-
-/// The fixed temp roots a recursive `rm` may delete inside WITHOUT
-/// confirmation (spec 3aa215e1 class 2). Narrower than [`TEMP_ROOTS`] on
-/// purpose: `/var/tmp` survives reboots and is not listed by the ruling, so it
-/// keeps only the safe-root `Ask`.
-const DELETION_TEMP_ROOTS: &[&str] = &["/tmp", "/private/tmp"];
-
-/// The cache roots below `$HOME` (spec 3aa215e1 class 3), as components below
-/// the canonicalised home directory.
-const DELETION_CACHE_ROOTS: &[&[&str]] = &[&[".cache"], &["Library", "Caches"]];
-
-/// True when `root` is `home` or an ancestor of it — a root that would put the
-/// whole home directory inside a delete-freely region.
-fn contains_home(root: &str, homes: &[&str]) -> bool {
-    homes.iter().any(|h| {
-        *h == root || root == "/" || h.starts_with(&format!("{}/", root.trim_end_matches('/')))
-    })
-}
-
-/// True when `root` is strictly below one of `homes`. A TEMP root there would
-/// make an ordinary home subtree (`$TMPDIR=$HOME/src`) delete-freely; only the
-/// fixed cache roots may live below home.
-fn below_home(root: &str, homes: &[&str]) -> bool {
-    homes
-        .iter()
-        .any(|h| root.starts_with(&format!("{}/", h.trim_end_matches('/'))))
-}
-
-/// Prefixes under which the OS's per-user temp directory lives (macOS
-/// `$TMPDIR` = `/var/folders/<xx>/<id>/T`). A deletion root strictly below
-/// one of these is not refused as a system directory; everything else
-/// [`crate::deletion::is_system_path`] names is.
-const OS_TEMP_PARENTS: &[&str] = &["/private/var/folders", "/var/folders"];
-
-/// True when `root` is a system directory in the sense of
-/// [`crate::deletion::is_system_path`] and not strictly below
-/// [`OS_TEMP_PARENTS`].
-fn system_root(root: &str) -> bool {
-    crate::deletion::is_system_path(root)
-        && !OS_TEMP_PARENTS
-            .iter()
-            .any(|p| root.starts_with(&format!("{p}/")))
-}
-
-/// Build the temp and cache DELETION roots (module doc, "Temp and cache
-/// roots"). Same filesystem discipline as the worktree storage roots: each
-/// must exist, right now, as a real directory with no symlink below its
-/// anchor ([`real_root_below_anchor`]). `$TMPDIR` and `$HOME` are refused on
-/// their RAW spelling (a `..`/`.` component, or not absolute) exactly like the
-/// payload cwd ([`raw_session_path_refusal`]). No root may be on
-/// [`NEVER_A_ROOT`], be `/`, be a system directory
-/// ([`crate::deletion::is_system_path`] — `$TMPDIR=/etc` resolves to
-/// `/private/etc`, which is not on [`NEVER_A_ROOT`]; only the OS per-user
-/// temp dir under `/var/folders` is exempt), or be the home directory or one
-/// of its ancestors (every spelling of HOME counts for that, refused or not).
-/// A TEMP root may also not be strictly below the home directory
-/// (`$TMPDIR=$HOME/src` would make `~/src` delete-freely). `$TMPDIR` is not a
-/// root at all when HOME is absent (those checks would have nothing to compare
-/// against).
-fn deletion_roots(
-    tmpdir: Option<&str>,
-    home: Option<&str>,
-    resolver: Option<RealPathResolver>,
-    probe: Option<DirProbe>,
-) -> (Vec<String>, Vec<String>) {
-    let mut temp: Vec<String> = Vec::new();
-    let mut cache: Vec<String> = Vec::new();
-    let Some(probe) = probe else {
-        return (temp, cache);
-    };
-    // For EXCLUSION ("no root may contain the home directory") every spelling
-    // of HOME counts, refused or not; for ANCHORING the cache roots only an
-    // unrefused one does.
-    let home_any = home.and_then(normalize_abs);
-    let home_any_real = home_any.as_deref().and_then(|h| resolve_with(h, resolver));
-    let home_norm = home
-        .filter(|h| raw_session_path_refusal(h, true).is_none())
-        .and_then(normalize_abs);
-    let homes: Vec<&str> = [home_any.as_deref(), home_any_real.as_deref()]
-        .into_iter()
-        .flatten()
-        .collect();
-    let acceptable = |root: &str| {
-        root.starts_with('/')
-            && !NEVER_A_ROOT.contains(&root)
-            && !system_root(root)
-            && !contains_home(root, &homes)
-    };
-    let acceptable_temp = |root: &str| acceptable(root) && !below_home(root, &homes);
-    for fixed in DELETION_TEMP_ROOTS {
-        if let Some(r) = real_root_below_anchor(fixed, &[], resolver, probe) {
-            if acceptable_temp(&r) && !temp.contains(&r) {
-                temp.push(r);
-            }
-        }
-    }
-    // `$TMPDIR` is only trusted when it can be checked against a known home
-    // directory: with no HOME at all, "is this TMPDIR the home directory or
-    // above it?" has no answer, so it is not a root (restrictive side).
-    let tmpdir = tmpdir.filter(|_| !homes.is_empty());
-    if let Some(t) = tmpdir.filter(|t| raw_session_path_refusal(t, true).is_none()) {
-        if let Some(norm) = normalize_abs(t) {
-            if let Some(r) = real_root_below_anchor(&norm, &[], resolver, probe) {
-                if acceptable_temp(&r)
-                    && is_acceptable_derived_root(&r, home_norm.as_deref())
-                    && !temp.contains(&r)
-                {
-                    temp.push(r);
-                }
-            }
-        }
-    }
-    if let Some(h) = home_norm.as_deref() {
-        for below in DELETION_CACHE_ROOTS {
-            if let Some(r) = real_root_below_anchor(h, below, resolver, probe) {
-                if acceptable(&r)
-                    && is_acceptable_derived_root(&r, home_norm.as_deref())
-                    && !cache.contains(&r)
-                {
-                    cache.push(r);
-                }
-            }
-        }
-    }
-    (temp, cache)
 }
 
 /// Why a RAW session path disqualifies the worktree `Allow`, or `None`.

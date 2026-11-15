@@ -1,7 +1,12 @@
 // このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! RED repro (2026-11-07, session c2e3bc17): `condukt worktree merge` lands a
+//! 2026-11-13 NOTE: the two refusal tests that pinned a per-merge fmt/clippy gate
+//! (backlog 0a68823d) were retired by the user ruling of 2026-11-12 (lint moves
+//! to the push tier); only the control remains. The text below is the original
+//! 2026-11-07 history.
+//!
+//! RED repro (2026-11-07, session c2e3bc17): `condukt worktree merge` landed a
 //! task branch whose tip fails `cargo fmt --check` / `cargo clippy -D warnings`.
 //!
 //! Observed: condukt workers committed code that failed clippy
@@ -163,31 +168,9 @@ impl Fixture {
     }
 }
 
-/// rustfmt reports a diff for this (the gate would run `cargo fmt --check`).
-const FMT_VIOLATION: &str =
-    "pub fn answer() -> u32 {\n    42\n}\n\npub fn badly_formatted(   ) ->u32{let x=1;x}\n";
-
-/// rustfmt-clean, but `clippy::collapsible_if` fires under `-D warnings` (the
-/// lint observed at crates/blastguard/src/detect/interpreter.rs:1168).
-const CLIPPY_VIOLATION: &str = "pub fn answer() -> u32 {\n    42\n}\n\npub fn nested(a: bool, b: bool) -> u32 {\n    if a {\n        if b {\n            return 1;\n        }\n    }\n    0\n}\n";
-
 /// Clean under both fmt and clippy.
 const CLEAN_ADDITION: &str =
     "pub fn answer() -> u32 {\n    42\n}\n\npub fn also_clean(x: u32) -> u32 {\n    x + 1\n}\n";
-
-fn assert_refused_and_main_unmoved(f: &Fixture, branch: &str, what: &str) {
-    let before = f.main_sha();
-    let out = f.merge(branch);
-    let after = f.main_sha();
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !out.status.success() && after == before,
-        "condukt worktree merge landed a branch whose tip fails {what}: exit={:?}, main \
-         {before} -> {after}\nstdout={stdout}\nstderr={stderr}",
-        out.status.code()
-    );
-}
 
 /// ANTI-VACUITY CONTROL: a fmt+clippy clean task branch merges and main
 /// advances. Proves the fixture's create/trailer/merge path works, so the RED
@@ -205,37 +188,4 @@ fn control_clean_branch_merges() {
     let out = f.merge(&branch);
     assert!(out.status.success(), "clean branch must merge: {out:?}");
     assert_ne!(f.main_sha(), before, "main must advance on a clean merge");
-}
-
-#[test]
-fn merge_refuses_branch_whose_tip_fails_cargo_fmt_check() {
-    let f = Fixture::new();
-    let (wt, branch) = f.task_branch("fmt", FMT_VIOLATION);
-    let fmt = cargo(&wt, &f.home, &["fmt", "--", "--check"]);
-    assert!(
-        !fmt.status.success(),
-        "apparatus: the task tip must fail `cargo fmt --check`: {fmt:?}"
-    );
-    assert_refused_and_main_unmoved(&f, &branch, "`cargo fmt --check`");
-}
-
-#[test]
-fn merge_refuses_branch_whose_tip_fails_cargo_clippy() {
-    let f = Fixture::new();
-    let (wt, branch) = f.task_branch("clippy", CLIPPY_VIOLATION);
-    let fmt = cargo(&wt, &f.home, &["fmt", "--", "--check"]);
-    assert!(
-        fmt.status.success(),
-        "apparatus: the clippy fixture must be fmt-clean so only clippy is red: {fmt:?}"
-    );
-    let clippy = cargo(
-        &wt,
-        &f.home,
-        &["clippy", "--all-targets", "--", "-D", "warnings"],
-    );
-    assert!(
-        !clippy.status.success(),
-        "apparatus: the task tip must fail `cargo clippy -D warnings`: {clippy:?}"
-    );
-    assert_refused_and_main_unmoved(&f, &branch, "`cargo clippy -D warnings`");
 }

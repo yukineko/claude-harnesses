@@ -25,7 +25,11 @@
 //!     or stderr names the half-applied state with recovery instructions.
 //! Silent staged-without-MERGE_HEAD is neither.
 //!
-//! Written without a fix; run with `-- --ignored`.
+//! Written without a fix (RED observed 2026-11-08: `staged="task.txt",
+//! MERGE_HEAD present=false`). Fixed by `worktree::recover_timed_out_merge`
+//! (backlog 8ada7ad9): the timed-out real merge is rolled back and the
+//! rollback is reported; the extra assertions at the end pin that stricter
+//! contract. Same fixture observed no `.git/index.lock` left after the kill.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -66,7 +70,6 @@ fn condukt(repo: &Path, home: &Path, args: &[&str]) -> Output {
 }
 
 #[test]
-#[ignore = "RED: merge timeout leaves staged half-merge, no MERGE_HEAD 2026-11-07"]
 fn timed_out_merge_does_not_leave_a_silent_half_applied_index() {
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path().canonicalize().unwrap();
@@ -137,6 +140,14 @@ fn timed_out_merge_does_not_leave_a_silent_half_applied_index() {
          for another reason); stdout={stdout:?} stderr={stderr:?}"
     );
 
+    // Observation (2026-11-08): is the killed git's `.git/index.lock` left
+    // behind? Printed so the run output records it.
+    eprintln!(
+        "observation: .git/index.lock present after merge = {}, .git/MERGE_HEAD present = {}",
+        repo.join(".git/index.lock").exists(),
+        repo.join(".git/MERGE_HEAD").exists()
+    );
+
     let head_after = run_git(&repo, &["rev-parse", "HEAD"]);
     assert_eq!(head_after, head_before, "a failed merge must not move HEAD");
     let staged = run_git(&repo, &["diff", "--cached", "--name-only"]);
@@ -151,5 +162,143 @@ fn timed_out_merge_does_not_leave_a_silent_half_applied_index() {
         "timed-out merge left main HALF-APPLIED and unannounced: staged={staged:?}, \
          MERGE_HEAD present={merge_head}, recovery named in output={reported}; \
          stderr={stderr:?}"
+    );
+
+    // Fix contract (backlog 8ada7ad9, 2026-11-08): the rollback actually ran
+    // and the failure is still reported as a failure.
+    assert!(
+        !out.status.success(),
+        "a timed-out merge must exit non-zero"
+    );
+    assert!(clean, "the rollback must leave nothing staged: {staged:?}");
+    assert!(!merge_head, "the rollback must leave no MERGE_HEAD");
+    assert!(
+        !repo.join(".git/index.lock").exists(),
+        "no index.lock may remain after the rollback"
+    );
+    assert!(
+        !repo.join("task.txt").exists(),
+        "the half-applied incoming file must be gone from main's work tree"
+    );
+    assert!(
+        stderr.contains("rolled back"),
+        "stderr must state the half-applied merge was rolled back: {stderr:?}"
+    );
+}
+
+/// Backlog 8ada7ad9, the `index.lock` arm. A kill INSIDE a merge driver
+/// leaves the killed git's `.git/index.lock` behind (observed 2026-11-08 in
+/// `backlog_merge_timeout_other_paths_20261108`). condukt cannot prove the
+/// lock is the killed git's rather than a live git's, so the rollback must not
+/// remove it and must fail loudly: non-zero exit, "timed out", the
+/// half-applied state named, the lock named, the manual recovery named.
+#[test]
+fn timed_out_merge_with_a_left_index_lock_fails_loudly_and_keeps_the_lock() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().canonicalize().unwrap();
+    let repo = base.join("repo");
+    let home = base.join("home");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    run_git(&repo, &["init", "-q", "-b", "main"]);
+    run_git(&repo, &["config", "user.email", "t@t.t"]);
+    run_git(&repo, &["config", "user.name", "t"]);
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+    std::fs::write(repo.join("shared.txt"), "a\nb\nc\n").unwrap();
+    run_git(&repo, &["add", "."]);
+    run_git(&repo, &["commit", "-q", "-m", "init"]);
+
+    let out = condukt(
+        &repo,
+        &home,
+        &[
+            "worktree", "create", "--run", "runT", "--topic", "t1", "--branch", "b1",
+        ],
+    );
+    assert!(out.status.success(), "worktree create: {out:?}");
+    let wt = std::path::PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    std::fs::write(wt.join("shared.txt"), "a\nb\ntask\n").unwrap();
+    run_git(&wt, &["add", "shared.txt"]);
+    run_git(
+        &wt,
+        &["commit", "-q", "-m", "task", "-m", "Condukt-Task: runT/t1"],
+    );
+    let task_branch = run_git(&wt, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    std::fs::write(repo.join("shared.txt"), "a\nmain\nc\n").unwrap();
+    run_git(&repo, &["add", "shared.txt"]);
+    run_git(&repo, &["commit", "-q", "-m", "main moves"]);
+
+    // Merge driver for shared.txt: instant on its first call (the trial
+    // merge), sleeps past the 45s GIT_TIMEOUT on the second (the real merge).
+    let marker = base.join("driver-called-once");
+    let driver = base.join("slow-merge-driver.sh");
+    std::fs::write(
+        &driver,
+        format!(
+            "#!/bin/sh\nif [ -e '{m}' ]; then sleep 120; fi\ntouch '{m}'\nexit 0\n",
+            m = marker.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&driver, std::fs::Permissions::from_mode(0o755)).unwrap();
+    run_git(
+        &repo,
+        &[
+            "config",
+            "merge.slow.driver",
+            &format!("{} %O %A %B", driver.display()),
+        ],
+    );
+    std::fs::write(repo.join(".git/info/attributes"), "shared.txt merge=slow\n").unwrap();
+
+    let out = condukt(
+        &repo,
+        &home,
+        &[
+            "worktree",
+            "merge",
+            "--branch",
+            &task_branch,
+            "--run",
+            "runT",
+            "--task",
+            "t1",
+        ],
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let lock = repo.join(".git/index.lock");
+    eprintln!(
+        "merge exit={:?}\nstderr={stderr}\nobservation: .git/index.lock present = {}",
+        out.status.code(),
+        lock.exists()
+    );
+    assert!(
+        marker.exists(),
+        "fixture precondition: the trial merge called the driver"
+    );
+    assert!(
+        stderr.contains("timed out"),
+        "fixture precondition: the real merge must have timed out: {stderr:?}"
+    );
+    assert!(
+        lock.exists(),
+        "fixture precondition: the kill inside the driver left index.lock"
+    );
+    assert!(!out.status.success(), "must exit non-zero");
+    assert!(
+        stderr.contains("HALF-APPLIED"),
+        "must name the state: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("index.lock"),
+        "must name the lock: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("git reset --merge") && stderr.contains("git merge --abort"),
+        "must name the manual recovery: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains("rolled back"),
+        "must not claim a rollback that did not happen: {stderr:?}"
     );
 }

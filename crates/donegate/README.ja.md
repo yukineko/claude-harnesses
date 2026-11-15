@@ -34,7 +34,8 @@ donegate は、この「未検証のまま完了宣言する」問題を停止�
 - **試行カウンタ**: セッションごとに連続ブロック回数を数え、`max_attempts`（既定 2）回に達したら諦めて停止を許す。本当に詰まったエージェントが罠にかからないようにするためだ。カウンタは `reset_after_secs` のアイドル後、またはグリーンになった時点でリセットされる。
 - **エスケープハッチ**: `donegate skip --reason "<理由>"`。一度だけ消費されて次の停止を通し、**発行したセッションにだけ**適用される。理由は必須で、発行と消費の両方がゲートログに追記されるため、記録の残らないバイパスは起こらない。（旧来の project root の `.donegate-skip` ファイルは撤去した。共有の 1 回限りマーカーは次に停止したセッションが消費してしまい、その*別*セッションの正当なゲートを素通りさせる — CLAUDE.md §5 が並行セッション下で禁じているのはまさにこれ。）
 - **キルスイッチ**: `DONEGATE_DISABLE=1`。ただし **Claude Code 自身を起動した環境**でのみ有効で、ツール呼び出しから export しても、このフックはアプリの環境を継承するため届かない。
-- **オプトイン**: 設定ファイルが 1 つも無い（`<root>/donegate.toml` も `~/.donegate/config.toml` も無い）か、読み込んだ設定に `[[check]]` が 1 つも無ければ、ゲートはすべての停止を許す。フックを入れただけで、オプトインしていないプロジェクトをブロックすることはない。セッションが書き込んだ root がすべて donegate の設定を一切持たない場合も停止は許可され、stdout は空になる（`systemMessage` は出さない。2026-10-27 のユーザー裁定）。代わりに stderr に「donegate not configured for <roots>: no checks ran」を出し、`<state_dir>/log.jsonl` にセッションと各 root（`roots`）を記した `"verdict":"unconfigured"` の行を追記する。
+- **オプトイン**: 設定ファイルが 1 つも無い（`<root>/donegate.toml` も `~/.donegate/config.toml` も無い）か、読み込んだ設定に `[[check]]` が 1 つも無ければ、ゲートはすべての停止を許す。フックを入れただけで、オプトインしていないプロジェクトをブロックすることはない。セッションが hook cwd 内に書き込んだのに cwd が donegate の設定を一切持たない場合も停止は許可され、stdout は空になる（`systemMessage` は出さない。2026-10-27 のユーザー裁定）。代わりに stderr に「donegate not configured for <cwd>: no checks ran」を出し、`<state_dir>/log.jsonl` にセッションと cwd（`roots`）を記した `"verdict":"unconfigured"` の行を追記する。
+- **判定するのは hook cwd だけ**（2026-11-08 のユーザー裁定、原文:「donegateのworktreeテストは問題ありすぎるので即時に停止」「donegateそのものが他のworktreeを見たり検証したりテストしたりすることは禁止とする」）: Stop でも SubagentStop でも、donegate は hook の cwd の root だけを判定する。セッションが書き込んだ他の worktree・他の root は解決も列挙もせず、チェックを実行せず、ブロックせず、出力や log で名指しもしない。transcript から読むのは「書き込んだパスが cwd の内側にあるか」だけ（パスの比較であり、cwd の外は開かない）。transcript が読めないときはブロックする。cwd の内側にネストした worktree（例: `.claude/worktrees/…`）への書き込みは、cwd への書き込みとして数える（制限側）。
 - **判定できないときはブロックする**: project の `donegate.toml` があるのに root が**未信頼**（実行を拒否）、設定ファイルが存在するのに読めない・解析できない、宣言されたチェック名が予約名前空間 `undetermined:` に入っている — これらは許可ではなくブロックになる。同じ `max_attempts` カウンタで有界で、使い切ると「NOTHING WAS VERIFIED」と明示して停止を通す（`giveup-refusal` として記録）。
 - **donegate 自身の panic** は `harness_core::gate::run::run_guarded` を通り fail-closed（最初の停止はブロック。`stop_hook_active` の再入で 2 回連続 panic したときだけ通す）。
 
@@ -64,7 +65,7 @@ donegate gate          # チェックを手動実行（人間向けレポート�
 | サブコマンド | 役割 |
 |---|---|
 | `donegate gate` | Stop フック本体。適用対象のチェックを実行し、グリーンになるまで停止をブロックする。 |
-| `donegate subagent-gate` | SubagentStop フック本体。停止する subagent が書いた root のチェックを実行し、グリーンになるまでその停止をブロックする。 |
+| `donegate subagent-gate` | SubagentStop フック本体。停止する subagent が hook cwd 内に書いたときだけ cwd のチェックを実行し、グリーンになるまでその停止をブロックする。他の worktree は判定しない。 |
 | `donegate init` | プロジェクト種別（Cargo / npm / Python / Go）を自動検出して `./donegate.toml` を生成する。 |
 | `donegate install` / `uninstall` | `~/.claude/settings.json` への Stop / SubagentStop フックの追加 / 削除。 |
 | `donegate status` | 解決済みの設定と、現在の作業ツリーに対して実行されるチェックを表示する。 |
@@ -96,7 +97,7 @@ donegate gate          # チェックを手動実行（人間向けレポート�
 
 #### pass キャッシュ
 
-**通った（pass した）**チェックの結果だけを `<state_dir>/pass-cache/` に記録し、キーが 1 バイトも変わっていなければ次の Stop（親 Stop が subagent の root を再判定する場合も含む）では再実行しない。キーは root パス・チェック名・`cmd` 文字列・`workdir`・実効タイムアウト・`HEAD` の sha・`main` が指す sha（無ければ「無い」と確定した値。変更集合の merge-base はこの 2 つで決まる）・作業ツリーの内容。作業ツリーの内容は、空の一時 index（`GIT_INDEX_FILE`、`<state_dir>/tmp` 配下）に `git add -A`（tracked＋ignore されていない untracked）と、本物の index が追跡している ignore 対象パスの強制 add をしてから `git write-tree` した tree。本物の index は読むだけで触らない（副作用として blob が object store に書かれる）。
+**通った（pass した）**チェックの結果だけを `<state_dir>/pass-cache/` に記録し、キーが 1 バイトも変わっていなければ次の Stop（SubagentStop の後に親 Stop が同じ cwd を判定する場合も含む）では再実行しない。キーは root パス・チェック名・`cmd` 文字列・`workdir`・実効タイムアウト・`HEAD` の sha・`main` が指す sha（無ければ「無い」と確定した値。変更集合の merge-base はこの 2 つで決まる）・作業ツリーの内容。作業ツリーの内容は、空の一時 index（`GIT_INDEX_FILE`、`<state_dir>/tmp` 配下）に `git add -A`（tracked＋ignore されていない untracked）と、本物の index が追跡している ignore 対象パスの強制 add をしてから `git write-tree` した tree。本物の index は読むだけで触らない（副作用として blob が object store に書かれる）。
 
 - キーが計算できない（repo でない・git の失敗・読めないファイル）・ストアが読めない／壊れている・保存されたキーと違う、はすべて **miss** で、チェックを実行する。
 - 失敗したチェックは保存しない。そのチェックのエントリは消す。
@@ -105,36 +106,23 @@ donegate gate          # チェックを手動実行（人間向けレポート�
 - キーに含まれないもの: 追跡されていない ignore 対象ファイル（`target/` など）、repo 外のファイル、チェックが継承する環境変数。
 - give-up・試行回数・waiver の扱いは変わらない（hit は pass と同じ扱い）。
 
-#### 実行中のバックグラウンド subagent の root（SubagentStop）
+#### SubagentStop
 
-実行中のバックグラウンド subagent **だけ**が書いた root は、親の Stop では判定しない。subagent がまだ編集中なので、判定すると推論中の編集と競合する。その root は黙って飛ばさず名指しする。stderr に出し、Stop の `systemMessage` またはブロック理由にも `[root: …] NOT judged at this stop: only background subagent(s) <ids> wrote it …` として載せる。「実行中」と判定するには次の 3 つがすべて要る。
+（2026-11-08 のユーザー裁定で、実行中のバックグラウンド subagent だけが書いた root を親の Stop で見送る仕組みは撤去した。親の Stop はそもそも hook cwd 以外を判定しない。）
 
-- `agent-<id>.meta.json` に `toolUseId` がある。
-- いずれかの transcript（親か sidechain。入れ子の起動元も含む）に、対応する `toolUseResult {isAsync: true, status: "async_launched", agentId}` がある。
-- どの transcript にもその agent の `<task-notification>`（`task-id`）がない。
-
-次のいずれかに当たれば、親の Stop は従来どおりその root を判定する。
-
-- 状態が判定できない。
-- subagent が終了済み。
-- 親自身、または実行中と観測できない他の subagent もその root に書いた（cwd がその root 内の Bash 呼び出しを含む）。
-- その root が hook cwd である。
-- transcript を読めない。この場合は「実行中 root を判定できず、全 root を判定した」という通知を同じ経路で出す。
-
-`donegate subagent-gate` は **SubagentStop** フックで、`hooks/hooks.json` と `donegate install` が登録する。停止する subagent が書いた root を判定する。その subagent の transcript は `agent_transcript_path`、無ければ `<transcript dir>/<stem>/subagents/agent-<agent_id>.jsonl` から読む。判定は親の追加 root と同じロジックで行う。
+`donegate subagent-gate` は **SubagentStop** フックで、`hooks/hooks.json` と `donegate install` が登録する。停止する subagent の transcript（`agent_transcript_path`、無ければ `<transcript dir>/<stem>/subagents/agent-<agent_id>.jsonl`）に hook cwd 内への書き込みがあるときだけ、cwd を判定する。他の worktree・root は判定しない。
 
 - green なら許可する。
 - red なら `{"decision":"block"}` で subagent の停止をブロックする。
 - 同一指摘の再発は `systemMessage` 付きで見送る。
 - `max_attempts` に達したら give-up する。
 
-カウンタと見送り記憶は `<session>-agent-<agent_id>` をキーにするので、親の連鎖とは混ざらない。何も書かなかった subagent は黙って許可する。config が無い root やチェックを宣言していない root は、ここでは判定しない。次の場合はブロックする。
+カウンタと見送り記憶は `<session>-agent-<agent_id>` をキーにするので、親の連鎖とは混ざらない。cwd 内に何も書かなかった subagent は黙って許可する。cwd に config が無い、またはチェックを宣言していないときは、ここでは判定しない。次の場合はブロックする。
 
-- donegate がその root のチェック実行を拒否した。
+- donegate が cwd のチェック実行を拒否した。
 - agent transcript の場所が分からない、または読めない。
-- root を判定できない。
 
-`donegate skip` は親セッションのものなので、SubagentStop では消費しない。subagent が終了した後は、親の Stop が改めてその root を判定する。
+`donegate skip` は親セッションのものなので、SubagentStop では消費しない。
 
 #### 失敗出力の session 記録と静かな表示
 
@@ -168,8 +156,7 @@ donegate gate          # チェックを手動実行（人間向けレポート�
   チェーン終了（グリーン・give-up・skip・`reset_after_secs` のアイドルリセット）で消える。これとは別に、
   共有の `harness_core::repeat` ledger（2026-09-18 裁定）は同一セッション内で同文のブロックが再発すれば
   通しうる。ツリーや署名が判定できなければブロックする。waiver は
-  gate log に `repeat-waived` として残るが overwatch ledger には書かない。別 root がブロックするときは、
-  他 root の waiver / give-up 通知をブロック理由に追記する。有界な出口は試行上限と give-up sentinel
+  gate log に `repeat-waived` として残るが overwatch ledger には書かない。有界な出口は試行上限と give-up sentinel
   （`donegate:giveup:<check>`）である。
 5. すべてグリーンなら exit 0 で停止を通し、いずれか必須が失敗したら `block` を出して Claude に作業を続けさせる。
 

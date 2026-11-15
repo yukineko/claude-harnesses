@@ -23,11 +23,10 @@ pub const PROTECTION: Protection = Protection {
         consumers that act on its exit codes and output: (1) a plugin rollout, \
         when a human runs scripts/rollout-plugins.sh with a canary (required \
         for the GATE crates) - the stage is rolled back and the rollout \
-        halted; (2) the shared main working tree, through condukt's main-tree \
-        guard (crates/condukt/src/maintree.rs observe_peers, run by the opt-in \
-        .githooks/pre-commit as `condukt guard main-tree`), which reads \
-        `overwatch status --json` as one of its two liveness inputs; (3) \
-        duplicate work across sessions, advisory only (see AGAINST).",
+        halted; (2) duplicate work across sessions, advisory only (see \
+        AGAINST). It no longer feeds any commit-time gate: condukt's main-tree \
+        guard, which read `overwatch status --json` as a liveness input, was \
+        removed by user ruling 2026-11-08.",
     against: "(1) A canary stage that makes gates misfire: `overwatch \
         canary-gate` exits 3 (src/main.rs CanaryGate arm) when violations \
         recorded since the stage's deploy exceed --threshold (rollout default \
@@ -40,12 +39,7 @@ pub const PROTECTION: Protection = Protection {
         repoint with no soak time (stage_deploy_ts is taken just before the \
         copy), so it counts only violations recorded in those seconds and does \
         not observe the new binaries in use; ROLLOUT_GATE_EVAL_FAILSOFT=1 and \
-        --no-canary are explicit bypasses. (2) A commit from the shared main \
-        tree while another session is live: overwatch supplies the lease \
-        roster and reports an unreadable lease ledger as an `undetermined` \
-        entry with source `sessions` instead of an empty roster, which the \
-        guard resolves to a block (maintree.rs parse_overwatch_sessions); the \
-        guard, not overwatch, blocks. (3) Two sessions working one key: \
+        --no-canary are explicit bypasses. (2) Two sessions working one key: \
         `overwatch begin` exits 1 with skip JSON when another live session \
         holds the key or the lease lock is contended (src/lease.rs begin). \
         Nothing enforces that exit: no code, hook or script in this repo \
@@ -63,11 +57,6 @@ pub const PROTECTION: Protection = Protection {
         comments - a gate-eval error used to fall through to PROCEED, 'a \
         GATE-crate rollout advancing every stage precisely because the health \
         check was broken and verified nothing', and 'a single-stage canary ran \
-        it ZERO times'. (2) CLAUDE.md section 8, measured 2026-07-23: two \
-        sessions shared main's working tree and index \
-        ('触っているファイルは非衝突なのに、index が共有されているため分離できない'); \
-        README.md: '`(none)` there is the claim \"no other session is live\"', \
-        which is why an unreadable ledger is reported as unknown, not as \
-        (none). (3) Rationale only, no recorded incident: README.md 'A \
+        it ZERO times'. (2) Rationale only, no recorded incident: README.md 'A \
         distributed multi-session system requires coordination.'",
 };

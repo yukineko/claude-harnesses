@@ -38,6 +38,13 @@ Evidence classes (every class present is validated; at least one is required)
             git objects (`read-tree` into a private index + `checkout-index`),
             never by touching the repository's index or working tree, and are
             removed on every exit path.
+            NOTE (unresolved, user ruling 2026-11-08 「backlog doneのRED実行は
+            そもそも全面廃止でいい」): `backlog done` no longer executes RED. It
+            writes closure.red with executed = false, kind = "not-executed"
+            and no exit, which THIS gate refuses ("red.exit ... must exit
+            non-zero", kind != "behavioural"). Whether the gate should change
+            is undecided and left to a human; it is not wired into
+            .githooks/pre-commit (docs/gate-taxonomy.md), so nothing blocks today.
   doc-only  closure.doc_only_commit: an ancestor, non-root, non-merge commit
             that touches ONLY doc paths (predicate `is_doc_path`, below).
   duplicate closure.duplicate_of: an existing row (not itself) whose status is
@@ -430,8 +437,9 @@ def is_test_path(p: str) -> bool:
 
 def staged_test_paths() -> list[str]:
     """Test files the red tree gets from the index (the test is the one being
-    committed; the code is the red rev's). Mirrors the backlog CLI's overlay of
-    test files onto the detached red worktree (narrowed to the named ones by the caller)."""
+    committed; the code is the red rev's). This used to mirror the backlog CLI's
+    overlay onto its detached red worktree; the CLI no longer runs RED at all
+    (user ruling 2026-11-08), so this gate is now the only place a RED re-run exists."""
     out = _git_ok(["ls-files", "-z", "--full-name"], "list index")
     return [p for p in out.split("\0") if p and is_test_path(p)]
 
@@ -536,9 +544,9 @@ def check_f2p(row: dict, cl: dict, ctx: Ctx) -> list[str]:
     staged = staged_test_paths()
     named = [p for p in staged if p in set(need)]
     overlay = named or staged
-    # `done --red-overlay` (evidence.rs `narrowed_overlay`) records a narrowed
-    # overlay as closure.red.overlay: a non-empty list that may only NARROW the
-    # default overlay above. Anything else blocks; absent = the default.
+    # Legacy closures written by the removed `done --red-overlay` carry a
+    # narrowed overlay as closure.red.overlay: a non-empty list that may only
+    # NARROW the default overlay above. Anything else blocks; absent = the default.
     if "overlay" in red:
         ro = red["overlay"]
         if (not isinstance(ro, list) or not ro

@@ -85,8 +85,12 @@ class _Fixture(unittest.TestCase):
         return self.write(os.path.join(self.wt, "n.md"), f"see {text}", sid=sid, **kw)
 
     def stop(self, sid="s1", **kw):
+        # cwd MAIN (was the worktree). RE-SCOPED by user ruling 2026-11-08
+        # ("donegateそのものが他のworktreeを見たり検証したりテストしたりすることは
+        # 禁止とする。..."): a deny against main is re-checked at Stop only when
+        # the session's own tree is main; from a worktree nothing in main is read.
         return self.run_hook(STOP, {"session_id": sid, "hook_event_name": "Stop",
-                                    "cwd": self.wt}, **kw)
+                                    "cwd": self.main}, **kw)
 
     def ledger(self, sid="s1"):
         return os.path.join(self.home, ".claude", "state", "maintree-deny", sid + ".jsonl")

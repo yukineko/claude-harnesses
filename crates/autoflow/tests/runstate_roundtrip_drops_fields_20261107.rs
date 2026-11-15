@@ -85,7 +85,6 @@ impl Drop for Env {
 }
 
 #[test]
-#[ignore = "RED: autoflow mark_running write-back drops condukt per-task/run fields 2026-11-07"]
 fn autoflow_stop_preserves_fields_it_does_not_own() {
     let env = Env::new();
     let seeded = serde_json::json!({

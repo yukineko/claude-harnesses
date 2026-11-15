@@ -170,7 +170,6 @@ fn unbalanced_delimiter_in_quoted_body_does_not_unresolve_a_literal_cd() {
 /// heredoc keeps the body scanned), not from cd resolution; fixing it needs a
 /// ruling that changes that documented scan.
 #[test]
-#[ignore = "backlog a63ee085: open defect, remove ignore when fixed"]
 fn lone_backtick_in_quoted_body_with_trailing_line_is_allow() {
     let base = fresh_dir("bt");
     let wt = base.display();

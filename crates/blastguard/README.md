@@ -36,7 +36,7 @@ It matches `Bash`, `Edit`, `Write`, `MultiEdit`, and `NotebookEdit`.
 | Recursive `rm` | `rm -rf dir`, `rm -fr dir`, `rm -r -f dir` |
 | Wildcard `rm` | `rm *`, `rm -f *`, `rm path/*` |
 | `git clean` force + dir/ignored | `git clean -fdx`, `git clean -fd` |
-| `git reset --hard` | `git reset --hard HEAD~3` |
+| `git reset --hard` (exception: the literal rev `HEAD`, run in a linked worktree checkout that `git status --ignore-submodules=none` positively reports clean and whose index has no assume-unchanged / skip-worktree entry, is allowed; probe failure keeps the deny) | `git reset --hard HEAD~3` |
 | Working-tree discard | `git checkout -- .`, `git checkout --force` |
 | Truncating redirect (single `>`) | `echo x > existing` (judged by recoverability — see [Truncating redirects](#truncating-redirects-are-judged-by-recoverability)) |
 | Bash write into a system directory | `echo x > /etc/paths.d/zz`, `… \| tee /etc/sudoers.d/x`, `cp evil /etc/paths.d/zz` |
@@ -51,11 +51,46 @@ It matches `Bash`, `Edit`, `Write`, `MultiEdit`, and `NotebookEdit`.
 
 Inline-eval interpreters (`python3`/`perl`/`ruby`/`node`/`php`/`lua` with
 `-c`/`-e`/…) are no longer denied for their **shape**: the program text is
-audited (`analyze_code_interpreter` / `interpreter_code_verdict` in
-`src/detect/interpreter.rs`). A program that demonstrably deletes something, or whose
+audited (`analyze_code_interpreter` in `src/detect/interpreter/invocation.rs`,
+`interpreter_code_verdict` in `src/detect/interpreter.rs`). Since 0.2.481 the
+audited text is the argument read off the command line as written — newlines
+and runs of blanks kept (`faithful_tail` in `src/detect/payload.rs`) — not the
+whitespace-split tokens re-joined by one space, which let a `#` comment swallow
+the call on the next line (`python3 -c "import os # x<NL>os.chmod(…)"` was
+allowed). A re-join that cannot be checked against the source and has lost a
+word's separators is an ask, never an allow. Since 0.2.491 the word is
+dequoted with POSIX line continuation (`first_shell_word` in
+`src/detect/words.rs`): a backslash-newline is removed when unquoted or inside
+double quotes — `python3 -c "o\<NL>pen('/etc/hosts','a')"` is judged as the
+`open('/etc/hosts','a')` python receives — and kept literally inside single
+quotes (and `$'…'`); a real newline is never joined. A program that demonstrably deletes something, or whose
 embedded shell line is destructive, is a deny; one that names a protected
 gate/config path is an ask; a benign program such as `python3 -c "print(1)"`
-is allowed (0.2.59). Running a script **file** (`python3 app.py`,
+is allowed (0.2.59). Since 0.2.483 (backlog 6cac93af) whether a program
+**writes** — which turns on the recoverability / system-directory probe of its
+path literals — is decided for every `open(`-family call (`open`, `io.open`,
+`codecs.open`, `os.fdopen`, `pathlib.Path.open`, Node `fs.open`/`openSync`,
+Ruby `File.open`, Perl three-argument `open`) by parsing its mode
+(`src/detect/interpreter/open_mode.rs`), not by listing `'w'` spellings: a
+literal mode containing `w`, `a`, `x`, `+` (or Perl's `>`) is a write, a mode
+that cannot be determined statically (variable, expression, `*args`/`**kwargs`)
+is treated as a write, and an absent or read-only mode (`'r'`, `'rb'`, `'rt'`)
+is not. `os.open` flags are a write unless every term is a read-only flag
+(`O_RDONLY`, `O_CLOEXEC`, …); an integer mode/flags operand is a write unless
+it is `0`. Since 0.2.485 a call is the name, optional whitespace or newline,
+then `(` (`open ('/etc/hosts','a')`); the mode-taking file classes (`FileIO`,
+`ZipFile`, `GzipFile`, `TarFile`, `BZ2File`, `LZMAFile`) and `shelve`/`dbm`
+`open` follow the same rule (dbm flag: only `'r'` is a read; `shelve`'s
+default `'c'` is a write); and any non-call use of the name `open`
+(`from io import open as o`, `from os import open`, `o = open`) makes the
+whole program undetermined, i.e. a write. Since 0.2.489 a known-Python
+program (no `exec`/`eval`/`getattr`-style marker, no f-string) is read with the
+Python lexer, so `open` in a string or `#` comment counts for nothing, and a
+non-ASCII character in a code token (full-width `ｏｐｅｎ`, which Python
+NFKC-normalises to `open`) makes it undetermined; other program text is scanned
+raw, where any non-ASCII letter is undetermined. So `open('/etc/hosts','a')`,
+`'r+'`, `'x'` and `mode='a'` are denied like `'w'` was; `Path.write_text` and
+Node `appendFileSync` are not covered by this rule. Running a script **file** (`python3 app.py`,
 `python3 -m …`) is not judged. A `>` in program text whose "target" cannot be
 determined (`print(1 > 0)`, a backticked `` `<k(r)>/x.json` `` in a comment) is
 an `ask` marked "Recommended: do not run this." — never a deny, never an allow
@@ -431,6 +466,60 @@ that lock's failure would have to resolve to `Undetermined` on every read.
 Writes go through temp + rename, so a reader never sees a half-written entry.
 
 
+## Subagent Ask relay: a subagent's Ask is adjudicated in the main session
+
+User rulings, 2026-11-14 (verbatim): 「sub agentのAskはmainで裁定する」 (the
+governing statement), 「この仕組みはコードで強制する、どうせわすれる」,
+「gateにそんな例外は追加してほしくない」, and
+「gateもconduktも絶対に勝手に他のworktreeを参照してはならない」.
+
+Inside a subagent nobody can answer a permission prompt, so an `Ask` is hardened
+to a `Deny` there. That verdict is unchanged. The relay makes sure the main
+session adjudicates it instead of forgetting it (`src/relay.rs`):
+
+1. **Record (PreToolUse).** When a subagent's Bash `Ask` is hardened and the main
+   session itself could ask (`interactive::ask_available`), a `queued` record
+   (id `bgr-<12 hex>`, ts, session_id, agent_id, cwd, exact command, Ask reason)
+   is appended to `~/.blastguard/relay/<session_id>.jsonl` (override:
+   `BLASTGUARD_RELAY_DIR`). The id is appended to the printed deny reason. A
+   true `Deny` (system harm or otherwise), a main-session `Ask`, and a subagent
+   `Ask` in a session that cannot ask (headless) are never queued. If the record
+   cannot be written the verdict is still `Deny`, and the deny reason says the
+   record failed and why.
+2. **Executed (PostToolUse / PostToolUseFailure, Bash, `blastguard relay
+   mark-executed`).** A main-session Bash call whose command and cwd are
+   byte-identical to a pending entry marks it executed, with the exit code when
+   the payload reports one. A subagent's call marks nothing.
+3. **Relayed (PostToolUse, SendMessage, `blastguard relay mark-relayed`).** A
+   main-session SendMessage that names the relay id marks an executed entry
+   relayed. Sending before executing marks nothing.
+4. **Stop (`blastguard relay stop`).** The main-session Stop blocks while any
+   entry of the session is neither executed-and-relayed nor dismissed, and
+   lists each pending entry's id, agent_id, cwd and exact command with the
+   procedure. It blocks on re-entry too: the way out is to resolve or dismiss.
+   An unreadable queue, an unparseable line, an event naming an unknown id, or
+   an unparseable Stop payload blocks (fail-closed) and names the queue path.
+   A panic blocks via the shared Stop barrier. No queue file allows.
+5. **Dismiss (`blastguard relay dismiss <id> --reason "<text>"`).** For a prompt
+   the human declined, or a command that cannot be re-run. A blank or missing
+   reason is refused (exit 2), as is an unknown id; an unreadable queue is
+   exit 3. The dismissal is recorded in the queue file but is no longer
+   shown on later Stops: when nothing is pending, Stop allows; otherwise it
+   lists only the pending entries and blocks.
+
+What it never does: it never executes a command (a tool that ran the stored
+command inside one Bash call would hide it from blastguard — the main agent runs
+it through its own Bash tool, where blastguard judges it normally); it adds no
+exception to any verdict; and it never resolves, stats or runs anything in the
+stored cwd, which is compared as an opaque string only. The main agent's own
+Bash call is the only thing that runs there.
+
+Known limits: only Bash is relayed (an `Edit`/`Write` Ask in a subagent is
+hardened as before but not queued); two main-session runs of the same command
+racing each other may mark the same entry; the `mark-*` hooks report write
+failures on stderr only, which leaves the entry pending (the restrictive side).
+
+
 ## Why it exists
 
 In agentic coding, a single `rm -rf`, `git reset --hard`, `git clean -fdx`, or
@@ -480,13 +569,16 @@ The CLI surface is minimal: `--version` / `-V`, `--help` / `-h` and `--protects`
 (the gate's protection statement from `src/protection.rs`: PROTECTS / AGAINST /
 GROUNDS lines) short-circuit before stdin is touched; `retro` runs the
 [retrospective](#retrospective); `record-approval` reads a PostToolUse payload
-(the approval-memory recorder); otherwise it reads a PreToolUse payload from
-stdin.
+(the approval-memory recorder); `relay mark-executed | mark-relayed | stop |
+dismiss` is the [subagent Ask relay](#subagent-ask-relay-a-subagents-ask-is-adjudicated-in-the-main-session);
+otherwise it reads a PreToolUse payload from stdin.
 
 | env var | effect |
 |---|---|
 | `BLASTGUARD_ASK` | `never` / `always` / `auto` (default): whether an `ask` may be emitted or is hardened to `deny` (see [Design bias](#design-bias)) |
 | `BLASTGUARD_APPROVALS_DIR` | approval-memory store location (default `~/.blastguard/approvals`) |
+| `BLASTGUARD_RELAY_DIR` | subagent Ask relay queue location (default `~/.blastguard/relay`) |
+| `BLASTGUARD_BLOCK_LOG_DIR` | block log directory (default `~/.blastguard/blocks`; file `blocks.jsonl`) |
 | `CLAUDE_PROJECT_DIR`, `TMPDIR`, `HOME` | read by the hook to build the safe roots |
 | `CLAUDE_CODE_SESSION_ID` | keys the repeat-deny ledger |
 
@@ -496,10 +588,46 @@ make bins                             # refresh bundled per-platform binaries
 cargo test -p blastguard              # unit + integration tests
 ```
 
+### Where integration-test fixtures live (backlog 37955e32)
+
+Integration tests that drive the real hook binary build their fixtures —
+including repos made with `git init` / `git worktree add` — under
+`neutral_base()` from `tests/support/neutral_base.rs`:
+`$HOME/.blastguard-test-fixtures/blastguard-worktree-root-fixtures/run-<pid>-<nanos>[-n]`
+(when `BLASTGUARD_TEST_FIXTURE_DIR` is set it is the only candidate, with
+`blastguard-worktree-root-fixtures/run-*` below it). Each test-binary run
+creates its own directory with `create_dir`.
+
+- **Never under `target/`**: a nested `.git` left in a worktree's ignored
+  `target/` makes the forced `git worktree remove` check answer Ask (subagent:
+  Deny), correctly, so the worktree could not be removed without a prompt.
+- **Never on a safe root**: `/tmp`, `/private/tmp`, `/var/tmp` are temp safe
+  roots; `$TMPDIR` (macOS `/private/var/folders/...`) is a temp root and a
+  system directory for the deletion principle. Either lets the fixture's
+  location decide the verdict. Before use, two calibration probes against the
+  real hook (`rm -rf` outside the cwd exactly Deny, inside the cwd exactly Ask)
+  must pass, or the base panics.
+- **Self-clean**: at process exit (`atexit`) each run deletes its OWN run
+  directory, only if `symlink_metadata` shows a real directory (not a symlink)
+  whose canonical path is the one it created. A failure is reported on stderr;
+  it never panics and never deletes anything else.
+- **Prune**: at start, a run deletes `run-*` entries DIRECTLY in the dedicated
+  `blastguard-worktree-root-fixtures` directory that are real directories
+  (symlinks and non-directories are skipped), untouched for 24 hours, and whose
+  canonical path is exactly `<canonical dedicated dir>/<name>` — leftovers of
+  runs killed before their self-clean. Anything doubtful is skipped;
+  `remove_dir_all` does not follow symlinks inside the tree.
+- Some tests that create no git repo still put scratch under
+  `CARGO_TARGET_TMPDIR`.
+
 The hooks (`hooks/hooks.json`): **PreToolUse** with matcher
 `Bash|Edit|Write|MultiEdit|NotebookEdit` (timeout 10) calls
 `${CLAUDE_PLUGIN_ROOT}/bin/blastguard`; **PostToolUse** with matcher `Bash`
-(timeout 10) calls `${CLAUDE_PLUGIN_ROOT}/bin/blastguard record-approval`.
+(timeout 10) calls `${CLAUDE_PLUGIN_ROOT}/bin/blastguard record-approval` and
+`blastguard relay mark-executed`; **PostToolUseFailure** with matcher `Bash`
+calls `blastguard relay mark-executed`; **PostToolUse** with matcher
+`SendMessage` calls `blastguard relay mark-relayed`; **Stop** calls
+`blastguard relay stop` (all timeout 10).
 `bin/blastguard` is a POSIX-sh launcher that execs the matching
 `blastguard-<os>-<arch>` build. If no build is bundled for the host platform,
 the launcher prints a warning to stderr **and emits a PreToolUse decision**
@@ -543,3 +671,86 @@ Two things the report deliberately does not claim: an approval does **not**
 establish that stopping was wrong (only that nothing was prevented), and a
 command the agent rephrased and re-ran is **not** detected — so prevention
 counts are an upper bound. Both qualifiers are printed with the numbers.
+
+## Block log: every block records exactly what it blocked
+
+User ruling, 2026-11-14 (verbatim): 「…完全なコマンドが残っていないため、これ以上は
+切り分けられません。というのは大変愚かなので記録をとること。止めたなら止めた責任をとる」.
+
+Every printed `Deny` or `Ask` appends one JSON line to blastguard's own
+`~/.blastguard/blocks/blocks.jsonl` (override: `BLASTGUARD_BLOCK_LOG_DIR`, file
+`<dir>/blocks.jsonl`), independent of overwatch (`src/blocklog.rs`). An `Allow`
+writes nothing. Fields: `v` (2), `ts`, `blastguard_version`, `session_id`,
+`agent_id` (null outside a subagent), `cwd` (payload value, opaque, never
+inspected), `tool_name`, `command` (Bash, byte-exact, never truncated),
+`file_path` (file tools), `tool_input` (the full payload value),
+`tool_input_capped`, `tool_input_bytes`, `tool_input_sha256` (of the compact
+JSON serialization), `decision` (printed `deny`/`ask`), `decision_kind`
+(`deny`, `ask`, `ask-hardened-to-deny` for a subagent/headless Ask,
+`deny-downgraded-to-ask` for a repeat deny, `panic-blocked` for a panic on the
+verdict path blocked with exit 2), `original_decision` (the detector's own
+verdict before hardening/downgrade: `deny`, `ask`, or `undetermined` for a
+panic; present and non-null for every `decision_kind`, so a downgraded repeat
+of a headless-hardened Ask says `ask` and a downgraded real Deny says `deny`;
+absent only in v1 records, where absence never means `deny`), `actor`, `system_harm`, `reason` (exactly as
+printed), `rule_id`, and `raw_payload` (the raw stdin, only when the payload
+could not be parsed or the verdict path panicked).
+
+Only the `tool_input` copy is capped: above 1 MiB of compact JSON (a large
+`Write` content) it is `null` with `tool_input_capped: true`; the length, the
+hash, `command` and `file_path` are kept. Nothing is redacted; the log is local
+under `$HOME` and never sent anywhere.
+
+The record is written after the verdict is decided and before it is printed.
+It cannot change the verdict. If it cannot be written (or the write panics), the
+printed reason gets a paragraph containing `could NOT be recorded` with the
+error, and stderr warns too — a lost record is never silent. The overwatch
+ledger line below is still written.
+
+This is the complement of the relay: the relay queues only a subagent's Bash
+`Ask` for re-execution in the main session; the block log records every block,
+true `Deny`s and main-session `Ask`s included.
+
+## Context recorded in the violation ledger (overwatch)
+
+Each Deny/Ask appends one line to overwatch's
+`~/.overwatch/<project-key>/overwatch/violations.jsonl` after the decision has
+been printed (a failed append only warns on stderr; the decision is unchanged).
+Optional fields: `decision` (final `deny`/`ask`), `tool`, `command` (Bash,
+verbatim), `target` (file-tool path), `cwd` (as given), `actor`
+(`subagent`/`interactive`/`headless`), `system_harm` (`true` only for a
+system-harm deny). Older lines lack these fields, which means **unknown**, not
+false. Commands are stored verbatim and may contain secrets; the ledger is
+local under `$HOME` and there is no redaction.
+
+### `blastguard log` — read-only ledger listing
+
+```
+blastguard log [--decision deny|ask] [--rule <id>] [--since <RFC3339|Ns|Nm|Nh|Nd>]
+               [--system-harm] [--subagent | --interactive] [--json]
+```
+
+Lists the `source=blastguard` lines of the current project's `violations.jsonl`
+in file order. Never reads stdin, never modifies the ledger. `--since` takes
+`<digits>s|m|h|d` ago or an RFC3339 timestamp in UTC `Z` form only (offsets
+such as `+09:00` are rejected). Text mode prints
+`decision=<v> actor=<v> system_harm=<v> rule=<id> tool=<v> cwd=<v>` followed by
+`command=<v>` (Bash) or `target=<v>` (file tools); a line with unknown tool
+prints both as `unknown`. Values are escaped: `\n` `\r` `\t` as two-char
+escapes, other chars below 0x20 and 0x7f as `\xHH` (lowercase), backslash as
+`\\`, and C1 controls (U+0080-U+009F), U+2028/U+2029 and bidi controls
+(U+061C, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069) as `\u{XXXX}`
+(uppercase hex), no quoting, so one entry is always one line and a value
+cannot visually reorder it. Limits: values are not quoted and spaces / `=`
+are not escaped, so a value containing ` key=...` (e.g. a cwd
+`/tmp/x command=ls`) can look like an extra token on the same line. Use
+`--json` for exact, unambiguous parsing. `--json` prints one
+object per line (`ts, rule, decision, tool, command, target, cwd, actor,
+system_harm`). A field missing from an old ledger line is
+`unknown` (text) / `null` (JSON), never guessed. **A filter never matches an
+unknown field**; such entries are dropped and stderr reports how many were
+`excluded`. Exit codes: `0` success (an absent ledger prints `no ledger at
+<path>` on stderr), `2` usage error, `3` ledger path/read failure (stdout empty),
+unparsable line (`line <N>` on stderr; valid entries are still printed) or
+stdout write failure. Commands are printed verbatim and may contain secrets
+(the ledger is local under `$HOME`).

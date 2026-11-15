@@ -190,13 +190,13 @@ fn ca_blastguard_07_git_global_option_prefix_still_fires_deny() {
 
 #[test]
 fn ca_blastguard_06_git_stash_discard_is_denied() {
-    // CA-blastguard-06: `git stash clear` drops every stash entry and
-    // `git stash drop` drops one — both irreversibly delete stashed work,
-    // the same hazard class as the already-denied working-tree-discard
-    // forms. analyze_git used to fall through to Allow for `stash`.
+    // CA-blastguard-06: `git stash clear` drops every entry of the refs/stash
+    // shared by all worktrees, so it stays denied (analyze_git once allowed it).
     assert!(bash("git stash clear").is_deny());
-    assert!(bash("git stash drop").is_deny());
-    assert!(bash("git stash drop stash@{2}").is_deny());
+    // test-weakening-justified: user ruling 2026-11-08 "drop のみ Allow" makes
+    // `git stash drop [<stash>]` Allow by contract; the pin flips, not removed.
+    assert_eq!(bash("git stash drop"), Decision::Allow);
+    assert_eq!(bash("git stash drop stash@{2}"), Decision::Allow);
     // Non-destructive stash subcommands (and the bare `git stash` push)
     // must stay allowed — the fix must not over-broaden.
     assert_eq!(bash("git stash"), Decision::Allow);
@@ -741,216 +741,9 @@ fn xargs_destructive_payload_is_denied() {
     assert_eq!(bash("ls | xargs -n1 echo"), Decision::Allow);
 }
 
-// ---- File operations ----
-#[test]
-fn edit_is_always_allowed() {
-    assert_eq!(
-        detect("Edit", Some(&json!({ "file_path": "src/main.rs" }))),
-        Decision::Allow
-    );
-    assert_eq!(
-        detect("MultiEdit", Some(&json!({ "file_path": "src/main.rs" }))),
-        Decision::Allow
-    );
-}
-
-#[test]
-fn write_empty_content_to_source_is_denied() {
-    assert!(detect(
-        "Write",
-        Some(&json!({ "file_path": "src/main.rs", "content": "" }))
-    )
-    .is_deny());
-    assert!(detect(
-        "Write",
-        Some(&json!({ "file_path": "src/main.rs", "content": "   \n" }))
-    )
-    .is_deny());
-}
-
-#[test]
-fn write_with_content_or_to_config_is_allowed() {
-    assert_eq!(
-        detect(
-            "Write",
-            Some(&json!({ "file_path": "src/main.rs", "content": "fn main() {}" }))
-        ),
-        Decision::Allow
-    );
-    // Config files are exempt even when emptied.
-    assert_eq!(
-        detect(
-            "Write",
-            Some(&json!({ "file_path": "Cargo.toml", "content": "" }))
-        ),
-        Decision::Allow
-    );
-    // `.claude/settings.json` controls which hooks/gates run at all, so
-    // wiping it must NOT fall through the config-file exemption to Allow.
-    // See `write_to_protected_config_paths_is_gated` for the broader set of
-    // security-relevant paths this covers.
-    assert_protected_modify(detect(
-        "Write",
-        Some(&json!({ "file_path": ".claude/settings.json", "content": "" })),
-    ));
-}
-
-#[test]
-fn write_to_git_internals_is_denied() {
-    assert!(detect(
-        "Write",
-        Some(&json!({ "file_path": ".git/config", "content": "x" }))
-    )
-    .is_deny());
-}
-
-/// An UNMATCHED tool is allowed — and only an unmatched tool.
-///
-/// This test used to be `missing_or_unknown_input_is_allowed` and asserted
-/// three things under one name:
-///
-/// ```text
-/// assert_eq!(detect("Bash", None), Decision::Allow);                  // removed
-/// assert_eq!(detect("Read", Some(&json!({"file_path":"x"}))), Allow); // kept
-/// assert_eq!(detect("Write", Some(&json!({}))), Decision::Allow);     // removed
-/// ```
-///
-/// The middle one is a real specification: `Read` is not a tool blastguard
-/// judges, so `Allow` is the accurate answer and folding it in would make
-/// the hook prompt on every file read.
-///
-/// The other two were not a specification. They were the fail-open written
-/// down AS one: `Bash` and `Write` ARE tools blastguard judges, and both
-/// payloads are ones whose operand it could not read. Asserting `Allow`
-/// there fixed "I could not analyse this" as "this is fine" — the exact
-/// shape CLAUDE.md 2 cites in `assert!(checks_verdict(&[]))`, where a test
-/// that verified nothing pinned an empty-set fail-open as the contract.
-/// A test can only ever certify the behaviour it asserts; when the
-/// behaviour is wrong, the test is a lock on the defect.
-///
-/// Those two cases did not lose coverage — they gained the opposite
-/// assertion, in `a_bash_call_whose_command_cannot_be_read_is_asked_not_allowed`
-/// and `a_write_whose_path_cannot_be_read_is_asked_not_allowed` below.
-#[test]
-fn an_unmatched_tool_is_allowed() {
-    assert_eq!(
-        detect("Read", Some(&json!({ "file_path": "x" }))),
-        Decision::Allow
-    );
-    assert_eq!(
-        detect("Grep", Some(&json!({ "pattern": "x" }))),
-        Decision::Allow
-    );
-    assert_eq!(detect("WebFetch", None), Decision::Allow);
-}
-
-// ---- entry-boundary: unreadable OPERAND is not "nothing to judge" -------
-//
-// The distinction these pin, which `missing_or_unknown_input_is_allowed`
-// above conflates into one rule:
-//
-//   * an UNMATCHED TOOL (Read, Grep, WebFetch) -> Allow is correct.
-//     blastguard has no jurisdiction; there is genuinely nothing to judge.
-//   * a MATCHED TOOL whose OPERAND cannot be read -> Allow is a fail-open.
-//     blastguard has jurisdiction over this call and failed to exercise it.
-//     That is "I don't understand this" recorded as "this is fine" — the
-//     defect `model.rs:5` says the third answer exists to prevent, applied
-//     to this crate's own front door.
-
-#[test]
-fn a_bash_call_whose_command_cannot_be_read_is_asked_not_allowed() {
-    // No tool_input at all.
-    assert!(detect("Bash", None).is_ask(), "Bash with no tool_input");
-    // tool_input present but carrying no `command` key.
-    assert!(
-        detect("Bash", Some(&json!({}))).is_ask(),
-        "Bash with no command key"
-    );
-    // `command` present but not a string — schema drift, or a payload
-    // shaped to slip past the `as_str()`.
-    assert!(
-        detect("Bash", Some(&json!({ "command": 123 }))).is_ask(),
-        "Bash with a non-string command"
-    );
-    assert!(
-        detect("Bash", Some(&json!({ "command": ["rm", "-rf", "/"] }))).is_ask(),
-        "Bash with an array command"
-    );
-}
-
-#[test]
-fn a_write_whose_path_cannot_be_read_is_asked_not_allowed() {
-    assert!(detect("Write", None).is_ask(), "Write with no tool_input");
-    assert!(
-        detect("Write", Some(&json!({}))).is_ask(),
-        "Write with no path key"
-    );
-    assert!(
-        detect("Write", Some(&json!({ "file_path": 7 }))).is_ask(),
-        "Write with a non-string path"
-    );
-    // An empty path string is equally unreadable: extract_path already
-    // rejects it, and "" names no file to classify.
-    assert!(
-        detect("Write", Some(&json!({ "file_path": "" }))).is_ask(),
-        "Write with an empty path"
-    );
-}
-
-#[test]
-fn an_edit_whose_path_cannot_be_read_is_asked_not_allowed() {
-    for tool in ["Edit", "MultiEdit", "NotebookEdit"] {
-        assert!(detect(tool, None).is_ask(), "{tool} with no tool_input");
-        assert!(
-            detect(tool, Some(&json!({}))).is_ask(),
-            "{tool} with no path key"
-        );
-    }
-}
-
-/// ANTI-VACUITY CONTROL 1 — the DELIBERATE permissive spec.
-///
-/// A tool blastguard does not claim jurisdiction over must stay a silent
-/// Allow. If the fix above were "Ask whenever anything is missing", this
-/// would turn every Read and Grep in the session into a prompt, which is
-/// not a stricter gate but a broken one.
-#[test]
-fn an_unmatched_tool_is_still_allowed_even_with_no_input() {
-    for tool in ["Read", "Grep", "Glob", "WebFetch", "Task", "TodoWrite"] {
-        assert_eq!(detect(tool, None), Decision::Allow, "{tool} with no input");
-        assert_eq!(
-            detect(tool, Some(&json!({ "file_path": "x" }))),
-            Decision::Allow,
-            "{tool} with input"
-        );
-    }
-}
-
-/// ANTI-VACUITY CONTROL 2 — a READABLE operand still gets its real verdict.
-///
-/// Proves the entry-boundary change did not short-circuit the analyser: an
-/// ordinary command is still Allow and a destructive one is still Deny, so
-/// the new Ask cannot be masking a blanket "Ask everything".
-#[test]
-fn a_readable_operand_still_reaches_the_real_analysis() {
-    assert_eq!(
-        detect("Bash", Some(&json!({ "command": "ls -la" }))),
-        Decision::Allow
-    );
-    assert!(detect("Bash", Some(&json!({ "command": "rm -rf /" }))).is_deny());
-    assert_eq!(
-        detect(
-            "Write",
-            Some(&json!({ "file_path": "src/x.rs", "content": "fn main() {}" }))
-        ),
-        Decision::Allow
-    );
-    assert!(detect(
-        "Write",
-        Some(&json!({ "file_path": ".git/config", "content": "x" }))
-    )
-    .is_deny());
-}
+// ---- File operations and the entry-boundary unreadable-operand tests:
+// moved to tests/file_ops.rs (file-growth cap).
+mod file_ops;
 
 // ---- UTF-8 boundary safety (regression: multi-byte text must not panic) ----
 
@@ -1136,7 +929,9 @@ fn first_shell_word_trailing_lone_backslash() {
 fn first_shell_word_empty_quoted_word_is_some_empty() {
     assert_eq!(first_shell_word("''").as_deref(), Some(""));
     assert_eq!(first_shell_word(r#""""#).as_deref(), Some(""));
-    assert!(dash_c_payloads(&["-c", "''"]).iter().all(|p| !p.is_empty()));
+    assert!(dash_c_payloads(&["-c", "''"], None)
+        .iter()
+        .all(|p| !p.is_empty()));
 }
 
 /// CA-blastguard-014 (fail-open): a shell parses its own OPTIONS before the
@@ -2925,17 +2720,15 @@ fn a_reassignment_is_unknowable_when_the_last_reaching_one_is_guarded() {
         resolve_first_expansion_word("BIN=/bin/a; foo && BIN=/bin/b; $BIN x"),
         CommandWordOrigin::AssignedButUnknowable
     );
-    // The mirror image, pinned to make the rule's coarseness visible rather
-    // than leaving it to be discovered. Here `BIN=/bin/b` follows a `;`, so
-    // the shell really does run it on both branches and `/bin/b` really is
-    // the program. This function still refuses, because it asks whether a
-    // conditional appears ANYWHERE earlier on the line rather than tracking
-    // where each and-or list ends (see
-    // `assignment_execution_is_unconditional`). That costs a resolution;
-    // it never invents one.
+    // The mirror image. Here the `;` after `BIN=/bin/a` closes the and-or list
+    // that `&&` guards, so `BIN=/bin/b` stands in a NEW and-or list with no
+    // conditional in it: the shell runs it on both branches, and `/bin/b`
+    // really is the program. The `&&` is only checked within the winning
+    // assignment's own and-or list (see
+    // `assignment_execution_is_unconditional`), so this resolves.
     assert_eq!(
         resolve_first_expansion_word("foo && BIN=/bin/a; BIN=/bin/b; $BIN x"),
-        CommandWordOrigin::AssignedButUnknowable
+        CommandWordOrigin::Literal("/bin/b".to_string())
     );
 }
 
@@ -4427,8 +4220,9 @@ fn deletion_escape_spellings_are_not_allowed() {
         format!("rm -rf {}/out", f.tmp),
         format!("rm -rf {}/in/b", f.tmp),
         format!("rm -rf {}/../home/docs", f.tmp),
-        format!("rm -rf {}/a/../a", f.tmp),
-        format!("rm -rf {}/./a", f.tmp),
+        // GH #1661: a `..` that physically leaves the temp root.
+        format!("rm -rf {}/a/../../home/docs", f.tmp),
+        format!("rm -rf {}/a/../out", f.tmp),
         format!("rm -rf {}/a {}/docs", f.tmp, f.home),
         format!("mv {}/docs {}/x && rm -rf {}/x", f.home, f.tmp, f.tmp),
         format!("rm -rf {}/a -x", f.tmp),
@@ -4442,13 +4236,37 @@ fn deletion_escape_spellings_are_not_allowed() {
     // User ruling 2026-10-28: cd <literal safe root> && rm -rf <relative> must match the absolute spelling.
     let cd_rel = format!("cd {} && rm -rf a", f.tmp);
     assert_eq!(f.run(&cd_rel), Decision::Allow, "{cd_rel}");
-    // `.` relative spelling, cwd in the temp root.
-    let dot = detect_scoped(
-        "Bash",
-        Some(&json!({ "command": "rm -rf ./a" })),
-        &f.roots_with_cwd(&f.tmp),
-    );
-    assert_ne!(verdict_name(&dot), "allow");
+    // GH #1661, re-anchored by user ruling esc-6eab173e (2026-11-14): a `.`/`..`
+    // spelling that PHYSICALLY resolves to the same path gets the same verdict
+    // as its plain spelling (it used to be refused for the spelling alone).
+    let plain = verdict_name(&f.run(&format!("rm -rf {}/a", f.tmp)));
+    assert_eq!(plain, "allow", "baseline: the plain spelling is Allow");
+    for cmd in [
+        format!("rm -rf {}/a/../a", f.tmp),
+        format!("rm -rf {}/./a", f.tmp),
+    ] {
+        assert_eq!(verdict_name(&f.run(&cmd)), plain, "{cmd}");
+    }
+    // `.` relative spelling, cwd in the temp root: same as the bare `a`.
+    let at_tmp = |cmd: &str| {
+        verdict_name(&detect_scoped(
+            "Bash",
+            Some(&json!({ "command": cmd })),
+            &f.roots_with_cwd(&f.tmp),
+        ))
+    };
+    assert_eq!(at_tmp("rm -rf ./a"), at_tmp("rm -rf a"), "rm -rf ./a");
+    // …but a `./`/`../` spelling that physically ESCAPES the temp root (a
+    // symlink out, or a `..` above it) stays not-Allow.
+    for cmd in [
+        "rm -rf ./out",
+        "rm -rf ./out/",
+        "rm -rf ../home/docs",
+        "rm -rf ./a/../../home/docs",
+        "rm -rf ./out/../docs",
+    ] {
+        assert_ne!(at_tmp(cmd), "allow", "cwd={} {cmd}", f.tmp);
+    }
     // A non-canonical payload cwd withholds every deletion Allow.
     let raw = format!("{}/a/..", f.tmp);
     let d = detect_scoped(
@@ -5018,4 +4836,104 @@ fn mutkill_temp_disposable_refuses_git_and_protected_spellings() {
     // Control for T6: an unprotected relative name from the same cwd.
     t.file(".claude/notes.txt");
     assert!(temp_disposable_redirect_target("notes.txt", &ctx2));
+}
+
+/// Backlog 9a2f5a08: the splitters now honour backslash-escaped quotes
+/// (`quote_escape_pair`). These are the still-refused side of that change:
+/// an escape that the shell does NOT read as one must not hide a real command.
+#[test]
+fn escaped_quote_splitting_does_not_hide_real_commands() {
+    // A genuine unknown-option `install` is still refused, alone and after an
+    // escaped quote in an earlier segment.
+    for cmd in [
+        "install -6 a b",
+        r#"grep -E "a\"b" x; install -6 a b"#,
+        // Unquoted `\"` is a literal quote, so `;` still separates.
+        r#"echo \"; install -6 a b"#,
+        // `\\` is an escaped backslash: the `"` after it closes the string.
+        r#"echo "a\\"; install -6 a b"#,
+        // Inside single quotes a backslash is literal: `'a\'` closes there.
+        r#"echo 'a\'; install -6 a b"#,
+    ] {
+        assert!(bash(cmd).is_blocking(), "must not be Allow: {cmd}");
+    }
+    // A protected-path write after an escaped quote is still judged.
+    for cmd in [
+        r#"grep -E "a\"b" x; install src .claude/settings.json"#,
+        r#"echo \"; install src .claude/settings.json"#,
+        r#"echo "a\\"; install src .claude/settings.json"#,
+    ] {
+        assert!(bash(cmd).is_blocking(), "protected write not gated: {cmd}");
+    }
+    // The segmentation itself: the escaped quote stays inside the string, so
+    // the `|` in it is text and the real pipe still cuts.
+    assert_eq!(
+        split_segments(r#"grep -E "a\"b|install" f | head -6"#),
+        vec![
+            r#"grep -E "a\"b|install" f "#.to_string(),
+            " head -6".into()
+        ]
+    );
+}
+
+/// Backlog 040b959b: [`shell_lex::line_continuation_reading`] removes a
+/// backslash-newline where the shell removes it — unquoted, in double quotes,
+/// in `$(…)` and backticks — and nowhere else: single quotes, `$'…'`, a `#`
+/// comment and a quoted here-document body keep it (the reading is then
+/// `Same`). Escaped quotes and comments are left as written.
+#[test]
+fn line_continuation_reading_removes_only_where_the_shell_does() {
+    use shell_lex::{line_continuation_reading as r, ShellLexed};
+    let text = |s: &str| ShellLexed::Text(s.to_string());
+    assert_eq!(r("ls \\\n-la"), text("ls -la"));
+    assert_eq!(
+        r("a\\\nb \"c\\\nd\" $(e\\\nf) `g\\\nh`"),
+        text("ab \"cd\" $(ef) `gh`")
+    );
+    assert_eq!(r("x \\'y\\\nz # k\\\n"), text("x \\'yz # k\\\n"));
+    for same in [
+        "echo 'a\\\nb'",
+        "echo $'a\\\nb'",
+        "echo a # b \\\nls",
+        "cat <<'EOF'\na\\\nb\nEOF\n",
+        "echo \\\\",
+        "plain",
+    ] {
+        assert_eq!(r(same), ShellLexed::Same, "{same:?}");
+    }
+}
+
+// GH #1661 (task f70e5164): the dotted-operand eligibility is exactly
+// `deletion_rm_eligible` with `.`/`..` OPERAND components masked. Option
+// words, `=`-attached dots, a relative operand next to a `cd`, and every
+// other refusal of the plain predicate keep refusing.
+#[test]
+fn deletion_rm_dotted_eligible_masks_only_operand_dot_components() {
+    for ok in [
+        "rm -rf ./a",
+        "rm -rf a/./b",
+        "rm -rf a/..",
+        "rm -rf ../sbx/proj/target",
+        "rm -rf ./a ../b",
+        "rm -rf /x/../y",
+        "cd /x && rm -rf /x/../y",
+        // A plain line stays eligible here too.
+        "rm -rf a b",
+    ] {
+        assert!(rm::deletion_rm_dotted_eligible(ok), "{ok}");
+    }
+    for bad in [
+        "rm -rf --opt=../x a",
+        "rm -rf a=..",
+        "rm -rf ./a -x",
+        "rm -rf -- ./a",
+        "rm -rf - ./a",
+        "rm -rf ./a && ls",
+        "cd /x && rm -rf ./y",
+        "cd /x && rm -rf ../y",
+        "rm -rf './a'",
+        "rm -rf ./a*",
+    ] {
+        assert!(!rm::deletion_rm_dotted_eligible(bad), "{bad}");
+    }
 }

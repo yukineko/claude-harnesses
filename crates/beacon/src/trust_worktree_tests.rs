@@ -1,7 +1,8 @@
-//! backlog 4cacdfae: a LINKED git worktree whose main working tree is in the
-//! trust store must load its own project `beacon.toml`. Exact-match
-//! `is_trusted` does not, so these tests pin worktree inheritance plus the two
-//! controls.
+//! backlog 4cacdfae, INVERTED by the user ruling 2026-11-08: a LINKED git
+//! worktree whose main working tree is in the trust store does NOT inherit that
+//! trust, so its project `beacon.toml` escape-hatch `command` is dropped
+//! (beacon is a notifier, not a gate: no block). The two controls must keep
+//! holding.
 //!
 //! The existing config tests serialize HOME mutation through a lock private to
 //! `config::tests`, which this module cannot reach. Rather than race them, each
@@ -102,7 +103,7 @@ fn observe(root: &Path, trust: Option<&Path>, home: &Path) -> String {
 }
 
 #[test]
-fn linked_worktree_of_trusted_main_loads_project_config() {
+fn linked_worktree_of_trusted_main_does_not_inherit_trust_and_drops_project_command() {
     let (home, base) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let (main, wt) = fixture(base.path());
     assert_eq!(
@@ -112,8 +113,8 @@ fn linked_worktree_of_trusted_main_loads_project_config() {
     );
     assert_eq!(
         observe(&wt, Some(&main), home.path()),
-        "wt-hook",
-        "a linked worktree of a TRUSTED main must load its project beacon.toml"
+        DEFAULT_CMD,
+        "a linked worktree of a TRUSTED main must NOT run its project beacon.toml command (no inheritance)"
     );
 }
 

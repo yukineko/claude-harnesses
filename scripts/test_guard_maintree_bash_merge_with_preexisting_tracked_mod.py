@@ -11,6 +11,9 @@ modification that is the same at Pre and Post is treated as a change, so
 integration_head() is never asked about the new HEAD and the REFUSE message
 blames "not a merge / fast-forward" for a two-parent merge. The twin
 test_guard_maintree_bash_merge_with_untracked.py covers the untracked case.
+(Historical: integration_head() was replaced by integration_move(), which reads
+only main's own branch reflog, user ruling 2026-11-08; the merge here is a real
+`git merge`, so the verdict is unchanged.)
 
 Expected: a real merge with an unchanged pre-existing tracked modification is
 allowed (nothing in main was changed BY the command).

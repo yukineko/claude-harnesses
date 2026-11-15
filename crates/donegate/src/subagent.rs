@@ -1,26 +1,26 @@
 //! `donegate subagent-gate` — the SubagentStop hook (backlog 95deaa32).
 //!
-//! Judges the roots the STOPPING subagent wrote (its own transcript,
-//! `agent_transcript_path`, mapped to git roots exactly as the parent's Stop
-//! maps writes), with the same per-root logic as the parent's Stop
-//! ([`crate::rootcheck::judge`]): checks run, a red root blocks the subagent's
+//! Judges ONLY the hook's own root, the SubagentStop payload's `cwd`. User
+//! rulings 2026-11-08, verbatim: "donegateのworktreeテストは問題ありすぎるので
+//! 即時に停止" and "donegateそのものが他のworktreeを見たり検証したりテストしたり
+//! することは禁止とする". donegate does not resolve, list, inspect or check any
+//! other worktree or root the subagent wrote into.
+//!
+//! When the stopping subagent's own transcript (`agent_transcript_path`)
+//! records a write inside the cwd ([`crate::rootcheck::writes_in`]), the cwd's
+//! checks run ([`crate::rootcheck::judge`]): a red cwd blocks the subagent's
 //! stop (`{"decision":"block"}`), an identical repeat is waived loudly, and
 //! `max_attempts` bounds the chain. The attempt counter and the waiver memory
 //! are keyed `<session>-agent-<agent_id>`, so a subagent never shares the
 //! parent's chain (or another agent's).
 //!
-//! This is what lets the parent's Stop leave a root that only a still-running
-//! background subagent wrote to that subagent ([`crate::inflight`]). The
-//! parent's Stop judges the root again once the subagent has finished.
-//!
-//! Fail-closed: a payload naming no locatable agent transcript, an unreadable
-//! transcript, or roots that cannot be determined BLOCK the subagent's stop
-//! (bounded by the shared repeat ledger: a second identical block is waived
-//! with a visible message). A subagent that wrote nothing has nothing to judge
-//! and is allowed silently. Roots with no donegate config, or a config that
-//! declares no checks, are not judged here (the parent's Stop judges them
-//! after the subagent finishes); a root whose declared checks donegate refuses
-//! to run blocks, as on the parent's Stop.
+//! Fail-closed: a payload naming no locatable agent transcript, or an
+//! unreadable transcript, BLOCKS the subagent's stop (bounded by the shared
+//! repeat ledger: a second identical block is waived with a visible message).
+//! A subagent that wrote nothing inside the cwd has nothing to judge and is
+//! allowed silently. A cwd with no donegate config, or a config that declares
+//! no checks, is not judged here (the parent's Stop judges it); a cwd whose
+//! declared checks donegate refuses to run blocks, as on the parent's Stop.
 //!
 //! The one-shot `donegate skip` is NOT consumed here: it is keyed by session,
 //! which a subagent shares with its parent, so consuming it here would spend
@@ -86,26 +86,11 @@ fn block(header: &str, why: &str) -> ! {
     std::process::exit(0);
 }
 
-/// The roots this subagent owns: every written toplevel, plus the hook cwd
-/// when a write lies in it (or a write's directory is gone, so it cannot be
-/// shown that it does not) and no other owned root already contains it.
-pub(crate) fn owned_roots(
-    roots: &[PathBuf],
-    writes: &harness_core::attribution::SessionWrites,
-) -> Vec<PathBuf> {
-    let Some((cwd, rest)) = roots.split_first() else {
-        return Vec::new();
-    };
-    let mut out = rest.to_vec();
-    let touches_cwd = writes
-        .edited
-        .iter()
-        .chain(writes.bash.iter())
-        .any(|p| p.starts_with(cwd) || p.parent().is_none_or(|d| !d.is_dir()));
-    if touches_cwd && !rest.iter().any(|r| cwd.starts_with(r)) {
-        out.insert(0, cwd.clone());
-    }
-    out
+/// `agent-<id>.jsonl` -> `<id>`.
+pub(crate) fn agent_id_of(sidechain: &Path) -> Option<String> {
+    let stem = sidechain.file_stem()?.to_str()?;
+    let id = stem.strip_prefix("agent-")?;
+    (!id.is_empty()).then(|| id.to_string())
 }
 
 fn run(hook: Option<HookInput>, value: Option<Value>) -> ! {
@@ -120,10 +105,7 @@ fn run(hook: Option<HookInput>, value: Option<Value>) -> ! {
     }
     let agent_t = agent_transcript(&v);
     let id = match str_field(&v, "agent_id") {
-        "" => agent_t
-            .as_deref()
-            .and_then(crate::inflight::agent_id_of)
-            .unwrap_or_default(),
+        "" => agent_t.as_deref().and_then(agent_id_of).unwrap_or_default(),
         s => s.to_string(),
     };
     let header = format!(
@@ -148,23 +130,13 @@ fn run(hook: Option<HookInput>, value: Option<Value>) -> ! {
     if writes.edited.is_empty() && writes.bash.is_empty() {
         std::process::exit(0);
     }
-    let session_t = if input.transcript_path.trim().is_empty() {
-        agent_s.clone()
-    } else {
-        input.transcript_path.clone()
-    };
     let cwd = input.cwd_or_current();
-    let store = harness_core::worktree_origin::default_store();
-    let sr = match harness_core::session_roots::roots_of_writes(&cwd, &writes, &session_t, &store) {
-        Determination::Known(sr) => sr,
-        Determination::Undetermined(why) => block(
-            &header,
-            &format!(
-                "the roots this subagent wrote into cannot be determined ({}); no checks ran.",
-                why.as_str()
-            ),
-        ),
-    };
+    // Only the hook's own root (the cwd) is judged; a subagent that wrote
+    // nothing inside it has nothing donegate may judge (user rulings
+    // 2026-11-08, see the module docs).
+    if !rootcheck::writes_in(&cwd, &writes) {
+        std::process::exit(0);
+    }
     let session = format!(
         "{}-agent-{}",
         input.session_key(),
@@ -172,54 +144,37 @@ fn run(hook: Option<HookInput>, value: Option<Value>) -> ! {
     );
     let waiver_allowed = !input.session_id.trim().is_empty() && !id.is_empty();
     let mut notices: Vec<String> = Vec::new();
-    let mut blocks: Vec<String> = Vec::new();
-    let mut keys: Vec<String> = Vec::new();
-    let mut waived_any = false;
-    let mut judged_dirs: Vec<PathBuf> = Vec::new();
-    for r in owned_roots(&sr.roots, &writes) {
-        let (rcfg, rdecl) = Config::resolve(&r);
-        if rdecl.is_refusal() {
-            let b = format!(
-                "[root: {}] donegate refuses to run this root's checks: {}",
-                r.display(),
-                crate::declaration_note(&r, &rdecl)
-            );
-            keys.push(b.clone());
-            blocks.push(b);
-            continue;
-        }
-        if !rcfg.enabled || rcfg.checks.is_empty() {
-            continue;
-        }
-        if !judged_dirs.contains(&rcfg.state_dir) {
-            judged_dirs.push(rcfg.state_dir.clone());
-        }
-        match rootcheck::judge(&rcfg, &r, &session, waiver_allowed, &mut notices) {
-            rootcheck::Judged::Green | rootcheck::Judged::GaveUp => {}
-            rootcheck::Judged::Waived => waived_any = true,
-            rootcheck::Judged::Blocked { reason, key } => {
-                blocks.push(reason);
-                keys.push(key);
-            }
-        }
-    }
-    if !blocks.is_empty() {
-        let mut reason = format!("{header}\n{}", blocks.join("\n\n"));
-        // The shared reason text names `donegate skip`, which this hook does
-        // not consume (see the module docs); say so rather than mislead.
-        reason.push_str(
-            "\n\n(At SubagentStop `donegate skip` is NOT consumed: it belongs to the parent \
-             session. This block is bounded by max_attempts and the identical-finding waiver.)",
+    let (rcfg, rdecl) = Config::resolve(&cwd);
+    if rdecl.is_refusal() {
+        let b = format!(
+            "[root: {}] donegate refuses to run this root's checks: {}",
+            cwd.display(),
+            crate::declaration_note(&cwd, &rdecl)
         );
-        crate::append_notices(&mut reason, &notices);
-        let key = format!("{header}\n{}", keys.join("\n\n"));
-        harness_core::repeat::emit_stop_block_keyed("donegate", &reason, &key);
+        let reason = format!("{header}\n{b}");
+        harness_core::repeat::emit_stop_block_keyed("donegate", &reason, &reason);
         std::process::exit(0);
     }
-    if !waived_any {
-        // Nothing red remains standing: the agent's chain has ended.
-        for d in &judged_dirs {
-            state::reset(d, &session);
+    if !rcfg.enabled || rcfg.checks.is_empty() {
+        std::process::exit(0);
+    }
+    match rootcheck::judge(&rcfg, &cwd, &session, waiver_allowed, &mut notices) {
+        rootcheck::Judged::Green | rootcheck::Judged::GaveUp => {
+            // Nothing red remains standing: the agent's chain has ended.
+            state::reset(&rcfg.state_dir, &session);
+        }
+        rootcheck::Judged::Waived => {}
+        rootcheck::Judged::Blocked { reason, key } => {
+            let mut reason = format!("{header}\n{reason}");
+            // The shared reason text names `donegate skip`, which this hook does
+            // not consume (see the module docs); say so rather than mislead.
+            reason.push_str(
+                "\n\n(At SubagentStop `donegate skip` is NOT consumed: it belongs to the parent \
+                 session. This block is bounded by max_attempts and the identical-finding waiver.)",
+            );
+            let key = format!("{header}\n{key}");
+            harness_core::repeat::emit_stop_block_keyed("donegate", &reason, &key);
+            std::process::exit(0);
         }
     }
     if !notices.is_empty() {
@@ -254,27 +209,36 @@ mod tests {
         }
     }
 
+    /// Re-scoped by user rulings 2026-11-08 ("donegateのworktreeテストは問題
+    /// ありすぎるので即時に停止"; "donegateそのものが他のworktreeを見たり検証したり
+    /// テストしたりすることは禁止とする"). Was `owned_roots_include_the_cwd_only_when_written`
+    /// (the subagent owned every written root); now only a write inside the cwd
+    /// makes the cwd judged, and a write elsewhere selects nothing.
     #[test]
-    fn owned_roots_include_the_cwd_only_when_written() {
+    fn writes_in_selects_the_cwd_only_when_written_inside_it() {
         let d = std::env::temp_dir().join(format!("dg-owned-{}", std::process::id()));
         let cwd = d.join("cwd");
         let wt = d.join("wt");
         std::fs::create_dir_all(&cwd).unwrap();
         std::fs::create_dir_all(&wt).unwrap();
-        let roots = vec![cwd.clone(), wt.clone()];
-        assert_eq!(
-            owned_roots(&roots, &writes(&[&wt.join("f.rs")])),
-            vec![wt.clone()]
-        );
-        assert_eq!(
-            owned_roots(&roots, &writes(&[&cwd.join("f.rs")])),
-            vec![cwd.clone(), wt.clone()]
-        );
-        // A write whose directory is gone cannot be shown to lie outside cwd.
-        assert_eq!(
-            owned_roots(&roots, &writes(&[&d.join("gone/f.rs")])),
-            vec![cwd.clone(), wt.clone()]
-        );
+        assert!(!crate::rootcheck::writes_in(
+            &cwd,
+            &writes(&[&wt.join("f.rs")])
+        ));
+        assert!(crate::rootcheck::writes_in(
+            &cwd,
+            &writes(&[&cwd.join("f.rs")])
+        ));
+        // A gone directory inside the cwd is still inside the cwd.
+        assert!(crate::rootcheck::writes_in(
+            &cwd,
+            &writes(&[&cwd.join("gone/f.rs")])
+        ));
+        // A relative path cannot be placed: the cwd is judged (restrictive).
+        assert!(crate::rootcheck::writes_in(
+            &cwd,
+            &writes(&[Path::new("rel/f.rs")])
+        ));
         let _ = std::fs::remove_dir_all(&d);
     }
 }

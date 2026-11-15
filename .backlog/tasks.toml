@@ -2390,3 +2390,31 @@ exit 101: _unexecuted_attempt" -p condukt` to apply 1 suggestion)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.03s
      Running tests/backlog_20261115_testscope_counts_unexecuted_attempt.rs (target/debug/deps/backlog_20261115_testscope_counts_unexecuted_attempt-bf799c7a4f6b54c1)
 error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_counts_unexecuted_attempt`"""
+
+[[task]]
+id = "3a45a57d"
+title = "condukt worktree merge --branch with no --run/--task still applies the task-trailer guard (merge-task-trailer-missing) via the branch's recorded conduktTask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-15 (run-20261114-161340-68728): condukt worktree merge --branch condukt/run-20261114-161340-68728/side-reds (no --run/--task) refused with merge-task-trailer-missing. crates/condukt/src/worktree/merge_gate.rs resolves the task as (recorded branch.<b>.conduktTask, cli) -> recorded wins, so the guard applies even without flags; the --run help says 'Omit for a merge with no task association (behavior otherwise unchanged)'. RED (independent, sonnet): crates/condukt/tests/backlog_20261115_worktree_merge_no_task_trailer_refusal.rs. CONFLICT: existing crates/condukt/tests/task_trailer_merge.rs::foreign_trailerless_commit_is_refused freezes the refusal for a recorded branch with no flags -> readings: (a) defect (help text is the contract) vs (b) intended (help text wrong); needs a human ruling before fixing; do not loosen either test without it."
+created_at = 1794712104
+updated_at = 1794712104
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261115_worktree_merge_no_task_trailer_refusal -- --include-ignored"
+rev = "85bef6669e6bd8c23bd121fcf909508e40e95942"
+observed_at = 1794712104
+detail = """
+exit 101: 0261114-161340-68728-side-reds/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.67s
+     Running tests/backlog_20261115_worktree_merge_no_task_trailer_refusal.rs (target/debug/deps/backlog_20261115_worktree_merge_no_task_trailer_refusal-4806af8c846a3078)
+error: test failed, to rerun pass `-p condukt --test backlog_20261115_worktree_merge_no_task_trailer_refusal`"""

@@ -78852,3 +78852,75 @@ rev = "f5cc4349f15d62e0c19d1bb973265493ed3bd802"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "c80effc2"
+title = "answerlang Stop judges a stale interim transcript text instead of the final answer (prefer payload last_assistant_message)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "answerlang",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-15 session 6dcca0ad transcript lines 2117/2123/2124/2126: Stop fired 140ms after the Japanese final answer but judged the 101-letter English interim text. Fix candidate: read payload last_assistant_message first, transcript as fallback; include the judged source in the block reason so the next firing shows which was read. UNVERIFIED: whether the MAIN-session Stop payload carries last_assistant_message (SubagentStop does: overwatch subagents.json; changelog says Stop too; context-governor io.rs:10 claims otherwise). If absent, this fix does not cure the FP — then treat 'last assistant text precedes the last tool_result' as undetermined."
+created_at = 1794733932
+updated_at = 1794764625
+weight = 0.0
+issue_number = 1798
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1798"
+issue_closed_at = 1794764628
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p answerlang --test stop_payload_final_message_20261115 -- --ignored"
+rev = "c19614ef3c14d2ac117f8b6b01eff9ad9223a929"
+observed_at = 1794733932
+detail = """
+exit 101: 
+   Compiling answerlang v0.1.1 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/answerlang)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.70s
+     Running tests/stop_payload_final_message_20261115.rs (target/debug/deps/stop_payload_final_message_20261115-a069576d5a9a4563)
+error: test failed, to rerun pass `-p answerlang --test stop_payload_final_message_20261115`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p answerlang --test stop_undetermined_stale_transcript_20261116 --test stop_payload_final_message_20261115"
+exit = 0
+passed = 6
+rev = "5c21adda126411fbfd45fbceef250106bd60eaf3"
+observed_at = 1794764624
+output_digest = "sha256:274608c694ed7995c8c0b8aee9ee909b316f8a662b2580ab9fe91d51c92a31e8"
+excerpt = """
+
+running 2 tests
+test payload_last_assistant_message_wins_over_stale_transcript_line ... ok
+test payload_english_final_message_still_blocks ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+
+running 4 tests
+test control_transcript_ending_in_final_text_is_clean ... ok
+test stale_transcript_tool_result_after_last_text_is_undetermined_not_clean ... ok
+test transcript_fallback_english_blocks_and_reason_names_transcript ... ok
+test payload_english_message_blocks_and_reason_names_last_assistant_message ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/stop_payload_final_message_20261115.rs (target/debug/deps/stop_payload_final_message_20261115-c4d25fd703909595)
+     Running tests/stop_undetermined_stale_transcript_20261116.rs (target/debug/deps/stop_undetermined_stale_transcript_20261116-a9d09b45bf2e322e)
+"""
+
+[task.closure.red]
+rev = "befece7321899497c711f5de9bb32b537c34948a"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -2468,3 +2468,28 @@ exit 101: wt-fp-heredoc-json/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.24s
      Running tests/backlog_20261115_quoted_heredoc_json_backtick_subagent_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_json_backtick_subagent_fp-83306c7d27f04712)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_heredoc_json_backtick_subagent_fp`"""
+
+[[task]]
+id = "4242986e"
+title = "condukt testscope: Rule C (task scope) judges the hook payload cwd, not a leading cd target, so cd <task worktree> && cargo test <out of scope> is allowed (fail-open)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-15 at main 2ace975d1: two rerun refusals carried byte-identical fingerprint (2ace975d1fc8783b496cc853711bed7992c900a7:1dcbe1ce95dcba8e); the second command was 'cd /Users/yuki/.condukt/worktrees/run-20261115-173313-90185-t1 && cargo check -p blastguard && tdd green ...' while that worktree was at ddefb055b with payload.rs modified; 2ace975d1 is HEAD of the main checkout = hook payload cwd. Measured: 1dcbe1ce95dcba8e is the dirty-hash of an empty diff + empty untracked list (any clean temp repo gives it), so the payload cwd tree was fingerprinted. Probe with payload cwd = edited tree (uncommitted removal of two #[ignore] lines) allowed the rerun -> the uncommitted-edit hypothesis does NOT reproduce; root cause is cd-prefix. Rerun-ledger half already filed as 214b39b5 (RED backlog_20261114_testscope_cd_tree_identity still fails at 2ace975d1). THIS row: Rule C half. crates/condukt/src/testscope.rs judge(command, cwd) takes cwd from the payload; check_task_scope(tests, cwd) never sees the cd target. RED at 70d8e2116 (independent author), measured 2026-11-15 with main at 95fbd0631, verbatim: 'payload cwd = repo root, cd into task worktree, --test old_t (out of scope): expected a deny, stdout not JSON (EOF while parsing a value at line 1 column 0): ""' (empty stdout = Allow). Control control_out_of_scope_test_with_payload_cwd_in_task_worktree_is_denied passes. Readings: (a) defect - the tree a test runs against is the cd target, both rules must judge it; (b) intended - cd prefix not modelled; even then fail-closed must hold: an unmodelled cd that may move into a task worktree is cannot-determine and must not resolve to Allow. Either reading makes the asserted case non-Allow; they differ only in reason text. Fix constraint: cd must not become a way to dodge the rerun ledger (e.g. cd to a fresh copy to re-run the same test on the same code); a fix that keys on the cd target must keep same-code reruns refused. Also observed live while writing this RED: the hook recorded attempts that never ran (blastguard-blocked / no-test-target), keyed on main's clean tree, and refused the first real run twice (see the unexecuted-attempt row). DOES NOT PROVE: cd chains, pushd, git -C, subshells, cargo --manifest-path."""
+created_at = 1794733334
+updated_at = 1794733334
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261115_testscope_cd_prefix_rule_c -- --ignored out_of_scope_test_via_cd_into_task_worktree_is_denied"
+rev = "70d8e2116e4c7c05a0913a0c85aae7e55bcaef51"
+observed_at = 1794733334
+detail = """
+exit 101: ng condukt v0.7.413 (/Users/yuki/src/harness-wt-red-empty-worktree/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.50s
+     Running tests/backlog_20261115_testscope_cd_prefix_rule_c.rs (target/debug/deps/backlog_20261115_testscope_cd_prefix_rule_c-98af5fb69044e43b)
+error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_cd_prefix_rule_c`"""

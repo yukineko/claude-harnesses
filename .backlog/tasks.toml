@@ -2822,3 +2822,65 @@ exit 101: s-worktrees/sidereds-20261116/crates/tdd)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.84s
      Running tests/backlog_20261116_committed_peer_files_labelled_uncommitted.rs (target/debug/deps/backlog_20261116_committed_peer_files_labelled_uncommitted-3ed7d6413e72ff5c)
 error: test failed, to rerun pass `-p tdd --test backlog_20261116_committed_peer_files_labelled_uncommitted`"""
+
+[[task]]
+id = "188d2f29"
+title = "tdd green: a test command that never ran (spawn / run-log failure) is reported as 'tests still failing — keep implementing'"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "message-mismatch",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Code (crates/tdd/src/proof.rs at 9a989926b): green() calls judge_green(out.passed, has_red) and never judge_ran(&out) (red() does since 9c58c590d); runner maps spawn/run-log failure to passed:false + spawn_error:Some. RED (commit 168d912bf, branch backlog/sidereds-20261116, 2026-11-16): RED recorded with usable state, then <HOME>/.tdd/state replaced by a regular file so the run log cannot be created; marker file shows the command did not run. Verbatim failure: 'the command never ran, yet tdd green said the tests are still failing. stdout: (empty) stderr: tdd: tests still failing — keep implementing until they pass, then run `tdd green` again.' Controls in the same test pass: GREEN refused (non-zero), no green.json. Readings: (a) defect - environment failure misattributed to code; the message must name the spawn error / never ran; (b) cosmetic, the refusal is what matters. Both agree GREEN must be refused (it is: no fail-open). DOES NOT PROVE: real Command::spawn ENOENT path, timeout path."
+created_at = 1794764532
+updated_at = 1794764532
+weight = 0.0
+issue_number = 1811
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1811"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261116_green_spawn_error_misreported -- --ignored green_names_the_spawn_failure_not_failing_tests"
+rev = "9d0e7defaee17d5e84aefa974a8b9cbfb6d439b7"
+observed_at = 1794764532
+detail = """
+exit 101: tdd v0.1.83 (/Users/yuki/src/.harness-worktrees/sidereds-20261116/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.81s
+     Running tests/backlog_20261116_green_spawn_error_misreported.rs (target/debug/deps/backlog_20261116_green_spawn_error_misreported-e2fe1fa60285e999)
+error: test failed, to rerun pass `-p tdd --test backlog_20261116_green_spawn_error_misreported`"""
+
+[[task]]
+id = "b423c0c1"
+title = "tdd red: a test command killed by a signal (exit_code None, no spawn_error) is recorded as RED ('tests fail as expected (killed)')"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Code (crates/tdd/src/proof.rs at 9a989926b): red() = judge_ran(&out) (inspects only spawn_error) then judge_red(out.passed) (accepts any passed==false); status_str prints 'killed' for exit_code None. RED (commit 9d0e7defa, branch backlog/sidereds-20261116, 2026-11-16), cmd 'touch ran.marker; kill -KILL $$', verbatim: 'command was killed by SIGKILL (no assertion observed) yet tdd red exit=Some(0), RED proof exists=true stdout: 🔴 RED recorded for `t1` — tests fail as expected (killed).' Control control_command_exiting_1_records_red passes. Readings: (a) asserted - a kill/crash is not a demonstrated assertion failure -> undetermined -> no RED (CLAUDE.md 2(b)/3: crash is undetermined, F->P oracle fails open otherwise); (b) a crashing test is a failing test, RED correct - under (b) this RED is wrong. The test is NOT independent of the reading; a human ruling distinguishes them. Note a Rust test panic exits 101 (not a signal), so (a) only affects OS/harness kills (SIGKILL, OOM, SIGSEGV). DOES NOT PROVE: timeout path (timed_out:true, likely same acceptance, untested), tdd green."
+created_at = 1794764566
+updated_at = 1794764566
+weight = 0.0
+issue_number = 1812
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1812"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261116_red_killed_by_signal_records_red -- --ignored red_is_not_recorded_when_the_command_was_killed_by_a_signal"
+rev = "9d0e7defaee17d5e84aefa974a8b9cbfb6d439b7"
+observed_at = 1794764566
+detail = """
+exit 101: 83 (/Users/yuki/src/.harness-worktrees/sidereds-20261116/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.48s
+     Running tests/backlog_20261116_red_killed_by_signal_records_red.rs (target/debug/deps/backlog_20261116_red_killed_by_signal_records_red-53c8e72309bcc7b8)
+error: test failed, to rerun pass `-p tdd --test backlog_20261116_red_killed_by_signal_records_red`"""

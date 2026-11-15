@@ -62,9 +62,13 @@
 //!
 //! Not covered (stated, not hidden): `--manifest-path` and `git -C`-style
 //! redirection inside cargo, directory changes by anything other than a
-//! literal `cd` (a sourced script, `builtin cd`, `eval`), and `tdd
+//! literal `cd` at the head of a simple command (a sourced script, `builtin
+//! cd`, `time cd`, `{ cd x; }`, `if cd x; then …`, `eval`), and `tdd
 //! red|green` without `--cmd` (which runs tdd's configured `test_cmd`) are not
-//! judged — such a test is attributed to the directory the walk last knew.
+//! judged — such a test is attributed to the directory the walk last knew,
+//! which can key it on the wrong tree (a rerun-ledger dodge; RED
+//! `backlog_20261115_testscope_verifier_suspicions.rs` a1-a4, filed in the
+//! backlog 2026-11-15).
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -852,6 +856,8 @@ fn split_pieces(cmd: &str) -> Option<Vec<Piece>> {
 /// its bytes, an untracked symlink by its target, and an untracked nested
 /// repository (`git ls-files` lists it as `dir/`) by its own identity. A path
 /// that cannot be read makes the identity undetermined (`Err`), never "same".
+/// All of it is read from the repository top level, so any subdirectory of a
+/// tree has that tree's identity.
 /// A tree with no untracked paths hashes exactly as before this change, so
 /// existing ledger records for clean trees keep colliding.
 fn tree_identity(cwd: &Path) -> Result<(String, String), String> {
@@ -859,10 +865,10 @@ fn tree_identity(cwd: &Path) -> Result<(String, String), String> {
 }
 
 fn tree_identity_at(cwd: &Path, depth: usize) -> Result<(String, String), String> {
-    let git = |args: &[&str]| -> Result<String, String> {
+    let git_in = |dir: &Path, args: &[&str]| -> Result<String, String> {
         let out = Command::new("git")
             .args(args)
-            .current_dir(cwd)
+            .current_dir(dir)
             .output()
             .map_err(|e| format!("git {}: {e}", args.join(" ")))?;
         if !out.status.success() {
@@ -875,27 +881,26 @@ fn tree_identity_at(cwd: &Path, depth: usize) -> Result<(String, String), String
         }
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     };
-    let top = git(&["rev-parse", "--show-toplevel"])?.trim().to_string();
+    let top = git_in(cwd, &["rev-parse", "--show-toplevel"])?
+        .trim()
+        .to_string();
+    // Everything below is read from the top level, so the identity of a tree
+    // does not depend on which of its subdirectories the test runs in (a
+    // `cd <top>/sub &&` must collide with a run at `<top>`).
+    let topdir = PathBuf::from(&top);
+    let git = |args: &[&str]| git_in(&topdir, args);
     let head = git(&["rev-parse", "HEAD"])?.trim().to_string();
     let diff = git(&["diff", "HEAD", "--binary"])?;
     let untracked = git(&["ls-files", "--others", "--exclude-standard"])?;
     let mut h = std::collections::hash_map::DefaultHasher::new();
     std::hash::Hash::hash(&diff, &mut h);
     std::hash::Hash::hash(&untracked, &mut h);
-    // The list above C-quotes unusual names and, from a subdirectory, covers
-    // only that subdirectory; for the contents take the raw (`-z`) names of the
-    // whole repository (`:/`), printed relative to the cwd.
-    let raw = git(&[
-        "ls-files",
-        "--others",
-        "--exclude-standard",
-        "-z",
-        "--",
-        ":/",
-    ])?;
+    // The list above C-quotes unusual names; for the contents take the raw
+    // (`-z`) names, relative to the top level.
+    let raw = git(&["ls-files", "--others", "--exclude-standard", "-z"])?;
     if !raw.is_empty() {
         for rel in raw.split('\0').filter(|s| !s.is_empty()) {
-            let p = cwd.join(rel);
+            let p = topdir.join(rel);
             std::hash::Hash::hash(rel, &mut h);
             let meta = std::fs::symlink_metadata(&p)
                 .map_err(|e| format!("untracked {}: {e}", p.display()))?;

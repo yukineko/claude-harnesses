@@ -2441,3 +2441,28 @@ exit 101: rness-wt-red-empty-worktree/crates/condukt)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.36s
      Running tests/backlog_20261115_testscope_empty_worktree_owns_every_cwd.rs (target/debug/deps/backlog_20261115_testscope_empty_worktree_owns_every_cwd-bfa1f975ba682c1a)
 error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_empty_worktree_owns_every_cwd`"""
+
+[[task]]
+id = "a826bdab"
+title = "blastguard: backtick text inside a quoted heredoc body (<<'EOF') is judged as a command-word expansion (FP; Deny in subagent, Ask in main)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-15 in a subagent: cat > decomp.json <<'EOF' ... EOF with a JSON body containing "done_criteria":"`cargo test -p x` passes" was denied with: the command word `"done_criteria":"`cargo` is an expansion whose value only exists at run time — blastguard cannot tell what program this runs. Measured 2026-11-15 at main 2ace975d1 (RED committed ef03ba804, branch fp/quoted-heredoc-json-backtick-20261115): f0 (recovered shape: cd scratch && cat > decomp.json <<'EOF' JSON EOF; cd .. && ls scratch) and f1 (minimal: cat > scratch/d.json <<'EOF' {"done_criteria":"`cargo test -p x` passes"} EOF) both: assertion `left == right` failed: (subagent, main) left: ("deny", "ask") right: ("allow", "allow"). Control c1 (unquoted <<EOF with `$X`) passes non-Allow: subagent deny / main ask with 'the command word `$X` is an expansion ...'. Subagent mode = payload agent_id (same as backlog_20261113_heredoc_body_fp.rs). Readings: (a) defect - a quoted-delimiter heredoc body is literal data and is never expanded, so the backtick span is not a command; the quoted body of a cat > file target is not executed; (b) intended - body is treated as possibly-executed. Tell apart: (b) would also need the body to reach an interpreter; here it is cat into a .json file, and the reason names a 'command word' that only exists if the body is shell-parsed, i.e. the quoted body was tokenized as shell. Fix must keep c1 (unquoted heredoc backtick substitution) non-Allow. DOES NOT PROVE: whether the "key":" prefix glued to the backtick, line position, or trailing commands is the trigger; other delimiters (<<"EOF", <<-'EOF')."""
+created_at = 1794732083
+updated_at = 1794732083
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_quoted_heredoc_json_backtick_subagent_fp -- --ignored"
+rev = "ef03ba804a8e6a1d1a431edd51bf6e2cad911d2d"
+observed_at = 1794732083
+detail = """
+exit 101: wt-fp-heredoc-json/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.24s
+     Running tests/backlog_20261115_quoted_heredoc_json_backtick_subagent_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_json_backtick_subagent_fp-83306c7d27f04712)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_heredoc_json_backtick_subagent_fp`"""

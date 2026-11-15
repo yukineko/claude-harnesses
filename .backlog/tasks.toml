@@ -2869,6 +2869,8 @@ notes = "Observed 2026-11-16 in live queue ~/.blastguard/relay/06c2bd77-5d52-454
 created_at = 1794766056
 updated_at = 1794766056
 weight = 0.0
+issue_number = 1813
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1813"
 rev = 0
 
 [task.repro]

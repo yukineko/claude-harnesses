@@ -2495,3 +2495,28 @@ exit 101: ng condukt v0.7.413 (/Users/yuki/src/harness-wt-red-empty-worktree/cra
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.50s
      Running tests/backlog_20261115_testscope_cd_prefix_rule_c.rs (target/debug/deps/backlog_20261115_testscope_cd_prefix_rule_c-98af5fb69044e43b)
 error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_cd_prefix_rule_c`"""
+
+[[task]]
+id = "4270601a"
+title = "blastguard: quoted heredoc body of python3 - (<<'EOF') judged as shell redirect, Denied in both main and subagent (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-15 in a subagent (main at 72cb90009): 'cd <tests dir> && python3 - <<'EOF' ... EOF' whose Python body held Rust doc text in a raw string was denied with: '> ' destroys the file's current contents and `` is a relative path and blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable. RED cf3e7a684 (independent author), measured 2026-11-15 with main at e889149e7: f0 (cd scratch && python3 - <<'EOF' with a raw string containing '`check_rerun` -> `tree_identity(cwd)`', '`cd <task worktree> && cargo test --test' / '<out of scope>` is allowed', open('out.rs','w').write(header); EOF; cd .. && ls scratch): left: ("deny", "deny") with the verbatim reason above (Deny, not Ask, even in main). Narrowing control f1 (python3 - body with only '-> `tree_identity(cwd)`') = allow/allow, so that token alone is not the trigger. Control c1 (cd scratch && echo x > `printf %s "$T"`, a real shell redirect) = deny both modes: "'> `printf' destroys the file's current contents and ``printf` contains a shell expansion ...". Readings: (a) defect - a quoted heredoc fed to python3 - is Python source the shell never parses, so '>' in it is not a redirect; (b) intended - interpreter-bound body judged conservatively. Tell apart: the reason uses shell redirect semantics with an empty target on text only Python reads; (b) would need a Python-level reason (the open(...,'w') target out.rs is a literal relative path in scratch). Suspected trigger (unproven): the angle-bracket text '<task worktree> &&' / '<out of scope>' inside the body being tokenized as shell. Related: a826bdab (quoted heredoc JSON backtick). Fix must keep c1 non-Allow. DOES NOT PROVE: exact trigger token; node/ruby stdin."""
+created_at = 1794733637
+updated_at = 1794733637
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_stdin_heredoc_backtick_redirect_fp -- --ignored f0_recovered_shape_is_allow_in_subagent_and_main"
+rev = "cf3e7a684c35c5abb71891d7e54b5503021fd04c"
+observed_at = 1794733637
+detail = """
+exit 101: -empty-worktree/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.88s
+     Running tests/backlog_20261115_python_stdin_heredoc_backtick_redirect_fp.rs (target/debug/deps/backlog_20261115_python_stdin_heredoc_backtick_redirect_fp-1edf72d723701cc4)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_stdin_heredoc_backtick_redirect_fp`"""

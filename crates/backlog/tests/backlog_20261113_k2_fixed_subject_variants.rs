@@ -65,14 +65,12 @@ fn control_plain_subject_is_recognized() {
 }
 
 #[test]
-#[ignore = "RED: K2 — remove the ignore when fixed"]
 fn subject_with_wave_suffix_is_recognized() {
     let (fx, x, y) = setup("k2-wave", |x| format!("(backlog {x} wave 2)"));
     assert_not_dispatched(&fx.run(&["next"]), &x, &y);
 }
 
 #[test]
-#[ignore = "RED: K2 — remove the ignore when fixed"]
 fn subject_with_semicolon_suffix_is_recognized() {
     let (fx, x, y) = setup("k2-semi", |x| format!("(backlog {x}; y)"));
     assert_not_dispatched(&fx.run(&["next"]), &x, &y);

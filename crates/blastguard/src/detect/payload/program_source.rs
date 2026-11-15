@@ -137,9 +137,42 @@ pub(super) fn source_program_source(argv: &[&str]) -> ProgramSource {
     }
 }
 
+/// Python's known long options, shared by [`python_program_source`] and
+/// [`python_reads_stdin_program`] so the two option walkers cannot drift.
+/// `(name, takes_value)`: `--check-hash-based-pycs` takes a MODE (glued as
+/// `=MODE` or the next word); the `--help*` family and `--version` take none.
+/// A CLOSED list: any other `--xxx` is not modelled.
+const PYTHON_LONG_OPTIONS: &[(&str, bool)] = &[
+    ("--check-hash-based-pycs", true),
+    ("--help", false),
+    ("--help-env", false),
+    ("--help-xoptions", false),
+    ("--help-all", false),
+    ("--version", false),
+];
+
+/// How many argv words the python long option `w` (a word starting `--`, not
+/// `--` itself) occupies: 1 (no value, or a glued `=VALUE`), 2 (value in the
+/// next word), or `None` when it is not on [`PYTHON_LONG_OPTIONS`] (or glues a
+/// value to an option that takes none).
+fn python_long_option_width(w: &str) -> Option<usize> {
+    let (name, glued) = match w.split_once('=') {
+        Some((n, _)) => (n, true),
+        None => (w, false),
+    };
+    let (_, takes_value) = PYTHON_LONG_OPTIONS.iter().find(|(n, _)| *n == name)?;
+    match (takes_value, glued) {
+        (true, true) | (false, false) => Some(1),
+        (true, false) => Some(2),
+        (false, true) => None,
+    }
+}
+
 /// Where `python` / `python3` takes its program from: `-c` / `-m` inline,
 /// `-W` / `-X` take a value (glued or the next word), the other single-letter
-/// flags take none, `-` or no operand is stdin.
+/// flags take none, a long option on [`PYTHON_LONG_OPTIONS`] is skipped (with
+/// its value word where it takes one) and scanning continues, a long option not
+/// on that list is Undetermined, `--` ends options, `-` or no operand is stdin.
 pub(super) fn python_program_source(argv: &[&str]) -> ProgramSource {
     let mut k = 0;
     while k < argv.len() {
@@ -154,7 +187,20 @@ pub(super) fn python_program_source(argv: &[&str]) -> ProgramSource {
         let Some(letters) = w.strip_prefix('-') else {
             break;
         };
-        if letters.starts_with('-') || letters.is_empty() {
+        if letters.starts_with('-') {
+            match python_long_option_width(w) {
+                Some(width) => {
+                    k += width;
+                    continue;
+                }
+                None => {
+                    return ProgramSource::Undetermined(format!(
+                        "the python option `{w}` is not one blastguard models"
+                    ))
+                }
+            }
+        }
+        if letters.is_empty() {
             return ProgramSource::Undetermined(format!(
                 "the python option `{w}` is not one blastguard models"
             ));
@@ -283,7 +329,10 @@ pub(super) fn python_head_reads_stdin(
 /// script operand, `-m` module or `-c` program is named: `-i` (inspect: after
 /// the script it runs stdin as an interactive interpreter), `-m` on a
 /// [`STDIN_REPL_MODULES`] module, and a `-c` program that may enter a stdin
-/// console ([`dash_c_program_reads_stdin`]). Options end at the first
+/// console ([`dash_c_program_reads_stdin`]). A long option on
+/// [`PYTHON_LONG_OPTIONS`] is skipped (with its value word) so a later `-i` /
+/// `-m` / `-c` is still seen; a long option not on that list is not modelled
+/// and resolves restrictive (true = reads stdin). Options end at the first
 /// non-option word, `--` or `-`.
 pub(super) fn python_reads_stdin_program(argv: &[&str], source: &str) -> bool {
     let mut k = 0;
@@ -292,8 +341,17 @@ pub(super) fn python_reads_stdin_program(argv: &[&str], source: &str) -> bool {
         let Some(letters) = w.strip_prefix('-') else {
             break;
         };
-        if letters.is_empty() || letters.starts_with('-') {
+        if w == "--" || letters.is_empty() {
             break;
+        }
+        if letters.starts_with('-') {
+            match python_long_option_width(w) {
+                Some(width) => {
+                    k += width;
+                    continue;
+                }
+                None => return true,
+            }
         }
         for (pos, c) in letters.char_indices() {
             match c {

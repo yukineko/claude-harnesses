@@ -69,7 +69,6 @@ fn run_red(home: &Path, cwd: &Path) -> Output {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-15 proof.rs judge_red ignores spawn_error, so `tdd red` records RED when the test command never ran — remove the ignore when fixed"]
 fn red_is_not_recorded_when_the_command_never_ran() {
     let d = unique_dir("spawnerr");
     let home = d.0.join("home");

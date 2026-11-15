@@ -627,4 +627,47 @@ mod tests {
             other => panic!("{other:?}"),
         }
     }
+
+    const DISMISSED_MARKER: &str = "DISMISSED-BODY-MARKER-line1\nDISMISSED-BODY-MARKER-line2 <<EOF";
+    const PENDING_MARKER: &str = "PENDING-BODY-MARKER-line1\nPENDING-BODY-MARKER-line2";
+
+    // test-weakening-justified: RED contract test for the compact dismissed Stop text; ignored until the fix lands.
+    #[test]
+    #[ignore = "RED: stop text repeats full dismissed command bodies on every Stop (persisted-output blob)"]
+    fn stop_allow_text_shows_dismissed_id_reason_and_queue_path_but_not_command_body() {
+        let d = tmp("compact-allow");
+        let id = queue(&d, "s", None, "/w", DISMISSED_MARKER, "r").unwrap();
+        dismiss(&d, &id, "declined by human").unwrap();
+        let qp = queue_path(&d, "s").display().to_string();
+        match stop_outcome(&d, "s") {
+            StopOutcome::Allow(Some(msg)) => {
+                assert!(msg.contains(&id) && msg.contains("declined by human"), "{msg}");
+                assert!(msg.contains(&qp), "queue path missing: {msg}");
+                assert!(!msg.contains("DISMISSED-BODY-MARKER"), "command body leaked: {msg}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    // test-weakening-justified: RED contract test for the compact dismissed Stop text; ignored until the fix lands.
+    #[test]
+    #[ignore = "RED: stop text repeats full dismissed command bodies on every Stop (persisted-output blob)"]
+    fn stop_block_text_keeps_pending_command_in_full_but_not_dismissed_body() {
+        let d = tmp("compact-block");
+        let pid = queue(&d, "s", None, "/w", PENDING_MARKER, "r").unwrap();
+        let did = queue(&d, "s", None, "/w", DISMISSED_MARKER, "r").unwrap();
+        dismiss(&d, &did, "declined by human").unwrap();
+        match stop_outcome(&d, "s") {
+            StopOutcome::Block(msg) => {
+                assert!(msg.contains(&pid), "{msg}");
+                assert!(
+                    msg.contains(&indent(PENDING_MARKER)),
+                    "pending command not shown in full: {msg}"
+                );
+                assert!(msg.contains(&did) && msg.contains("declined by human"), "{msg}");
+                assert!(!msg.contains("DISMISSED-BODY-MARKER"), "command body leaked: {msg}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
 }

@@ -511,10 +511,12 @@ fn d_dismiss_requires_reason_and_stays_visible() {
     let o = stop(&e, s, false);
     assert_eq!(o.status.code(), Some(0));
     assert!(!blocks(&o));
-    let doc = stdout_json(&o).expect("systemMessage JSON");
-    let msg = doc["systemMessage"].as_str().expect("systemMessage");
-    assert!(msg.contains(&id));
-    assert!(msg.contains("human declined"));
+    // test-weakening-justified: user ruling 2026-11-16 「表示をやめてほしい」 — dismissed entries are no longer listed on Stop
+    let out = String::from_utf8_lossy(&o.stdout).into_owned();
+    assert!(
+        !out.contains(&id) && !out.contains("human declined") && !out.contains("dismissed"),
+        "dismissed entry listed on Stop: {out}"
+    );
 }
 
 #[test]

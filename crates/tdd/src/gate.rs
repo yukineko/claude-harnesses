@@ -53,6 +53,7 @@ use harness_core::verdict::{Determination, Verdict};
 use regex::RegexSet;
 
 use crate::config::Config;
+use crate::excluded_label::{self, Excluded};
 use crate::git::{self, AddedLine, AddedScan, ChangeScan};
 use crate::moved;
 
@@ -226,17 +227,18 @@ pub use crate::committed::Committed;
 
 /// Whether the scan was scoped to the stopping session's own writes.
 ///
-/// * `Attributed { excluded }` — the session transcript was read, and `scan`
-///   covers only the uncommitted files it shows this session writing
-///   (`harness_core::attribution::attribute_own_writes`). `excluded` is every
-///   other uncommitted file, kept so the exclusion can be NAMED.
+/// * `Attributed { excluded }` — transcript read; `scan` covers only the files
+///   it shows this session writing (`attribute_own_writes`). `excluded` is every
+///   other file — uncommitted AND known only from commits folded in by
+///   [`include_committed`] — kept so it can be NAMED; [`Excluded`] records which
+///   of them have no working-tree change.
 /// * `Unverified { why }` — attribution was undetermined (no transcript, an
 ///   unreadable one, a manual run). `scan` covers the WHOLE checkout, exactly
 ///   as before scoping existed; `why` is said in the message. Undetermined is
 ///   never read as "this session wrote nothing" (CLAUDE.md §3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Authorship {
-    Attributed { excluded: Vec<String> },
+    Attributed { excluded: Excluded },
     Unverified { why: String },
 }
 
@@ -405,12 +407,13 @@ pub fn classify_with_removed(
 pub fn evaluate(cfg: &Config, root: &Path, transcript_path: &str) -> Report {
     let changed = git::changed_files(root);
     let git::DiffScan { added, removed } = git::diff_lines(root);
+    let working = excluded_label::working_files(&changed, &added, &removed);
     let (changed, added, removed, committed) =
         include_committed(cfg, root, transcript_path, changed, added, removed);
     let (changed, added, removed, authorship) =
         scope_to_session(root, transcript_path, changed, added, removed);
     let mut report = classify_with_removed(cfg, &changed, &added, &removed);
-    report.authorship = authorship;
+    report.authorship = excluded_label::mark_committed(authorship, &working);
     report.committed = committed;
     report.root = Some(root.to_path_buf());
     report
@@ -623,7 +626,7 @@ pub fn scope_to_session(
                 ChangeScan::Files(files),
                 AddedScan::Lines(lines),
                 removed,
-                Authorship::Attributed { excluded },
+                excluded_label::attributed(excluded),
             )
         }
         harness_core::attribution::Attribution::Undetermined { why } => {
@@ -675,12 +678,12 @@ pub fn credit_note(v: &Report) -> Option<String> {
 /// excluded and attribution succeeded.
 pub fn attribution_note(v: &Report) -> Option<String> {
     match &v.authorship {
-        Authorship::Attributed { excluded } if excluded.is_empty() => None,
-        Authorship::Attributed { excluded } => Some(format!(
-            "tdd: {} uncommitted file(s) not attributed to this session were excluded from the \
+        Authorship::Attributed { excluded, .. } if excluded.is_empty() => None,
+        Authorship::Attributed { excluded, .. } => Some(format!(
+            "tdd: {}, not attributed to this session, were excluded from the \
              scan (no Edit/Write/MultiEdit/NotebookEdit of them and no Bash command naming them \
              outside a read-only statement in this session's transcript): {}",
-            excluded.len(),
+            excluded_label::counts(&v.authorship),
             excluded.join(", ")
         )),
         Authorship::Unverified { why } => Some(format!(
@@ -785,7 +788,7 @@ fn generic_block_reason(
     max: u32,
 ) -> String {
     let whose = match authorship {
-        Authorship::Attributed { excluded } => {
+        Authorship::Attributed { excluded, .. } => {
             let ex = if excluded.is_empty() {
                 String::new()
             } else {
@@ -796,10 +799,10 @@ fn generic_block_reason(
                     String::new()
                 };
                 format!(
-                    " {} uncommitted file(s) not attributed to this session were excluded: {}{more}. \
+                    " {}, not attributed to this session, were excluded: {}{more}. \
                      A file you wrote through a command that never named it (cargo fmt, a glob, a \
                      script) is among the excluded ones, not counted above.",
-                    excluded.len(),
+                    excluded_label::counts(authorship),
                     shown.join(", ")
                 )
             };

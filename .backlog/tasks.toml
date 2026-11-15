@@ -2373,6 +2373,8 @@ notes = "F11. Observed 2026-11-15 at 0.2.603, re-observed by main with RED 784eb
 created_at = 1794730681
 updated_at = 1794730681
 weight = 0.0
+issue_number = 1789
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1789"
 rev = 0
 
 [task.repro]

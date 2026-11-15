@@ -2853,3 +2853,32 @@ exit 101: tdd v0.1.83 (/Users/yuki/src/.harness-worktrees/sidereds-20261116/crat
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.81s
      Running tests/backlog_20261116_green_spawn_error_misreported.rs (target/debug/deps/backlog_20261116_green_spawn_error_misreported-e2fe1fa60285e999)
 error: test failed, to rerun pass `-p tdd --test backlog_20261116_green_spawn_error_misreported`"""
+
+[[task]]
+id = "b423c0c1"
+title = "tdd red: a test command killed by a signal (exit_code None, no spawn_error) is recorded as RED ('tests fail as expected (killed)')"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Code (crates/tdd/src/proof.rs at 9a989926b): red() = judge_ran(&out) (inspects only spawn_error) then judge_red(out.passed) (accepts any passed==false); status_str prints 'killed' for exit_code None. RED (commit 9d0e7defa, branch backlog/sidereds-20261116, 2026-11-16), cmd 'touch ran.marker; kill -KILL $$', verbatim: 'command was killed by SIGKILL (no assertion observed) yet tdd red exit=Some(0), RED proof exists=true stdout: 🔴 RED recorded for `t1` — tests fail as expected (killed).' Control control_command_exiting_1_records_red passes. Readings: (a) asserted - a kill/crash is not a demonstrated assertion failure -> undetermined -> no RED (CLAUDE.md 2(b)/3: crash is undetermined, F->P oracle fails open otherwise); (b) a crashing test is a failing test, RED correct - under (b) this RED is wrong. The test is NOT independent of the reading; a human ruling distinguishes them. Note a Rust test panic exits 101 (not a signal), so (a) only affects OS/harness kills (SIGKILL, OOM, SIGSEGV). DOES NOT PROVE: timeout path (timed_out:true, likely same acceptance, untested), tdd green."
+created_at = 1794764566
+updated_at = 1794764566
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261116_red_killed_by_signal_records_red -- --ignored red_is_not_recorded_when_the_command_was_killed_by_a_signal"
+rev = "9d0e7defaee17d5e84aefa974a8b9cbfb6d439b7"
+observed_at = 1794764566
+detail = """
+exit 101: 83 (/Users/yuki/src/.harness-worktrees/sidereds-20261116/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.48s
+     Running tests/backlog_20261116_red_killed_by_signal_records_red.rs (target/debug/deps/backlog_20261116_red_killed_by_signal_records_red-53c8e72309bcc7b8)
+error: test failed, to rerun pass `-p tdd --test backlog_20261116_red_killed_by_signal_records_red`"""

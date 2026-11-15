@@ -1136,3 +1136,80 @@ mod env_arith_unsupported {
         assert_known("i=2; declare -a a=([i]=1)");
     }
 }
+
+mod env_arith_followups {
+    use super::*;
+
+    fn assert_unsupported(command: &str) {
+        match analyze(command) {
+            Analysis::Undetermined(Cause::Unsupported(_)) => {}
+            other => panic!(
+                "{command:?} depends on an environment value in an arithmetic context; \
+                 expected Undetermined(Unsupported), got {other:#?}"
+            ),
+        }
+    }
+
+    fn assert_known(command: &str) {
+        match analyze(command) {
+            Analysis::Known(_) => {}
+            other => panic!("{command:?} is fully determined by its text; got {other:#?}"),
+        }
+    }
+
+    /// The `cat` redirect target of a Known analysis.
+    fn cat_target(command: &str) -> RedirTarget {
+        let s = known(command);
+        let cat = one_named(&s, "cat");
+        one_redirect(cat).target.clone()
+    }
+
+    fn assert_target_undetermined(command: &str) {
+        match cat_target(command) {
+            RedirTarget::Path(Value::Undetermined(_)) => {}
+            other => panic!("{command:?}: expected Path(Undetermined), got {other:#?}"),
+        }
+    }
+
+    // (A) declare args are key-checked in argument order: `i` is reassigned to
+    // a non-integer literal before the compound's key `[i]` is evaluated.
+    #[test]
+    fn declare_args_checked_in_order_reassigned_key_is_unsupported() {
+        assert_unsupported("declare i='x[$(c)]' a=([i]=1)");
+    }
+
+    // (B) `declare -a a=(x y)` must not bind $a as the literal "(x y)".
+    // NOTE: RED was not observed against the pre-fix evaluator (43ede5450);
+    // this test passed there too, so it is only a regression guard, not
+    // evidence that the fix changed this behaviour.
+    #[test]
+    fn declare_dash_a_compound_is_not_bound_as_literal_string() {
+        assert_target_undetermined("declare -a a=(x y); cat > $a");
+    }
+
+    // (C) an undetermined option word may have made `n` an integer, so a later
+    // `n=$Y` is arithmetic on an environment value.
+    #[test]
+    fn declare_undetermined_option_word_may_make_integer() {
+        assert_unsupported("declare $opt n=1; n=$Y; cat > /tmp/f");
+    }
+
+    #[test]
+    fn control_declare_readonly_plain_assignment_stays_known() {
+        assert_known("declare -r n=1; cat > /tmp/f");
+    }
+
+    // (D) a non-integer compound key havocs tracked variables.
+    #[test]
+    fn non_integer_compound_key_havocs_tracked_var() {
+        assert_target_undetermined("x=/a; a=([x=3]=v); cat > $x");
+    }
+
+    #[test]
+    fn control_literal_compound_key_keeps_tracked_var() {
+        assert_eq!(
+            cat_target("x=/a; a=([0]=v); cat > $x"),
+            RedirTarget::Path(lit("/a"))
+        );
+    }
+}

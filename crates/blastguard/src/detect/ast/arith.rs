@@ -16,7 +16,8 @@
 //!
 //! The contexts the evaluator checks: the subscript of a builtin's name
 //! operand (`read 'a[i]'`, `unset`, `printf -v`, the `declare` family) and of
-//! an assignment (`a[i]=v`, the keys of `a=([i]=v)`), `$(( ))` / `$[ ]`,
+//! an assignment (`a[i]=v`, the keys of `a=([i]=v)`, also as an operand of
+//! the `declare` family: `declare -a a=([i]=v)`), `$(( ))` / `$[ ]`,
 //! `(( ))`, arithmetic `for`, the operands of `[[ a -eq b ]]` (and the other
 //! arithmetic comparisons) and of `[[ -v a[i] ]]`, the operands of `let`,
 //! assignments to a name with the `declare -i` attribute, and in a parameter

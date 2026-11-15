@@ -48,7 +48,13 @@
 //!   arithmetic assignment are `Undetermined`, so a later read of them in
 //!   arithmetic (a loop counter `i=$((i+1))`) is `Unsupported` too.
 //!   `declare -i` (also `local` / `typeset`) names are remembered: a later
-//!   assignment to one is arithmetic.
+//!   assignment to one is arithmetic. An undetermined non-assignment operand
+//!   of a declaration builtin (`declare $opt n=v`) counts as a possible `-i`.
+//!   The keys of a compound value are arithmetic in a declaration builtin
+//!   too (`declare -a a=([i]=1)`), checked in operand order; a compound
+//!   operand leaves its name `Undetermined` (it is an array, not the text
+//!   `( ... )`), and a key that is not a decimal integer may assign, so it
+//!   makes the tracked variables `Undetermined`.
 //!
 //! The whole evaluation runs under `catch_unwind` (a panic is
 //! `Undetermined(Panic)`) and under a work budget (`Undetermined(Unsupported)`
@@ -494,6 +500,17 @@ fn resolve(cwd: &Cwd, v: Value) -> Value {
 // ---------------------------------------------------------------- evaluator
 
 const DECL_BUILTINS: &[&str] = &["export", "declare", "typeset", "local", "readonly"];
+
+/// An assignment operand of a declaration builtin, as parsed by brush.
+struct DeclArg {
+    /// The variable name (`None` for `a[i]=v`).
+    name: Option<String>,
+    /// Raw keys `k` of a compound value `a=([k]=v)`: arithmetic text the
+    /// shell expands and evaluates when the operand is assigned.
+    keys: Vec<String>,
+    /// The value is compound `( ... )`: an array, not a scalar.
+    compound: bool,
+}
 const ASSIGNING_BUILTINS: &[&str] = &["read", "mapfile", "readarray", "getopts", "unset", "wait"];
 const OPAQUE_BUILTINS: &[&str] = &[
     "eval", "source", ".", "trap", "alias", "unalias", "enable", "shopt", "builtin", "command",
@@ -971,17 +988,36 @@ impl Ev {
         }
         let decl = matches!(argv.first().map(|w| &w.value),
             Some(Value::Literal(n)) if DECL_BUILTINS.contains(&n.as_str()));
-        // argv index -> assignment name, for declaration builtins.
-        let mut decl_names: BTreeMap<usize, String> = BTreeMap::new();
+        // argv index -> assignment operand, for declaration builtins.
+        let mut decl_names: BTreeMap<usize, DeclArg> = BTreeMap::new();
         for item in suffix {
             match item {
                 I::Word(w) => argv.push(self.word(text, w, Mode::Field, &mut env)?),
                 I::AssignmentWord(a, w) => {
                     let mode = if decl { Mode::Assign } else { Mode::Field };
                     if decl {
-                        if let ast::AssignmentName::VariableName(n) = &a.name {
-                            decl_names.insert(argv.len(), n.clone());
-                        }
+                        let name = match &a.name {
+                            ast::AssignmentName::VariableName(n) => Some(n.clone()),
+                            ast::AssignmentName::ArrayElementName(..) => None,
+                        };
+                        let (keys, compound) = match &a.value {
+                            ast::AssignmentValue::Array(elems) => (
+                                elems
+                                    .iter()
+                                    .filter_map(|(k, _)| k.as_ref().map(|k| k.value.clone()))
+                                    .collect(),
+                                true,
+                            ),
+                            ast::AssignmentValue::Scalar(_) => (Vec::new(), false),
+                        };
+                        decl_names.insert(
+                            argv.len(),
+                            DeclArg {
+                                name,
+                                keys,
+                                compound,
+                            },
+                        );
                     }
                     argv.push(self.word(text, w, mode, &mut env)?);
                 }
@@ -1086,7 +1122,7 @@ impl Ev {
     fn effects(
         &mut self,
         sc: &SimpleCommand,
-        decl_names: &BTreeMap<usize, String>,
+        decl_names: &BTreeMap<usize, DeclArg>,
         mut env: Env,
     ) -> Result<Outcome, Cause> {
         let name = match sc.argv.first().map(|w| &w.value) {
@@ -1171,18 +1207,60 @@ impl Ev {
         &mut self,
         builtin: &str,
         args: &[Word],
-        decl_names: &BTreeMap<usize, String>,
+        decl_names: &BTreeMap<usize, DeclArg>,
         env: &mut Env,
     ) -> Result<(), Cause> {
-        // An `i` in any option may give the integer attribute (superset).
-        let int_attr = args.iter().any(
-            |a| matches!(&a.value, Value::Literal(s) if s.starts_with('-') && s.contains('i')),
-        );
+        // An `i` in any option may give the integer attribute (superset); so
+        // may an undetermined operand that is not an assignment (`declare
+        // $opt n=v` with opt=-i): its value is not known not to be `-i`.
+        let int_attr = args.iter().enumerate().any(|(i, a)| match &a.value {
+            Value::Literal(s) => s.starts_with('-') && s.contains('i'),
+            Value::Undetermined(_) => !decl_names.contains_key(&(i + 1)),
+        });
+        // The keys of a compound value `a=([k]=v)` are arithmetic, evaluated
+        // when that operand is assigned. An option of this command (which
+        // makes `env` opaque below) changes only the names this command
+        // declares, so a key reads the state from before the command for a
+        // name not yet operated on here, and the current state otherwise —
+        // and always once an undetermined operand or a key's own arithmetic
+        // (which may assign) ran.
+        let start = env.clone();
+        let mut touched: BTreeSet<String> = BTreeSet::new();
+        let mut current_only = false;
         for (i, a) in args.iter().enumerate() {
+            let decl = decl_names.get(&(i + 1));
+            for k in decl.map_or(&[][..], |d| d.keys.as_slice()) {
+                let lookup = |n: &str| {
+                    if current_only || touched.contains(n) {
+                        env.lookup(n)
+                    } else {
+                        start.lookup(n)
+                    }
+                };
+                arith::check_text(k, &lookup)?;
+                if !arith::plain_int(&Value::Literal(k.clone())) {
+                    env.havoc_vars("an array key's arithmetic may assign variables");
+                    current_only = true;
+                }
+            }
+            match &a.value {
+                Value::Literal(s) if !s.starts_with('-') && !s.starts_with('+') => {
+                    let lhs = s.split_once('=').map_or(s.as_str(), |(l, _)| l);
+                    let lhs = lhs.strip_suffix('+').unwrap_or(lhs);
+                    touched.insert(lhs.split('[').next().unwrap_or(lhs).to_string());
+                }
+                Value::Literal(_) => {}
+                Value::Undetermined(_) => match decl.and_then(|d| d.name.as_ref()) {
+                    Some(n) => {
+                        touched.insert(n.clone());
+                    }
+                    None => current_only = true,
+                },
+            }
             let s = match &a.value {
                 Value::Literal(s) => s,
                 Value::Undetermined(_) => {
-                    match decl_names.get(&(i + 1)) {
+                    match decl_names.get(&(i + 1)).and_then(|d| d.name.as_ref()) {
                         Some(n) => {
                             if int_attr {
                                 env.integer.insert(n.clone());
@@ -1215,6 +1293,9 @@ impl Ev {
                     env.int_assign(lhs.strip_suffix('+').unwrap_or(lhs), &Value::Literal(expr))?;
                     if let Some(n) = lhs.strip_suffix('+') {
                         env.forget_operand(n, "+= appends to a value")?;
+                    } else if decl.is_some_and(|d| d.compound) {
+                        // `a=(x y)` sets an array; `$a` is not the text `(x y)`.
+                        env.forget_operand(lhs, "compound assignment")?;
                     } else if is_ident(lhs) {
                         env.bind(lhs, Value::Literal(rhs.to_string()));
                     } else {
@@ -1322,6 +1403,9 @@ impl Ev {
                         let (kv, _) =
                             self.eval_word(&origin.inexact(), &k.value, Mode::Field, env)?;
                         arith::check_value(&kv, &|n| env.lookup(n))?;
+                        if !arith::plain_int(&kv) {
+                            env.havoc_vars("an array key's arithmetic may assign variables");
+                        }
                     }
                     self.eval_word(&origin.inexact(), &v.value, Mode::Field, env)?;
                 }

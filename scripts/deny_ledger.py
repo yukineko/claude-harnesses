@@ -203,6 +203,7 @@ RESIDUALS (recorded, not hidden — CLAUDE.md 4):
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import stat
@@ -1037,13 +1038,45 @@ def read_writes(session_id: str) -> list[dict]:
 
 def writes_stop_check(session_id: str, own_root: str) -> str | None:
     """Signal 3. None to allow; otherwise the block reason. Only entries whose
-    root is `own_root` are looked at, and only in that tree."""
+    root is `own_root` are looked at, and only in that tree.
+
+    A dirty recorded path is skipped (treated as a foreign write) only when every
+    record epoch for it is finite AND its lstat mtime > max(epoch) + 30 seconds.
+    Blocks (keeps the path) when: the mtime is unreadable, any epoch for the path
+    is non-finite (NaN/inf), or the path is not found in the epoch map.
+
+    Limitation: a path this session wrote and left uncommitted is also skipped if
+    its mtime is more than 30s after this session's last recorded write (a
+    foreign writer touching it later, a delayed record, or clock skew)."""
     try:
         entries = read_writes(session_id)
     except Undetermined as e:
         return WRITES_UNDETERMINED.format(why=e)
     root_f = _fold(own_root)
     paths = sorted({e["path"] for e in entries if _fold(e["root"]) == root_f})
+
+    # Build a mapping from folded path to max epoch for that path.
+    # Since git status returns relative paths, we need to store relative paths in
+    # the dictionary, computed as os.path.relpath(absolute_path, root).
+    path_max_epoch: dict[str, float] = {}
+    for e in entries:
+        if _fold(e["root"]) == root_f:
+            # Convert absolute path to relative (how git status reports it)
+            try:
+                rel_path = os.path.relpath(e["path"], own_root)
+            except ValueError:
+                # Path on different drive (Windows), shouldn't happen in practice
+                rel_path = e["path"]
+            folded = _fold(rel_path)
+            epoch = e["epoch"]
+            prev = path_max_epoch.get(folded, -float('inf'))
+            if not math.isfinite(epoch) or not math.isfinite(prev) and prev != -float('inf'):
+                # Non-finite epoch: max() with NaN/-inf is order-dependent, so
+                # mark the path undeterminable (None => kept/blocked below).
+                path_max_epoch[folded] = float('nan')
+            else:
+                path_max_epoch[folded] = max(prev, epoch)
+
     dirty: list[str] = []
     for i in range(0, len(paths), _PATHSPEC_CHUNK):
         chunk = paths[i:i + _PATHSPEC_CHUNK]
@@ -1061,10 +1094,36 @@ def writes_stop_check(session_id: str, own_root: str) -> str | None:
         for rec in r.stdout.decode("utf-8", "surrogateescape").split("\0"):
             if len(rec) > 3 and rec[2] == " ":
                 dirty.append(rec[3:])
-    if not dirty:
+
+    # Filter out paths whose mtime is > max_epoch + 30 (foreign writes).
+    # Keep paths with unreadable mtime or invalid epoch (fail-closed).
+    filtered_dirty: list[str] = []
+    for path_str in dirty:
+        folded = _fold(path_str)
+        max_epoch = path_max_epoch.get(folded)
+        if max_epoch is None or not math.isfinite(max_epoch):
+            # Path not in the epoch map, or an epoch was non-finite: keep it (block)
+            filtered_dirty.append(path_str)
+            continue
+        try:
+            # Use lstat semantics: don't follow symlinks
+            stat = os.lstat(os.path.join(own_root, path_str))
+            mtime = stat.st_mtime
+        except (OSError, TypeError):
+            # Cannot read mtime: keep it (fail-closed)
+            filtered_dirty.append(path_str)
+            continue
+
+        # mtime later than every recorded epoch + 30s: treated as a foreign write, skipped
+        if mtime > max_epoch + 30:
+            continue
+        # Otherwise, keep it (this session's write or same-call concurrent write)
+        filtered_dirty.append(path_str)
+
+    if not filtered_dirty:
         return None
-    return WRITES_DIRTY.format(root=own_root, paths="\n  ".join(dirty[:50]),
-                               more="" if len(dirty) <= 50 else f"\n  ... and {len(dirty) - 50} more")
+    return WRITES_DIRTY.format(root=own_root, paths="\n  ".join(filtered_dirty[:50]),
+                               more="" if len(filtered_dirty) <= 50 else f"\n  ... and {len(filtered_dirty) - 50} more")
 
 
 WRITES_DIRTY = """Do not stop yet: main-tree paths THIS session wrote are still uncommitted in {root}.

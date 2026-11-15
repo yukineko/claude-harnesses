@@ -70,8 +70,8 @@ pub(super) fn exec_opened_fds(stages: &[String]) -> Vec<(u32, ExecFd)> {
                     Some(body) => ExecFd::Procsub(body.to_string()),
                     None => ExecFd::File,
                 },
-                "<&" => match target.parse::<u32>() {
-                    Ok(n) if n <= 2 => ExecFd::File,
+                "<&" => match dup_fd_number(target) {
+                    Some(n) if n <= 2 => ExecFd::File,
                     _ if target == "-" => continue,
                     _ => ExecFd::Unreadable,
                 },
@@ -380,7 +380,7 @@ fn here_text_fds(stages: &[Stage]) -> Vec<u32> {
                 out.push(n);
             }
             if matches!(op.as_str(), "<&" | ">&") {
-                if let Ok(m) = target.parse::<u32>() {
+                if let Some(m) = dup_fd_number(&target) {
                     dups.push((n, m));
                 }
             }
@@ -417,7 +417,7 @@ fn stdin_here_text(stages: &[Stage], tracked: &[u32]) -> bool {
             fd.unwrap_or(if op.starts_with('<') { 0 } else { 1 }) == 0
                 && (matches!(op.as_str(), "<<<" | "<<" | "<<-")
                     || (matches!(op.as_str(), "<&" | ">&")
-                        && target.parse::<u32>().is_ok_and(|m| tracked.contains(&m))))
+                        && dup_fd_number(target).is_some_and(|m| tracked.contains(&m))))
         })
     })
 }
@@ -846,6 +846,14 @@ pub(super) fn dynamic_dup_reason(target: &str) -> Option<String> {
         .map(|why| format!("its stdin is duplicated from `{target}`, an fd spelled with {why}"))
 }
 
+/// The fd number a `<&` / `>&` target names, decoded the shell's way: quotes
+/// are removed first (`<&'3'` and `<&"3"` are `<&3`). `None` when the decoded
+/// text is not a plain number (`-`, a name) or cannot be decoded at all; callers
+/// resolve `None` restrictively (see `dynamic_dup_reason`), never as "no dup".
+pub(super) fn dup_fd_number(target: &str) -> Option<u32> {
+    decode_literal_word(target).ok()?.parse::<u32>().ok()
+}
+
 /// The literal text the shell word `word` stands for after quote removal, or
 /// `Err(why)` when the text does not determine it: an expansion the shell
 /// performs (`$…` or a backquote, unquoted or inside double quotes), ANSI-C
@@ -1042,7 +1050,7 @@ runs that text",
                     let seen = redirects
                         .iter()
                         .filter(|(_, op, t)| {
-                            matches!(op.as_str(), "<&" | ">&") && t.parse::<u32>() == Ok(n)
+                            matches!(op.as_str(), "<&" | ">&") && dup_fd_number(t) == Some(n)
                         })
                         .count();
                     if raw_fd_mentions(&st.raw, n) != seen && !unresolved.contains(&n) {
@@ -1124,7 +1132,7 @@ runs that text",
                     stdin_redirects += 1;
                 }
                 if matches!(op, "<&" | ">&") {
-                    if let Ok(m) = target.parse::<u32>() {
+                    if let Some(m) = dup_fd_number(target) {
                         refs.push(FdRef {
                             fd: m,
                             kind: if eff == 0 {
@@ -1419,9 +1427,9 @@ opened on"
                 why: format!("fd {n} was closed (`exec {n}<&-`) before it is read"),
             }),
         },
-        "<&" | ">&" => match target.parse::<u32>() {
-            Ok(m) if m <= 2 => Some(FdState::Other),
-            Ok(m) => match fds.get(&m) {
+        "<&" | ">&" => match dup_fd_number(target) {
+            Some(m) if m <= 2 => Some(FdState::Other),
+            Some(m) => match fds.get(&m) {
                 Some(FdState::Other) => Some(FdState::Other),
                 // fd 0 duplicated from an fd that holds a known text
                 // (`exec 3<<< '…'; exec 0<&3`, backlog 2210e1db): fd 0 reads
@@ -1437,7 +1445,7 @@ not follow"
                     ),
                 }),
             },
-            Err(_) => Some(FdState::Undetermined {
+            None => Some(FdState::Undetermined {
                 texts: Vec::new(),
                 why: format!("fd {n} is a copy of `{target}`, which blastguard does not resolve"),
             }),

@@ -90,13 +90,11 @@ fn assert_deny_both(cmd: &str, tag: &str) {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-15 F11 bash <&'3' allowed while <&3 is deny — remove when fixed"]
 fn quoted_single_numeric_dup_target_matches_unquoted_verdict() {
     assert_deny_both("exec 3<<<'chmod 777 /etc/hosts'; bash <&'3'", "sq");
 }
 
 #[test]
-#[ignore = "RED: 2026-11-15 F11 bash <&\"3\" allowed while <&3 is deny — remove when fixed"]
 fn quoted_double_numeric_dup_target_matches_unquoted_verdict() {
     assert_deny_both("exec 3<<<'chmod 777 /etc/hosts'; bash <&\"3\"", "dq");
 }

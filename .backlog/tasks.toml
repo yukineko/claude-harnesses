@@ -2508,6 +2508,8 @@ notes = """Observed 2026-11-15 in a subagent (main at 72cb90009): 'cd <tests dir
 created_at = 1794733637
 updated_at = 1794733637
 weight = 0.0
+issue_number = 1797
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1797"
 rev = 0
 
 [task.repro]

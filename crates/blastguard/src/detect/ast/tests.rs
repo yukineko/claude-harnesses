@@ -1400,3 +1400,69 @@ mod env_arith_opaque_followups {
         assert_known("eval foo; for v in 1 2; do :; done; cat > /tmp/f");
     }
 }
+
+mod env_arith_opaque_assign_default {
+    use super::*;
+
+    fn assert_unsupported(command: &str) {
+        match analyze(command) {
+            Analysis::Undetermined(Cause::Unsupported(_)) => {}
+            other => panic!(
+                "{command:?}: an assign-default expansion assigns a non-text-determined \
+                 value to a possibly-integer name, so this must be \
+                 Undetermined(Unsupported), got {other:#?}"
+            ),
+        }
+    }
+
+    fn assert_known(command: &str) {
+        match analyze(command) {
+            Analysis::Known(_) => {}
+            other => panic!("{command:?} is fully determined by its text; got {other:#?}"),
+        }
+    }
+
+    #[test]
+    fn opaque_then_assign_default_colon_eq_undetermined_is_unsupported() {
+        assert_unsupported("eval foo; : ${n:=$X}; cat > /tmp/f");
+    }
+
+    #[test]
+    fn opaque_then_assign_default_eq_literal_is_unsupported() {
+        assert_unsupported("eval foo; : ${n=bar}; cat > /tmp/f");
+    }
+
+    // Whether `declare -i n` alone already makes the state opaque is not
+    // asserted here; the expectation is only that the declared integer name
+    // evaluates the assigned value as arithmetic.
+    #[test]
+    fn declared_integer_assign_default_undetermined_is_unsupported() {
+        assert_unsupported("declare -i n; : ${n:=$X}; cat > /tmp/f");
+    }
+
+    #[test]
+    fn opaque_then_assign_default_array_element_is_unsupported() {
+        assert_unsupported("eval foo; : ${a[0]:=$X}; cat > /tmp/f");
+    }
+
+    #[test]
+    fn opaque_then_assign_default_inside_redirected_word_is_unsupported() {
+        assert_unsupported("eval foo; echo \"${n:=$X}\" > /tmp/f");
+    }
+
+    // Controls.
+    #[test]
+    fn control_assign_default_numeric_stays_known() {
+        assert_known(": ${n:=5}; cat > /tmp/f");
+    }
+
+    #[test]
+    fn control_use_default_does_not_assign_stays_known() {
+        assert_known(": ${n:-$X}; cat > /tmp/f");
+    }
+
+    #[test]
+    fn control_opaque_then_assign_default_numeric_literal_stays_known() {
+        assert_known("eval foo; : ${n:=5}; cat > /tmp/f");
+    }
+}

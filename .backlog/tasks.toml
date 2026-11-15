@@ -2481,6 +2481,8 @@ notes = """Observed 2026-11-15 at main 2ace975d1: two rerun refusals carried byt
 created_at = 1794733334
 updated_at = 1794733334
 weight = 0.0
+issue_number = 1796
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1796"
 rev = 0
 
 [task.repro]

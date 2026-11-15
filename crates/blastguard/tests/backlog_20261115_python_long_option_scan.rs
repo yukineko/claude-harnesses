@@ -204,13 +204,11 @@ fn assert_same_as_plain(long_spelling: &str, tag: &str) {
 }
 
 #[test]
-#[ignore = "RED: known python long option --check-hash-based-pycs MODE is unmodelled -> FP Deny in subagent; must equal plain `python3 x.py`"]
 fn known_long_option_separate_value_judged_like_plain_script() {
     assert_same_as_plain("--check-hash-based-pycs always", "fp-sep");
 }
 
 #[test]
-#[ignore = "RED: known python long option --check-hash-based-pycs=MODE is unmodelled -> FP Deny; must equal plain `python3 x.py`"]
 fn known_long_option_equals_value_judged_like_plain_script() {
     assert_same_as_plain("--check-hash-based-pycs=always", "fp-eq");
 }

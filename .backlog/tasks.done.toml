@@ -78397,3 +78397,49 @@ auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はあり
    Compiling blastguard v0.2.607 (/Users/yuki/src/.harness-worktrees/session-f01b1dd4/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
      Running tests/backlog_20261114_source_dev_stdin_dup.rs (target/debug/deps/backlog_20261114_source_dev_stdin_dup-369861d9bd6e5f6e)"""
+
+[[task]]
+id = "0154ed31"
+title = 'blastguard fail-open: g=globals; g()["exec"](input()) with harmful stdin is Allow (system harm must be Deny)'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-15 at 0.2.603 by independent RED designer, re-observed by main at 901603d40+RED (784eba77f). exec (/compile ( spaced forms already deny. CODE_BUILDING markers are space-sensitive substrings (code_building.rs). Readings: (a) defect - alias reaching exec is the same harm; (b) out of scope. Ruling: system harm Deny through any wrapper -> (a).
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261115_python_c_spaced_exec_fail_open -- --include-ignored; rev: edd05592c11ff4964f05d5542bb7fb5cb888fcd4; observed: exit 0: 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+
+   Compiling blastguard v0.2.613 (/Users/yuki/src/.harness-worktrees/session-075ca932/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/backlog_20261115_python_c_spaced_exec_fail_open.rs (target/debug/deps/backlog_20261115_python_c_spaced_exec_fail_open-e9dd36b59f5d664a)"""
+created_at = 1794730656
+updated_at = 1794742405
+weight = 0.0
+issue_number = 1788
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1788"
+issue_closed_at = 1794742408
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_c_spaced_exec_fail_open -- --include-ignored"
+rev = "bdfdc064af6abf8c9d8cbde6b9f1ba790bfc7e4a"
+observed_at = 1794730656
+detail = """
+exit 101: ers/yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/backlog_20261115_python_c_spaced_exec_fail_open.rs (target/debug/deps/backlog_20261115_python_c_spaced_exec_fail_open-528e4870bc24d1f9)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_c_spaced_exec_fail_open`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261115_python_c_spaced_exec_fail_open -- --include-ignored; rev: edd05592c11ff4964f05d5542bb7fb5cb888fcd4; observed: exit 0: 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+
+   Compiling blastguard v0.2.613 (/Users/yuki/src/.harness-worktrees/session-075ca932/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/backlog_20261115_python_c_spaced_exec_fail_open.rs (target/debug/deps/backlog_20261115_python_c_spaced_exec_fail_open-e9dd36b59f5d664a)"""

@@ -964,3 +964,48 @@ mod arith_subscript_fail_open {
         );
     }
 }
+
+mod subscript_command_substitution_fail_open {
+    use super::*;
+
+    /// A quoted name operand whose subscript holds `$( )` / backquotes runs
+    /// that command in the shell; a Known script that omits it hides it.
+    fn assert_undetermined(command: &str) {
+        match analyze(command) {
+            Analysis::Undetermined(_) => {}
+            Analysis::Known(s) => panic!(
+                "{command:?} runs a command inside the subscript; a Known script hides it: {s:#?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn read_quoted_subscript_substitution_is_undetermined() {
+        assert_undetermined("read 'a[$(rm -rf /tmp/x)]' </dev/null");
+    }
+
+    #[test]
+    fn unset_quoted_subscript_substitution_is_undetermined() {
+        assert_undetermined("unset 'a[$(rm -rf /tmp/x)]'");
+    }
+
+    #[test]
+    fn declare_quoted_subscript_substitution_is_undetermined() {
+        assert_undetermined("declare 'a[$(rm -rf /tmp/x)]=1'");
+    }
+
+    #[test]
+    fn printf_v_quoted_subscript_substitution_is_undetermined() {
+        assert_undetermined("printf -v 'a[$(rm -rf /tmp/x)]' hi");
+    }
+
+    #[test]
+    fn read_quoted_subscript_backquote_is_undetermined() {
+        assert_undetermined("read 'a[`rm -rf /tmp/x`]' </dev/null");
+    }
+
+    #[test]
+    fn control_read_plain_subscript_stays_known() {
+        let _ = known("read 'a[1]' </dev/null");
+    }
+}

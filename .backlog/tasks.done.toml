@@ -79734,3 +79734,234 @@ rev = "2af84d826b77b706090289af587fc895e45ba887"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "967fd65c"
+title = "blastguard fail-open: bash <&3- (move inherited fd to stdin) is Allow while bash <&3 is Ask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-14 (run-20261114-161340-68728 t1 verifier + side-reds agent, main dde31f11b): bash <&3- and bash 0<&3- are allow/allow (main/subagent) while bash <&3 is ask/deny. crates/blastguard/src/detect/payload.rs:~824 procsub_programs: target '3-' fails parse::<u32>() and is neither a dup nor unreadable. exec 3<<< 'chmod 777 /etc/hosts'; bash <&3- is Deny (other path). Readings: (a) fail-open — fd 3 contents unknown, same as bash <&3; (b) none plausible. "
+created_at = 1794656943
+updated_at = 1794785271
+weight = 0.0
+issue_number = 1781
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1781"
+issue_closed_at = 1794785273
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_stdin_dup_move_fd_suffix -- --include-ignored"
+rev = "b7903d36f4c6501380f6ae3a95d12d6b8dae69bc"
+observed_at = 1794656943
+detail = """
+exit 101: /Users/yuki/.condukt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/backlog_20261114_stdin_dup_move_fd_suffix.rs (target/debug/deps/backlog_20261114_stdin_dup_move_fd_suffix-9ced7a051e26aaa3)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_stdin_dup_move_fd_suffix`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_stdin_dup_move_fd_suffix"
+exit = 0
+passed = 5
+rev = "0f7cf5b0c5bf55605ab62165b626b86f5a6ffacd"
+observed_at = 1794785251
+output_digest = "sha256:1c274978d23799c40756ce80175205270720a736277133baf0600b8e23ca7101"
+excerpt = """
+ Compiling zmij v1.0.21
+   Compiling ucd-trie v0.1.7
+   Compiling stacker v0.1.25
+   Compiling autocfg v1.5.1
+   Compiling syn v2.0.118
+   Compiling syn v3.0.10
+   Compiling num-traits v0.2.19
+   Compiling aho-corasick v1.1.4
+   Compiling prettyplease v0.2.37
+   Compiling regex-syntax v0.8.11
+   Compiling rustix v1.1.4
+   Compiling parking_lot_core v0.9.12
+   Compiling ar_archive_writer v0.5.1
+   Compiling darling_core v0.21.3
+   Compiling darling_core v0.20.11
+   Compiling serde_json v1.0.150
+   Compiling typenum v1.20.1
+   Compiling zerocopy v0.8.52
+   Compiling utf8parse v0.2.2
+   Compiling getrandom v0.4.3
+   Compiling psm v0.1.31
+   Compiling hashbrown v0.17.1
+   Compiling rustversion v1.0.22
+   Compiling indexmap v2.14.0
+   Compiling serde_derive v1.0.228
+   Compiling regex-automata v0.4.14
+   Compiling anstyle-parse v1.0.0
+   Compiling pest v2.9.5
+   Compiling darling_macro v0.20.11
+   Compiling darling_macro v0.21.3
+   Compiling pest_meta v2.9.5
+   Compiling errno v0.3.14
+   Compiling ahash v0.8.12
+   Compiling anstyle v1.0.14
+   Compiling smallvec v1.16.5
+   Compiling option-ext v0.2.0
+   Compiling core-foundation-sys v0.8.7
+   Compiling bitflags v2.13.0
+   Compiling winnow v0.7.15
+   Compiling anyhow v1.0.103
+   Compiling anstyle-query v1.1.5
+   Compiling toml_write v0.1.2
+   Compiling itoa v1.0.18
+   Compiling scopeguard v1.2.0
+   Compiling thiserror v2.0.21
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling colorchoice v1.0.5
+   Compiling anstream v1.0.0
+   Compiling lock_api v0.4.14
+   Compiling iana-time-zone v0.1.65
+   Compiling pest_generator v2.9.5
+   Compiling dirs-sys v0.4.1
+   Compiling darling v0.21.3
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling darling v0.20.11
+   Compiling toml_edit v0.22.27
+   Compiling thiserror-impl v2.0.21
+   Compiling allocator-api2 v0.2.21
+   Compiling fastrand v2.4.1
+   Compiling clap_lex v1.1.0
+   Compiling peg-runtime v0.8.6
+   Compiling foldhash v0.2.0
+   Compiling heck v0.5.0
+   Compiling clap_builder v4.6.0
+   Compiling peg-macros v0.8.6
+   Compiling clap_derive v4.6.1
+   Compiling bon-macros v3.9.3
+   Compiling cached_proc_macro v0.27.0
+   Compiling toml v0.8.23
+   Compiling hashbrown v0.16.1
+   Compiling tempfile v3.27.0
+   Compiling pest_derive v2.9.5
+   Compiling dirs v5.0.1
+   Compiling chrono v0.4.45
+   Compiling parking_lot v0.12.5
+   Compiling regex v1.12.4
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling tracing-attributes v0.1.31
+   Compiling console v0.16.6
+   Compiling wait-timeout v0.2.1
+   Compiling tracing-core v0.1.36
+   Compiling arrayvec v0.7.8
+   Compiling pin-project-lite v0.2.17
+   Compiling web-time v1.1.0
+   Compiling cached_proc_macro_types v0.1.1
+   Compiling similar v2.7.0
+   Compiling harness-core v0.2.97 (/Users/yuki/src/.harness-worktrees/backlog-close-p0-20261116/crates/harness-core)
+   Compiling peg v0.8.6
+   Compiling cached v0.59.0
+   Compiling tracing v0.1.44
+   Compiling insta v1.49.0
+   Compiling utf8-chars v3.0.7
+   Compiling digest v0.10.7
+   Compiling clap v4.6.1
+   Compiling cpufeatures v0.2.17
+   Compiling bstr v1.12.2
+   Compiling winnow v1.0.4
+   Compiling target-triple v1.0.1
+   Compiling log v0.4.33
+   Compiling indenter v0.3.4
+   Compiling globset v0.4.18
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling sha2 v0.10.9
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling bon v3.9.3
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling termcolor v1.4.1
+   Compiling toml v1.1.3+spec-1.1.0
+   Compiling glob v0.3.3
+   Compiling overwatch v0.2.121 (/Users/yuki/src/.harness-worktrees/backlog-close-p0-20261116/crates/overwatch)
+   Compiling trybuild v1.0.118
+   Compiling brush-parser v0.4.0
+   Compiling blastguard v0.2.662 (/Users/yuki/src/.harness-worktrees/backlog-close-p0-20261116/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.74s
+     Running tests/backlog_20261114_stdin_dup_move_fd_suffix.rs (target/debug/deps/backlog_20261114_stdin_dup_move_fd_suffix-ee45fe878b9ed264)
+"""
+
+[task.closure.red]
+rev = "84254ee763d54f3bde899b1308e30c28c3af2879"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "3da14bbd"
+title = """blastguard fail-open: harmful stdin into python3 -c 'os.system("python3 -m asyncio")' (nested REPL) is Allow"""
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "F13. Observed 2026-11-15 at 0.2.603, re-observed by main with RED 784eba77f. The child REPL inherits stdin and runs the piped program. Readings: (a) defect - wrapper descent misses inherited stdin; (b) child stdin out of scope. Ruling: system harm Deny through any wrapper -> (a)."
+created_at = 1794730703
+updated_at = 1794785281
+weight = 0.0
+issue_number = 1790
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1790"
+issue_closed_at = 1794785284
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_os_system_nested_repl -- --include-ignored"
+rev = "bdfdc064af6abf8c9d8cbde6b9f1ba790bfc7e4a"
+observed_at = 1794730703
+detail = """
+exit 101: 8 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/backlog_20261115_python_os_system_nested_repl.rs (target/debug/deps/backlog_20261115_python_os_system_nested_repl-d35551448481b324)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_os_system_nested_repl`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_os_system_nested_repl"
+exit = 0
+passed = 2
+rev = "0f7cf5b0c5bf55605ab62165b626b86f5a6ffacd"
+observed_at = 1794785280
+output_digest = "sha256:1d98184773ed0faacda09b825edcd8b3449718d5ca17501cd5eaa13868678af8"
+excerpt = """
+
+running 2 tests
+test harmful_stdin_into_os_system_nested_repl_is_deny ... ok
+test control_benign_stdin_into_nested_repl_is_not_deny ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+   Compiling blastguard v0.2.662 (/Users/yuki/src/.harness-worktrees/backlog-close-p0-20261116/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/backlog_20261115_python_os_system_nested_repl.rs (target/debug/deps/backlog_20261115_python_os_system_nested_repl-6bd74be66fea518a)
+"""
+
+[task.closure.red]
+rev = "84254ee763d54f3bde899b1308e30c28c3af2879"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

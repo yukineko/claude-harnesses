@@ -1773,37 +1773,6 @@ exit 101: ndukt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_txt_data_heredoc_python_probe`"""
 
 [[task]]
-id = "967fd65c"
-title = "blastguard fail-open: bash <&3- (move inherited fd to stdin) is Allow while bash <&3 is Ask"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-14 (run-20261114-161340-68728 t1 verifier + side-reds agent, main dde31f11b): bash <&3- and bash 0<&3- are allow/allow (main/subagent) while bash <&3 is ask/deny. crates/blastguard/src/detect/payload.rs:~824 procsub_programs: target '3-' fails parse::<u32>() and is neither a dup nor unreadable. exec 3<<< 'chmod 777 /etc/hosts'; bash <&3- is Deny (other path). Readings: (a) fail-open — fd 3 contents unknown, same as bash <&3; (b) none plausible. "
-created_at = 1794656943
-updated_at = 1794656943
-weight = 0.0
-issue_number = 1781
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1781"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261114_stdin_dup_move_fd_suffix -- --include-ignored"
-rev = "b7903d36f4c6501380f6ae3a95d12d6b8dae69bc"
-observed_at = 1794656943
-detail = """
-exit 101: /Users/yuki/.condukt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
-     Running tests/backlog_20261114_stdin_dup_move_fd_suffix.rs (target/debug/deps/backlog_20261114_stdin_dup_move_fd_suffix-9ced7a051e26aaa3)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261114_stdin_dup_move_fd_suffix`"""
-
-[[task]]
 id = "7cccad0a"
 title = "blastguard fail-open: harmful literal piped to python3 -c that forwards stdin to a shell (os.system(input()), subprocess.run(stdin, shell=True)) is Allow"
 project = "/Users/yuki/src/harness"
@@ -1924,36 +1893,6 @@ exit 101: d v0.2.608 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
      Running tests/backlog_20261115_quoted_numeric_dup_target.rs (target/debug/deps/backlog_20261115_quoted_numeric_dup_target-c281c6c9d662af65)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_numeric_dup_target`"""
-
-[[task]]
-id = "3da14bbd"
-title = """blastguard fail-open: harmful stdin into python3 -c 'os.system("python3 -m asyncio")' (nested REPL) is Allow"""
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "F13. Observed 2026-11-15 at 0.2.603, re-observed by main with RED 784eba77f. The child REPL inherits stdin and runs the piped program. Readings: (a) defect - wrapper descent misses inherited stdin; (b) child stdin out of scope. Ruling: system harm Deny through any wrapper -> (a)."
-created_at = 1794730703
-updated_at = 1794730703
-weight = 0.0
-issue_number = 1790
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1790"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261115_python_os_system_nested_repl -- --include-ignored"
-rev = "bdfdc064af6abf8c9d8cbde6b9f1ba790bfc7e4a"
-observed_at = 1794730703
-detail = """
-exit 101: 8 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
-     Running tests/backlog_20261115_python_os_system_nested_repl.rs (target/debug/deps/backlog_20261115_python_os_system_nested_repl-d35551448481b324)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_os_system_nested_repl`"""
 
 [[task]]
 id = "392097d7"

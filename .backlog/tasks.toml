@@ -2839,6 +2839,8 @@ notes = "Code (crates/tdd/src/proof.rs at 9a989926b): green() calls judge_green(
 created_at = 1794764532
 updated_at = 1794764532
 weight = 0.0
+issue_number = 1811
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1811"
 rev = 0
 
 [task.repro]

@@ -18,13 +18,16 @@
 //!   the command text alone (plus the process `HOME` for `~` / `$HOME`). It is
 //!   never a guessed literal.
 //!
-//! # Current state (skeleton)
+//! # Current state
 //!
-//! This is the skeleton task of run-20261115-212659-5759: the types and
-//! signatures are frozen, but nothing is implemented yet.
+//! The types and signatures are frozen (run-20261115-212659-5759). The parse
+//! stage (`parse.rs`: caps, depth pre-scan, zsh-only syntax, brush-parser
+//! under `catch_unwind`) is implemented; the evaluator is not yet.
 //!
-//! * [`analyze`] returns `Analysis::Undetermined(Cause::NotImplemented)` for
-//!   **every** input.
+//! * [`analyze`] returns the parse stage's `Undetermined` cause
+//!   (`TooLong` / `TooDeep` / `ZshOnly` / `Parse` / `Panic`) for inputs it
+//!   rejects, and `Analysis::Undetermined(Cause::NotImplemented)` for every
+//!   input that parses (the evaluator is still a stub).
 //! * [`program_source`] returns
 //!   `Some(ProgramSource::Undetermined("program_source: not implemented"))`
 //!   for **every** input. It deliberately does not return `None`: `None` means
@@ -46,22 +49,27 @@ mod tests;
 use std::ops::Range;
 
 /// Inputs longer than this many bytes are not parsed:
-/// `Analysis::Undetermined(Cause::TooLong)`.
+/// `Analysis::Undetermined(Cause::TooLong)`, checked before brush-parser is
+/// called.
 ///
-/// Placeholder value: the real bound is chosen by measurement in the
-/// `ast-parse` task.
-pub(crate) const MAX_PARSE_BYTES: usize = 64 * 1024;
+/// 8 KiB: user ruling 2026-11-16 (3 of the 417 commands in the blastguard
+/// block log exceed it). Measured parse time at this size is ~1–3 ms release
+/// (see `parse.rs`).
+pub(crate) const MAX_PARSE_BYTES: usize = 8 * 1024;
 
-/// Maximum structural nesting depth, pre-scanned before brush-parser is
+/// Maximum nesting depth, pre-scanned (over-counting) before brush-parser is
 /// invoked; deeper inputs yield `Analysis::Undetermined(Cause::TooDeep)`.
 ///
-/// Placeholder value: the real bound is chosen by measurement in the
-/// `ast-parse` task.
-pub(crate) const MAX_PARSE_DEPTH: usize = 64;
+/// 16: user ruling 2026-11-16. The deepest command in the blastguard block
+/// log (417 rows, plain `( { [` counter) is 13; the shallowest brush-parser
+/// stack overflow measured is at depth 128 (debug build, 2 MiB stack); see
+/// the table in `parse.rs`.
+pub(crate) const MAX_PARSE_DEPTH: usize = 16;
 
 /// Parse and statically evaluate `command`.
 ///
-/// Skeleton: always `Analysis::Undetermined(Cause::NotImplemented)`.
+/// Evaluator still a stub: an input that parses is
+/// `Analysis::Undetermined(Cause::NotImplemented)`.
 pub(crate) fn analyze(command: &str) -> Analysis {
     match parse::parse(command) {
         Ok(program) => eval::evaluate(command, &program),
@@ -81,7 +89,13 @@ pub(crate) enum Analysis {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Cause {
     NotImplemented,
+    /// Over [`MAX_PARSE_BYTES`]. Detectors resolve it to Deny, with a reason
+    /// telling the caller to write the script to a file with the Write tool
+    /// and run it with a short command — user ruling 2026-11-16.
     TooLong,
+    /// Over [`MAX_PARSE_DEPTH`]. Detectors resolve it to Deny, with a reason
+    /// telling the caller to flatten the command (split it, or write a script
+    /// file with the Write tool and run that) — user ruling 2026-11-16.
     TooDeep,
     Timeout,
     Parse(String),

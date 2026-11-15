@@ -197,25 +197,21 @@ mod parse_caps {
     }
 
     #[test]
-    #[ignore = "RED: ast parse_caps"]
     fn unbalanced_single_quote_is_undetermined() {
         assert_parse_undetermined("echo 'abc");
     }
 
     #[test]
-    #[ignore = "RED: ast parse_caps"]
     fn unbalanced_double_quote_is_undetermined() {
         assert_parse_undetermined("echo \"abc");
     }
 
     #[test]
-    #[ignore = "RED: ast parse_caps"]
     fn unterminated_heredoc_is_undetermined() {
         assert_parse_undetermined("cat <<'EOF'\nrm -rf /tmp/z\n");
     }
 
     #[test]
-    #[ignore = "RED: ast parse_caps"]
     fn over_max_parse_bytes_is_too_long() {
         let command = format!("echo {}", "a".repeat(MAX_PARSE_BYTES));
         assert!(command.len() > MAX_PARSE_BYTES);
@@ -236,7 +232,6 @@ mod parse_caps {
     }
 
     #[test]
-    #[ignore = "RED: ast parse_caps"]
     fn nested_subshells_over_cap_are_too_deep() {
         for n in depths() {
             let command = format!("{}echo hi{}", "(".repeat(n), ")".repeat(n));
@@ -270,7 +265,6 @@ mod parse_caps {
     }
 
     #[test]
-    #[ignore = "RED: ast parse_caps"]
     fn zsh_process_substitution_equals_is_zsh_only() {
         match analyze_bounded("diff =(ls) /tmp/a".to_string(), LIMIT) {
             Analysis::Undetermined(Cause::ZshOnly(_)) => {}
@@ -279,7 +273,6 @@ mod parse_caps {
     }
 
     #[test]
-    #[ignore = "RED: ast parse_caps"]
     fn zsh_parameter_flags_are_zsh_only() {
         match analyze_bounded("echo ${(f)x}".to_string(), LIMIT) {
             Analysis::Undetermined(Cause::ZshOnly(_)) => {}

@@ -2454,6 +2454,8 @@ notes = """Observed 2026-11-15 in a subagent: cat > decomp.json <<'EOF' ... EOF 
 created_at = 1794732083
 updated_at = 1794732083
 weight = 0.0
+issue_number = 1795
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1795"
 rev = 0
 
 [task.repro]

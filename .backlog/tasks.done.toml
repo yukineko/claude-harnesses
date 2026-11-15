@@ -78191,3 +78191,70 @@ rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "e21b891c"
+title = "blastguard FP: python3 --check-hash-based-pycs always x.py fed from a pipe is Deny; python long options must be modelled and the option scans must not stop at them"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794715649
+updated_at = 1794715933
+weight = 0.0
+issue_number = 1787
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1787"
+issue_closed_at = 1794715936
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_long_option_scan -- --include-ignored"
+rev = "d04fcb2ff2bde5c1fe021af061715bc41f8a6dbf"
+observed_at = 1794715649
+detail = """
+exit 101: g blastguard v0.2.605 (/Users/yuki/src/.harness-worktrees/py-long-opt/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running tests/backlog_20261115_python_long_option_scan.rs (target/debug/deps/backlog_20261115_python_long_option_scan-d14c0e0040427045)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_long_option_scan`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_long_option_scan -- --include-ignored"
+exit = 0
+passed = 8
+rev = "e62b63ad2f05a0c290efa8c3f003b233ddbb7296"
+observed_at = 1794715932
+output_digest = "sha256:c1543c814bd98d7cb05bf7521061888fae056aec6eb13d8af0fd8254a445a73d"
+excerpt = """
+
+running 8 tests
+test control_benign_pipe_to_python_script_is_not_deny ... ok
+test guard_long_option_then_m_code_is_deny ... ok
+test guard_long_option_with_separate_value_then_i_is_deny ... ok
+test guard_long_option_with_equals_value_then_i_is_deny ... ok
+test guard_unknown_long_option_then_i_is_not_allow ... ok
+test control_harmful_program_piped_to_python_i_is_deny ... ok
+test known_long_option_equals_value_judged_like_plain_script ... ok
+test known_long_option_separate_value_judged_like_plain_script ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/backlog_20261115_python_long_option_scan.rs (target/debug/deps/backlog_20261115_python_long_option_scan-88f1be591d9ef8e8)
+"""
+
+[task.closure.red]
+rev = "d04fcb2ff2bde5c1fe021af061715bc41f8a6dbf"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

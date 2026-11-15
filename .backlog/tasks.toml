@@ -2522,3 +2522,33 @@ exit 101: -empty-worktree/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.88s
      Running tests/backlog_20261115_python_stdin_heredoc_backtick_redirect_fp.rs (target/debug/deps/backlog_20261115_python_stdin_heredoc_backtick_redirect_fp-1edf72d723701cc4)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_stdin_heredoc_backtick_redirect_fp`"""
+
+[[task]]
+id = "c80effc2"
+title = "answerlang Stop judges a stale interim transcript text instead of the final answer (prefer payload last_assistant_message)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "answerlang",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-15 session 6dcca0ad transcript lines 2117/2123/2124/2126: Stop fired 140ms after the Japanese final answer but judged the 101-letter English interim text. Fix candidate: read payload last_assistant_message first, transcript as fallback; include the judged source in the block reason so the next firing shows which was read. UNVERIFIED: whether the MAIN-session Stop payload carries last_assistant_message (SubagentStop does: overwatch subagents.json; changelog says Stop too; context-governor io.rs:10 claims otherwise). If absent, this fix does not cure the FP — then treat 'last assistant text precedes the last tool_result' as undetermined."
+created_at = 1794733932
+updated_at = 1794733932
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p answerlang --test stop_payload_final_message_20261115 -- --ignored"
+rev = "c19614ef3c14d2ac117f8b6b01eff9ad9223a929"
+observed_at = 1794733932
+detail = """
+exit 101: 
+   Compiling answerlang v0.1.1 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/answerlang)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.70s
+     Running tests/stop_payload_final_message_20261115.rs (target/debug/deps/stop_payload_final_message_20261115-a069576d5a9a4563)
+error: test failed, to rerun pass `-p answerlang --test stop_payload_final_message_20261115`"""

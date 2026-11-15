@@ -445,8 +445,8 @@ is elsewhere, `cd` there in a separate Bash call first). blastguard judges it no
 sees the real permission prompt. Do not rewrite it, wrap it, or hand it to the user to run.\n\
   2. SendMessage the output and exit code to the subagent, and name the relay id in the message.\n\
 If the human declined the prompt, or the command cannot be run, record why with \
-`blastguard relay dismiss <id> --reason \"<why>\"`; every dismissal is shown on each later Stop of \
-this session.";
+`blastguard relay dismiss <id> --reason \"<why>\"`; every dismissal stays listed on each later Stop of \
+this session as its relay id and reason only (the full command stays in the queue file).";
 
 fn describe(e: &Entry) -> String {
     let state = match (&e.executed, e.relayed) {
@@ -475,11 +475,9 @@ fn indent(s: &str) -> String {
 
 fn describe_dismissed(e: &Entry) -> String {
     format!(
-        "- relay id: {} (cwd: {}) dismissed — reason: {}\n  command:\n{}\n",
+        "- relay id: {} dismissed — reason: {}\n",
         e.id,
-        e.cwd,
-        e.dismissed.as_deref().unwrap_or(""),
-        indent(&e.command)
+        e.dismissed.as_deref().unwrap_or("")
     )
 }
 
@@ -509,8 +507,10 @@ pub fn stop_outcome(dir: &Path, session: &str) -> StopOutcome {
     } else {
         Some(format!(
             "blastguard relay: {} subagent Ask(s) were dismissed in this session instead of being \
-             re-run in the main session:\n{}",
+             re-run in the main session (id and reason only; the full commands are in the queue \
+             file {}):\n{}",
             dismissed.len(),
+            path.display(),
             dismissed
                 .iter()
                 .map(|e| describe_dismissed(e))
@@ -633,7 +633,6 @@ mod tests {
 
     // test-weakening-justified: RED contract test for the compact dismissed Stop text; ignored until the fix lands.
     #[test]
-    #[ignore = "RED: stop text repeats full dismissed command bodies on every Stop (persisted-output blob)"]
     fn stop_allow_text_shows_dismissed_id_reason_and_queue_path_but_not_command_body() {
         let d = tmp("compact-allow");
         let id = queue(&d, "s", None, "/w", DISMISSED_MARKER, "r").unwrap();
@@ -641,9 +640,15 @@ mod tests {
         let qp = queue_path(&d, "s").display().to_string();
         match stop_outcome(&d, "s") {
             StopOutcome::Allow(Some(msg)) => {
-                assert!(msg.contains(&id) && msg.contains("declined by human"), "{msg}");
+                assert!(
+                    msg.contains(&id) && msg.contains("declined by human"),
+                    "{msg}"
+                );
                 assert!(msg.contains(&qp), "queue path missing: {msg}");
-                assert!(!msg.contains("DISMISSED-BODY-MARKER"), "command body leaked: {msg}");
+                assert!(
+                    !msg.contains("DISMISSED-BODY-MARKER"),
+                    "command body leaked: {msg}"
+                );
             }
             other => panic!("{other:?}"),
         }
@@ -651,7 +656,6 @@ mod tests {
 
     // test-weakening-justified: RED contract test for the compact dismissed Stop text; ignored until the fix lands.
     #[test]
-    #[ignore = "RED: stop text repeats full dismissed command bodies on every Stop (persisted-output blob)"]
     fn stop_block_text_keeps_pending_command_in_full_but_not_dismissed_body() {
         let d = tmp("compact-block");
         let pid = queue(&d, "s", None, "/w", PENDING_MARKER, "r").unwrap();
@@ -664,8 +668,14 @@ mod tests {
                     msg.contains(&indent(PENDING_MARKER)),
                     "pending command not shown in full: {msg}"
                 );
-                assert!(msg.contains(&did) && msg.contains("declined by human"), "{msg}");
-                assert!(!msg.contains("DISMISSED-BODY-MARKER"), "command body leaked: {msg}");
+                assert!(
+                    msg.contains(&did) && msg.contains("declined by human"),
+                    "{msg}"
+                );
+                assert!(
+                    !msg.contains("DISMISSED-BODY-MARKER"),
+                    "command body leaked: {msg}"
+                );
             }
             other => panic!("{other:?}"),
         }

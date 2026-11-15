@@ -19,7 +19,13 @@
 //!   `source`, `.`, `trap`, `alias`, `shopt`, `builtin`, `command`, an
 //!   undetermined command word, `declare`-family options, `set` with options
 //!   other than the plain ones — makes the state *opaque*: from there on every
-//!   variable, the cwd and stdin are `Undetermined`.
+//!   variable, the cwd and stdin are `Undetermined`. `builtin [--] w ...` and
+//!   `command [-p] [--] w ...` (nested too) are unwrapped first: the wrapped
+//!   command `w` has its effects and assignment checks as if it ran alone
+//!   (a wrapped declaration builtin's operands keep Field mode), and then the
+//!   wrapper still makes the state opaque. `command -v` / `-V` (a lookup
+//!   that runs nothing), an undetermined word and an unmodelled option of
+//!   the chain have no effect other than making the state opaque.
 //! * cwd: `cd <literal>` moves the tracked cwd for the commands that run only
 //!   if it succeeded (`cd x && ...`); after `cd x;` the cd may have failed, so
 //!   the cwd is the join of both and `Undetermined`. `cd -`, `cd` alone,
@@ -538,6 +544,7 @@ fn resolve(cwd: &Cwd, v: Value) -> Value {
 const DECL_BUILTINS: &[&str] = &["export", "declare", "typeset", "local", "readonly"];
 
 /// An assignment operand of a declaration builtin, as parsed by brush.
+#[derive(Clone)]
 struct DeclArg {
     /// The variable name (`None` for `a[i]=v`).
     name: Option<String>,
@@ -555,6 +562,62 @@ const SPECIAL_BUILTINS: &[&str] = &[
     ":", ".", "break", "continue", "eval", "exec", "exit", "export", "readonly", "return", "set",
     "shift", "times", "trap", "unset", "source",
 ];
+
+/// What a `builtin` / `command` wrapper chain at the start of `argv` runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Wrapped {
+    /// `argv[i]` is the command word that runs (`i == 0`: no wrapper).
+    At(usize),
+    /// `command -v` / `-V`: a lookup that runs nothing.
+    Lookup,
+    /// The chain ends (`builtin` alone), or a word / option of it is not
+    /// determined or not modelled.
+    Unknown,
+}
+
+/// Unwrap `builtin [--] w ...` and `command [-p] [--] w ...` (nested too).
+fn unwrap_wrappers(argv: &[Word]) -> Wrapped {
+    let mut i = 0;
+    loop {
+        let lit = |j: usize| match argv.get(j).map(|w| &w.value) {
+            Some(Value::Literal(s)) => Some(s.as_str()),
+            _ => None,
+        };
+        match lit(i) {
+            Some("builtin") => {
+                i += 1;
+                if lit(i) == Some("--") {
+                    i += 1;
+                }
+            }
+            Some("command") => {
+                i += 1;
+                loop {
+                    match lit(i) {
+                        Some("--") => {
+                            i += 1;
+                            break;
+                        }
+                        Some(o) if o.starts_with('-') && o.len() > 1 => {
+                            let o = &o[1..];
+                            if o.contains(['v', 'V']) {
+                                return Wrapped::Lookup;
+                            }
+                            if !o.chars().all(|c| c == 'p') {
+                                return Wrapped::Unknown;
+                            }
+                            i += 1;
+                        }
+                        Some(_) => break,
+                        None => return Wrapped::Unknown,
+                    }
+                }
+            }
+            Some(_) => return Wrapped::At(i),
+            None => return Wrapped::Unknown,
+        }
+    }
+}
 
 struct Ev {
     out: Vec<SimpleCommand>,
@@ -1026,14 +1089,18 @@ impl Ev {
         }
         let decl = matches!(argv.first().map(|w| &w.value),
             Some(Value::Literal(n)) if DECL_BUILTINS.contains(&n.as_str()));
-        // argv index -> assignment operand, for declaration builtins.
+        // argv index -> assignment operand, for declaration builtins (also
+        // one behind `builtin` / `command`, whose operands keep Field mode).
         let mut decl_names: BTreeMap<usize, DeclArg> = BTreeMap::new();
         for item in suffix {
             match item {
                 I::Word(w) => argv.push(self.word(text, w, Mode::Field, &mut env)?),
                 I::AssignmentWord(a, w) => {
                     let mode = if decl { Mode::Assign } else { Mode::Field };
-                    if decl {
+                    let wrapped_decl = matches!(unwrap_wrappers(&argv),
+                        Wrapped::At(i) if i > 0 && matches!(&argv[i].value,
+                            Value::Literal(n) if DECL_BUILTINS.contains(&n.as_str())));
+                    if decl || wrapped_decl {
                         let name = match &a.name {
                             ast::AssignmentName::VariableName(n) => Some(n.clone()),
                             ast::AssignmentName::ArrayElementName(..) => None,
@@ -1171,7 +1238,43 @@ impl Ev {
             }
             Some(Value::Literal(n)) => n.as_str(),
         };
+        if name == "builtin" || name == "command" {
+            // The wrapped command's effects (and assignment checks) apply as
+            // if it ran unwrapped. The wrapper still makes the state opaque:
+            // that `command` drops special-builtin semantics and that the
+            // modelling of every wrapped builtin is unchanged by the wrapper
+            // is not verified here, so the earlier, restrictive effect stays.
+            let mut out = match unwrap_wrappers(&sc.argv) {
+                Wrapped::At(i) => match &sc.argv[i].value {
+                    Value::Literal(w) => {
+                        let shifted: BTreeMap<usize, DeclArg> = decl_names
+                            .range(i + 1..)
+                            .map(|(k, d)| (k - i, d.clone()))
+                            .collect();
+                        let args = sc.argv.get(i + 1..).unwrap_or(&[]);
+                        self.builtin_effects(sc, w, args, &shifted, env)?
+                    }
+                    Value::Undetermined(_) => Outcome::same(env),
+                },
+                Wrapped::Lookup | Wrapped::Unknown => Outcome::same(env),
+            };
+            out.ok.make_opaque(&format!("`{name}` ran"));
+            out.fail.make_opaque(&format!("`{name}` ran"));
+            return Ok(out);
+        }
         let args = sc.argv.get(1..).unwrap_or(&[]);
+        self.builtin_effects(sc, name, args, decl_names, env)
+    }
+
+    /// The effects of the builtin (or other command) `name` with `args`.
+    fn builtin_effects(
+        &mut self,
+        sc: &SimpleCommand,
+        name: &str,
+        args: &[Word],
+        decl_names: &BTreeMap<usize, DeclArg>,
+        mut env: Env,
+    ) -> Result<Outcome, Cause> {
         if SPECIAL_BUILTINS.contains(&name) {
             for (n, _) in &sc.assignments {
                 env.forget_operand(n, "prefix assignment of a special builtin")?;

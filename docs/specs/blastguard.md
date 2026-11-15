@@ -1275,6 +1275,10 @@ forge・condukt のスケジューラが再利用）。
   `for` 変数（literal list の各語、不定 list は不定値として）・`${n:=v}` / `${n=v}`（`${a[i]:=v}` も。
   間接 `${!x:=v}` は opaque 中または `declare -i` 名がある間は integer 扱い）。本文で決まらない値や name を
   読む値（`X=bar`・`FOO=/abs/path` を含む）は `Undetermined(Unsupported)`。
+  `builtin [--] w ...`・`command [-p] [--] w ...`（入れ子も）は unwrap し、包まれた `w` を単独実行と同じ
+  効果・代入検査で評価したうえで（declare 系の operand は Field mode のまま）、wrapper 自体は従来どおり
+  状態を opaque にする。`command -v`/`-V` は何も実行しない lookup として
+  効果なし（opaque 化は残す）。chain 中の不定語・未モデル化 option も opaque 化のみ。
   `support.rs` は状態を持たない補助関数（escape 展開・パス正規化・fd/stdin・pipe stdin）。
   `eval/words.rs` は `eval.rs` の子 module で、parameter 展開の値（`${n:=v}` の integer 検査を含む）と
   展開後の語の最終値（tilde・word split・pathname/brace 展開・heredoc 展開の判定）を担う。

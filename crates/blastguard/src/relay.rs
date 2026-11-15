@@ -48,8 +48,11 @@
 //!   call, which blastguard's PreToolUse judged like any other.
 //! * It never changes a verdict. The queue write happens after the verdict is
 //!   decided; a failed write only adds a line to the deny reason.
-//! * It never records a true `Deny` (system harm or otherwise). Only an `Ask`
-//!   that was hardened because the caller was a subagent is queued.
+//! * It never queues a true `Deny` (system harm or otherwise): only an `Ask`
+//!   that was hardened because the caller was a subagent is queued. A
+//!   main-session `Deny` of an already-queued, byte-identical (command, cwd)
+//!   Bash call is recorded only as a non-resolving `denied` outcome on that
+//!   entry ([`mark_denied`]).
 //!
 //! # Fail-closed (CLAUDE.md §3)
 //!

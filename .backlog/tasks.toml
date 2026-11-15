@@ -2218,13 +2218,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "Observed 2026-11-15 (run-20261114-161340-68728): condukt worktree merge --branch condukt/run-20261114-161340-68728/side-reds (no --run/--task) refused with merge-task-trailer-missing. crates/condukt/src/worktree/merge_gate.rs resolves the task as (recorded branch.<b>.conduktTask, cli) -> recorded wins, so the guard applies even without flags; the --run help says 'Omit for a merge with no task association (behavior otherwise unchanged)'. RED (independent, sonnet): crates/condukt/tests/backlog_20261115_worktree_merge_no_task_trailer_refusal.rs. CONFLICT: existing crates/condukt/tests/task_trailer_merge.rs::foreign_trailerless_commit_is_refused freezes the refusal for a recorded branch with no flags -> readings: (a) defect (help text is the contract) vs (b) intended (help text wrong); needs a human ruling before fixing; do not loosen either test without it."
+notes = "Observed 2026-11-15 (run-20261114-161340-68728): condukt worktree merge --branch condukt/run-20261114-161340-68728/side-reds (no --run/--task) refused with merge-task-trailer-missing. crates/condukt/src/worktree/merge_gate.rs resolves the task as (recorded branch.<b>.conduktTask, cli) -> recorded wins, so the guard applies even without flags; the --run help says 'Omit for a merge with no task association (behavior otherwise unchanged)'. RED (independent, sonnet): crates/condukt/tests/backlog_20261115_worktree_merge_no_task_trailer_refusal.rs. CONFLICT: existing crates/condukt/tests/task_trailer_merge.rs::foreign_trailerless_commit_is_refused freezes the refusal for a recorded branch with no flags -> readings: (a) defect (help text is the contract) vs (b) intended (help text wrong); needs a human ruling before fixing; do not loosen either test without it. | User ruling 2026-11-15: the refusal is the defect (a trailer check must not apply to a merge that names no task); fix the part of task_trailer_merge.rs::foreign_trailerless_commit_is_refused that pins this case, with a test-weakening-justified line. Same root, also observed 2026-11-15: 'condukt worktree remove' refused the merged side-reds worktree with 'cannot determine whether the task that owns it is verified (branch identity names task 'side-reds' of run 'run-20261114-161340-68728', which that run does not have)'; main removed it with git worktree remove + git branch -d per user ruling."
 created_at = 1794712104
-updated_at = 1794712104
+updated_at = 1794731472
 weight = 0.0
 issue_number = 1786
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1786"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

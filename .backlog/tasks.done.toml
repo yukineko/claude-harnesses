@@ -78461,3 +78461,63 @@ rev = "784eba77f4f1aea1456a1b525a3eb8e6fd9ea763"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "7c430e87"
+title = "tdd red/green output_tail uses a shared fixed tdd-run.log; concurrent runs in other cwds contaminate each other"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b)"
+created_at = 1794626790
+updated_at = 1794747088
+weight = 0.0
+issue_number = 1754
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1754"
+issue_closed_at = 1794747091
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261114_red_output_capture_shared_log -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626790
+detail = """
+exit 101:  tdd v0.1.76 (/Users/yuki/src/.harness-worktrees/session-7e01fcf0/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.08s
+     Running tests/backlog_20261114_red_output_capture_shared_log.rs (target/debug/deps/backlog_20261114_red_output_capture_shared_log-e14c357d581c124e)
+error: test failed, to rerun pass `-p tdd --test backlog_20261114_red_output_capture_shared_log`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p tdd --test backlog_20261114_red_output_capture_shared_log"
+exit = 0
+passed = 2
+rev = "4349fc030b5c068c767208a159ac353f53ab0e30"
+observed_at = 1794747085
+output_digest = "sha256:2a33363991bc8af11c20bf042c912b4cf841ffb40d98925fdd98b02299b16c72"
+excerpt = """
+
+running 2 tests
+test control_single_red_run_records_its_own_output ... ok
+test concurrent_red_runs_in_different_roots_do_not_mix_output_tail ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.46s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261114_red_output_capture_shared_log.rs (target/debug/deps/backlog_20261114_red_output_capture_shared_log-f9c3b374a52a4287)
+"""
+
+[task.closure.red]
+rev = "a8e92b562439a36c84486b33d575815b813e3196"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

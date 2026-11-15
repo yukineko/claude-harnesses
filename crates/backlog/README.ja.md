@@ -4,7 +4,7 @@
 
 ## サブコマンドを使うこと
 
-- `add` — `--repro-test` のコミット済みテストが HEAD で落ちた時だけタスクを追加する。`origin` が GitHub なら、行を main へ merge して push してから issue を作る（下の「`add` は issue より先に行を main へ載せる」参照）
+- `add` — `--repro-test` のコミット済みテストが HEAD で落ちた時だけタスクを追加する。`origin` が GitHub なら、行を main へ merge して push してから issue を作る（下の「`add` は issue より先に行を main へ載せる」参照）。blastguard タスク（tag に `blastguard`、または title が大文字小文字を問わず `blastguard` で始まる）は `--tag fail-open` か `--tag false-positive` の少なくとも一方が必須で、無ければ repro を走らせる前・gh/store へ書く前に非0終了で拒否する（ユーザー裁定 2026-11-14。週次指標 `scripts/blastguard-discovery-rate.py` の未分類を無くすため）
 - `list` — store のタスク一覧: `--tag` / `--status`（`pending` / `done` / `failed` / `cancelled` / `claimed` / `ruled-deferred`（旧 `defer` が書いた legacy 行。新規には書かれない）、`claimed` は導出値、`open` は status ではない）/ `--json`。repo store では `--project` は絞り込みではなく **assertion**（下の「スコープ」参照）
 - `next` — reproduced な repro を持つ pending タスクのうち最高優先度のものを JSON で出力する（`--claim` で予約）
   - `--claim` は払い出す前に候補の保存済み repro を HEAD で再実行する（下の「保留は無い」参照）。再現すれば払い出し、再現しない・実証されないなら**自動で cancel** して次の候補へ進み、インフラ要因で判定不能なら claim を拒否する（非 0、行は触らない）
@@ -16,7 +16,7 @@
 - `recheck [--id ID]` — open 行（`pending` / `failed` / legacy `ruled-deferred`、生きた lease 中の行は除く）の保存済み repro を再実行して解決する: reproduced → open のまま（legacy `ruled-deferred` は `pending` に戻る）／ not-reproduced・not-demonstrated・repro 記録なし → 自動 cancel（`discard` closure に判定・cmd・rev・exit code・出力末尾を逐語記録し、mirror の issue を `cancel` と同じく close）／ undeterminable → 行は触らず stderr に名指しし、残りを処理した後に非 0 終了。行ごとに `<verdict>\t<action>\t<id>` を 1 行出力する
 - `audit-closures` — 全終端行の closure 証拠を read-only で分類する（`--json`）。store は書かない
 - `overlap` — キュー中のタスクを宣言された `touched_files` scope でグループ化する（advisory、未宣言は別に列挙）
-- `edit <id>` — タスクの title / tags / notes / status を更新する。`--repro-test CMD` で pending タスクの repro を差し替える（「テストが無ければ起票しない」参照）
+- `edit <id>` — タスクの title / tags / notes / status を更新する。`--repro-test CMD` で pending タスクの repro を差し替える（「テストが無ければ起票しない」参照）。`--tag` か `--title` を与え、結果が `fail-open` / `false-positive` を持たない blastguard タスクになる edit は拒否され store は変わらない（`add` と同じ判定。`--notes` / `--status` だけの edit は未分類の legacy 行にも通る）
 - `sync` — store を GitHub issue と突き合わせる（一方向・ローカル優先）。`--apply` なしでは報告のみ。`--only both` ではローカルで open の mirror 済み行の issue 状態を `gh issue view` で読み、リモートで closed なら reopen を plan する。`gh` の失敗・パース不能は「判定不能」として非0終了で報告する（「0 件」とはしない）。`--only both|create|close|body` で実行する arm を選ぶ。`--limit` は plan をそのタスク数に切り詰める
 - `session-start` — SessionStart フック: pending タスクを context として注入する
 - `install` / `uninstall` — `~/.claude/settings.json` の SessionStart フックを配線/除去する（standalone 用）

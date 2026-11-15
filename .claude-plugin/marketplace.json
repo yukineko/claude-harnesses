@@ -82,7 +82,7 @@
     {
       "name": "backlog",
       "description": "Cross-project task queue for Claude Code with cycle-type tags, a SessionStart hook that injects pending work, and subcommands to add, list, claim and finish tasks.",
-      "version": "0.3.127",
+      "version": "0.3.128",
       "category": "workflow",
       "keywords": [
         "backlog",
@@ -800,7 +800,7 @@
     {
       "name": "overwatch",
       "description": "Lease and event store for condukt task orchestration that manages the claim registry, heartbeat lifecycle and runtime state so parallel sessions do not duplicate work.",
-      "version": "0.2.120",
+      "version": "0.2.121",
       "category": "observability",
       "keywords": [
         "pdo",

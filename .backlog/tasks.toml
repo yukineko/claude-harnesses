@@ -2851,3 +2851,30 @@ exit 101: ssed; 4 failed; 0 ignored; 0 measured; 4 filtered out; finished in 1.1
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
      Running tests/backlog_20261115_testscope_verifier_suspicions.rs (target/debug/deps/backlog_20261115_testscope_verifier_suspicions-c2916ab2cf2e0ae4)
 error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_verifier_suspicions`"""
+
+[[task]]
+id = "f2750dde"
+title = "blastguard relay: forged session_id/agent_id payload is queued and main Stop hook orders byte-for-byte re-run (cross-session command injection)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-16 main ec356662, peer cbe8af8e fed a synthetic PreToolUse (session_id=ec356662-..., agent_id=a7f9e57c28c3b88e5) to the blastguard binary; queued as bgr-d6e6d207c7fc / bgr-9c12da6932b3; the relay Stop hook told main to 'Run the EXACT command, byte-for-byte' and main ran a python3 heredoc that overwrote a real scratchpad file. No provenance: relay::queue never checks agent_id against the session transcript / no nonce. relay.rs and README state no trust boundary (grep trust/forg/provenance in relay.rs, README, docs/specs/blastguard.md: none), so reading (a) defect. Mitigation today only the normal permission prompt. RED: crates/blastguard/tests/backlog_20261116_relay_forged_session_entry.rs. Related FP by same peer (do NOT file separately; heredoc-body-interp class, in scope of the ongoing AST migration): python3 - <<'EOF' with open(<own scratchpad>/msg.txt,'w') is ask(main)/deny(subagent) while > redirect to the same path is allow."
+created_at = 1794762252
+updated_at = 1794762252
+weight = 0.0
+issue_number = 1808
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1808"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261116_relay_forged_session_entry -- --ignored"
+rev = "e053f6faebf1b7c41ddc034ddbc72ce385205e4f"
+observed_at = 1794762252
+detail = """
+exit 101: blastguard v0.2.622 (/Users/yuki/src/harness-wt-relay-forged/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.56s
+     Running tests/backlog_20261116_relay_forged_session_entry.rs (target/debug/deps/backlog_20261116_relay_forged_session_entry-5d22a94ba37e4155)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261116_relay_forged_session_entry`"""

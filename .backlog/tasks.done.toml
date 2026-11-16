@@ -80505,3 +80505,65 @@ rev = "16334d10a3513791bde26ac5d174048317ee39e4"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "245a4c5f"
+title = "blastguard fail-open: python heredoc writes a harmful .sh and the same call runs it (sh/bash/source/./) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-15 at blastguard 0.2.616 by independent RED designer: python3 - <<'PY' open('t_test.sh','w').write('<system-harm chmod of /etc/hosts or rm -rf ~>') PY then sh|bash|. ./|chmod +x && ./ t_test.sh is allow/allow (main/subagent); the shell-heredoc writer (cat > t_test.sh <<'EOF') is deny. Readings: (a) fail-open: the python-written .sh body is never judged as shell though run in the same call; (b) intended only if python writes are opaque, but then they must be undetermined (ask), never allow. Pending ruling: python write-only of a harmful .sh (not asserted). RED: crates/blastguard/tests/backlog_20261115_python_heredoc_write_then_sh_fail_open.rs"
+created_at = 1794744257
+updated_at = 1794813144
+weight = 0.0
+issue_number = 1806
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1806"
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_heredoc_write_then_sh_fail_open -- --include-ignored"
+rev = "1ae570887c5b0d2650c213df87b0e344ae8b9d44"
+observed_at = 1794744257
+detail = """
+exit 101: rktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.05s
+     Running tests/backlog_20261115_python_heredoc_write_then_sh_fail_open.rs (target/debug/deps/backlog_20261115_python_heredoc_write_then_sh_fail_open-a43835431492e487)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_heredoc_write_then_sh_fail_open`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_heredoc_write_then_sh_fail_open -- --include-ignored"
+exit = 0
+passed = 3
+rev = "163698936391f5ae9c7eb227a9704a73841d430c"
+observed_at = 1794813136
+output_digest = "sha256:4c1f4aa957074e8035fbae224de30ec04c672f75283e39c3a37e380d056912bf"
+excerpt = """
+
+running 3 tests
+test control_benign_written_sh_then_run_is_allow ... ok
+test control_shell_heredoc_write_then_run_is_not_allowed ... ok
+test python_writes_harmful_sh_then_same_call_runs_it_is_not_allowed ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+
+   Compiling blastguard v0.2.672 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.62s
+     Running tests/backlog_20261115_python_heredoc_write_then_sh_fail_open.rs (target/debug/deps/backlog_20261115_python_heredoc_write_then_sh_fail_open-1ffefd57fe349538)
+"""
+
+[task.closure.red]
+rev = "5284100d573894e909a12ed700fba7ba308b4361"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

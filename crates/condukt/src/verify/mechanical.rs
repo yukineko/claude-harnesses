@@ -134,3 +134,32 @@ fn prose_tail_parses(done_criteria: &str, needle: &str) -> bool {
         None => false,
     }
 }
+
+/// `found.max(semicolon_clause_count(done_criteria))`, kept here so the call
+/// site in `verify.rs` stays one line (file-growth ratchet).
+pub(super) fn semi_max(done_criteria: &str, found: usize) -> usize {
+    found.max(semicolon_clause_count(done_criteria))
+}
+
+/// Number of non-empty `;` / `；` separated clauses of `done_criteria`,
+/// ignoring `;` inside backticked spans (a command like `a; b` is one claim).
+/// Each clause that carries an alphanumeric character is a separate claim, so
+/// "X exits 0; no regressions; version bumped." is 3 claims. Fed into
+/// `enumerated_claim_count` via max, so a single clause yields 1 (never
+/// vetoes) and multiple clauses make the coverage `Partial` (verifier runs).
+/// An unbalanced backtick leaves the tail span unstripped, which can only
+/// over-count (the restrictive side).
+pub(super) fn semicolon_clause_count(done_criteria: &str) -> usize {
+    let mut outside = String::with_capacity(done_criteria.len());
+    for (i, part) in done_criteria.split('`').enumerate() {
+        if i % 2 == 0 {
+            outside.push_str(part);
+        } else {
+            outside.push('X');
+        }
+    }
+    outside
+        .split([';', '；'])
+        .filter(|c| c.chars().any(char::is_alphanumeric))
+        .count()
+}

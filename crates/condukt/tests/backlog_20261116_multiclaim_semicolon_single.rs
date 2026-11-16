@@ -169,7 +169,6 @@ fn control_single_claim_command_is_single_coverage() {
 }
 
 #[test]
-#[ignore = "RED: three `;`-separated claims (only the first mechanical) classified coverage=single and skip_verifier=true"]
 fn semicolon_separated_multi_claim_criteria_is_not_single_and_does_not_skip_verifier() {
     let o = observe("multi", MULTI);
     assert_ne!(

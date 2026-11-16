@@ -1129,7 +1129,7 @@ fn enumerated_claim_count(done_criteria: &str) -> Option<usize> {
         .filter(|l| line_re.is_match(l))
         .count();
     let inline = inline_re.find_iter(done_criteria).count();
-    Some(by_line.max(inline))
+    Some(mechanical::semi_max(done_criteria, by_line.max(inline)))
 }
 
 /// Count the distinct commands the criteria *names*. Two named commands mean

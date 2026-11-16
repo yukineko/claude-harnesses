@@ -2812,3 +2812,69 @@ exit 101: .680 (/Users/yuki/src/.harness-worktrees/red-py-marker-fp-20261117/cra
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.73s
      Running tests/backlog_20261117_python_heredoc_marker_fp.rs (target/debug/deps/backlog_20261117_python_heredoc_marker_fp-fa709c95f374dc83)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261117_python_heredoc_marker_fp`"""
+
+[[task]]
+id = "05b5dcaf"
+title = "tdd: proofs lack tree identity, per-test results/counts, and green output_tail"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "User ruling 2026-11-17 (proof contract b,d,e). RED 25a27ee67 crates/tdd/tests/backlog_20261117_proof_contents.rs (3 ignored REDs). (a) cmd and (c) exit_code already recorded."
+created_at = 1794868790
+updated_at = 1794868790
+weight = 0.0
+issue_number = 1841
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1841"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261117_proof_contents -- --ignored"
+rev = "9f1ad7438b27dee634223982a612de3266f60211"
+observed_at = 1794868790
+detail = """
+exit 101: fs_carry_tree_identity
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_20261117_proof_contents.rs (target/debug/deps/backlog_20261117_proof_contents-60dcd892ca2f0f33)
+error: test failed, to rerun pass `-p tdd --test backlog_20261117_proof_contents`"""
+
+[[task]]
+id = "7768aeaf"
+title = "condukt merge: fix task merges without tdd proofs / without GREEN covering RED / with zero passes / with tree changed after GREEN"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "User ruling 2026-11-17 (proof contract f,g,h,i). RED 25a27ee67 crates/condukt/tests/backlog_20261117_merge_without_tdd_proofs.rs (4 ignored REDs, 2 controls pass). Observed: merge exit=Some(0) stdout=merged 'run-nomerge-proofs/t1' into main."
+created_at = 1794868812
+updated_at = 1794868812
+weight = 0.0
+issue_number = 1842
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1842"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261117_merge_without_tdd_proofs -- --ignored"
+rev = "9f1ad7438b27dee634223982a612de3266f60211"
+observed_at = 1794868812
+detail = """
+exit 101: t: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 2 filtered out; finished in 2.15s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_20261117_merge_without_tdd_proofs.rs (target/debug/deps/backlog_20261117_merge_without_tdd_proofs-ca6ac8c8d696119a)
+error: test failed, to rerun pass `-p condukt --test backlog_20261117_merge_without_tdd_proofs`"""

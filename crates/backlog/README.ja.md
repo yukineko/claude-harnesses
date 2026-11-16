@@ -200,7 +200,11 @@ repo ごとに driver を設定するには次を実行すること。
 backlog merge-driver --install   # repo 内で実行すること
 ```
 
-これは repo の `merge.backlog.driver` を `backlog merge-driver %O %A %B` を実行するよう設定する。
+これは実行中のバイナリを `<git common dir>/backlog/merge-driver` へコピーし（linked worktree
+で共有され、`prune-plugin-cache.py` が削除する version 付き plugin cache の外にある）、repo の
+`merge.backlog.driver` を `'<そのパス>' merge-driver %O %A %B` に設定する。コピーは install した
+版のスナップショットなので、更新するには `--install` を再実行する。失敗はすべて非0終了になり、
+driver キーはコピーが存在してからしか書かれない。
 
 store は意図的に checkout に追従する (`<repo root>/.backlog/tasks.toml`、linked worktree は
 それ自体が root)。

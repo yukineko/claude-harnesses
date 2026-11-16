@@ -53,6 +53,11 @@
 //! cannot place are judged on the values [`targets::resolve`] hands back.
 //! No other detector reads this module yet ([`program_source`] and the stdin
 //! sources are the next migration's).
+//!
+//! `judge.rs` freezes the EFFECT x TARGET-PATH judgement (`Effect`,
+//! `PathClass`, `Judgement`, `judge`) specified in `SUBSET.md` (task S1
+//! `subset-spec`, user rulings 2026-11-17). It is a stub and is not wired
+//! into `detect` yet; stage S3 (`path-cutover`) implements and wires it.
 
 // Only `targets` has a caller so far; the rest of the contract (e.g.
 // `program_source`, `StdinSource`) is wired in by the later migration tasks
@@ -61,6 +66,7 @@
 
 mod arith;
 mod eval;
+mod judge;
 mod parse;
 mod support;
 pub(super) mod targets;

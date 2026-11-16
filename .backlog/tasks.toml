@@ -2606,3 +2606,37 @@ scripts/test_check_unlisted_gates_sessionstart.py:96: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_check_unlisted_gates_sessionstart.py::SessionStartChain::test_rollout_checker_reached_via_sessionstart_is_not_unlisted
 ========================= 1 failed, 3 passed in 0.17s =========================="""
+
+[[task]]
+id = "b9092972"
+title = "test_rollout_refuses_dirty_source: MutationMarker の fake_tests stub が run_crate_tests の test_args 引数に追従しておらず TypeError で失敗"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "test-rollout-refuses-dirty-source",
+    "check-fail-open-mutation",
+    "stale-stub",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """HEAD f6a19c390 で MutationMarker::test_f_evaluate_scenario_brackets_mutation_with_marker_and_seq が失敗: AssertionError: fixture: mutation not applied while tests ran (error: unexpected exception: TypeError("...fake_tests() got an unexpected keyword argument 'test_args'"))。原因: scripts/check-fail-open-mutation.py の evaluate_scenario (L590) は run_crate_tests(scenario.crate, timeout=timeout, test_args=scenario.test_args()) を呼ぶが、テスト側 stub は def fake_tests(crate, timeout=600)。経緯: 87ea01f59 (2026-11-14 05:25, feat(fail-open-mutation): scenarios can declare the test targets that catch them) が run_crate_tests(crate, timeout=600) -> (crate, timeout=600, test_args=None) に変え呼び出しに test_args= を追加。並行ブランチの 9e5bfaf26 (2026-11-14 06:24, test(rollout): RED - refuse to deploy from a source tree that is not committed HEAD) が旧シグネチャで stub を追加。両者は merge 1462ab8c8 (2026-11-14 07:29, Merge branch 'perf/prepush-parallel-mutation') で初めて合流し、以後赤。その後 a53976406 (check-fail-open-mutation: mutate and test a scratch copy) が cwd=None も追加 (L500 現シグネチャ run_crate_tests(crate, timeout=600, test_args=None, cwd=None))。既存テスト自体が再現テスト (新規テストなし)。"""
+created_at = 1794792246
+updated_at = 1794792246
+weight = 0.0
+issue_number = 1818
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1818"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_rollout_refuses_dirty_source.py::MutationMarker::test_f_evaluate_scenario_brackets_mutation_with_marker_and_seq"
+rev = "d1d7a536c862e5a8000b8406ed2cb37d63e2e103"
+observed_at = 1794792246
+detail = """
+exit 1: expected keyword argument 'test_args'"))
+
+scripts/test_rollout_refuses_dirty_source.py:253: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_rollout_refuses_dirty_source.py::MutationMarker::test_f_evaluate_scenario_brackets_mutation_with_marker_and_seq
+============================== 1 failed in 0.11s ==============================="""

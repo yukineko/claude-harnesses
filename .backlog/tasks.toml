@@ -2838,6 +2838,8 @@ RED: commit 5db847196（branch red/tdd-misattr-20261117, worktree /Users/yuki/sr
 created_at = 1794869392
 updated_at = 1794869392
 weight = 0.0
+issue_number = 1843
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1843"
 rev = 0
 
 [task.repro]

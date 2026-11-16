@@ -2970,6 +2970,8 @@ notes = '''Observed 2026-11-17 in worktree bg-s2-red-20261117 (commit 10625a33c)
 created_at = 1794869988
 updated_at = 1794869988
 weight = 0.0
+issue_number = 1846
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1846"
 rev = 0
 
 [task.repro]

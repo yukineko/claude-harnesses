@@ -732,10 +732,14 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let judged = detect_bash_after_data_bodies(cmd, depth, ctx);
     // 0d. `git apply` / `git am` fed a patch by a here-document writes the
     // patch's added files, and a later command can run them. The body's `+`
-    // (and context) prefix hides its commands from every rule above, so the
-    // shell view of the body (prefix removed) is judged too, and a reader whose
-    // input cannot be read as a patch is an Ask. Deny over Ask over Allow.
-    // See `git_apply_patch` (backlog 42741ea3).
+    // (and context) prefix hides its commands from every rule above, so a
+    // shell view (one `+`/space prefix removed from each body line the module
+    // recognises) is judged too, Deny over Ask over Allow. Only the shapes
+    // listed in the `git_apply_patch` module doc are refused (Ask); the KNOWN
+    // GAPS listed there (`|&`, subshell/group readers, a pipe continued on the
+    // next line, `<<-` TAB-indented bodies, a heredoc of another command on
+    // the reader's line, named patch files, non-plain `git`) are NOT judged by
+    // this step and may stay Allow. See `git_apply_patch` (backlog 42741ea3).
     match git_apply_patch::read_patch_readers(cmd) {
         None => judged,
         Some(reading) => {

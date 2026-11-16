@@ -34,6 +34,10 @@
 //!   * `<<-`: the shell strips leading TABs from the body, but this module
 //!     strips only one `+` or space prefix, so a body line like `\t+rm -rf ~`
 //!     is not turned into the text the file will hold;
+//!   * here-documents are found on the reader's whole LINE, not its segment:
+//!     in `cat <<'A' >f; git apply < x.patch` the `cat` body is taken as the
+//!     reader's patch, so the `<` refusal is not raised, and when that body has
+//!     a patch header nothing is refused (x.patch itself is never read);
 //!   * `git apply x.patch` / `git am x.mbox` naming a file: the command text
 //!     does not contain that file and blastguard never reads it (a residual,
 //!     like any file written by an earlier tool call);
@@ -52,16 +56,20 @@ use crate::model::Decision;
 
 /// What the patch readers of one command write, and what they refuse.
 pub(super) struct PatchReading {
-    /// The whole command, with the prefix character of every patch body line
-    /// (`+` and ` `) removed. Lines outside the bodies are unchanged.
+    /// The whole command, with the prefix character (`+` or ` `) removed from
+    /// every line of each body this module took as a patch. Other lines are
+    /// unchanged (see KNOWN GAPS for bodies it does not take, or takes wrongly).
     pub(super) shell_view: String,
     /// Why some reader's input could not be read as a patch: a refusal to
-    /// guess, judged as `Ask`. `None` when every reader was read.
+    /// guess, judged as `Ask`. `None` when none of the refusal shapes in the
+    /// module doc matched — which is NOT proof that every reader was read
+    /// (the KNOWN GAPS leave readers unread with `None`).
     pub(super) refusal: Option<String>,
 }
 
-/// The patch reading of `cmd`, or `None` when no `git apply` / `git am` reads
-/// its input (stdin or here-document) from this command text.
+/// The patch reading of `cmd`, or `None` when no segment is recognised as a
+/// `git apply` / `git am` reader (a `git` that is not a plain word is not
+/// recognised; see KNOWN GAPS).
 pub(super) fn read_patch_readers(cmd: &str) -> Option<PatchReading> {
     let lines: Vec<&str> = cmd.split('\n').collect();
     let mut view: Vec<String> = lines.iter().map(|l| (*l).to_string()).collect();
@@ -126,7 +134,7 @@ pub(super) fn read_patch_readers(cmd: &str) -> Option<PatchReading> {
         let body = &lines[i + 1..body_end];
         if !body.iter().any(|l| is_patch_header(l)) {
             refusals.push(
-                "git apply/am here-document body has no patch header (`diff `, `--- `, `+++ `, `@@ `, `Subject:`): cannot tell what it writes"
+                "git apply/am here-document body has no patch header (`diff `, `--- `, `+++ `, `@@ `, `Subject:`, `From `): cannot tell what it writes"
                     .to_string(),
             );
         }

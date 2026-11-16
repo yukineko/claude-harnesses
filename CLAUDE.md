@@ -304,9 +304,9 @@ merge で統合すればよい。したがって分離するのは**編集の場
 `[package].version` を micro 上げる**。リンク先 plugin の bump は要求しない（1 commit あたり
 「リンク先 plugin 数 × 3」ファイルが動き並行セッションと必ず衝突するため。§8）。`check-version-bumped.py` が強制する。
 
-強制ゲート4本（rollout は `.githooks/pre-push`、他の3本は `.githooks/pre-commit` で回す）: `check-plugin-versions.py`（lockstep）/
+強制ゲート3本（`.githooks/pre-commit` で回す）と advisory 1本（rollout。git hook では回さず、SessionStart で `scripts/session-worktree-init.py` → `scripts/session-rollout-drift.py` が報告する。2026-11-16 ユーザー裁定で `.githooks/pre-push` から撤去）: `check-plugin-versions.py`（lockstep）/
 `check-version-bumped.py`（bump-on-change。plugin と harness-core の両方）/
-`check-plugin-rollout.py`（rollout 実行済みか。`.deployed-from.json` の `harness_core_version` も見る）/
+`check-plugin-rollout.py`（advisory・SessionStart。rollout 実行済みか。`.deployed-from.json` の `harness_core_version` も見る）/
 `check-launcher-exec-bit.py`（`crates/<c>/bin/<name>` launcher が git **index** で 100755 か。
 `core.fileMode=false` なので working tree の mode は信用できない。100644 のまま配布された launcher は
 `Permission denied` で暗転し、hook が起動しない = finding も出ないので red ではなく dark になる）。

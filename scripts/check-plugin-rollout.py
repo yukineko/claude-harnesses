@@ -52,10 +52,11 @@ fixes and a caller that conflates them sends the reader to the wrong command —
       plugin.json at all. Outranks both other classes, because neither
       dimension's verdict covers a plugin the checker could not read, and
       because its fix is neither of theirs — repair the plugin.json. (Its own
-      code rather than borrowing rc 1 or 2: .githooks/pre-push prints a
-      class-specific remedy per code, and both of those remedies are wrong
-      here. pre-push's catch-all branch prints this script's full output
-      instead, which names the actual problem.)
+      code rather than borrowing rc 1 or 2: the caller prints a
+      class-specific remedy per code — scripts/session-rollout-drift.py at
+      SessionStart; .githooks/pre-push did until this check was removed from
+      it by user ruling 2026-11-16 — and both of those remedies are wrong
+      here.)
   4 — PARKED_CONFIG class: scripts/parked-plugins.json exists but cannot be
       trusted (unparseable, wrong shape, an entry with no reason/parked_at, or a
       name matching no plugin). Fix: repair that file. Outranks every other
@@ -80,13 +81,12 @@ fixes and a caller that conflates them sends the reader to the wrong command —
       rollout-plugins.sh fail its own verification on every rollout done
       before the push. Ranked below ENABLEMENT and above RETIRED.
 
-  Neither 5 nor 6 has its own branch in .githooks/pre-push, which is not
-  editable from a Claude session here (Edit/Write on .githooks/** is denied in
-  the user's permission settings). That file's `*)` catch-all prints this
-  script's full output and marks it advisory — the same fallback the
-  UNVERIFIABLE class relied on before it got a branch, and the output names the
-  actual problem. Adding the two branches is filed as a backlog item rather than
-  done silently.
+  Driver: no git hook runs this script. It was removed from .githooks/pre-push
+  by user ruling 2026-11-16 (rollout is local deployment state, not a property
+  of the code being pushed). scripts/session-rollout-drift.py runs it at
+  SessionStart (from scripts/session-worktree-init.py) and maps each exit code
+  to an advisory notice; an exit code it does not recognise is reported as
+  UNDETERMINED, never as clean.
 
 3. PARKED (third state, not a failure at all). A plugin can be deliberately
    left un-rolled-out / un-enabled, and before scripts/parked-plugins.json
@@ -249,7 +249,7 @@ import plugin_cache  # noqa: E402
 OWNER = "yukineko"
 
 # Exit codes, one per failure CLASS (see the module docstring). Named so callers
-# — .githooks/pre-push in particular — can branch on the class instead of on a
+# — scripts/session-rollout-drift.py in particular — can branch on the class instead of on a
 # bare non-zero and then guess at which remediation to print.
 RC_OK = 0
 RC_ROLLOUT = 1
@@ -1539,7 +1539,8 @@ def check_rollout(plugins):
         # Guard the ELEMENTS, not just the list. `isinstance(entry, list) and
         # entry` let `["1.2.0"]` through to `.get` and raised an uncaught
         # AttributeError; the resulting traceback exited 1, colliding with
-        # RC_ROLLOUT, so .githooks/pre-push routed a crash to the rollout
+        # RC_ROLLOUT, so the caller (.githooks/pre-push at the time; now
+        # scripts/session-rollout-drift.py) routed a crash to the rollout
         # remediation as though it were ordinary drift.
         if not isinstance(entry, list) or not entry or not isinstance(entry[0], dict):
             problems.append(
@@ -2730,7 +2731,8 @@ def main(argv=None):
         )
 
     # Distinct exit code per failure CLASS so callers can route the reader to
-    # the right fix. .githooks/pre-push used to branch on a bare non-zero and
+    # the right fix. .githooks/pre-push (which no longer runs this script, user
+    # ruling 2026-11-16) once branched on a bare non-zero and
     # unconditionally print "run scripts/rollout-plugins.sh --plugin <name>" —
     # which, by this script's own hint, does NOT enable plugins. Telling someone
     # to run it for a disabled-gate failure sends them to the one command that
@@ -2757,13 +2759,10 @@ def main(argv=None):
     # being read off an input nobody has repaired yet. Its own block above still
     # printed, with its own remedy.
     #
-    # Neither new code has a branch in .githooks/pre-push (that file is not
-    # editable from here - Edit/Write on .githooks/** is denied by the user's
-    # permission settings). Its `*)` catch-all prints this script's full output
-    # and marks it advisory, which is the same fallback the UNVERIFIABLE class
-    # relied on before it got its own branch, and the output names the actual
-    # problem. Adding explicit branches for 5 and 6 is filed for the user rather
-    # than done silently here.
+    # The caller is scripts/session-rollout-drift.py at SessionStart; no git
+    # hook runs this script (removed from .githooks/pre-push by user ruling
+    # 2026-11-16). That caller maps each code to a notice and reports an
+    # unrecognised code as UNDETERMINED rather than clean.
     if parked_config:
         return RC_PARKED_CONFIG
     if retired_config:

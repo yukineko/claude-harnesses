@@ -2571,6 +2571,8 @@ notes = '観測(2026-11-16, main 0be4629b0, run-20261116-164820-25374 t1): `cond
 created_at = 1794817374
 updated_at = 1794817374
 weight = 0.0
+issue_number = 1821
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1821"
 rev = 0
 
 [task.repro]

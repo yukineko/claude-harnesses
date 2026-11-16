@@ -2607,6 +2607,8 @@ notes = "Observed 2026-11-16 in run-20261116-164820-25374 t4: .tdd/t4.green.json
 created_at = 1794821419
 updated_at = 1794821419
 weight = 0.0
+issue_number = 1823
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1823"
 rev = 0
 
 [task.repro]

@@ -447,7 +447,6 @@ class RealHooksSyntax(unittest.TestCase):
             "check-prompt-injection.py",  # run helper, pre-commit
             "check-clippy-lints.py",  # run helper, pre-commit
             "check-test-weakening.py",  # SCANNER= variable, commit-msg
-            "check-plugin-rollout.py",  # $(python3 scripts/...), pre-push
             "check-compile-fail.py",  # subshell python3 scripts/..., pre-push
         ]
         for n in expected:

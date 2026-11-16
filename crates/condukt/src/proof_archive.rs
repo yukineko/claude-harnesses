@@ -447,6 +447,54 @@ pub fn oracle_dir(cfg: &Config, cwd: &Path, run: &str, task: &str, primary: &Pat
     }
 }
 
+/// The directory the F→P oracle judges `task`'s proofs in (backlog 834ccf88).
+///
+/// * A recorded worktree → [`oracle_dir`] on it (the worktree when it still
+///   holds the proofs, else the run/task archive).
+/// * No recorded worktree → the run/task archive, but ONLY when it is
+///   observed to hold `task`'s RED or GREEN proof. Teardown paths that clear
+///   the recorded worktree (`discard`, reconcile of a vanished worktree)
+///   persist the proofs there first, so this is the same set of proofs the
+///   worktree held — never the caller's cwd, which is not the task's tree.
+/// * Anything else — no worktree and no archived proof, an unresolvable
+///   archive dir, an unreadable proof dir — is `Err`: which tree holds the
+///   task's proofs cannot be determined, and the caller must refuse rather
+///   than judge some other tree.
+pub fn task_oracle_dir(
+    cfg: &Config,
+    cwd: &Path,
+    run: &str,
+    task: &str,
+    recorded_worktree: Option<&Path>,
+) -> Result<PathBuf> {
+    if let Some(wt) = recorded_worktree {
+        return Ok(oracle_dir(cfg, cwd, run, task, wt));
+    }
+    let arch = archive_dir(cfg, cwd, run, task).with_context(|| {
+        format!(
+            "task '{task}' has no recorded worktree and its proof archive location could not \
+             be resolved; cannot determine which tree to judge the F→P oracle in"
+        )
+    })?;
+    let holds = holds_proof(&arch, task).with_context(|| {
+        format!(
+            "task '{task}' has no recorded worktree and its proof archive {} could not be \
+             read; cannot determine the F→P oracle",
+            arch.display()
+        )
+    })?;
+    if !holds {
+        bail!(
+            "task '{task}' in run '{run}' has no recorded worktree and no archived tdd proof in \
+             {}; cannot determine which tree to judge the F→P oracle in (refusing rather than \
+             judging the caller's cwd). Record the task's worktree with `condukt state set \
+             --worktree <path>`",
+            arch.display()
+        );
+    }
+    Ok(arch)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

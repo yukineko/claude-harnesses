@@ -56,7 +56,6 @@ fn registered_worktrees(repo: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-#[ignore = "backlog: condukt worktree remove leaves an unregistered orphan dir (target/ + tdd.toml) when the forced removal fails part-way"]
 fn remove_never_leaves_an_unregistered_orphan_directory() {
     let base = std::env::temp_dir().join(format!("condukt-wt-orphan-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);

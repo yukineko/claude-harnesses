@@ -1702,36 +1702,6 @@ exit 101: _unexecuted_attempt" -p condukt` to apply 1 suggestion)
 error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_counts_unexecuted_attempt`"""
 
 [[task]]
-id = "3a45a57d"
-title = "condukt worktree merge --branch with no --run/--task still applies the task-trailer guard (merge-task-trailer-missing) via the branch's recorded conduktTask"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-15 (run-20261114-161340-68728): condukt worktree merge --branch condukt/run-20261114-161340-68728/side-reds (no --run/--task) refused with merge-task-trailer-missing. crates/condukt/src/worktree/merge_gate.rs resolves the task as (recorded branch.<b>.conduktTask, cli) -> recorded wins, so the guard applies even without flags; the --run help says 'Omit for a merge with no task association (behavior otherwise unchanged)'. RED (independent, sonnet): crates/condukt/tests/backlog_20261115_worktree_merge_no_task_trailer_refusal.rs. CONFLICT: existing crates/condukt/tests/task_trailer_merge.rs::foreign_trailerless_commit_is_refused freezes the refusal for a recorded branch with no flags -> readings: (a) defect (help text is the contract) vs (b) intended (help text wrong); needs a human ruling before fixing; do not loosen either test without it. | User ruling 2026-11-15: the refusal is the defect (a trailer check must not apply to a merge that names no task); fix the part of task_trailer_merge.rs::foreign_trailerless_commit_is_refused that pins this case, with a test-weakening-justified line. Same root, also observed 2026-11-15: 'condukt worktree remove' refused the merged side-reds worktree with 'cannot determine whether the task that owns it is verified (branch identity names task 'side-reds' of run 'run-20261114-161340-68728', which that run does not have)'; main removed it with git worktree remove + git branch -d per user ruling."
-created_at = 1794712104
-updated_at = 1794731472
-weight = 0.0
-issue_number = 1786
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1786"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261115_worktree_merge_no_task_trailer_refusal -- --include-ignored"
-rev = "85bef6669e6bd8c23bd121fcf909508e40e95942"
-observed_at = 1794712104
-detail = """
-exit 101: 0261114-161340-68728-side-reds/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.67s
-     Running tests/backlog_20261115_worktree_merge_no_task_trailer_refusal.rs (target/debug/deps/backlog_20261115_worktree_merge_no_task_trailer_refusal-4806af8c846a3078)
-error: test failed, to rerun pass `-p condukt --test backlog_20261115_worktree_merge_no_task_trailer_refusal`"""
-
-[[task]]
 id = "cf0bf4ca"
 title = "blastguard fail-open: exec 3<<<'chmod 777 /etc/hosts'; bash <&'3' (quoted fd) is Allow while <&3 is Deny"
 project = "/Users/yuki/src/harness"
@@ -2232,68 +2202,6 @@ exit 101: rc/.harness-worktrees/sidereds-20261116/crates/backlog)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.52s
      Running tests/backlog_20261116_zero_tests_filtered_out_not_discard.rs (target/debug/deps/backlog_20261116_zero_tests_filtered_out_not_discard-e511e6be63ab2a45)
 error: test failed, to rerun pass `-p backlog --test backlog_20261116_zero_tests_filtered_out_not_discard`"""
-
-[[task]]
-id = "188d2f29"
-title = "tdd green: a test command that never ran (spawn / run-log failure) is reported as 'tests still failing — keep implementing'"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "tdd",
-    "message-mismatch",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Code (crates/tdd/src/proof.rs at 9a989926b): green() calls judge_green(out.passed, has_red) and never judge_ran(&out) (red() does since 9c58c590d); runner maps spawn/run-log failure to passed:false + spawn_error:Some. RED (commit 168d912bf, branch backlog/sidereds-20261116, 2026-11-16): RED recorded with usable state, then <HOME>/.tdd/state replaced by a regular file so the run log cannot be created; marker file shows the command did not run. Verbatim failure: 'the command never ran, yet tdd green said the tests are still failing. stdout: (empty) stderr: tdd: tests still failing — keep implementing until they pass, then run `tdd green` again.' Controls in the same test pass: GREEN refused (non-zero), no green.json. Readings: (a) defect - environment failure misattributed to code; the message must name the spawn error / never ran; (b) cosmetic, the refusal is what matters. Both agree GREEN must be refused (it is: no fail-open). DOES NOT PROVE: real Command::spawn ENOENT path, timeout path. | User ruling 2026-11-16 (AskUserQuestion, session 06c2bd77): 「欠陥 → 未実行と表示する (推奨)」 — reading (a): green() must pass through judge_ran like red() and name the spawn error / never ran."
-created_at = 1794764532
-updated_at = 1794784236
-weight = 0.0
-issue_number = 1811
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1811"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p tdd --test backlog_20261116_green_spawn_error_misreported -- --ignored green_names_the_spawn_failure_not_failing_tests"
-rev = "9d0e7defaee17d5e84aefa974a8b9cbfb6d439b7"
-observed_at = 1794764532
-detail = """
-exit 101: tdd v0.1.83 (/Users/yuki/src/.harness-worktrees/sidereds-20261116/crates/tdd)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.81s
-     Running tests/backlog_20261116_green_spawn_error_misreported.rs (target/debug/deps/backlog_20261116_green_spawn_error_misreported-e2fe1fa60285e999)
-error: test failed, to rerun pass `-p tdd --test backlog_20261116_green_spawn_error_misreported`"""
-
-[[task]]
-id = "b423c0c1"
-title = "tdd red: a test command killed by a signal (exit_code None, no spawn_error) is recorded as RED ('tests fail as expected (killed)')"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "tdd",
-    "fail-open",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Code (crates/tdd/src/proof.rs at 9a989926b): red() = judge_ran(&out) (inspects only spawn_error) then judge_red(out.passed) (accepts any passed==false); status_str prints 'killed' for exit_code None. RED (commit 9d0e7defa, branch backlog/sidereds-20261116, 2026-11-16), cmd 'touch ran.marker; kill -KILL $$', verbatim: 'command was killed by SIGKILL (no assertion observed) yet tdd red exit=Some(0), RED proof exists=true stdout: 🔴 RED recorded for `t1` — tests fail as expected (killed).' Control control_command_exiting_1_records_red passes. Readings: (a) asserted - a kill/crash is not a demonstrated assertion failure -> undetermined -> no RED (CLAUDE.md 2(b)/3: crash is undetermined, F->P oracle fails open otherwise); (b) a crashing test is a failing test, RED correct - under (b) this RED is wrong. The test is NOT independent of the reading; a human ruling distinguishes them. Note a Rust test panic exits 101 (not a signal), so (a) only affects OS/harness kills (SIGKILL, OOM, SIGSEGV). DOES NOT PROVE: timeout path (timed_out:true, likely same acceptance, untested), tdd green. | User ruling 2026-11-16 (AskUserQuestion, session 06c2bd77): 「判定不能 → RED にしない (推奨)」 — reading (a): a kill/crash with no observed assertion failure is undetermined; tdd red must refuse non-zero and write no RED proof."
-created_at = 1794764566
-updated_at = 1794784236
-weight = 0.0
-issue_number = 1812
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1812"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p tdd --test backlog_20261116_red_killed_by_signal_records_red -- --ignored red_is_not_recorded_when_the_command_was_killed_by_a_signal"
-rev = "9d0e7defaee17d5e84aefa974a8b9cbfb6d439b7"
-observed_at = 1794764566
-detail = """
-exit 101: 83 (/Users/yuki/src/.harness-worktrees/sidereds-20261116/crates/tdd)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.48s
-     Running tests/backlog_20261116_red_killed_by_signal_records_red.rs (target/debug/deps/backlog_20261116_red_killed_by_signal_records_red-53c8e72309bcc7b8)
-error: test failed, to rerun pass `-p tdd --test backlog_20261116_red_killed_by_signal_records_red`"""
 
 [[task]]
 id = "54231a0a"

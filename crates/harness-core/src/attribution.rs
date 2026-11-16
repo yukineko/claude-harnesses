@@ -656,8 +656,9 @@ fn statements(command: &str) -> Option<Vec<Statement>> {
 }
 
 /// A pipeline stage that cannot write a file. Conservative: anything not on
-/// this list — `sed`, `awk`, `cp`, `xargs`, `find`, `sort`, an interpreter, a
-/// bare `VAR=value` — may write and is NOT read-only.
+/// this list — `awk`, `cp`, `xargs`, `find`, `sort`, an interpreter, a bare
+/// `VAR=value` — may write and is NOT read-only. `sed` is read-only only when
+/// [`sed_read_only`] can prove it (print-only, no in-place, no script file).
 fn read_only_stage(stage: &Stage) -> bool {
     if stage.writes {
         return false;
@@ -718,9 +719,113 @@ fn read_only_stage(stage: &Stage) -> bool {
                 )
             ) && !rest.iter().any(|a| a.starts_with("--output"))
         }
+        "sed" => sed_read_only(&rest[1..]),
         "tdd" | "reviewgate" | "donegate" => rest.get(1) == Some(&"skip"),
         _ => false,
     }
+}
+
+/// `sed` arguments (program name excluded) that provably cannot write a file.
+///
+/// Fail-closed whitelist: only the flags `-n -s -E -r -z -u` (singly or
+/// clustered), `--quiet/--silent/--regexp-extended/--null-data/--unbuffered/
+/// --separate/--posix`, `-e SCRIPT`, `--expression=SCRIPT` and `--` are
+/// understood. Anything else starting with `-` (`-i`, `-ni`, `--in-place`,
+/// `-f`, `--file`, `-l`, a cluster containing an unknown letter) is "may
+/// write", as is a script outside [`sed_script_print_only`].
+fn sed_read_only(args: &[&str]) -> bool {
+    let mut scripts: Vec<&str> = Vec::new();
+    let mut positional: Vec<&str> = Vec::new();
+    let mut it = args.iter().copied();
+    let mut opts_done = false;
+    while let Some(a) = it.next() {
+        if opts_done || a == "-" || !a.starts_with('-') {
+            positional.push(a);
+        } else if a == "--" {
+            opts_done = true;
+        } else if a == "-e" {
+            match it.next() {
+                Some(sc) => scripts.push(sc),
+                None => return false,
+            }
+        } else if let Some(sc) = a.strip_prefix("--expression=") {
+            scripts.push(sc);
+        } else if matches!(
+            a,
+            "--quiet"
+                | "--silent"
+                | "--regexp-extended"
+                | "--null-data"
+                | "--unbuffered"
+                | "--separate"
+                | "--posix"
+        ) {
+            // harmless long flag
+        } else if !a.starts_with("--") && a[1..].chars().all(|c| "nsErzu".contains(c)) {
+            // harmless short-flag cluster (no `i`, `e`, `f`)
+        } else {
+            return false;
+        }
+    }
+    if scripts.is_empty() {
+        if positional.is_empty() {
+            return false;
+        }
+        scripts.push(positional.remove(0));
+    }
+    scripts.iter().all(|sc| sed_script_print_only(sc))
+}
+
+/// A sed script made only of addresses and the commands `p n d q l =` plus
+/// separators and `{ }` grouping. Regex addresses `/re/` are allowed when they
+/// hold no backslash or newline (so the closing `/` is unambiguous). No `w`,
+/// `W`, `e`, `s`, `y`, `r`, `a`, `i`, `c`, `b`, `t` ... — anything unlisted is
+/// "may write".
+fn sed_script_print_only(script: &str) -> bool {
+    if script.trim().is_empty() {
+        return false;
+    }
+    let mut chars = script.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '0'..='9'
+            | ','
+            | '$'
+            | '!'
+            | '~'
+            | '+'
+            | ' '
+            | '\t'
+            | ';'
+            | '\n'
+            | '{'
+            | '}'
+            | 'p'
+            | 'n'
+            | 'd'
+            | 'q'
+            | 'l'
+            | '=' => {}
+            '/' => {
+                let mut closed = false;
+                for r in chars.by_ref() {
+                    match r {
+                        '/' => {
+                            closed = true;
+                            break;
+                        }
+                        '\\' | '\n' => return false,
+                        _ => {}
+                    }
+                }
+                if !closed {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// Basename of the program a stage runs, past the introducing keywords.
@@ -854,6 +959,38 @@ pub fn own_written_paths(transcript_path: &str) -> Determination<SessionWrites> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sed_stage(cmd: &str) -> bool {
+        let stmts = statements(cmd).expect("parses");
+        stmts
+            .iter()
+            .all(|s| !s.opaque && s.stages.iter().all(read_only_stage))
+    }
+
+    #[test]
+    fn sed_print_only_is_read_only() {
+        assert!(sed_stage("sed -n 1,5p f"));
+        assert!(sed_stage("sed -n '/foo/,/bar/p' f"));
+        assert!(sed_stage("sed -n -e 1p -e 3p f"));
+    }
+
+    #[test]
+    fn sed_that_may_write_is_not_read_only() {
+        for c in [
+            "sed -i s/a/b/ f",
+            "sed -ni p f",
+            "sed --in-place s/a/b/ f",
+            "sed -n 'w out' f",
+            "sed 's/a/b/w out' f",
+            "sed -f script f",
+            "sed -e 1e f",
+            "sed s/a/b/ f",
+            "sed -n 1,5p f > out",
+            "sed",
+        ] {
+            assert!(!sed_stage(c), "{c} must stay may-write");
+        }
+    }
 
     fn set(paths: &[&str]) -> BTreeSet<String> {
         paths.iter().map(|s| (*s).to_string()).collect()

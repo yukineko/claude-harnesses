@@ -738,6 +738,47 @@ pub(super) fn python_stdin_here_document(cmd: &str) -> Option<HereDocumentParts>
     here_document_body_parts(cmd, OutputTargets::PythonStdin)
 }
 
+/// The text the per-segment shell pass of `detect_bash_rules` reads for a
+/// command whose QUOTED here-document body a bare Python interpreter runs as
+/// its program ([`python_stdin_here_document`]): `cmd` with the TEXT of every
+/// Python string literal and comment of the body that contains whitespace
+/// blanked, newlines kept ([`super::interpreter::python_redirect_view`]). A
+/// literal or comment with no whitespace keeps its text (quote characters
+/// blanked), so a path-shaped literal stays visible to that pass as an
+/// operand. Every line outside the body is unchanged.
+///
+/// Backlog b0de2710 (B): `print('''Unit tests for .githooks/pre-push''')` was
+/// read as the shell command `print(Unit` operating on the protected path
+/// `.githooks/pre-push)`. The shell never parses that body (quoted
+/// delimiter) and Python never runs a string literal as a shell command; what
+/// a program does with its strings (`os.system`, `subprocess`, `open(p,'w')`,
+/// a protected path named in a literal, computed commands) is judged by the
+/// Python judge and the interpreter-program scans, which read the FULL body.
+/// Only this one pass reads the view.
+///
+/// `None` (the caller keeps `cmd`) on every doubt: another shape, a body that
+/// does not tokenise as Python, a different line count, or any body line that
+/// the segment splitter cuts into a different number of segments in the view
+/// than as written (the view must stay index-aligned with `split_segments`).
+pub(super) fn python_stdin_segment_view(cmd: &str) -> Option<String> {
+    let parts = python_stdin_here_document(cmd)?;
+    let keep = |text: &str| !text.chars().any(char::is_whitespace);
+    let body = super::interpreter::python_redirect_view(&parts.body, keep)?;
+    let (raw_lines, view_lines): (Vec<&str>, Vec<&str>) =
+        (parts.body.split('\n').collect(), body.split('\n').collect());
+    if raw_lines.len() != view_lines.len()
+        || raw_lines
+            .iter()
+            .zip(&view_lines)
+            .any(|(r, v)| super::split_segments(r).len() != super::split_segments(v).len())
+    {
+        return None;
+    }
+    let (head, tail) = parts.without_body.split_at(parts.head_len);
+    let view = format!("{head}{body}{tail}");
+    (super::split_segments(&view).len() == super::split_segments(cmd).len()).then_some(view)
+}
+
 /// [`opener_consumer`], then further `cd <literal>` heads ([`permitted_prefix_line`])
 /// followed by `;` are peeled too, for the two Python shapes
 /// ([`python_file_here_document`], [`python_stdin_redirect_view`]) only. A
@@ -1620,6 +1661,10 @@ pub(super) fn strip_output_redirect_operator(word: &str) -> Option<&str> {
 ///     options allowed before `commit`. git records the text as the commit
 ///     message and runs none of it.
 ///
+/// The fd duplication `2>&1`, spelled exactly so, is skipped for
+/// [`OutputTargets::DataFilesOnly`] and [`OutputTargets::AnyTarget`]: it writes
+/// no file (backlog b0de2710).
+///
 /// Output redirects (`> f`, `>> f`, `2> f`, glued or not) are allowed only to a
 /// DATA file or `/dev/null`: a body written to `run.sh` may be executed later,
 /// so it stays judged. The redirect itself is NOT exempted from anything — the
@@ -1675,6 +1720,28 @@ pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets)
                 return false;
             }
             saw_here_document = true;
+            i += 1;
+            continue;
+        }
+        // Backlog b0de2710 (A): the exact word `2>&1` duplicates stderr onto
+        // stdout. It opens, creates and writes no file, and does not change
+        // what the reader gets on stdin (the body), so it leaves a data-only
+        // reader data-only (`git commit -F - <<'EOF' 2>&1`). Read as an output
+        // redirect it named the target `&1`, which is no data file, so the
+        // body stayed in the text and its prose lines were judged as
+        // commands. Only this one spelling, and only for the two rules whose
+        // targets are data files ([`OutputTargets::DataFilesOnly`]) or any
+        // literal ([`OutputTargets::AnyTarget`]); `>&2`, `>&N`, `&>` and every
+        // other form still disqualify the line, as does `2>&1` for the
+        // code-file and Python readers. The same word is already dropped from
+        // a `git commit -F -` reader before a tail
+        // ([`git_commit_reader_before_tail`]).
+        if w == "2>&1"
+            && matches!(
+                targets,
+                OutputTargets::DataFilesOnly | OutputTargets::AnyTarget
+            )
+        {
             i += 1;
             continue;
         }

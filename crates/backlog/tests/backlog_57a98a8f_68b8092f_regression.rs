@@ -9,9 +9,11 @@
 //!
 //! The test runs a copy of the binary from a fake versioned cache dir, installs
 //! the driver, prunes the version dir, and requires that the configured driver
-//! still resolves (it must not name the pruned path). `#[ignore]`d and RED while
-//! 68b8092f is open. The non-ignored control proves --install configured the
-//! key at all, so the ignored test cannot pass on an empty config.
+//! still resolves (it must not name the pruned path). It was `#[ignore]`d and
+//! RED while 68b8092f was open; fixed by 8a85894b (--install now copies the
+//! binary to `<git common dir>/backlog/merge-driver`), so it runs by default.
+//! The control proves --install configured the key at all, so the prune test
+//! cannot pass on an empty config.
 //!
 //! Written by an independent closure verifier, not an implementer.
 
@@ -82,7 +84,6 @@ fn control_install_configures_the_driver() {
 }
 
 #[test]
-#[ignore = "68b8092f open: --install bakes the versioned cache path (57a98a8f duplicate)"]
 fn installed_driver_survives_pruning_the_version_dir() {
     let (driver, verdir) = install_from_versioned_cache("prune");
     std::fs::remove_dir_all(&verdir).unwrap();

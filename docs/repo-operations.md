@@ -42,7 +42,7 @@
   狭めるだけで閉じない** — 再確認から transport の読み直しまでの間に ref が動けば同じことが起きる。
   残余の窓は残っており、race は閉じていない。
 - **pre-push のフェーズ計時（observability のみ）** — `.githooks/pre-push` は各フェーズの wall-clock 秒
-  （`date +%s`）を測る: `bypass-ledger` / `nudges` / `rollout`（スクリプトがある時のみ）/
+  （`date +%s`）を測る: `bypass-ledger` / `nudges` /
   push される sha ごとの `typecheck(<sha8>)`（worktree 作成＋`cargo check`）・`compile-fail(<sha8>)`
   （trybuild target ごとの内訳つき。pass cache で飛ばした target は秒数の代わりに `skipped`）・`specguard(<sha8>)`（gate crate を触る range か、その diff が取れなかった時のみ）/
   `cleanup`（検査用 worktree の削除）/ `ref-recheck`。EXIT trap で、block や失敗で抜けた場合も含めて
@@ -339,6 +339,12 @@ commit・version-bump 済みの fix が rollout されないまま放置され�
 このスクリプトはその調査をスクリプト化したもので、`installed_plugins.json` の `"<name>@yukineko"` registry
 version と各 plugin.json の source version を比較し、不一致（＝ rollout 未実行）を機械的に検知する
 （registry ファイルが存在しない環境では検査対象なしとして exit 0 で skip）。
+
+**`check-plugin-rollout.py` はどの git hook からも実行されない**（2026-11-16 ユーザー裁定で
+`.githooks/pre-push` から撤去。それ以前も pre-push では advisory で push を止めていなかった）。
+rollout drift は機械固有の配備状態であってコードの品質ではないので、SessionStart で
+`scripts/session-worktree-init.py` → `scripts/session-rollout-drift.py` がこのスクリプトを実行し、
+所見を advisory として報告する（session を止めない）。上のコードブロックの手動実行はいつでもよい。
 
 `check-version-bumped.py` は `crates/<name>/` に差分がある plugin の plugin.json version が
 base より**厳密に上がっている**ことを要求し、上がっていなければ exit 1 で該当 plugin と変更ファイルを

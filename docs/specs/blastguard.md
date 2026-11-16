@@ -945,6 +945,28 @@ forge・condukt のスケジューラが再利用）。
 - **`python3 -i script.py` と `python3 -m code`（`-m pdb`）は、script / module があっても stdin を program として読む**
   （`program_source::python_reads_stdin_program`、tests/backlog_20261114_pipe_to_python_interactive.rs）— pipe の program を判定する。
   `-i` 無しの `python3 script.py` は stdin が data のまま（広げない）。
+- **`python3 -c` の program が子プロセスを起動するとき、子は program の stdin を継承するので、その子が stdin を
+  program として読みうるなら pipe の program を判定する（backlog 3da14bbd、
+  `interpreter::python_file::python_program_enters_stdin_console` の `child_process_may_read_stdin` と
+  `python_semantics::child_start_lines`、tests/backlog_20261115_python_os_system_nested_repl.rs・
+  tests/backlog_20261115_python_c_import_os_stdin_data_fp.rs・tests/backlog_20261116_python_os_system_literal_spelling_bypass.rs）** — `echo 'import os; os.chmod("/etc/hosts", 0o777)' |
+  python3 -c 'import os; os.system("python3 -m asyncio")'` と `echo 'chmod 777 /etc/hosts' | python3 -c 'import os; os.system("bash")'`
+  は main・subagent とも Deny。**literal な `os.system("…")` / `os.popen("…")` は、その literal が完全に decode できる
+  （`Decoded::Value`。raw literal は backslash を含まない）ときだけ静的に解決**する。`\N{…}`・不正な escape・backslash を含む raw literal は
+  未確定として制限側（`python_semantics::lex_marking_inexact`）。解決した command line のどれかの語が
+  code interpreter・shell・`STDIN_READING_PROGRAMS`（`ipython` 等の閉じた list）、または `$`・backtick、あるいは sh の glob・brace・tilde
+  展開の metacharacter（`*`・`?`・`[`・`{`・`~`）を含む語なら stdin を読みうる（`/bin/ba*`・`/bin/b?sh`・`{bash,}` は実行時に shell になりうる。
+  quote 内で sh が展開しない場合も保守的に数える）。command line を実行する sh 自身が stdin を code として読む形も
+  stdin を読みうる（tests/backlog_20261116_python_os_system_source_stdin.rs）: quote と backslash を外した語が stdin / fd を
+  file として名指す（`/dev/stdin`・`/dev/fd/N`・`/proc/…/fd/N`）、`source` か `eval` である（位置を問わず保守的に数える）、
+  または command 位置の `.`（前に assignment・option・`(` を含む語・`command`/`builtin`/`exec` 等の閉じた prefix しか無い。
+  `ls .`・`find . -name x` の `.` は operand なので数えない）。`os.system(". /dev/stdin")` と `"source /dev/stdin"` は Allow にしない。
+  literal の command がどれでもなければ（`os.system("ls")`・`"cat"`・`"grep chmod"`）stdin は data のまま。
+  それ以外の子プロセス起動（computed な command `os.system(c)`・argv list・`subprocess.*`・`os.exec*`/`os.spawn*`・`pty.spawn`・
+  `asyncio.*`・runner module の値としての参照 `g(os)`・call 結果の属性 `__import__("os").system`・runner module からの
+  `from … import *`、alias 解決後）は未確定として制限側（stdin を読む）。**module の import（`import os`）や起動しない関数
+  （`os.getcwd()`・`shutil.which`）は子を起動しない**ので stdin は data のまま。
+  **LIMIT**: literal command が closed list に無い stdin 読み program を呼ぶ場合は stdin を読まないと扱う。
 - **`python3 -` が実行する quoted here-document の本文は、stdin-program scan に加えて Python 判定器でも読む
   （tests/heredoc_system_harm_holes_20261111.rs A / G）** — 形は上と同じ（`heredoc::python_stdin_here_document`）。
   `payload::analyze_interpreter_stdin_exec` が `interpreter::python_stdin_body_reading` を呼ぶ。token 化
@@ -1019,6 +1041,31 @@ forge・condukt のスケジューラが再利用）。
   code interpreter の program 監査は `node -e` と同じ文字列ベースの破壊的呼び出し検出であり、言語ごとの
   parser ではない。`>>` の連結で読み方が 16 を超えると、超えた分の読み方は判定せず Ask にする（そこに system
   harm があっても Deny ではなく Ask）。
+- **quoted `python3 - <<'PY'` program が書いたファイルも、同じ command の別の部分が実行しうるとき同じ判定にかける
+  （backlog 245a4c5f、tests/backlog_20261115_python_heredoc_write_then_sh_fail_open.rs、
+  `detect/interpreter/python_written_files.rs` と `detect/echo_script_file.rs` の `python_heredoc_files`）** —
+  上の `echo`/`printf` の判定（実行しうるかの探索・内容の判定）をそのまま使い、writer を Python token から読む。
+  path と内容がともに exact な literal の `open(P,M).write(C)`（`a` は追記、`w`/`x` は置換）と
+  `Path(P).write_text(C)`/`write_bytes(C)` だけが内容を保つ。それ以外の書き込み（書き込み可能または mode が
+  判定できない `open`/`fdopen`、literal でない path、f-string、`with … as`、copy/move/rename/link 系の呼び出し、
+  program のどこかにある動的実行 marker、tokenise できない body）は内容が読めない書き込み（Ask、subagent では
+  Deny）、literal でない path は置き場所不明の target として扱う。実行の探索は body を除いた command で行い、
+  here-document を開く最初の stage（python reader 自身）は数えない。実行しうる stage が無い書き込みだけの
+  program の判定は変えない（書くだけの有害 `.sh` の扱いは裁定待ち）。過剰側: 書き込み可能な `open` を持つ
+  program では mode が literal でない `open` や `os.open(P, O_RDONLY)` も書き込みとして数え、動的実行 marker を
+  含む program では後続の shell 語があれば Ask になる。**GAP**（判定の外。コード読解による記述）: import alias、
+  `tarfile`/`zipfile` の展開、pathlib の `.replace`、`python -c` やファイル program、unquoted delimiter、
+  python program の内側からの実行、書き込みと実行の順序。
+- **`git apply`/`git am` に here-document で渡した patch の本文を、それが書くファイルの shell として判定する
+  （backlog 42741ea3、tests/verify_e70b6a71_commit_heredoc_later_cmds.rs の
+  `e_prime_git_apply_or_am_patch_then_running_the_written_file_is_not_allowed`、`detect/git_apply_patch.rs`。
+  `detect_bash` の step 0d）** — plain な `git` 語の後に `apply`/`am` を持つ segment の here-document 本文から
+  各行の先頭の `+`/空白を 1 つ取った shell view を作り、元の command の判定と shell view の判定の強い方を取る
+  （Deny > Ask > Allow）。次の形は読み取りを推測せず Ask: plain な `|`（`||` を含む）の直後の reader、
+  here-document の無い `<`、here-document が 2 つ以上か delimiter が読めない、patch header（`diff `・`--- `・
+  `+++ `・`@@ `・`Subject:`・`From `）が無い本文。**KNOWN GAP**（判定の外。Allow のままでありうる）: `|&`、
+  subshell/group `( )`、前の行末の `|` で続く pipe、`<<-` の TAB 字下げ本文、reader と同じ行にある別コマンドの
+  here-document、名前付き patch ファイル、plain でない `git` 語（quote・変数）。
 - **未修正の false positive の RED（2026-11-13、flow-8cca7ef5。修正は未実装）** — `.rs` 宛ての quoted heredoc の
   body は data であり shell ではない（ユーザー裁定: heredoc body を .py/.rs へ書くコマンドの body は data、
   .sh/拡張子なしだけ shell として判定、同一 command 内で実行される場合を除く）。しかし (FP1) body に Rust 文字列
@@ -1251,7 +1298,7 @@ forge・condukt のスケジューラが再利用）。
   記録は判定確定後・表示前に書き、判定を変えない。書けない（panic を含む）ときは表示理由に
   `could NOT be recorded` とエラーを付け stderr にも警告する（沈黙しない）。relay（subagent の Bash Ask の
   再実行 queue）とは別物で、block log は真の `Deny` と main の `Ask` を含む全 block を記録する。
-- **`detect/ast`**（`mod.rs` / `parse.rs` / `eval.rs` / `eval/words.rs` / `arith.rs` / `support.rs`）— shell parser（brush-parser `=0.4.0`）＋静的評価層
+- **`detect/ast`**（`mod.rs` / `parse.rs` / `eval.rs` / `eval/words.rs` / `eval/decl.rs` / `arith.rs` / `support.rs`）— shell parser（brush-parser `=0.4.0`）＋静的評価層
   （ユーザー裁定 2026-11-15「parser ＋ 静的評価で一体にする」）。`analyze(&str) -> Analysis`
   （`Known(Script)` / `Undetermined(Cause)`、`Cause` = `NotImplemented`/`TooLong`/`TooDeep`/`Timeout`/
   `Parse`/`Panic`/`ZshOnly`/`Unsupported`）と `program_source(&SimpleCommand) -> Option<ProgramSource>`。
@@ -1275,6 +1322,16 @@ forge・condukt のスケジューラが再利用）。
   `for` 変数（literal list の各語、不定 list は不定値として）・`${n:=v}` / `${n=v}`（`${a[i]:=v}` も。
   間接 `${!x:=v}` は opaque 中または `declare -i` 名がある間は integer 扱い）。本文で決まらない値や name を
   読む値（`X=bar`・`FOO=/abs/path` を含む）は `Undetermined(Unsupported)`。
+  本文が `_` を integer と宣言した後（`declare -i _`・`typeset -i _`・`local -i _`・`-ri _`・
+  `declare -i x _`・`-i` の可能性がある不定 option。ユーザー裁定 2026-11-16 A2）は、bash が各 simple command の
+  最後の語（引数が無ければ command name。redirect は語でない。`builtin`/`command` 越しも同じ）を `_` に
+  代入するため、以後の各 simple command の最後の語を、そのコマンド実行後の状態（成功・失敗の両方）で算術検査
+  する（`echo 5` は Known、`echo bar`・`cat` は name を読むので `Undetermined(Unsupported)`）。`_` に integer
+  属性を与えた時点で、その時点の `_` の値も算術検査する（bash 3.2.57 で `true 'a[$(c)]'; declare -i _` が `c` を
+  実行することを観測。ユーザー裁定 2026-11-16）: 値は直前の simple command の最後の語、直前が無ければ環境からの
+  継承値なので `Undetermined(Unsupported)`。`&`・pipeline・compound command・`[[ ]]`・代入のみのコマンド・
+  opaque 化の後の `_` は未モデル化として `Undetermined`。**受容済み残余**: opaque 状態だけでは `_` を integer 扱いしない
+  （`_` は `integer` 集合だけを見る）。
   `builtin [--] w ...`・`command [-p] [--] w ...`（入れ子も）は unwrap し、包まれた `w` を単独実行と同じ
   効果・代入検査で評価したうえで（declare 系の operand は Field mode のまま）、wrapper 自体は従来どおり
   状態を opaque にする。`command -v`/`-V` は何も実行しない lookup として
@@ -1282,6 +1339,8 @@ forge・condukt のスケジューラが再利用）。
   `support.rs` は状態を持たない補助関数（escape 展開・パス正規化・fd/stdin・pipe stdin）。
   `eval/words.rs` は `eval.rs` の子 module で、parameter 展開の値（`${n:=v}` の integer 検査を含む）と
   展開後の語の最終値（tilde・word split・pathname/brace 展開・heredoc 展開の判定）を担う。
+  `eval/decl.rs` も `eval.rs` の子 module で、declare 系 builtin（`export`/`declare`/`typeset`/`local`/
+  `readonly`）の integer 属性付与・代入と compound key の算術検査・binding を担う。
   **現状どの検出器からも呼ばれない**（判定に影響しない）。検出器の移行は migrate-path / migrate-stdin-program 段で行う。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。
@@ -1381,4 +1440,5 @@ path/target を埋め込む。例: `"Write would replace {path} with empty conte
    - 判定は、その reader の pipeline を書かれたまま、その reader に中身を inline で渡した形（`bash <<< …`）で行う。それが Deny（中身が literal で system harm）なら、main・subagent ともに Deny とする（裁定 1）。
    - それ以外（中身が harm でない・判定しない形・上の対象外の reader）では、fd 0 の追跡はこの判定を採らない。fd 0 は解決済みにしないので、reader が stdin から program を読みうるときは従来どおり Ask（subagent では Deny）のまま。たとえば `exec <<< 'echo hi'; bash` と `exec 3<<< 'echo hi'; exec 0<&3; bash` は main で Ask のまま。close の後の reader も同じく従来どおりで、close 前の中身が harm でも、この追跡では Deny にしない（close した fd 0 の中身は reader に届かない）。中身の分からない fd から複製した fd 0 を読む reader は判定しないが、Allow にもしない（main で Ask、subagent で Deny）。中身が確実に分かる fd N から複製した fd 0 は、上のとおりその中身で判定し、literal で system harm なら main・subagent ともに Deny とする（裁定 1）。
    - 再現テスト: `crates/blastguard/tests/backlog_20261114_exec_stdin_herestring_literal_harm.rs`（fd 0 の here-string に literal の system harm を入れて後で `bash` が読む形は main・subagent とも Deny）と、`crates/blastguard/tests/backlog_20261114_exec_stdin_harm_non_stdin_reader_fp.rs`（script ファイルや `-c` を実行する reader は Allow のまま、close の後は main で Deny にしない）と、`crates/blastguard/tests/backlog_20261115_exec_dup_onto_stdin_literal_harm.rs`（fd 3 の here-string を `exec 0<&3`・`exec 0<&3 3<&-`・`exec <&3` で fd 0 に複製して後で shell が読む形は main・subagent とも Deny、中身が harm でない形は直接の形 `exec <<< 'echo hi'; bash` と同じく main で Ask・subagent で Deny、`cat`・`bash script.sh` は Deny にしない）。
-   - quote された数字の複製先（backlog cf0bf4ca、2026-11-15）: `<&` / `>&` の複製先の fd 番号は、shell が単語を読むのと同じく quote を外してから数字として読む。`exec 3<<< 'chmod 777 /etc/hosts'; bash <&'3'` と `bash <&"3"` は `<&3` と同じ形として追跡し、main・subagent とも Deny とする。quote を外しても数字にならない複製先（`-` や名前）は従来どおり。quote を外せない複製先（閉じていない quote・ANSI-C `$'…'`・末尾の孤立した backslash）と展開を含む複製先は判定不能として扱い、制限側に倒す（落とさない）。実装は `exec_fds::dup_fd_number` で、`payload.rs` と `exec_fds.rs` にある複製先の単語の読み取りはすべてこれを使う。読めない形の言及を見落とさないための文字列上の数え上げ（`exec_fds::raw_fd_mentions`）も、`&` の後の単語を同じく quote を外して読み、先頭が fd 番号なら言及として数える。したがって quote した形は、quote しない形と同じ所で同じ数だけ数えられ、判定は quote しない形と同じになる（例: `eval 'bash <&3' 2>&'3'` と `x=$(bash <&3) 2>&'3'` は `2>&3` の形と同じく main・subagent とも Deny、`cat <&'3'` は `cat <&3` と同じ、移動の形 `bash <&'3'-` は `bash <&3-` と同じく Deny）。再現テスト: `crates/blastguard/tests/backlog_20261115_quoted_numeric_dup_target.rs` と、quote した形と quote しない形の判定の一致を見る `crates/blastguard/tests/backlog_20261115_quoted_numeric_dup_consistency.rs`。
+   - quote された数字の複製先（backlog cf0bf4ca、2026-11-15）: `<&` / `>&` の複製先の fd 番号は、shell が単語を読むのと同じく quote を外してから数字として読む。`exec 3<<< 'chmod 777 /etc/hosts'; bash <&'3'` と `bash <&"3"` は `<&3` と同じ形として追跡し、main・subagent とも Deny とする。quote を外しても数字にならない複製先（`-` や名前）は従来どおり。quote を外せない複製先（閉じていない quote・ANSI-C `$'…'`・末尾の孤立した backslash）と展開を含む複製先は判定不能として扱い、制限側に倒す（落とさない）。実装は `exec_fds.rs` の `decode_literal_word` で、`exec_fds.rs` にある複製先の単語の読み取りは `exec_fds::dup_fd_number` を、`payload.rs` の `procsub_programs` にある stdin の複製先の読み取りは `exec_fds::stdin_dup_target`（下の移動の形も読む）を通して、すべてこれを使う。読めない形の言及を見落とさないための文字列上の数え上げ（`exec_fds::raw_fd_mentions`）も、`&` の後の単語を同じく quote を外して読み、先頭が fd 番号なら言及として数える。したがって quote した形は、quote しない形と同じ所で同じ数だけ数えられ、判定は quote しない形と同じになる（例: `eval 'bash <&3' 2>&'3'` と `x=$(bash <&3) 2>&'3'` は `2>&3` の形と同じく main・subagent とも Deny、`cat <&'3'` は `cat <&3` と同じ、移動の形 `bash <&'3'-` は `bash <&3-` と同じく Deny）。再現テスト: `crates/blastguard/tests/backlog_20261115_quoted_numeric_dup_target.rs` と、quote した形と quote しない形の判定の一致を見る `crates/blastguard/tests/backlog_20261115_quoted_numeric_dup_consistency.rs`。
+   - stdin への移動の形（backlog 967fd65c、2026-11-16）: reader の stage の `<&N-` / `0<&N-`（fd N を stdin へ移動し N を閉じる）は、bash が展開・quote 除去の後に末尾の `-` を 1 つ外して読むのと同じく、`<&N` と同じ stdin の複製として読む（`exec_fds::stdin_dup_target`）。したがって `bash <&3-` と `bash 0<&3-` は `bash <&3` と同じく main で Allow にせず、subagent で Deny とする。`-` だけ（`<&-`、stdin を閉じる）は何も読まない。`-` を外しても fd 番号にならない移動の形（`<&abc-`）は stdin の出どころが判定不能として制限側に倒す。`exec` の行の複製（`exec 4<&3-`）は `exec_fds::dup_fd_number` のままで、この読み替えの対象外。再現テスト: `crates/blastguard/tests/backlog_20261114_stdin_dup_move_fd_suffix.rs`。

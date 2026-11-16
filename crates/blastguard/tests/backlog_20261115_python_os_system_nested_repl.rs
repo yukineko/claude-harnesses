@@ -90,7 +90,6 @@ fn nested_repl(stdin_text: &str) -> String {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-15 F13 harmful stdin into os.system nested REPL is allow — remove when fixed"]
 fn harmful_stdin_into_os_system_nested_repl_is_deny() {
     let cmd = nested_repl(r#"import os; os.chmod("/etc/hosts", 0o777)"#);
     let home = unique_home("a");

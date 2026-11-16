@@ -35,7 +35,9 @@ class MutationHarnessWiredInPrePush(unittest.TestCase):
     def test_control_scanner_sees_existing_wiring(self):
         self.assertTrue((REPO / "scripts" / SCRIPT).is_file())
         lines = _code_lines(PRE_PUSH.read_text(encoding="utf-8"))
-        self.assertTrue(any("check-plugin-rollout.py" in ln for ln in lines))
+        # Control wiring: check-compile-fail.py (check-plugin-rollout.py was
+        # the control until it was removed from pre-push, user ruling 2026-11-16).
+        self.assertTrue(any("check-compile-fail.py" in ln for ln in lines))
 
     def test_pre_push_runs_fail_open_mutation(self):
         lines = _code_lines(PRE_PUSH.read_text(encoding="utf-8"))

@@ -1591,12 +1591,14 @@ run_canary() {
 # would turn it into silence.
 # Refuse to report success while the fleet is still drifted.
 #
-# The gate that detects drift (check-plugin-rollout.py) is wired into
-# .githooks/pre-push, but only as ADVISORY: rc=1 prints and does not block,
-# deliberately demoted 2026-07-23 because rollout state is a fact about THIS
-# machine while `git push` shares code with a remote. That reasoning is sound for
-# the push path and is not touched here — but it left the detection with no
-# enforcement point at all, which the demotion comment itself flags as a risk of
+# The gate that detects drift (check-plugin-rollout.py) is not wired into any
+# git hook. It used to run in .githooks/pre-push, but only as ADVISORY (rc=1
+# printed and did not block; demoted 2026-07-23 because rollout state is a fact
+# about THIS machine while `git push` shares code with a remote), and it was
+# removed from pre-push entirely by user ruling 2026-11-16. Its report now runs
+# at SessionStart (scripts/session-rollout-drift.py), still advisory. That
+# reasoning is sound for the push path and is not touched here — but it left the
+# detection with no enforcement point at all, which the demotion comment itself flags as a risk of
 # degrading into "someone will notice" (CLAUDE.md §6 forbids resting on that).
 #
 # This is where enforcement is unambiguous: a rollout that ends with the fleet

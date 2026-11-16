@@ -326,8 +326,10 @@ enum Command {
     ///
     /// Invoked by git as `backlog merge-driver %O %A %B`: an id-level 3-way
     /// merge written into <OURS>; exit 0 = clean, non-zero = conflict or
-    /// undeterminable input, with <OURS> left untouched. `--install` sets
-    /// `merge.backlog.driver` / `merge.backlog.name` in the current repo.
+    /// undeterminable input, with <OURS> left untouched. `--install` copies
+    /// this binary to `<git common dir>/backlog/merge-driver` (outside the
+    /// pruned plugin cache) and sets `merge.backlog.driver` (naming that copy)
+    /// / `merge.backlog.name` in the current repo.
     MergeDriver {
         /// Configure the driver in the current repository's git config.
         #[arg(long, conflicts_with_all = ["base", "ours", "theirs"])]

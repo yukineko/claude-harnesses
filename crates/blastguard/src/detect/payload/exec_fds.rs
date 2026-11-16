@@ -870,27 +870,69 @@ fn probe_synthetics(texts: &[HereText], stages: &[&Stage], default_sh: bool) -> 
 /// counts: unquoted (`<&$fd`, `` <&`cmd` ``) or inside double quotes
 /// (`<&"$fd"`). A single-quoted or backslash-escaped one (`<&'$fd'`,
 /// `<&\$fd`) is the literal text `$fd`, which is no fd: bash rejects the
-/// redirection and nothing is read, so that is `None`. A word that cannot be
-/// decoded (an unclosed quote, ANSI-C `$'…'` / locale `$"…"` quoting, a
+/// redirection and nothing is read, so it gets no reason. A word that cannot
+/// be decoded (an unclosed quote, ANSI-C `$'…'` / locale `$"…"` quoting, a
 /// trailing lone backslash) is undetermined and gets a reason too: it resolves
-/// to the restrictive side, never to `None`. `None` for any literal target.
-pub(super) fn dynamic_dup_reason(target: &str) -> Option<String> {
-    decode_literal_word(target)
-        .err()
-        .map(|why| format!("its stdin is duplicated from `{target}`, an fd spelled with {why}"))
+/// to the restrictive side. `why` is [`decode_literal_word`]'s error; the
+/// caller is [`stdin_dup_target`] (its [`StdinDup::Unreadable`]).
+fn undecodable_dup_reason(target: &str, why: &str) -> String {
+    format!("its stdin is duplicated from `{target}`, an fd spelled with {why}")
 }
 
 /// The fd number a `<&` / `>&` target names, decoded the shell's way: quotes
 /// are removed first (`<&'3'` and `<&"3"` are `<&3`). `None` when the decoded
-/// text is not a plain number (`-`, a name) or cannot be decoded at all; callers
-/// resolve `None` restrictively (see `dynamic_dup_reason`), never as "no dup".
+/// text is not a plain number (`-`, a name, the move form `3-`) or cannot be
+/// decoded at all. A stdin dup is read with [`stdin_dup_target`] instead,
+/// which tells those cases apart.
 pub(super) fn dup_fd_number(target: &str) -> Option<u32> {
     decode_literal_word(target).ok()?.parse::<u32>().ok()
 }
 
+/// How a stdin dup target `<&TARGET` reads, the move form included
+/// (backlog 967fd65c). The word is decoded as [`dup_fd_number`] decodes it,
+/// then ONE trailing `-` is stripped, as bash does after expansion: `<&3-`
+/// (move fd 3 to stdin, then close 3) reads fd 3 exactly as `<&3` does, and
+/// `<&'3'-` / `<&"3-"` are the same move.
+///   * [`StdinDup::Fd`]: `<&N` or `<&N-`.
+///   * [`StdinDup::Unreadable`]: a target that is not a literal
+///     ([`undecodable_dup_reason`]), or a move form whose remainder is not an fd
+///     number (`<&abc-`): where stdin comes from is unknown, so callers
+///     resolve it to the restrictive side, never to "no dup".
+///   * [`StdinDup::Nothing`]: the bare `-` (`<&-`, close stdin), or another
+///     literal that is no fd (`<&abc`, `<&'$fd'`): bash rejects such a
+///     redirection, so no program is read from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum StdinDup {
+    Fd(u32),
+    Unreadable(String),
+    Nothing,
+}
+
+pub(super) fn stdin_dup_target(target: &str) -> StdinDup {
+    let decoded = match decode_literal_word(target) {
+        Ok(d) => d,
+        Err(why) => return StdinDup::Unreadable(undecodable_dup_reason(target, why)),
+    };
+    if let Ok(n) = decoded.parse::<u32>() {
+        return StdinDup::Fd(n);
+    }
+    match decoded.strip_suffix('-') {
+        None | Some("") => StdinDup::Nothing,
+        Some(moved) => match moved.parse::<u32>() {
+            Ok(n) => StdinDup::Fd(n),
+            Err(_) => StdinDup::Unreadable(format!(
+                "its stdin is moved from `{target}`, which blastguard does not read as an fd \
+number"
+            )),
+        },
+    }
+}
+
 /// The literal text the shell word `word` stands for after quote removal, or
 /// `Err(why)` when the text does not determine it: an expansion the shell
-/// performs (`$…` or a backquote, unquoted or inside double quotes), ANSI-C
+/// performs (`$…` or a backquote, unquoted or inside double quotes; the one
+/// exception is a `$` directly before the closing `"`, as in `"$"`, which is a
+/// literal `$`), ANSI-C
 /// `$'…'` or locale `$"…"` quoting (not modelled here), an unclosed quote, or
 /// a trailing lone backslash. Single quotes keep everything literal; outside
 /// quotes a backslash makes the next character literal; inside double quotes
@@ -920,6 +962,11 @@ fn decode_literal_word(word: &str) -> Result<String, &'static str> {
                         }
                         None => return Err("an unclosed quote"),
                     },
+                    // A `$` immediately before the closing quote (`"$"`) has
+                    // nothing to expand: it is a literal `$`. Only this exact
+                    // shape is resolved; `$` followed by anything else
+                    // (`"$fd"`, `"${x}"`, `"$(…)"`, `"$ x"`) stays an expansion.
+                    Some('$') if chars.peek() == Some(&'"') => out.push('$'),
                     Some('$' | '`') => return Err(EXPANSION),
                     Some(d) => out.push(d),
                     None => return Err("an unclosed quote"),
@@ -1491,6 +1538,22 @@ not follow"
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stdin_dup_target_reads_the_move_form_as_the_dup() {
+        for t in ["3", "3-", "'3'-", "\"3-\"", "'3'"] {
+            assert_eq!(stdin_dup_target(t), StdinDup::Fd(3), "{t}");
+        }
+        for t in ["-", "'-'", "abc", "'$fd'"] {
+            assert_eq!(stdin_dup_target(t), StdinDup::Nothing, "{t}");
+        }
+        for t in ["abc-", "--", "3--", "'x'-", "$fd", "$fd-", "'3"] {
+            assert!(
+                matches!(stdin_dup_target(t), StdinDup::Unreadable(_)),
+                "{t}"
+            );
+        }
+    }
 
     #[test]
     fn raw_mentions_count_dups_and_fd_paths() {

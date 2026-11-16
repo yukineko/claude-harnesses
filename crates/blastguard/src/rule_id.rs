@@ -684,9 +684,13 @@ mod tests {
         // threw away the directory it would have run in" — and `retro` counts
         // by id, so collapsing them would make the second invisible inside the
         // first. Pin the id itself.
+        // The `#` comment makes `readings::static_bindings` (536f63e5d) leave
+        // the line as written, so the head re-judge — the arm this id names —
+        // still answers. Without it the line is rewritten to its literal
+        // spelling and denied by `protected-path-disarm` instead.
         let reason = deny_reason(
             "Bash",
-            json!({ "command": "cd .githooks; BIN=/bin/rm; $BIN pre-commit" }),
+            json!({ "command": "cd .githooks; BIN=/bin/rm; $BIN pre-commit # x" }),
         );
         assert_eq!(
             rule_id(&reason),

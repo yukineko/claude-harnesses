@@ -92,6 +92,12 @@ CLI は `clap` の `Command` enum（`main.rs`）で定義。ledger/lease 系は�
   `LEASE_TTL_SECS`(=1800, ハードコード)、`storage_root`
   （`harness_core::{config::base_dir, projkey}` で解決）、`load_leases`/`save_leases`(原子)/`append_event`/
   `read_events`、`is_held_by_other`/`is_stale`/`reap_stale`/`now`。`init` は no-op プレースホルダ。
+- **`durable`** — store 書き込みの耐久化。`write_durable(path, tmp, bytes)` が temp を作成→`write_all`→
+  `sync_all`（fsync）→close→`rename`→親ディレクトリの fsync（unix のみ）の順で書く。どの段の失敗も
+  `Err` で返し、rename 前の失敗では temp を消す（握りつぶさない）。`presence.json`・`subagents.json`・
+  `leases.json`・`active_changesets.json`・audit rounds・JSONL の全 store 書き込みがこれを通る（status
+  cache だけは従来どおり best-effort）。fsync 無しの temp+rename はクラッシュ後に全 NUL のファイルを
+  残しうる（2026-11-16、`presence.json` が 32322 バイトの NUL で観測）。
 - **`event`** — ライフサイクルモデル。`EventKind::{Started,Running,Ended}`（lowercase serde）と
   `LifecycleEvent`（`kind`/`key`/`title`/`session_id`/`run_id`/`ts`/optional `status`）＋ビルダ。制御専用の
   kind は無く、`control` は `Running` を流用する。

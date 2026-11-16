@@ -74,8 +74,6 @@ def build_backlog() -> Path:
 
 
 class PinnedDriverPath(unittest.TestCase):
-    @pytest.mark.xfail(strict=True, reason="backlog: merge-driver --install pins a versioned "
-                       "plugin-cache path that prune later deletes (RED 2026-11-13)")
     def test_store_merge_survives_removal_of_the_installing_version_dir(self):
         exe = build_backlog()
         with tempfile.TemporaryDirectory() as t:

@@ -1129,7 +1129,7 @@ fn enumerated_claim_count(done_criteria: &str) -> Option<usize> {
         .filter(|l| line_re.is_match(l))
         .count();
     let inline = inline_re.find_iter(done_criteria).count();
-    Some(by_line.max(inline))
+    Some(mechanical::semi_max(done_criteria, by_line.max(inline)))
 }
 
 /// Count the distinct commands the criteria *names*. Two named commands mean
@@ -4266,7 +4266,7 @@ note: run with `RUST_BACKTRACE=1` for a backtrace";
     /// be wrongly refused.
     #[test]
     fn classify_criteria_prefix_collision_word_does_not_block_legitimate_skip() {
-        let dc = "we use the npm testing framework; `cargo test -p condukt` exits 0";
+        let dc = "with the npm testing framework, `cargo test -p condukt` exits 0"; // no `;` (0a7be389)
         let c = classify_criteria(dc, None, None);
         assert!(
             !c.behavioral,

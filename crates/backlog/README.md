@@ -251,7 +251,12 @@ Run this to configure the driver per repository:
 backlog merge-driver --install   # run inside the repo
 ```
 
-This sets the repo's `merge.backlog.driver` to run `backlog merge-driver %O %A %B`.
+This copies the running binary to `<git common dir>/backlog/merge-driver` (shared by
+linked worktrees, and outside the versioned plugin cache that `prune-plugin-cache.py`
+deletes), then sets the repo's `merge.backlog.driver` to
+`'<that path>' merge-driver %O %A %B`. The copy is a snapshot of the installing
+version: re-run `--install` to refresh it. Any failure exits non-zero, and the driver
+key is written only after the copy exists.
 
 The store follows the checkout on purpose: `<repo root>/.backlog/tasks.toml`,
 where a linked worktree counts as its own root.

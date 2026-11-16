@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Unit tests for .githooks/pre-push's wiring: the one blocking check
-(gate-bypass) plus the advisory-only checks (rollout drift, GATE-crate nudge,
-autonomy-chain nudge).
+(gate-bypass) plus the advisory-only checks (GATE-crate nudge, autonomy-chain
+nudge), and the ABSENCE of the plugin-rollout check (removed by user ruling
+2026-11-16; rollout drift is reported at session start by
+scripts/session-rollout-drift.py instead).
 
 Stdlib-only (`unittest`), no third-party dependency, so it runs identically in
 CI and locally: `python3 scripts/test_prepush_hook.py`.
 
 The hook is exercised as a SUBPROCESS inside a throwaway git repository that
 has its own `scripts/` directory holding a stub `gate-bypass.py` (whose exit
-code each test chooses) and, where relevant, a stub `check-plugin-rollout.py`.
+code each test chooses) and, where relevant, a stub `check-plugin-rollout.py`
+that records whether anything ran it.
 Nothing here touches the real repository, the real checkers, the real
 ~/.claude registry, or the git index of any working tree.
 
@@ -33,22 +36,17 @@ CONTRACT pinned here:
     missing script/python3| cannot check at all       | push BLOCKED (non-zero,
                           |                           | fail-closed)
 
-    check-plugin-rollout.py exit | meaning              | hook behaviour
-    ------------------------------|----------------------|------------------
-    0                              | nothing to report    | push ALLOWED, silent
-    1 (rollout drift)              | committed not rolled | push ALLOWED
-                                   | out                  | (advisory prose)
-    2 (enablement)                  | plugin not enabled   | push ALLOWED
-                                   |                      | (advisory prose)
-    3 (unverifiable)                | population incomplete| push ALLOWED
-                                   |                      | (advisory prose)
-    absent script                   | not installed here   | push ALLOWED, silent
+    check-plugin-rollout.py: NOT RUN by pre-push at all (user ruling
+    2026-11-16). A present stub that would exit 1 is never invoked and no
+    rollout prose is printed. The per-class rollout prose that used to live in
+    the hook (and its tests here and in the deleted
+    scripts/test_backlog_d38c195b.py) was removed with the check; SessionStart
+    owns that report now (scripts/test_session_rollout_drift.py).
 
 ANTI-VACUITY CONTROL — the single most important property in this file: a hook
 that blocked every push unconditionally would trivially satisfy every "blocks"
 row above while proving nothing. `test_clean_ledger_allows` is what proves it
-doesn't: it asserts the gate-bypass-clean, rollout-absent case genuinely
-ALLOWS the push. Without it, the block-side tests carry no information.
+doesn't: it asserts the gate-bypass-clean case genuinely ALLOWS the push. Without it, the block-side tests carry no information.
 
 The hook under test defaults to `.githooks/pre-push` next to this file's repo
 root; set PREPUSH_HOOK_UNDER_TEST to point the same suite at another copy.
@@ -85,8 +83,12 @@ sys.stderr.write("STUB gate-bypass: pretending exit {code}\\n")
 sys.exit({code})
 """
 
+# Records each invocation by appending a line to {log} (an absolute path in the
+# harness's logdir, outside the repo), so a test can prove the hook never ran it.
 _ROLLOUT_STUB = """#!/usr/bin/env python3
 import sys
+with open({log!r}, "a") as fh:
+    fh.write("ran\\n")
 sys.stdout.write("STUB check-plugin-rollout: pretending exit {code}\\n")
 sys.exit({code})
 """
@@ -183,8 +185,8 @@ class HookHarness:
         rollout_exit: exit code the check-plugin-rollout.py stub returns; only
             used when rollout_missing is False.
         rollout_missing: if True (default), never create
-            scripts/check-plugin-rollout.py — that advisory block must then be
-            skipped entirely.
+            scripts/check-plugin-rollout.py. When False, the stub appends to
+            self.rollout_log each time it runs (the hook must never run it).
         cargo_exit: exit code the `cargo` stub returns. The hook type-checks the
             pushed commits (f98de400, 2026-08-06) and BLOCKS when that fails, so
             every test about some later stage has to get past it. Stubbed rather
@@ -209,6 +211,7 @@ class HookHarness:
         self.git_log = self.logdir / "git.log"
         self.gate_bypass_log = self.logdir / "gate-bypass.log"
         self.cf_log = self.logdir / "compile-fail.log"
+        self.rollout_log = self.logdir / "rollout.log"
 
         git = _which("git")
         subprocess.run([git, "init", "-q", str(self.root)], check=True, capture_output=True)
@@ -233,7 +236,9 @@ class HookHarness:
 
         if not rollout_missing:
             rollout = scripts / "check-plugin-rollout.py"
-            rollout.write_text(_ROLLOUT_STUB.format(code=rollout_exit))
+            rollout.write_text(
+                _ROLLOUT_STUB.format(code=rollout_exit, log=str(self.rollout_log))
+            )
             rollout.chmod(0o755)
 
         # The hook BLOCKS any pushed commit whose TREE lacks
@@ -435,8 +440,7 @@ class HookTestCase(unittest.TestCase):
 class CleanLedgerAllows(HookTestCase):
     """ANTI-VACUITY CONTROL. A hook that blocked every push unconditionally
     would satisfy every "blocks" test below for free. This is what proves it
-    doesn't: a clean gate-bypass ledger (exit 0) and no rollout script present
-    genuinely ALLOWS the push."""
+    doesn't: a clean gate-bypass ledger (exit 0) genuinely ALLOWS the push."""
 
     def test_clean_ledger_allows(self):
         h = self.harness(gate_bypass_exit=0)
@@ -480,34 +484,42 @@ class MissingBypassScriptBlocks(HookTestCase):
         self.assertBlocked(proc, "scripts/gate-bypass.py absent")
 
 
-class RolloutAdvisoryNeverBlocks(HookTestCase):
-    """Contract row: whatever check-plugin-rollout.py reports (drift,
-    enablement, unverifiable, or an unrecognized code), it is advisory only —
-    the push is never blocked on its account."""
+class RolloutCheckNotRunByPrePush(HookTestCase):
+    """User ruling 2026-11-16: the plugin-rollout check is not needed on
+    `git push`; rollout timing is reported at SessionStart by
+    scripts/session-rollout-drift.py. Motivating defect: pre-push printed
+    "committed but not live on THIS machine ... roll it out" when the only
+    finding was a prune finding (superseded version dirs removable).
 
-    def test_rollout_drift_is_advisory(self):
+    A stub check-plugin-rollout.py that exits 1 (the class that produced that
+    prose) is present in the fixture. The hook must not run it, must print none
+    of the old rollout prose, and must still allow the push. The stub's own
+    invocation log is the primary evidence: it distinguishes "not run" from
+    "run but silenced"."""
+
+    def test_rollout_checker_is_not_invoked(self):
         h = self.harness(gate_bypass_exit=0, rollout_missing=False, rollout_exit=1)
         proc = h.run()
-        self.assertAllowed(proc, "rollout drift (exit 1) must be advisory only")
-        self.assertIn("rollout", proc.stderr.lower())
+        self.assertAllowed(proc, "fixture with a rollout stub present")
+        self.assertFalse(
+            h.rollout_log.exists(),
+            "pre-push ran scripts/check-plugin-rollout.py\n" + proc.stderr,
+        )
+        self.assertNotIn("STUB check-plugin-rollout", proc.stderr)
+        self.assertNotIn("committed but not live", proc.stderr)
+        self.assertNotIn("rollout-plugins.sh", proc.stderr)
 
-    def test_rollout_enablement_is_advisory(self):
-        h = self.harness(gate_bypass_exit=0, rollout_missing=False, rollout_exit=2)
-        proc = h.run()
-        self.assertAllowed(proc, "rollout enablement class (exit 2) must be advisory only")
-        self.assertIn("enablement", proc.stderr.lower())
-
-    def test_rollout_unverifiable_is_advisory(self):
-        h = self.harness(gate_bypass_exit=0, rollout_missing=False, rollout_exit=3)
-        proc = h.run()
-        self.assertAllowed(proc, "rollout unverifiable class (exit 3) must be advisory only")
-        self.assertIn("unverifiable", proc.stderr.lower())
-
-    def test_missing_rollout_script_is_silent(self):
-        h = self.harness(gate_bypass_exit=0, rollout_missing=True)
-        proc = h.run()
-        self.assertAllowed(proc, "scripts/check-plugin-rollout.py absent")
-        self.assertNotIn("rollout", proc.stderr.lower())
+    def test_stub_records_invocation_control(self):
+        """Control: the stub's log really is written when the stub runs, so an
+        absent log above means "not run", not "the stub cannot log"."""
+        h = self.harness(gate_bypass_exit=0, rollout_missing=False, rollout_exit=1)
+        proc = subprocess.run(
+            [_which("python3"), str(h.root / "scripts" / "check-plugin-rollout.py")],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertTrue(h.rollout_log.exists())
 
 
 class NotAGitWorkTreeBlocks(HookTestCase):
@@ -535,9 +547,9 @@ class NotAGitWorkTreeBlocks(HookTestCase):
 class CargoTypecheckGate(HookTestCase):
     """The hook's second blocking check: the pushed tip must type-check.
 
-    Both polarities are pinned here because the four "advisory" tests above are
-    ALLOW assertions — they were silently red from the day the cargo block
-    landed until the harness gained a cargo stub, which meant the whole suite's
+    Both polarities are pinned here because the advisory tests (at the time,
+    four rollout-advisory tests, removed 2026-11-16) are ALLOW assertions —
+    they were silently red from the day the cargo block landed until the harness gained a cargo stub, which meant the whole suite's
     anti-vacuity half was dead and only the "blocks" rows were being exercised.
 
     Since the 2026-11-08 ruling (hooks check only the change's range) cargo

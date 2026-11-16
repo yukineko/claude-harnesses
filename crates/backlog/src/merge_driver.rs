@@ -26,7 +26,10 @@
 //!
 //! A repo WITHOUT `merge.backlog.driver` configured ignores the
 //! `.gitattributes` `merge=backlog` entry and falls back to git's line-based
-//! text merge (see the README). `backlog merge-driver --install` configures it.
+//! text merge (see the README). `backlog merge-driver --install` configures it:
+//! it copies the running binary to `<git common dir>/backlog/merge-driver`
+//! (outside the versioned plugin cache, which is pruned) and points the driver
+//! at that copy (see [`install`]).
 
 use std::path::Path;
 
@@ -183,15 +186,114 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// `backlog merge-driver --install`: configure `merge.backlog.{name,driver}`
-/// in the repository of the current directory (`git config`, local scope).
-/// Pairs with the `.gitattributes` `merge=backlog` entries.
+/// Run `git <args>` in the current directory; any spawn failure or non-zero
+/// exit is an error (never an empty/default answer).
+fn git_ok(args: &[&str]) -> Result<String> {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .output()
+        .with_context(|| format!("failed to run git {}", args.join(" ")))?;
+    if !out.status.success() {
+        bail!(
+            "git {} failed ({}): {}",
+            args.join(" "),
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Where `--install` keeps the driver binary: `<git common dir>/backlog/merge-driver`.
+/// The common dir (not the per-worktree git dir) so every linked worktree of
+/// the repository shares the one copy that the shared `merge.backlog.driver`
+/// names.
+const STABLE_DIR: &str = "backlog";
+const STABLE_NAME: &str = "merge-driver";
+
+/// Copy `src` to `dir/name` atomically with mode 0755: write a temp file in
+/// `dir`, fsync, chmod, then rename over the target. Any step failing is an
+/// error and removes the temp file; the target is either the old file or the
+/// complete new copy, never a partial one.
+fn install_copy(src: &Path, dir: &Path, name: &str) -> Result<std::path::PathBuf> {
+    use std::io::Write;
+    std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    let bytes = std::fs::read(src)
+        .with_context(|| format!("cannot read the backlog executable {}", src.display()))?;
+    let target = dir.join(name);
+    let tmp = dir.join(format!(".{name}.tmp.{}", std::process::id()));
+    let result = (|| -> Result<()> {
+        let mut f = std::fs::File::create(&tmp)
+            .with_context(|| format!("cannot create {}", tmp.display()))?;
+        f.write_all(&bytes)
+            .with_context(|| format!("cannot write {}", tmp.display()))?;
+        f.sync_all()
+            .with_context(|| format!("cannot sync {}", tmp.display()))?;
+        drop(f);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))
+                .with_context(|| format!("cannot chmod 0755 {}", tmp.display()))?;
+        }
+        std::fs::rename(&tmp, &target)
+            .with_context(|| format!("cannot rename {} to {}", tmp.display(), target.display()))?;
+        Ok(())
+    })();
+    if let Err(e) = result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    // Verify the copy is really there and byte-identical before any config
+    // names it.
+    let written =
+        std::fs::read(&target).with_context(|| format!("cannot read back {}", target.display()))?;
+    if written != bytes {
+        bail!(
+            "{} does not match the backlog executable after copy",
+            target.display()
+        );
+    }
+    Ok(target)
+}
+
+/// `backlog merge-driver --install`: copy the running backlog executable to a
+/// stable path OUTSIDE the plugin cache — `<git common dir>/backlog/merge-driver`
+/// (`git rev-parse --git-common-dir`, so linked worktrees share it; mode 0755,
+/// temp file + atomic rename) — and configure `merge.backlog.{name,driver}`
+/// in the repository of the current directory (`git config`, local scope),
+/// with the driver naming that copy. Pairs with the `.gitattributes`
+/// `merge=backlog` entries.
+///
+/// Why a copy: the running executable usually lives in a versioned plugin
+/// cache dir (`.../backlog/<ver>/bin/...`) that `prune-plugin-cache.py`
+/// deletes once the version is superseded; a driver naming it then fails every
+/// task-store merge (backlog 8a85894b). The copy is a snapshot of THIS
+/// version: re-run `--install` to refresh it.
+///
+/// Fail closed: any failure (resolving the common dir, copying, chmod,
+/// rename, `git config`) is an error and a non-zero exit, and the driver key
+/// is only written after the copy exists. If the copy is later removed, git
+/// fails the driver and the path stays conflicted (restrictive side).
 pub fn install() -> Result<()> {
     let exe = std::env::current_exe().context("cannot resolve the backlog executable path")?;
-    let exe = exe
+    let common = git_ok(&["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .context("cannot resolve the repository's git common dir")?;
+    if common.is_empty() {
+        bail!("git rev-parse --git-common-dir returned an empty path");
+    }
+    let common = Path::new(&common);
+    if !common.is_absolute() || !common.is_dir() {
+        bail!(
+            "git common dir {} is not an absolute existing directory",
+            common.display()
+        );
+    }
+    let stable = install_copy(&exe, &common.join(STABLE_DIR), STABLE_NAME)?;
+    let stable = stable
         .to_str()
-        .context("backlog executable path is not valid UTF-8")?;
-    let driver = format!("{} merge-driver %O %A %B", shell_quote(exe));
+        .context("stable merge-driver path is not valid UTF-8")?;
+    let driver = format!("{} merge-driver %O %A %B", shell_quote(stable));
     for (key, value) in [
         (
             "merge.backlog.name",
@@ -199,17 +301,7 @@ pub fn install() -> Result<()> {
         ),
         ("merge.backlog.driver", driver.as_str()),
     ] {
-        let out = std::process::Command::new("git")
-            .args(["config", key, value])
-            .output()
-            .context("failed to run git config")?;
-        if !out.status.success() {
-            bail!(
-                "git config {key} failed ({}): {}",
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
+        git_ok(&["config", key, value]).with_context(|| format!("git config {key} failed"))?;
     }
     println!("configured merge.backlog.driver = {driver}");
     Ok(())

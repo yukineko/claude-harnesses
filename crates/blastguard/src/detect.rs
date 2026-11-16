@@ -60,6 +60,7 @@ use crate::model::Decision;
 use crate::scope::{Placement, SafeRoots};
 use harness_core::verdict::Determination;
 mod ast;
+mod backtick_text;
 mod budget;
 mod compound;
 mod condukt;
@@ -73,6 +74,7 @@ mod find_xargs;
 mod function_calls;
 mod gh;
 mod git;
+mod git_apply_patch;
 mod git_stage;
 mod git_unmerged;
 mod harm_mark;
@@ -727,6 +729,35 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // written here can still be run by a LATER, separate tool call. Shape rule: `strip_data_here_document_bodies`.
     let stripped = strip_data_here_document_bodies(cmd);
     let cmd: &str = &stripped;
+    let judged = detect_bash_after_data_bodies(cmd, depth, ctx);
+    // 0d. `git apply` / `git am` fed a patch by a here-document writes the
+    // patch's added files, and a later command can run them. The body's `+`
+    // (and context) prefix hides its commands from every rule above, so a
+    // shell view (one `+`/space prefix removed from each body line the module
+    // recognises) is judged too, Deny over Ask over Allow. Only the shapes
+    // listed in the `git_apply_patch` module doc are refused (Ask); the KNOWN
+    // GAPS listed there (`|&`, subshell/group readers, a pipe continued on the
+    // next line, `<<-` TAB-indented bodies, a heredoc of another command on
+    // the reader's line, named patch files, non-plain `git`) are NOT judged by
+    // this step and may stay Allow. See `git_apply_patch` (backlog 42741ea3).
+    match git_apply_patch::read_patch_readers(cmd) {
+        None => judged,
+        Some(reading) => {
+            let mut d = git_apply_patch::stronger(
+                judged,
+                detect_bash_rules(&reading.shell_view, depth, ctx),
+            );
+            if let Some(reason) = reading.refusal {
+                d = git_apply_patch::stronger(d, Decision::ask(reason));
+            }
+            d
+        }
+    }
+}
+
+/// Steps 0b onward of [`detect_bash`]: the rules that run after the data-only
+/// here-document body was removed (see there), on `cmd` as given.
+fn detect_bash_after_data_bodies(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // 0b. A QUOTED here-document body written to a literal `.py` file is judged
     // as Python, not as shell lines (user ruling 2026-11-08); the rest of the
     // command, later lines included, is judged here without it — or, when the
@@ -1173,22 +1204,22 @@ cannot tell whether it is a protected gate/config file or a system directory"
         return deny;
     }
 
-    // ENUMERATED, so `unknown_wrapper_ask` can ask `resolve_expanded_command_word`
-    // what an expansion-valued command word in THIS segment was assigned by an
-    // EARLIER one. `advance_cwd_and_rewrite` below rewrites a segment's text but
-    // maps one segment to one segment, so `seg_idx` stays the segment's index in
-    // `split_segments(cmd)` — which is what that resolver's parameter means.
-    // Compound-command syntax (`for … in`, `do`, `then`, `{`, `case` patterns)
-    // separated from the command each segment really runs; see
-    // `compound_views`. Index-aligned with `split_segments(cmd)`.
-    let views = compound_views(cmd); // The cwd, alias table and subshell-group bookkeeping, one walk for the
-                                     // line and one per quoted here-document body (backlog 547cf2f6); see
-                                     // `CwdWalks`. `segment_cwd_states` replays the same walks.
-    let mut walks = CwdWalks::new(cmd, &views);
+    // ENUMERATED, so `unknown_wrapper_ask` can ask `resolve_expanded_command_word` what an
+    // expansion-valued command word in THIS segment was assigned by an EARLIER one; `seg_idx` is
+    // the index in `split_segments(ln)`. Compound syntax (`for … in`, `do`, `{`, `case`
+    // patterns) is separated from the command each segment runs (`compound_views`). `ln` is
+    // `cmd`, or for a `python3 - <<'EOF'` body its prose string text blanked (b0de2710, see
+    // `heredoc::python_stdin_segment_view`); every rule above and below this loop reads `cmd`.
+    let line_view = heredoc::python_stdin_segment_view(cmd);
+    let ln: &str = line_view.as_deref().unwrap_or(cmd);
+    let views = compound_views(ln);
+    // The cwd, alias table and subshell-group bookkeeping, one walk for the line and one per
+    // quoted here-document body (backlog 547cf2f6); see `CwdWalks` and `segment_cwd_states`.
+    let mut walks = CwdWalks::new(ln, &views);
     // `for`/`select` variables bound so far on this line; see `loop_variants`.
     let mut bindings: Vec<LoopBinding> = Vec::new();
-    let line_cwds = segment_cwd_states(cmd);
-    for (seg_idx, seg) in split_segments(cmd).into_iter().enumerate() {
+    let line_cwds = segment_cwd_states(ln);
+    for (seg_idx, seg) in split_segments(ln).into_iter().enumerate() {
         let walk = walks.walk_for(seg_idx);
         let cwd = walk.cwd.clone();
         // The base for THIS segment's relative operands is the cwd state as it
@@ -1250,7 +1281,7 @@ through it, and refuses to guess"
                         }
                     }
                     if let Some(deny) =
-                        acc.record(analyze_segment(&variant_seg, depth, cmd, seg_idx, &seg_ctx))
+                        acc.record(analyze_segment(&variant_seg, depth, ln, seg_idx, &seg_ctx))
                     {
                         return deny;
                     }
@@ -1269,16 +1300,15 @@ through it, and refuses to guess"
         }
         // Target operands another segment relinks, judged where they land
         // (relink.rs); first, so a landing's Deny names that landing.
-        let landed = relink::operand_landing_verdict(
-            command, cmd, seg_idx, &line_cwds, depth, ctx, &seg_ctx,
-        );
+        let landed =
+            relink::operand_landing_verdict(command, ln, seg_idx, &line_cwds, depth, ctx, &seg_ctx);
         if let Some(deny) = acc.record(landed) {
             return deny;
         }
         if let Some(deny) = acc.record(analyze_segment(
             &effective_seg,
             depth,
-            cmd,
+            ln,
             seg_idx,
             &seg_ctx,
         )) {
@@ -1404,7 +1434,7 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
     // Memory rule: backticks in a double-quoted note / commit message are
     // command-substituted and silently eaten. Recorded (not returned) so a
     // Deny elsewhere on the segment still outranks this Ask.
-    if let Some(ask) = backtick_in_double_quoted_text(seg) {
+    if let Some(ask) = backtick_text::backtick_in_double_quoted_text(seg) {
         let _ = acc.record(ask);
     }
 
@@ -2161,58 +2191,6 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         Some(deny) => deny,
         None => acc.finish(),
     }
-}
-
-/// A backtick inside a DOUBLE-quoted argument of `backlog add|edit` or
-/// `git commit` is command substitution: the shell runs the span and replaces
-/// it with its (usually empty) output, so the stored note / commit message
-/// silently loses that text. Single-quoted backticks are literal and fine.
-fn backtick_in_double_quoted_text(seg: &str) -> Option<Decision> {
-    // Cheap pre-filter: without both characters there is nothing to find, and
-    // `command_candidates` below is too costly to run on every re-analysed
-    // segment (the D4 budget test measures it).
-    if !(seg.contains('`') && seg.contains('"')) {
-        return None;
-    }
-    let tokens: Vec<&str> = seg.split_whitespace().collect();
-    let target = command_candidates(&tokens).into_iter().find_map(|idx| {
-        let cmd = normalized_command(tokens[idx]);
-        let rest = &tokens[idx + 1..];
-        match cmd.as_str() {
-            "backlog" => rest
-                .iter()
-                .find(|t| !t.starts_with('-'))
-                .map(|t| normalized_command(t))
-                .filter(|s| s == "add" || s == "edit")
-                .map(|s| format!("backlog {s}")),
-            "git" => git_subcommand_index(rest)
-                .map(|i| normalized_command(rest[i]))
-                .filter(|s| s == "commit")
-                .map(|_| "git commit".to_string()),
-            _ => None,
-        }
-    })?;
-    let (mut in_s, mut in_d, mut escaped) = (false, false, false);
-    for c in seg.chars() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match c {
-            '\\' if !in_s => escaped = true,
-            '\'' if !in_d => in_s = !in_s,
-            '"' if !in_s => in_d = !in_d,
-            '`' if in_d => {
-                return Some(Decision::ask(format!(
-                    "a backtick inside a double-quoted argument of `{target}` is command \
-substitution: the shell runs that span and silently deletes it from the stored text. Use single \
-quotes (or escape the backtick) to keep it literal"
-                )));
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 #[cfg(test)]

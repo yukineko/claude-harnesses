@@ -91,13 +91,11 @@ fn assert_deny_both(cmd: &str, tag: &str) {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 bash <&3- not recognised as stdin dup — remove the ignore when fixed"]
 fn bash_move_fd_to_stdin_is_not_allowed() {
     assert_non_allow_main_deny_sub("bash <&3-", "a");
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 bash 0<&3- not recognised as stdin dup — remove the ignore when fixed"]
 fn bash_explicit_fd0_move_to_stdin_is_not_allowed() {
     assert_non_allow_main_deny_sub("bash 0<&3-", "b0");
 }

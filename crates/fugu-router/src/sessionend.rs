@@ -32,6 +32,20 @@
 //! recycled pid. Anything that cannot be determined (unreadable directory or
 //! marker, unparseable marker, liveness probe error) is reported as unfinished
 //! (CLAUDE.md §3: cannot-determine resolves to the restrictive side).
+//!
+//! The notice tells the user to run `fugu-router sync`, so a successful FULL
+//! sync (`cmd_sync` without `--pull-only` / `--push-only`) is what clears it:
+//! `cmd_sync` then calls `clear_dead_markers_after_sync()`, which (for a full
+//! sync only) runs `clear_dead_markers()`, which removes exactly the
+//! markers whose process is definitively dead. Markers whose process is
+//! alive (a worker still in flight — including the calling worker's own
+//! marker), whose liveness cannot be determined, or that cannot be read or
+//! parsed are kept, so their notice stays. A partial or failed sync removes
+//! nothing. A marker that cannot be removed is reported on stderr and does
+//! not turn the successful sync into an error. If a manual sync removes a
+//! `spawning` marker in the instant between the hook exiting and its worker
+//! taking the marker over, the worker's takeover rewrites it, so the worker
+//! stays tracked.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -48,6 +62,11 @@ const STUCK_AFTER_SECS: u64 = 15 * 60;
 /// The worker log is truncated once it grows past this.
 const LOG_MAX_BYTES: u64 = 1024 * 1024;
 
+/// A pending marker (`<dir>/*.json`). Written by the hook before any work,
+/// taken over by the worker, and removed by the worker when it finishes — or,
+/// once its process is dead, by the next successful full `fugu-router sync`
+/// (`clear_dead_markers`). Alive / undeterminable / unparseable markers are
+/// never removed by sync.
 #[derive(Serialize, Deserialize)]
 struct Pending {
     /// The process responsible for the sync right now: the hook while it
@@ -349,6 +368,74 @@ fn pending_in(dir: &Path, now: u64) -> Option<String> {
     }
 }
 
+/// Called by `cmd_sync` after it succeeded. A partial sync (`--pull-only` /
+/// `--push-only`) does not finish what SessionEnd started, so markers stay.
+pub fn clear_dead_markers_after_sync(pull_only: bool, push_only: bool) {
+    if !pull_only && !push_only {
+        clear_dead_markers();
+    }
+}
+
+/// After a successful full sync: remove every pending marker whose process
+/// is definitively dead. Problems are printed to stderr (never silent) and
+/// never fail the caller's sync.
+pub fn clear_dead_markers() {
+    for problem in clear_dead_markers_in(&pending_dir()) {
+        eprintln!("fugu-router: {problem}");
+    }
+}
+
+/// Remove the dead-pid markers in `dir`; return what could not be done.
+///
+/// Only `Liveness::Dead` is removed. Alive, `Unknown` liveness, unreadable
+/// and unparseable markers are kept (cannot determine → keep, so `pending()`
+/// still reports them). The directory itself is never removed.
+fn clear_dead_markers_in(dir: &Path) -> Vec<String> {
+    let mut problems = Vec::new();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return problems,
+        Err(e) => {
+            problems.push(format!(
+                "could not read the pending-marker directory {} to clear finished markers: {e}",
+                dir.display()
+            ));
+            return problems;
+        }
+    };
+    for entry in entries {
+        let path = match entry {
+            Ok(en) => en.path(),
+            Err(e) => {
+                problems.push(format!("an entry of {} is unreadable: {e}", dir.display()));
+                continue;
+            }
+        };
+        if path.extension().and_then(|x| x.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(marker) = std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|raw| serde_json::from_str::<Pending>(&raw).map_err(|e| e.to_string()))
+        else {
+            // Kept: pending() reports it as unreadable.
+            continue;
+        };
+        if !matches!(liveness(marker.pid), Liveness::Dead) {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => problems.push(format!(
+                "could not clear the finished pending marker {}: {e}",
+                path.display()
+            )),
+        }
+    }
+    problems
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,6 +499,60 @@ mod tests {
         let d = dir("pid0");
         put(&d, "a.json", 0, 1);
         assert!(pending_in(&d, 1).is_some_and(|s| s.contains("undetermined")));
+    }
+
+    fn dead_pid() -> i64 {
+        let mut child = std::process::Command::new("true")
+            .spawn()
+            .unwrap_or_else(|e| panic!("{e}"));
+        let pid = i64::from(child.id());
+        let _ = child.wait();
+        pid
+    }
+
+    #[test]
+    fn clear_removes_dead_marker() {
+        let d = dir("clear-dead");
+        put(&d, "a.json", dead_pid(), 100);
+        assert!(clear_dead_markers_in(&d).is_empty());
+        assert!(!d.join("a.json").exists());
+        assert!(d.is_dir(), "the directory itself must be kept");
+        assert!(pending_in(&d, 101).is_none());
+    }
+
+    #[test]
+    fn clear_keeps_alive_marker() {
+        let d = dir("clear-alive");
+        put(&d, "a.json", i64::from(std::process::id()), 100);
+        assert!(clear_dead_markers_in(&d).is_empty());
+        assert!(d.join("a.json").exists());
+    }
+
+    #[test]
+    fn clear_keeps_unparseable_marker() {
+        let d = dir("clear-bad");
+        std::fs::write(d.join("x.json"), "not json").unwrap_or_else(|e| panic!("{e}"));
+        assert!(clear_dead_markers_in(&d).is_empty());
+        assert!(d.join("x.json").exists());
+        assert!(pending_in(&d, 1).is_some_and(|s| s.contains("unreadable")));
+    }
+
+    #[test]
+    fn clear_keeps_unknown_liveness_markers() {
+        let d = dir("clear-unknown");
+        put(&d, "zero.json", 0, 1);
+        put(&d, "neg.json", -5, 1);
+        assert!(clear_dead_markers_in(&d).is_empty());
+        assert!(d.join("zero.json").exists());
+        assert!(d.join("neg.json").exists());
+        assert!(pending_in(&d, 1).is_some_and(|s| s.contains("undetermined")));
+    }
+
+    #[test]
+    fn clear_on_missing_dir_is_a_no_op() {
+        let d = dir("clear-missing");
+        assert!(clear_dead_markers_in(&d.join("absent")).is_empty());
+        assert!(!d.join("absent").exists());
     }
 
     #[test]

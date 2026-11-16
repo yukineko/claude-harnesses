@@ -12,10 +12,12 @@ use super::{
 mod compound_readers;
 mod exec_fds;
 mod node_source;
+mod procsub_split;
 mod program_source;
 
 use exec_fds::{exec_opened_fds, ExecFd};
 use node_source::{is_node_head, node_program_source};
+use procsub_split::procsub_stages;
 use program_source::{
     interpreter_program_source, python_head_reads_stdin, python_program_source,
     shell_program_source, shell_startup_file_values, source_program_source, ProgramSource,
@@ -196,10 +198,39 @@ fn stdin_exec_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // stage. See `group_reader_pipelines`. The descent terminates: each
     // synthetic pipeline holds one grouping layer fewer past its first stage
     // than the stage it came from.
-    let (mut group_pipelines, mut group_undetermined) = group_reader_pipelines(&statements);
+    //
+    // `group_reader_pipelines` and `compound_and_forwarder_pipelines` read
+    // `shell_text`: `cmd` with the body of a quoted `python3 - <<'EOF'`
+    // here-document removed (`python_stdin_here_document`). The shell does
+    // not parse that body, so a `|`, `&` or `{` inside a Python string (a
+    // Rust closure `|x| { … }` in a triple-quoted replace, backlog 7671c79f)
+    // is not a pipe or a brace group. The opener line and the lines after
+    // the closing delimiter stay in `shell_text`. The removal is decided by
+    // the here-document's shape alone, so a body that does not tokenise as
+    // Python is removed too; other shapes (another interpreter, an unquoted
+    // delimiter) keep the body. The rest of this function reads the
+    // unstripped `cmd`: the per-stage loop below iterates `statements`,
+    // split from `cmd`, so it sees the body lines, and the program texts it
+    // audits come from `stdin_program_texts(cmd, …)`.
+    //
+    // In that loop `python_stdin_reading` has two effects. It can add the
+    // Python judge's system-harm Deny. It also supplies `strings_are_data`
+    // to `interpreter_code_verdict`, which then stops the descent past
+    // layer 0 — the permissive effect. It is true when the body tokenises,
+    // the audited program texts are exactly the body, and
+    // `python_stdin_body_reading` finds either that the body only prints or
+    // that it has no shell-string or dynamic-execution marker and no string
+    // of it reaches a shell or a process.
+    // A body that does not tokenise gets neither effect: no Python judge
+    // verdict and `strings_are_data` false.
+    let shell_text = super::heredoc::python_stdin_here_document(cmd)
+        .map(|parts| parts.without_body)
+        .unwrap_or_else(|| cmd.to_string());
+    let shell_statements = split_statements_into_pipe_stages(&shell_text);
+    let (mut group_pipelines, mut group_undetermined) = group_reader_pipelines(&shell_statements);
     // The same for `if` / `while` / `until` bodies and `eval` / `sh -c`
     // forwarders (backlog b3569da5); see `compound_readers`.
-    let (more, why) = compound_readers::compound_and_forwarder_pipelines(&statements);
+    let (more, why) = compound_readers::compound_and_forwarder_pipelines(&shell_statements);
     group_pipelines.extend(more);
     group_undetermined.extend(why);
     for synthetic in &group_pipelines {
@@ -652,55 +683,6 @@ blastguard cannot find — it cannot tell which command inside reads the piped p
     (pipelines, undetermined)
 }
 
-/// `cmd` split into simple command stages at `;`, newlines, `|`, `|&`, `||`,
-/// `&&` and a background `&` outside quotes and parentheses — but NOT at the
-/// `&` of a redirection (`<&3`, `2>&1`, `&>f`), which belongs to its stage
-/// (`split_statements_into_pipe_stages` splits there, which cut
-/// `bash <&3 3< <(…)` into `bash <` and `3 3< <(…)`).
-fn procsub_stages(cmd: &str) -> Vec<String> {
-    let chars: Vec<char> = cmd.chars().collect();
-    let mut stages = Vec::new();
-    let mut cur = String::new();
-    let (mut in_s, mut in_d) = (false, false);
-    let mut depth: u32 = 0;
-    let mut k = 0;
-    while k < chars.len() {
-        let c = chars[k];
-        if c == '\\' && !in_s {
-            cur.push(c);
-            if let Some(&n) = chars.get(k + 1) {
-                cur.push(n);
-            }
-            k += 2;
-            continue;
-        }
-        if c == '\'' && !in_d {
-            in_s = !in_s;
-        } else if c == '"' && !in_s {
-            in_d = !in_d;
-        } else if !in_s && !in_d {
-            match c {
-                '(' => depth += 1,
-                ')' => depth = depth.saturating_sub(1),
-                _ => {}
-            }
-            let redirect_amp = c == '&'
-                && (matches!(k.checked_sub(1).map(|p| chars[p]), Some('<' | '>'))
-                    || chars.get(k + 1) == Some(&'>'));
-            if depth == 0 && matches!(c, ';' | '\n' | '|' | '&') && !redirect_amp {
-                stages.push(std::mem::take(&mut cur));
-                k += 1;
-                continue;
-            }
-        }
-        cur.push(c);
-        k += 1;
-    }
-    stages.push(cur);
-    stages.retain(|s| !s.trim().is_empty());
-    stages
-}
-
 /// What the process substitutions of one stage hand its reader as a PROGRAM.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct ProcsubPrograms {
@@ -750,7 +732,8 @@ struct ProcsubPrograms {
 /// pass, which reads it as the inline text (backlog e686a85e). An fd opened on
 /// a file (`exec 3< f; bash <&3`) is that file, read as `bash < f` is. A
 /// program operand naming an fd (`bash /dev/fd/3`, `source /dev/stdin`) is
-/// read the same way as `<&N`; see `exec_fds::program_operand_fds`.
+/// read the same way as `<&N`; see `exec_fds::program_operand_fds`. The move
+/// `<&N-` is read as `<&N` (`exec_fds::stdin_dup_target`).
 ///
 /// zsh's `=(…)` (a substitution handed over as a temporary FILE) is read as
 /// `<(…)`: `zsh =(…)` runs the inner command's output just as `zsh <(…)` does.
@@ -825,13 +808,12 @@ fn procsub_programs(
                     opened_in_stage.push((effective_fd, true));
                 }
             }
-            "<&" | ">&" if effective_fd == 0 => {
-                if let Some(n) = exec_fds::dup_fd_number(target) {
-                    dup_into_stdin.push(n);
-                } else if let Some(why) = exec_fds::dynamic_dup_reason(target) {
-                    unreadable_stdin.push(why);
-                }
-            }
+            "<&" | ">&" if effective_fd == 0 => match exec_fds::stdin_dup_target(target) {
+                // `<&N` and the move `<&N-` read fd N (backlog 967fd65c).
+                exec_fds::StdinDup::Fd(n) => dup_into_stdin.push(n),
+                exec_fds::StdinDup::Unreadable(why) => unreadable_stdin.push(why),
+                exec_fds::StdinDup::Nothing => {}
+            },
             "<<" | "<<-" | "<<<" => opened_in_stage.push((effective_fd, false)),
             _ => opened_in_stage.push((effective_fd, true)),
         }

@@ -787,8 +787,8 @@ backtick で引用されたものも判定対象に残る。
 同じコマンドをコマンドとして渡せば gate される。
 コマンド一覧が宣言されていない（`None`）`classify_change` は判定不能であり、Low にはならない。
 
-コマンド分類とは別に、**diff の内容そのもの**から意味的リスクを見る2つのモジュールも
-公開している。いずれも純粋・決定論・I/O なしで、command 分類が拾えない「無害な
+コマンド分類とは別に、**diff の内容そのもの**から意味的リスクを見るモジュールと、
+それが使う caller 列挙（harness-core 側）がある。いずれも純粋・決定論・I/O なしで、command 分類が拾えない「無害な
 コマンドで危険な差分を書く」ケースを埋める:
 
 - **`diffrisk`**（`src/diffrisk.rs`）— 変更されたファイルパスがセンシティブ領域
@@ -797,8 +797,8 @@ backtick で引用されたものも判定対象に残る。
   unified diff テキストから直接判定する（`classify_diff` / `changes_public_symbol`）。
   結果は command classification と同じ `crate::classify::RiskAssessment` に載るので、
   呼び出し側は2つの軸を別々に扱わず1本の risk として扱える。
-- **`callgraph`**（`src/callgraph.rs`。実装は `harness_core::callgraph` へ移り、
-  blastguard 側は re-export のみ）— 変更された symbol を diff から抽出し
+- **`harness_core::callgraph`**（blastguard の re-export `blastguard::callgraph` は
+  2026-11-17 に撤去。blastguard はコマンド安全性の判定だけを持つ）— 変更された symbol を diff から抽出し
   （`changed_symbol_names`）、その symbol を実際に参照している呼び出し箇所を
   ソースコーパス全体から字句レベルで列挙する（`enumerate_callers`）。パーサ・正規表現・
   外部 API 不使用の純粋な文字列トークンスキャンで、どんな入力に対しても panic しない
@@ -806,7 +806,7 @@ backtick で引用されたものも判定対象に残る。
 
 **condukt 側の呼び出し経路**: `crates/condukt/src/diffrisk_record.rs` が
 `blastguard::diffrisk::{classify_diff, classify_diff_with_callers, SensitiveConfig}` と
-`blastguard::callgraph::{changed_symbol_names, enumerate_callers}` を呼び出し、
+`harness_core::callgraph::{changed_symbol_names, enumerate_callers}` を呼び出し、
 コンパイル済みの caller コーパスと突き合わせて `(needs_review, high_risk)` 相当の
 判定を1つの `ViolationSource::Blastguard` イベントとして `overwatch` へ記録する
 （`crates/condukt/src/schedule.rs` / `gate_exec.rs` / `review_brief.rs` もこの経路を

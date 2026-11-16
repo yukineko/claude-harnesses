@@ -557,11 +557,11 @@ gates.
 `classify_change` with no declared command list (`None`) is undetermined, never
 Low.
 
-Two diff-level modules are exported as well (pure, no I/O): `diffrisk`
-(`classify_diff` / `changes_public_symbol`) and `callgraph`
-(`changed_symbol_names` / `enumerate_callers`, now a thin re-export of
-`harness_core::callgraph`). condukt consumes both
-(`crates/condukt/src/diffrisk_record.rs`).
+A diff-level module is exported as well (pure, no I/O): `diffrisk`
+(`classify_diff` / `changes_public_symbol`). The caller enumeration it is paired
+with (`changed_symbol_names` / `enumerate_callers`) lives in
+`harness_core::callgraph`; blastguard no longer re-exports it. condukt consumes
+both (`crates/condukt/src/diffrisk_record.rs`).
 
 ## Build
 

@@ -3198,8 +3198,8 @@ fn gather_review_worthiness_inputs_from_git(
 /// dependency edges), attributes DEFINED symbols to hunks via
 /// [`harness_core::code_index::extract_symbols`] +
 /// [`review_order::hunk_containing`], builds the reference map via
-/// [`blastguard::callgraph::changed_symbol_names`] +
-/// [`blastguard::callgraph::enumerate_callers`], then runs the pure
+/// [`harness_core::callgraph::changed_symbol_names`] +
+/// [`harness_core::callgraph::enumerate_callers`], then runs the pure
 /// [`review_order::build_edges`] / [`review_order::order_hunks`] pipeline
 /// and prints the result.
 fn run_review_order(
@@ -3256,8 +3256,8 @@ fn run_review_order(
 
     // Build the reference map: for every symbol name changed in the diff,
     // the (file, line) sites that reference it.
-    let changed_names = blastguard::callgraph::changed_symbol_names(&diff_text);
-    let callers = blastguard::callgraph::enumerate_callers(&changed_names, &sources);
+    let changed_names = harness_core::callgraph::changed_symbol_names(&diff_text);
+    let callers = harness_core::callgraph::enumerate_callers(&changed_names, &sources);
     let mut refs: BTreeMap<String, Vec<(String, usize)>> = BTreeMap::new();
     for (name, sites) in callers {
         let mut list: Vec<(String, usize)> = sites.into_iter().map(|c| (c.file, c.line)).collect();

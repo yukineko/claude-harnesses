@@ -138,7 +138,7 @@ fn worktree_diff(worktree: &Path, base: &str) -> Option<String> {
 }
 
 /// Read the worktree's Rust sources as `(relative_path, contents)` pairs — the
-/// caller corpus [`blastguard::callgraph::enumerate_callers`] scans to learn a
+/// caller corpus [`harness_core::callgraph::enumerate_callers`] scans to learn a
 /// changed symbol's blast radius.
 ///
 /// Fail-soft & bounded: walks `worktree` for `*.rs` files, skipping `target/`,
@@ -292,8 +292,8 @@ pub(crate) fn record_post_execution_diff_risk(
     // this is a pure superset of the base assessment. All of this is fail-soft:
     // an empty corpus / no callers simply degrades `full` back to `base`.
     let corpus = worktree_rust_sources(worktree);
-    let changed = blastguard::callgraph::changed_symbol_names(&diff);
-    let callers = blastguard::callgraph::enumerate_callers(&changed, &corpus);
+    let changed = harness_core::callgraph::changed_symbol_names(&diff);
+    let callers = harness_core::callgraph::enumerate_callers(&changed, &corpus);
     let full = classify_diff_with_callers(paths, &diff, &callers, &sensitive);
     // Counts for the journal. From here on the call graph HAS run, so these are
     // real observations (`Some`), not the `None` of a blind-spot exit above.

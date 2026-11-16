@@ -2720,6 +2720,8 @@ notes = "Observed 2026-11-16 by run-20261116-020031-33040 migrate-path worker an
 created_at = 1794826783
 updated_at = 1794826783
 weight = 0.0
+issue_number = 1834
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1834"
 rev = 0
 
 [task.repro]

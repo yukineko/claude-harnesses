@@ -74,7 +74,8 @@ pub(crate) enum Effect {
 /// Where one target path lands. Table C is indexed by this x [`Effect`].
 ///
 /// Precedence when several apply (first wins): `System`, `Protected`,
-/// `Workflow`, `Persistence`, `Scratch`, `OwnWorktree`, `Project`, `Other`.
+/// `Workflow`, `Persistence`, `Scratch`, `OwnWorktree`, `OtherWorktree`,
+/// `Project`, `Other`.
 /// `Unresolved` is exclusive (no predicate could be consulted).
 #[allow(
     dead_code,
@@ -102,15 +103,20 @@ pub(crate) enum PathClass {
     /// A NEW file in a per-user `Library/LaunchAgents`:
     /// `launch_agents_new_file_ask` (`detect/protected.rs`).
     Persistence,
-    /// The fixed temp roots (`/tmp`, `/private/tmp`; the session scratchpad
-    /// lives there): [`SafeRoots::classify_temp`] `Inside` (strictly inside;
-    /// `IsRoot` is not `Scratch`).
+    /// Every temp and cache deletion root (`/tmp`, `/private/tmp`, `$TMPDIR`,
+    /// `$HOME/.cache`, `$HOME/Library/Caches`; the session scratchpad lives
+    /// under `/private/tmp`): [`SafeRoots::classify_disposable`] `Inside`
+    /// (strictly inside; `IsRoot` is not `Scratch`). User ruling 2026-11-17.
     Scratch,
-    /// Strictly inside a worktree storage root (`$HOME/.condukt/worktrees`,
-    /// `.harness-worktrees`): [`SafeRoots::classify_worktree`] `Inside`, the
-    /// existing worktree rm `Allow`. (Whether this must be narrowed to the
-    /// session's OWN checkout is an open question in `SUBSET.md`.)
+    /// Inside the git checkout that contains the session cwd (user ruling
+    /// 2026-11-17): the target is [`SafeRoots::classify_worktree_checkout`]
+    /// `Inside { root: R }` and [`SafeRoots::session_cwd`] is `R` or inside
+    /// `R` by the same predicate. Any `Undetermined` is not `OwnWorktree`.
     OwnWorktree,
+    /// Strictly inside a worktree storage root (`$HOME/.condukt/worktrees`,
+    /// `.harness-worktrees`; [`SafeRoots::classify_worktree`] `Inside`) but
+    /// not `OwnWorktree`: today's verdict is kept (legacy, confined Ask).
+    OtherWorktree,
     /// Inside a session safe root (payload cwd / `CLAUDE_PROJECT_DIR`):
     /// [`SafeRoots::classify`] `Inside` / `IsRoot`; judged by the existing
     /// recoverability rules (`crate::deletion::judge_rm`, `crate::reversible`).

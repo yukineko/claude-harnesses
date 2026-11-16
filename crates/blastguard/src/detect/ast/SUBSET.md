@@ -21,6 +21,20 @@ Task S1 `subset-spec` (2026-11-17). Specification only: the frozen types are in
    raise-only (may lift Ask → Deny, never lower to Allow).
 7. Migrated detectors drop the old string-reading fallback (S6).
 
+Follow-up rulings (2026-11-17, on the S1 open questions):
+
+8. `Scratch` = every temp and cache deletion root: `/tmp`, `/private/tmp`,
+   `$TMPDIR` and the cache roots `rm -r` already allows
+   (`SafeRoots::classify_disposable`). Not `classify_temp` alone.
+9. `OwnWorktree` = only the git checkout that contains the session cwd. Other
+   worktrees keep today's verdict (confined Ask).
+10. A program whose text is not in the command (`bash script.sh`) is
+    Undetermined → Ask (subagent Deny): an interpreter running a file is an
+    exception to "unknown program → Allow". When the same command writes that
+    file, the written body is judged recursively instead (S4).
+11. The remaining open questions stay legacy (today's behaviour) and are
+    revisited at S6; see "Open questions".
+
 Vocabulary: **Undetermined** = `Judgement::Undetermined(cause)`, resolved to
 Ask (main) / Deny (subagent, `interactive::ask_available`). **Unresolved** =
 `PathClass::Unresolved`, one target that could not be placed (Table C row).
@@ -107,7 +121,8 @@ Common rules for every row:
   applies → placed against `PathCtx::hook_cwd`; Undetermined after an
   undetermined `cd`).
 * A command not in this table (and not a wrapper / interpreter) has no effect
-  model → no finding (Allow); its redirects are still judged (B.2).
+  model → no finding (Allow); its redirects are still judged (B.2). An
+  interpreter running a program file is NOT such a command (ruling 10, B.5).
 * Undetermined command word (`argv[0]`) → `Judgement::Undetermined`.
 
 ### B.1 File commands
@@ -121,12 +136,12 @@ Common rules for every row:
 | `install` | destination `Truncate` | last operand / `-t DIR`; `-d`: every operand `CreateTree` | `-m -o -g` take an argument |
 | `ln` | `Link` | link name = last operand / `-t DIR` (one operand: basename in cwd) | link target is not a target; `-s -f -n -v -T -t` |
 | `chmod`, `chown`, `chgrp` | `Metadata` (recursive with `-R`) | operands after the mode / owner spec | `--reference=F` reads F |
-| `sed -i` / `--in-place` | `Rewrite` | input files (script operand dropped unless `-e`/`-f` given) | BSD `-i ''` / `-i.bak` suffix; a script containing `w`/`W`/`e` or `s///w`/`s///e` → Unsupported (see Open questions) |
+| `sed -i` / `--in-place` | `Rewrite` | input files (script operand dropped unless `-e`/`-f` given) | BSD `-i ''` / `-i.bak` suffix; a script containing `w`/`W`/`e` or `s///w`/`s///e`: legacy until S6 (Open question 2) |
 | `perl -i` | — | — | **out of subset**: perl inline program → Undetermined (ruling 4) |
 | `tee` | `Truncate` (`Append` with `-a`) | every operand | `-a -i -p` |
 | `truncate` | `Truncate` | every operand | `-s` takes an argument; `-r RFILE` reads |
 | `dd` | `of=F`: `Truncate` (`Rewrite` with `conv=notrunc`) | `F` | `if=` is a read; any other operand form not `k=v` → Unsupported |
-| `find` | `-delete`: `Delete{recursive:true}` on each search root (descendants); `-fprint* F` / `-fls F`: `Truncate F` | search roots = words before the first expression word (`-H -L -P -D x -O*` skipped) | `-exec/-execdir/-ok/-okdir CMD … {} ;|+`: CMD judged as a nested simple command whose `{}` operands are descendants of the roots (see Open questions) |
+| `find` | `-delete`: `Delete{recursive:true}` on each search root (descendants); `-fprint* F` / `-fls F`: `Truncate F` | search roots = words before the first expression word (`-H -L -P -D x -O*` skipped) | `-exec/-execdir/-ok/-okdir CMD … {} ;|+`: legacy (`find_xargs.rs`) until S6 (Open question 1) |
 | `xargs` | the wrapped command's effect | wrapped command's own literal operands + the stdin-supplied operands → `Unresolved` unless stdin is `StdinSource::Literal` | `-0 -n N -I R -L N -P N -d D -r -t` |
 
 ### B.2 Redirections (the shell's effect, judged for every command)
@@ -173,7 +188,7 @@ else the command's cwd).
 |---|---|---|
 | `bash` / `sh` / `zsh` / `dash` / `ksh` `-c PROG` | `InlineLiteral` | PROG analysed and judged recursively (S4); Undetermined PROG → Undetermined |
 | same, stdin (`bash`, `-s`, `-`, `/dev/stdin`) | `Stdin(StdinSource)` | `Literal` body judged recursively (S4); `FromCommand` / `File` / `Fd` / `Undetermined` → Undetermined |
-| same, script file (`bash x.sh`) | `File(Value)` | open question (file content is not in the text) |
+| same, script file (`bash x.sh`); likewise any interpreter running a program file (`python3 x.py`, `perl x.pl`, …) | `File(Value)` | **Undetermined** → Ask / Deny (ruling 10). Exception: when an earlier command of the same script writes that file (matched by resolved path) with a determined body (`cat > x.sh <<'EOF' … EOF`), that body is analysed and judged recursively (S4) |
 | `eval`, `source`, `.` | `Undetermined` | Undetermined (S4) |
 | `python*` `-c` / stdin / file / `-m` | as `program_source` | Undetermined until S5 (Python parser) |
 | `perl` / `ruby` `-e`/`-E`, `-i`, stdin, `node` `-e`/`-p`/stdin | — | **out of subset** → Undetermined (ruling 4) |
@@ -192,8 +207,9 @@ column. The subagent column is always the main column with Ask → Deny
 | **Protected** (`exclude::is_protected_path`, `protected::physical_landing`; lifted inside `classify_worktree_checkout` Inside) | Deny / Deny (`protected_disarm_deny`, `protected_tree_deny`) | Ask / Deny (`protected_path_block`) | Ask / Deny | Ask / Deny | Ask / Deny | legacy | legacy |
 | **Workflow** (`exclude::is_workflow_path`) | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny |
 | **Persistence** (`launch_agents_new_file_ask`, new file only) | — | Ask / Deny | — | Ask / Deny | Ask / Deny | — | — |
-| **Scratch** (`SafeRoots::classify_temp` Inside) | Allow / Allow (ruling 5) | Allow / Allow | Allow / Allow | Allow / Allow | Allow / Allow | Allow / Allow | Allow / Allow |
-| **OwnWorktree** (`SafeRoots::classify_worktree` Inside) | Allow / Allow (ruling 5) | Allow / Allow | Allow / Allow | Allow / Allow | Allow / Allow | legacy (`managed_worktree_git`) | Allow / Allow |
+| **Scratch** (`SafeRoots::classify_disposable` Inside: `/tmp`, `/private/tmp`, `$TMPDIR`, cache roots — ruling 8) | Allow / Allow (ruling 5) | Allow / Allow | Allow / Allow | Allow / Allow | Allow / Allow | Allow / Allow | Allow / Allow |
+| **OwnWorktree** (the checkout containing the session cwd — ruling 9; see notes) | Allow / Allow (ruling 5) | Allow / Allow | Allow / Allow | Allow / Allow | Allow / Allow | legacy (`managed_worktree_git`) | Allow / Allow |
+| **OtherWorktree** (`SafeRoots::classify_worktree` Inside, not OwnWorktree) | legacy (ruling 9: today's verdict, confined Ask) | legacy | legacy | legacy | legacy | legacy | legacy |
 | **Project** (`SafeRoots::classify` Inside / IsRoot) | legacy (`deletion::judge_rm` recoverability; non-rec: legacy rm arm) | legacy | legacy (`chmod -R` confined Ask) | legacy | legacy (scratch-place: managed → unchanged) | legacy (`reversible`) | legacy (`git_stage`) |
 | **Other** (resolved, `Placement::Outside`) | legacy (ruling 5: unchanged Ask/Deny) | legacy | legacy | legacy | Ask / Deny (scratch-place rule) | legacy | legacy |
 | **Unresolved** | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny |
@@ -202,6 +218,10 @@ column. The subagent column is always the main column with Ask → Deny
 
 Notes:
 
+* OwnWorktree is composed from existing predicates only: the target is
+  `SafeRoots::classify_worktree_checkout` `Inside { root: R }` and the session
+  cwd (`SafeRoots::session_cwd`) is `R` or inside `R` by the same predicate.
+  Any `Undetermined` → not OwnWorktree.
 * `IsRoot` of a Scratch / worktree storage root (`rm -rf /tmp`) is NOT Scratch /
   OwnWorktree; it falls through to Project / Other (today: `judge_rm` refuses the
   root of a temp / worktree area → Deny).
@@ -230,34 +250,31 @@ Notes:
 | Stage | Implements |
 |---|---|
 | S1 `subset-spec` | this document; frozen types in `judge.rs` (stubs, not wired) |
+| S2 `red-tests` | an independent author (not the S3 implementer; CLAUDE.md §2(a)) writes a RED test for each Table B row and each Table C cell that is not `legacy`, each observed failing against the S1 stub before S3 makes it GREEN |
 | S3 `path-cutover` | Table A enforcement for judged commands; Table B B.1 (all rows except `perl -i` which is already Undetermined), B.2, B.3, B.4; Table C (all rows); `classify` from the existing predicates; wire `judge` into `detect` with the "Undetermined handling" layer |
-| S4 `stdin-program` | Table B B.5 rows for shells: `-c` inline, stdin (`StdinSource::Literal` bodies), `eval` / `source` / `.`; the script-file row once the open question is decided; wrapper → interpreter unwrap |
+| S4 `stdin-program` | Table B B.5 rows for shells: `-c` inline, stdin (`StdinSource::Literal` bodies), `eval` / `source` / `.`; the script-file row (Undetermined, and the recursive judgement of a body the same command writes — ruling 10); wrapper → interpreter unwrap |
 | S5 `python-parser` | Table B B.5 python row (a real Python parser; effects × targets of the parsed program judged by Table C) |
-| S6 `retire-readings` | remove the string-reading fallbacks of every migrated row (`targets.rs::resolve` callers, `readings.rs` re-readings) leaving only the raise-only harm layer |
+| S6 `retire-readings` | remove the string-reading fallbacks of every migrated row (`targets.rs::resolve` callers, `readings.rs` re-readings) leaving only the raise-only harm layer; revisit the deferred Open questions 1–4 |
 
-S2 is not assigned rows by this specification.
+## Open questions
 
-## Open questions (not decided by the 2026-11-17 rulings)
+Decided by the follow-up rulings 8–10 (2026-11-17): scratchpad scope →
+`Scratch` row; own-worktree scope → `OwnWorktree` / `OtherWorktree` rows;
+`bash script.sh` → B.5 script-file row. Unresolved targets — non-delete writes
+(`echo x > "$f"`) and deletes alike — are Ask / Deny per ruling 2 as Table C
+states (accepted 2026-11-17; where today's rule answers Deny, the raise-only
+layer keeps that Deny).
 
-1. **"Session scratchpad" scope.** No scratchpad-specific predicate exists.
-   `Scratch` uses `SafeRoots::classify_temp` (all of `/tmp`, `/private/tmp`).
-   Narrow to the session scratchpad dir, or keep the fixed temp roots? And the
-   cache roots / `$TMPDIR` that `classify_disposable` already allows for `rm -r`
-   today: Scratch, or Project/Other legacy?
-2. **"Own worktree" scope.** `classify_worktree` Inside admits any checkout under
-   a worktree storage root, not only the session's own. Narrow (how is "own"
-   observed — `session_cwd`'s checkout?) or keep the existing rule?
-3. **`bash script.sh`** (program in a file not in the text): unknown program
-   (Allow) or Undetermined?
-4. **`find -exec … {}`**: may `{}` inherit the search root's class (descendants),
-   or is it always Unresolved?
-5. **sed scripts that write / execute** (`w`, `W`, `e`, `s///w`, `s///e`): needs a
-   sed-script tokenizer — inside the "no corner-case modelling" ruling or not?
-6. **Other / Project write cells marked legacy**: should Table C state explicit
-   verdicts (e.g. Truncate of an Other path = Allow) instead of reproducing the
-   current rules?
-7. **Unresolved non-delete writes** (`echo x > "$f"`): Table C answers Ask/Deny
-   per ruling 2, which is stricter than today for some shapes — confirm.
-8. **Non-path detectors** (git push / branch -D, gh, high_blast tiers,
+Deferred (ruling 11): **legacy (today's behaviour) until S6, revisited there.**
+S3 does not implement these.
+
+1. **`find -exec … {}`**: may `{}` inherit the search root's class
+   (descendants), or is it always Unresolved?
+2. **sed scripts that write / execute** (`w`, `W`, `e`, `s///w`, `s///e`): needs
+   a sed-script tokenizer — inside the "no corner-case modelling" ruling or not?
+3. **Project / Other / OtherWorktree cells marked legacy**: should Table C state
+   explicit verdicts (e.g. Truncate of an Other path = Allow) instead of
+   reproducing the current rules?
+4. **Non-path detectors** (git push / branch -D, gh, high_blast tiers,
    osascript, …): stay as legacy detectors beside `judge`, or migrate into
    Table B?

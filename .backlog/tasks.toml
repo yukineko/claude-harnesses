@@ -2500,3 +2500,34 @@ exit 101: /home/hiroyuki_nakayama/src/.harness-worktrees/followup-cd-df7c/crates
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
      Running tests/backlog_20261116_multiclaim_semicolon_single.rs (target/debug/deps/backlog_20261116_multiclaim_semicolon_single-e66c810b09b231be)
 error: test failed, to rerun pass `-p condukt --test backlog_20261116_multiclaim_semicolon_single`"""
+
+[[task]]
+id = "4264c8c1"
+title = "blastguard: quoted 'git' apply heredoc patch then sh run.sh judged allow"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-16, main fa58e3698 (blastguard 0.2.672), run-20261116-143410-12142: quoted git word, apply, heredoc patch creating run.sh (chmod 777 /etc/hosts), then sh run.sh, is allow in main and subagent. Variable form (g=git; $g apply) is already deny (control). git_apply_patch.rs KNOWN GAP. Expected: not allow."
+created_at = 1794813600
+updated_at = 1794813600
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261116_git_apply_patch_known_gaps f3_quoted -- --include-ignored"
+rev = "a6e29aec99889d915c30082dc00de16d95407ded"
+observed_at = 1794813600
+detail = """
+exit 101: red out; finished in 0.04s
+
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-80ffcfc78037f570)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261116_git_apply_patch_known_gaps`"""

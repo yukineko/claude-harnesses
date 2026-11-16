@@ -1,3 +1,4 @@
+use super::ast::targets::Role;
 use super::{
     confined_ask, dotgit_link_deny, exclude, glob_literal_prefix, has_glob_meta,
     has_unresolvable_expansion, home_asset_deny, is_assignment, is_short_flag,
@@ -47,8 +48,9 @@ fn rm_is_recursive(rest: &[&str]) -> bool {
 /// the command line `line`) whose operand is spelled with an expansion the
 /// line's own text resolves to a path in a system directory, else `Allow`.
 ///
-/// [`analyze_rm`] does not resolve expansions: an operand it cannot read is an
-/// Ask (user ruling 2026-11-07, "Ask, deny known paths"). This pass names the
+/// [`analyze_rm`] resolves an expansion only through the AST evaluator
+/// ([`super::ast::targets::resolve`]); an operand neither reads is an Ask
+/// (user ruling 2026-11-07, "Ask, deny known paths"). This pass names the
 /// known paths among them, so they stay a system-harm Deny:
 ///
 ///   * `$NAME` / `${NAME}` with a literal assignment in an EARLIER segment of
@@ -57,10 +59,13 @@ fn rm_is_recursive(rest: &[&str]) -> bool {
 ///     [`resolve_expanded_command_word`](super::vars::resolve_expanded_command_word)
 ///     (`X=/etc/passwd; rm $X`, `X=/etc/passwd && rm "$X"`);
 ///   * `$(…)` / a backtick whose body is `echo` / `printf %s` of literal words
-///     (`rm $(echo /etc/passwd)`).
+///     (`rm $(echo /etc/passwd)`);
+///   * for the `cp` / `mv` / `install` destination and the mutators' files,
+///     then the paths the AST evaluator proved the word names (task
+///     `migrate-path`).
 ///
 /// Every other expansion is left unresolved here (and so stays an Ask in
-/// [`analyze_rm`]). For `rm` and the mutators this function only ever adds a
+/// [`analyze_rm`] unless the AST evaluator resolves it there). For `rm` and the mutators this function only ever adds a
 /// Deny; the exception is a `cp` / `mv` / `install` DESTINATION spelled through
 /// an expansion (backlog 21b3faad), which `analyze_copy_move` never judged: a
 /// resolvable one gets the literal verdict, an unresolvable one is an Ask.
@@ -104,9 +109,11 @@ pub(super) fn known_path_harm(
 /// substitution while its `$NAME` operands are resolved against the line that
 /// encloses it ([`known_path_harm_in_substitutions`]).
 fn known_path_harm_with(tokens: &[&str], ctx: &Ctx<'_>, vars: VarLookup<'_>) -> Decision {
+    // Then the paths the AST evaluator proved the word names (task
+    // `migrate-path`, `super::ast::targets`).
     let resolve = |word: &str| match expand_operand_with(word, ctx.scope.home_real(), Some(vars)) {
         OperandSpelling::Paths(p) => Some(p),
-        OperandSpelling::Unresolvable(_) => None,
+        OperandSpelling::Unresolvable(_) => super::ast::targets::resolve(word, Role::Argv),
     };
     for idx in super::words::command_candidates(tokens) {
         let cmd = super::words::normalized_command(tokens[idx]);
@@ -242,6 +249,58 @@ fn collect_substitution_commands(text: &str, depth: usize, out: &mut Vec<String>
 }
 
 pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+    // An operand spelled through an expansion the AST evaluator resolves
+    // (task `migrate-path`): every combination of the paths it names is
+    // judged by this function as its literal spelling would be, the most
+    // restrictive verdict winning. Anything unresolved keeps the text as is.
+    if let Some(variants) = ast_operand_variants(rest) {
+        let mut acc = super::VerdictAcc::default();
+        for variant in &variants {
+            let tokens: Vec<&str> = variant.iter().map(String::as_str).collect();
+            if let Some(deny) = acc.record(analyze_rm_literal(&tokens, ctx)) {
+                return deny;
+            }
+        }
+        return acc.finish();
+    }
+    analyze_rm_literal(rest, ctx)
+}
+
+/// At most this many operand combinations are judged by [`analyze_rm`];
+/// more keeps the text as written (its old verdict).
+const MAX_AST_RM_VARIANTS: usize = 64;
+
+/// `rest` once per combination of the AST-resolved paths of its operands
+/// that carry an expansion; `None` when no operand does, when one does not
+/// resolve ([`super::ast::targets::resolve`]), or past
+/// [`MAX_AST_RM_VARIANTS`].
+fn ast_operand_variants(rest: &[&str]) -> Option<Vec<Vec<String>>> {
+    let mut variants: Vec<Vec<String>> = vec![Vec::new()];
+    let mut any = false;
+    for tok in rest {
+        let values = if !tok.starts_with('-') && has_unresolvable_expansion(tok) {
+            any = true;
+            super::ast::targets::resolve(tok, Role::Argv)?
+        } else {
+            vec![(*tok).to_string()]
+        };
+        let mut next = Vec::new();
+        for v in &variants {
+            for value in &values {
+                let mut v = v.clone();
+                v.push(value.clone());
+                next.push(v);
+            }
+        }
+        if next.len() > MAX_AST_RM_VARIANTS {
+            return None;
+        }
+        variants = next;
+    }
+    any.then_some(variants)
+}
+
+fn analyze_rm_literal(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     let mut unplaced: Option<String> = None;
     let verdict = analyze_rm_placed(rest, ctx, &mut unplaced);
     // A literal operand the system-harm check could not place (see

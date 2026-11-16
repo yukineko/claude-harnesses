@@ -262,6 +262,49 @@ pub(super) fn resolve_redirect_target_at(
     }
 }
 
+/// Whether a redirect TARGET names no determinable file: it carries a shell
+/// expansion, or it is relative and no base is known to place it against.
+/// These are exactly the two pre-IO `Undetermined` rows of
+/// [`crate::reversible::probe`] — not the git-failure rows, whose target IS
+/// known and only its recoverability is not. (Moved here from `detect.rs`
+/// unchanged, file-growth cap.)
+pub(super) fn redirect_target_undeterminable(target: &str, base: Option<&str>) -> bool {
+    target.contains('$')
+        || target.contains('`')
+        || crate::reversible::resolve(target, base).is_none()
+}
+
+/// The targets the `>` / `>>` axes judge for ONE redirect occurrence `raw` of
+/// segment `seg_idx` of `cmd`: the line's own resolution
+/// ([`resolve_redirect_target_at`]) as before; when that leaves no target
+/// these axes can place — it still carries an expansion, or it is relative
+/// and [`place_redirect_target`] refuses it (an earlier `cd` this string
+/// reading could not resolve) — the paths the AST evaluator proved `raw`
+/// names ([`super::ast::targets::resolve`]: `S=/x && echo > $S/f`, a `for`
+/// value, a relative target after a literal `cd`), each judged by every axis
+/// exactly as its literal spelling is. When the evaluator cannot resolve it
+/// either, the one unplaced target is returned and keeps the pre-existing
+/// verdict (the expansion Deny, the unplaceable Ask). Never empty.
+pub(super) fn redirect_target_candidates(
+    cmd: &str,
+    seg_idx: Option<usize>,
+    seg_cwds: &[CwdState],
+    raw: String,
+) -> Vec<String> {
+    let resolved = seg_idx
+        .and_then(|seg_idx| resolve_redirect_target_at(cmd, seg_idx, &raw))
+        .unwrap_or_else(|| raw.clone());
+    let unplaced = has_unresolvable_expansion(&resolved)
+        || place_redirect_target(cmd, seg_idx, seg_cwds, resolved.clone()).is_err();
+    if unplaced {
+        use super::ast::targets::{resolve, Role};
+        if let Some(paths) = resolve(&raw, Role::RedirectTarget) {
+            return paths;
+        }
+    }
+    vec![resolved]
+}
+
 /// Split a redirect target into the single variable reference it BEGINS with
 /// and the literal suffix that follows, when the word has exactly that shape.
 ///

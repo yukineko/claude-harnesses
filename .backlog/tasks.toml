@@ -2951,3 +2951,34 @@ exit 101: st result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filter
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
      Running tests/foreign_main_dirt_attribution_20261117.rs (target/debug/deps/foreign_main_dirt_attribution_20261117-c549ed4350a10543)
 error: test failed, to rerun pass `-p donegate --test foreign_main_dirt_attribution_20261117`"""
+
+[[task]]
+id = "2d2ef773"
+title = "blastguard FP: python3 - heredoc whose Python body only rewrites ignore-label strings (containing the word 'truncate') is Denied as shell truncate ('truncate can shrink a file to zero bytes')"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "false-positive",
+    "s5-python-parser",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-17 in worktree bg-s2-red-20261117 (commit 10625a33c): the exact refused command is pinned verbatim as REFUSED in crates/blastguard/tests/backlog_20261117_python_heredoc_literal_truncate_fp.rs; hook answered decision=deny reason='truncate can shrink a file to zero bytes'. No shell word runs truncate; the only 'truncate' words are inside Python string literals of a quoted heredoc fed to python3 on stdin. Minimal shape python3 - <<'EOF' print("truncate -s 0 /tmp/x") EOF is ALREADY Allow (control in the same file), so the trigger is something else in the body (not isolated; candidates: the 'Truncate truncate (' words, the open(p, "w") write, the multi-line quoted strings with literal \n). Relation to 06c51772: same family (python heredoc body read by shell-string readings; both tagged s5-python-parser), but a different symptom (06c51772 = dropped literal write paths + later '. $HOME/.cargo/env' read as running the written file; this = a shell truncate reading inside Python literals). Root identity not verified; treat as related, possibly separate. Ruling 15 (2026-11-17): python keeps legacy readings until S5, so the fix is either in the legacy reading now (FP not tolerated) or S5.'''
+created_at = 1794869988
+updated_at = 1794869988
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261117_python_heredoc_literal_truncate_fp -- --ignored python_heredoc_label_rewrite_is_not_denied_as_truncate"
+rev = "10625a33c40d05376da7158c1275dd06bde92622"
+observed_at = 1794869988
+detail = """
+exit 101: arness-worktrees/bg-s2-red-20261117/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.56s
+     Running tests/backlog_20261117_python_heredoc_literal_truncate_fp.rs (target/debug/deps/backlog_20261117_python_heredoc_literal_truncate_fp-460b6f19ab159f08)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261117_python_heredoc_literal_truncate_fp`"""

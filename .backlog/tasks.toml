@@ -2779,3 +2779,102 @@ exit 101: ignored; 0 measured; 0 filtered out; finished in 0.47s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running tests/backlog_20261117_rs_heredoc_doc_comment_backtick_fp.rs (target/debug/deps/backlog_20261117_rs_heredoc_doc_comment_backtick_fp-54ecc282de5d64d9)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261117_rs_heredoc_doc_comment_backtick_fp`"""
+
+[[task]]
+id = "06c51772"
+title = """blastguard FP: python3 - heredoc with a backtick inside a plain string literal drops its literal write paths (dynamic-marker substring), then a later '. "$HOME/.cargo/env"' is read as running the written file"""
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "false-positive",
+    "s5-python-parser",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-17 as relay bgr-be0f4d8da498 (subagent a1147bafb9f7b24fb, worktree fix-b2d9cb6b): python3 - <<'EOF' that only reads/writes literal 'worktree.rs' and 'worktree/retry_task.rs' (imports re/textwrap; no exec/eval/subprocess/os.system) with Rust doc text containing backticks in string literals, followed by '. "$HOME/.cargo/env" && cargo fmt ...' -> main ask / subagent deny. Verbatim reason: '`the Python program` writes `a path the Python program does not spell as a literal`, and another part of this command may run that file, so the written text is judged as the shell script it is; the Python program holds a dynamic-execution or process marker (`exec`, `eval`, `subprocess`, `os.system`, …), so blastguard does not read what it writes, so blastguard cannot see the program the file will hold'. Chain: inert_literal::DYNAMIC_EXECUTION_MARKERS contains the backtick and has_dynamic_code_execution is a whole-program lowercase substring match -> python_written_files::python_program_writes returns one write with path None (literal paths dropped) -> echo_script_file::python_heredoc_files makes it Opaque, which any pipeline holding a '.' word 'runs'. Not a duplicate of c9da0437 (backtick span misread AS the open target, 'contains a shell expansion' reason), 4270601a (body read as shell redirect) or 9d88d739 (gh span / rm literal). RED 01d64675d (blastguard 0.2.680): minimal 's = "`x`"; open("a.rs","w").write(s)' + '. "$HOME/.cargo/env"' = ask/deny; controls green: no-backtick twin allow, subprocess.run(['bash','f']) of written 'rm -rf ~' deny, backtick text written to f then 'bash f' not allow. Per user ruling fixed structurally in S5 (Python parser), not by a one-off patch."""
+created_at = 1794867735
+updated_at = 1794867735
+weight = 0.0
+issue_number = 1840
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1840"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261117_python_heredoc_marker_fp -- --include-ignored backtick_in_python_string_does_not_drop_literal_write_paths"
+rev = "01d64675d3ab4bd70fb8e5d21a40575abb16adf2"
+observed_at = 1794867735
+detail = """
+exit 101: .680 (/Users/yuki/src/.harness-worktrees/red-py-marker-fp-20261117/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.73s
+     Running tests/backlog_20261117_python_heredoc_marker_fp.rs (target/debug/deps/backlog_20261117_python_heredoc_marker_fp-fa709c95f374dc83)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261117_python_heredoc_marker_fp`"""
+
+[[task]]
+id = "05b5dcaf"
+title = "tdd: proofs lack tree identity, per-test results/counts, and green output_tail"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "User ruling 2026-11-17 (proof contract b,d,e). RED 25a27ee67 crates/tdd/tests/backlog_20261117_proof_contents.rs (3 ignored REDs). (a) cmd and (c) exit_code already recorded."
+created_at = 1794868790
+updated_at = 1794868790
+weight = 0.0
+issue_number = 1841
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1841"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261117_proof_contents -- --ignored"
+rev = "9f1ad7438b27dee634223982a612de3266f60211"
+observed_at = 1794868790
+detail = """
+exit 101: fs_carry_tree_identity
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_20261117_proof_contents.rs (target/debug/deps/backlog_20261117_proof_contents-60dcd892ca2f0f33)
+error: test failed, to rerun pass `-p tdd --test backlog_20261117_proof_contents`"""
+
+[[task]]
+id = "7768aeaf"
+title = "condukt merge: fix task merges without tdd proofs / without GREEN covering RED / with zero passes / with tree changed after GREEN"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "User ruling 2026-11-17 (proof contract f,g,h,i). RED 25a27ee67 crates/condukt/tests/backlog_20261117_merge_without_tdd_proofs.rs (4 ignored REDs, 2 controls pass). Observed: merge exit=Some(0) stdout=merged 'run-nomerge-proofs/t1' into main."
+created_at = 1794868812
+updated_at = 1794868812
+weight = 0.0
+issue_number = 1842
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1842"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261117_merge_without_tdd_proofs -- --ignored"
+rev = "9f1ad7438b27dee634223982a612de3266f60211"
+observed_at = 1794868812
+detail = """
+exit 101: t: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 2 filtered out; finished in 2.15s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_20261117_merge_without_tdd_proofs.rs (target/debug/deps/backlog_20261117_merge_without_tdd_proofs-ca6ac8c8d696119a)
+error: test failed, to rerun pass `-p condukt --test backlog_20261117_merge_without_tdd_proofs`"""

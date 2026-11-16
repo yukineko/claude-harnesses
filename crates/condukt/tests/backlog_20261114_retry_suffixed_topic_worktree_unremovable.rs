@@ -74,10 +74,7 @@ fn ok(out: &Output, what: &str) {
     );
 }
 
-// test-weakening-justified: new RED for an unfixed defect (backlog pending,
-// 2026-11-14); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: <backlog-pending> 2026-11-14 verified task's retry worktree (suffixed topic) cannot be removed; remove the ignore when fixed"]
 fn verified_task_with_suffixed_topic_retry_worktree_can_be_removed() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");

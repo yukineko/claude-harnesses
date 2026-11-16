@@ -1372,6 +1372,12 @@ forge・condukt のスケジューラが再利用）。
   （cd 失敗時 unset）、`||` の後、8 KiB 超（`TooLong`）などは評価器が `Undetermined` を返すので旧判定のまま。
   relink（`relink.rs`）・command word・git の whole-tree staging は未移行。stdin/interpreter program
   （`program_source`）の移行は migrate-stdin-program 段で行う。
+- **`detect/ast/judge`** — 構造判定の正典（user ruling 2026-11-17）。仕様は同じディレクトリの `SUBSET.md`
+  （Table A: 対応する node / expansion の allowlist、表外は `Undetermined`、Table B: 効果 × target の抽出、
+  Table C: `PathClass` × 効果 → verdict）。`judge(script, ctx) -> Judgement` と `Effect` / `PathClass` /
+  `Finding` / `PathCtx` の型を S1 で凍結した。S1 時点の `judge` と `classify` は stub で、常に
+  `Undetermined(Cause::NotImplemented)` / `PathClass::Unresolved` を返し、detect へは未接続（判定に寄与しない）。
+  S3（path-cutover）で接続する。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。
 

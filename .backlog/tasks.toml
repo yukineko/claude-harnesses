@@ -2771,3 +2771,35 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 695 filtered out
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running unittests src/lib.rs (target/debug/deps/blastguard-a07d982b4f0a36d7)
 error: test failed, to rerun pass `-p blastguard --lib`"""
+
+[[task]]
+id = "ea57789e"
+title = "blastguard --lib red at main: detect::tests invariance_the_pipe_egress_arm_still_asks_when_the_line_assigns_the_upstream_a_fetch fails"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "lib-red",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-16 by run-20261116-020031-33040 migrate-path worker and verifier: one of 6 pre-existing --lib failures (fails at base 07bf4b5f2 and at the migrate-path tree 697fb328b). Cause guessed (UNVERIFIED): 536f63e5d static_bindings resolves $BIN/$CMD command words statically so pins expecting Ask now get Deny. Readings: (a) stale pin after an intended rule change; (b) regression."
+created_at = 1794826831
+updated_at = 1794826831
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --lib detect::tests::invariance_the_pipe_egress_arm_still_asks_when_the_line_assigns_the_upstream_a_fetch"
+rev = "e6c63919736aab6a7a2279efc90130c4a13dcf06"
+observed_at = 1794826831
+detail = """
+exit 101: s::invariance_the_pipe_egress_arm_still_asks_when_the_line_assigns_the_upstream_a_fetch
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 695 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-a07d982b4f0a36d7)
+error: test failed, to rerun pass `-p blastguard --lib`"""

@@ -765,13 +765,12 @@ pub fn build_cached(cwd: &Path) -> ProgressView {
             if let Some(parent) = cache_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            // Best-effort write via temp+rename (same atomic idiom as
-            // `store::save_leases`); any failure here is ignored since the
-            // render itself already succeeded.
+            // Best-effort write via temp + fsync + rename (same durable idiom
+            // as `store::save_leases`); any failure here is ignored since the
+            // render itself already succeeded (unchanged from before; the
+            // helper still removes the temp on failure).
             let tmp = cache_path.with_extension("json.tmp");
-            if std::fs::write(&tmp, &json).is_ok() {
-                let _ = std::fs::rename(&tmp, &cache_path);
-            }
+            let _ = crate::durable::write_durable(&cache_path, &tmp, json.as_bytes());
         }
     }
 

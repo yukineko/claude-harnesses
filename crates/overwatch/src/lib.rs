@@ -9,6 +9,7 @@ pub mod audit_round;
 pub mod canary;
 pub mod changeset;
 pub mod disposition;
+mod durable;
 pub mod event;
 pub mod merge_conflict;
 pub mod observed_close;

@@ -14,7 +14,6 @@ use testscope_confirm_common::*;
 const CMD: &str = "cargo test -p foo --test bar";
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R3: Pre(X) then Pre(X) is Deny, must be Ask"]
 fn a_pre_only_then_pre_is_ask() {
     let env = Env::new();
     let root = repo();
@@ -25,7 +24,6 @@ fn a_pre_only_then_pre_is_ask() {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R3: Ask output must exist and carry no 'deny' substring"]
 fn ask_output_never_contains_deny() {
     let env = Env::new();
     let root = repo();
@@ -50,7 +48,6 @@ fn legacy_line(root: &std::path::Path, cmd: &str) -> String {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R3: a legacy 3-column row is pending, rerun must be Ask (is Deny)"]
 fn b_legacy_three_column_row_only_is_pending_so_ask() {
     let env = Env::new();
     let root = repo();
@@ -60,7 +57,6 @@ fn b_legacy_three_column_row_only_is_pending_so_ask() {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R3: Pre without tool_use_id is never promoted; rerun must be Ask"]
 fn c_pre_without_tool_use_id_is_allowed_but_never_promoted() {
     let env = Env::new();
     let root = repo();
@@ -71,7 +67,6 @@ fn c_pre_without_tool_use_id_is_allowed_but_never_promoted() {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R3: Ask pre writes its own pending row; approval+Post promotes it"]
 fn ask_pre_row_is_promoted_by_its_own_post() {
     let env = Env::new();
     let root = repo();
@@ -84,7 +79,6 @@ fn ask_pre_row_is_promoted_by_its_own_post() {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R3: a rejected Ask (no Post) stays pending; next rerun is Ask again"]
 fn ask_pre_without_post_stays_pending() {
     let env = Env::new();
     let root = repo();

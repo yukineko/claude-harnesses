@@ -534,7 +534,9 @@ fi
 ### Phase 4.5 — ベースライン取得（廃止: フルスイートはバイナリが拒否する）
 フルスイートのベースラインは取らない。`condukt state test` は、解決したテストコマンドがフルスイート
 （target selector の無い `cargo test` 等）なら実行せずに非 0 で拒否する（`crates/condukt/src/testscope.rs`）。
-worker / verifier の Bash も PreToolUse の `condukt testscope` が同じ規則で deny し、同一ツリーでの同じテストの再実行も deny する。
+worker / verifier の Bash も PreToolUse の `condukt testscope` が同じ規則で deny し、同一ツリーで **実行が確認済み**
+（PostToolUse / PostToolUseFailure の `condukt testscope-confirm` が `tool_use_id` で昇格済み）の同じテストの再実行も deny する。
+確認されていない前歴（pending のみ）の再実行は deny ではなく **ask** になる。
 `tdd red|green --cmd <c>`（`--cmd=<c>`）の `<c>` も素の Bash と同じに判定され、再実行 ledger は素の `cargo test`・
 `tdd --cmd`・`condukt state test` で共有される（どの経路で走らせても同一ツリーで 2 回目は拒否）。
 **task worktree の中では task のテストしか走らない**: `--test <name>` は decomposition の `reproduction_tests` に

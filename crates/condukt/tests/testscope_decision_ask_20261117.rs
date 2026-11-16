@@ -25,7 +25,6 @@ fn if_let_deny_lines(name: &str, src: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R7: `if let Decision::Deny` consumers remain (state.rs, main.rs, testscope.rs)"]
 fn no_if_let_deny_consumer_remains() {
     let mut found = if_let_deny_lines("state.rs", STATE);
     found.extend(if_let_deny_lines("main.rs", MAIN));
@@ -43,7 +42,6 @@ fn module_doc() -> String {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R7: module doc still says every cannot-determine resolves to deny"]
 fn module_doc_no_longer_says_cannot_determine_resolves_to_deny() {
     let doc = module_doc();
     assert!(!doc.is_empty());

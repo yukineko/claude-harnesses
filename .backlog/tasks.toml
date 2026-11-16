@@ -2505,3 +2505,32 @@ exit 101: . 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
      Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-80ffcfc78037f570)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261116_git_apply_patch_known_gaps`"""
+
+[[task]]
+id = "c1873b73"
+title = """blastguard: python heredoc os.__dict__['sys'+'tem']("cat x | { bash; }") judged allow"""
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-16, main fa58e3698 (blastguard 0.2.672), run-20261116-143410-12142 (independent probe on t3): python3 - <<'EOF' with import os; os.__dict__['sys'+'tem']("cat x | { bash; }") is allow in main and subagent, both before (16334d10a) and after t3 — pre-existing. Plain os.system twin is ask/deny. Dict lookup avoids every runner marker. Readings: (a) fail-open: the runner is not recognised; (b) intended only if obfuscated runners are out of scope, but then undeterminable -> must be ask. Expected: not allow."""
+created_at = 1794813882
+updated_at = 1794813882
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261116_python_dict_lookup_system_group_pipe -- --include-ignored"
+rev = "e0173e098994fc132458949627fead46948ead9c"
+observed_at = 1794813882
+detail = """
+exit 101: ess-worktrees/followup-bg-df7c/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.69s
+     Running tests/backlog_20261116_python_dict_lookup_system_group_pipe.rs (target/debug/deps/backlog_20261116_python_dict_lookup_system_group_pipe-ab765f1c4c4c75c0)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261116_python_dict_lookup_system_group_pipe`"""

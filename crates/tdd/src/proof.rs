@@ -48,14 +48,29 @@ fn judge_red(passed: bool) -> Result<()> {
     Ok(())
 }
 
+/// Which proof a run was meant to produce; only selects the wording of
+/// [`judge_ran`]'s refusal so each phase tells the user which command to re-run.
+#[derive(Clone, Copy)]
+enum Phase {
+    Red,
+    Green,
+}
+
 /// Refuse to treat a run as evidence when the test command never ran
 /// (`spawn_error` set): the runner reports that as `passed: false`, which
-/// `judge_red` would otherwise read as "tests fail as expected".
-fn judge_ran(out: &runner::Outcome) -> Result<()> {
+/// `judge_red` would otherwise read as "tests fail as expected" and
+/// `judge_green` as "tests still failing". Both `red()` and `green()` call
+/// this right after `run_cmd`, so a run that never happened is reported as
+/// such (naming the spawn error) and records no artifact in either phase.
+fn judge_ran(out: &runner::Outcome, phase: Phase) -> Result<()> {
     if let Some(e) = &out.spawn_error {
+        let (which, again) = match phase {
+            Phase::Red => ("RED", "tdd red"),
+            Phase::Green => ("GREEN", "tdd green"),
+        };
         bail!(
-            "test command never ran ({e}) — no RED recorded. Fix the environment/command \
-             and run `tdd red` again."
+            "test command never ran ({e}) — no {which} recorded. Fix the environment/command \
+             and run `{again}` again."
         );
     }
     Ok(())
@@ -231,7 +246,7 @@ pub fn red(
         cfg.output_tail_lines,
         &tmp,
     );
-    judge_ran(&out)?;
+    judge_ran(&out, Phase::Red)?;
     judge_red(out.passed)?;
     let path = artifact_path(root, cfg, task, "red");
     let author = resolve_author(author);
@@ -333,6 +348,7 @@ pub fn green(
         cfg.output_tail_lines,
         &tmp,
     );
+    judge_ran(&out, Phase::Green)?;
     judge_green(out.passed, has_red)?;
     let path = artifact_path(root, cfg, task, "green");
     write_artifact(

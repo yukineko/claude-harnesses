@@ -757,7 +757,12 @@ reason = "'振る舞い' interpreter bullet '`CODE_BUILDING` marker は Ask' and
 [[spec]]
 path = "crates/blastguard/src/detect/ast/mod.rs"
 doc = "docs/specs/blastguard.md"
-reason = "'module 責務' bullet `detect/ast`: Analysis/Cause/Script/SimpleCommand contract of the parser + static-eval layer (RedirTarget / SimpleCommand.cwd relative-target representation); not yet called by any detector."
+reason = "'module 責務' bullet `detect/ast`: Analysis/Cause/Script/SimpleCommand contract of the parser + static-eval layer (RedirTarget / SimpleCommand.cwd relative-target representation); read by the path-resolution detectors through targets.rs only."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/targets.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/ast` (task migrate-path): the index the path-resolution detectors read — resolve(spelling, role) returns the evaluated literal paths only at depth 0, not suspended (diverging bash 3.2 pass / comment candidate), when every textual occurrence of the spelling is exactly one evaluated argv or redirect-target word and every word in the detector's role is a plain Literal; otherwise None and the old verdict stands."
 
 [[spec]]
 path = "crates/blastguard/src/detect/ast/parse.rs"

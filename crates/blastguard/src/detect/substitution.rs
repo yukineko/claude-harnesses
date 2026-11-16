@@ -127,6 +127,11 @@ thread_local! {
     /// Set when a scan under [`under_bash32_reading`] met a shape whose bash
     /// 3.2 parse is not modelled ([`Scan32::Undetermined`]).
     static BASH32_UNDETERMINED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set when a scan under [`under_bash32_reading`] closed a construct at a
+    /// different end than the modern scan ([`Scan32::Closed`] at another
+    /// offset): the text is then read differently from brush-parser's modern
+    /// parse ([`under_bash32_reading_diverged`]).
+    static BASH32_DIVERGED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set while [`assuming_comment_hides_quotes`] runs: [`scan_bash32`] then
     /// reads a [`Comments::On`] comment whose line holds a quote, backtick or
     /// backslash as a comment that hides them (instead of
@@ -174,6 +179,7 @@ impl Drop for Bash32Guard {
     fn drop(&mut self) {
         BASH32_READING.with(|f| f.set(false));
         BASH32_UNDETERMINED.with(|f| f.set(false));
+        BASH32_DIVERGED.with(|f| f.set(false));
     }
 }
 
@@ -192,12 +198,23 @@ impl Drop for Bash32Guard {
 /// whose meaning differs by shell must be judged under every reading, the
 /// most restrictive verdict winning.
 pub(super) fn under_bash32_reading<R>(f: impl FnOnce() -> R) -> (R, bool) {
+    let (out, undetermined, _) = under_bash32_reading_diverged(f);
+    (out, undetermined)
+}
+
+/// [`under_bash32_reading`], also reporting whether any scan closed a
+/// construct where the modern scan does not (the bash 3.2 reading of this
+/// text then differs from the modern one; `false` when every bash 3.2 answer
+/// was the modern end — `Unclosed` and `Undetermined` use it too).
+pub(super) fn under_bash32_reading_diverged<R>(f: impl FnOnce() -> R) -> (R, bool, bool) {
     let _guard = Bash32Guard;
     BASH32_READING.with(|m| m.set(true));
     BASH32_UNDETERMINED.with(|m| m.set(false));
+    BASH32_DIVERGED.with(|m| m.set(false));
     let out = f();
     let undetermined = BASH32_UNDETERMINED.with(std::cell::Cell::get);
-    (out, undetermined)
+    let diverged = BASH32_DIVERGED.with(std::cell::Cell::get);
+    (out, undetermined, diverged)
 }
 
 /// The bash 3.2 answer when [`under_bash32_reading`] is active, `modern()`
@@ -227,7 +244,12 @@ fn bash32_or(
         depth,
         entry_comments(chars, start, stop),
     ) {
-        Scan32::Closed(end) => Some(end),
+        Scan32::Closed(end) => {
+            if modern() != Some(end) {
+                BASH32_DIVERGED.with(|m| m.set(true));
+            }
+            Some(end)
+        }
         Scan32::Unclosed => modern(),
         Scan32::Undetermined => {
             BASH32_UNDETERMINED.with(|m| m.set(true));

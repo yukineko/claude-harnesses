@@ -1308,7 +1308,7 @@ forge・condukt のスケジューラが再利用）。
   記録は判定確定後・表示前に書き、判定を変えない。書けない（panic を含む）ときは表示理由に
   `could NOT be recorded` とエラーを付け stderr にも警告する（沈黙しない）。relay（subagent の Bash Ask の
   再実行 queue）とは別物で、block log は真の `Deny` と main の `Ask` を含む全 block を記録する。
-- **`detect/ast`**（`mod.rs` / `parse.rs` / `eval.rs` / `eval/words.rs` / `eval/decl.rs` / `arith.rs` / `support.rs`）— shell parser（brush-parser `=0.4.0`）＋静的評価層
+- **`detect/ast`**（`mod.rs` / `parse.rs` / `eval.rs` / `eval/words.rs` / `eval/decl.rs` / `arith.rs` / `support.rs` / `targets.rs`）— shell parser（brush-parser `=0.4.0`）＋静的評価層
   （ユーザー裁定 2026-11-15「parser ＋ 静的評価で一体にする」）。`analyze(&str) -> Analysis`
   （`Known(Script)` / `Undetermined(Cause)`、`Cause` = `NotImplemented`/`TooLong`/`TooDeep`/`Timeout`/
   `Parse`/`Panic`/`ZshOnly`/`Unsupported`）と `program_source(&SimpleCommand) -> Option<ProgramSource>`。
@@ -1351,7 +1351,27 @@ forge・condukt のスケジューラが再利用）。
   展開後の語の最終値（tilde・word split・pathname/brace 展開・heredoc 展開の判定）を担う。
   `eval/decl.rs` も `eval.rs` の子 module で、declare 系 builtin（`export`/`declare`/`typeset`/`local`/
   `readonly`）の integer 属性付与・代入と compound key の算術検査・binding を担う。
-  **現状どの検出器からも呼ばれない**（判定に影響しない）。検出器の移行は migrate-path / migrate-stdin-program 段で行う。
+  **path 解決系の検出器が `targets.rs` 経由で読む**（task migrate-path）。`detect_bash_every_reading` は
+  static_bindings 解決後の本文を `analyze` し、`Known` のときだけ index を有効にして全 reading を走らせる
+  （`Undetermined` なら index なし＝旧経路のまま）。文字列 reading が置けない対象 —— 切り詰め redirect
+  （`>`）・追記 redirect（`>>`）の展開入り target と「解決できない cd の後の相対 target」、`rm` の展開入り
+  operand、`sed -i`/`perl -i`/`chmod`/`chown`/`chgrp`/`unlink`/`rmdir`/`mv`/`rsync` が書き換える展開入り
+  operand（`system_paths.rs`）、`cp`/`mv`/`install` の展開入り destination —— について、`targets::resolve`
+  が評価値を返したときだけ、その各値を **既存の述語でリテラル表記と同じく判定する**（system path なら
+  system-harm Deny、protected path なら protected の判定、clean なら当該 Deny/Ask は落ちる。`rm` は operand の
+  組み合わせごとに `analyze_rm` を通し最も制限的な判定、組み合わせ 64 超は旧経路）。`resolve` が値を返す条件
+  （どれか欠ければ `None`＝旧判定のまま）: shell depth 0（入れ子 payload・`find -exec` tail・program text
+  は別プログラム）、index が suspend されていない（bash 3.2 reading で modern と異なる位置で閉じた pass
+  と comment-hides-quotes 候補は suspend して再判定）、綴りが本文に 1 回以上現れ、その**全出現**が評価済み
+  コマンドのちょうど 1 語（argv 語か file redirect の target 語。quoted 文字列・heredoc 本文・代入値・より
+  長い語の一部に現れたら不可）、検出器の役割（redirect target / argv）の語が 1 つ以上あり、その役割の全
+  評価値（unroll された for の各回を含む）が空でない `Literal` かつ `[A-Za-z0-9/._+,:@%^-]` のみ。相対値は
+  cwd に対して `RedirTarget::Path` と同じく解決済み（literal cd の後は絶対、cd が無ければ書かれたまま）。
+  他方の役割の出現は値を与えない（redirect rule は argv 語に書き込まない。逆も同じで、各役割はその役割の
+  rule が判定する）。`.`/`source`・`command -v` 等で opaque になった後の変数、`cd x && S=v;` の後の `$S`
+  （cd 失敗時 unset）、`||` の後、8 KiB 超（`TooLong`）などは評価器が `Undetermined` を返すので旧判定のまま。
+  relink（`relink.rs`）・command word・git の whole-tree staging は未移行。stdin/interpreter program
+  （`program_source`）の移行は migrate-stdin-program 段で行う。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。
 

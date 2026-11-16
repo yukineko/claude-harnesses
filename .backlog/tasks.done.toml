@@ -80385,3 +80385,64 @@ rev = "8fc38578bbc00dcfd260cebb14dc792433d73e21"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "392097d7"
+title = """blastguard FP: bash <&"$"fd (literal $fd) is Ask/Deny while <&'$fd' is Allow"""
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = 'F12. Observed 2026-11-15 at 0.2.603, re-observed by main with RED 784eba77f. A lone "$" is a literal dollar; standing ruling: text-determined values are resolved, not undetermined.'
+created_at = 1794730727
+updated_at = 1794810229
+weight = 0.0
+issue_number = 1791
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1791"
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_dq_dollar_literal_dup_fd -- --include-ignored"
+rev = "bdfdc064af6abf8c9d8cbde6b9f1ba790bfc7e4a"
+observed_at = 1794730727
+detail = """
+exit 101: uard v0.2.608 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/backlog_20261115_dq_dollar_literal_dup_fd.rs (target/debug/deps/backlog_20261115_dq_dollar_literal_dup_fd-c7223dcbc93d47c9)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_dq_dollar_literal_dup_fd`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261115_dq_dollar_literal_dup_fd -- --include-ignored"
+exit = 0
+passed = 3
+rev = "6483898b2d52d7db742fa28130af06c5847a9b0d"
+observed_at = 1794810220
+output_digest = "sha256:9086ee6ba56392ab92623b1383e4f92623f2c5e0b89440dbaa5e4563c6cd1291"
+excerpt = """
+
+running 3 tests
+test dq_dollar_literal_word_is_allow ... ok
+test control_real_expansion_in_double_quotes_is_not_allow ... ok
+test literal_twin_single_quoted_is_allow ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Compiling blastguard v0.2.668 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.99s
+     Running tests/backlog_20261115_dq_dollar_literal_dup_fd.rs (target/debug/deps/backlog_20261115_dq_dollar_literal_dup_fd-dd97e6a76351a53a)
+"""
+
+[task.closure.red]
+rev = "66c2ec5cd58745898b7ea8973746b2f571728233"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

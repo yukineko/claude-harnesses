@@ -2658,6 +2658,8 @@ notes = """2026-11-16 session 1b9a1e23 の overwatch ledger 記録を f6a19c390 
 created_at = 1794792494
 updated_at = 1794792494
 weight = 0.0
+issue_number = 1819
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1819"
 rev = 0
 
 [task.repro]

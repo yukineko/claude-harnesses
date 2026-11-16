@@ -2983,3 +2983,35 @@ exit 101: /crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
      Running tests/backlog_20261117_python_stdin_triple_quote_redirect_after_cd_fp.rs (target/debug/deps/backlog_20261117_python_stdin_triple_quote_redirect_after_cd_fp-815829cea95d5864)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261117_python_stdin_triple_quote_redirect_after_cd_fp`"""
+
+[[task]]
+id = "7fe09808"
+title = "blastguard FP: a 2 KiB quoted python stdin program exhausts the legacy detect_bash node budget (too complex to analyse within the safety budget)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "s6-retire-readings",
+    "s5-python-parser",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-17 relays bgr-fac0e88ff878 (8160 B) and bgr-4bcd8c5f1c96 (4777 B), subagent deny / main ask; reproduced on main 0.2.679/0.2.681 hermetic HOME. Verbatim: 'command is too complex to analyse within the safety budget — blastguard cannot vouch for it either way'. Both are under the 8 KiB parse cap (2026-11-16 ruling); that cap is not wired yet (9623 B cat heredoc = allow). Source: detect/budget.rs MAX_ANALYSIS_NODES=2000, whose doc says real work cannot reach it, which contradicts these two relays. Fixture = bgr-4bcd8c5f1c96 delta-debugged to 2216 B (python s.replace('''...''') rewriting Rust doc comments full of backtick spans and escaped quotes). Synthetic repeats (closures, ;/&&/|, strings, line continuations, balanced backticks) did not reproduce; which re-reading fans out is not identified. RED 31c938dd6 (branch red/blastguard-fp-batch-20261117, 0.2.682). Stage: S6 retire-readings (GREEN also needs S5)."
+created_at = 1794872375
+updated_at = 1794872375
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261117_python_stdin_body_exhausts_node_budget_fp -- --include-ignored"
+rev = "31c938dd6444bb88927be8222cb10dc78362fb85"
+observed_at = 1794872375
+detail = """
+exit 101: 0 filtered out; finished in 1.96s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_20261117_python_stdin_body_exhausts_node_budget_fp.rs (target/debug/deps/backlog_20261117_python_stdin_body_exhausts_node_budget_fp-d0de5f74c164dc3d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261117_python_stdin_body_exhausts_node_budget_fp`"""

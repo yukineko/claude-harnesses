@@ -77,8 +77,11 @@ fn judge_ran(out: &runner::Outcome, phase: Phase) -> Result<()> {
 }
 
 /// Refuse to treat a run as evidence when it produced no exit code: the
-/// command timed out, or was killed by a signal (`exit_code` is `None` with no
-/// `spawn_error`). The runner reports both as `passed: false`, which
+/// command timed out (`timed_out`), or it ended without an exit code —
+/// `exit_code` is `None` with no `spawn_error` and `timed_out` false, which
+/// the harness-core runner produces both when the child was killed by a
+/// signal and when waiting on the child failed (its `wait_timeout` `Err`
+/// arm). The runner reports all of these as `passed: false`, which
 /// `judge_red` would read as "tests fail as expected" — but no assertion
 /// failure was observed, so the outcome is undetermined, not RED. Only a
 /// command that ran and exited with a code (even non-zero) is evidence.
@@ -99,9 +102,10 @@ fn judge_exited(out: &runner::Outcome, phase: Phase, timeout_secs: u64) -> Resul
     }
     if out.exit_code.is_none() {
         bail!(
-            "test command was killed by a signal — no {which} recorded: no assertion failure \
-             was observed, so the result is undetermined. Find out why the process was killed \
-             and run `{again}` again."
+            "test command produced no exit code (killed by a signal, or waiting on it failed) — \
+             no {which} recorded: no assertion failure was observed, so the result is \
+             undetermined. Find out why the process ended without an exit code and run \
+             `{again}` again."
         );
     }
     Ok(())
@@ -255,6 +259,12 @@ fn resolve_cmd<'a>(cmd: &'a Option<String>, cfg: &'a Config) -> &'a str {
 
 /// `tdd red`: run the tests, require failure, record the RED proof.
 ///
+/// RED is recorded only for a command that ran and exited non-zero. A run
+/// that timed out, or produced no exit code (killed by a signal, or the wait
+/// on the child failed), is refused and records no proof: no assertion
+/// failure was observed, so the outcome is undetermined (see
+/// [`judge_exited`]). A run whose tests already pass is refused too.
+///
 /// `author` is an optional identity (agent/session id) for the test-authoring
 /// step, recorded into the proof so a later `tdd green --author <id>` can be
 /// checked against it under `strict_separation` (see [`judge_separation`]).
@@ -322,6 +332,10 @@ fn read_author(root: &Path, cfg: &Config, task: &str, kind: &str) -> Determinati
 }
 
 /// `tdd green`: require a RED proof, run the tests, require success, record GREEN.
+///
+/// GREEN is recorded only for a command that ran and exited zero. A run that
+/// timed out, or produced no exit code (killed by a signal, or the wait on
+/// the child failed), is refused and records no proof (see [`judge_exited`]).
 ///
 /// `author` is an optional identity for the implementation step. When
 /// omitted, it defaults to the current session id (see [`default_author`] /

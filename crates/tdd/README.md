@@ -111,8 +111,8 @@ started with, since the hook inherits the app's environment.
 ```
 
 `tdd red` refuses to record a proof if the tests already pass (that isn't
-test-first), and also refuses (recording no RED) when the command was killed
-by a signal or timed out, because no assertion failure was observed; RED is
+test-first), and also refuses (recording no RED) when the command timed out
+or produced no exit code (killed by a signal, or waiting on it failed), because no assertion failure was observed; RED is
 recorded only for a command that ran and exited non-zero. `tdd green` refuses
 without a prior RED proof. The test command
 comes from `--cmd`, else `tdd.toml`'s `test_cmd` (default `cargo test`).

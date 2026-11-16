@@ -2472,3 +2472,31 @@ exit 101: . 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
      Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-80ffcfc78037f570)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261116_git_apply_patch_known_gaps`"""
+
+[[task]]
+id = "0a7be389"
+title = "condukt: check-criteria classifies ';'-separated multi-claim done_criteria as single coverage and sets skip_verifier:true"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-16 at fa58e3698 in run-20261116-143410-12142 (t2): done_criteria '<cargo test ...> exits 0 ...; no other blastguard test regresses; version bumped.' → coverage single, skip_verifier true. Classifier: verify.rs criteria_coverage_for. Readings: (a) defect: only the first claim is mechanical, the verifier must not be skipped; (b) intended if the trailing clauses are considered advisory. The test asserts not-single/no-skip."
+created_at = 1794813554
+updated_at = 1794813554
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261116_multiclaim_semicolon_single -- --include-ignored"
+rev = "bf454e21f24c4fff547678a33c3b882fd3d2a185"
+observed_at = 1794813554
+detail = """
+exit 101: /home/hiroyuki_nakayama/src/.harness-worktrees/followup-cd-df7c/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
+     Running tests/backlog_20261116_multiclaim_semicolon_single.rs (target/debug/deps/backlog_20261116_multiclaim_semicolon_single-e66c810b09b231be)
+error: test failed, to rerun pass `-p condukt --test backlog_20261116_multiclaim_semicolon_single`"""

@@ -80273,3 +80273,49 @@ rev = "cc87dd9c3f27be96dfbe4452beb686717369e22d"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "7cccad0a"
+title = "blastguard fail-open: harmful literal piped to python3 -c that forwards stdin to a shell (os.system(input()), subprocess.run(stdin, shell=True)) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-14 (run-20261114-161340-68728 t4 verifier + side-reds agent, main c158cd573 and t4 wt): echo 'rm -rf /' | python3 -c 'import os; os.system(input())' and ... subprocess.run(sys.stdin.read(), shell=True) are allow/allow (main/subagent). The -c program forwards stdin to a shell. Readings: (a) fail-open — literal system harm reaches a shell; (b) intended only if -c programs are never modelled as stdin forwarders — conflicts with system-harm-always-deny. Control: echo hi | python3 -c 'import sys; print(sys.stdin.read())' allow.
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_python_stdin_forward_shell_literal_harm -- --include-ignored; rev: c1d7e2388be73ec5ab91d15096cbdcae3515727d; observed: exit 0: d; 0 filtered out; finished in 0.04s
+
+   Compiling blastguard v0.2.664 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.73s
+     Running tests/backlog_20261114_python_stdin_forward_shell_literal_harm.rs (target/debug/deps/backlog_20261114_python_stdin_forward_shell_literal_harm-f55d3f3335fe0ca5)"""
+created_at = 1794657413
+updated_at = 1794806316
+weight = 0.0
+issue_number = 1783
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1783"
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_stdin_forward_shell_literal_harm -- --include-ignored"
+rev = "95197ae5b4457c7d6c8328cdd42f7693fbf06446"
+observed_at = 1794657413
+detail = """
+exit 101: 61340-68728-side-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.24s
+     Running tests/backlog_20261114_python_stdin_forward_shell_literal_harm.rs (target/debug/deps/backlog_20261114_python_stdin_forward_shell_literal_harm-eacd53911bd95b16)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_stdin_forward_shell_literal_harm`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_python_stdin_forward_shell_literal_harm -- --include-ignored; rev: c1d7e2388be73ec5ab91d15096cbdcae3515727d; observed: exit 0: d; 0 filtered out; finished in 0.04s
+
+   Compiling blastguard v0.2.664 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.73s
+     Running tests/backlog_20261114_python_stdin_forward_shell_literal_harm.rs (target/debug/deps/backlog_20261114_python_stdin_forward_shell_literal_harm-f55d3f3335fe0ca5)"""

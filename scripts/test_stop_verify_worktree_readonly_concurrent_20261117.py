@@ -53,7 +53,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_guard_maintree_bash_observe import ObserveGuardBase, _clean_env  # noqa: E402
+from test_guard_maintree_bash_observe import GIT_ID, ObserveGuardBase, _clean_env, git  # noqa: E402
 
 STOP = Path(__file__).resolve().parent / "stop-verify-worktree.py"
 
@@ -97,6 +97,56 @@ class ReadOnlySessionConcurrentForeignWrite(ObserveGuardBase):
             r.returncode, 0,
             "a session that ran only `git status` in main was blocked at Stop for "
             f"another process's write: rc={r.returncode} stderr={r.stderr!r}")
+
+    def _foreign_backlog_commit(self, rows: int) -> None:
+        """Another session's `backlog add` in main: write .backlog/tasks.toml,
+        then commit it (the shape of a7857dbbe / aa18dda2c "backlog: file
+        7768aeaf")."""
+        p = self.main / ".backlog" / "tasks.toml"
+        p.parent.mkdir(exist_ok=True)
+        p.write_text(f"rows = {rows}\n")
+        git(self.main, "add", "--", ".backlog/tasks.toml")
+        git(self.main, *GIT_ID, "commit", "-q", "-m", "backlog: file 7768aeaf")
+
+    def test_foreign_main_commits_attributed_to_readonly_session(self) -> None:
+        """Fixture with ANOTHER session's main commits (user-specified shape).
+
+        1. this session runs `git status` in main; during that call the other
+           session writes .backlog/tasks.toml (dirty at Post) -> the guard
+           records it in THIS session's write record;
+        2. the other session commits it ("backlog: file 7768aeaf", like
+           a7857dbbe);
+        3. the other session writes tasks.toml again for its second commit
+           (like aa18dda2c) and this session Stops inside that write->commit
+           window.
+        Observed (a): the Stop is blocked naming .backlog/tasks.toml as a path
+        "THIS session wrote", and right after, once the foreign commit lands,
+        `git status` is empty. This session never wrote the file."""
+        cmd = "git status"
+        tid, _ = self.pre_ok(cmd)
+        subprocess.run(["git", "status"], cwd=str(self.main), env=_clean_env(),
+                       check=True, capture_output=True)
+        p = self.main / ".backlog" / "tasks.toml"
+        p.parent.mkdir(exist_ok=True)
+        p.write_text("rows = 1\n")                  # foreign write inside the window
+        self.post(tid, cmd)
+        git(self.main, "add", "--", ".backlog/tasks.toml")
+        git(self.main, *GIT_ID, "commit", "-q", "-m", "backlog: file 7768aeaf")
+        self.assertIn("tasks.toml", self._record_file().read_text(),
+                      "precondition: the foreign write is in THIS session's record")
+        p.write_text("rows = 2\n")                  # foreign second write, not yet committed
+        r = self._stop()
+        # the foreign session then commits; main is clean right after (observed)
+        git(self.main, "add", "--", ".backlog/tasks.toml")
+        git(self.main, *GIT_ID, "commit", "-q", "-m", "backlog: file 7768aeaf")
+        self.assertEqual(git(self.main, "status", "--porcelain").stdout, "")
+        log = git(self.main, "log", "--format=%s").stdout.splitlines()
+        self.assertEqual(log.count("backlog: file 7768aeaf"), 2,
+                         "fixture: two foreign main commits")
+        self.assertEqual(
+            r.returncode, 0,
+            "the other session's main commits/writes to .backlog/tasks.toml were "
+            f"treated as THIS session's write: rc={r.returncode} stderr={r.stderr!r}")
 
     def test_control_real_write_by_this_call_still_blocks_stop(self) -> None:
         cmd = "echo v2 > tracked.txt"

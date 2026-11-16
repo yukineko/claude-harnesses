@@ -20,6 +20,7 @@ pub mod presence;
 // crate root must also declare the module. Kept private: it is an internal
 // concurrency primitive, not public API.
 mod lock;
+pub mod retro;
 pub mod review_finding;
 pub mod rollback;
 pub mod stalled;

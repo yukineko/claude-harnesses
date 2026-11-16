@@ -961,6 +961,8 @@ hook を実バイナリで叩く統合テストの fixture（`git init` / `git w
 
 ## 事後検証（`blastguard retro`）
 
+実装は 2026-11-17 に overwatch へ移設した（`crates/overwatch/src/retro.rs`＝`overwatch::retro`）。blastguard に残るのは CLI（`blastguard retro`、挙動は不変）と reason→rule id の表（`blastguard::rule_id::rule_id`）で、表は `overwatch::retro::scan_dir` へ関数引数として注入する。blastguard が既に overwatch に依存しているため、overwatch から blastguard へは依存できない。
+
 ゲート自身のログは「ゲートが何を言ったか」しか答えない。ゲートが割に合っているかを
 決めるのは次の問いである — **止めた操作は本当に起きなかったのか、それとも人間が
 承認して結局実行されたのか**。承認は violation store に痕跡を残さないので、この失敗

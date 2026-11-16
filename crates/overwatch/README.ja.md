@@ -141,6 +141,8 @@ overwatch escalations [--json] [--threshold N] [--window-secs S]    # systemic �
 overwatch blastguard-log [OPTIONS]                                 # blastguard の行のみ。`blastguard log` と同じ
 ```
 
+`overwatch::retro`（ライブラリのみ）は `blastguard retro` の実体で、transcript 内の PreToolUse 判定を同じ id の `tool_result` と突き合わせる。reason→rule id の表は呼び出し側が注入する（`RuleIdFn`）。表は blastguard が持ち、overwatch は blastguard に依存できないため。
+
 - `--source` は `blastguard | propguard | specguard | mutategate | donegate | reviewgate | tdd | budgetguard | autoflow | ctxrot` を受け付け、未知の token は source として parse されない。
 - **signature 正規化**（`violation::normalize_signature`）では、同種の失敗（例: blastguard の同一 rule、mutategate の同一 mutation operator、specguard の同一 drift kind + symbol）は、大文字小文字・空白の違いを問わず同じ signature になる。
 - **再発検知**（`violation::detect_recurrence`）は時刻を引数で受け取る。

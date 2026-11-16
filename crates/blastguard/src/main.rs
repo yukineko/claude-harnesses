@@ -61,9 +61,10 @@
 use blastguard::model::Decision;
 use blastguard::rule_id::INTERNAL_ERROR_REASON;
 use blastguard::scope::SafeRoots;
-use blastguard::{approve, detect, hookio, interactive, relay, retro, rule_id};
+use blastguard::{approve, detect, hookio, interactive, relay, rule_id};
 use harness_core::blocklog;
 use harness_core::hook::{self, HookInput};
+use overwatch::retro;
 use std::process::exit;
 
 fn main() {
@@ -246,7 +247,7 @@ fn parse_retro_args(rest: &[String]) -> Result<RetroArgs, String> {
 /// intervention (gate, rule id, outcome, raw reason, recorded command); pair
 /// it with `--rule-id <id>` to narrow the listing to a single rule, e.g. to
 /// compare which specific interventions a fix made a rule stop raising
-/// (see [`blastguard::retro::render_list`]). `--rule-id` alone (no explicit
+/// (see [`overwatch::retro::render_list`]). `--rule-id` alone (no explicit
 /// `--list`) also switches to listing mode — see [`parse_retro_args`].
 ///
 /// # Exit status is a verdict, not a formality
@@ -254,7 +255,7 @@ fn parse_retro_args(rest: &[String]) -> Result<RetroArgs, String> {
 /// `2` when the corpus could not be read. A reviewer scripting this must be
 /// able to tell "no gate ever stopped anything" from "I read nothing", and an
 /// exit 0 printing an empty table conflates them — the same fail-open the
-/// report body refuses (see [`blastguard::retro`]).
+/// report body refuses (see [`overwatch::retro`]).
 fn run_retro(rest: &[String]) -> i32 {
     let args = match parse_retro_args(rest) {
         Ok(a) => a,
@@ -276,7 +277,7 @@ fn run_retro(rest: &[String]) -> i32 {
             return 2;
         }
     };
-    let report = retro::build_report(retro::scan_dir(&dir));
+    let report = retro::build_report(retro::scan_dir(&dir, rule_id::rule_id));
     let out = if args.list {
         retro::render_list(&report, args.rule_filter.as_deref())
     } else {

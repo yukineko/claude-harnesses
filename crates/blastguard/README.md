@@ -639,6 +639,8 @@ launcher exited 0 with no output — a fail-open — and this README said so.)
 
 ## Retrospective
 
+The implementation lives in overwatch since 2026-11-17 (`crates/overwatch/src/retro.rs`, `overwatch::retro`). blastguard keeps the CLI (`blastguard retro`, unchanged) and its reason -> rule-id table (`blastguard::rule_id::rule_id`), which it injects into `overwatch::retro::scan_dir`; overwatch cannot depend on blastguard because blastguard already depends on overwatch.
+
 A gate's own log answers "what did it say", never "did it prevent anything".
 `blastguard retro` answers the second by joining each PreToolUse verdict in the
 Claude Code transcript to the `tool_result` for the same `toolUseID`:

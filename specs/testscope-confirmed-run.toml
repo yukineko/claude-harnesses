@@ -1,0 +1,217 @@
+[spec]
+id = "testscope-confirmed-run"
+title = "condukt testscope: rerun guard counts only test runs that actually executed (backlog 64fe4e19)"
+status = "draft"
+provenance_commit = "adbdd16fd06b4a780f4110a937e3d29be674609d"
+date = "2026-11-17"
+canon = []
+
+[[requirement]]
+id = "R1"
+statement = "他の PreToolUse hook に阻止されて実行されなかったテストコマンドは、同一 tree 上の後続の同一コマンドを already ran として拒否させない。実行されたことが確認 (Post/PostToolUseFailure) されていない Pre 行は rerun 拒否の根拠に数えない。"
+acceptance = [
+    "RED (現行コードで失敗する): backlog_20261115_testscope_counts_unexecuted_attempt.rs の #[ignore] 付き RED (144 行目付近) が、assert 不変のまま GREEN になる。Pre を 2 回送って Post が一度も無い場合、2 回目は not denied である (解決先は R3 により Ask)。",
+    "同ファイルの a_pre_only_attempt_is_not_counted_once_post_has_fired_in_session (167 行目、#[ignore] 付き RED) も assert 不変のまま GREEN になる。「session で Post が発火済み」という marker は導入しない。tool_use_id が確認されていない Pre は数えない、という一般則で満たす (G3-a 裁定)。",
+    "修正 commit で上記 2 テストの #[ignore] を両方外す。repro は -- --include-ignored を付けて実行し、2 テストが executed かつ passed であること。0 件実行は FAIL とする。",
+    "同ファイルの doc は Q4 裁定どおり修正する: 「denied されない / Ask に解決する」と書き、assert 自体は変えない。",
+    "実測事実 (round 6): hook が deny または ask した Bash 呼び出しでは PostToolUse も PostToolUseFailure も発火せず、Pre だけが発火する。したがって実行されなかった呼び出しの行は pending のまま残る。",
+]
+canon = [
+    "要望 Requirements to specify 1",
+    "要望 Human rulings Ask 2 / Q4",
+    "要望 Observations round 6 (MEASURED)",
+    "要望 User rulings 2026-11-17 G3-a",
+    "CLAUDE.md §2 (RED を観測してから GREEN)",
+    "CLAUDE.md §3",
+]
+falsifiable = true
+repro_test = "cargo test -p condukt --test backlog_20261115_testscope_counts_unexecuted_attempt -- --include-ignored"
+
+[[requirement]]
+id = "R2"
+statement = "実行されたテスト (Post または PostToolUseFailure で確認済み) は、変更の無い tree 上の rerun で従来どおり拒否される。これは既存挙動を守る回帰 control であり、RED ではない。"
+acceptance = [
+    "これは回帰 control である。現行コードで既に PASS することが期待され、RED 証跡には数えない。R2 には現行コードで behaviourally に失敗するコマンドは無い。ledger の振る舞い (v2 ファイル・legacy 行の追記) の RED は R6 が持つ。",
+    "Ask 1 / R4-1 / C1 の固定リストの各テストは、入力に Post と、Pre に対応する tool_use_id を足してよい。assert 文は byte-identical のままにする。リスト: testscope_20261114.rs::rule3_same_tree_rerun_is_denied_until_tree_changes; backlog_20261114_testscope_cd_tree_identity.rs::control_identical_command_on_unchanged_cd_target_is_refused と ::rerun_after_editing_only_the_payload_cwd_tree_is_refused_when_test_runs_in_cd_target; backlog_20261115_testscope_untracked_content_identity.rs::control_unchanged_tree_refuses_rerun; backlog_20261115_testscope_verifier_suspicions.rs::a5_bash_c_cd_is_denied, ::a6_cd_semicolon_cargo_is_denied, ::b_subdir_cd_same_tree_with_untracked_top_file_is_denied, ::b_control_subdir_cd_same_tree_without_untracked_is_denied; backlog_20261115_testscope_cd_route_dodges.rs::r2_env_cd_then_cargo_is_denied; testscope_enforcement_20261114.rs::b_tdd_after_bare_run_on_same_tree_is_denied, ::b_bare_after_tdd_run_on_same_tree_is_denied, ::b_tdd_twice_on_same_tree_is_denied。",
+    "無修正で GREEN のまま維持するもの: backlog_20261115_testscope_cd_route_dodges.rs の r1/r3、testscope_enforcement_20261114.rs::b_state_test_twice_on_same_tree_is_refused と ::b_state_test_after_hook_run_on_same_tree_is_refused (state test 経路、Ask 5)。",
+    "verifier_suspicions の ignore 済み RED a1〜a4 は、入力に Post と tool_use_id を足す (C2 裁定)。assert は不変で、#[ignore] は残す。assert が byte-identical であることは base..HEAD の diff で確認する。",
+    "G3-C 裁定により、C1 リストには backlog_20261115_testscope_counts_unexecuted_attempt.rs::c_no_post_ever_in_session_falls_back_to_recording_at_pre も加わる。この 1 件だけは assert の改訂 (denied されない、かつ Ask) が承認済みで、byte-identical の対象外である (R3)。",
+    "C1 リストの網羅性は verifier が確認する。リスト外に「同一 ledger key への 2 回目の Pre が denied」を assert するテストが見つかった場合は、spec 変更として人間に戻す。",
+]
+canon = [
+    "要望 Requirements to specify 2",
+    "要望 Human rulings Ask 1 / Ask 8",
+    "要望 round 4 R4-1 / Control list",
+    "要望 round 5 C1 / C2",
+    "CLAUDE.md §2 (assert を緩めない)",
+    "CLAUDE.md §4",
+]
+falsifiable = true
+repro_test = "cargo test -p condukt --test testscope_20261114 && cargo test -p condukt --test backlog_20261114_testscope_cd_tree_identity && cargo test -p condukt --test backlog_20261115_testscope_untracked_content_identity && cargo test -p condukt --test backlog_20261115_testscope_verifier_suspicions && cargo test -p condukt --test backlog_20261115_testscope_cd_route_dodges && cargo test -p condukt --test testscope_enforcement_20261114"
+
+[[requirement]]
+id = "R3"
+statement = "testscope の Decision に Ask を加える。confirmed 行が無く pending 行 (legacy の state 列なし行、tool_use_id なしの Pre の行を含む) だけが前歴の rerun は Ask に解決する。Ask の output / reason に deny という部分文字列を含めない。"
+acceptance = [
+    "RED: 新規 crates/condukt/tests/testscope_ask_pending_20261117.rs (実装者以外の Agent が書く) の各テストが GREEN になる。現行コードでは失敗する。内訳: (a) Pre(X) のみ → Pre(X) で Ask を明示 assert する (Q4 の別テスト)。(b) state 列なしの legacy 3 列行だけを持つ ledger から rerun すると Ask (Ask 7)。(c) tool_use_id なしの Pre は従来どおり allow されるが、その行は昇格されず、後続の rerun は Ask (R4-2)。",
+    "Ask 時の hook 出力の permissionDecisionReason と systemMessage は、いずれも小文字化しても deny という部分文字列を含まない (C1)。",
+    "Ask に解決した Pre は、自分の tool_use_id で pending 行を書く (round 7)。承認されて実行された場合は、その Post が昇格する。却下された場合は Post が発火せず pending のまま残るので、次の rerun は再び Ask になる。unmatched 経路には落とさない。",
+    "backlog_20261115_testscope_counts_unexecuted_attempt.rs の c_no_post_ever_in_session_falls_back_to_recording_at_pre (212 行目) の期待を「denied されない、かつ Ask」に改訂する。旧 fallback (session に Post が一度も無ければ Pre が confirmed を書く) は撤回し、同ファイルの doc (24〜28 行目) も同じ commit で直す (G3-C 裁定)。C は C1 リストへの承認済み改訂として扱う。",
+    "Ask の headless / subagent での解決は testscope について未観測である。この点は R10 で測定する。ここでは Ask と Deny の区別を保つことだけを要求する。",
+]
+canon = [
+    "要望 Human rulings Ask 2 / Ask 7",
+    "要望 round 3 Q4",
+    "要望 round 4 R4-2",
+    "要望 round 5 C1",
+    "要望 round 7 Q1 consequence",
+    "要望 User rulings 2026-11-17 G3-C",
+    "CLAUDE.md §3: 「必ず `block` か `ask` に解決する」",
+]
+falsifiable = true
+repro_test = "cargo test -p condukt --test testscope_ask_pending_20261117 && cargo test -p condukt --test backlog_20261115_testscope_counts_unexecuted_attempt -- --include-ignored"
+
+[[requirement]]
+id = "R4"
+statement = "Bash の PostToolUse と PostToolUseFailure の両方が実行確認として働く。中断された実行も実行済みとして扱う。対象は testscope のパーサがテストコマンドを含むと判定した Bash 呼び出しだけで、それ以外の Bash の Post は出力なしで return する。"
+acceptance = [
+    "RED: crates/condukt/hooks/hooks.json に、matcher が Bash の PostToolUse エントリと PostToolUseFailure エントリが存在する。現行の hooks.json の PostToolUse は matcher Edit|Write|MultiEdit の editgate と matcher * の session-heartbeat だけで、testscope の実行確認を行うエントリは無い (PostToolUseFailure エントリも無い)。新規 crates/condukt/tests/testscope_confirm_hooks_20261117.rs が hooks.json を JSON として parse して assert する。",
+    "同ファイルで、Pre(id=1, テストコマンド) → PostToolUse(id=1) の後の rerun が denied になる。Pre(id=2) → PostToolUseFailure(id=2) の後の rerun も denied になる (Ask 3: 中断も実行済み)。",
+    "テストコマンドを含まない Bash の Post / PostToolUseFailure は、stdout が空で、ledger を書かず、systemMessage も出さない (裁定 A)。",
+    "新しい Post hook の入口は、tool_use_id を持たない Post を block せず処理する。Post は実行済みの呼び出しを止められないため、block を返さない (Q2)。",
+]
+canon = [
+    "要望 Human rulings Ask 3",
+    "要望 round 5 A",
+    "要望 Requirements to specify 3",
+    "要望 round 3 Q2",
+]
+falsifiable = true
+repro_test = "cargo test -p condukt --test testscope_confirm_hooks_20261117"
+
+[[requirement]]
+id = "R5"
+statement = "確認は tool_use_id で照合する。Post は自分の tool_use_id を持つ行だけを昇格する。一致する pending 行が無い Post と、ledger の IO 失敗、確認 hook 内の panic は、いずれも制限側へ解決し、実行済み呼び出しを止めない。"
+acceptance = [
+    "RED: 新規 crates/condukt/tests/testscope_confirm_match_20261117.rs (実装者以外の Agent が書く)。Pre(id=A, X) と Pre(id=B, X) を送り、Post(id=B) だけを送る。このとき id=A の行は pending のまま残り、id=B の行だけが confirmed になる (Q1)。",
+    "unmatched: 一致する pending 行が無い tool_use_id の Post (テストコマンドを含む Bash に限る) は、command+cwd をキーにした unmatched 行を append する。以後、同じ command+cwd の rerun は tree に関わらず Ask になる (Q2)。",
+    "複数テスト呼び出し (Ask 6 / Q1): 1 回の Bash にテストコマンドが 2 つ以上含まれ、同じ tool_use_id の pending 行が複数あるとき、その tool_use_id の Post 1 回で全行が confirmed になる。testscope_confirm_match_20261117.rs で、2 行とも以後の rerun が Deny になることを assert する。",
+    "優先順位 (R7-1): 同じ command+cwd に、現在の tree に一致する confirmed 行と unmatched 行の両方があるときは Deny を優先する。現在の tree に一致する confirmed 行が無ければ、unmatched 行により Ask になる。両ケースをテストで観測する。",
+    "IO 失敗 (ledger の読み書き不能) のとき、Post hook は stdout に systemMessage を出す。内容は confirmation が記録されなかったことの記述である。decision は block ではない (Q2)。行は pending のまま残り、次の rerun は Ask になる。",
+    "panic (R4-3): 確認 hook 本体の panic は、同じく systemMessage で表面化し、block にはしない。harness_core::hook::run_posttooluse_guarded は panic を block に解決するので、そのまま使ってはならない。panic の注入手段は要望のどこにも無い。テスト担当は非侵襲な注入手段を探す。見つからなければ判断で通さず AskUserQuestion に上げ、その間この acceptance は未証明と報告する (CLAUDE.md §2)。",
+    "panic / IO 失敗のテストを含め、専用の統合テストファイルで実行する。GREEN の判定は 1 件以上実行され、passed が 1 件以上であること。0 件実行は FAIL とする。",
+]
+canon = [
+    "要望 round 3 Q1 / Q2",
+    "要望 round 4 R4-3 / R4-3 implementation note",
+    "要望 round 5 A / R7-1",
+    "CLAUDE.md §3: 「判定不能 — IO 失敗 / ロック取得失敗 / subprocess の異常終了 / パース不能 / panic / 空集合」",
+    "CLAUDE.md §2 (テストが書けない問題は ask)",
+]
+falsifiable = true
+repro_test = "cargo test -p condukt --test testscope_confirm_match_20261117"
+
+[[requirement]]
+id = "R6"
+statement = '新しい列と confirm / invalidate record は別ファイル ledger.v2.tsv に append-only で書く。実行確認時には旧形式の 3 列行 <top>\t<head:dirty>\t<cmd> も ledger.tsv に追記し、旧 cache バイナリでも確認済み rerun を拒否できるようにする。'
+acceptance = [
+    "RED: 新規 crates/condukt/tests/testscope_ledger_v2_20261117.rs。Pre(id=1, X) → Post(id=1) の後に、ledger.v2.tsv に confirm 1 の追記行があり、かつ ledger.tsv に旧 3 列行がある。現行コードは ledger.v2.tsv を書かないので、behaviourally に失敗する。",
+    "Pre のみで Post が無い場合、旧 3 列行は ledger.tsv に書かれない (旧バイナリには pending が見えず、従来どおり allow する)。",
+    "ledger.v2.tsv の pending 行は、payload の raw tool_input.command と payload cwd を列として持つ (Ask 6 / Q1)。R5 の unmatched 照合はこの 2 列を使う。testscope_ledger_v2_20261117.rs で、Pre 後の v2 行にこの 2 列が入力と byte 一致で入っていることを assert する。",
+    "ledger.v2.tsv の既存行は削除も書き換えもされない。昇格と invalidate は常に append で表す (B 裁定)。テストは、操作の前後で既存行が byte 単位で prefix として保たれることを assert する。",
+    "新バイナリは両ファイルを読む。ledger.tsv にあって v2 に対応する confirm が無い legacy 行は pending 扱い (Ask 7) になる。ただし新バイナリ自身が確認時に書いた legacy 行は除く。v2 の confirmed 行が一致するときは Deny が勝つ。",
+    "理由: 旧バイナリは追加列を splitn(3) で cmd フィールドに取り込み、黙って allow する (fail-open)。この理由があるので、新形式を ledger.tsv に直接書かない。",
+]
+canon = [
+    "要望 round 6 R6-1",
+    "要望 round 5 B",
+    "要望 Human rulings Ask 7",
+    "CLAUDE.md §3 (判定不能を clean にしない)",
+]
+falsifiable = true
+repro_test = "cargo test -p condukt --test testscope_ledger_v2_20261117"
+
+[[requirement]]
+id = "R7"
+statement = "Decision を Allow / Deny / Ask の三値にし、Decision を消費するすべての呼び出し箇所を exhaustive な match に移行して、Ask が Deny と同じく bail するようにする。モジュール doc の cannot-determine の記述も同じ変更で直す。"
+acceptance = [
+    "対象の消費箇所は、要望に明記されたものだけを扱う: crates/condukt/src/state.rs の約 2583 行目、crates/condukt/src/main.rs の 2003 行目 (if let testscope::Decision::Deny(reason) =)、crates/condukt/src/testscope.rs の 149 行目と 153 行目 (if let Decision::Deny(r) = check_task_scope(...))、定義は 1267 行目 (fn check_task_scope(tests: &[Words], cwd: &Path) -> Decision)。ほかに Decision を消費する箇所が見つかれば、その箇所も同様に移行する。",
+    "RED: 新規 crates/condukt/tests/testscope_decision_ask_20261117.rs (実装者以外の Agent が書く)。(a) 上記ファイルを include_str で読み、if let ... Decision::Deny の形が残っていないことを assert する。if let は variant 追加に対してコンパイルエラーにならないので、ソース走査が必要である。(b) condukt state test が Ask の pending 前歴で実行されず bail することを観測する。",
+    "モジュール doc の「Every cannot-determine ... resolves to deny」(要望の引用) は、Ask を含む記述へ同じ commit で更新する。テストは旧文言が残っていないことを assert する。",
+    "Ask 時、state test 経路は、Deny と同様にテストを実行せず、理由を stderr に出して非 0 で終了する。",
+]
+canon = [
+    "要望 Human rulings Ask 2 / Ask 5",
+    "要望 Review round 10 FIX 10-6 / 10-5",
+    "CLAUDE.md §4 (docstring と実挙動を一致させる)",
+    "CLAUDE.md §3",
+]
+falsifiable = true
+repro_test = "cargo test -p condukt --test testscope_decision_ask_20261117"
+
+[[requirement]]
+id = "R8"
+statement = "condukt state test は in-process でテストを実行するので、実行完了後に自分で confirmed 行を書く。spawn に失敗したときは、自分の pending 行を invalidate record の append で無効化する。無効化に失敗したら制限側に倒したままエラーを報告する。"
+acceptance = [
+    "RED: 新規 crates/condukt/tests/testscope_state_test_confirm_20261117.rs (実装者以外の Agent が書く)。state test の正常実行後に、ledger.v2.tsv に自己確定の confirm 行が追記され、同じ tree での 2 回目の state test が denied になる。現行コードには v2 ledger が無いので失敗する。",
+    "spawn 失敗: テストコマンドの spawn に失敗させると、invalidate <id> が追記される。その後の同一コマンドの rerun は pending 前歴に引きずられず、通常どおり実行できる (Q5)。invalidate は append-only で、既存行は書き換えない。",
+    "invalidate の追記に失敗した場合は、行が pending のまま残り、エラーを stderr に報告して非 0 で終了する。後続の rerun は Ask である。これも同じ専用ファイルのテストで、1 件以上 passed になること。0 件実行は FAIL。",
+    "無修正で GREEN のまま維持するもの (control。R2 参照): testscope_enforcement_20261114.rs::b_state_test_twice_on_same_tree_is_refused と ::b_state_test_after_hook_run_on_same_tree_is_refused。",
+]
+canon = [
+    "要望 Human rulings Ask 5",
+    "要望 round 3 Q5",
+    "要望 round 5 B / C1",
+    "要望 Review round 10 FIX 10-1 / 10-2",
+]
+falsifiable = true
+repro_test = "cargo test -p condukt --test testscope_state_test_confirm_20261117 && cargo test -p condukt --test testscope_enforcement_20261114 -- b_state_test_twice_on_same_tree_is_refused b_state_test_after_hook_run_on_same_tree_is_refused"
+
+[[requirement]]
+id = "R9"
+statement = "ledger を読めない・書けない・パースできないときは、silent な free rerun にせず制限側へ解決する。"
+acceptance = [
+    'control (現行コードで既に PASS するので RED ではない): ledger.tsv が NotFound 以外の読み取りエラーのとき、rerun 判定は Decision::Deny (crates/condukt/src/testscope.rs:1000-1008 付近が Decision::Deny("condukt testscope cannot read its rerun ledger ...") を返す、と要望に記載) のままである。',
+    "RED: ledger.v2.tsv が読み取り不能・パース不能なとき、rerun 判定は Allow にならず、Ask か Deny に解決する。Ask / Deny のどちらにするかは、旧 ledger.tsv の読み取り不能を Deny にしている既存の扱いに揃える。v2 のパース不能行は無視せず、判定不能として扱う。",
+    "pending 行しか読めない場合の Ask は R3 のとおりである。ここでは、空集合や既定値を「前歴なし = 許可」と読まないことだけを要求する。",
+    "テストは新規 crates/condukt/tests/testscope_ledger_failclosed_20261117.rs に置く (実装者以外の Agent が書く)。0 件実行は FAIL。",
+]
+canon = [
+    "要望 Requirements to specify 4",
+    "要望 Review round 10 FIX 10-4",
+    "CLAUDE.md §3: 「エラー時に**空の集合**を返さない。」",
+]
+falsifiable = true
+repro_test = "cargo test -p condukt --test testscope_ledger_failclosed_20261117"
+
+[[requirement]]
+id = "R10"
+statement = "Ask の headless / subagent での解決を、実装後に subagent で実測して README に事実として記録する。実質 deny になっている場合に限り、追加要件を RED 付きで起票する。これは文書・プロセスだけの requirement である。"
+acceptance = [
+    "repro_test は持たない。理由は、成果物が README の記録と backlog 起票という文書・プロセス作業であり、自動テストでは観測を再現できないことである (Ask 8 / R6-2 の「計測要件」)。実測そのものが観測の手続きなので、判断では代替しない。",
+    "実測済みの事実 (claude 2.1.284、headless claude -p): hook が ask を返した Bash 呼び出しは、headless では permission_denied になり、PostToolUse も PostToolUseFailure も発火しない。つまり実質 deny である。これを crates/condukt の README に事実として記録する。",
+    "testscope の Ask 実装後に、subagent での実測を行い、その結果 (Ask が実質 deny か否か) を README に追記する。実質 deny と観測された場合のみ、追加要件 (relay 等) を RED 付きで backlog に起票する。実質 deny でなければ起票しない (R6-2 / Q6)。",
+    "実測できない (環境上測れない) 場合は、判断で通さず AskUserQuestion に上げる (CLAUDE.md §2)。",
+]
+canon = [
+    "要望 round 6 Observations / R6-2",
+    "要望 round 3 Q6",
+    "要望 Human rulings Ask 8",
+    "CLAUDE.md §2 (測れないものは ask)",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R11"
+statement = "crates/condukt の変更に対し、plugin version を lockstep で micro 上げし、rollout する。これはプロセスだけの requirement である。"
+acceptance = [
+    "repro_test は持たない。理由は、CLAUDE.md が定める強制ゲート (check-plugin-versions.py / check-version-bumped.py) が pre-commit で機械判定する領域で、新規テストを書く対象ではないことである。",
+    "新しい condukt version は、実装 branch の base rev における condukt version より大きい。Cargo.toml の [package].version、.claude-plugin/plugin.json の version、.claude-plugin/marketplace.json の当該エントリ version の 3 ファイルを同時に揃える (現行は 0.7.436。base rev で測り直す)。",
+    "scripts/rollout-plugins.sh を実行しない限り稼働ハーネスには反映されない。手動 cp は禁止である。rollout は advisory 報告 (SessionStart) で確認する。",
+    "harness-core に触れる場合は、harness-core の Cargo.toml の version も micro 上げする。この requirement は harness-core への変更を要求しない。",
+]
+canon = [
+    "CLAUDE.md「プラグインを改修したとき・バージョンを上げたとき（禁忌ルール）」",
+    "要望 Review round 10 (2026-11-17) FIX 10-4",
+]
+falsifiable = true

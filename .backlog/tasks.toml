@@ -2531,3 +2531,33 @@ exit 101: red out; finished in 0.04s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
      Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-80ffcfc78037f570)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261116_git_apply_patch_known_gaps`"""
+
+[[task]]
+id = "4b2e76b5"
+title = "blastguard: git apply patch creating README.md with rm -rf ~ text denied"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-16, main fa58e3698 (blastguard 0.2.672), run-20261116-143410-12142: git apply heredoc patch creating README.md whose added line is 'rm -rf ~', nothing executed, is deny in main and subagent: 'recursive rm (-r) can delete an entire directory tree'. Reading (a): false positive, patch bodies are read as shell regardless of target file type. Reading (b): intended, the module is conservative. Test asserts allow."
+created_at = 1794813626
+updated_at = 1794813626
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261116_git_apply_patch_known_gaps f4_readme -- --include-ignored"
+rev = "a6e29aec99889d915c30082dc00de16d95407ded"
+observed_at = 1794813626
+detail = """
+exit 101: . 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.05s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-80ffcfc78037f570)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261116_git_apply_patch_known_gaps`"""

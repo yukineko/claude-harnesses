@@ -2541,3 +2541,33 @@ exit 101: 2 (/Users/yuki/src/.harness-worktrees/backlog-close-p0-20261116/crates
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
      Running tests/backlog_20261114_exec_fd_dynamic_fd_reader.rs (target/debug/deps/backlog_20261114_exec_fd_dynamic_fd_reader-4de96f009a33964c)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_exec_fd_dynamic_fd_reader`"""
+
+[[task]]
+id = "27f5e584"
+title = "blastguard --lib red at main: rule_id a_resolution_that_lost_the_cwd_gets_its_own_id_not_the_unresolvable_one fails"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "lib-red",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-16 by run-20261116-020031-33040 migrate-path worker: fails at base 07bf4b5f2 (687 passed; 7 failed incl. this) and at the migrate-path tree; one of 6 pre-existing --lib failures. Cause guessed (UNVERIFIED): 536f63e5d static_bindings resolves $BIN/$CMD command words statically so pins expecting Ask/an unresolvable id now get Deny/another id. Readings: (a) test pin stale after an intended rule change; (b) regression in rule_id."
+created_at = 1794826606
+updated_at = 1794826606
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --lib rule_id::tests::a_resolution_that_lost_the_cwd_gets_its_own_id_not_the_unresolvable_one"
+rev = "e6c63919736aab6a7a2279efc90130c4a13dcf06"
+observed_at = 1794826606
+detail = """
+exit 101: rees/run-20261116-020031-33040-backlog-libred/crates/overwatch)
+   Compiling blastguard v0.2.662 (/Users/yuki/.condukt/worktrees/run-20261116-020031-33040-backlog-libred/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 26.98s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-a07d982b4f0a36d7)
+error: test failed, to rerun pass `-p blastguard --lib`"""

@@ -1492,6 +1492,7 @@ mod tests {
             diff_ours: "ours-diff".to_string(),
             diff_theirs: "theirs-diff".to_string(),
             ts,
+            task_named: None,
         }
     }
 

@@ -542,14 +542,19 @@ enum WtAction {
     Merge {
         #[arg(long)]
         branch: String,
-        /// Optional run id whose task owns this branch. When both --run and
-        /// --task are given and the merge succeeds, stamps `merge_completed_at`
-        /// on that task (per-phase measurement; set-once). Omit for a merge with
-        /// no task association (behavior otherwise unchanged).
+        /// Optional run id whose task owns this branch. Giving --run and
+        /// --task together names the task: every commit the merge would land
+        /// must then carry `Condukt-Task: <run>/<task>` (a recorded
+        /// `branch.<b>.conduktTask` must agree with the pair), and on success
+        /// `merge_completed_at` is stamped on that task (set-once). Omit both
+        /// for a merge with no task association: no trailer check, even when a
+        /// `conduktTask` record exists. Giving only one of the two refuses
+        /// (`merge-task-undetermined`). condukt's own merges always name the
+        /// task.
         #[arg(long)]
         run: Option<String>,
-        /// Optional task id to stamp `merge_completed_at` on when the merge
-        /// succeeds (requires --run).
+        /// Optional task id naming the task that owns this branch (requires
+        /// --run; see --run for the trailer guard it turns on).
         #[arg(long)]
         task: Option<String>,
     },
@@ -557,6 +562,8 @@ enum WtAction {
     /// resolution (`overwatch resolve-merge-conflict --id <id> --choose ...`) for
     /// conflict <id> and complete the merge. Ours→`merge -s ours`,
     /// Theirs→`merge -X theirs`, Manual→materialize markers for a human to finish.
+    /// The `Condukt-Task` trailer guard applies only when the held merge named
+    /// a task (the hold's `task_named`); a hold without that flag applies it.
     ResolveMerge {
         #[arg(long)]
         id: String,

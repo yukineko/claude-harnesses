@@ -271,6 +271,11 @@ pub(crate) fn record_and_check_actual_overlap(
                 "mid-flight overlap check NOT performed (undetermined, not absent): {why}"
             ),
             ts: now,
+            // A runtime-overlap hold is enqueued mid-flight, not by a
+            // `worktree merge`, so whether a merge names a task is unknown
+            // here: `None` makes `resolve-merge` apply the trailer guard
+            // (restrictive side).
+            task_named: None,
         }
     };
 
@@ -359,6 +364,8 @@ pub(crate) fn record_and_check_actual_overlap(
             peers.join(", ")
         ),
         ts: now,
+        // Unknown here (see `unchecked_entry`): `None` => guard on resolve.
+        task_named: None,
     };
     // Idempotent per conflict_id (append_merge_conflict re-checks membership).
     // A failed enqueue means NO hold is on the review surface, so the merge is

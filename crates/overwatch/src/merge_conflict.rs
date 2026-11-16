@@ -155,6 +155,22 @@ pub struct MergeConflictEntry {
     pub diff_theirs: String,
     /// Unix timestamp when recorded.
     pub ts: i64,
+    /// Whether the ORIGINAL merge that was held named a task (`condukt
+    /// worktree merge --run <r> --task <t>`; user ruling 2026-11-16, backlog
+    /// 3a45a57d). `condukt worktree resolve-merge` reads it to decide whether
+    /// the `Condukt-Task` trailer guard applies:
+    ///
+    /// - `Some(true)`: the merge named a task → the guard applies on resolve.
+    /// - `Some(false)`: the merge named no task → no guard on resolve.
+    /// - `None`: legacy entry (written before this field) or a writer that
+    ///   cannot tell (e.g. a runtime-overlap hold) → the guard applies
+    ///   (restrictive side).
+    ///
+    /// A value that is present but not a bool (or `null`) makes the whole line
+    /// undecodable; the lenient ledger reader skips such a line, so it never
+    /// reaches resolve as `Some(false)` ("no guard").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_named: Option<bool>,
 }
 
 /// A resolution of a [`MergeConflictEntry`], joined by `conflict_id`. Its own
@@ -291,6 +307,7 @@ mod tests {
             diff_ours: "ours".to_string(),
             diff_theirs: "theirs".to_string(),
             ts,
+            task_named: None,
         }
     }
 

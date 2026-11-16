@@ -101,6 +101,7 @@ fn append_merge_conflict_with_unacquired_lock_must_not_return_ok_unwritten() {
         diff_ours: String::new(),
         diff_theirs: String::new(),
         ts: 1,
+        task_named: None,
     };
     let r = store::append_merge_conflict(&cwd, &entry);
     let _ = std::fs::remove_file(&lock);

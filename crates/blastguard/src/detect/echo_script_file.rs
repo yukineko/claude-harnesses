@@ -5,6 +5,13 @@
 //! here-string twin is [`super::here_string_file`]; this module gives the same
 //! reading to the literal arguments of `echo` and `printf`.
 //!
+//! The files a quoted `python3 - <<'PY'` here-document program writes are a
+//! second source of written files (backlog 245a4c5f;
+//! [`python_heredoc_files`], read by
+//! `interpreter::python_written_files`). They are judged by the same rules
+//! below, except where [`python_heredoc_files`] says otherwise. The writer
+//! rules in the next paragraph are about `echo` / `printf` only.
+//!
 //! A writer is a pipe stage whose command (behind any exec-wrapper,
 //! [`command_candidates`]) is `echo` or `printf`, writing its stdout to a file
 //! through `>`, `>>`, `>|`, `&>`, `1>` (glued or not), or through a following
@@ -84,19 +91,26 @@ enum Target {
 impl Target {
     fn from_word(word: &str) -> Target {
         match word_literal(word) {
-            Some(lit) if !lit.is_empty() => {
-                let mut p = lit.as_str();
-                while let Some(rest) = p.strip_prefix("./") {
-                    p = rest;
-                }
-                let p = p.trim_end_matches('/');
-                if basename(p).is_empty() || matches!(basename(p), "." | "..") {
-                    Target::Opaque(word.to_string())
-                } else {
-                    Target::Literal(p.to_string())
-                }
-            }
-            _ => Target::Opaque(word.to_string()),
+            Some(lit) => Target::from_path(&lit, word),
+            None => Target::Opaque(word.to_string()),
+        }
+    }
+
+    /// The target whose path value is `lit`; `Opaque(shown)` when that value
+    /// has no file name.
+    fn from_path(lit: &str, shown: &str) -> Target {
+        if lit.is_empty() {
+            return Target::Opaque(shown.to_string());
+        }
+        let mut p = lit;
+        while let Some(rest) = p.strip_prefix("./") {
+            p = rest;
+        }
+        let p = p.trim_end_matches('/');
+        if basename(p).is_empty() || matches!(basename(p), "." | "..") {
+            Target::Opaque(shown.to_string())
+        } else {
+            Target::Literal(p.to_string())
         }
     }
 
@@ -131,21 +145,32 @@ struct WrittenFile {
     writer: String,
 }
 
-/// The verdict on the files `echo`/`printf` write in `cmd` that another stage
-/// of `cmd` may run; Allow when there are none. See the module documentation.
+/// The verdict on the files `echo`/`printf` write in `cmd`, and the files the
+/// program of a quoted Python here-document in `cmd` writes
+/// ([`python_heredoc_files`]), that another stage of `cmd` may run; Allow
+/// when there are none. See the module documentation.
 pub(super) fn echoed_script_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let statements = split_statements_into_pipe_stages(cmd);
     let mut files: Vec<WrittenFile> = Vec::new();
     let mut writer_stages: Vec<(usize, usize)> = Vec::new();
     collect_writes(&statements, &mut files, &mut writer_stages);
+    let python = python_heredoc_files(cmd);
+    let echoed = files
+        .iter()
+        .map(|f| (f, &statements, writer_stages.as_slice()));
+    let python_written = python.iter().flat_map(|(files, statements, skipped)| {
+        files
+            .iter()
+            .map(move |f| (f, statements, skipped.as_slice()))
+    });
     let mut acc = VerdictAcc::default();
-    for file in &files {
+    for (file, statements, skipped) in echoed.chain(python_written) {
         let mut runs = Runs::default();
         for (s, stages) in statements.iter().enumerate() {
             let others: Vec<&str> = stages
                 .iter()
                 .enumerate()
-                .filter(|(i, _)| !writer_stages.contains(&(s, *i)))
+                .filter(|(i, _)| !skipped.contains(&(s, *i)))
                 .map(|(_, st)| st.as_str())
                 .collect();
             runs.add(statement_may_run(&others, &file.target));
@@ -280,26 +305,85 @@ fn collect_writes(
             }
             let content = writer.content();
             for w in writer.writes {
-                let idx = match files.iter().position(|f| f.target == w.target) {
-                    Some(idx) => idx,
-                    None => {
-                        files.push(WrittenFile {
-                            target: w.target.clone(),
-                            snapshots: Vec::new(),
-                            writer: writer.name.clone(),
-                        });
-                        files.len() - 1
-                    }
-                };
-                let file = &mut files[idx];
-                let next = match (w.append, file.snapshots.last()) {
-                    (true, Some(prev)) => appended(prev, &content),
-                    _ => content.clone(),
-                };
-                file.snapshots.push(next);
+                record_write(files, w, &content, &writer.name);
             }
         }
     }
+}
+
+/// Adds the content `content` that `writer` writes by `w` to `files`: a new
+/// file, or one more snapshot of a file already written (an append joins the
+/// previous snapshot's readings with `content`'s).
+fn record_write(files: &mut Vec<WrittenFile>, w: Write, content: &Content, writer: &str) {
+    let idx = match files.iter().position(|f| f.target == w.target) {
+        Some(idx) => idx,
+        None => {
+            files.push(WrittenFile {
+                target: w.target,
+                snapshots: Vec::new(),
+                writer: writer.to_string(),
+            });
+            files.len() - 1
+        }
+    };
+    let file = &mut files[idx];
+    let next = match (w.append, file.snapshots.last()) {
+        (true, Some(prev)) => appended(prev, content),
+        _ => content.clone(),
+    };
+    file.snapshots.push(next);
+}
+
+/// The files a Python here-document program writes, the statements its runs
+/// are looked for in, and the (statement, stage) pairs left out of that search.
+type PythonWrittenFiles = (Vec<WrittenFile>, Vec<Vec<String>>, Vec<(usize, usize)>);
+
+/// The files the program of a quoted Python here-document
+/// ([`super::heredoc::python_stdin_here_document`], `python3 - <<'PY'`)
+/// writes, as [`super::interpreter::python_program_writes`] reads them
+/// (backlog 245a4c5f: `open("t.sh","w").write("chmod 777 /etc/hosts\n")` in
+/// that body followed by `sh t.sh` was Allow). A path that is not an exact
+/// literal is an `Opaque` target (see the module documentation for what may
+/// run one).
+///
+/// Their runs are looked for in the statements of the command WITHOUT the
+/// body, so a body line (where the write call names the file) is not read as
+/// a run. The first stage there that opens a here-document — the Python
+/// reader — is left out of the search, so its `python3` word is not read as a
+/// run of the file as a Python program; when no stage opens one, none is
+/// left out.
+///
+/// `None` when there is no such here-document or the body yields no write.
+/// Not read here (gaps): a Python program given by `-c`, by a file, or under
+/// an unquoted delimiter; a run inside the Python program itself; and the
+/// order of the write and the run (a run before the program counts as a run
+/// of what it writes, as for `echo`).
+fn python_heredoc_files(cmd: &str) -> Option<PythonWrittenFiles> {
+    let parts = super::heredoc::python_stdin_here_document(cmd)?;
+    let writes = super::interpreter::python_program_writes(&parts.body);
+    if writes.is_empty() {
+        return None;
+    }
+    let mut files = Vec::new();
+    for w in writes {
+        let target = match &w.path {
+            Some(p) => Target::from_path(p, p),
+            None => Target::Opaque("a path the Python program does not spell as a literal".into()),
+        };
+        let write = Write {
+            target,
+            append: w.append,
+        };
+        record_write(&mut files, write, &vec![w.content], w.call);
+    }
+    let statements = split_statements_into_pipe_stages(&parts.without_body);
+    let reader = statements.iter().enumerate().find_map(|(s, stages)| {
+        stages
+            .iter()
+            .position(|st| super::heredoc::opens_here_document(st))
+            .map(|i| (s, i))
+    });
+    Some((files, statements, reader.into_iter().collect()))
 }
 
 /// An `echo` / `printf` stage: its name, its argument words (quotes still on),

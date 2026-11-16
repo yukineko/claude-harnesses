@@ -14,6 +14,7 @@ mod python_escape;
 mod python_file;
 mod python_literal_target;
 mod python_semantics;
+mod python_written_files;
 mod shell_calls;
 #[cfg(test)]
 mod unit_tests;
@@ -29,6 +30,7 @@ pub(super) use python_file::{
     python_file_body_verdict, python_program_enters_stdin_console, python_program_only_prints,
     python_redirect_view, python_stdin_body_reading, python_written_program_verdict,
 };
+pub(super) use python_written_files::python_program_writes;
 pub(super) use shell_calls::python_body_segment_verdict;
 
 /// Non-shell interpreters that run an inline program supplied as a string

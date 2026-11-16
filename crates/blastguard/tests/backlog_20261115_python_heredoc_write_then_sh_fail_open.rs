@@ -118,7 +118,6 @@ fn py_heredoc(body: &str) -> String {
 const WRITE_HARM: &str = "open(\"t_test.sh\", \"w\").write(\"chmod 777 /etc/hosts\\n\")";
 
 #[test]
-#[ignore = "RED: 2026-11-15 python heredoc writes a .sh with `chmod 777 /etc/hosts` / `rm -rf ~` and the same call runs it (sh/bash/source/chmod+x ./) — allowed at HEAD, shell-heredoc equivalent is denied — remove when fixed"]
 fn python_writes_harmful_sh_then_same_call_runs_it_is_not_allowed() {
     let cases: Vec<String> = vec![
         format!("{}\nsh t_test.sh", py_heredoc(WRITE_HARM)),

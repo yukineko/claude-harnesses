@@ -69,7 +69,7 @@ pub(super) fn literal_values(src: &str) -> Vec<super::python_escape::Decoded> {
 /// is not fully decoded (`Decoded::Holed` / `Undecodable`, e.g. `\N{…}`), and
 /// a raw literal holding a backslash (the lexer reads `\X` as `X` there,
 /// Python keeps the backslash).
-fn lex_marking_inexact(src: &str) -> (Vec<Tok>, Vec<usize>) {
+pub(super) fn lex_marking_inexact(src: &str) -> (Vec<Tok>, Vec<usize>) {
     let mut inexact = Vec::new();
     let toks = lex_impl(src, None, Some(&mut inexact));
     (toks, inexact)

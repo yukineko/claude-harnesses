@@ -58,7 +58,8 @@ hooks:
     （消さない・戻さない。必要なら `notes` に `file` と状態を書いて報告する）。
     自分の変更ファイルは `files_changed` に返すものと一致させる。
     記録が読めない（空・未記録）なら commit せず `status: blocked` で返し、`notes` にその旨を書く。
-    `condukt worktree merge` は `<conduktBase>..<branch>` のうち既定ブランチに未到達の commit が 1 つでも
+    呼び出し元の `condukt worktree merge --run <run> --task <task>`（condukt は統合時に必ず task を名指しする）は
+    `<conduktBase>..<branch>` のうち既定ブランチに未到達の commit が 1 つでも
     この trailer を欠く（または別 task の値を持つ）と、該当 SHA を列挙して merge を拒否する —
     並列セッションは git identity を共有するので、author では task の commit と他セッションの commit を区別できないため。
     **merge commit も例外ではない**（worktree 内で `git merge main` する場合は `git merge --no-commit main` の後に

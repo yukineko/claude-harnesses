@@ -48,10 +48,9 @@ pub fn run_cmd(cmd: &str, root: &Path, timeout: u64, tail_lines: usize, tmp_dir:
         }
     }
     let Some(log_path) = log_path else {
-        // No test ran. passed=false, so `tdd green` rejects this. `tdd red`'s
-        // judge_red does not inspect spawn_error and would still record a RED
-        // (pre-existing, tracked separately); the message is carried in
-        // output_tail so such an artifact says why.
+        // No test ran. passed=false, but both `tdd red` and `tdd green` check
+        // spawn_error via `judge_ran` and refuse (no artifact written); the
+        // message is carried in output_tail so any artifact says why.
         let msg = format!("could not create a unique run log in {}", tmp_dir.display());
         return Outcome {
             passed: false,

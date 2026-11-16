@@ -48,14 +48,64 @@ fn judge_red(passed: bool) -> Result<()> {
     Ok(())
 }
 
+/// Which proof a run was meant to produce; only selects the wording of
+/// [`judge_ran`]'s refusal so each phase tells the user which command to re-run.
+#[derive(Clone, Copy)]
+enum Phase {
+    Red,
+    Green,
+}
+
 /// Refuse to treat a run as evidence when the test command never ran
 /// (`spawn_error` set): the runner reports that as `passed: false`, which
-/// `judge_red` would otherwise read as "tests fail as expected".
-fn judge_ran(out: &runner::Outcome) -> Result<()> {
+/// `judge_red` would otherwise read as "tests fail as expected" and
+/// `judge_green` as "tests still failing". Both `red()` and `green()` call
+/// this right after `run_cmd`, so a run that never happened is reported as
+/// such (naming the spawn error) and records no artifact in either phase.
+fn judge_ran(out: &runner::Outcome, phase: Phase) -> Result<()> {
     if let Some(e) = &out.spawn_error {
+        let (which, again) = match phase {
+            Phase::Red => ("RED", "tdd red"),
+            Phase::Green => ("GREEN", "tdd green"),
+        };
         bail!(
-            "test command never ran ({e}) — no RED recorded. Fix the environment/command \
-             and run `tdd red` again."
+            "test command never ran ({e}) — no {which} recorded. Fix the environment/command \
+             and run `{again}` again."
+        );
+    }
+    Ok(())
+}
+
+/// Refuse to treat a run as evidence when it produced no exit code: the
+/// command timed out (`timed_out`), or it ended without an exit code —
+/// `exit_code` is `None` with no `spawn_error` and `timed_out` false, which
+/// the harness-core runner produces both when the child was killed by a
+/// signal and when waiting on the child failed (its `wait_timeout` `Err`
+/// arm). The runner reports all of these as `passed: false`, which
+/// `judge_red` would read as "tests fail as expected" — but no assertion
+/// failure was observed, so the outcome is undetermined, not RED. Only a
+/// command that ran and exited with a code (even non-zero) is evidence.
+/// `red()` and `green()` call this right after [`judge_ran`]; neither records
+/// an artifact for such a run. (GREEN was already refused via `passed: false`;
+/// this only makes the message name the real cause.)
+fn judge_exited(out: &runner::Outcome, phase: Phase, timeout_secs: u64) -> Result<()> {
+    let (which, again) = match phase {
+        Phase::Red => ("RED", "tdd red"),
+        Phase::Green => ("GREEN", "tdd green"),
+    };
+    if out.timed_out {
+        bail!(
+            "test command timed out after {timeout_secs} s — no {which} recorded: no assertion \
+             failure was observed, so the result is undetermined. Fix the hang or raise the \
+             timeout and run `{again}` again."
+        );
+    }
+    if out.exit_code.is_none() {
+        bail!(
+            "test command produced no exit code (killed by a signal, or waiting on it failed) — \
+             no {which} recorded: no assertion failure was observed, so the result is \
+             undetermined. Find out why the process ended without an exit code and run \
+             `{again}` again."
         );
     }
     Ok(())
@@ -209,6 +259,12 @@ fn resolve_cmd<'a>(cmd: &'a Option<String>, cfg: &'a Config) -> &'a str {
 
 /// `tdd red`: run the tests, require failure, record the RED proof.
 ///
+/// RED is recorded only for a command that ran and exited non-zero. A run
+/// that timed out, or produced no exit code (killed by a signal, or the wait
+/// on the child failed), is refused and records no proof: no assertion
+/// failure was observed, so the outcome is undetermined (see
+/// [`judge_exited`]). A run whose tests already pass is refused too.
+///
 /// `author` is an optional identity (agent/session id) for the test-authoring
 /// step, recorded into the proof so a later `tdd green --author <id>` can be
 /// checked against it under `strict_separation` (see [`judge_separation`]).
@@ -231,7 +287,8 @@ pub fn red(
         cfg.output_tail_lines,
         &tmp,
     );
-    judge_ran(&out)?;
+    judge_ran(&out, Phase::Red)?;
+    judge_exited(&out, Phase::Red, cfg.default_timeout_secs)?;
     judge_red(out.passed)?;
     let path = artifact_path(root, cfg, task, "red");
     let author = resolve_author(author);
@@ -275,6 +332,10 @@ fn read_author(root: &Path, cfg: &Config, task: &str, kind: &str) -> Determinati
 }
 
 /// `tdd green`: require a RED proof, run the tests, require success, record GREEN.
+///
+/// GREEN is recorded only for a command that ran and exited zero. A run that
+/// timed out, or produced no exit code (killed by a signal, or the wait on
+/// the child failed), is refused and records no proof (see [`judge_exited`]).
 ///
 /// `author` is an optional identity for the implementation step. When
 /// omitted, it defaults to the current session id (see [`default_author`] /
@@ -333,6 +394,8 @@ pub fn green(
         cfg.output_tail_lines,
         &tmp,
     );
+    judge_ran(&out, Phase::Green)?;
+    judge_exited(&out, Phase::Green, cfg.default_timeout_secs)?;
     judge_green(out.passed, has_red)?;
     let path = artifact_path(root, cfg, task, "green");
     write_artifact(

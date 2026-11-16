@@ -391,15 +391,19 @@ reconcile 後も FAIL が残る場合の対処:
 各 verified タスクの worktree を自分の turn 内で閉じます。
 
 ```
-condukt worktree merge --branch condukt/<id>
-condukt worktree remove --path "$WP" --branch condukt/<id>
+condukt worktree merge --branch condukt/$RID/<id> --run "$RID" --task <id>
+condukt worktree remove --path "$WP" --branch condukt/$RID/<id>
 condukt worktree cleanup    # orphan が無いことを確認
 ```
+
+`--run "$RID" --task <id>` は必ず渡します。`Condukt-Task` trailer guard は merge が task を名指ししたときだけ
+掛かり（両方省いた merge は task 関連を持たず、`branch.<b>.conduktTask` の記録があっても trailer を検査しない。
+片方だけは `merge-task-undetermined` で拒否）、condukt 自身の merge はこの 2 つを渡して guard を保ちます。
 
 **merge pre-flight 衝突への対処**:
 
 1. 衝突している branch を特定する
-2. 軽微で自動解消可能な場合: worktree 内で `git merge main` → コンフリクト解消 → commit → `condukt worktree merge` 再実行
+2. 軽微で自動解消可能な場合: worktree 内で `git merge --no-commit main` → コンフリクト解消 → task trailer 付きで commit → `condukt worktree merge --branch condukt/$RID/<id> --run "$RID" --task <id>` 再実行
 3. 大きく再実装が必要な場合: タスクを `failed` に set し、Phase 6 経由で新しい worktree で再実装
 4. 解消後に `condukt state gate --run $RID` で gate PASS を確認
 
@@ -486,10 +490,15 @@ WP=$(condukt worktree create --topic <t.id> --branch condukt/<t.id>)
 ### merge（Phase 7 で verified タスクの統合時）
 
 ```
-condukt worktree merge --branch condukt/<id>
+condukt worktree merge --branch condukt/$RID/<id> --run "$RID" --task <id>
 ```
 
 - `condukt state gate` が PASS した後に実行する
+- `--run`/`--task` を渡したとき（だけ）、既定ブランチに未到達の commit がすべて `Condukt-Task: <run>/<task>`
+  trailer を持つことを検査する（`branch.<b>.conduktTask` の記録があればそれと一致しなければ
+  `merge-task-mismatch`、欠落・別 task は `merge-task-trailer-missing`）。両方省くと trailer 検査はしない。
+  衝突で HOLD された merge の `condukt worktree resolve-merge` は、元の merge が task を名指ししていた
+  （hold entry の `task_named`）ときだけ trailer 検査をする。flag の無い旧 entry は検査する（制限側）
 - merge 前に pre-flight 衝突チェックを行う
 - 衝突がある場合は詳細を返し、呼び出し側が解消する
 

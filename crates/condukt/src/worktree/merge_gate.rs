@@ -1,24 +1,93 @@
 //! Pre-checkout merge refusals of a task branch, moved verbatim out of
 //! `worktree.rs` (file-growth ratchet): the recorded creation base must be on
-//! the default branch, and every landed commit must carry the task trailer.
+//! the default branch, and every landed commit of a task-associated merge must
+//! carry the task trailer.
 
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 
 use super::{creation_base_key, git, git_exit_code, git_try, task_identity_key, TASK_TRAILER};
 
-/// Refuse to integrate `branch` unless EVERY commit the merge would newly land
-/// on `default_branch` (`<base>..<tip>` minus what `default_branch` already
-/// has) carries a `Condukt-Task: <run>/<task>` trailer naming this task, and
-/// only that task.
+/// Whether (and against which identity) the `Condukt-Task` trailer guard runs
+/// for one merge (user rulings 2026-11-15 / 2026-11-16, backlog 3a45a57d).
+///
+/// The guard applies only to a merge that has a task association. Which one a
+/// caller has is decided by the caller and stated here explicitly, never
+/// inferred from an absent value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TrailerGuard<'a> {
+    /// The merge names no task (`worktree merge` without `--run/--task`, or
+    /// `resolve-merge` of a hold whose original merge named no task): no
+    /// trailer check, even when `branch.<b>.conduktTask` is recorded. The tip
+    /// is still pinned.
+    Skip,
+    /// The merge names the task `run/task` (`--run` and `--task` together).
+    /// A `conduktTask` record, when present, must agree with it
+    /// (`merge-task-mismatch`) and is then the identity; without a record the
+    /// pair is the identity.
+    Named { run: &'a str, task: &'a str },
+    /// The identity comes from the create-time `conduktTask` record alone
+    /// (`resolve-merge` of a task-named hold, or of a hold that does not say —
+    /// legacy entry / runtime-overlap hold: restrictive side). No record
+    /// refuses (`merge-task-undetermined`).
+    RecordOnly,
+}
+
+impl<'a> TrailerGuard<'a> {
+    /// The guard of `worktree merge`: [`TrailerGuard::Named`] when the CLI
+    /// gave `--run` and `--task` together, [`TrailerGuard::Skip`] when it gave
+    /// neither (user ruling 2026-11-15) — even when a `conduktTask` record
+    /// exists. A half-given pair never reaches here: the CLI refuses it
+    /// (`merge-task-undetermined`).
+    pub(super) fn for_merge(cli_task: Option<(&'a str, &'a str)>) -> Self {
+        match cli_task {
+            Some((run, task)) => Self::Named { run, task },
+            None => Self::Skip,
+        }
+    }
+
+    /// The guard of `resolve-merge`, from the hold entry's `task_named` (user
+    /// ruling 2026-11-16, option B): `Some(false)` — the held merge named no
+    /// task — skips the check; `Some(true)` applies it, and so does `None`
+    /// (legacy entry or a runtime-overlap hold: does not say → restrictive
+    /// side). Applied, the identity is the create-time record only.
+    pub(super) fn for_resolve(task_named: Option<bool>) -> Self {
+        match task_named {
+            Some(false) => Self::Skip,
+            Some(true) | None => Self::RecordOnly,
+        }
+    }
+}
+
+/// Resolve `branch` to the commit the caller must merge (pinned, so a commit
+/// arriving after this point is not merged).
+fn pin_tip(repo: &Path, branch: &str) -> Result<String> {
+    Ok(git(
+        repo,
+        &["rev-parse", "--verify", &format!("{branch}^{{commit}}")],
+    )
+    .with_context(|| format!("could not resolve '{branch}' to a commit"))?
+    .trim()
+    .to_string())
+}
+
+/// Return the pinned tip of `branch` for the merge; when `guard` is not
+/// [`TrailerGuard::Skip`], first refuse unless EVERY commit the merge would
+/// newly land on `default_branch` (`<base>..<tip>` minus what
+/// `default_branch` already has) carries a `Condukt-Task: <run>/<task>`
+/// trailer naming this task, and only that task.
 ///
 /// Parallel sessions share one git identity, so authorship cannot tell a
 /// task's own commits from a foreign session's commit made on the same branch;
-/// the trailer is the only per-task mark. The expected identity is the
-/// `conduktTask` record written at create time; a caller-supplied
-/// `--run/--task` must agree with it, and stands in for it only when no
-/// record exists. Every non-determination refuses: no identity, a half-given
-/// `--run/--task`, a disagreeing pair, an unreadable log, a malformed record.
+/// the trailer is the only per-task mark. The guard is the property of a merge
+/// that names a task: [`TrailerGuard::Skip`] (a merge naming no task) checks
+/// no trailer even when a `conduktTask` record exists. With the guard on, the
+/// expected identity is the `conduktTask` record written at create time; a
+/// [`TrailerGuard::Named`] pair must agree with it, and is the identity only
+/// when no record exists. Every non-determination refuses: no identity under
+/// [`TrailerGuard::RecordOnly`], a disagreeing pair, an unreadable log, a
+/// malformed record. (A half-given `--run/--task` is refused by the CLI before
+/// a guard is chosen.)
 ///
 /// Merge commits are not exempt. condukt itself never commits on a task
 /// branch — [`merge`] and [`resolve_merge`] create their merge commit on
@@ -35,8 +104,13 @@ pub(super) fn ensure_commits_carry_task_trailer(
     branch: &str,
     default_branch: &str,
     base: &str,
-    cli_task: Option<(&str, &str)>,
+    guard: TrailerGuard<'_>,
 ) -> Result<String> {
+    let cli_task = match guard {
+        TrailerGuard::Skip => return pin_tip(repo, branch),
+        TrailerGuard::Named { run, task } => Some((run, task)),
+        TrailerGuard::RecordOnly => None,
+    };
     let short = branch.strip_prefix("refs/heads/").unwrap_or(branch);
     let key = task_identity_key(short);
     // `--local`: only the repository's own record counts, never a value in
@@ -54,8 +128,8 @@ pub(super) fn ensure_commits_carry_task_trailer(
         (None, Some(cli)) => cli,
         (None, None) => bail!(
             "merge-task-undetermined: '{branch}' has no recorded task identity ({key}{}) and \
-             no --run/--task was given; cannot tell which commits belong to the task, \
-             refusing to merge ('{default_branch}' untouched)",
+             the held merge named a task (or its hold does not say); cannot tell which \
+             commits belong to the task, refusing to merge ('{default_branch}' untouched)",
             if err.trim().is_empty() {
                 String::new()
             } else {
@@ -64,13 +138,7 @@ pub(super) fn ensure_commits_carry_task_trailer(
         ),
     };
 
-    let tip = git(
-        repo,
-        &["rev-parse", "--verify", &format!("{branch}^{{commit}}")],
-    )
-    .with_context(|| format!("could not resolve '{branch}' to a commit"))?
-    .trim()
-    .to_string();
+    let tip = pin_tip(repo, branch)?;
     let fmt = format!(
         "--format=%H%x1f%(trailers:key={TASK_TRAILER},valueonly,unfold,separator=%x1f)%x1e"
     );

@@ -1219,9 +1219,13 @@ condukt state gate --run $RID      # exit 0 まで完了宣言しない
   - 未コミット → 該当 worktree 内で commit させる
 - **serial タスク**は Phase 5 の serial mid-run merge で既に統合・remove 済みなので、ここでは再 merge しない。
 - 各 verified タスクの worktree を **自分の turn 内で** 閉じる:
-  `condukt worktree merge --branch condukt/$RID/<id>` → `condukt worktree remove --path "$WP" --branch condukt/$RID/<id>`
+  `condukt worktree merge --branch condukt/$RID/<id> --run "$RID" --task <id>` → `condukt worktree remove --path "$WP" --branch condukt/$RID/<id>`
   （Phase 5 で `--run "$RID"` を渡して切った run-名前空間つき branch 名をそのまま使う。`--run` を
   渡さずに切った旧レイアウトの worktree は従来どおり `condukt/<id>`）。
+  **`--run "$RID" --task <id>` は必ず渡す**: `Condukt-Task` trailer guard は merge が task を名指ししたときだけ
+  掛かる（`--run`/`--task` を両方とも省いた merge は task 関連を持たず、`branch.<b>.conduktTask` の記録が
+  あっても trailer を検査しない。片方だけは `merge-task-undetermined` で拒否）。condukt 自身の merge は
+  guard を外さないためにこの 2 つを渡す。
   最後に `condukt worktree cleanup` で orphan が無いことを確認。
 - **統合先は常に config の `default_branch`**（既定 `main`）。run を開始したときの primary tree の
   ブランチではない。`condukt worktree create` は task branch をその時点の HEAD から切り、切った commit を
@@ -1241,7 +1245,8 @@ condukt state gate --run $RID      # exit 0 まで完了宣言しない
      stage する（作業ツリー全体の一括 stage はしない）→ task trailer 付きで確定する
      `git commit --no-edit --trailer "Condukt-Task: $TASK_ID"` (`TASK_ID` は
      `TASK_ID=$(git config --get "branch.$(git branch --show-current).conduktTask")` で読む。
-     trailer の無い merge commit は `condukt worktree merge` が拒否する) → 再度 `condukt worktree merge` を実行する。
+     trailer の無い merge commit は `--run`/`--task` 付きの `condukt worktree merge` が拒否する) → 再度
+     `condukt worktree merge --branch condukt/$RID/<id> --run "$RID" --task <id>` を実行する。
   3. 衝突が大きく再実装が必要な場合: タスクを `failed` に set し、Phase 6 カスケードエスカレーション
      を経て新しい worktree で再実装する。再実装 worker には衝突の詳細を `failure_context.reason` に
      含めて渡す。

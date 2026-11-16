@@ -39,8 +39,6 @@ fn run(home: &Path, cwd: &Path, phase: &str, cmd: &str) -> Output {
         .expect("tdd runs")
 }
 
-// test-weakening-justified: new RED for an unfixed defect (backlog pending, 2026-11-16); the ignore is removed in the fixing commit.
-#[ignore]
 #[test]
 fn green_names_the_spawn_failure_not_failing_tests() {
     let d = Dir(std::env::temp_dir().join(format!("tdd-green-spawn-{}", std::process::id())));

@@ -46,8 +46,6 @@ fn red(home: &Path, cwd: &Path, cmd: &str) -> Output {
         .expect("tdd runs")
 }
 
-// test-weakening-justified: new RED for an unfixed defect (backlog pending, 2026-11-16); the ignore is removed in the fixing commit.
-#[ignore]
 #[test]
 fn red_is_not_recorded_when_the_command_was_killed_by_a_signal() {
     let (_d, home, work) = setup("sig");

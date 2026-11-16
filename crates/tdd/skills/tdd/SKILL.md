@@ -49,6 +49,9 @@ tdd red --task <id> [--cmd "<test cmd>"] [--author <id>]
 - 成功(exit 0)= テストが落ちた = test-first 成立。`<proof_dir>/<id>.red.json` が書かれる。
 - 失敗(exit 1, "tests passed …")= テストが通ってしまった。**実装してはいけない**。
   振る舞いを実際に検証する失敗テストへ書き直して Phase 3 をやり直す。
+- 失敗(exit 1, "produced no exit code" / "timed out")= コマンドが終了コードを返さなかった（signal で kill された、または子プロセスの wait に失敗した）、またはタイムアウトした。
+  assertion の失敗は観測されていないので判定不能として拒否され、RED 証跡は書かれない。
+  RED になるのは「コマンドが走り切って非 0 で終了した」場合だけ。
 - **記録される identity**: `--author` を渡さない場合、証跡に記録される identity は
   `CLAUDE_CODE_SESSION_ID`(未設定なら共有バケット `_local`)に自動で default する。
   素の CLI 文字列を渡す honor-system には依存しない。`--author <id>` を明示すれば、それが

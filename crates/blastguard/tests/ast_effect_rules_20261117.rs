@@ -35,11 +35,12 @@
 //! today's verdict there, which is pinned by the existing tests.
 //!
 //! Backlog 06c51772 note: that item reports `. "$HOME/.cargo/env"` being
-//! refused as a false positive. Under ruling 13 (`.` / `source` stay Ask
-//! (main) / Deny (subagent) until a quarantine plugin exists), the
-//! refusal of the `.` itself is the SPECIFIED verdict, not an FP; only the
-//! python-heredoc write-path half of 06c51772 (S5) is outside ruling 13.
-//! `b3_dot_source_home_cargo_env_restricts` pins the ruling-13 half.
+//! refused as a false positive. Rulings 13 / 16: `.` / `source` become Ask
+//! (main) / Deny (subagent) together with the quarantine plugin; from then
+//! on refusing the `.` itself is the SPECIFIED verdict, not an FP. Until the
+//! plugin exists the verdict is today's (legacy). The python-heredoc
+//! write-path half of 06c51772 is S5 (ruling 15).
+//! `b3_dot_source_home_cargo_env_restricts` pins the ruling-13/16 half.
 //!
 //! DOES NOT PROVE: which rule produced a verdict (only the decision is
 //! asserted, not the reason), behaviour with `TMPDIR` set, any `legacy`
@@ -52,10 +53,11 @@
 //! would freeze a possible fail-open, so it is left to a ruling. The `xargs`
 //! / `find -delete` shapes are tested with `rm` / `-delete` instead.
 //!
-//! Stage labels on `dd` / `truncate` / `find -delete` Scratch twins say "S6
-//! if ...": SUBSET.md "Undetermined handling" 3 keeps legacy readings
-//! raise-only until S6, and today's legacy answer there is Deny / Ask, so
-//! S3 alone may not turn them GREEN.
+//! Stage labels on the `dd` / `truncate` / `find -delete` Scratch twins are
+//! S6: ruling 14 keeps the whole legacy string layer raise-only until S6, and
+//! today's legacy answer there is Deny / Ask. The `.` / `source` REDs are
+//! labelled `quarantine` (ruling 16: they become Ask together with the
+//! quarantine plugin, not in S4).
 
 #[path = "support/bounded.rs"]
 mod bounded;
@@ -117,7 +119,11 @@ fn fixture(tag: &str) -> Fx {
     Fx { base }
 }
 
-/// Run the hook once; `(decision, reason)`. Empty stdout is Allow.
+/// Run the hook once; `(decision, reason)`.
+///
+/// Order is load-bearing: (1) a non-zero / signalled exit panics; (2) only
+/// then is an EMPTY stdout read as Allow (a crashed hook never becomes an
+/// Allow); (3) a non-empty stdout that is not JSON panics.
 fn run_as(fx: &Fx, cwd: &Path, command: &str, subagent: bool) -> (String, String) {
     let mut p = serde_json::json!({
         "session_id": "ast-effect-rules-20261117",
@@ -141,6 +147,7 @@ fn run_as(fx: &Fx, cwd: &Path, command: &str, subagent: bool) -> (String, String
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let out = bounded::run_bounded(&mut cmd, p.to_string().as_bytes(), bounded::HOOK_DEADLINE);
+    // (1) Exit status first: everything below runs only for exit 0.
     assert!(
         out.status.success(),
         "hook exited {:?} for {command:?}: {}",
@@ -148,10 +155,13 @@ fn run_as(fx: &Fx, cwd: &Path, command: &str, subagent: bool) -> (String, String
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    // (2) Empty stdout = Allow, reachable only after (1).
     if stdout.trim().is_empty() {
         return ("allow".into(), String::new());
     }
-    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    // (3) Non-JSON stdout panics.
+    let v: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("hook stdout for {command:?} is not JSON ({e}): {stdout:?}"));
     let h = &v["hookSpecificOutput"];
     (
         h["permissionDecision"].as_str().unwrap_or("?").to_string(),
@@ -262,6 +272,26 @@ fn b1_rm_r_inside_own_worktree_relative_allows() {
     allow_at(&fx, &wt, "rm -r sub");
 }
 
+/// OwnWorktree control: the SAME `rm -r <checkout>/sub` with the session cwd
+/// OUTSIDE the checkout (the fixture's plain `src/proj`). Ruling 9 makes the
+/// target OtherWorktree ("today's verdict (confined Ask)"), while the
+/// `scope.rs` module doc says recursive rm strictly inside a worktree storage
+/// root is Allow today. Those two disagree, so per the coordinator's
+/// instruction (2026-11-17) this is NOT asserted: it is a probe that panics
+/// with the observed decisions, kept ignored. Observed 2026-11-17:
+/// `main=allow () | subagent=allow ()` — today's verdict is the scope.rs
+/// storage-root Allow, not ruling 9's parenthetical "confined Ask".
+#[test]
+#[ignore = "probe: OtherWorktree rm -r, ruling 9 vs scope.rs storage-root Allow (undecided)"]
+fn b1_probe_rm_r_own_worktree_target_with_cwd_outside() {
+    let fx = fixture("b1wtout");
+    let wt = fx.own_worktree();
+    let command = format!("rm -r {}", wt.join("sub").display());
+    let (dm, rm) = run_as(&fx, &fx.proj(), &command, false);
+    let (ds, rs) = run_as(&fx, &fx.proj(), &command, true);
+    panic!("PROBE main={dm} ({rm}) | subagent={ds} ({rs})");
+}
+
 // ---------------------------------------------------------------------------
 // B2 — perl / ruby / node inline programs are OUT of the subset (ruling 4;
 // Table B.5 row "perl / ruby -e/-E, -i, stdin, node -e/-p/stdin") ->
@@ -369,17 +399,17 @@ fn b3_dollar_home_cache_delete_allows() {
 
 /// Ruling 13: `.` of a file is Ask (main) / Deny (subagent). See the module
 /// doc for the backlog 06c51772 note.
-// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
+// test-weakening-justified: new RED for unbuilt quarantine-plugin behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S4 B.5 . file Ask (ruling 13)"]
+#[ignore = "RED: quarantine B.5 . file Ask together with the quarantine plugin (rulings 13, 16)"]
 fn b3_dot_source_home_cargo_env_restricts() {
     restrict("b3dot", ". \"$HOME/.cargo/env\"");
 }
 
 /// Ruling 13: `source` of a relative file is Ask / Deny.
-// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
+// test-weakening-justified: new RED for unbuilt quarantine-plugin behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S4 B.5 source file Ask (ruling 13)"]
+#[ignore = "RED: quarantine B.5 source file Ask together with the quarantine plugin (rulings 13, 16)"]
 fn b3_source_relative_restricts() {
     restrict("b3src", "source ./x.sh");
 }
@@ -423,6 +453,39 @@ fn b4_perl_script_file_restricts() {
 #[ignore = "RED: S4 B.5 wrapper -> script-file row (ruling 10)"]
 fn b4_env_wrapped_script_file_restricts() {
     restrict("b4env", "env bash script.sh");
+}
+
+/// Ruling 17 (Q2): direct execution of a file whose body is not in the text
+/// (`./run.sh`) is Undetermined -> Ask / Deny.
+// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
+#[test]
+#[ignore = "RED: S4 B.5 direct-execution row ./ (ruling 17)"]
+fn b4_direct_exec_dot_slash_restricts() {
+    restrict("b4dot", "./run.sh");
+}
+
+/// Ruling 17: a relative path with a directory component.
+// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
+#[test]
+#[ignore = "RED: S4 B.5 direct-execution row relative dir (ruling 17)"]
+fn b4_direct_exec_relative_dir_restricts() {
+    restrict("b4rel", "scripts/foo.sh");
+}
+
+/// Ruling 17: an absolute path (non-existent sentinel under `/tmp`).
+// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
+#[test]
+#[ignore = "RED: S4 B.5 direct-execution row absolute (ruling 17)"]
+fn b4_direct_exec_absolute_restricts() {
+    restrict("b4abs", "/tmp/bg-s2-sentinel-exec/run.sh");
+}
+
+/// Ruling 17 + B.3: a wrapper in front of a direct execution.
+// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
+#[test]
+#[ignore = "RED: S4 B.5 wrapper -> direct-execution row (ruling 17)"]
+fn b4_direct_exec_env_wrapped_restricts() {
+    restrict("b4envd", "env ./run.sh");
 }
 
 // ---------------------------------------------------------------------------
@@ -548,9 +611,9 @@ fn b5_truncate_system_denies() {
 }
 
 /// B.1 `truncate` (Truncate) x Scratch.
-// test-weakening-justified: new RED for unbuilt S3 behaviour (2026-11-17)
+// test-weakening-justified: new RED for unbuilt S6 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S3 Table C Scratch x Truncate truncate (S6 if the legacy confined Ask stays raise-only)"]
+#[ignore = "RED: S6 Table C Scratch x Truncate truncate (legacy confined Ask raise-only until S6, ruling 14)"]
 fn b5_truncate_scratch_allows() {
     allow("b5trscr", "truncate -s 0 /tmp/bg-s2-sentinel-truncate");
 }
@@ -589,9 +652,9 @@ fn b5_dd_of_system_denies() {
 }
 
 /// B.1 `dd of=` (Truncate) x Scratch.
-// test-weakening-justified: new RED for unbuilt S3 behaviour (2026-11-17)
+// test-weakening-justified: new RED for unbuilt S6 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S3 Table C Scratch x Truncate dd of= (S6 if the legacy dd reading stays raise-only)"]
+#[ignore = "RED: S6 Table C Scratch x Truncate dd of= (legacy dd reading raise-only until S6, ruling 14)"]
 fn b5_dd_of_scratch_allows() {
     allow(
         "b5ddscr",
@@ -671,9 +734,9 @@ fn b6_find_delete_system_root_denies() {
 }
 
 /// B.1 `find -delete` on a Scratch search root -> Allow.
-// test-weakening-justified: new RED for unbuilt S3 behaviour (2026-11-17)
+// test-weakening-justified: new RED for unbuilt S6 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S3 Table C Scratch x Delete find -delete (S6 if the legacy confined Ask stays raise-only)"]
+#[ignore = "RED: S6 Table C Scratch x Delete find -delete (legacy confined Ask raise-only until S6, ruling 14)"]
 fn b6_find_delete_scratch_root_allows() {
     allow("b6fscr", "find /tmp/bg-s2-sentinel-find -delete");
 }

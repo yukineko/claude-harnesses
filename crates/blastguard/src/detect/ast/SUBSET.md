@@ -42,6 +42,20 @@ S2 rulings (user ruling 2026-11-17, spec change made before the S2 tests):
 13. `.` / `source` of a file stay **Ask** (main) / Deny (subagent) until a
     quarantine plugin exists (Table B.5); S4 does not judge the sourced body.
 
+S2 supplement rulings (user ruling 2026-11-17, after the S2 RED verification):
+
+14. The legacy string layer stays in full, **raise-only**, until S6 — for
+    every row, not only the harm readings. A Table C Allow that a legacy
+    reading answers Ask / Deny today (`dd of=`, `truncate`, `find -delete` on
+    Scratch) stays at the legacy verdict until S6 retires that reading.
+15. Python keeps the legacy readings until S5 (the Python parser).
+16. `.` / `source` become Ask (main) / Deny (subagent) **together with the
+    quarantine plugin**, not in S4. Until then their verdict is legacy
+    (today's). This refines ruling 13's timing.
+17. Direct execution of a program file (`./run.sh`, `scripts/foo.sh`, an
+    absolute path) whose body is not in the command text is Undetermined →
+    Ask (main) / Deny (subagent), like ruling 10's `bash script.sh` (S4).
+
 Vocabulary: **Undetermined** = `Judgement::Undetermined(cause)`, resolved to
 Ask (main) / Deny (subagent, `interactive::ask_available`). **Unresolved** =
 `PathClass::Unresolved`, one target that could not be placed (Table C row).
@@ -114,8 +128,8 @@ script is still `Known`: the word's `Value` is `Undetermined` and feeds Table C 
 `shopt`, `builtin`, `command`, an undetermined command word, `declare`-family
 options, non-plain `set` make the state opaque (later values Undetermined).
 For **judgement**, `eval` is Undetermined (it runs code not in the script) until
-S4 models it; `source` / `.` are Ask (main) / Deny (subagent) until a quarantine
-plugin exists (user ruling 2026-11-17, ruling 13; B.5).
+S4 models it; `source` / `.` become Ask (main) / Deny (subagent) together with
+the quarantine plugin and are legacy until then (rulings 13, 16; B.5).
 
 ## Table B — effect × target extraction
 
@@ -199,8 +213,9 @@ else the command's cwd).
 | same, stdin (`bash`, `-s`, `-`, `/dev/stdin`) | `Stdin(StdinSource)` | `Literal` body judged recursively (S4); `FromCommand` / `File` / `Fd` / `Undetermined` → Undetermined |
 | same, script file (`bash x.sh`); likewise any interpreter running a program file (`python3 x.py`, `perl x.pl`, …) | `File(Value)` | **Undetermined** → Ask / Deny (ruling 10). Exception: when an earlier command of the same script writes that file (matched by resolved path) with a determined body (`cat > x.sh <<'EOF' … EOF`), that body is analysed and judged recursively (S4) |
 | `eval` | `Undetermined` | Undetermined (S4) |
-| `source`, `.` (reading a file) | `File(Value)` | **Ask** (main) / Deny (subagent) until a quarantine plugin exists — user ruling 2026-11-17 (ruling 13); not judged recursively in S4 |
-| `python*` `-c` / stdin / file / `-m` | as `program_source` | Undetermined until S5 (Python parser) |
+| direct execution of a program file (`./run.sh`, `scripts/foo.sh`, `/abs/run.sh`) | `File(Value)` | **Undetermined** → Ask / Deny (ruling 17, S4), same exception as the script-file row |
+| `source`, `.` (reading a file) | `File(Value)` | **Ask** (main) / Deny (subagent) together with the quarantine plugin; legacy until then (rulings 13, 16); not judged recursively in S4 |
+| `python*` `-c` / stdin / file / `-m` | as `program_source` | legacy readings until S5 (ruling 15); from S5 the Python parser |
 | `perl` / `ruby` `-e`/`-E`, `-i`, stdin, `node` `-e`/`-p`/stdin | — | **out of subset** → Undetermined (ruling 4) |
 | wrapper whose operand is an interpreter or Undetermined | `Undetermined` | unwrap (B.3), then the interpreter's row |
 
@@ -251,7 +266,8 @@ Notes:
    legacy Deny lifts Ask → Deny (keeping `system_harm`); legacy Ask or Allow
    leaves the Ask. It is never consulted to lower a verdict to Allow.
 3. When `judge` is Known (Allow / Ask / Deny), S3 keeps the legacy readings
-   raise-only too until S6 retires them for the migrated rows; a migrated row's
+   — all of them, not only the harm readings (ruling 14) — raise-only too
+   until S6 retires them for the migrated rows; a migrated row's
    detector no longer has a string-reading fallback (ruling 7).
 4. A `judge` panic is caught and is `Undetermined(Panic)` → rule 1.
 
@@ -262,9 +278,10 @@ Notes:
 | S1 `subset-spec` | this document; frozen types in `judge.rs` (stubs, not wired) |
 | S2 `red-tests` | an independent author (not the S3 implementer; CLAUDE.md §2(a)) writes a RED test for each Table B row and each Table C cell that is not `legacy`, each observed failing against the S1 stub before S3 makes it GREEN |
 | S3 `path-cutover` | Table A enforcement for judged commands; Table B B.1 (all rows except `perl -i` which is already Undetermined), B.2, B.3, B.4; Table C (all rows); `classify` from the existing predicates; wire `judge` into `detect` with the "Undetermined handling" layer |
-| S4 `stdin-program` | Table B B.5 rows for shells: `-c` inline, stdin (`StdinSource::Literal` bodies), `eval` (`source` / `.` stay Ask, ruling 13); the script-file row (Undetermined, and the recursive judgement of a body the same command writes — ruling 10); wrapper → interpreter unwrap |
-| S5 `python-parser` | Table B B.5 python row (a real Python parser; effects × targets of the parsed program judged by Table C) |
-| S6 `retire-readings` | remove the string-reading fallbacks of every migrated row (`targets.rs::resolve` callers, `readings.rs` re-readings) leaving only the raise-only harm layer; revisit the deferred Open questions 1–4 |
+| S4 `stdin-program` | Table B B.5 rows for shells: `-c` inline, stdin (`StdinSource::Literal` bodies), `eval`; the script-file row and the direct-execution row (Undetermined, and the recursive judgement of a body the same command writes — rulings 10, 17); wrapper → interpreter unwrap. `source` / `.` are NOT in S4 (ruling 16) |
+| S5 `python-parser` | Table B B.5 python row (a real Python parser; effects × targets of the parsed program judged by Table C); legacy python readings until then (ruling 15) |
+| S6 `retire-readings` | remove the string-reading fallbacks of every migrated row (`targets.rs::resolve` callers, `readings.rs` re-readings); until S6 the whole legacy layer is raise-only (ruling 14), so Table C Allow cells a legacy reading answers Ask / Deny today turn GREEN here; revisit the deferred Open questions 1–4 |
+| quarantine plugin (separate) | `source` / `.` → Ask (main) / Deny (subagent), introduced together with the script-quarantine plugin (ruling 16) |
 
 ## Open questions
 

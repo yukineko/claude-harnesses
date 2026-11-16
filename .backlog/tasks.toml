@@ -2891,6 +2891,8 @@ RED commit: 18920337a（branch red/stopverify-misattr-20261117、未 merge）
 created_at = 1794869811
 updated_at = 1794869811
 weight = 0.0
+issue_number = 1844
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1844"
 rev = 0
 
 [task.repro]

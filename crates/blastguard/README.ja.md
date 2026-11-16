@@ -1079,6 +1079,8 @@ Deny / Ask は出力（stdout）を出した**後に**1行だけ、overwatch の
 
 ### `blastguard log` — 台帳の読み取り専用一覧
 
+実装は 2026-11-17 に overwatch へ移設した（`crates/overwatch/src/blastguard_log.rs`。`overwatch blastguard-log [OPTIONS]` でも呼べる）。`blastguard log` は同じ引数・同じ出力でそこへ委譲する互換経路として残している。
+
 ```
 blastguard log [--decision deny|ask] [--rule <id>] [--since <RFC3339|Ns|Nm|Nh|Nd>]
                [--system-harm] [--subagent | --interactive] [--json]

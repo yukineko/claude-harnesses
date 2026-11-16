@@ -38,7 +38,6 @@ pub mod diffrisk;
 pub mod exclude;
 pub mod hookio;
 pub mod interactive;
-pub mod log;
 pub mod model;
 pub mod protection;
 pub mod relay;

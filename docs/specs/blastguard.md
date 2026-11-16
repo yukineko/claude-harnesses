@@ -1258,7 +1258,7 @@ forge・condukt のスケジューラが再利用）。
   `Ask` にする。subagent からの payload では `main.rs` の `harden_for_subagent` が `Deny` に固める。照合は
   parse 済みの command word と argv token だけで行い、生のコマンド文字列は見ない（`echo "condukt …"` は対象外）。
   前の文での `export CONDUKT_AUTONOMOUS=1; condukt …` は見ない。
-- **`log`** — `blastguard log`: overwatch の violations ledger（`overwatch::store::violations_path`）から
+- **`log`**（実装は `overwatch::blastguard_log`。2026-11-17 に移設、`blastguard log` は互換の委譲経路、`overwatch blastguard-log` でも同じ）— `blastguard log`: overwatch の violations ledger（`overwatch::store::violations_path`）から
   `source == "blastguard"` の行だけを file 順に列挙する read-only の照会コマンド。stdin を読まず ledger へ書かない。
   フィルタは `--decision deny|ask`・`--rule`・`--since`（RFC3339 または期間）・`--system-harm`・
   `--subagent` / `--interactive`（排他）、`--json` で JSON 出力。旧形式の行に無いフィールドは UNKNOWN

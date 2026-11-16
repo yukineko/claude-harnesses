@@ -61,7 +61,7 @@
 use blastguard::model::Decision;
 use blastguard::rule_id::INTERNAL_ERROR_REASON;
 use blastguard::scope::SafeRoots;
-use blastguard::{approve, detect, hookio, interactive, log, relay, retro, rule_id};
+use blastguard::{approve, detect, hookio, interactive, relay, retro, rule_id};
 use harness_core::blocklog;
 use harness_core::hook::{self, HookInput};
 use std::process::exit;
@@ -92,7 +92,9 @@ fn main() {
                 exit(run_retro(&args[i + 1..]));
             }
             "log" => {
-                exit(log::run_log(&args[i + 1..]));
+                // Compatibility path: the listing lives in overwatch since
+                // 2026-11-17 (`overwatch blastguard-log`); same args, same output.
+                exit(overwatch::blastguard_log::run_log(&args[i + 1..]));
             }
             "record-approval" => {
                 // PostToolUse. This path has NO verdict: it prints nothing and

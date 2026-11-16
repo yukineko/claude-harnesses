@@ -725,6 +725,8 @@ local under `$HOME` and there is no redaction.
 
 ### `blastguard log` — read-only ledger listing
 
+The implementation lives in overwatch since 2026-11-17 (`crates/overwatch/src/blastguard_log.rs`, also reachable as `overwatch blastguard-log [OPTIONS]`); `blastguard log` is kept as a compatibility path that dispatches to it with the same arguments and output.
+
 ```
 blastguard log [--decision deny|ask] [--rule <id>] [--since <RFC3339|Ns|Nm|Nh|Nd>]
                [--system-harm] [--subagent | --interactive] [--json]

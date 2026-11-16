@@ -138,6 +138,7 @@ git repo 外の cwd は cwd 自身がキーになる。
 overwatch record-violation --source <gate> --discriminator <d> --task <key> [--symbol <sym>] [--session <sid>] [--detail <text>]
 overwatch violations [--json] [--threshold N] [--window-secs S]     # 全 signature の再発状況
 overwatch escalations [--json] [--threshold N] [--window-secs S]    # systemic と判定された signature のみ
+overwatch blastguard-log [OPTIONS]                                 # blastguard の行のみ。`blastguard log` と同じ
 ```
 
 - `--source` は `blastguard | propguard | specguard | mutategate | donegate | reviewgate | tdd | budgetguard | autoflow | ctxrot` を受け付け、未知の token は source として parse されない。

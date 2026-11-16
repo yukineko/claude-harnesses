@@ -140,6 +140,7 @@ Alongside the lease registry, overwatch records gate-violation events with a **n
 overwatch record-violation --source <gate> --discriminator <d> --task <key> [--symbol <sym>] [--session <sid>] [--detail <text>]
 overwatch violations  [--json] [--threshold N] [--window-secs S]   # recurrence stats for every signature
 overwatch escalations [--json] [--threshold N] [--window-secs S]   # only the signatures judged systemic
+overwatch blastguard-log [OPTIONS]                                 # blastguard's lines only; same as `blastguard log`
 ```
 
 - `--source` accepts `blastguard | propguard | specguard | mutategate | donegate | reviewgate | tdd | budgetguard | autoflow | ctxrot`; an unknown token does not parse as a source.

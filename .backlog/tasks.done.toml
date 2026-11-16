@@ -80689,3 +80689,61 @@ rev = "36f7e5da11f6cb2d0521e538953053a691f00157"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "0a7be389"
+title = "condukt: check-criteria classifies ';'-separated multi-claim done_criteria as single coverage and sets skip_verifier:true"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-16 at fa58e3698 in run-20261116-143410-12142 (t2): done_criteria '<cargo test ...> exits 0 ...; no other blastguard test regresses; version bumped.' → coverage single, skip_verifier true. Classifier: verify.rs criteria_coverage_for. Readings: (a) defect: only the first claim is mechanical, the verifier must not be skipped; (b) intended if the trailing clauses are considered advisory. The test asserts not-single/no-skip."
+created_at = 1794813554
+updated_at = 1794820818
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261116_multiclaim_semicolon_single -- --include-ignored"
+rev = "bf454e21f24c4fff547678a33c3b882fd3d2a185"
+observed_at = 1794813554
+detail = """
+exit 101: /home/hiroyuki_nakayama/src/.harness-worktrees/followup-cd-df7c/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
+     Running tests/backlog_20261116_multiclaim_semicolon_single.rs (target/debug/deps/backlog_20261116_multiclaim_semicolon_single-e66c810b09b231be)
+error: test failed, to rerun pass `-p condukt --test backlog_20261116_multiclaim_semicolon_single`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261116_multiclaim_semicolon_single -- --include-ignored"
+exit = 0
+passed = 2
+rev = "016c66f965475666de082e615d42d39f056e58e1"
+observed_at = 1794820804
+output_digest = "sha256:6096c544b4cbc4db7f990f927970687d0c00d5c8825749e9b60a3e16a9ea4a2f"
+excerpt = """
+
+running 2 tests
+test semicolon_separated_multi_claim_criteria_is_not_single_and_does_not_skip_verifier ... ok
+test control_single_claim_command_is_single_coverage ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+   Compiling condukt v0.7.435 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.59s
+     Running tests/backlog_20261116_multiclaim_semicolon_single.rs (target/debug/deps/backlog_20261116_multiclaim_semicolon_single-aebf8ef20d442c2b)
+"""
+
+[task.closure.red]
+rev = "6d7f39f2f2ea089dd16e860b713241055aa537bb"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

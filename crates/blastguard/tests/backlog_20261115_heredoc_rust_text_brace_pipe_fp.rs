@@ -120,7 +120,6 @@ import os; os.system("rm -rf /")
 EOF"##;
 
 #[test]
-#[ignore = "RED: 2026-11-15 F16 triple-quoted Rust closure in quoted python heredoc misread as pipe into brace group — remove when fixed"]
 fn heredoc_python_replace_with_rust_closure_in_triple_quote_is_allow() {
     let home = unique_home("a");
     let (m, mr) = run_as(TRIPLE_QUOTED_REPLACE, &home, false);

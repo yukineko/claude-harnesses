@@ -12,10 +12,12 @@ use super::{
 mod compound_readers;
 mod exec_fds;
 mod node_source;
+mod procsub_split;
 mod program_source;
 
 use exec_fds::{exec_opened_fds, ExecFd};
 use node_source::{is_node_head, node_program_source};
+use procsub_split::procsub_stages;
 use program_source::{
     interpreter_program_source, python_head_reads_stdin, python_program_source,
     shell_program_source, shell_startup_file_values, source_program_source, ProgramSource,
@@ -196,10 +198,23 @@ fn stdin_exec_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // stage. See `group_reader_pipelines`. The descent terminates: each
     // synthetic pipeline holds one grouping layer fewer past its first stage
     // than the stage it came from.
-    let (mut group_pipelines, mut group_undetermined) = group_reader_pipelines(&statements);
+    //
+    // These two shell splits read the command WITHOUT the body of a quoted
+    // `python3 - <<'EOF'` here-document: the shell never parses that body, so
+    // a `|`, `&` or `{` inside a Python string (a Rust closure
+    // `|x| { … }` in a triple-quoted replace, backlog 7671c79f) is not a
+    // pipe or a brace group. The body is judged as the Python program it is
+    // by `python_stdin_reading`. The opener line and every line after the
+    // close stay in the text. Other shapes (other interpreters, an unquoted
+    // delimiter) keep the body, as before.
+    let shell_text = super::heredoc::python_stdin_here_document(cmd)
+        .map(|parts| parts.without_body)
+        .unwrap_or_else(|| cmd.to_string());
+    let shell_statements = split_statements_into_pipe_stages(&shell_text);
+    let (mut group_pipelines, mut group_undetermined) = group_reader_pipelines(&shell_statements);
     // The same for `if` / `while` / `until` bodies and `eval` / `sh -c`
     // forwarders (backlog b3569da5); see `compound_readers`.
-    let (more, why) = compound_readers::compound_and_forwarder_pipelines(&statements);
+    let (more, why) = compound_readers::compound_and_forwarder_pipelines(&shell_statements);
     group_pipelines.extend(more);
     group_undetermined.extend(why);
     for synthetic in &group_pipelines {
@@ -650,55 +665,6 @@ blastguard cannot find — it cannot tell which command inside reads the piped p
         }
     }
     (pipelines, undetermined)
-}
-
-/// `cmd` split into simple command stages at `;`, newlines, `|`, `|&`, `||`,
-/// `&&` and a background `&` outside quotes and parentheses — but NOT at the
-/// `&` of a redirection (`<&3`, `2>&1`, `&>f`), which belongs to its stage
-/// (`split_statements_into_pipe_stages` splits there, which cut
-/// `bash <&3 3< <(…)` into `bash <` and `3 3< <(…)`).
-fn procsub_stages(cmd: &str) -> Vec<String> {
-    let chars: Vec<char> = cmd.chars().collect();
-    let mut stages = Vec::new();
-    let mut cur = String::new();
-    let (mut in_s, mut in_d) = (false, false);
-    let mut depth: u32 = 0;
-    let mut k = 0;
-    while k < chars.len() {
-        let c = chars[k];
-        if c == '\\' && !in_s {
-            cur.push(c);
-            if let Some(&n) = chars.get(k + 1) {
-                cur.push(n);
-            }
-            k += 2;
-            continue;
-        }
-        if c == '\'' && !in_d {
-            in_s = !in_s;
-        } else if c == '"' && !in_s {
-            in_d = !in_d;
-        } else if !in_s && !in_d {
-            match c {
-                '(' => depth += 1,
-                ')' => depth = depth.saturating_sub(1),
-                _ => {}
-            }
-            let redirect_amp = c == '&'
-                && (matches!(k.checked_sub(1).map(|p| chars[p]), Some('<' | '>'))
-                    || chars.get(k + 1) == Some(&'>'));
-            if depth == 0 && matches!(c, ';' | '\n' | '|' | '&') && !redirect_amp {
-                stages.push(std::mem::take(&mut cur));
-                k += 1;
-                continue;
-            }
-        }
-        cur.push(c);
-        k += 1;
-    }
-    stages.push(cur);
-    stages.retain(|s| !s.trim().is_empty());
-    stages
 }
 
 /// What the process substitutions of one stage hand its reader as a PROGRAM.

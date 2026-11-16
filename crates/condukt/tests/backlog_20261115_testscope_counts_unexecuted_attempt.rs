@@ -21,10 +21,16 @@
 //! DOES NOT PROVE: how a PostToolUse confirmation should reach testscope, or
 //! that blastguard was the blocker (only the no-Post sequence is driven).
 //!
+//! 2026-11-16 user ruling (fail-closed preferred, test amended): Pre records
+//! pending, PostToolUse(Bash) confirms; if Post never fired in the session
+//! (no Post marker) Pre falls back to a confirmed record. Cases:
+//! (A) Post fired earlier in the session, Pre-only attempt not counted;
+//! (B) Pre then Post counts as run; (C) no Post ever in session: Pre counts.
+//!
 //! RED written by an independent test author, not the implementer.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use tempfile::TempDir;
@@ -50,13 +56,12 @@ fn repo() -> TempDir {
     d
 }
 
-fn run(home: &Path, ledger: &Path, cmd: &str, cwd: &Path) -> (Option<i32>, String) {
-    let payload = serde_json::json!({
-        "session_id": "s",
-        "tool_name": "Bash",
-        "tool_input": {"command": cmd},
-        "cwd": cwd.to_str().unwrap(),
-    });
+fn send(
+    home: &Path,
+    ledger: &Path,
+    payload: serde_json::Value,
+    cwd: &Path,
+) -> (Option<i32>, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_condukt"))
         .arg("testscope")
         .env("HOME", home)
@@ -77,6 +82,56 @@ fn run(home: &Path, ledger: &Path, cmd: &str, cwd: &Path) -> (Option<i32>, Strin
     (
         out.status.code(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
+}
+
+fn run(home: &Path, ledger: &Path, cmd: &str, cwd: &Path) -> (Option<i32>, String) {
+    pre(home, ledger, cmd, cwd, "s", "tu-pre")
+}
+
+fn pre(
+    home: &Path,
+    ledger: &Path,
+    cmd: &str,
+    cwd: &Path,
+    sid: &str,
+    tuid: &str,
+) -> (Option<i32>, String) {
+    send(
+        home,
+        ledger,
+        serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": sid,
+            "tool_name": "Bash",
+            "tool_input": {"command": cmd},
+            "cwd": cwd.to_str().unwrap(),
+            "tool_use_id": tuid,
+        }),
+        cwd,
+    )
+}
+
+fn post(
+    home: &Path,
+    ledger: &Path,
+    cmd: &str,
+    cwd: &Path,
+    sid: &str,
+    tuid: &str,
+) -> (Option<i32>, String) {
+    send(
+        home,
+        ledger,
+        serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": sid,
+            "tool_name": "Bash",
+            "tool_input": {"command": cmd},
+            "cwd": cwd.to_str().unwrap(),
+            "tool_use_id": tuid,
+        }),
+        cwd,
     )
 }
 
@@ -103,5 +158,69 @@ fn second_pretooluse_after_never_executed_first_is_allowed() {
     assert!(
         !denied(&second),
         "unexecuted attempt was counted as a run: {second:?}"
+    );
+}
+
+/// (A) Post already fired in this session (marker exists), then a Pre-only
+/// attempt (never executed) must not count: the second Pre is allowed.
+#[test]
+#[ignore = "RED: 2026-11-15 testscope records at PreToolUse so a never-executed attempt blocks the real run — remove when fixed"]
+fn a_pre_only_attempt_is_not_counted_once_post_has_fired_in_session() {
+    let home = tempfile::tempdir().unwrap();
+    let ledger_dir = tempfile::tempdir().unwrap();
+    let ledger = ledger_dir.path().join("ledger.tsv");
+    let root = repo();
+    let (sid, cwd) = ("sA", root.path());
+    // Prime: another command ran fully, so Post is known to fire in this session.
+    let other = "cargo test -p other --test prime";
+    let p = pre(home.path(), &ledger, other, cwd, sid, "tu-1");
+    assert!(!denied(&p), "priming Pre must be allowed: {p:?}");
+    post(home.path(), &ledger, other, cwd, sid, "tu-1");
+    // Target: Pre only, never executed.
+    let cmd = "cargo test -p foo --test bar";
+    let first = pre(home.path(), &ledger, cmd, cwd, sid, "tu-2");
+    assert!(!denied(&first), "first Pre must be allowed: {first:?}");
+    let second = pre(home.path(), &ledger, cmd, cwd, sid, "tu-3");
+    assert!(
+        !denied(&second),
+        "Pre-only attempt counted as run although Post fires in this session: {second:?}"
+    );
+}
+
+/// (B) Pre then Post: executed; the identical rerun on the same tree is denied.
+#[test]
+fn b_pre_then_post_counts_as_run_and_rerun_is_denied() {
+    let home = tempfile::tempdir().unwrap();
+    let ledger_dir = tempfile::tempdir().unwrap();
+    let ledger = ledger_dir.path().join("ledger.tsv");
+    let root = repo();
+    let (sid, cwd) = ("sB", root.path());
+    let cmd = "cargo test -p foo --test bar";
+    let first = pre(home.path(), &ledger, cmd, cwd, sid, "tu-1");
+    assert!(!denied(&first), "first Pre must be allowed: {first:?}");
+    post(home.path(), &ledger, cmd, cwd, sid, "tu-1");
+    let second = pre(home.path(), &ledger, cmd, cwd, sid, "tu-2");
+    assert!(
+        denied(&second),
+        "executed run must be refused on rerun: {second:?}"
+    );
+}
+
+/// (C) Post never fired in the session: fall back to recording at Pre
+/// (fail-closed); the identical second Pre is denied.
+#[test]
+fn c_no_post_ever_in_session_falls_back_to_recording_at_pre() {
+    let home = tempfile::tempdir().unwrap();
+    let ledger_dir = tempfile::tempdir().unwrap();
+    let ledger = ledger_dir.path().join("ledger.tsv");
+    let root = repo();
+    let (sid, cwd) = ("sC", root.path());
+    let cmd = "cargo test -p foo --test bar";
+    let first = pre(home.path(), &ledger, cmd, cwd, sid, "tu-1");
+    assert!(!denied(&first), "first Pre must be allowed: {first:?}");
+    let second = pre(home.path(), &ledger, cmd, cwd, sid, "tu-2");
+    assert!(
+        denied(&second),
+        "fail-closed fallback must refuse rerun: {second:?}"
     );
 }

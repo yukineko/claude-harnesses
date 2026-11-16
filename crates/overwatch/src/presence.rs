@@ -131,7 +131,7 @@ pub fn load_presence(cwd: &Path) -> Result<PresenceRegistry> {
     }
 }
 
-/// Atomic write (temp + rename) of the registry.
+/// Atomic, durable write (temp + fsync + rename + dir fsync) of the registry.
 fn save_presence(cwd: &Path, reg: &PresenceRegistry) -> Result<()> {
     let path = store::presence_path(cwd)?;
     if let Some(parent) = path.parent() {
@@ -139,8 +139,7 @@ fn save_presence(cwd: &Path, reg: &PresenceRegistry) -> Result<()> {
     }
     let json = serde_json::to_string_pretty(reg)?;
     let tmp = store::unique_tmp(&path, "json");
-    std::fs::write(&tmp, &json)?;
-    std::fs::rename(&tmp, &path)?;
+    crate::durable::write_durable(&path, &tmp, json.as_bytes())?;
     Ok(())
 }
 

@@ -198,7 +198,6 @@ fn e_git_readers_that_store_the_body_followed_by_a_later_command_are_not_allowed
 // line `+rm …` is simply not read as a command. Base eeaa73843 not measured
 // (the test-rerun hook refused the run).
 #[test]
-#[ignore = "pre-existing fail-open (git apply/am heredoc then sh run.sh is Allow), unrelated to e70b6a71 — file as backlog"]
 fn e_prime_git_apply_or_am_patch_then_running_the_written_file_is_not_allowed() {
     let patch = "diff --git a/run.sh b/run.sh\nnew file mode 100644\n--- /dev/null\n+++ b/run.sh\n@@ -0,0 +1 @@\n+rm -rf ~\n";
     let apply = format!("git apply <<'EOF'\n{patch}EOF\nsh run.sh");

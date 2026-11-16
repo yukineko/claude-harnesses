@@ -283,3 +283,11 @@ reason = "Pure move: denoised_eval_rescan (99b506b7) relocated verbatim out of d
 path = "crates/blastguard/src/detect/heredoc_subst_tests.rs"
 reason = "Test-only module (#[cfg(test)] unit tests for the $(...) here-document scanner of blastguard 0.2.302); no runtime behaviour. The behaviour it tests is specified in blastguard.md's whole-tree staging bullet ('here-document' clause)."
 
+
+[[ack]]
+path = "crates/blastguard/src/detect/backtick_text.rs"
+reason = "Pure move: backtick_in_double_quoted_text relocated unchanged out of detect.rs as pub(super) to satisfy the file-growth cap (backlog 42741ea3); no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/payload/procsub_split.rs"
+reason = "Pure move: procsub_stages relocated byte-identically out of payload.rs (fn -> pub(super) fn) to satisfy the file-growth cap (backlog 7671c79f, verifier-checked by diff); no behavior or spec-visible change, so no spec text is owed."

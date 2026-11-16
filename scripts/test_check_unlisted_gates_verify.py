@@ -185,7 +185,7 @@ class T(unittest.TestCase):
             "check-gate-crates-sync.py", "check-gate-protection.py",
             "check-cross-crate-constants.py", "check-launcher-exec-bit.py",
             "check-clippy-lints.py", "check-test-weakening.py",
-            "check-plugin-rollout.py", "check-compile-fail.py",
+            "check-compile-fail.py",
         ]
         self.r.scanner(*invoked)
         p = self.r.scan()

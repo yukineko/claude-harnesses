@@ -435,6 +435,11 @@ doc = "docs/specs/overwatch.md"
 reason = "'module 責務' store: Lease persistence, is_stale heartbeat TTL; 'liveness = heartbeat TTL' invariant."
 
 [[spec]]
+path = "crates/overwatch/src/durable.rs"
+doc = "docs/specs/overwatch.md"
+reason = "'module 責務' durable bullet: write_durable order (write_all, sync_all, rename, parent-dir fsync), every failure returned as Err, temp removed on pre-rename failure, which store writes go through it."
+
+[[spec]]
 path = "crates/overwatch/src/event.rs"
 doc = "docs/specs/overwatch.md"
 reason = "'module 責務' event: EventKind Started/Running/Ended lifecycle model."
@@ -778,3 +783,13 @@ reason = "'module 責務' bullet `detect/ast`: child module of eval.rs — param
 path = "crates/blastguard/src/detect/ast/tests.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `detect/ast`: contract tests of the parser + static-eval layer: caps/parse failure -> Undetermined, literal assignment/for/cd resolution, relative redirect after cd joined or Undetermined (user ruling 2026-11-16), stdin/program sources, tilde/arithmetic/subscript fail-open regressions."
+
+[[spec]]
+path = "crates/blastguard/src/detect/git_apply_patch.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '`git apply`/`git am` に here-document で渡した patch の本文を…shell として判定する': read_patch_readers, the +/space-stripped shell view, the stronger-of combine, the Ask refusal shapes and the KNOWN GAP list (backlog 42741ea3)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/python_written_files.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'quoted `python3 - <<'PY'` program が書いたファイルも…同じ判定にかける': the literal open().write / Path().write_text readers, unreadable-write and opaque-target fallbacks, over-approximations and GAP list (backlog 245a4c5f)."

@@ -274,8 +274,7 @@ fn save(cwd: &Path, reg: &SubagentRegistry) -> Result<()> {
     }
     let json = serde_json::to_string_pretty(reg)?;
     let tmp = store::unique_tmp(&path, "json");
-    std::fs::write(&tmp, &json)?;
-    std::fs::rename(&tmp, &path)?;
+    crate::durable::write_durable(&path, &tmp, json.as_bytes())?;
     Ok(())
 }
 

@@ -930,7 +930,9 @@ number"
 
 /// The literal text the shell word `word` stands for after quote removal, or
 /// `Err(why)` when the text does not determine it: an expansion the shell
-/// performs (`$…` or a backquote, unquoted or inside double quotes), ANSI-C
+/// performs (`$…` or a backquote, unquoted or inside double quotes; the one
+/// exception is a `$` directly before the closing `"`, as in `"$"`, which is a
+/// literal `$`), ANSI-C
 /// `$'…'` or locale `$"…"` quoting (not modelled here), an unclosed quote, or
 /// a trailing lone backslash. Single quotes keep everything literal; outside
 /// quotes a backslash makes the next character literal; inside double quotes
@@ -960,6 +962,11 @@ fn decode_literal_word(word: &str) -> Result<String, &'static str> {
                         }
                         None => return Err("an unclosed quote"),
                     },
+                    // A `$` immediately before the closing quote (`"$"`) has
+                    // nothing to expand: it is a literal `$`. Only this exact
+                    // shape is resolved; `$` followed by anything else
+                    // (`"$fd"`, `"${x}"`, `"$(…)"`, `"$ x"`) stays an expansion.
+                    Some('$') if chars.peek() == Some(&'"') => out.push('$'),
                     Some('$' | '`') => return Err(EXPANSION),
                     Some(d) => out.push(d),
                     None => return Err("an unclosed quote"),

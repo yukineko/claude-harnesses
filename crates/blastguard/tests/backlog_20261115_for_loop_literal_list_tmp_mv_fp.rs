@@ -1,7 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! RED (false positive, observed 2026-11-15): a worker's
-//! `D=<dir>; for f in decomp decomp.routed; do jq '.tasks|=map(.x)' $D/$f.json
-//! > $D/$f.tmp && mv $D/$f.tmp $D/$f.json; done` was Ask (Deny in a subagent)
+//! `D=<dir>; for f in decomp decomp.routed; do jq '.tasks|=map(.x)'
+//! $D/$f.json > $D/$f.tmp && mv $D/$f.tmp $D/$f.json; done` was Ask (Deny in a
+//! subagent)
 //! with "'> $D/$f.tmp': a command that may relink it runs first and the path
 //! cannot be placed, so blastguard cannot tell which file the write really lands
 //! on". `$D` is a literal assignment and `$f` iterates a literal word list, so

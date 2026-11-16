@@ -256,7 +256,7 @@ pub fn load_leases(cwd: &Path) -> Result<LeaseRegistry> {
     }
 }
 
-/// Atomic write (temp + rename) of the lease registry.
+/// Atomic, durable write (temp + fsync + rename + dir fsync) of the lease registry.
 pub fn save_leases(cwd: &Path, leases: &LeaseRegistry) -> Result<()> {
     let path = leases_path(cwd)?;
     if let Some(parent) = path.parent() {
@@ -264,8 +264,7 @@ pub fn save_leases(cwd: &Path, leases: &LeaseRegistry) -> Result<()> {
     }
     let json = serde_json::to_string_pretty(leases)?;
     let tmp = unique_tmp(&path, "json");
-    std::fs::write(&tmp, &json)?;
-    std::fs::rename(&tmp, &path)?;
+    crate::durable::write_durable(&path, &tmp, json.as_bytes())?;
     Ok(())
 }
 
@@ -824,8 +823,7 @@ pub fn rewrite_audit_rounds(cwd: &Path, rounds: &[AuditRound]) -> Result<()> {
     // holds the store LeaseLock across its read->modify->rewrite so a concurrent
     // writer serializes rather than having its append clobbered.
     let tmp = unique_tmp(&path, "jsonl");
-    std::fs::write(&tmp, buf.as_bytes())?;
-    std::fs::rename(&tmp, &path)?;
+    crate::durable::write_durable(&path, &tmp, buf.as_bytes())?;
     Ok(())
 }
 
@@ -1126,7 +1124,8 @@ pub fn load_active_changesets(cwd: &Path) -> Result<ChangesetRegistry> {
     }
 }
 
-/// Atomic write (unique temp + rename) of the active-changeset registry.
+/// Atomic, durable write (unique temp + fsync + rename + dir fsync) of the
+/// active-changeset registry.
 pub fn save_active_changesets(cwd: &Path, registry: &ChangesetRegistry) -> Result<()> {
     let path = active_changesets_path(cwd)?;
     if let Some(parent) = path.parent() {
@@ -1134,8 +1133,7 @@ pub fn save_active_changesets(cwd: &Path, registry: &ChangesetRegistry) -> Resul
     }
     let json = serde_json::to_string_pretty(registry)?;
     let tmp = unique_tmp(&path, "json");
-    std::fs::write(&tmp, &json)?;
-    std::fs::rename(&tmp, &path)?;
+    crate::durable::write_durable(&path, &tmp, json.as_bytes())?;
     Ok(())
 }
 
@@ -1452,8 +1450,7 @@ fn write_jsonl_atomic<T: Serialize>(path: &Path, records: &[T]) -> Result<()> {
     // archive and the hot file, so a fixed temp name could collide with a
     // concurrent rewrite and publish a half-written file.
     let tmp = unique_tmp(path, "jsonl");
-    std::fs::write(&tmp, buf.as_bytes())?;
-    std::fs::rename(&tmp, path)?;
+    crate::durable::write_durable(path, &tmp, buf.as_bytes())?;
     Ok(())
 }
 

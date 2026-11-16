@@ -1041,6 +1041,31 @@ forge・condukt のスケジューラが再利用）。
   code interpreter の program 監査は `node -e` と同じ文字列ベースの破壊的呼び出し検出であり、言語ごとの
   parser ではない。`>>` の連結で読み方が 16 を超えると、超えた分の読み方は判定せず Ask にする（そこに system
   harm があっても Deny ではなく Ask）。
+- **quoted `python3 - <<'PY'` program が書いたファイルも、同じ command の別の部分が実行しうるとき同じ判定にかける
+  （backlog 245a4c5f、tests/backlog_20261115_python_heredoc_write_then_sh_fail_open.rs、
+  `detect/interpreter/python_written_files.rs` と `detect/echo_script_file.rs` の `python_heredoc_files`）** —
+  上の `echo`/`printf` の判定（実行しうるかの探索・内容の判定）をそのまま使い、writer を Python token から読む。
+  path と内容がともに exact な literal の `open(P,M).write(C)`（`a` は追記、`w`/`x` は置換）と
+  `Path(P).write_text(C)`/`write_bytes(C)` だけが内容を保つ。それ以外の書き込み（書き込み可能または mode が
+  判定できない `open`/`fdopen`、literal でない path、f-string、`with … as`、copy/move/rename/link 系の呼び出し、
+  program のどこかにある動的実行 marker、tokenise できない body）は内容が読めない書き込み（Ask、subagent では
+  Deny）、literal でない path は置き場所不明の target として扱う。実行の探索は body を除いた command で行い、
+  here-document を開く最初の stage（python reader 自身）は数えない。実行しうる stage が無い書き込みだけの
+  program の判定は変えない（書くだけの有害 `.sh` の扱いは裁定待ち）。過剰側: 書き込み可能な `open` を持つ
+  program では mode が literal でない `open` や `os.open(P, O_RDONLY)` も書き込みとして数え、動的実行 marker を
+  含む program では後続の shell 語があれば Ask になる。**GAP**（判定の外。コード読解による記述）: import alias、
+  `tarfile`/`zipfile` の展開、pathlib の `.replace`、`python -c` やファイル program、unquoted delimiter、
+  python program の内側からの実行、書き込みと実行の順序。
+- **`git apply`/`git am` に here-document で渡した patch の本文を、それが書くファイルの shell として判定する
+  （backlog 42741ea3、tests/verify_e70b6a71_commit_heredoc_later_cmds.rs の
+  `e_prime_git_apply_or_am_patch_then_running_the_written_file_is_not_allowed`、`detect/git_apply_patch.rs`。
+  `detect_bash` の step 0d）** — plain な `git` 語の後に `apply`/`am` を持つ segment の here-document 本文から
+  各行の先頭の `+`/空白を 1 つ取った shell view を作り、元の command の判定と shell view の判定の強い方を取る
+  （Deny > Ask > Allow）。次の形は読み取りを推測せず Ask: plain な `|`（`||` を含む）の直後の reader、
+  here-document の無い `<`、here-document が 2 つ以上か delimiter が読めない、patch header（`diff `・`--- `・
+  `+++ `・`@@ `・`Subject:`・`From `）が無い本文。**KNOWN GAP**（判定の外。Allow のままでありうる）: `|&`、
+  subshell/group `( )`、前の行末の `|` で続く pipe、`<<-` の TAB 字下げ本文、reader と同じ行にある別コマンドの
+  here-document、名前付き patch ファイル、plain でない `git` 語（quote・変数）。
 - **未修正の false positive の RED（2026-11-13、flow-8cca7ef5。修正は未実装）** — `.rs` 宛ての quoted heredoc の
   body は data であり shell ではない（ユーザー裁定: heredoc body を .py/.rs へ書くコマンドの body は data、
   .sh/拡張子なしだけ shell として判定、同一 command 内で実行される場合を除く）。しかし (FP1) body に Rust 文字列

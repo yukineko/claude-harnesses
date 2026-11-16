@@ -4538,19 +4538,30 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         requires_fp_oracle,
                         reproduction_tests,
                     } => {
-                        // The oracle judges the proofs in `task_wt`, else cwd.
-                        // A missing/unreadable dir is not papered over: the
-                        // `tdd` spawn fails there and `check_oracle` reports an
-                        // undetermined oracle, which `enforce_fp_gate` rejects
-                        // (pinned by `oracle::tests::
-                        // spawn_failure_is_undetermined_and_rejects`).
-                        let run_dir = task_wt
-                            .as_deref()
-                            .map(std::path::PathBuf::from)
-                            .unwrap_or_else(|| cwd.to_path_buf());
-                        // After teardown the worktree's proofs live only in
-                        // the durable archive (backlog ea6547c9).
-                        let run_dir = proof_archive::oracle_dir(cfg, cwd, &run, &task, &run_dir);
+                        // The oracle judges the proofs in `task_wt` (or, after
+                        // teardown, the durable archive — backlog ea6547c9).
+                        // With no recorded worktree and no archived proof the
+                        // tree cannot be determined: refuse, never judge the
+                        // caller's cwd (backlog 834ccf88). A missing/unreadable
+                        // recorded dir is not papered over: the `tdd` spawn
+                        // fails there and `check_oracle` reports an undetermined
+                        // oracle, which `enforce_fp_gate` rejects (pinned by
+                        // `oracle::tests::spawn_failure_is_undetermined_and_rejects`).
+                        let run_dir = if requires_fp_oracle {
+                            proof_archive::task_oracle_dir(
+                                cfg,
+                                cwd,
+                                &run,
+                                &task,
+                                task_wt.as_deref().map(Path::new),
+                            )
+                            .with_context(|| format!("refusing to verify task '{task}'"))?
+                        } else {
+                            // Not a fix/feature task: `check_oracle` returns
+                            // `required:false` without looking at any tree, so
+                            // no directory is an input to this verdict.
+                            PathBuf::new()
+                        };
                         let verdict = oracle::check_oracle(
                             requires_fp_oracle,
                             reproduction_tests.as_deref(),
@@ -5536,22 +5547,40 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 return Ok(());
             };
             let cls = verify::classify_criteria(dc, t.is_behavioral, t.mechanical_check.as_ref());
-            let run_dir = rs
+            // The task's tree. With no recorded worktree there is no tree to
+            // run the command in: the caller's cwd is NOT the task's tree, so
+            // running there would report on unrelated code as if it were the
+            // task's (backlog 834ccf88). Refuse whenever a command would run;
+            // when none would, no tree is an input to the output.
+            let run_dir = match rs
                 .tasks
                 .iter()
                 .find(|s| s.id == task)
                 .and_then(|s| s.worktree.as_deref())
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| cwd.to_path_buf());
+            {
+                Some(w) => Some(PathBuf::from(w)),
+                None if cls.mechanical_cmd.is_some() => bail!(
+                    "refusing to check criteria for task '{task}' in run '{run}': the task has \
+                     no recorded worktree, so which tree to run its mechanical check in cannot \
+                     be determined (not running it in the caller's cwd). Record the task's \
+                     worktree with `condukt state set --worktree <path>`"
+                ),
+                None => None,
+            };
 
             // Behavioral (or non-runnable) criteria: the LLM verifier MUST run.
             // Any embedded command is run only to attach evidence — never to
             // skip the verifier, and never to fail this gate.
             if !cls.skip_eligible {
-                let evidence = cls.mechanical_cmd.as_ref().map(|cmd| {
-                    let (passed, output) = run_mechanical(cmd, &run_dir);
-                    serde_json::json!({ "cmd": cmd, "passed": passed, "output": output })
-                });
+                // `mechanical_cmd` Some ⇒ `run_dir` Some (refused above).
+                let evidence =
+                    cls.mechanical_cmd
+                        .as_ref()
+                        .zip(run_dir.as_deref())
+                        .map(|(cmd, dir)| {
+                            let (passed, output) = run_mechanical(cmd, dir);
+                            serde_json::json!({ "cmd": cmd, "passed": passed, "output": output })
+                        });
                 // `passed` mirrors the evidence run's exit verdict at top level
                 // so a consumer reading `passed` and `skip_verifier` together
                 // sees (true, false): ran green, verifier still required. It is
@@ -5583,8 +5612,16 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             let store = pass_cache::store_dir(&cfg.state_dir);
             let mut cache_hit = false;
             let (mut out, gate_failed) = verify::mechanical_skip_verdict(&cls, |cmd| {
+                // Unreachable (a command ⇒ a recorded worktree, refused above);
+                // if ever reached, fail the gate rather than run elsewhere.
+                let Some(dir) = run_dir.as_deref() else {
+                    return (
+                        false,
+                        "no recorded task worktree; mechanical check not run".to_string(),
+                    );
+                };
                 let (passed, output, hit) =
-                    pass_cache::run_cached(&store, cmd, &run_dir, run_mechanical);
+                    pass_cache::run_cached(&store, cmd, dir, run_mechanical);
                 cache_hit = hit;
                 (passed, output)
             });
@@ -5609,16 +5646,21 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 .iter()
                 .find(|t| t.id == task)
                 .ok_or_else(|| anyhow!("no task '{task}' in run '{run}'"))?;
-            let run_dir = rs
-                .tasks
-                .iter()
-                .find(|s| s.id == task)
-                .and_then(|s| s.worktree.as_deref())
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| cwd.to_path_buf());
-            // After teardown the worktree's proofs live only in the durable
-            // archive (backlog ea6547c9).
-            let run_dir = proof_archive::oracle_dir(cfg, cwd, &run, &task, &run_dir);
+            // The recorded worktree, else (after teardown) the durable archive
+            // (backlog ea6547c9); with neither, refuse — never the caller's
+            // cwd (backlog 834ccf88). A non-fix/feature task's verdict reads
+            // no tree (`check_oracle` returns `required:false` up front).
+            let run_dir = if t.requires_fp_oracle() {
+                let recorded = rs
+                    .tasks
+                    .iter()
+                    .find(|s| s.id == task)
+                    .and_then(|s| s.worktree.as_deref());
+                proof_archive::task_oracle_dir(cfg, cwd, &run, &task, recorded.map(Path::new))
+                    .with_context(|| format!("refusing to check the oracle for task '{task}'"))?
+            } else {
+                PathBuf::new()
+            };
             let out = oracle::check_oracle(
                 t.requires_fp_oracle(),
                 t.reproduction_tests.as_deref(),

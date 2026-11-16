@@ -17,6 +17,7 @@ use crate::lock;
 mod dirty_tracked;
 mod merge_gate;
 mod merge_recovery;
+mod quarantine;
 pub use dirty_tracked::refuse_uncommitted_task_worktree;
 use merge_gate::{ensure_base_on_default_branch, ensure_commits_carry_task_trailer};
 use merge_recovery::{abort_state_phrase, abort_trial_merge, run_merge_recovering_timeout};
@@ -3126,6 +3127,10 @@ mod worktree_remove_tests {
 /// verbatim and leaves the directory — and the work it could not save — on
 /// disk. For a garbage collector the restrictive side is DO NOT DELETE.
 ///
+/// A forced removal that fails part-way leaves no unregistered orphan in place:
+/// the leftover is quarantine-moved (see `quarantine`) and `remove` returns `Err`
+/// naming where it went.
+///
 /// If the branch cannot be deleted because it is not fully merged, a warning is
 /// printed to stderr and the function still returns `Ok(())`. The caller is
 /// responsible for acting on the warning (e.g. the CLI prints it again with
@@ -3194,8 +3199,9 @@ fn remove_worktree_preserving(repo: &Path, path: &Path) -> Result<()> {
                 ),
             }
         }
-        git(repo, &["worktree", "remove", "--force", &path_str])
-            .with_context(|| format!("could not force-remove worktree {}", path.display()))?;
+        if let Err(e) = git(repo, &["worktree", "remove", "--force", &path_str]) {
+            return Err(quarantine::fail_forced_removal(repo, path, e));
+        }
     }
     Ok(())
 }

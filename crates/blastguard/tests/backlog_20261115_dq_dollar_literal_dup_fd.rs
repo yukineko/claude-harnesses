@@ -87,7 +87,6 @@ fn run_as(command: &str, home: &Home, subagent: bool) -> (String, String) {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-15 F12 bash <&\"$\"fd literal $fd judged as expansion — remove when fixed"]
 fn dq_dollar_literal_word_is_allow() {
     let cmd = r#"bash <&"$"fd"#;
     let home = unique_home("a");

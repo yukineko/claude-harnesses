@@ -3,7 +3,7 @@
 #
 #     git config core.hooksPath .githooks
 #
-# This hook has three advisory nudges plus six blocking checks (the bypass
+# This hook has two advisory nudges plus six blocking checks (the bypass
 # ledger below, `cargo check` over the crates each pushed range touches, the
 # trybuild compile-fail type contracts via scripts/check-compile-fail.py,
 # `specguard map gate-check` over each pushed range, the fail-open mutation
@@ -23,34 +23,20 @@
 #   1. GATE crates (advisory) — when the push touches blastguard/propguard/
 #      specguard/stuckguard/mutategate/overwatch (the fleet defense gates),
 #      suggest a Continuous-Audit round (`scripts/continuous-audit.sh --dry-run`).
-#   2. Rollout drift — `scripts/check-plugin-rollout.py` reports plugins whose
-#      committed+bumped version was never actually rolled out to the live plugin
-#      cache. That fix then reaches NO session. This has to live here rather than
-#      in CI: the check reads ~/.claude/plugins/installed_plugins.json, which is
-#      a property of the developer's machine and does not exist on a runner.
-#      ALL of its sub-classes are advisory. rc=1 ("committed but not rolled
-#      out") used to BLOCK (2026-07-22: 16 plugins drifted silently across ~20
-#      commits in one session before anyone ran the checker by hand). It was
-#      demoted on 2026-07-23 because it gates the wrong thing at the wrong
-#      point: drift is a property of THIS machine's plugin cache, while `git
-#      push` shares CODE with a remote — local deployment state is not a
-#      statement about code quality, so it must not decide whether good commits
-#      may leave this machine. The detection is unchanged; only the consequence
-#      moved. See the rc=1 branch for the full argument, and the backlog item
-#      for relocating enforcement to session start (where an operator can act on
-#      it) so this does not degrade into "someone will notice". rc=2
-#      (enablement) and rc=3 (unverifiable) were already advisory: neither has a
-#      rollout fix, so blocking on them would send the reader to a command that
-#      cannot help.
-#   3. Autonomy chain (advisory) — when the push touches the crates whose SKILL
+#   2. Autonomy chain (advisory) — when the push touches the crates whose SKILL
 #      specs the human-0 chain depends on (condukt/scout/flow/backlog), suggest
 #      re-running `scripts/e2e-autonomy.sh`, which asserts the gate contracts
 #      that remove every AskUserQuestion stop. Also machine-local (needs
 #      installed binaries).
 #
-# Checks 1, 3, and rollout-drift's sub-classes are advisory and always
-# degrade to silence when their prerequisite (python3, the script, the registry)
-# is absent. They never block.
+# Checks 1 and 2 are advisory and always degrade to silence when their
+# prerequisite (python3, the script) is absent. They never block.
+#
+# Plugin rollout drift (scripts/check-plugin-rollout.py) is NOT checked here.
+# It was removed from this hook by user ruling 2026-11-16: rollout is a fact
+# about this machine's plugin cache, not about the code being pushed, and it is
+# reported at session start by scripts/session-rollout-drift.py, which covers
+# every exit class of the checker.
 #
 # The FIRST of the six blocking checks: the first thing this hook does is look
 # for an ungated commit outstanding in the bypass ledger (`scripts/gate-bypass.py`). That is the
@@ -389,141 +375,6 @@ This is advisory only — the push is not blocked.
 EOF
 fi
 phase_end
-
-# Rollout drift: a committed + version-bumped plugin whose fix was never rolled
-# out to the live cache reaches no session at all. The checker exits 0 when the
-# registry is absent (e.g. a machine with no plugins installed), so this stays
-# quiet where it does not apply. Skipped entirely without python3 or the script.
-#
-# The checker distinguishes its failure CLASSES by exit code (rc=1 rollout
-# drift, rc=2 enablement) because they have OPPOSITE fixes. Branching on a bare
-# non-zero and then unconditionally printing the rollout prose told the reader
-# to run `scripts/rollout-plugins.sh` for a disabled-GATE-crate failure — the
-# one command that, by the checker's own hint, does NOT enable plugins. So: the
-# checker's own output (which already carries the right Fix line for whichever
-# class fired) is always echoed, and the extra rollout prose is added only for
-# the rollout class. Any other non-zero rc is unrecognized: echo and say so
-# rather than inventing a remediation for it.
-#
-# rc=1 (rollout drift proper) is ADVISORY (demoted 2026-07-23): rollout is a
-# fact about THIS machine's plugin cache, and `git push` shares code with a
-# remote, so local deployment state must not gate the share. rc=2/rc=3 stay
-# advisory too (neither has a rollout remedy).
-if command -v python3 >/dev/null 2>&1 && [ -f scripts/check-plugin-rollout.py ]; then
-    phase_begin rollout
-    rollout_out="$(python3 scripts/check-plugin-rollout.py 2>&1)"
-    rollout_rc=$?
-    if [ "$rollout_rc" -ne 0 ]; then
-        printf '\n%s\n' "$rollout_out" >&2
-    fi
-    case "$rollout_rc" in
-        0) ;;
-        1)
-            # DEMOTED TO ADVISORY (2026-07-23), deliberately — not because it was
-            # noisy, but because it was gating the wrong thing at the wrong point.
-            #
-            # Rollout drift is a fact about THIS MACHINE's plugin cache
-            # (`~/.claude/plugins/.../installed_plugins.json`): the committed code
-            # is fine, it just has not been copied into the live harness here.
-            # `git push` is the act of SHARING CODE with a remote. Local
-            # deployment state says nothing about whether that code is correct,
-            # so blocking the share on it conflated two unrelated concerns — and
-            # penalized a machine that is behind on deployment by cutting it off
-            # from publishing perfectly good commits.
-            #
-            # This is NOT "the gate went red so we silenced it" (CLAUDE.md §4).
-            # The detection is unchanged and still runs and still prints; only
-            # the *consequence* moved. The failure mode it was built for — a
-            # committed, version-bumped fix that reaches no session (once found
-            # by hand across 5 plugins) — is real and must stay covered, but it
-            # is a DEPLOYMENT reminder, so it belongs at session start where the
-            # operator can act on it, not on the push path.
-            #
-            # Backlog tracks relocating the enforcement so this does not degrade
-            # into "someone will notice" (CLAUDE.md §6 forbids resting on that).
-            #
-            # An ORPHAN-ONLY rc=1 (an ORPHAN CACHE DIR block and no ROLLOUT
-            # DRIFT block) has no crate to roll out; the checker's own Fix line
-            # says so, and naming rollout-plugins.sh here would contradict it
-            # (backlog d38c195b).
-            case "$rollout_out" in
-                *"ROLLOUT DRIFT ("*) rollout_orphan_only=0 ;;
-                *"ORPHAN CACHE DIR ("*) rollout_orphan_only=1 ;;
-                *) rollout_orphan_only=0 ;;
-            esac
-            if [ "$rollout_orphan_only" -eq 1 ]; then
-                cat >&2 <<'EOF'
-
-rollout: the plugin cache holds a dir for a plugin with no crate (ORPHAN CACHE
-DIR above). That is NOT fixed by a rollout — follow the checker's Fix line
-(delete the orphan cache dir, or declare it in scripts/retired-plugins.json).
-
-This is advisory only — the push is not blocked.
-EOF
-            else
-            cat >&2 <<'EOF'
-
-rollout: the versions above are committed but not live on THIS machine — the fix
-is in git and reaches no session here until you roll it out:
-
-    scripts/rollout-plugins.sh --plugin <name>            # add --canary for GATE crates
-
-This is advisory only — the push is not blocked. Rollout is local deployment
-state, not code quality, so it does not gate sharing code with the remote.
-EOF
-            fi
-            ;;
-        3)
-            # Unverifiable class. Neither a rollout nor an enablement edit can
-            # fix it: the checker could not read a plugin.json at all, so the
-            # population it inspected is incomplete and NOTHING it reported is a
-            # complete verdict. Naming either remedy here would send the reader
-            # to a command that cannot help — and, worse, imply the rest of the
-            # report was verified when it was not.
-            cat >&2 <<'EOF'
-
-unverifiable: a crate under crates/ ships a plugin.json that could not be read
-or parsed, so the rollout and enablement checks above covered an INCOMPLETE set
-of plugins. Treat their result as unknown, not as a pass — fix the file named in
-the Fix line above and re-run.
-
-This is advisory only — the push is not blocked.
-EOF
-            ;;
-        2)
-            # Enablement class. Deliberately does NOT mention rollout-plugins.sh:
-            # the checker's own Fix line above names the real remedy (edit
-            # enabledPlugins in settings.json, then restart Claude Code).
-            cat >&2 <<'EOF'
-
-enablement: see the Fix line above — this class is NOT fixed by a rollout.
-A GATE crate that is installed but not listed in enabledPlugins is inert: its
-hooks never fire, so the gate reports nothing and guards nothing.
-
-This is advisory only — the push is not blocked.
-EOF
-            ;;
-        4)
-            # Parked-declaration class. scripts/parked-plugins.json is what says
-            # which of the reds above are intentional; while it is unusable, that
-            # question has no answer, and the wrong guess is the expensive one —
-            # arming a plugin that was parked on purpose is what caused the
-            # 2026-08-04 incident (backlog a6f165cd).
-            cat >&2 <<'EOF'
-
-parked declaration: scripts/parked-plugins.json could not be used, so NONE of the
-reds above were treated as intentional. Do not act on them until that file parses
-— repair it (or delete it, which means nothing is parked) and re-run.
-
-This is advisory only — the push is not blocked.
-EOF
-            ;;
-        *)
-            printf '\n%s\n' "rollout check: unrecognized exit code $rollout_rc — see its output above. This is advisory only; the push is not blocked." >&2
-            ;;
-    esac
-    phase_end
-fi
 
 # --- blocking checks 2-4: compiler, trybuild contracts, gate spec-docs -------
 # The one surface `--no-verify` cannot jump is the compiler. donegate runs cargo

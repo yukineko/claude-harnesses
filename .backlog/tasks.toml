@@ -2442,3 +2442,33 @@ exit 101: e/hiroyuki_nakayama/src/.harness-worktrees/followup-cd-df7c/crates/con
     Finished `test` profile [unoptimized + debuginfo] target(s) in 23.72s
      Running tests/backlog_20261116_check_criteria_null_worktree.rs (target/debug/deps/backlog_20261116_check_criteria_null_worktree-4af4ed9337aa11b3)
 error: test failed, to rerun pass `-p condukt --test backlog_20261116_check_criteria_null_worktree`"""
+
+[[task]]
+id = "5f4dc912"
+title = "blastguard: git apply heredoc with TAB-indented added line then sh run.sh judged allow"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-16, main fa58e3698 (blastguard 0.2.672), run-20261116-143410-12142: git apply with a dash-heredoc where only the added line is TAB-indented (+chmod 777 /etc/hosts), then sh run.sh, is allow in main and subagent. Module strips one plus-or-space prefix, the shell strips the TAB. git_apply_patch.rs KNOWN GAP. Expected: not allow."
+created_at = 1794813550
+updated_at = 1794813550
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261116_git_apply_patch_known_gaps d_tab -- --include-ignored"
+rev = "a6e29aec99889d915c30082dc00de16d95407ded"
+observed_at = 1794813550
+detail = """
+exit 101: . 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.08s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-80ffcfc78037f570)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261116_git_apply_patch_known_gaps`"""

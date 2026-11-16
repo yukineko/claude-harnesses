@@ -1,15 +1,21 @@
 // このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! `condukt worktree merge` must only land commits that carry a
-//! `Condukt-Task: <run>/<task>` trailer naming the task that owns the branch.
+//! `condukt worktree merge` with a task association must only land commits
+//! that carry a `Condukt-Task: <run>/<task>` trailer naming the task that owns
+//! the branch.
 //!
-//! The task identity is recorded at `worktree create` time in git config
-//! `branch.<b>.conduktTask` (or given via `--run/--task` on merge, which must
-//! agree with the record). A commit lacking the trailer, or naming another
-//! task, is treated as foreign (e.g. made by a parallel session sharing the
-//! branch) and the merge refuses: non-zero exit, main does not move, and
-//! stderr lists the full SHA of every offending commit. An undeterminable
-//! identity also refuses (fail-closed).
+//! Contract (user rulings 2026-11-15 backlog 3a45a57d, 2026-11-16 scope):
+//! the guard applies only when the merge NAMES the task (`--run` and `--task`
+//! together, which must agree with any `branch.<b>.conduktTask` record written
+//! at `worktree create`). A merge with neither flag has no task association:
+//! the guard does not apply, even when a record exists. A half-given pair
+//! (only one of the two) is undeterminable and refuses with
+//! `merge-task-undetermined`. With the guard on, a commit lacking the trailer
+//! or naming another task is foreign: non-zero exit, main does not move, and
+//! stderr lists the full SHA of every offending commit.
+//!
+//! DOES NOT PROVE: `resolve-merge` behaviour (see
+//! `backlog_20261116_resolve_merge_task_named_flag.rs`).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -179,12 +185,13 @@ fn assert_merged(f: &Fixture, r: &MergeResult, tip: &str) {
     );
 }
 
+// test-weakening-justified: user ruling 2026-11-15 (backlog 3a45a57d): a merge with no --run/--task has no task association and must not apply the trailer guard; per the 2026-11-16 scope ruling this test now names the task via --run/--task so the guard property stays tested.
 #[test]
 fn foreign_trailerless_commit_is_refused() {
     let f = setup();
     let own = commit(&f.wt, "a.txt", Some("runA/t1"));
     let foreign = commit(&f.wt, "b.txt", None);
-    let r = merge(&f, &[]);
+    let r = merge(&f, &["--run", "runA", "--task", "t1"]);
     assert_refused(&f, &r);
     assert!(
         r.stderr.contains(&foreign),
@@ -198,12 +205,13 @@ fn foreign_trailerless_commit_is_refused() {
     );
 }
 
+// test-weakening-justified: user ruling 2026-11-15 (backlog 3a45a57d): a merge with no --run/--task has no task association and must not apply the trailer guard; per the 2026-11-16 scope ruling this test now names the task via --run/--task so the guard property stays tested.
 #[test]
 fn wrong_task_trailer_is_refused() {
     let f = setup();
     let own = commit(&f.wt, "a.txt", Some("runA/t1"));
     let foreign = commit(&f.wt, "b.txt", Some("runB/t9"));
-    let r = merge(&f, &[]);
+    let r = merge(&f, &["--run", "runA", "--task", "t1"]);
     assert_refused(&f, &r);
     assert!(
         r.stderr.contains(&foreign),
@@ -217,19 +225,47 @@ fn wrong_task_trailer_is_refused() {
     );
 }
 
+// test-weakening-justified: user ruling 2026-11-15 (backlog 3a45a57d): a merge with no --run/--task has no task association and must not apply the trailer guard; per the 2026-11-16 scope ruling this test now names the task via --run/--task so the guard property stays tested.
 #[test]
 fn all_commits_trailered_merges() {
     let f = setup();
     commit(&f.wt, "a.txt", Some("runA/t1"));
     let tip = commit(&f.wt, "b.txt", Some("runA/t1"));
+    let r = merge(&f, &["--run", "runA", "--task", "t1"]);
+    assert_merged(&f, &r, &tip);
+}
+
+// test-weakening-justified: user ruling 2026-11-15 (backlog 3a45a57d) and the 2026-11-16 scope ruling: with no record and no --run/--task there is no task association, so the merge proceeds without a trailer check (the old "refused" pin was the defect); a half-given pair still refuses (see identity_half_given_pair_is_refused).
+#[test]
+fn identity_undetermined_merges_without_trailer_check() {
+    let f = setup();
+    unset_record(&f);
+    commit(&f.wt, "a.txt", Some("runA/t1"));
+    let tip = commit(&f.wt, "b.txt", None);
     let r = merge(&f, &[]);
     assert_merged(&f, &r, &tip);
 }
 
+// test-weakening-justified: user ruling 2026-11-15 (backlog 3a45a57d) and the 2026-11-16 scope ruling: the old identity_undetermined_is_refused pin is repinned; the undeterminable case that remains is a half-given --run/--task pair, which must still refuse with merge-task-undetermined.
 #[test]
-fn identity_undetermined_is_refused() {
-    let f = setup();
-    // Remove the recorded task identity (may already be absent: ignore failure).
+fn identity_half_given_pair_is_refused() {
+    for half in [&["--run", "runA"][..], &["--task", "t1"][..]] {
+        let f = setup();
+        unset_record(&f);
+        commit(&f.wt, "a.txt", Some("runA/t1"));
+        let r = merge(&f, half);
+        assert_refused(&f, &r);
+        assert!(
+            r.stderr.contains("merge-task-undetermined"),
+            "half-given pair {half:?} must refuse with merge-task-undetermined; stderr={:?}",
+            r.stderr
+        );
+    }
+}
+
+/// Remove the recorded task identity and assert it is gone.
+fn unset_record(f: &Fixture) {
+    // May already be absent: ignore failure.
     let _ = git(
         &f.repo,
         &[
@@ -251,9 +287,6 @@ fn identity_undetermined_is_refused() {
         .success(),
         "fixture precondition: conduktTask record must be absent"
     );
-    commit(&f.wt, "a.txt", Some("runA/t1"));
-    let r = merge(&f, &[]);
-    assert_refused(&f, &r);
 }
 
 #[test]

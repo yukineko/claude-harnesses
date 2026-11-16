@@ -128,7 +128,6 @@ fn merge(f: &Fixture, extra: &[&str]) -> (Output, String) {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-15 worktree merge without task refuses on missing trailer — remove when fixed"]
 fn merge_without_run_task_does_not_apply_task_trailer_guard() {
     let f = setup();
     let (out, _main_after) = merge(&f, &[]);

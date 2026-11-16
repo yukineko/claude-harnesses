@@ -54,7 +54,17 @@
 | 対照: `ls` | 0 | 空 | Allow |
 
 **結論（事実）**: 稼働中の blastguard 0.2.679 は、B.5 の形をどれも Ask にしていない。
-「いまは blastguard が Ask を返す」という依頼の前提は、稼働版の挙動と食い違う（**[論点 Q1]**）。
+「いまは blastguard が Ask を返す」という依頼の前提は、稼働版の挙動と食い違っていた（Q1。§9 で解消済み）。
+**現状は Allow（観測済み）であり、B.5 の Ask 化は S4 で入る（P0 = S4）。**
+
+**[観測]** 依頼者（harness-5a）の 2026-11-17 の返信によると、稼働版 0.2.679 は S1 の型を凍結しただけで、detect には未配線である。
+今の Allow は S2 の RED テストで固定されている。branch `bg/s2-red-20261117` の commit `ceed4a0db`、
+`crates/blastguard/tests/ast_effect_rules_20261117.rs` の B4 群（`b4_bash_script_file_restricts` `bash script.sh`、
+`b4_sh_script_file_restricts` `sh ./script.sh`、`b4_python3_script_file_restricts` `python3 x.py`、
+`b4_perl_script_file_restricts` `perl x.pl`、wrapper 行 `env bash script.sh`）で、いずれも `#[ignore = "RED: S4 B.5 script-file row …"]` が付いている。
+`. file` と `source file` は同じファイルの `#[ignore = "RED: S4 B.5 . file Ask (ruling 13)"]` と `"RED: S4 B.5 source file Ask (ruling 13)"` に含まれる。
+この 2 点は main session が `git show ceed4a0db` で確認した。
+直接実行の形（`./run.sh`、`scripts/foo.sh`）の RED は、同じファイルの中に見当たらなかった（Q2 は未解決のまま）。
 
 **[観測]** この食い違いは文書の上でも説明がつく。SUBSET の冒頭に
 「Specification only: … nothing here is wired into `detect` yet and no verdict changes in S1.」とあり、
@@ -69,7 +79,7 @@ SUBSET の B.5 が例に挙げるのは interpreter 経由の形（`bash x.sh`�
 
 ### 1.2 前提段階（検疫 plugin より先に済ませる）
 
-- **P0 [提案]** blastguard が B.5 の script-file 行を Ask（subagent では Deny）にする。これは SUBSET の S4 の一部である。
+- **P0 = S4（Q1 解消、依頼者 harness-5a 2026-11-17）** blastguard が B.5 の script-file 行を Ask（subagent では Deny）にする。これは SUBSET の S4 の一部で、受け入れ条件は S2 の RED（上記 B4 群と `. file` / `source file`）が GREEN になることである。
   P0 が GREEN になる前に検疫 plugin を有効化しても意味がない。blastguard が既に Allow を返しているコマンドを、検疫が「Allow に下げる」ことはないからである。
   P0 の範囲に直接実行の形を含めるかは Q2 で決める。
 - **P0 の帰結（明示）**: P0 を入れた時点から検疫 plugin が有効になるまでのあいだ、すべての `bash x.sh` / `python3 x.py` 等が Ask になる。
@@ -331,7 +341,7 @@ crates/effectscope/
 
 番号は本文の **[論点 Qn]** に対応する。推奨はあくまで推奨で、決定ではない。
 
-1. **Q1 前提の食い違い**: 依頼の前提「いまは blastguard が B.5 の形を Ask にする」が、稼働版 0.2.679 の観測（すべて Allow、§1.1）と食い違う。SUBSET は S1 の時点では未配線と明記している。B.5 の script-file 行の Ask 化（P0）を S4 で入れることを前提段階としてよいか。それとも先行して入れるか。
+1. **Q1 前提の食い違い — 解消済み（依頼者 harness-5a、2026-11-17）**: 今は Allow であることを観測で確かめた（§1.1）。P0 は S4 の一部として入れ、S2 の RED（`ceed4a0db`）で固定済み。前倒しはしない。
 2. **Q2 直接実行の形**: `./run.sh`、`scripts/foo.sh`、絶対パスの直接実行を B.5 の対象（Ask → 検疫）に含めるか。含めると言語は shebang で決める。含めないと、検疫を経ずに Allow のまま残る。
 3. **Q3 移行期間**: P0 から検疫の有効化までのあいだに Ask が増えることを、どれだけの期間許容するか。P0 と検疫を同時に有効化するか。
 4. **Q4 連携方式**: (A) 独立した hook、(B) blastguard が検疫 binary を subprocess で呼ぶ、(C) in-process。推奨は (B)。(A) は hook の合成規則（未確認）に依存する。(B) の場合、binary のパスをどう見つけるか。

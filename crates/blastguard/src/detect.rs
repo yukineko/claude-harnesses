@@ -60,6 +60,7 @@ use crate::model::Decision;
 use crate::scope::{Placement, SafeRoots};
 use harness_core::verdict::Determination;
 mod ast;
+mod backtick_text;
 mod budget;
 mod compound;
 mod condukt;
@@ -73,6 +74,7 @@ mod find_xargs;
 mod function_calls;
 mod gh;
 mod git;
+mod git_apply_patch;
 mod git_stage;
 mod git_unmerged;
 mod harm_mark;
@@ -727,6 +729,31 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // written here can still be run by a LATER, separate tool call. Shape rule: `strip_data_here_document_bodies`.
     let stripped = strip_data_here_document_bodies(cmd);
     let cmd: &str = &stripped;
+    let judged = detect_bash_after_data_bodies(cmd, depth, ctx);
+    // 0d. `git apply` / `git am` fed a patch by a here-document writes the
+    // patch's added files, and a later command can run them. The body's `+`
+    // (and context) prefix hides its commands from every rule above, so the
+    // shell view of the body (prefix removed) is judged too, and a reader whose
+    // input cannot be read as a patch is an Ask. Deny over Ask over Allow.
+    // See `git_apply_patch` (backlog 42741ea3).
+    match git_apply_patch::read_patch_readers(cmd) {
+        None => judged,
+        Some(reading) => {
+            let mut d = git_apply_patch::stronger(
+                judged,
+                detect_bash_rules(&reading.shell_view, depth, ctx),
+            );
+            if let Some(reason) = reading.refusal {
+                d = git_apply_patch::stronger(d, Decision::ask(reason));
+            }
+            d
+        }
+    }
+}
+
+/// Steps 0b onward of [`detect_bash`]: the rules that run after the data-only
+/// here-document body was removed (see there), on `cmd` as given.
+fn detect_bash_after_data_bodies(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // 0b. A QUOTED here-document body written to a literal `.py` file is judged
     // as Python, not as shell lines (user ruling 2026-11-08); the rest of the
     // command, later lines included, is judged here without it — or, when the
@@ -1403,7 +1430,7 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
     // Memory rule: backticks in a double-quoted note / commit message are
     // command-substituted and silently eaten. Recorded (not returned) so a
     // Deny elsewhere on the segment still outranks this Ask.
-    if let Some(ask) = backtick_in_double_quoted_text(seg) {
+    if let Some(ask) = backtick_text::backtick_in_double_quoted_text(seg) {
         let _ = acc.record(ask);
     }
 
@@ -2160,58 +2187,6 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         Some(deny) => deny,
         None => acc.finish(),
     }
-}
-
-/// A backtick inside a DOUBLE-quoted argument of `backlog add|edit` or
-/// `git commit` is command substitution: the shell runs the span and replaces
-/// it with its (usually empty) output, so the stored note / commit message
-/// silently loses that text. Single-quoted backticks are literal and fine.
-fn backtick_in_double_quoted_text(seg: &str) -> Option<Decision> {
-    // Cheap pre-filter: without both characters there is nothing to find, and
-    // `command_candidates` below is too costly to run on every re-analysed
-    // segment (the D4 budget test measures it).
-    if !(seg.contains('`') && seg.contains('"')) {
-        return None;
-    }
-    let tokens: Vec<&str> = seg.split_whitespace().collect();
-    let target = command_candidates(&tokens).into_iter().find_map(|idx| {
-        let cmd = normalized_command(tokens[idx]);
-        let rest = &tokens[idx + 1..];
-        match cmd.as_str() {
-            "backlog" => rest
-                .iter()
-                .find(|t| !t.starts_with('-'))
-                .map(|t| normalized_command(t))
-                .filter(|s| s == "add" || s == "edit")
-                .map(|s| format!("backlog {s}")),
-            "git" => git_subcommand_index(rest)
-                .map(|i| normalized_command(rest[i]))
-                .filter(|s| s == "commit")
-                .map(|_| "git commit".to_string()),
-            _ => None,
-        }
-    })?;
-    let (mut in_s, mut in_d, mut escaped) = (false, false, false);
-    for c in seg.chars() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match c {
-            '\\' if !in_s => escaped = true,
-            '\'' if !in_d => in_s = !in_s,
-            '"' if !in_s => in_d = !in_d,
-            '`' if in_d => {
-                return Some(Decision::ask(format!(
-                    "a backtick inside a double-quoted argument of `{target}` is command \
-substitution: the shell runs that span and silently deletes it from the stored text. Use single \
-quotes (or escape the backtick) to keep it literal"
-                )));
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 #[cfg(test)]

@@ -212,7 +212,40 @@ class MidBuild(Fixture):
 
 class MutationMarker(unittest.TestCase):
     def test_f_evaluate_scenario_brackets_mutation_with_marker_and_seq(self):
-        root = Path(tempfile.mkdtemp(prefix="rdirty-f-")).resolve()
+        self.run_and_assert_scratch_only_mutation()
+
+    # Controls: the assertions must FAIL against broken implementations,
+    # otherwise test_f proves nothing.
+    def test_f_control_noop_mutation_is_detected(self):
+        def sabotage(mod):
+            mod.apply_mutation = lambda scenario, root=None: None
+        with self.assertRaisesRegex(AssertionError, "scratch copy did not hold the mutant"):
+            self.run_and_assert_scratch_only_mutation(sabotage)
+
+    def test_f_control_mutating_invoking_tree_is_detected(self):
+        def sabotage(mod):
+            orig = mod.apply_mutation
+
+            # Pre-ruling behaviour: the mutant is (also) written into REPO.
+            def both(scenario, root=None):
+                orig(scenario, root=None)
+                return orig(scenario, root=root)
+            mod.apply_mutation = both
+        with self.assertRaisesRegex(AssertionError, "invoking tree's file was written"):
+            self.run_and_assert_scratch_only_mutation(sabotage)
+
+    def test_f_control_tests_run_in_invoking_tree_is_detected(self):
+        def sabotage(mod):
+            stub = mod.run_crate_tests
+            mod.run_crate_tests = lambda crate, timeout=600, test_args=None, cwd=None: stub(
+                crate, timeout=timeout, test_args=test_args, cwd=mod.REPO)
+        with self.assertRaisesRegex(AssertionError, "cargo cwd is the invoking tree"):
+            self.run_and_assert_scratch_only_mutation(sabotage)
+
+    def run_and_assert_scratch_only_mutation(self, sabotage=None):
+        """`sabotage(mod)` may replace module functions to model a broken
+        implementation (used only by the control tests)."""
+        root =Path(tempfile.mkdtemp(prefix="rdirty-f-")).resolve()
         self.addCleanup(shutil.rmtree, root, True)
         repo = root / "repo"
         (repo / "crates" / "g" / "src").mkdir(parents=True)
@@ -239,21 +272,44 @@ class MutationMarker(unittest.TestCase):
         before = seq_val()
         seen = {}
 
-        def fake_tests(crate, timeout=600):
-            seen["mutated_on_disk"] = "NEW" in f.read_text()
+        # USER RULING 2026-11-14 (a53976406): the mutant is written ONLY into a
+        # scratch copy of the tree; `cargo test` runs with cwd = that copy and
+        # REPO/<file_rel> is read-only. So while the stubbed tests "run", the
+        # scratch copy must hold the mutant AND the invoking tree's file must
+        # still hold the original bytes.
+        def fake_tests(crate, timeout=600, test_args=None, cwd=None):
+            # Same resolution run_crate_tests uses for its cargo cwd.
+            root = cwd if cwd is not None else mod._ACTIVE_SCRATCH
+            seen["root"] = None if root is None else Path(root).resolve()
+            copy = None if root is None else Path(root) / "crates" / "g" / "src" / "m.rs"
+            seen["scratch_text"] = copy.read_text() if copy is not None and copy.is_file() else None
+            seen["repo_text"] = f.read_text()
             seen["active"] = active.exists()
             seen["seq"] = seq_val()
             return 1, "test result: FAILED. 1 failed"
 
         mod.REPO = repo
         mod.run_crate_tests = fake_tests
-        sc = mod.Scenario(crate="g", file_rel="crates/g/src/m.rs", description="d", old="OLD", new="NEW")
+        if sabotage is not None:
+            sabotage(mod)
+        sc =mod.Scenario(crate="g", file_rel="crates/g/src/m.rs", description="d", old="OLD", new="NEW")
         res = mod.evaluate_scenario(sc, 5)
+        ctx = f"({res.status}: {res.detail})"
 
-        self.assertTrue(seen.get("mutated_on_disk"), f"fixture: mutation not applied while tests ran ({res.status}: {res.detail})")
-        self.assertTrue(seen["active"], ".active marker absent while the mutated file was on disk")
-        self.assertGreater(seen["seq"], before, ".seq not bumped before the mutated file was written")
-        self.assertTrue(res.revert_confirmed)
+        self.assertIn("root", seen, f"fixture: tests were never run {ctx}")
+        scratch = seen["root"]
+        self.assertIsNotNone(scratch, f"cargo cwd (cwd / _ACTIVE_SCRATCH) unset while tests ran {ctx}")
+        self.assertNotEqual(scratch, repo, f"cargo cwd is the invoking tree, not a scratch copy {ctx}")
+        self.assertFalse(scratch.is_relative_to(repo), f"scratch {scratch} lies inside the invoking tree {ctx}")
+        self.assertEqual(seen["scratch_text"], "fn a() { NEW }\n",
+                         f"scratch copy did not hold the mutant while tests ran {ctx}")
+        self.assertEqual(seen["repo_text"], "fn a() { OLD }\n",
+                         f"invoking tree's file was written while tests ran (must be read-only) {ctx}")
+        self.assertTrue(seen["active"], ".active marker absent while the mutant existed")
+        self.assertGreater(seen["seq"], before, ".seq not bumped before the mutant was written")
+        self.assertEqual(res.status, "caught", ctx)
+        self.assertTrue(res.revert_confirmed, ctx)
+        self.assertFalse(os.path.lexists(scratch), f"scratch copy {scratch} not removed after the run")
         self.assertEqual(f.read_text(), "fn a() { OLD }\n")
         self.assertFalse(active.exists(), ".active still present after confirmed revert")
         self.assertGreater(seq_val(), before, ".seq must stay bumped after revert")

@@ -80567,3 +80567,67 @@ rev = "5284100d573894e909a12ed700fba7ba308b4361"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "c96e756a"
+title = "condukt worktree remove leaves an unregistered orphan dir (target/ residue, .git gone) when git worktree remove --force fails part-way"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "worktree",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+RED: crates/condukt/tests/worktree_remove_orphan_leftover.rs (79f5528d), ported from unmerged bk-leftover-1106 (fb17edd6; its backlog follow-up was never filed). Re-run on main 47ec0a2e: FAILS - git worktree remove --force exits 255 'Permission denied', admin dir deleted, target/ residue left; condukt then refuses ('is not the root of a usable git worktree'). Field observation 2026-11-13: /mnt/c/tmp/aegis-worktrees/run-20261106-100625-7376-blastguard-heredoc-body-fp left with only target/ (1.4G) + tdd.toml, 'prunable' in git worktree list; cleaned by hand (rm -rf + git worktree prune). Earlier field: 2026-11-05/06 wedged tdd/donegate Stop hooks. Remove the #[ignore] when fixed.
+blocked 2026-11-14 run-20261114-130020-46995: Q7 — leftover after git already deleted the admin dir: (i) quarantine-move, delete nothing (proposed) / (ii) delete only proven-gitignored entries / (iii) re-register as worktree. Needs ruling. | RULED 2026-11-14 by user (AskUserQuestion): Q7 quarantine-move the leftover, delete nothing."""
+created_at = 1794533093
+updated_at = 1794817276
+weight = 0.0
+issue_number = 1678
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1678"
+rev = 4
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test worktree_remove_orphan_leftover -- --ignored"
+rev = "79f5528d215b7b71a116795f2af234ba23671ca2"
+observed_at = 1794533093
+detail = """
+exit 101: 0.06s
+
+   Compiling condukt v0.7.394 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-43f28f62/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.25s
+     Running tests/worktree_remove_orphan_leftover.rs (target/debug/deps/worktree_remove_orphan_leftover-b2dcc6fdf9b9a738)
+error: test failed, to rerun pass `-p condukt --test worktree_remove_orphan_leftover`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test worktree_remove_orphan_leftover -- --include-ignored"
+exit = 0
+passed = 1
+rev = "db3e23a0806a7a86e2032889e237dc6a3d0f3389"
+observed_at = 1794817253
+output_digest = "sha256:1fbc3a067b819e75be631bb05cb1540b77148e92fe91d817afa26ecb4b064d77"
+excerpt = """
+
+running 1 test
+test remove_never_leaves_an_unregistered_orphan_directory ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+   Compiling condukt v0.7.430 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.10s
+     Running tests/worktree_remove_orphan_leftover.rs (target/debug/deps/worktree_remove_orphan_leftover-d792e8071c93da5e)
+"""
+
+[task.closure.red]
+rev = "0be4629b085beda8f4767b4ffe75dfd9dd156e95"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

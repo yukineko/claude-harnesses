@@ -80631,3 +80631,61 @@ rev = "0be4629b085beda8f4767b4ffe75dfd9dd156e95"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "834ccf88"
+title = "condukt: check-criteria runs the repro in the caller's cwd when the task has no recorded worktree (reports passed:true / skip_verifier:true)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-16 at fa58e3698 in run-20261116-143410-12142 t3: worktree=null (orchestrator set running without --worktree); check-criteria ran the repro in the caller's tree. Test shows passed:true skip_verifier:true exit 0 with a cwd marker. Cause: main.rs CheckCriteria .unwrap_or_else(|| cwd.to_path_buf()); CheckOracle has the same pattern (untested). Readings: (a) defect: null worktree = undeterminable tree, must refuse; (b) intended cwd fallback. The ran.marker in cwd tells them apart."
+created_at = 1794813513
+updated_at = 1794820349
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261116_check_criteria_null_worktree -- --include-ignored"
+rev = "bf454e21f24c4fff547678a33c3b882fd3d2a185"
+observed_at = 1794813513
+detail = """
+exit 101: e/hiroyuki_nakayama/src/.harness-worktrees/followup-cd-df7c/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.72s
+     Running tests/backlog_20261116_check_criteria_null_worktree.rs (target/debug/deps/backlog_20261116_check_criteria_null_worktree-4af4ed9337aa11b3)
+error: test failed, to rerun pass `-p condukt --test backlog_20261116_check_criteria_null_worktree`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261116_check_criteria_null_worktree -- --include-ignored"
+exit = 0
+passed = 2
+rev = "5c3fe9d9b42a41ecb2c54ca80b7882152177cdd9"
+observed_at = 1794820336
+output_digest = "sha256:42df4dfae937e9ae1a76858ee88c90262c0ac9510b817c903d082eca305c8011"
+excerpt = """
+
+running 2 tests
+test control_recorded_worktree_runs_command_there_not_in_cwd ... ok
+test null_worktree_check_criteria_does_not_run_in_cwd_and_is_not_a_verdict ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+   Compiling condukt v0.7.434 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.95s
+     Running tests/backlog_20261116_check_criteria_null_worktree.rs (target/debug/deps/backlog_20261116_check_criteria_null_worktree-4246d35d94072dcc)
+"""
+
+[task.closure.red]
+rev = "36f7e5da11f6cb2d0521e538953053a691f00157"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

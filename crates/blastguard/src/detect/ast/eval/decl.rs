@@ -1,6 +1,6 @@
 //! The declaration builtins of `detect::ast::eval` (`export` / `declare` /
-//! `typeset` / `local` / `readonly`): which names get the integer attribute,
-//! the arithmetic checks of their assignments and compound keys, and the
+//! `typeset` / `local` / `readonly`): which names get the integer attribute
+//! (for `_` also the check of its current value, `give_int`), the arithmetic checks of their assignments and compound keys, and the
 //! bindings they make. A child module of `eval.rs`, so it reads the
 //! evaluator's state (`Env`, `DeclArg`) directly.
 
@@ -73,7 +73,7 @@ impl Ev {
                     match decl_names.get(&(i + 1)).and_then(|d| d.name.as_ref()) {
                         Some(n) => {
                             if int_attr {
-                                env.integer.insert(n.clone());
+                                give_int(env, &start, n)?;
                             }
                             env.int_assign_if(start.opaque, n, &a.value)?;
                             env.forget(n, &format!("assigned by {builtin}"));
@@ -90,8 +90,7 @@ impl Ev {
             let name = s.split_once('=').map_or(s.as_str(), |(l, _)| l);
             if int_attr {
                 let base = name.strip_suffix('+').unwrap_or(name);
-                env.integer
-                    .insert(base.split('[').next().unwrap_or(base).to_string());
+                give_int(env, &start, base.split('[').next().unwrap_or(base))?;
             }
             match s.split_once('=') {
                 Some((lhs, rhs)) => {
@@ -126,4 +125,19 @@ impl Ev {
         }
         Ok(())
     }
+}
+
+/// Give `name` the integer attribute. For `_` that evaluates its current
+/// value as arithmetic (observed: bash 3.2.57 ran the `$( )` of a previous
+/// last word `a[$(c)]` at `declare -i _`; user ruling 2026-11-16): the last
+/// word of the previous simple command, taken from `start` (the state before
+/// this command, whose own option only makes `env` opaque), and
+/// `Undetermined` — so `Unsupported` — when there is none (inherited). Names
+/// in that value are read in the current state.
+fn give_int(env: &mut Env, start: &Env, name: &str) -> Result<(), Cause> {
+    if name == "_" {
+        arith::check_value(&start.underscore(), &|n| env.lookup(n))?;
+    }
+    env.integer.insert(name.to_string());
+    Ok(())
 }

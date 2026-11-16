@@ -73,8 +73,11 @@
 //!   `-ri _`, `declare -i x _`, a possible `-i` option), the last word of
 //!   every later simple command (the command name if alone; also behind
 //!   `builtin` / `command`) is checked too, in the states after it: bash
-//!   assigns it to `_`. Not the declaring command's own `_`, and opaque
-//!   alone does not make `_` integer (user ruling 2026-11-16; residual).
+//!   assigns it to `_`. Giving `_` the attribute checks its current value:
+//!   the previous simple command's last word (tracked in `Env`), else
+//!   `Undetermined` (inherited, or after `&`, a pipeline, a compound command,
+//!   `[[ ]]`, an assignment-only command, opacity). Opaque alone does not
+//!   make `_` integer (user ruling 2026-11-16; accepted residual).
 //!   An undetermined non-assignment operand
 //!   of a declaration builtin (`declare $opt n=v`) counts as a possible `-i`.
 //!   The keys of a compound value are arithmetic in a declaration builtin
@@ -359,6 +362,16 @@ impl Env {
             arith::check_value(v, &|n| self.lookup(n))
         } else {
             Ok(())
+        }
+    }
+
+    /// The value of `_`: the last word of the previous simple command (kept
+    /// under the key `_`, which `lookup` never reads), `Undetermined` before
+    /// the first one (inherited), after anything not modelled or when opaque.
+    fn underscore(&self) -> Value {
+        match self.vars.get("_") {
+            Some(v) if !self.opaque => v.clone(),
+            _ => undet("$_: inherited, or set by something not modelled"),
         }
     }
 
@@ -679,6 +692,7 @@ impl Ev {
             match sep {
                 ast::SeparatorOperator::Async => {
                     self.and_or(text, ao, env.clone(), &Context::Background)?;
+                    env.forget("_", "after a command run with &");
                 }
                 ast::SeparatorOperator::Sequence => env = self.and_or(text, ao, env, ctx)?,
             }
@@ -722,6 +736,8 @@ impl Ev {
         let out = match p.seq.as_slice() {
             [only] => self.command(text, only, env, ctx)?.0,
             stages => {
+                let mut env = env;
+                env.forget("_", "after a pipeline");
                 let len = stages.len();
                 let mut stdin = env.stdin.clone();
                 for (pos, c) in stages.iter().enumerate() {
@@ -758,9 +774,11 @@ impl Ev {
             }
             ast::Command::Compound(cc, redirs) => {
                 let span = text.global(compound_loc(cc));
-                let e = self.with_redirects(text, redirs.as_ref(), span, env, ctx, |ev, e| {
-                    ev.compound(text, cc, e, ctx)
-                })?;
+                let mut e =
+                    self.with_redirects(text, redirs.as_ref(), span, env, ctx, |ev, e| {
+                        ev.compound(text, cc, e, ctx)
+                    })?;
+                e.forget("_", "after a compound command");
                 Ok((Outcome::same(e), None))
             }
             ast::Command::Function(_) => Err(Cause::Unsupported(
@@ -768,11 +786,12 @@ impl Ev {
             )),
             ast::Command::ExtendedTest(t, redirs) => {
                 let span = text.global(Some(&t.loc));
-                let e =
+                let mut e =
                     self.with_redirects(text, redirs.as_ref(), span, env, ctx, |ev, mut e| {
                         ev.test_expr(text, &t.expr, &mut e)?;
                         Ok(e)
                     })?;
+                e.forget("_", "after [[ ]]");
                 Ok((Outcome::same(e), None))
             }
         }
@@ -1228,11 +1247,19 @@ impl Ev {
         // 4. Effects on the shell state. Afterwards bash assigns the last
         // word to `_`: arithmetic if the text declared `_` integer before
         // this command (not merely opaque), read in the states after it.
+        // The new value of `_` is remembered (an assignment-only command's
+        // effect on `_` is not modelled).
         let underscore_int = env.integer.contains("_");
-        let outcome = self.effects(&sc, &decl_names, env)?;
-        if let Some(last) = sc.argv.last().filter(|_| underscore_int) {
-            for after in [&outcome.ok, &outcome.fail] {
-                arith::check_value(&last.value, &|n| after.lookup(n))?;
+        let mut outcome = self.effects(&sc, &decl_names, env)?;
+        for after in [&mut outcome.ok, &mut outcome.fail] {
+            match sc.argv.last() {
+                Some(last) => {
+                    if underscore_int {
+                        arith::check_value(&last.value, &|n| after.lookup(n))?;
+                    }
+                    after.bind("_", last.value.clone());
+                }
+                None => after.forget("_", "after an assignment-only command"),
             }
         }
         self.push(sc.clone())?;

@@ -1301,8 +1301,11 @@ forge・condukt のスケジューラが再利用）。
   `declare -i x _`・`-i` の可能性がある不定 option。ユーザー裁定 2026-11-16 A2）は、bash が各 simple command の
   最後の語（引数が無ければ command name。redirect は語でない。`builtin`/`command` 越しも同じ）を `_` に
   代入するため、以後の各 simple command の最後の語を、そのコマンド実行後の状態（成功・失敗の両方）で算術検査
-  する（`echo 5` は Known、`echo bar`・`cat` は name を読むので `Undetermined(Unsupported)`）。宣言した
-  コマンド自身の `_` 代入は検査しない。**受容済み残余**: opaque 状態だけでは `_` を integer 扱いしない
+  する（`echo 5` は Known、`echo bar`・`cat` は name を読むので `Undetermined(Unsupported)`）。`_` に integer
+  属性を与えた時点で、その時点の `_` の値も算術検査する（bash 3.2.57 で `true 'a[$(c)]'; declare -i _` が `c` を
+  実行することを観測。ユーザー裁定 2026-11-16）: 値は直前の simple command の最後の語、直前が無ければ環境からの
+  継承値なので `Undetermined(Unsupported)`。`&`・pipeline・compound command・`[[ ]]`・代入のみのコマンド・
+  opaque 化の後の `_` は未モデル化として `Undetermined`。**受容済み残余**: opaque 状態だけでは `_` を integer 扱いしない
   （`_` は `integer` 集合だけを見る）。
   `builtin [--] w ...`・`command [-p] [--] w ...`（入れ子も）は unwrap し、包まれた `w` を単独実行と同じ
   効果・代入検査で評価したうえで（declare 系の operand は Field mode のまま）、wrapper 自体は従来どおり

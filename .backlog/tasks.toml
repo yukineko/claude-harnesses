@@ -2846,3 +2846,33 @@ test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
      Running tests/backlog_20261117_proof_contents.rs (target/debug/deps/backlog_20261117_proof_contents-60dcd892ca2f0f33)
 error: test failed, to rerun pass `-p tdd --test backlog_20261117_proof_contents`"""
+
+[[task]]
+id = "7768aeaf"
+title = "condukt merge: fix task merges without tdd proofs / without GREEN covering RED / with zero passes / with tree changed after GREEN"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "User ruling 2026-11-17 (proof contract f,g,h,i). RED 25a27ee67 crates/condukt/tests/backlog_20261117_merge_without_tdd_proofs.rs (4 ignored REDs, 2 controls pass). Observed: merge exit=Some(0) stdout=merged 'run-nomerge-proofs/t1' into main."
+created_at = 1794868812
+updated_at = 1794868812
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261117_merge_without_tdd_proofs -- --ignored"
+rev = "9f1ad7438b27dee634223982a612de3266f60211"
+observed_at = 1794868812
+detail = """
+exit 101: t: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 2 filtered out; finished in 2.15s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_20261117_merge_without_tdd_proofs.rs (target/debug/deps/backlog_20261117_merge_without_tdd_proofs-ca6ac8c8d696119a)
+error: test failed, to rerun pass `-p condukt --test backlog_20261117_merge_without_tdd_proofs`"""

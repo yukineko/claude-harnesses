@@ -11,7 +11,10 @@
 //! * the identity `branch.<b>.conduktTask = <run>/<task>` recorded by
 //!   `worktree create --run` for the worktree's checked-out branch; when it is
 //!   present that run/task is judged — a run that cannot be loaded or a task
-//!   that is not in it is a refusal (cannot determine);
+//!   that is not in it is a refusal (cannot determine). A retry worktree
+//!   (`--topic <task>-rN`) records the real task `<task>` at create time
+//!   (`worktree::resolve_retry_topic`, backlog b2d9cb6b); a topic that names no
+//!   task of the run stays an unknown task and is refused;
 //! * otherwise every run-state file of the project is scanned for tasks whose
 //!   recorded `worktree` is this path. The scan is strict: a state dir or
 //!   state file that cannot be read or parsed is a refusal, not "no owner".

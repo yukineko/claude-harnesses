@@ -14,18 +14,22 @@
 //! never ran.
 //!
 //! Asserted: PreToolUse for a test command, no PostToolUse (tool never ran),
-//! then a second identical PreToolUse on the unchanged tree is allowed.
+//! then a second identical PreToolUse on the unchanged tree is not denied
+//! (it resolves to Ask; spec testscope-confirmed-run Q4).
 //! Control: the identical-rerun-refused control lives in
 //! backlog_20261114_testscope_cd_tree_identity.rs (not duplicated here).
 //!
 //! DOES NOT PROVE: how a PostToolUse confirmation should reach testscope, or
 //! that blastguard was the blocker (only the no-Post sequence is driven).
 //!
-//! 2026-11-16 user ruling (fail-closed preferred, test amended): Pre records
-//! pending, PostToolUse(Bash) confirms; if Post never fired in the session
-//! (no Post marker) Pre falls back to a confirmed record. Cases:
-//! (A) Post fired earlier in the session, Pre-only attempt not counted;
-//! (B) Pre then Post counts as run; (C) no Post ever in session: Pre counts.
+//! 2026-11-17 ruling (spec testscope-confirmed-run R3 / G3-C, supersedes the
+//! 2026-11-16 Post-marker fallback): Pre records a pending row; only a Post
+//! (PostToolUse / PostToolUseFailure) with the same tool_use_id confirms it.
+//! A rerun whose only prior is pending resolves to Ask, never Deny. Cases:
+//! (A) Post fired earlier in the session, Pre-only attempt not counted (Ask);
+//! (B) Pre then Post counts as run (Deny); (C) no Post ever in the session:
+//! the second Pre is not denied and is Ask (the old record-at-Pre fallback is
+//! withdrawn).
 //!
 //! RED written by an independent test author, not the implementer.
 
@@ -206,9 +210,10 @@ fn b_pre_then_post_counts_as_run_and_rerun_is_denied() {
     );
 }
 
-/// (C) Post never fired in the session: fall back to recording at Pre
-/// (fail-closed); the identical second Pre is denied.
+/// (C) Post never fired in the session: no confirmed row exists, so the
+/// identical second Pre is not denied and resolves to Ask (G3-C).
 #[test]
+#[ignore = "RED testscope-confirmed-run R3: second Pre with no Post ever is Deny at HEAD, must be Ask — remove when fixed"]
 fn c_no_post_ever_in_session_falls_back_to_recording_at_pre() {
     let home = tempfile::tempdir().unwrap();
     let ledger_dir = tempfile::tempdir().unwrap();
@@ -220,7 +225,11 @@ fn c_no_post_ever_in_session_falls_back_to_recording_at_pre() {
     assert!(!denied(&first), "first Pre must be allowed: {first:?}");
     let second = pre(home.path(), &ledger, cmd, cwd, sid, "tu-2");
     assert!(
-        denied(&second),
-        "fail-closed fallback must refuse rerun: {second:?}"
+        !denied(&second),
+        "unconfirmed attempt must not be refused as a rerun: {second:?}"
+    );
+    assert!(
+        second.1.contains("\"ask\""),
+        "unconfirmed prior must resolve to Ask: {second:?}"
     );
 }

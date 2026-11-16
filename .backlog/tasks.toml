@@ -2819,42 +2819,6 @@ exit 101: t: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 2 filtered out; 
 error: test failed, to rerun pass `-p condukt --test backlog_20261117_merge_without_tdd_proofs`"""
 
 [[task]]
-id = "bd07c598"
-title = "tdd gate misattributes other sessions' post-start commits on HEAD to this session (false positive)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "tdd",
-    "false-positive",
-]
-touched_files = []
-status = "pending"
-notes = """
-Observed 2026-11-17, session 1e000416: Stop で tdd gate が「🔴 tdd: write a test first — 14 new implementation line(s) added, and no test is visible in the uncommitted changes and this session's own commits ... implementation changed: crates/blastguard/src/detect/ast/judge.rs」を返した（3 回、transcript 行 120/145/194）。main 作業ツリーは clean。judge.rs +14 行は別セッションの commit 772851b76（2026-11-17 07:20:04 +0900、S1 subset spec）、merge d008fb18c。session 1e000416 本体も subagent も judge.rs を Edit/Write していない。
-原因経路（コードで確認）: crates/tdd/src/gate.rs include_committed（:446 付近）が session 開始以降の HEAD 上の全 non-merge commit の追加行を fold し、scope_to_session（:594）→ harness_core::attribution::attribute_own_writes（crates/harness-core/src/attribution.rs:295）で自セッションのファイルに絞る。attribute_own_writes は Bash command がパスを『read-only でない statement』で名指したらそのファイルを自セッションのものとする。read_only_stage（attribution.rs:661-724）の許可リストに sed が無いため、subagent agent-aafd4626885243b75 が 2026-11-16T22:35:49Z（最初の block 22:40:17Z より前）に実行した print-only の「cd /Users/yuki/src/.harness-worktrees/session-1e000416 && sed -n 1,80p crates/blastguard/src/detect/ast/mod.rs; sed -n 315,420p crates/blastguard/src/detect/ast/mod.rs; sed -n 40,212p crates/blastguard/src/detect/ast/judge.rs」が書き込みと判定され、judge.rs が帰属された → 他人の commit の 14 行が自セッションの変更として数えられた。
-仮説『親の git log -- judge.rs が帰属させた』は棄却（観測）: その git log は最初の block より後（transcript 行 133、22:40:30Z）で、制御テスト git_log_naming_the_path_does_not_attribute_a_peer_commit が PASS。
-副次（未修正・未テスト）: needle が repo 相対パスの substring なので、別 worktree（session-1e000416）で名指したパスが hook cwd（main）の同名ファイルに帰属する。ブロック文言の read-only 例示（git diff, grep, cat, tdd skip）に sed は無い。
-RED: commit 5db847196（branch red/tdd-misattr-20261117, worktree /Users/yuki/src/.harness-worktrees/red-tdd-misattr-20261117）, tdd 0.1.92。テスト crates/tdd/tests/backlog_20261117_peer_commit_misattributed_by_read_only_sed.rs::print_only_sed_naming_the_path_does_not_attribute_a_peer_commit（#[ignore = RED]）。実行: cargo test -p tdd --test backlog_20261117_peer_commit_misattributed_by_read_only_sed -- --include-ignored → 3 passed, 1 failed（stdout decision=block, 14 new implementation line(s) ... crates/x/src/detect/ast/judge.rs）。制御 3 本（control_subagent_edit_of_the_file_does_block / peer_commit_on_unnamed_file_is_not_attributed / git_log_naming_the_path_does_not_attribute_a_peer_commit）は PASS。修正候補（未決定）: read_only_stage に sed -n（-i/w コマンド無し）を read-only として加える等。harness-core を変えると reviewgate も影響。"""
-created_at = 1794869392
-updated_at = 1794869392
-weight = 0.0
-issue_number = 1843
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1843"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p tdd --test backlog_20261117_peer_commit_misattributed_by_read_only_sed -- --include-ignored print_only_sed_naming_the_path_does_not_attribute_a_peer_commit"
-rev = "5db847196fbd56bc4861d0eba57bb681dcd72b75"
-observed_at = 1794869392
-detail = """
-exit 101: ed; 3 filtered out; finished in 1.22s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
-     Running tests/backlog_20261117_peer_commit_misattributed_by_read_only_sed.rs (target/debug/deps/backlog_20261117_peer_commit_misattributed_by_read_only_sed-699ca392495e1faf)
-error: test failed, to rerun pass `-p tdd --test backlog_20261117_peer_commit_misattributed_by_read_only_sed`"""
-
-[[task]]
 id = "dc97fc2d"
 title = "stop-verify-worktree: read-only main-cwd session blamed for another session's concurrent main write (guard-maintree-bash over-attribution)"
 project = "/Users/yuki/src/harness"

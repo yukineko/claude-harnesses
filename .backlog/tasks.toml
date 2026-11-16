@@ -2747,3 +2747,35 @@ exit 101: .677 (/Users/yuki/src/.harness-worktrees/bg-fp-bgr3c57-20261116/crates
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.16s
      Running tests/backlog_20261116_heredoc_data_fd_reader_fp.rs (target/debug/deps/backlog_20261116_heredoc_data_fd_reader_fp-7051546632d2bfe3)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261116_heredoc_data_fd_reader_fp`"""
+
+[[task]]
+id = "648a6641"
+title = "blastguard FP: quoted heredoc body line with ; before a backtick span is judged as a command word when the heredoc is the 3rd+ statement (cat > x.rs <<'EOF')"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-17 in a peer session (relay bgr-cf29c893de79; blocks.jsonl ts 1794865460 subagent deny, 1794865551 main ask): mkdir -p d && cd d && cat > x/mod.rs <<'EOF' with Rust body line '/// Change the tree identity (a tracked edit); `restore` puts it back.' -> main ask / subagent deny 'the command word ``restore`` is an expansion whose value only exists at run time'. RED d53c6f681 (branch red/blastguard-rs-heredoc-backtick-20261117, blastguard 0.2.678). Measured on deployed 0.2.675: fires only when the heredoc is the 3rd+ statement AND a control operator (; & | &&) precedes the span on the body line; also fires for .txt target and cat to stdout. Allow: heredoc first, one preceding command, no operator before span, no backticks. Controls: no-backtick body allow; unquoted delimiter not allow. Distinct from a826bdab/d292ce6e/53a97aa3/9d347af5/234cae6f/d462444e/0bc46ca0 (none has an operator before a mid-line span with two preceding commands)."
+created_at = 1794865868
+updated_at = 1794865868
+weight = 0.0
+issue_number = 1839
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1839"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261117_rs_heredoc_doc_comment_backtick_fp -- --include-ignored"
+rev = "d53c6f6818c004dcf3ebbe91f2340c9cdd403a7b"
+observed_at = 1794865868
+detail = """
+exit 101: ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261117_rs_heredoc_doc_comment_backtick_fp.rs (target/debug/deps/backlog_20261117_rs_heredoc_doc_comment_backtick_fp-54ecc282de5d64d9)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261117_rs_heredoc_doc_comment_backtick_fp`"""

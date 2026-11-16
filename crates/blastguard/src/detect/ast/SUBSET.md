@@ -35,6 +35,13 @@ Follow-up rulings (2026-11-17, on the S1 open questions):
 11. The remaining open questions stay legacy (today's behaviour) and are
     revisited at S6; see "Open questions".
 
+S2 rulings (user ruling 2026-11-17, spec change made before the S2 tests):
+
+12. `$HOME` / `${HOME}` and `~` are Known values: the `HOME` of the hook's own
+    environment (Table A.3).
+13. `.` / `source` of a file stay **Ask** (main) / Deny (subagent) until a
+    quarantine plugin exists (Table B.5); S4 does not judge the sourced body.
+
 Vocabulary: **Undetermined** = `Judgement::Undetermined(cause)`, resolved to
 Ask (main) / Deny (subagent, `interactive::ask_available`). **Unresolved** =
 `PathClass::Unresolved`, one target that could not be placed (Table C row).
@@ -81,7 +88,8 @@ script is still `Known`: the word's `Value` is `Undetermined` and feeds Table C 
 | `Text`, `SingleQuotedText`, `DoubleQuotedSequence`, `EscapeSequence` | supported (literal) |
 | `AnsiCQuotedText` `$'…'` | supported if decoded; else value Undetermined |
 | `GettextDoubleQuotedSequence` `$"…"` | value Undetermined |
-| `TildeExpansion` `~` (also after `=` / `:`) | value Undetermined |
+| `TildeExpansion` `~` (also after `=` / `:`) | value Known: the hook environment's `HOME` (user ruling 2026-11-17, ruling 12); `~user` is not covered by the ruling → value Undetermined |
+| `$HOME` / `${HOME}` | value Known: the hook environment's `HOME` (user ruling 2026-11-17, ruling 12), unless `HOME` is assigned on the line (then the named rule below) |
 | `$x` / `${x}` named | literal iff bound to a literal on the line; else value Undetermined |
 | positional / special parameters (`$1`, `$@`, `$?`, …) | value Undetermined |
 | other parameter operations (`${x:-v}`, `${#x}`, `${x/a/b}`, …) | value Undetermined; **Unsupported** if it holds `$( )` / backquote or reads an undetermined name in arithmetic |
@@ -105,8 +113,9 @@ script is still `Known`: the word's `Value` is `Undetermined` and feeds Table C 
 / `popd` / `..` → cwd Undetermined. `eval`, `source`, `.`, `trap`, `alias`,
 `shopt`, `builtin`, `command`, an undetermined command word, `declare`-family
 options, non-plain `set` make the state opaque (later values Undetermined).
-For **judgement**, `eval` / `source` / `.` themselves are Undetermined (they run
-code not in the script) until S4 models them.
+For **judgement**, `eval` is Undetermined (it runs code not in the script) until
+S4 models it; `source` / `.` are Ask (main) / Deny (subagent) until a quarantine
+plugin exists (user ruling 2026-11-17, ruling 13; B.5).
 
 ## Table B — effect × target extraction
 
@@ -189,7 +198,8 @@ else the command's cwd).
 | `bash` / `sh` / `zsh` / `dash` / `ksh` `-c PROG` | `InlineLiteral` | PROG analysed and judged recursively (S4); Undetermined PROG → Undetermined |
 | same, stdin (`bash`, `-s`, `-`, `/dev/stdin`) | `Stdin(StdinSource)` | `Literal` body judged recursively (S4); `FromCommand` / `File` / `Fd` / `Undetermined` → Undetermined |
 | same, script file (`bash x.sh`); likewise any interpreter running a program file (`python3 x.py`, `perl x.pl`, …) | `File(Value)` | **Undetermined** → Ask / Deny (ruling 10). Exception: when an earlier command of the same script writes that file (matched by resolved path) with a determined body (`cat > x.sh <<'EOF' … EOF`), that body is analysed and judged recursively (S4) |
-| `eval`, `source`, `.` | `Undetermined` | Undetermined (S4) |
+| `eval` | `Undetermined` | Undetermined (S4) |
+| `source`, `.` (reading a file) | `File(Value)` | **Ask** (main) / Deny (subagent) until a quarantine plugin exists — user ruling 2026-11-17 (ruling 13); not judged recursively in S4 |
 | `python*` `-c` / stdin / file / `-m` | as `program_source` | Undetermined until S5 (Python parser) |
 | `perl` / `ruby` `-e`/`-E`, `-i`, stdin, `node` `-e`/`-p`/stdin | — | **out of subset** → Undetermined (ruling 4) |
 | wrapper whose operand is an interpreter or Undetermined | `Undetermined` | unwrap (B.3), then the interpreter's row |
@@ -252,7 +262,7 @@ Notes:
 | S1 `subset-spec` | this document; frozen types in `judge.rs` (stubs, not wired) |
 | S2 `red-tests` | an independent author (not the S3 implementer; CLAUDE.md §2(a)) writes a RED test for each Table B row and each Table C cell that is not `legacy`, each observed failing against the S1 stub before S3 makes it GREEN |
 | S3 `path-cutover` | Table A enforcement for judged commands; Table B B.1 (all rows except `perl -i` which is already Undetermined), B.2, B.3, B.4; Table C (all rows); `classify` from the existing predicates; wire `judge` into `detect` with the "Undetermined handling" layer |
-| S4 `stdin-program` | Table B B.5 rows for shells: `-c` inline, stdin (`StdinSource::Literal` bodies), `eval` / `source` / `.`; the script-file row (Undetermined, and the recursive judgement of a body the same command writes — ruling 10); wrapper → interpreter unwrap |
+| S4 `stdin-program` | Table B B.5 rows for shells: `-c` inline, stdin (`StdinSource::Literal` bodies), `eval` (`source` / `.` stay Ask, ruling 13); the script-file row (Undetermined, and the recursive judgement of a body the same command writes — ruling 10); wrapper → interpreter unwrap |
 | S5 `python-parser` | Table B B.5 python row (a real Python parser; effects × targets of the parsed program judged by Table C) |
 | S6 `retire-readings` | remove the string-reading fallbacks of every migrated row (`targets.rs::resolve` callers, `readings.rs` re-readings) leaving only the raise-only harm layer; revisit the deferred Open questions 1–4 |
 

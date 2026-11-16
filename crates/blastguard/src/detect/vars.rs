@@ -365,6 +365,16 @@ pub(super) fn is_shell_identifier(name: &str) -> bool {
 /// helper does not try to tell apart from one), so a caller that needs "nothing
 /// here can rebind `name`" must refuse on `true`. Over-reporting only costs a
 /// resolution; it never invents one.
+///
+/// One literal spelling is NOT a mention (backlog 54231a0a): the name as a
+/// path component between two slashes, not followed by `=` (`fd` in
+/// `/dev/fd/$fd`, `/proc/self/fd/…`). No binding form puts a `/` on both
+/// sides of the name — an assignment word, a builtin's name operand
+/// (`read`/`unset`/`for`/`export`/…), an `{name}` redirect, or an arithmetic
+/// lvalue, which needs the name next to `=` / `op=` / `++` / `--`; the one
+/// arithmetic shape with `/` after it, `/=`, is excluded. Without this, a
+/// statically bound `$fd` glued to a literal `/dev/fd/` stayed unresolved and
+/// was judged as an fd spelled with an expansion instead of as the literal.
 pub(super) fn mentions_name_outside_reference(text: &str, name: &str) -> bool {
     let chars: Vec<char> = text.chars().collect();
     let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
@@ -385,7 +395,13 @@ pub(super) fn mentions_name_outside_reference(text: &str, name: &str) -> bool {
         let before = |back: usize| start.checked_sub(back).map(|k| chars[k]);
         let plain = before(1) == Some('$') && before(2) != Some('\\');
         let braced = before(1) == Some('{') && before(2) == Some('$') && before(3) != Some('\\');
-        if !plain && !braced {
+        // Backlog 54231a0a: a path component strictly between two slashes
+        // (the `fd` of `/dev/fd/$fd`) is literal text, not a binding — but
+        // `/=` after it is the arithmetic compound assignment (`x/fd/=2`), so
+        // that shape still counts.
+        let path_component =
+            before(1) == Some('/') && chars.get(i) == Some(&'/') && chars.get(i + 1) != Some(&'=');
+        if !plain && !braced && !path_component {
             return true;
         }
     }

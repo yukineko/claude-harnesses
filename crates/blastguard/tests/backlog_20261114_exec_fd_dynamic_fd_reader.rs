@@ -11,6 +11,12 @@
 //! is Deny in main and subagent; an undeterminable fd is Ask in main / Deny in
 //! subagent, never Allow.
 //!
+//! The statically resolvable `fd=3; ...; bash <&$fd` benign row was moved out of
+//! `benign_with_dynamic_fd_reader_is_not_allow` into
+//! `statically_resolved_fd_var_gets_literal_verdict` (var verdict == literal
+//! verdict) per the user ruling of 2026-11-16 (A): blastguard rewrites `$fd`->`3`
+//! before any rule, so it is not dynamic. The `$((1+2))` rows stay ask/deny.
+//!
 //! DOES NOT PROVE: other fd numbers, `exec 3< file`, here-docs, other shells,
 //! or that the suspected line is the only cause.
 //!
@@ -96,12 +102,51 @@ fn benign_with_dynamic_fd_reader_is_not_allow() {
     let home = unique_home("benign");
     for cmd in [
         "exec 3<<< 'echo hi'; bash <&$((1+2))",
-        "fd=3; exec 3<<< 'echo hi'; bash <&$fd",
         "exec 3<<< 'echo hi'; bash /dev/fd/$((1+2))",
     ] {
         let (d, r) = run_as(cmd, &home, false);
         assert_eq!(d, "ask", "main: {cmd:?} => {d} ({r})");
         let (d, r) = run_as(cmd, &home, true);
         assert_eq!(d, "deny", "subagent: {cmd:?} => {d} ({r})");
+    }
+}
+
+#[test]
+fn statically_resolved_fd_var_gets_literal_verdict() {
+    let home = unique_home("static");
+    // (literal, var, expected-for-both-or-None)
+    let pairs: [(&str, &str, Option<&str>); 3] = [
+        (
+            "exec 3<<< 'echo hi'; bash <&3",
+            "fd=3; exec 3<<< 'echo hi'; bash <&$fd",
+            None,
+        ),
+        (
+            "exec 3<<< 'echo hi'; bash /dev/fd/3",
+            "fd=3; exec 3<<< 'echo hi'; bash /dev/fd/$fd",
+            None,
+        ),
+        (
+            "exec 3<<< 'chmod 777 /etc/hosts'; bash <&3",
+            "fd=3; exec 3<<< 'chmod 777 /etc/hosts'; bash <&$fd",
+            Some("deny"),
+        ),
+    ];
+    for (literal, var, want) in pairs {
+        for subagent in [false, true] {
+            let (dl, rl) = run_as(literal, &home, subagent);
+            let (dv, rv) = run_as(var, &home, subagent);
+            assert_eq!(
+                dv, dl,
+                "subagent={subagent}: literal {literal:?} => {dl} ({rl}) but var {var:?} => {dv} ({rv})"
+            );
+            if let Some(w) = want {
+                assert_eq!(
+                    dl, w,
+                    "subagent={subagent}: literal {literal:?} => {dl} ({rl})"
+                );
+                assert_eq!(dv, w, "subagent={subagent}: var {var:?} => {dv} ({rv})");
+            }
+        }
     }
 }

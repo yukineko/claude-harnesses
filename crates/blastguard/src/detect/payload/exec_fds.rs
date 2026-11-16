@@ -513,7 +513,9 @@ struct FdRef {
 /// `bash /dev/fd/3` reads its program from fd 3 exactly as `bash <&3` does.
 /// `Err(why)` for a word that names one of those fd directories but whose fd
 /// the text does not determine (`/dev/fd/$fd`, an undecodable quote): the fd
-/// is unknown, as with `<&$fd`. `None` for any other word.
+/// is unknown, as with `<&$fd`. `None` for any other word. A `$fd` the line
+/// binds to a literal (`fd=3; …`) never reaches here: `resolve_static_bindings`
+/// has already replaced it with that literal (backlog 54231a0a).
 pub(super) fn program_operand_fd(word: &str) -> Option<Result<u32, String>> {
     match decode_literal_word(word) {
         Ok(lit) if lit == "/dev/stdin" => Some(Ok(0)),
@@ -795,6 +797,9 @@ fn stdin_script_spelling(st: &Stage, at: usize) -> Option<&'static str> {
 /// The texts `exec` opens a NAMED fd on (`exec {fd}<<< '…'`, bash's
 /// allocated fd): its number is not on the line, so a read through an fd
 /// spelled with an expansion (`<&$fd`, `/dev/fd/$fd`) may be any of them.
+/// Only an expansion the text does not resolve gets here; a `$fd` the line
+/// binds to a literal is replaced first by `resolve_static_bindings`
+/// (backlog 54231a0a).
 fn named_fd_texts(cmd: &str, stages: &[Stage]) -> Vec<HereText> {
     let mut out = Vec::new();
     for st in stages {
@@ -988,7 +993,10 @@ fn decode_literal_word(word: &str) -> Result<String, &'static str> {
 }
 
 /// A dup or fd-path mention whose fd is spelled with an expansion
-/// (`<&$fd`, `<&"$fd"`, `/dev/fd/$fd`).
+/// (`<&$fd`, `<&"$fd"`, `/dev/fd/$fd`). A `$fd` the line binds to a literal
+/// (`fd=3; …`) is not seen here: `resolve_static_bindings` has already
+/// replaced it with the literal, which is judged as that literal fd
+/// (backlog 54231a0a).
 fn mentions_dynamic_fd(words: &[&str]) -> bool {
     let mut j = 0;
     while j < words.len() {
@@ -1044,6 +1052,10 @@ pub(super) struct FdTracking {
 /// a read through an fd spelled with an expansion (`<&$fd`, `<&$((1+2))`,
 /// `/dev/fd/$fd`) on a line where an `exec` opens a numbered or named fd
 /// (`exec {fd}<<< '…'`) on literal text: every text opened so far is judged.
+/// The expansion here is one the text does not resolve (`$((1+2))`, an
+/// unassigned `$fd`); a `$fd` the line binds to a literal (`fd=3; …`) is
+/// replaced by `resolve_static_bindings` before any rule runs and gets the
+/// literal fd's verdict (backlog 54231a0a, user ruling 2026-11-16).
 /// Where no reader is
 /// visible, a text is judged as `sh` would run it.
 ///
@@ -1295,7 +1307,9 @@ runs that text",
         // A read through an fd spelled with an expansion (`<&$fd`,
         // `<&$((1+2))`, `/dev/fd/$fd`) may be any fd an `exec` opened on
         // literal text before it, numbered or named: each such text is
-        // judged, and the read is an Ask.
+        // judged, and the read is an Ask. A `$fd` the line binds to a
+        // literal never gets here: `resolve_static_bindings` already
+        // replaced it (backlog 54231a0a).
         if mentions_dynamic_fd(&words) {
             let mut texts: Vec<HereText> = named.clone();
             let mut open: Vec<(&u32, &FdState)> = fds.iter().collect();

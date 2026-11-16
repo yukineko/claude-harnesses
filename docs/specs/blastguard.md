@@ -1298,7 +1298,7 @@ forge・condukt のスケジューラが再利用）。
   記録は判定確定後・表示前に書き、判定を変えない。書けない（panic を含む）ときは表示理由に
   `could NOT be recorded` とエラーを付け stderr にも警告する（沈黙しない）。relay（subagent の Bash Ask の
   再実行 queue）とは別物で、block log は真の `Deny` と main の `Ask` を含む全 block を記録する。
-- **`detect/ast`**（`mod.rs` / `parse.rs` / `eval.rs` / `eval/words.rs` / `arith.rs` / `support.rs`）— shell parser（brush-parser `=0.4.0`）＋静的評価層
+- **`detect/ast`**（`mod.rs` / `parse.rs` / `eval.rs` / `eval/words.rs` / `eval/decl.rs` / `arith.rs` / `support.rs`）— shell parser（brush-parser `=0.4.0`）＋静的評価層
   （ユーザー裁定 2026-11-15「parser ＋ 静的評価で一体にする」）。`analyze(&str) -> Analysis`
   （`Known(Script)` / `Undetermined(Cause)`、`Cause` = `NotImplemented`/`TooLong`/`TooDeep`/`Timeout`/
   `Parse`/`Panic`/`ZshOnly`/`Unsupported`）と `program_source(&SimpleCommand) -> Option<ProgramSource>`。
@@ -1322,6 +1322,16 @@ forge・condukt のスケジューラが再利用）。
   `for` 変数（literal list の各語、不定 list は不定値として）・`${n:=v}` / `${n=v}`（`${a[i]:=v}` も。
   間接 `${!x:=v}` は opaque 中または `declare -i` 名がある間は integer 扱い）。本文で決まらない値や name を
   読む値（`X=bar`・`FOO=/abs/path` を含む）は `Undetermined(Unsupported)`。
+  本文が `_` を integer と宣言した後（`declare -i _`・`typeset -i _`・`local -i _`・`-ri _`・
+  `declare -i x _`・`-i` の可能性がある不定 option。ユーザー裁定 2026-11-16 A2）は、bash が各 simple command の
+  最後の語（引数が無ければ command name。redirect は語でない。`builtin`/`command` 越しも同じ）を `_` に
+  代入するため、以後の各 simple command の最後の語を、そのコマンド実行後の状態（成功・失敗の両方）で算術検査
+  する（`echo 5` は Known、`echo bar`・`cat` は name を読むので `Undetermined(Unsupported)`）。`_` に integer
+  属性を与えた時点で、その時点の `_` の値も算術検査する（bash 3.2.57 で `true 'a[$(c)]'; declare -i _` が `c` を
+  実行することを観測。ユーザー裁定 2026-11-16）: 値は直前の simple command の最後の語、直前が無ければ環境からの
+  継承値なので `Undetermined(Unsupported)`。`&`・pipeline・compound command・`[[ ]]`・代入のみのコマンド・
+  opaque 化の後の `_` は未モデル化として `Undetermined`。**受容済み残余**: opaque 状態だけでは `_` を integer 扱いしない
+  （`_` は `integer` 集合だけを見る）。
   `builtin [--] w ...`・`command [-p] [--] w ...`（入れ子も）は unwrap し、包まれた `w` を単独実行と同じ
   効果・代入検査で評価したうえで（declare 系の operand は Field mode のまま）、wrapper 自体は従来どおり
   状態を opaque にする。`command -v`/`-V` は何も実行しない lookup として
@@ -1329,6 +1339,8 @@ forge・condukt のスケジューラが再利用）。
   `support.rs` は状態を持たない補助関数（escape 展開・パス正規化・fd/stdin・pipe stdin）。
   `eval/words.rs` は `eval.rs` の子 module で、parameter 展開の値（`${n:=v}` の integer 検査を含む）と
   展開後の語の最終値（tilde・word split・pathname/brace 展開・heredoc 展開の判定）を担う。
+  `eval/decl.rs` も `eval.rs` の子 module で、declare 系 builtin（`export`/`declare`/`typeset`/`local`/
+  `readonly`）の integer 属性付与・代入と compound key の算術検査・binding を担う。
   **現状どの検出器からも呼ばれない**（判定に影響しない）。検出器の移行は migrate-path / migrate-stdin-program 段で行う。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。

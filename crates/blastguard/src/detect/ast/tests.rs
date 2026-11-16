@@ -1546,3 +1546,241 @@ mod env_arith_wrapped_builtins {
         assert_known("command -v git; cat > /tmp/f");
     }
 }
+
+// bash sets `_` to the last argument of every simple command; when the text gives `_` the
+// integer attribute that assignment is arithmetic (observed bash 3.2.57:
+// `declare -i _; true 'a[$(echo RAN-underscore >&2)]'` ran the substitution).
+// Ruling 2026-11-16: opaque state does NOT make `_` possibly-integer (accepted residual).
+// Function-definition form (`f() { local -i _; ...; }`) is not used: function definitions are
+// already Undetermined(Unsupported) ("its body is not evaluated"), so it would prove nothing;
+// `local -i _` is tested at top level instead.
+mod underscore_integer {
+    use super::*;
+
+    fn assert_unsupported(command: &str) {
+        match analyze(command) {
+            Analysis::Undetermined(Cause::Unsupported(_)) => {}
+            other => panic!(
+                "{command:?}: `_` is integer by text, so the last argument is arithmetic; \
+                 this must be Undetermined(Unsupported), got {other:#?}"
+            ),
+        }
+    }
+
+    fn assert_known(command: &str) {
+        match analyze(command) {
+            Analysis::Known(_) => {}
+            other => panic!("{command:?} is fully determined by its text; got {other:#?}"),
+        }
+    }
+
+    #[test]
+    fn declare_i_underscore_arith_subscript_arg_is_unsupported() {
+        assert_unsupported("declare -i _; true 'a[$(echo hi)]'; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declare_i_underscore_variable_arg_is_unsupported() {
+        assert_unsupported("declare -i _; echo $X; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declare_i_underscore_literal_word_is_variable_name_unsupported() {
+        assert_unsupported("declare -i _; echo bar; cat > /tmp/f");
+    }
+
+    #[test]
+    fn typeset_i_underscore_is_unsupported() {
+        assert_unsupported("typeset -i _; echo bar; cat > /tmp/f");
+    }
+
+    #[test]
+    fn local_i_underscore_top_level_is_unsupported() {
+        assert_unsupported("local -i _; echo bar; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declare_ri_underscore_combined_flags_is_unsupported() {
+        assert_unsupported("declare -ri _; echo bar; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declare_i_other_name_then_underscore_is_unsupported() {
+        assert_unsupported("declare -i x _; echo bar; cat > /tmp/f");
+    }
+
+    #[test]
+    fn declare_i_underscore_last_word_is_command_name_unsupported() {
+        // Redirections are not arguments; `_` gets `cat`, a non-numeric name.
+        assert_unsupported("declare -i _; cat > /tmp/f");
+    }
+
+    // Controls.
+    #[test]
+    fn control_opaque_does_not_make_underscore_integer() {
+        assert_known("eval foo; echo bar; cat > /tmp/f");
+    }
+
+    #[test]
+    fn control_declare_i_underscore_all_decimal_last_args_stay_known() {
+        // Ruling 2026-11-16: `declare -i _` with no previous command in the text is Unsupported (inherited value), so a previous command with a decimal last word is prefixed.
+        assert_known("true 7; declare -i _; echo 5; true 7");
+    }
+
+    #[test]
+    fn control_declare_i_other_name_stays_known() {
+        assert_known("declare -i n; echo bar; cat > /tmp/f");
+    }
+}
+
+// `declare -i _` itself arithmetic-evaluates the CURRENT value of `_` (observed bash 3.2.57:
+// `true "a[\$(echo RAN-prev >&2)]"; declare -i _; echo after` printed `RAN-prev` then `after`).
+// Ruling 2026-11-16: at the point `-i` is given to `_`, check `_`'s value then: the previous
+// simple command's last word if the text has one; if the text has no previous simple command
+// (value inherited from the environment) -> Undetermined(Unsupported).
+mod underscore_integer_prev_value {
+    use super::*;
+
+    fn assert_unsupported(command: &str) {
+        match analyze(command) {
+            Analysis::Undetermined(Cause::Unsupported(_)) => {}
+            other => panic!(
+                "{command:?}: `declare -i _` evaluates the current value of `_` arithmetically; \
+                 this must be Undetermined(Unsupported), got {other:#?}"
+            ),
+        }
+    }
+
+    fn assert_known(command: &str) {
+        match analyze(command) {
+            Analysis::Known(_) => {}
+            other => panic!("{command:?} is fully determined by its text; got {other:#?}"),
+        }
+    }
+
+    // Every later last word is a decimal, so only the declaration's own check can fire.
+    #[test]
+    fn prev_arith_subscript_arg_then_declare_i_underscore_is_unsupported() {
+        assert_unsupported("true 'a[$(echo hi)]'; declare -i _; true 5; true 6");
+    }
+
+    #[test]
+    fn prev_variable_arg_then_declare_i_underscore_is_unsupported() {
+        assert_unsupported("echo $X; declare -i _; true 5");
+    }
+
+    #[test]
+    fn prev_literal_word_is_variable_name_then_declare_i_underscore_is_unsupported() {
+        assert_unsupported("echo bar; declare -i _; true 5");
+    }
+
+    #[test]
+    fn declare_i_underscore_without_prev_command_inherits_env_value_is_unsupported() {
+        assert_unsupported("declare -i _; true 5");
+    }
+
+    #[test]
+    fn typeset_i_underscore_prev_value_is_unsupported() {
+        assert_unsupported("typeset -i _; true 5");
+    }
+
+    // Controls.
+    #[test]
+    fn control_prev_decimal_then_declare_i_underscore_stays_known() {
+        assert_known("true 7; declare -i _; true 5");
+    }
+
+    #[test]
+    fn control_prev_literal_then_declare_i_other_name_stays_known() {
+        assert_known("echo bar; declare -i n; true 5");
+    }
+}
+
+mod underscore_integer_surface {
+    use super::*;
+
+    // RED not observed at 7f8b3c7a5 (regression guard): every expected-Unsupported test
+    // in this module already passed when first run.
+    // Once `_` has the integer attribute, every later simple command's last word is
+    // evaluated arithmetically, whatever wrapper/compound surface the command sits in.
+    fn assert_unsupported(command: &str) {
+        match analyze(command) {
+            Analysis::Undetermined(Cause::Unsupported(_)) => {}
+            other => panic!(
+                "{command:?}: `_` is integer here, so `bar` is evaluated arithmetically; \
+                 this must be Undetermined(Unsupported), got {other:#?}"
+            ),
+        }
+    }
+
+    fn assert_known(command: &str) {
+        match analyze(command) {
+            Analysis::Known(_) => {}
+            other => panic!("{command:?} is fully determined by its text; got {other:#?}"),
+        }
+    }
+
+    // NOTE on `--`: `declare -i -- _` is accepted by bash (declare uses internal_getopt,
+    // which honours `--`); not verified against bash 3.2 specifically.
+
+    #[test]
+    fn builtin_declare_i_underscore_then_literal_word_is_unsupported() {
+        assert_unsupported("true 7; builtin declare -i _; echo bar; true 5");
+    }
+
+    #[test]
+    fn declare_i_double_dash_underscore_then_literal_word_is_unsupported() {
+        assert_unsupported("true 7; declare -i -- _; echo bar; true 5");
+    }
+
+    #[test]
+    fn pipeline_after_integer_underscore_is_unsupported() {
+        assert_unsupported("true 7; declare -i _; echo bar | cat; true 5");
+    }
+
+    #[test]
+    fn subshell_after_integer_underscore_is_unsupported() {
+        assert_unsupported("true 7; declare -i _; (echo bar); true 5");
+    }
+
+    #[test]
+    fn brace_group_after_integer_underscore_is_unsupported() {
+        assert_unsupported("true 7; declare -i _; { echo bar; }; true 5");
+    }
+
+    #[test]
+    fn background_after_integer_underscore_is_unsupported() {
+        assert_unsupported("true 7; declare -i _; echo bar & true 5");
+    }
+
+    #[test]
+    fn builtin_wrapper_after_integer_underscore_is_unsupported() {
+        assert_unsupported("true 7; declare -i _; builtin echo bar; true 5");
+    }
+
+    #[test]
+    fn command_wrapper_after_integer_underscore_is_unsupported() {
+        assert_unsupported("true 7; declare -i _; command echo bar; true 5");
+    }
+
+    #[test]
+    fn if_body_after_integer_underscore_is_unsupported() {
+        assert_unsupported("true 7; declare -i _; if true; then echo bar; fi; true 5");
+    }
+
+    #[test]
+    fn for_body_after_integer_underscore_is_unsupported() {
+        assert_unsupported("true 7; declare -i _; for x in 1; do echo bar; done; true 5");
+    }
+
+    // Controls.
+    #[test]
+    fn control_assignment_only_after_integer_underscore_stays_known() {
+        assert_known("true 7; declare -i _; X=5; true 5");
+    }
+
+    #[test]
+    fn control_decimal_pipeline_after_integer_underscore_stays_known() {
+        assert_known("true 7; declare -i _; echo 5 | cat 6; true 7");
+    }
+}

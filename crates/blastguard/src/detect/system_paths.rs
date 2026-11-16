@@ -28,7 +28,11 @@
 //! Operands are re-split quote-aware and unquoted the way the shell would
 //! (`'…'`, `"…"`, `\x`). A leading `~` / `$HOME` / `${HOME}` is expanded with
 //! the session's home. Any other `$`/backtick expansion in a judged operand
-//! cannot be placed, and that is answered `Ask` (fail closed), never `Allow`.
+//! is judged on the paths the AST evaluator proved it names
+//! ([`super::ast::targets::resolve`], task `migrate-path`: `cd /p && f=a.rs &&
+//! sed -i … $f` judges `/p/a.rs`), each exactly like its literal spelling;
+//! one the evaluator cannot resolve either cannot be placed, and that is
+//! answered `Ask` (fail closed), never `Allow`.
 //! A wildcard or brace operand is judged by its literal directory prefix.
 //! A `{}` operand is a `find -exec` placeholder whose paths are `find`'s to
 //! judge, and is skipped. A relative operand with no known base is not judged
@@ -47,6 +51,7 @@
 //! there is the same system-harm Deny. Anything that does not resolve keeps
 //! the Ask above.
 
+use super::ast::targets::Role;
 use super::vars::quote_aware_words;
 use super::{
     chmod_mode_and_targets, chown_owner_and_targets, is_short_flag, positional_operands, Ctx,
@@ -57,7 +62,7 @@ use harness_core::verdict::Determination;
 /// The system-harm verdict for `cmd rest…`: `Allow` when no file it would
 /// modify or remove lies inside a system directory (the per-command rules then
 /// decide), `Ask` when such a file is spelled with an expansion blastguard
-/// cannot resolve.
+/// cannot resolve — neither here nor through the AST evaluator.
 pub(super) fn system_mutation_verdict(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     system_mutation(cmd, rest, ctx).unwrap_or(Decision::Allow)
 }
@@ -125,15 +130,28 @@ fn system_mutation(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Option<Decision> 
     let (what, targets) = mutated_files(cmd, &words)?;
     let mut ask: Option<Decision> = None;
     for raw in targets {
-        match judge(cmd, raw, ctx) {
-            Judged::System(hit) => return Some(system_deny(cmd, what, raw, &hit)),
-            Judged::Unresolved if ask.is_none() => {
-                ask = Some(Decision::ask(format!(
-                    "`{cmd}` {what} `{raw}`, whose path depends on an expansion blastguard cannot \
-resolve — it cannot tell whether that lands inside a system directory, so it refuses to guess"
-                )));
+        let judged = match judge(cmd, raw, ctx) {
+            // The paths the AST evaluator proved `raw` names, each judged
+            // like its literal spelling (`super::ast::targets`); one it
+            // cannot resolve keeps the Ask.
+            Judged::Unresolved => match super::ast::targets::resolve(raw, Role::Argv) {
+                Some(paths) => paths.iter().map(|p| judge(cmd, p, ctx)).collect(),
+                None => vec![Judged::Unresolved],
+            },
+            j => vec![j],
+        };
+        for j in judged {
+            match j {
+                Judged::System(hit) => return Some(system_deny(cmd, what, raw, &hit)),
+                Judged::Unresolved if ask.is_none() => {
+                    ask = Some(Decision::ask(format!(
+                        "`{cmd}` {what} `{raw}`, whose path depends on an expansion blastguard \
+cannot resolve — it cannot tell whether that lands inside a system directory, so it refuses to \
+guess"
+                    )));
+                }
+                Judged::Unresolved | Judged::Elsewhere => {}
             }
-            Judged::Unresolved | Judged::Elsewhere => {}
         }
     }
     ask

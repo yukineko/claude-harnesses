@@ -1424,7 +1424,6 @@ fn fp_line_10_s_scratch_var_git_diff_redirect() {
 
 /// Line 34 [var] (34=subagent). Label: `cp ... $B/` with B=/private/tmp/.../scratchpad/f70e-bak literal on the same line
 #[test]
-#[ignore = "RED: ast-eval line 34"]
 fn fp_line_34_b_scratch_var_cp_destination() {
     assert_allow_both("fp_34", L34, false);
 }
@@ -1453,7 +1452,6 @@ fn fp_line_53_literal_cd_then_relative_heredoc_redirect() {
 
 /// Line 57 [var] (57=subagent). Label: `sed -i '' ... $f` with f=crates/condukt/src/testscope.rs assigned literally on the same line after literal cd into a worktree
 #[test]
-#[ignore = "RED: ast-eval line 57"]
 fn fp_line_57_f_literal_var_sed_in_place() {
     assert_allow_both("fp_57", L57, false);
 }
@@ -1474,14 +1472,12 @@ fn fp_line_66_o_scratch_file_var_redirect() {
 
 /// Line 73 [var] (73=subagent). Label: `cat > $S/c1.json <<'J'` with S literal scratchpad assigned on same line; quoted heredoc JSON data
 #[test]
-#[ignore = "RED: ast-eval line 73"]
 fn fp_line_73_s_scratch_var_quoted_heredoc_redirect() {
     assert_allow_both("fp_73", L73, false);
 }
 
 /// Line 99 [var] (99=subagent). Label: `sed -i '' '94d' $F` with F=crates/blastguard/tests/...rs assigned literally after literal cd; changes were also saved via git diff > fix.patch
 #[test]
-#[ignore = "RED: ast-eval line 99"]
 fn fp_line_99_f_literal_var_sed_in_place_after_git_diff() {
     assert_allow_both("fp_99", L99, false);
 }
@@ -1516,14 +1512,12 @@ fn fp_line_172_f_literal_var_sed_in_place_after_rm() {
 
 /// Line 195 [var] (195=subagent). Label: P assigned literal scratchpad p.sh on the same line; `chmod +x $P` is on a scratch file
 #[test]
-#[ignore = "RED: ast-eval line 195"]
 fn fp_line_195_p_scratch_var_chmod() {
     assert_allow_both("fp_195", L195, false);
 }
 
 /// Line 200 [var] (200=subagent). Label: S literal scratchpad; `sed -i.bak ... $S/run.py` on scratch file
 #[test]
-#[ignore = "RED: ast-eval line 200"]
 fn fp_line_200_s_scratch_var_sed_in_place() {
     assert_allow_both("fp_200", L200, false);
 }
@@ -1570,14 +1564,12 @@ fn fp_line_250_bash_dash_c_quoted_dev_stdin_is_dollar0() {
 
 /// Line 263 [for] (263=subagent). Label: `> $S/p_$m.json` with S a literal scratchpad path and m looped over literal `main sub`; fully determinable scratch file
 #[test]
-#[ignore = "RED: ast-eval line 263"]
 fn fp_line_263_for_loop_var_in_scratch_redirect_jq() {
     assert_allow_both("fp_263", L263, false);
 }
 
 /// Line 265 [var] (265=interactive). Label: `F=crates/...rs && ... > $F` F is a literal assigned earlier in the && chain (own worktree test file)
 #[test]
-#[ignore = "RED: ast-eval line 265"]
 fn fp_line_265_f_literal_var_redirect_in_group() {
     assert_allow_both("fp_265", L265, false);
 }
@@ -1600,14 +1592,12 @@ fn fp_line_281_for_loop_var_scratch_tmp_then_mv() {
 /// Line 292 [var] (292=subagent, 294=interactive). Label: `S=/private/tmp/.../scratchpad && mkdir -p $S && cp target/debug/blastguard $S/bg-fix` literal scratchpad destination
 /// Twins de-duplicated into this test: lines 292, 294 (same command).
 #[test]
-#[ignore = "RED: ast-eval line 292"]
 fn fp_line_292_s_scratch_var_cp_destination() {
     assert_allow_both("fp_292", L292, false);
 }
 
 /// Line 298 [for] (298=subagent). Label: `for f in <4 literal repo files>; do sed -i '' ... "$f"` loop over literal relative paths in a git worktree
 #[test]
-#[ignore = "RED: ast-eval line 298"]
 fn fp_line_298_for_loop_literal_files_sed_in_place() {
     assert_allow_both("fp_298", L298, false);
 }
@@ -1643,14 +1633,12 @@ fn fp_line_322_d_scratch_var_redirect_rid() {
 
 /// Line 324 [var] (324=interactive). Label: `S=<scratchpad>/bm && git show :1:... > $S/O` S literal scratchpad path
 #[test]
-#[ignore = "RED: ast-eval line 324"]
 fn fp_line_324_s_scratch_var_git_show_redirect() {
     assert_allow_both("fp_324", L324, false);
 }
 
 /// Line 327 [var] (327=subagent). Label: `D=$S/draft` with S literal scratchpad; `> $D/helpers.rs` fully determinable scratch file
 #[test]
-#[ignore = "RED: ast-eval line 327"]
 fn fp_line_327_chained_var_scratch_redirect() {
     assert_allow_both("fp_327", L327, false);
 }
@@ -1664,7 +1652,6 @@ fn fp_line_329_python_empty_quoted_heredoc_is_literal_stdin() {
 
 /// Line 334 [var] (334=interactive). Label: `F=crates/...rs && sed -i '' ... $F` F is a literal relative path in own worktree
 #[test]
-#[ignore = "RED: ast-eval line 334"]
 fn fp_line_334_f_literal_var_sed_in_place_version_bump() {
     assert_allow_both("fp_334", L334, false);
 }

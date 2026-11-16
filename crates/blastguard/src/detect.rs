@@ -201,8 +201,9 @@ use vars::{
 
 use redirect::{
     append_redirect_targets, append_target_occurrences, physical_redirect_spelling,
-    place_redirect_target, redirect_target_is_safe, redirect_target_occurrences, redirect_targets,
-    resolve_redirect_target_at, temp_disposable_redirect_target, unplaceable_redirect_ask,
+    place_redirect_target, redirect_target_candidates, redirect_target_is_safe,
+    redirect_target_occurrences, redirect_target_undeterminable, redirect_targets,
+    temp_disposable_redirect_target, unplaceable_redirect_ask,
 };
 
 /// Top-level entry WITH a location model: same dispatch as [`detect`], but the
@@ -348,17 +349,6 @@ fn recommend_against(d: Decision) -> Decision {
         }
         other => other,
     }
-}
-
-/// Whether a redirect TARGET names no determinable file: it carries a shell
-/// expansion, or it is relative and no base is known to place it against.
-/// These are exactly the two pre-IO `Undetermined` rows of
-/// [`crate::reversible::probe`] — not the git-failure rows, whose target IS
-/// known and only its recoverability is not.
-fn redirect_target_undeterminable(target: &str, base: Option<&str>) -> bool {
-    target.contains('$')
-        || target.contains('`')
-        || crate::reversible::resolve(target, base).is_none()
 }
 
 impl<'a> Ctx<'a> {
@@ -716,6 +706,7 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
             "command is too complex to analyse within the safety budget — blastguard cannot vouch for it either way",
         );
     }
+    let _ast_depth = ast::targets::enter_depth(depth); // AST values are depth 0's only
 
     // 0. When the command is effectively ONE here-document fed to a data-only
     // reader (`cat > notes.txt <<'EOF'`, `git commit -F - <<'EOF'`), with no
@@ -813,226 +804,228 @@ primitive, not a filesystem path",
             .as_ref()
             .and_then(|occ| occ.get(occurrence))
             .map(|(seg_idx, _)| *seg_idx);
-        // Resolve `> "$P"` to the path it will actually name BEFORE any axis
-        // judges it: every check below asks a question about a path, and the
-        // unresolved token answers none of them (see
-        // `resolve_redirect_target_at`). Falling back to the raw token keeps the
-        // pre-existing verdict for everything that cannot be resolved.
-        let target = seg_idx
-            .and_then(|seg_idx| resolve_redirect_target_at(rcmd, seg_idx, &raw_target))
-            .unwrap_or(raw_target);
-        // `..` kept for the symlink resolver (see `physical_redirect_spelling`).
-        let physical = physical_redirect_spelling(seg_idx, &seg_cwds, &target);
-        let target = match place_redirect_target(rcmd, seg_idx, &seg_cwds, target) {
-            Ok(placed) => placed,
-            Err(raw) => {
-                // Unplaced: no base to resolve symlinks against, so lexical
-                // only; the unplaceable Ask below covers the rest.
-                if let Some(deny) = protected_path_lexical_block(ctx, "redirect", &raw) {
-                    return deny;
-                }
-                line_level_asks.push(unplaceable_redirect_ask(">", &raw));
-                continue;
-            }
-        };
-        if let Some(deny) = protected_path_block_at(ctx, "redirect", &target, &physical) {
-            return deny;
-        }
-        // Relinked earlier on the line: judge where it really lands (relink.rs).
-        let landing =
-            relink::redirect_landing(ctx, ">", rcmd, seg_idx, &seg_cwds, target, physical);
-        let (target, physical) = match landing {
-            relink::Step::Judge(t, p) => (t, p),
-            relink::Step::Decided(d) => return d,
-            relink::Step::Ask(a) => {
-                line_level_asks.push(a);
-                continue;
-            }
-        };
-        if !redirect_target_is_safe(&target, ctx) {
-            // SYSTEM-DIRECTORY axis, checked BEFORE recoverability for the same
-            // reason the protected-path axis above is: the recoverability probe
-            // reports `NothingToDestroy` for a path that does not exist yet, and
-            // `continue`s past it into Allow. That is the correct answer to the
-            // question it was asked and the wrong question for `/etc/sudoers.d`.
-            if let Some(deny) = system_path_block("redirect", &target, ctx) {
-                return deny;
-            }
-            // The same axis on the path the kernel really writes (2287ebae):
-            // a symlink in the text can land a NEW file in `/etc` that the
-            // lexical check above never sees.
-            let landing_undetermined = match real_system_path_block("redirect", &physical, ctx) {
-                Ok(Some(deny)) => return deny,
-                Ok(None) => None,
-                Err(why) => Some(why),
-            };
-            // RECOVERABILITY runs FIRST (operator ruling 2026-09-09). The two
-            // verdicts this precedes — the confined ask and the flat deny —
-            // fired 63 times across 25 transcripts, and neither had ever asked
-            // the only question that decides whether the write costs anything:
-            // are these bytes recoverable afterwards? The deny even asserted
-            // `truncates and overwrites an existing file` while NOTHING in the
-            // crate checked existence — a §4 divergence between the reason a
-            // human reads and the finding actually made.
-            //
-            // Order matters. Confinement is a LOCATION answer ("inside your
-            // own tree"), which is weaker than a RECOVERY answer ("git holds
-            // these bytes"): a scratch file with an hour of uncommitted work in
-            // it is confined and still unrecoverable, while a tracked, clean
-            // file outside the session root is recoverable and worth nobody's
-            // attention. Asking recovery first lets the strong answer win.
-            //
-            // The protected-path check above already ran and is a SEPARATE
-            // axis: a gate/config file is surfaced however recoverable it is,
-            // because a silently disabled gate voids every later verdict. Only
-            // targets that cleared it reach here.
-            let recovery = crate::reversible::probe(&target, ctx.raw_base.as_deref());
-            // RECOVERABLE **AND MINE**. Recoverability alone used to allow, and
-            // that was a fail-open across project boundaries: any git-tracked
-            // file in ANY checkout on this machine probes as recoverable, so
-            // `echo x > <other project>/CLAUDE.md` was silently ALLOWED while
-            // the same write inside this session's own tree was merely asked
-            // about. Measured 2026-09-14 against 0.2.63.
-            //
-            // Operator ruling (2026-09-14): work inside THIS project that git
-            // can restore may run unattended; another project is someone
-            // else's tree and is an Ask whose recommended answer is "do not
-            // run". "git can undo it" answers the COST question, not the
-            // WHOSE-TREE question, so both must hold to skip the prompt.
-            let runs_unattended = match recovery {
-                // Nothing to lose, and that is true in ANY tree: a file that
-                // does not exist has no prior bytes for the write to destroy.
-                // Gating this on confinement was wrong and regressed
-                // `bg2_system_dir_rule_does_not_swallow_ordinary_absent_targets`
-                // — the location question only arises once there are bytes.
-                // ...unless where it really lands could not be determined: then
-                // the system-directory axis above did not actually look, and
-                // "could not check" is not "clean" (CLAUDE.md §3).
-                crate::reversible::Recovery::NothingToDestroy => {
-                    if let Some(why) = &landing_undetermined {
-                        line_level_asks.push(Decision::ask(format!(
-                            "'> {target}' creates a file, and {why} — blastguard cannot tell \
-whether it lands in a system directory"
-                        )));
-                        continue;
+        // Resolve `> "$P"` to the path(s) it will actually name BEFORE any
+        // axis judges it: every check below asks a question about a path, and
+        // the unresolved token answers none of them. Each candidate is judged
+        // by the whole body; one the line's text and the AST evaluator cannot
+        // place stays the raw token, keeping the pre-existing verdict (see
+        // `redirect_target_candidates`).
+        for target in redirect_target_candidates(rcmd, seg_idx, &seg_cwds, raw_target) {
+            // `..` kept for the symlink resolver (see `physical_redirect_spelling`).
+            let physical = physical_redirect_spelling(seg_idx, &seg_cwds, &target);
+            let target = match place_redirect_target(rcmd, seg_idx, &seg_cwds, target) {
+                Ok(placed) => placed,
+                Err(raw) => {
+                    // Unplaced: no base to resolve symlinks against, so lexical
+                    // only; the unplaceable Ask below covers the rest.
+                    if let Some(deny) = protected_path_lexical_block(ctx, "redirect", &raw) {
+                        return deny;
                     }
-                    true
-                }
-                // THIS is the whose-tree case. Any git-tracked file in ANY
-                // checkout on the machine probes as restorable, so before this
-                // gate `echo x > <other project>/CLAUDE.md` was silently
-                // ALLOWED while the same write inside this session's own tree
-                // was merely asked about (measured 2026-09-14 against 0.2.63).
-                // "git can undo it" answers the COST question, not the
-                // WHOSE-TREE one, so both must hold to skip the prompt.
-                //
-                // A linked worktree checkout under this session's worktree
-                // storage roots is this session's tree too (user ruling
-                // 2026-10-03: refusing edits inside a worktree is itself the
-                // defect), even when the session runs in the main tree and the
-                // checkout is therefore not one of its safe roots. Judged by
-                // `Ctx::in_worktree_checkout_for_redirect`: absolute target, one plain command
-                // or an inert `&&` prefix (#1625), no symlink below the checkout.
-                crate::reversible::Recovery::RecoverableFromGit => {
-                    ctx.confined_root("redirect", &[target.as_str()]).is_some()
-                        || ctx.in_worktree_checkout_for_redirect(&target, rcmd, seg_idx)
-                }
-                // An existing file whose bytes git does not hold, but which
-                // sits in a fixed temp root (`/tmp`, `/private/tmp`; never
-                // `$TMPDIR`) outside any git tree: disposable work (user ruling
-                // 2026-10-28: a truncating redirect inside /private/tmp is
-                // recoverable work and must not ask). Only for a fully
-                // determined placement — see `temp_disposable_redirect_target`;
-                // and never when where it really lands could not be determined.
-                crate::reversible::Recovery::Unrecoverable(_) => {
-                    landing_undetermined.is_none() && temp_disposable_redirect_target(&target, ctx)
-                }
-                // Undetermined keeps falling through, per CLAUDE.md §3, and so
-                // does every Unrecoverable target the arm above refuses.
-                _ => false,
-            };
-            if runs_unattended {
-                continue;
-            }
-            // NOT SPLIT THREE WAYS HERE, deliberately. `Undetermined` and
-            // `Unrecoverable` both fall through to the Deny below, so this arm
-            // blocks exactly the set 0.2.58 blocked minus the recoverable ones
-            // — it never turns a former Deny into something weaker.
-            //
-            // Splitting them was tried and backed out. By `model.rs`'s own
-            // doctrine an undetermined answer is a refusal and refusals are
-            // `Ask`, which would also make an unplaceable `$TMPDIR` target
-            // passable instead of a dead end. But every relative target in an
-            // unscoped `detect::detect` call is undetermined for want of a cwd,
-            // so the split moved about a dozen established denies to asks —
-            // relitigating deny-vs-ask for a whole class this change had no
-            // need to touch, and buying nothing measurable (2067 real commands:
-            // 163 non-allow either way, the split only shifting 24 of them from
-            // deny to ask). The distinction is still visible: the reason text
-            // says which answer was reached, and `rule_id` files them under
-            // different ids.
-            // LOCATION axis. Safe to consult for every target that reaches
-            // here: `place_redirect_target` has already re-expressed a relative
-            // target against the cwd its segment runs in (or refused it above),
-            // so `cd /usr && echo x > lib/f` is judged as `/usr/lib/f` and can
-            // no longer come out "confined" to the session tree.
-            if let Some(root) = ctx.confined_root("redirect", &[target.as_str()]) {
-                line_level_asks.push(confined_ask(
-                    "truncating redirect",
-                    &root,
-                    &[target.as_str()],
-                ));
-                continue;
-            }
-            // A recoverable target only reaches here when the whose-tree check
-            // above failed, so the reason names that — it is why this refuses
-            // (backlog 2dc70bc5: the bare description used to say the gate
-            // "does not refuse or ask about" the very path it was refusing).
-            let observed = match recovery {
-                crate::reversible::Recovery::RecoverableFromGit => format!(
-                    "{}, but not one of this session's trees (neither inside its safe roots \
-nor a recognised worktree checkout), so git being able to restore it does not make the \
-overwrite this session's to make",
-                    recovery.describe()
-                ),
-                _ => recovery.describe(),
-            };
-            let reason =
-                format!("'> {target}' destroys the file's current contents and {observed}");
-            // User ruling R2 (2026-10-14): inside interpreter PROGRAM TEXT a
-            // redirect whose target cannot be determined is not denied here;
-            // it is handed back to `interpreter_code_verdict`, which resolves
-            // it to an Ask (never Allow) unless the program holds a Deny. Only
-            // the undeterminable-target rows qualify — an existing
-            // unrecoverable target (`/etc/hosts`) is a definite finding and
-            // still denies. See `Ctx::program_text_redirects`.
-            if let Some(sink) = ctx.program_text_redirects {
-                if matches!(recovery, crate::reversible::Recovery::Undetermined(_))
-                    && redirect_target_undeterminable(&target, ctx.raw_base.as_deref())
-                {
-                    sink.rows.borrow_mut().push(reason);
+                    line_level_asks.push(unplaceable_redirect_ask(">", &raw));
                     continue;
                 }
-                if sink.redirects_are_data {
-                    continue; // #1626: Python data, see `ProgramTextSink`
-                }
+            };
+            if let Some(deny) = protected_path_block_at(ctx, "redirect", &target, &physical) {
+                return deny;
             }
-            // The same ruling at LINE level (4a1cf1ad): this `>` sits in the
-            // body of a quoted here-document handed to a code interpreter, so
-            // it is program text the shell never parses. Ask with the marker,
-            // never Allow; a Deny elsewhere on the line still wins.
-            if matches!(recovery, crate::reversible::Recovery::Undetermined(_))
-                && redirect_target_undeterminable(&target, ctx.raw_base.as_deref())
-                && seg_idx.is_some_and(|i| program_body.get(i) == Some(&true))
-            {
-                line_level_asks.push(recommend_against(Decision::ask(format!(
+            // Relinked earlier on the line: judge where it really lands (relink.rs).
+            let landing =
+                relink::redirect_landing(ctx, ">", rcmd, seg_idx, &seg_cwds, target, physical);
+            let (target, physical) = match landing {
+                relink::Step::Judge(t, p) => (t, p),
+                relink::Step::Decided(d) => return d,
+                relink::Step::Ask(a) => {
+                    line_level_asks.push(a);
+                    continue;
+                }
+            };
+            if !redirect_target_is_safe(&target, ctx) {
+                // SYSTEM-DIRECTORY axis, checked BEFORE recoverability for the same
+                // reason the protected-path axis above is: the recoverability probe
+                // reports `NothingToDestroy` for a path that does not exist yet, and
+                // `continue`s past it into Allow. That is the correct answer to the
+                // question it was asked and the wrong question for `/etc/sudoers.d`.
+                if let Some(deny) = system_path_block("redirect", &target, ctx) {
+                    return deny;
+                }
+                // The same axis on the path the kernel really writes (2287ebae):
+                // a symlink in the text can land a NEW file in `/etc` that the
+                // lexical check above never sees.
+                let landing_undetermined = match real_system_path_block("redirect", &physical, ctx)
+                {
+                    Ok(Some(deny)) => return deny,
+                    Ok(None) => None,
+                    Err(why) => Some(why),
+                };
+                // RECOVERABILITY runs FIRST (operator ruling 2026-09-09). The two
+                // verdicts this precedes — the confined ask and the flat deny —
+                // fired 63 times across 25 transcripts, and neither had ever asked
+                // the only question that decides whether the write costs anything:
+                // are these bytes recoverable afterwards? The deny even asserted
+                // `truncates and overwrites an existing file` while NOTHING in the
+                // crate checked existence — a §4 divergence between the reason a
+                // human reads and the finding actually made.
+                //
+                // Order matters. Confinement is a LOCATION answer ("inside your
+                // own tree"), which is weaker than a RECOVERY answer ("git holds
+                // these bytes"): a scratch file with an hour of uncommitted work in
+                // it is confined and still unrecoverable, while a tracked, clean
+                // file outside the session root is recoverable and worth nobody's
+                // attention. Asking recovery first lets the strong answer win.
+                //
+                // The protected-path check above already ran and is a SEPARATE
+                // axis: a gate/config file is surfaced however recoverable it is,
+                // because a silently disabled gate voids every later verdict. Only
+                // targets that cleared it reach here.
+                let recovery = crate::reversible::probe(&target, ctx.raw_base.as_deref());
+                // RECOVERABLE **AND MINE**. Recoverability alone used to allow, and
+                // that was a fail-open across project boundaries: any git-tracked
+                // file in ANY checkout on this machine probes as recoverable, so
+                // `echo x > <other project>/CLAUDE.md` was silently ALLOWED while
+                // the same write inside this session's own tree was merely asked
+                // about. Measured 2026-09-14 against 0.2.63.
+                //
+                // Operator ruling (2026-09-14): work inside THIS project that git
+                // can restore may run unattended; another project is someone
+                // else's tree and is an Ask whose recommended answer is "do not
+                // run". "git can undo it" answers the COST question, not the
+                // WHOSE-TREE question, so both must hold to skip the prompt.
+                let runs_unattended = match recovery {
+                    // Nothing to lose, and that is true in ANY tree: a file that
+                    // does not exist has no prior bytes for the write to destroy.
+                    // Gating this on confinement was wrong and regressed
+                    // `bg2_system_dir_rule_does_not_swallow_ordinary_absent_targets`
+                    // — the location question only arises once there are bytes.
+                    // ...unless where it really lands could not be determined: then
+                    // the system-directory axis above did not actually look, and
+                    // "could not check" is not "clean" (CLAUDE.md §3).
+                    crate::reversible::Recovery::NothingToDestroy => {
+                        if let Some(why) = &landing_undetermined {
+                            line_level_asks.push(Decision::ask(format!(
+                                "'> {target}' creates a file, and {why} — blastguard cannot tell \
+whether it lands in a system directory"
+                            )));
+                            continue;
+                        }
+                        true
+                    }
+                    // THIS is the whose-tree case. Any git-tracked file in ANY
+                    // checkout on the machine probes as restorable, so before this
+                    // gate `echo x > <other project>/CLAUDE.md` was silently
+                    // ALLOWED while the same write inside this session's own tree
+                    // was merely asked about (measured 2026-09-14 against 0.2.63).
+                    // "git can undo it" answers the COST question, not the
+                    // WHOSE-TREE one, so both must hold to skip the prompt.
+                    //
+                    // A linked worktree checkout under this session's worktree
+                    // storage roots is this session's tree too (user ruling
+                    // 2026-10-03: refusing edits inside a worktree is itself the
+                    // defect), even when the session runs in the main tree and the
+                    // checkout is therefore not one of its safe roots. Judged by
+                    // `Ctx::in_worktree_checkout_for_redirect`: absolute target, one plain command
+                    // or an inert `&&` prefix (#1625), no symlink below the checkout.
+                    crate::reversible::Recovery::RecoverableFromGit => {
+                        ctx.confined_root("redirect", &[target.as_str()]).is_some()
+                            || ctx.in_worktree_checkout_for_redirect(&target, rcmd, seg_idx)
+                    }
+                    // An existing file whose bytes git does not hold, but which
+                    // sits in a fixed temp root (`/tmp`, `/private/tmp`; never
+                    // `$TMPDIR`) outside any git tree: disposable work (user ruling
+                    // 2026-10-28: a truncating redirect inside /private/tmp is
+                    // recoverable work and must not ask). Only for a fully
+                    // determined placement — see `temp_disposable_redirect_target`;
+                    // and never when where it really lands could not be determined.
+                    crate::reversible::Recovery::Unrecoverable(_) => {
+                        landing_undetermined.is_none()
+                            && temp_disposable_redirect_target(&target, ctx)
+                    }
+                    // Undetermined keeps falling through, per CLAUDE.md §3, and so
+                    // does every Unrecoverable target the arm above refuses.
+                    _ => false,
+                };
+                if runs_unattended {
+                    continue;
+                }
+                // NOT SPLIT THREE WAYS HERE, deliberately. `Undetermined` and
+                // `Unrecoverable` both fall through to the Deny below, so this arm
+                // blocks exactly the set 0.2.58 blocked minus the recoverable ones
+                // — it never turns a former Deny into something weaker.
+                //
+                // Splitting them was tried and backed out. By `model.rs`'s own
+                // doctrine an undetermined answer is a refusal and refusals are
+                // `Ask`, which would also make an unplaceable `$TMPDIR` target
+                // passable instead of a dead end. But every relative target in an
+                // unscoped `detect::detect` call is undetermined for want of a cwd,
+                // so the split moved about a dozen established denies to asks —
+                // relitigating deny-vs-ask for a whole class this change had no
+                // need to touch, and buying nothing measurable (2067 real commands:
+                // 163 non-allow either way, the split only shifting 24 of them from
+                // deny to ask). The distinction is still visible: the reason text
+                // says which answer was reached, and `rule_id` files them under
+                // different ids.
+                // LOCATION axis. Safe to consult for every target that reaches
+                // here: `place_redirect_target` has already re-expressed a relative
+                // target against the cwd its segment runs in (or refused it above),
+                // so `cd /usr && echo x > lib/f` is judged as `/usr/lib/f` and can
+                // no longer come out "confined" to the session tree.
+                if let Some(root) = ctx.confined_root("redirect", &[target.as_str()]) {
+                    line_level_asks.push(confined_ask(
+                        "truncating redirect",
+                        &root,
+                        &[target.as_str()],
+                    ));
+                    continue;
+                }
+                // A recoverable target only reaches here when the whose-tree check
+                // above failed, so the reason names that — it is why this refuses
+                // (backlog 2dc70bc5: the bare description used to say the gate
+                // "does not refuse or ask about" the very path it was refusing).
+                let observed = match recovery {
+                    crate::reversible::Recovery::RecoverableFromGit => format!(
+                        "{}, but not one of this session's trees (neither inside its safe roots \
+nor a recognised worktree checkout), so git being able to restore it does not make the \
+overwrite this session's to make",
+                        recovery.describe()
+                    ),
+                    _ => recovery.describe(),
+                };
+                let reason =
+                    format!("'> {target}' destroys the file's current contents and {observed}");
+                // User ruling R2 (2026-10-14): inside interpreter PROGRAM TEXT a
+                // redirect whose target cannot be determined is not denied here;
+                // it is handed back to `interpreter_code_verdict`, which resolves
+                // it to an Ask (never Allow) unless the program holds a Deny. Only
+                // the undeterminable-target rows qualify — an existing
+                // unrecoverable target (`/etc/hosts`) is a definite finding and
+                // still denies. See `Ctx::program_text_redirects`.
+                if let Some(sink) = ctx.program_text_redirects {
+                    if matches!(recovery, crate::reversible::Recovery::Undetermined(_))
+                        && redirect_target_undeterminable(&target, ctx.raw_base.as_deref())
+                    {
+                        sink.rows.borrow_mut().push(reason);
+                        continue;
+                    }
+                    if sink.redirects_are_data {
+                        continue; // #1626: Python data, see `ProgramTextSink`
+                    }
+                }
+                // The same ruling at LINE level (4a1cf1ad): this `>` sits in the
+                // body of a quoted here-document handed to a code interpreter, so
+                // it is program text the shell never parses. Ask with the marker,
+                // never Allow; a Deny elsewhere on the line still wins.
+                if matches!(recovery, crate::reversible::Recovery::Undetermined(_))
+                    && redirect_target_undeterminable(&target, ctx.raw_base.as_deref())
+                    && seg_idx.is_some_and(|i| program_body.get(i) == Some(&true))
+                {
+                    line_level_asks.push(recommend_against(Decision::ask(format!(
                     "the body of a quoted here-document fed to a code interpreter contains a `>` \
 that a shell would read as a redirect whose target cannot be determined ({reason}); the shell \
 does not parse that body, but blastguard cannot show the program does not use it as one."
                 ))));
-                continue;
+                    continue;
+                }
+                return Decision::deny(reason);
             }
-            return Decision::deny(reason);
         }
     }
 
@@ -1053,61 +1046,61 @@ does not parse that body, but blastguard cannot show the program does not use it
             .as_ref()
             .and_then(|occ| occ.get(occurrence))
             .map(|(seg_idx, _)| *seg_idx);
-        let target = seg_idx
-            .and_then(|seg_idx| resolve_redirect_target_at(rcmd, seg_idx, &raw_target))
-            .unwrap_or(raw_target);
-        let physical = physical_redirect_spelling(seg_idx, &seg_cwds, &target);
-        let target = match place_redirect_target(rcmd, seg_idx, &seg_cwds, target) {
-            Ok(placed) => placed,
-            Err(raw) => {
-                // Unplaced: lexical only, as for `>` above.
-                if let Some(deny) = protected_path_lexical_block(ctx, "append redirect", &raw) {
-                    return deny;
+        for target in redirect_target_candidates(rcmd, seg_idx, &seg_cwds, raw_target) {
+            let physical = physical_redirect_spelling(seg_idx, &seg_cwds, &target);
+            let target = match place_redirect_target(rcmd, seg_idx, &seg_cwds, target) {
+                Ok(placed) => placed,
+                Err(raw) => {
+                    // Unplaced: lexical only, as for `>` above.
+                    if let Some(deny) = protected_path_lexical_block(ctx, "append redirect", &raw) {
+                        return deny;
+                    }
+                    line_level_asks.push(unplaceable_redirect_ask(">>", &raw));
+                    continue;
                 }
-                line_level_asks.push(unplaceable_redirect_ask(">>", &raw));
-                continue;
+            };
+            if let Some(deny) = protected_path_block_at(ctx, "append redirect", &target, &physical)
+            {
+                return deny;
             }
-        };
-        if let Some(deny) = protected_path_block_at(ctx, "append redirect", &target, &physical) {
-            return deny;
-        }
-        let landing =
-            relink::redirect_landing(ctx, ">>", rcmd, seg_idx, &seg_cwds, target, physical);
-        let (target, physical) = match landing {
-            relink::Step::Judge(t, p) => (t, p),
-            relink::Step::Decided(d) => return d,
-            relink::Step::Ask(a) => {
-                line_level_asks.push(a);
-                continue;
+            let landing =
+                relink::redirect_landing(ctx, ">>", rcmd, seg_idx, &seg_cwds, target, physical);
+            let (target, physical) = match landing {
+                relink::Step::Judge(t, p) => (t, p),
+                relink::Step::Decided(d) => return d,
+                relink::Step::Ask(a) => {
+                    line_level_asks.push(a);
+                    continue;
+                }
+            };
+            // The system-directory axis does not care about the truncate/append
+            // distinction either: `>>` is how a `paths.d` entry or an
+            // `authorized_keys` line gets added, and one appended line is the
+            // whole payload.
+            if let Some(deny) = system_path_block("append redirect", &target, ctx) {
+                return deny;
             }
-        };
-        // The system-directory axis does not care about the truncate/append
-        // distinction either: `>>` is how a `paths.d` entry or an
-        // `authorized_keys` line gets added, and one appended line is the
-        // whole payload.
-        if let Some(deny) = system_path_block("append redirect", &target, ctx) {
-            return deny;
-        }
-        // ...and on the path the kernel really writes (2287ebae): a symlink in
-        // the text hides the system directory from the lexical check.
-        match real_system_path_block("append redirect", &physical, ctx) {
-            Ok(Some(deny)) => return deny,
-            Ok(None) => {}
-            Err(why) => line_level_asks.push(Decision::ask(format!(
-                "'>> {target}' appends to a path whose real location is unknown ({why}) — \
+            // ...and on the path the kernel really writes (2287ebae): a symlink in
+            // the text hides the system directory from the lexical check.
+            match real_system_path_block("append redirect", &physical, ctx) {
+                Ok(Some(deny)) => return deny,
+                Ok(None) => {}
+                Err(why) => line_level_asks.push(Decision::ask(format!(
+                    "'>> {target}' appends to a path whose real location is unknown ({why}) — \
 blastguard cannot tell whether it lands in a system directory"
-            ))),
-        }
-        // A target that is STILL an expansion after resolution names no path
-        // either axis above could place, so both answered "not mine" without
-        // having looked (`echo x >> $SOMEWHERE` with `SOMEWHERE` from the
-        // environment). "Could not check" is not "clean" (CLAUDE.md §3): Ask,
-        // recorded rather than returned so a Deny elsewhere on the line wins.
-        if has_unresolvable_expansion(&target) {
-            line_level_asks.push(Decision::ask(format!(
-                "'>> {target}' appends to a path that only exists at run time — blastguard \
+                ))),
+            }
+            // A target that is STILL an expansion after resolution names no path
+            // either axis above could place, so both answered "not mine" without
+            // having looked (`echo x >> $SOMEWHERE` with `SOMEWHERE` from the
+            // environment). "Could not check" is not "clean" (CLAUDE.md §3): Ask,
+            // recorded rather than returned so a Deny elsewhere on the line wins.
+            if has_unresolvable_expansion(&target) {
+                line_level_asks.push(Decision::ask(format!(
+                    "'>> {target}' appends to a path that only exists at run time — blastguard \
 cannot tell whether it is a protected gate/config file or a system directory"
-            )));
+                )));
+            }
         }
     }
 

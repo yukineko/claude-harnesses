@@ -435,6 +435,11 @@ doc = "docs/specs/overwatch.md"
 reason = "'module 責務' store: Lease persistence, is_stale heartbeat TTL; 'liveness = heartbeat TTL' invariant."
 
 [[spec]]
+path = "crates/overwatch/src/durable.rs"
+doc = "docs/specs/overwatch.md"
+reason = "'module 責務' durable bullet: write_durable order (write_all, sync_all, rename, parent-dir fsync), every failure returned as Err, temp removed on pre-rename failure, which store writes go through it."
+
+[[spec]]
 path = "crates/overwatch/src/event.rs"
 doc = "docs/specs/overwatch.md"
 reason = "'module 責務' event: EventKind Started/Running/Ended lifecycle model."

@@ -2603,6 +2603,8 @@ notes = "Observed 2026-11-16, run-20261116-164820-25374 t2 worktree (HEAD 8204ef
 created_at = 1794819376
 updated_at = 1794819376
 weight = 0.0
+issue_number = 1822
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1822"
 rev = 0
 
 [task.repro]

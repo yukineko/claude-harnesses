@@ -203,10 +203,15 @@ fn stdin_exec_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // `python3 - <<'EOF'` here-document: the shell never parses that body, so
     // a `|`, `&` or `{` inside a Python string (a Rust closure
     // `|x| { … }` in a triple-quoted replace, backlog 7671c79f) is not a
-    // pipe or a brace group. The body is judged as the Python program it is
-    // by `python_stdin_reading`. The opener line and every line after the
-    // close stay in the text. Other shapes (other interpreters, an unquoted
-    // delimiter) keep the body, as before.
+    // pipe or a brace group. Only these two splits drop the body: the main
+    // per-stage loop and the program-text audit still read the full command.
+    // The body is judged by `interpreter_code_verdict` (reached through
+    // `stdin_program_texts`); `python_stdin_reading` adds only its
+    // system-harm Deny, and only when the body tokenises. A body that does
+    // not tokenise is still stripped here and gets no `python_stdin_reading`
+    // verdict, so only the program-text scan judges it. The opener line and
+    // every line after the close stay in the text. Other shapes (other
+    // interpreters, an unquoted delimiter) keep the body, as before.
     let shell_text = super::heredoc::python_stdin_here_document(cmd)
         .map(|parts| parts.without_body)
         .unwrap_or_else(|| cmd.to_string());

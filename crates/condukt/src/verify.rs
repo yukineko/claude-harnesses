@@ -4266,7 +4266,7 @@ note: run with `RUST_BACKTRACE=1` for a backtrace";
     /// be wrongly refused.
     #[test]
     fn classify_criteria_prefix_collision_word_does_not_block_legitimate_skip() {
-        let dc = "we use the npm testing framework; `cargo test -p condukt` exits 0";
+        let dc = "with the npm testing framework, `cargo test -p condukt` exits 0"; // no `;` (0a7be389)
         let c = classify_criteria(dc, None, None);
         assert!(
             !c.behavioral,

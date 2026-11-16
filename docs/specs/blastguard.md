@@ -1273,7 +1273,7 @@ forge・condukt のスケジューラが再利用）。
   記録は判定確定後・表示前に書き、判定を変えない。書けない（panic を含む）ときは表示理由に
   `could NOT be recorded` とエラーを付け stderr にも警告する（沈黙しない）。relay（subagent の Bash Ask の
   再実行 queue）とは別物で、block log は真の `Deny` と main の `Ask` を含む全 block を記録する。
-- **`detect/ast`**（`mod.rs` / `parse.rs` / `eval.rs` / `eval/words.rs` / `arith.rs` / `support.rs`）— shell parser（brush-parser `=0.4.0`）＋静的評価層
+- **`detect/ast`**（`mod.rs` / `parse.rs` / `eval.rs` / `eval/words.rs` / `eval/decl.rs` / `arith.rs` / `support.rs`）— shell parser（brush-parser `=0.4.0`）＋静的評価層
   （ユーザー裁定 2026-11-15「parser ＋ 静的評価で一体にする」）。`analyze(&str) -> Analysis`
   （`Known(Script)` / `Undetermined(Cause)`、`Cause` = `NotImplemented`/`TooLong`/`TooDeep`/`Timeout`/
   `Parse`/`Panic`/`ZshOnly`/`Unsupported`）と `program_source(&SimpleCommand) -> Option<ProgramSource>`。
@@ -1311,6 +1311,8 @@ forge・condukt のスケジューラが再利用）。
   `support.rs` は状態を持たない補助関数（escape 展開・パス正規化・fd/stdin・pipe stdin）。
   `eval/words.rs` は `eval.rs` の子 module で、parameter 展開の値（`${n:=v}` の integer 検査を含む）と
   展開後の語の最終値（tilde・word split・pathname/brace 展開・heredoc 展開の判定）を担う。
+  `eval/decl.rs` も `eval.rs` の子 module で、declare 系 builtin（`export`/`declare`/`typeset`/`local`/
+  `readonly`）の integer 属性付与・代入と compound key の算術検査・binding を担う。
   **現状どの検出器からも呼ばれない**（判定に影響しない）。検出器の移行は migrate-path / migrate-stdin-program 段で行う。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。

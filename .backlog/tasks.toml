@@ -2950,3 +2950,34 @@ exit 101: arness-worktrees/bg-s2-red-20261117/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 10.56s
      Running tests/backlog_20261117_python_heredoc_literal_truncate_fp.rs (target/debug/deps/backlog_20261117_python_heredoc_literal_truncate_fp-460b6f19ab159f08)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261117_python_heredoc_literal_truncate_fp`"""
+
+[[task]]
+id = "46b8e76d"
+title = "blastguard FP: python stdin heredoc with >=1, and a triple-quoted <&str, after a literal cd is read as a relative redirect after an unresolved cd"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "s6-retire-readings",
+    "s5-python-parser",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-17 relay bgr-d2f040bc9abe (subagent deny / main ask), reproduced on main 0.2.679/0.2.681 hermetic HOME. Verbatim: ''> =1,' is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve'. Minimal: cd D && python3 /dev/stdin <<'EOF' / assert a>=1, b / x=''' / Option<&str>, / ''' / EOF. Allow when: no cd, no >=1, <&str in a single-line string or bare line, cat > n.txt with same body, triple-quoted text without <&. Python program text re-read as shell. RED 31c938dd6 (branch red/blastguard-fp-batch-20261117, 0.2.682). Stage: S6 retire-readings (S3 judges redirects from AST; S6 removes the string re-reading); GREEN also needs S5 since python stdin is Undetermined until S5. Distinct from 3764e463 (python -c, backtick '>> `y`'), 9d88d739/c9da0437/06c51772 (backtick-in-string)."
+created_at = 1794872347
+updated_at = 1794872347
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261117_python_stdin_triple_quote_redirect_after_cd_fp -- --include-ignored"
+rev = "31c938dd6444bb88927be8222cb10dc78362fb85"
+observed_at = 1794872347
+detail = """
+exit 101: /crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/backlog_20261117_python_stdin_triple_quote_redirect_after_cd_fp.rs (target/debug/deps/backlog_20261117_python_stdin_triple_quote_redirect_after_cd_fp-815829cea95d5864)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261117_python_stdin_triple_quote_redirect_after_cd_fp`"""

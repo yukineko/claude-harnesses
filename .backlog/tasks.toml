@@ -2640,3 +2640,33 @@ scripts/test_rollout_refuses_dirty_source.py:253: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_rollout_refuses_dirty_source.py::MutationMarker::test_f_evaluate_scenario_brackets_mutation_with_marker_and_seq
 ============================== 1 failed in 0.11s ==============================="""
+
+[[task]]
+id = "b0de2710"
+title = "blastguard: heredoc 本文・Python 文字列リテラルを実行操作と誤読して Ask/Deny する (3 形)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "heredoc",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """2026-11-16 session 1b9a1e23 の overwatch ledger 記録を f6a19c390 ビルドで再生し最小化。A: git commit -q -F - <<'EOF' 2>&1 (quoted heredoc + 演算子行の redirect) の本文行 'unknown dirs directly under ~/.claude/plugins/cache/yukineko/ ...' を command 'unknown' と読み unknown-verb-protected-path で Ask (subagent では Deny。原記録は '... <<'EOF' 2>&1 | tail -30; git log ...')。redirect なしなら allow (対照)。B: python3 - <<'EOF' の print('''Unit tests for .githooks/pre-push''') を command 'print(Unit' on '.githooks/pre-push)' と読み Ask (原記録は python heredoc の三重引用リテラル 'Unit tests for .githooks/pre-push's wiring' で subagent Deny)。C: 既存ファイル A を open(A) で読み新規 B に open(B,'w') で書く Python を "`,'w')` onto A" と A への書き込みに誤帰属し Ask (A を読むだけ / B に書くだけはどちらも allow。原記録は ~/.blastguard/relay/<sid>.jsonl を読み scratchpad に書くスクリプトが interpreter-unrecoverable-write で Deny)。各ケースに陽性対照 (実際に保護パスを操作するコマンドは ask/deny) を併置し HEAD で pass。どの内部段で誤るかは未特定。RED test: scripts/test_blastguard_heredoc_literal_fp.py (commit 776be5f22、cargo build -p blastguard の成果物を隔離 HOME で駆動)。"""
+created_at = 1794792494
+updated_at = 1794792494
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_blastguard_heredoc_literal_fp.py"
+rev = "776be5f22604fe35e0215bd138207293f596d315"
+observed_at = 1794792494
+detail = """
+exit 1: ok_is_allowed
+FAILED scripts/test_blastguard_heredoc_literal_fp.py::HeredocLiteralFalsePositives::test_c_read_existing_write_new_does_not_name_read_file_as_write_target
+FAILED scripts/test_blastguard_heredoc_literal_fp.py::HeredocLiteralFalsePositives::test_c_read_existing_write_new_gets_same_verdict_as_write_new_only
+========================= 4 failed, 5 passed in 0.79s =========================="""

@@ -2585,3 +2585,35 @@ exit 101: uki_nakayama/src/.harness-worktrees/red-ccwiden/crates/condukt)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 11.52s
      Running tests/backlog_20261116_check_criteria_drops_test_target.rs (target/debug/deps/backlog_20261116_check_criteria_drops_test_target-c3651da4c67db1b9)
 error: test failed, to rerun pass `-p condukt --test backlog_20261116_check_criteria_drops_test_target`"""
+
+[[task]]
+id = "8f82f09d"
+title = "condukt testscope: tdd green refused as rerun after a plain cargo test on the same tree, so a required F→P oracle cannot be completed"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "testscope",
+    "tdd",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-16, run-20261116-164820-25374 t2 worktree (HEAD 8204efae4): worker ran the repro via plain cargo test (6 passed); tdd red recorded on reverted tree (exit 101); tdd green on the fixed tree denied by testscope 'rerun refused ... already ran on this exact tree'. check-oracle required:true, so no path records GREEN. Readings: (a) defect: gates contradict (required oracle with no satisfiable path); (b) intended: rerun ban wins. RED 3f5f7acb7."
+created_at = 1794819376
+updated_at = 1794819376
+weight = 0.0
+issue_number = 1822
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1822"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261116_tdd_green_refused_after_plain_run -- --include-ignored"
+rev = "3f5f7acb7f52b9372076947538ff73fbaa98344b"
+observed_at = 1794819376
+detail = """
+exit 101: yama/src/.harness-worktrees/session-df7c968f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.06s
+     Running tests/backlog_20261116_tdd_green_refused_after_plain_run.rs (target/debug/deps/backlog_20261116_tdd_green_refused_after_plain_run-96b12b3104f0154c)
+error: test failed, to rerun pass `-p condukt --test backlog_20261116_tdd_green_refused_after_plain_run`"""

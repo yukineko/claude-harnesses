@@ -69,7 +69,12 @@
 //!   variables being `Undetermined`, a value not determined by the text or
 //!   that reads a name is `Unsupported` (even a literal word such as `bar` or
 //!   `/abs/path`: `bar` / `abs` name variables). The opaque flag is OR-ed
-//!   where paths join.
+//!   where paths join. Once the text declared `_` integer (`declare -i _`,
+//!   `-ri _`, `declare -i x _`, a possible `-i` option), the last word of
+//!   every later simple command (the command name if alone; also behind
+//!   `builtin` / `command`) is checked too, in the states after it: bash
+//!   assigns it to `_`. Not the declaring command's own `_`, and opaque
+//!   alone does not make `_` integer (user ruling 2026-11-16; residual).
 //!   An undetermined non-assignment operand
 //!   of a declaration builtin (`declare $opt n=v`) counts as a possible `-i`.
 //!   The keys of a compound value are arithmetic in a declaration builtin
@@ -1218,8 +1223,16 @@ impl Ev {
             span,
         };
 
-        // 4. Effects on the shell state.
+        // 4. Effects on the shell state. Afterwards bash assigns the last
+        // word to `_`: arithmetic if the text declared `_` integer before
+        // this command (not merely opaque), read in the states after it.
+        let underscore_int = env.integer.contains("_");
         let outcome = self.effects(&sc, &decl_names, env)?;
+        if let Some(last) = sc.argv.last().filter(|_| underscore_int) {
+            for after in [&outcome.ok, &outcome.fail] {
+                arith::check_value(&last.value, &|n| after.lookup(n))?;
+            }
+        }
         self.push(sc.clone())?;
         Ok((outcome, sc))
     }

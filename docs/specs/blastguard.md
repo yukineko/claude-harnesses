@@ -1297,6 +1297,13 @@ forge・condukt のスケジューラが再利用）。
   `for` 変数（literal list の各語、不定 list は不定値として）・`${n:=v}` / `${n=v}`（`${a[i]:=v}` も。
   間接 `${!x:=v}` は opaque 中または `declare -i` 名がある間は integer 扱い）。本文で決まらない値や name を
   読む値（`X=bar`・`FOO=/abs/path` を含む）は `Undetermined(Unsupported)`。
+  本文が `_` を integer と宣言した後（`declare -i _`・`typeset -i _`・`local -i _`・`-ri _`・
+  `declare -i x _`・`-i` の可能性がある不定 option。ユーザー裁定 2026-11-16 A2）は、bash が各 simple command の
+  最後の語（引数が無ければ command name。redirect は語でない。`builtin`/`command` 越しも同じ）を `_` に
+  代入するため、以後の各 simple command の最後の語を、そのコマンド実行後の状態（成功・失敗の両方）で算術検査
+  する（`echo 5` は Known、`echo bar`・`cat` は name を読むので `Undetermined(Unsupported)`）。宣言した
+  コマンド自身の `_` 代入は検査しない。**受容済み残余**: opaque 状態だけでは `_` を integer 扱いしない
+  （`_` は `integer` 集合だけを見る）。
   `builtin [--] w ...`・`command [-p] [--] w ...`（入れ子も）は unwrap し、包まれた `w` を単独実行と同じ
   効果・代入検査で評価したうえで（declare 系の operand は Field mode のまま）、wrapper 自体は従来どおり
   状態を opaque にする。`command -v`/`-V` は何も実行しない lookup として

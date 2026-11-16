@@ -11,14 +11,35 @@
 //!     ends up with) loses that one prefix character. The caller judges the view
 //!     with every shell rule, and the verdicts are combined `Deny > Ask >
 //!     Allow` with the verdict of the command as written;
-//!   * REFUSES (`Ask`) when it cannot read the reader's input as a patch:
-//!     stdin from a pipe, from a `<` file or here-string, a here-document it
-//!     cannot delimit, or a body with no patch header. Such input may write
-//!     anything, so it is never Allow.
+//!   * REFUSES (`Ask`) in exactly these shapes, because the patch cannot be
+//!     read from the command text:
+//!       - the reader's segment comes right after a plain `|` (an unquoted `|`
+//!         immediately before it; `a || git apply` also lands here, which is
+//!         only stricter);
+//!       - the reader's line has no here-document but contains `<` (a `<` file
+//!         or a here-string);
+//!       - the reader's line has more than one here-document, or the
+//!         here-document's delimiter cannot be read;
+//!       - the here-document body has no patch header (`diff `, `--- `,
+//!         `+++ `, `@@ `, `Subject:`, `From `).
 //!
-//! Only the here-document shape is read. `git apply x.patch` names a file the
-//! command text does not contain; blastguard never reads that file (a residual,
-//! like any file written by an earlier tool call), and it is left as it was.
+//! KNOWN GAPS (this module does NOT make these safe; they may stay Allow, and
+//! none of them is covered by the refusals above):
+//!   * `|&` (stdout+stderr pipe): the segment after it is not marked as piped,
+//!     so `printf … |& git apply` is not refused;
+//!   * a reader inside a subshell / group: `cat p | (git apply)` is not
+//!     refused, because the segment after `(` is not marked as piped;
+//!   * a pipe at the end of a line with the reader on the next line: segments
+//!     are computed per physical line, so the pipe is not seen;
+//!   * `<<-`: the shell strips leading TABs from the body, but this module
+//!     strips only one `+` or space prefix, so a body line like `\t+rm -rf ~`
+//!     is not turned into the text the file will hold;
+//!   * `git apply x.patch` / `git am x.mbox` naming a file: the command text
+//!     does not contain that file and blastguard never reads it (a residual,
+//!     like any file written by an earlier tool call);
+//!   * a `git` that is not a plain word of the segment (quoted, or produced
+//!     by a variable or substitution): recognition below works on the segment's
+//!     words and these forms have no test here, so treat them as unhandled.
 //!
 //! The reader is recognised per shell segment: a `git` word followed later in
 //! the segment by the word `apply` or `am` (global options such as `-C dir` /
@@ -148,9 +169,11 @@ fn is_patch_header(line: &str) -> bool {
 }
 
 /// Splits one physical line at unquoted `|`, `&`, `;`, `(` and `)`. Each piece
-/// carries whether a single `|` came right before it (the piece's stdin is then
-/// a pipe). Quotes and backslash escapes are kept as text; only the split is
-/// computed here.
+/// carries whether the separator character right before it was `|` (the flag
+/// is true after `|` and `||`; it is false after `|&`, because the `&` is
+/// itself a separator and resets it, and after `(`, `;`, `&`, `)`; and it is
+/// per physical line, so a trailing `|` does not reach the next line). Quotes
+/// and backslash escapes are kept as text; only the split is computed here.
 fn line_segments(line: &str) -> Vec<(bool, String)> {
     let chars: Vec<char> = line.chars().collect();
     let mut out: Vec<(bool, String)> = Vec::new();

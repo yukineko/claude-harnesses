@@ -1173,22 +1173,22 @@ cannot tell whether it is a protected gate/config file or a system directory"
         return deny;
     }
 
-    // ENUMERATED, so `unknown_wrapper_ask` can ask `resolve_expanded_command_word`
-    // what an expansion-valued command word in THIS segment was assigned by an
-    // EARLIER one. `advance_cwd_and_rewrite` below rewrites a segment's text but
-    // maps one segment to one segment, so `seg_idx` stays the segment's index in
-    // `split_segments(cmd)` — which is what that resolver's parameter means.
-    // Compound-command syntax (`for … in`, `do`, `then`, `{`, `case` patterns)
-    // separated from the command each segment really runs; see
-    // `compound_views`. Index-aligned with `split_segments(cmd)`.
-    let views = compound_views(cmd); // The cwd, alias table and subshell-group bookkeeping, one walk for the
-                                     // line and one per quoted here-document body (backlog 547cf2f6); see
-                                     // `CwdWalks`. `segment_cwd_states` replays the same walks.
-    let mut walks = CwdWalks::new(cmd, &views);
+    // ENUMERATED, so `unknown_wrapper_ask` can ask `resolve_expanded_command_word` what an
+    // expansion-valued command word in THIS segment was assigned by an EARLIER one; `seg_idx` is
+    // the index in `split_segments(ln)`. Compound syntax (`for … in`, `do`, `{`, `case`
+    // patterns) is separated from the command each segment runs (`compound_views`). `ln` is
+    // `cmd`, or for a `python3 - <<'EOF'` body its prose string text blanked (b0de2710, see
+    // `heredoc::python_stdin_segment_view`); every rule above and below this loop reads `cmd`.
+    let line_view = heredoc::python_stdin_segment_view(cmd);
+    let ln: &str = line_view.as_deref().unwrap_or(cmd);
+    let views = compound_views(ln);
+    // The cwd, alias table and subshell-group bookkeeping, one walk for the line and one per
+    // quoted here-document body (backlog 547cf2f6); see `CwdWalks` and `segment_cwd_states`.
+    let mut walks = CwdWalks::new(ln, &views);
     // `for`/`select` variables bound so far on this line; see `loop_variants`.
     let mut bindings: Vec<LoopBinding> = Vec::new();
-    let line_cwds = segment_cwd_states(cmd);
-    for (seg_idx, seg) in split_segments(cmd).into_iter().enumerate() {
+    let line_cwds = segment_cwd_states(ln);
+    for (seg_idx, seg) in split_segments(ln).into_iter().enumerate() {
         let walk = walks.walk_for(seg_idx);
         let cwd = walk.cwd.clone();
         // The base for THIS segment's relative operands is the cwd state as it
@@ -1250,7 +1250,7 @@ through it, and refuses to guess"
                         }
                     }
                     if let Some(deny) =
-                        acc.record(analyze_segment(&variant_seg, depth, cmd, seg_idx, &seg_ctx))
+                        acc.record(analyze_segment(&variant_seg, depth, ln, seg_idx, &seg_ctx))
                     {
                         return deny;
                     }
@@ -1269,16 +1269,15 @@ through it, and refuses to guess"
         }
         // Target operands another segment relinks, judged where they land
         // (relink.rs); first, so a landing's Deny names that landing.
-        let landed = relink::operand_landing_verdict(
-            command, cmd, seg_idx, &line_cwds, depth, ctx, &seg_ctx,
-        );
+        let landed =
+            relink::operand_landing_verdict(command, ln, seg_idx, &line_cwds, depth, ctx, &seg_ctx);
         if let Some(deny) = acc.record(landed) {
             return deny;
         }
         if let Some(deny) = acc.record(analyze_segment(
             &effective_seg,
             depth,
-            cmd,
+            ln,
             seg_idx,
             &seg_ctx,
         )) {

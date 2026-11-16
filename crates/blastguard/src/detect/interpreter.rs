@@ -422,7 +422,8 @@ fn interpreter_write_call(payload: &str, python_code: bool) -> Option<&'static s
 /// - that open call is then consumed by a read: immediately followed by
 ///   `.read(`, `.readline(` or `.readlines(`, or it is the sole argument of a
 ///   `load(` call (`json.load(open('A'))`), `load` itself not being the tail
-///   of a longer identifier.
+///   of a longer identifier, or it is the iterable of a `for` loop header
+///   `for <name> in open('A'):` ([`for_loop_header_before`]).
 ///
 /// Rejected (keeps probing): zero occurrences, `with open('A') as f:` (the
 /// handle escapes and `f.name` could feed a write), `open('A').name`, any
@@ -496,11 +497,38 @@ fn literal_is_read_only_open(literal: &str, payload: &str) -> bool {
             let load_at = open_at - "load(".len();
             load_at == 0 || !is_ident(bytes[load_at - 1])
         };
-        if !(read_after || load_around) {
+        let iterated = after_call.starts_with(':') && for_loop_header_before(&payload[..open_at]);
+        if !(read_after || load_around || iterated) {
             return false;
         }
     }
     seen > 0
+}
+
+/// True when `before` (the program text up to a bare `open(`) ends with the
+/// header `for <name> in ` of a Python `for` loop: `for` at the start of the
+/// text or after whitespace, ONE plain identifier as the loop target (no
+/// tuple, attribute or subscript), and single spaces around it. The loop then
+/// iterates the file's lines; the handle is never bound to a name, so nothing
+/// can reach it to write (backlog b0de2710, C). Any other spelling answers
+/// false and keeps the literal probed.
+fn for_loop_header_before(before: &str) -> bool {
+    let Some(rest) = before.strip_suffix(" in ") else {
+        return false;
+    };
+    let name_len = rest
+        .bytes()
+        .rev()
+        .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        .count();
+    let (head, name) = rest.split_at(rest.len() - name_len);
+    if name.is_empty() || name.as_bytes()[0].is_ascii_digit() {
+        return false;
+    }
+    let Some(head) = head.strip_suffix("for ") else {
+        return false;
+    };
+    head.is_empty() || head.ends_with(char::is_whitespace)
 }
 
 /// The destructive interpreter-level call in `payload`, if any. Case-folded

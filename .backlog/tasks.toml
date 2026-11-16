@@ -2764,6 +2764,8 @@ notes = "Observed 2026-11-17 in a peer session (relay bgr-cf29c893de79; blocks.j
 created_at = 1794865868
 updated_at = 1794865868
 weight = 0.0
+issue_number = 1839
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1839"
 rev = 0
 
 [task.repro]

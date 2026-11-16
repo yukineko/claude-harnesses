@@ -3700,12 +3700,26 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
                 }
                 None => None,
             };
-            let path = worktree::create_namespaced(
+            // A retry worktree's topic is `<task>-rN`; record the identity of
+            // the real task when the run has it (backlog b2d9cb6b). A run that
+            // cannot be loaded keeps the topic as identity (refused later).
+            let task = match run.as_deref() {
+                Some(r) => match state::RunState::load(cfg, cwd, r) {
+                    Ok(rs) => {
+                        let ids: Vec<&str> = rs.tasks.iter().map(|t| t.id.as_str()).collect();
+                        worktree::resolve_retry_topic(&topic, &ids)
+                    }
+                    Err(_) => topic.clone(),
+                },
+                None => topic.clone(),
+            };
+            let path = worktree::create_namespaced_for_task(
                 &repo,
                 &cfg.worktree_base,
                 run.as_deref(),
                 &topic,
                 &branch,
+                &task,
             )?;
             println!("{}", path.display());
         }

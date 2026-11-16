@@ -2539,36 +2539,3 @@ detail = """
 exit 1: nder='rebuild-plugins.sh') scripts/test_rollout_lock_outside_managed_cache.py::RolloutLockOutsideManagedCache::test_lock_survives_claude_code_cache_gc
 SUBFAILED(contender='prune-plugin-cache.py') scripts/test_rollout_lock_outside_managed_cache.py::RolloutLockOutsideManagedCache::test_lock_survives_claude_code_cache_gc
 ========================= 4 failed, 2 passed in 0.74s =========================="""
-
-[[task]]
-id = "a60128e8"
-title = "blastguard: 6 lib tests red on main (variable-resolved head now Deny where tests expect Ask / reason-id resolved-head-lost-cwd)"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "red-on-main",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-16 by main session at f9efea527 (base worktree, cargo test -p blastguard --lib: 690 passed / 6 failed) and identically at f63162f8f (b0de2710 fix; untouched files). Failing: detect::tests::{a_later_rebinding_of_the_name_is_not_readable_and_must_not_leave_a_stale_literal, invariance_the_pipe_egress_arm_still_asks_when_that_literal_is_destructive, invariance_the_pipe_egress_arm_still_asks_when_the_line_assigns_the_upstream_a_fetch, invariance_the_shell_payload_arm_ignores_an_assignment_on_the_enclosing_line, resolving_the_head_must_not_lose_the_cwd_that_the_literal_spelling_keeps}, rule_id::tests::a_resolution_that_lost_the_cwd_gets_its_own_id_not_the_unresolvable_one. Pattern: commands like 'BIN=/bin/rm; $BIN -rf /some/path' now resolve the variable head and Deny, tests expect Ask (stricter than expected -> tagged false-positive, not fail-open). Readings: (a) tests stale after a resolver landed (standing ruling: text-determined values are resolved) -> update tests; (b) resolver regression -> fix code. Not decided here. Also: clippy --all-targets fails at f9efea527 on tests/backlog_20261115_for_loop_literal_list_tmp_mv_fp.rs:8-9 (doc quote without >), backlog_20261116_relay_forged_session_entry.rs:28 (&PathBuf), backlog_20261116_relay_stop_hides_dismissed.rs:93 (queued_id unused). Blocks donegate lint-changed/test-changed for any blastguard change."
-created_at = 1794794767
-updated_at = 1794794767
-weight = 0.0
-issue_number = 1820
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1820"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --lib -- a_later_rebinding_of_the_name invariance_the_pipe_egress_arm invariance_the_shell_payload_arm resolving_the_head_must_not_lose_the_cwd a_resolution_that_lost_the_cwd"
-rev = "f9efea5275edc7db74d8a588c97996d0e26b67c4"
-observed_at = 1794794767
-detail = """
-exit 101: hiroyuki_nakayama/src/.harness-worktrees/base-f9efea527/crates/overwatch)
-   Compiling blastguard v0.2.662 (/home/hiroyuki_nakayama/src/.harness-worktrees/base-f9efea527/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.64s
-     Running unittests src/lib.rs (target/debug/deps/blastguard-5ddd1ecc49b9aeba)
-error: test failed, to rerun pass `-p blastguard --lib`"""

@@ -68,8 +68,8 @@ path = "crates/blastguard/src/protection.rs"
 reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; blastguard.md does not describe it."
 
 [[ack]]
-path = "crates/blastguard/src/retro.rs"
-reason = "Retrospective review of gate interventions; blastguard.md has no retro section (grep retro: 0 hits). Spec debt."
+path = "crates/overwatch/src/retro.rs"
+reason = "Retrospective review of gate interventions (moved from crates/blastguard/src/retro.rs 2026-11-17; `blastguard retro` injects the rule-id table); neither blastguard.md nor overwatch.md has a retro section. Spec debt, carried over unchanged."
 
 [[ack]]
 path = "crates/blastguard/src/reversible.rs"

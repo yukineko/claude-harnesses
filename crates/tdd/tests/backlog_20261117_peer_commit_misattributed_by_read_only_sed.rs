@@ -313,13 +313,12 @@ fn git_log_naming_the_path_does_not_attribute_a_peer_commit() {
     );
 }
 
-/// RED: the subagent's actual command (agent-aafd4626885243b75 line 67, paths
+/// The subagent's actual command (agent-aafd4626885243b75 line 67, paths
 /// re-rooted). `sed -n …p` only PRINTS; it does not write the file. The peer's
 /// 14 committed lines in that file are not this session's, so the stop must be
-/// allowed. Today `read_only_stage` has no `sed` arm, the statement is kept as
-/// writing, judge.rs is attributed, and the gate blocks.
+/// allowed. (Was RED until `read_only_stage` learned a provably print-only
+/// `sed`.)
 #[test]
-#[ignore = "RED: 2026-11-17 tdd gate attributes a peer's post-start commit to this session because a print-only `sed -n …p <path>` counts as a write (backlog: tdd misattribution)"]
 fn print_only_sed_naming_the_path_does_not_attribute_a_peer_commit() {
     let f = Fixture::new();
     let wt = f.home.join("session-wt");

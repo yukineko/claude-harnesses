@@ -2555,3 +2555,31 @@ exit 101: ess-worktrees/followup-bg-df7c/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.69s
      Running tests/backlog_20261116_python_dict_lookup_system_group_pipe.rs (target/debug/deps/backlog_20261116_python_dict_lookup_system_group_pipe-ab765f1c4c4c75c0)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261116_python_dict_lookup_system_group_pipe`"""
+
+[[task]]
+id = "5a633271"
+title = "condukt: check-criteria drops --test <name> from done_criteria and runs the whole crate suite"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '観測(2026-11-16, main 0be4629b0, run-20261116-164820-25374 t1): `condukt state check-criteria --run <RID> --task t1` を実行した。そのタスクの done_criteria は `cargo test -p condukt --test worktree_remove_orphan_leftover -- --include-ignored exits 0` だったが、出力 JSON の cmd は ["cargo","test","-p","condukt"] で、954 件の全テストを実行していた。--test <name> と -- --include-ignored が落ちている。期待: 名指しされた --test ターゲットだけを実行する。全スイート実行は testscope のユーザー裁定で nightly 限定。原因箇所: crates/condukt/src/verify/mechanical.rs mechanical_cmd の prose fallback (バッククォート無しの場合 cargo test [-p X] のみ再構築)。読み方は (a) 欠陥 / (b) 意図どおり（意図なら testscope 裁定と矛盾する）。RED テストは commit 0a823bb73 (branch red-ccwiden)。'
+created_at = 1794817374
+updated_at = 1794817374
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261116_check_criteria_drops_test_target -- --include-ignored"
+rev = "0a823bb73e10018aaf17984b923831d292c4633b"
+observed_at = 1794817374
+detail = """
+exit 101: uki_nakayama/src/.harness-worktrees/red-ccwiden/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.52s
+     Running tests/backlog_20261116_check_criteria_drops_test_target.rs (target/debug/deps/backlog_20261116_check_criteria_drops_test_target-c3651da4c67db1b9)
+error: test failed, to rerun pass `-p condukt --test backlog_20261116_check_criteria_drops_test_target`"""

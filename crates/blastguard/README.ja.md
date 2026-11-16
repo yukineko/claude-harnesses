@@ -1036,7 +1036,7 @@ Deny が 0 件であることは弱い保証ではあるが事実である — �
 表示した `Deny` / `Ask`（subagent・headless で硬化した Ask、2 度目で Ask に戻した Deny を含む）は
 すべて、overwatch の有無に関係なく blastguard 自身の `~/.blastguard/blocks/blocks.jsonl`
 （`BLASTGUARD_BLOCK_LOG_DIR` で dir を上書き、ファイルは `<dir>/blocks.jsonl`）へ 1 行追記する
-（`src/blocklog.rs`）。`Allow` は記録しない。
+（`harness_core::blocklog`＝`crates/harness-core/src/blocklog.rs`。2026-11-17 に blastguard から移設し、blastguard は呼び出しのみ持つ）。`Allow` は記録しない。
 
 各行: `v`(2)・`ts`・`blastguard_version`・`session_id`・`agent_id`（subagent 外は null）・
 `cwd`（payload 値。不透明な文字列で検査しない）・`tool_name`・`command`（Bash、バイト一致・

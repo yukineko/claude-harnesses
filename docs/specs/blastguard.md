@@ -1290,7 +1290,7 @@ forge・condukt のスケジューラが再利用）。
   allow。dismiss 済みは queue に記録されるだけで Stop には列挙しない（ユーザー裁定 2026-11-16「表示をやめてほしい」）。(5) `relay dismiss
   <id> --reason <text>`: 空白のみ/欠落の理由・未知 id は exit 2、queue 読み書き失敗は exit 3。
   コマンドを実行する経路は持たず、cwd は不透明な文字列として比較するだけで解決・stat しない。
-- **`blocklog`** — block log（ユーザー裁定 2026-11-14 逐語:「…完全なコマンドが残っていないため、
+- **`blocklog`**（実装は `harness_core::blocklog`。2026-11-17 に blastguard から移設、blastguard は呼び出しのみ）— block log（ユーザー裁定 2026-11-14 逐語:「…完全なコマンドが残っていないため、
   これ以上は切り分けられません。というのは大変愚かなので記録をとること。止めたなら止めた責任をとる」）。
   表示した `Deny` / `Ask` ごとに 1 行を overwatch に依存せず `~/.blastguard/blocks/blocks.jsonl`
   （`BLASTGUARD_BLOCK_LOG_DIR` で dir を上書き）へ追記する。`Allow` は記録しない。フィールド:

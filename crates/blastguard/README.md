@@ -679,7 +679,7 @@ User ruling, 2026-11-14 (verbatim): 「…完全なコマンドが残ってい�
 
 Every printed `Deny` or `Ask` appends one JSON line to blastguard's own
 `~/.blastguard/blocks/blocks.jsonl` (override: `BLASTGUARD_BLOCK_LOG_DIR`, file
-`<dir>/blocks.jsonl`), independent of overwatch (`src/blocklog.rs`). An `Allow`
+`<dir>/blocks.jsonl`), independent of overwatch (`harness_core::blocklog`, `crates/harness-core/src/blocklog.rs`; moved out of blastguard 2026-11-17, blastguard makes the calls). An `Allow`
 writes nothing. Fields: `v` (2), `ts`, `blastguard_version`, `session_id`,
 `agent_id` (null outside a subagent), `cwd` (payload value, opaque, never
 inspected), `tool_name`, `command` (Bash, byte-exact, never truncated),

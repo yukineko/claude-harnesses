@@ -31,7 +31,6 @@
 //! module existed.
 
 pub mod approve;
-pub mod blocklog;
 pub mod classify;
 pub mod deletion;
 pub mod detect;

@@ -2561,3 +2561,32 @@ exit 101: yama/src/.harness-worktrees/session-df7c968f/crates/condukt)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 24.06s
      Running tests/backlog_20261116_tdd_green_refused_after_plain_run.rs (target/debug/deps/backlog_20261116_tdd_green_refused_after_plain_run-96b12b3104f0154c)
 error: test failed, to rerun pass `-p condukt --test backlog_20261116_tdd_green_refused_after_plain_run`"""
+
+[[task]]
+id = "3d5285d5"
+title = "backlog add does not write the minted id back into the RED test's #[ignore] (RED(<id>))"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "red-traceability",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-16 at 202efa14a: 62 files with #[ignore = "RED", 51 of them carry no resolvable backlog id (test is committed before add mints the id). User ruling 2026-11-16 (option 1): on successful add, rewrite the referenced test's #[ignore = "RED..."] to #[ignore = "RED(<id>): ..."]. RED 28b8a1e4f."""
+created_at = 1794821176
+updated_at = 1794821176
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261116_add_writes_id_back_to_red_test -- --include-ignored"
+rev = "55a1044bfa6bf6d1e929a41dd3816c13baa0b987"
+observed_at = 1794821176
+detail = """
+exit 101: yuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.35s
+     Running tests/backlog_20261116_add_writes_id_back_to_red_test.rs (target/debug/deps/backlog_20261116_add_writes_id_back_to_red_test-cb11645522549853)
+error: test failed, to rerun pass `-p backlog --test backlog_20261116_add_writes_id_back_to_red_test`"""

@@ -80148,3 +80148,59 @@ rev = "776be5f22604fe35e0215bd138207293f596d315"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "8a85894b"
+title = "backlog merge-driver --install pins a versioned plugin-cache path that prune-plugin-cache.py later deletes, so .backlog/tasks.toml merges fall back to conflict"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "rollout",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "RED: scripts/test_backlog_merge_driver_pinned_path_20261113.py (1cb95a64, xfail strict; control without the dir removal passes). Observed 2026-11-13: merging origin/main left .backlog/tasks.toml UU with no markers; merge.backlog.driver named ~/.claude/plugins/cache/yukineko/backlog/0.3.86/bin/backlog-linux-x86_64, already pruned. The same driver run by hand from 0.3.111 merged the stages cleanly (exit 0). Cause: merge_driver::install writes std::env::current_exe(); a session on an older backlog even writes an already-superseded path (re-install from this session wrote 0.3.106). prune-plugin-cache.py does not know this reference. Workaround applied: re-installed from 0.3.111 (will break again when 0.3.111 is pruned). Fix direction: version-independent driver path, and/or rollout/prune re-point the config. Remove the xfail when fixed."
+created_at = 1794535333
+updated_at = 1794796027
+weight = 0.0
+issue_number = 1679
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1679"
+issue_closed_at = 1794796029
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_merge_driver_pinned_path_20261113.py"
+rev = "1cb95a642892f6a7cb17f41d72a05075b524589a"
+observed_at = 1794535333
+detail = """
+exit 1: : not found
+
+scripts/test_backlog_merge_driver_pinned_path_20261113.py:113: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_backlog_merge_driver_pinned_path_20261113.py::PinnedDriverPath::test_store_merge_survives_removal_of_the_installing_version_dir
+============================== 1 failed in 0.28s ==============================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest -q --runxfail scripts/test_backlog_merge_driver_pinned_path_20261113.py"
+exit = 0
+passed = 1
+rev = "f4c7c37b30694a72ff622ff3c56671ca5de70f9e"
+observed_at = 1794796025
+output_digest = "sha256:6adb81285ad83cda4860e53fd7a29d459160a711fe0e4b04323f735de187fab8"
+excerpt = """
+.                                                                        [100%]
+1 passed in 1.20s
+"""
+
+[task.closure.red]
+rev = "1cb95a642892f6a7cb17f41d72a05075b524589a"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

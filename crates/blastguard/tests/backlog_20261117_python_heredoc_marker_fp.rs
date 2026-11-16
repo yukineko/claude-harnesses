@@ -127,7 +127,7 @@ const FP_SHAPES: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: 2026-11-17 backtick in a Python string literal drops literal write paths (S5 python-parser) — remove when fixed"]
+#[ignore = "RED: backlog 06c51772 (S5 python-parser)"]
 fn backtick_in_python_string_does_not_drop_literal_write_paths() {
     let bad: Vec<String> = decisions(FP_SHAPES, "red")
         .into_iter()

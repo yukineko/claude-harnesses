@@ -90,19 +90,6 @@ fn stop_text(root: &Path) -> String {
     String::from_utf8_lossy(&o.stdout).into_owned()
 }
 
-fn queued_id(root: &Path) -> String {
-    let q = std::fs::read_to_string(root.join("relay").join(format!("{SESSION}.jsonl")))
-        .expect("control: the subagent Ask must have been queued");
-    let ids: Vec<String> = q
-        .lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter(|v| v["event"] == "queued")
-        .map(|v| v["id"].as_str().unwrap().to_string())
-        .collect();
-    assert_eq!(ids.len(), 1, "control: exactly one queued entry: {q}");
-    ids[0].clone()
-}
-
 fn queue_text(root: &Path) -> String {
     std::fs::read_to_string(root.join("relay").join(format!("{SESSION}.jsonl"))).unwrap()
 }

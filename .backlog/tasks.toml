@@ -2808,3 +2808,34 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 695 filtered out
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running unittests src/lib.rs (target/debug/deps/blastguard-a07d982b4f0a36d7)
 error: test failed, to rerun pass `-p blastguard --lib`"""
+
+[[task]]
+id = "b5d6ac29"
+title = "blastguard FP: quoted heredoc data line 'exec 3<<< ...; bash <&3' read by while-read/echo is Deny in subagent (bgr-3c577fb491b6)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-17 at main 963a18429 (blastguard 0.2.676): while IFS= read -r c; do echo "$c"; done <<'EOF' with body exec 3<<< 'echo hi'; bash <&3 is Deny in subagent, Ask in main; the body is data echoed, never run. Control cat <<'EOF' with the same body is allow. RED 5f42fcd25 (independent author). Readings: (a) FP: quoted heredoc fed to a non-shell reader is data; (b) intended only if while-read+eval-like consumers are treated as shells, but echo does not execute."""
+created_at = 1794864711
+updated_at = 1794864711
+weight = 0.0
+issue_number = 1838
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1838"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261116_heredoc_data_fd_reader_fp -- --include-ignored"
+rev = "5f42fcd25ef9868b2f5a24177eb5739f8db18a8a"
+observed_at = 1794864711
+detail = """
+exit 101: .677 (/Users/yuki/src/.harness-worktrees/bg-fp-bgr3c57-20261116/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.16s
+     Running tests/backlog_20261116_heredoc_data_fd_reader_fp.rs (target/debug/deps/backlog_20261116_heredoc_data_fd_reader_fp-7051546632d2bfe3)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261116_heredoc_data_fd_reader_fp`"""

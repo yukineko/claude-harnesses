@@ -80752,3 +80752,174 @@ rev = "6d7f39f2f2ea089dd16e860b713241055aa537bb"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "54231a0a"
+title = "blastguard fail-open: fd=3; exec 3<<< 'echo hi'; bash <&$fd is Allow in main (expected Ask); e686a85e test regressed on main"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-16 on 84254ee76 (base 0744d9ef2 + tests only) and on 0f7cf5b0c: backlog_20261114_exec_fd_dynamic_fd_reader::benign_with_dynamic_fd_reader_is_not_allow FAILED, main => allow, left allow right ask. harm_with_dynamic_fd_reader_is_deny passes. e686a85e was closed done earlier, so this is a regression on main; not caused by 967fd65c/3da14bbd work (fails at their RED base)."
+created_at = 1794785293
+updated_at = 1794863242
+weight = 0.0
+issue_number = 1815
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1815"
+issue_closed_at = 1794863245
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_exec_fd_dynamic_fd_reader"
+rev = "0f7cf5b0c5bf55605ab62165b626b86f5a6ffacd"
+observed_at = 1794785293
+detail = """
+exit 101: 2 (/Users/yuki/src/.harness-worktrees/backlog-close-p0-20261116/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/backlog_20261114_exec_fd_dynamic_fd_reader.rs (target/debug/deps/backlog_20261114_exec_fd_dynamic_fd_reader-4de96f009a33964c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_exec_fd_dynamic_fd_reader`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_exec_fd_dynamic_fd_reader"
+exit = 0
+passed = 3
+rev = "c6d3cf3f2bc225da20495c5373321dcb49d7e744"
+observed_at = 1794863220
+output_digest = "sha256:2f12a5e3b8d93aa37e7628dc2328b095a9e36b08f622da0fa0c83687dd48b15b"
+excerpt = """
+mpiling once_cell v1.21.4
+   Compiling generic-array v0.14.7
+   Compiling autocfg v1.5.1
+   Compiling ucd-trie v0.1.7
+   Compiling zmij v1.0.21
+   Compiling syn v2.0.118
+   Compiling ar_archive_writer v0.5.1
+   Compiling syn v3.0.10
+   Compiling num-traits v0.2.19
+   Compiling aho-corasick v1.1.4
+   Compiling serde_json v1.0.150
+   Compiling rustix v1.1.4
+   Compiling psm v0.1.31
+   Compiling regex-syntax v0.8.11
+   Compiling getrandom v0.4.3
+   Compiling parking_lot_core v0.9.12
+   Compiling utf8parse v0.2.2
+   Compiling prettyplease v0.2.37
+   Compiling typenum v1.20.1
+   Compiling zerocopy v0.8.52
+   Compiling hashbrown v0.17.1
+   Compiling rustversion v1.0.22
+   Compiling indexmap v2.14.0
+   Compiling regex-automata v0.4.14
+   Compiling darling_core v0.21.3
+   Compiling pest v2.9.5
+   Compiling darling_core v0.20.11
+   Compiling anstyle-parse v1.0.0
+   Compiling pest_meta v2.9.5
+   Compiling serde_derive v1.0.228
+   Compiling errno v0.3.14
+   Compiling ahash v0.8.12
+   Compiling anstyle-query v1.1.5
+   Compiling core-foundation-sys v0.8.7
+   Compiling anstyle v1.0.14
+   Compiling bitflags v2.13.0
+   Compiling thiserror v2.0.21
+   Compiling winnow v0.7.15
+   Compiling darling_macro v0.20.11
+   Compiling darling_macro v0.21.3
+   Compiling option-ext v0.2.0
+   Compiling toml_write v0.1.2
+   Compiling colorchoice v1.0.5
+   Compiling itoa v1.0.18
+   Compiling smallvec v1.16.5
+   Compiling scopeguard v1.2.0
+   Compiling anyhow v1.0.103
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstream v1.0.0
+   Compiling lock_api v0.4.14
+   Compiling darling v0.21.3
+   Compiling darling v0.20.11
+   Compiling dirs-sys v0.4.1
+   Compiling pest_generator v2.9.5
+   Compiling iana-time-zone v0.1.65
+   Compiling thiserror-impl v2.0.21
+   Compiling allocator-api2 v0.2.21
+   Compiling foldhash v0.2.0
+   Compiling fastrand v2.4.1
+   Compiling heck v0.5.0
+   Compiling peg-runtime v0.8.6
+   Compiling clap_lex v1.1.0
+   Compiling clap_derive v4.6.1
+   Compiling tempfile v3.27.0
+   Compiling clap_builder v4.6.0
+   Compiling peg-macros v0.8.6
+   Compiling hashbrown v0.16.1
+   Compiling bon-macros v3.9.3
+   Compiling pest_derive v2.9.5
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling cached_proc_macro v0.27.0
+   Compiling toml_edit v0.22.27
+   Compiling chrono v0.4.45
+   Compiling dirs v5.0.1
+   Compiling parking_lot v0.12.5
+   Compiling regex v1.12.4
+   Compiling tracing-attributes v0.1.31
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling console v0.16.6
+   Compiling wait-timeout v0.2.1
+   Compiling tracing-core v0.1.36
+   Compiling similar v2.7.0
+   Compiling arrayvec v0.7.8
+   Compiling toml v0.8.23
+   Compiling pin-project-lite v0.2.17
+   Compiling web-time v1.1.0
+   Compiling cached_proc_macro_types v0.1.1
+   Compiling peg v0.8.6
+   Compiling cached v0.59.0
+   Compiling tracing v0.1.44
+   Compiling harness-core v0.2.97 (/Users/yuki/src/.harness-worktrees/done-54231a0a/crates/harness-core)
+   Compiling utf8-chars v3.0.7
+   Compiling insta v1.49.0
+   Compiling digest v0.10.7
+   Compiling clap v4.6.1
+   Compiling cpufeatures v0.2.17
+   Compiling bstr v1.12.2
+   Compiling target-triple v1.0.1
+   Compiling indenter v0.3.4
+   Compiling winnow v1.0.4
+   Compiling log v0.4.33
+   Compiling globset v0.4.18
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling sha2 v0.10.9
+   Compiling bon v3.9.3
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling glob v0.3.3
+   Compiling termcolor v1.4.1
+   Compiling toml v1.1.3+spec-1.1.0
+   Compiling trybuild v1.0.118
+   Compiling brush-parser v0.4.0
+   Compiling overwatch v0.2.124 (/Users/yuki/src/.harness-worktrees/done-54231a0a/crates/overwatch)
+   Compiling blastguard v0.2.676 (/Users/yuki/src/.harness-worktrees/done-54231a0a/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.69s
+     Running tests/backlog_20261114_exec_fd_dynamic_fd_reader.rs (target/debug/deps/backlog_20261114_exec_fd_dynamic_fd_reader-615f0dfa24fa4d53)
+"""
+
+[task.closure.red]
+rev = "b14310c00a146d481152d6878510318f133d00c9"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

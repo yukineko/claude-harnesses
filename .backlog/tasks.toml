@@ -2669,3 +2669,35 @@ exit 101: iroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/tdd)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 7.62s
      Running tests/backlog_20261116_green_proof_has_no_tree_identity.rs (target/debug/deps/backlog_20261116_green_proof_has_no_tree_identity-e8ca29d0d41f66b3)
 error: test failed, to rerun pass `-p tdd --test backlog_20261116_green_proof_has_no_tree_identity`"""
+
+[[task]]
+id = "23afadf2"
+title = "blastguard --lib red at main: detect::tests a_later_rebinding_of_the_name_is_not_readable_and_must_not_leave_a_stale_literal fails"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "lib-red",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-16 by run-20261116-020031-33040 migrate-path worker and verifier: one of 6 pre-existing --lib failures (fails at base 07bf4b5f2 and at the migrate-path tree 697fb328b). Cause guessed (UNVERIFIED): 536f63e5d static_bindings resolves $BIN/$CMD command words statically so pins expecting Ask now get Deny. Readings: (a) stale pin after an intended rule change; (b) regression."
+created_at = 1794826760
+updated_at = 1794826760
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --lib detect::tests::a_later_rebinding_of_the_name_is_not_readable_and_must_not_leave_a_stale_literal"
+rev = "e6c63919736aab6a7a2279efc90130c4a13dcf06"
+observed_at = 1794826760
+detail = """
+exit 101: tests::a_later_rebinding_of_the_name_is_not_readable_and_must_not_leave_a_stale_literal
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 695 filtered out; finished in 0.04s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-a07d982b4f0a36d7)
+error: test failed, to rerun pass `-p blastguard --lib`"""

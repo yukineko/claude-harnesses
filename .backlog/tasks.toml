@@ -2969,6 +2969,8 @@ notes = "Observed 2026-11-17 relay bgr-d2f040bc9abe (subagent deny / main ask), 
 created_at = 1794872347
 updated_at = 1794872347
 weight = 0.0
+issue_number = 1847
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1847"
 rev = 0
 
 [task.repro]

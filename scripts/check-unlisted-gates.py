@@ -36,6 +36,30 @@ a scanner that legitimately runs only at push or commit-msg time counts as
 listed. A sibling hook that exists but cannot be read is undetermined; one
 without the exec bit is skipped, because git never runs it.
 
+Claude Code hooks and invocation chains (backlog 96e2fde0)
+---------------------------------------------------------
+The project's checked-in `<toplevel>/.claude/settings.json` hooks are active
+hooks too (e.g. SessionStart -> scripts/session-worktree-init.py ->
+scripts/session-rollout-drift.py -> scripts/check-plugin-rollout.py). Every
+`type: "command"` hook's command string is parsed with the same shell parser
+as a git hook body. Still NO allowlist: a scanner counts only when an active
+hook REACHES it by tracing real invocations:
+  * the roots are every `scripts/<name>.py|.sh` (check-* or not) invoked, in
+    the shapes below, by a git hook body or a settings.json command;
+  * a reached `.sh` is read with the same shell parser; a reached `.py` is
+    read with `ast` (python_invokes(): a subprocess / runner call whose argv
+    literal runs `scripts/<name>` or a `__file__`-sibling `<name>`, in code
+    reachable from module top level); the closure is followed transitively;
+  * a scanner nothing reaches stays unlisted (red).
+settings.json missing = no project hooks (absence). settings.json unreadable,
+not JSON, or with a malformed `hooks` shape, a command that cannot be parsed,
+and a reached script that cannot be read or parsed are undetermined (exit 2).
+`disableAllHooks: true` counts no Claude hook. `settings.local.json` and
+user-level settings are not read. Python shapes other than those listed in
+python_invokes() (os.system, os.exec*, shell=True strings, imports, computed
+paths, ...) are NOT followed, so a scanner reached only that way reads as
+unlisted — the red direction.
+
 Naming rule for "gate scanner"
 ------------------------------
 A regular file directly in `<toplevel>/scripts/` whose name matches
@@ -72,6 +96,9 @@ word):
   3. a direct exec of `<...>scripts/<check-name>`;
   4. `VAR=<...>scripts/<check-name>` followed elsewhere in the same hook by
      `python3|python|bash|sh "$VAR"` (commit-msg's SCANNER= form).
+The same four shapes are matched for ANY `scripts/<name>.py|.sh` (not only
+check-*) so that a non-check helper becomes a chain root (see the Claude Code
+hooks section); only check-* names in the resulting closure are "invoked".
 Anything this parser does not recognise is NOT counted, so an unrecognised
 invocation style reads as unlisted (red), never as listed.
 
@@ -104,11 +131,15 @@ Exit codes
      --hooks-dir missing / not a directory, active pre-commit
      missing/unreadable/not executable, a sibling hook unreadable, a hook body
      that cannot be parsed (unbalanced quoting / nesting, unterminated or
-     unparseable heredoc), scripts/
-     unreadable or missing, zero gate scanners found, or zero invocations parsed
-     from the hooks (an empty set is not a clean set).
+     unparseable heredoc), .claude/settings.json unreadable / not JSON /
+     malformed hooks shape, a settings.json hook command that cannot be parsed,
+     a chained script that cannot be read or parsed, scripts/
+     unreadable or missing, zero gate scanners found, or zero check-* scanner
+     invocations parsed from the git hooks (an empty set is not a clean set).
 """
 
+import ast
+import json
 import os
 import re
 import stat
@@ -587,16 +618,30 @@ def _skip_word(src, i):
     return i
 
 
-def _script_name(operand):
-    m = SCRIPT_PATH_RE.match(operand)
+def _script_name(operand, path_re=SCRIPT_PATH_RE):
+    m = path_re.match(operand)
     return m.group(1) if m else None
 
 
-def invoked_by(text):
-    """Return the set of check-* scanner names a hook body invokes.
+# Any script directly under scripts/ (not only check-*): used to FOLLOW an
+# invocation chain through helpers such as session-worktree-init.py.
+ANY_SCRIPT_NAME = r"[A-Za-z0-9_.-]+\.(?:py|sh)"
+ANY_SCRIPT_PATH_RE = re.compile(
+    r"^(?:\$\{?\w+\}?/|\./|[^\s\"']*/)?scripts/(" + ANY_SCRIPT_NAME + r")$"
+)
+ANY_RUN_RE = re.compile(r"run[ \t]+(" + ANY_SCRIPT_NAME + r")(?=[\s;&|)]|$)")
 
-    Raises Undetermined when the body cannot be parsed (see command_starts).
+
+def invoked_by(text, any_script=False):
+    """Return the set of script names a shell body invokes.
+
+    By default only check-* scanner names; with any_script=True every
+    `scripts/<name>.py|.sh` invoked in a recognised shape (used to follow a
+    chain through non-check helpers). Raises Undetermined when the body cannot
+    be parsed (see command_starts).
     """
+    path_re = ANY_SCRIPT_PATH_RE if any_script else SCRIPT_PATH_RE
+    run_re = ANY_RUN_RE if any_script else RUN_RE
     src, all_starts, owners = command_starts(text)
     # A function body runs only if the function is called from live code
     # (top level, or a function that is itself live). Fixpoint over call words.
@@ -625,18 +670,18 @@ def invoked_by(text):
         asg = ASSIGN_RE.match(src, i)
         if asg:
             val = src[asg.end():_skip_word(src, asg.end())].strip("\"'")
-            name = _script_name(val)
+            name = _script_name(val, path_re)
             if name:
                 bindings[asg.group(1)] = name
             continue
-        m = RUN_RE.match(src, i)
+        m = run_re.match(src, i)
         if m:
             run_calls.add(m.group(1))
             continue
         m = INTERP_RE.match(src, i)
         if m:
             operand = m.group(2)
-            name = _script_name(operand)
+            name = _script_name(operand, path_re)
             if name:
                 found.add(name)
                 continue
@@ -646,7 +691,7 @@ def invoked_by(text):
             continue
         m = DIRECT_RE.match(src, i)
         if m:
-            name = _script_name(m.group(2))
+            name = _script_name(m.group(2), path_re)
             if name:
                 found.add(name)
     if has_run:
@@ -655,6 +700,330 @@ def invoked_by(text):
         if var in bindings:
             found.add(bindings[var])
     return found
+
+
+# ---------------------------------------------------------------------------
+# Python helpers in an invocation chain (backlog 96e2fde0)
+# ---------------------------------------------------------------------------
+
+PY_SCRIPT_LITERAL_RE = re.compile(r"^(scripts/)?(" + ANY_SCRIPT_NAME + r")$")
+SUBPROCESS_FUNCS = ("run", "Popen", "call", "check_call", "check_output")
+INTERP_LITERALS = ("python3", "python", "bash", "sh")
+PATH_WRAPPERS = ("abspath", "realpath", "normpath")
+
+
+def _is_subprocess_call(func):
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr in SUBPROCESS_FUNCS
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "subprocess"
+    )
+
+
+def _argv_arg(call):
+    if call.args:
+        return call.args[0]
+    for kw in call.keywords:
+        if kw.arg == "args":
+            return kw.value
+    return None
+
+
+def _is_interp(node):
+    if isinstance(node, ast.Attribute):
+        return node.attr == "executable" and isinstance(node.value, ast.Name) and node.value.id == "sys"
+    if isinstance(node, ast.Constant):
+        return node.value in INTERP_LITERALS
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+        return all(_is_interp(v) for v in node.values)
+    return False
+
+
+def _single_assignments(stmts):
+    """{name: expr} for names assigned exactly once (plain `NAME = expr`).
+
+    A name assigned more than once, or also bound another way (augmented /
+    tuple assignment, for target, ...), maps to None: ambiguous, resolves to
+    nothing (the red direction).
+    """
+    seen = {}
+
+    def bind(name, value):
+        seen[name] = None if name in seen else value
+
+    for stmt in stmts:
+        for node in ast.walk(stmt):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                if len(targets) == 1 and isinstance(targets[0], ast.Name) and node.value is not None:
+                    bind(targets[0].id, node.value)
+                    continue
+                other = targets
+            elif isinstance(node, (ast.AugAssign, ast.For, ast.AsyncFor, ast.NamedExpr, ast.comprehension)):
+                other = [node.target]
+            elif isinstance(node, (ast.With, ast.AsyncWith)):
+                other = [i.optional_vars for i in node.items if i.optional_vars is not None]
+            else:
+                continue
+            for t in other:
+                for sub in ast.walk(t):
+                    if isinstance(sub, ast.Name):
+                        bind(sub.id, None)
+                        seen[sub.id] = None
+    return seen
+
+
+def python_invokes(text, path):
+    """Return the script names (under scripts/) a Python helper really runs.
+
+    Static and deliberately narrow — anything not in these shapes is NOT
+    counted, so an unrecognised invocation reads as unlisted (red):
+      * the call is `subprocess.run|Popen|call|check_call|check_output(argv,
+        ...)`, or a call to a module-level "runner" function (one that passes
+        its first parameter as argv to such a subprocess call), or a call
+        through a parameter whose default is such a runner;
+      * argv is a tuple/list literal (directly, or via a name assigned exactly
+        once in that function / at module level) of the form
+        `(<interp>, <script>, ...)` with <interp> = sys.executable, "python3",
+        "python", "bash", "sh" or an `or` of those, or `(<script>, ...)`;
+      * <script> resolves (through names assigned exactly once,
+        os.path.join, os.path.abspath/realpath/normpath, str) to a literal
+        "scripts/<name>", or to a bare "<name>" joined onto a path built from
+        `__file__` (a sibling of the helper, which itself lives in scripts/);
+      * the call sits in module top-level code or in a module-level function
+        transitively called (by plain name) from top-level code.
+    A mention in a message string, a comment or a docstring is never an argv,
+    so it does not count. Raises Undetermined if the source cannot be parsed.
+    """
+    try:
+        tree = ast.parse(text, filename=path)
+    except (SyntaxError, ValueError) as e:
+        raise Undetermined("cannot parse Python helper %s: %s" % (path, e))
+    funcs = {
+        n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    top_stmts = [n for n in tree.body if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+    module_env = _single_assignments(top_stmts)
+
+    def first_param(fn):
+        a = fn.args.posonlyargs + fn.args.args
+        return a[0].arg if a else None
+
+    runners = set()
+    for name, fn in funcs.items():
+        p = first_param(fn)
+        if p is None:
+            continue
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Call) and _is_subprocess_call(node.func):
+                arg = _argv_arg(node)
+                if isinstance(arg, ast.Name) and arg.id == p:
+                    runners.add(name)
+                    break
+
+    def called_names(stmts):
+        out = set()
+        for stmt in stmts:
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                    out.add(node.func.id)
+        return out
+
+    live = set()
+    frontier = called_names(top_stmts) & set(funcs)
+    while frontier:
+        live |= frontier
+        nxt = set()
+        for f in frontier:
+            nxt |= called_names(funcs[f].body)
+        frontier = (nxt & set(funcs)) - live
+
+    def scan(stmts, params, defaults):
+        local_env = _single_assignments(stmts)
+
+        def lookup(name):
+            if name in params:
+                return None
+            if name in local_env:
+                return local_env[name]
+            return module_env.get(name)
+
+        def resolve(node, depth=0):
+            """-> (kind, name): kind 'scripts' | 'bare' | None."""
+            if depth > 20:
+                return None, None
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                m = PY_SCRIPT_LITERAL_RE.match(node.value)
+                if not m:
+                    return None, None
+                return ("scripts" if m.group(1) else "bare"), m.group(2)
+            if isinstance(node, ast.Name):
+                v = lookup(node.id)
+                return resolve(v, depth + 1) if v is not None else (None, None)
+            if isinstance(node, ast.Call):
+                fn = node.func
+                fname = fn.attr if isinstance(fn, ast.Attribute) else (fn.id if isinstance(fn, ast.Name) else None)
+                is_ospath = (
+                    isinstance(fn, ast.Attribute)
+                    and isinstance(fn.value, ast.Attribute)
+                    and fn.value.attr == "path"
+                    and isinstance(fn.value.value, ast.Name)
+                    and fn.value.value.id == "os"
+                )
+                if is_ospath and fname == "join" and node.args and not node.keywords:
+                    kind, name = resolve(node.args[-1], depth + 1)
+                    if kind == "bare":
+                        anchored = any(
+                            isinstance(sub, ast.Name) and sub.id == "__file__"
+                            for a in node.args[:-1]
+                            for sub in ast.walk(a)
+                        )
+                        return ("scripts", name) if anchored else (None, None)
+                    return kind, name
+                if ((is_ospath and fname in PATH_WRAPPERS) or (isinstance(fn, ast.Name) and fname == "str")) \
+                        and len(node.args) == 1 and not node.keywords:
+                    return resolve(node.args[0], depth + 1)
+            return None, None
+
+        def argv_script(node):
+            if isinstance(node, ast.Name):
+                v = lookup(node.id)
+                node = v if v is not None else node
+            if not isinstance(node, (ast.Tuple, ast.List)) or not node.elts:
+                return None
+            elts = node.elts
+            target = elts[1] if (_is_interp(elts[0]) and len(elts) >= 2) else elts[0]
+            kind, name = resolve(target)
+            return name if kind == "scripts" else None
+
+        found = set()
+        for stmt in stmts:
+            for node in ast.walk(stmt):
+                if not isinstance(node, ast.Call):
+                    continue
+                fn = node.func
+                ok = _is_subprocess_call(fn) or (
+                    isinstance(fn, ast.Name)
+                    and (
+                        (fn.id in runners and fn.id not in params)
+                        or (fn.id in params and defaults.get(fn.id) in runners)
+                    )
+                )
+                if not ok:
+                    continue
+                arg = _argv_arg(node)
+                name = argv_script(arg) if arg is not None else None
+                if name:
+                    found.add(name)
+        return found
+
+    found = scan(top_stmts, set(), {})
+    for f in live:
+        fn = funcs[f]
+        a = fn.args
+        positional = a.posonlyargs + a.args
+        params = {x.arg for x in positional + a.kwonlyargs}
+        if a.vararg:
+            params.add(a.vararg.arg)
+        if a.kwarg:
+            params.add(a.kwarg.arg)
+        defaults = {}
+        for p, d in zip(positional[len(positional) - len(a.defaults):], a.defaults):
+            if isinstance(d, ast.Name):
+                defaults[p.arg] = d.id
+        for p, d in zip(a.kwonlyargs, a.kw_defaults):
+            if isinstance(d, ast.Name):
+                defaults[p.arg] = d.id
+        found |= scan(fn.body, params, defaults)
+    return found
+
+
+# ---------------------------------------------------------------------------
+# Claude Code hooks (.claude/settings.json) and chain following
+# ---------------------------------------------------------------------------
+
+def claude_hook_commands(toplevel):
+    """Return the `command` strings of the project's Claude Code hooks.
+
+    Reads `<toplevel>/.claude/settings.json` (the checked-in project settings).
+    A missing file is a real absence (no project hooks): returns []. A file
+    that exists but cannot be read, is not valid JSON, or whose `hooks` value
+    does not have the documented shape is undetermined — never an empty set.
+    `disableAllHooks: true` means Claude Code runs none of them: [].
+    `settings.local.json` and user-level settings are not read (not part of
+    the checkout); a scanner reached only from those stays unlisted (red).
+    """
+    path = os.path.join(toplevel, ".claude", "settings.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = fh.read()
+    except FileNotFoundError:
+        return []
+    except OSError as e:
+        raise Undetermined("cannot read %s: %s" % (path, e))
+    try:
+        data = json.loads(raw)
+    except ValueError as e:
+        raise Undetermined("cannot parse %s as JSON: %s" % (path, e))
+    if not isinstance(data, dict):
+        raise Undetermined("%s is not a JSON object" % path)
+    if data.get("disableAllHooks") is True:
+        return []
+    hooks = data.get("hooks", {})
+    if not isinstance(hooks, dict):
+        raise Undetermined("%s: `hooks` is not an object" % path)
+    out = []
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            raise Undetermined("%s: hooks.%s is not a list" % (path, event))
+        for g in groups:
+            if not isinstance(g, dict) or not isinstance(g.get("hooks"), list):
+                raise Undetermined("%s: hooks.%s has an entry without a `hooks` list" % (path, event))
+            for h in g["hooks"]:
+                if not isinstance(h, dict):
+                    raise Undetermined("%s: hooks.%s has a non-object hook" % (path, event))
+                if h.get("type") != "command":
+                    continue  # prompt / agent hooks run no script
+                cmd = h.get("command")
+                if not isinstance(cmd, str):
+                    raise Undetermined("%s: hooks.%s has a command hook without a string `command`" % (path, event))
+                out.append((event, cmd))
+    return out
+
+
+def follow_chain(scripts_dir, roots):
+    """Close `roots` (script names) over the scripts they really invoke.
+
+    A reached `.sh` is read with the shell parser (invoked_by, any_script);
+    a reached `.py` with python_invokes(). Only regular files directly in
+    scripts_dir are followed; a name that does not exist there reaches
+    nothing. A reached file that cannot be read or parsed is undetermined.
+    """
+    seen = set()
+    todo = list(roots)
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        path = os.path.join(scripts_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError as e:
+            raise Undetermined("cannot read chained script %s: %s" % (path, e))
+        try:
+            if name.endswith(".py"):
+                nxt = python_invokes(text, path)
+            else:
+                nxt = invoked_by(text, any_script=True)
+        except Undetermined as e:
+            raise Undetermined("cannot parse chained script %s: %s" % (path, e))
+        todo.extend(nxt - seen)
+    return seen
 
 
 def gate_scanners(scripts_dir):
@@ -733,18 +1102,29 @@ def main(argv):
         else:
             toplevel, hook_dir, how = resolve_hook_dir(cwd)
         bodies = read_hooks(hook_dir)
-        invoked = set()
+        roots = set()
         for hook_name, text in sorted(bodies.items()):
             try:
-                invoked |= invoked_by(text)
+                roots |= invoked_by(text, any_script=True)
             except Undetermined as e:
                 raise Undetermined("cannot parse hook %s: %s" % (os.path.join(hook_dir, hook_name), e))
-        if not invoked:
+        if not any(SCANNER_RE.match(n) for n in roots):
             raise Undetermined(
                 "parsed zero scanner invocations from the active hooks in %s (%s); "
                 "an empty set is not a clean set" % (hook_dir, ", ".join(sorted(bodies)))
             )
-        scanners = gate_scanners(os.path.join(toplevel, "scripts"))
+        claude_cmds = claude_hook_commands(toplevel)
+        for event, cmd in claude_cmds:
+            try:
+                roots |= invoked_by(cmd, any_script=True)
+            except Undetermined as e:
+                raise Undetermined(
+                    "cannot parse .claude/settings.json %s hook command %r: %s" % (event, cmd, e)
+                )
+        scripts_dir = os.path.join(toplevel, "scripts")
+        reached = follow_chain(scripts_dir, roots)
+        invoked = {n for n in reached if SCANNER_RE.match(n)}
+        scanners = gate_scanners(scripts_dir)
         if not scanners:
             raise Undetermined(
                 "found zero check-*.py / check-*.sh scanners in %s/scripts"
@@ -758,8 +1138,8 @@ def main(argv):
     if unlisted:
         print(
             "%s: %d gate scanner(s) in %s/scripts are NOT invoked by any active hook "
-            "(hook dir %s, from %s; hooks read: %s):"
-            % (NAME, len(unlisted), toplevel, hook_dir, how, ", ".join(sorted(bodies))),
+            "(hook dir %s, from %s; hooks read: %s; .claude/settings.json command hooks: %d):"
+            % (NAME, len(unlisted), toplevel, hook_dir, how, ", ".join(sorted(bodies)), len(claude_cmds)),
             file=sys.stderr,
         )
         for n in unlisted:

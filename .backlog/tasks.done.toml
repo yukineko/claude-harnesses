@@ -79965,3 +79965,67 @@ rev = "84254ee763d54f3bde899b1308e30c28c3af2879"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "96e2fde0"
+title = "check-unlisted-gates: SessionStart 経由で実行される check-plugin-rollout.py を unlisted と誤判定する"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "check-unlisted-gates",
+    "sessionstart",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "3858c833f で rollout check は pre-push から外れ SessionStart のみ (.claude/settings.json SessionStart -> scripts/session-worktree-init.py -> scripts/session-rollout-drift.py(CHECKER) -> scripts/check-plugin-rollout.py) になった。check-unlisted-gates.py は git hook 本文 (GIT_HOOKS) しか読まないためこの呼び出し経路を数えず、--hooks-dir .githooks で check-plugin-rollout.py を unlisted として赤にする (f6a19c390 で unlisted 6 件)。期待: allowlist ではなく実際の呼び出し経路の追跡で、SessionStart チェーンから到達するスクリプトを invoked と数える。対照: どこからも呼ばれないダミー scanner は unlisted のまま (test_control_uncalled_dummy_scanner_is_still_unlisted)。RED test: scripts/test_check_unlisted_gates_sessionstart.py (commit c7a9f92d9)。"
+created_at = 1794792195
+updated_at = 1794793407
+weight = 0.0
+issue_number = 1817
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1817"
+issue_closed_at = 1794793411
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_check_unlisted_gates_sessionstart.py"
+rev = "c7a9f92d9ef85b1044b90d0f303f11ffb8a6302a"
+observed_at = 1794792195
+detail = """
+exit 1:  remove it. Backlog 666b6704.
+
+scripts/test_check_unlisted_gates_sessionstart.py:96: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_unlisted_gates_sessionstart.py::SessionStartChain::test_rollout_checker_reached_via_sessionstart_is_not_unlisted
+========================= 1 failed, 3 passed in 0.17s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_check_unlisted_gates_sessionstart.py"
+exit = 0
+passed = 4
+rev = "7e0d073026bb093bbe4f6723387a12fcdab2287e"
+observed_at = 1794793406
+output_digest = "sha256:73ffd412ed291a1bbd02ee57e7b2b9a4ce963ef31b89445067762c239b2cfa03"
+excerpt = """
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/hiroyuki_nakayama/src/.harness-worktrees/fix-96e2fde0
+plugins: cov-7.0.0, xdist-3.8.0, anyio-4.12.1
+collected 4 items
+
+scripts/test_check_unlisted_gates_sessionstart.py ....                   [100%]
+
+============================== 4 passed in 0.49s ===============================
+"""
+
+[task.closure.red]
+rev = "f9efea5275edc7db74d8a588c97996d0e26b67c4"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

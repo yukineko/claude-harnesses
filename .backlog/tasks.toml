@@ -2385,3 +2385,59 @@ detail = """
 exit 1: nder='rebuild-plugins.sh') scripts/test_rollout_lock_outside_managed_cache.py::RolloutLockOutsideManagedCache::test_lock_survives_claude_code_cache_gc
 SUBFAILED(contender='prune-plugin-cache.py') scripts/test_rollout_lock_outside_managed_cache.py::RolloutLockOutsideManagedCache::test_lock_survives_claude_code_cache_gc
 ========================= 4 failed, 2 passed in 0.74s =========================="""
+
+[[task]]
+id = "834ccf88"
+title = "condukt: check-criteria runs the repro in the caller's cwd when the task has no recorded worktree (reports passed:true / skip_verifier:true)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-16 at fa58e3698 in run-20261116-143410-12142 t3: worktree=null (orchestrator set running without --worktree); check-criteria ran the repro in the caller's tree. Test shows passed:true skip_verifier:true exit 0 with a cwd marker. Cause: main.rs CheckCriteria .unwrap_or_else(|| cwd.to_path_buf()); CheckOracle has the same pattern (untested). Readings: (a) defect: null worktree = undeterminable tree, must refuse; (b) intended cwd fallback. The ran.marker in cwd tells them apart."
+created_at = 1794813513
+updated_at = 1794813513
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261116_check_criteria_null_worktree -- --include-ignored"
+rev = "bf454e21f24c4fff547678a33c3b882fd3d2a185"
+observed_at = 1794813513
+detail = """
+exit 101: e/hiroyuki_nakayama/src/.harness-worktrees/followup-cd-df7c/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.72s
+     Running tests/backlog_20261116_check_criteria_null_worktree.rs (target/debug/deps/backlog_20261116_check_criteria_null_worktree-4af4ed9337aa11b3)
+error: test failed, to rerun pass `-p condukt --test backlog_20261116_check_criteria_null_worktree`"""
+
+[[task]]
+id = "0a7be389"
+title = "condukt: check-criteria classifies ';'-separated multi-claim done_criteria as single coverage and sets skip_verifier:true"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-16 at fa58e3698 in run-20261116-143410-12142 (t2): done_criteria '<cargo test ...> exits 0 ...; no other blastguard test regresses; version bumped.' → coverage single, skip_verifier true. Classifier: verify.rs criteria_coverage_for. Readings: (a) defect: only the first claim is mechanical, the verifier must not be skipped; (b) intended if the trailing clauses are considered advisory. The test asserts not-single/no-skip."
+created_at = 1794813554
+updated_at = 1794813554
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261116_multiclaim_semicolon_single -- --include-ignored"
+rev = "bf454e21f24c4fff547678a33c3b882fd3d2a185"
+observed_at = 1794813554
+detail = """
+exit 101: /home/hiroyuki_nakayama/src/.harness-worktrees/followup-cd-df7c/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
+     Running tests/backlog_20261116_multiclaim_semicolon_single.rs (target/debug/deps/backlog_20261116_multiclaim_semicolon_single-e66c810b09b231be)
+error: test failed, to rerun pass `-p condukt --test backlog_20261116_multiclaim_semicolon_single`"""

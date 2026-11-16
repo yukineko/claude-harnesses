@@ -17,6 +17,11 @@
 //! `--tag`, `--notes`, `--status`) are applied in the SAME locked write as the
 //! new repro. When the repro is refused, none of them is written.
 //!
+//! Blastguard classification (user ruling 2026-11-14): when `--tag` or
+//! `--title` is given and the resulting task is a blastguard task without a
+//! `fail-open` / `false-positive` tag, the edit is refused and nothing is
+//! written (checked before the repro runs and again under the lock).
+//!
 //! Only a `pending` task's repro can be replaced. Any other status is refused
 //! before the command runs and checked again under the lock, because the
 //! status can change while the test runs.
@@ -63,7 +68,9 @@ pub fn edit_with_repro_test(
     // Refuse what can be refused without running a test.
     parse_edit_status(fields.status)?;
     let tasks = load(path)?;
-    require_pending(find(&tasks, id)?)?;
+    let task = find(&tasks, id)?;
+    require_pending(task)?;
+    require_blastguard_classification(task, &fields)?;
     let repro = crate::evidence::run_repro(&std::env::current_dir()?, cmd, now_unix());
     let why = format!("{}: {}", repro.outcome, repro.detail);
     let Some(intake) = Intake::reproduced(repro) else {
@@ -146,6 +153,7 @@ fn apply(path: &Path, id: &str, fields: Fields<'_>, repro: Option<Repro>) -> Res
         if repro.is_some() {
             require_pending(task)?;
         }
+        require_blastguard_classification(task, &fields)?;
         if let Some(v) = fields.title {
             task.title = v.to_string();
         }
@@ -200,6 +208,23 @@ fn parse_edit_status(status: Option<&str>) -> Result<Option<Status>> {
         }
     }
     Ok(status)
+}
+
+/// User ruling 2026-11-14 ([`crate::task::blastguard_classification_error`]):
+/// an edit that sets `--tag` or `--title` must not leave a blastguard task
+/// without `fail-open` / `false-positive`. Edits touching neither (e.g.
+/// `--notes`, `--status`) are not checked, so legacy untagged rows stay
+/// editable.
+fn require_blastguard_classification(task: &Task, fields: &Fields<'_>) -> Result<()> {
+    if fields.title.is_none() && fields.tags.is_none() {
+        return Ok(());
+    }
+    let title = fields.title.unwrap_or(&task.title);
+    let tags = fields.tags.as_deref().unwrap_or(&task.tags);
+    match crate::task::blastguard_classification_error(title, tags) {
+        Some(why) => Err(anyhow!("backlog edit {}: {why}", task.id)),
+        None => Ok(()),
+    }
 }
 
 fn find<'t>(tasks: &'t [Task], id: &str) -> Result<&'t Task> {

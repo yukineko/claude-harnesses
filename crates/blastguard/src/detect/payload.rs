@@ -750,7 +750,8 @@ struct ProcsubPrograms {
 /// pass, which reads it as the inline text (backlog e686a85e). An fd opened on
 /// a file (`exec 3< f; bash <&3`) is that file, read as `bash < f` is. A
 /// program operand naming an fd (`bash /dev/fd/3`, `source /dev/stdin`) is
-/// read the same way as `<&N`; see `exec_fds::program_operand_fds`.
+/// read the same way as `<&N`; see `exec_fds::program_operand_fds`. The move
+/// `<&N-` is read as `<&N` (`exec_fds::stdin_dup_target`).
 ///
 /// zsh's `=(…)` (a substitution handed over as a temporary FILE) is read as
 /// `<(…)`: `zsh =(…)` runs the inner command's output just as `zsh <(…)` does.
@@ -825,13 +826,12 @@ fn procsub_programs(
                     opened_in_stage.push((effective_fd, true));
                 }
             }
-            "<&" | ">&" if effective_fd == 0 => {
-                if let Some(n) = exec_fds::dup_fd_number(target) {
-                    dup_into_stdin.push(n);
-                } else if let Some(why) = exec_fds::dynamic_dup_reason(target) {
-                    unreadable_stdin.push(why);
-                }
-            }
+            "<&" | ">&" if effective_fd == 0 => match exec_fds::stdin_dup_target(target) {
+                // `<&N` and the move `<&N-` read fd N (backlog 967fd65c).
+                exec_fds::StdinDup::Fd(n) => dup_into_stdin.push(n),
+                exec_fds::StdinDup::Unreadable(why) => unreadable_stdin.push(why),
+                exec_fds::StdinDup::Nothing => {}
+            },
             "<<" | "<<-" | "<<<" => opened_in_stage.push((effective_fd, false)),
             _ => opened_in_stage.push((effective_fd, true)),
         }

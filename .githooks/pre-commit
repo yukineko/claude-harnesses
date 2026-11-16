@@ -351,6 +351,8 @@ run check-clippy-lints.py     clippy-lints --staged
 run check-backlog-store.py    backlog-store --staged
 run check-projkey-store-classification.py projkey-classification --staged
 run check-file-growth.py      file-growth
+run check-scoped-spawn-unwind.py scoped-spawn-unwind
+run check-never-executed.py never-executed
 
 if [ "$rc" -ne 0 ]; then
     cat >&2 <<'EOF'

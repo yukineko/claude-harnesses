@@ -205,10 +205,26 @@ macro_rules! control {
 // keeps the `git add <paths> &&` head that `redirect_view_extra_head` peels,
 // so the `>` in the body stays the only thing under test.
 
+fn target_cd_var_git_commit_heredoc_cmd() -> &'static str {
+    "WT=/private/tmp/hdgt-wt; cd \"$WT\" && git add f.txt && git commit -q -F - <<'EOF'\nfix: a -> b\n\n> quoted\nEOF"
+}
+
 target!(
     target_cd_var_git_commit_heredoc,
-    "WT=/private/tmp/hdgt-wt; cd \"$WT\" && git add f.txt && git commit -q -F - <<'EOF'\nfix: a -> b\n\n> quoted\nEOF"
+    target_cd_var_git_commit_heredoc_cmd()
 );
+
+/// Pins the ruling (2026-11-08, "Explicit path in target"): whole-tree staging
+/// must not creep back into the target above, or its verdict would be about
+/// `git add -A` (backlog e9325654) instead of the heredoc body `>`.
+#[test]
+fn target_cd_var_git_commit_heredoc_stages_explicit_path() {
+    let cmd = target_cd_var_git_commit_heredoc_cmd();
+    assert!(
+        !cmd.contains("add -A"),
+        "target must stage an explicit path, not `git add -A`: {cmd}"
+    );
+}
 target!(
     target_cd_subst_git_commit_heredoc,
     "cd \"$(git rev-parse --show-toplevel)\" && git commit -q -F - <<'EOF'\nfix: a -> b\n\n> quoted\nEOF"

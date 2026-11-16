@@ -1,191 +1,4 @@
 [[task]]
-id = "04f53dbe"
-title = "context-governor injector dedup keys on the hook input session_id, not env"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = '''
-Audit B item 11 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: cg-injector-dedup-env-session.
-Observed RED 2026-11-07 at c564dbb9 (base fc7b5dd9) (verbatim): session X's ledger was written for a hook whose input names session Y: .../audit-b11-env-x/ledger.jsonl = "{\"event\":\"injected\",...\"session\":\"audit-b11-env-x\"...}" / test result: FAILED
-Readings: (A) hook input session_id is authoritative (audit; pinned); (B) env session authoritative - memory says they always match in production, so defect is only test hermeticity. To tell apart: capture a live hook stdin/env pair and see whether session_id can differ from env. Extra: the written row's session field shows the env session although LedgerNode.session is set from input.session_id (Ledger::open overrides it).
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.'''
-created_at = 1793998442
-updated_at = 1794001893
-weight = 0.0
-issue_number = 1580
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1580"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p context-governor --test audit_b11_injector_session -- --include-ignored"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998931
-detail = """
-exit 101: ed in 0.00s
-
-   Compiling context-governor v0.1.28 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/context-governor)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.16s
-     Running tests/audit_b11_injector_session.rs (target/debug/deps/audit_b11_injector_session-b6edd85e362a07e4)
-error: test failed, to rerun pass `-p context-governor --test audit_b11_injector_session`"""
-
-[[task]]
-id = "4620134f"
-title = "pre-commit ratchet: refuse new thread::scope spawns without catch_unwind in gate crates"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 9 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: thread-scope-reraises-panic.
-Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): no pre-commit scanner refuses a newly added thread::scope spawn without catch_unwind in crates/blastguard/src/store.rs. Scanners accepting the wrapped control: ['check-backlog-store.py', 'check-clippy-lints.py', ... 'check-version-bumped.py']; their exit codes on the bare diff: {... all 0}
-Test runs every `run X.py` scanner in .githooks/pre-commit against a fixture repo (independent of the new scanner's name); only scanners passing the wrapped control count, so the new scanner must be runnable in a minimal fixture repo. Ratchet guard (an existing bare spawn is not refused) passes today. Runtime ~30s.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.
-User ruling 2026-11-07 (AskUserQuestion): accept the ~80s added to the pre-push python suites; do not shrink detection strength for speed."""
-created_at = 1793998463
-updated_at = 1794001892
-weight = 0.0
-issue_number = 1582
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1582"
-rev = 3
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_audit_b_scoped_spawn_unwind.py"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998951
-detail = """
-exit 1: _pytest.outcomes.XFailed
-
-../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
-=========================== short test summary info ============================
-FAILED scripts/test_audit_b_scoped_spawn_unwind.py::ScopedSpawnNeedsCatchUnwind::test_added_scoped_spawn_without_catch_unwind_is_refused
-========================= 1 failed, 2 passed in 8.93s =========================="""
-
-[[task]]
-id = "4f9189da"
-title = "UserPromptSubmit blocks /flow unless permission_mode is bypassPermissions"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 17 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: flow-bypass-permissions-mode.
-Observed RED 2026-11-07 at ee3e6d1a (base fc7b5dd9) (verbatim): prompt "/flow" with permission_mode Some("auto") must be blocked until the session is in bypassPermissions; got exit Some(0) stdout="" stderr="" (same for "default" and None) / test result: FAILED. 2 passed; 3 failed
-Owner readings: (A) autoflow prompt-submit, the existing UserPromptSubmit hook that already knows /flow (pinned); (B) a new hook in the flow plugin (crates/flow is skill-only today) - test moves, property same. Either way prompt_submit_command goes through run_hook (never blocks); giving it a verdict means moving it off run_hook per CLAUDE.md s1. Missing permission_mode = cannot determine -> block (s3). Controls: /flow under bypassPermissions and 'hello' under auto pass.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998479
-updated_at = 1794001896
-weight = 0.0
-issue_number = 1583
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1583"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p autoflow --test audit_b_flow_bypass -- --include-ignored"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998936
-detail = """
-exit 101: 0 ignored; 0 measured; 0 filtered out; finished in 3.25s
-
-   Compiling autoflow v0.1.45 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/autoflow)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.84s
-     Running tests/audit_b_flow_bypass.rs (target/debug/deps/audit_b_flow_bypass-f04d2fd96b42467a)
-error: test failed, to rerun pass `-p autoflow --test audit_b_flow_bypass`"""
-
-[[task]]
-id = "d425cfc3"
-title = "check-fail-open-mutation.py: mutate by deleting the construct, not if false"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 19 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: fail-open-review-checklist s7 (formerly mutation-remove-dont-disable); ruled 2026-11-07.
-Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): - ['parallelguard (crates/parallelguard/src/model.rs): +1 `if false`'] / + [] : mutants must delete the construct, not wrap it in `if false` (ruling 2026-11-07)
-Control: each scenario's anchor occurs exactly once in its target file. Untested reading: the stuckguard scenario replaces the threshold guard with `if true { return None; }` (always-taken early return, also 'neutralize in place'); the RED asserts only 'no if false' per the ruling - human to decide whether `if true {` is also out.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.
-User ruling 2026-11-07 (AskUserQuestion): `if true { return ...; }` (always-taken early return) is ALSO banned as neutralize-in-place; the mutant must delete the guard. Extend the RED to assert no `if true {` either."""
-created_at = 1793998489
-updated_at = 1794001898
-weight = 0.0
-issue_number = 1585
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1585"
-rev = 3
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_audit_b_mutation_deletes.py"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998962
-detail = """
-exit 1: 
-E           _pytest.outcomes.XFailed
-
-../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
-=========================== short test summary info ============================
-FAILED scripts/test_audit_b_mutation_deletes.py::MutantsDeleteRatherThanDisable::test_generated_mutant_contains_no_if_false
-========================= 1 failed, 1 passed in 0.07s =========================="""
-
-[[task]]
-id = "32ac2ceb"
-title = "pre-commit ratchet: refuse newly added never-executed constructs in crates src"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 20 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: fail-open-review-checklist s7 (new item; user ruling 2026-11-07 絶対に処理されないコードはプログラムとコンパイラのゴミ).
-Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): no pre-commit scanner refuses a newly added `if false {` in crates/fixturecrate/src/lib.rs. Scanners accepting the live control: ['check-backlog-store.py', ... 'check-version-bumped.py']; their exit codes on the dead diff: {... all 0} (same for `while false {` and `if false && flag {`)
-Diff-scoped ratchet: existing occurrences counted, nothing new added (ratchet guard and live control pass today). Only `run` lines in .githooks/pre-commit are tried, so wiring is implied; the new scanner must run in a minimal fixture repo. Runtime ~50s.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.
-User ruling 2026-11-07 (AskUserQuestion): accept the ~80s added to the pre-push python suites; do not shrink detection strength for speed."""
-created_at = 1793998491
-updated_at = 1794001898
-weight = 0.0
-issue_number = 1586
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1586"
-rev = 3
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_audit_b_never_executed_ratchet.py"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998963
-detail = """
-exit 1: it_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_if_false_and_guard_is_refused
-FAILED scripts/test_audit_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_if_false_block_is_refused
-FAILED scripts/test_audit_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_while_false_is_refused
-========================= 3 failed, 2 passed in 12.26s ========================="""
-
-[[task]]
 id = "d039872d"
 title = "不正な CONDUKT_MAX_PARALLEL / CONDUKT_STUCK_TTL_SECS を黙って無視しない"
 project = "/Users/yuki/src/harness"
@@ -1960,37 +1773,6 @@ exit 101: ndukt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_txt_data_heredoc_python_probe`"""
 
 [[task]]
-id = "967fd65c"
-title = "blastguard fail-open: bash <&3- (move inherited fd to stdin) is Allow while bash <&3 is Ask"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-14 (run-20261114-161340-68728 t1 verifier + side-reds agent, main dde31f11b): bash <&3- and bash 0<&3- are allow/allow (main/subagent) while bash <&3 is ask/deny. crates/blastguard/src/detect/payload.rs:~824 procsub_programs: target '3-' fails parse::<u32>() and is neither a dup nor unreadable. exec 3<<< 'chmod 777 /etc/hosts'; bash <&3- is Deny (other path). Readings: (a) fail-open — fd 3 contents unknown, same as bash <&3; (b) none plausible. "
-created_at = 1794656943
-updated_at = 1794656943
-weight = 0.0
-issue_number = 1781
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1781"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261114_stdin_dup_move_fd_suffix -- --include-ignored"
-rev = "b7903d36f4c6501380f6ae3a95d12d6b8dae69bc"
-observed_at = 1794656943
-detail = """
-exit 101: /Users/yuki/.condukt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
-     Running tests/backlog_20261114_stdin_dup_move_fd_suffix.rs (target/debug/deps/backlog_20261114_stdin_dup_move_fd_suffix-9ced7a051e26aaa3)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261114_stdin_dup_move_fd_suffix`"""
-
-[[task]]
 id = "7cccad0a"
 title = "blastguard fail-open: harmful literal piped to python3 -c that forwards stdin to a shell (os.system(input()), subprocess.run(stdin, shell=True)) is Allow"
 project = "/Users/yuki/src/harness"
@@ -2111,36 +1893,6 @@ exit 101: d v0.2.608 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
      Running tests/backlog_20261115_quoted_numeric_dup_target.rs (target/debug/deps/backlog_20261115_quoted_numeric_dup_target-c281c6c9d662af65)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_numeric_dup_target`"""
-
-[[task]]
-id = "3da14bbd"
-title = """blastguard fail-open: harmful stdin into python3 -c 'os.system("python3 -m asyncio")' (nested REPL) is Allow"""
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "F13. Observed 2026-11-15 at 0.2.603, re-observed by main with RED 784eba77f. The child REPL inherits stdin and runs the piped program. Readings: (a) defect - wrapper descent misses inherited stdin; (b) child stdin out of scope. Ruling: system harm Deny through any wrapper -> (a)."
-created_at = 1794730703
-updated_at = 1794730703
-weight = 0.0
-issue_number = 1790
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1790"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261115_python_os_system_nested_repl -- --include-ignored"
-rev = "bdfdc064af6abf8c9d8cbde6b9f1ba790bfc7e4a"
-observed_at = 1794730703
-detail = """
-exit 101: 8 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
-     Running tests/backlog_20261115_python_os_system_nested_repl.rs (target/debug/deps/backlog_20261115_python_os_system_nested_repl-d35551448481b324)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_os_system_nested_repl`"""
 
 [[task]]
 id = "392097d7"
@@ -2758,3 +2510,34 @@ exit 101: 83 (/Users/yuki/src/.harness-worktrees/sidereds-20261116/crates/tdd)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.48s
      Running tests/backlog_20261116_red_killed_by_signal_records_red.rs (target/debug/deps/backlog_20261116_red_killed_by_signal_records_red-53c8e72309bcc7b8)
 error: test failed, to rerun pass `-p tdd --test backlog_20261116_red_killed_by_signal_records_red`"""
+
+[[task]]
+id = "54231a0a"
+title = "blastguard fail-open: fd=3; exec 3<<< 'echo hi'; bash <&$fd is Allow in main (expected Ask); e686a85e test regressed on main"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-16 on 84254ee76 (base 0744d9ef2 + tests only) and on 0f7cf5b0c: backlog_20261114_exec_fd_dynamic_fd_reader::benign_with_dynamic_fd_reader_is_not_allow FAILED, main => allow, left allow right ask. harm_with_dynamic_fd_reader_is_deny passes. e686a85e was closed done earlier, so this is a regression on main; not caused by 967fd65c/3da14bbd work (fails at their RED base)."
+created_at = 1794785293
+updated_at = 1794785293
+weight = 0.0
+issue_number = 1815
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1815"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_exec_fd_dynamic_fd_reader"
+rev = "0f7cf5b0c5bf55605ab62165b626b86f5a6ffacd"
+observed_at = 1794785293
+detail = """
+exit 101: 2 (/Users/yuki/src/.harness-worktrees/backlog-close-p0-20261116/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/backlog_20261114_exec_fd_dynamic_fd_reader.rs (target/debug/deps/backlog_20261114_exec_fd_dynamic_fd_reader-4de96f009a33964c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_exec_fd_dynamic_fd_reader`"""

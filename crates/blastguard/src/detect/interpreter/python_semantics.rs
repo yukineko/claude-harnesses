@@ -52,7 +52,7 @@ pub(super) enum Tok {
 /// `Undecodable`) is what [`literal_values`] reports, and the interpreter
 /// write check judges a holed or undecodable write target from that.
 pub(super) fn lex(src: &str) -> Vec<Tok> {
-    lex_impl(src, None)
+    lex_impl(src, None, None)
 }
 
 /// The decoded value of every NON-raw string literal of `src`, read with the
@@ -60,11 +60,26 @@ pub(super) fn lex(src: &str) -> Vec<Tok> {
 /// source order. Raw literals are not listed: their text is their body.
 pub(super) fn literal_values(src: &str) -> Vec<super::python_escape::Decoded> {
     let mut values = Vec::new();
-    lex_impl(src, Some(&mut values));
+    lex_impl(src, Some(&mut values), None);
     values
 }
 
-fn lex_impl(src: &str, mut values: Option<&mut Vec<super::python_escape::Decoded>>) -> Vec<Tok> {
+/// [`lex`], plus the indices (into the returned tokens) of every [`Tok::Str`]
+/// whose text may NOT be the literal's Python value: a non-raw literal that
+/// is not fully decoded (`Decoded::Holed` / `Undecodable`, e.g. `\N{…}`), and
+/// a raw literal holding a backslash (the lexer reads `\X` as `X` there,
+/// Python keeps the backslash).
+fn lex_marking_inexact(src: &str) -> (Vec<Tok>, Vec<usize>) {
+    let mut inexact = Vec::new();
+    let toks = lex_impl(src, None, Some(&mut inexact));
+    (toks, inexact)
+}
+
+fn lex_impl(
+    src: &str,
+    mut values: Option<&mut Vec<super::python_escape::Decoded>>,
+    mut inexact: Option<&mut Vec<usize>>,
+) -> Vec<Tok> {
     let chars: Vec<(usize, char)> = src.char_indices().collect();
     let byte_at = |i: usize| chars.get(i).map_or(src.len(), |(b, _)| *b);
     let mut out = Vec::new();
@@ -136,14 +151,22 @@ fn lex_impl(src: &str, mut values: Option<&mut Vec<super::python_escape::Decoded
             // literal, or a body `decode_non_raw` cannot decode statically
             // (`\N{…}`, a malformed escape), keeps the reading above here; the
             // undecoded reading is reported through `values`.
+            let body = src.get(body_start..body_end.max(body_start)).unwrap_or("");
+            // Raw: exact only without a backslash. Non-raw: exact only when fully decoded.
+            let mut exact = raw && !body.contains('\\');
             if !raw {
-                let body = src.get(body_start..body_end.max(body_start)).unwrap_or("");
                 let decoded = super::python_escape::decode_non_raw(body, bytes);
                 if let super::python_escape::Decoded::Value(v) = &decoded {
                     s = v.clone();
+                    exact = true;
                 }
                 if let Some(values) = values.as_deref_mut() {
                     values.push(decoded);
+                }
+            }
+            if !exact {
+                if let Some(inexact) = inexact.as_deref_mut() {
+                    inexact.push(out.len());
                 }
             }
             out.push(Tok::Str { text: s, fstring });
@@ -493,6 +516,87 @@ pub(super) fn escaped_runner(code: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// The command lines of the CHILD processes `code` (a code view with aliases
+/// rewritten, see [`rewrite`]) may start, read statically (backlog 3da14bbd:
+/// a child inherits the program's stdin). `Some(lines)` when every child
+/// start is `os.system("LITERAL")` / `os.popen("LITERAL", …)` with a plain
+/// (non-f) string literal as its only first argument whose text is exactly its
+/// Python value (fully decoded, `Decoded::Value`; a raw literal without a
+/// backslash — see [`lex_marking_inexact`]): the literal lines, empty when no
+/// child is started. A `\N{…}` or malformed escape, or a raw literal holding a
+/// backslash, is undetermined. `None` (undetermined) for any other reach of a
+/// process starter, read as [`references_runner`] reads one minus the
+/// callables that only remove a file (`os.remove`, `shutil.rmtree`): a
+/// computed command (`os.system(c)`, `os.system("a" + b)`), an argv list or
+/// any `subprocess` / `pty` / `commands` / `asyncio` attribute, a bare runner
+/// module used as a value (`g(os)`), a starter not called directly, or an
+/// attribute reached through a call result whose last component starts a
+/// process (`__import__("os").system`). The binding statements (`import …`,
+/// `from … import …`, and the rewritten alias `os.system = os.system`) are
+/// skipped, so `import os` alone starts nothing.
+pub(super) fn child_start_lines(code: &str) -> Option<Vec<String>> {
+    const FILE_REMOVERS: &[&str] = &[
+        "os.remove",
+        "os.unlink",
+        "os.rmdir",
+        "os.removedirs",
+        "shutil.rmtree",
+    ];
+    let (toks, inexact) = lex_marking_inexact(code);
+    let mut lines = Vec::new();
+    let mut next = 0;
+    // The statements of [`statements`], each with its offset into `toks`.
+    for st in toks.split(|t| *t == Tok::Nl) {
+        let at = next;
+        next += st.len() + 1;
+        if st.is_empty() {
+            continue;
+        }
+        if matches!(name(st.first()), Some("import" | "from")) {
+            continue;
+        }
+        if st.len() == 3 && st[1] == Tok::Punct('=') && name(st.first()) == name(st.get(2)) {
+            continue;
+        }
+        for (k, t) in st.iter().enumerate() {
+            let Some(n) = name(Some(t)) else { continue };
+            let last = n.rsplit('.').next().unwrap_or(n);
+            if k > 0 && st[k - 1] == Tok::Punct('.') {
+                if PROCESS_STARTING_ATTRS.contains(&last) {
+                    return None;
+                }
+                continue;
+            }
+            if FILE_REMOVERS.contains(&n) {
+                continue;
+            }
+            let runner = RUNNERS
+                .iter()
+                .any(|r| n == *r || n.strip_prefix(r).is_some_and(|x| x.starts_with('.')));
+            if !(runner
+                || RUNNER_MODULES.contains(&n)
+                || ["subprocess", "pty", "commands", "asyncio"].contains(&top(n))
+                || PROCESS_STARTING_ATTRS.contains(&last))
+            {
+                continue;
+            }
+            match (n, st.get(k + 1), st.get(k + 2), st.get(k + 3)) {
+                (
+                    "os.system" | "os.popen",
+                    Some(Tok::Punct('(')),
+                    Some(Tok::Str {
+                        text,
+                        fstring: false,
+                    }),
+                    Some(Tok::Punct(')' | ',')),
+                ) if !inexact.contains(&(at + k + 2)) => lines.push(text.clone()),
+                _ => return None,
+            }
+        }
+    }
+    Some(lines)
 }
 
 /// A path a program names, as far as it can be read statically: a literal

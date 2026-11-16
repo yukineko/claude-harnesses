@@ -157,6 +157,9 @@ scripts/continuous-audit.sh --round <round-id> --dry-run
 - confirmed が 0 のラウンド (全件 refute) は締める対象が無いので通る。
 - CONFIRMED のうち**挙動バグ**は、対象 crate に**回帰テストを追加して固定**すること。
   これは別タスク (backlog / condukt) に委譲してもよいが、追加できた件数を記録すること。
+  target が blastguard の所見を `backlog add` するときは `--tag blastguard` に加えて
+  `--tag fail-open` か `--tag false-positive` を必ず付けること（無分類の blastguard 起票は
+  `backlog add` が拒否する。ユーザー裁定 2026-11-14）。
 
 ### Step 4.5 — closure を書き戻すこと
 

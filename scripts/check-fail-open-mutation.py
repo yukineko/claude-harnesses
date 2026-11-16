@@ -22,7 +22,14 @@ parallelguard) it
      mechanical fail-open mutation to the COPY of a real source file (a
      literal old-string -> new-string replacement, applied programmatically
      -- never "an LLM decides at check-time whether this would break
-     something"). USER RULING 2026-11-14: the mutation and the test run
+     something"). The mutation DELETES the construct under test (a guard,
+     a call, a comparison) or replaces it with the fail-open value; it
+     never neutralizes it in place. Wrapping the guarded block in
+     `if false {` or adding an always-taken `if true { return ...; }` is
+     banned (user ruling 2026-11-07): code that can never run is garbage,
+     in mutants as much as in real code.
+     `scripts/test_audit_b_mutation_deletes.py` enforces this on every
+     registered scenario. USER RULING 2026-11-14: the mutation and the test run
      happen in that scratch copy, and the invoking tree's tracked file is
      never written. The 2026-11-08 "no temp checkout" ruling is read
      narrowly as "no git worktree / second checkout", and this plain file
@@ -57,7 +64,7 @@ INCONCLUSIVE (it doesn't exercise the test suite's semantic judgment at all)
 and is reported separately from both CAUGHT and NOT-CAUGHT.
 
 Exit codes:
-  0 — every scenario across all 6 crates was CAUGHT (red confirmed).
+  0 — every selected scenario was CAUGHT (red confirmed).
   1 — at least one scenario was NOT CAUGHT (existing tests missed a real
       fail-open) or INCONCLUSIVE (mutation didn't compile), or an
       unexpected error occurred (including a scratch copy that could not be
@@ -107,7 +114,11 @@ class Scenario:
 
     `old` must appear EXACTLY ONCE in the target file (checked before
     mutating) so the replacement is unambiguous — if it appears zero or more
-    than once, the scenario is treated as INCONCLUSIVE rather than guessing.
+    than once, the scenario is reported as an error rather than guessing.
+
+    `new` must DELETE the construct under test (or replace it with the
+    fail-open value), never neutralize it in place with `if false {` or an
+    always-taken `if true {` (see the module docstring).
     """
 
     def __init__(self, crate, file_rel, description, old, new, tests=None):
@@ -185,34 +196,33 @@ SCENARIOS = [
         crate="stuckguard",
         file_rel="crates/stuckguard/src/detect.rs",
         description=(
-            "repeat(): make the repeat-threshold check always report 'not "
-            "enough repeats yet', so the repeat detector never trips "
-            "regardless of how many times an action repeats."
+            "detect(): delete the call to the repeat detector, so detect() "
+            "never reports a repeat trip regardless of how many times an "
+            "action repeats (only oscillation can still trip)."
         ),
-        old="    if same.len() < cfg.repeat_threshold {\n        return None;\n    }\n",
-        new="    if true {\n        return None;\n    }\n",
-        # Evidence (rev 91046d26, 2026-11-14): RED targets bin stuckguard,
-        # backlog_6108a7fa, faultinject_state, integration (all pass
-        # unmutated). integration: mutated exit 101 (1.3s warm).
+        old="        return Some(t);\n    }\n    repeat(window, cur, cfg)\n}\n",
+        new="        return Some(t);\n    }\n    None\n}\n",
+        # Selector: main's evidence (rev 91046d26, 2026-11-14) observed RED in
+        # --test integration for the earlier threshold mutant; re-observed
+        # for this call-deletion mutant at the merge into session-bf349dd5.
         tests=("--test", "integration"),
     ),
     Scenario(
         crate="parallelguard",
         file_rel="crates/parallelguard/src/model.rs",
         description=(
-            "acquire(): hardcode the cap check to never fire, so a class that "
-            "already holds `cap` live slots is admitted anyway — the width "
-            "limit this gate exists to enforce, removed."
+            "acquire(): delete the cap check, so a class that already holds "
+            "`cap` live slots is admitted anyway — the width limit this gate "
+            "exists to enforce, removed."
         ),
         old="        if live >= cap {\n"
         "            return Decision::Deny(deny_reason(class, live, cap));\n"
         "        }\n",
-        new="        if false {\n"
-        "            return Decision::Deny(deny_reason(class, live, cap));\n"
-        "        }\n",
-        # Evidence (rev 91046d26, 2026-11-14): RED targets bin parallelguard,
-        # concurrency, hook_contract (all pass unmutated). concurrency:
-        # mutated exit 101 (0.4s warm).
+        new="",
+        # Evidence (rev 91046d26, 2026-11-14) for the behaviourally identical
+        # `if false` wrapper: RED targets bin parallelguard, concurrency,
+        # hook_contract (all pass unmutated). concurrency: mutated exit 101.
+        # Re-observed for this deletion mutant at the merge.
         tests=("--test", "concurrency"),
     ),
     Scenario(

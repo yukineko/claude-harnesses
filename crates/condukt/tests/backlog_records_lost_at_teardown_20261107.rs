@@ -406,6 +406,21 @@ fn remove_is_refused_when_proofs_cannot_be_persisted() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    // The refusal must be the persist-failure refusal, not the
+    // unverified-task refusal (task t5 is verified, so the latter must not fire).
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("tdd proofs could not be persisted"),
+        "refusal is not the proof-persist failure (proof_archive.rs): {combined}"
+    );
+    assert!(
+        !combined.contains("(not verified)") && !combined.contains("cannot determine whether"),
+        "refusal came from the unverified-task gate (teardown_gate.rs), not persisting: {combined}"
+    );
 }
 
 /// Read-only every dir under `root` that is not inside `keep` and not an

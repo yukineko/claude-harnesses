@@ -182,7 +182,6 @@ fn control_recorded_worktree_runs_command_there_not_in_cwd() {
 }
 
 #[test]
-#[ignore = "RED: check-criteria with a null task worktree runs the command in the caller's cwd and reports a verdict (main.rs CheckCriteria unwrap_or_else(cwd)); expected refusal/undetermined"]
 fn null_worktree_check_criteria_does_not_run_in_cwd_and_is_not_a_verdict() {
     let fx = Fx::new("null");
     let run = fx.run_with(false);

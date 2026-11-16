@@ -31,7 +31,10 @@
 //! from them, unassigned names, assignments guarded by `&&`/`||` or inside an
 //! `if`/loop/`case`/subshell/brace group, a pipeline stage or `&`, arrays,
 //! `+=`, any other statement mentioning the name outside a plain reference
-//! (`read X`, `for X in`, `unset X`, `printf -v X`, `(X=…`, `$(X=…)`), a
+//! (`read X`, `for X in`, `unset X`, `printf -v X`, `(X=…`, `$(X=…)`; the
+//! name as a path component between two slashes — the `fd` of `/dev/fd/$fd`
+//! — is literal text and does not count, so `fd=3; …; bash /dev/fd/$fd`
+//! resolves to `bash /dev/fd/3` like `<&$fd` does, backlog 54231a0a), a
 //! name rebound anywhere inside a loop (from the loop opener on), `eval` /
 //! `source` / `.` (the environment is dropped), shell-maintained names
 //! (`PWD`, `RANDOM`, `_`, …), and here-document bodies.

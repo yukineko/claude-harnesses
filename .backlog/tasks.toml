@@ -2070,6 +2070,8 @@ notes = 'Observed 2026-11-15 at main a8e92b562 (script from 4d1d74f6c). main() c
 created_at = 1794746224
 updated_at = 1794746224
 weight = 0.0
+issue_number = 1824
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1824"
 rev = 0
 
 [task.repro]
@@ -2095,6 +2097,8 @@ notes = 'Observed 2026-11-15 at main a8e92b562 (blastguard 0.2.619). Verdict inp
 created_at = 1794746259
 updated_at = 1794746259
 weight = 0.0
+issue_number = 1825
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1825"
 rev = 0
 
 [task.repro]
@@ -2123,6 +2127,8 @@ notes = """Observed 2026-11-15 at a8e92b562, worktree c 03a066401, and acf8a59bd
 created_at = 1794746822
 updated_at = 1794746822
 weight = 0.0
+issue_number = 1826
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1826"
 rev = 0
 
 [task.repro]
@@ -2367,6 +2373,8 @@ notes = "Observed 2026-11-16, main fa58e3698 (blastguard 0.2.672), run-20261116-
 created_at = 1794813495
 updated_at = 1794813495
 weight = 0.0
+issue_number = 1827
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1827"
 rev = 0
 
 [task.repro]
@@ -2396,6 +2404,8 @@ notes = "Observed 2026-11-16, main fa58e3698 (blastguard 0.2.672), run-20261116-
 created_at = 1794813550
 updated_at = 1794813550
 weight = 0.0
+issue_number = 1828
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1828"
 rev = 0
 
 [task.repro]
@@ -2426,6 +2436,8 @@ notes = "Observed 2026-11-16, main fa58e3698 (blastguard 0.2.672), run-20261116-
 created_at = 1794813600
 updated_at = 1794813600
 weight = 0.0
+issue_number = 1829
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1829"
 rev = 0
 
 [task.repro]
@@ -2457,6 +2469,8 @@ notes = "Observed 2026-11-16, main fa58e3698 (blastguard 0.2.672), run-20261116-
 created_at = 1794813626
 updated_at = 1794813626
 weight = 0.0
+issue_number = 1830
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1830"
 rev = 0
 
 [task.repro]
@@ -2487,6 +2501,8 @@ notes = """Observed 2026-11-16, main fa58e3698 (blastguard 0.2.672), run-2026111
 created_at = 1794813882
 updated_at = 1794813882
 weight = 0.0
+issue_number = 1831
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1831"
 rev = 0
 
 [task.repro]
@@ -2578,6 +2594,8 @@ notes = """Observed 2026-11-16 at 202efa14a: 62 files with #[ignore = "RED", 51 
 created_at = 1794821176
 updated_at = 1794821176
 weight = 0.0
+issue_number = 1832
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1832"
 rev = 0
 
 [task.repro]

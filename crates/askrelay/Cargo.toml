@@ -1,0 +1,23 @@
+[package]
+name = "askrelay"
+version = "0.1.0"
+edition = "2021"
+rust-version.workspace = true
+description = "Subagent Ask relay: a gate's Ask that was hardened to Deny inside a subagent is queued, and a main-session Stop hook blocks until the main session has re-run it under its own permission prompt and relayed the result (or dismissed it with a reason)."
+license = "MIT"
+
+# Binary only. The queue format and operations (`harness_core::relay`) live in
+# harness-core so that blastguard can enqueue a hardened subagent Ask without
+# depending on this crate, and this crate depends on no gate.
+[[bin]]
+name = "askrelay"
+path = "src/main.rs"
+
+[dependencies]
+harness-core = { path = "../harness-core" }
+serde_json = { workspace = true }
+
+# ワークスペースの [workspace.lints.clippy] を継承する（unwrap_used / expect_used = deny）。
+# Stop を block する判定を持つ crate なので、production 側に unwrap / expect を書けなくする。
+[lints]
+workspace = true

@@ -1211,18 +1211,17 @@ fn spawn_and_wait_timeout(
 /// which nobody reads in passing. So a failure is ALSO written to `syncstate`,
 /// which the `UserPromptSubmit` hook surfaces on the next prompt; a success
 /// clears it. A worker killed before it gets here writes nothing at all; its
-/// pending marker covers that case.
+/// pending marker covers that case. A successful FULL sync (neither `--pull-only`
+/// nor `--push-only`) also removes the markers of definitively dead workers;
+/// alive, undeterminable and unparseable ones stay, and a failed or partial sync
+/// removes none (`sessionend::clear_dead_markers_after_sync`).
 fn cmd_sync(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<()> {
-    match sync_inner(cfg, pull_only, push_only) {
-        Ok(()) => {
+    sync_inner(cfg, pull_only, push_only)
+        .inspect(|_| {
             syncstate::clear();
-            Ok(())
-        }
-        Err(e) => {
-            syncstate::record(&format!("{e:#}"));
-            Err(e)
-        }
-    }
+            sessionend::clear_dead_markers_after_sync(pull_only, push_only);
+        })
+        .inspect_err(|e| syncstate::record(&format!("{e:#}")))
 }
 
 fn sync_inner(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<()> {

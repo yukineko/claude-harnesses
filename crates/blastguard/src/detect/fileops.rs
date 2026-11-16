@@ -781,7 +781,8 @@ tell which path it writes (or, for mv, removes) and refuses to guess"
 /// judges the destination token as typed, so `$L` matched no system or protected
 /// path and the line was Allow while the literal spelling is Deny.
 ///
-/// `resolve` is the line's own resolution (see `rm::known_path_harm`). A
+/// `resolve` is the line's own resolution, then the AST evaluator's (see
+/// `rm::known_path_harm`). A
 /// resolved destination is substituted back into the argv and judged by
 /// [`analyze_copy_move`] itself, so the literal and the variable spelling cannot
 /// disagree. A destination that cannot be resolved is an Ask, never an Allow

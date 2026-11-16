@@ -46,17 +46,24 @@
 //!   undetermined operand; an undetermined command word is
 //!   `Some(Undetermined)`.
 //!
-//! No detector calls this module yet; the detector-migration tasks of this
-//! run wire it in.
+//! The path-resolution detectors read it through [`targets`] (task
+//! `migrate-path` of run-20261116-020031-33040): the truncating / append
+//! redirect targets, `rm` operands, the `sed -i` / `chmod` / … mutated files
+//! and the `cp` / `mv` / `install` destination that the string readings
+//! cannot place are judged on the values [`targets::resolve`] hands back.
+//! No other detector reads this module yet ([`program_source`] and the stdin
+//! sources are the next migration's).
 
-// No caller yet: the detector-migration tasks of run-20261116-020031-33040
-// wire it in and remove this allow.
+// Only `targets` has a caller so far; the rest of the contract (e.g.
+// `program_source`, `StdinSource`) is wired in by the later migration tasks
+// of run-20261116-020031-33040, which remove this allow.
 #![allow(dead_code)]
 
 mod arith;
 mod eval;
 mod parse;
 mod support;
+pub(super) mod targets;
 #[cfg(test)]
 mod tests;
 

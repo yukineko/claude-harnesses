@@ -1,8 +1,11 @@
+use super::ast::targets;
 use super::function_calls::{function_call_reading, FUNCTION_CALL_UNDETERMINED};
 use super::shell_lex::{
     bash32_lexed_reading, line_continuation_reading, shell_lexed_reading, Bash32Lexed, ShellLexed,
 };
-use super::substitution::{assuming_comment_hides_quotes, under_bash32_reading};
+use super::substitution::{
+    assuming_comment_hides_quotes, under_bash32_reading, under_bash32_reading_diverged,
+};
 use super::{
     detect_bash, Ctx, Decision, SafeRoots, VerdictAcc, ANALYSIS_BUDGET, MAX_ANALYSIS_NODES,
 };
@@ -65,6 +68,13 @@ mod static_bindings;
 /// D4: each pass starts from a full per-command node budget, so a later
 /// reading cannot be starved by an earlier one; budget exhaustion in any pass
 /// is that pass's own Ask.
+///
+/// Every pass runs with the AST index of the (statically resolved) text
+/// active ([`targets::with_index`], task `migrate-path`): the path-resolution
+/// rules judge a target their string reading cannot place on the values the
+/// AST evaluator proved it names. A bash 3.2 pass whose parse differs from
+/// the modern one, and the comment-hides-quotes candidate, run without it
+/// ([`bash32_pass`]).
 pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision {
     // Backlog 3a950c6c / 5ef2d51f: every reading below — and every rule inside
     // each — judges the text with the line's own literal bindings already
@@ -72,6 +82,23 @@ pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision 
     // resolver, run once, before anything else; see `static_bindings`.
     let resolved = static_bindings::resolve_static_bindings(c);
     let c: &str = &resolved;
+    targets::with_index(c, || every_reading(c, scope))
+}
+
+/// [`under_bash32_reading`] of `pass`. When that reading closed a construct
+/// where the modern scan does not, the text is read differently from the
+/// parse the AST index describes, so the pass is judged once more with the
+/// index suspended and that verdict is the answer.
+fn bash32_pass(pass: impl Fn() -> Decision) -> (Decision, bool) {
+    let (verdict, undetermined, diverged) = under_bash32_reading_diverged(&pass);
+    if !diverged {
+        return (verdict, undetermined);
+    }
+    ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
+    targets::suspended(|| under_bash32_reading(&pass))
+}
+
+fn every_reading(c: &str, scope: &SafeRoots) -> Decision {
     ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
     let mut acc = VerdictAcc::default();
     if let Some(deny) = acc.record(detect_bash(c, 0, &Ctx::new(scope, c))) {
@@ -126,8 +153,7 @@ pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision 
         return acc.finish();
     }
     ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
-    let (bash32, mut undetermined) =
-        under_bash32_reading(|| detect_bash(c, 0, &Ctx::new(scope, c)));
+    let (bash32, mut undetermined) = bash32_pass(|| detect_bash(c, 0, &Ctx::new(scope, c)));
     if let Some(deny) = acc.record(bash32) {
         return deny;
     }
@@ -137,7 +163,7 @@ pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision 
         Bash32Lexed::Text(lexed) => {
             ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
             let (verdict, lexed_undetermined) =
-                under_bash32_reading(|| detect_bash(&lexed, 0, &Ctx::new(scope, &lexed)));
+                bash32_pass(|| detect_bash(&lexed, 0, &Ctx::new(scope, &lexed)));
             if let Some(deny) = acc.record(verdict) {
                 return deny;
             }
@@ -266,22 +292,25 @@ const LINE_CONTINUATION_UNDETERMINED: &str =
 /// in D1-D3 of `tests/heredoc_paren_bash32_verifier_20261107.rs`). Each
 /// verdict is recorded into `acc`; a Deny is returned. The passes' own
 /// undetermined flags are ignored on purpose: the caller has already decided
-/// the command is undetermined and records that Ask itself.
+/// the command is undetermined and records that Ask itself. A candidate parse
+/// is not the one the AST index describes, so the index is suspended here.
 fn bash32_comment_candidate(c: &str, scope: &SafeRoots, acc: &mut VerdictAcc) -> Option<Decision> {
-    assuming_comment_hides_quotes(|| {
-        ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
-        let (plain, _) = under_bash32_reading(|| detect_bash(c, 0, &Ctx::new(scope, c)));
-        if let Some(deny) = acc.record(plain) {
-            return Some(deny);
-        }
-        if let Bash32Lexed::Text(lexed) = bash32_lexed_reading(c) {
+    targets::suspended(|| {
+        assuming_comment_hides_quotes(|| {
             ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
-            let (verdict, _) =
-                under_bash32_reading(|| detect_bash(&lexed, 0, &Ctx::new(scope, &lexed)));
-            if let Some(deny) = acc.record(verdict) {
+            let (plain, _) = under_bash32_reading(|| detect_bash(c, 0, &Ctx::new(scope, c)));
+            if let Some(deny) = acc.record(plain) {
                 return Some(deny);
             }
-        }
-        None
+            if let Bash32Lexed::Text(lexed) = bash32_lexed_reading(c) {
+                ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
+                let (verdict, _) =
+                    under_bash32_reading(|| detect_bash(&lexed, 0, &Ctx::new(scope, &lexed)));
+                if let Some(deny) = acc.record(verdict) {
+                    return Some(deny);
+                }
+            }
+            None
+        })
     })
 }

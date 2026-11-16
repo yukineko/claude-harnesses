@@ -102,7 +102,6 @@ fn invocations(p: &Path) -> usize {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R8: state test writes no self-confirm row (no ledger.v2.tsv)"]
 fn state_test_confirms_its_own_run() {
     let fx = fixture();
     let first = run(&fx, &normal_path(&fx), &["state", "test", "--run", "runT"]);
@@ -139,7 +138,6 @@ fn path_without_sh() -> String {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R8: spawn failure appends no invalidate row; the rerun stays pending-blocked"]
 fn spawn_failure_invalidates_pending_row_so_rerun_runs() {
     let fx = fixture();
     let failed = run(&fx, &path_without_sh(), &["state", "test", "--run", "runT"]);

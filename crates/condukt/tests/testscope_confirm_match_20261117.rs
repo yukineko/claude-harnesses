@@ -15,7 +15,6 @@ use testscope_confirm_common::*;
 const CMD: &str = "cargo test -p foo --test bar";
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R5: Post(B) must promote only B; A stays pending (Ask)"]
 fn post_promotes_only_its_own_tool_use_id() {
     let env = Env::new();
     let root = repo();
@@ -32,7 +31,6 @@ fn post_promotes_only_its_own_tool_use_id() {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R5: unmatched Post records an unmatched row; rerun is Ask on any tree"]
 fn unmatched_post_makes_later_reruns_ask_regardless_of_tree() {
     let env = Env::new();
     let root = repo();
@@ -45,7 +43,6 @@ fn unmatched_post_makes_later_reruns_ask_regardless_of_tree() {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R5: one Post confirms every pending row of that tool_use_id"]
 fn one_post_confirms_all_test_commands_of_one_call() {
     let env = Env::new();
     let root = repo();
@@ -67,7 +64,6 @@ fn one_post_confirms_all_test_commands_of_one_call() {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R5: confirmed row on this tree beats an unmatched row; without it unmatched asks"]
 fn confirmed_row_wins_over_unmatched_row() {
     let env = Env::new();
     let root = repo();
@@ -82,7 +78,6 @@ fn confirmed_row_wins_over_unmatched_row() {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R5: unwritable ledger on Post surfaces a systemMessage, never block; row stays pending"]
 fn io_failure_on_post_is_surfaced_not_blocked_and_stays_pending() {
     use std::os::unix::fs::PermissionsExt;
     let env = Env::new();

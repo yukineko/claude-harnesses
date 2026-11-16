@@ -2565,8 +2565,9 @@ pub fn resolve_agent_tokens(agent_id: &str) -> Determination<Option<(u64, u64)>>
 /// the user expects (`pytest -k "foo bar"`).
 ///
 /// It is first judged by [`crate::testscope::judge`] (the hook's rules and
-/// rerun ledger, repo root as cwd): a deny refuses without running, an allow is
-/// recorded in the ledger. No ledger location (`$HOME` unset) is refused.
+/// rerun ledger, repo root as cwd): a deny or an ask refuses without running; an
+/// allow writes a pending row this function settles itself (confirm / invalidate
+/// on a failed spawn). No ledger location (`$HOME` unset) is refused.
 pub fn run_tests(cfg: &Config, cwd: &Path, _rs: &RunState) -> Result<()> {
     let root = repo_root(cwd);
     let cmd_str = cfg
@@ -2580,16 +2581,19 @@ pub fn run_tests(cfg: &Config, cwd: &Path, _rs: &RunState) -> Result<()> {
     let Some(ledger) = crate::testscope::ledger_path(home.as_deref()) else {
         bail!("refusing to run `{cmd_str}`: HOME is unset, so the rerun ledger has no location");
     };
-    if let crate::testscope::Decision::Deny(reason) =
-        crate::testscope::judge(&cmd_str, &root, home.as_deref(), &ledger)
-    {
-        bail!("refusing to run `{cmd_str}`: {reason}");
+    let attempt_id = crate::testscope::self_attempt_id();
+    match crate::testscope::judge(&cmd_str, &root, home.as_deref(), &ledger, Some(&attempt_id)) {
+        crate::testscope::Decision::Allow => {}
+        crate::testscope::Decision::Deny(reason) | crate::testscope::Decision::Ask(reason) => {
+            bail!("refusing to run `{cmd_str}`: {reason}");
+        }
     }
     eprintln!("condukt: running tests in {}: {cmd_str}", root.display());
-    let status = harness_core::shell::command(&cmd_str)
+    let spawned = harness_core::shell::command(&cmd_str)
         .current_dir(&root)
-        .status()
-        .with_context(|| format!("failed to run '{cmd_str}'"))?;
+        .status();
+    let status = crate::testscope::settle_self_run(&ledger, &attempt_id, &cmd_str, &root, spawned)
+        .map_err(anyhow::Error::msg)?;
     if status.success() {
         eprintln!("condukt: tests passed");
         Ok(())

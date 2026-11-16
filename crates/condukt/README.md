@@ -138,6 +138,30 @@ reference material, not an instruction, and never able to override
 `done_criteria`/scope. `condukt learning-signal` (above) is the read-only
 measurement layer over that same lessons flow.
 
+**`testscope` rerun ledger (confirmed runs).** The PreToolUse `condukt testscope`
+hook refuses a full suite, a mid-run main merge, an out-of-scope test target and
+the *rerun of a test that already ran on the same tree*. "Already ran" means a
+run that is **confirmed** as executed: PreToolUse can only record a *pending* row
+(another hook may still stop the call), and the `condukt testscope-confirm` hook
+(PostToolUse and PostToolUseFailure, matcher `Bash`; an interrupted run counts)
+promotes the rows with the same `tool_use_id`. A confirmed rerun is **denied**;
+a rerun whose only prior is pending (never confirmed, a legacy `ledger.tsv` row,
+or a Post that matched no row) **asks** (`permissionDecision: ask`), because a
+call that a hook denied or asked about fires no Post and so cannot be told from
+one that ran. New records are append-only in `ledger.v2.tsv`; confirmation also
+appends the old 3-column row to `ledger.tsv` so an older cached binary still
+refuses a confirmed rerun. An unreadable or unparseable `ledger.v2.tsv` is denied,
+never read as "no prior". `condukt state test` confirms its own run (and
+invalidates its row when the spawn fails). A confirm hook that crashes or cannot
+write prints a `systemMessage` and never blocks.
+
+Measured fact (claude 2.1.284, headless `claude -p`; spec `testscope-confirmed-run`
+R10): a Bash call that a hook answered with `ask` becomes `permission_denied`
+headless and fires neither PostToolUse nor PostToolUseFailure, i.e. an `ask` is
+effectively a deny there. Whether an `ask` resolves the same way inside a
+subagent has **not yet been measured** for testscope; that measurement is the
+remaining part of R10 and is recorded here once taken.
+
 ## Install
 
 ### Plugin (recommended)

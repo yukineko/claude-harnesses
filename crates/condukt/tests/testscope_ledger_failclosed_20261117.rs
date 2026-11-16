@@ -35,7 +35,6 @@ fn control_no_ledger_allows_first_run() {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R9: unreadable ledger.v2.tsv (a directory) is ignored and the rerun allowed"]
 fn unreadable_v2_ledger_is_not_allow() {
     let env = Env::new();
     let root = repo();
@@ -45,7 +44,6 @@ fn unreadable_v2_ledger_is_not_allow() {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R9: ledger.v2.tsv with invalid UTF-8 is ignored and the rerun allowed"]
 fn non_utf8_v2_ledger_is_not_allow() {
     let env = Env::new();
     let root = repo();
@@ -55,7 +53,6 @@ fn non_utf8_v2_ledger_is_not_allow() {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R9: unparseable v2 row is skipped and the rerun allowed"]
 fn unparseable_v2_row_is_not_allow() {
     let env = Env::new();
     let root = repo();

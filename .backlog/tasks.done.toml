@@ -81274,3 +81274,131 @@ rev = "9d0e7defaee17d5e84aefa974a8b9cbfb6d439b7"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "64fe4e19"
+title = "condukt testscope: rerun guard records a test command at PreToolUse, so an attempt a later hook blocked (never executed) refuses the real run"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "testscope",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-15 in run-20261114-161340-68728: a combined heredoc+cargo test Bash call was denied by blastguard at PreToolUse; every later run of that cargo test was refused by testscope as 'already ran on this exact tree' although it never executed. crates/condukt/src/testscope.rs check_rerun writes the ledger line and returns Allow in the same PreToolUse; there is no PostToolUse confirmation. RED by an independent author (sonnet): crates/condukt/tests/backlog_20261115_testscope_counts_unexecuted_attempt.rs. Readings: (a) defect - a never-executed attempt counts as a run; (b) intended - recording at Pre is the only hook point. Distinguish: whether testscope docs promise 'ran'. Related (separate row): cd-target tree identity (backlog_20261114_testscope_cd_tree_identity). Fix must stay fail-closed."
+created_at = 1794680589
+updated_at = 1794869336
+weight = 0.0
+issue_number = 1785
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1785"
+issue_closed_at = 1794869339
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261115_testscope_counts_unexecuted_attempt -- --include-ignored"
+rev = "8fc672062940920906b2f947a5bf2cccc4f7ccdc"
+observed_at = 1794680589
+detail = """
+exit 101: _unexecuted_attempt" -p condukt` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.03s
+     Running tests/backlog_20261115_testscope_counts_unexecuted_attempt.rs (target/debug/deps/backlog_20261115_testscope_counts_unexecuted_attempt-bf799c7a4f6b54c1)
+error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_counts_unexecuted_attempt`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test testscope_ask_pending_20261117"
+exit = 0
+passed = 7
+rev = "ec660b1ef147179f53969851189110d14dc3f9e3"
+observed_at = 1794869321
+output_digest = "sha256:9fccecd1c6aebb507dae2e96a27f89772875a44b983b20a4a7cb8119fab30cc8"
+excerpt = """
+
+running 7 tests
+test b_legacy_three_column_row_only_is_pending_so_ask ... ok
+test control_first_pre_is_allowed ... ok
+test c_pre_without_tool_use_id_is_allowed_but_never_promoted ... ok
+test ask_output_never_contains_deny ... ok
+test a_pre_only_then_pre_is_ask ... ok
+test ask_pre_without_post_stays_pending ... ok
+test ask_pre_row_is_promoted_by_its_own_post ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.51s
+
+   Compiling blastguard v0.2.681 (/Users/yuki/src/.harness-worktrees/fix-b2d9cb6b/crates/blastguard)
+   Compiling condukt v0.7.441 (/Users/yuki/src/.harness-worktrees/fix-b2d9cb6b/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.73s
+     Running tests/testscope_ask_pending_20261117.rs (target/debug/deps/testscope_ask_pending_20261117-1aaf0dcf7e276d10)
+"""
+
+[task.closure.red]
+rev = "47568c2f625cc0d16a76e11ced31a536f6165323"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "b2d9cb6b"
+title = "condukt: suffixed-topic retry worktree (--topic <task>-r1) records identity of a task the run lacks; verified task's worktree cannot be removed/merged"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "worktree",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-14 run run-20261114-163341-69351 task e70b6a71. worktree create --run R --topic <task>-r1 records branch identity R/<task>-r1 (worktree.rs create_namespaced). Then worktree merge --task <task> => merge-task-mismatch, and worktree remove of the VERIFIED task's recorded worktree refuses: 'cannot determine whether the task that owns it is verified (branch identity names task <task>-r1 of run R, which that run does not have)' (teardown_gate.rs). RED: crates/condukt/tests/backlog_20261114_retry_suffixed_topic_worktree_unremovable.rs (commit bbffde1cb, side/run-20261114-163341-69351). Two readings: (a) binary: teardown gate should fall back to the task whose recorded worktree is this path, or create should not mint identity for a nonexistent task; (b) skill: SKILL.md retry step (L1038 'new per-task worktree') gives no naming rule; correct invocation keeps --topic <task>. Distinguish: if a documented invocation yields a fresh retry worktree with identity R/<task>, it is (b); if none exists, (a)."
+created_at = 1794647180
+updated_at = 1794869343
+weight = 0.0
+issue_number = 1772
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1772"
+issue_closed_at = 1794869346
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261114_retry_suffixed_topic_worktree_unremovable -- --ignored verified_task_with_suffixed_topic_retry_worktree_can_be_removed"
+rev = "bbffde1cbf508b54ea9de97004e080e219cd7d1d"
+observed_at = 1794647180
+detail = """
+exit 101: 20261114-163341-69351/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.29s
+     Running tests/backlog_20261114_retry_suffixed_topic_worktree_unremovable.rs (target/debug/deps/backlog_20261114_retry_suffixed_topic_worktree_unremovable-302e92890b4d4139)
+error: test failed, to rerun pass `-p condukt --test backlog_20261114_retry_suffixed_topic_worktree_unremovable`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261114_retry_suffixed_topic_worktree_unremovable"
+exit = 0
+passed = 1
+rev = "ec660b1ef147179f53969851189110d14dc3f9e3"
+observed_at = 1794869340
+output_digest = "sha256:9c248bbc18ad163374c8b6317a73dfba4d967992ebdb0ca0c05218c6b7aae4d8"
+excerpt = """
+
+running 1 test
+test verified_task_with_suffixed_topic_retry_worktree_can_be_removed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.75s
+
+   Compiling condukt v0.7.441 (/Users/yuki/src/.harness-worktrees/fix-b2d9cb6b/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running tests/backlog_20261114_retry_suffixed_topic_worktree_unremovable.rs (target/debug/deps/backlog_20261114_retry_suffixed_topic_worktree_unremovable-e7bc47c0cc92f449)
+"""
+
+[task.closure.red]
+rev = "bbffde1cbf508b54ea9de97004e080e219cd7d1d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

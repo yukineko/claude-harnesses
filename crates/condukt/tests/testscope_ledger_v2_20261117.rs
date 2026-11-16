@@ -23,7 +23,6 @@ fn legacy_rows(env: &Env) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R6: no ledger.v2.tsv / no legacy row at confirmation"]
 fn confirmation_appends_v2_confirm_and_legacy_three_column_row() {
     let env = Env::new();
     let root = repo();
@@ -42,7 +41,6 @@ fn confirmation_appends_v2_confirm_and_legacy_three_column_row() {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R6: Pre alone must not write a legacy row (it does at HEAD)"]
 fn pre_alone_writes_no_legacy_row() {
     let env = Env::new();
     let root = repo();
@@ -56,7 +54,6 @@ fn pre_alone_writes_no_legacy_row() {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R6: v2 pending row must carry raw command and payload cwd as columns"]
 fn v2_pending_row_carries_raw_command_and_cwd_columns() {
     let env = Env::new();
     let root = repo();
@@ -69,7 +66,6 @@ fn v2_pending_row_carries_raw_command_and_cwd_columns() {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R6: existing v2 rows stay a byte prefix across later operations"]
 fn existing_rows_are_a_byte_prefix_after_later_operations() {
     let env = Env::new();
     let root = repo();

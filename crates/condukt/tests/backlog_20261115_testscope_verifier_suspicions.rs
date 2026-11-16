@@ -53,14 +53,39 @@ fn repo() -> TempDir {
 }
 
 fn run(home: &Path, ledger: &Path, cmd: &str, cwd: &Path) -> (Option<i32>, String) {
-    let payload = serde_json::json!({
+    run_as("testscope", None, home, ledger, cmd, cwd)
+}
+
+/// `run`, then (when the hook allowed it, i.e. the command ran) the
+/// PostToolUse that confirms the run (spec testscope-confirmed-run R2 / C2:
+/// input only, the asserts stay as they were).
+fn run_confirmed(home: &Path, ledger: &Path, cmd: &str, cwd: &Path) -> (Option<i32>, String) {
+    let res = run_as("testscope", Some("tu-1"), home, ledger, cmd, cwd);
+    if res.1.trim().is_empty() {
+        run_as("testscope-confirm", Some("tu-1"), home, ledger, cmd, cwd);
+    }
+    res
+}
+
+fn run_as(
+    sub: &str,
+    tuid: Option<&str>,
+    home: &Path,
+    ledger: &Path,
+    cmd: &str,
+    cwd: &Path,
+) -> (Option<i32>, String) {
+    let mut payload = serde_json::json!({
         "session_id": "s",
         "tool_name": "Bash",
         "tool_input": {"command": cmd},
         "cwd": cwd.to_str().unwrap(),
     });
+    if let Some(id) = tuid {
+        payload["tool_use_id"] = serde_json::json!(id);
+    }
     let mut child = Command::new(env!("CARGO_BIN_EXE_condukt"))
-        .arg("testscope")
+        .arg(sub)
         .env("HOME", home)
         .env("CONDUKT_TESTSCOPE_LEDGER", ledger)
         .current_dir(cwd)
@@ -110,10 +135,13 @@ impl Fx {
     fn go(&self, cmd: &str, cwd: &Path) -> (Option<i32>, String) {
         run(self.home.path(), &self.ledger(), cmd, cwd)
     }
+    fn go_confirmed(&self, cmd: &str, cwd: &Path) -> (Option<i32>, String) {
+        run_confirmed(self.home.path(), &self.ledger(), cmd, cwd)
+    }
     /// From P: run `cd X && PLAIN` (must be allowed), then `form` (X unchanged).
     fn a(&self, form: &str) -> (Option<i32>, String) {
         let seed = format!("cd {} && {PLAIN}", self.x.path().display());
-        let first = self.go(&seed, self.p.path());
+        let first = self.go_confirmed(&seed, self.p.path());
         assert!(!denied(&first), "seed run in X must be allowed: {first:?}");
         let second = self.go(form, self.p.path());
         eprintln!("form {form:?} -> {second:?}");
@@ -185,7 +213,7 @@ fn b(untracked: bool) {
     if untracked {
         std::fs::write(x.join("untracked.txt"), "u\n").unwrap();
     }
-    let first = fx.go(PLAIN, x);
+    let first = fx.go_confirmed(PLAIN, x);
     assert!(!denied(&first), "first run in X must be allowed: {first:?}");
     let cmd = format!("cd {} && {PLAIN}", x.join("sub").display());
     let second = fx.go(&cmd, x);

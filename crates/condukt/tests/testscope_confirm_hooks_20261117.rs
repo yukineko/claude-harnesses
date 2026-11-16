@@ -25,19 +25,16 @@ fn event_has_bash_entry(event: &str) -> bool {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R4: hooks.json has no Bash PostToolUse entry"]
 fn hooks_json_has_bash_posttooluse_entry() {
     assert!(event_has_bash_entry("PostToolUse"));
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R4: hooks.json has no Bash PostToolUseFailure entry"]
 fn hooks_json_has_bash_posttooluse_failure_entry() {
     assert!(event_has_bash_entry("PostToolUseFailure"));
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R4: a Post is judged as a Pre and answered with a permission decision"]
 fn pre_then_post_confirms_and_rerun_is_denied() {
     let env = Env::new();
     let root = repo();
@@ -59,7 +56,6 @@ fn pre_then_post_confirms_and_rerun_is_denied() {
 }
 
 #[test]
-#[ignore = "RED testscope-confirmed-run R4: a PostToolUseFailure is judged as a Pre and answered with a permission decision"]
 fn pre_then_post_failure_confirms_and_rerun_is_denied() {
     let env = Env::new();
     let root = repo();

@@ -1,10 +1,16 @@
 [spec]
 id = "testscope-confirmed-run"
 title = "condukt testscope: rerun guard counts only test runs that actually executed (backlog 64fe4e19)"
-status = "draft"
+status = "ratified"
 provenance_commit = "adbdd16fd06b4a780f4110a937e3d29be674609d"
 date = "2026-11-17"
 canon = []
+
+[spec.ratification]
+canon_commit = "0e9d4b79b813de555eb2dc38d25584906f438bf6"
+date = "2026-11-17"
+reason = "User rulings 2026-11-14..17 recorded in the req file; independent sonnet review PASS (draft 13 + 4 verified fixes)"
+fingerprint = "f9b108aa3b09c3b9"
 
 [[requirement]]
 id = "R1"

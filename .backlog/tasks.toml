@@ -2829,6 +2829,8 @@ notes = "User ruling 2026-11-17 (proof contract b,d,e). RED 25a27ee67 crates/tdd
 created_at = 1794868790
 updated_at = 1794868790
 weight = 0.0
+issue_number = 1841
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1841"
 rev = 0
 
 [task.repro]

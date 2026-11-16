@@ -2590,6 +2590,8 @@ notes = "3858c833f で rollout check は pre-push から外れ SessionStart の�
 created_at = 1794792195
 updated_at = 1794792195
 weight = 0.0
+issue_number = 1817
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1817"
 rev = 0
 
 [task.repro]

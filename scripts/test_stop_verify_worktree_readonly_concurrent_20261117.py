@@ -98,16 +98,6 @@ class ReadOnlySessionConcurrentForeignWrite(ObserveGuardBase):
             "a session that ran only `git status` in main was blocked at Stop for "
             f"another process's write: rc={r.returncode} stderr={r.stderr!r}")
 
-    def _foreign_backlog_commit(self, rows: int) -> None:
-        """Another session's `backlog add` in main: write .backlog/tasks.toml,
-        then commit it (the shape of a7857dbbe / aa18dda2c "backlog: file
-        7768aeaf")."""
-        p = self.main / ".backlog" / "tasks.toml"
-        p.parent.mkdir(exist_ok=True)
-        p.write_text(f"rows = {rows}\n")
-        git(self.main, "add", "--", ".backlog/tasks.toml")
-        git(self.main, *GIT_ID, "commit", "-q", "-m", "backlog: file 7768aeaf")
-
     def test_foreign_main_commits_attributed_to_readonly_session(self) -> None:
         """Fixture with ANOTHER session's main commits (user-specified shape).
 

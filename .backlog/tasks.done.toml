@@ -80319,3 +80319,69 @@ auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はあり
    Compiling blastguard v0.2.664 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.73s
      Running tests/backlog_20261114_python_stdin_forward_shell_literal_harm.rs (target/debug/deps/backlog_20261114_python_stdin_forward_shell_literal_harm-f55d3f3335fe0ca5)"""
+
+[[task]]
+id = "42741ea3"
+title = "blastguard fail-open: git apply/git am fed a quoted heredoc patch that creates run.sh, then 'sh run.sh', is Allow (system harm)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-14 by the independent verifier of condukt run run-20261114-163341-69351 task e70b6a71 at commit 1420ba8ee and again on main 5decb21e2 (pinned as #[ignore]d e_prime test). Command: git apply <<'EOF' / <diff creating run.sh with +rm -rf ~> / EOF / sh run.sh (and the same with git am) is Allow in main and subagent. here_document_consumer_is_data rejects non-commit git, so the e70b6a71 diff did not touch this path; the verifier reports it pre-existing (Allow at 1420ba8ee; base eeaa73843 not directly measured because the testscope rerun hook refused). Expected: Deny (system harm through a file the heredoc writes via git). Distinguish: if base eeaa73843 is also Allow it is pre-existing (a); if not, it regressed (b) — measure with the e_prime test at both revs."
+created_at = 1794646180
+updated_at = 1794809682
+weight = 0.0
+issue_number = 1770
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1770"
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test verify_e70b6a71_commit_heredoc_later_cmds -- --ignored e_prime_git_apply_or_am_patch_then_running_the_written_file_is_not_allowed"
+rev = "5decb21e2f604f4eb450256c59378909525b19c9"
+observed_at = 1794646180
+detail = """
+exit 101: /Users/yuki/src/.harness-worktrees/side-run-20261114-163341-69351/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.25s
+     Running tests/verify_e70b6a71_commit_heredoc_later_cmds.rs (target/debug/deps/verify_e70b6a71_commit_heredoc_later_cmds-d7445c9c13b531bf)
+error: test failed, to rerun pass `-p blastguard --test verify_e70b6a71_commit_heredoc_later_cmds`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test verify_e70b6a71_commit_heredoc_later_cmds -- --include-ignored"
+exit = 0
+passed = 7
+rev = "0dd31b6c38a74d70ad3e0570a0a256393b2dab1c"
+observed_at = 1794809672
+output_digest = "sha256:57b79a5a23f0fd3982eda7d45ac3d420b7f2498673ae17bd20afbd8e589dca02"
+excerpt = """
+
+running 7 tests
+test sanity_quoted_commit_heredoc_with_backticks_and_benign_later_command_is_allowed ... ok
+test c_unterminated_quoted_commit_heredoc_with_dangerous_body_is_not_allowed ... ok
+test e_prime_git_apply_or_am_patch_then_running_the_written_file_is_not_allowed ... ok
+test a_unquoted_commit_heredoc_with_dangerous_substitution_and_later_command_is_not_allowed ... ok
+test e_git_readers_that_store_the_body_followed_by_a_later_command_are_not_allowed ... ok
+test b_quoted_commit_heredoc_followed_by_dangerous_command_is_not_allowed ... ok
+test d_later_line_executing_the_stored_commit_message_is_not_allowed ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+   Compiling blastguard v0.2.667 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.90s
+     Running tests/verify_e70b6a71_commit_heredoc_later_cmds.rs (target/debug/deps/verify_e70b6a71_commit_heredoc_later_cmds-532af1e524bcdb87)
+"""
+
+[task.closure.red]
+rev = "8fc38578bbc00dcfd260cebb14dc792433d73e21"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

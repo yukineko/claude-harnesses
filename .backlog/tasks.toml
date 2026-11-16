@@ -2733,6 +2733,8 @@ notes = """Observed 2026-11-17 at main 963a18429 (blastguard 0.2.676): while IFS
 created_at = 1794864711
 updated_at = 1794864711
 weight = 0.0
+issue_number = 1838
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1838"
 rev = 0
 
 [task.repro]

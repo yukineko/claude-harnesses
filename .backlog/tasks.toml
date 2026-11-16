@@ -2385,3 +2385,32 @@ detail = """
 exit 1: nder='rebuild-plugins.sh') scripts/test_rollout_lock_outside_managed_cache.py::RolloutLockOutsideManagedCache::test_lock_survives_claude_code_cache_gc
 SUBFAILED(contender='prune-plugin-cache.py') scripts/test_rollout_lock_outside_managed_cache.py::RolloutLockOutsideManagedCache::test_lock_survives_claude_code_cache_gc
 ========================= 4 failed, 2 passed in 0.74s =========================="""
+
+[[task]]
+id = "04fc7f20"
+title = "blastguard: git apply reader after trailing-pipe continuation then sh run.sh judged allow"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-16, main fa58e3698 (blastguard 0.2.672), run-20261116-143410-12142: cat heredoc ending in pipe, newline, patch, EOF, newline, git apply, newline, sh run.sh (patch writes run.sh with chmod 777 /etc/hosts) is allow in main and subagent. git_apply_patch.rs KNOWN GAP (pipe at end of line, per-physical-line segments). Expected: not allow."
+created_at = 1794813495
+updated_at = 1794813495
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261116_git_apply_patch_known_gaps c_trailing -- --include-ignored"
+rev = "a6e29aec99889d915c30082dc00de16d95407ded"
+observed_at = 1794813495
+detail = """
+exit 101: me/hiroyuki_nakayama/src/.harness-worktrees/followup-bg-df7c/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.05s
+     Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-80ffcfc78037f570)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261116_git_apply_patch_known_gaps`"""

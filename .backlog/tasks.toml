@@ -2905,3 +2905,49 @@ exit 1: ktree_readonly_concurrent_20261117.py:96: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_stop_verify_worktree_readonly_concurrent_20261117.py::ReadOnlySessionConcurrentForeignWrite::test_readonly_call_with_concurrent_foreign_write_does_not_block_stop
 ============================== 1 failed in 0.61s ==============================="""
+
+[[task]]
+id = "02ec6595"
+title = "donegate: when_changed checks (lint-changed / test-changed) run on another session's dirty crates in main and block a session that changed nothing"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "donegate",
+    "false-positive",
+    "attribution",
+]
+touched_files = []
+status = "pending"
+notes = """
+観測事実（session 1e000416、2026-11-17、依頼文より逐語）:
+同じ Stop で donegate も、main に一時的にあった condukt の変更に対してチェックを走らせ、FAIL しています。lint-changed は「cargo fmt --check FAILED for condukt」、test-changed は condukt の audit_b12_oracle_ids_and_teardown です。
+このセッションは condukt を一切触っていません。直後の main の git status --short は空でした。
+このセッションは main の cwd（/Users/yuki/src/harness）から、読み取り専用のコマンドを多く打っています。例: git status、git log、git -C <wt> ...、blastguard probe（hook JSON を stdin に渡すもの）、tdd skip、blastguard relay dismiss。
+
+原因経路（rev 7767e6a8f のコード）:
+1. crates/donegate/src/gate.rs:133 scan_scope(crate::git::changed_files(root)) — when_changed の対象範囲は tree 全体の変更集合。
+2. crates/donegate/src/git.rs:41 changed_files = git diff --name-only + --cached + untracked + merge-base(main)..HEAD。session 入力なし。
+3. scripts/test-changed-crates.sh（changed= 行付近: git diff --name-only HEAD / ls-files --others / merge-base..HEAD）と scripts/lint-changed-crates.sh も tree の dirt から crate を選ぶ。session 入力なし。
+意図との矛盾: donegate.toml:18-22「ATTRIBUTION IS THE OTHER CONSTRAINT: ... a red crate the current turn never touched blocked the stop of whoever WAS working」— 意図は turn/session 単位、実装は tree 単位。gate.rs:370-372 は「the workspace-wide checks routinely fail on ANOTHER session changes (CLAUDE.md §8 measured attribution bug)」と既知の帰属バグとして記述。CLAUDE.md §8 末尾も同種の要求を「帰属のバグ」と呼ぶ。tree 全体検査を仕様とする記述は見つからなかった（test-changed-crates.sh:3「crates touched in the working tree」は tree 単位だが、session 帰属を否定する仕様文ではない）。
+
+RED commit: 9179c4652（branch red/stopverify-misattr-20261117、未 merge、donegate 0.1.95）
+テスト: crates/donegate/tests/foreign_main_dirt_attribution_20261117.rs
+  RED (#[ignore]): readonly_session_is_not_blocked_by_foreign_crate_dirt_in_main — transcript は Bash git status / git log のみ、main に別 writer の dirty な crates/condukt/src/main.rs、check は when_changed **/*.rs で exit 1。結果 decision=block、marker あり。
+  対照 (GREEN): control_own_edit_of_the_crate_still_runs_the_check_and_blocks — 同じ dirt を自セッションの Edit として transcript に記録すると check が走り block。
+未確認: 実際の観測で donegate が見た condukt dirt の出所（別セッションの具体的操作）。関連: dc97fc2d（stop-verify-worktree 側の同種帰属バグ）。"""
+created_at = 1794869981
+updated_at = 1794869981
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test foreign_main_dirt_attribution_20261117 -- --ignored"
+rev = "9179c4652ae3cc7e78c9eb7acfe1ca1d3928fcfe"
+observed_at = 1794869981
+detail = """
+exit 101: st result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 1.33s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/foreign_main_dirt_attribution_20261117.rs (target/debug/deps/foreign_main_dirt_attribution_20261117-c549ed4350a10543)
+error: test failed, to rerun pass `-p donegate --test foreign_main_dirt_attribution_20261117`"""

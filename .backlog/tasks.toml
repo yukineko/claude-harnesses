@@ -2590,3 +2590,32 @@ exit 101: yuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/backlog)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 15.35s
      Running tests/backlog_20261116_add_writes_id_back_to_red_test.rs (target/debug/deps/backlog_20261116_add_writes_id_back_to_red_test-cb11645522549853)
 error: test failed, to rerun pass `-p backlog --test backlog_20261116_add_writes_id_back_to_red_test`"""
+
+[[task]]
+id = "97185747"
+title = "tdd green proof binds no tree/commit; change after GREEN still yields valid_fp_oracle:true"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-16 in run-20261116-164820-25374 t4: .tdd/t4.green.json keys are only author/cmd/exit_code/passed/phase/red_proof/task/ts; worker edited a caller after GREEN and condukt state check-oracle still returned valid_fp_oracle:true. Re-observed in main via relay bgr-26ea8713935e. Readings: (a) defect: GREEN-vs-final-commit correspondence is uncheckable; (b) intended: oracle checks only the transition. RED 55a1044bf."
+created_at = 1794821419
+updated_at = 1794821419
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261116_green_proof_has_no_tree_identity -- --include-ignored"
+rev = "8397d316c17c6e44b6b7216744d0042027031bf4"
+observed_at = 1794821419
+detail = """
+exit 101: iroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.62s
+     Running tests/backlog_20261116_green_proof_has_no_tree_identity.rs (target/debug/deps/backlog_20261116_green_proof_has_no_tree_identity-e8ca29d0d41f66b3)
+error: test failed, to rerun pass `-p tdd --test backlog_20261116_green_proof_has_no_tree_identity`"""

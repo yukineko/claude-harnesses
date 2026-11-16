@@ -3002,6 +3002,8 @@ notes = "Observed 2026-11-17 relays bgr-fac0e88ff878 (8160 B) and bgr-4bcd8c5f1c
 created_at = 1794872375
 updated_at = 1794872375
 weight = 0.0
+issue_number = 1848
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1848"
 rev = 0
 
 [task.repro]

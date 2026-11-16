@@ -80923,3 +80923,354 @@ rev = "b14310c00a146d481152d6878510318f133d00c9"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "188d2f29"
+title = "tdd green: a test command that never ran (spawn / run-log failure) is reported as 'tests still failing — keep implementing'"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "message-mismatch",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Code (crates/tdd/src/proof.rs at 9a989926b): green() calls judge_green(out.passed, has_red) and never judge_ran(&out) (red() does since 9c58c590d); runner maps spawn/run-log failure to passed:false + spawn_error:Some. RED (commit 168d912bf, branch backlog/sidereds-20261116, 2026-11-16): RED recorded with usable state, then <HOME>/.tdd/state replaced by a regular file so the run log cannot be created; marker file shows the command did not run. Verbatim failure: 'the command never ran, yet tdd green said the tests are still failing. stdout: (empty) stderr: tdd: tests still failing — keep implementing until they pass, then run `tdd green` again.' Controls in the same test pass: GREEN refused (non-zero), no green.json. Readings: (a) defect - environment failure misattributed to code; the message must name the spawn error / never ran; (b) cosmetic, the refusal is what matters. Both agree GREEN must be refused (it is: no fail-open). DOES NOT PROVE: real Command::spawn ENOENT path, timeout path. | User ruling 2026-11-16 (AskUserQuestion, session 06c2bd77): 「欠陥 → 未実行と表示する (推奨)」 — reading (a): green() must pass through judge_ran like red() and name the spawn error / never ran."
+created_at = 1794764532
+updated_at = 1794863265
+weight = 0.0
+issue_number = 1811
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1811"
+issue_closed_at = 1794863267
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261116_green_spawn_error_misreported -- --ignored green_names_the_spawn_failure_not_failing_tests"
+rev = "9d0e7defaee17d5e84aefa974a8b9cbfb6d439b7"
+observed_at = 1794764532
+detail = """
+exit 101: tdd v0.1.83 (/Users/yuki/src/.harness-worktrees/sidereds-20261116/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.81s
+     Running tests/backlog_20261116_green_spawn_error_misreported.rs (target/debug/deps/backlog_20261116_green_spawn_error_misreported-e2fe1fa60285e999)
+error: test failed, to rerun pass `-p tdd --test backlog_20261116_green_spawn_error_misreported`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p tdd --test backlog_20261116_green_spawn_error_misreported"
+exit = 0
+passed = 1
+rev = "c6d3cf3f2bc225da20495c5373321dcb49d7e744"
+observed_at = 1794863252
+output_digest = "sha256:a170111b18137581db030df74681b30da8a57afe3fe66a28e2d890693442c601"
+excerpt = """
+
+running 1 test
+test green_names_the_spawn_failure_not_failing_tests ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.186
+   Compiling serde_core v1.0.228
+   Compiling memchr v2.8.2
+   Compiling serde v1.0.228
+   Compiling autocfg v1.5.1
+   Compiling hashbrown v0.17.1
+   Compiling num-traits v0.2.19
+   Compiling aho-corasick v1.1.4
+   Compiling zmij v1.0.21
+   Compiling equivalent v1.0.2
+   Compiling regex-syntax v0.8.11
+   Compiling utf8parse v0.2.2
+   Compiling anstyle-parse v1.0.0
+   Compiling indexmap v2.14.0
+   Compiling anstyle-query v1.1.5
+   Compiling winnow v0.7.15
+   Compiling serde_json v1.0.150
+   Compiling anstyle v1.0.14
+   Compiling anyhow v1.0.103
+   Compiling syn v2.0.118
+   Compiling option-ext v0.2.0
+   Compiling core-foundation-sys v0.8.7
+   Compiling colorchoice v1.0.5
+   Compiling toml_write v0.1.2
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling iana-time-zone v0.1.65
+   Compiling anstream v1.0.0
+   Compiling dirs-sys v0.4.1
+   Compiling strsim v0.11.1
+   Compiling clap_lex v1.1.0
+   Compiling regex-automata v0.4.14
+   Compiling heck v0.5.0
+   Compiling itoa v1.0.18
+   Compiling clap_builder v4.6.0
+   Compiling chrono v0.4.45
+   Compiling dirs v5.0.1
+   Compiling wait-timeout v0.2.1
+   Compiling getrandom v0.4.3
+   Compiling rustix v1.1.4
+   Compiling errno v0.3.14
+   Compiling bstr v1.12.2
+   Compiling log v0.4.33
+   Compiling cfg-if v1.0.4
+   Compiling bitflags v2.13.0
+   Compiling once_cell v1.21.4
+   Compiling fastrand v2.4.1
+   Compiling serde_derive v1.0.228
+   Compiling clap_derive v4.6.1
+   Compiling regex v1.12.4
+   Compiling globset v0.4.18
+   Compiling tempfile v3.27.0
+   Compiling clap v4.6.1
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.97 (/Users/yuki/src/.harness-worktrees/sink3-done/crates/harness-core)
+   Compiling overwatch v0.2.124 (/Users/yuki/src/.harness-worktrees/sink3-done/crates/overwatch)
+   Compiling tdd v0.1.90 (/Users/yuki/src/.harness-worktrees/sink3-done/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.75s
+     Running tests/backlog_20261116_green_spawn_error_misreported.rs (target/debug/deps/backlog_20261116_green_spawn_error_misreported-35bc1083e8e96014)
+"""
+
+[task.closure.red]
+rev = "168d912bfc9e265cd4f7a051a84b269620fec682"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "3a45a57d"
+title = "condukt worktree merge --branch with no --run/--task still applies the task-trailer guard (merge-task-trailer-missing) via the branch's recorded conduktTask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-15 (run-20261114-161340-68728): condukt worktree merge --branch condukt/run-20261114-161340-68728/side-reds (no --run/--task) refused with merge-task-trailer-missing. crates/condukt/src/worktree/merge_gate.rs resolves the task as (recorded branch.<b>.conduktTask, cli) -> recorded wins, so the guard applies even without flags; the --run help says 'Omit for a merge with no task association (behavior otherwise unchanged)'. RED (independent, sonnet): crates/condukt/tests/backlog_20261115_worktree_merge_no_task_trailer_refusal.rs. CONFLICT: existing crates/condukt/tests/task_trailer_merge.rs::foreign_trailerless_commit_is_refused freezes the refusal for a recorded branch with no flags -> readings: (a) defect (help text is the contract) vs (b) intended (help text wrong); needs a human ruling before fixing; do not loosen either test without it. | User ruling 2026-11-15: the refusal is the defect (a trailer check must not apply to a merge that names no task); fix the part of task_trailer_merge.rs::foreign_trailerless_commit_is_refused that pins this case, with a test-weakening-justified line. Same root, also observed 2026-11-15: 'condukt worktree remove' refused the merged side-reds worktree with 'cannot determine whether the task that owns it is verified (branch identity names task 'side-reds' of run 'run-20261114-161340-68728', which that run does not have)'; main removed it with git worktree remove + git branch -d per user ruling."
+created_at = 1794712104
+updated_at = 1794863299
+weight = 0.0
+issue_number = 1786
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1786"
+issue_closed_at = 1794863301
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261115_worktree_merge_no_task_trailer_refusal -- --include-ignored"
+rev = "85bef6669e6bd8c23bd121fcf909508e40e95942"
+observed_at = 1794712104
+detail = """
+exit 101: 0261114-161340-68728-side-reds/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.67s
+     Running tests/backlog_20261115_worktree_merge_no_task_trailer_refusal.rs (target/debug/deps/backlog_20261115_worktree_merge_no_task_trailer_refusal-4806af8c846a3078)
+error: test failed, to rerun pass `-p condukt --test backlog_20261115_worktree_merge_no_task_trailer_refusal`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261115_worktree_merge_no_task_trailer_refusal --test backlog_20261116_resolve_merge_task_named_flag"
+exit = 0
+passed = 5
+rev = "c6d3cf3f2bc225da20495c5373321dcb49d7e744"
+observed_at = 1794863273
+output_digest = "sha256:d01aa1a939fff707e79ab63faca7eaaf1d11a6426072afed849c23ec70ecc1ca"
+excerpt = """
+ tests
+test control_resolve_merge_of_legacy_entry_refuses_trailerless_commit ... ok
+test control_resolve_merge_of_task_named_hold_refuses_trailerless_commit ... ok
+test resolve_merge_of_no_task_hold_does_not_apply_trailer_guard ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+
+   Compiling memchr v2.8.2
+   Compiling find-msvc-tools v0.1.9
+   Compiling shlex v2.0.1
+   Compiling object v0.37.3
+   Compiling version_check v0.9.5
+   Compiling syn v2.0.118
+   Compiling fnv v1.0.7
+   Compiling ident_case v1.0.1
+   Compiling pest_stack_guard v1.0.1
+   Compiling zerocopy v0.8.52
+   Compiling num-traits v0.2.19
+   Compiling cc v1.2.65
+   Compiling syn v3.0.10
+   Compiling once_cell v1.21.4
+   Compiling generic-array v0.14.7
+   Compiling aho-corasick v1.1.4
+   Compiling ucd-trie v0.1.7
+   Compiling regex-automata v0.4.14
+   Compiling stacker v0.1.25
+   Compiling rustversion v1.0.22
+   Compiling prettyplease v0.2.37
+   Compiling parking_lot_core v0.9.12
+   Compiling typenum v1.20.1
+   Compiling getrandom v0.3.4
+   Compiling ahash v0.8.12
+   Compiling darling_core v0.21.3
+   Compiling ar_archive_writer v0.5.1
+   Compiling darling_core v0.20.11
+   Compiling smallvec v1.16.5
+   Compiling thiserror v2.0.21
+   Compiling scopeguard v1.2.0
+   Compiling lock_api v0.4.14
+   Compiling serde_json v1.0.150
+   Compiling psm v0.1.31
+   Compiling regex v1.12.4
+   Compiling serde_derive v1.0.228
+   Compiling clap_derive v4.6.1
+   Compiling chrono v0.4.45
+   Compiling pest v2.9.5
+   Compiling thiserror-impl v2.0.21
+   Compiling foldhash v0.2.0
+   Compiling peg-runtime v0.8.6
+   Compiling darling_macro v0.21.3
+   Compiling allocator-api2 v0.2.21
+   Compiling darling_macro v0.20.11
+   Compiling darling v0.21.3
+   Compiling hashbrown v0.16.1
+   Compiling darling v0.20.11
+   Compiling bon-macros v3.9.3
+   Compiling clap v4.6.1
+   Compiling tempfile v3.27.0
+   Compiling cached_proc_macro v0.27.0
+   Compiling pest_meta v2.9.5
+   Compiling peg-macros v0.8.6
+   Compiling tracing-attributes v0.1.31
+   Compiling rand_core v0.9.5
+   Compiling parking_lot v0.12.5
+   Compiling serde v1.0.228
+   Compiling block-buffer v0.10.4
+   Compiling pest_generator v2.9.5
+   Compiling crypto-common v0.1.7
+   Compiling tracing-core v0.1.36
+   Compiling console v0.16.6
+   Compiling pin-project-lite v0.2.17
+   Compiling similar v2.7.0
+   Compiling web-time v1.1.0
+   Compiling arrayvec v0.7.8
+   Compiling cached_proc_macro_types v0.1.1
+   Compiling cached v0.59.0
+   Compiling tracing v0.1.44
+   Compiling peg v0.8.6
+   Compiling toml_datetime v0.6.11
+   Compiling serde_spanned v0.6.9
+   Compiling toml_edit v0.22.27
+   Compiling pest_derive v2.9.5
+   Compiling utf8-chars v3.0.7
+   Compiling digest v0.10.7
+   Compiling insta v1.49.0
+   Compiling bstr v1.12.2
+   Compiling cpufeatures v0.2.17
+   Compiling indenter v0.3.4
+   Compiling sha2 v0.10.9
+   Compiling globset v0.4.18
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand v0.9.4
+   Compiling rand_xorshift v0.4.0
+   Compiling rand_chacha v0.9.0
+   Compiling unarray v0.1.4
+   Compiling shlex v1.3.0
+   Compiling proptest v1.11.0
+   Compiling toml v0.8.23
+   Compiling bon v3.9.3
+   Compiling harness-core v0.2.97 (/Users/yuki/src/.harness-worktrees/sink3-done/crates/harness-core)
+   Compiling brush-parser v0.4.0
+   Compiling overwatch v0.2.124 (/Users/yuki/src/.harness-worktrees/sink3-done/crates/overwatch)
+   Compiling schemaguard v0.1.28 (/Users/yuki/src/.harness-worktrees/sink3-done/crates/schemaguard)
+   Compiling blastguard v0.2.676 (/Users/yuki/src/.harness-worktrees/sink3-done/crates/blastguard)
+   Compiling condukt v0.7.436 (/Users/yuki/src/.harness-worktrees/sink3-done/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.14s
+     Running tests/backlog_20261115_worktree_merge_no_task_trailer_refusal.rs (target/debug/deps/backlog_20261115_worktree_merge_no_task_trailer_refusal-964d1911edfa4cb8)
+     Running tests/backlog_20261116_resolve_merge_task_named_flag.rs (target/debug/deps/backlog_20261116_resolve_merge_task_named_flag-d037d837da4363f8)
+"""
+
+[task.closure.red]
+rev = "85bef6669e6bd8c23bd121fcf909508e40e95942"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "b423c0c1"
+title = "tdd red: a test command killed by a signal (exit_code None, no spawn_error) is recorded as RED ('tests fail as expected (killed)')"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Code (crates/tdd/src/proof.rs at 9a989926b): red() = judge_ran(&out) (inspects only spawn_error) then judge_red(out.passed) (accepts any passed==false); status_str prints 'killed' for exit_code None. RED (commit 9d0e7defa, branch backlog/sidereds-20261116, 2026-11-16), cmd 'touch ran.marker; kill -KILL $$', verbatim: 'command was killed by SIGKILL (no assertion observed) yet tdd red exit=Some(0), RED proof exists=true stdout: 🔴 RED recorded for `t1` — tests fail as expected (killed).' Control control_command_exiting_1_records_red passes. Readings: (a) asserted - a kill/crash is not a demonstrated assertion failure -> undetermined -> no RED (CLAUDE.md 2(b)/3: crash is undetermined, F->P oracle fails open otherwise); (b) a crashing test is a failing test, RED correct - under (b) this RED is wrong. The test is NOT independent of the reading; a human ruling distinguishes them. Note a Rust test panic exits 101 (not a signal), so (a) only affects OS/harness kills (SIGKILL, OOM, SIGSEGV). DOES NOT PROVE: timeout path (timed_out:true, likely same acceptance, untested), tdd green. | User ruling 2026-11-16 (AskUserQuestion, session 06c2bd77): 「判定不能 → RED にしない (推奨)」 — reading (a): a kill/crash with no observed assertion failure is undetermined; tdd red must refuse non-zero and write no RED proof."
+created_at = 1794764566
+updated_at = 1794863304
+weight = 0.0
+issue_number = 1812
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1812"
+issue_closed_at = 1794863307
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261116_red_killed_by_signal_records_red -- --ignored red_is_not_recorded_when_the_command_was_killed_by_a_signal"
+rev = "9d0e7defaee17d5e84aefa974a8b9cbfb6d439b7"
+observed_at = 1794764566
+detail = """
+exit 101: 83 (/Users/yuki/src/.harness-worktrees/sidereds-20261116/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.48s
+     Running tests/backlog_20261116_red_killed_by_signal_records_red.rs (target/debug/deps/backlog_20261116_red_killed_by_signal_records_red-53c8e72309bcc7b8)
+error: test failed, to rerun pass `-p tdd --test backlog_20261116_red_killed_by_signal_records_red`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p tdd --test backlog_20261116_red_killed_by_signal_records_red --test backlog_20261116_red_timeout_records_red"
+exit = 0
+passed = 4
+rev = "c6d3cf3f2bc225da20495c5373321dcb49d7e744"
+observed_at = 1794863302
+output_digest = "sha256:15696d95ae1274669ec42ae8679b3c95c2f2ff0850810604b4e1a7c233d46eb1"
+excerpt = """
+
+running 2 tests
+test red_is_not_recorded_when_the_command_was_killed_by_a_signal ... ok
+test control_command_exiting_1_records_red ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+
+
+running 2 tests
+test control_command_exiting_1_records_red_under_the_same_config ... ok
+test red_is_not_recorded_when_the_command_timed_out ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+
+   Compiling tdd v0.1.90 (/Users/yuki/src/.harness-worktrees/sink3-done/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running tests/backlog_20261116_red_killed_by_signal_records_red.rs (target/debug/deps/backlog_20261116_red_killed_by_signal_records_red-e60607a7bbf87813)
+     Running tests/backlog_20261116_red_timeout_records_red.rs (target/debug/deps/backlog_20261116_red_timeout_records_red-e754c95fab2e9564)
+"""
+
+[task.closure.red]
+rev = "9d0e7defaee17d5e84aefa974a8b9cbfb6d439b7"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -238,8 +238,10 @@ SCENARIOS = [
         new="    let _ = &entries;\n    let pending: Vec<&Entry> = Vec::new();\n",
         # The relay queue logic lives in harness-core (shared with blastguard,
         # which enqueues); askrelay's integration tests drive it through the
-        # askrelay binary. Evidence: see the commit message / report — the
-        # mutated and unmutated runs of this target are recorded there.
+        # askrelay binary. Evidence (2026-11-17, this scenario run via
+        # `check-fail-open-mutation.py --crate askrelay`): caught, RED
+        # confirmed, scratch cleanup confirmed (66.8s). The unmutated run of
+        # the same target passed (18 tests ok).
         tests=("--test", "subagent_ask_relay_20261114"),
     ),
     Scenario(

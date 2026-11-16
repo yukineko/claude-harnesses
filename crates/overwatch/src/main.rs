@@ -11,6 +11,7 @@ pub mod changeset;
 mod control;
 pub mod disposition;
 mod disposition_cli;
+mod durable;
 pub mod event;
 mod gate_outcomes;
 mod lease;

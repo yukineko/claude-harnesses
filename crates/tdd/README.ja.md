@@ -37,7 +37,7 @@ harness の他のゲートに対する「test-first の兄弟」にあたる。`
   Phase 6  tdd verify --task <id>  →  RED→GREEN を検証
 ```
 
-タスク ID を 1 つ決め（例: スラッグ `parse-csv`）、以降 `--task <id>` に使う。テストコマンドは `--cmd` 引数を優先し、無ければ `tdd.toml` の `test_cmd`（既定 `cargo test`）。`tdd red` がテストの失敗を確認できなければ「振る舞いをまだ試せていない」ので失敗テストを書き直す。`tdd green` は RED 証跡が無いと拒否する。
+タスク ID を 1 つ決め（例: スラッグ `parse-csv`）、以降 `--task <id>` に使う。テストコマンドは `--cmd` 引数を優先し、無ければ `tdd.toml` の `test_cmd`（既定 `cargo test`）。`tdd red` がテストの失敗を確認できなければ「振る舞いをまだ試せていない」ので失敗テストを書き直す。コマンドが signal で kill された場合・タイムアウトした場合も assertion の失敗が観測されていないので判定不能として拒否し、RED 証跡は書かない（RED になるのは走り切って非 0 で終了した場合だけ）。`tdd green` は RED 証跡が無いと拒否する。
 
 `tdd oracle --task <id>` はタスクの証跡から RED→GREEN の遷移を分類し、JSON レポート
 （`{"transition":"fail_to_pass","valid_fp_oracle":true,…}`）を出力する。有効な
@@ -54,7 +54,7 @@ Fail→Pass ゲート（`condukt state check-oracle`）が `fix`/`feature` タ�
 | サブコマンド | 目的 |
 |---|---|
 | `tdd gate` | Stop hook 本体。実装が追加されテストが無いとき停止をブロックする。Claude へは常に exit 0 で返し（停止のブロックは exit code ではなく出力 JSON の `decision` フィールドで行う）、手動 CLI でのみ exit 1 を返す。 |
-| `tdd red --task <id> [--cmd ...] [--author <id>]` | テストを実行し**失敗**を要求して RED 証跡を記録する。既に通っていれば拒否（test-first 不成立）。`--author` は任意で、テスト作成者の identity を証跡に記録する（`strict_separation` で使う）。 |
+| `tdd red --task <id> [--cmd ...] [--author <id>]` | テストを実行し**失敗**を要求して RED 証跡を記録する。既に通っていれば拒否（test-first 不成立）。signal kill・タイムアウトも拒否し RED を記録しない。`--author` は任意で、テスト作成者の identity を証跡に記録する（`strict_separation` で使う）。 |
 | `tdd green --task <id> [--cmd ...] [--author <id>] [--strict-separation \| --no-strict-separation]` | 先行 RED 証跡を要求し、テストを実行して**成功**を要求し GREEN 証跡を記録する。strict separation が有効なとき、`--author` の identity が RED 証跡の author と同一なら拒否する（fail-closed）。`--strict-separation` / `--no-strict-separation`（排他）はその実行に限り設定より優先する。 |
 | `tdd verify --task <id>` | RED と GREEN の両証跡が揃っていれば exit 0。 |
 | `tdd oracle --task <id>` | RED→GREEN の遷移を分類し JSON 判定を出力する（上記参照）。有効な Fail→Pass のときだけ exit 0。 |

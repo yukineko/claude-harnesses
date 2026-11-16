@@ -76,6 +76,37 @@ fn judge_ran(out: &runner::Outcome, phase: Phase) -> Result<()> {
     Ok(())
 }
 
+/// Refuse to treat a run as evidence when it produced no exit code: the
+/// command timed out, or was killed by a signal (`exit_code` is `None` with no
+/// `spawn_error`). The runner reports both as `passed: false`, which
+/// `judge_red` would read as "tests fail as expected" — but no assertion
+/// failure was observed, so the outcome is undetermined, not RED. Only a
+/// command that ran and exited with a code (even non-zero) is evidence.
+/// `red()` and `green()` call this right after [`judge_ran`]; neither records
+/// an artifact for such a run. (GREEN was already refused via `passed: false`;
+/// this only makes the message name the real cause.)
+fn judge_exited(out: &runner::Outcome, phase: Phase, timeout_secs: u64) -> Result<()> {
+    let (which, again) = match phase {
+        Phase::Red => ("RED", "tdd red"),
+        Phase::Green => ("GREEN", "tdd green"),
+    };
+    if out.timed_out {
+        bail!(
+            "test command timed out after {timeout_secs} s — no {which} recorded: no assertion \
+             failure was observed, so the result is undetermined. Fix the hang or raise the \
+             timeout and run `{again}` again."
+        );
+    }
+    if out.exit_code.is_none() {
+        bail!(
+            "test command was killed by a signal — no {which} recorded: no assertion failure \
+             was observed, so the result is undetermined. Find out why the process was killed \
+             and run `{again}` again."
+        );
+    }
+    Ok(())
+}
+
 /// Decide whether a RED proof exists — the single canonical definition of the
 /// "no RED proof found" judgment. Shared by [`judge_green`] (the exhaustive
 /// GREEN-run judgment) and by `green()`'s own early check, which MUST run
@@ -247,6 +278,7 @@ pub fn red(
         &tmp,
     );
     judge_ran(&out, Phase::Red)?;
+    judge_exited(&out, Phase::Red, cfg.default_timeout_secs)?;
     judge_red(out.passed)?;
     let path = artifact_path(root, cfg, task, "red");
     let author = resolve_author(author);
@@ -349,6 +381,7 @@ pub fn green(
         &tmp,
     );
     judge_ran(&out, Phase::Green)?;
+    judge_exited(&out, Phase::Green, cfg.default_timeout_secs)?;
     judge_green(out.passed, has_red)?;
     let path = artifact_path(root, cfg, task, "green");
     write_artifact(

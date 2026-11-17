@@ -4324,7 +4324,6 @@ fn deletion_escape_spellings_are_not_allowed() {
 }
 
 #[test]
-#[ignore = "RED: quoted in-scratch rm -rf still Deny at 7d030c34b (legacy scratch reading active); un-ignore when the retire fix lands"]
 fn deletion_quoted_scratch_literal_matches_unquoted() {
     // User ruling 2026-11-18: Table C Scratch × Delete = Allow wins. A
     // `rm -rf "<path>"` whose target statically resolves inside a scratch

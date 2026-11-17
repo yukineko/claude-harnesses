@@ -65,6 +65,18 @@ is not decided by where it is spelled"
         }
     }
 
+    /// [`SafeRoots::classify_disposable`] of an absolute path VALUE
+    /// ([`Reading::Value`]); identical otherwise.
+    pub(crate) fn classify_disposable_value(&self, path: &str) -> Determination<Placement> {
+        let roots: Vec<String> = self
+            .temp_roots
+            .iter()
+            .chain(self.cache_roots.iter())
+            .cloned()
+            .collect();
+        self.classify_disposable_in(&roots, "temp or cache", path, None, Reading::Value)
+    }
+
     /// The operand as an absolute, lexically normalised path (no symlink
     /// resolution), or why it cannot be one. The literal-path, relative-base
     /// and residual-`..` rules are exactly [`SafeRoots::classify`]'s (it uses

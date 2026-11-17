@@ -20,14 +20,11 @@
 //! * every evaluated operand value is a `Literal`, absolute or (no `cd`
 //!   applies) relative to the session cwd, with no `..` component and not
 //!   ending in a `.` component;
-//! * every target's Table C class is **OwnWorktree** — a Delete cell Table C
-//!   states as Allow (rulings 5, 9). **Scratch** (also Allow in Table C,
-//!   rulings 5, 8) is NOT retired here: the lib test
-//!   `detect::tests::deletion_escape_spellings_are_not_allowed` pins the
-//!   quoted Scratch spelling `rm -rf "<tmp>/a"` as not-Allow, which
-//!   contradicts Table C; that conflict is raised to the user, and Scratch
-//!   keeps the legacy reading until it is decided. Classes are tried in
-//!   Table C precedence and every earlier class refuses:
+//! * every target's Table C class is **Scratch** or **OwnWorktree** — the
+//!   two Delete cells Table C states as Allow (rulings 5, 8, 9; for Scratch
+//!   confirmed by user ruling 2026-11-18 "仕様どおり Allow", so a quoted
+//!   in-scratch literal gets the verdict of its unquoted spelling). Classes
+//!   are tried in Table C precedence and every earlier class refuses:
 //!   **System** (`/`, a system directory, a raw disk, the home itself, an
 //!   irreplaceable home asset — lexical, resolved and parent-resolved
 //!   spellings; no safe-root escape here), **Protected**
@@ -97,7 +94,16 @@ fn operand_allows(o: &RmOperand, ctx: &Ctx<'_>) -> bool {
     if is_system(&path, ctx) || is_protected(&path) || exclude::is_workflow_path(&path) {
         return false;
     }
-    own_worktree(&path, ctx)
+    scratch(&path, ctx) || own_worktree(&path, ctx)
+}
+
+/// Table C **Scratch**: strictly inside a temp / cache deletion root
+/// (rulings 5, 8; user ruling 2026-11-18 "仕様どおり Allow").
+fn scratch(path: &str, ctx: &Ctx<'_>) -> bool {
+    matches!(
+        ctx.scope.classify_disposable_value(path),
+        Determination::Known(Placement::Inside { .. })
+    )
 }
 
 /// Table C **System** (restrictive superset: no safe-root escape).

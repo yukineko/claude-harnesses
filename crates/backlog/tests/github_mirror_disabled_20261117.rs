@@ -250,7 +250,6 @@ fn says_mirror_disabled(s: &str) -> bool {
 /// Spec 1. Dies if `add` still runs `gh issue create`, does not write the row,
 /// exits non-zero, or is silent about the mirror being off.
 #[test]
-#[ignore = "RED: github_mirror=false not implemented"]
 fn add_with_mirror_false_does_not_create_issue_and_says_so() {
     let e = add_setup("false", Cfg::Body("github_mirror = false\n"));
     let (code, stdout, stderr) = run_add(&e);
@@ -310,7 +309,6 @@ fn control_add_with_mirror_true_creates_issue() {
 /// Non-bool value: not silently the default. Dies if `add` exits 0, does not
 /// name `github_mirror` on stderr, or runs `gh issue create` anyway.
 #[test]
-#[ignore = "RED: github_mirror=false not implemented"]
 fn add_with_non_bool_mirror_value_is_an_error() {
     let e = add_setup("nonbool", Cfg::Body("github_mirror = \"no\"\n"));
     let (code, stdout, stderr) = run_add(&e);
@@ -456,7 +454,6 @@ fn run_sync_apply(tag: &str, cfg: Cfg) -> SyncRun {
 /// Spec 2. Dies if `sync --apply` invokes `gh` at all, exits non-zero, or does
 /// not say the mirror is disabled.
 #[test]
-#[ignore = "RED: github_mirror=false not implemented"]
 fn sync_apply_with_mirror_false_runs_no_gh_and_says_so() {
     let r = run_sync_apply("false", Cfg::Body("github_mirror = false\n"));
     assert!(
@@ -519,7 +516,6 @@ fn control_sync_apply_with_mirror_true_creates_and_closes() {
 
 /// Non-bool value on sync --apply: an error, and no gh mutation.
 #[test]
-#[ignore = "RED: github_mirror=false not implemented"]
 fn sync_apply_with_non_bool_mirror_value_is_an_error() {
     let r = run_sync_apply("nonbool", Cfg::Body("github_mirror = \"no\"\n"));
     assert!(
@@ -607,7 +603,6 @@ fn hook_ctx(tag: &str, cfg: Cfg) -> (String, String) {
 /// Spec 3. Dies if the drift section is still emitted with the mirror off, or
 /// if no single line says the mirror is disabled.
 #[test]
-#[ignore = "RED: github_mirror=false not implemented"]
 fn session_start_with_mirror_false_replaces_drift_with_one_disabled_line() {
     let (ctx, log) = hook_ctx("false", Cfg::Body("github_mirror = false\n"));
     assert!(
@@ -646,7 +641,6 @@ fn control_session_start_with_mirror_true_reports_drift() {
 /// Non-bool value in the hook: no exit code / stderr reaches the agent, so the
 /// error must be in additionalContext and must name the key.
 #[test]
-#[ignore = "RED: github_mirror=false not implemented"]
 fn session_start_with_non_bool_mirror_value_reports_the_error() {
     let (ctx, _) = hook_ctx("nonbool", Cfg::Body("github_mirror = \"no\"\n"));
     assert!(

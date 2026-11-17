@@ -20,7 +20,10 @@
 //!
 //! Fixtures write the queue file directly (the format of
 //! `harness_core::relay::Event`) so the row's own `session_id` can disagree
-//! with its file; the real `askrelay` binary is driven for every verdict.
+//! with its file; the real `askrelay` binary (and, for mark-denied, the real
+//! blastguard PreToolUse) is driven for every verdict except
+//! `two_processes_sharing_a_session_both_rows_verified`, which asserts the
+//! `harness_core::relay::provenance` classification directly (see its doc).
 //!
 //! What these tests do NOT prove: that a forged row cannot name a REAL
 //! subagent of the session (an attacker who knows a live agent_id still gets
@@ -112,16 +115,30 @@ impl Fx {
     /// Append a `queued` row with the given row-level session_id / agent_id
     /// to the queue file of `SESSION`.
     fn queue_row(&self, id: &str, row_session: &str, agent: &str) {
-        let line = json!({
+        self.queue_row_cmd(id, row_session, agent, CMD);
+    }
+
+    /// [`Fx::queue_row`] with an explicit `command`.
+    fn queue_row_cmd(&self, id: &str, row_session: &str, agent: &str, command: &str) {
+        self.append_line(&json!({
             "event": "queued",
             "id": id,
             "ts": 1,
             "session_id": row_session,
             "agent_id": agent,
             "cwd": self.cwd(),
-            "command": CMD,
+            "command": command,
             "reason": "blastguard: Ask hardened to Deny inside a subagent",
-        });
+        }));
+    }
+
+    /// Append an `executed` event for `id` directly (the fixture bypasses
+    /// `mark-executed`, which itself only marks Verified rows).
+    fn queue_executed(&self, id: &str) {
+        self.append_line(&json!({"event": "executed", "id": id, "ts": 2, "exit_code": 0}));
+    }
+
+    fn append_line(&self, line: &Value) {
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new()
             .create(true)
@@ -129,6 +146,43 @@ impl Fx {
             .open(self.queue_file())
             .unwrap();
         writeln!(f, "{line}").unwrap();
+    }
+
+    /// Run `askrelay mark-relayed` with a main-session SendMessage that names
+    /// `id`.
+    fn send_naming(&self, transcript: &Path, id: &str) -> Output {
+        let p = json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "SendMessage",
+            "tool_input": { "to": "worker", "message": format!("relay {id}: exit 0") },
+            "cwd": self.cwd(),
+            "session_id": SESSION,
+            "transcript_path": transcript.to_string_lossy(),
+        });
+        self.run(&["relay", "mark-relayed"], &p.to_string())
+    }
+
+    /// Run blastguard's main-session PreToolUse on `command` (the only caller
+    /// of `relay::mark_denied`); returns the printed permission decision.
+    fn main_pretooluse(&self, transcript: &Path, command: &str) -> (Output, String) {
+        let p = json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": { "command": command },
+            "cwd": self.cwd(),
+            "session_id": SESSION,
+            "transcript_path": transcript.to_string_lossy(),
+        });
+        let o = self.run(&[], &p.to_string());
+        let d = serde_json::from_slice::<Value>(&o.stdout)
+            .ok()
+            .and_then(|v| {
+                v["hookSpecificOutput"]["permissionDecision"]
+                    .as_str()
+                    .map(str::to_string)
+            })
+            .unwrap_or_default();
+        (o, d)
     }
 
     fn queue_text(&self) -> String {
@@ -346,26 +400,139 @@ fn verified_row_blocks_stop_with_run_procedure() {
 
 /// Two Claude processes (harness-5a, harness-9e) share SESSION and its one
 /// relay file; AGENT_A was spawned by one, AGENT_B by the other. Both
-/// sidechains live under SESSION, so both rows are Verified and each process's
-/// Stop (identical payload: same session, same transcript_path) lists both.
+/// sidechains live under SESSION, so both rows classify as Verified (user
+/// ruling 2026-11-17).
+///
+/// Observable chosen: the classification itself,
+/// `harness_core::relay::provenance` over the rows `relay::load` folds from
+/// the queue file and `SessionAgents::of` the shared transcript. It is the
+/// narrowest one available: the Stop text also carries whatever per-process
+/// filtering is layered on top (per-process PID attribution, a separate spec,
+/// is expected to show each process only its own rows), and `mark-executed`
+/// marks one row per call and couples to command/cwd matching. The
+/// classification takes no process input: both processes hand it the same
+/// (queue file, session, transcript_path), so one evaluation covers both.
+///
+/// DOES NOT PROVE: what either process's Stop lists; that the binaries call
+/// `provenance` (the other tests in this file drive the binaries).
 #[test]
 fn two_processes_sharing_a_session_both_rows_verified() {
+    use harness_core::relay::{self, Provenance, Queue, SessionAgents};
     let fx = Fx::new("two-proc");
     let t = fx.transcript(&[AGENT_A, AGENT_B]);
     fx.queue_row("bgr-18080000000a", SESSION, AGENT_A);
     fx.queue_row("bgr-18080000000b", SESSION, AGENT_B);
-    for process in ["harness-5a", "harness-9e"] {
-        let (o, v) = fx.stop(Some(&t));
-        assert!(blocked(&v), "{process}: Stop must block: {}", show(&o));
-        let r = reason(&v);
-        for id in ["bgr-18080000000a", "bgr-18080000000b"] {
-            assert!(r.contains(id), "{process}: block must name {id}: {r}");
-        }
-        assert!(
-            r.contains(PROCEDURE_MARK),
-            "{process}: Verified rows keep the run procedure: {r}"
+    let entries = match relay::load(&fx.queue_file()) {
+        Ok(Queue::Known(v)) => v,
+        other => panic!("control: the queue file must fold: {other:?}"),
+    };
+    let agents = SessionAgents::of(Some(&t));
+    for id in ["bgr-18080000000a", "bgr-18080000000b"] {
+        let e = entries
+            .iter()
+            .find(|e| e.id == id)
+            .unwrap_or_else(|| panic!("control: {id} queued: {entries:?}"));
+        assert_eq!(
+            relay::provenance(e, SESSION, &agents),
+            Provenance::Verified,
+            "{id} (agent {:?}, a sidechain of {SESSION}) must be Verified",
+            e.agent_id
         );
     }
+}
+
+// ------------------------------------------- mark-relayed / mark-denied
+
+/// The row sits in SESSION's file but names OTHER_SESSION (Refuted by the
+/// session mismatch alone: AGENT_A is a real subagent of SESSION). It is
+/// already executed, so the only thing keeping mark-relayed from marking it
+/// is provenance.
+#[test]
+fn mark_relayed_does_not_mark_session_mismatched_row() {
+    let fx = Fx::new("relayed-mismatch");
+    let t = fx.transcript(&[AGENT_A]);
+    fx.queue_row("bgr-180800000008", OTHER_SESSION, AGENT_A);
+    fx.queue_executed("bgr-180800000008");
+    let o = fx.send_naming(&t, "bgr-180800000008");
+    assert!(o.status.success(), "mark-relayed exits 0: {}", show(&o));
+    let text = fx.queue_text();
+    assert!(
+        !text.contains("\"relayed\""),
+        "a Refuted row (session_id {OTHER_SESSION} in the file of {SESSION}) was marked relayed; \
+         queue:\n{text}"
+    );
+}
+
+/// CONTROL for the above: the same shape with a matching session is marked.
+#[test]
+fn control_mark_relayed_marks_verified_executed_row() {
+    let fx = Fx::new("relayed-ok");
+    let t = fx.transcript(&[AGENT_A]);
+    fx.queue_row("bgr-180800000009", SESSION, AGENT_A);
+    fx.queue_executed("bgr-180800000009");
+    let o = fx.send_naming(&t, "bgr-180800000009");
+    assert!(o.status.success(), "mark-relayed exits 0: {}", show(&o));
+    let text = fx.queue_text();
+    assert!(
+        text.contains("\"relayed\""),
+        "control: a Verified executed row named by SendMessage must be marked relayed; \
+         queue:\n{text}"
+    );
+}
+
+/// A command blastguard Denies in the main session (measured `deny` for the
+/// main session in subagent_ask_relay_20261114.rs `e_verdicts_unchanged`).
+const DENY_CMD: &str = "git reset --hard";
+
+/// mark-denied runs inside blastguard's main-session PreToolUse Deny. It
+/// carries no transcript, so only the session mismatch is checked there (the
+/// agent_id is not): a row whose session_id differs from its file's must not
+/// get a denial recorded.
+#[test]
+fn mark_denied_does_not_mark_session_mismatched_row() {
+    let fx = Fx::new("denied-mismatch");
+    let t = fx.transcript(&[AGENT_A]);
+    fx.queue_row_cmd("bgr-18080000000c", OTHER_SESSION, AGENT_A, DENY_CMD);
+    let (o, d) = fx.main_pretooluse(&t, DENY_CMD);
+    assert_eq!(
+        d,
+        "deny",
+        "control: {DENY_CMD} is a main-session Deny: {}",
+        show(&o)
+    );
+    let text = fx.queue_text();
+    assert!(
+        !text.contains("\"denied\""),
+        "a Refuted row (session_id {OTHER_SESSION} in the file of {SESSION}) got a denial \
+         recorded; queue:\n{text}\n{}",
+        show(&o)
+    );
+    assert!(
+        !String::from_utf8_lossy(&o.stdout).contains("bgr-18080000000c"),
+        "the deny must not claim to be the re-run of the Refuted row: {}",
+        show(&o)
+    );
+}
+
+/// CONTROL for the above: the same Deny on a matching-session row records it.
+#[test]
+fn control_mark_denied_marks_matching_session_row() {
+    let fx = Fx::new("denied-ok");
+    let t = fx.transcript(&[AGENT_A]);
+    fx.queue_row_cmd("bgr-18080000000d", SESSION, AGENT_A, DENY_CMD);
+    let (o, d) = fx.main_pretooluse(&t, DENY_CMD);
+    assert_eq!(
+        d,
+        "deny",
+        "control: {DENY_CMD} is a main-session Deny: {}",
+        show(&o)
+    );
+    let text = fx.queue_text();
+    assert!(
+        text.contains("\"denied\""),
+        "control: a matching-session row must get the denial recorded; queue:\n{text}\n{}",
+        show(&o)
+    );
 }
 
 #[test]

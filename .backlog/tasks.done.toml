@@ -81667,3 +81667,64 @@ rev = "28b8a1e4f0255c66d5a8df17ac386748f0616b34"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "0c301e8b"
+title = "condukt testscope: tdd green after a confirmed tdd red of the same command on an unchanged tree is allowed"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "testscope",
+    "tdd",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-17 at cd09054b1 (t2 verifier finding on 310d9a671, RED aa9077fc7). judge_words records tdd red --cmd X under the bare key; tdd green --cmd X is checked only against its TDD_GREEN_ROUTE-tagged key, so tdd red then tdd green on the same unchanged tree is Allow. Expected deny: GREEN with no change since RED proves nothing (F-to-P oracle). Controls: bare run then one tdd green allowed, second denied; tdd green after tdd red on a changed tree allowed. Module doc currently describes the allow, so the doc changes with the fix."
+created_at = 1794887615
+updated_at = 1794895159
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261117_tdd_red_then_green_same_tree -- --include-ignored"
+rev = "8358077eb972490b4979ba3ecab651d33c0786f4"
+observed_at = 1794887615
+detail = """
+exit 101: me/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.58s
+     Running tests/backlog_20261117_tdd_red_then_green_same_tree.rs (target/debug/deps/backlog_20261117_tdd_red_then_green_same_tree-818cafe96793a5f5)
+error: test failed, to rerun pass `-p condukt --test backlog_20261117_tdd_red_then_green_same_tree`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261117_tdd_red_then_green_same_tree -- --include-ignored"
+exit = 0
+passed = 3
+rev = "3c5bd361d9f389f19ca9e8d8aa0cc9b916c56106"
+observed_at = 1794895148
+output_digest = "sha256:4f4d7971dbd81c042639a4d21dd25c80ac29b0f7d7f3d887b4dd75ad9d00f46c"
+excerpt = """
+
+running 3 tests
+test red_tdd_green_after_tdd_red_on_same_tree_is_denied ... ok
+test control_tdd_green_after_tdd_red_on_changed_tree_is_allowed ... ok
+test control_tdd_green_after_bare_run_is_allowed_once ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+   Compiling condukt v0.7.448 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.28s
+     Running tests/backlog_20261117_tdd_red_then_green_same_tree.rs (target/debug/deps/backlog_20261117_tdd_red_then_green_same_tree-5d8ac9f55498ab5b)
+"""
+
+[task.closure.red]
+rev = "aa9077fc762ca04fce040d2a3eef296ea1949a1f"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

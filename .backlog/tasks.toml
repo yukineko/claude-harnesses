@@ -3019,36 +3019,6 @@ exit 101: iroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/blastg
 error: test failed, to rerun pass `-p blastguard --test backlog_20261117_relay_executed_cwd_after_cd`"""
 
 [[task]]
-id = "0c301e8b"
-title = "condukt testscope: tdd green after a confirmed tdd red of the same command on an unchanged tree is allowed"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "testscope",
-    "tdd",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-17 at cd09054b1 (t2 verifier finding on 310d9a671, RED aa9077fc7). judge_words records tdd red --cmd X under the bare key; tdd green --cmd X is checked only against its TDD_GREEN_ROUTE-tagged key, so tdd red then tdd green on the same unchanged tree is Allow. Expected deny: GREEN with no change since RED proves nothing (F-to-P oracle). Controls: bare run then one tdd green allowed, second denied; tdd green after tdd red on a changed tree allowed. Module doc currently describes the allow, so the doc changes with the fix."
-created_at = 1794887615
-updated_at = 1794887615
-weight = 0.0
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261117_tdd_red_then_green_same_tree -- --include-ignored"
-rev = "8358077eb972490b4979ba3ecab651d33c0786f4"
-observed_at = 1794887615
-detail = """
-exit 101: me/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.58s
-     Running tests/backlog_20261117_tdd_red_then_green_same_tree.rs (target/debug/deps/backlog_20261117_tdd_red_then_green_same_tree-818cafe96793a5f5)
-error: test failed, to rerun pass `-p condukt --test backlog_20261117_tdd_red_then_green_same_tree`"""
-
-[[task]]
 id = "a70f2389"
 title = "backlog: unreadable or invalid-TOML config.toml silently turns the GitHub mirror ON (done runs gh issue close)"
 project = "/home/hiroyuki_nakayama/src/harness"

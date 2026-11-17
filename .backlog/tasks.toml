@@ -3301,3 +3301,121 @@ exit 101: uard-zsh-equals-20261118/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 9.68s
      Running tests/backlog_20261118_quoted_heredoc_backtick_equals_word_fp.rs (target/debug/deps/backlog_20261118_quoted_heredoc_backtick_equals_word_fp-950f9c89ac5f7e75)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261118_quoted_heredoc_backtick_equals_word_fp`"""
+
+[[task]]
+id = "7f9f2457"
+title = "blastguard fail-open: rsync --delete into the home directory itself or ~/.ssh is Allow (harms_system target; rsync arm checks only system dirs)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = 'Observed 2026-11-18 at origin/main 1dfa60681 (blastguard 0.2.699), hermetic fixture HOME, main+subagent: rsync -a --delete /tmp/empty/ ~/ , "$HOME", <abs home>/, ~/.ssh/, and (cwd=$HOME) rsync -a --delete build/ ./ are all allow. Controls: rsync -a --delete /tmp/empty/ /usr/ is system-harm deny (detect/system_paths.rs rsync_mutated judges the destination only via scope::is_inside_system_dir); rm -rf ~ and rm -rf ~/.ssh are deny. Expected deny: SUBSET.md ruling 3 + Table C System row = harm_mark::harms_system (home itself, irreplaceable home asset); user ruling 2026-11-07 system-harm-always-deny. RED 3cc3c61e5 (branch red/bg-leads-20261118, 5 ignored cases). NOT pinned (spec gap, rsync not in Table B): rsync --delete into a non-asset home subdir (~/Documents/) is allow while rm -rf ~/Documents/* and find ~/Documents -delete are deny.'
+created_at = 1794946875
+updated_at = 1794946875
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_rsync_delete_home_target_fail_open -- --ignored"
+rev = "3cc3c61e5aa501f3904e1961d8d6c075039235fe"
+observed_at = 1794946875
+detail = """
+exit 101: src/.harness-worktrees/bg-leads-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.90s
+     Running tests/backlog_20261118_rsync_delete_home_target_fail_open.rs (target/debug/deps/backlog_20261118_rsync_delete_home_target_fail_open-c1225f41b45b2862)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_rsync_delete_home_target_fail_open`"""
+
+[[task]]
+id = "d6de38be"
+title = "blastguard FP: expansion in an argv operand after python3 -c PROG is reported as an expansion in the program (read-only program Ask/Deny; bgr-32cea6e4ce95)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-18 relay bgr-32cea6e4ce95, re-judged at origin/main 1dfa60681 (0.2.699): main ask / subagent deny, verbatim 'that program contains a shell expansion (`$D/blocks.jsonl`) — the text on the command line is a template'. The -c program has no $; the expansion is sys.argv[1]. Cause: detect/payload.rs interpreter_payloads_after returns every shell word after -c as a candidate program, and the template check in detect/interpreter.rs asks on any candidate containing $. Minimal: python3 -c "import sys;print(open(sys.argv[1]).read())" "$HOME/x" (also "$1", literal-bound "$D/x") -> ask; literal argv -> allow. Ruling 2026-11-12 (python-c-expansion-in-literal-deny) recommends passing paths via argv. Controls kept not-allow: expansion inside the program; write to unresolved argv path. RED 3cc3c61e5 (branch red/bg-leads-20261118, 3 ignored)."""
+created_at = 1794947135
+updated_at = 1794947135
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_python_c_argv_expansion_read_as_program_fp -- --ignored"
+rev = "3cc3c61e5aa501f3904e1961d8d6c075039235fe"
+observed_at = 1794947135
+detail = """
+exit 101: bg-leads-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.31s
+     Running tests/backlog_20261118_python_c_argv_expansion_read_as_program_fp.rs (target/debug/deps/backlog_20261118_python_c_argv_expansion_read_as_program_fp-510e379e782aa619)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_python_c_argv_expansion_read_as_program_fp`"""
+
+[[task]]
+id = "9a4e07cf"
+title = "blastguard FP: quoted heredoc body written to a .json/.jsonl data file is read as shell and a python3 -c fragment refused (bgr-d085f75f9fa7)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-18 (own subagent refusal, relay bgr-d085f75f9fa7; main re-ran it). At origin/main 1dfa60681 (0.2.699): cat > cases.jsonl <<'EOF' / "python3 -c \"import sys;print(1)\"" / EOF -> main ask / subagent deny, verbatim '`python3` is invoked with an inline-eval flag, and its program cannot be tokenised as Python (an unterminated string or an unbalanced bracket)'. Same for .json. Allow: .txt target with the same body; the body without 'import sys;'. Nothing runs the file. Ruling 2026-11-08 (heredoc-body-by-target-language): only .sh / extension-less bodies are judged as shell. The body line is split at the ; inside the JSON string. Not pinned: .sh target (also ask). RED 3cc3c61e5 (branch red/bg-leads-20261118, 2 ignored).'''
+created_at = 1794947228
+updated_at = 1794947228
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_heredoc_json_data_body_read_as_python_fp -- --ignored"
+rev = "3cc3c61e5aa501f3904e1961d8d6c075039235fe"
+observed_at = 1794947228
+detail = """
+exit 101: trees/bg-leads-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s
+     Running tests/backlog_20261118_heredoc_json_data_body_read_as_python_fp.rs (target/debug/deps/backlog_20261118_heredoc_json_data_body_read_as_python_fp-4b28c2c97c2ca0e2)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_heredoc_json_data_body_read_as_python_fp`"""
+
+[[task]]
+id = "0298c734"
+title = "blastguard: with the session cwd under /private/var (no TMPDIR), rm -rf <in-cwd> is Deny as one command but the confined Ask behind any && / ; / cd prefix"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-18 at origin/main 1dfa60681 (0.2.699), HOME/cwd = non-existent sentinel /private/var/folders/zz/<x>/home/wt, hook env without TMPDIR: rm -rf build / rm -rf D/build / rm -rf <abs>/build -> deny ('… is a system directory [system harm …]', deletion::judge_rm). true && rm -rf build, echo x; rm -rf build, cd <same abs wt> && rm -rf build, =cd D && rm -rf build -> main ask ('recursive rm (-r) is confined to …/wt — a safe root'); subagent deny in every case. Table C: System row escapes via confined_root, so Project row -> legacy deletion::judge_rm = Deny; a no-op prefix must not lower it (raise-only legacy layer). With HOME under ~/.blastguard-test-fixtures or /private/tmp both shapes are the confined Ask (no inconsistency). Separate, unpinned: the [system harm] marker on the single-command deny vs harm_mark::harms_system's confined_root escape. RED 3cc3c61e5 (branch red/bg-leads-20261118, 4 ignored)."
+created_at = 1794947239
+updated_at = 1794947239
+weight = 0.0
+issue_number = 1859
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1859"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_compound_line_weakens_sysdir_rm_deny -- --ignored"
+rev = "3cc3c61e5aa501f3904e1961d8d6c075039235fe"
+observed_at = 1794947239
+detail = """
+exit 101: harness-worktrees/bg-leads-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.61s
+     Running tests/backlog_20261118_compound_line_weakens_sysdir_rm_deny.rs (target/debug/deps/backlog_20261118_compound_line_weakens_sysdir_rm_deny-91079b9cce231417)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_compound_line_weakens_sysdir_rm_deny`"""

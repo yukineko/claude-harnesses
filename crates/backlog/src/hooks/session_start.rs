@@ -159,8 +159,22 @@ pub fn run(input: &HookInput) -> Option<String> {
     // but closed on GitHub is therefore NOT counted here; only `backlog sync`
     // shows it. `MirrorDrift::is_reportable` carries the anti-noise rule and the
     // gap it knowingly leaves open.
+    //
+    // `github_mirror = false`: there is no mirror to drift from, so the drift
+    // section is replaced by ONE line saying the mirror is disabled (a silent
+    // omission would read as "in sync"). A non-bool value is reported here
+    // too, since this hook's only channel is additionalContext.
     let drift = store::mirror_drift(&tasks);
-    if drift.is_reportable() {
+    if let Err(why) = cfg.github_mirror.enabled() {
+        warnings.push_str(&format!(
+            "## Backlog \u{2014} github_mirror config error\n\n{why}\n\n"
+        ));
+    } else if cfg.github_mirror == crate::config::GithubMirror::Off {
+        warnings.push_str(&format!(
+            "Backlog: {}\n\n",
+            crate::config::GithubMirror::DISABLED_LINE
+        ));
+    } else if drift.is_reportable() {
         warnings.push_str("## Backlog \u{2014} GitHub mirror drift\n\n");
         warnings.push_str(&format!(
             "This store is out of sync with its GitHub issues: **{closes} issue(s) to close** (the task is already done/cancelled) and **{creates} issue(s) to create** (pending, never mirrored).\n\n",

@@ -57,7 +57,7 @@
     {
       "name": "blastguard",
       "description": "PreToolUse hook that denies or asks before project-destroying Bash commands and file operations, as a single self-contained Rust binary.",
-      "version": "0.2.684",
+      "version": "0.2.685",
       "category": "security",
       "keywords": [
         "hooks",
@@ -82,7 +82,7 @@
     {
       "name": "backlog",
       "description": "Cross-project task queue for Claude Code with cycle-type tags, a SessionStart hook that injects pending work, and subcommands to add, list, claim and finish tasks.",
-      "version": "0.3.130",
+      "version": "0.3.142",
       "category": "workflow",
       "keywords": [
         "backlog",
@@ -156,7 +156,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: schedules parallel and serial task batches by file-conflict analysis, manages git worktrees, tracks run state and gates completion.",
-      "version": "0.7.441",
+      "version": "0.7.448",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -331,7 +331,7 @@
     {
       "name": "donegate",
       "description": "Completion-verification gate for Claude Code: on Stop it runs your acceptance commands and blocks until every applicable check is green, feeding failures back for an auto-fix loop.",
-      "version": "0.1.94",
+      "version": "0.1.96",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -703,7 +703,7 @@
     {
       "name": "tdd",
       "description": "Test-first gate for Claude Code: on Stop it blocks when implementation lines were added with no test visible in the uncommitted changes, and red/green/verify subcommands record RED before GREEN.",
-      "version": "0.1.93",
+      "version": "0.1.95",
       "category": "quality",
       "keywords": [
         "tdd",

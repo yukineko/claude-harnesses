@@ -7,10 +7,10 @@ date = "2026-11-17"
 canon = []
 
 [spec.ratification]
-canon_commit = "0e9d4b79b813de555eb2dc38d25584906f438bf6"
+canon_commit = "a070a0d91f5cd82bc98378d5042d74c4bdd615e4"
 date = "2026-11-17"
-reason = "User rulings 2026-11-14..17 recorded in the req file; independent sonnet review PASS (draft 13 + 4 verified fixes)"
-fingerprint = "f9b108aa3b09c3b9"
+reason = "User ruling 2026-11-17: amend R2 to the 8f82f09d tdd green exception (one tdd green after a bare run on the same tree; nested green counts once); code stays as merged in 310d9a671. The same-tree tdd red then tdd green allow is not part of the exception (backlog 0c301e8b)."
+fingerprint = "679c5d0b72cbfbdf"
 
 [[requirement]]
 id = "R1"
@@ -35,13 +35,14 @@ repro_test = "cargo test -p condukt --test backlog_20261115_testscope_counts_une
 
 [[requirement]]
 id = "R2"
-statement = "実行されたテスト (Post または PostToolUseFailure で確認済み) は、変更の無い tree 上の rerun で従来どおり拒否される。これは既存挙動を守る回帰 control であり、RED ではない。"
+statement = "実行されたテスト (Post または PostToolUseFailure で確認済み) は、変更の無い tree 上の rerun で従来どおり拒否される。ただし例外が 1 つある (backlog 8f82f09d、310d9a671、2026-11-17 ユーザー裁定で R2 を改訂): 素の実行 (tdd を経由しない cargo test) の後、同じ tree で同じコマンドを `tdd green --cmd` 経由で走らせるのは 1 回だけ許可される。F→P oracle の GREEN を記録する経路を残すためである。2 回目の tdd green、および tdd green の後の素の rerun は拒否される。入れ子の tdd green も同じ 1 回に数える (backlog_20261117_nested_tdd_green_rerun_bypass.rs)。これは既存挙動を守る回帰 control であり、RED ではない。"
 acceptance = [
     "これは回帰 control である。現行コードで既に PASS することが期待され、RED 証跡には数えない。R2 には現行コードで behaviourally に失敗するコマンドは無い。ledger の振る舞い (v2 ファイル・legacy 行の追記) の RED は R6 が持つ。",
     "Ask 1 / R4-1 / C1 の固定リストの各テストは、入力に Post と、Pre に対応する tool_use_id を足してよい。assert 文は byte-identical のままにする。リスト: testscope_20261114.rs::rule3_same_tree_rerun_is_denied_until_tree_changes; backlog_20261114_testscope_cd_tree_identity.rs::control_identical_command_on_unchanged_cd_target_is_refused と ::rerun_after_editing_only_the_payload_cwd_tree_is_refused_when_test_runs_in_cd_target; backlog_20261115_testscope_untracked_content_identity.rs::control_unchanged_tree_refuses_rerun; backlog_20261115_testscope_verifier_suspicions.rs::a5_bash_c_cd_is_denied, ::a6_cd_semicolon_cargo_is_denied, ::b_subdir_cd_same_tree_with_untracked_top_file_is_denied, ::b_control_subdir_cd_same_tree_without_untracked_is_denied; backlog_20261115_testscope_cd_route_dodges.rs::r2_env_cd_then_cargo_is_denied; testscope_enforcement_20261114.rs::b_tdd_after_bare_run_on_same_tree_is_denied, ::b_bare_after_tdd_run_on_same_tree_is_denied, ::b_tdd_twice_on_same_tree_is_denied。",
     "無修正で GREEN のまま維持するもの: backlog_20261115_testscope_cd_route_dodges.rs の r1/r3、testscope_enforcement_20261114.rs::b_state_test_twice_on_same_tree_is_refused と ::b_state_test_after_hook_run_on_same_tree_is_refused (state test 経路、Ask 5)。",
     "verifier_suspicions の ignore 済み RED a1〜a4 は、入力に Post と tool_use_id を足す (C2 裁定)。assert は不変で、#[ignore] は残す。assert が byte-identical であることは base..HEAD の diff で確認する。",
     "G3-C 裁定により、C1 リストには backlog_20261115_testscope_counts_unexecuted_attempt.rs::c_no_post_ever_in_session_falls_back_to_recording_at_pre も加わる。この 1 件だけは assert の改訂 (denied されない、かつ Ask) が承認済みで、byte-identical の対象外である (R3)。",
+    "tdd green 例外の範囲は backlog_20261117_nested_tdd_green_rerun_bypass.rs と testscope_enforcement_20261114.rs の B 群が固定する。同じ tree での確認済み tdd red の後の tdd green が今は Allow になる件は、この例外に含めない欠陥として backlog 0c301e8b (RED backlog_20261117_tdd_red_then_green_same_tree.rs) が持つ。",
     "C1 リストの網羅性は verifier が確認する。リスト外に「同一 ledger key への 2 回目の Pre が denied」を assert するテストが見つかった場合は、spec 変更として人間に戻す。",
 ]
 canon = [

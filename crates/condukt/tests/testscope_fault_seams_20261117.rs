@@ -93,7 +93,11 @@ fn r5_confirm_hook_panic_surfaces_system_message_never_blocks_and_rerun_asks() {
             out.stdout, out.stderr
         )
     });
-    assert!(v.is_object(), "stdout must be a JSON object: {}", out.stdout);
+    assert!(
+        v.is_object(),
+        "stdout must be a JSON object: {}",
+        out.stdout
+    );
     let msg = v["systemMessage"]
         .as_str()
         .unwrap_or_else(|| panic!("no systemMessage in {}", out.stdout));

@@ -1641,36 +1641,6 @@ exit 101: ndukt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_txt_data_heredoc_python_probe`"""
 
 [[task]]
-id = "cf0bf4ca"
-title = "blastguard fail-open: exec 3<<<'chmod 777 /etc/hosts'; bash <&'3' (quoted fd) is Allow while <&3 is Deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "F11. Observed 2026-11-15 at 0.2.603, re-observed by main with RED 784eba77f. bash strips quotes before the redirect, so <&'3' == <&3. Readings: (a) defect; (b) quoted fd treated as undeterminable -> but then must be Ask/Deny, never allow."
-created_at = 1794730681
-updated_at = 1794730681
-weight = 0.0
-issue_number = 1789
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1789"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261115_quoted_numeric_dup_target -- --include-ignored"
-rev = "bdfdc064af6abf8c9d8cbde6b9f1ba790bfc7e4a"
-observed_at = 1794730681
-detail = """
-exit 101: d v0.2.608 (/Users/yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
-     Running tests/backlog_20261115_quoted_numeric_dup_target.rs (target/debug/deps/backlog_20261115_quoted_numeric_dup_target-c281c6c9d662af65)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_numeric_dup_target`"""
-
-[[task]]
 id = "d292ce6e"
 title = "blastguard FP: quoted heredoc body line starting with a backtick is judged as a command word (true && git commit -F - <<'EOF' ... `import re` ...)"
 project = "/Users/yuki/src/harness"

@@ -4265,7 +4265,17 @@ fn deletion_escape_spellings_are_not_allowed() {
         format!("rm -rf -- {}/a", f.tmp),
         format!("rm -rf - {}/a", f.tmp),
         format!("rm -rf {}/a 2>/dev/null", f.tmp),
-        format!("rm -rf \"{}/a\"", f.tmp),
+        // Quoting does not launder an escape: these quoted targets do NOT
+        // statically resolve inside the temp root (symlink out, `..` above
+        // it), so they stay not-Allow exactly like their unquoted spellings.
+        // (The quoted spelling of an in-scratch literal moved to
+        // `deletion_quoted_scratch_literal_matches_unquoted` per user ruling
+        // 2026-11-18: Table C Scratch × Delete = Allow wins.)
+        format!("rm -rf \"{}/out\"", f.tmp),
+        format!("rm -rf \"{}/out/\"", f.tmp),
+        format!("rm -rf \"{}/in/b\"", f.tmp),
+        format!("rm -rf \"{}/../home/docs\"", f.tmp),
+        format!("rm -rf '{}/a/../../home/docs'", f.tmp),
     ] {
         assert_ne!(verdict_name(&f.run(&cmd)), "allow", "{cmd}");
     }
@@ -4311,6 +4321,38 @@ fn deletion_escape_spellings_are_not_allowed() {
         &f.roots_with_cwd(&raw),
     );
     assert_ne!(verdict_name(&d), "allow", "payload cwd {raw}");
+}
+
+#[test]
+#[ignore = "RED: quoted in-scratch rm -rf still Deny at 7d030c34b (legacy scratch reading active); un-ignore when the retire fix lands"]
+fn deletion_quoted_scratch_literal_matches_unquoted() {
+    // User ruling 2026-11-18: Table C Scratch × Delete = Allow wins. A
+    // `rm -rf "<path>"` whose target statically resolves inside a scratch
+    // root is Allow even when quoted — quoting a plain literal does not
+    // change what is deleted, so the quoted spelling must get the same
+    // decision as the unquoted one (parity). This used to be pinned as
+    // not-Allow in `deletion_escape_spellings_are_not_allowed`, which
+    // contradicted the spec; escapes out of scratch stay pinned there.
+    let f = DelFx::new("quotedscratch");
+    let plain = f.run(&format!("rm -rf {}/a", f.tmp));
+    assert_eq!(
+        plain,
+        Decision::Allow,
+        "baseline: the plain spelling is Allow"
+    );
+    for cmd in [
+        format!("rm -rf \"{}/a\"", f.tmp),
+        format!("rm -rf '{}/a'", f.tmp),
+    ] {
+        assert_eq!(f.run(&cmd), plain, "{cmd}");
+    }
+    // Each quoted spelling matches its own unquoted spelling.
+    for (unquoted, quoted) in [(
+        format!("rm -rf {}/a/", f.tmp),
+        format!("rm -rf \"{}/a/\"", f.tmp),
+    )] {
+        assert_eq!(f.run(&quoted), f.run(&unquoted), "{quoted} vs {unquoted}");
+    }
 }
 
 #[test]

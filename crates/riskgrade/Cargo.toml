@@ -4,12 +4,13 @@
 #
 # NOT a distributed Claude Code plugin: a pure library linked into condukt, so
 # it carries no `.claude-plugin/plugin.json` (CONTRIBUTING.md: internal code
-# that is not shipped needs only Cargo.toml).
+# that is not shipped needs only Cargo.toml). Its version is bumped on every
+# linked change like harness-core's (scripts/check-version-bumped.py).
 [package]
 # blastguard (a dependency) requires 1.88 for brush-parser.
 rust-version = "1.88"
 name = "riskgrade"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Graded risk / reversibility assessment of a planned action (classify) and diff-level semantic risk signals (diffrisk), built on blastguard's detector."
 license = "MIT"

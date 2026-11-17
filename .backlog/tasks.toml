@@ -3240,38 +3240,6 @@ exit 101: uki/src/.harness-worktrees/red-commit-heredoc-fp-20261118/crates/blast
 error: test failed, to rerun pass `-p blastguard --test backlog_20261118_rs_heredoc_checkout_text_fp`"""
 
 [[task]]
-id = "aa7acd12"
-title = "blastguard: zsh =cmd (equals expansion) in command position hides system harm (=rm -rf ~ is allow)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "system-harm",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = 'Observed 2026-11-18, blastguard 0.2.690 deployed and origin/main c3dd9fd6d worktree build: =rm -rf ~, =chmod 777 /etc/hosts and =bash -c "chmod 777 /etc/hosts" are allow in main and subagent; the same without = are deny (system harm). The Bash tool runs /bin/zsh 5.9 with option equals on: echo =ls printed /bin/ls and =echo hi printed hi, so a command-position =word runs the PATH binary. RED: crates/blastguard/tests/backlog_20261118_zsh_equals_cmd_fail_open.rs at 105564832 (branch red/blastguard-zsh-equals-20261118, 0.2.691): 3 RED fail, 4 controls pass (plain harm deny, echo hi allow, echo =x / a==b / [[ $a == b ]] / x=1 echo hi allow, =$x foo ask main / deny subagent). Fix owner: harness-5a (resolve =word statically to word, undetermined name -> Undetermined).'
-created_at = 1794942814
-updated_at = 1794942814
-weight = 0.0
-issue_number = 1856
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1856"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261118_zsh_equals_cmd_fail_open -- --include-ignored"
-rev = "105564832bbde7adb5a2a750682034404e31ecb6"
-observed_at = 1794942814
-detail = """
-exit 101: rs/yuki/src/.harness-worktrees/red-blastguard-zsh-equals-20261118/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.26s
-     Running tests/backlog_20261118_zsh_equals_cmd_fail_open.rs (target/debug/deps/backlog_20261118_zsh_equals_cmd_fail_open-e1b00426a45f6ff4)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261118_zsh_equals_cmd_fail_open`"""
-
-[[task]]
 id = "693a76ea"
 title = "blastguard: backtick =word inside a quoted heredoc body read as an undetermined command word (Ask/Deny FP)"
 project = "/Users/yuki/src/harness"

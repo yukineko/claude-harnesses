@@ -3327,3 +3327,32 @@ exit 101: bg-leads-red/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.31s
      Running tests/backlog_20261118_python_c_argv_expansion_read_as_program_fp.rs (target/debug/deps/backlog_20261118_python_c_argv_expansion_read_as_program_fp-510e379e782aa619)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261118_python_c_argv_expansion_read_as_program_fp`"""
+
+[[task]]
+id = "0298c734"
+title = "blastguard: with the session cwd under /private/var (no TMPDIR), rm -rf <in-cwd> is Deny as one command but the confined Ask behind any && / ; / cd prefix"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-18 at origin/main 1dfa60681 (0.2.699), HOME/cwd = non-existent sentinel /private/var/folders/zz/<x>/home/wt, hook env without TMPDIR: rm -rf build / rm -rf D/build / rm -rf <abs>/build -> deny ('… is a system directory [system harm …]', deletion::judge_rm). true && rm -rf build, echo x; rm -rf build, cd <same abs wt> && rm -rf build, =cd D && rm -rf build -> main ask ('recursive rm (-r) is confined to …/wt — a safe root'); subagent deny in every case. Table C: System row escapes via confined_root, so Project row -> legacy deletion::judge_rm = Deny; a no-op prefix must not lower it (raise-only legacy layer). With HOME under ~/.blastguard-test-fixtures or /private/tmp both shapes are the confined Ask (no inconsistency). Separate, unpinned: the [system harm] marker on the single-command deny vs harm_mark::harms_system's confined_root escape. RED 3cc3c61e5 (branch red/bg-leads-20261118, 4 ignored)."
+created_at = 1794947239
+updated_at = 1794947239
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_compound_line_weakens_sysdir_rm_deny -- --ignored"
+rev = "3cc3c61e5aa501f3904e1961d8d6c075039235fe"
+observed_at = 1794947239
+detail = """
+exit 101: harness-worktrees/bg-leads-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.61s
+     Running tests/backlog_20261118_compound_line_weakens_sysdir_rm_deny.rs (target/debug/deps/backlog_20261118_compound_line_weakens_sysdir_rm_deny-91079b9cce231417)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_compound_line_weakens_sysdir_rm_deny`"""

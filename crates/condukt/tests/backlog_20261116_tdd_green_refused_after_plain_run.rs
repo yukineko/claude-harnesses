@@ -148,9 +148,7 @@ fn denied(res: &(Option<i32>, String)) -> bool {
     res.1.contains("\"deny\"")
 }
 
-// test-weakening-justified: new RED for an unfixed defect (2026-11-16).
 #[test]
-#[ignore = "RED: 2026-11-16 tdd green is refused as a rerun after a plain run on the same tree, so the required F->P oracle cannot be completed — remove when fixed"]
 fn tdd_green_is_allowed_after_plain_run_on_same_tree() {
     let home = tempfile::tempdir().unwrap();
     let ledger_dir = tempfile::tempdir().unwrap();

@@ -22,7 +22,11 @@
 //!    Bash `cargo test`, `bash -c`, `condukt sandbox run --cmd`, `tdd
 //!    red|green --cmd <c>` / `--cmd=<c>` (whose `<c>` is judged like a bare
 //!    command for every rule), and `condukt state test`, which calls
-//!    [`judge`] itself before running anything.
+//!    [`judge`] itself before running anything. One exception (backlog
+//!    8f82f09d): `tdd green --cmd <c>` is checked only against earlier `tdd
+//!    green` runs of `<c>`, so a bare run cannot block the GREEN evidence the
+//!    F->P oracle requires; it still records `<c>`'s bare key (see
+//!    `check_rerun`).
 //! 4. **Task scope** (2026-11-14) — when the cwd is inside a run task's
 //!    recorded worktree, each `--test <name>` must appear as `--test <name>`
 //!    in that task's `reproduction_tests` or be a `tests/<name>.rs` the
@@ -121,6 +125,11 @@ const MAIN_MERGE_REASON: &str = "a condukt run integrates once at the end via `c
 
 /// One simple command: its words after shell tokenizing.
 type Words = Vec<String>;
+
+/// Prefixed to the words of a test run through `tdd green --cmd` (backlog
+/// 8f82f09d). Bare test words start with `cargo`, so the prefix cannot occur in
+/// them.
+const TDD_GREEN_ROUTE: [&str; 3] = ["tdd", "green", "--cmd"];
 
 /// What the tokenizer and the `cd` walk say about a command line, before any
 /// task-scope or ledger rule is applied.
@@ -558,12 +567,24 @@ fn judge_words(words: &[String], dir: &Dir, ctx: &Ctx, depth: usize) -> Judged {
             }
         }
         // `tdd red|green … --cmd '<c>'` runs <c> as the test command; it is
-        // judged exactly like the bare command (full suite, task scope and the
-        // same rerun-ledger key), so routing a test through tdd changes nothing.
+        // judged like the bare command (full suite, task scope, rerun key). A
+        // `tdd green` test is tagged with [`TDD_GREEN_ROUTE`] (see `check_rerun`).
         "tdd" if depth < 4 && matches!(w.get(1).map(String::as_str), Some("red" | "green")) => {
-            match cmd_flag(w) {
-                Some(p) => judge_payload(&p, dir, ctx, depth + 1),
-                None => Judged::Other,
+            match (cmd_flag(w), w[1] == "green") {
+                (Some(p), false) => judge_payload(&p, dir, ctx, depth + 1),
+                (Some(p), true) => match judge_payload(&p, dir, ctx, depth + 1) {
+                    Judged::Test(t) => Judged::Test(
+                        t.into_iter()
+                            .map(|(tw, d)| {
+                                let mut v: Words = TDD_GREEN_ROUTE.map(String::from).to_vec();
+                                v.extend(tw);
+                                (v, d)
+                            })
+                            .collect(),
+                    ),
+                    other => other,
+                },
+                (None, _) => Judged::Other,
             }
         }
         "cargo" => judge_cargo(&w[1..], dir),
@@ -1301,8 +1322,15 @@ const ASK_TAIL: &str = "no PostToolUse / PostToolUseFailure has confirmed that a
 /// allowed and the asked attempt record their own pending row (an asked call
 /// that is rejected fires no Post and so stays pending: the next rerun asks
 /// again).
+///
+/// `tdd green --cmd <c>` (backlog 8f82f09d): its checked key is the tagged
+/// command, so it collides only with an earlier `tdd green` of `<c>` on this
+/// tree, not with a bare run of `<c>`, which would leave the required F->P
+/// oracle no way to record GREEN. It also records the bare key of `<c>`
+/// (never checked here), so a bare run after it is still refused.
 fn check_rerun(by_dir: &[(PathBuf, Vec<Words>)], ledger: &Path, at: &Attempt) -> Decision {
     let mut keys: Vec<LedgerKey> = Vec::new();
+    let mut record_only: Vec<LedgerKey> = Vec::new();
     for (dir, tests) in by_dir {
         let (top, tree) = match tree_identity(dir) {
             Ok(t) => t,
@@ -1316,11 +1344,15 @@ fn check_rerun(by_dir: &[(PathBuf, Vec<Words>)], ledger: &Path, at: &Attempt) ->
             }
         };
         for w in tests {
-            keys.push(LedgerKey {
+            let key = |cmd: String| LedgerKey {
                 top: top.clone(),
                 tree: tree.clone(),
-                cmd: w.join(" "),
-            });
+                cmd,
+            };
+            if w.starts_with(&TDD_GREEN_ROUTE.map(String::from)) {
+                record_only.push(key(w[TDD_GREEN_ROUTE.len()..].join(" ")));
+            }
+            keys.push(key(w.join(" ")));
         }
     }
     let v2p = v2_path(ledger);
@@ -1373,6 +1405,7 @@ fn check_rerun(by_dir: &[(PathBuf, Vec<Words>)], ledger: &Path, at: &Attempt) ->
         });
     let rows: Vec<String> = keys
         .iter()
+        .chain(&record_only)
         .map(|k| {
             V2Row::Pending {
                 id: at.tool_use_id.to_string(),
@@ -1558,42 +1591,9 @@ pub fn ledger_path(home: Option<&Path>) -> Option<PathBuf> {
 
 // ── session marker (rule A) ─────────────────────────────────────────────────
 
-/// `<ledger parent>/sessions/<safe session id>`: the file whose existence says
-/// "the testscope hook ran in this session". `None` when the ledger path has no
-/// parent or the session id is empty.
-pub fn session_marker_path(ledger: &Path, session_id: &str) -> Option<PathBuf> {
-    if session_id.trim().is_empty() {
-        return None;
-    }
-    let dir = ledger.parent()?;
-    Some(
-        dir.join("sessions")
-            .join(harness_core::store::safe_session(session_id)),
-    )
-}
-
-/// Record that the testscope hook is loaded in `session_id`. Called by the hook
-/// on every payload that carries a session id; `condukt state set --status
-/// running` refuses a session that has no marker ([`session_marker_present`]).
-pub fn write_session_marker(ledger: &Path, session_id: &str) -> std::io::Result<()> {
-    let Some(p) = session_marker_path(ledger, session_id) else {
-        return Ok(());
-    };
-    if let Some(dir) = p.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(&p, b"")
-}
-
-/// Whether the marker of `session_id` exists, as an observation: `Err` (never
-/// `false`, never `true`) when existence cannot be told.
-pub fn session_marker_present(ledger: &Path, session_id: &str) -> Result<bool, String> {
-    let Some(p) = session_marker_path(ledger, session_id) else {
-        return Ok(false);
-    };
-    p.try_exists()
-        .map_err(|e| format!("cannot tell whether {} exists: {e}", p.display()))
-}
+// Lives in `testscope_hook.rs` (the hook is its only writer); re-exported so
+// `testscope::session_marker_present` keeps its path for `main.rs`.
+pub use crate::testscope_hook::{session_marker_present, write_session_marker};
 
 // ── task scope (rule C) ─────────────────────────────────────────────────────
 

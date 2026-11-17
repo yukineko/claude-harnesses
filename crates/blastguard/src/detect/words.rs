@@ -105,6 +105,7 @@ pub(super) fn first_shell_word(s: &str) -> Option<String> {
 ///   * `"rm"` / `'rm'` / `r""m` — quoted or split command words
 ///   * `/bin/rm`, `$HOME/bin/rm` (literal path part) — via `basename`
 ///   * `command rm`, `sudo rm`, `env rm`, … — via `command_index`'s wrapper skip
+///   * `=rm` — zsh equals expansion (see below)
 ///
 /// OUT OF REACH (deliberately not attempted — each needs runtime state we do
 /// not have, and guessing would deny benign commands):
@@ -119,9 +120,35 @@ pub(super) fn first_shell_word(s: &str) -> Option<String> {
 ///
 /// Operand tokens are also intentionally left un-normalised: unquoting them
 /// would change glob/path semantics that `analyze_rm` reasons about.
+///
+/// ZSH EQUALS EXPANSION (backlog aa7acd12, user ruling 2026-11-18): Claude
+/// Code's Bash tool runs commands with zsh, where option `equals` is on, so an
+/// UNQUOTED word `=WORD` is replaced by the path of the program `WORD` found on
+/// PATH — `=rm -rf ~` runs `/bin/rm -rf ~`. Such a word resolves to `WORD`
+/// here, before every rule, exactly as a quoted spelling does (see
+/// [`equals_command_word`]). What follows the `=` is then normalised like any
+/// command word, so an expansion there (`=$x`) stays an expansion and is asked
+/// about by the callers that check the raw token for one. A quoted or escaped
+/// `=` (`'=rm'`, `"=rm"`, `\=rm`) is not expanded by zsh and is left as is.
 pub(super) fn normalized_command(tok: &str) -> String {
+    let tok = equals_command_word(tok).unwrap_or(tok);
     let unquoted = first_shell_word(tok).unwrap_or_else(|| tok.to_string());
     basename(&unquoted).to_string()
+}
+
+/// The `WORD` of a raw token `=WORD` that zsh's equals expansion turns into the
+/// PATH program `WORD` (see [`normalized_command`]); `None` for any other
+/// token.
+///
+/// Only ONE leading `=` is removed, as zsh does: `==rm` names the program
+/// `=rm`. A bare `=` names nothing and is left alone.
+///
+/// The program reached this way is always the one on PATH, never a shell
+/// builtin or function of the same name (zsh substitutes its path). Callers
+/// that model a builtin's effect on the shell's own state (`cd` moving the
+/// working directory) must check this before applying it.
+pub(super) fn equals_command_word(tok: &str) -> Option<&str> {
+    tok.strip_prefix('=').filter(|rest| !rest.is_empty())
 }
 
 pub(super) fn is_assignment(tok: &str) -> bool {

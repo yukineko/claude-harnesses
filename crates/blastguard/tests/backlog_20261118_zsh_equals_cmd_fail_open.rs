@@ -99,7 +99,6 @@ fn mismatches(cmds: &[&str], tag: &str, want: &str, ok: fn(&str) -> bool) -> Vec
 }
 
 #[test]
-#[ignore = "RED: 2026-11-18 zsh `=rm -rf ~` (equals expansion in command position) is Allow — remove the ignore when fixed"]
 fn equals_rm_rf_home_is_deny() {
     let bad = mismatches(&["=rm -rf ~"], "red-rm", "deny", |d| d == "deny");
     assert!(
@@ -110,7 +109,6 @@ fn equals_rm_rf_home_is_deny() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-18 zsh `=chmod 777 /etc/hosts` (equals expansion in command position) is Allow — remove the ignore when fixed"]
 fn equals_chmod_etc_hosts_is_deny() {
     let bad = mismatches(&["=chmod 777 /etc/hosts"], "red-chmod", "deny", |d| {
         d == "deny"
@@ -123,7 +121,6 @@ fn equals_chmod_etc_hosts_is_deny() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-18 zsh `=bash -c 'chmod 777 /etc/hosts'` is Allow — remove the ignore when fixed"]
 fn equals_bash_c_chmod_is_not_allow() {
     let bad = mismatches(
         &["=bash -c 'chmod 777 /etc/hosts'"],

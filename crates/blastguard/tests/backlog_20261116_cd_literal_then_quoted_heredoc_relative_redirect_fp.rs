@@ -36,6 +36,7 @@
 //!    3. the whole command longer than ~8 KiB (4.2 KB: Allow; 8.2 KB: Ask; the
 //!       cap quoted in the task is the 8 KiB AST parse cap, so over it the AST
 //!       layer is Undetermined and the old string reading decides),
+//!
 //!  and the command must carry a later non-inert command after the close
 //!  (the `cd .. && . "$HOME/.cargo/env" && cargo ...` tail): without it the
 //!  body is dropped from the shell reading and the command is Allow.

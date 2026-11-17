@@ -82,7 +82,8 @@ fn run_as(command: &str, home: &Home, subagent: bool) -> (String, String) {
     )
 }
 
-const MINIMAL: &str = "while IFS= read -r c; do echo \"$c\"; done <<'EOF'\nexec 3<<< 'echo hi'; bash <&3\nEOF";
+const MINIMAL: &str =
+    "while IFS= read -r c; do echo \"$c\"; done <<'EOF'\nexec 3<<< 'echo hi'; bash <&3\nEOF";
 const CAT: &str = "cat <<'EOF'\nexec 3<<< 'echo hi'; bash <&3\nEOF";
 
 fn check(tag: &str, cmd: &str) {

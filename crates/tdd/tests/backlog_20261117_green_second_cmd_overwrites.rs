@@ -103,7 +103,7 @@ fn control_single_repro_oracle_valid() {
 }
 
 #[test]
-#[ignore = "RED: a second `tdd green --cmd B` on the same task silently overwrites the first green proof (A lost, oracle command_mismatch)"]
+#[ignore = "RED(519f089e): a second `tdd green --cmd B` on the same task silently overwrites the first green proof (A lost, oracle command_mismatch)"]
 fn second_green_with_other_cmd_must_not_destroy_first_proof() {
     let fx = fixture("two");
     let (c, _, e) = run(&fx, &["red", "--task", "t3", "--cmd", A]);

@@ -3137,3 +3137,32 @@ exit 101: 96 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/cr
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.03s
      Running tests/backlog_20261117_subagent_cd_relative_root.rs (target/debug/deps/backlog_20261117_subagent_cd_relative_root-2b3ed9b3f3f7e4c7)
 error: test failed, to rerun pass `-p donegate --test backlog_20261117_subagent_cd_relative_root`"""
+
+[[task]]
+id = "519f089e"
+title = "tdd: a second tdd green with another --cmd overwrites the first green proof (one slot per task)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-17 at 1331e475d (tdd 0.1.93), run-20261117-100335-22251 t3: task with two repros; the second tdd green replaced .tdd/t3.green.json, oracle went command_mismatch / valid_fp_oracle false. README/src state no one-slot contract. Expected: the first F-to-P proof survives, or the overwrite is refused. RED 5502e2d18."
+created_at = 1794892278
+updated_at = 1794892278
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261117_green_second_cmd_overwrites -- --include-ignored second_green_with_other_cmd"
+rev = "4ccf146bf1cb4437405d7ba7efc72edaeebbc7fb"
+observed_at = 1794892278
+detail = """
+exit 101: 0.1.94 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running tests/backlog_20261117_green_second_cmd_overwrites.rs (target/debug/deps/backlog_20261117_green_second_cmd_overwrites-29bdba7173b3501d)
+error: test failed, to rerun pass `-p tdd --test backlog_20261117_green_second_cmd_overwrites`"""

@@ -379,13 +379,19 @@ pub fn attribute_own_writes(root: &Path, transcript_path: &str, changed: &[Strin
 /// enters is where that later statement's relative paths land.
 ///
 /// Anything this parser cannot follow keeps the WHOLE command (the old,
-/// over-attributing rule): a heredoc (`<<`), an unterminated quote or
+/// over-attributing rule): an unterminated heredoc, an unterminated quote or
 /// substitution, and a substitution holding `case`, a comment, a heredoc or a
 /// nested backtick. Being unable to tell is not "read only" (CLAUDE.md 第3節).
+/// A heredoc is parsed by [`statements`] (body skipped as data), but a command
+/// holding one still keeps the whole command here, since the body may name files.
 fn writing_statements(command: &str) -> Vec<&str> {
     let Some(stmts) = statements(command) else {
         return vec![command];
     };
+    // A heredoc keeps the WHOLE command (its body may name files).
+    if stmts.iter().any(|s| s.heredoc) {
+        return vec![command];
+    }
     let mut keep: Vec<bool> = stmts
         .iter()
         .map(|s| s.opaque || !s.stages.iter().all(read_only_stage))
@@ -420,6 +426,8 @@ struct Statement {
     stages: Vec<Stage>,
     /// Holds a command substitution: kept whatever its stages are.
     opaque: bool,
+    /// Holds a heredoc (`<<`); its body was skipped as data.
+    heredoc: bool,
 }
 
 /// End (exclusive) of the `$(…)` / `<(…)` / `>(…)` whose `(` is at `open`.
@@ -496,6 +504,11 @@ fn statements(command: &str) -> Option<Vec<Statement>> {
     let mut in_word = false;
     let mut start = 0;
     let mut opaque = false;
+    let mut heredoc = false;
+    let mut bodysubst = false;
+    // `(delimiter, quoted, strip_tabs)` of heredocs whose body starts after
+    // the next newline.
+    let mut pending: Vec<(String, bool, bool)> = Vec::new();
     let mut i = 0;
 
     fn end_word(stage: &mut Stage, word: &mut String, in_word: &mut bool) {
@@ -547,6 +560,58 @@ fn statements(command: &str) -> Option<Vec<Statement>> {
                 in_word = true;
                 opaque = true;
                 i = end;
+                continue;
+            }
+            b'<' if b.get(i + 1) == Some(&b'<') && b.get(i + 2) != Some(&b'<') => {
+                // Heredoc: stdin, not a word. The body is data, skipped at
+                // the next newline.
+                end_word(&mut stage, &mut word, &mut in_word);
+                let mut j = i + 2;
+                let strip = b.get(j) == Some(&b'-');
+                if strip {
+                    j += 1;
+                }
+                while b.get(j).is_some_and(|d| *d == b' ' || *d == b'\t') {
+                    j += 1;
+                }
+                let mut delim = String::new();
+                let mut quoted = false;
+                while let Some(&d) = b.get(j) {
+                    match d {
+                        b'\'' => {
+                            let e = command.get(j + 1..)?.find('\'')? + j + 1;
+                            delim.push_str(&command[j + 1..e]);
+                            quoted = true;
+                            j = e + 1;
+                        }
+                        b'"' => {
+                            let e = command.get(j + 1..)?.find('"')? + j + 1;
+                            delim.push_str(&command[j + 1..e]);
+                            quoted = true;
+                            j = e + 1;
+                        }
+                        b'\\' => {
+                            let ch = command.get(j + 1..)?.chars().next()?;
+                            delim.push(ch);
+                            quoted = true;
+                            j += 1 + ch.len_utf8();
+                        }
+                        // Expansion in the delimiter word: not followed.
+                        b'$' | b'`' => return None,
+                        _ if b" \t\n;&|()<>".contains(&d) => break,
+                        _ => {
+                            let ch = command[j..].chars().next()?;
+                            delim.push(ch);
+                            j += ch.len_utf8();
+                        }
+                    }
+                }
+                if delim.is_empty() {
+                    return None;
+                }
+                pending.push((delim, quoted, strip));
+                heredoc = true;
+                i = j;
                 continue;
             }
             b'<' if b.get(i + 1) == Some(&b'<') => return None,
@@ -625,10 +690,50 @@ fn statements(command: &str) -> Option<Vec<Statement>> {
                     end: i,
                     stages: std::mem::take(&mut stages),
                     opaque: std::mem::take(&mut opaque),
+                    heredoc: std::mem::take(&mut heredoc),
                 });
                 let mut j = i + 1;
                 if (c == b'&' || c == b'|') && b.get(j) == Some(&c) {
                     j += 1;
+                }
+                if c == b'\n' {
+                    for (delim, quoted, strip) in pending.drain(..) {
+                        // Body: up to a line equal to the delimiter. A
+                        // missing terminator is a construct not followed.
+                        let mut found = false;
+                        while j <= b.len() {
+                            let nl = command[j..].find('\n').map(|n| n + j);
+                            let end = nl.unwrap_or(b.len());
+                            let line = &command[j..end];
+                            let line = if strip {
+                                line.trim_start_matches('\t')
+                            } else {
+                                line
+                            };
+                            if line == delim {
+                                j = nl.map_or(b.len(), |n| n + 1);
+                                found = true;
+                                break;
+                            }
+                            // An unquoted body expands: a substitution runs.
+                            if !quoted && (line.contains("$(") || line.contains('`')) {
+                                bodysubst = true;
+                            }
+                            match nl {
+                                Some(n) => j = n + 1,
+                                None => break,
+                            }
+                        }
+                        if !found {
+                            return None;
+                        }
+                    }
+                    if bodysubst {
+                        bodysubst = false;
+                        if let Some(last) = out.last_mut() {
+                            last.opaque = true;
+                        }
+                    }
                 }
                 start = j;
                 i = j;
@@ -654,7 +759,12 @@ fn statements(command: &str) -> Option<Vec<Statement>> {
         end: b.len(),
         stages,
         opaque,
+        heredoc,
     });
+    if !pending.is_empty() {
+        // Heredoc whose body never started (no newline after it).
+        return None;
+    }
     Some(out)
 }
 
@@ -1089,7 +1199,13 @@ fn operands<'a>(args: &[&'a str], allowed_flags: &[&str]) -> Option<Vec<&'a str>
 /// 2. its program word (bare, containing no `/`; a path-qualified program is
 ///    never in the table) is in this table and its arguments match the form:
 ///    - `sed -i|--in-place [-E|-r|-n] [-e] 's/…/…/flags' FILE...` — only a single
-///      plain `s` command ([`sed_subst_only`]), no backup suffix, no script file;
+///      plain `s` command ([`sed_subst_only`]), no backup suffix, no script file.
+///      The BSD/macOS `-i ''` (separate, exactly empty argument = no backup) is
+///      accepted like `-i`; `-i .bak`, `-i.bak`, `--in-place=.bak` are not;
+///    - a read-only program (`cat`) with a plain-file output redirect and a
+///      heredoc stdin (`cat > f <<'EOF'`): the heredoc body is data, not a
+///      stage ([`statements`]); an unquoted-delimiter body holding `$(` or a
+///      backtick marks the statement opaque (the substitution runs);
 ///    - `tee [-a] FILE...`, `touch FILE...`, `rm [-f] FILE...` — every operand
 ///      is the written (or removed) file;
 ///    - `cp SRC DEST`, `mv SRC DEST` — exactly two file operands, no flags: DEST
@@ -1144,10 +1260,18 @@ fn stage_attributable(stage: &Stage, cwd: Option<&Path>) -> bool {
             let mut in_place = false;
             let mut script: Option<&str> = None;
             let mut files: Vec<&str> = Vec::new();
-            let mut it = args.iter().copied();
+            let mut it = args.iter().copied().peekable();
             while let Some(a) = it.next() {
                 match a {
-                    "-i" | "--in-place" => in_place = true,
+                    "-i" => {
+                        in_place = true;
+                        // BSD/macOS `-i ''`: the separate empty argument is
+                        // an empty backup suffix = no backup file.
+                        if it.peek() == Some(&"") {
+                            it.next();
+                        }
+                    }
+                    "--in-place" => in_place = true,
                     "-E" | "-r" | "-n" => {}
                     "-e" => match (script, it.next()) {
                         (None, Some(s)) => script = Some(s),

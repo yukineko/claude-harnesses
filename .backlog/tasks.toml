@@ -3304,3 +3304,34 @@ exit 101:  failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 9m 31s
      Running tests/testscope_fault_seams_20261117.rs (target/debug/deps/testscope_fault_seams_20261117-0680b439b7ed3bdb)
 error: test failed, to rerun pass `-p condukt --test testscope_fault_seams_20261117`"""
+
+[[task]]
+id = "439fb07d"
+title = "attribution: naming any existing file makes a path-less write attributable (cargo fmt -- a.rs, python3 gen.py, git apply, cp to dir)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "attribution",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "has_unattributable_write returns Known(false) for cargo fmt -- a.rs, python3 gen.py [existing.rs], bash fmt.sh, cargo build a.rs, rustfmt a.rs, git apply a.rs, patch -p1 < a.rs, cp a.rs other_dir/, git stash pop a.rs. Controls (sed -i, tee, touch, cp to named dest, cat, git diff) pass."
+created_at = 1794942983
+updated_at = 1794942983
+weight = 0.0
+issue_number = 1857
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1857"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test backlog_20261118_named_file_attribution_holes -- --ignored"
+rev = "aeb6d0aeb98e005ecce1f85cd3f3652362e9f33d"
+observed_at = 1794942983
+detail = """
+exit 101: d; 10 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261118_named_file_attribution_holes.rs (target/debug/deps/backlog_20261118_named_file_attribution_holes-b911ce4087c6677c)
+error: test failed, to rerun pass `-p harness-core --test backlog_20261118_named_file_attribution_holes`"""

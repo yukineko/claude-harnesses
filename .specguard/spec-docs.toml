@@ -25,9 +25,9 @@ doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `relay`: subagent Ask relay (user ruling 2026-11-14 「sub agentのAskはmainで裁定する」) — append-only per-session queue, queued only for a hardened subagent Bash Ask, mark-executed / mark-relayed / Stop block / dismiss with reason, fail-closed on unreadable or corrupt queue."
 
 [[spec]]
-path = "crates/blastguard/src/blocklog.rs"
+path = "crates/harness-core/src/blocklog.rs"
 doc = "docs/specs/blastguard.md"
-reason = "'module 責務' bullet `blocklog`: block log (user ruling 2026-11-14 「止めたなら止めた責任をとる」) — one line per printed Deny/Ask in ~/.blastguard/blocks/blocks.jsonl (BLASTGUARD_BLOCK_LOG_DIR), overwatch-independent, byte-exact command / full tool_input (copy capped at 1 MiB with hash), decision_kind, written before the print, a failed write surfaced as 'could NOT be recorded' without changing the verdict."
+reason = "'module 責務' bullet `blocklog` (moved from crates/blastguard/src/blocklog.rs 2026-11-17; blastguard still makes every call): block log (user ruling 2026-11-14 「止めたなら止めた責任をとる」) — one line per printed Deny/Ask in ~/.blastguard/blocks/blocks.jsonl (BLASTGUARD_BLOCK_LOG_DIR), overwatch-independent, byte-exact command / full tool_input (copy capped at 1 MiB with hash), decision_kind, written before the print, a failed write surfaced as 'could NOT be recorded' without changing the verdict."
 
 [[spec]]
 path = "crates/blastguard/tests/subagent_ask_relay_20261114.rs"
@@ -140,9 +140,9 @@ doc = "docs/specs/blastguard.md"
 reason = "'module 責務' exclude (ALLOW_GLOBS, glob_set, normalize, is_config_file, is_git_internal) and the 'config ファイル除外' invariant."
 
 [[spec]]
-path = "crates/blastguard/src/classify.rs"
-doc = "docs/specs/blastguard.md"
-reason = "'module 責務' classify: RiskAssessment/Risk tiers, requires_gate precedence; 'detect と classify の lockstep' invariant; classify_change in the diffrisk section."
+path = "crates/riskgrade/src/classify.rs"
+doc = "docs/specs/riskgrade.md"
+reason = "(moved from crates/blastguard/src/classify.rs 2026-11-17) 'module 責務' classify: RiskAssessment/Risk tiers, requires_gate precedence; 'detect と classify の lockstep' invariant; classify_change in the diffrisk section."
 
 [[spec]]
 path = "crates/blastguard/src/model.rs"
@@ -155,9 +155,9 @@ doc = "docs/specs/blastguard.md"
 reason = "'module 責務' hookio and the 'PreToolUse deny JSON は単一行' invariant (deny_json shape)."
 
 [[spec]]
-path = "crates/blastguard/src/diffrisk.rs"
-doc = "docs/specs/blastguard.md"
-reason = "Section '一般化リスクスコアリング (diff-level 意味的リスク)': DEFAULT_SENSITIVE_GLOBS, SensitiveConfig, changes_public_symbol, classify_diff, merge rules."
+path = "crates/riskgrade/src/diffrisk.rs"
+doc = "docs/specs/riskgrade.md"
+reason = "(moved from crates/blastguard/src/diffrisk.rs 2026-11-17) Section '一般化リスクスコアリング (diff-level 意味的リスク)': DEFAULT_SENSITIVE_GLOBS, SensitiveConfig, changes_public_symbol, classify_diff, merge rules."
 
 [[spec]]
 path = "crates/blastguard/src/rule_id.rs"
@@ -620,9 +620,9 @@ doc = "docs/specs/blastguard.md"
 reason = "module list bullet `detect/condukt`: autonomy-set on / HARNESS_AUTONOMOUS / CONDUKT_AUTONOMOUS prefixed to condukt resolve to Ask (Deny in a subagent via harden_for_subagent); matching on parsed argv only (backlog 12ba5845)."
 
 [[spec]]
-path = "crates/blastguard/src/log.rs"
+path = "crates/overwatch/src/blastguard_log.rs"
 doc = "docs/specs/blastguard.md"
-reason = "module list bullet `log`: read-only `blastguard log` over overwatch violations.jsonl, filters, UNKNOWN fields, text escaping limits, exit codes 0/2/3."
+reason = "module list bullet `log` (implementation moved from crates/blastguard/src/log.rs to overwatch 2026-11-17; `blastguard log` dispatches to it, `overwatch blastguard-log` too): read-only `blastguard log` over overwatch violations.jsonl, filters, UNKNOWN fields, text escaping limits, exit codes 0/2/3."
 
 [[spec]]
 path = "crates/blastguard/tests/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs"

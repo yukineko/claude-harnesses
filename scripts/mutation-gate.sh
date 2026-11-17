@@ -43,6 +43,15 @@
 #     was added rather than assumed. The ONE survivor is recorded in the backlog:
 #     `classify.rs:44:41: replace && with || in RiskAssessment::requires_gate` —
 #     a gate-relevant predicate whose conjunction no test distinguishes.
+#     2026-11-17: classify.rs moved to the `riskgrade` lib crate (user ruling:
+#     blastguard holds the command-safety verdict only), so this pilot is now
+#     `riskgrade` (--file crates/riskgrade/src/classify.rs). The first
+#     re-measurement there (55 mutants, incl. mask_file_path_tokens which did
+#     not exist on 2026-09-11) FAILED CLOSED: 2 missed + 3 timeouts, cargo-mutants
+#     exit 3. Bounded-deadline tests were added
+#     (crates/riskgrade/tests/mask_file_path_tokens_mutation_20261117.rs) and the
+#     pilot must be re-measured; the 95.0% figure above is the 2026-09-11
+#     blastguard measurement and is NOT a riskgrade result.
 #   * The remaining GATE_CRATES were measured in the same round and did NOT
 #     qualify: stuckguard src/detect.rs 78.8% (11 of 52 survived), propguard
 #     src/config.rs 48.7% (20 of 39 survived), and overwatch src/canary.rs
@@ -87,7 +96,7 @@
 #   PILOT=difflog MIN_KILL_RATE=0.7 scripts/mutation-gate.sh
 #   PILOT=specguard scripts/mutation-gate.sh  # polarity gate (src/similarity.rs)
 #   PILOT=condukt scripts/mutation-gate.sh    # circuit-breaker logic (src/circuit.rs)
-#   PILOT=blastguard scripts/mutation-gate.sh # risk classifier (src/classify.rs)
+#   PILOT=riskgrade scripts/mutation-gate.sh  # risk classifier (src/classify.rs)
 #   MUTANTS_EXTRA="--file crates/harness-core/src/hash.rs" scripts/mutation-gate.sh
 set -euo pipefail
 
@@ -124,8 +133,8 @@ case "$PILOT" in
   condukt)
     default_mutants_extra="--file crates/condukt/src/circuit.rs"
     ;;
-  blastguard)
-    default_mutants_extra="--file crates/blastguard/src/classify.rs"
+  riskgrade)
+    default_mutants_extra="--file crates/riskgrade/src/classify.rs"
     ;;
   *)
     default_mutants_extra=""

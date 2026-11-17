@@ -138,7 +138,10 @@ git repo 外の cwd は cwd 自身がキーになる。
 overwatch record-violation --source <gate> --discriminator <d> --task <key> [--symbol <sym>] [--session <sid>] [--detail <text>]
 overwatch violations [--json] [--threshold N] [--window-secs S]     # 全 signature の再発状況
 overwatch escalations [--json] [--threshold N] [--window-secs S]    # systemic と判定された signature のみ
+overwatch blastguard-log [OPTIONS]                                 # blastguard の行のみ。`blastguard log` と同じ
 ```
+
+`overwatch::retro`（ライブラリのみ）は `blastguard retro` の実体で、transcript 内の PreToolUse 判定を同じ id の `tool_result` と突き合わせる。reason→rule id の表は呼び出し側が注入する（`RuleIdFn`）。表は blastguard が持ち、overwatch は blastguard に依存できないため。
 
 - `--source` は `blastguard | propguard | specguard | mutategate | donegate | reviewgate | tdd | budgetguard | autoflow | ctxrot` を受け付け、未知の token は source として parse されない。
 - **signature 正規化**（`violation::normalize_signature`）では、同種の失敗（例: blastguard の同一 rule、mutategate の同一 mutation operator、specguard の同一 drift kind + symbol）は、大文字小文字・空白の違いを問わず同じ signature になる。

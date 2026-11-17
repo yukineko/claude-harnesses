@@ -142,7 +142,9 @@ pub fn acquire(path: PathBuf, deadline: Duration) -> Result<LockGuard, AcquireEr
 /// environment — production), and `probe_interval` is the same-holder probe
 /// throttle (production: [`LIVENESS_PROBE_INTERVAL`]). They exist so tests can
 /// interpose a fake `kill` and pin the throttle without mutating process-wide
-/// state (backlogs 7c798579, c77cdc98).
+/// state (backlogs 7c798579, c77cdc98). A `Some` `kill_path` also routes every
+/// probe of a foreign pid through that `kill`, bypassing the Linux `/proc`
+/// fast path (see [`pid_alive_with_env_path`], backlog 51b9371d).
 pub fn acquire_with_probe(
     path: PathBuf,
     deadline: Duration,
@@ -282,13 +284,22 @@ pub fn holder_alive(pid: u32, child_path: Option<&std::ffi::OsStr>) -> Determina
 /// `child_path` is an optional `PATH` for the spawned `kill` CHILD only (on
 /// Unix also what the bare `kill` is resolved against); `None` inherits this
 /// process's environment.
+///
+/// On Linux with `child_path == None` (production) a pid whose `/proc/<pid>`
+/// entry exists is answered `Known(true)` without spawning `kill`; any other
+/// pid still goes to `kill -0`. With `child_path == Some(_)` (the seam that
+/// interposes a fake `kill`) that fast path is NOT taken: every probe spawns
+/// the `kill` resolved on `child_path`, on every OS. Before backlog 51b9371d
+/// the fast path also ran under `Some(_)`, so on Linux a LIVE holder was
+/// never probed through the interposed `kill`, and the fixtures that observe
+/// probes through it could not see a single alive probe.
 pub fn pid_alive_with_env_path(
     pid: u32,
     child_path: Option<&std::ffi::OsStr>,
 ) -> Determination<bool> {
     #[cfg(target_os = "linux")]
     {
-        if Path::new(&format!("/proc/{pid}")).exists() {
+        if child_path.is_none() && Path::new(&format!("/proc/{pid}")).exists() {
             return Determination::known(true);
         }
     }

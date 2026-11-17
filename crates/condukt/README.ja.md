@@ -307,6 +307,14 @@ PreToolUse は pending 行しか書けない（他の hook がその呼び出し
 `ledger.v2.tsv` は deny（「前歴なし」とは読まない）。`condukt state test` は自分の実行を自分で確認し、spawn 失敗時は
 自分の行を invalidate する。確認 hook が panic / 書き込み失敗したときは `systemMessage` を出し、block しない。
 
+**`tdd` の red / green 経路（backlog 8f82f09d、0c301e8b）。** `tdd red --cmd <c>` は素の `<c>` の実行と同じく
+同一キーで照合されるうえ、`<c>` の red 用タグ付きキーも記録する。同じ tree 上の `tdd green --cmd <c>` は、
+そのキーとも照合される。変更の無い同一 tree で、確認済みの `tdd red` の直後に来る `tdd green --cmd <c>` は
+**deny**、pending の `tdd red` の直後なら **ask** になり、どちらの場合も allow には落ちない（間に変更が無いと
+F→P oracle が何も証明しないため）。tree が変わった後の green は allow。8f82f09d の例外は従来どおりで、
+対象は素の実行だけ。同一 tree で素の `<c>` を実行した後の `tdd green --cmd <c>` は 1 回だけ allow され
+（入れ子の green も 1 回に数える）、2 回目は deny される。
+
 実測（claude 2.1.284、headless `claude -p`、spec `testscope-confirmed-run` R10）: hook が `ask` を返した Bash 呼び出しは
 headless では `permission_denied` になり、PostToolUse も PostToolUseFailure も発火しない。つまり実質 deny である。
 subagent での ask の解決は testscope について **まだ実測していない**（R10 の残り。測定後にここへ追記する）。

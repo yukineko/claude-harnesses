@@ -11,9 +11,14 @@
 //!   running` must refuse (non-zero, status unchanged) when the marker of
 //!   `$CLAUDE_CODE_SESSION_ID` is absent, or when there is no session id.
 //! * **B** — `tdd red|green --cmd "<c>"` (also `--cmd=<c>`) is judged as if `<c>`
-//!   were a bare Bash command (full suite deny, same-tree rerun deny, same
-//!   ledger key in both directions); `condukt state test` consults the same
-//!   rerun ledger inside the binary.
+//!   were a bare Bash command (full suite deny, same-tree rerun deny; `tdd
+//!   red` shares the bare ledger key in both directions). `tdd green` is the
+//!   one-way exception of backlog 8f82f09d: a bare run does not refuse a later
+//!   `tdd green` of `<c>`, but `tdd green` records `<c>`'s bare key, so a bare
+//!   run after it is refused, and a second `tdd green` of `<c>` (any nesting
+//!   depth) is refused. B here exercises `tdd red` across routes and `tdd
+//!   green` twice; `condukt state test` consults the same rerun ledger inside
+//!   the binary.
 //! * **C** — inside a run task's recorded worktree, each `--test <name>` must be
 //!   named in the task's `reproduction_tests` or be a `tests/<name>.rs` the
 //!   worktree added/changed against its base (committed, uncommitted or

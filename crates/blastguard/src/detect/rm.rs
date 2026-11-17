@@ -6,6 +6,7 @@ use super::{
     Determination, Placement, SafeRoots, SegmentSep,
 };
 
+mod new_layer;
 mod operand_words;
 use operand_words::{
     expand_operand_with, has_unquoted_glob, place_literal, rm_operand_words, OperandSpelling,
@@ -249,6 +250,14 @@ fn collect_substitution_commands(text: &str, depth: usize, out: &mut Vec<String>
 }
 
 pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+    // Ruling 14 replaced for `rm` (user ruling 2026-11-18): when the new
+    // layer's verdict for this `rm` is Known — every target statically
+    // resolved and in a Table C Allow class (Scratch / OwnWorktree) — the
+    // legacy reading below may not raise it. Anything the new layer does not
+    // decide keeps the legacy verdict exactly as before. See `new_layer`.
+    if new_layer::known_allow(rest, ctx) {
+        return Decision::Allow;
+    }
     // An operand spelled through an expansion the AST evaluator resolves
     // (task `migrate-path`): every combination of the paths it names is
     // judged by this function as its literal spelling would be, the most

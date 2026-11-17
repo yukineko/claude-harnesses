@@ -6,7 +6,7 @@
 
 use harness_core::verdict::Determination;
 
-use super::{Placement, SafeRoots};
+use super::{Placement, Reading, SafeRoots};
 
 impl SafeRoots {
     /// Is `operand` STRICTLY INSIDE a linked git worktree checkout that sits
@@ -44,6 +44,21 @@ impl SafeRoots {
         operand: &str,
         cwd: Option<&str>,
     ) -> Determination<Placement> {
+        self.classify_worktree_checkout_as(operand, cwd, Reading::Spelled)
+    }
+
+    /// [`SafeRoots::classify_worktree_checkout`] of an absolute path VALUE
+    /// ([`Reading::Value`], `scope/reading.rs`); every rule is the same.
+    pub(crate) fn classify_worktree_checkout_value(&self, path: &str) -> Determination<Placement> {
+        self.classify_worktree_checkout_as(path, None, Reading::Value)
+    }
+
+    fn classify_worktree_checkout_as(
+        &self,
+        operand: &str,
+        cwd: Option<&str>,
+        reading: Reading,
+    ) -> Determination<Placement> {
         if let Some(why) = &self.worktree_refusal {
             return Determination::undetermined(why.clone());
         }
@@ -57,11 +72,11 @@ impl SafeRoots {
                 "operand has a `..` component, so where it lands is not decided by its spelling",
             );
         }
-        let lexical = match self.lexical_absolute(operand, cwd) {
+        let lexical = match self.lexical_absolute_as(operand, cwd, reading) {
             Determination::Known(l) => l,
             Determination::Undetermined(u) => return Determination::Undetermined(u),
         };
-        let (root, real) = match self.classify_worktree(operand, cwd) {
+        let (root, real) = match self.classify_worktree_as(operand, cwd, reading) {
             Determination::Known(Placement::Inside { root, path }) => (root, path),
             Determination::Known(other) => return Determination::known(other),
             Determination::Undetermined(u) => return Determination::Undetermined(u),

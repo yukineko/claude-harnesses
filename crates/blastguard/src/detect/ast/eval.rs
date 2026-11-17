@@ -407,12 +407,19 @@ impl Env {
 }
 
 /// `HOME` of the hook's own process environment, when it is a non-empty
-/// absolute path (ruling 12). Anything else (unset, relative, not UTF-8)
-/// leaves `$HOME` / `~` `Undetermined`.
+/// absolute path made only of `[A-Za-z0-9/._+,:@%^-]` (ruling 12) — the same
+/// rule the static resolver applies before it substitutes `HOME`
+/// (`readings/static_bindings.rs` `hook_home`), so both layers agree on when
+/// `HOME` is Known. Anything else (unset, relative, not UTF-8, a blank or
+/// other special character) leaves `$HOME` / `~` `Undetermined`.
 fn hook_home() -> Option<String> {
-    std::env::var("HOME")
-        .ok()
-        .filter(|h| h.starts_with('/') && !h.contains('\0'))
+    std::env::var("HOME").ok().filter(|h| {
+        h.starts_with('/')
+            && h.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || matches!(c, '/' | '.' | '_' | '+' | ',' | ':' | '@' | '%' | '^' | '-')
+            })
+    })
 }
 
 fn undet(s: impl Into<String>) -> Value {

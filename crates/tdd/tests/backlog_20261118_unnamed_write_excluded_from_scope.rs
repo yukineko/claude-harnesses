@@ -17,9 +17,9 @@
 //! scope), not to exclusion.
 //!
 //! NOTE for the reader: the 2026-10-17 user ruling (see reviewgate's
-//! `session_attribution.rs` header) explicitly "accepted" this residual hole.
-//! These tests pin the CLAUDE.md section 3 reading against that acceptance;
-//! if the ruling stands, close the RED as won't-do rather than weakening it.
+//! `session_attribution.rs` header) had "accepted" this residual hole; it was
+//! superseded by the 2026-11-18 ruling: a path-less write keeps full scope.
+//! These tests pin that ruling and the CLAUDE.md section 3 reading.
 //!
 //! Tests:
 //! * `control_edit_naming_the_file_blocks` - the fixture can block (passes).
@@ -260,9 +260,7 @@ fn unnamed_write_cargo_fmt_stays_in_scope() {
 /// coordinator 2026-11-18): `cd <abs dir> && cargo fmt` names only a directory
 /// (the cd target); the formatter still rewrites files without naming any, so
 /// the changed impl file must stay in scope.
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
 #[test]
-#[ignore = "RED: 2026-11-18 `cd <abs> && cargo fmt` counts the cd target as a named path (has_unattributable_write), excluding changed files"]
 fn unnamed_write_cd_abs_cargo_fmt_stays_in_scope() {
     let f = Fixture::new();
     let t = f.transcript(&[bash(
@@ -277,9 +275,7 @@ fn unnamed_write_cd_abs_cargo_fmt_stays_in_scope() {
 }
 
 /// RED (same fix): `cd <relative dir> && cargo fmt`, resolved against the call's cwd.
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
 #[test]
-#[ignore = "RED: 2026-11-18 `cd <rel> && cargo fmt` counts the cd target as a named path (has_unattributable_write), excluding changed files"]
 fn unnamed_write_cd_relative_cargo_fmt_stays_in_scope() {
     let f = Fixture::new();
     let t = f.transcript(&[bash("cd crates/x && cargo fmt", &f.repo)]);

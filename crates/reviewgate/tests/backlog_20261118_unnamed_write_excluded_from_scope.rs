@@ -14,10 +14,10 @@
 //! section 3: an unattributable write is "cannot determine" and must resolve
 //! to the restrictive side (keep the file in the review set).
 //!
-//! NOTE: the 2026-10-17 user ruling (see `session_attribution.rs` header)
-//! explicitly accepted this residual hole. These tests pin the CLAUDE.md
-//! section 3 reading against that acceptance; if the ruling stands, close the
-//! RED as won't-do rather than weakening it.
+//! NOTE: the 2026-10-17 user ruling (see `session_attribution.rs` header) had
+//! accepted this residual hole; it was superseded by the 2026-11-18 ruling:
+//! a path-less write keeps full scope. These tests pin that ruling and the
+//! CLAUDE.md section 3 reading.
 //!
 //! Observable: the JSONL log line (`$HOME/.reviewgate/state/log.jsonl`) holds
 //! exactly the `files` the gate reviewed, plus the stdout decision, as in
@@ -256,9 +256,7 @@ fn bash_in(cmd: &str, cwd: &Path) -> serde_json::Value {
 /// coordinator 2026-11-18): `cd <abs dir> && cargo fmt` names only a directory
 /// (the cd target); the formatter still rewrites files without naming any, so
 /// the changed file must stay in the review set.
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
 #[test]
-#[ignore = "RED: 2026-11-18 `cd <abs> && cargo fmt` counts the cd target as a named path (has_unattributable_write), excluding changed files"]
 fn unnamed_write_cd_abs_cargo_fmt_stays_in_review_set() {
     let f = Fixture::new();
     let t = f.transcript(&[bash_in(
@@ -277,9 +275,7 @@ fn unnamed_write_cd_abs_cargo_fmt_stays_in_review_set() {
 }
 
 /// RED (same fix): `cd <relative dir> && cargo fmt`, resolved against the call's cwd.
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
 #[test]
-#[ignore = "RED: 2026-11-18 `cd <rel> && cargo fmt` counts the cd target as a named path (has_unattributable_write), excluding changed files"]
 fn unnamed_write_cd_relative_cargo_fmt_stays_in_review_set() {
     let f = Fixture::new();
     std::fs::create_dir_all(f.repo.join("sub")).unwrap();

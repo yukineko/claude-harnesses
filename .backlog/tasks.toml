@@ -3066,6 +3066,8 @@ notes = "Observed 2026-11-16 session df7c968f: relay bgr-26ea8713935e run verbat
 created_at = 1794876820
 updated_at = 1794876820
 weight = 0.0
+issue_number = 1850
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1850"
 rev = 0
 
 [task.repro]

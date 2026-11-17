@@ -164,6 +164,14 @@ enum Command {
         #[arg(long)]
         detail: Option<String>,
     },
+    /// List blastguard's Deny/Ask lines from this project's violation ledger
+    /// (read-only; same options and output as `blastguard log`, which now
+    /// dispatches here). The options are passed through verbatim and parsed
+    /// by the listing itself.
+    BlastguardLog {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Show recurrence stats for all recorded violation signatures.
     Violations {
         #[arg(long)]
@@ -695,6 +703,9 @@ fn main() -> Result<()> {
                 session.as_deref(),
                 detail.as_deref(),
             )?;
+        }
+        Command::BlastguardLog { args } => {
+            std::process::exit(overwatch::blastguard_log::run_log(&args));
         }
         Command::Violations {
             json,

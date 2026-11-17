@@ -1,6 +1,6 @@
 //! Graded risk / reversibility classifier for a *planned* action.
 //!
-//! [`crate::detect`] answers a binary allow/deny for a single tool call. The
+//! [`blastguard::detect`] answers a binary allow/deny for a single tool call. The
 //! autonomy policy engine needs finer axes: *how risky* is an action and *is it
 //! reversible*. This module supplies them as pure, deterministic functions over
 //! a task's prose (title + done-criteria + touched files: [`classify`]) and,
@@ -14,8 +14,8 @@ use harness_core::verdict::Determination;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::detect;
 use crate::diffrisk::{self, SensitiveConfig};
+use blastguard::detect;
 
 /// How much blast radius an action carries. Serialises lowercase
 /// (`"low"`/`"medium"`/`"high"`) so callers can emit `{risk, reversible}`.
@@ -258,28 +258,30 @@ fn mask_file_path_tokens(lower: &str) -> String {
         }
         // `None` == start of a segment == command position.
         let mut prev: Option<&str> = None;
-        let mut cursor = 0usize;
-        while let Some(start_rel) = seg[cursor..].find(|c: char| !c.is_ascii_whitespace()) {
-            let start = cursor + start_rel;
-            let len = seg[start..]
-                .find(|c: char| c.is_ascii_whitespace())
-                .unwrap_or(seg.len() - start);
-            let tok = &seg[start..start + len];
-            out.push_str(&seg[cursor..start]);
-            let command_position = match prev {
-                None => true,
-                Some(p) => RUNNER_WORDS.contains(&p) || p.ends_with([';', '|', '&', '(']),
+        // Iterator-driven, no hand-advanced index: each piece is a (possibly
+        // empty) run of non-ASCII-whitespace chars followed by at most one
+        // ASCII-whitespace char, so the walk always terminates and the
+        // whitespace is copied through verbatim.
+        for piece in seg.split_inclusive(|c: char| c.is_ascii_whitespace()) {
+            let (tok, sep) = match piece.char_indices().last() {
+                Some((i, c)) if c.is_ascii_whitespace() => piece.split_at(i),
+                _ => (piece, ""),
             };
-            let invoked = command_position || tok.starts_with("./");
-            if !invoked && is_file_path_token(tok) {
-                out.extend(std::iter::repeat_n(' ', tok.len()));
-            } else {
-                out.push_str(tok);
+            if !tok.is_empty() {
+                let command_position = match prev {
+                    None => true,
+                    Some(p) => RUNNER_WORDS.contains(&p) || p.ends_with([';', '|', '&', '(']),
+                };
+                let invoked = command_position || tok.starts_with("./");
+                if !invoked && is_file_path_token(tok) {
+                    out.extend(std::iter::repeat_n(' ', tok.len()));
+                } else {
+                    out.push_str(tok);
+                }
+                prev = Some(tok);
             }
-            prev = Some(tok);
-            cursor = start + len;
+            out.push_str(sep);
         }
-        out.push_str(&seg[cursor..]);
     }
     out
 }
@@ -362,7 +364,7 @@ pub fn classify(prose: &str) -> RiskAssessment {
 /// `Low` + `reversible: true` is not a neutral default here: it is the exact
 /// pair `condukt::gate_exec::decide_gate_exec` reads as
 /// `GateExec::AutoExec`, i.e. "run this without human sign-off". Routing an
-/// `Ask` — which `crate::model::Decision` defines as "NOT a verdict about the
+/// `Ask` — which `blastguard::model::Decision` defines as "NOT a verdict about the
 /// command, it is a refusal to guess about one" — into that pair turns
 /// blastguard's refusal to analyse into permission to proceed. That is the
 /// fail-open CLAUDE.md §3 forbids, one layer up from where `Ask` was
@@ -859,7 +861,7 @@ mod tests {
     /// What [`detect`] answers for `text` as a Bash command — the exact call
     /// `classify_command` makes internally, so a precondition assert here
     /// observes the same verdict `classify_command` sees.
-    fn detect_verdict(text: &str) -> crate::model::Decision {
+    fn detect_verdict(text: &str) -> blastguard::model::Decision {
         detect::detect("Bash", Some(&json!({ "command": text })))
     }
 
@@ -917,7 +919,7 @@ mod tests {
         for text in ["refactor the parser", "fix a typo in the README"] {
             let d = detect_verdict(text);
             assert!(
-                matches!(d, crate::model::Decision::Allow),
+                matches!(d, blastguard::model::Decision::Allow),
                 "precondition: {text:?} must be plainly allowed by detect, got {d:?}"
             );
 

@@ -35,7 +35,7 @@ scripts/mutation-gate.sh
 PILOT=difflog MIN_KILL_RATE=0.70 scripts/mutation-gate.sh
 PILOT=specguard scripts/mutation-gate.sh
 PILOT=condukt scripts/mutation-gate.sh
-PILOT=blastguard scripts/mutation-gate.sh
+PILOT=riskgrade scripts/mutation-gate.sh
 
 # Show what this gate protects, from what, and on what grounds, without a verdict
 cargo run -p mutategate -- --protects
@@ -56,7 +56,7 @@ If that write fails, a note is printed and the FAIL verdict still stands.
 - Pilot 1: `harness-core` (default).
 - Pilot 2: `specguard` — narrowed by default to `--file crates/specguard/src/similarity.rs`, and by default skips the one test `ack_blocks_when_no_new_commits_since_raised`.
 - Pilot 3: `condukt` — narrowed by default to `--file crates/condukt/src/circuit.rs`.
-- Pilot 4: `blastguard` — narrowed by default to `--file crates/blastguard/src/classify.rs`.
+- Pilot 4: `riskgrade` — narrowed by default to `--file crates/riskgrade/src/classify.rs`. Until 2026-11-17 this was the `blastguard` pilot; the classifier moved to the riskgrade crate and the pilot moved with it (see the re-measurement note in `scripts/mutation-gate.sh`).
 - Override the pilot with `PILOT=<crate>`. `MUTANTS_EXTRA` (for example `MUTANTS_EXTRA="--file crates/harness-core/src/hash.rs"`) is passed to cargo-mutants verbatim, and the script runs cargo-mutants from the repo root whatever the caller's directory. A non-empty `MUTANTS_EXTRA` overrides the per-pilot default entirely.
 
  Of the GATE crates measured alongside blastguard, stuckguard and propguard scored below the bar and overwatch could not be measured (baseline failure); none of the three was made a pilot.

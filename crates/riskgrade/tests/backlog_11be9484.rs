@@ -1,4 +1,4 @@
-//! backlog 11be9484: `blastguard::classify::classify` runs the deploy needles
+//! backlog 11be9484: `riskgrade::classify::classify` runs the deploy needles
 //! and `detect::detect` over a task's free text (title + done_criteria +
 //! touched files, exactly as condukt's `schedule::task_action_text` joins
 //! them), so a FILE NAME containing a deploy needle, or prose that merely
@@ -18,9 +18,9 @@
 //! `classify` now reads prose only; the commands a task runs go to
 //! `classify_command` / `classify_change(.., Some(commands), ..)` separately.
 //!
-//! Repro: cargo test -p blastguard --test backlog_11be9484
+//! Repro: cargo test -p riskgrade --test backlog_11be9484
 
-use blastguard::classify::classify;
+use riskgrade::classify::classify;
 
 /// The same join condukt's `task_action_text` performs.
 fn action_text(title: &str, done: &str, files: &[&str]) -> String {

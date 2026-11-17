@@ -3,12 +3,10 @@
 //!
 //! The negative fixtures prove fabrication is rejected; this proves the
 //! contract does not over-block. This mirrors
-//! `harness-core/tests/ui/verdict_pass/sanctioned_clean.rs`, plus a third
-//! path: `blastguard::diffrisk::SensitiveConfig::any_sensitive` returns a
-//! `Determination<bool>`, and `require()` resolves it into a plain `bool` the
-//! way the migrated call sites do -- proof that blastguard's own migration
-//! onto `Determination` is wired to the type contract, not just declared in
-//! prose.
+//! `harness-core/tests/ui/verdict_pass/sanctioned_clean.rs`. The third path
+//! this control used to carry (`blastguard::diffrisk::SensitiveConfig::
+//! any_sensitive` resolved with `require()`) moved with diffrisk to riskgrade
+//! on 2026-11-17: crates/riskgrade/tests/ui/verdict_pass/sanctioned_diffrisk.rs.
 
 use harness_core::verdict::{Determination, Verdict};
 
@@ -26,15 +24,4 @@ fn main() {
         .require()
         .expect("Known must extract to Required::Determined");
     assert_eq!(five, 5);
-
-    // blastguard's own migrated call site: `any_sensitive` returns a
-    // `Determination<bool>`; `require()` is the one sanctioned way to read it,
-    // and a real (compiled, tested) glob config is `Known`, never
-    // `Undetermined`.
-    let cfg = blastguard::diffrisk::SensitiveConfig::default();
-    let sensitive: bool = cfg
-        .any_sensitive(&["src/auth/login.rs".to_string()])
-        .require()
-        .expect("a default, always-compilable glob set is Known, not Undetermined");
-    assert!(sensitive, "src/auth/** is a built-in sensitive glob");
 }

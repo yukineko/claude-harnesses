@@ -969,10 +969,50 @@ pub fn has_unattributable_write(transcript_path: &str) -> Determination<bool> {
             return Determination::undetermined(why.as_str().to_string())
         }
     }
-    Determination::known(all.iter().any(|c| {
-        let (writes, named) = call_named_paths(c);
-        writes && named.is_empty()
-    }))
+    Determination::known(all.iter().any(call_is_unattributable))
+}
+
+/// Per STAGE, not per call: a call is unattributable when any stage that may
+/// write (not provably read-only, not a bare `cd`/`pushd`) names no existing
+/// FILE. A `cd` target or any directory argument does not count as naming the
+/// files written (`cd <dir> && cargo fmt` rewrites files it never names), and
+/// a path named by a DIFFERENT stage does not cover a path-less writer. A
+/// command the parser cannot follow, or holding a substitution, is
+/// unattributable (when in doubt, it is).
+fn call_is_unattributable(call: &crate::transcript::BashCall) -> bool {
+    let Some(stmts) = statements(&call.command) else {
+        return true;
+    };
+    let cwd = call.cwd.as_deref().map(Path::new);
+    for s in &stmts {
+        if s.opaque {
+            return true;
+        }
+        for stage in &s.stages {
+            if read_only_stage(stage) || matches!(program(stage), Some("cd" | "pushd")) {
+                continue;
+            }
+            let names_file = stage.words.iter().skip(1).any(|raw| {
+                let w = raw.trim_matches(|c: char| matches!(c, '"' | '\'' | '>' | ';' | '(' | ')'));
+                if w.is_empty() || w.starts_with('-') {
+                    return false;
+                }
+                let p = Path::new(w);
+                let abs = if p.is_absolute() {
+                    p.to_path_buf()
+                } else if let Some(c) = cwd.filter(|_| w.contains('/') || w.contains('.')) {
+                    c.join(p)
+                } else {
+                    return false;
+                };
+                abs.exists() && !abs.is_dir()
+            });
+            if !names_file {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// The files ONE transcript records as written: the transcript at

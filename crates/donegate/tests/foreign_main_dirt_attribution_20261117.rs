@@ -243,3 +243,32 @@ fn session_with_unnamed_writing_command_keeps_full_scope() {
     );
     assert_eq!(decision, "block", "reason={reason:?} err={err:?}");
 }
+
+// A cd target (absolute or relative) does not name the files a path-less
+// writer such as cargo fmt rewrites: the full scope must be kept.
+#[test]
+fn cd_abs_then_cargo_fmt_keeps_full_scope() {
+    let f = Fixture::new();
+    f.foreign_dirt();
+    let cmd = format!("cd {} && cargo fmt", f.main.display());
+    let tp = f.transcript(&[bash(&cmd)]);
+    let (decision, reason, err) = f.stop(&tp);
+    assert!(
+        f.marker().exists(),
+        "cd <abs> then cargo fmt must keep the full scope: err={err:?}"
+    );
+    assert_eq!(decision, "block", "reason={reason:?} err={err:?}");
+}
+
+#[test]
+fn cd_rel_then_cargo_fmt_keeps_full_scope() {
+    let f = Fixture::new();
+    f.foreign_dirt();
+    let tp = f.transcript(&[bash("cd crates/condukt && cargo fmt")]);
+    let (decision, reason, err) = f.stop(&tp);
+    assert!(
+        f.marker().exists(),
+        "cd <rel> then cargo fmt must keep the full scope: err={err:?}"
+    );
+    assert_eq!(decision, "block", "reason={reason:?} err={err:?}");
+}

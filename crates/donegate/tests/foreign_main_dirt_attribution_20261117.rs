@@ -200,7 +200,6 @@ fn edit(path: &Path) -> (&'static str, serde_json::Value) {
 /// RED: this session ran only `git status`; the dirty condukt file is another
 /// session's. donegate must not run the crate check for it and block.
 #[test]
-#[ignore = "RED 2026-11-17: donegate scopes when_changed checks to tree dirt, not to this session's writes; remove when fixed"]
 fn readonly_session_is_not_blocked_by_foreign_crate_dirt_in_main() {
     let f = Fixture::new();
     f.foreign_dirt();

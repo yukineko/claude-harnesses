@@ -10,7 +10,9 @@
 //! The same argv shape remained in `tests/log_subcommand_20261113.rs` (the
 //! timeout path of the stdin-held `blastguard log` test): on Linux a timed-out
 //! child process group would leak silently, because `kill` exits 0 and the
-//! result is discarded.
+//! result is discarded. Fixed 2026-11-18 (backlog c3d5d225, GH #1704): that
+//! site now passes `--` and `no_process_group_kill_without_double_dash` is no
+//! longer `#[ignore]`d (its RED, one hit in that file, was observed first).
 //!
 //! This file scans the blastguard crate's `src/` and `tests/` for spawns of
 //! the `kill` program and fails when an argument starting with `-` (other than
@@ -321,7 +323,6 @@ fn control_tree_scan_sees_the_fixed_bounded_rs_site() {
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: log_subcommand_20261113.rs spawns `kill -TERM -<pid>` without `--`; procps-ng kill signals nothing (group leaks on Linux)"]
 fn no_process_group_kill_without_double_dash() {
     let bad: Vec<_> = scan_crate().into_iter().filter(|h| h.3.is_some()).collect();
     assert!(

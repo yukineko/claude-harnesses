@@ -3080,3 +3080,37 @@ exit 101: iroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/blastg
     Finished `test` profile [unoptimized + debuginfo] target(s) in 22.25s
      Running tests/backlog_20261117_relay_executed_cwd_after_cd.rs (target/debug/deps/backlog_20261117_relay_executed_cwd_after_cd-d9029a4080df0ce1)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261117_relay_executed_cwd_after_cd`"""
+
+[[task]]
+id = "51b9371d"
+title = "condukt lock::backlog_e9262d91: 5 lock-wait fixture tests fail with probes: [] on main (fake kill never runs)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "flaky-or-env",
+    "lock",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-17 at main 58d184a70 (condukt 0.7.442) in a fresh worktree, WSL2 6.6.87.2, 12 cpus: cargo test -p condukt --bin condukt lock::backlog_e9262d91 -> 4 passed; 5 failed. Same 5 failed in the donegate test-changed run of session df7c968f (946 passed; 5 failed). Failing: lock_wait_changed_holder_fixture_is_conclusive_when_first_probe_is_unanswered (lock.rs:1582 'holder A ... was never probed at all (probes: [])'), lock_wait_changed_holder_scenario_without_fault_acquires (lock.rs:1611 'lock was not acquired within 30s (probes: [])'), lock_wait_mid_wait_death_fixture_is_conclusive_under_slow_probe (lock.rs:1291), lock_wait_on_holder_dying_mid_wait_reaps_on_first_dead_probe (lock.rs:1151), lock_wait_probes_a_changed_holder_pid_immediately (lock.rs:1384 'the fake kill never ran for holder A'). Readings: (a) product regression: lock wait no longer probes holders via the kill path the fixture stubs (e.g. probe moved to harness-core run_lock or libc::kill, bypassing the fake kill on PATH); (b) fixture/environment defect: fake kill not reached on this host. Distinguish: check whether lock wait still spawns kill -0 (git log -p crates/condukt/src/lock.rs crates/harness-core/src/run_lock.rs since b1f7abe2e) and run at b1f7abe2e."
+created_at = 1794879689
+updated_at = 1794879689
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --bin condukt lock::backlog_e9262d91"
+rev = "58d184a70779babf401348b9f8e556f1fcc78407"
+observed_at = 1794879689
+detail = """
+exit 101: robe
+    lock::backlog_e9262d91::lock_wait_probes_a_changed_holder_pid_immediately
+
+test result: FAILED. 4 passed; 5 failed; 0 ignored; 0 measured; 947 filtered out; finished in 127.64s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running unittests src/main.rs (target/debug/deps/condukt-a1897a9ded714865)
+error: test failed, to rerun pass `-p condukt --bin condukt`"""

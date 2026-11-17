@@ -3221,3 +3221,34 @@ exit 101: 0.3.141 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c96
     Finished `test` profile [unoptimized + debuginfo] target(s) in 3.77s
      Running tests/backlog_20261117_red_writeback_parse_gaps.rs (target/debug/deps/backlog_20261117_red_writeback_parse_gaps-c16c6948b232810e)
 error: test failed, to rerun pass `-p backlog --test backlog_20261117_red_writeback_parse_gaps`"""
+
+[[task]]
+id = "db316cf2"
+title = "condukt tests panic where git and sh share /usr/bin: testscope_fault_seams / testscope_state_test_confirm cannot build the spawn-failure fixture"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "test-env",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-17 by the t2 verifier (run-20261117-142919-13013) at 3c5bd361d and at base 6f23efe25: testscope_fault_seams_20261117 (2 failed: r8_control_without_fault_spawn_failure_invalidates_and_rerun_runs, r8_invalidate_append_failure_is_reported_leaves_row_pending_and_rerun_asks) and testscope_state_test_confirm_20261117 (1 failed: spawn_failure_invalidates_pending_row_so_rerun_runs) panic: environment cannot build a PATH with git but without sh (/usr/bin): spawn failure not constructible here (testscope_fault_seams_20261117.rs:263, testscope_state_test_confirm_20261117.rs:132). Readings: (a) defect: the fixture depends on git and sh living in different dirs, so spec R8 is unverified on this machine; (b) intended fail-loud: the panic refuses a fake pass. Either way the R8 behaviour is not observed here; the fixture needs a spawn failure that does not rely on PATH layout."
+created_at = 1794895183
+updated_at = 1794895183
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test testscope_fault_seams_20261117"
+rev = "18879c00b55136db298f30f84128ac29d0403366"
+observed_at = 1794895183
+detail = """
+exit 101:  failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9m 31s
+     Running tests/testscope_fault_seams_20261117.rs (target/debug/deps/testscope_fault_seams_20261117-0680b439b7ed3bdb)
+error: test failed, to rerun pass `-p condukt --test testscope_fault_seams_20261117`"""

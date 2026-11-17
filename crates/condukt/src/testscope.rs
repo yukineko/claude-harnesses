@@ -24,9 +24,9 @@
 //!    command for every rule), and `condukt state test`, which calls
 //!    [`judge`] itself before running anything. One exception (backlog
 //!    8f82f09d): `tdd green --cmd <c>` is checked only against earlier `tdd
-//!    green` runs of `<c>`, so a bare run cannot block the GREEN evidence the
-//!    F->P oracle requires; it still records `<c>`'s bare key (see
-//!    `check_rerun`).
+//!    green` runs of `<c>` (any nesting depth), so a bare run cannot block the
+//!    GREEN evidence the F->P oracle requires; it still records `<c>`'s bare
+//!    key, refusing a bare run after it (see `check_rerun`).
 //! 4. **Task scope** (2026-11-14) — when the cwd is inside a run task's
 //!    recorded worktree, each `--test <name>` must appear as `--test <name>`
 //!    in that task's `reproduction_tests` or be a `tests/<name>.rs` the
@@ -130,6 +130,22 @@ type Words = Vec<String>;
 /// 8f82f09d). Bare test words start with `cargo`, so the prefix cannot occur in
 /// them.
 const TDD_GREEN_ROUTE: [&str; 3] = ["tdd", "green", "--cmd"];
+
+/// `w` with every leading [`TDD_GREEN_ROUTE`] removed: the bare test words.
+fn untagged(w: &[String]) -> &[String] {
+    let mut rest = w;
+    while rest.starts_with(&TDD_GREEN_ROUTE.map(String::from)) {
+        rest = &rest[TDD_GREEN_ROUTE.len()..];
+    }
+    rest
+}
+
+/// `tw` tagged with [`TDD_GREEN_ROUTE`] exactly once, at any nesting depth.
+fn green_tagged(tw: Words) -> Words {
+    let tag = TDD_GREEN_ROUTE.map(String::from);
+    let head: &[String] = if tw.starts_with(&tag) { &[] } else { &tag };
+    [head, &tw].concat()
+}
 
 /// What the tokenizer and the `cd` walk say about a command line, before any
 /// task-scope or ledger rule is applied.
@@ -568,20 +584,14 @@ fn judge_words(words: &[String], dir: &Dir, ctx: &Ctx, depth: usize) -> Judged {
         }
         // `tdd red|green … --cmd '<c>'` runs <c> as the test command; it is
         // judged like the bare command (full suite, task scope, rerun key). A
-        // `tdd green` test is tagged with [`TDD_GREEN_ROUTE`] (see `check_rerun`).
+        // `tdd green` test is tagged once at any depth ([`green_tagged`]).
         "tdd" if depth < 4 && matches!(w.get(1).map(String::as_str), Some("red" | "green")) => {
             match (cmd_flag(w), w[1] == "green") {
                 (Some(p), false) => judge_payload(&p, dir, ctx, depth + 1),
                 (Some(p), true) => match judge_payload(&p, dir, ctx, depth + 1) {
-                    Judged::Test(t) => Judged::Test(
-                        t.into_iter()
-                            .map(|(tw, d)| {
-                                let mut v: Words = TDD_GREEN_ROUTE.map(String::from).to_vec();
-                                v.extend(tw);
-                                (v, d)
-                            })
-                            .collect(),
-                    ),
+                    Judged::Test(t) => {
+                        Judged::Test(t.into_iter().map(|(tw, d)| (green_tagged(tw), d)).collect())
+                    }
                     other => other,
                 },
                 (None, _) => Judged::Other,
@@ -1323,11 +1333,11 @@ const ASK_TAIL: &str = "no PostToolUse / PostToolUseFailure has confirmed that a
 /// that is rejected fires no Post and so stays pending: the next rerun asks
 /// again).
 ///
-/// `tdd green --cmd <c>` (backlog 8f82f09d): its checked key is the tagged
-/// command, so it collides only with an earlier `tdd green` of `<c>` on this
-/// tree, not with a bare run of `<c>`, which would leave the required F->P
-/// oracle no way to record GREEN. It also records the bare key of `<c>`
-/// (never checked here), so a bare run after it is still refused.
+/// `tdd green --cmd <c>` (backlog 8f82f09d), at any nesting depth: its checked
+/// key is `<c>` tagged once ([`green_tagged`]), so it collides only with an
+/// earlier `tdd green` of `<c>` on this tree, not a bare run (that would leave
+/// the F->P oracle no way to record GREEN). It also records the fully
+/// [`untagged`] bare key (never checked here), so a later bare run is refused.
 fn check_rerun(by_dir: &[(PathBuf, Vec<Words>)], ledger: &Path, at: &Attempt) -> Decision {
     let mut keys: Vec<LedgerKey> = Vec::new();
     let mut record_only: Vec<LedgerKey> = Vec::new();
@@ -1349,8 +1359,8 @@ fn check_rerun(by_dir: &[(PathBuf, Vec<Words>)], ledger: &Path, at: &Attempt) ->
                 tree: tree.clone(),
                 cmd,
             };
-            if w.starts_with(&TDD_GREEN_ROUTE.map(String::from)) {
-                record_only.push(key(w[TDD_GREEN_ROUTE.len()..].join(" ")));
+            if untagged(w).len() < w.len() {
+                record_only.push(key(untagged(w).join(" ")));
             }
             keys.push(key(w.join(" ")));
         }

@@ -81728,3 +81728,70 @@ rev = "aa9077fc762ca04fce040d2a3eef296ea1949a1f"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "aa7acd12"
+title = "blastguard: zsh =cmd (equals expansion) in command position hides system harm (=rm -rf ~ is allow)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = 'Observed 2026-11-18, blastguard 0.2.690 deployed and origin/main c3dd9fd6d worktree build: =rm -rf ~, =chmod 777 /etc/hosts and =bash -c "chmod 777 /etc/hosts" are allow in main and subagent; the same without = are deny (system harm). The Bash tool runs /bin/zsh 5.9 with option equals on: echo =ls printed /bin/ls and =echo hi printed hi, so a command-position =word runs the PATH binary. RED: crates/blastguard/tests/backlog_20261118_zsh_equals_cmd_fail_open.rs at 105564832 (branch red/blastguard-zsh-equals-20261118, 0.2.691): 3 RED fail, 4 controls pass (plain harm deny, echo hi allow, echo =x / a==b / [[ $a == b ]] / x=1 echo hi allow, =$x foo ask main / deny subagent). Fix owner: harness-5a (resolve =word statically to word, undetermined name -> Undetermined).'
+created_at = 1794942814
+updated_at = 1794943773
+weight = 0.0
+issue_number = 1856
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1856"
+issue_closed_at = 1794943776
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_zsh_equals_cmd_fail_open -- --include-ignored"
+rev = "105564832bbde7adb5a2a750682034404e31ecb6"
+observed_at = 1794942814
+detail = """
+exit 101: rs/yuki/src/.harness-worktrees/red-blastguard-zsh-equals-20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.26s
+     Running tests/backlog_20261118_zsh_equals_cmd_fail_open.rs (target/debug/deps/backlog_20261118_zsh_equals_cmd_fail_open-e1b00426a45f6ff4)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_zsh_equals_cmd_fail_open`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261118_zsh_equals_cmd_fail_open"
+exit = 0
+passed = 7
+rev = "e8df66146cea9ce433d5d00ce26c932b8670d8ea"
+observed_at = 1794943772
+output_digest = "sha256:d77adf4c97ad4f64bbfbd016e5585fd9cacd8d67fbd092db5e63be18beeb60f3"
+excerpt = """
+
+running 7 tests
+test control_echo_hi_is_allow ... ok
+test equals_chmod_etc_hosts_is_deny ... ok
+test equals_rm_rf_home_is_deny ... ok
+test control_pin_undetermined_equals_command_word_is_ask_main_deny_subagent ... ok
+test equals_bash_c_chmod_is_not_allow ... ok
+test control_plain_system_harm_is_deny ... ok
+test control_pin_equals_shapes_outside_command_position_are_allow ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261118_zsh_equals_cmd_fail_open.rs (target/debug/deps/backlog_20261118_zsh_equals_cmd_fail_open-d944bff9b1073f11)
+"""
+
+[task.closure.red]
+rev = "105564832bbde7adb5a2a750682034404e31ecb6"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

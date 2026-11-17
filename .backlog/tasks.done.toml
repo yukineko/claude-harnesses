@@ -81728,3 +81728,64 @@ rev = "aa9077fc762ca04fce040d2a3eef296ea1949a1f"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "42e5c169"
+title = "blastguard: unknown subcommand (incl. moved `relay`) exits 0 silently"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-18: `blastguard no-such-subcommand </dev/null` and `blastguard relay dismiss <id> --reason x` exit 0 with empty stdout/stderr (relay moved to askrelay plugin; callers believe dismiss succeeded). RED by independent author harness-9e: commit 5975d68af, crates/blastguard/tests/backlog_20261118_unknown_subcommand_fails_loudly.rs (failures: `unknown subcommand must exit non-zero, got Some(0)` / `moved relay subcommand must exit non-zero, got Some(0)`). Fix on branch fix/bg-unknown-subcmd-20261118."
+created_at = 1794942949
+updated_at = 1794943004
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_unknown_subcommand_fails_loudly -- --include-ignored"
+rev = "5975d68af788dd49e89e2bd34c6699a4346421d5"
+observed_at = 1794942949
+detail = """
+exit 101: src/.harness-worktrees/bg-unknown-subcmd-impl/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.68s
+     Running tests/backlog_20261118_unknown_subcommand_fails_loudly.rs (target/debug/deps/backlog_20261118_unknown_subcommand_fails_loudly-21696f22b761574f)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_unknown_subcommand_fails_loudly`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261118_unknown_subcommand_fails_loudly"
+exit = 0
+passed = 4
+rev = "10c8c7371f52686e19a4b71fb791f18e15636cf2"
+observed_at = 1794943003
+output_digest = "sha256:a816b1e0485db091138b3affc5c5641d9ff65e775fc1c5ff5873e6ed5c999f2d"
+excerpt = """
+
+running 4 tests
+test moved_relay_subcommand_exits_nonzero_and_names_askrelay ... ok
+test unknown_subcommand_exits_nonzero_with_stderr ... ok
+test control_version_still_works ... ok
+test control_hook_entry_point_allows_benign_command ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+   Compiling blastguard v0.2.693 (/Users/yuki/src/.harness-worktrees/bg-unknown-subcmd-impl/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running tests/backlog_20261118_unknown_subcommand_fails_loudly.rs (target/debug/deps/backlog_20261118_unknown_subcommand_fails_loudly-ef8993d090dd8c9d)
+"""
+
+[task.closure.red]
+rev = "5975d68af788dd49e89e2bd34c6699a4346421d5"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

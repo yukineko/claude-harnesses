@@ -86,8 +86,28 @@ backlog uninstall                                            # 再び除去す�
 
 規則と根拠テストは [backlog スキルの「起票の基準」](skills/backlog/SKILL.md) を参照すること。
 
-- 意図的な RED repro は `#[ignore = "backlog <id>: ..."]` を付けてコミットし、
+- 意図的な RED repro は `#[ignore = "RED: ..."]` を付けてコミットし、
   `--repro-test "cargo test -p <crate> --test <file> -- --ignored"` で起票する。
+  起票に成功すると `add` は採番した id を、repro が `--test <file>` で名指したテストファイル
+  （git 管理下の `tests/<file>.rs` か `tests/<file>/main.rs`。複数あれば `-p` の `Cargo.toml` の
+  `name` で絞る）の `#[ignore = "RED..."]` に書き戻し、`#[ignore = "RED(<id>): ..."]` にする
+  （backlog 3d5285d5、ユーザー裁定 2026-11-16）。書き換えるのは**作業ツリーのファイルだけ**で、
+  stage も commit もしない（呼び出し側の index を巻き込まないため。コミットは呼び出し側が行う。
+  コミットするまでは tree が dirty なので、clean tree を要求する `edit --repro-test` 等は拒否する）。
+  数えるのはコード中の `#[ignore` 属性だけで、コメントや文字列・文字リテラル中の記述は数えない。
+  repro にテスト名フィルタ（libtest と同じく fn 名への部分一致）があれば、対象はフィルタが選ぶ
+  テストの `#[ignore]` **だけ**であり、選ばれるのはちょうど 1 つで、それが id の無い RED でなければ
+  ならない（別 id 付き・RED でない・該当なし・複数該当はいずれも書き換えずに失敗）。照合するのは
+  fn 名だけなので、`tests::red_a` のようなモジュールパス付きのフィルタは何も選ばず、書き換えずに
+  失敗する。既知の残余: 該当ファイルが 1 つだけのときは `-p` をその `Cargo.toml` と照合しない
+  （repro はその `-p` で実行済み）。`tests/` の外を指す `[[test]] path = ...` は見つからず失敗する。フィルタが無い
+  repro は、id の無い RED 属性がファイルにちょうど 1 つのときだけ書き換える。対象が既に
+  `RED(<id>)`（同じ id）なら変更しない。`pytest` / script の repro は `#[ignore]`
+  の慣例が無いので書き戻さず、その旨を stderr に出す（exit は変わらない）。それ以外で書き戻せない
+  場合 — `cargo test` の repro が `--test` を名指さない・複数名指す、該当ファイルが無い/複数で
+  決められない、読めない/書けない、id の無い `#[ignore = "RED` が無い、上の選択が成立しない —
+  は成功扱いにせず、`error:` を stderr に出して exit 1 で終わる。行は既に起票済みで取り消さない
+  （再 `add` せず、手で `RED(<id>)` を書く）。他のファイルを推測で書き換えることはしない。
 - 起票済みタスクの RED テストを `#[ignore]` へ移したら、保存済み repro を
   `backlog edit <id> --repro-test "cargo test -p <crate> --test <file> -- --ignored"` で更新する。
   コマンドは `add --repro-test` と全く同じく実行され（HEAD の一時 worktree）、同じ repro 記録が
@@ -152,6 +172,15 @@ store は repo ごとに解決される (`<repo root>/.backlog/tasks.toml`)。
   cross-project な `~/.backlog` へフォールバックしない。`next` も同様に拒否する。共有 store を明示的に使いたい場合は
   `~/.backlog/config.toml` で `store_dir` を pin する（pinned store は複数 project を持ちうるので、
   そこでは `--project` は従来どおりのフィルタ）。
+- **GitHub issue ミラーの無効化 (`github_mirror`):** `~/.backlog/config.toml` に
+  `github_mirror = false` と書くと、backlog は issue ミラーのために `gh` を一切呼ばない。
+  `add` は行を通常どおり書く（primary branch への land も従来どおり）が issue を作らず、
+  `done` / `cancel` / `recheck` の inline close もせず、`sync` は（dry run も含めて）何もしないで exit 0 する。
+  いずれもミラーが無効である旨を 1 行出し、SessionStart hook は「GitHub mirror drift」の代わりに
+  その 1 行を注入する。キーが無いか `true` なら従来どおりミラーする。bool 以外の値
+  （例: `github_mirror = "no"`）は既定値に倒さずエラーとして報告し、ミラーしない
+  （`add` / `sync` は非0で終了、`done` 等は issue を閉じずに `error:` を出す）。なお
+  config.toml 自体が読めない／TOML として不正な場合は、従来どおり全項目が既定値（ミラー ON）になる。
 
 `project` フィールド自体は残る（誰が起票したかを示し、そのラベルが推測だった場合は `list` が
 `[project unresolved: …]` と表示する） が、**何が見えるかを決めるものではなくなった**。

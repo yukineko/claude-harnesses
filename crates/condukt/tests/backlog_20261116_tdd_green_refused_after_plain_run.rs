@@ -59,13 +59,14 @@ fn repo() -> TempDir {
 }
 
 fn send(
+    sub: &str,
     home: &Path,
     ledger: &Path,
     payload: serde_json::Value,
     cwd: &Path,
 ) -> (Option<i32>, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_condukt"))
-        .arg("testscope")
+        .arg(sub)
         .env("HOME", home)
         .env("CONDUKT_TESTSCOPE_LEDGER", ledger)
         .current_dir(cwd)
@@ -95,7 +96,40 @@ fn event(
     cwd: &Path,
     tuid: &str,
 ) -> (Option<i32>, String) {
+    send_as("testscope", kind, home, ledger, cmd, cwd, tuid)
+}
+
+/// The PostToolUse that confirms `cmd` ran (spec testscope-confirmed-run R2:
+/// input only), sent to the confirm hook.
+fn confirm_event(
+    home: &Path,
+    ledger: &Path,
+    cmd: &str,
+    cwd: &Path,
+    tuid: &str,
+) -> (Option<i32>, String) {
+    send_as(
+        "testscope-confirm",
+        "PostToolUse",
+        home,
+        ledger,
+        cmd,
+        cwd,
+        tuid,
+    )
+}
+
+fn send_as(
+    sub: &str,
+    kind: &str,
+    home: &Path,
+    ledger: &Path,
+    cmd: &str,
+    cwd: &Path,
+    tuid: &str,
+) -> (Option<i32>, String) {
     send(
+        sub,
         home,
         ledger,
         serde_json::json!({
@@ -114,9 +148,7 @@ fn denied(res: &(Option<i32>, String)) -> bool {
     res.1.contains("\"deny\"")
 }
 
-// test-weakening-justified: new RED for an unfixed defect (2026-11-16).
 #[test]
-#[ignore = "RED: 2026-11-16 tdd green is refused as a rerun after a plain run on the same tree, so the required F->P oracle cannot be completed — remove when fixed"]
 fn tdd_green_is_allowed_after_plain_run_on_same_tree() {
     let home = tempfile::tempdir().unwrap();
     let ledger_dir = tempfile::tempdir().unwrap();
@@ -129,7 +161,7 @@ fn tdd_green_is_allowed_after_plain_run_on_same_tree() {
         !denied(&first),
         "plain first Pre must be allowed: {first:?}"
     );
-    event("PostToolUse", home.path(), &ledger, plain, cwd, "tu-1");
+    confirm_event(home.path(), &ledger, plain, cwd, "tu-1");
 
     let green = "tdd green --task t --cmd \"cargo test -p foo --test bar\"";
     let second = event("PreToolUse", home.path(), &ledger, green, cwd, "tu-2");
@@ -150,7 +182,7 @@ fn control_identical_plain_rerun_is_still_denied() {
     let plain = "cargo test -p foo --test bar";
     let first = event("PreToolUse", home.path(), &ledger, plain, cwd, "tu-1");
     assert!(!denied(&first), "first Pre must be allowed: {first:?}");
-    event("PostToolUse", home.path(), &ledger, plain, cwd, "tu-1");
+    confirm_event(home.path(), &ledger, plain, cwd, "tu-1");
     let second = event("PreToolUse", home.path(), &ledger, plain, cwd, "tu-2");
     assert!(denied(&second), "plain rerun must be refused: {second:?}");
 }

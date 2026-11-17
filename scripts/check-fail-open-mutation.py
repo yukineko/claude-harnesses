@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Adversarial fail-open mutation harness for the 7 GATE crates.
+"""Adversarial fail-open mutation harness for the 8 GATE crates.
 
 The other fail-open defenses in this repo are STATIC: `check-fail-open.py`
 greps for known swallow-shapes; code review reads doc comments and asserts
@@ -10,9 +10,9 @@ is exactly the unverified *judgment* the repo's top-level doctrine (see
 CLAUDE.md §2, "判断は予測にすぎない") warns against substituting for an
 observed fact.
 
-This script is the missing DYNAMIC check: for each of the 7 GATE crates
+This script is the missing DYNAMIC check: for each of the 8 GATE crates
 (blastguard / propguard / specguard / stuckguard / mutategate / overwatch /
-parallelguard) it
+parallelguard / askrelay) it
 
   1. copies the invoking tree into a SCRATCH temporary directory (every
      tracked and untracked-but-not-ignored path `git ls-files` lists, read
@@ -76,7 +76,7 @@ Usage:
   python3 scripts/check-fail-open-mutation.py --crate mutategate   # one crate only
   python3 scripts/check-fail-open-mutation.py --keep-going         # don't stop at first NOT-CAUGHT
 
-GATE_CRATES here is one more hardcoded copy of the canonical 7-crate list
+GATE_CRATES here is one more hardcoded copy of the canonical 8-crate list
 (unavoidable: this is a standalone Python script, not Rust, so it cannot
 `pub use harness_core::fleet::GATE_CRATES`). It is registered as an "exact"
 source in `scripts/check-gate-crates-sync.py`'s SOURCES list so drift between
@@ -95,7 +95,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-# The canonical 7 GATE crates (see crates/harness-core/src/fleet.rs and
+# The canonical 8 GATE crates (see crates/harness-core/src/fleet.rs and
 # scripts/check-gate-crates-sync.py). Kept as a plain, greppable tuple of
 # string literals — see check-gate-crates-sync.py's SOURCES registration.
 GATE_CRATES = (
@@ -106,6 +106,7 @@ GATE_CRATES = (
     "mutategate",
     "overwatch",
     "parallelguard",
+    "askrelay",
 )
 
 
@@ -224,6 +225,24 @@ SCENARIOS = [
         # hook_contract (all pass unmutated). concurrency: mutated exit 101.
         # Re-observed for this deletion mutant at the merge.
         tests=("--test", "concurrency"),
+    ),
+    Scenario(
+        crate="askrelay",
+        file_rel="crates/harness-core/src/relay.rs",
+        description=(
+            "stop_outcome(): replace the pending-entry fold with an empty "
+            "list, so the Stop gate never blocks on an unadjudicated "
+            "subagent Ask (the queue is read and then ignored)."
+        ),
+        old="    let pending: Vec<&Entry> = entries.iter().filter(|e| !e.is_resolved()).collect();\n",
+        new="    let _ = &entries;\n    let pending: Vec<&Entry> = Vec::new();\n",
+        # The relay queue logic lives in harness-core (shared with blastguard,
+        # which enqueues); askrelay's integration tests drive it through the
+        # askrelay binary. Evidence (2026-11-17, this scenario run via
+        # `check-fail-open-mutation.py --crate askrelay`): caught, RED
+        # confirmed, scratch cleanup confirmed (66.8s). The unmutated run of
+        # the same target passed (18 tests ok).
+        tests=("--test", "subagent_ask_relay_20261114"),
     ),
     Scenario(
         crate="mutategate",

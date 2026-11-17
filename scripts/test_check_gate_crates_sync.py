@@ -262,7 +262,7 @@ class DriftDetection(unittest.TestCase):
             self.assertNotIn("overwatch", by_path["docs/OVERVIEW.md"])
 
     def test_fail_open_mutation_script_missing_a_crate_is_detected(self):
-        """scripts/check-fail-open-mutation.py hardcodes the same 7-crate list
+        """scripts/check-fail-open-mutation.py hardcodes the same 8-crate list
         (it cannot `pub use` the Rust constant, being a standalone Python
         script) so it is tracked here too; a dropped crate must be detected,
         not silently skip that crate's fail-open mutation coverage."""
@@ -274,7 +274,7 @@ class DriftDetection(unittest.TestCase):
             self.assertNotIn("mutategate", by_path["scripts/check-fail-open-mutation.py"])
 
     def test_fail_open_scanner_missing_a_crate_is_detected(self):
-        """scripts/check-fail-open.py hardcodes the same 7-crate list as its own
+        """scripts/check-fail-open.py hardcodes the same 8-crate list as its own
         merge-blocking scan scope (a fail-open here would silently drop a real
         GATE crate from fail-open enforcement). Found as an untracked 9th copy
         (docs/gate-taxonomy.md, backlog bb667ce1) and is now tracked here too."""

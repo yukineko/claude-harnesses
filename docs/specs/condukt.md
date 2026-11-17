@@ -77,11 +77,15 @@
   通常パス（自動 verified・exit 0）は不変。`record-run --all` は fugu-router 向けに outcome を冪等記録（Stop hook は `record-run --all --stop-hook`: stdout/stderr 無出力・exit 0 で、失敗と進捗行は `<state_dir>/record-run-failures.log` へ追記。未記録 episode は次回再試行。`--stop-hook` 無しの CLI は失敗時 exit 1 のまま。2026-10-27 ユーザー裁定）。`test` は
   `[test].command`→自動検出（cargo/npm/pytest）で `sh -c` 実行し exit code 伝播。実行前に `testscope::judge`
   （PreToolUse hook と同一の判定・同一の rerun ledger）に掛け、フルスイート / task scope 外 / 同一ツリーでの再実行は
-  実行せず非 0 で拒否し、許可した実行は ledger に記録する。
+  実行せず非 0 で拒否する（ask に解決した場合も実行せず非 0）。許可した実行は ledger に pending 行として記録し、実行後に
+自分で confirmed 行を書く（spawn 失敗時は invalidate 行）。
 - **`testscope`（PreToolUse(Bash)、2026-11-14 ユーザー裁定「規則からはずれた点は許さないので、余計な実行はシステムで
   できないようにする」）** — (1) フルスイート deny、(2) task worktree 内の main merge/pull/rebase deny、(3) 同一ツリーでの
   同一テスト再実行 deny（ledger key は repo top・tree identity・正規化コマンド。素の `cargo test`・`tdd red|green --cmd <c>` /
-  `--cmd=<c>`・`bash -c`・`condukt sandbox run --cmd`・`state test` で共通）、(4) cwd が run task の記録済み worktree
+  `--cmd=<c>`・`bash -c`・`condukt sandbox run --cmd`・`state test` で共通）。deny するのは実行が **確認済み**
+  （PostToolUse / PostToolUseFailure の `condukt testscope-confirm` が `tool_use_id` で昇格、`state test` は自己確定）の
+  場合だけで、pending のみが前歴の再実行は **ask**（spec `testscope-confirmed-run`、新記録は `ledger.v2.tsv` に append-only、
+  確認時に旧 3 列行も `ledger.tsv` へ追記）、(4) cwd が run task の記録済み worktree
   の中なら、`--test <name>` はその task の `reproduction_tests` に現れるものか worktree が base（`default_branch`）から
   追加・変更した `tests/<name>.rs`（`<base>...HEAD`・未 commit・untracked）だけ、`--lib`/`--bin`/`--doc`
   （と `--example`/`--bench`）は `reproduction_tests` に同じ selector がある場合だけ許す。cwd が複数 task に一致・

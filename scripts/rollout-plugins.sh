@@ -184,7 +184,7 @@ usage() { sed -n '2,80p' "$0"; }
 # rollback/health-gate safety net for the OTHER gate crates with no forcing
 # function to catch it (backlog 50f94a60) — so it gets the same canary
 # requirement as the crates it protects.
-GATE_CRATES="blastguard propguard specguard stuckguard mutategate overwatch parallelguard"
+GATE_CRATES="blastguard propguard specguard stuckguard mutategate overwatch parallelguard askrelay"
 
 is_gate_crate() {
   local want="$1" g

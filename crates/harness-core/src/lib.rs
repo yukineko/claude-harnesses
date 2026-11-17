@@ -62,6 +62,7 @@ pub mod pricing;
 pub mod primary_tree;
 pub mod progress;
 pub mod projkey;
+pub mod relay;
 pub mod repeat;
 pub mod retrieval;
 pub mod run_lock;

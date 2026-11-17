@@ -26,7 +26,7 @@ mod bounded;
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 const ASK_CMD: &str = r#"for f in a b; do git checkout -- "$f"; done"#;
 const SUB: &str = "ab0687739fbba8a8b";
@@ -60,9 +60,8 @@ fn run(e: &Env, entrypoint: &str, args: &[&str], stdin: &str) -> Output {
 }
 
 fn run_with_relay(e: &Env, relay: &Path, entrypoint: &str, args: &[&str], stdin: &str) -> Output {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_blastguard"));
-    c.args(args)
-        .env("HOME", &e.home)
+    let mut c = bounded::command_for(args);
+    c.env("HOME", &e.home)
         .env("BLASTGUARD_RELAY_DIR", relay)
         .env("BLASTGUARD_APPROVALS_DIR", &e.approvals)
         .env("CLAUDE_CODE_SESSION_ID", "sessEnvIgnored")

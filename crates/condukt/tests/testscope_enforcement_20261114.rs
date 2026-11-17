@@ -11,9 +11,14 @@
 //!   running` must refuse (non-zero, status unchanged) when the marker of
 //!   `$CLAUDE_CODE_SESSION_ID` is absent, or when there is no session id.
 //! * **B** — `tdd red|green --cmd "<c>"` (also `--cmd=<c>`) is judged as if `<c>`
-//!   were a bare Bash command (full suite deny, same-tree rerun deny, same
-//!   ledger key in both directions); `condukt state test` consults the same
-//!   rerun ledger inside the binary.
+//!   were a bare Bash command (full suite deny, same-tree rerun deny; `tdd
+//!   red` shares the bare ledger key in both directions). `tdd green` is the
+//!   one-way exception of backlog 8f82f09d: a bare run does not refuse a later
+//!   `tdd green` of `<c>`, but `tdd green` records `<c>`'s bare key, so a bare
+//!   run after it is refused, and a second `tdd green` of `<c>` (any nesting
+//!   depth) is refused. B here exercises `tdd red` across routes and `tdd
+//!   green` twice; `condukt state test` consults the same rerun ledger inside
+//!   the binary.
 //! * **C** — inside a run task's recorded worktree, each `--test <name>` must be
 //!   named in the task's `reproduction_tests` or be a `tests/<name>.rs` the
 //!   worktree added/changed against its base (committed, uncommitted or
@@ -96,14 +101,41 @@ fn repo() -> TempDir {
 
 /// `condukt testscope` with a PreToolUse(Bash) payload. Returns (exit, stdout).
 fn hook(env: &Env, session: &str, cmd: &str, cwd: &Path) -> (Option<i32>, String) {
-    let payload = serde_json::json!({
+    hook_as("testscope", None, env, session, cmd, cwd)
+}
+
+/// `hook`, then (when the hook allowed it, i.e. the command ran) the
+/// PostToolUse that confirms the run (spec testscope-confirmed-run R2: input
+/// only, the asserts stay as they were).
+fn hook_confirmed(env: &Env, session: &str, cmd: &str, cwd: &Path) -> (Option<i32>, String) {
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let id = format!("tu-{}", N.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+    let res = hook_as("testscope", Some(&id), env, session, cmd, cwd);
+    if res.1.trim().is_empty() {
+        hook_as("testscope-confirm", Some(&id), env, session, cmd, cwd);
+    }
+    res
+}
+
+fn hook_as(
+    sub: &str,
+    tuid: Option<&str>,
+    env: &Env,
+    session: &str,
+    cmd: &str,
+    cwd: &Path,
+) -> (Option<i32>, String) {
+    let mut payload = serde_json::json!({
         "session_id": session,
         "tool_name": "Bash",
         "tool_input": {"command": cmd},
         "cwd": cwd.to_str().unwrap(),
     });
+    if let Some(id) = tuid {
+        payload["tool_use_id"] = serde_json::json!(id);
+    }
     let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
-        .arg("testscope")
+        .arg(sub)
         .env("HOME", env.home.path())
         .env("CONDUKT_TESTSCOPE_LEDGER", env.ledger())
         .env("CONDUKT_DEFAULT_BRANCH", "main")
@@ -384,7 +416,7 @@ fn b_tdd_after_bare_run_on_same_tree_is_denied() {
     let env = Env::new();
     let r = repo();
     assert_allow(
-        &hook(&env, "s", "cargo test -p x --test t", r.path()),
+        &hook_confirmed(&env, "s", "cargo test -p x --test t", r.path()),
         "first bare run",
     );
     assert_deny(
@@ -402,7 +434,7 @@ fn b_tdd_after_bare_run_on_same_tree_is_denied() {
 fn b_bare_after_tdd_run_on_same_tree_is_denied() {
     let env = Env::new();
     let r = repo();
-    let first = hook(
+    let first = hook_confirmed(
         &env,
         "s",
         "tdd red --cmd \"cargo test -p x --test t\"",
@@ -420,7 +452,7 @@ fn b_tdd_twice_on_same_tree_is_denied() {
     let env = Env::new();
     let r = repo();
     let c = "tdd green --cmd=\"cargo test -p x --test t\"";
-    assert_allow(&hook(&env, "s", c, r.path()), "first tdd green");
+    assert_allow(&hook_confirmed(&env, "s", c, r.path()), "first tdd green");
     assert_deny(&hook(&env, "s", c, r.path()), "tdd green twice, same tree");
 }
 

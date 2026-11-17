@@ -22,7 +22,18 @@
 //!    Bash `cargo test`, `bash -c`, `condukt sandbox run --cmd`, `tdd
 //!    red|green --cmd <c>` / `--cmd=<c>` (whose `<c>` is judged like a bare
 //!    command for every rule), and `condukt state test`, which calls
-//!    [`judge`] itself before running anything.
+//!    [`judge`] itself before running anything. Two exceptions to the
+//!    same-command key, both for `tdd green --cmd <c>` (any nesting depth):
+//!    (a) backlog 8f82f09d: it is checked only against earlier `tdd green`
+//!    runs of `<c>`, so a bare run cannot block the GREEN evidence the F->P
+//!    oracle requires; it still records `<c>`'s bare key, refusing a bare run
+//!    after it, and its own green key, refusing a second green on the same tree.
+//!    (b) backlog 0c301e8b: it is also checked against an earlier `tdd red
+//!    --cmd <c>` of `<c>`. On the same unchanged tree a confirmed red denies
+//!    the green, and a pending red asks (rule R3 of spec
+//!    `testscope-confirmed-run`), never allows it. A `tdd red --cmd <c>` is
+//!    checked against the bare key like a bare run, and records a red key
+//!    besides it (see `check_rerun`).
 //! 4. **Task scope** (2026-11-14) — when the cwd is inside a run task's
 //!    recorded worktree, each `--test <name>` must appear as `--test <name>`
 //!    in that task's `reproduction_tests` or be a `tests/<name>.rs` the
@@ -37,10 +48,36 @@
 //! `condukt state set --status running` requires, so a session that never
 //! loaded this hook cannot start a task.
 //!
-//! Every cannot-determine (unbalanced quotes around a cargo test, a tree
-//! identity git cannot give, an unwritable ledger) resolves to deny
-//! (CLAUDE.md §3). A command that contains no test / merge invocation is never
-//! judged and is allowed by printing nothing.
+//! Every cannot-determine resolves to the restricted side (CLAUDE.md §3):
+//! [`Decision::Deny`] for a command that cannot be judged at all (unbalanced
+//! quotes around a cargo test, a tree identity git cannot give, an unreadable
+//! or unwritable ledger, an unparseable `ledger.v2.tsv`), and
+//! [`Decision::Ask`] for a rerun whose only prior was never confirmed as
+//! executed (see "Confirmed runs" below). A command that contains no test /
+//! merge invocation is never judged and is allowed by printing nothing.
+//!
+//! **Confirmed runs** (spec `testscope-confirmed-run`, backlog 64fe4e19). Rule
+//! 3 counts only a test run that is known to have executed. PreToolUse writes a
+//! *pending* row (it cannot know whether another PreToolUse hook will stop the
+//! call); the `condukt testscope-confirm` hook, registered for PostToolUse and
+//! PostToolUseFailure of Bash, promotes the rows carrying the same
+//! `tool_use_id` to *confirmed* (an interrupted run is a run). A rerun of a
+//! confirmed key on the same tree is denied; a rerun whose only prior is
+//! pending (or a legacy `ledger.tsv` row nobody confirmed, or a Post that
+//! matched no pending row for the same command and cwd) resolves to
+//! [`Decision::Ask`], because a pending row proves nothing about whether the
+//! test ran (a call that a hook denied or asked about never fires a Post). The
+//! new records live in `ledger.v2.tsv`, append-only; confirmation also appends
+//! the old 3-column row to `ledger.tsv` so an older cached binary still
+//! refuses a confirmed rerun. The ledger itself (rule 3's `check_rerun`, the
+//! confirm / invalidate records) lives in the [`rerun`] submodule.
+//!
+//! **Test-only fault seams** (read from the environment only, never from
+//! the payload): `CONDUKT_TESTSCOPE_FAULT=confirm_panic` makes the confirm hook
+//! panic once it has found a test command; `CONDUKT_TESTSCOPE_FAULT=
+//! invalidate_append_fail` makes [`invalidate`] fail instead of appending.
+//! Both only withhold a confirmation / an invalidation, i.e. move toward the
+//! restricted side, so they cannot loosen the gate.
 //!
 //! **Where a test runs** (backlog 214b39b5): a `cd <dir>` that is certain to
 //! run before a test (head of a list followed by `&&` / `;`, or inside an
@@ -70,7 +107,6 @@
 //! `backlog_20261115_testscope_verifier_suspicions.rs` a1-a4, filed in the
 //! backlog 2026-11-15).
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -79,6 +115,11 @@ use std::process::Command;
 pub enum Decision {
     Allow,
     Deny(String),
+    /// Not a verdict on the command: the rerun ledger holds only unconfirmed
+    /// (pending) priors, so whether the test already ran is unknown. The
+    /// caller must not run the command without a human answer; the text never
+    /// says "deny".
+    Ask(String),
 }
 
 const FULL_SUITE_REASON: &str = "full suite is nightly-only (user ruling 2026-11-07/11-12): \
@@ -92,12 +133,79 @@ const MAIN_MERGE_REASON: &str = "a condukt run integrates once at the end via `c
 /// One simple command: its words after shell tokenizing.
 type Words = Vec<String>;
 
-/// Judge a Bash command line run in `cwd`. `home` is `$HOME` (for the condukt
-/// worktree root); `ledger` is where same-tree runs are recorded.
-pub fn judge(command: &str, cwd: &Path, home: Option<&Path>, ledger: &Path) -> Decision {
+/// Prefixed to the words of a test run through `tdd green --cmd` (backlog
+/// 8f82f09d). Bare test words start with `cargo`, so the prefix cannot occur in
+/// them.
+const TDD_GREEN_ROUTE: [&str; 3] = ["tdd", "green", "--cmd"];
+
+/// Prefixed to the words of a test run through `tdd red --cmd` (backlog
+/// 0c301e8b), the same way as [`TDD_GREEN_ROUTE`]. A red run is still checked
+/// against its bare key like any bare run; the tagged key is only recorded, so
+/// that a later `tdd green --cmd` of the same command on the same tree can see
+/// it.
+const TDD_RED_ROUTE: [&str; 3] = ["tdd", "red", "--cmd"];
+
+/// `w` with every leading [`TDD_GREEN_ROUTE`] / [`TDD_RED_ROUTE`] tag removed:
+/// the bare test words, and whether a green tag / a red tag was among them.
+fn untagged(w: &[String]) -> (&[String], bool, bool) {
+    let green = TDD_GREEN_ROUTE.map(String::from);
+    let red = TDD_RED_ROUTE.map(String::from);
+    let (mut rest, mut is_green, mut is_red) = (w, false, false);
+    loop {
+        if rest.starts_with(&green) {
+            rest = &rest[green.len()..];
+            is_green = true;
+        } else if rest.starts_with(&red) {
+            rest = &rest[red.len()..];
+            is_red = true;
+        } else {
+            return (rest, is_green, is_red);
+        }
+    }
+}
+
+/// `tw` with `route` prepended.
+fn with_route(tw: Words, route: [&str; 3]) -> Words {
+    let tag: Words = route.iter().map(|s| s.to_string()).collect();
+    [tag, tw].concat()
+}
+
+/// `tw` tagged with [`TDD_GREEN_ROUTE`] exactly once, at any nesting depth.
+fn green_tagged(tw: Words) -> Words {
+    let (_, green, _) = untagged(&tw);
+    if green {
+        tw
+    } else {
+        with_route(tw, TDD_GREEN_ROUTE)
+    }
+}
+
+/// `tw` tagged with [`TDD_RED_ROUTE`] exactly once, at any nesting depth.
+fn red_tagged(tw: Words) -> Words {
+    let (_, _, red) = untagged(&tw);
+    if red {
+        tw
+    } else {
+        with_route(tw, TDD_RED_ROUTE)
+    }
+}
+
+/// What the tokenizer and the `cd` walk say about a command line, before any
+/// task-scope or ledger rule is applied.
+enum Parsed {
+    /// Decided without a ledger: `Allow` (no test / merge invocation) or `Deny`.
+    Final(Decision),
+    /// Test invocations, grouped by the directory each runs in.
+    Tests(Vec<(PathBuf, Vec<Words>)>),
+}
+
+/// Tokenize `command`, judge rules 1 and 2 and resolve the directory every test
+/// runs in. Shared by the PreToolUse judge and the PostToolUse confirm hook
+/// (which only needs to know whether the call contained a test command).
+fn parse_tests(command: &str, cwd: &Path, home: Option<&Path>) -> Parsed {
     let stripped = strip_heredoc_bodies(command);
     let Some(pieces) = split_pieces(&stripped) else {
-        return if mentions_test_or_merge(&stripped) {
+        return Parsed::Final(if mentions_test_or_merge(&stripped) {
             Decision::Deny(format!(
                 "condukt testscope cannot tokenize this command (unbalanced quote), and it \
                  mentions a cargo test / git merge, so whether it is a full suite or a \
@@ -105,7 +213,7 @@ pub fn judge(command: &str, cwd: &Path, home: Option<&Path>, ledger: &Path) -> D
             ))
         } else {
             Decision::Allow
-        };
+        });
     };
     let ctx = Ctx {
         wt_root: home.map(|h| h.join(".condukt").join("worktrees")),
@@ -116,9 +224,9 @@ pub fn judge(command: &str, cwd: &Path, home: Option<&Path>, ledger: &Path) -> D
     };
 
     let test_cmds = match judge_pieces(&pieces, &Dir::Known(cwd.to_path_buf()), &ctx, 0, "") {
-        Judged::Deny(r) => return Decision::Deny(r),
+        Judged::Deny(r) => return Parsed::Final(Decision::Deny(r)),
         Judged::Test(t) => t,
-        Judged::Other => return Decision::Allow,
+        Judged::Other => return Parsed::Final(Decision::Allow),
     };
     // Every test must run in a directory we can name; a `cd` we could not
     // resolve leaves the tree under test undetermined (CLAUDE.md §3).
@@ -127,13 +235,13 @@ pub fn judge(command: &str, cwd: &Path, home: Option<&Path>, ledger: &Path) -> D
         let d = match dir {
             Dir::Known(d) => d,
             Dir::Undetermined(why) => {
-                return Decision::Deny(format!(
+                return Parsed::Final(Decision::Deny(format!(
                     "condukt testscope cannot determine the directory `{}` runs in ({why}), so \
                      its tree, its task scope and whether it re-runs a test already run on the \
                      same tree are undetermined; run it without that `cd`, or with a leading \
                      `cd <literal absolute path> &&`",
                     words.join(" ")
-                ));
+                )));
             }
         };
         match by_dir.iter_mut().find(|(p, _)| *p == d) {
@@ -141,21 +249,53 @@ pub fn judge(command: &str, cwd: &Path, home: Option<&Path>, ledger: &Path) -> D
             None => by_dir.push((d, vec![words])),
         }
     }
+    Parsed::Tests(by_dir)
+}
+
+/// Judge a Bash command line run in `cwd`. `home` is `$HOME` (for the condukt
+/// worktree root); `ledger` is where same-tree runs are recorded;
+/// `tool_use_id` is the id of the PreToolUse call (`None` when the payload has
+/// none: such a row is never promoted by a Post, so its rerun asks).
+///
+/// A [`Decision::Allow`] or [`Decision::Ask`] for a test command has written a
+/// pending row for this attempt; [`confirm`] promotes it once the call is known
+/// to have executed.
+pub fn judge(
+    command: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+    ledger: &Path,
+    tool_use_id: Option<&str>,
+) -> Decision {
+    let by_dir = match parse_tests(command, cwd, home) {
+        Parsed::Final(d) => return d,
+        Parsed::Tests(t) => t,
+    };
     // Rule C (task scope) is judged in the directory each test runs in AND in
     // the payload cwd: a worker inside its task worktree does not escape its
     // scope by `cd`-ing elsewhere, and a `cd` into a task worktree does not
     // escape that task's scope (backlog 214b39b5).
     for (d, tests) in &by_dir {
-        if let Decision::Deny(r) = check_task_scope(tests, d) {
-            return Decision::Deny(r);
+        match check_task_scope(tests, d) {
+            Decision::Allow => {}
+            stop @ (Decision::Deny(_) | Decision::Ask(_)) => return stop,
         }
         if d != cwd {
-            if let Decision::Deny(r) = check_task_scope(tests, cwd) {
-                return Decision::Deny(r);
+            match check_task_scope(tests, cwd) {
+                Decision::Allow => {}
+                stop @ (Decision::Deny(_) | Decision::Ask(_)) => return stop,
             }
         }
     }
-    check_rerun(&by_dir, ledger)
+    check_rerun(
+        &by_dir,
+        ledger,
+        &Attempt {
+            tool_use_id: tool_use_id.unwrap_or(""),
+            raw_command: command,
+            cwd,
+        },
+    )
 }
 
 /// Where a simple command runs, as far as the leading `cd`s of its command
@@ -486,11 +626,23 @@ fn judge_words(words: &[String], dir: &Dir, ctx: &Ctx, depth: usize) -> Judged {
             }
         }
         // `tdd red|green … --cmd '<c>'` runs <c> as the test command; it is
-        // judged exactly like the bare command (full suite, task scope and the
-        // same rerun-ledger key), so routing a test through tdd changes nothing.
+        // judged like the bare command (full suite, task scope, rerun key). A
+        // `tdd green` test is tagged once at any depth ([`green_tagged`]), and
+        // a `tdd red` test likewise ([`red_tagged`]), so each route records its
+        // own key.
         "tdd" if depth < 4 && matches!(w.get(1).map(String::as_str), Some("red" | "green")) => {
+            let tag: fn(Words) -> Words = if w[1] == "green" {
+                green_tagged
+            } else {
+                red_tagged
+            };
             match cmd_flag(w) {
-                Some(p) => judge_payload(&p, dir, ctx, depth + 1),
+                Some(p) => match judge_payload(&p, dir, ctx, depth + 1) {
+                    Judged::Test(t) => {
+                        Judged::Test(t.into_iter().map(|(tw, d)| (tag(tw), d)).collect())
+                    }
+                    other => other,
+                },
                 None => Judged::Other,
             }
         }
@@ -929,167 +1081,17 @@ fn tree_identity_at(cwd: &Path, depth: usize) -> Result<(String, String), String
     Ok((top, format!("{head}:{dirty:016x}")))
 }
 
-/// One rerun-ledger record: the tree a test ran in and the command.
-///
-/// Line format: `<top>\t<head:dirty>\t<cmd>`. Lines written by condukt
-/// 0.7.413-0.7.418 may carry `@from=<top>:<head:dirty>\t` before the command
-/// (the payload cwd's tree); that context is read and ignored, so such a
-/// record collides with every later run of the same command on the same tree.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LedgerKey {
-    top: String,
-    tree: String,
-    cmd: String,
-}
-
-impl LedgerKey {
-    fn line(&self) -> String {
-        format!("{}\t{}\t{}", self.top, self.tree, self.cmd)
-    }
-
-    fn parse(line: &str) -> Option<Self> {
-        let mut it = line.splitn(3, '\t');
-        let top = it.next()?.to_string();
-        let tree = it.next()?.to_string();
-        let rest = it.next()?;
-        let cmd = match rest.strip_prefix("@from=") {
-            Some(r) => r.split_once('\t')?.1.to_string(),
-            None => rest.to_string(),
-        };
-        Some(LedgerKey { top, tree, cmd })
-    }
-
-    /// Same command on the same tree. Where it was launched from (the payload
-    /// cwd) plays no part (user ruling 2026-11-15: the fingerprint is taken
-    /// only from the tree the test actually runs in).
-    fn collides(&self, other: &LedgerKey) -> bool {
-        self.top == other.top && self.tree == other.tree && self.cmd == other.cmd
-    }
-}
-
-/// Rule 3. `by_dir` maps each directory a test runs in (the payload cwd, or
-/// the target of a leading `cd`) to its tests. The key is the identity of the
-/// tree each test actually runs in plus the command, nothing else (backlog
-/// 214b39b5: it used to be the payload cwd's tree whatever `cd` preceded the
-/// test; user ruling 2026-11-15: the payload cwd's tree must not contribute
-/// either, so editing only the payload cwd does not permit a rerun on an
-/// unchanged run tree, pinned by `backlog_20261114_testscope_cd_tree_identity.rs`
-/// `rerun_after_editing_only_the_payload_cwd_tree_is_refused_when_test_runs_in_cd_target`).
-fn check_rerun(by_dir: &[(PathBuf, Vec<Words>)], ledger: &Path) -> Decision {
-    let mut keys: Vec<LedgerKey> = Vec::new();
-    for (dir, tests) in by_dir {
-        let (top, tree) = match tree_identity(dir) {
-            Ok(t) => t,
-            Err(e) => {
-                return Decision::Deny(format!(
-                    "condukt testscope cannot determine the tree this test runs against in {} \
-                     ({e}), so whether it re-runs a test already run on the same tree is \
-                     undetermined",
-                    dir.display()
-                ));
-            }
-        };
-        for w in tests {
-            keys.push(LedgerKey {
-                top: top.clone(),
-                tree: tree.clone(),
-                cmd: w.join(" "),
-            });
-        }
-    }
-    let existing = match std::fs::read_to_string(ledger) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => {
-            return Decision::Deny(format!(
-                "condukt testscope cannot read its rerun ledger {}: {e}",
-                ledger.display()
-            ));
-        }
-    };
-    // A line that does not parse as a key never matched a key before either
-    // (the old check was exact line equality), so skipping it changes nothing.
-    let recorded: Vec<LedgerKey> = existing.lines().filter_map(LedgerKey::parse).collect();
-    for k in &keys {
-        if recorded.iter().any(|r| r.collides(k)) {
-            return Decision::Deny(format!(
-                "rerun refused: `{}` already ran on this exact tree ({} at {}); running the same \
-                 test twice is forbidden (user ruling 2026-11-07). Change the code first, or \
-                 move on",
-                k.cmd, k.tree, k.top
-            ));
-        }
-    }
-    let write = || -> std::io::Result<()> {
-        if let Some(dir) = ledger.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(ledger)?;
-        for k in &keys {
-            writeln!(f, "{}", k.line())?;
-        }
-        Ok(())
-    };
-    match write() {
-        Ok(()) => Decision::Allow,
-        Err(e) => Decision::Deny(format!(
-            "condukt testscope cannot record this test run in {} ({e}), so a later rerun could \
-             not be detected",
-            ledger.display()
-        )),
-    }
-}
-
-/// The ledger path: `$CONDUKT_TESTSCOPE_LEDGER`, else
-/// `$HOME/.condukt/testscope/ledger.tsv`.
-pub fn ledger_path(home: Option<&Path>) -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("CONDUKT_TESTSCOPE_LEDGER") {
-        return Some(PathBuf::from(p));
-    }
-    home.map(|h| h.join(".condukt").join("testscope").join("ledger.tsv"))
-}
+// The rerun ledger (LedgerKey, ledger.v2.tsv, check_rerun, confirm, invalidate,
+// ledger_path, ...) lives in `testscope/rerun.rs`; see that module's doc.
+mod rerun;
+use rerun::{check_rerun, Attempt};
+pub use rerun::{confirm_post, ledger_path, self_attempt_id, settle_self_run};
 
 // ── session marker (rule A) ─────────────────────────────────────────────────
 
-/// `<ledger parent>/sessions/<safe session id>`: the file whose existence says
-/// "the testscope hook ran in this session". `None` when the ledger path has no
-/// parent or the session id is empty.
-pub fn session_marker_path(ledger: &Path, session_id: &str) -> Option<PathBuf> {
-    if session_id.trim().is_empty() {
-        return None;
-    }
-    let dir = ledger.parent()?;
-    Some(
-        dir.join("sessions")
-            .join(harness_core::store::safe_session(session_id)),
-    )
-}
-
-/// Record that the testscope hook is loaded in `session_id`. Called by the hook
-/// on every payload that carries a session id; `condukt state set --status
-/// running` refuses a session that has no marker ([`session_marker_present`]).
-pub fn write_session_marker(ledger: &Path, session_id: &str) -> std::io::Result<()> {
-    let Some(p) = session_marker_path(ledger, session_id) else {
-        return Ok(());
-    };
-    if let Some(dir) = p.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(&p, b"")
-}
-
-/// Whether the marker of `session_id` exists, as an observation: `Err` (never
-/// `false`, never `true`) when existence cannot be told.
-pub fn session_marker_present(ledger: &Path, session_id: &str) -> Result<bool, String> {
-    let Some(p) = session_marker_path(ledger, session_id) else {
-        return Ok(false);
-    };
-    p.try_exists()
-        .map_err(|e| format!("cannot tell whether {} exists: {e}", p.display()))
-}
+// Lives in `testscope_hook.rs` (the hook is its only writer); re-exported so
+// `testscope::session_marker_present` keeps its path for `main.rs`.
+pub use crate::testscope_hook::{session_marker_present, write_session_marker};
 
 // ── task scope (rule C) ─────────────────────────────────────────────────────
 

@@ -1,5 +1,16 @@
 //! The subagent Ask relay: a subagent's Ask is adjudicated in the main session.
 //!
+//! This module moved out of blastguard (`crates/blastguard/src/relay.rs`) on
+//! 2026-11-17 (user ruling: the relay is a cross-gate concern — any gate that
+//! Asks inside a subagent needs main-session adjudication). It lives in
+//! harness-core, not in the `askrelay` crate, because BOTH sides need the queue
+//! format: the `askrelay` binary (Stop / PostToolUse hooks, `dismiss`) and
+//! blastguard (enqueue of a hardened subagent Ask via [`queue`], and the
+//! main-session denial record via [`mark_denied`]). Living here lets blastguard
+//! enqueue without depending on `askrelay`, and `askrelay` carry no dependency
+//! on blastguard. The queue directory, file names and line format are
+//! unchanged, so queues written before the move keep working.
+//!
 //! User rulings (2026-11-14, verbatim):
 //!
 //! * 「sub agentのAskはmainで裁定する」 — the governing statement. A subagent's
@@ -15,22 +26,24 @@
 //!
 //! # The procedure this module enforces
 //!
-//! 1. Inside a subagent nobody can answer a permission prompt, so `emit`
-//!    (main.rs) hardens an `Ask` to a `Deny`. That verdict is unchanged. When
-//!    the call was a Bash command and the main session itself could ask
-//!    ([`crate::interactive::ask_available`]), the hardened Ask is also
-//!    appended to this session's relay queue ([`queue`]).
+//! 1. Inside a subagent nobody can answer a permission prompt, so the gate
+//!    (today blastguard: `emit` in `crates/blastguard/src/main.rs`) hardens an
+//!    `Ask` to a `Deny`. That verdict is unchanged. When the call was a Bash
+//!    command and the main session itself could ask (blastguard's
+//!    `interactive::ask_available`), the gate also appends the hardened Ask to
+//!    this session's relay queue ([`queue`]).
 //! 2. The main agent re-runs the EXACT command (same `cwd`, same string)
 //!    through its own Bash tool. blastguard judges that call normally, so the
 //!    human sees the real permission prompt. A PostToolUse /
-//!    PostToolUseFailure hook ([`mark_executed`]) marks the entry executed.
-//!    When blastguard's PreToolUse DENIES that re-run instead, the denial is
-//!    recorded on the entry ([`mark_denied`]) so the Stop text says so rather
-//!    than "not executed"; the entry stays pending until it is dismissed.
+//!    PostToolUseFailure hook (`askrelay mark-executed`, [`mark_executed`])
+//!    marks the entry executed. When blastguard's PreToolUse DENIES that
+//!    re-run instead, blastguard records the denial on the entry
+//!    ([`mark_denied`]) so the Stop text says so rather than "not executed";
+//!    the entry stays pending until it is dismissed.
 //! 3. The main agent sends the output and exit code to the subagent with
 //!    SendMessage, naming the relay id. A PostToolUse hook on SendMessage
-//!    ([`mark_relayed`]) marks the entry relayed.
-//! 4. A main-session Stop hook ([`stop_outcome`]) blocks while any entry of
+//!    (`askrelay mark-relayed`, [`mark_relayed`]) marks the entry relayed.
+//! 4. A main-session Stop hook (`askrelay stop`, [`stop_outcome`]) blocks while any entry of
 //!    the session is neither (executed and relayed) nor dismissed.
 //!
 //! The human may decline the prompt; then no PostToolUse fires. That is what
@@ -136,14 +149,17 @@ impl Entry {
 }
 
 /// The queue directory: `BLASTGUARD_RELAY_DIR`, else `~/.blastguard/relay`.
-/// Lives in blastguard's own state dir, outside every repo and worktree.
+/// Lives in blastguard's state dir, outside every repo and worktree. The
+/// directory and the env var keep their blastguard names after the move to
+/// askrelay so that queues written before the move are still read; renaming
+/// them is a separate, later step.
 pub fn relay_dir() -> PathBuf {
     if let Ok(d) = std::env::var(DIR_VAR) {
         if !d.trim().is_empty() {
             return PathBuf::from(d.trim());
         }
     }
-    harness_core::config::base_dir("blastguard").join("relay")
+    crate::config::base_dir("blastguard").join("relay")
 }
 
 /// The session key: the payload's `session_id`, else `CLAUDE_CODE_SESSION_ID`,
@@ -202,7 +218,7 @@ fn new_id(session: &str, cwd: &str, command: &str) -> String {
 
 fn append(path: &Path, event: &Event) -> Result<(), String> {
     let line = serde_json::to_string(event).map_err(|e| format!("serialize failed: {e}"))?;
-    harness_core::append::append_line(path, &line)
+    crate::append::append_line(path, &line)
         .map_err(|e| format!("append to {} failed: {e}", path.display()))
 }
 
@@ -246,8 +262,8 @@ pub enum Queue {
 /// IO error other than not-found, an unparseable line, or an event that names
 /// an id without a `queued` line — all of which the Stop hook blocks on.
 pub fn load(path: &Path) -> Result<Queue, String> {
-    use harness_core::verdict::Determination;
-    let text = match harness_core::boundary::read_to_string(path) {
+    use crate::verdict::Determination;
+    let text = match crate::boundary::read_to_string(path) {
         Determination::Known(Some(t)) => t,
         Determination::Known(None) => return Ok(Queue::Absent),
         Determination::Undetermined(why) => {
@@ -439,7 +455,7 @@ pub enum DismissError {
     Io(String),
 }
 
-/// `blastguard relay dismiss <id> --reason <text>`: find the id in the queue
+/// `askrelay dismiss <id> --reason <text>`: find the id in the queue
 /// directory and append a `dismissed` record carrying the reason. Returns the
 /// queue file it was written to.
 ///
@@ -449,10 +465,10 @@ pub fn dismiss(dir: &Path, id: &str, reason: &str) -> Result<PathBuf, DismissErr
     if reason.trim().is_empty() {
         return Err(DismissError::EmptyReason);
     }
-    use harness_core::verdict::Determination;
+    use crate::verdict::Determination;
     // All-or-nothing: a listing error mid-walk is `Undetermined` for the whole
     // directory, never a partial listing.
-    let listing = match harness_core::boundary::read_dir_entries_checked(dir) {
+    let listing = match crate::boundary::read_dir_entries_checked(dir) {
         Determination::Known(Some(l)) => l,
         Determination::Known(None) => return Err(DismissError::UnknownId(id.to_string())),
         Determination::Undetermined(why) => {
@@ -514,14 +530,14 @@ sees the real permission prompt. Do not rewrite it, wrap it, or hand it to the u
   2. SendMessage the output and exit code to the subagent, and name the relay id in the message.\n\
 If the human declined the prompt, blastguard denied the re-run in the main session, or the command \
 cannot be run, record why with \
-`blastguard relay dismiss <id> --reason \"<why>\"`; the dismissal is recorded in the queue file and is \
+`askrelay dismiss <id> --reason \"<why>\"`; the dismissal is recorded in the queue file and is \
 not shown on later Stops.";
 
 fn describe(e: &Entry) -> String {
     let state = match (&e.executed, e.relayed) {
         (None, _) if !e.denied.is_empty() => format!(
             "re-run in the main session and DENIED there by blastguard ({} time(s)), so it did \
-             not run; record the outcome with `blastguard relay dismiss {} --reason \"<why>\"` \
+             not run; record the outcome with `askrelay dismiss {} --reason \"<why>\"` \
              (latest deny reason, first line: {})",
             e.denied.len(),
             e.id,
@@ -561,7 +577,7 @@ pub fn stop_outcome(dir: &Path, session: &str) -> StopOutcome {
         Ok(Queue::Known(v)) => v,
         Err(why) => {
             return StopOutcome::Block(format!(
-                "blastguard relay: the subagent Ask relay queue for this session could not be \
+                "askrelay: the subagent Ask relay queue for this session could not be \
                  determined, so this stop is blocked (fail-closed): {why}\nqueue file: {}\n\
                  Inspect or repair that file; a subagent Ask recorded there may still be waiting \
                  for the main session.",
@@ -574,7 +590,7 @@ pub fn stop_outcome(dir: &Path, session: &str) -> StopOutcome {
         return StopOutcome::Allow(None);
     }
     let reason = format!(
-        "blastguard relay: {} subagent Ask(s) in this session have not been adjudicated in the \
+        "askrelay: {} subagent Ask(s) in this session have not been adjudicated in the \
          main session.\n{PROCEDURE}\nqueue file: {}\n\nPending:\n{}",
         pending.len(),
         path.display(),

@@ -61,13 +61,14 @@ fn repo() -> TempDir {
 }
 
 fn send(
+    sub: &str,
     home: &Path,
     ledger: &Path,
     payload: serde_json::Value,
     cwd: &Path,
 ) -> (Option<i32>, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_condukt"))
-        .arg("testscope")
+        .arg(sub)
         .env("HOME", home)
         .env("CONDUKT_TESTSCOPE_LEDGER", ledger)
         .current_dir(cwd)
@@ -102,6 +103,7 @@ fn pre(
     tuid: &str,
 ) -> (Option<i32>, String) {
     send(
+        "testscope",
         home,
         ledger,
         serde_json::json!({
@@ -125,6 +127,7 @@ fn post(
     tuid: &str,
 ) -> (Option<i32>, String) {
     send(
+        "testscope-confirm",
         home,
         ledger,
         serde_json::json!({
@@ -145,7 +148,6 @@ fn denied(res: &(Option<i32>, String)) -> bool {
 
 // test-weakening-justified: new RED for an unfixed defect (2026-11-15).
 #[test]
-#[ignore = "RED: 2026-11-15 testscope records at PreToolUse so a never-executed attempt blocks the real run — remove when fixed"]
 fn second_pretooluse_after_never_executed_first_is_allowed() {
     let home = tempfile::tempdir().unwrap();
     let ledger_dir = tempfile::tempdir().unwrap();
@@ -168,7 +170,6 @@ fn second_pretooluse_after_never_executed_first_is_allowed() {
 /// (A) Post already fired in this session (marker exists), then a Pre-only
 /// attempt (never executed) must not count: the second Pre is allowed.
 #[test]
-#[ignore = "RED: 2026-11-15 testscope records at PreToolUse so a never-executed attempt blocks the real run — remove when fixed"]
 fn a_pre_only_attempt_is_not_counted_once_post_has_fired_in_session() {
     let home = tempfile::tempdir().unwrap();
     let ledger_dir = tempfile::tempdir().unwrap();
@@ -213,7 +214,6 @@ fn b_pre_then_post_counts_as_run_and_rerun_is_denied() {
 /// (C) Post never fired in the session: no confirmed row exists, so the
 /// identical second Pre is not denied and resolves to Ask (G3-C).
 #[test]
-#[ignore = "RED testscope-confirmed-run R3: second Pre with no Post ever is Deny at HEAD, must be Ask — remove when fixed"]
 fn c_no_post_ever_in_session_falls_back_to_recording_at_pre() {
     let home = tempfile::tempdir().unwrap();
     let ledger_dir = tempfile::tempdir().unwrap();

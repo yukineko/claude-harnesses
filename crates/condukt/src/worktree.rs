@@ -18,9 +18,11 @@ mod dirty_tracked;
 mod merge_gate;
 mod merge_recovery;
 mod quarantine;
+mod retry_task;
 pub use dirty_tracked::refuse_uncommitted_task_worktree;
 use merge_gate::{ensure_base_on_default_branch, ensure_commits_carry_task_trailer, TrailerGuard};
 use merge_recovery::{abort_state_phrase, abort_trial_merge, run_merge_recovering_timeout};
+pub use retry_task::{create_namespaced_for_task, resolve_retry_topic};
 
 /// Every `git` subprocess spawned by this module is bounded by this timeout.
 /// worktree lifecycle ops (add/remove/merge/status) are expected to be local
@@ -440,38 +442,7 @@ pub fn create_namespaced(
     topic: &str,
     branch: &str,
 ) -> Result<PathBuf> {
-    match run {
-        None => {
-            eprintln!("{}", legacy_degradation_warning(topic, branch));
-            create(repo, worktree_base, topic, branch)
-        }
-        Some(run) => {
-            validate_run_ns(run)?;
-            // Validate the *inputs* too, so a bad topic/branch is reported
-            // against what the caller passed rather than against the spliced
-            // form (create() re-validates the spliced result regardless).
-            validate_topic(topic)?;
-            validate_branch(branch)?;
-            let ns_branch = namespaced_branch(run, branch);
-            let path = create(
-                repo,
-                worktree_base,
-                &namespaced_topic(run, topic),
-                &ns_branch,
-            )?;
-            // The task identity every commit on this branch must carry as a
-            // `Condukt-Task:` trailer (checked by a task-named `merge`). Without
-            // it such a merge refuses, so a failed record rolls the worktree
-            // back rather than returning a branch condukt cannot integrate.
-            if let Err(e) = record_task_identity(repo, &ns_branch, &format!("{run}/{topic}")) {
-                let path_str = path.to_string_lossy().to_string();
-                let _ = git_try(repo, &["worktree", "remove", "--force", "--", &path_str]);
-                let _ = git_try(repo, &["branch", "-D", &ns_branch]);
-                return Err(e);
-            }
-            Ok(path)
-        }
-    }
+    retry_task::create_namespaced_for_task(repo, worktree_base, run, topic, branch, topic)
 }
 
 /// What [`create_namespaced`] prints to stderr when `run` is `None`.

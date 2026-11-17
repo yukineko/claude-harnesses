@@ -300,13 +300,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "RED febfee9c (crates/blastguard/tests/quoted_heredoc_body_backtick_fp_20261113.rs r1/r2, ignored). Shape: git commit -q -F - <<'EOF' with a body line starting with a backticked word, then a command after EOF -> ask/deny 'the command word detect is an expansion'. Nothing after EOF, or a mid-line backtick -> allow. Hit by a subagent commit 2026-11-13. Controls c1 (allow) and c2 (top-level backtick stays not Allow) must hold."
+notes = "RED febfee9c (crates/blastguard/tests/quoted_heredoc_body_backtick_fp_20261113.rs r1/r2, ignored). Shape: git commit -q -F - <<'EOF' with a body line starting with a backticked word, then a command after EOF -> ask/deny 'the command word detect is an expansion'. Nothing after EOF, or a mid-line backtick -> allow. Hit by a subagent commit 2026-11-13. Controls c1 (allow) and c2 (top-level backtick stays not Allow) must hold. | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open."
 created_at = 1794542097
-updated_at = 1794542097
+updated_at = 1794888167
 weight = 0.0
 issue_number = 1680
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1680"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -363,13 +363,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "RED bf134cb8, crates/blastguard/tests/quoted_heredoc_body_string_parsed_as_command_fp_20261113.rs r1-r3 (ignored). Trigger: a quoted here-doc (single-quoted terminator) preceded by another command (and-list or semicolon), whose body has a line starting with a string literal that looks like a system-path copy. Observed deny or ask; the same here-doc with no preceding command, or the literal mid-line, is Allow. Same family as 53a97aa3 (that one needs a command AFTER the terminator); shared root cause likely but unconfirmed from source. Controls c1 (benign line Allow), c2/c3 (real top-level copy into a system dir stays not Allow) must hold. Also seen: a backlog add notes argument whose quoted text contained a move command with an unknown option was refused by the same kind of misparse (unprobed)."
+notes = "RED bf134cb8, crates/blastguard/tests/quoted_heredoc_body_string_parsed_as_command_fp_20261113.rs r1-r3 (ignored). Trigger: a quoted here-doc (single-quoted terminator) preceded by another command (and-list or semicolon), whose body has a line starting with a string literal that looks like a system-path copy. Observed deny or ask; the same here-doc with no preceding command, or the literal mid-line, is Allow. Same family as 53a97aa3 (that one needs a command AFTER the terminator); shared root cause likely but unconfirmed from source. Controls c1 (benign line Allow), c2/c3 (real top-level copy into a system dir stays not Allow) must hold. Also seen: a backlog add notes argument whose quoted text contained a move command with an unknown option was refused by the same kind of misparse (unprobed). | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open."
 created_at = 1794543623
-updated_at = 1794543623
+updated_at = 1794888167
 weight = 0.0
 issue_number = 1693
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1693"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -977,13 +977,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "Observed 2026-11-14 in a subagent. A command that runs one command, then a semicolon or double ampersand, then a command with a quoted heredoc whose body has a backtick span crossing a line break, is judged Ask because the word on the second line inside the span is read as a command word. Quoted heredoc bodies are data. Minimal repro is test f2. Without the preceding command (f1), with a single-line span (f3), it is Allow. Unquoted heredoc stays non-Allow (c1)."
+notes = "Observed 2026-11-14 in a subagent. A command that runs one command, then a semicolon or double ampersand, then a command with a quoted heredoc whose body has a backtick span crossing a line break, is judged Ask because the word on the second line inside the span is read as a command word. Quoted heredoc bodies are data. Minimal repro is test f2. Without the preceding command (f1), with a single-line span (f3), it is Allow. Unquoted heredoc stays non-Allow (c1). | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open."
 created_at = 1794603914
-updated_at = 1794603914
+updated_at = 1794888169
 weight = 0.0
 issue_number = 1739
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1739"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -1125,13 +1125,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b)"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b) | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open."
 created_at = 1794626746
-updated_at = 1794626746
+updated_at = 1794888170
 weight = 0.0
 issue_number = 1752
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1752"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -1187,13 +1187,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b)"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b) | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open."
 created_at = 1794626818
-updated_at = 1794626818
+updated_at = 1794888167
 weight = 0.0
 issue_number = 1755
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1755"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -1218,13 +1218,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b)"
+notes = "found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b) | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open."
 created_at = 1794626839
-updated_at = 1794626839
+updated_at = 1794888168
 weight = 0.0
 issue_number = 1759
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1759"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -1248,13 +1248,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = """Side finding of run-20261114-120314-34769 (flow session b3435a5e), RED committed 86d9b0dea, measured 2026-11-14. FP-A: python3 - <<'EOF' program with a `gh` span inside a Python string -> Ask, reason 'gh: no subcommand given — blastguard cannot tell what this does' (relay bgr-5dc49e87261a). FP-B: quoted heredoc appending "rm -rf ./a", to a .rs file followed by a cargo test line -> Deny 'recursive rm (-r) can delete an entire directory tree' even in main mode; without the trailing command Allow (blocks.jsonl ts=1794625871). Same class as open FP1/FP2b in backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs with different content; may share a root cause with GH #1664/#1680/#1739. RED: 2 ignored fail, 3 controls pass. Readings: (a) real FP (quoted heredoc body is data); (b) intended fail-closed for python stdin programs — distinguish: FP-A's span is inside a Python string literal, so a real parser of the target language separates it (memory: gate text vs code via parser)."""
+notes = """Side finding of run-20261114-120314-34769 (flow session b3435a5e), RED committed 86d9b0dea, measured 2026-11-14. FP-A: python3 - <<'EOF' program with a `gh` span inside a Python string -> Ask, reason 'gh: no subcommand given — blastguard cannot tell what this does' (relay bgr-5dc49e87261a). FP-B: quoted heredoc appending "rm -rf ./a", to a .rs file followed by a cargo test line -> Deny 'recursive rm (-r) can delete an entire directory tree' even in main mode; without the trailing command Allow (blocks.jsonl ts=1794625871). Same class as open FP1/FP2b in backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs with different content; may share a root cause with GH #1664/#1680/#1739. RED: 2 ignored fail, 3 controls pass. Readings: (a) real FP (quoted heredoc body is data); (b) intended fail-closed for python stdin programs — distinguish: FP-A's span is inside a Python string literal, so a real parser of the target language separates it (memory: gate text vs code via parser). | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open."""
 created_at = 1794626779
-updated_at = 1794626779
+updated_at = 1794888168
 weight = 0.0
 issue_number = 1758
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1758"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -1681,13 +1681,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "F18. Original command: relay bgr-837357910fb9 (t4 worker commit), reproduced verbatim by independent author on 0.2.606; RED 0633bb8ec observed by main with reason 'the command word ``import` is an expansion whose value only exists at run time'. Fires only when the heredoc command is not the first bare command and the backtick is at column 0. Readings: (a) defect - quoted heredoc body is data; (b) intended - column-0 backtick deliberately shell. Tell apart: same body mid-line, or bare first git commit, is allow."
+notes = "F18. Original command: relay bgr-837357910fb9 (t4 worker commit), reproduced verbatim by independent author on 0.2.606; RED 0633bb8ec observed by main with reason 'the command word ``import` is an expansion whose value only exists at run time'. Fires only when the heredoc command is not the first bare command and the backtick is at column 0. Readings: (a) defect - quoted heredoc body is data; (b) intended - column-0 backtick deliberately shell. Tell apart: same body mid-line, or bare first git commit, is allow. | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open."
 created_at = 1794730885
-updated_at = 1794730885
+updated_at = 1794888169
 weight = 0.0
 issue_number = 1793
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1793"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -1708,13 +1708,13 @@ project_unresolved = false
 tags = ["p1"]
 touched_files = []
 status = "pending"
-notes = """Observed 2026-11-15 in a subagent: cat > decomp.json <<'EOF' ... EOF with a JSON body containing "done_criteria":"`cargo test -p x` passes" was denied with: the command word `"done_criteria":"`cargo` is an expansion whose value only exists at run time — blastguard cannot tell what program this runs. Measured 2026-11-15 at main 2ace975d1 (RED committed ef03ba804, branch fp/quoted-heredoc-json-backtick-20261115): f0 (recovered shape: cd scratch && cat > decomp.json <<'EOF' JSON EOF; cd .. && ls scratch) and f1 (minimal: cat > scratch/d.json <<'EOF' {"done_criteria":"`cargo test -p x` passes"} EOF) both: assertion `left == right` failed: (subagent, main) left: ("deny", "ask") right: ("allow", "allow"). Control c1 (unquoted <<EOF with `$X`) passes non-Allow: subagent deny / main ask with 'the command word `$X` is an expansion ...'. Subagent mode = payload agent_id (same as backlog_20261113_heredoc_body_fp.rs). Readings: (a) defect - a quoted-delimiter heredoc body is literal data and is never expanded, so the backtick span is not a command; the quoted body of a cat > file target is not executed; (b) intended - body is treated as possibly-executed. Tell apart: (b) would also need the body to reach an interpreter; here it is cat into a .json file, and the reason names a 'command word' that only exists if the body is shell-parsed, i.e. the quoted body was tokenized as shell. Fix must keep c1 (unquoted heredoc backtick substitution) non-Allow. DOES NOT PROVE: whether the "key":" prefix glued to the backtick, line position, or trailing commands is the trigger; other delimiters (<<"EOF", <<-'EOF')."""
+notes = """Observed 2026-11-15 in a subagent: cat > decomp.json <<'EOF' ... EOF with a JSON body containing "done_criteria":"`cargo test -p x` passes" was denied with: the command word `"done_criteria":"`cargo` is an expansion whose value only exists at run time — blastguard cannot tell what program this runs. Measured 2026-11-15 at main 2ace975d1 (RED committed ef03ba804, branch fp/quoted-heredoc-json-backtick-20261115): f0 (recovered shape: cd scratch && cat > decomp.json <<'EOF' JSON EOF; cd .. && ls scratch) and f1 (minimal: cat > scratch/d.json <<'EOF' {"done_criteria":"`cargo test -p x` passes"} EOF) both: assertion `left == right` failed: (subagent, main) left: ("deny", "ask") right: ("allow", "allow"). Control c1 (unquoted <<EOF with `$X`) passes non-Allow: subagent deny / main ask with 'the command word `$X` is an expansion ...'. Subagent mode = payload agent_id (same as backlog_20261113_heredoc_body_fp.rs). Readings: (a) defect - a quoted-delimiter heredoc body is literal data and is never expanded, so the backtick span is not a command; the quoted body of a cat > file target is not executed; (b) intended - body is treated as possibly-executed. Tell apart: (b) would also need the body to reach an interpreter; here it is cat into a .json file, and the reason names a 'command word' that only exists if the body is shell-parsed, i.e. the quoted body was tokenized as shell. Fix must keep c1 (unquoted heredoc backtick substitution) non-Allow. DOES NOT PROVE: whether the "key":" prefix glued to the backtick, line position, or trailing commands is the trigger; other delimiters (<<"EOF", <<-'EOF'). | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open."""
 created_at = 1794732083
-updated_at = 1794732083
+updated_at = 1794888169
 weight = 0.0
 issue_number = 1795
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1795"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -1948,13 +1948,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = ""
+notes = " | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open."
 created_at = 1794743487
-updated_at = 1794743487
+updated_at = 1794888166
 weight = 0.0
 issue_number = 1804
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1804"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -3091,11 +3091,11 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "Observed 2026-11-17 at cd09054b1, RED bd74f5c40. With ~/.backlog/config.toml present but invalid TOML (even github_mirror = false plus a broken line) or unreadable (EISDIR), backlog done runs gh issue close, exits 0, prints nothing about config. Config::load ignores read errors; GithubMirror::from_toml returns On when parsing fails. Expected per CLAUDE.md section 3 (IO/parse failure is not clean): no gh call and an error line naming config.toml. README.ja.md and the GithubMirror::On doc state the fall-open on purpose, so the fix also changes those docs (top-level section 3 outranks the README). Only done is driven; add/sync/cancel/recheck share Config::load."
+notes = "Observed 2026-11-17 at cd09054b1, RED bd74f5c40. With ~/.backlog/config.toml present but invalid TOML (even github_mirror = false plus a broken line) or unreadable (EISDIR), backlog done runs gh issue close, exits 0, prints nothing about config. Config::load ignores read errors; GithubMirror::from_toml returns On when parsing fails. Expected per CLAUDE.md section 3 (IO/parse failure is not clean): no gh call and an error line naming config.toml. README.ja.md and the GithubMirror::On doc state the fall-open on purpose, so the fix also changes those docs (top-level section 3 outranks the README). Only done is driven; add/sync/cancel/recheck share Config::load. | User ruling 2026-11-17: CLAUDE.md section 3 wins over README. Unreadable or invalid config.toml must not call gh and must print an error naming config.toml; README.ja.md and the GithubMirror::On doc change in the same fix."
 created_at = 1794887637
-updated_at = 1794887637
+updated_at = 1794888178
 weight = 0.0
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

@@ -82174,3 +82174,318 @@ rev = "6118e167b943ba9fc6530847df43ce0a215be450"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "23afadf2"
+title = "blastguard --lib red at main: detect::tests a_later_rebinding_of_the_name_is_not_readable_and_must_not_leave_a_stale_literal fails"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "lib-red",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-16 by run-20261116-020031-33040 migrate-path worker and verifier: one of 6 pre-existing --lib failures (fails at base 07bf4b5f2 and at the migrate-path tree 697fb328b). Cause guessed (UNVERIFIED): 536f63e5d static_bindings resolves $BIN/$CMD command words statically so pins expecting Ask now get Deny. Readings: (a) stale pin after an intended rule change; (b) regression."
+created_at = 1794826760
+updated_at = 1794946181
+weight = 0.0
+issue_number = 1833
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1833"
+issue_closed_at = 1794946185
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --lib detect::tests::a_later_rebinding_of_the_name_is_not_readable_and_must_not_leave_a_stale_literal"
+rev = "e6c63919736aab6a7a2279efc90130c4a13dcf06"
+observed_at = 1794826760
+detail = """
+exit 101: tests::a_later_rebinding_of_the_name_is_not_readable_and_must_not_leave_a_stale_literal
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 695 filtered out; finished in 0.04s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-a07d982b4f0a36d7)
+error: test failed, to rerun pass `-p blastguard --lib`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --lib detect::tests::a_later_rebinding_of_the_name_is_not_readable_and_must_not_leave_a_stale_literal"
+exit = 0
+passed = 1
+rev = "1dfa6068179f77ff732c03cac475f27769e4cade"
+observed_at = 1794946178
+output_digest = "sha256:a9a8336a168be38dec18e8343c43c2a354dc2d11d0e4766479071d9398471893"
+excerpt = """
+
+running 1 test
+test detect::tests::a_later_rebinding_of_the_name_is_not_readable_and_must_not_leave_a_stale_literal ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 630 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-649aeced12f48a89)
+"""
+
+[task.closure.red]
+rev = "cc87dd9c3f27be96dfbe4452beb686717369e22d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "6570b34f"
+title = "blastguard --lib red at main: detect::tests resolving_the_head_must_not_lose_the_cwd_that_the_literal_spelling_keeps fails"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "lib-red",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-16 by run-20261116-020031-33040 migrate-path worker and verifier: one of 6 pre-existing --lib failures (fails at base 07bf4b5f2 and at the migrate-path tree 697fb328b). Cause guessed (UNVERIFIED): 536f63e5d static_bindings resolves $BIN/$CMD command words statically so pins expecting Ask now get Deny. Readings: (a) stale pin after an intended rule change; (b) regression."
+created_at = 1794826783
+updated_at = 1794946202
+weight = 0.0
+issue_number = 1834
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1834"
+issue_closed_at = 1794946205
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --lib detect::tests::resolving_the_head_must_not_lose_the_cwd_that_the_literal_spelling_keeps"
+rev = "e6c63919736aab6a7a2279efc90130c4a13dcf06"
+observed_at = 1794826783
+detail = """
+exit 101: detect::tests::resolving_the_head_must_not_lose_the_cwd_that_the_literal_spelling_keeps
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 695 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-a07d982b4f0a36d7)
+error: test failed, to rerun pass `-p blastguard --lib`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --lib detect::tests::resolving_the_head_must_not_lose_the_cwd_that_the_literal_spelling_keeps"
+exit = 0
+passed = 1
+rev = "1dfa6068179f77ff732c03cac475f27769e4cade"
+observed_at = 1794946201
+output_digest = "sha256:ae69e829166e481adf15c89af88209301dabc5e3ed9c337f8e7c165d12815e0f"
+excerpt = """
+
+running 1 test
+test detect::tests::resolving_the_head_must_not_lose_the_cwd_that_the_literal_spelling_keeps ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 630 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-649aeced12f48a89)
+"""
+
+[task.closure.red]
+rev = "cc87dd9c3f27be96dfbe4452beb686717369e22d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "37d6ba9b"
+title = "blastguard --lib red at main: detect::tests invariance_the_shell_payload_arm_ignores_an_assignment_on_the_enclosing_line fails"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "lib-red",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-16 by run-20261116-020031-33040 migrate-path worker and verifier: one of 6 pre-existing --lib failures (fails at base 07bf4b5f2 and at the migrate-path tree 697fb328b). Cause guessed (UNVERIFIED): 536f63e5d static_bindings resolves $BIN/$CMD command words statically so pins expecting Ask now get Deny. Readings: (a) stale pin after an intended rule change; (b) regression."
+created_at = 1794826808
+updated_at = 1794946207
+weight = 0.0
+issue_number = 1835
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1835"
+issue_closed_at = 1794946211
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --lib detect::tests::invariance_the_shell_payload_arm_ignores_an_assignment_on_the_enclosing_line"
+rev = "e6c63919736aab6a7a2279efc90130c4a13dcf06"
+observed_at = 1794826808
+detail = """
+exit 101: ct::tests::invariance_the_shell_payload_arm_ignores_an_assignment_on_the_enclosing_line
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 695 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-a07d982b4f0a36d7)
+error: test failed, to rerun pass `-p blastguard --lib`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --lib detect::tests::invariance_the_shell_payload_arm_ignores_an_assignment_on_the_enclosing_line"
+exit = 0
+passed = 1
+rev = "1dfa6068179f77ff732c03cac475f27769e4cade"
+observed_at = 1794946207
+output_digest = "sha256:ea2ad7823f56cc510ad52a21d8fe91d34136fda531493c29e7e317802dc7f654"
+excerpt = """
+
+running 1 test
+test detect::tests::invariance_the_shell_payload_arm_ignores_an_assignment_on_the_enclosing_line ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 630 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-649aeced12f48a89)
+"""
+
+[task.closure.red]
+rev = "cc87dd9c3f27be96dfbe4452beb686717369e22d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "ea57789e"
+title = "blastguard --lib red at main: detect::tests invariance_the_pipe_egress_arm_still_asks_when_the_line_assigns_the_upstream_a_fetch fails"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "lib-red",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-16 by run-20261116-020031-33040 migrate-path worker and verifier: one of 6 pre-existing --lib failures (fails at base 07bf4b5f2 and at the migrate-path tree 697fb328b). Cause guessed (UNVERIFIED): 536f63e5d static_bindings resolves $BIN/$CMD command words statically so pins expecting Ask now get Deny. Readings: (a) stale pin after an intended rule change; (b) regression."
+created_at = 1794826831
+updated_at = 1794946215
+weight = 0.0
+issue_number = 1836
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1836"
+issue_closed_at = 1794946219
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --lib detect::tests::invariance_the_pipe_egress_arm_still_asks_when_the_line_assigns_the_upstream_a_fetch"
+rev = "e6c63919736aab6a7a2279efc90130c4a13dcf06"
+observed_at = 1794826831
+detail = """
+exit 101: s::invariance_the_pipe_egress_arm_still_asks_when_the_line_assigns_the_upstream_a_fetch
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 695 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-a07d982b4f0a36d7)
+error: test failed, to rerun pass `-p blastguard --lib`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --lib detect::tests::invariance_the_pipe_egress_arm_still_asks_when_the_line_assigns_the_upstream_a_fetch"
+exit = 0
+passed = 1
+rev = "1dfa6068179f77ff732c03cac475f27769e4cade"
+observed_at = 1794946214
+output_digest = "sha256:1bb552fd7933c6ed53ab2143741c4159d2ccfe1f9ac164d948ab43d3a38dd92f"
+excerpt = """
+
+running 1 test
+test detect::tests::invariance_the_pipe_egress_arm_still_asks_when_the_line_assigns_the_upstream_a_fetch ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 630 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-649aeced12f48a89)
+"""
+
+[task.closure.red]
+rev = "cc87dd9c3f27be96dfbe4452beb686717369e22d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "2390b414"
+title = "blastguard --lib red at main: detect::tests invariance_the_pipe_egress_arm_still_asks_when_that_literal_is_destructive fails"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "lib-red",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-16 by run-20261116-020031-33040 migrate-path worker and verifier: one of 6 pre-existing --lib failures (fails at base 07bf4b5f2 and at the migrate-path tree 697fb328b). Cause guessed (UNVERIFIED): 536f63e5d static_bindings resolves $BIN/$CMD command words statically so pins expecting Ask now get Deny. Readings: (a) stale pin after an intended rule change; (b) regression."
+created_at = 1794826852
+updated_at = 1794946221
+weight = 0.0
+issue_number = 1837
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1837"
+issue_closed_at = 1794946223
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --lib detect::tests::invariance_the_pipe_egress_arm_still_asks_when_that_literal_is_destructive"
+rev = "e6c63919736aab6a7a2279efc90130c4a13dcf06"
+observed_at = 1794826852
+detail = """
+exit 101: tect::tests::invariance_the_pipe_egress_arm_still_asks_when_that_literal_is_destructive
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 695 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-a07d982b4f0a36d7)
+error: test failed, to rerun pass `-p blastguard --lib`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --lib detect::tests::invariance_the_pipe_egress_arm_still_asks_when_that_literal_is_destructive"
+exit = 0
+passed = 1
+rev = "1dfa6068179f77ff732c03cac475f27769e4cade"
+observed_at = 1794946220
+output_digest = "sha256:030f173c3718b86a2958bc84ac3e1d6acd8e5c735bb6bb3495a8b77450c41447"
+excerpt = """
+
+running 1 test
+test detect::tests::invariance_the_pipe_egress_arm_still_asks_when_that_literal_is_destructive ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 630 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-649aeced12f48a89)
+"""
+
+[task.closure.red]
+rev = "cc87dd9c3f27be96dfbe4452beb686717369e22d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

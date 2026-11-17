@@ -3048,3 +3048,123 @@ exit 101: iroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/blastg
     Finished `test` profile [unoptimized + debuginfo] target(s) in 22.25s
      Running tests/backlog_20261117_relay_executed_cwd_after_cd.rs (target/debug/deps/backlog_20261117_relay_executed_cwd_after_cd-d9029a4080df0ce1)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261117_relay_executed_cwd_after_cd`"""
+
+[[task]]
+id = "0c301e8b"
+title = "condukt testscope: tdd green after a confirmed tdd red of the same command on an unchanged tree is allowed"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "testscope",
+    "tdd",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-17 at cd09054b1 (t2 verifier finding on 310d9a671, RED aa9077fc7). judge_words records tdd red --cmd X under the bare key; tdd green --cmd X is checked only against its TDD_GREEN_ROUTE-tagged key, so tdd red then tdd green on the same unchanged tree is Allow. Expected deny: GREEN with no change since RED proves nothing (F-to-P oracle). Controls: bare run then one tdd green allowed, second denied; tdd green after tdd red on a changed tree allowed. Module doc currently describes the allow, so the doc changes with the fix."
+created_at = 1794887615
+updated_at = 1794887615
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261117_tdd_red_then_green_same_tree -- --include-ignored"
+rev = "8358077eb972490b4979ba3ecab651d33c0786f4"
+observed_at = 1794887615
+detail = """
+exit 101: me/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.58s
+     Running tests/backlog_20261117_tdd_red_then_green_same_tree.rs (target/debug/deps/backlog_20261117_tdd_red_then_green_same_tree-818cafe96793a5f5)
+error: test failed, to rerun pass `-p condukt --test backlog_20261117_tdd_red_then_green_same_tree`"""
+
+[[task]]
+id = "a70f2389"
+title = "backlog: unreadable or invalid-TOML config.toml silently turns the GitHub mirror ON (done runs gh issue close)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-17 at cd09054b1, RED bd74f5c40. With ~/.backlog/config.toml present but invalid TOML (even github_mirror = false plus a broken line) or unreadable (EISDIR), backlog done runs gh issue close, exits 0, prints nothing about config. Config::load ignores read errors; GithubMirror::from_toml returns On when parsing fails. Expected per CLAUDE.md section 3 (IO/parse failure is not clean): no gh call and an error line naming config.toml. README.ja.md and the GithubMirror::On doc state the fall-open on purpose, so the fix also changes those docs (top-level section 3 outranks the README). Only done is driven; add/sync/cancel/recheck share Config::load."
+created_at = 1794887637
+updated_at = 1794887637
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261117_mirror_config_undetermined -- --include-ignored"
+rev = "8358077eb972490b4979ba3ecab651d33c0786f4"
+observed_at = 1794887637
+detail = """
+exit 101: 4 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.01s
+     Running tests/backlog_20261117_mirror_config_undetermined.rs (target/debug/deps/backlog_20261117_mirror_config_undetermined-57c17f6f35038ac8)
+error: test failed, to rerun pass `-p backlog --test backlog_20261117_mirror_config_undetermined`"""
+
+[[task]]
+id = "410e9514"
+title = "backlog test done_closes_issue_inline.rs fails with Author identity unknown since add lands the row via git commit-tree"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "test-fixture",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-17 at cd09054b1. bl() runs the binary with env_clear and HOME set to an empty tempdir and passes no GIT_AUTHOR_* or GIT_COMMITTER_*; since 18f91ae7b add runs git commit-tree in land_row_on_main, which exits 128 (Author identity unknown), so both tests die at the add assertion before the inline-close path they pin. Fixture defect, not a binary defect: add GIT_AUTHOR_NAME/EMAIL, GIT_COMMITTER_NAME/EMAIL and GIT_CONFIG_GLOBAL/SYSTEM=/dev/null like github_mirror_disabled_close_20261117.rs. While red, mirror_close_for inline close has no working end-to-end test here."
+created_at = 1794887649
+updated_at = 1794887649
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test done_closes_issue_inline"
+rev = "8358077eb972490b4979ba3ecab651d33c0786f4"
+observed_at = 1794887649
+detail = """
+exit 101: ered out; finished in 0.20s
+
+   Compiling backlog v0.3.134 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.95s
+     Running tests/done_closes_issue_inline.rs (target/debug/deps/done_closes_issue_inline-e1737e45ff03d3d8)
+error: test failed, to rerun pass `-p backlog --test done_closes_issue_inline`"""
+
+[[task]]
+id = "39772e9f"
+title = "donegate: a subagent's cd other-worktree && relative-path write is attributed to the parent session's root, so the parent's checks run and block"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "donegate",
+    "harness-core",
+    "attribution",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-17 at cd09054b1 (RED e88bcb421/e9f1fe7b9). harness_core::attribution::own_written_paths joins relative path words in a Bash command to the transcript line cwd and ignores a leading cd in the same statement, contradicting the writing_statements doc. Sidechain lines record the parent worktree as cwd (observed via relay bgr-108f07d82bfd), so a worker doing cd /wt && edit src/lib.rs is judged as writing <parent>/src/lib.rs; donegate then runs or refuses the parent root's checks on SubagentStop and on the parent Stop. Seen live twice this session (lock tests run on the session root; a RED-writing subagent blocked on red-testscope's untrusted donegate.toml). Controls: own write in cwd still judged; hook cwd=wt judges wt. Fix likely in harness-core attribution, which other gates share (unverified)."
+created_at = 1794887673
+updated_at = 1794887673
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test backlog_20261117_subagent_cd_relative_root -- --include-ignored"
+rev = "e7cd81d0a7eb0d72c11b2d1d894a169dec9078a3"
+observed_at = 1794887673
+detail = """
+exit 101: 96 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/donegate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.03s
+     Running tests/backlog_20261117_subagent_cd_relative_root.rs (target/debug/deps/backlog_20261117_subagent_cd_relative_root-2b3ed9b3f3f7e4c7)
+error: test failed, to rerun pass `-p donegate --test backlog_20261117_subagent_cd_relative_root`"""

@@ -938,7 +938,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.105"
+version = "0.2.106"
 dependencies = [
  "anyhow",
  "chrono",

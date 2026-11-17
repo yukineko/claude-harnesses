@@ -1019,6 +1019,10 @@ fn plain_word(w: &str) -> bool {
 /// `w` as a write target: a plain word that resolves (against `cwd` when
 /// relative) to something that is not a directory. A relative path with no
 /// known `cwd`, a trailing `/`, an existing directory: not a file target.
+/// A symlink (checked with `symlink_metadata` on the cwd-resolved path) is not
+/// a named file either: the write lands on the link's target. A nonexistent
+/// path stays a file target; any `symlink_metadata` error other than
+/// `NotFound` is undetermined and fails closed (not a file target).
 fn file_target(w: &str, cwd: Option<&Path>) -> bool {
     if !plain_word(w) || w.ends_with('/') {
         return false;
@@ -1031,7 +1035,11 @@ fn file_target(w: &str, cwd: Option<&Path>) -> bool {
     } else {
         return false;
     };
-    !abs.is_dir()
+    match std::fs::symlink_metadata(&abs) {
+        Ok(m) if m.file_type().is_symlink() => false,
+        Ok(_) => !abs.is_dir(),
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+    }
 }
 
 /// `sed` script of exactly one `s` command whose flags cannot write or run
@@ -1078,7 +1086,8 @@ fn operands<'a>(args: &[&'a str], allowed_flags: &[&str]) -> Option<Vec<&'a str>
 ///
 /// CLOSED allowlist, fail-closed: a stage is attributable only when
 /// 1. every output redirect (`> f`, `>> f`) names a [`file_target`], AND
-/// 2. its program is in this table and its arguments match the table's form:
+/// 2. its program word (bare, containing no `/`; a path-qualified program is
+///    never in the table) is in this table and its arguments match the form:
 ///    - `sed -i|--in-place [-E|-r|-n] [-e] 's/…/…/flags' FILE...` — only a single
 ///      plain `s` command ([`sed_subst_only`]), no backup suffix, no script file;
 ///    - `tee [-a] FILE...`, `touch FILE...`, `rm [-f] FILE...` — every operand
@@ -1124,7 +1133,9 @@ fn stage_attributable(stage: &Stage, cwd: Option<&Path>) -> bool {
     }
     let args = &words[1..];
     let all_files = |ops: &[&str]| !ops.is_empty() && ops.iter().all(|o| file_target(o, cwd));
-    match first.rsplit('/').next().unwrap_or(first) {
+    // A program word containing '/' is never in the table: `./touch`,
+    // `/tmp/x/tee` may be any binary named like a writer.
+    match *first {
         "tee" => operands(args, &["-a"]).is_some_and(|o| all_files(&o)),
         "touch" => operands(args, &[]).is_some_and(|o| all_files(&o)),
         "rm" => operands(args, &["-f"]).is_some_and(|o| all_files(&o)),

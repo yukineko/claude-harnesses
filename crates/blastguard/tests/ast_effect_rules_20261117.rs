@@ -357,7 +357,6 @@ fn same_as_absolute(tag: &str, spelled: &str, rel_under_home: &str) {
 
 // test-weakening-justified: new RED for unbuilt S3 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S3 A.3 $HOME Known (ruling 12)"]
 fn b3_dollar_home_matches_absolute() {
     same_as_absolute(
         "b3home",
@@ -368,7 +367,6 @@ fn b3_dollar_home_matches_absolute() {
 
 // test-weakening-justified: new RED for unbuilt S3 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S3 A.3 ${HOME} Known (ruling 12)"]
 fn b3_braced_home_matches_absolute() {
     same_as_absolute(
         "b3bhome",
@@ -379,7 +377,6 @@ fn b3_braced_home_matches_absolute() {
 
 // test-weakening-justified: new RED for unbuilt S3 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S3 A.3 ~ Known (ruling 12)"]
 fn b3_tilde_matches_absolute() {
     same_as_absolute(
         "b3tilde",
@@ -392,7 +389,6 @@ fn b3_tilde_matches_absolute() {
 /// cache-root target is Scratch, hence Allow.
 // test-weakening-justified: new RED for unbuilt S3 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S3 A.3 $HOME Known x Scratch Delete (rulings 8, 12)"]
 fn b3_dollar_home_cache_delete_allows() {
     allow("b3homeok", "rm -r \"$HOME/.cache/bg-sentinel\"");
 }

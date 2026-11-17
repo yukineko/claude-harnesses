@@ -115,7 +115,9 @@ pub(crate) enum PathClass {
     OwnWorktree,
     /// Strictly inside a worktree storage root (`$HOME/.condukt/worktrees`,
     /// `.harness-worktrees`; [`SafeRoots::classify_worktree`] `Inside`) but
-    /// not `OwnWorktree`: today's verdict is kept (legacy, confined Ask).
+    /// not `OwnWorktree`: today's verdict is kept (legacy; a recursive `rm`
+    /// strictly inside a worktree storage root is Allow, ruling 9 as corrected
+    /// 2026-11-18).
     OtherWorktree,
     /// Inside a session safe root (payload cwd / `CLAUDE_PROJECT_DIR`):
     /// [`SafeRoots::classify`] `Inside` / `IsRoot`; judged by the existing

@@ -81607,3 +81607,63 @@ rev = "76e053bf3057e03594a86517b573bcc7100e44f9"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "3d5285d5"
+title = "backlog add does not write the minted id back into the RED test's #[ignore] (RED(<id>))"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "red-traceability",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-16 at 202efa14a: 62 files with #[ignore = "RED", 51 of them carry no resolvable backlog id (test is committed before add mints the id). User ruling 2026-11-16 (option 1): on successful add, rewrite the referenced test's #[ignore = "RED..."] to #[ignore = "RED(<id>): ..."]. RED 28b8a1e4f."""
+created_at = 1794821176
+updated_at = 1794891875
+weight = 0.0
+issue_number = 1832
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1832"
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261116_add_writes_id_back_to_red_test -- --include-ignored"
+rev = "55a1044bfa6bf6d1e929a41dd3816c13baa0b987"
+observed_at = 1794821176
+detail = """
+exit 101: yuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.35s
+     Running tests/backlog_20261116_add_writes_id_back_to_red_test.rs (target/debug/deps/backlog_20261116_add_writes_id_back_to_red_test-cb11645522549853)
+error: test failed, to rerun pass `-p backlog --test backlog_20261116_add_writes_id_back_to_red_test`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261116_add_writes_id_back_to_red_test -- --include-ignored"
+exit = 0
+passed = 1
+rev = "2a5576751ebdce4ad708ee58769dc29af876f92e"
+observed_at = 1794891871
+output_digest = "sha256:87c6b840d5dd0aea115b3aef31457cf9f8ae0eb5bf6a09c63d454ebaf0dd315c"
+excerpt = """
+
+running 1 test
+test add_writes_minted_id_back_into_red_test ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+   Compiling backlog v0.3.138 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.99s
+     Running tests/backlog_20261116_add_writes_id_back_to_red_test.rs (target/debug/deps/backlog_20261116_add_writes_id_back_to_red_test-6196beb0510d6bf1)
+"""
+
+[task.closure.red]
+rev = "28b8a1e4f0255c66d5a8df17ac386748f0616b34"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -15,9 +15,11 @@
 //!   receives one must resolve it to its restrictive side (Ask / Deny), never
 //!   to Allow.
 //! * A [`Value::Literal`] is only produced when the value is determined from
-//!   the command text alone. It is never a guessed literal. (The frozen
-//!   contract also permits resolving `~` / `$HOME` from the process `HOME`;
-//!   the evaluator does not do that: both are `Undetermined`.)
+//!   the command text alone. It is never a guessed literal. The one value
+//!   taken from outside the text is `HOME`: `$HOME` / `${HOME}` and a bare
+//!   leading `~` are the hook process's `HOME` when it is an absolute path
+//!   (user ruling 2026-11-17, SUBSET.md ruling 12), unless the line assigns
+//!   it.
 //!
 //! # Current state
 //!

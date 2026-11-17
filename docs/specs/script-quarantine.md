@@ -130,7 +130,7 @@ B.5 行の Ask だけが、検疫 Allow を条件に Allow へ下がる。
 blastguard と検疫は、どちらも Bash の PreToolUse で動く。連携方式の候補は次の 3 つ。
 
 - **(A) 両方が独立した PreToolUse hook を持つ。** blastguard は B.5 行を Ask にし、検疫は Allow / Ask / Deny を出す。最終判定は Claude Code の合成規則に任せる。
-  - Claude Code が複数 plugin の PreToolUse 判定をどう合成するか（たとえば deny > ask > allow の優先か、並列実行か）は **未確認・実測予定**（repo 内に記述が見つからない。Q21、§9.2）。
+  - Claude Code が複数 plugin の PreToolUse 判定をどう合成するかは、2026-11-18 に実測した（Q21、§9.2）。2 つの plugin の hook は並列に走り、deny は allow に勝ち、ask も allow に勝つ（headless では ask は拒否になる）。
   - もし「最も制限的な判定が勝つ」なら、blastguard の Ask が検疫の Allow に勝つので、(A) では自動通過が実現しない。
 - **(B) blastguard が検疫 binary を subprocess で呼ぶ。** `script-quarantine check --path <resolved> --lang-hint <interpreter> ...` の終了ステータスと stdout を判定に使う（CLAUDE.md §3: 終了ステータスを必ず使う）。
   - binary が見つからない、spawn できない、異常終了した、出力を parse できない場合はすべて Undetermined → Ask。plugin 未導入もここに含まれる。
@@ -160,7 +160,7 @@ blastguard と検疫は、どちらも Bash の PreToolUse で動く。連携方
 | `python3 x.py` / `python x.py`（`python_source` のとおり） | 対象 | 言語は Python に固定 |
 | `zsh x.zsh` / `dash` / `ksh` | Ask（**[裁定済み Q6]** 当面 Ask） | brush-parser は bash の文法。SUBSET A.1 の ZshOnly 検出が file 内容にも十分かどうかは未検証。初期は Ask（未対応言語） |
 | `perl x.pl` / `ruby` / `node` | Ask（未知言語） | parser が無い。裁定 4 の「perl/ruby/node は subset 外」に合わせる |
-| `. file` / `source file` | 対象（**[決定]** Ask 化は検疫 plugin の導入と同時。§1.2 P0-b） | 現在 `program_source` は `Undetermined`（「`source` runs shell code: not modelled」）。`File(Value)` を返すよう変えた場合に限り対象にする。実行は現在の shell（Bash ツールの shell。この環境では zsh。Claude Code が Bash ツールでどの shell を使うかは**未確認・実測予定**、§9.2）の中で、状態（cwd・変数）を共有する点が別 process の実行と違う |
+| `. file` / `source file` | 対象（**[決定]** Ask 化は検疫 plugin の導入と同時。§1.2 P0-b） | 現在 `program_source` は `Undetermined`（「`source` runs shell code: not modelled」）。`File(Value)` を返すよう変えた場合に限り対象にする。実行は現在の shell（Bash ツールの shell。この環境では `/bin/zsh` 5.9 と実測した。§9.2）の中で、状態（cwd・変数）を共有する点が別 process の実行と違う |
 | `./run.sh`、`scripts/foo.sh`、絶対パスの直接実行 | 対象（**[裁定済み Q2]**。S4 = P0-a） | 現在は B.5 の対象外（§1.1）で、S4 で `File(Value)` を返すようにする。言語は shebang で判別する（§4.1）。blastguard はファイルを読まない（裁定 6）ので、shebang を読むのは検疫の側である。interpreter が無いので `--lang-hint` は渡さない |
 | PATH 上の名前（`mytool`） | 対象外 | 効果モデルの無い未知プログラム（裁定 2: Allow）。これを変えるのは本仕様の範囲外 |
 | `python3 -m mod` | Ask | module の解決は sys.path に依存し、静的に決まらない（B.5 python 行）。将来の論点 |
@@ -196,7 +196,7 @@ blastguard と検疫は、どちらも Bash の PreToolUse で動く。連携方
 1. interpreter を書いて起動した形（`bash x.sh`、`python3 x.py`）: **interpreter が言語を決める**。shebang・拡張子は見ない（bash/python は shebang 行をコメントとして読み飛ばす）。
 2. 直接実行の形（**[裁定済み Q2]** で対象に含めた）: shebang だけで決める。`#!/bin/sh`、`#!/bin/bash`、`#!/usr/bin/env bash`、`#!/usr/bin/env python3` を既知とする。
    - `#!/usr/bin/env -S …` や、未知の interpreter・shebang 行の引数（`#!/bin/bash -e` のオプションは shell_source と同じ集合に限る）→ Ask。
-   - shebang が無い → Ask（execve の ENOEXEC 後に呼び出し側の shell が何で実行するかは shell ごとに違う。Bash ツールが使う shell は未確認・実測予定、§9.2）。
+   - shebang が無い → Ask（execve の ENOEXEC 後に呼び出し側の shell が何で実行するかは shell ごとに違う。この環境の Bash ツールの shell は `/bin/zsh` と実測した。§9.2）。
    - 拡張子は使わない。
 3. NUL バイトを含む、UTF-8 として読めない → Ask。
 
@@ -340,7 +340,7 @@ PreToolUse の時点で hash を計算してから、Bash ツールが実際に�
 候補は次のとおり（**[裁定済み Q16]**: 推奨どおり (b) + (c)）。
 
 - (a) **内容アドレスのコピーを実行させる**: 検疫済みの内容を `~/.script-quarantine/blobs/<hash>` に保存し、PreToolUse の `updatedInput` でコマンドを書き換える。
-  - Claude Code の PreToolUse で `updatedInput` が使えるかは **未確認・実測予定**（Q22、§9.2）。
+  - Claude Code の PreToolUse は `updatedInput` を受け付け、書き換えた後のコマンドが実行されることを 2026-11-18 に実測した（Q22、§9.2）。(b)+(c) の裁定は変えない。
   - 書き換えると `$0` / `BASH_SOURCE` / `__file__` / Python の sys.path[0] が変わり、スクリプトのディレクトリを基準にする相対参照が壊れる。
   - コマンドの書き換えは blastguard のコマンド判定とも順序の問題を起こす。
 - (b) **残余リスクとして明記する**: PreToolUse 時の hash で判定し、TOCTOU の窓を残す。そのうえで、同じコマンド内での変更のうち Table B で効果先が決まる書き込みは §3.3 で Ask にして窓を狭める（前段の未知プログラムは **[裁定済み Q7]** により Ask にしない）。
@@ -445,13 +445,13 @@ crates/effectscope/
 15. **Q15 人間承認 — 裁定済み（2026-11-17）**: 人間が Ask の許可プロンプトで許可し、かつ実行が成功したときだけ、PostToolUse でその hash を記録する。subagent では許可できないので、記録は起きない。Deny は承認で通せない。規則の版が上がったら、記録はすべて無効になる（§7）。
     - 前回の版の推奨「規則の版が上がっても人間承認は無効にしない」は、この裁定で採らないことになった。
     - 承認の期限は D-2 で裁定済み: 期限は付けない。中身と `RULESET_VERSION` が同じなら、承認はずっと有効である（§7、§9.1 の D-2）。
-16. **Q16 TOCTOU — 裁定済み（2026-11-17）: 推奨どおり (b)+(c)**（残余リスクを明記し、事後検出を足す）。(a) は `updatedInput`（Q22、未確認・実測予定）に依存する。
+16. **Q16 TOCTOU — 裁定済み（2026-11-17）: 推奨どおり (b)+(c)**（残余リスクを明記し、事後検出を足す）。(a) は `updatedInput`（Q22。受け付けることは 2026-11-18 に実測済み、§9.2）に依存する。
 17. **Q17 crate 名 — 裁定済み（2026-11-17）: `effectscope`。**
 18. **Q18 述語の置き場所 — 裁定済み（2026-11-17）: 推奨どおり**、PathClass の述語を trait として注入し、正典を blastguard に残す。
 19. **Q19 移行順序 — 裁定済み（2026-11-17）: 推奨どおり** §8.4 の順序（S3 は移設前に完了、M1 純粋移動、S4/S5 は共有 crate の上で実装）。
 20. **Q20 GATE crate 指定 — 裁定済み（2026-11-17）: 推奨どおり**、検疫 plugin を GATE crate にする（§10.1）。共有 crate の version bump は `scripts/check-version-bumped.py` を拡張して強制する（§10.1 の [提案]）。
-21. **Q21 Claude Code の合成規則 — 未確認・実測予定（§9.2）。**
-22. **Q22 `updatedInput` — 未確認・実測予定（§9.2）。**
+21. **Q21 Claude Code の合成規則 — 2026-11-18 に実測済み（§9.2）。**
+22. **Q22 `updatedInput` — 2026-11-18 に実測済み（§9.2）。**
 
 ### 9.1 ユーザーに聞く論点
 
@@ -511,13 +511,13 @@ F-1・F-2 の反映で決まらなかった次の 2 点は、harness-5a が判�
 |---|---|
 | Q12 の「`RULESET_VERSION` の上げ忘れはゲートで検出する」について、ゲートの置き場所（どの script / hook に置くか）と判定方法（「判定規則を変えた」をどう機械判定するか）。 | Q12、§6.2、§10.1、T-R13 |
 
-### 9.2 実測で確かめる論点（結果はまだ無い）
+### 9.2 実測で確かめる論点（2026-11-18 に実測）
 
 | 論点 | 状態 | 結果で変わるもの |
 |---|---|---|
-| Q21 複数の PreToolUse hook（複数 plugin）の判定がどう合成されるか（優先順位、並列か直列か） | 未確認・実測予定 | Q4 の (A) の可否（現在は (B) を裁定済み） |
-| Q22 Claude Code の PreToolUse が `updatedInput` を受け付けるか | 未確認・実測予定 | Q16 の (a) の可否（現在は (b)+(c) を裁定済み） |
-| Bash ツールが使う shell（この環境では zsh に見えるが確かめていない） | 未確認・実測予定 | `. file` / `source file` の実行文脈（§3.1）、shebang の無い直接実行の扱い（§4.1） |
+| Q21 複数の PreToolUse hook（複数 plugin）の判定がどう合成されるか（優先順位、並列か直列か） | **実測済み**: 並列に走る。deny は allow に勝つ（どちらの plugin が deny を返しても同じ）。ask も allow に勝つ（headless では拒否になる）。下の M-3 の c0〜c4。 | Q4 の (A) の可否（現在は (B) を裁定済み。裁定は変えない） |
+| Q22 Claude Code の PreToolUse が `updatedInput` を受け付けるか | **実測済み**: 受け付ける。書き換えた後のコマンドが実行され、元のコマンドは実行されない。2 つの plugin が両方書き換えると、片方だけが効く（どちらが効くかの規則は 1 回の観測では決まらない）。書き換えと deny が重なると deny になる。下の M-3 の c5〜c7。 | Q16 の (a) の可否（現在は (b)+(c) を裁定済み。裁定は変えない） |
+| Bash ツールが使う shell | **実測済み（この環境）**: `/bin/zsh` 5.9。`/bin/zsh -c 'source <shell snapshot> … && eval '<コマンド>''` の形で起動される（`setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL` が先に入る）。ログインシェルの設定に従うのかは確かめていない。 | `. file` / `source file` の実行文脈（§3.1）、shebang の無い直接実行の扱い（§4.1） |
 
 ## 10. GATE crate、rollout と有効化の順序、テスト計画
 
@@ -633,11 +633,15 @@ fail-closed のケース（§3 の判定不能すべて）には **(fc)** を付
 **計測（テストではなく観測）**
 - M-1 実在するスクリプト（この repo の `scripts/*.sh`）を検疫したとき、Allow / Ask / Deny が何件になるか。動的な source・`$HOME`・引数の多用によって Ask が多数になる予想（§4.3）を、数字で確かめる。数字には測定コマンド・rev・日付を併記する。
 - M-2 **[裁定済み Q3]** P0-a（S4）を入れたことによる Ask の増加を replay で測る。数字には測定コマンド・rev・日付を併記する。
-- M-3 §9.2 の実測（Q21 hook の合成規則、Q22 `updatedInput`、Bash ツールが使う shell）。いずれも未確認・実測予定で、結果はまだ無い。
+- M-3 §9.2 の実測（2026-11-18、Claude Code 2.1.284、macOS、origin/main `dc047ef9f`）。
+  - 手順: PreToolUse（matcher `Bash`）hook を 1 つずつ持つ使い捨ての plugin `pa`・`pb` を作った。hook は 2 秒待ってから、開始・終了時刻をログに書き、設定した判定を返す。これを `claude -p --model haiku --setting-sources project --plugin-dir pa --plugin-dir pb --output-format json "…touch <dir>/m_orig…"` で 1 ケース 1 回ずつ走らせ、どの marker ファイルができたかと `permission_denials` を見た。user 設定（稼働中の plugin）は読ませていない。
+  - c0 allow+無判定 → 実行された。c1 無判定+無判定 → 権限確認になり、headless なので拒否（対照）。c2 allow+deny、c3 deny+allow → どちらも拒否。c4 allow+ask → 拒否（理由に「pb says ask」）。どのケースでも 2 つの hook の開始時刻の差は 0.01 秒以内で、2 秒の待ちが重なっていた（並列）。
+  - c5 書き換え+無判定 → 書き換え後の `m_rewA` だけができた。c6 書き換え A+書き換え B → `m_rewB` だけができた。c7 書き換え+deny → 拒否、marker なし。
+  - 測っていないこと: 対話モードでの ask の扱い、marketplace から入れた plugin（`--plugin-dir` ではない）での合成、c6 で効く側の規則（1 回だけの観測）。Bash ツールの shell がログインシェルに従うかどうか。
 
 ## 11. 実装の順序（まとめ、**[提案]**）
 
-§9.2 の実測 → S3 完了 → M1（共有 crate `effectscope` への純粋移動）→ S4（P0-a を含む。Ask の増加は replay で測る）→ 検疫 plugin の sh/bash 版（parked で配布）→ canary で有効化（同時に P0-b = `.`/`source` の Ask 化）→ S5（Python）→ 検疫 plugin の Python 対応。
+S3 完了 → M1（共有 crate `effectscope` への純粋移動）→ S4（P0-a を含む。Ask の増加は replay で測る）→ 検疫 plugin の sh/bash 版（parked で配布）→ canary で有効化（同時に P0-b = `.`/`source` の Ask 化）→ S5（Python）→ 検疫 plugin の Python 対応。
 
 Q1〜Q20 と Q4-path は 2026-11-17 に裁定済み（Q4-path、Q7、Q9、Q12〈改訂〉、Q14、Q15 は第 2 次裁定）。裁定の反映で生じた §9.1 の D-1〜D-3 も 2026-11-17 に裁定済み（第 3 次裁定）。第 3 次裁定の反映で足さなかった E-1〜E-4 も 2026-11-17 に裁定済み（第 4 次裁定）。E-1 / E-4 の反映で出た食い違い 3 点（F-1〜F-3）も 2026-11-17 に裁定済み（第 5 次裁定）。
-未裁定は §9.2 の実測 3 件（Q21、Q22、Bash ツールが使う shell）と、§9.1 に残した Q12 の上げ忘れ検出ゲートの置き場所と判定方法（実装の段階で改めてユーザーに聞く）である。F-1・F-2 の反映で決まらなかった 2 点（G-1、G-2）は harness-5a が判断した（§9.1）。
+§9.2 の実測 3 件（Q21、Q22、Bash ツールが使う shell）は 2026-11-18 に測った（M-3）。未裁定は §9.1 に残した Q12 の上げ忘れ検出ゲートの置き場所と判定方法（実装の段階で改めてユーザーに聞く）である。F-1・F-2 の反映で決まらなかった 2 点（G-1、G-2）は harness-5a が判断した（§9.1）。

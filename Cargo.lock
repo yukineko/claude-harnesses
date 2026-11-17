@@ -222,7 +222,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.690"
+version = "0.2.696"
 dependencies = [
  "brush-parser",
  "globset",
@@ -442,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.448"
+version = "0.7.449"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -454,6 +454,7 @@ dependencies = [
  "overwatch",
  "proptest",
  "regex",
+ "riskgrade",
  "schemaguard",
  "serde",
  "serde_json",
@@ -476,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "context-governor"
-version = "0.1.29"
+version = "0.1.30"
 dependencies = [
  "anyhow",
  "harness-core",
@@ -697,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.96"
+version = "0.1.100"
 dependencies = [
  "anyhow",
  "chrono",
@@ -938,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.102"
+version = "0.2.108"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1181,7 +1182,7 @@ dependencies = [
 
 [[package]]
 name = "mutategate"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "clap",
@@ -1239,7 +1240,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.125"
+version = "0.2.127"
 dependencies = [
  "anyhow",
  "clap",
@@ -1444,7 +1445,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.78"
+version = "0.1.79"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1615,7 +1616,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.69"
+version = "0.1.70"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1628,6 +1629,18 @@ dependencies = [
  "tempfile",
  "toml 0.8.23",
  "wait-timeout",
+]
+
+[[package]]
+name = "riskgrade"
+version = "0.1.2"
+dependencies = [
+ "blastguard",
+ "globset",
+ "harness-core",
+ "serde",
+ "serde_json",
+ "trybuild",
 ]
 
 [[package]]
@@ -1930,7 +1943,7 @@ checksum = "c3a6bfce3d99adfa72d24750a61f782f3036a81e7f86d8841ee1326deaebd171"
 
 [[package]]
 name = "tdd"
-version = "0.1.97"
+version = "0.1.98"
 dependencies = [
  "anyhow",
  "chrono",

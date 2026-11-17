@@ -59,12 +59,20 @@ run_case "machinery-only change -> default harness-core" "harness-core" \
 run_case "uncalibrated GATE crate only -> default (never empty, no false coverage)" \
   "harness-core" "crates/propguard/src/main.rs"
 
-# blastguard is a calibrated pilot as of 2026-09-11 — a change under it must now
-# fire the gate against blastguard itself, not fall back to the default. This is
-# the positive half of the case above: together they pin that the fallback is
-# driven by CALIBRATION, not by a crate being a GATE crate.
-run_case "calibrated GATE crate (blastguard) -> blastguard" "blastguard" \
-  "crates/blastguard/src/classify.rs"
+# A calibrated GATE crate must fire the gate against itself, not fall back to the
+# default. This is the positive half of the case above: together they pin that
+# the fallback is driven by CALIBRATION, not by a crate being a GATE crate.
+# RE-ANCHORED 2026-11-17: this case used blastguard, whose calibrated file
+# (classify.rs) moved to the riskgrade lib crate (user ruling: blastguard holds
+# the command-safety verdict only), so blastguard is no longer a pilot. The named
+# property is unchanged; specguard is the remaining calibrated GATE crate.
+run_case "calibrated GATE crate (specguard) -> specguard" "specguard" \
+  "crates/specguard/src/main.rs"
+
+# The classifier pilot follows its file: a change under crates/riskgrade/ fires
+# the riskgrade pilot.
+run_case "riskgrade change -> riskgrade" "riskgrade" \
+  "crates/riskgrade/src/classify.rs"
 run_case "empty input -> default harness-core (never empty)" "harness-core" ""
 
 if [ "$fail" -ne 0 ]; then

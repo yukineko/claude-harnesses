@@ -1,7 +1,15 @@
 //! `blastguard log` — read-only listing of blastguard violations from overwatch's ledger.
 //!
+//! Lives in overwatch since 2026-11-17 (user ruling: blastguard holds the
+//! command-safety verdict only; listing overwatch's ledger is overwatch's job).
+//! Two entry points reach [`run_log`] with the same arguments and the same
+//! output: `overwatch blastguard-log [OPTIONS]`, and the compatibility path
+//! `blastguard log [OPTIONS]` (blastguard's `main.rs` only dispatches here).
+//! Messages keep the `blastguard log:` prefix so the existing CLI's output is
+//! unchanged.
+//!
 //! A pure query command: it never reads stdin and never writes to the ledger.
-//! The ledger is `overwatch::store::violations_path(current_dir)`; only lines
+//! The ledger is `crate::store::violations_path(current_dir)`; only lines
 //! with `source == "blastguard"` are listed, in file order. Lines from other
 //! sources are skipped (not errors).
 //!
@@ -462,7 +470,7 @@ pub fn run_log(rest: &[String]) -> i32 {
             return 3;
         }
     };
-    let ledger_path = match overwatch::store::violations_path(&cwd) {
+    let ledger_path = match crate::store::violations_path(&cwd) {
         Ok(p) => p,
         Err(e) => {
             eprintln!(

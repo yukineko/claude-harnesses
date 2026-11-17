@@ -5,7 +5,7 @@
 //! whether the action is safe enough to run autonomously or whether it must
 //! escalate to a human. This module is the deterministic core consulted before
 //! executing a gated task: given the action's graded risk
-//! ([`blastguard::classify::Risk`]), whether it is reversible, and whether the
+//! ([`riskgrade::classify::Risk`]), whether it is reversible, and whether the
 //! prevailing run policy is `auto`, it returns a two-state verdict. The rule is
 //! deliberately conservative — only the clearly-safe corner (Low risk AND
 //! reversible AND policy auto) auto-executes; every irreversible or high-risk
@@ -17,9 +17,9 @@
 
 use crate::config::Config;
 use crate::state;
-use blastguard::classify::{classify_change, Risk, RiskAssessment};
-use blastguard::diffrisk::SensitiveConfig;
 use harness_core::verdict::{Determination, Required};
+use riskgrade::classify::{classify_change, Risk, RiskAssessment};
+use riskgrade::diffrisk::SensitiveConfig;
 use std::path::Path;
 
 /// The two-state verdict emitted by [`decide_gate_exec`]: run the gated task
@@ -364,7 +364,7 @@ mod tests {
     #[test]
     fn blastguard_ask_command_escalates_end_to_end_under_auto_policy() {
         // END-TO-END, not a hand-built RiskAssessment: the assessment comes out
-        // of the real `blastguard::classify::classify_command`, which is what
+        // of the real `riskgrade::classify::classify_command`, which is what
         // `gather_assessment` applies (via `classify_change`) to each command
         // a task declares (dc955812). A command blastguard REFUSED to analyse
         // (`Decision::Ask` — "not a verdict about the command, it is a refusal")
@@ -382,7 +382,7 @@ mod tests {
             "precondition: blastguard must answer Ask for {text:?} today, got {decision:?}"
         );
 
-        let a = blastguard::classify::classify_command(text);
+        let a = riskgrade::classify::classify_command(text);
         assert_eq!(
             decide_gate_exec(a.risk, a.reversible, true),
             GateExec::Escalate,

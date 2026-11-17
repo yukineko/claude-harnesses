@@ -86,8 +86,21 @@ backlog uninstall                                            # 再び除去す�
 
 規則と根拠テストは [backlog スキルの「起票の基準」](skills/backlog/SKILL.md) を参照すること。
 
-- 意図的な RED repro は `#[ignore = "backlog <id>: ..."]` を付けてコミットし、
+- 意図的な RED repro は `#[ignore = "RED: ..."]` を付けてコミットし、
   `--repro-test "cargo test -p <crate> --test <file> -- --ignored"` で起票する。
+  起票に成功すると `add` は採番した id を、repro が `--test <file>` で名指したテストファイル
+  （git 管理下の `tests/<file>.rs` か `tests/<file>/main.rs`。複数あれば `-p` の `Cargo.toml` の
+  `name` で絞る）の `#[ignore = "RED..."]` に書き戻し、`#[ignore = "RED(<id>): ..."]` にする
+  （backlog 3d5285d5、ユーザー裁定 2026-11-16）。書き換えるのは**作業ツリーのファイルだけ**で、
+  stage も commit もしない（呼び出し側の index を巻き込まないため。コミットは呼び出し側が行う。
+  コミットするまでは tree が dirty なので、clean tree を要求する `edit --repro-test` 等は拒否する）。
+  同じファイルに id の無い RED 属性が複数あれば repro のテスト名フィルタ（libtest と同じ部分一致）で
+  1 つに絞る。既に `RED(<id>)` を含むファイルは変更しない。`pytest` / script の repro は `#[ignore]`
+  の慣例が無いので書き戻さず、その旨を stderr に出す（exit は変わらない）。それ以外で書き戻せない
+  場合 — `cargo test` の repro が `--test` を名指さない・複数名指す、該当ファイルが無い/複数で
+  決められない、読めない/書けない、id の無い `#[ignore = "RED` が無い、複数の候補を 1 つに絞れない —
+  は成功扱いにせず、`error:` を stderr に出して exit 1 で終わる。行は既に起票済みで取り消さない
+  （再 `add` せず、手で `RED(<id>)` を書く）。他のファイルを推測で書き換えることはしない。
 - 起票済みタスクの RED テストを `#[ignore]` へ移したら、保存済み repro を
   `backlog edit <id> --repro-test "cargo test -p <crate> --test <file> -- --ignored"` で更新する。
   コマンドは `add --repro-test` と全く同じく実行され（HEAD の一時 worktree）、同じ repro 記録が

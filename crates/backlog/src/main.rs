@@ -17,6 +17,7 @@ mod liveness;
 mod lock;
 mod merge_driver;
 mod recheck;
+mod red_writeback;
 mod store;
 mod task;
 mod timefmt;
@@ -979,6 +980,7 @@ fn run(cli: Cli) -> Result<()> {
             // command, and it never blocks — the ruling was
             // 「blocking しないまま、ただし必ず可視化」.
             dedup::report_near_duplicates(&tasks_path, &id, location.project_root());
+            red_writeback::after_add(repro_test.as_deref(), &id); // backlog 3d5285d5
         }
 
         Command::Overlap { project, all } => {

@@ -93,8 +93,21 @@ writing.
   `pending` with the reproduced repro recorded.
 - Any other outcome is refused with a non-zero exit and nothing written to the store: no `--repro-test`,
   not reproduced, undetermined.
-- Intentional RED repros are committed with `#[ignore = "backlog <id>: ..."]` and filed with
-  `--repro-test "cargo test -p <crate> --test <file> -- --ignored"`.
+- Intentional RED repros are committed with `#[ignore = "RED: ..."]` and filed with
+  `--repro-test "cargo test -p <crate> --test <file> -- --ignored"`. Once filed, `add` writes the
+  minted id back into the file the repro names with `--test <file>` (git-tracked
+  `tests/<file>.rs` or `tests/<file>/main.rs`; several are narrowed by the `-p` package's
+  `Cargo.toml` `name`), turning `#[ignore = "RED..."]` into `#[ignore = "RED(<id>): ..."]`
+  (backlog 3d5285d5, user ruling 2026-11-16). Only the **working-tree file** is rewritten — it is
+  not staged or committed (so the caller's index is not swept in; the caller commits it, and until
+  then commands needing a clean tree such as `edit --repro-test` refuse). Several id-less RED
+  attributes in the file are narrowed by the repro's test-name filters (libtest substring match);
+  a file already containing `RED(<id>)` is left unchanged. `pytest` / script repros have no
+  `#[ignore]` convention: skipped with a stderr note (exit unchanged). Every other failure — a
+  `cargo test` repro naming no or several `--test`, no or several matching files, unreadable or
+  unwritable file, no id-less `#[ignore = "RED`, several candidates not narrowed to one — is not
+  success: an `error:` line on stderr and exit 1. The row stays filed (do not re-add; write
+  `RED(<id>)` by hand). No other file is guessed at.
 - An already-filed task whose RED test is moved under `#[ignore]` gets its stored repro updated
   with `backlog edit <id> --repro-test "cargo test -p <crate> --test <file> -- --ignored"`.
   The command is run exactly as `add --repro-test` runs it (at HEAD in a temp worktree) and the

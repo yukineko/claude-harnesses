@@ -3,7 +3,7 @@
 //! subcommands moved to the `askrelay` plugin, so `blastguard relay dismiss
 //! <id> --reason x` prints nothing, records nothing, and looks like success.
 //!
-//! Repro: cargo test -p blastguard --test backlog_20261118_unknown_subcommand_fails_loudly -- --ignored
+//! Repro: cargo test -p blastguard --test backlog_20261118_unknown_subcommand_fails_loudly
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -63,8 +63,6 @@ fn run(tag: &str, args: &[&str], stdin: &str) -> Run {
     Run { out }
 }
 
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
-#[ignore = "RED: 2026-11-18 unknown subcommand exits 0 silently"]
 #[test]
 fn unknown_subcommand_exits_nonzero_with_stderr() {
     let r = run("unknown", &["no-such-subcommand"], "");
@@ -81,8 +79,6 @@ fn unknown_subcommand_exits_nonzero_with_stderr() {
     );
 }
 
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
-#[ignore = "RED: 2026-11-18 moved relay subcommand exits 0 silently, no askrelay pointer"]
 #[test]
 fn moved_relay_subcommand_exits_nonzero_and_names_askrelay() {
     let r = run(

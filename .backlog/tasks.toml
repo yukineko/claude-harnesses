@@ -3432,3 +3432,32 @@ exit 101: uki/src/.harness-worktrees/red-commit-heredoc-fp-20261118/crates/blast
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.57s
      Running tests/backlog_20261118_rs_heredoc_checkout_text_fp.rs (target/debug/deps/backlog_20261118_rs_heredoc_checkout_text_fp-57f7c3880d353448)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261118_rs_heredoc_checkout_text_fp`"""
+
+[[task]]
+id = "42e5c169"
+title = "blastguard: unknown subcommand (incl. moved `relay`) exits 0 silently"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-18: `blastguard no-such-subcommand </dev/null` and `blastguard relay dismiss <id> --reason x` exit 0 with empty stdout/stderr (relay moved to askrelay plugin; callers believe dismiss succeeded). RED by independent author harness-9e: commit 5975d68af, crates/blastguard/tests/backlog_20261118_unknown_subcommand_fails_loudly.rs (failures: `unknown subcommand must exit non-zero, got Some(0)` / `moved relay subcommand must exit non-zero, got Some(0)`). Fix on branch fix/bg-unknown-subcmd-20261118."
+created_at = 1794942949
+updated_at = 1794942949
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_unknown_subcommand_fails_loudly -- --include-ignored"
+rev = "5975d68af788dd49e89e2bd34c6699a4346421d5"
+observed_at = 1794942949
+detail = """
+exit 101: src/.harness-worktrees/bg-unknown-subcmd-impl/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.68s
+     Running tests/backlog_20261118_unknown_subcommand_fails_loudly.rs (target/debug/deps/backlog_20261118_unknown_subcommand_fails_loudly-21696f22b761574f)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_unknown_subcommand_fails_loudly`"""

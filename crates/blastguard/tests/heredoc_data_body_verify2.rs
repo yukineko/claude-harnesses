@@ -112,6 +112,20 @@ fn smuggle_consumer_redefined_out_of_sight() {
     assert_all(&rows, false);
 }
 
+/// User ruling 2026-11-18 (B-1): a leading `. "$HOME/.cargo/env"` (this exact
+/// literal) is trusted, so it does not make a data here-document behind it
+/// stricter: the combined command gets the same verdict as the bare commit.
+/// Other sourced files (`. ./defs.sh`) stay pinned above.
+#[test]
+#[ignore = "RED: heredoc data-body fix (ruling 2026-11-18 B-1) not on origin/main"]
+fn parity_cargo_env_source_before_commit_heredoc() {
+    let bare = format!("git commit -F - <<'EOF'\nfix: do not {RM}\nEOF");
+    let combined = format!(". \"$HOME/.cargo/env\"\n{bare}");
+    let want = verdict(&bare);
+    let got = verdict(&combined);
+    assert_eq!(got, want, "bare {bare:?} vs combined {combined:?}");
+}
+
 /// Non-regression for the rework: the data contract still holds.
 #[test]
 fn contract_data_body_still_allowed() {

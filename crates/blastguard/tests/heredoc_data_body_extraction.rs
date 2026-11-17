@@ -118,9 +118,9 @@ fn bodies_that_may_run_stay_judged() {
         format!("enable -n cat\ncat <<'EOF'\n{RM}\nEOF"),
         // The data file is fed to an interpreter later on the same line.
         format!("cat <<'EOF' > x.txt\n{RM}\nEOF\nxargs -a x.txt sh -c"),
-        // Anything but the permitted shapes before or after the here-document.
-        format!("cat <<'EOF' > a.txt\n{RM}\nEOF\necho done"),
-        format!("X=1\ncat <<'EOF' > a.txt\n{RM}\nEOF"),
+        // A non-literal `cd` before the here-document moves the relative
+        // write target to an undetermined directory. (`X=1` before and
+        // `echo done` after are re-anchored to parity below, ruling B-3.)
         format!("cd $D\ncat <<'EOF' > a.txt\n{RM}\nEOF"),
         // Formats that commonly hold executable configuration are not data.
         format!("cat <<'EOF' > a.json\n{RM}\nEOF"),
@@ -155,6 +155,49 @@ fn bodies_that_may_run_stay_judged() {
         "bodies that may run were not denied:\n{}",
         wrong.join("\n")
     );
+}
+
+fn rank(d: &str) -> u8 {
+    match d {
+        "allow" => 0,
+        "ask" => 1,
+        "deny" => 2,
+        other => panic!("unexpected decision {other:?}"),
+    }
+}
+
+/// User ruling 2026-11-18 (B-3): a benign command before or after a data
+/// here-document is judged on its own merits, so the combined command gets
+/// exactly the strictest verdict of (the bare here-document alone, each
+/// surrounding command alone).
+fn assert_parity(bare: &str, parts: &[&str], combined: &str) {
+    let (mut want, _) = verdict(bare);
+    for part in parts {
+        let (d, _) = verdict(part);
+        if rank(&d) > rank(&want) {
+            want = d;
+        }
+    }
+    let (got, r) = verdict(combined);
+    assert_eq!(
+        got, want,
+        "combined must equal the strictest of bare {bare:?} + parts {parts:?}; \
+         got {got} ({r}) for {combined:?}"
+    );
+}
+
+#[test]
+#[ignore = "RED: heredoc data-body fix (ruling 2026-11-18 B-3) not on origin/main"]
+fn parity_benign_command_after_data_heredoc() {
+    let bare = format!("cat <<'EOF' > a.txt\n{RM}\nEOF");
+    assert_parity(&bare, &["echo done"], &format!("{bare}\necho done"));
+}
+
+#[test]
+#[ignore = "RED: heredoc data-body fix (ruling 2026-11-18 B-3) not on origin/main"]
+fn parity_assignment_before_data_heredoc() {
+    let bare = format!("cat <<'EOF' > a.txt\n{RM}\nEOF");
+    assert_parity(&bare, &["X=1"], &format!("X=1\n{bare}"));
 }
 
 #[test]

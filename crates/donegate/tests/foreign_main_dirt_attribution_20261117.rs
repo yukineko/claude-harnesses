@@ -227,3 +227,19 @@ fn control_own_edit_of_the_crate_still_runs_the_check_and_blocks() {
     );
     assert_eq!(decision, "block", "reason={reason:?} err={err:?}");
 }
+
+/// A session that ran `cargo fmt` may have rewritten any file without naming
+/// it, so the scope must NOT narrow to named writes: the dirty crate file is
+/// checked even though no transcript entry names it (CLAUDE.md 3).
+#[test]
+fn session_with_unnamed_writing_command_keeps_full_scope() {
+    let f = Fixture::new();
+    f.foreign_dirt();
+    let tp = f.transcript(&[bash("cargo fmt")]);
+    let (decision, reason, err) = f.stop(&tp);
+    assert!(
+        f.marker().exists(),
+        "an unattributable write must keep the full scope: err={err:?}"
+    );
+    assert_eq!(decision, "block", "reason={reason:?} err={err:?}");
+}

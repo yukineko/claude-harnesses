@@ -152,6 +152,26 @@ pub fn attribute_scope(
     }
     match harness_core::attribution::attribute_own_writes(root, transcript_path, &full) {
         harness_core::attribution::Attribution::Narrowed { keep, excluded } => {
+            // A session Bash call that may have written but names no path
+            // (`cargo fmt`, a glob, a generator, `git checkout`) could have
+            // changed any of the `excluded` files: narrowing would silently
+            // skip checks for them (CLAUDE.md 3). Unreadable evidence is the
+            // same: keep the full scope.
+            match harness_core::attribution::has_unattributable_write(transcript_path) {
+                Determination::Known(false) => {}
+                Determination::Known(true) | Determination::Undetermined(_) => {
+                    if !excluded.is_empty() {
+                        eprintln!(
+                            "donegate: this session ran a Bash command that may write without \
+                             naming a path (or its writes cannot be read); scope NOT narrowed \
+                             to its named writes, checking all {} changed file(s) in {}",
+                            full.len(),
+                            root.display()
+                        );
+                    }
+                    return Determination::known(Some(full));
+                }
+            }
             if !excluded.is_empty() {
                 eprintln!(
                     "donegate: {} changed file(s) in {} are NOT attributed to this session and \

@@ -904,6 +904,77 @@ pub fn session_written_paths(transcript_path: &str) -> Determination<SessionWrit
     Determination::known(all)
 }
 
+/// The writing statements of one recorded Bash call and the existing paths
+/// they name. `(false, _)` = the call is provably read-only. A writing call
+/// whose set is empty wrote through something that names no file (`cargo fmt`,
+/// a glob, a generator, `git checkout`): it is unattributable.
+fn call_named_paths(call: &crate::transcript::BashCall) -> (bool, BTreeSet<PathBuf>) {
+    let cwd = call.cwd.as_deref().map(Path::new);
+    let stmts = writing_statements(&call.command);
+    let mut out = BTreeSet::new();
+    for text in &stmts {
+        let mut after_cd = false;
+        for raw in text.split_whitespace() {
+            let w = raw.trim_matches(|c: char| matches!(c, '"' | '\'' | '>' | ';' | '(' | ')'));
+            // A `cd` target is a directory even without `/` or `.`.
+            let cd_target = std::mem::replace(&mut after_cd, matches!(w, "cd" | "pushd"));
+            if w.is_empty() || w.starts_with('-') {
+                continue;
+            }
+            let p = Path::new(w);
+            let abs = if p.is_absolute() {
+                p.to_path_buf()
+            } else if let Some(c) = cwd.filter(|_| cd_target || w.contains('/') || w.contains('.'))
+            {
+                c.join(p)
+            } else {
+                continue;
+            };
+            if abs.exists() {
+                out.insert(resolve(&abs));
+            }
+        }
+    }
+    (!stmts.is_empty(), out)
+}
+
+/// Whether this session (parent transcript and every subagent sidechain)
+/// ran any Bash call that may have written but names no existing path
+/// ([`call_named_paths`]). Such a write cannot be attributed to a file, so a
+/// caller that narrows to "files this session wrote" must NOT narrow when
+/// this is `true` (CLAUDE.md 3). An unreadable transcript or sidechain is
+/// `Undetermined`, never `false`.
+pub fn has_unattributable_write(transcript_path: &str) -> Determination<bool> {
+    let mut all = match crate::transcript::bash_commands_by_session(transcript_path) {
+        Determination::Known(v) => v,
+        Determination::Undetermined(why) => {
+            return Determination::undetermined(why.as_str().to_string())
+        }
+    };
+    match crate::transcript::subagent_transcripts_strict(Path::new(transcript_path)) {
+        Determination::Known(sides) => {
+            for side in sides {
+                match crate::transcript::bash_commands_by_session(&side.to_string_lossy()) {
+                    Determination::Known(v) => all.extend(v),
+                    Determination::Undetermined(why) => {
+                        return Determination::undetermined(format!(
+                            "subagent transcript: {}",
+                            why.as_str()
+                        ))
+                    }
+                }
+            }
+        }
+        Determination::Undetermined(why) => {
+            return Determination::undetermined(why.as_str().to_string())
+        }
+    }
+    Determination::known(all.iter().any(|c| {
+        let (writes, named) = call_named_paths(c);
+        writes && named.is_empty()
+    }))
+}
+
 /// The files ONE transcript records as written: the transcript at
 /// `transcript_path` only, without its subagent sidechains ([`session_written_paths`]
 /// is the union of this over the parent and every sidechain). Lets a caller
@@ -924,31 +995,7 @@ pub fn own_written_paths(transcript_path: &str) -> Determination<SessionWrites> 
     };
     let mut bash_paths = BTreeSet::new();
     for call in &bash {
-        let cwd = call.cwd.as_deref().map(Path::new);
-        for text in writing_statements(&call.command) {
-            let mut after_cd = false;
-            for raw in text.split_whitespace() {
-                let w = raw.trim_matches(|c: char| matches!(c, '"' | '\'' | '>' | ';' | '(' | ')'));
-                // A `cd` target is a directory even without `/` or `.`.
-                let cd_target = std::mem::replace(&mut after_cd, matches!(w, "cd" | "pushd"));
-                if w.is_empty() || w.starts_with('-') {
-                    continue;
-                }
-                let p = Path::new(w);
-                let abs = if p.is_absolute() {
-                    p.to_path_buf()
-                } else if let Some(c) =
-                    cwd.filter(|_| cd_target || w.contains('/') || w.contains('.'))
-                {
-                    c.join(p)
-                } else {
-                    continue;
-                };
-                if abs.exists() {
-                    bash_paths.insert(resolve(&abs));
-                }
-            }
-        }
+        bash_paths.extend(call_named_paths(call).1);
     }
     Determination::known(SessionWrites {
         edited: resolved(&edited),

@@ -3400,3 +3400,33 @@ exit 101: -20261118/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 8.00s
      Running tests/backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp.rs (target/debug/deps/backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp-473aa388e6897006)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp`"""
+
+[[task]]
+id = "19baba2f"
+title = "blastguard FP: quoted heredoc written to a .rs file whose Rust doc text mentions 'git checkout <branch> -- .' is denied as git checkout -- . (rule git-checkout-dash-dot)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-18 ~/.blastguard/blocks/blocks.jsonl line 692 (session 06c2bd77, subagent a611cdac32e08bddb, 0.2.675, ts 1794941931): cd <wt> && cat > crates/tdd/tests/backlog_20261118_unnamed_write_excluded_from_scope.rs <<'EOF' ... EOF then '. "$HOME/.cargo/env"; cargo test -p tdd ...' -> deny 'git checkout -- . discards all working-tree changes'. Exact command kept byte-exact as crates/blastguard/tests/fixtures/backlog_20261118_rs_heredoc_checkout_fp.cmd (jq -j .tool_input.command; 10952 bytes; sha256 c42b19da...; the log's tool_input_bytes 11544 / tool_input_sha256 efbd0f... do not equal the raw command's size/hash, apparently computed over another serialization - not verified). RED + control in commit 34f79f4a7 (0.2.692); re-observed at that tree: main=deny same reason. Control: the phrase alone in a quoted .rs heredoc is NOT misread, so the trigger is elsewhere in the 10.9 KB body (not isolated). The command is > 8 KiB (MAX_PARSE_BYTES): a TooLong Deny would be a separate, ruled verdict; the RED asserts only that it is not the git-checkout misreading. Memory ruling: .rs heredoc body is not shell (note: the same command then runs cargo test on that file - the ruling's 'unless run in same command' clause is about shell-run, which this is not, but this reading is an interpretation). Not a duplicate of 2d2ef773 (python stdin), 648a6641 (backtick command-word, different reason), bd2a44e0 ($(cat) form), d292ce6e (column-0 backtick)."""
+created_at = 1794942463
+updated_at = 1794942463
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_rs_heredoc_checkout_text_fp -- --ignored logged_rs_heredoc_is_not_read_as_git_checkout"
+rev = "34f79f4a7d84491cfebf83b97ae20560287d459d"
+observed_at = 1794942463
+detail = """
+exit 101: uki/src/.harness-worktrees/red-commit-heredoc-fp-20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.57s
+     Running tests/backlog_20261118_rs_heredoc_checkout_text_fp.rs (target/debug/deps/backlog_20261118_rs_heredoc_checkout_text_fp-57f7c3880d353448)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_rs_heredoc_checkout_text_fp`"""

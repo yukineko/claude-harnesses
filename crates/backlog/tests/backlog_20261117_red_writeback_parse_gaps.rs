@@ -119,7 +119,7 @@ fn ignore_on_non_fn_item_is_not_bound_to_next_fn() {
 }
 
 #[test]
-#[ignore = "RED: `# [ignore = \"RED..\"]` (valid Rust, space after #) is not seen, the add is refused"]
+#[ignore = "RED(4bbf36c2): `# [ignore = \"RED..\"]` (valid Rust, space after #) is not seen, the add is refused"]
 fn space_after_hash_ignore_is_seen() {
     let body = "#[test]\n# [ignore = \"RED: x\"]\nfn red_one() { panic!(); }\n";
     let (c, e, b, id) = run_case("f5-hash", REPRO, body);
@@ -130,7 +130,7 @@ fn space_after_hash_ignore_is_seen() {
 }
 
 #[test]
-#[ignore = "RED: `#[ ignore = \"RED..\"]` (valid Rust, space after [) is not seen, the add is refused"]
+#[ignore = "RED(4bbf36c2): `#[ ignore = \"RED..\"]` (valid Rust, space after [) is not seen, the add is refused"]
 fn space_after_bracket_ignore_is_seen() {
     let body = "#[test]\n#[ ignore = \"RED: x\"]\nfn red_one() { panic!(); }\n";
     let (c, e, b, id) = run_case("f5-bracket", REPRO, body);

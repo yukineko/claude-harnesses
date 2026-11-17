@@ -28,6 +28,8 @@ fn verdict(cmd: &str) -> Determination<bool> {
     for f in ["a.rs", "existing.rs", "gen.py", "fmt.sh", "x/b.rs"] {
         std::fs::write(cwd.join(f), "x\n").unwrap();
     }
+    // Symlink L -> existing.rs: a write to L lands on existing.rs, never named.
+    std::os::unix::fs::symlink("existing.rs", cwd.join("L")).unwrap();
     let cwd = cwd.canonicalize().unwrap();
     let tdir: PathBuf = base.join("transcripts");
     std::fs::create_dir_all(&tdir).unwrap();
@@ -110,6 +112,73 @@ fn cp_into_directory_is_unattributable() {
 #[test]
 fn git_stash_pop_with_named_file_is_unattributable() {
     expect("git stash pop a.rs", true);
+}
+
+// ---- F1: program word matched by basename; a path-qualified program is arbitrary ----
+
+// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
+#[ignore = "RED: 2026-11-18 F1 path-qualified program matched by basename"]
+#[test]
+fn f1_dot_slash_touch_is_unattributable() {
+    expect("./touch a.rs", true);
+}
+
+// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
+#[ignore = "RED: 2026-11-18 F1 path-qualified program matched by basename"]
+#[test]
+fn f1_dot_slash_sed_is_unattributable() {
+    expect("./sed -i s/a/b/ a.rs", true);
+}
+
+// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
+#[ignore = "RED: 2026-11-18 F1 path-qualified program matched by basename"]
+#[test]
+fn f1_nested_rm_is_unattributable() {
+    expect("./gen/rm a.rs", true);
+}
+
+// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
+#[ignore = "RED: 2026-11-18 F1 path-qualified program matched by basename"]
+#[test]
+fn f1_absolute_tee_is_unattributable() {
+    expect("/tmp/x/tee a.rs", true);
+}
+
+// ---- F2: a symlink target writes through to a file that is never named ----
+
+// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
+#[ignore = "RED: 2026-11-18 F2 symlink target writes through to unnamed file"]
+#[test]
+fn f2_cp_onto_symlink_is_unattributable() {
+    expect("cp a.rs L", true);
+}
+
+// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
+#[ignore = "RED: 2026-11-18 F2 symlink target writes through to unnamed file"]
+#[test]
+fn f2_touch_symlink_is_unattributable() {
+    expect("touch L", true);
+}
+
+// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
+#[ignore = "RED: 2026-11-18 F2 symlink target writes through to unnamed file"]
+#[test]
+fn f2_sed_in_place_symlink_is_unattributable() {
+    expect("sed -i s/a/b/ L", true);
+}
+
+// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
+#[ignore = "RED: 2026-11-18 F2 symlink target writes through to unnamed file"]
+#[test]
+fn f2_redirect_into_symlink_is_unattributable() {
+    expect("echo x > L", true);
+}
+
+// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
+#[ignore = "RED: 2026-11-18 F2 symlink target writes through to unnamed file"]
+#[test]
+fn f2_tee_symlink_is_unattributable() {
+    expect("tee L", true);
 }
 
 // ---- Controls: must pass now and after the fix ----

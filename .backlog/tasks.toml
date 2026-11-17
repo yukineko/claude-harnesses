@@ -3509,6 +3509,8 @@ notes = "has_unattributable_write returns Known(false) for cargo fmt -- a.rs, py
 created_at = 1794942983
 updated_at = 1794942983
 weight = 0.0
+issue_number = 1857
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1857"
 rev = 0
 
 [task.repro]

@@ -122,8 +122,6 @@ fn non_red_repro_file_exits_1() {
 }
 /// repro filter targets red_a (already tagged with ANOTHER id); red_b is untagged.
 #[test]
-// test-weakening-justified: new RED for an unfixed defect (2026-11-17).
-#[ignore = "RED: 2026-11-17 t3 verifier - red_writeback rewrites the wrong #[ignore] and exits 0 - remove when fixed"]
 fn single_untagged_other_test_is_not_rewritten() {
     let body = "#[test]\n#[ignore = \"RED(deadbeef): a\"]\nfn red_a() { panic!(); }\n#[test]\n#[ignore = \"RED: b\"]\nfn red_b() { panic!(); }\n";
     let (c, _e, b, id) = run_case("v-wrong", &format!("{REPRO} red_a"), body, false);
@@ -134,8 +132,6 @@ fn single_untagged_other_test_is_not_rewritten() {
 }
 /// repro filter targets red_a (plain #[ignore = "other"]); red_b has RED.
 #[test]
-// test-weakening-justified: new RED for an unfixed defect (2026-11-17).
-#[ignore = "RED: 2026-11-17 t3 verifier - red_writeback rewrites the wrong #[ignore] and exits 0 - remove when fixed"]
 fn filter_names_nonred_test_but_other_red_gets_tagged() {
     let body = "#[test]\n#[ignore = \"slow\"]\nfn red_a() { panic!(); }\n#[test]\n#[ignore = \"RED: b\"]\nfn red_b() { panic!(); }\n";
     let (c, _e, b, id) = run_case("v-wrong2", &format!("{REPRO} red_a"), body, false);
@@ -146,8 +142,6 @@ fn filter_names_nonred_test_but_other_red_gets_tagged() {
 }
 /// RED text inside a comment before the real attribute.
 #[test]
-// test-weakening-justified: new RED for an unfixed defect (2026-11-17).
-#[ignore = "RED: 2026-11-17 t3 verifier - red_writeback rewrites the wrong #[ignore] and exits 0 - remove when fixed"]
 fn comment_mention_not_rewritten() {
     let body = "// was #[ignore = \"RED: old\"]\n#[test]\nfn red_one() { panic!(); }\n";
     let (c, _e, b, id) = run_case("v-comment", REPRO, body, false);

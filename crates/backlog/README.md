@@ -100,12 +100,16 @@ writing.
   `Cargo.toml` `name`), turning `#[ignore = "RED..."]` into `#[ignore = "RED(<id>): ..."]`
   (backlog 3d5285d5, user ruling 2026-11-16). Only the **working-tree file** is rewritten — it is
   not staged or committed (so the caller's index is not swept in; the caller commits it, and until
-  then commands needing a clean tree such as `edit --repro-test` refuse). Several id-less RED
-  attributes in the file are narrowed by the repro's test-name filters (libtest substring match);
-  a file already containing `RED(<id>)` is left unchanged. `pytest` / script repros have no
+  then commands needing a clean tree such as `edit --repro-test` refuse). Only `#[ignore` attributes in
+  code count (mentions in comments or string/char literals do not). If the repro has test-name
+  filters (libtest substring match on the fn name), ONLY the `#[ignore]` of the test they select
+  is a target: exactly one must be selected and it must be an id-less RED (another id, a non-RED
+  reason, none selected or several selected all fail without rewriting). A repro without filters
+  rewrites only when the file holds exactly one id-less RED attribute. A target already carrying
+  `RED(<id>)` (same id) is left unchanged. `pytest` / script repros have no
   `#[ignore]` convention: skipped with a stderr note (exit unchanged). Every other failure — a
   `cargo test` repro naming no or several `--test`, no or several matching files, unreadable or
-  unwritable file, no id-less `#[ignore = "RED`, several candidates not narrowed to one — is not
+  unwritable file, no id-less `#[ignore = "RED`, a selection above that fails — is not
   success: an `error:` line on stderr and exit 1. The row stays filed (do not re-add; write
   `RED(<id>)` by hand). No other file is guessed at.
 - An already-filed task whose RED test is moved under `#[ignore]` gets its stored repro updated

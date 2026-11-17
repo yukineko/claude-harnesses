@@ -18,13 +18,27 @@
 //!   `tests/<name>/main.rs`, git-tracked). No other file is guessed at.
 //! - `pytest` / script repros have no `#[ignore]` convention: skipped, with a
 //!   note on stderr (exit unaffected).
+//! - Which attribute: only `#[ignore` attributes in CODE count (a mention in
+//!   a comment or a string/char literal is skipped; lexical scan, see
+//!   [`code_mask`]). If the repro carries libtest name filters, ONLY the
+//!   `#[ignore]` of the test they select (fn name contains a filter) is a
+//!   target: exactly one must be selected and it must be an id-less
+//!   `"RED...`; another id, a non-RED reason, none selected or several
+//!   selected is refused. Without filters, the file must hold exactly one
+//!   id-less `#[ignore = "RED...`.
 //! - Every other failure to write back — a `cargo test` repro with no
 //!   `--test`, several `--test`s, no/several matching files, an unreadable or
-//!   unwritable file, no `#[ignore = "RED` attribute, several candidates that
-//!   the repro's test-name filters do not narrow to one — is NOT success: an
-//!   `error:` line on stderr and exit 1. The row is already filed and is NOT
-//!   rolled back; the message says so, so the caller does not re-add.
-//! - Idempotent: a file already containing `RED(<id>)` is left unchanged.
+//!   unwritable file, no id-less `#[ignore = "RED` attribute, a refused
+//!   selection above — is NOT success: an `error:` line on stderr and exit 1.
+//!   The row is already filed and is NOT rolled back; the message says so, so
+//!   the caller does not re-add.
+//! - Idempotent: when the target (the filter-selected attribute, or with no
+//!   filters: no id-less RED and some attribute already `RED(<id>)`) already
+//!   carries this id, the file is left unchanged.
+//! - Residual: when exactly one tracked file matches `--test <name>`, `-p` is
+//!   not cross-checked against its `Cargo.toml` (the repro already ran under
+//!   that `-p`); a `[[test]] path = ...` target outside `tests/` is not found
+//!   and is refused.
 
 use crate::evidence;
 use harness_core::boundary;
@@ -98,10 +112,10 @@ fn write_back(repro: &str, id: &str) -> Result<Done, String> {
     let rel = locate(&root, &name, args.package.as_deref())?;
     let path = root.join(&rel);
     let body = std::fs::read_to_string(&path).map_err(|e| format!("cannot read {rel}: {e}"))?;
-    if body.contains(&format!("RED({id})")) {
-        return Ok(Done::AlreadyTagged(rel));
-    }
-    let at = choose(&body, &args.filters).map_err(|e| format!("{rel}: {e}"))?;
+    let at = match choose(&body, &args.filters, id).map_err(|e| format!("{rel}: {e}"))? {
+        Pick::Insert(at) => at,
+        Pick::AlreadyTagged => return Ok(Done::AlreadyTagged(rel)),
+    };
     let new = insert_id(&body, at, id);
     std::fs::write(&path, new).map_err(|e| format!("cannot write {rel}: {e}"))?;
     Ok(Done::Written(rel))
@@ -236,79 +250,270 @@ fn crate_dir(rel: &str) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-/// Does `dir/Cargo.toml` declare `name = "<pkg>"`? An unreadable manifest
-/// is an error (cannot tell), not a "no".
+/// Does `dir/Cargo.toml` declare `name = "<pkg>"` in its `[package]` table?
+/// An unreadable manifest is an error (cannot tell), not a "no".
 fn package_is(dir: &Path, pkg: &str) -> Result<bool, String> {
     let want = format!("name = \"{pkg}\"");
     let manifest = dir.join("Cargo.toml");
-    match std::fs::read_to_string(&manifest) {
-        Ok(t) => Ok(t.lines().any(|l| l.trim() == want)),
-        Err(e) => Err(format!(
-            "cannot read {} to tell whether it is package {pkg}: {e}",
-            manifest.display()
-        )),
+    let text = match std::fs::read_to_string(&manifest) {
+        Ok(t) => t,
+        Err(e) => {
+            return Err(format!(
+                "cannot read {} to tell whether it is package {pkg}: {e}",
+                manifest.display()
+            ))
+        }
+    };
+    let mut in_package = false;
+    for line in text.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_package = line == "[package]";
+        } else if in_package && line == want {
+            return Ok(true);
+        }
     }
+    Ok(false)
 }
 
-/// Byte offsets just after `"RED` of every `#[ignore = "RED...` attribute that
-/// carries no id yet (the next char is not `(`, nor part of a longer word).
-fn untagged(body: &str) -> Vec<usize> {
+/// Which bytes of a Rust source are code, i.e. not inside a comment, a string
+/// / byte-string / raw-string literal, or a char literal. Lifetimes (`'a`) are
+/// code. A lexical approximation, not a parser.
+fn code_mask(body: &str) -> Vec<bool> {
+    let b = body.as_bytes();
+    let n = b.len();
+    let mut code = vec![true; n];
+    let ident = |c: u8| c == b'_' || c.is_ascii_alphanumeric();
+    let raw_open = |i: usize| -> Option<(usize, usize)> {
+        // `r#*"` or `br#*"` not preceded by an identifier char:
+        // (offset of the opening quote, number of hashes).
+        if i > 0 && ident(b[i - 1]) {
+            return None;
+        }
+        let mut j = match (b.get(i), b.get(i + 1)) {
+            (Some(b'r'), _) => i + 1,
+            (Some(b'b'), Some(b'r')) => i + 2,
+            _ => return None,
+        };
+        let h = j;
+        while j < n && b[j] == b'#' {
+            j += 1;
+        }
+        (j < n && b[j] == b'"').then_some((j, j - h))
+    };
+    let mut i = 0;
+    while i < n {
+        let start = i;
+        if b[i] == b'/' && b.get(i + 1) == Some(&b'/') {
+            while i < n && b[i] != b'\n' {
+                i += 1;
+            }
+        } else if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+            let mut depth = 0usize;
+            while i < n {
+                if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+                    depth += 1;
+                    i += 2;
+                } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
+                    depth = depth.saturating_sub(1);
+                    i += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        } else if let Some((q, hashes)) = raw_open(i) {
+            i = q + 1;
+            while i < n {
+                if b[i] == b'"' && b[i + 1..].iter().take_while(|&&c| c == b'#').count() >= hashes {
+                    i += 1 + hashes;
+                    break;
+                }
+                i += 1;
+            }
+        } else if b[i] == b'"' {
+            i += 1;
+            while i < n && b[i] != b'"' {
+                i += if b[i] == b'\\' { 2 } else { 1 };
+            }
+            i += 1;
+        } else if b[i] == b'\'' {
+            // `'\..'` or `'x'` is a char literal; anything else is a lifetime.
+            if b.get(i + 1) == Some(&b'\\') {
+                i += 3; // past the quote, the backslash and the escaped char
+                while i < n && b[i] != b'\'' {
+                    i += 1;
+                }
+                i += 1;
+            } else {
+                let width = body[i + 1..].chars().next().map_or(0, char::len_utf8);
+                if width > 0 && b.get(i + 1 + width) == Some(&b'\'') {
+                    i += 2 + width;
+                } else {
+                    i += 1;
+                    continue;
+                }
+            }
+        } else {
+            i += 1;
+            continue;
+        }
+        for c in code.iter_mut().take(i.min(n)).skip(start) {
+            *c = false;
+        }
+    }
+    code
+}
+
+/// The reason text of one `#[ignore ...]` attribute in code.
+#[derive(Debug, PartialEq, Eq)]
+enum Reason {
+    /// `"RED...` with no id; the offset just after `"RED`.
+    Untagged(usize),
+    /// `"RED(<id>)...`.
+    Tagged(String),
+    /// Bare `#[ignore]` or a reason that is not `RED`.
+    NotRed,
+}
+
+/// One `#[ignore]` attribute (in code) and the `fn` it is attached to.
+#[derive(Debug)]
+struct IgnoreAttr {
+    reason: Reason,
+    fn_name: Option<String>,
+}
+
+/// Every `#[ignore` attribute that sits in code (comments and literals are
+/// skipped), with its reason and the name of the next `fn` in code.
+fn ignore_attrs(body: &str) -> Vec<IgnoreAttr> {
+    let mask = code_mask(body);
     let mut out = Vec::new();
     for (start, _) in body.match_indices("#[ignore") {
-        let rest = &body[start + "#[ignore".len()..];
-        let r = rest.trim_start();
-        let Some(r) = r.strip_prefix('=') else {
+        if mask.get(start) != Some(&true) {
             continue;
-        };
-        let r = r.trim_start();
-        let Some(after) = r.strip_prefix("\"RED") else {
-            continue;
-        };
-        match after.chars().next() {
-            Some(c) if c == '(' || c == '_' || c.is_alphanumeric() => continue,
-            None => continue,
-            _ => {}
         }
-        out.push(body.len() - after.len());
+        let after_kw = start + "#[ignore".len();
+        let rest = &body[after_kw..];
+        if rest
+            .chars()
+            .next()
+            .is_some_and(|c| c == '_' || c.is_alphanumeric())
+        {
+            continue; // `#[ignore_something]`, a different attribute
+        }
+        let reason = match rest.trim_start().strip_prefix('=').map(str::trim_start) {
+            Some(v) => match v.strip_prefix("\"RED") {
+                Some(after) => match after.chars().next() {
+                    Some('(') => match after[1..].find(')') {
+                        Some(e) => Reason::Tagged(after[1..1 + e].to_string()),
+                        None => Reason::NotRed,
+                    },
+                    Some(c) if c == '_' || c.is_alphanumeric() => Reason::NotRed,
+                    Some(_) => Reason::Untagged(body.len() - after.len()),
+                    None => Reason::NotRed,
+                },
+                None => Reason::NotRed,
+            },
+            None => Reason::NotRed,
+        };
+        out.push(IgnoreAttr {
+            reason,
+            fn_name: next_fn_name(body, &mask, after_kw),
+        });
     }
     out
 }
 
-/// The name of the first `fn` after byte offset `at`.
-fn next_fn_name(body: &str, at: usize) -> Option<&str> {
-    let rest = &body[at..];
-    let i = rest.find("fn ")?;
-    let tail = rest[i + 3..].trim_start();
-    let end = tail
-        .find(|c: char| !(c == '_' || c.is_alphanumeric()))
-        .unwrap_or(tail.len());
-    Some(&tail[..end])
+/// The name of the first `fn` keyword in code after byte offset `at`.
+fn next_fn_name(body: &str, mask: &[bool], at: usize) -> Option<String> {
+    let b = body.as_bytes();
+    let ident = |c: u8| c == b'_' || c.is_ascii_alphanumeric();
+    for (i, _) in body[at..].match_indices("fn") {
+        let i = at + i;
+        let before_ok = i == 0 || !ident(b[i - 1]);
+        let after_ok = b.get(i + 2).is_some_and(|c| c.is_ascii_whitespace());
+        if !(mask.get(i) == Some(&true) && before_ok && after_ok) {
+            continue;
+        }
+        let tail = body[i + 2..].trim_start();
+        let end = tail
+            .find(|c: char| !(c == '_' || c.is_alphanumeric()))
+            .unwrap_or(tail.len());
+        return (end > 0).then(|| tail[..end].to_string());
+    }
+    None
 }
 
-/// The one attribute to tag. Several candidates are narrowed by the repro's
-/// libtest filters (a test runs iff its name contains a filter); anything but
-/// exactly one is refused.
-fn choose(body: &str, filters: &[String]) -> Result<usize, String> {
-    let all = untagged(body);
-    if all.is_empty() {
-        return Err("no untagged #[ignore = \"RED...\"] attribute in the file".to_string());
+/// What to do with the file: rewrite at an offset, or leave it (the target
+/// already carries this id). Every other answer is an error.
+#[derive(Debug, PartialEq, Eq)]
+enum Pick {
+    Insert(usize),
+    AlreadyTagged,
+}
+
+/// The one attribute to tag.
+///
+/// With libtest name filters, ONLY the `#[ignore]` of the test the filters
+/// select (a test is selected iff its fn name contains a filter) is a target:
+/// exactly one must be selected and it must be an id-less RED (one already
+/// tagged with `id` is left unchanged); another id, a non-RED reason, no
+/// selected `#[ignore]`, or several selected is refused. Without filters,
+/// exactly one id-less RED attribute in the file is required (none, with one
+/// already tagged with `id`, is left unchanged).
+fn choose(body: &str, filters: &[String], id: &str) -> Result<Pick, String> {
+    let attrs = ignore_attrs(body);
+    if !filters.is_empty() {
+        let selected: Vec<&IgnoreAttr> = attrs
+            .iter()
+            .filter(|a| {
+                a.fn_name
+                    .as_deref()
+                    .is_some_and(|n| filters.iter().any(|f| n.contains(f.as_str())))
+            })
+            .collect();
+        return match selected.as_slice() {
+            [one] => match &one.reason {
+                Reason::Untagged(at) => Ok(Pick::Insert(*at)),
+                Reason::Tagged(t) if t == id => Ok(Pick::AlreadyTagged),
+                Reason::Tagged(t) => Err(format!(
+                    "the #[ignore] of the test the repro's filters {filters:?} select already \
+                     carries another id RED({t})"
+                )),
+                Reason::NotRed => Err(format!(
+                    "the #[ignore] of the test the repro's filters {filters:?} select is not a \
+                     #[ignore = \"RED...\"]"
+                )),
+            },
+            [] => Err(format!(
+                "no #[ignore] test in the file is selected by the repro's filters {filters:?}"
+            )),
+            many => Err(format!(
+                "the repro's filters {filters:?} select {} #[ignore] tests; which one to tag \
+                 cannot be determined",
+                many.len()
+            )),
+        };
     }
-    if all.len() == 1 {
-        return Ok(all[0]);
-    }
-    let narrowed: Vec<usize> = all
+    let untagged: Vec<usize> = attrs
         .iter()
-        .copied()
-        .filter(|&at| {
-            next_fn_name(body, at).is_some_and(|n| filters.iter().any(|f| n.contains(f.as_str())))
+        .filter_map(|a| match a.reason {
+            Reason::Untagged(at) => Some(at),
+            _ => None,
         })
         .collect();
-    match narrowed.as_slice() {
-        [one] => Ok(*one),
-        _ => Err(format!(
-            "{} untagged #[ignore = \"RED...\"] attributes and the repro's test-name filters \
-             {filters:?} do not select exactly one",
-            all.len()
+    let already = attrs
+        .iter()
+        .any(|a| matches!(&a.reason, Reason::Tagged(t) if t == id));
+    match untagged.as_slice() {
+        [one] => Ok(Pick::Insert(*one)),
+        [] if already => Ok(Pick::AlreadyTagged),
+        [] => Err("no id-less #[ignore = \"RED...\"] attribute in the file".to_string()),
+        many => Err(format!(
+            "{} id-less #[ignore = \"RED...\"] attributes and the repro names no test filter to \
+             select one",
+            many.len()
         )),
     }
 }

@@ -10,7 +10,7 @@
 # blastguard (a dependency) requires 1.88 for brush-parser.
 rust-version = "1.88"
 name = "riskgrade"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Graded risk / reversibility assessment of a planned action (classify) and diff-level semantic risk signals (diffrisk), built on blastguard's detector."
 license = "MIT"

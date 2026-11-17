@@ -258,28 +258,30 @@ fn mask_file_path_tokens(lower: &str) -> String {
         }
         // `None` == start of a segment == command position.
         let mut prev: Option<&str> = None;
-        let mut cursor = 0usize;
-        while let Some(start_rel) = seg[cursor..].find(|c: char| !c.is_ascii_whitespace()) {
-            let start = cursor + start_rel;
-            let len = seg[start..]
-                .find(|c: char| c.is_ascii_whitespace())
-                .unwrap_or(seg.len() - start);
-            let tok = &seg[start..start + len];
-            out.push_str(&seg[cursor..start]);
-            let command_position = match prev {
-                None => true,
-                Some(p) => RUNNER_WORDS.contains(&p) || p.ends_with([';', '|', '&', '(']),
+        // Iterator-driven, no hand-advanced index: each piece is a (possibly
+        // empty) run of non-ASCII-whitespace chars followed by at most one
+        // ASCII-whitespace char, so the walk always terminates and the
+        // whitespace is copied through verbatim.
+        for piece in seg.split_inclusive(|c: char| c.is_ascii_whitespace()) {
+            let (tok, sep) = match piece.char_indices().last() {
+                Some((i, c)) if c.is_ascii_whitespace() => piece.split_at(i),
+                _ => (piece, ""),
             };
-            let invoked = command_position || tok.starts_with("./");
-            if !invoked && is_file_path_token(tok) {
-                out.extend(std::iter::repeat_n(' ', tok.len()));
-            } else {
-                out.push_str(tok);
+            if !tok.is_empty() {
+                let command_position = match prev {
+                    None => true,
+                    Some(p) => RUNNER_WORDS.contains(&p) || p.ends_with([';', '|', '&', '(']),
+                };
+                let invoked = command_position || tok.starts_with("./");
+                if !invoked && is_file_path_token(tok) {
+                    out.extend(std::iter::repeat_n(' ', tok.len()));
+                } else {
+                    out.push_str(tok);
+                }
+                prev = Some(tok);
             }
-            prev = Some(tok);
-            cursor = start + len;
+            out.push_str(sep);
         }
-        out.push_str(&seg[cursor..]);
     }
     out
 }

@@ -135,7 +135,11 @@ apart from this call's own writes) and recorded in THIS session's write record
 the command is PROVEN read-only (command_provably_read_only: a shlex lexer plus
 a closed allowlist, never a regex): its window changes are another process's,
 so they are still logged but flagged `"attributed": false` and the Stop gate
-ignores them (backlog dc97fc2d, user ruling 2026-11-17). Not provable
+ignores them (backlog dc97fc2d, user ruling 2026-11-17). `git -C <path>` is
+provable only when <path> (resolved against the call's cwd) is a checkout of
+THIS repository, i.e. its git common dir equals the guarded repo's (linked
+worktrees count); another repo, a nonexistent path or any git failure is not
+(user ruling 2026-11-18: reading another place with git is forbidden). Not provable
 (expansion, redirect, unknown program/option, unlexable) = recorded as before.
 One exception
 (pre_dirt_landed_in_head): HEAD moved, `git status` names no path at Post,
@@ -306,7 +310,36 @@ def _ro_flags_ok(args: list[str], short: str, long_names, extra=frozenset()) -> 
     return True
 
 
-def _ro_simple_command(argv: list[str]) -> bool:
+def _ro_c_target_is_this_repo(path: str, cwd, common) -> bool:
+    """User ruling 2026-11-18 (「別の場所をgitでよむのは禁止。自分のrepoは読んで」):
+    `git -C <path>` is provable only when <path>, resolved against the call's
+    cwd, is a checkout of THIS repository -- its git common dir equals the
+    guarded repo's common dir (linked worktrees share it). Another repo, a
+    nonexistent path, a missing cwd/common, a resolution failure or a git
+    error/non-zero exit is NOT provable."""
+    if not isinstance(cwd, str) or not cwd or common is None:
+        return False
+    target = path if os.path.isabs(path) else os.path.join(cwd, path)
+    if not os.path.isdir(target):
+        return False
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")}
+    try:
+        proc = subprocess.run(
+            ["git", "-C", target, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True, text=True, env=env, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    out = proc.stdout.strip()
+    if proc.returncode != 0 or not out:
+        return False
+    try:
+        return os.path.realpath(out) == os.path.realpath(str(common))
+    except (OSError, ValueError):
+        return False
+
+
+def _ro_simple_command(argv: list[str], cwd=None, common=None) -> bool:
     if not argv:
         return False
     prog = argv[0]
@@ -316,11 +349,15 @@ def _ro_simple_command(argv: list[str]) -> bool:
     if prog != "git":
         return False
     i = 1
+    seen_c = False
     # only `-C <path>` / `--no-pager` may precede the subcommand: `-c k=v` can
-    # configure an arbitrary program to run. `-C` only changes which repo a
-    # read-only subcommand reads; it cannot make it write.
+    # configure an arbitrary program to run. `-C` (at most once) must name a
+    # checkout of THIS repository (_ro_c_target_is_this_repo).
     while i < len(argv):
         if argv[i] == "-C" and i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+            if seen_c or not _ro_c_target_is_this_repo(argv[i + 1], cwd, common):
+                return False
+            seen_c = True
             i += 2
         elif argv[i] == "--no-pager":
             i += 1
@@ -332,8 +369,10 @@ def _ro_simple_command(argv: list[str]) -> bool:
     return _ro_flags_ok(argv[i + 1:], short, long_names, extra)
 
 
-def command_provably_read_only(command) -> bool:
-    """True only when `command` is proven to write nothing; False = not proven."""
+def command_provably_read_only(command, cwd=None, common=None) -> bool:
+    """True only when `command` is proven to write nothing; False = not proven.
+    `cwd` (the call's cwd) and `common` (the guarded repo's git common dir)
+    are needed only to judge `git -C <path>`; without them any -C is False."""
     if not isinstance(command, str) or not command.strip():
         return False
     # expansions, escapes and line breaks hide commands from a token view.
@@ -356,7 +395,7 @@ def command_provably_read_only(command) -> bool:
         else:
             current.append(tok)
     segments.append(current)
-    return all(_ro_simple_command(seg) for seg in segments)
+    return all(_ro_simple_command(seg, cwd, common) for seg in segments)
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -1199,7 +1238,8 @@ def post(payload: dict, common: Path, main: Path) -> int:
             err = deny_ledger.record_writes(
                 payload, str(main), [str(main / p) for p in touched], "guard-maintree-bash.py",
                 attributed=not command_provably_read_only(
-                    tool_input.get("command") if isinstance(tool_input, dict) else None))
+                    tool_input.get("command") if isinstance(tool_input, dict) else None,
+                    cwd=payload.get("cwd"), common=common))
         if err is not None:
             print(
                 "Refused: the main-tree paths this call changed could not be recorded "

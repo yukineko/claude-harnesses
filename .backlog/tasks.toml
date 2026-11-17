@@ -3223,3 +3223,31 @@ exit 101: 0.3.140 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c96
     Finished `test` profile [unoptimized + debuginfo] target(s) in 3.87s
      Running tests/backlog_20261117_red_writeback_parse_gaps.rs (target/debug/deps/backlog_20261117_red_writeback_parse_gaps-3c47da0ac49bfa16)
 error: test failed, to rerun pass `-p backlog --test backlog_20261117_red_writeback_parse_gaps`"""
+
+[[task]]
+id = "4bbf36c2"
+title = "backlog red_writeback: spaced attribute spelling (# [ignore / #[ ignore) is not seen as a RED ignore"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-17 at 1331e475d (backlog 0.3.138), t3 re-verifier low finding, RED by independent agent: # [ignore = RED: x] and #[ ignore = RED: x] are valid Rust attributes but add exits 1 with no id-less #[ignore = RED...] attribute in the file. Fail-safe (refuses, no wrong write), but a valid RED is not tagged. Sibling RED space_after_bracket_ignore_is_seen. RED 4ccf146bf."
+created_at = 1794892457
+updated_at = 1794892457
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261117_red_writeback_parse_gaps -- --include-ignored space_after_hash_ignore_is_seen"
+rev = "35907f74efe219801ef23683fc1e0b851dccc84d"
+observed_at = 1794892457
+detail = """
+exit 101: 0.3.141 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.77s
+     Running tests/backlog_20261117_red_writeback_parse_gaps.rs (target/debug/deps/backlog_20261117_red_writeback_parse_gaps-c16c6948b232810e)
+error: test failed, to rerun pass `-p backlog --test backlog_20261117_red_writeback_parse_gaps`"""

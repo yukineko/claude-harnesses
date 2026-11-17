@@ -939,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.107"
+version = "0.2.109"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1616,7 +1616,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.67"
+version = "0.1.71"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1943,7 +1943,7 @@ checksum = "c3a6bfce3d99adfa72d24750a61f782f3036a81e7f86d8841ee1326deaebd171"
 
 [[package]]
 name = "tdd"
-version = "0.1.95"
+version = "0.1.99"
 dependencies = [
  "anyhow",
  "chrono",

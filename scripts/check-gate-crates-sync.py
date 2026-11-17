@@ -40,7 +40,7 @@ Sources and how each must relate to the canonical GATE_CRATES set:
     only the constant can drift.)
   - scripts/check-fail-open-mutation.py  module-level GATE_CRATES = (...) tuple —
     must equal canonical EXACTLY. This is the adversarial fail-open mutation
-    harness: it hardcodes the same 7-crate list only because it is a standalone
+    harness: it hardcodes the same 8-crate list only because it is a standalone
     Python script that cannot `pub use harness_core::fleet::GATE_CRATES`. A
     stale copy here would either mutation-test a crate that is no longer a GATE
     crate, or (worse) silently skip a real GATE crate's fail-open coverage.

@@ -45,6 +45,7 @@ pub const GATE_CRATES: &[&str] = &[
     "mutategate",
     "overwatch",
     "parallelguard",
+    "askrelay",
 ];
 
 /// The canonical list of **blocking gates**: every gate that must carry a
@@ -74,6 +75,7 @@ pub const BLOCKING_GATES: &[&str] = &[
     "mutategate",
     "overwatch",
     "parallelguard",
+    "askrelay",
 ];
 
 #[cfg(test)]
@@ -81,7 +83,7 @@ mod tests {
     use super::GATE_CRATES;
 
     #[test]
-    fn gate_crates_is_the_known_seven() {
+    fn gate_crates_is_the_known_eight() {
         assert_eq!(
             GATE_CRATES,
             &[
@@ -91,7 +93,8 @@ mod tests {
                 "stuckguard",
                 "mutategate",
                 "overwatch",
-                "parallelguard"
+                "parallelguard",
+                "askrelay"
             ]
         );
     }

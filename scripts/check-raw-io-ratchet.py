@@ -110,6 +110,7 @@ GATE_CRATES = (
     "mutategate",
     "overwatch",
     "parallelguard",
+    "askrelay",
 )
 
 # Receiver-aware: `(?<!\.)` excludes `some_reader.read_to_string(&mut buf)` (the

@@ -3418,6 +3418,8 @@ notes = """Observed 2026-11-18 ~/.blastguard/blocks/blocks.jsonl line 692 (sessi
 created_at = 1794942463
 updated_at = 1794942463
 weight = 0.0
+issue_number = 1855
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1855"
 rev = 0
 
 [task.repro]

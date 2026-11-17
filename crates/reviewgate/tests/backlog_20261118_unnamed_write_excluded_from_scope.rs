@@ -230,9 +230,7 @@ fn control_read_only_session_still_excludes_foreign_change() {
 
 /// RED: `cargo fmt` rewrites files without naming any. A path-less write is
 /// unattributable -> the changed file must stay in the review set.
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
 #[test]
-#[ignore = "RED: 2026-11-18 path-less Bash write (cargo fmt) excludes changed files from reviewgate scope (fail-open)"]
 fn unnamed_write_cargo_fmt_stays_in_review_set() {
     let f = Fixture::new();
     let t = f.transcript(&[bash("cargo fmt")]);
@@ -247,10 +245,58 @@ fn unnamed_write_cargo_fmt_stays_in_review_set() {
     );
 }
 
-/// RED: a glob `sed -i` rewrites files without naming their paths.
+/// Like `bash`, with the `cwd` a real transcript records on the call.
+fn bash_in(cmd: &str, cwd: &Path) -> serde_json::Value {
+    let mut v = bash(cmd);
+    v["cwd"] = serde_json::json!(cwd.to_string_lossy());
+    v
+}
+
+/// RED (needs the has_unattributable_write cd-target fix, relay from the
+/// coordinator 2026-11-18): `cd <abs dir> && cargo fmt` names only a directory
+/// (the cd target); the formatter still rewrites files without naming any, so
+/// the changed file must stay in the review set.
 // test-weakening-justified: new RED for an unfixed defect (2026-11-18).
 #[test]
-#[ignore = "RED: 2026-11-18 path-less Bash write (glob sed -i) excludes changed files from reviewgate scope (fail-open)"]
+#[ignore = "RED: 2026-11-18 `cd <abs> && cargo fmt` counts the cd target as a named path (has_unattributable_write), excluding changed files"]
+fn unnamed_write_cd_abs_cargo_fmt_stays_in_review_set() {
+    let f = Fixture::new();
+    let t = f.transcript(&[bash_in(
+        &format!("cd {} && cargo fmt", f.repo.display()),
+        &f.repo,
+    )]);
+    let o = f.run(&t);
+    assert!(
+        o.log_files.contains(&FILE.to_string()),
+        "`cd <abs> && cargo fmt` is a path-less write; {FILE} must stay in the review set; \
+         decision={}, verdict={}, reviewed={:?}",
+        o.decision,
+        o.log_verdict,
+        o.log_files
+    );
+}
+
+/// RED (same fix): `cd <relative dir> && cargo fmt`, resolved against the call's cwd.
+// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
+#[test]
+#[ignore = "RED: 2026-11-18 `cd <rel> && cargo fmt` counts the cd target as a named path (has_unattributable_write), excluding changed files"]
+fn unnamed_write_cd_relative_cargo_fmt_stays_in_review_set() {
+    let f = Fixture::new();
+    std::fs::create_dir_all(f.repo.join("sub")).unwrap();
+    let t = f.transcript(&[bash_in("cd sub && cargo fmt", &f.repo)]);
+    let o = f.run(&t);
+    assert!(
+        o.log_files.contains(&FILE.to_string()),
+        "`cd sub && cargo fmt` is a path-less write; {FILE} must stay in the review set; \
+         decision={}, verdict={}, reviewed={:?}",
+        o.decision,
+        o.log_verdict,
+        o.log_files
+    );
+}
+
+/// RED: a glob `sed -i` rewrites files without naming their paths.
+#[test]
 fn unnamed_write_glob_sed_stays_in_review_set() {
     let f = Fixture::new();
     let t = f.transcript(&[bash("sed -i 's/a/b/' *.rs")]);

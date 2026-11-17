@@ -245,9 +245,7 @@ fn control_read_only_session_still_excludes_foreign_change() {
 /// RED: the session ran `cargo fmt`, which rewrites files without naming any.
 /// A path-less write is unattributable -> must stay in scope (restrictive
 /// side), so the untested implementation lines must still be judged.
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
 #[test]
-#[ignore = "RED: 2026-11-18 path-less Bash write (cargo fmt) excludes changed files from tdd scope (fail-open)"]
 fn unnamed_write_cargo_fmt_stays_in_scope() {
     let f = Fixture::new();
     let t = f.transcript(&[bash("cargo fmt", &f.repo)]);
@@ -258,10 +256,42 @@ fn unnamed_write_cargo_fmt_stays_in_scope() {
     );
 }
 
-/// RED: a glob `sed -i` rewrites files without naming their paths.
+/// RED (needs the has_unattributable_write cd-target fix, relay from the
+/// coordinator 2026-11-18): `cd <abs dir> && cargo fmt` names only a directory
+/// (the cd target); the formatter still rewrites files without naming any, so
+/// the changed impl file must stay in scope.
 // test-weakening-justified: new RED for an unfixed defect (2026-11-18).
 #[test]
-#[ignore = "RED: 2026-11-18 path-less Bash write (glob sed -i) excludes changed files from tdd scope (fail-open)"]
+#[ignore = "RED: 2026-11-18 `cd <abs> && cargo fmt` counts the cd target as a named path (has_unattributable_write), excluding changed files"]
+fn unnamed_write_cd_abs_cargo_fmt_stays_in_scope() {
+    let f = Fixture::new();
+    let t = f.transcript(&[bash(
+        &format!("cd {} && cargo fmt", f.repo.display()),
+        &f.repo,
+    )]);
+    let (blocked, out, err) = f.stop(&t);
+    assert!(
+        blocked,
+        "`cd <abs> && cargo fmt` is a path-less write; the changed impl file must stay in scope\nstdout: {out}\nstderr: {err}"
+    );
+}
+
+/// RED (same fix): `cd <relative dir> && cargo fmt`, resolved against the call's cwd.
+// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
+#[test]
+#[ignore = "RED: 2026-11-18 `cd <rel> && cargo fmt` counts the cd target as a named path (has_unattributable_write), excluding changed files"]
+fn unnamed_write_cd_relative_cargo_fmt_stays_in_scope() {
+    let f = Fixture::new();
+    let t = f.transcript(&[bash("cd crates/x && cargo fmt", &f.repo)]);
+    let (blocked, out, err) = f.stop(&t);
+    assert!(
+        blocked,
+        "`cd crates/x && cargo fmt` is a path-less write; the changed impl file must stay in scope\nstdout: {out}\nstderr: {err}"
+    );
+}
+
+/// RED: a glob `sed -i` rewrites files without naming their paths.
+#[test]
 fn unnamed_write_glob_sed_stays_in_scope() {
     let f = Fixture::new();
     let t = f.transcript(&[bash("sed -i 's/a/b/' crates/x/src/*.rs", &f.repo)]);

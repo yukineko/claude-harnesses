@@ -3304,3 +3304,67 @@ exit 101:  failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 9m 31s
      Running tests/testscope_fault_seams_20261117.rs (target/debug/deps/testscope_fault_seams_20261117-0680b439b7ed3bdb)
 error: test failed, to rerun pass `-p condukt --test testscope_fault_seams_20261117`"""
+
+[[task]]
+id = "0031b957"
+title = "tdd: path-less writes (cargo fmt, glob sed -i) are excluded from the Stop scan scope"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "User ruling 2026-11-18 supersedes the 2026-10-17 accepted hole: any Bash write that names no path keeps ALL changed files in scope. RED 6118e167b."
+created_at = 1794942254
+updated_at = 1794942254
+weight = 0.0
+issue_number = 1852
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1852"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261118_unnamed_write_excluded_from_scope -- --ignored"
+rev = "6118e167b943ba9fc6530847df43ce0a215be450"
+observed_at = 1794942254
+detail = """
+exit 101: failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.24s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
+     Running tests/backlog_20261118_unnamed_write_excluded_from_scope.rs (target/debug/deps/backlog_20261118_unnamed_write_excluded_from_scope-7985e8f791874d66)
+error: test failed, to rerun pass `-p tdd --test backlog_20261118_unnamed_write_excluded_from_scope`"""
+
+[[task]]
+id = "dc597740"
+title = "reviewgate: path-less writes (cargo fmt, glob sed -i) are excluded from the Stop scan scope"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "reviewgate",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "User ruling 2026-11-18 supersedes the 2026-10-17 accepted hole: any Bash write that names no path keeps ALL changed files in scope. RED 6118e167b."
+created_at = 1794942296
+updated_at = 1794942296
+weight = 0.0
+issue_number = 1853
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1853"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test backlog_20261118_unnamed_write_excluded_from_scope -- --ignored"
+rev = "6118e167b943ba9fc6530847df43ce0a215be450"
+observed_at = 1794942296
+detail = """
+exit 101:  0 ignored; 0 measured; 2 filtered out; finished in 0.74s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261118_unnamed_write_excluded_from_scope.rs (target/debug/deps/backlog_20261118_unnamed_write_excluded_from_scope-fae859212d40fd27)
+error: test failed, to rerun pass `-p reviewgate --test backlog_20261118_unnamed_write_excluded_from_scope`"""

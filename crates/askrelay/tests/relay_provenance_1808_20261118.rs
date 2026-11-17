@@ -200,7 +200,6 @@ fn show(o: &Output) -> String {
 // ---------------------------------------------------------------- RED
 
 #[test]
-#[ignore = "RED: 2026-11-18 #1808 a row whose session_id differs from its file's session still makes Stop block with the run procedure"]
 fn refuted_session_mismatch_row_does_not_block_stop() {
     let fx = Fx::new("mismatch-stop");
     // AGENT_A is a real subagent of SESSION: only the session mismatch refutes.
@@ -220,7 +219,6 @@ fn refuted_session_mismatch_row_does_not_block_stop() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-18 #1808 an Undetermined row (transcript_path missing) blocks with the byte-for-byte run procedure"]
 fn undetermined_missing_transcript_path_blocks_without_run_procedure() {
     let fx = Fx::new("undet-nopath");
     let _ = fx.transcript(&[AGENT_A]);
@@ -243,7 +241,6 @@ fn undetermined_missing_transcript_path_blocks_without_run_procedure() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-18 #1808 an Undetermined row (subagents dir unreadable) blocks with the byte-for-byte run procedure"]
 fn undetermined_unreadable_subagents_dir_blocks_without_run_procedure() {
     let fx = Fx::new("undet-unreadable");
     let t = fx.transcript(&[AGENT_A]);
@@ -280,7 +277,6 @@ fn undetermined_unreadable_subagents_dir_blocks_without_run_procedure() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-18 #1808 dismiss accepts a row whose session_id differs from its file's session"]
 fn dismiss_refuses_row_whose_session_differs_from_its_file() {
     let fx = Fx::new("dismiss-mismatch");
     let _ = fx.transcript(&[AGENT_A]);
@@ -303,7 +299,6 @@ fn dismiss_refuses_row_whose_session_differs_from_its_file() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-18 #1808 mark-executed marks a Refuted row (agent_id absent from every subagent transcript)"]
 fn mark_executed_does_not_mark_refuted_row() {
     let fx = Fx::new("mark-refuted");
     // The subagents dir is readable and holds AGENT_A only: ABSENT_AGENT is

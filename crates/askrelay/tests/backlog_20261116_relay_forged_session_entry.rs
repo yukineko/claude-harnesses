@@ -41,7 +41,6 @@ fn run(root: &Path, args: &[&str], stdin: &str) -> Output {
 }
 
 #[test]
-#[ignore = "RED: relay queues an entry for an agent_id absent from every transcript of the session; Stop then blocks demanding a byte-for-byte re-run (cross-session command injection)"]
 fn forged_agent_id_is_not_queued_as_pending_relay() {
     let root = std::env::temp_dir().join(format!("bg-relay-forged-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

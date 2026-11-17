@@ -1273,6 +1273,14 @@ forge・condukt のスケジューラが再利用）。
   (2) main session の Bash `Deny` が queue 済み entry と command・cwd バイト一致なら `denied` を記録し、
   deny 理由に `askrelay dismiss <id> --reason "<why>"` を案内する。askrelay が無い・無効でも subagent の `Ask` は
   `Deny` のまま（fail-closed）で、失われるのは main の Stop を止めるリマインドだけ。
+  **信頼境界（backlog #1808）**: queue は信頼できる経路ではない — どのローカルプロセスでも任意の session の
+  queue ファイルに追記できる。書き手である blastguard は信頼しないまま変更せず、読み手（askrelay の Stop /
+  mark-executed / mark-relayed / dismiss）が payload の `transcript_path`（session transcript が信頼の根）で
+  行ごとに Verified（行の `session_id` がファイルの session と一致し、`agent_id` の sidechain
+  `<session>/subagents/agent-<id>.jsonl` が存在）/ Refuted / Undetermined を判定する。Refuted は Stop を
+  block せず、Undetermined は実行手順なしで block する。(2) の `mark_denied` は transcript を受け取らないので
+  行の `session_id` 不一致だけを除外する（`denied` は entry を解決しない）。実在する `agent_id` を名乗る偽造行は
+  Verified になり、この設計では検出しない。詳細は `crates/harness-core/src/relay.rs` の module doc。
 - **`blocklog`**（実装は `harness_core::blocklog`。2026-11-17 に blastguard から移設、blastguard は呼び出しのみ）— block log（ユーザー裁定 2026-11-14 逐語:「…完全なコマンドが残っていないため、
   これ以上は切り分けられません。というのは大変愚かなので記録をとること。止めたなら止めた責任をとる」）。
   表示した `Deny` / `Ask` ごとに 1 行を overwatch に依存せず `~/.blastguard/blocks/blocks.jsonl`

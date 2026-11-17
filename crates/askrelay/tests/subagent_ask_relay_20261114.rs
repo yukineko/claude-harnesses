@@ -89,6 +89,19 @@ fn pre_payload(session: &str, command: &str, cwd: &Path, agent: Option<&str>) ->
     v.to_string()
 }
 
+/// #1808: the session transcript the main-session payloads carry (the relay's
+/// trust root), with a subagent sidechain for `SUB` under
+/// `<dir>/<session>/subagents/agent-<SUB>.jsonl`.
+fn transcript_path(session: &str) -> String {
+    let dir = std::env::temp_dir().join(format!("bg-relay-transcripts-{}", std::process::id()));
+    let sub = dir.join(session).join("subagents");
+    std::fs::create_dir_all(&sub).unwrap();
+    let main = dir.join(format!("{session}.jsonl"));
+    std::fs::write(&main, "{}\n").unwrap();
+    std::fs::write(sub.join(format!("agent-{SUB}.jsonl")), "{}\n").unwrap();
+    main.to_string_lossy().into_owned()
+}
+
 fn post_payload(
     event: &str,
     session: &str,
@@ -102,6 +115,7 @@ fn post_payload(
         "tool_input": { "command": command },
         "cwd": cwd.to_string_lossy(),
         "session_id": session,
+        "transcript_path": transcript_path(session),
         "tool_response": { "stdout": "x", "stderr": "", "interrupted": false, "exit_code": 0 },
     });
     if let Some(a) = agent {
@@ -117,6 +131,7 @@ fn send_payload(session: &str, message: &str, agent: Option<&str>) -> String {
         "tool_name": "SendMessage",
         "tool_input": { "to": "worker", "message": message },
         "session_id": session,
+        "transcript_path": transcript_path(session),
     });
     if let Some(a) = agent {
         v["agent_id"] = json!(a);
@@ -130,6 +145,7 @@ fn stop_payload(session: &str, cwd: &Path, active: bool) -> String {
         "hook_event_name": "Stop",
         "session_id": session,
         "cwd": cwd.to_string_lossy(),
+        "transcript_path": transcript_path(session),
         "stop_hook_active": active,
     })
     .to_string()

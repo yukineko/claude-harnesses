@@ -70,15 +70,31 @@ impl Fx {
         self.ledger_dir.path().join("ledger.tsv")
     }
     fn go(&self) -> String {
+        self.go_as("testscope", None)
+    }
+    /// `go`, then (when the hook allowed it, i.e. the command ran) the
+    /// PostToolUse that confirms the run (spec testscope-confirmed-run R2:
+    /// input only, the asserts stay as they were).
+    fn go_confirmed(&self) -> String {
+        let res = self.go_as("testscope", Some("tu-1"));
+        if res.trim().is_empty() {
+            self.go_as("testscope-confirm", Some("tu-1"));
+        }
+        res
+    }
+    fn go_as(&self, sub: &str, tuid: Option<&str>) -> String {
         let cwd = self.tree.path();
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "session_id": "s",
             "tool_name": "Bash",
             "tool_input": {"command": "cargo test -p foo --test new_test"},
             "cwd": cwd.to_str().unwrap(),
         });
+        if let Some(id) = tuid {
+            payload["tool_use_id"] = serde_json::json!(id);
+        }
         let mut child = Command::new(env!("CARGO_BIN_EXE_condukt"))
-            .arg("testscope")
+            .arg(sub)
             .env("HOME", self.home.path())
             .env("CONDUKT_TESTSCOPE_LEDGER", self.ledger())
             .current_dir(cwd)
@@ -134,7 +150,7 @@ fn control_editing_a_tracked_file_allows_rerun() {
 #[test]
 fn control_unchanged_tree_refuses_rerun() {
     let fx = Fx::new();
-    assert!(!denied(&fx.go()));
+    assert!(!denied(&fx.go_confirmed()));
     let second = fx.go();
     assert!(denied(&second), "same tree, same command: {second}");
 }

@@ -188,9 +188,253 @@ pub fn oracle_report_same_cmd(
     (report, code)
 }
 
+/// One recorded proof file (one slot of one kind): its `cmd` and `passed`
+/// reads, each with the same tri-state as `proof::read_cmd` / `read_passed`.
+pub struct SlotProof {
+    pub cmd: Determination<Option<String>>,
+    pub passed: Determination<Option<bool>>,
+}
+
+fn read_known<T: Clone>(d: &Determination<T>) -> Result<T, String> {
+    match d {
+        Determination::Known(v) => Ok(v.clone()),
+        Determination::Undetermined(w) => Err(w.as_str().to_string()),
+    }
+}
+
+/// `tdd oracle`'s verdict over ALL slots of a task (backlog 519f089e: one
+/// slot per test command, so a second command no longer erases the first).
+///
+/// * Either list `Undetermined`, or any proof in it with an unreadable `cmd` /
+///   `passed`: transition `"undetermined"`, exit [`ORACLE_EXIT_UNDETERMINED`].
+/// * At most one RED proof and at most one GREEN proof: exactly
+///   [`oracle_report_same_cmd`] (the single-slot verdict, unchanged — including
+///   `"command_mismatch"` for a RED of command A and a GREEN of command B).
+/// * Otherwise the proofs are grouped by recorded `cmd`. The oracle is valid
+///   (exit 0) ONLY when EVERY command has a RED and a GREEN proof and goes
+///   Fail->Pass; a command with only one side, a proof with no recorded `cmd`,
+///   or two proofs of one kind for one command makes it invalid (exit 1). A RED
+///   of command A is never paired with a GREEN of command B.
+///   The report lists every command under `"slots"`; the top-level
+///   `"transition"` is `"fail_to_pass"` when valid, else that of the first
+///   non-valid slot.
+///
+/// This never compares trees (user ruling 2026-11-17): that is `condukt merge`'s
+/// job, from the identity each proof records.
+pub fn oracle_report_slots(
+    reds: Determination<Vec<SlotProof>>,
+    greens: Determination<Vec<SlotProof>>,
+) -> (Value, i32) {
+    let (reds, greens) = match (reds, greens) {
+        (Determination::Known(r), Determination::Known(g)) => (r, g),
+        (r, g) => {
+            let why = |d: &Determination<Vec<SlotProof>>| match d {
+                Determination::Known(_) => None,
+                Determination::Undetermined(w) => Some(w.as_str().to_string()),
+            };
+            let report = json!({
+                "transition": "undetermined",
+                "valid_fp_oracle": false,
+                "has_red": Value::Null,
+                "has_green": Value::Null,
+                "undetermined": { "red": why(&r), "green": why(&g) },
+            });
+            return (report, ORACLE_EXIT_UNDETERMINED);
+        }
+    };
+    // Resolve every proof to concrete (cmd, passed) values. A proof whose cmd
+    // or passed could not be read is collected as a reason and the oracle
+    // answers "undetermined" below — no value is invented for it.
+    type Resolved = Vec<(Option<String>, Option<bool>)>;
+    let mut why: Vec<String> = Vec::new();
+    let mut resolve = |kind: &str, list: &[SlotProof]| -> Resolved {
+        let mut out = Vec::new();
+        for p in list {
+            match (read_known(&p.cmd), read_known(&p.passed)) {
+                (Ok(cmd), Ok(passed)) => out.push((cmd, passed)),
+                (cmd, passed) => {
+                    if let Err(e) = cmd {
+                        why.push(format!("{kind} cmd: {e}"));
+                    }
+                    if let Err(e) = passed {
+                        why.push(format!("{kind} passed: {e}"));
+                    }
+                }
+            }
+        }
+        out
+    };
+    let reds_r = resolve("red", &reds);
+    let greens_r = resolve("green", &greens);
+    if !why.is_empty() {
+        let report = json!({
+            "transition": "undetermined",
+            "valid_fp_oracle": false,
+            "has_red": !reds.is_empty(),
+            "has_green": !greens.is_empty(),
+            "undetermined": why,
+        });
+        return (report, ORACLE_EXIT_UNDETERMINED);
+    }
+    if reds_r.len() <= 1 && greens_r.len() <= 1 {
+        let one = |l: &Resolved| -> (Determination<Option<bool>>, Determination<Option<String>>) {
+            match l.first() {
+                Some((cmd, passed)) => (
+                    Determination::known(*passed),
+                    Determination::known(cmd.clone()),
+                ),
+                None => (Determination::known(None), Determination::known(None)),
+            }
+        };
+        let (pre, red_cmd) = one(&reds_r);
+        let (post, green_cmd) = one(&greens_r);
+        return oracle_report_same_cmd(pre, post, red_cmd, green_cmd);
+    }
+    // Group by command (None = a proof that records no command).
+    type Passes = Vec<Option<bool>>;
+    let mut groups: std::collections::BTreeMap<Option<String>, (Passes, Passes)> =
+        std::collections::BTreeMap::new();
+    for (cmd, passed) in &reds_r {
+        groups.entry(cmd.clone()).or_default().0.push(*passed);
+    }
+    for (cmd, passed) in &greens_r {
+        groups.entry(cmd.clone()).or_default().1.push(*passed);
+    }
+    let mut slots = Vec::new();
+    let mut first_bad: Option<String> = None;
+    for (cmd, (r, g)) in &groups {
+        let (transition, valid) = if cmd.is_none() {
+            ("command_mismatch".to_string(), false)
+        } else if r.len() > 1 || g.len() > 1 {
+            ("duplicate_slot".to_string(), false)
+        } else {
+            let (rep, _) = oracle_report(
+                Determination::known(r.first().copied().flatten()),
+                Determination::known(g.first().copied().flatten()),
+            );
+            (
+                rep["transition"].as_str().unwrap_or("unknown").to_string(),
+                rep["valid_fp_oracle"].as_bool() == Some(true),
+            )
+        };
+        if !valid && first_bad.is_none() {
+            first_bad = Some(transition.clone());
+        }
+        slots.push(json!({
+            "cmd": cmd,
+            "transition": transition,
+            "valid_fp_oracle": valid,
+            "has_red": !r.is_empty(),
+            "has_green": !g.is_empty(),
+        }));
+    }
+    let valid = first_bad.is_none() && !slots.is_empty();
+    let report = json!({
+        "transition": first_bad.unwrap_or_else(|| "fail_to_pass".to_string()),
+        "valid_fp_oracle": valid,
+        "has_red": !reds.is_empty(),
+        "has_green": !greens.is_empty(),
+        "slots": slots,
+    });
+    (
+        report,
+        if valid {
+            ORACLE_EXIT_VALID
+        } else {
+            ORACLE_EXIT_INVALID
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sp(cmd: Option<&str>, passed: Option<bool>) -> SlotProof {
+        SlotProof {
+            cmd: Determination::known(cmd.map(str::to_string)),
+            passed: Determination::known(passed),
+        }
+    }
+
+    #[test]
+    fn slots_all_fail_to_pass_is_valid() {
+        let (r, code) = oracle_report_slots(
+            Determination::known(vec![sp(Some("A"), Some(false)), sp(Some("B"), Some(false))]),
+            Determination::known(vec![sp(Some("B"), Some(true)), sp(Some("A"), Some(true))]),
+        );
+        assert_eq!(code, ORACLE_EXIT_VALID, "{r}");
+        assert_eq!(r["valid_fp_oracle"], true);
+        assert_eq!(r["slots"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn slots_unpaired_command_is_invalid() {
+        // RED A, RED B, GREEN A: B never went green. RED A paired with a
+        // GREEN of another command is never valid.
+        let (r, code) = oracle_report_slots(
+            Determination::known(vec![sp(Some("A"), Some(false)), sp(Some("B"), Some(false))]),
+            Determination::known(vec![sp(Some("A"), Some(true))]),
+        );
+        assert_eq!(code, ORACLE_EXIT_INVALID, "{r}");
+        assert_eq!(r["valid_fp_oracle"], false);
+        let (r, code) = oracle_report_slots(
+            Determination::known(vec![sp(Some("A"), Some(false)), sp(Some("B"), Some(false))]),
+            Determination::known(vec![sp(Some("C"), Some(true)), sp(Some("D"), Some(true))]),
+        );
+        assert_eq!(code, ORACLE_EXIT_INVALID, "{r}");
+    }
+
+    #[test]
+    fn slots_one_failing_green_makes_it_invalid() {
+        let (_, code) = oracle_report_slots(
+            Determination::known(vec![sp(Some("A"), Some(false)), sp(Some("B"), Some(false))]),
+            Determination::known(vec![sp(Some("A"), Some(true)), sp(Some("B"), Some(false))]),
+        );
+        assert_eq!(code, ORACLE_EXIT_INVALID);
+    }
+
+    #[test]
+    fn slots_without_a_recorded_cmd_are_never_valid() {
+        let (r, code) = oracle_report_slots(
+            Determination::known(vec![sp(Some("A"), Some(false)), sp(None, Some(false))]),
+            Determination::known(vec![sp(Some("A"), Some(true)), sp(None, Some(true))]),
+        );
+        assert_eq!(code, ORACLE_EXIT_INVALID, "{r}");
+    }
+
+    #[test]
+    fn slots_single_pair_keeps_the_single_slot_verdict() {
+        let (r, code) = oracle_report_slots(
+            Determination::known(vec![sp(Some("A"), Some(false))]),
+            Determination::known(vec![sp(Some("B"), Some(true))]),
+        );
+        assert_eq!(r["transition"], "command_mismatch");
+        assert_eq!(code, ORACLE_EXIT_INVALID);
+        let (r, code) =
+            oracle_report_slots(Determination::known(vec![]), Determination::known(vec![]));
+        assert_eq!(r["transition"], "unknown");
+        assert_eq!(code, ORACLE_EXIT_INVALID);
+    }
+
+    #[test]
+    fn slots_unreadable_is_undetermined_exit_2() {
+        let (r, code) = oracle_report_slots(
+            Determination::undetermined("cannot list"),
+            Determination::known(vec![]),
+        );
+        assert_eq!(code, ORACLE_EXIT_UNDETERMINED, "{r}");
+        assert_eq!(r["valid_fp_oracle"], false);
+        let bad = SlotProof {
+            cmd: Determination::undetermined("io"),
+            passed: Determination::known(Some(false)),
+        };
+        let (_, code) = oracle_report_slots(
+            Determination::known(vec![bad, sp(Some("B"), Some(false))]),
+            Determination::known(vec![]),
+        );
+        assert_eq!(code, ORACLE_EXIT_UNDETERMINED);
+    }
 
     #[test]
     fn classify_maps_all_four_transitions() {

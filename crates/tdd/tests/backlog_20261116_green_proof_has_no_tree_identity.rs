@@ -84,8 +84,6 @@ fn valid(o: &Output) -> bool {
         && (out.contains("\"valid_fp_oracle\":true") || out.contains("\"valid_fp_oracle\": true"))
 }
 
-// test-weakening-justified: new RED for an unfixed defect (2026-11-16).
-#[ignore = "RED: 2026-11-16 green proof has no tree id; change after GREEN still yields valid_fp_oracle:true"]
 #[test]
 fn oracle_detects_change_made_after_green() {
     let d = Dir(std::env::temp_dir().join(format!("tdd-green-tree-{}", std::process::id())));

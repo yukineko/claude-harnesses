@@ -152,6 +152,15 @@ store は repo ごとに解決される (`<repo root>/.backlog/tasks.toml`)。
   cross-project な `~/.backlog` へフォールバックしない。`next` も同様に拒否する。共有 store を明示的に使いたい場合は
   `~/.backlog/config.toml` で `store_dir` を pin する（pinned store は複数 project を持ちうるので、
   そこでは `--project` は従来どおりのフィルタ）。
+- **GitHub issue ミラーの無効化 (`github_mirror`):** `~/.backlog/config.toml` に
+  `github_mirror = false` と書くと、backlog は issue ミラーのために `gh` を一切呼ばない。
+  `add` は行を通常どおり書く（primary branch への land も従来どおり）が issue を作らず、
+  `done` / `cancel` / `recheck` の inline close もせず、`sync` は（dry run も含めて）何もしないで exit 0 する。
+  いずれもミラーが無効である旨を 1 行出し、SessionStart hook は「GitHub mirror drift」の代わりに
+  その 1 行を注入する。キーが無いか `true` なら従来どおりミラーする。bool 以外の値
+  （例: `github_mirror = "no"`）は既定値に倒さずエラーとして報告し、ミラーしない
+  （`add` / `sync` は非0で終了、`done` 等は issue を閉じずに `error:` を出す）。なお
+  config.toml 自体が読めない／TOML として不正な場合は、従来どおり全項目が既定値（ミラー ON）になる。
 
 `project` フィールド自体は残る（誰が起票したかを示し、そのラベルが推測だった場合は `list` が
 `[project unresolved: …]` と表示する） が、**何が見えるかを決めるものではなくなった**。

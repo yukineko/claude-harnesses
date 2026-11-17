@@ -3017,3 +3017,32 @@ exit 101: 0 filtered out; finished in 1.96s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
      Running tests/backlog_20261117_python_stdin_body_exhausts_node_budget_fp.rs (target/debug/deps/backlog_20261117_python_stdin_body_exhausts_node_budget_fp-d0de5f74c164dc3d)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261117_python_stdin_body_exhausts_node_budget_fp`"""
+
+[[task]]
+id = "4503c90d"
+title = "condukt: part-way-removed worktree (no .git, tracked/ignored files left) survives discard/remove/cleanup; not quarantine-moved"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-16..17 run-20261116-164820-25374 (condukt 0.7.435, worktree_base on WSL drvfs /mnt/c): t1 leftover (target/ + tdd.toml, no .git) refused by worktree remove (git symbolic-ref HEAD exited 128) and kept by cleanup (no resolvable .git); t2 discard refused 'git declined to remove it, its content could not be preserved (... seeding the temp index from HEAD) ... The directory is left in place.' Both needed a human rm. c96e756a quarantine only runs when the --force retry fails; Undetermined branch of remove_worktree_preserving bails. Readings: (a) defect, quarantine-move deletes nothing so it is fail-closed-compatible; (b) intended fail-closed refusal. RED 078435a0d."
+created_at = 1794876375
+updated_at = 1794876375
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261117_worktree_partial_remove_leftover_discard -- --include-ignored"
+rev = "69bea7a6d6ef6a65dbb7c3414b37c3a1e219309a"
+observed_at = 1794876375
+detail = """
+exit 101: ktrees/session-df7c968f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.88s
+     Running tests/backlog_20261117_worktree_partial_remove_leftover_discard.rs (target/debug/deps/backlog_20261117_worktree_partial_remove_leftover_discard-f3558f15bad2719c)
+error: test failed, to rerun pass `-p condukt --test backlog_20261117_worktree_partial_remove_leftover_discard`"""

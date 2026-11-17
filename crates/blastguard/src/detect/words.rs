@@ -105,7 +105,7 @@ pub(super) fn first_shell_word(s: &str) -> Option<String> {
 ///   * `"rm"` / `'rm'` / `r""m` — quoted or split command words
 ///   * `/bin/rm`, `$HOME/bin/rm` (literal path part) — via `basename`
 ///   * `command rm`, `sudo rm`, `env rm`, … — via `command_index`'s wrapper skip
-///   * `=rm` — zsh equals expansion (see below)
+///   * `=rm` — zsh equals expansion, shell-scoped (see below)
 ///
 /// OUT OF REACH (deliberately not attempted — each needs runtime state we do
 /// not have, and guessing would deny benign commands):
@@ -130,6 +130,9 @@ pub(super) fn first_shell_word(s: &str) -> Option<String> {
 /// command word, so an expansion there (`=$x`) stays an expansion and is asked
 /// about by the callers that check the raw token for one. A quoted or escaped
 /// `=` (`'=rm'`, `"=rm"`, `\=rm`) is not expanded by zsh and is left as is.
+/// The stripping is shell-scoped: inside text run by bash (`bash -c '=rm …'`)
+/// the `=` is kept, since bash does not expand it — see
+/// [`equals_command_word`].
 pub(super) fn normalized_command(tok: &str) -> String {
     let tok = equals_command_word(tok).unwrap_or(tok);
     let unquoted = first_shell_word(tok).unwrap_or_else(|| tok.to_string());
@@ -147,8 +150,61 @@ pub(super) fn normalized_command(tok: &str) -> String {
 /// builtin or function of the same name (zsh substitutes its path). Callers
 /// that model a builtin's effect on the shell's own state (`cd` moving the
 /// working directory) must check this before applying it.
+///
+/// SHELL-SCOPED (user ruling 2026-11-18): only a shell that performs equals
+/// expansion turns `=WORD` into a program path. While the text being judged is
+/// run by a shell positively known to be bash ([`equals_scope`] set to
+/// `false`, e.g. the payload of `bash -c '…'`), this returns `None`: bash runs
+/// a command literally named `=WORD` (not found). Everywhere else — the Bash
+/// tool's own top level (zsh), `zsh -c`, `sh -c` and any shell whose identity
+/// is not known — the `=` is stripped (the strict side).
 pub(super) fn equals_command_word(tok: &str) -> Option<&str> {
+    if !ZSH_EQUALS_ACTIVE.with(std::cell::Cell::get) {
+        return None;
+    }
     tok.strip_prefix('=').filter(|rest| !rest.is_empty())
+}
+
+thread_local! {
+    /// Whether the shell running the text currently being judged performs zsh
+    /// equals expansion (see [`equals_command_word`]). `true` (strip `=`) is
+    /// the default and the fail-closed value; only [`equals_scope`] changes it,
+    /// and only for the duration of its guard.
+    static ZSH_EQUALS_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// Guard returned by [`equals_scope`]; restores the previous setting on drop
+/// (also while unwinding), so a scope can never leak into later analysis.
+pub(super) struct EqualsScope {
+    prev: bool,
+}
+
+impl Drop for EqualsScope {
+    fn drop(&mut self) {
+        ZSH_EQUALS_ACTIVE.with(|c| c.set(self.prev));
+    }
+}
+
+/// Judge text run by a shell that does (`true`) or does not (`false`) perform
+/// zsh equals expansion until the returned guard is dropped.
+pub(super) fn equals_scope(active: bool) -> EqualsScope {
+    EqualsScope {
+        prev: ZSH_EQUALS_ACTIVE.with(|c| c.replace(active)),
+    }
+}
+
+/// The current equals-expansion setting (see [`equals_scope`]); used by
+/// re-analysis of text that the SAME shell runs (`eval`, `exec`, `source`).
+pub(super) fn zsh_equals_active() -> bool {
+    ZSH_EQUALS_ACTIVE.with(std::cell::Cell::get)
+}
+
+/// Whether the shell named `shell` (a normalised command word for which
+/// [`is_shell`] holds) expands `=WORD`. Only bash is positively known not to;
+/// every other shell, including ones whose identity is unknown (`sh` may be
+/// zsh on macOS), is treated as expanding — the strict side.
+pub(super) fn shell_expands_equals(shell: &str) -> bool {
+    shell != "bash"
 }
 
 pub(super) fn is_assignment(tok: &str) -> bool {

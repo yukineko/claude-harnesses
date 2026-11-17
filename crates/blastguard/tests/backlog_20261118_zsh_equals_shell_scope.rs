@@ -155,7 +155,6 @@ fn control_bash_c_plain_rm_is_deny() {
 // ---- bash does not expand =word: not rm ----
 
 #[test]
-#[ignore = "RED: observed Deny (main+subagent) at f455e6b44: bash -c does not expand =rm"]
 fn bash_c_equals_rm_is_allow() {
     let bad = mismatches(&["bash -c '=rm -rf ~'"], "bash-c", "allow", |d| {
         d == "allow"
@@ -167,7 +166,6 @@ fn bash_c_equals_rm_is_allow() {
 }
 
 #[test]
-#[ignore = "RED: observed Deny (main+subagent) at f455e6b44: env bash -c follows bash"]
 fn env_bash_c_equals_rm_is_allow() {
     let bad = mismatches(&["env bash -c '=rm -rf ~'"], "env-bash", "allow", |d| {
         d == "allow"
@@ -179,7 +177,6 @@ fn env_bash_c_equals_rm_is_allow() {
 }
 
 #[test]
-#[ignore = "RED: observed Deny (main+subagent) at f455e6b44: sudo bash -c follows bash"]
 fn sudo_bash_c_equals_rm_is_not_deny() {
     let bad = mismatches(
         &["sudo bash -c '=rm -rf ~'"],

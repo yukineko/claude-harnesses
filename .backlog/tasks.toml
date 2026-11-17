@@ -3195,3 +3195,31 @@ exit 101: 0.3.139 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c96
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.88s
      Running tests/backlog_20261117_red_writeback_parse_gaps.rs (target/debug/deps/backlog_20261117_red_writeback_parse_gaps-9cfa35356fb8d143)
 error: test failed, to rerun pass `-p backlog --test backlog_20261117_red_writeback_parse_gaps`"""
+
+[[task]]
+id = "c62740af"
+title = "backlog red_writeback: #[ignore] on a non-fn item (struct) is bound to the next fn"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-17 at 1331e475d (backlog 0.3.138), t3 re-verifier low finding, RED by independent agent: #[ignore = RED: s] on struct Helper; is treated as the ignore of the following fn red_one and add exits 0. Only struct observed; mod not tried. Expected: an attribute on a non-fn item is not a test ignore. RED 4ccf146bf."
+created_at = 1794892431
+updated_at = 1794892431
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261117_red_writeback_parse_gaps -- --include-ignored ignore_on_non_fn_item_is_not_bound_to_next_fn"
+rev = "2d410f86fd7ab1edcaccfa873d4a117f130e5cb7"
+observed_at = 1794892431
+detail = """
+exit 101: 0.3.140 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.87s
+     Running tests/backlog_20261117_red_writeback_parse_gaps.rs (target/debug/deps/backlog_20261117_red_writeback_parse_gaps-3c47da0ac49bfa16)
+error: test failed, to rerun pass `-p backlog --test backlog_20261117_red_writeback_parse_gaps`"""

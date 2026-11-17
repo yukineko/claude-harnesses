@@ -196,18 +196,114 @@ class Undetermined(Exception):
 # text. Anything the lexer cannot follow, any operator outside the allowlist,
 # any expansion, any program/option outside the allowlist is "not proven" and
 # keeps the old behaviour (record as this session's write, restrictive side).
-_RO_PROGRAMS = frozenset({
-    "ls", "cat", "head", "tail", "wc", "pwd", "echo", "true", "false", "grep",
-    "stat", "file", "basename", "dirname", "which", "diff", "cmp",
-})
-_RO_GIT_SUBCOMMANDS = frozenset({
-    "status", "log", "diff", "show", "rev-parse", "rev-list", "ls-files",
-    "cat-file", "describe", "blame", "shortlog", "name-rev", "merge-base",
-    "diff-tree", "diff-index", "ls-tree", "for-each-ref", "show-ref",
-})
+# Closed per-program flag allowlists: (short flag chars, exact long names).
+# A flag is accepted only when it is listed here; ANY other flag is "not
+# provable". Long options are matched EXACTLY on the part before `=` (git and
+# GNU tools accept unique-prefix abbreviations such as `--out=` for `--output=`,
+# so an abbreviation can never be proven to be what it looks like).
+_RO_PROGRAMS = {
+    "ls": ("1aAdlhFpRtSrnLG", frozenset()),
+    "cat": ("nbsTEvA", frozenset()),
+    "head": ("nqc0123456789", frozenset()),
+    "tail": ("nqc0123456789", frozenset()),  # no -f/-F: follow never ends
+    "wc": ("lwcmL", frozenset()),
+    "pwd": ("LP", frozenset()),
+    "echo": ("n", frozenset()),
+    "true": ("", frozenset()),
+    "false": ("", frozenset()),
+    "grep": ("ivnclLoqsHhwxEFGrRe", frozenset()),
+    "stat": ("Lfc", frozenset()),
+    "file": ("bLi", frozenset()),  # NOT -C (compiles *.mgc) and NOT -m
+    "basename": ("as", frozenset()),
+    "dirname": ("", frozenset()),
+    "which": ("a", frozenset()),
+    "diff": ("uUcrqibBwNy0123456789", frozenset()),
+    "cmp": ("lsb", frozenset()),
+}
+# git subcommand -> (short chars, exact long names, exact extra short tokens)
+_RO_GIT = {
+    "status": ("sbvz", frozenset({
+        "--porcelain", "--short", "--branch", "--long", "--untracked-files",
+        "--ignored", "--no-renames", "--null", "--ahead-behind",
+        "--no-ahead-behind"}), frozenset({"-uall", "-uno", "-unormal"})),
+    "log": ("pn0123456789SG", frozenset({
+        "--oneline", "--graph", "--decorate", "--no-decorate", "--stat",
+        "--name-only", "--name-status", "--format", "--pretty", "--max-count",
+        "--since", "--until", "--author", "--grep", "--all", "--abbrev-commit",
+        "--no-merges", "--merges", "--first-parent", "--reverse", "--date",
+        "--follow", "--no-color", "--shortstat", "--numstat", "--patch",
+        "--no-patch", "--skip", "--abbrev", "--topo-order", "--date-order"}),
+        frozenset()),
+    "diff": ("pUwbq0123456789", frozenset({
+        "--stat", "--name-only", "--name-status", "--cached", "--staged",
+        "--numstat", "--shortstat", "--no-color", "--color", "--patch",
+        "--no-patch", "--quiet", "--exit-code", "--check", "--no-renames",
+        "--summary", "--unified", "--ignore-space-change",
+        "--ignore-all-space", "--word-diff", "--no-index", "--minimal",
+        "--histogram", "--patience", "--diff-filter", "--relative",
+        "--abbrev", "--full-index", "--binary", "--raw"}), frozenset()),
+    "show": ("ps", frozenset({
+        "--stat", "--name-only", "--name-status", "--oneline", "--format",
+        "--pretty", "--no-patch", "--patch", "--no-color", "--abbrev-commit",
+        "--numstat", "--shortstat", "--summary", "--date"}), frozenset()),
+    "rev-parse": ("q", frozenset({
+        "--show-toplevel", "--git-dir", "--git-common-dir", "--abbrev-ref",
+        "--short", "--verify", "--is-inside-work-tree", "--show-cdup",
+        "--show-prefix", "--symbolic-full-name", "--absolute-git-dir",
+        "--is-bare-repository", "--quiet"}), frozenset()),
+    "rev-list": ("n", frozenset({
+        "--count", "--max-count", "--oneline", "--parents", "--reverse",
+        "--all", "--first-parent", "--no-merges", "--abbrev-commit",
+        "--since", "--until", "--author", "--left-right",
+        "--ancestry-path"}), frozenset()),
+    "ls-files": ("cdmosuz", frozenset({
+        "--cached", "--deleted", "--modified", "--others", "--ignored",
+        "--stage", "--exclude-standard", "--unmerged", "--full-name",
+        "--error-unmatch"}), frozenset()),
+    "cat-file": ("tspe", frozenset(), frozenset()),  # NOT --filters/--textconv
+    "describe": ("", frozenset({
+        "--tags", "--abbrev", "--always", "--long", "--contains", "--all",
+        "--exact-match"}), frozenset()),
+    "blame": ("Lewsfnp", frozenset({
+        "--porcelain", "--line-porcelain", "--show-name", "--show-email",
+        "--abbrev", "--date"}), frozenset()),  # NOT --contents
+    "shortlog": ("sne", frozenset({"--summary", "--numbered", "--email"}),
+                 frozenset()),
+    "name-rev": ("", frozenset({
+        "--name-only", "--tags", "--refs", "--no-undefined"}), frozenset()),
+    "merge-base": ("a", frozenset({
+        "--is-ancestor", "--fork-point", "--all", "--octopus"}), frozenset()),
+    "diff-tree": ("rtp", frozenset({
+        "--name-only", "--name-status", "--no-commit-id", "--root", "--stat",
+        "--numstat"}), frozenset()),
+    "diff-index": ("", frozenset({
+        "--cached", "--name-only", "--name-status", "--quiet", "--raw"}),
+        frozenset()),
+    "ls-tree": ("rtdlz", frozenset({
+        "--name-only", "--full-tree", "--long", "--abbrev"}), frozenset()),
+    "for-each-ref": ("", frozenset({
+        "--format", "--sort", "--count", "--merged", "--no-merged",
+        "--contains", "--points-at"}), frozenset()),
+    "show-ref": ("dq", frozenset({
+        "--heads", "--tags", "--verify", "--hash", "--abbrev", "--quiet",
+        "--head", "--dereference"}), frozenset()),
+}
 _RO_SEPARATORS = frozenset({"|", "&&", "||", ";"})
 _RO_PUNCT = "();<>|&"
-_RO_BAD_GIT_OPT_PREFIXES = ("--output", "--ext-diff", "--textconv", "-o")
+
+
+def _ro_flags_ok(args: list[str], short: str, long_names, extra=frozenset()) -> bool:
+    for a in args:
+        if a == "--":
+            return True  # everything after is a positional argument
+        if a in extra or a == "-" or not a.startswith("-"):
+            continue
+        if a.startswith("--"):
+            if a.split("=", 1)[0] not in long_names:
+                return False
+        elif not all(c in short for c in a[1:]):
+            return False
+    return True
 
 
 def _ro_simple_command(argv: list[str]) -> bool:
@@ -215,22 +311,25 @@ def _ro_simple_command(argv: list[str]) -> bool:
         return False
     prog = argv[0]
     if prog in _RO_PROGRAMS:
-        return True
+        short, long_names = _RO_PROGRAMS[prog]
+        return _ro_flags_ok(argv[1:], short, long_names)
     if prog != "git":
         return False
     i = 1
     # only `-C <path>` / `--no-pager` may precede the subcommand: `-c k=v` can
-    # configure an arbitrary program to run.
+    # configure an arbitrary program to run. `-C` only changes which repo a
+    # read-only subcommand reads; it cannot make it write.
     while i < len(argv):
-        if argv[i] == "-C" and i + 1 < len(argv):
+        if argv[i] == "-C" and i + 1 < len(argv) and not argv[i + 1].startswith("-"):
             i += 2
         elif argv[i] == "--no-pager":
             i += 1
         else:
             break
-    if i >= len(argv) or argv[i] not in _RO_GIT_SUBCOMMANDS:
+    if i >= len(argv) or argv[i] not in _RO_GIT:
         return False
-    return not any(a.startswith(_RO_BAD_GIT_OPT_PREFIXES) for a in argv[i + 1:])
+    short, long_names, extra = _RO_GIT[argv[i]]
+    return _ro_flags_ok(argv[i + 1:], short, long_names, extra)
 
 
 def command_provably_read_only(command) -> bool:

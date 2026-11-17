@@ -104,7 +104,11 @@ writing.
   code count (mentions in comments or string/char literals do not). If the repro has test-name
   filters (libtest substring match on the fn name), ONLY the `#[ignore]` of the test they select
   is a target: exactly one must be selected and it must be an id-less RED (another id, a non-RED
-  reason, none selected or several selected all fail without rewriting). A repro without filters
+  reason, none selected or several selected all fail without rewriting). Only the fn name is
+  matched, so a module-path filter such as `tests::red_a` selects nothing and fails without
+  rewriting. Known residual: when exactly one tracked file matches, `-p` is not cross-checked
+  against its `Cargo.toml` (the repro already ran under that `-p`); a `[[test]] path = ...`
+  target outside `tests/` is not found and fails. A repro without filters
   rewrites only when the file holds exactly one id-less RED attribute. A target already carrying
   `RED(<id>)` (same id) is left unchanged. `pytest` / script repros have no
   `#[ignore]` convention: skipped with a stderr note (exit unchanged). Every other failure — a

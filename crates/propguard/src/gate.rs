@@ -145,7 +145,7 @@ fn resolve_filter(
 /// `allow("no-code-changes")` — "nothing here to check" about a change set
 /// propguard merely failed to match. Same shape, same fix, as
 /// `blastguard::exclude::build_set` (9ed33ba6) and `blastguard::diffrisk`
-/// before it; this is the third instance of that mirror gap.
+/// (now `riskgrade::diffrisk`) before it; this is the third instance of that mirror gap.
 fn build_set(globs: &[String]) -> Determination<Option<globset::GlobSet>> {
     let mut b = GlobSetBuilder::new();
     let mut any = false;

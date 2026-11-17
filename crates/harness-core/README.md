@@ -41,6 +41,7 @@ harness-core ships no `plugin.json`, no hooks, and no binary.
 - `plugin_bin`: Locates a sibling plugin's executable from the plugin cache, picking the newest version numerically, and, when the cache holds no version directory, reports a binary absent from `$PATH` as known-absent rather than undetermined.
 - `progress`: Liveness engine: any advancing signal is `Progressing`, a fingerprint frozen across the window is `Stalled`, and a first observation is undetermined, never stalled.
 - `append`: Atomic single-`write()` JSONL append: one newline-terminated record per call, and concurrent writers never interleave records.
+- `blocklog`: blastguard's block log (moved from blastguard 2026-11-17): every printed Deny/Ask appends one JSON line holding the byte-exact Bash command or the full `tool_input` to `~/.blastguard/blocks/blocks.jsonl` (override `BLASTGUARD_BLOCK_LOG_DIR`); a failed write is returned, never silent.
 - `discovery`: Append-only discovery-record store: a record persisted by one session is seen as owned by another session's lookup, with a deterministic fingerprint.
 - `lessons` / `retrieval`: Lessons store idempotent by id, first write wins, and a retrieval-event ledger idempotent by run id. The default lessons store is `~/.lessons/lessons.jsonl`.
 - `code_index` / `text_index` / `callgraph` / `index_store`: Lexical indexes: deterministic symbols, deterministic full text and a caller-to-callee graph that finds edges across files, with a façade that answers symbol search and full-text search.

@@ -7,7 +7,7 @@
 //! env (src/main.rs `safe_roots`: `std::env::var("CLAUDE_PROJECT_DIR")`,
 //! `std::env::var("TMPDIR")`; src/detect/scratch_place.rs
 //! `process_place_model` likewise), and they decide which places are managed
-//! (Allow vs Ask/Deny for deletions and scratch writes). src/blocklog.rs
+//! (Allow vs Ask/Deny for deletions and scratch writes). harness-core src/blocklog.rs
 //! `record` writes neither. scripts/blastguard_fp_replay.py has to approximate
 //! `CLAUDE_PROJECT_DIR` from the cwd and inherit its own `TMPDIR` (its
 //! docstring lists both under "WHAT STILL DIFFERS FROM THE ORIGINAL CALL").

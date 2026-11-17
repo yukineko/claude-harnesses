@@ -513,31 +513,14 @@ of this README for how each undetermined case is resolved.
 
 `src/lib.rs` exposes the same detection to other crates in this repo (pure, no
 I/O): specguard's forge runs an LLM-generated `test_cmd` through `detect::detect`
-before ever handing it to `sh -c`, and condukt's scheduler uses the graded
-`classify::classify` risk/reversibility assessor to force outward, irreversible
-actions (a deploy, `git push`, a release) through its GATED gate even when an
-upstream LLM mislabelled the task.
-A deploy word that appears only inside a file name in the task text (for example
-`rollout` in `scripts/check-plugin-rollout.py`) does not force the gate.
-A file-path token is a word containing `/`, or one ending in a known extension
-such as `.py`/`.rs`/`.sh`/`.md`/`.toml`, with no `:` or `@`.
-A path still counts when it comes first, follows a runner word (`run`, `bash`,
-...) or shell separator, or starts with `./`.
-A path quoted in backticks still counts.
-Task prose is never parsed as a command: `classify` reads prose with the deploy
-and history needles only, so prose that merely describes a command (for example
-quotes `git config core.hooksPath` in backticks) is not force-gated.
-The commands a task will actually run are passed separately and go through the
-full `classify_command` analysis, so the same command passed as a command still
-gates.
-`classify_change` with no declared command list (`None`) is undetermined, never
-Low.
+before ever handing it to `sh -c`, and condukt's verifier refuses a destructive
+verify command the same way.
 
-Two diff-level modules are exported as well (pure, no I/O): `diffrisk`
-(`classify_diff` / `changes_public_symbol`) and `callgraph`
-(`changed_symbol_names` / `enumerate_callers`, now a thin re-export of
-`harness_core::callgraph`). condukt consumes both
-(`crates/condukt/src/diffrisk_record.rs`).
+The graded risk/reversibility classifier (`classify`) and the diff-level risk
+signals (`diffrisk`) that used to live here moved to the `riskgrade` crate on
+2026-11-17 (user ruling: blastguard holds the command-safety verdict only); see
+`crates/riskgrade/README.md`. riskgrade still reuses `detect::detect` for its
+local-destruction tier.
 
 ## Build
 
@@ -615,6 +598,8 @@ launcher exited 0 with no output — a fail-open — and this README said so.)
 
 ## Retrospective
 
+The implementation lives in overwatch since 2026-11-17 (`crates/overwatch/src/retro.rs`, `overwatch::retro`). blastguard keeps the CLI (`blastguard retro`, unchanged) and its reason -> rule-id table (`blastguard::rule_id::rule_id`), which it injects into `overwatch::retro::scan_dir`; overwatch cannot depend on blastguard because blastguard already depends on overwatch.
+
 A gate's own log answers "what did it say", never "did it prevent anything".
 `blastguard retro` answers the second by joining each PreToolUse verdict in the
 Claude Code transcript to the `tool_result` for the same `toolUseID`:
@@ -655,7 +640,7 @@ User ruling, 2026-11-14 (verbatim): 「…完全なコマンドが残ってい�
 
 Every printed `Deny` or `Ask` appends one JSON line to blastguard's own
 `~/.blastguard/blocks/blocks.jsonl` (override: `BLASTGUARD_BLOCK_LOG_DIR`, file
-`<dir>/blocks.jsonl`), independent of overwatch (`src/blocklog.rs`). An `Allow`
+`<dir>/blocks.jsonl`), independent of overwatch (`harness_core::blocklog`, `crates/harness-core/src/blocklog.rs`; moved out of blastguard 2026-11-17, blastguard makes the calls). An `Allow`
 writes nothing. Fields: `v` (2), `ts`, `blastguard_version`, `session_id`,
 `agent_id` (null outside a subagent), `cwd` (payload value, opaque, never
 inspected), `tool_name`, `command` (Bash, byte-exact, never truncated),
@@ -700,6 +685,8 @@ false. Commands are stored verbatim and may contain secrets; the ledger is
 local under `$HOME` and there is no redaction.
 
 ### `blastguard log` — read-only ledger listing
+
+The implementation lives in overwatch since 2026-11-17 (`crates/overwatch/src/blastguard_log.rs`, also reachable as `overwatch blastguard-log [OPTIONS]`); `blastguard log` is kept as a compatibility path that dispatches to it with the same arguments and output.
 
 ```
 blastguard log [--decision deny|ask] [--rule <id>] [--since <RFC3339|Ns|Nm|Nh|Nd>]

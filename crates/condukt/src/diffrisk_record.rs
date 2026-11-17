@@ -4,9 +4,9 @@
 //!
 //! ## Why this exists (finding 4 / WorkItem-A)
 //!
-//! blastguard's [`blastguard::diffrisk::classify_diff`] has two signals: a
+//! blastguard's [`riskgrade::diffrisk::classify_diff`] has two signals: a
 //! sensitive-path glob hit and a public-API surface change
-//! ([`blastguard::diffrisk::changes_public_symbol`]). The public-API signal was
+//! ([`riskgrade::diffrisk::changes_public_symbol`]). The public-API signal was
 //! DEAD in production: the only in-workspace callers
 //! ([`crate::gate_exec::gather_assessment`] and [`crate::schedule::schedule`])
 //! run at a *pre-execution* stage where no diff exists yet, so they pass an
@@ -55,9 +55,9 @@
 use crate::config::Config;
 use crate::gatelog::DiffRiskOutcome;
 use crate::state::TaskState;
-use blastguard::classify::Risk;
-use blastguard::diffrisk::{classify_diff, classify_diff_with_callers, SensitiveConfig};
 use overwatch::violation::{build_event, RawViolation, ViolationSource};
+use riskgrade::classify::Risk;
+use riskgrade::diffrisk::{classify_diff, classify_diff_with_callers, SensitiveConfig};
 use std::path::{Path, PathBuf};
 
 /// The rule id / discriminator recorded for a High-risk post-execution diff.
@@ -138,7 +138,7 @@ fn worktree_diff(worktree: &Path, base: &str) -> Option<String> {
 }
 
 /// Read the worktree's Rust sources as `(relative_path, contents)` pairs — the
-/// caller corpus [`blastguard::callgraph::enumerate_callers`] scans to learn a
+/// caller corpus [`harness_core::callgraph::enumerate_callers`] scans to learn a
 /// changed symbol's blast radius.
 ///
 /// Fail-soft & bounded: walks `worktree` for `*.rs` files, skipping `target/`,
@@ -292,8 +292,8 @@ pub(crate) fn record_post_execution_diff_risk(
     // this is a pure superset of the base assessment. All of this is fail-soft:
     // an empty corpus / no callers simply degrades `full` back to `base`.
     let corpus = worktree_rust_sources(worktree);
-    let changed = blastguard::callgraph::changed_symbol_names(&diff);
-    let callers = blastguard::callgraph::enumerate_callers(&changed, &corpus);
+    let changed = harness_core::callgraph::changed_symbol_names(&diff);
+    let callers = harness_core::callgraph::enumerate_callers(&changed, &corpus);
     let full = classify_diff_with_callers(paths, &diff, &callers, &sensitive);
     // Counts for the journal. From here on the call graph HAS run, so these are
     // real observations (`Some`), not the `None` of a blind-spot exit above.

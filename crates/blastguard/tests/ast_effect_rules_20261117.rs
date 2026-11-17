@@ -272,24 +272,29 @@ fn b1_rm_r_inside_own_worktree_relative_allows() {
     allow_at(&fx, &wt, "rm -r sub");
 }
 
-/// OwnWorktree control: the SAME `rm -r <checkout>/sub` with the session cwd
-/// OUTSIDE the checkout (the fixture's plain `src/proj`). Ruling 9 makes the
-/// target OtherWorktree ("today's verdict (confined Ask)"), while the
-/// `scope.rs` module doc says recursive rm strictly inside a worktree storage
-/// root is Allow today. Those two disagree, so per the coordinator's
-/// instruction (2026-11-17) this is NOT asserted: it is a probe that panics
-/// with the observed decisions, kept ignored. Observed 2026-11-17:
-/// `main=allow () | subagent=allow ()` — today's verdict is the scope.rs
-/// storage-root Allow, not ruling 9's parenthetical "confined Ask".
+/// OtherWorktree control: the SAME `rm -r <checkout>/sub` with the session
+/// cwd OUTSIDE the checkout (the fixture's plain `src/proj`) stays Allow in
+/// both modes. User ruling 2026-11-17 (correcting ruling 9): recursive rm
+/// strictly inside a worktree storage root (`$HOME/.condukt/worktrees`) is
+/// Allow even when the cwd is not in that checkout — the `scope.rs` ruling of
+/// 2026-09-30 takes precedence over ruling 9's "confined Ask". Was an
+/// ignored probe until 2026-11-18; observed 2026-11-17 `main=allow |
+/// subagent=allow`.
+///
+/// DOES NOT PROVE: which rule produced the Allow (OtherWorktree cell vs the
+/// legacy storage-root rule), behaviour for `.harness-worktrees` storage
+/// roots, a checkout whose `.git` is not a `gitdir:` file, symlinked
+/// spellings, non-recursive or non-`rm` effects, or targets that are the
+/// checkout root itself (`IsRoot`).
 #[test]
-#[ignore = "probe: OtherWorktree rm -r, ruling 9 vs scope.rs storage-root Allow (undecided)"]
-fn b1_probe_rm_r_own_worktree_target_with_cwd_outside() {
+fn b1_rm_r_other_worktree_with_cwd_outside_allows() {
     let fx = fixture("b1wtout");
     let wt = fx.own_worktree();
-    let command = format!("rm -r {}", wt.join("sub").display());
-    let (dm, rm) = run_as(&fx, &fx.proj(), &command, false);
-    let (ds, rs) = run_as(&fx, &fx.proj(), &command, true);
-    panic!("PROBE main={dm} ({rm}) | subagent={ds} ({rs})");
+    allow_at(
+        &fx,
+        &fx.proj(),
+        &format!("rm -r {}", wt.join("sub").display()),
+    );
 }
 
 // ---------------------------------------------------------------------------

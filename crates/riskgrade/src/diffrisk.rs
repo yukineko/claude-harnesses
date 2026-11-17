@@ -278,7 +278,7 @@ pub fn classify_diff(
 pub const HIGH_CALLER_THRESHOLD: usize = 5;
 
 /// Like [`classify_diff`], but folds in a **caller-blast-radius** signal derived
-/// from an already-enumerated caller map (see [`crate::callgraph::enumerate_callers`]).
+/// from an already-enumerated caller map (see [`harness_core::callgraph::enumerate_callers`]).
 ///
 /// This is purely **additive** over [`classify_diff`]: it starts from that base
 /// assessment and merges a blast-radius tier via the existing
@@ -288,9 +288,9 @@ pub const HIGH_CALLER_THRESHOLD: usize = 5;
 ///
 /// ## Blast-radius signal
 ///
-/// The changed symbols are [`crate::callgraph::changed_symbol_names`] of
+/// The changed symbols are [`harness_core::callgraph::changed_symbol_names`] of
 /// `diff_text`. Each changed symbol is looked up in `callers` and its enumerated
-/// [`CallSite`](crate::callgraph::CallSite) count summed across all changed
+/// [`CallSite`](harness_core::callgraph::CallSite) count summed across all changed
 /// symbols. That total maps to a tier:
 ///
 ///   - `>= HIGH_CALLER_THRESHOLD` call sites → [`Risk::High`] signal (wide blast
@@ -315,13 +315,13 @@ pub const HIGH_CALLER_THRESHOLD: usize = 5;
 pub fn classify_diff_with_callers(
     paths: &[String],
     diff_text: &str,
-    callers: &std::collections::BTreeMap<String, Vec<crate::callgraph::CallSite>>,
+    callers: &std::collections::BTreeMap<String, Vec<harness_core::callgraph::CallSite>>,
     config: &SensitiveConfig,
 ) -> Determination<RiskAssessment> {
     let base = classify_diff(paths, diff_text, config);
 
     // Total enumerated caller sites across every symbol this diff changed.
-    let changed = crate::callgraph::changed_symbol_names(diff_text);
+    let changed = harness_core::callgraph::changed_symbol_names(diff_text);
     let total_callers: usize = changed
         .iter()
         .filter_map(|name| callers.get(name))
@@ -436,7 +436,7 @@ mod tests {
             classify_diff(&["src/parser.rs".to_string()], "", &cfg),
             Determination::Undetermined(_)
         ));
-        let empty: std::collections::BTreeMap<String, Vec<crate::callgraph::CallSite>> =
+        let empty: std::collections::BTreeMap<String, Vec<harness_core::callgraph::CallSite>> =
             std::collections::BTreeMap::new();
         assert!(matches!(
             classify_diff_with_callers(&["src/parser.rs".to_string()], "", &empty, &cfg),
@@ -587,7 +587,7 @@ mod tests {
 
     use std::collections::BTreeMap;
 
-    use crate::callgraph::CallSite;
+    use harness_core::callgraph::CallSite;
 
     /// Build a `callers` map with `n` synthetic call sites for `symbol`.
     fn callers_for(symbol: &str, n: usize) -> BTreeMap<String, Vec<CallSite>> {

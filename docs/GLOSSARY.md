@@ -37,7 +37,7 @@
 | backlog | manual | クロスプロジェクト・タスクキュー（`/backlog` skill + SessionStart 通知 + binary） |
 | beacon | always-on | ターン完了・入力待ちをデスクトップ/Slack/webhook 通知する |
 | benchkit | manual | ベンチ回帰＋SWE-bench ランナー。auto-gate 通過変更を無作為抽出し厳格監査へ回す事後サンプリング較正ループ（auditsample）を含む |
-| blastguard | always-on | Bash/ファイル操作の破壊的コマンドを PreToolUse で deny する（機微パス glob／公開シンボル変更の diff リスクも RiskAssessment に合流） |
+| blastguard | always-on | Bash/ファイル操作の破壊的コマンドを PreToolUse で deny する（コマンド安全性の判定のみ。2026-11-17 に classify/diffrisk は riskgrade、retro/log は overwatch、blocklog/callgraph は harness-core へ移設） |
 | budgetguard | always-on | Stop でセッション/日次のコスト上限を監視し超過ターンを阻止する |
 | compass | always-on | condukt 上流のゴール再接地＋次の一手導出（subscription-native） |
 | condukt | always-on | interpreter/researcher/worker/verifier + Rust binary の決定論オーケストレーションエンジン（cross-task lessons ライフサイクル＋`learning-signal` 計測集計を内蔵） |
@@ -81,6 +81,7 @@
 
 - **harness-core** — 全プラグインが共有する不変インフラの単一ソース（ビルド時依存。各バイナリに静的に焼き込まれる）。
 - **mutategate** — このワークスペース用の mutation-testing kill-rate ゲート（内製ツール・配布しない）。
+- **riskgrade** — 計画 action の段階的 risk/reversibility 分類（`classify`）と diff-level リスク信号（`diffrisk`。機微パス glob／公開シンボル変更）の純粋 lib（配布しない・condukt にリンク。2026-11-17 に blastguard から移設）。
 - **integration-tests** — ワークスペース横断の結合テスト専用クレート（プラグイン面なし）。
 
 ## さらに読む（docs/）

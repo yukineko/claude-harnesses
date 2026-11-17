@@ -13,7 +13,8 @@
 //!
 //! `donegate` is a bin-only crate (no `[lib]` target, no `src/lib.rs`), so
 //! this test cannot `use donegate::gate::...` directly the way
-//! `blastguard`'s equivalent suite reaches into `blastguard::diffrisk`. The
+//! riskgrade's suite reaches into `riskgrade::diffrisk` (formerly
+//! `blastguard::diffrisk`, moved 2026-11-17). The
 //! positive control below therefore mirrors gate.rs's exact call shapes
 //! in-line against `harness_core::verdict` — see the doc comment on
 //! `tests/ui/verdict_pass/sanctioned_clean.rs` for the line-by-line

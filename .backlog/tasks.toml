@@ -3344,6 +3344,8 @@ notes = "Observed 2026-11-18 at origin/main 1dfa60681 (0.2.699), HOME/cwd = non-
 created_at = 1794947239
 updated_at = 1794947239
 weight = 0.0
+issue_number = 1859
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1859"
 rev = 0
 
 [task.repro]

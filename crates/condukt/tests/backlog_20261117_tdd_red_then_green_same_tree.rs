@@ -21,9 +21,11 @@
 //! (b) intended: the module doc of testscope.rs says `tdd green --cmd <c>` "is
 //!     checked only against earlier `tdd green` runs of `<c>`", and `tdd red`
 //!     is judged like a bare run, so red->green on one tree is allowed by design.
-//! How to tell them apart: only a human ruling can. The code and its module doc
-//! agree with (b); the F->P oracle's purpose (RED then GREEN across a change)
-//! argues for (a). If the ruling is (b), delete this RED instead of fixing code.
+//! Ruled (a) on 2026-11-17: spec `testscope-confirmed-run` was amended so that
+//! the 8f82f09d exception covers only a bare run, and a same-tree `tdd red` then
+//! `tdd green` of one command is denied (backlog 0c301e8b). The RED is kept as
+//! the regression for that ruling; the module doc of testscope.rs is brought in
+//! line with it in the same change.
 //!
 //! Controls (current intended behaviour, not RED): after a bare `cargo test X`
 //! on a tree, one `tdd green --cmd X` is allowed and a second is denied; after a
@@ -159,7 +161,6 @@ fn ran(e: &Env, cmd: &str, tuid: &str) {
 }
 
 // test-weakening-justified: new RED for an unfixed defect (2026-11-17).
-#[ignore = "RED: 2026-11-17 tdd green after tdd red on the same unchanged tree is allowed — remove when fixed"]
 #[test]
 fn red_tdd_green_after_tdd_red_on_same_tree_is_denied() {
     let e = env();

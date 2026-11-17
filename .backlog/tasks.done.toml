@@ -81730,6 +81730,67 @@ executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
 
 [[task]]
+id = "42e5c169"
+title = "blastguard: unknown subcommand (incl. moved `relay`) exits 0 silently"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-18: `blastguard no-such-subcommand </dev/null` and `blastguard relay dismiss <id> --reason x` exit 0 with empty stdout/stderr (relay moved to askrelay plugin; callers believe dismiss succeeded). RED by independent author harness-9e: commit 5975d68af, crates/blastguard/tests/backlog_20261118_unknown_subcommand_fails_loudly.rs (failures: `unknown subcommand must exit non-zero, got Some(0)` / `moved relay subcommand must exit non-zero, got Some(0)`). Fix on branch fix/bg-unknown-subcmd-20261118."
+created_at = 1794942949
+updated_at = 1794943004
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_unknown_subcommand_fails_loudly -- --include-ignored"
+rev = "5975d68af788dd49e89e2bd34c6699a4346421d5"
+observed_at = 1794942949
+detail = """
+exit 101: src/.harness-worktrees/bg-unknown-subcmd-impl/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.68s
+     Running tests/backlog_20261118_unknown_subcommand_fails_loudly.rs (target/debug/deps/backlog_20261118_unknown_subcommand_fails_loudly-21696f22b761574f)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_unknown_subcommand_fails_loudly`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261118_unknown_subcommand_fails_loudly"
+exit = 0
+passed = 4
+rev = "10c8c7371f52686e19a4b71fb791f18e15636cf2"
+observed_at = 1794943003
+output_digest = "sha256:a816b1e0485db091138b3affc5c5641d9ff65e775fc1c5ff5873e6ed5c999f2d"
+excerpt = """
+
+running 4 tests
+test moved_relay_subcommand_exits_nonzero_and_names_askrelay ... ok
+test unknown_subcommand_exits_nonzero_with_stderr ... ok
+test control_version_still_works ... ok
+test control_hook_entry_point_allows_benign_command ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+   Compiling blastguard v0.2.693 (/Users/yuki/src/.harness-worktrees/bg-unknown-subcmd-impl/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running tests/backlog_20261118_unknown_subcommand_fails_loudly.rs (target/debug/deps/backlog_20261118_unknown_subcommand_fails_loudly-ef8993d090dd8c9d)
+"""
+
+[task.closure.red]
+rev = "5975d68af788dd49e89e2bd34c6699a4346421d5"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
 id = "02ec6595"
 title = "donegate: when_changed checks (lint-changed / test-changed) run on another session's dirty crates in main and block a session that changed nothing"
 project = "/Users/yuki/src/harness"
@@ -81972,6 +82033,144 @@ scripts/test_stop_verify_worktree_readonly_concurrent_20261117.py ...    [100%]
 
 [task.closure.red]
 rev = "18920337a46de5f9f29827556b02f7a8fde2e302"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "0031b957"
+title = "tdd: path-less writes (cargo fmt, glob sed -i) are excluded from the Stop scan scope"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "User ruling 2026-11-18 supersedes the 2026-10-17 accepted hole: any Bash write that names no path keeps ALL changed files in scope. RED 6118e167b."
+created_at = 1794942254
+updated_at = 1794946003
+weight = 0.0
+issue_number = 1852
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1852"
+issue_closed_at = 1794946005
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261118_unnamed_write_excluded_from_scope -- --ignored"
+rev = "6118e167b943ba9fc6530847df43ce0a215be450"
+observed_at = 1794942254
+detail = """
+exit 101: failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.24s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
+     Running tests/backlog_20261118_unnamed_write_excluded_from_scope.rs (target/debug/deps/backlog_20261118_unnamed_write_excluded_from_scope-7985e8f791874d66)
+error: test failed, to rerun pass `-p tdd --test backlog_20261118_unnamed_write_excluded_from_scope`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p tdd --test backlog_20261118_unnamed_write_excluded_from_scope"
+exit = 0
+passed = 6
+rev = "d65001fe974d5b2eb65751e2f66752fac99a4079"
+observed_at = 1794945999
+output_digest = "sha256:512aa75751b2ab5bd88fd325087c51431277ea64768d2c43f12067330bfa6f5a"
+excerpt = """
+
+running 6 tests
+test control_read_only_session_still_excludes_foreign_change ... ok
+test control_edit_naming_the_file_blocks ... ok
+test unnamed_write_cd_relative_cargo_fmt_stays_in_scope ... ok
+test unnamed_write_cd_abs_cargo_fmt_stays_in_scope ... ok
+test unnamed_write_glob_sed_stays_in_scope ... ok
+test unnamed_write_cargo_fmt_stays_in_scope ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.07s
+
+   Compiling harness-core v0.2.109 (/Users/yuki/src/.harness-worktrees/red-unnamed-write-attr/crates/harness-core)
+   Compiling overwatch v0.2.127 (/Users/yuki/src/.harness-worktrees/red-unnamed-write-attr/crates/overwatch)
+   Compiling tdd v0.1.99 (/Users/yuki/src/.harness-worktrees/red-unnamed-write-attr/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.96s
+     Running tests/backlog_20261118_unnamed_write_excluded_from_scope.rs (target/debug/deps/backlog_20261118_unnamed_write_excluded_from_scope-0bb323d8db48aebf)
+"""
+
+[task.closure.red]
+rev = "6118e167b943ba9fc6530847df43ce0a215be450"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "dc597740"
+title = "reviewgate: path-less writes (cargo fmt, glob sed -i) are excluded from the Stop scan scope"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "reviewgate",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "User ruling 2026-11-18 supersedes the 2026-10-17 accepted hole: any Bash write that names no path keeps ALL changed files in scope. RED 6118e167b."
+created_at = 1794942296
+updated_at = 1794946010
+weight = 0.0
+issue_number = 1853
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1853"
+issue_closed_at = 1794946013
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test backlog_20261118_unnamed_write_excluded_from_scope -- --ignored"
+rev = "6118e167b943ba9fc6530847df43ce0a215be450"
+observed_at = 1794942296
+detail = """
+exit 101:  0 ignored; 0 measured; 2 filtered out; finished in 0.74s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261118_unnamed_write_excluded_from_scope.rs (target/debug/deps/backlog_20261118_unnamed_write_excluded_from_scope-fae859212d40fd27)
+error: test failed, to rerun pass `-p reviewgate --test backlog_20261118_unnamed_write_excluded_from_scope`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p reviewgate --test backlog_20261118_unnamed_write_excluded_from_scope"
+exit = 0
+passed = 6
+rev = "d65001fe974d5b2eb65751e2f66752fac99a4079"
+observed_at = 1794946006
+output_digest = "sha256:8f7cd30c46a53e9d7fc0bfc8330870525b91e88f48b1f0d283558c397fe944df"
+excerpt = """
+
+running 6 tests
+test control_read_only_session_still_excludes_foreign_change ... ok
+test control_edit_naming_the_file_is_reviewed ... ok
+test unnamed_write_glob_sed_stays_in_review_set ... ok
+test unnamed_write_cd_relative_cargo_fmt_stays_in_review_set ... ok
+test unnamed_write_cd_abs_cargo_fmt_stays_in_review_set ... ok
+test unnamed_write_cargo_fmt_stays_in_review_set ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
+
+   Compiling harness-core v0.2.109 (/Users/yuki/src/.harness-worktrees/red-unnamed-write-attr/crates/harness-core)
+   Compiling overwatch v0.2.127 (/Users/yuki/src/.harness-worktrees/red-unnamed-write-attr/crates/overwatch)
+   Compiling reviewgate v0.1.71 (/Users/yuki/src/.harness-worktrees/red-unnamed-write-attr/crates/reviewgate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.88s
+     Running tests/backlog_20261118_unnamed_write_excluded_from_scope.rs (target/debug/deps/backlog_20261118_unnamed_write_excluded_from_scope-a283ab63391cd571)
+"""
+
+[task.closure.red]
+rev = "6118e167b943ba9fc6530847df43ce0a215be450"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -5,17 +5,34 @@
 //! supported node / expansion kinds — everything else is
 //! `Cause::Unsupported`), Table B (which effect each modelled command has on
 //! which target words), Table C ([`PathClass`] x [`Effect`] -> verdict). This
-//! file freezes the types and the signatures only.
+//! file freezes the types and the signatures.
 //!
-//! # Current state (S1)
+//! # Current state (S3b, user ruling 2026-11-18)
 //!
-//! Nothing calls [`judge`] or [`classify`]: they are NOT wired into `detect`
-//! and change no verdict. Both are stubs that never panic and answer the
-//! restrictive "cannot judge" value ([`Judgement::Undetermined`] with
-//! [`Cause::NotImplemented`], [`PathClass::Unresolved`]). Stage S3
-//! (`path-cutover`) implements Tables A–C for the path rows and wires
-//! [`judge`] in; S4 / S5 add the program-source rows; S6 removes the string
-//! readings (see "Stage map" in `SUBSET.md`).
+//! [`judge`] is wired into `detect` (through [`super::table_b_verdict`],
+//! called from `detect/readings.rs::detect_bash_every_reading`) ONLY for the
+//! commands that have a Table B **B.1** row (`table_b.rs`):
+//!
+//! * an option not in the row's list, an undetermined word that may be an
+//!   option, or a `dd` operand that is not `key=value` →
+//!   [`Judgement::Undetermined`] (`Cause::Unsupported`);
+//! * a target word whose value the evaluator cannot determine (unquoted
+//!   glob, `~user`, `$( )`, an unbound / positional parameter, a relative
+//!   path after an undetermined `cd`, an `xargs` operand read from stdin) →
+//!   a [`PathClass::Unresolved`] finding → [`Judgement::Ask`];
+//! * a target whose value IS determined gets no finding: [`classify`] is
+//!   still the S1 stub, and the legacy string layer (raise-only, ruling 14)
+//!   alone judges placed paths. So [`Judgement::Allow`] here means "S3b found
+//!   nothing undetermined", not "every Table C cell is Allow";
+//! * a command without a B.1 row — unknown program, empty `argv`,
+//!   undetermined command word, B.2 redirects, B.3 wrappers, B.4 git, B.5
+//!   interpreters — contributes nothing: its handling is unchanged (the
+//!   ruling), so the "undetermined command word → Undetermined" contract
+//!   below is NOT yet enforced by this module.
+//!
+//! An `analyze` result of `Undetermined` is not judged here (analyze-wide
+//! Undetermined handling unchanged). S6 removes the string readings (see
+//! "Stage map" in `SUBSET.md`).
 //!
 //! # Contract (holds from the first caller on)
 //!
@@ -37,6 +54,8 @@ use std::ops::Range;
 
 use super::{Cause, Script, Value};
 use crate::scope::SafeRoots;
+
+mod table_b;
 
 /// What a modelled command (Table B) does to one target path.
 #[allow(
@@ -153,12 +172,14 @@ pub(crate) struct Finding {
 /// [`crate::interactive::ask_available`]; no cell needs another rule.
 #[allow(
     dead_code,
-    reason = "frozen in S1; `Allow` / `Ask` / `Deny` are produced by S3 (path-cutover)"
+    reason = "`Deny` is produced once `classify` places paths (S3); S3b produces the others"
 )]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
 pub(crate) enum Judgement {
-    /// Every finding's cell is Allow, or no command has an effect model.
+    /// Every finding's cell is Allow, or no command has an effect model. In
+    /// S3b: no B.1 command had an undetermined option or target (placed
+    /// targets are not classified yet; see the module doc).
     Allow,
     /// At least one Ask cell and no Deny cell.
     Ask(Vec<Finding>),
@@ -186,17 +207,41 @@ pub(crate) struct PathCtx<'a> {
     pub hook_cwd: Option<&'a str>,
 }
 
-/// Judge `script` by Tables B and C (see `SUBSET.md`).
+/// Judge `script` by Table B B.1 and the Table C `Unresolved` row (S3b; see
+/// the module doc for what is and is not judged yet).
 ///
-/// S1 stub: not wired into `detect`; never panics; always
-/// `Undetermined(NotImplemented)` (the restrictive answer).
-#[allow(
-    dead_code,
-    reason = "frozen in S1; implemented and wired into detect by S3 (path-cutover)"
-)]
+/// The first command whose B.1 row is undetermined makes the whole script
+/// [`Judgement::Undetermined`]; otherwise every unresolved target is an
+/// [`Judgement::Ask`] finding; otherwise [`Judgement::Allow`].
 pub(crate) fn judge(script: &Script, ctx: &PathCtx) -> Judgement {
-    let _ = (script, ctx);
-    Judgement::Undetermined(Cause::NotImplemented)
+    let _ = ctx; // placed paths are not classified in S3b (`classify` stub)
+    let mut findings = Vec::new();
+    for c in &script.commands {
+        let targets = match table_b::extract(c) {
+            table_b::Row::None => continue,
+            table_b::Row::Undetermined(why) => {
+                return Judgement::Undetermined(Cause::Unsupported(why))
+            }
+            table_b::Row::Targets(t) => t,
+        };
+        for (effect, target) in targets {
+            let resolved = super::eval::resolve_at(&c.cwd, target);
+            if let Value::Undetermined(why) = &resolved {
+                findings.push(Finding {
+                    effect,
+                    class: PathClass::Unresolved(why.clone()),
+                    reason: format!("{effect:?} target cannot be placed: {why}"),
+                    target: resolved.clone(),
+                    span: c.span.clone(),
+                });
+            }
+        }
+    }
+    if findings.is_empty() {
+        Judgement::Allow
+    } else {
+        Judgement::Ask(findings)
+    }
 }
 
 /// The [`PathClass`] of `target` under `effect` (some classes depend on the

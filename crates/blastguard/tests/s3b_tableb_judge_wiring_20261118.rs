@@ -206,7 +206,6 @@ fn pinned(tag: &str, command: &str, main: &str, sub: &str) {
 
 /// B.1 `rm` lists `-r/-R/--recursive -f -i -I -v -d`; `-P` is not listed.
 #[test]
-#[ignore = "RED: S3b Table B rm option -P not modelled -> Undetermined"]
 fn a_rm_unlisted_option_restricts() {
     restrict("arm", "rm -P /tmp/bg-s3b-sentinel-rm");
 }
@@ -214,7 +213,6 @@ fn a_rm_unlisted_option_restricts() {
 /// B.1 `cp` (destination `Truncate`): `-p` is not in the row (the S3 status
 /// line of SUBSET.md names `cp -p` as an unmodelled option).
 #[test]
-#[ignore = "RED: S3b Table B cp option -p not modelled -> Undetermined"]
 fn a_cp_unlisted_option_restricts() {
     restrict(
         "acp",
@@ -224,7 +222,6 @@ fn a_cp_unlisted_option_restricts() {
 
 /// B.1 `mv` lists `-f -i -n -v -T -t`; `-b` is not listed.
 #[test]
-#[ignore = "RED: S3b Table B mv option -b not modelled -> Undetermined"]
 fn a_mv_unlisted_option_restricts() {
     restrict(
         "amv",
@@ -234,14 +231,12 @@ fn a_mv_unlisted_option_restricts() {
 
 /// B.1 `tee` lists `-a -i -p`; `-u` is not listed.
 #[test]
-#[ignore = "RED: S3b Table B tee option -u not modelled -> Undetermined"]
 fn a_tee_unlisted_option_restricts() {
     restrict("atee", "echo hi | tee -u /tmp/bg-s3b-sentinel-tee");
 }
 
 /// B.1 `chmod` models `-R` (and `--reference=F`); `-h` is not listed.
 #[test]
-#[ignore = "RED: S3b Table B chmod option -h not modelled -> Undetermined"]
 fn a_chmod_unlisted_option_restricts() {
     restrict("achm", "chmod -h 644 /tmp/bg-s3b-sentinel-chmod");
 }
@@ -249,7 +244,6 @@ fn a_chmod_unlisted_option_restricts() {
 /// B.1 `rm` + A.3 "unquoted glob → value Undetermined" → Table C
 /// Unresolved x Delete.
 #[test]
-#[ignore = "RED: S3b Table C Unresolved x Delete (rm unquoted glob operand)"]
 fn a_rm_unquoted_glob_operand_restricts() {
     restrict("armglob", "rm /tmp/bg-s3b-sentinel-glob-*");
 }
@@ -262,14 +256,12 @@ fn a_mv_positional_dest_restricts() {
 
 /// B.1 `chmod` + A.3 `~user` → value Undetermined → Unresolved x Metadata.
 #[test]
-#[ignore = "RED: S3b Table C Unresolved x Metadata (chmod ~user operand)"]
 fn a_chmod_tilde_user_operand_restricts() {
     restrict("achmtu", "chmod 644 ~bgs3bnouser/f");
 }
 
 /// B.1 `cp` destination + A.3 command substitution → Unresolved x Truncate.
 #[test]
-#[ignore = "RED: S3b Table C Unresolved x Truncate (cp dest from command substitution)"]
 fn a_cp_cmdsubst_dest_restricts() {
     restrict(
         "acpsub",

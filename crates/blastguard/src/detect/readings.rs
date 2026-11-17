@@ -82,7 +82,20 @@ pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision 
     // resolver, run once, before anything else; see `static_bindings`.
     let resolved = static_bindings::resolve_static_bindings(c);
     let c: &str = &resolved;
-    targets::with_index(c, || every_reading(c, scope))
+    let legacy = targets::with_index(c, || every_reading(c, scope));
+    // Stage S3b (user ruling 2026-11-18): the AST judge for the commands with
+    // a SUBSET.md Table B B.1 row — an unlisted option or an operand the
+    // evaluator cannot resolve is Ask (main) / Deny (subagent). Raise-only:
+    // a legacy Deny is kept, a legacy Ask keeps its reason, and the judge
+    // never lowers the legacy verdict.
+    let mut acc = VerdictAcc::default();
+    if let Some(deny) = acc.record(legacy) {
+        return deny;
+    }
+    if let Some(deny) = acc.record(super::ast::table_b_verdict(c, scope)) {
+        return deny;
+    }
+    acc.finish()
 }
 
 /// [`under_bash32_reading`] of `pass`. When that reading closed a construct

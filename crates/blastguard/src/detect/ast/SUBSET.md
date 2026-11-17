@@ -3,6 +3,7 @@
 Task S1 `subset-spec` (2026-11-17). Specification only: the frozen types are in
 `judge.rs` (`Effect`, `PathClass`, `Finding`, `Judgement`, `PathCtx`, `judge`,
 `classify`); nothing here is wired into `detect` yet and no verdict changes in S1.
+(Since S3b, `judge` is wired for the B.1 rows only — see the Stage map.)
 
 ## Binding user rulings (2026-11-17)
 
@@ -284,11 +285,41 @@ Notes:
 | S1 `subset-spec` | this document; frozen types in `judge.rs` (stubs, not wired) |
 | S2 `red-tests` | an independent author (not the S3 implementer; CLAUDE.md §2(a)) writes a RED test for each Table B row and each Table C cell that is not `legacy`, each observed failing against the S1 stub before S3 makes it GREEN |
 | S3 `path-cutover` | Table A enforcement for judged commands; Table B B.1 (all rows except `perl -i` which is already Undetermined), B.2, B.3, B.4; Table C (all rows); `classify` from the existing predicates; wire `judge` into `detect` with the "Undetermined handling" layer |
-| S3 status (2026-11-18) | done: ruling 12 — `$HOME` / `${HOME}` / leading `~` are the hook environment's `HOME`, in the evaluator (`eval.rs` `Env::initial`) and in the one static resolver every legacy reading sees (`readings/static_bindings.rs`), so a `$HOME` spelling is judged exactly as its absolute spelling. NOT done: `judge` / `classify` are still the S1 stubs and are not wired (open question raised to the user: under raise-only every Known Allow cell is inert, so wiring only adds Asks — including `Undetermined` for every unmodelled option such as `cp -p` — whose effect on commands allowed today is not measured by the block-log replay) |
+| S3 status (2026-11-18) | done: ruling 12 — `$HOME` / `${HOME}` / leading `~` are the hook environment's `HOME`, in the evaluator (`eval.rs` `Env::initial`) and in the one static resolver every legacy reading sees (`readings/static_bindings.rs`), so a `$HOME` spelling is judged exactly as its absolute spelling. NOT done (at S3; `judge` is wired for B.1 since S3b, `classify` is still the stub): `judge` / `classify` are still the S1 stubs and are not wired (open question raised to the user: under raise-only every Known Allow cell is inert, so wiring only adds Asks — including `Undetermined` for every unmodelled option such as `cp -p` — whose effect on commands allowed today is not measured by the block-log replay) |
+| S3b `tableb-judge` (user ruling 2026-11-18) | done: `judge` wired into the final decision (`ast/mod.rs::table_b_verdict`, folded raise-only in `detect/readings.rs::detect_bash_every_reading`) ONLY for commands with a **B.1** row (`ast/judge/table_b.rs`). For such a command an option not in its row, an undetermined word that may be an option, or a `dd` operand that is not `key=value` → `Undetermined` → Ask (main) / Deny (subagent); a target word whose value the evaluator cannot determine (unquoted glob, `~user`, `$( )`, unbound / positional parameter, relative path after an undetermined `cd`, `xargs` operand read from non-literal stdin) → `Unresolved` → Ask / Deny. Commands without a B.1 row, and `analyze` = `Undetermined`, are unchanged; unknown programs stay Allow; the legacy layer is not lowered (a legacy Deny / Ask, with its reason, wins). See "S3b notes" |
 | S4 `stdin-program` | Table B B.5 rows for shells: `-c` inline, stdin (`StdinSource::Literal` bodies), `eval`; the script-file row and the direct-execution row (Undetermined, and the recursive judgement of a body the same command writes — rulings 10, 17); wrapper → interpreter unwrap. `source` / `.` are NOT in S4 (ruling 16) |
 | S5 `python-parser` | Table B B.5 python row (a real Python parser; effects × targets of the parsed program judged by Table C); legacy python readings until then (ruling 15) |
 | S6 `retire-readings` | remove the string-reading fallbacks of every migrated row (`targets.rs::resolve` callers, `readings.rs` re-readings); until S6 the whole legacy layer is raise-only (ruling 14), so Table C Allow cells a legacy reading answers Ask / Deny today turn GREEN here; revisit the deferred Open questions 1–4 |
 | quarantine plugin (separate) | `source` / `.` → Ask (main) / Deny (subagent), introduced together with the script-quarantine plugin (ruling 16) |
+
+### S3b notes (2026-11-18)
+
+* NOT wired in S3b (verdict unchanged, legacy only): B.2 redirects, B.3
+  wrappers (`sudo rm …`, `command rm …`), B.4 git, B.5 interpreters, the
+  "undetermined command word → Undetermined" rule, and every Table C cell of
+  a target whose value IS determined — `classify` is still the S1 stub, so a
+  placed target gets no finding and the raise-only legacy layer alone judges
+  it (S3b `Judgement::Allow` = "nothing undetermined found").
+* Option lists: the B.1 rows above, plus the GNU long spelling of a listed
+  short option (`--append` = `-a`, `--target-directory=DIR` = `-t DIR`, …;
+  list in `table_b.rs`). Options after operands count as options (GNU
+  permutation), except for `xargs`. An undetermined word counts as a possible
+  option unless its raw text provably starts with a literal that is not `-`
+  (`"/tmp/$x"`, `~user/f`). `chmod -w f`: a `-[rwxXst]+` word is the mode.
+  `sed` has a row only when a literal `-…i…` / `--in-place` word is present;
+  BSD `-i ''` is modelled.
+* **Implementer additions, pending the user's confirmation** (each keeps a
+  previously-passing test green — CA-blastguard-011 / -015 in
+  `detect/tests.rs`: `rm --help`, `rm -h`, `tee --help 2>&1`,
+  `truncate --help` → Allow):
+  1. `--help` / `--version` are accepted by every B.1 row;
+  2. an unlisted option is NOT Undetermined when every word after the
+     command is a literal option without an argument (`rm -h`): no word is
+     left for the option to turn into, or away from, a target.
+* `find`: an undetermined word in the expression is not read (it may be the
+  argument of a primary; primary arities are not modelled), so `find . "$x"`
+  where `$x` is `-delete` is NOT caught by S3b (legacy verdict unchanged).
+* `rmdir -p` ancestors are not extracted (they only matter for a placed path).
 
 ## Open questions
 

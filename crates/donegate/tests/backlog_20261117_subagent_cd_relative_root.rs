@@ -41,16 +41,20 @@
 //!  to the cwd-relative join rather than to the root selection.
 //!
 //! What this test does NOT prove:
-//!  - That Claude Code's real SubagentStop payload carries the parent cwd and
-//!    that real sidechain lines record `cwd` = parent root. That is inferred
-//!    from donegate's judge-only-the-cwd contract plus the observation (the
-//!    parent root was judged), and from the subagent environment note "Agent
-//!    threads always have their cwd reset between bash calls". Reading the
-//!    real sidechain transcript to confirm was denied by blastguard in the
-//!    authoring subagent (relay bgr-108f07d82bfd), so it is NOT observed.
-//!  - That the observed incident used exactly `cd <wt> && <relative write>`
-//!    (other spellings, e.g. `git -C <wt> ...` with relative words, may hit
-//!    the same join; not covered).
+//!  - That Claude Code's real SubagentStop PAYLOAD `cwd` is the parent root.
+//!    Not read directly; inferred from donegate's judge-only-the-cwd contract
+//!    plus the observation that the parent root was judged.
+//!    What IS observed (2026-11-17, main session re-ran blastguard relay
+//!    bgr-108f07d82bfd over the real sidechains of session df7c968f): every
+//!    sidechain (`isSidechain: true`) Bash line records `cwd` =
+//!    `/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f` (the
+//!    parent's worktree), and the commands reach the worker worktree as
+//!    `cd /mnt/c/tmp/aegis-worktrees/run-...-t1 && ...` /
+//!    `cd /mnt/c/tmp/aegis-worktrees/run-20261117-100335-22251-t2 && ...`.
+//!    That is the transcript shape this fixture builds.
+//!  - That the `...` after the observed `cd` contained a relative-path write
+//!    whose path also exists in the parent root (the exact command bodies were
+//!    not inspected). Other spellings (e.g. `git -C <wt> ...`) are not covered.
 //!  - What the fix should judge instead (the wt must NOT be judged from a
 //!    parent-root hook either, per the 2026-11-08 ruling); the RED asserts
 //!    only that the parent root's checks do not run.

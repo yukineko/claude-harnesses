@@ -124,13 +124,87 @@ fn scan_scope(scan: crate::git::ChangeScan) -> ChangeScope {
     }
 }
 
+/// Narrow a successful change scan to the files THIS session wrote (backlog
+/// 02ec6595; CLAUDE.md §8 "帰属のバグ"). `crate::git::changed_files` answers
+/// for the whole checkout, so another session's dirt in the same tree used to
+/// trigger (and block on) `when_changed` checks this session never earned.
+///
+/// The rule is the one shared with tdd / reviewgate:
+/// `harness_core::attribution::attribute_own_writes` (an Edit/Write tool_use of
+/// the file, or a non-read-only Bash statement naming it, in the transcript and
+/// its subagent sidechains). Fail-closed: an empty transcript path, an
+/// unreadable transcript/sidechain, or a scan that is not `Files` leaves the
+/// scope untouched (full scan, or the existing undetermined handling), never
+/// "this session wrote nothing". Residual hole, inherited from the shared rule:
+/// a write by a command that never names the file (`cargo fmt`, a glob, a
+/// generator) is excluded; the narrowed-away files are named on stderr.
+pub fn attribute_scope(
+    scan: crate::git::ChangeScan,
+    root: &Path,
+    transcript_path: &str,
+) -> ChangeScope {
+    let full = match scan {
+        crate::git::ChangeScan::Files(v) => v,
+        other => return scan_scope(other),
+    };
+    if transcript_path.trim().is_empty() {
+        return Determination::known(Some(full));
+    }
+    match harness_core::attribution::attribute_own_writes(root, transcript_path, &full) {
+        harness_core::attribution::Attribution::Narrowed { keep, excluded } => {
+            // A session Bash call that may have written but names no path
+            // (`cargo fmt`, a glob, a generator, `git checkout`) could have
+            // changed any of the `excluded` files: narrowing would silently
+            // skip checks for them (CLAUDE.md 3). Unreadable evidence is the
+            // same: keep the full scope.
+            match harness_core::attribution::has_unattributable_write(transcript_path) {
+                Determination::Known(false) => {}
+                Determination::Known(true) | Determination::Undetermined(_) => {
+                    if !excluded.is_empty() {
+                        eprintln!(
+                            "donegate: this session ran a Bash command that may write without \
+                             naming a path (or its writes cannot be read); scope NOT narrowed \
+                             to its named writes, checking all {} changed file(s) in {}",
+                            full.len(),
+                            root.display()
+                        );
+                    }
+                    return Determination::known(Some(full));
+                }
+            }
+            if !excluded.is_empty() {
+                eprintln!(
+                    "donegate: {} changed file(s) in {} are NOT attributed to this session and \
+                     were left out of the check scope: {}",
+                    excluded.len(),
+                    root.display(),
+                    excluded.join(", ")
+                );
+            }
+            Determination::known(Some(keep))
+        }
+        harness_core::attribution::Attribution::Undetermined { .. } => {
+            Determination::known(Some(full))
+        }
+    }
+}
+
 pub fn evaluate(cfg: &Config, root: &Path) -> GateReport {
+    evaluate_scoped(cfg, root, scan_scope(crate::git::changed_files(root)))
+}
+
+/// [`evaluate`] with this session's writes (from `transcript_path`) as the scope.
+pub fn evaluate_attributed(cfg: &Config, root: &Path, transcript_path: &str) -> GateReport {
+    let scope = attribute_scope(crate::git::changed_files(root), root, transcript_path);
+    evaluate_scoped(cfg, root, scope)
+}
+
+fn evaluate_scoped(cfg: &Config, root: &Path, scope: ChangeScope) -> GateReport {
     // donegate is RESTRICTIVE: both "not a repo" and "could not determine" map to
     // "no usable scope" → every check applies. Only a SUCCESSFUL scan narrows the
     // check set. Crucially `Failed` (a git sub-command errored) must land here, not
     // in a `Some(vec![])` "nothing changed" that would silently skip every
     // `when_changed` check and pass the Stop gate on an undetermined tree.
-    let scope = scan_scope(crate::git::changed_files(root));
     // `require()` is the only extractor method, and its blocked arm carries the
     // give-up (`Undet`, convertible only to a blocking `Verdict::Undetermined`)
     // — so the undetermined arm cannot reach the scoping code at all. Here it

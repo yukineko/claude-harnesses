@@ -27,7 +27,13 @@ Follow-up rulings (2026-11-17, on the S1 open questions):
    `$TMPDIR` and the cache roots `rm -r` already allows
    (`SafeRoots::classify_disposable`). Not `classify_temp` alone.
 9. `OwnWorktree` = only the git checkout that contains the session cwd. Other
-   worktrees keep today's verdict (confined Ask).
+   worktrees keep today's verdict. **Correction (user ruling 2026-11-18):**
+   today's verdict there is NOT a confined Ask for a recursive `rm`: a
+   recursive `rm` whose operands resolve strictly inside a worktree storage
+   root stays **Allow** even when the session cwd is outside that checkout
+   (the `scope.rs` / `rm.rs` worktree-storage Allow, user ruling 2026-09-30,
+   backlog 873651b9, wins). The earlier parenthetical "(confined Ask)" was
+   wrong for that row.
 10. A program whose text is not in the command (`bash script.sh`) is
     Undetermined → Ask (subagent Deny): an interpreter running a file is an
     exception to "unknown program → Allow". When the same command writes that
@@ -102,7 +108,7 @@ script is still `Known`: the word's `Value` is `Undetermined` and feeds Table C 
 | `Text`, `SingleQuotedText`, `DoubleQuotedSequence`, `EscapeSequence` | supported (literal) |
 | `AnsiCQuotedText` `$'…'` | supported if decoded; else value Undetermined |
 | `GettextDoubleQuotedSequence` `$"…"` | value Undetermined |
-| `TildeExpansion` `~` (also after `=` / `:`) | value Known: the hook environment's `HOME` (user ruling 2026-11-17, ruling 12); `~user` is not covered by the ruling → value Undetermined |
+| `TildeExpansion` `~` (also after `=` / `:`) | value Known: the hook environment's `HOME` (user ruling 2026-11-17, ruling 12); `~user` is not covered by the ruling → value Undetermined. **Implemented (S3) only for a bare `~` that starts the word**; `~` after `=` / `:` inside a word is still Undetermined (restrictive; not yet implemented) |
 | `$HOME` / `${HOME}` | value Known: the hook environment's `HOME` (user ruling 2026-11-17, ruling 12), unless `HOME` is assigned on the line (then the named rule below) |
 | `$x` / `${x}` named | literal iff bound to a literal on the line; else value Undetermined |
 | positional / special parameters (`$1`, `$@`, `$?`, …) | value Undetermined |
@@ -234,7 +240,7 @@ column. The subagent column is always the main column with Ask → Deny
 | **Persistence** (`launch_agents_new_file_ask`, new file only) | — | Ask / Deny | — | Ask / Deny | Ask / Deny | — | — |
 | **Scratch** (`SafeRoots::classify_disposable` Inside: `/tmp`, `/private/tmp`, `$TMPDIR`, cache roots — ruling 8) | Allow / Allow (ruling 5) | Allow / Allow | Allow / Allow | Allow / Allow | Allow / Allow | Allow / Allow | Allow / Allow |
 | **OwnWorktree** (the checkout containing the session cwd — ruling 9; see notes) | Allow / Allow (ruling 5) | Allow / Allow | Allow / Allow | Allow / Allow | Allow / Allow | legacy (`managed_worktree_git`) | Allow / Allow |
-| **OtherWorktree** (`SafeRoots::classify_worktree` Inside, not OwnWorktree) | legacy (ruling 9: today's verdict, confined Ask) | legacy | legacy | legacy | legacy | legacy | legacy |
+| **OtherWorktree** (`SafeRoots::classify_worktree` Inside, not OwnWorktree) | legacy (ruling 9 as corrected 2026-11-18: today's verdict — recursive `rm` strictly inside a worktree storage root is Allow) | legacy | legacy | legacy | legacy | legacy | legacy |
 | **Project** (`SafeRoots::classify` Inside / IsRoot) | legacy (`deletion::judge_rm` recoverability; non-rec: legacy rm arm) | legacy | legacy (`chmod -R` confined Ask) | legacy | legacy (scratch-place: managed → unchanged) | legacy (`reversible`) | legacy (`git_stage`) |
 | **Other** (resolved, `Placement::Outside`) | legacy (ruling 5: unchanged Ask/Deny) | legacy | legacy | legacy | Ask / Deny (scratch-place rule) | legacy | legacy |
 | **Unresolved** | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny |
@@ -278,6 +284,7 @@ Notes:
 | S1 `subset-spec` | this document; frozen types in `judge.rs` (stubs, not wired) |
 | S2 `red-tests` | an independent author (not the S3 implementer; CLAUDE.md §2(a)) writes a RED test for each Table B row and each Table C cell that is not `legacy`, each observed failing against the S1 stub before S3 makes it GREEN |
 | S3 `path-cutover` | Table A enforcement for judged commands; Table B B.1 (all rows except `perl -i` which is already Undetermined), B.2, B.3, B.4; Table C (all rows); `classify` from the existing predicates; wire `judge` into `detect` with the "Undetermined handling" layer |
+| S3 status (2026-11-18) | done: ruling 12 — `$HOME` / `${HOME}` / leading `~` are the hook environment's `HOME`, in the evaluator (`eval.rs` `Env::initial`) and in the one static resolver every legacy reading sees (`readings/static_bindings.rs`), so a `$HOME` spelling is judged exactly as its absolute spelling. NOT done: `judge` / `classify` are still the S1 stubs and are not wired (open question raised to the user: under raise-only every Known Allow cell is inert, so wiring only adds Asks — including `Undetermined` for every unmodelled option such as `cp -p` — whose effect on commands allowed today is not measured by the block-log replay) |
 | S4 `stdin-program` | Table B B.5 rows for shells: `-c` inline, stdin (`StdinSource::Literal` bodies), `eval`; the script-file row and the direct-execution row (Undetermined, and the recursive judgement of a body the same command writes — rulings 10, 17); wrapper → interpreter unwrap. `source` / `.` are NOT in S4 (ruling 16) |
 | S5 `python-parser` | Table B B.5 python row (a real Python parser; effects × targets of the parsed program judged by Table C); legacy python readings until then (ruling 15) |
 | S6 `retire-readings` | remove the string-reading fallbacks of every migrated row (`targets.rs::resolve` callers, `readings.rs` re-readings); until S6 the whole legacy layer is raise-only (ruling 14), so Table C Allow cells a legacy reading answers Ask / Deny today turn GREEN here; revisit the deferred Open questions 1–4 |

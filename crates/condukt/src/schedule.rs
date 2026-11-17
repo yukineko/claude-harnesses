@@ -12,9 +12,9 @@
 //! same decomposition always yields the same schedule.
 
 use crate::model::{Batch, Class, Decomposition, Schedule, Task};
-use blastguard::classify::{classify, classify_change, classify_commands, Risk};
-use blastguard::diffrisk::{classify_diff, SensitiveConfig};
 use globset::{Glob, GlobSet, GlobSetBuilder};
+use riskgrade::classify::{classify, classify_change, classify_commands, Risk};
+use riskgrade::diffrisk::{classify_diff, SensitiveConfig};
 use std::collections::{HashMap, HashSet};
 
 const GLOB_META: [char; 4] = ['*', '?', '[', '{'];
@@ -344,7 +344,7 @@ pub fn validate(dec: &Decomposition) -> Vec<String> {
 /// exact same action text this force-gate does (no duplicated join logic).
 ///
 /// In [`schedule`] this prose force-gates ONLY on a deploy/push/publish signal
-/// ([`blastguard::classify::classify`] answering High + irreversible, i.e.
+/// ([`riskgrade::classify::classify`] answering High + irreversible, i.e.
 /// `requires_gate()`). A prose history-rewrite needle (`filter-branch`,
 /// `git rebase`, ...) is Medium + reversible and does NOT force-gate on its
 /// own (backlog 3a0e30a8): prose that merely NAMES a command is not a command
@@ -402,7 +402,7 @@ pub(crate) fn task_commands(t: &Task) -> Option<Vec<String>> {
 /// runs.
 #[cfg(test)]
 fn resolve_force_gate(
-    d: harness_core::verdict::Determination<blastguard::classify::RiskAssessment>,
+    d: harness_core::verdict::Determination<riskgrade::classify::RiskAssessment>,
 ) -> (bool, Option<String>) {
     match resolve_action_gate(d) {
         ActionGate::Gate(_) => (true, None),
@@ -418,7 +418,7 @@ fn resolve_force_gate(
 #[derive(Debug)]
 enum ActionGate {
     /// Measured and gating (`requires_gate() || risk >= Medium`).
-    Gate(blastguard::classify::RiskAssessment),
+    Gate(riskgrade::classify::RiskAssessment),
     /// Measured and not gating.
     NoGate,
     /// Could not be measured — always force-gates (FAIL-CLOSED), with reason.
@@ -429,7 +429,7 @@ enum ActionGate {
 /// `Known(a)` gates iff `a.requires_gate() || a.risk >= Medium`;
 /// `Undetermined` always gates (FAIL-CLOSED) and carries the reason.
 fn resolve_action_gate(
-    d: harness_core::verdict::Determination<blastguard::classify::RiskAssessment>,
+    d: harness_core::verdict::Determination<riskgrade::classify::RiskAssessment>,
 ) -> ActionGate {
     match d.require() {
         harness_core::verdict::Required::Determined(a) => {
@@ -449,7 +449,7 @@ fn resolve_action_gate(
 /// verbatim in the schedule warning. Only `requires_gate()` (High +
 /// irreversible) is called a "high-risk irreversible action"; anything else
 /// names its actual tier and reversibility (backlog 3a0e30a8).
-fn describe_assessment(a: &blastguard::classify::RiskAssessment) -> String {
+fn describe_assessment(a: &riskgrade::classify::RiskAssessment) -> String {
     if a.requires_gate() {
         return "high-risk irreversible action".to_string();
     }
@@ -473,7 +473,7 @@ fn describe_assessment(a: &blastguard::classify::RiskAssessment) -> String {
 /// path (sensitive-path signal) and each prose field is re-classified on its
 /// own with the same predicate that gated it: commands/paths gate on
 /// `requires_gate() || risk >= Medium` ([`resolve_action_gate`]), prose only on
-/// `requires_gate()`. Because [`blastguard::classify::RiskAssessment::merge`]
+/// `requires_gate()`. Because [`riskgrade::classify::RiskAssessment::merge`]
 /// is max-risk / and-reversible, a gating merged assessment always has at least
 /// one gating component among commands and paths, so the attribution is
 /// complete for them. Prose is classified as one concatenated string, so a
@@ -535,17 +535,17 @@ fn gate_culprits(
 
 /// Compute the deterministic schedule. `shared_globs` come from config: any
 /// parallel task touching one is demoted to serial. A high-risk irreversible
-/// action (deploy/push/release, per [`blastguard::classify`]) is force-gated
+/// action (deploy/push/release, per [`riskgrade::classify`]) is force-gated
 /// regardless of its declared `class`. Additionally, a task whose
 /// `touched_files` hit a configured sensitive-path glob (auth/payment/PII,
-/// see [`blastguard::diffrisk::SensitiveConfig`]) is force-gated too, via
-/// [`blastguard::classify::classify_change`]. BOUNDED SCOPE: pre-execution
+/// see [`riskgrade::diffrisk::SensitiveConfig`]) is force-gated too, via
+/// [`riskgrade::classify::classify_change`]. BOUNDED SCOPE: pre-execution
 /// there is no diff yet, so only the sensitive-path signal (which needs only
 /// `paths`) can fire here — the public-symbol-diff signal needs a real diff
 /// and is out of scope for this (schedule-time) call site.
 ///
-/// NOTE on the gate predicate: [`blastguard::classify::RiskAssessment::requires_gate`]
-/// is `High && !reversible`, but [`blastguard::diffrisk::classify_diff`]
+/// NOTE on the gate predicate: [`riskgrade::classify::RiskAssessment::requires_gate`]
+/// is `High && !reversible`, but [`riskgrade::diffrisk::classify_diff`]
 /// deliberately always reports `reversible: true` for path/diff-derived
 /// signals (a human can still revert the commit — see its doc comment), so a
 /// sensitive-path hit alone tops out at `Medium`/reversible and can never
@@ -842,8 +842,8 @@ mod tests {
 
     #[test]
     fn undetermined_classification_force_gates_with_a_naming_warning() {
-        use blastguard::diffrisk::SensitiveConfig;
         use harness_core::verdict::Determination;
+        use riskgrade::diffrisk::SensitiveConfig;
 
         // Real end-to-end signal: a misconfigured glob list makes
         // `classify_change` undetermined ...
@@ -875,7 +875,7 @@ mod tests {
 
     #[test]
     fn determinable_classification_keeps_its_previous_gate_decision() {
-        use blastguard::diffrisk::SensitiveConfig;
+        use riskgrade::diffrisk::SensitiveConfig;
 
         let cfg = SensitiveConfig::default();
         // Low + reversible + no sensitive path -> NOT gated (unchanged), and no

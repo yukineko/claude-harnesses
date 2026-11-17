@@ -1,4 +1,12 @@
-//! The block log: a blastguard-owned, durable record of every call it stopped.
+//! The block log: blastguard's durable record of every call it stopped.
+//!
+//! Lives in harness-core since 2026-11-17 (user ruling: blastguard holds the
+//! command-safety verdict only; recording is not a verdict). blastguard still
+//! makes every call into it, and the file location, the env override and the
+//! record format are unchanged: the directory is still resolved under the
+//! `blastguard` base dir, and `blastguard_version` is now passed in by the
+//! caller ([`Block::blastguard_version`]) because `env!("CARGO_PKG_VERSION")`
+//! here would name harness-core's version instead.
 //!
 //! User ruling (2026-11-14, verbatim):
 //! 「…完全なコマンドが残っていないため、これ以上は切り分けられません。というのは大変愚かなので
@@ -128,6 +136,9 @@ pub struct Block<'a> {
     /// The reason exactly as printed to the agent.
     pub reason: &'a str,
     pub rule_id: &'a str,
+    /// Written as the record's `blastguard_version`. blastguard passes its own
+    /// `env!("CARGO_PKG_VERSION")`.
+    pub blastguard_version: &'a str,
 }
 
 /// The log directory: `BLASTGUARD_BLOCK_LOG_DIR`, else `~/.blastguard/blocks`.
@@ -137,7 +148,7 @@ pub fn log_dir() -> PathBuf {
             return PathBuf::from(d.trim());
         }
     }
-    harness_core::config::base_dir("blastguard").join("blocks")
+    crate::config::base_dir("blastguard").join("blocks")
 }
 
 /// `<dir>/blocks.jsonl`.
@@ -202,7 +213,7 @@ pub fn record(raw: &str, parsed: bool, block: &Block<'_>, ts: u64) -> Value {
     let mut rec = json!({
         "v": VERSION,
         "ts": ts,
-        "blastguard_version": env!("CARGO_PKG_VERSION"),
+        "blastguard_version": block.blastguard_version,
         "session_id": str_field(p, "session_id"),
         "agent_id": str_field(p, "agent_id"),
         "cwd": str_field(p, "cwd"),
@@ -235,8 +246,7 @@ pub fn write(dir: &Path, raw: &str, parsed: bool, block: &Block<'_>) -> Result<P
     let path = log_path(dir);
     let rec = record(raw, parsed, block, now());
     let line = serde_json::to_string(&rec).map_err(|e| format!("serialize: {e}"))?;
-    harness_core::append::append_line(&path, &line)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+    crate::append::append_line(&path, &line).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(path)
 }
 
@@ -262,6 +272,7 @@ mod tests {
             system_harm: false,
             reason: "r",
             rule_id: "x",
+            blastguard_version: env!("CARGO_PKG_VERSION"),
         }
     }
 

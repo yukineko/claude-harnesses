@@ -9,8 +9,10 @@
 //!
 //! * Variables: only values assigned on the line from literal text
 //!   (`S=/a`, `export S=/a`, `for v in a b`). Every variable the line does not
-//!   assign (environment, `$HOME`, positional / special parameters, shell
-//!   dynamic variables such as `$RANDOM` / `$PWD`) is `Undetermined`.
+//!   assign (environment, positional / special parameters, shell dynamic
+//!   variables such as `$RANDOM` / `$PWD`) is `Undetermined` — except
+//!   `$HOME`, which starts as the hook environment's `HOME` when that is an
+//!   absolute path (user ruling 2026-11-17, SUBSET.md ruling 12).
 //!   Subshells, pipeline stages, `$( )`, `<( )` and `&` get a copy that does
 //!   not leak back. Where two paths can reach a point (`&&` / `||`, `if`,
 //!   `case`, loops) the states are joined: a variable keeps its value only if
@@ -33,8 +35,9 @@
 //!   make it `Undetermined`. A relative `cd` from the hook's cwd, a relative
 //!   `cd` while `CDPATH` may apply, and any `..` component are `Undetermined`.
 //! * Unquoted expansions that would be word-split or pathname-expanded, globs
-//!   and brace expansions in unquoted text, `~` (also after `=` / `:` in any
-//!   word, e.g. `of=~/f`), `$((..))`, `$( )` output and parameter operations
+//!   and brace expansions in unquoted text, `~` other than a bare `~` that
+//!   starts the word (that one is `$HOME`, ruling 12; `~user`, and a tilde
+//!   after `=` / `:` in any word, e.g. `of=~/f`, stay `Undetermined`), `$((..))`, `$( )` output and parameter operations
 //!   other than plain `$x` / `${x}` are `Undetermined`. Arithmetic (`((..))`,
 //!   `$((..))`, `let`, `[[ a -eq b ]]` unless both operands are literal
 //!   integers, a builtin's name operand `a[i]` with a non-digit `i`, e.g.
@@ -105,7 +108,7 @@ use super::{
     RedirTarget, Redirect, Script, SimpleCommand, StdinSource, Value, Word,
 };
 use brush_parser::ast;
-use brush_parser::word::{WordPiece, WordPieceWithSource};
+use brush_parser::word::{TildeExpr, WordPiece, WordPieceWithSource};
 use brush_parser::SourceSpan;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -288,9 +291,18 @@ const DYNAMIC_VARS: &str = "RANDOM SRANDOM SECONDS LINENO EPOCHSECONDS EPOCHREAL
     BASHOPTS SHELLOPTS BASH_VERSINFO _";
 
 impl Env {
+    /// The state before the first command: nothing assigned except `HOME`,
+    /// which is Known from the hook's own environment (user ruling
+    /// 2026-11-17, SUBSET.md ruling 12) when it is set to an absolute path.
+    /// A `HOME` assigned / unset on the line rebinds it like any name; an
+    /// opaque state makes it `Undetermined` like every variable.
     fn initial() -> Self {
+        let mut vars = BTreeMap::new();
+        if let Some(home) = hook_home() {
+            vars.insert("HOME".to_string(), Value::Literal(home));
+        }
         Env {
-            vars: BTreeMap::new(),
+            vars,
             readonly: BTreeSet::new(),
             integer: BTreeSet::new(),
             opaque: false,
@@ -392,6 +404,15 @@ impl Env {
         self.cwd = Cwd::Undetermined(format!("cwd: {why}"));
         self.stdin = StdinSource::Undetermined(format!("stdin: {why}"));
     }
+}
+
+/// `HOME` of the hook's own process environment, when it is a non-empty
+/// absolute path (ruling 12). Anything else (unset, relative, not UTF-8)
+/// leaves `$HOME` / `~` `Undetermined`.
+fn hook_home() -> Option<String> {
+    std::env::var("HOME")
+        .ok()
+        .filter(|h| h.starts_with('/') && !h.contains('\0'))
 }
 
 fn undet(s: impl Into<String>) -> Value {
@@ -1755,10 +1776,23 @@ impl Ev {
                     self.pieces(origin, raw, inner, true, env, acc)?;
                     acc.undet("$\"..\" is translated at run time");
                 }
-                WordPiece::TildeExpansion(_) => {
+                WordPiece::TildeExpansion(t) => {
                     acc.unquoted = true;
                     acc.expansion = true;
-                    acc.undet("~ expands to a home directory at run time");
+                    // A bare `~` that starts the word is `$HOME` (ruling 12;
+                    // the result is not word-split or globbed). `~user`,
+                    // `~+`, `~-`, the directory stack, and a tilde that does
+                    // not start the word (`a=~/x`, `x:~/y` in an argv word,
+                    // whose expansion depends on how bash classifies the
+                    // word) stay Undetermined.
+                    let home = match t {
+                        TildeExpr::Home if !quoted && acc.segs.is_empty() => env.lookup("HOME"),
+                        _ => undet("~ expands to a home directory at run time"),
+                    };
+                    match home {
+                        Value::Literal(h) => acc.push(h, Seg::QuotedLit),
+                        Value::Undetermined(r) => acc.undet(format!("~: {r}")),
+                    }
                 }
                 WordPiece::ParameterExpansion(expr) => {
                     if !quoted {

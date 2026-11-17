@@ -5,7 +5,9 @@
 //! `harness_core::verdict`.
 //!
 //! `blastguard::diffrisk` migrated onto `harness_core::verdict::Determination`
-//! (see `SensitiveConfig::any_sensitive`). This suite pins that the same
+//! (see `SensitiveConfig::any_sensitive`); diffrisk moved to riskgrade on
+//! 2026-11-17 and its positive control with it
+//! (crates/riskgrade/tests/verdict_compile_pass.rs). This suite pins that the same
 //! type-level guarantees `harness-core` proves for itself
 //! (`harness-core/tests/verdict_compile_fail.rs`) also hold when the crate is
 //! consumed as a downstream dependency, not just from within `harness-core`

@@ -23,7 +23,7 @@ Lockfiles are excluded by default.
 `node_modules`, `target` and generated files are excluded by default.
 
 **Whose changes.** Only the files **this session wrote** are reviewed (`harness_core::attribution::attribute_own_writes`, read from the hook's `transcript_path`, shared with tdd): a changed file is kept when this session's transcript or a subagent sidechain records an `Edit`/`Write`/`MultiEdit`/`NotebookEdit` of it, or a `Bash` command naming its path outside a read-only statement (merely reading it with `git diff`, `grep` or `cat` does not count); every other changed file is excluded as not attributed to this session.
-Known gap: a file written by a command that never names it (`cargo fmt`, a shell glob, a script) is excluded too.
+A write that names no path (`cargo fmt`, a shell glob, a script) is NOT excluded: user ruling 2026-11-18 supersedes 2026-10-17 — if the session ran any Bash call that may write without naming a path (or its Bash calls cannot be read), attribution is undetermined and the **whole checkout** is reviewed.
 The exclusion is appended to the block reason.
 The exclusion is printed to stderr.
 When attribution is undetermined (no/unreadable transcript) every changed file is reviewed.

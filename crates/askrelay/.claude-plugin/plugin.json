@@ -1,6 +1,6 @@
 {
   "name": "askrelay",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Subagent Ask relay for Claude Code: an Ask that a gate hardened to Deny inside a subagent is queued; the main session's Stop is blocked until it has re-run the command under its own permission prompt and relayed the result, or dismissed it with a reason.",
   "author": {
     "name": "yukineko"

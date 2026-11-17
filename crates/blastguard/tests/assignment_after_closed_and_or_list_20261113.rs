@@ -13,13 +13,25 @@
 //! The command-word case (r4) shows the change resolves toward REFUSAL as well
 //! (Ask today, Deny like the literal-spelled `RM=/bin/rm; $RM -rf ...`).
 //!
-//! The controls pin shapes that must stay refused (NOT Allow) after the change:
-//! the assignment itself inside an and-or list, pipes, `&`, compound commands
-//! opened earlier, `{ ...; }` scoping, expansion-valued assignments.
+//! Re-anchored 2026-11-18 (user ruling): an `if ...; fi` construct CLOSED
+//! before the assignment (`if true && true; then :; fi; L=<p>`) and an
+//! assignment inside a brace group (`{ true && true; L=<p>; }`) both set `L`
+//! unconditionally in real bash — a brace group creates no scope. They are
+//! therefore parity cases (c5/c6): the variable spelling must answer exactly
+//! as the literal spelling, not "stay refused".
+//!
+//! The controls pin shapes that must stay refused (NOT Allow): the assignment
+//! itself inside an and-or list, pipes, `&`, expansion-valued assignments, and
+//! the genuinely conditional/scoped assignments — inside a `( ... )` subshell
+//! (does not reach the parent shell) and inside an `if` body (runs only when
+//! the condition holds: `if false`, or a non-literal condition such as
+//! `if test -e <f>`).
 //!
 //! DOES NOT PROVE: newline-separated variants, here-document interactions,
-//! `$(...)`/backtick-nested and-or lists, or any non-Bash tool path. Controls
-//! only pin "not Allow", not the exact Ask/Deny split.
+//! `$(...)`/backtick-nested and-or lists, `while`/`for`/`case` bodies,
+//! functions, or any non-Bash tool path. Controls only pin "not Allow", not
+//! the exact Ask/Deny split. The parity cases pin the decision only, not the
+//! reason text.
 
 #[path = "support/bounded.rs"]
 mod bounded;
@@ -229,20 +241,52 @@ fn c4_backgrounded_assignment_stays_refused() {
 }
 
 #[test]
-fn c5_if_construct_opened_earlier_stays_refused() {
+fn c5_if_construct_closed_earlier_matches_literal() {
     let f = Fx::new("c5");
     let p = f.out_log();
-    assert_not_allow(
+    same_as_literal(
         &f,
+        &format!("if true && true; then :; fi; L={p}; echo hi > {p}"),
+        "allow",
         &format!("if true && true; then :; fi; L={p}; echo hi > $L"),
     );
 }
 
 #[test]
-fn c6_assignment_inside_brace_group_stays_refused() {
+fn c6_brace_group_assignment_matches_literal() {
     let f = Fx::new("c6");
     let p = f.out_log();
-    assert_not_allow(&f, &format!("{{ true && true; L={p}; }}; echo hi > $L"));
+    same_as_literal(
+        &f,
+        &format!("{{ true && true; L={p}; }}; echo hi > {p}"),
+        "allow",
+        &format!("{{ true && true; L={p}; }}; echo hi > $L"),
+    );
+}
+
+#[test]
+fn c9_assignment_inside_subshell_stays_refused() {
+    let f = Fx::new("c9");
+    let p = f.out_log();
+    assert_not_allow(&f, &format!("( true && true; L={p} ); echo hi > $L"));
+}
+
+#[test]
+fn c10_assignment_inside_false_if_body_stays_refused() {
+    let f = Fx::new("c10");
+    let p = f.out_log();
+    assert_not_allow(&f, &format!("if false; then L={p}; fi; echo hi > $L"));
+}
+
+#[test]
+fn c11_assignment_inside_nonliteral_if_body_stays_refused() {
+    let f = Fx::new("c11");
+    let p = f.out_log();
+    let probe = f.proj.join("scratch/flag").display().to_string();
+    assert_not_allow(
+        &f,
+        &format!("if test -e {probe}; then L={p}; fi; echo hi > $L"),
+    );
 }
 
 #[test]

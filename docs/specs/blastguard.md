@@ -27,11 +27,9 @@ forge・condukt のスケジューラが再利用）。
   `hookSpecificOutput.{hookEventName:"PreToolUse", permissionDecision:"deny", permissionDecisionReason}`
   を serialize し、`hookio` の `deny_json_has_required_shape` テストが改行を含まないことを保証する。
   `reason` は `Decision::Deny(String)` の中身がそのまま agent へ surface される。
-- **判定は純粋・決定論** — `detect` / `classify` / `exclude` は I/O を持たず、`(入力) -> 出力` の
+- **判定は純粋・決定論** — `detect` / `exclude` は I/O を持たず、`(入力) -> 出力` の
   純関数。config allowlist は `exclude::glob_set()`（`OnceLock<GlobSet>`）でメモ化するのみ。
-- **detect と classify の lockstep** — `classify::classify` の tier-2「ローカル破壊」判定は
-  `detect::detect("Bash", …)` を再利用するため、binary の deny 集合と classifier の High/irreversible
-  集合が乖離しない（同一検出器を共有）。
+- **classify / diffrisk は riskgrade へ移設（2026-11-17）** — graded risk/reversibility 分類器と diff-level リスクは `docs/specs/riskgrade.md`。blastguard はコマンド安全性の判定だけを持ち、riskgrade が `detect::detect` を再利用する（lockstep 不変条件も riskgrade 側に移した）。
 - **偽陽性ゼロ・バイアス** — 曖昧な入力は allow。Rust の戻り型矢印 `->`（`prev == b'-'`）と山括弧
   プレースホルダ `<value>` / `<run-id>`（`is_angle_placeholder_close`。hyphen を含む kebab-case
   プレースホルダも placeholder と認識する）は truncating redirect と誤認しない。
@@ -1224,13 +1222,6 @@ forge・condukt のスケジューラが再利用）。
   `strip_wrapping_quotes`）、コマンド別 analyzer（`analyze_rm`/`analyze_git`/`analyze_find`）。I/O なし。
 - **`exclude`** — 「決してブロックしない repo config ファイル」の allowlist。`ALLOW_GLOBS` 定数、
   `glob_set()`（`OnceLock<GlobSet>` メモ化）、`normalize`、`is_config_file`、`is_git_internal`。
-- **`classify`** — planned action の graded risk/reversibility 分類器（`RiskAssessment{risk, reversible}`,
-  `Risk::{Low,Medium,High}`, `requires_gate()` = High かつ not reversible）。precedence: (1) outward
-  deploy/publish/push（tier-1 `DEPLOY_SIGNALS` 部分文字列 + tier-2 `DEPLOY_VERBS`×`OUTWARD_TARGETS` を
-  `has_word` 単語境界で照合）→ High/irreversible、(2) ローカル破壊（`detect` 委譲）→ High/irreversible、
-  (3) history rewrite（`HISTORY_SIGNALS`: rebase/`--amend`/filter-branch）→ Medium/reversible、
-  (4) その他 → Low/reversible。`has_word` が `ownership`⊃`ship` 等の偽陽性を防ぐ。lib 経由で condukt が
-  GATED ゲート強制に利用する。
 - **`model`** — 判定型 `Decision::{Allow, Deny(String), Ask(String)}`（`deny()`/`ask()`/`is_deny()`）。
   system-harm の Deny は `deny_system_harm()` で理由に `SYSTEM_HARM_MARK` を付け、`is_system_harm()` で識別する。
 - **`detect/payload/compound_readers`** — `detect/payload` の子 module。pipe で供給される `if`/`while`/`until`
@@ -1258,7 +1249,7 @@ forge・condukt のスケジューラが再利用）。
   `Ask` にする。subagent からの payload では `main.rs` の `harden_for_subagent` が `Deny` に固める。照合は
   parse 済みの command word と argv token だけで行い、生のコマンド文字列は見ない（`echo "condukt …"` は対象外）。
   前の文での `export CONDUKT_AUTONOMOUS=1; condukt …` は見ない。
-- **`log`** — `blastguard log`: overwatch の violations ledger（`overwatch::store::violations_path`）から
+- **`log`**（実装は `overwatch::blastguard_log`。2026-11-17 に移設、`blastguard log` は互換の委譲経路、`overwatch blastguard-log` でも同じ）— `blastguard log`: overwatch の violations ledger（`overwatch::store::violations_path`）から
   `source == "blastguard"` の行だけを file 順に列挙する read-only の照会コマンド。stdin を読まず ledger へ書かない。
   フィルタは `--decision deny|ask`・`--rule`・`--since`（RFC3339 または期間）・`--system-harm`・
   `--subagent` / `--interactive`（排他）、`--json` で JSON 出力。旧形式の行に無いフィールドは UNKNOWN
@@ -1282,7 +1273,7 @@ forge・condukt のスケジューラが再利用）。
   (2) main session の Bash `Deny` が queue 済み entry と command・cwd バイト一致なら `denied` を記録し、
   deny 理由に `askrelay dismiss <id> --reason "<why>"` を案内する。askrelay が無い・無効でも subagent の `Ask` は
   `Deny` のまま（fail-closed）で、失われるのは main の Stop を止めるリマインドだけ。
-- **`blocklog`** — block log（ユーザー裁定 2026-11-14 逐語:「…完全なコマンドが残っていないため、
+- **`blocklog`**（実装は `harness_core::blocklog`。2026-11-17 に blastguard から移設、blastguard は呼び出しのみ）— block log（ユーザー裁定 2026-11-14 逐語:「…完全なコマンドが残っていないため、
   これ以上は切り分けられません。というのは大変愚かなので記録をとること。止めたなら止めた責任をとる」）。
   表示した `Deny` / `Ask` ごとに 1 行を overwatch に依存せず `~/.blastguard/blocks/blocks.jsonl`
   （`BLASTGUARD_BLOCK_LOG_DIR` で dir を上書き）へ追記する。`Allow` は記録しない。フィールド:
@@ -1372,60 +1363,6 @@ forge・condukt のスケジューラが再利用）。
   S3（path-cutover）で接続する。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。
-
-## 一般化リスクスコアリング (diff-level 意味的リスク)
-
-> **REVIEW-NEEDED**: コードから逆算 (2026-07-09 セッション)。人間レビュー前は正典としない。
-
-### 概要
-
-`diffrisk` module は `classify` の command-text 分類（tier-1/2 deploy 語彙、`detect` 委譲のローカル
-破壊、history rewrite）に加えて、**diff-level の意味的リスク**を同じ `RiskAssessment` 軸へ合流させる。
-判定材料は2つ: (1) 変更パスが機微パス glob（auth/authn/authz/login/session/oauth/credential/secret、
-payment/billing/checkout/stripe、pii/personal_data/gdpr の既定 `DEFAULT_SENSITIVE_GLOBS`。
-`SensitiveConfig::with_extra_globs`/`from_globs` で呼び出し側が拡張・置換可能）に一致するか、
-(2) unified diff テキストに Rust の公開シンボル追加/変更（`pub fn`/`pub struct`/`pub enum`/
-`pub trait`/`pub const`/`pub static`/`pub type`/`pub mod`、`pub(crate)` 修飾も同様に扱う）を示す
-`+`/`-` 行があるか。`classify::classify_change(text, paths, diff_text, sensitive)` が command 分類と
-diff 分類を `RiskAssessment::merge` で統合し、condukt の `gate check` / force-gate エスカレーションは
-1つの `requires_gate()` 軸だけを見ればよい（並行パス無し）。
-
-### 不変条件
-
-- **機微パス glob は設定可能** — 既定は `DEFAULT_SENSITIVE_GLOBS`（auth/payment/PII 系）。
-  `SensitiveConfig::with_extra_globs` は既定に追加、`SensitiveConfig::from_globs` は既定を使わず
-  呼び出し側リストのみを採用する（プロジェクト固有の機微パスを完全に所有したい場合向け）。
-- **純関数** — `diffrisk` module は I/O を持たない。`classify_diff`/`changes_public_symbol`/
-  `SensitiveConfig::any_sensitive` は `(入力) -> 出力` の決定論的写像（`SensitiveConfig::build` の
-  `GlobSet` 構築もメモ化なしの純計算）。
-- **既存の破壊コマンド分類は不変で追加的** — `classify::classify`（tier-1/2 deploy、`detect` 委譲の
-  ローカル破壊、history rewrite、既定 Low）のロジック・precedence は一切変更しない。
-  `classify_change` は `classify(text)` と `diffrisk::classify_diff(...)` を `merge` するだけで、
-  diff signal が既存の deploy/破壊判定を弱める方向には作用しない
-  （`classify_change_still_force_gates_deploy_text_regardless_of_diff_signals` テストが固定）。
-- **公開シンボル変更検知は diff header `+++`/`---` を誤検知しない** — `changes_public_symbol` は
-  行頭の `+`/`-` マーカーの直後が更に `+`/`-` で始まる場合（unified diff のファイルヘッダ行）を
-  除外してから `pub …` プレフィックスを照合する。プレーンな context 行（マーカー無し）も対象外
-  （`diff_file_headers_are_not_mistaken_for_pub_markers` テストが固定）。
-- **merge は max risk かつ both-reversible のみ reversible** — `RiskAssessment::merge` は
-  `risk` を2つの `Ord` 実装 (`Low < Medium < High`) の max、`reversible` は両方が true の場合のみ
-  true（どちらかが irreversible なら結果も irreversible。希釈させない）。
-
-### 振る舞い
-
-機微パス glob 該当（auth/payment/PII）と公開シンボル変更を1つの `RiskAssessment{risk, reversible}`
-へ合流させ、既存の `requires_gate()` エスカレーションに相乗りする:
-
-- 機微パスのみ該当、または公開シンボル変更のみ検出 → `Risk::Medium`、reversible
-  （人間はコミットを revert できるので undoability ではなく *review 姿勢*の格上げ）。
-- 両方該当 → `Risk::High`、reversible（複合的な review-worthiness だが、diff signal 単体は
-  irreversible 化しない — irreversible 化するのは command-text 側の deploy/ローカル破壊判定のみ）。
-- どちらも該当しない → `Risk::Low`（`classify_change` は `classify(text)` 単体と同一結果になり、
-  baseline 後方互換）。
-- deploy/push テキスト（例: `git push origin main`）は diff signal の有無に関わらず、
-  従来どおり `classify` 側の tier-1/2 判定で `High`/irreversible/`requires_gate()` に force-gate
-  される（`merge` は risk を上げる方向にのみ作用するため、diff 側が Low でも既存の force-gate は
-  マスクされない）。
 
 ## 安定 rule id（overwatch 署名の粒度確保）
 

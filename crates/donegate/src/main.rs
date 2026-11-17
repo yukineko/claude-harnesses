@@ -372,7 +372,7 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         );
     }
 
-    let mut report = gate::evaluate(&cfg, &root);
+    let mut report = gate::evaluate_attributed(&cfg, &root, &input.transcript_path);
 
     if report.all_green() {
         // Only failing optional checks can have a log here; keep them too.

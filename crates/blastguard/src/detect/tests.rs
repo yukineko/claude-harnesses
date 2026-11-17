@@ -589,23 +589,8 @@ fn non_ascii_angle_bracket_placeholder_is_not_a_redirect() {
         Decision::Allow
     );
     assert_eq!(bash("emit {risk} for <セッションID>"), Decision::Allow);
-    let a = crate::classify::classify(
-        "2セッション(プロセス)がほぼ同時に同一keyをbeginする結合テストが追加され、\
-         片方が必ずskip(exit 1、または明示的な待機後の順序どおりの成功)になり\
-         両方が成功することは無いと固定される。<同一key>...を検証する",
-    );
-    assert_eq!(a.risk, crate::classify::Risk::Low);
-    assert!(a.reversible);
-    assert!(!a.requires_gate());
-}
-
-#[test]
-fn benign_lookalike_task_prose_is_low_and_reversible() {
-    // The end-to-end path the bug broke: classify() over a task's prose.
-    let a = crate::classify::classify("implement fn parse() -> Result and pass --flag <value>");
-    assert_eq!(a.risk, crate::classify::Risk::Low);
-    assert!(a.reversible);
-    assert!(!a.requires_gate());
+    // The classify() half of this regression moved to riskgrade with the
+    // classifier (2026-11-17): crates/riskgrade/tests/classify_placeholder_prose.rs.
 }
 
 #[test]

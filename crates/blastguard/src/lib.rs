@@ -31,19 +31,13 @@
 //! module existed.
 
 pub mod approve;
-pub mod blocklog;
-pub mod callgraph;
-pub mod classify;
 pub mod deletion;
 pub mod detect;
-pub mod diffrisk;
 pub mod exclude;
 pub mod hookio;
 pub mod interactive;
-pub mod log;
 pub mod model;
 pub mod protection;
-pub mod retro;
 pub mod reversible;
 pub mod rule_id;
 pub mod scope;

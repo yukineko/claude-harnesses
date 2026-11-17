@@ -243,7 +243,7 @@ fn protected_dir_patterns() -> Vec<String> {
 /// state.** Nothing in the crate could tell a fully loaded list from a partially
 /// loaded one.
 ///
-/// This is the same defect [`crate::diffrisk::SensitiveConfig::build`] already
+/// This is the same defect `riskgrade::diffrisk::SensitiveConfig::build` (then `blastguard::diffrisk`) already
 /// names verbatim in its own docstring ("This used to `if let Ok` past a bad
 /// `Glob::new` and `unwrap_or_else(|_| GlobSet::empty())` a bad `build()`"). The
 /// fix landed there and not on this twin — the mirror gap that is this crate's

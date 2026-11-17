@@ -541,6 +541,19 @@ fn analyze_rm_placed(rest: &[&str], ctx: &Ctx<'_>, unplaced: &mut Option<String>
     };
     if let Some(targets) = placeable_targets(&operands) {
         if let Some(root) = ctx.confined_root("rm", &targets) {
+            // The deletion principle's system-directory refusal only RAISES,
+            // so it applies whether or not the line was eligible for
+            // `judge_rm` above (a compound line is not): otherwise
+            // `true && rm -rf build` under a cwd in `/private/var` is this
+            // Ask while `rm -rf build` is a Deny. See
+            // [`crate::deletion::system_dir_refusal`].
+            if recursive && !wildcard {
+                if let Some(reason) =
+                    crate::deletion::system_dir_refusal(ctx.scope, &operands, ctx.base_for("rm"))
+                {
+                    return Decision::deny(reason);
+                }
+            }
             return confined_ask(action, &root, &operands);
         }
     }

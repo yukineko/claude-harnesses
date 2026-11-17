@@ -41,6 +41,7 @@ harness-core は `plugin.json`・hook・バイナリのいずれも持たない�
 - `plugin_bin`: 兄弟プラグインの実行ファイルを plugin キャッシュから見つけ、最新バージョンを数値比較で選ぶ；`$PATH` に無いバイナリは、キャッシュに版ディレクトリが無ければ判定不能ではなく known-absent になる。
 - `progress`: 進捗判定エンジン：いずれかの signal が進めば `Progressing`、ウィンドウ全体で fingerprint が凍結していれば `Stalled`、初回観測は stalled ではなく判定不能。
 - `append`: アトミックな単一 `write()` による JSONL 追記：呼び出しごとに改行終端の 1 レコード、並列 writer でもレコードが交錯しない。
+- `blocklog`: blastguard の block log（2026-11-17 に blastguard から移設）：表示した Deny/Ask ごとに Bash コマンド（バイト一致）またはファイル系 `tool_input` 全体を JSON 1 行で `~/.blastguard/blocks/blocks.jsonl`（`BLASTGUARD_BLOCK_LOG_DIR` で上書き）へ追記する。書き込み失敗は返り値で返し、黙らない。
 - `discovery`: 追記専用の discovery record ストア：あるセッションが保存したレコードは、別セッションの照会から他者所有として見える；fingerprint は決定論的。
 - `lessons` / `retrieval`: lessons ストアは id で冪等（最初の書き込みが勝つ）、retrieval イベント台帳は run id で冪等；既定の lessons ストアは `~/.lessons/lessons.jsonl`。
 - `code_index` / `text_index` / `callgraph` / `index_store`: 字句的なコードインデックス：決定論的なシンボル、決定論的な全文、ファイルをまたいで caller→callee エッジを見つけるグラフ；ファサードがシンボル検索と全文検索に答える。

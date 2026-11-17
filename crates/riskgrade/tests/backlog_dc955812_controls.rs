@@ -4,9 +4,9 @@
 //! repro itself is `tests/backlog_11be9484.rs::prose_describing_a_command_does_not_force_gate`
 //! (kept in its own file so it still compiles at the pre-fix revision).
 
-use blastguard::classify::{classify_change, classify_command};
-use blastguard::diffrisk::SensitiveConfig;
 use harness_core::verdict::Determination;
+use riskgrade::classify::{classify_change, classify_command};
+use riskgrade::diffrisk::SensitiveConfig;
 
 const TITLE_B: &str = "new gate: detect a retry of a blocked command through another syntax";
 

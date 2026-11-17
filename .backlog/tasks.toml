@@ -3304,3 +3304,254 @@ exit 101:  failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 9m 31s
      Running tests/testscope_fault_seams_20261117.rs (target/debug/deps/testscope_fault_seams_20261117-0680b439b7ed3bdb)
 error: test failed, to rerun pass `-p condukt --test testscope_fault_seams_20261117`"""
+
+[[task]]
+id = "0031b957"
+title = "tdd: path-less writes (cargo fmt, glob sed -i) are excluded from the Stop scan scope"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "User ruling 2026-11-18 supersedes the 2026-10-17 accepted hole: any Bash write that names no path keeps ALL changed files in scope. RED 6118e167b."
+created_at = 1794942254
+updated_at = 1794942254
+weight = 0.0
+issue_number = 1852
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1852"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261118_unnamed_write_excluded_from_scope -- --ignored"
+rev = "6118e167b943ba9fc6530847df43ce0a215be450"
+observed_at = 1794942254
+detail = """
+exit 101: failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.24s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
+     Running tests/backlog_20261118_unnamed_write_excluded_from_scope.rs (target/debug/deps/backlog_20261118_unnamed_write_excluded_from_scope-7985e8f791874d66)
+error: test failed, to rerun pass `-p tdd --test backlog_20261118_unnamed_write_excluded_from_scope`"""
+
+[[task]]
+id = "dc597740"
+title = "reviewgate: path-less writes (cargo fmt, glob sed -i) are excluded from the Stop scan scope"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "reviewgate",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "User ruling 2026-11-18 supersedes the 2026-10-17 accepted hole: any Bash write that names no path keeps ALL changed files in scope. RED 6118e167b."
+created_at = 1794942296
+updated_at = 1794942296
+weight = 0.0
+issue_number = 1853
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1853"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test backlog_20261118_unnamed_write_excluded_from_scope -- --ignored"
+rev = "6118e167b943ba9fc6530847df43ce0a215be450"
+observed_at = 1794942296
+detail = """
+exit 101:  0 ignored; 0 measured; 2 filtered out; finished in 0.74s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261118_unnamed_write_excluded_from_scope.rs (target/debug/deps/backlog_20261118_unnamed_write_excluded_from_scope-fae859212d40fd27)
+error: test failed, to rerun pass `-p reviewgate --test backlog_20261118_unnamed_write_excluded_from_scope`"""
+
+[[task]]
+id = "f6102045"
+title = "blastguard FP: quoted git commit -F - heredoc message (5th statement of an && chain) has its message lines judged as commands ('X is not a command blastguard recognises ... parses as a destructive command line')"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-18 relay bgr-0dd8923dc0f3 (subagent deny; main ran it, commit 23f5a3211). RED + control in commit 34f79f4a7 (branch red/blastguard-commit-heredoc-body-fp-20261118, 0.2.692); exact command = PREFIX + git commit -q -F - <<'EOF' MESSAGE EOF + SUFFIX in the test. Re-observed at 0.2.692 tree: main=ask with the same body-as-command reason. Control: the same message as a bare first git commit -q -F - is NOT misread. Not a duplicate of 3ab6109f (needs a quoted $ option value on the opener; none here), d292ce6e (column-0 backtick; no backtick in this body), 648a6641 (; before a backtick span; no backtick), bd2a44e0 ("$(cat <<'EOF' ...)" form), 2d2ef773 (python stdin heredoc). Same family: a quoted heredoc body is data (user ruling 2026-11-17 on d292ce6e); trigger line/position not isolated."""
+created_at = 1794942412
+updated_at = 1794942412
+weight = 0.0
+issue_number = 1854
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1854"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp -- --ignored refused_commit_heredoc_body_is_not_read_as_commands"
+rev = "34f79f4a7d84491cfebf83b97ae20560287d459d"
+observed_at = 1794942412
+detail = """
+exit 101: -20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.00s
+     Running tests/backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp.rs (target/debug/deps/backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp-473aa388e6897006)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp`"""
+
+[[task]]
+id = "19baba2f"
+title = "blastguard FP: quoted heredoc written to a .rs file whose Rust doc text mentions 'git checkout <branch> -- .' is denied as git checkout -- . (rule git-checkout-dash-dot)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-18 ~/.blastguard/blocks/blocks.jsonl line 692 (session 06c2bd77, subagent a611cdac32e08bddb, 0.2.675, ts 1794941931): cd <wt> && cat > crates/tdd/tests/backlog_20261118_unnamed_write_excluded_from_scope.rs <<'EOF' ... EOF then '. "$HOME/.cargo/env"; cargo test -p tdd ...' -> deny 'git checkout -- . discards all working-tree changes'. Exact command kept byte-exact as crates/blastguard/tests/fixtures/backlog_20261118_rs_heredoc_checkout_fp.cmd (jq -j .tool_input.command; 10952 bytes; sha256 c42b19da...; the log's tool_input_bytes 11544 / tool_input_sha256 efbd0f... do not equal the raw command's size/hash, apparently computed over another serialization - not verified). RED + control in commit 34f79f4a7 (0.2.692); re-observed at that tree: main=deny same reason. Control: the phrase alone in a quoted .rs heredoc is NOT misread, so the trigger is elsewhere in the 10.9 KB body (not isolated). The command is > 8 KiB (MAX_PARSE_BYTES): a TooLong Deny would be a separate, ruled verdict; the RED asserts only that it is not the git-checkout misreading. Memory ruling: .rs heredoc body is not shell (note: the same command then runs cargo test on that file - the ruling's 'unless run in same command' clause is about shell-run, which this is not, but this reading is an interpretation). Not a duplicate of 2d2ef773 (python stdin), 648a6641 (backtick command-word, different reason), bd2a44e0 ($(cat) form), d292ce6e (column-0 backtick)."""
+created_at = 1794942463
+updated_at = 1794942463
+weight = 0.0
+issue_number = 1855
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1855"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_rs_heredoc_checkout_text_fp -- --ignored logged_rs_heredoc_is_not_read_as_git_checkout"
+rev = "34f79f4a7d84491cfebf83b97ae20560287d459d"
+observed_at = 1794942463
+detail = """
+exit 101: uki/src/.harness-worktrees/red-commit-heredoc-fp-20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.57s
+     Running tests/backlog_20261118_rs_heredoc_checkout_text_fp.rs (target/debug/deps/backlog_20261118_rs_heredoc_checkout_text_fp-57f7c3880d353448)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_rs_heredoc_checkout_text_fp`"""
+
+[[task]]
+id = "aa7acd12"
+title = "blastguard: zsh =cmd (equals expansion) in command position hides system harm (=rm -rf ~ is allow)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = 'Observed 2026-11-18, blastguard 0.2.690 deployed and origin/main c3dd9fd6d worktree build: =rm -rf ~, =chmod 777 /etc/hosts and =bash -c "chmod 777 /etc/hosts" are allow in main and subagent; the same without = are deny (system harm). The Bash tool runs /bin/zsh 5.9 with option equals on: echo =ls printed /bin/ls and =echo hi printed hi, so a command-position =word runs the PATH binary. RED: crates/blastguard/tests/backlog_20261118_zsh_equals_cmd_fail_open.rs at 105564832 (branch red/blastguard-zsh-equals-20261118, 0.2.691): 3 RED fail, 4 controls pass (plain harm deny, echo hi allow, echo =x / a==b / [[ $a == b ]] / x=1 echo hi allow, =$x foo ask main / deny subagent). Fix owner: harness-5a (resolve =word statically to word, undetermined name -> Undetermined).'
+created_at = 1794942814
+updated_at = 1794942814
+weight = 0.0
+issue_number = 1856
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1856"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_zsh_equals_cmd_fail_open -- --include-ignored"
+rev = "105564832bbde7adb5a2a750682034404e31ecb6"
+observed_at = 1794942814
+detail = """
+exit 101: rs/yuki/src/.harness-worktrees/red-blastguard-zsh-equals-20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.26s
+     Running tests/backlog_20261118_zsh_equals_cmd_fail_open.rs (target/debug/deps/backlog_20261118_zsh_equals_cmd_fail_open-e1b00426a45f6ff4)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_zsh_equals_cmd_fail_open`"""
+
+[[task]]
+id = "42e5c169"
+title = "blastguard: unknown subcommand (incl. moved `relay`) exits 0 silently"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-18: `blastguard no-such-subcommand </dev/null` and `blastguard relay dismiss <id> --reason x` exit 0 with empty stdout/stderr (relay moved to askrelay plugin; callers believe dismiss succeeded). RED by independent author harness-9e: commit 5975d68af, crates/blastguard/tests/backlog_20261118_unknown_subcommand_fails_loudly.rs (failures: `unknown subcommand must exit non-zero, got Some(0)` / `moved relay subcommand must exit non-zero, got Some(0)`). Fix on branch fix/bg-unknown-subcmd-20261118."
+created_at = 1794942949
+updated_at = 1794942949
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_unknown_subcommand_fails_loudly -- --include-ignored"
+rev = "5975d68af788dd49e89e2bd34c6699a4346421d5"
+observed_at = 1794942949
+detail = """
+exit 101: src/.harness-worktrees/bg-unknown-subcmd-impl/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.68s
+     Running tests/backlog_20261118_unknown_subcommand_fails_loudly.rs (target/debug/deps/backlog_20261118_unknown_subcommand_fails_loudly-21696f22b761574f)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_unknown_subcommand_fails_loudly`"""
+
+[[task]]
+id = "439fb07d"
+title = "attribution: naming any existing file makes a path-less write attributable (cargo fmt -- a.rs, python3 gen.py, git apply, cp to dir)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "attribution",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "has_unattributable_write returns Known(false) for cargo fmt -- a.rs, python3 gen.py [existing.rs], bash fmt.sh, cargo build a.rs, rustfmt a.rs, git apply a.rs, patch -p1 < a.rs, cp a.rs other_dir/, git stash pop a.rs. Controls (sed -i, tee, touch, cp to named dest, cat, git diff) pass."
+created_at = 1794942983
+updated_at = 1794942983
+weight = 0.0
+issue_number = 1857
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1857"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test backlog_20261118_named_file_attribution_holes -- --ignored"
+rev = "aeb6d0aeb98e005ecce1f85cd3f3652362e9f33d"
+observed_at = 1794942983
+detail = """
+exit 101: d; 10 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261118_named_file_attribution_holes.rs (target/debug/deps/backlog_20261118_named_file_attribution_holes-b911ce4087c6677c)
+error: test failed, to rerun pass `-p harness-core --test backlog_20261118_named_file_attribution_holes`"""
+
+[[task]]
+id = "693a76ea"
+title = "blastguard: backtick =word inside a quoted heredoc body read as an undetermined command word (Ask/Deny FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = 'Observed 2026-11-18 (session 1e000416, relays bgr-c1761eb0eaab and bgr-360d450f9569). A backtick-quoted equals-word (e.g. the text BACKTICK =x BACKTICK) inside a QUOTED heredoc body (<<EOF with quoted delimiter) is reported as "the command word ... is an expansion whose value only exists at run time" when another command follows the EOF terminator: Ask in main, Deny in subagent. A quoted heredoc body is never expanded, so nothing in it runs. Minimal repro (worktree debug build 0.2.691): cat with quoted heredoc, body = backticked =x, then a line "true" -> ask/deny; without the trailing command -> allow/allow. Same body to git commit -q -F - then true -> allow/allow, but followed by "git log --oneline -1; backlog add --help 2>&1 | head -40" -> ask/deny (the shape that blocked a subagent commit). Not asserted: backticked "rm -rf ~" (no equals) in a quoted cat heredoc body then true is deny/deny in the worktree build (possible related FP). RED test: crates/blastguard/tests/backlog_20261118_quoted_heredoc_backtick_equals_word_fp.rs (commit 1bcc184a6, branch red/blastguard-zsh-equals-20261118), RED is #[ignore]d; run with --include-ignored. Controls: real "=$x foo" stays ask/deny; bash heredoc running chmod 777 /etc/hosts stays deny. Related: aa7acd12 (zsh =cmd system-harm fail-open); the fix for that must not widen this FP.'
+created_at = 1794943239
+updated_at = 1794943239
+weight = 0.0
+issue_number = 1858
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1858"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_quoted_heredoc_backtick_equals_word_fp -- --include-ignored"
+rev = "1bcc184a67cb645c1f269bec8a5e1ff627fbdb04"
+observed_at = 1794943239
+detail = """
+exit 101: uard-zsh-equals-20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.68s
+     Running tests/backlog_20261118_quoted_heredoc_backtick_equals_word_fp.rs (target/debug/deps/backlog_20261118_quoted_heredoc_backtick_equals_word_fp-950f9c89ac5f7e75)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_quoted_heredoc_backtick_equals_word_fp`"""

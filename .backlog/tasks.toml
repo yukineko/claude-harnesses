@@ -3368,3 +3368,33 @@ exit 101:  0 ignored; 0 measured; 2 filtered out; finished in 0.74s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running tests/backlog_20261118_unnamed_write_excluded_from_scope.rs (target/debug/deps/backlog_20261118_unnamed_write_excluded_from_scope-fae859212d40fd27)
 error: test failed, to rerun pass `-p reviewgate --test backlog_20261118_unnamed_write_excluded_from_scope`"""
+
+[[task]]
+id = "f6102045"
+title = "blastguard FP: quoted git commit -F - heredoc message (5th statement of an && chain) has its message lines judged as commands ('X is not a command blastguard recognises ... parses as a destructive command line')"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-18 relay bgr-0dd8923dc0f3 (subagent deny; main ran it, commit 23f5a3211). RED + control in commit 34f79f4a7 (branch red/blastguard-commit-heredoc-body-fp-20261118, 0.2.692); exact command = PREFIX + git commit -q -F - <<'EOF' MESSAGE EOF + SUFFIX in the test. Re-observed at 0.2.692 tree: main=ask with the same body-as-command reason. Control: the same message as a bare first git commit -q -F - is NOT misread. Not a duplicate of 3ab6109f (needs a quoted $ option value on the opener; none here), d292ce6e (column-0 backtick; no backtick in this body), 648a6641 (; before a backtick span; no backtick), bd2a44e0 ("$(cat <<'EOF' ...)" form), 2d2ef773 (python stdin heredoc). Same family: a quoted heredoc body is data (user ruling 2026-11-17 on d292ce6e); trigger line/position not isolated."""
+created_at = 1794942412
+updated_at = 1794942412
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp -- --ignored refused_commit_heredoc_body_is_not_read_as_commands"
+rev = "34f79f4a7d84491cfebf83b97ae20560287d459d"
+observed_at = 1794942412
+detail = """
+exit 101: -20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.00s
+     Running tests/backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp.rs (target/debug/deps/backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp-473aa388e6897006)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp`"""

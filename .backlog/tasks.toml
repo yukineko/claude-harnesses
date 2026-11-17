@@ -3524,3 +3524,32 @@ exit 101: d; 10 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.01s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
      Running tests/backlog_20261118_named_file_attribution_holes.rs (target/debug/deps/backlog_20261118_named_file_attribution_holes-b911ce4087c6677c)
 error: test failed, to rerun pass `-p harness-core --test backlog_20261118_named_file_attribution_holes`"""
+
+[[task]]
+id = "693a76ea"
+title = "blastguard: backtick =word inside a quoted heredoc body read as an undetermined command word (Ask/Deny FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = 'Observed 2026-11-18 (session 1e000416, relays bgr-c1761eb0eaab and bgr-360d450f9569). A backtick-quoted equals-word (e.g. the text BACKTICK =x BACKTICK) inside a QUOTED heredoc body (<<EOF with quoted delimiter) is reported as "the command word ... is an expansion whose value only exists at run time" when another command follows the EOF terminator: Ask in main, Deny in subagent. A quoted heredoc body is never expanded, so nothing in it runs. Minimal repro (worktree debug build 0.2.691): cat with quoted heredoc, body = backticked =x, then a line "true" -> ask/deny; without the trailing command -> allow/allow. Same body to git commit -q -F - then true -> allow/allow, but followed by "git log --oneline -1; backlog add --help 2>&1 | head -40" -> ask/deny (the shape that blocked a subagent commit). Not asserted: backticked "rm -rf ~" (no equals) in a quoted cat heredoc body then true is deny/deny in the worktree build (possible related FP). RED test: crates/blastguard/tests/backlog_20261118_quoted_heredoc_backtick_equals_word_fp.rs (commit 1bcc184a6, branch red/blastguard-zsh-equals-20261118), RED is #[ignore]d; run with --include-ignored. Controls: real "=$x foo" stays ask/deny; bash heredoc running chmod 777 /etc/hosts stays deny. Related: aa7acd12 (zsh =cmd system-harm fail-open); the fix for that must not widen this FP.'
+created_at = 1794943239
+updated_at = 1794943239
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_quoted_heredoc_backtick_equals_word_fp -- --include-ignored"
+rev = "1bcc184a67cb645c1f269bec8a5e1ff627fbdb04"
+observed_at = 1794943239
+detail = """
+exit 101: uard-zsh-equals-20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.68s
+     Running tests/backlog_20261118_quoted_heredoc_backtick_equals_word_fp.rs (target/debug/deps/backlog_20261118_quoted_heredoc_backtick_equals_word_fp-950f9c89ac5f7e75)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_quoted_heredoc_backtick_equals_word_fp`"""

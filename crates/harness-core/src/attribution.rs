@@ -410,6 +410,8 @@ struct Stage {
     words: Vec<String>,
     /// An output redirect to something other than `/dev/null` or an fd.
     writes: bool,
+    /// The raw target text of each such redirect (quotes/escapes unprocessed).
+    redirects: Vec<String>,
 }
 
 struct Statement {
@@ -597,6 +599,7 @@ fn statements(command: &str) -> Option<Vec<Statement>> {
                     j = j.min(b.len());
                     if &command[t..j] != "/dev/null" {
                         stage.writes = true;
+                        stage.redirects.push(command[t..j].to_string());
                     }
                 }
                 i = j;
@@ -939,8 +942,9 @@ fn call_named_paths(call: &crate::transcript::BashCall) -> (bool, BTreeSet<PathB
 }
 
 /// Whether this session (parent transcript and every subagent sidechain)
-/// ran any Bash call that may have written but names no existing path
-/// ([`call_named_paths`]). Such a write cannot be attributed to a file, so a
+/// ran any Bash call with a possibly-writing stage outside the closed writer
+/// allowlist of [`stage_attributable`] (a writer whose targets are not exactly
+/// named files). Such a write cannot be attributed to a file, so a
 /// caller that narrows to "files this session wrote" must NOT narrow when
 /// this is `true` (CLAUDE.md 3). An unreadable transcript or sidechain is
 /// `Undetermined`, never `false`.
@@ -973,12 +977,14 @@ pub fn has_unattributable_write(transcript_path: &str) -> Determination<bool> {
 }
 
 /// Per STAGE, not per call: a call is unattributable when any stage that may
-/// write (not provably read-only, not a bare `cd`/`pushd`) names no existing
-/// FILE. A `cd` target or any directory argument does not count as naming the
-/// files written (`cd <dir> && cargo fmt` rewrites files it never names), and
-/// a path named by a DIFFERENT stage does not cover a path-less writer. A
-/// command the parser cannot follow, or holding a substitution, is
-/// unattributable (when in doubt, it is).
+/// write (not provably read-only, not a bare `cd`/`pushd`) is not
+/// [`stage_attributable`] — i.e. its program is outside the closed writer
+/// allowlist (`sed -i`, `tee`, `touch`, `rm`, `cp`, `mv`, file redirects) or
+/// its targets are not exactly named files. Merely naming some existing file
+/// does NOT make a stage attributable (`cargo fmt -- a.rs`, `python3 gen.py`).
+/// A `cd` target or directory argument is not a written file, and a path named
+/// by a DIFFERENT stage does not cover another writer. A command the parser
+/// cannot follow, or holding a substitution, is unattributable.
 fn call_is_unattributable(call: &crate::transcript::BashCall) -> bool {
     let Some(stmts) = statements(&call.command) else {
         return true;
@@ -992,27 +998,159 @@ fn call_is_unattributable(call: &crate::transcript::BashCall) -> bool {
             if read_only_stage(stage) || matches!(program(stage), Some("cd" | "pushd")) {
                 continue;
             }
-            let names_file = stage.words.iter().skip(1).any(|raw| {
-                let w = raw.trim_matches(|c: char| matches!(c, '"' | '\'' | '>' | ';' | '(' | ')'));
-                if w.is_empty() || w.starts_with('-') {
-                    return false;
-                }
-                let p = Path::new(w);
-                let abs = if p.is_absolute() {
-                    p.to_path_buf()
-                } else if let Some(c) = cwd.filter(|_| w.contains('/') || w.contains('.')) {
-                    c.join(p)
-                } else {
-                    return false;
-                };
-                abs.exists() && !abs.is_dir()
-            });
-            if !names_file {
+            if !stage_attributable(stage, cwd) {
                 return true;
             }
         }
     }
     false
+}
+
+/// A word that names exactly one path: no glob, expansion, brace, tilde,
+/// history or escape character survives in it (the parser has already removed
+/// quotes, so a quoted glob is also refused: when in doubt, it is not named).
+fn plain_word(w: &str) -> bool {
+    !w.is_empty()
+        && !w
+            .chars()
+            .any(|c| "*?[]{}$~!`\\\"'<>|&;()#".contains(c) || c.is_whitespace())
+}
+
+/// `w` as a write target: a plain word that resolves (against `cwd` when
+/// relative) to something that is not a directory. A relative path with no
+/// known `cwd`, a trailing `/`, an existing directory: not a file target.
+fn file_target(w: &str, cwd: Option<&Path>) -> bool {
+    if !plain_word(w) || w.ends_with('/') {
+        return false;
+    }
+    let p = Path::new(w);
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else if let Some(c) = cwd {
+        c.join(p)
+    } else {
+        return false;
+    };
+    !abs.is_dir()
+}
+
+/// `sed` script of exactly one `s` command whose flags cannot write or run
+/// anything (`g`, `p`, `i`, `I`, digits; never `w`, `e`, `m`/`M` ambiguity
+/// aside). No backslash or newline, so the delimiters are unambiguous.
+fn sed_subst_only(script: &str) -> bool {
+    let mut chars = script.chars();
+    if chars.next() != Some('s') {
+        return false;
+    }
+    let Some(delim) = chars.next() else {
+        return false;
+    };
+    if delim.is_alphanumeric() || delim.is_whitespace() || matches!(delim, '\\' | ';' | '{' | '}') {
+        return false;
+    }
+    if script.contains(['\\', '\n']) {
+        return false;
+    }
+    let rest: Vec<&str> = chars.as_str().split(delim).collect();
+    // `pattern`, `replacement`, `flags`
+    rest.len() == 3 && rest[2].chars().all(|c| "gpiI0123456789".contains(c))
+}
+
+/// Operands (non-flag words) of a table writer, or `None` when it carries a
+/// flag outside `allowed_flags` (an unknown flag may redirect the write).
+fn operands<'a>(args: &[&'a str], allowed_flags: &[&str]) -> Option<Vec<&'a str>> {
+    let mut out = Vec::new();
+    let mut opts_done = false;
+    for &a in args {
+        if opts_done || a == "-" || !a.starts_with('-') {
+            out.push(a);
+        } else if a == "--" {
+            opts_done = true;
+        } else if allowed_flags.contains(&a) {
+        } else {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+/// Whether a possibly-writing stage's write targets are exactly determinable.
+///
+/// CLOSED allowlist, fail-closed: a stage is attributable only when
+/// 1. every output redirect (`> f`, `>> f`) names a [`file_target`], AND
+/// 2. its program is in this table and its arguments match the table's form:
+///    - `sed -i|--in-place [-E|-r|-n] [-e] 's/…/…/flags' FILE...` — only a single
+///      plain `s` command ([`sed_subst_only`]), no backup suffix, no script file;
+///    - `tee [-a] FILE...`, `touch FILE...`, `rm [-f] FILE...` — every operand
+///      is the written (or removed) file;
+///    - `cp SRC DEST`, `mv SRC DEST` — exactly two file operands, no flags: DEST
+///      (and for `mv`, SRC, which is removed) is the target; a directory DEST is
+///      refused because the written path would be `DEST/<name>`, not named;
+///    - a stage with no program (only redirects) — covered by (1).
+///
+/// Everything else is unattributable: interpreters (`python`, `bash`, `sh`,
+/// `node`), formatters (`cargo fmt`, `rustfmt`), build tools, `git apply`/
+/// `stash`/`checkout`, `patch`, `xargs`, any unknown flag, glob or directory
+/// target. Naming SOME existing file on the command line does not make an
+/// arbitrary program's writes attributable.
+fn stage_attributable(stage: &Stage, cwd: Option<&Path>) -> bool {
+    if !stage.redirects.iter().all(|t| file_target(t, cwd)) {
+        return false;
+    }
+    let words: Vec<&str> = stage
+        .words
+        .iter()
+        .map(String::as_str)
+        .skip_while(|w| {
+            matches!(
+                *w,
+                "if" | "then" | "else" | "elif" | "do" | "while" | "until" | "!" | "time"
+            )
+        })
+        .collect();
+    let Some(first) = words.first() else {
+        return true;
+    };
+    // A read-only program whose only effect is its (already validated) output
+    // redirect: `cat a > b.txt`.
+    if !stage.redirects.is_empty()
+        && read_only_stage(&Stage {
+            words: stage.words.clone(),
+            writes: false,
+            redirects: Vec::new(),
+        })
+    {
+        return true;
+    }
+    let args = &words[1..];
+    let all_files = |ops: &[&str]| !ops.is_empty() && ops.iter().all(|o| file_target(o, cwd));
+    match first.rsplit('/').next().unwrap_or(first) {
+        "tee" => operands(args, &["-a"]).is_some_and(|o| all_files(&o)),
+        "touch" => operands(args, &[]).is_some_and(|o| all_files(&o)),
+        "rm" => operands(args, &["-f"]).is_some_and(|o| all_files(&o)),
+        "cp" | "mv" => operands(args, &[]).is_some_and(|o| o.len() == 2 && all_files(&o)),
+        "sed" => {
+            let mut in_place = false;
+            let mut script: Option<&str> = None;
+            let mut files: Vec<&str> = Vec::new();
+            let mut it = args.iter().copied();
+            while let Some(a) = it.next() {
+                match a {
+                    "-i" | "--in-place" => in_place = true,
+                    "-E" | "-r" | "-n" => {}
+                    "-e" => match (script, it.next()) {
+                        (None, Some(s)) => script = Some(s),
+                        _ => return false,
+                    },
+                    _ if a.starts_with('-') => return false,
+                    _ if script.is_none() => script = Some(a),
+                    _ => files.push(a),
+                }
+            }
+            in_place && script.is_some_and(sed_subst_only) && all_files(&files)
+        }
+        _ => false,
+    }
 }
 
 /// The files ONE transcript records as written: the transcript at

@@ -62,71 +62,51 @@ fn expect(cmd: &str, want: bool) {
 
 // ---- REDs: path-less writes hidden behind a named existing file ----
 
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
-#[ignore = "RED: 2026-11-18 cargo fmt rewrites the whole workspace; `-- a.rs` does not scope it"]
 #[test]
 fn cargo_fmt_with_named_file_is_unattributable() {
     expect("cargo fmt -- a.rs", true);
 }
 
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
-#[ignore = "RED: 2026-11-18 python script outputs are unnamed (script counted as the named path)"]
 #[test]
 fn python_script_alone_is_unattributable() {
     expect("python3 gen.py", true);
 }
 
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
-#[ignore = "RED: 2026-11-18 python script plus an existing arg: outputs still unnamed"]
 #[test]
 fn python_script_with_existing_arg_is_unattributable() {
     expect("python3 gen.py existing.rs", true);
 }
 
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
-#[ignore = "RED: 2026-11-18 shell script writes are unnamed"]
 #[test]
 fn bash_script_is_unattributable() {
     expect("bash fmt.sh", true);
 }
 
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
-#[ignore = "RED: 2026-11-18 cargo build writes target/ etc; a.rs is not what it writes"]
 #[test]
 fn cargo_build_with_named_file_is_unattributable() {
     expect("cargo build a.rs", true);
 }
 
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
-#[ignore = "RED: 2026-11-18 rustfmt also formats mod-reached child files"]
 #[test]
 fn rustfmt_with_named_file_is_unattributable() {
     expect("rustfmt a.rs", true);
 }
 
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
-#[ignore = "RED: 2026-11-18 git apply targets live inside the patch, not the named patch file"]
 #[test]
 fn git_apply_patch_file_is_unattributable() {
     expect("git apply a.rs", true);
 }
 
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
-#[ignore = "RED: 2026-11-18 patch targets live inside the patch fed by stdin redirect"]
 #[test]
 fn patch_with_stdin_patch_file_is_unattributable() {
     expect("patch -p1 < a.rs", true);
 }
 
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
-#[ignore = "RED: 2026-11-18 cp into a directory writes other_dir/a.rs which is not named"]
 #[test]
 fn cp_into_directory_is_unattributable() {
     expect("cp a.rs other_dir/", true);
 }
 
-// test-weakening-justified: new RED for an unfixed defect (2026-11-18).
-#[ignore = "RED: 2026-11-18 git stash pop rewrites arbitrary tracked files"]
 #[test]
 fn git_stash_pop_with_named_file_is_unattributable() {
     expect("git stash pop a.rs", true);

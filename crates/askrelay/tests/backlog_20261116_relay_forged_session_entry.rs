@@ -19,16 +19,15 @@ mod bounded;
 
 use serde_json::{json, Value};
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 const ASK_CMD: &str = r#"for f in a b; do git checkout -- "$f"; done"#;
 const SESSION: &str = "ec356662-240d-47b9-9c46-7c26e1910aaa";
 const FORGED_AGENT: &str = "a7f9e57c28c3b88e5";
 
 fn run(root: &Path, args: &[&str], stdin: &str) -> Output {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_blastguard"));
-    c.args(args)
-        .env("HOME", root.join("home"))
+    let mut c = bounded::command_for(args);
+    c.env("HOME", root.join("home"))
         .env("BLASTGUARD_RELAY_DIR", root.join("relay"))
         .env("BLASTGUARD_APPROVALS_DIR", root.join("approvals"))
         .env("CLAUDE_CODE_SESSION_ID", "sessEnvIgnored")

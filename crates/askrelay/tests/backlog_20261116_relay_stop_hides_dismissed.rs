@@ -15,7 +15,7 @@ mod bounded;
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 const SESSION: &str = "relay-hide-sess-20261116";
 const AGENT: &str = "a0c1d2e3f4a5b6c7d";
@@ -42,9 +42,8 @@ fn setup(tag: &str) -> PathBuf {
 }
 
 fn run(root: &Path, args: &[&str], stdin: &str) -> Output {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_blastguard"));
-    c.args(args)
-        .env("HOME", root.join("home"))
+    let mut c = bounded::command_for(args);
+    c.env("HOME", root.join("home"))
         // TMPDIR is a safe root; keep it off `other/` so `other/` is not this
         // session's tree (as the sibling worktree was in the observation).
         .env("TMPDIR", root.join("home"))

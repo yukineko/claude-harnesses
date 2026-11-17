@@ -78,6 +78,7 @@ GATE_CRATES = (
     "mutategate",
     "overwatch",
     "parallelguard",
+    "askrelay",
 )
 
 # How many code lines above a `.flatten()` we look for the `read_dir(` that makes

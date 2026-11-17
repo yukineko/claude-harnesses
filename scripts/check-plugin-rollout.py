@@ -688,6 +688,7 @@ GATE_CRATES = (
     "mutategate",
     "overwatch",
     "parallelguard",
+    "askrelay",
 )
 
 # GATE crates that legitimately ship NO .claude-plugin/plugin.json and so can

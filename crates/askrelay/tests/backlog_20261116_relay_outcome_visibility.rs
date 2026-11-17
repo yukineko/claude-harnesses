@@ -72,9 +72,8 @@ fn setup(tag: &str) -> PathBuf {
 }
 
 fn run(root: &Path, args: &[&str], stdin: &str) -> Output {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_blastguard"));
-    c.args(args)
-        .env("HOME", root.join("home"))
+    let mut c = bounded::command_for(args);
+    c.env("HOME", root.join("home"))
         // TMPDIR is a safe root; keep it off `other/` so `other/` is not this
         // session's tree (as the sibling worktree was in the observation).
         .env("TMPDIR", root.join("home"))

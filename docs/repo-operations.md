@@ -28,7 +28,7 @@
   （path・行数・上限を表示）/ 2 = 判定不能（git 失敗・baseline の解釈不能行・重複エントリ）で、
   2 も block する。テスト: `python3 -m unittest scripts/test_check_file_growth.py`。
 - **Continuous-Audit 自動起動導線** — `git config core.hooksPath .githooks` を有効化していれば
-  `.githooks/pre-push` が GATE_CRATES（blastguard/propguard/specguard/stuckguard/mutategate/overwatch）配下の
+  `.githooks/pre-push` が GATE_CRATES（blastguard/propguard/specguard/stuckguard/mutategate/overwatch/parallelguard/askrelay）配下の
   変更を検知し、`scripts/continuous-audit.sh --dry-run` を勧める advisory メッセージを出す
   （この advisory 自体は push を止めない。ただし hook 全体は下記の再確認を含むブロッキングチェックで
   非0終了しうる）。cron 定期実行の雛形は `scripts/continuous-audit.cron.example` を参照。
@@ -249,7 +249,7 @@ python3 scripts/check-plugin-versions.py && python3 scripts/check-version-bumped
 scripts/rollout-plugins.sh --plugin <name> --dry-run   # 動作を確認（何も書かない）
 scripts/rollout-plugins.sh --plugin <name>             # 実反映（全 plugin なら無引数）
 
-# GATE クレート（防御ゲート: blastguard / propguard / specguard / stuckguard / overwatch、
+# GATE クレート（防御ゲート: blastguard / propguard / specguard / stuckguard / overwatch / askrelay、
 # 非プラグインの mutategate も含む）は fleet を守るため、canary 無しの反映を
 # **拒否**する（Problem-2.3）。GATE クレートを対象にするときは --canary で段階
 # 反映し、各ステージ間で健全性ゲート（raw-spike または systemic recurrence の

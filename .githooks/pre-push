@@ -275,7 +275,7 @@ fi
 phase_end
 
 phase_begin nudges
-GATE_PATTERN='^crates/(blastguard|propguard|specguard|stuckguard|mutategate|overwatch|parallelguard)/'
+GATE_PATTERN='^crates/(blastguard|propguard|specguard|stuckguard|mutategate|overwatch|parallelguard|askrelay)/'
 
 # Crates whose SKILL specs carry the autonomy gate contracts asserted by
 # scripts/e2e-autonomy.sh (scout selection/hand-off, condukt agreement, flow
@@ -898,7 +898,7 @@ EOF
     if printf '%s\n' "$range_files" | grep -qx 'scripts/check-fail-open-mutation.py'; then
         fm_all=1
     fi
-    for _g in blastguard propguard specguard stuckguard mutategate overwatch parallelguard; do
+    for _g in blastguard propguard specguard stuckguard mutategate overwatch parallelguard askrelay; do
         if [ "$fm_all" -eq 1 ] || printf '%s\n' "$range_files" | grep -q "^crates/$_g/"; then
             fm_crates="$fm_crates $_g"
         fi

@@ -932,7 +932,9 @@ determined, and a check that could not run has not passed (CLAUDE.md 3).
 #     path whose state changed between its Pre and Post snapshots (allowed or
 #     refused). Another session writing main during that very call is
 #     indistinguishable from this call and is recorded too (over-attribution:
-#     the restrictive side).
+#     the restrictive side) -- unless the command is PROVEN read-only by a real
+#     lexer + allowlist, in which case the entry carries "attributed": false
+#     and writes_stop_check ignores it (backlog dc97fc2d, ruling 2026-11-17).
 # File: $HOME/.claude/state/maintree-writes/<session_id>.jsonl, JSON lines
 #   {"v": 1, "kind": "write", "epoch", "root", "path", "by"}
 # root and path are absolute realpaths. It is NOT cleared by a user prompt (a
@@ -957,7 +959,8 @@ def writes_path(session_id: str) -> str:
     return os.path.join(writes_dir(), session_id + ".jsonl")
 
 
-def record_writes(payload: dict, root: str, paths, by: str) -> str | None:
+def record_writes(payload: dict, root: str, paths, by: str,
+                  attributed: bool = True) -> str | None:
     """Append one write entry per path for this payload's session. None on
     success or when there is nothing to record; otherwise why it failed (the
     caller refuses). A payload with no session_id key is an error here: the
@@ -974,7 +977,8 @@ def record_writes(payload: dict, root: str, paths, by: str) -> str | None:
         now = time.time()
         data = "".join(
             json.dumps({"v": 1, "kind": "write", "epoch": now,
-                        "root": os.path.realpath(root), "path": p, "by": by},
+                        "root": os.path.realpath(root), "path": p, "by": by,
+                        **({} if attributed else {"attributed": False})},
                        ensure_ascii=False, sort_keys=True) + "\n"
             for p in paths).encode("utf-8")
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND
@@ -993,6 +997,7 @@ def _valid_write(obj) -> bool:
             and obj.get("kind") == "write"
             and isinstance(obj.get("epoch"), (int, float))
             and isinstance(obj.get("by"), str)
+            and obj.get("attributed", True) in (True, False)
             and all(isinstance(obj.get(k), str) and os.path.isabs(obj[k])
                     for k in ("root", "path")))
 
@@ -1053,6 +1058,10 @@ def writes_stop_check(session_id: str, own_root: str) -> str | None:
     except Undetermined as e:
         return WRITES_UNDETERMINED.format(why=e)
     root_f = _fold(own_root)
+    # An entry flagged `"attributed": false` was logged for a call PROVEN
+    # read-only (guard-maintree-bash.py): not this session's write. Only the
+    # exact boolean False excludes; anything else (absent, True) counts.
+    entries = [e for e in entries if e.get("attributed", True) is not False]
     paths = sorted({e["path"] for e in entries if _fold(e["root"]) == root_f})
 
     # Build a mapping from folded path to max epoch for that path.

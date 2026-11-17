@@ -131,7 +131,13 @@ Known blind spots (not visible to `git status`): files under .git itself
 (.git/config, .git/hooks) and gitignored files. Changes by ANOTHER session in
 main between a main-cwd call's Pre and Post are REFUSED (they cannot be told
 apart from this call's own writes) and recorded in THIS session's write record
-(over-attribution, the restrictive side); the message says so. One exception
+(over-attribution, the restrictive side); the message says so. EXCEPT when
+the command is PROVEN read-only (command_provably_read_only: a shlex lexer plus
+a closed allowlist, never a regex): its window changes are another process's,
+so they are still logged but flagged `"attributed": false` and the Stop gate
+ignores them (backlog dc97fc2d, user ruling 2026-11-17). Not provable
+(expansion, redirect, unknown program/option, unlexable) = recorded as before.
+One exception
 (pre_dirt_landed_in_head): HEAD moved, `git status` names no path at Post,
 every path dirty at Pre already held at Pre -- in both working tree and index
 -- exactly what the new HEAD holds, and integration_move explains the HEAD
@@ -159,6 +165,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -178,6 +185,79 @@ ALLOW = 0
 
 class Undetermined(Exception):
     pass
+
+
+# --- proven read-only commands (backlog dc97fc2d) --------------------------
+# User ruling 2026-11-17: "読むだけと証明できたら記録しない". A call whose command
+# is PROVEN read-only cannot have written the paths that changed in main during
+# its window, so those paths are another process's and must not be charged to
+# this session. Proof is a real lexer (shlex with punctuation tokens, as
+# deny-no-verify.py does) plus a closed allowlist; it is NOT a regex over the
+# text. Anything the lexer cannot follow, any operator outside the allowlist,
+# any expansion, any program/option outside the allowlist is "not proven" and
+# keeps the old behaviour (record as this session's write, restrictive side).
+_RO_PROGRAMS = frozenset({
+    "ls", "cat", "head", "tail", "wc", "pwd", "echo", "true", "false", "grep",
+    "stat", "file", "basename", "dirname", "which", "diff", "cmp",
+})
+_RO_GIT_SUBCOMMANDS = frozenset({
+    "status", "log", "diff", "show", "rev-parse", "rev-list", "ls-files",
+    "cat-file", "describe", "blame", "shortlog", "name-rev", "merge-base",
+    "diff-tree", "diff-index", "ls-tree", "for-each-ref", "show-ref",
+})
+_RO_SEPARATORS = frozenset({"|", "&&", "||", ";"})
+_RO_PUNCT = "();<>|&"
+_RO_BAD_GIT_OPT_PREFIXES = ("--output", "--ext-diff", "--textconv", "-o")
+
+
+def _ro_simple_command(argv: list[str]) -> bool:
+    if not argv:
+        return False
+    prog = argv[0]
+    if prog in _RO_PROGRAMS:
+        return True
+    if prog != "git":
+        return False
+    i = 1
+    # only `-C <path>` / `--no-pager` may precede the subcommand: `-c k=v` can
+    # configure an arbitrary program to run.
+    while i < len(argv):
+        if argv[i] == "-C" and i + 1 < len(argv):
+            i += 2
+        elif argv[i] == "--no-pager":
+            i += 1
+        else:
+            break
+    if i >= len(argv) or argv[i] not in _RO_GIT_SUBCOMMANDS:
+        return False
+    return not any(a.startswith(_RO_BAD_GIT_OPT_PREFIXES) for a in argv[i + 1:])
+
+
+def command_provably_read_only(command) -> bool:
+    """True only when `command` is proven to write nothing; False = not proven."""
+    if not isinstance(command, str) or not command.strip():
+        return False
+    # expansions, escapes and line breaks hide commands from a token view.
+    if any(ch in command for ch in ("$", "`", "\\", "\n", "\r")):
+        return False
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=_RO_PUNCT)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    current: list[str] = []
+    segments: list[list[str]] = []
+    for tok in tokens:
+        if tok in _RO_SEPARATORS:
+            segments.append(current)
+            current = []
+        elif tok and all(c in _RO_PUNCT for c in tok):
+            return False  # redirect, subshell, background, here-doc ...
+        else:
+            current.append(tok)
+    segments.append(current)
+    return all(_ro_simple_command(seg) for seg in segments)
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -1016,8 +1096,11 @@ def post(payload: dict, common: Path, main: Path) -> int:
         if deny_ledger is None:
             err = "scripts/deny_ledger.py could not be loaded (%s)" % _LEDGER_IMPORT_ERROR
         else:
+            tool_input = payload.get("tool_input")
             err = deny_ledger.record_writes(
-                payload, str(main), [str(main / p) for p in touched], "guard-maintree-bash.py")
+                payload, str(main), [str(main / p) for p in touched], "guard-maintree-bash.py",
+                attributed=not command_provably_read_only(
+                    tool_input.get("command") if isinstance(tool_input, dict) else None))
         if err is not None:
             print(
                 "Refused: the main-tree paths this call changed could not be recorded "

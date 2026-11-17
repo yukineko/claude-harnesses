@@ -2950,3 +2950,55 @@ exit 101: arness-worktrees/bg-s2-red-20261117/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 10.56s
      Running tests/backlog_20261117_python_heredoc_literal_truncate_fp.rs (target/debug/deps/backlog_20261117_python_heredoc_literal_truncate_fp-460b6f19ab159f08)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261117_python_heredoc_literal_truncate_fp`"""
+
+[[task]]
+id = "bd2a44e0"
+title = """blastguard FP: backtick in quoted heredoc body inside "$(cat <<'EOF' ...)" is Ask/Deny (backlog add and plain echo forms)"""
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+]
+touched_files = []
+status = "pending"
+notes = """
+観測（2026-11-17、session 1e000416、relay bgr-ce850d320ab9 / bgr-2759af22e775）:
+subagent の backlog add --notes "$(cat <<'EOF' ... EOF)" が Deny された。理由（逐語）:
+「a backtick inside a double-quoted argument of `backlog add` is command substitution: the shell runs that span and silently deletes it from the stored text. Use single quotes (or escape the backtick) to keep it literal」
+同じコマンドを main で実行すると通り、保存された notes（dc97fc2d）にはバッククォートがそのまま残った = 置換は起きていない。引用付き heredoc の本文は bash では展開されない。
+
+probe（稼働 0.2.679 と worktree 0.2.684 で全行一致、main / subagent）:
+- Q1 echo "$(cat <<'EOF' 本文 `ls` EOF)": ask / deny。「the command executed here comes from ``ls``, whose value only exists at run time — blastguard cannot see what would actually run」
+- Q2 backlog add --notes "$(cat <<'EOF' 本文 `.backlog/tasks.toml` EOF)": ask / deny（上の backtick_text 理由）
+- Q3 Q2 に cd /tmp && と 2>&1 | tail -20 を付けた形: ask / deny
+- 対照: C1（バッククォート無し）allow/allow、U2 と D1（本物の置換）ask/deny、H1 と H2（引用なし heredoc の chmod 777 /etc/hosts）deny/deny
+- H3（引用付き heredoc 本文に chmod 777 /etc/hosts の文字列）: ask/deny。正しい判定は未確定のため RED には入れていない。
+
+原因は 2 経路:
+(1) crates/blastguard/src/detect/backtick_text.rs:11 backtick_in_double_quoted_text（backlog add/edit と git commit 限定。$(...) や引用付き heredoc の内側かを見ない）
+(2) 一般の echo の形で「the command executed here comes from …」を出す別の検出器
+関連: 234cae6f（#1755）は git commit の形だけを RED で検査しており、backlog add と一般の echo の形は検査していない。
+
+RED: commit 53faf5d35（branch red/blastguard-heredoc-backtick-cmdsubst-20261117、blastguard 0.2.685、未 merge）
+テスト: crates/blastguard/tests/backlog_20261117_quoted_heredoc_backtick_in_dq_cmdsubst_fp.rs
+  RED: backtick_in_quoted_heredoc_inside_dq_cmdsubst_is_allow（3 passed; 1 failed）
+  対照: control_quoted_heredoc_without_backtick_is_allow / control_genuine_substitution_stays_ask_in_main_deny_in_subagent / control_unquoted_heredoc_system_harm_stays_deny
+
+起票の経緯: subagent が notes をシングルクォートで渡した backlog add は condukt testscope に止められた。理由（逐語）「condukt testscope cannot tokenize this command (unbalanced quote), and it mentions a cargo test / git merge, so whether it is a full suite or a mid-run main merge is undetermined: …」。シングルクォート内の奇数個のバッククォートを未閉じの引用と読んだ testscope 側の FP の疑い（未テスト）。ユーザー判断により notes をファイル経由で渡して起票した。
+未確認: subagent の Python heredoc probe が「`installed-0.2.679:` is a command blastguard has no rule for …」で止められた件（dict キーをコマンド語と読んだ疑い）。"""
+created_at = 1794913091
+updated_at = 1794913091
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261117_quoted_heredoc_backtick_in_dq_cmdsubst_fp -- --include-ignored"
+rev = "53faf5d35ee4384c69da88af65b1abf33c86cf4c"
+observed_at = 1794913091
+detail = """
+exit 101: dsubst-20261117/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.82s
+     Running tests/backlog_20261117_quoted_heredoc_backtick_in_dq_cmdsubst_fp.rs (target/debug/deps/backlog_20261117_quoted_heredoc_backtick_in_dq_cmdsubst_fp-9343383bd6b6a238)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261117_quoted_heredoc_backtick_in_dq_cmdsubst_fp`"""

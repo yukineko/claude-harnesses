@@ -11,6 +11,99 @@ pub struct Config {
     /// pinned a location keeps it: per-project resolution is a DEFAULT, not an
     /// override, so `locate` must not silently relocate their store.
     pub store_dir_pinned: bool,
+    /// `github_mirror` from `config.toml`: whether backlog may run `gh` to
+    /// mirror tasks to GitHub issues (`add`'s issue create, the inline close
+    /// of `done` / `cancel` / `recheck`, and `sync`). See [`GithubMirror`].
+    pub github_mirror: GithubMirror,
+}
+
+/// The `github_mirror` setting, three-valued on purpose.
+///
+/// A value that is present but not a bool (`github_mirror = "no"`) is NOT the
+/// default: the operator wrote something about the mirror and we cannot tell
+/// what, so whether `gh` may run is undetermined (CLAUDE.md §3). Callers that
+/// would mirror refuse on [`GithubMirror::Invalid`] instead of running `gh`.
+///
+/// Read separately from [`FileConfig`] (as a raw `toml::Value`) so that a bad
+/// `github_mirror` does not make the whole file unparseable — that path drops
+/// every key to its default and would turn the mirror back ON silently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GithubMirror {
+    /// Key absent, `github_mirror = true`, or `config.toml` unreadable / not
+    /// valid TOML (the pre-existing all-defaults path, unchanged).
+    On,
+    /// `github_mirror = false`: no `gh` call is made for the mirror.
+    Off,
+    /// Present but not a bool; carries the diagnostic naming the key.
+    Invalid(String),
+}
+
+impl GithubMirror {
+    /// One line for stderr / additionalContext saying the mirror is off.
+    pub const DISABLED_LINE: &'static str =
+        "GitHub mirror disabled (github_mirror = false in ~/.backlog/config.toml): \
+         no GitHub issue is created, closed or read.";
+
+    /// `Ok(true)` = mirror, `Ok(false)` = mirror disabled, `Err` = the setting
+    /// could not be determined (the message names `github_mirror`).
+    pub fn enabled(&self) -> Result<bool, String> {
+        match self {
+            GithubMirror::On => Ok(true),
+            GithubMirror::Off => Ok(false),
+            GithubMirror::Invalid(why) => Err(why.clone()),
+        }
+    }
+
+    /// For `add` / `sync`: `Ok(true)` mirror, `Ok(false)` disabled, and a
+    /// non-bool value is an `Err` naming `github_mirror` that `cmd` must
+    /// return BEFORE any side effect (whether `gh` may run is undetermined,
+    /// CLAUDE.md §3), which `main` turns into a non-zero exit.
+    pub fn require(&self, cmd: &str) -> anyhow::Result<bool> {
+        self.enabled()
+            .map_err(|why| anyhow::anyhow!("{cmd} refused: {why}"))
+    }
+
+    /// For the inline close after `done` / `cancel` / `recheck`
+    /// (`mirror_close_for`): `true` = go ahead and close. Otherwise prints why
+    /// no `gh` runs — the disabled line, or an `error:` naming the key for a
+    /// non-bool value — and returns `false`. Either way the task keeps
+    /// `issue_closed_at` unset, exactly like a failed close; the local state
+    /// change has already been committed by the caller.
+    pub fn allows_inline_close(&self, id: &str) -> bool {
+        match self.enabled() {
+            Ok(true) => true,
+            Ok(false) => {
+                eprintln!(
+                    "{} Issue of {id} (if any) left as it is.",
+                    Self::DISABLED_LINE
+                );
+                false
+            }
+            Err(why) => {
+                eprintln!("error: issue of {id} NOT closed: {why}");
+                false
+            }
+        }
+    }
+
+    fn from_toml(path: &Path, txt: &str) -> Self {
+        // Not valid TOML: the existing behaviour (all defaults, mirror ON)
+        // is kept as it was.
+        let Ok(toml::Value::Table(table)) = toml::from_str::<toml::Value>(txt) else {
+            return GithubMirror::On;
+        };
+        match table.get("github_mirror") {
+            None | Some(toml::Value::Boolean(true)) => GithubMirror::On,
+            Some(toml::Value::Boolean(false)) => GithubMirror::Off,
+            Some(other) => GithubMirror::Invalid(format!(
+                "github_mirror in {} must be true or false, got {other}; whether the GitHub \
+                 issue mirror may run cannot be determined, so it does not run. Set \
+                 `github_mirror = false` to disable the mirror, or `github_mirror = true` \
+                 (or remove the key) to enable it.",
+                path.display()
+            )),
+        }
+    }
 }
 
 #[derive(Default, Deserialize)]
@@ -28,8 +121,11 @@ impl Config {
             store_dir: base.clone(),
             inject_limit: 4000,
             store_dir_pinned: false,
+            github_mirror: GithubMirror::On,
         };
-        if let Ok(txt) = std::fs::read_to_string(base.join("config.toml")) {
+        let path = base.join("config.toml");
+        if let Ok(txt) = std::fs::read_to_string(&path) {
+            cfg.github_mirror = GithubMirror::from_toml(&path, &txt);
             if let Ok(fc) = toml::from_str::<FileConfig>(&txt) {
                 if let Some(v) = fc.enabled {
                     cfg.enabled = v;
@@ -208,6 +304,7 @@ mod store_resolution_tests {
             store_dir,
             inject_limit: 4000,
             store_dir_pinned: pinned,
+            github_mirror: GithubMirror::On,
         }
     }
 

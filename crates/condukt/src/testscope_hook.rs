@@ -2,6 +2,8 @@
 //! (PostToolUse / PostToolUseFailure) hook entry points; the judgments live in
 //! `testscope.rs`.
 
+use std::path::{Path, PathBuf};
+
 use crate::{testscope, try_read_stdin};
 
 /// PreToolUse(Bash) test-scope gate (see `testscope.rs`). Writes the
@@ -187,4 +189,43 @@ fn run_testscope_confirm() {
              ({e}); its row stays pending, so a rerun will ask instead of being refused"
         ));
     }
+}
+
+// ── session marker (rule A; re-exported by `testscope`) ─────────────────────
+
+/// `<ledger parent>/sessions/<safe session id>`: the file whose existence says
+/// "the testscope hook ran in this session". `None` when the ledger path has no
+/// parent or the session id is empty.
+pub fn session_marker_path(ledger: &Path, session_id: &str) -> Option<PathBuf> {
+    if session_id.trim().is_empty() {
+        return None;
+    }
+    let dir = ledger.parent()?;
+    Some(
+        dir.join("sessions")
+            .join(harness_core::store::safe_session(session_id)),
+    )
+}
+
+/// Record that the testscope hook is loaded in `session_id`. Called by the hook
+/// on every payload that carries a session id; `condukt state set --status
+/// running` refuses a session that has no marker ([`session_marker_present`]).
+pub fn write_session_marker(ledger: &Path, session_id: &str) -> std::io::Result<()> {
+    let Some(p) = session_marker_path(ledger, session_id) else {
+        return Ok(());
+    };
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(&p, b"")
+}
+
+/// Whether the marker of `session_id` exists, as an observation: `Err` (never
+/// `false`, never `true`) when existence cannot be told.
+pub fn session_marker_present(ledger: &Path, session_id: &str) -> Result<bool, String> {
+    let Some(p) = session_marker_path(ledger, session_id) else {
+        return Ok(false);
+    };
+    p.try_exists()
+        .map_err(|e| format!("cannot tell whether {} exists: {e}", p.display()))
 }

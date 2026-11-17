@@ -155,6 +155,17 @@ never read as "no prior". `condukt state test` confirms its own run (and
 invalidates its row when the spawn fails). A confirm hook that crashes or cannot
 write prints a `systemMessage` and never blocks.
 
+**`tdd` red/green routes (backlog 8f82f09d, 0c301e8b).** `tdd red --cmd <c>` is
+checked like a bare run of `<c>` and additionally records a red-tagged key for
+`<c>`. A `tdd green --cmd <c>` on the same tree is checked against that red key
+too: on the same unchanged tree a **confirmed** `tdd red` of `<c>` makes the
+following `tdd green --cmd <c>` **denied**, and a **pending** one makes it
+**ask**; it is never allowed there (the F->P oracle would prove nothing without a
+change in between). After the tree changed, the green is allowed. The 8f82f09d
+exception is unchanged and covers only a bare run: after a bare run of `<c>` on
+the same tree, one `tdd green --cmd <c>` is allowed (nested green counts as one),
+and a second one is denied.
+
 Measured fact (claude 2.1.284, headless `claude -p`; spec `testscope-confirmed-run`
 R10): a Bash call that a hook answered with `ask` becomes `permission_denied`
 headless and fires neither PostToolUse nor PostToolUseFailure, i.e. an `ask` is

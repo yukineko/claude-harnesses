@@ -81471,3 +81471,260 @@ rev = "5db847196fbd56bc4861d0eba57bb681dcd72b75"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "8f82f09d"
+title = "condukt testscope: tdd green refused as rerun after a plain cargo test on the same tree, so a required F→P oracle cannot be completed"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "testscope",
+    "tdd",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-16, run-20261116-164820-25374 t2 worktree (HEAD 8204efae4): worker ran the repro via plain cargo test (6 passed); tdd red recorded on reverted tree (exit 101); tdd green on the fixed tree denied by testscope 'rerun refused ... already ran on this exact tree'. check-oracle required:true, so no path records GREEN. Readings: (a) defect: gates contradict (required oracle with no satisfiable path); (b) intended: rerun ban wins. RED 3f5f7acb7."
+created_at = 1794819376
+updated_at = 1794884050
+weight = 0.0
+issue_number = 1822
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1822"
+issue_closed_at = 1794884053
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261116_tdd_green_refused_after_plain_run -- --include-ignored"
+rev = "3f5f7acb7f52b9372076947538ff73fbaa98344b"
+observed_at = 1794819376
+detail = """
+exit 101: yama/src/.harness-worktrees/session-df7c968f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.06s
+     Running tests/backlog_20261116_tdd_green_refused_after_plain_run.rs (target/debug/deps/backlog_20261116_tdd_green_refused_after_plain_run-96b12b3104f0154c)
+error: test failed, to rerun pass `-p condukt --test backlog_20261116_tdd_green_refused_after_plain_run`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261116_tdd_green_refused_after_plain_run -- --include-ignored"
+exit = 0
+passed = 2
+rev = "ba404e72e057a57e14420256eeef3d2c0f97887c"
+observed_at = 1794884036
+output_digest = "sha256:8abc9410ba4a3774b1d72b02e2ec834ac467b3e884fe3ba0ddf8226732885010"
+excerpt = """
+
+running 2 tests
+test tdd_green_is_allowed_after_plain_run_on_same_tree ... ok
+test control_identical_plain_rerun_is_still_denied ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+   Compiling condukt v0.7.446 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.31s
+     Running tests/backlog_20261116_tdd_green_refused_after_plain_run.rs (target/debug/deps/backlog_20261116_tdd_green_refused_after_plain_run-40a02194e5adbb39)
+"""
+
+[task.closure.red]
+rev = "58d184a70779babf401348b9f8e556f1fcc78407"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "51b9371d"
+title = "condukt lock::backlog_e9262d91: 5 lock-wait fixture tests fail with probes: [] on main (fake kill never runs)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "flaky-or-env",
+    "lock",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-17 at main 58d184a70 (condukt 0.7.442) in a fresh worktree, WSL2 6.6.87.2, 12 cpus: cargo test -p condukt --bin condukt lock::backlog_e9262d91 -> 4 passed; 5 failed. Same 5 failed in the donegate test-changed run of session df7c968f (946 passed; 5 failed). Failing: lock_wait_changed_holder_fixture_is_conclusive_when_first_probe_is_unanswered (lock.rs:1582 'holder A ... was never probed at all (probes: [])'), lock_wait_changed_holder_scenario_without_fault_acquires (lock.rs:1611 'lock was not acquired within 30s (probes: [])'), lock_wait_mid_wait_death_fixture_is_conclusive_under_slow_probe (lock.rs:1291), lock_wait_on_holder_dying_mid_wait_reaps_on_first_dead_probe (lock.rs:1151), lock_wait_probes_a_changed_holder_pid_immediately (lock.rs:1384 'the fake kill never ran for holder A'). Readings: (a) product regression: lock wait no longer probes holders via the kill path the fixture stubs (e.g. probe moved to harness-core run_lock or libc::kill, bypassing the fake kill on PATH); (b) fixture/environment defect: fake kill not reached on this host. Distinguish: check whether lock wait still spawns kill -0 (git log -p crates/condukt/src/lock.rs crates/harness-core/src/run_lock.rs since b1f7abe2e) and run at b1f7abe2e."
+created_at = 1794879689
+updated_at = 1794884064
+weight = 0.0
+issue_number = 1851
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1851"
+issue_closed_at = 1794884067
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --bin condukt lock::backlog_e9262d91"
+rev = "58d184a70779babf401348b9f8e556f1fcc78407"
+observed_at = 1794879689
+detail = """
+exit 101: robe
+    lock::backlog_e9262d91::lock_wait_probes_a_changed_holder_pid_immediately
+
+test result: FAILED. 4 passed; 5 failed; 0 ignored; 0 measured; 947 filtered out; finished in 127.64s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running unittests src/main.rs (target/debug/deps/condukt-a1897a9ded714865)
+error: test failed, to rerun pass `-p condukt --bin condukt`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --bin condukt lock::backlog_e9262d91"
+exit = 0
+passed = 9
+rev = "ba404e72e057a57e14420256eeef3d2c0f97887c"
+observed_at = 1794884054
+output_digest = "sha256:dfc11b419bc1360c7c0f7131a1db4dbdc07317070fdb533df4cc87678b5335f6"
+excerpt = """
+
+running 9 tests
+test lock::backlog_e9262d91::lock_wait_changed_holder_fixture_is_conclusive_when_first_probe_is_unanswered ... ok
+test lock::backlog_e9262d91::lock_wait_does_not_spawn_kill_on_every_poll ... ok
+test lock::backlog_e9262d91::lock_wait_changed_holder_scenario_without_fault_acquires ... ok
+test lock::backlog_e9262d91::lock_wait_mid_wait_death_fixture_is_conclusive_under_slow_probe ... ok
+test lock::backlog_e9262d91::lock_wait_on_dead_holder_still_reaps_promptly ... ok
+test lock::backlog_e9262d91::lock_wait_on_holder_dying_mid_wait_reaps_on_first_dead_probe ... ok
+test lock::backlog_e9262d91::lock_wait_on_live_foreign_holder_is_throttled_and_never_steals ... ok
+test lock::backlog_e9262d91::lock_wait_on_own_pid_holder_spawns_no_probe ... ok
+test lock::backlog_e9262d91::lock_wait_probes_a_changed_holder_pid_immediately ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 947 filtered out; finished in 9.10s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/main.rs (target/debug/deps/condukt-3d5b262549f9ef67)
+"""
+
+[task.closure.red]
+rev = "76e053bf3057e03594a86517b573bcc7100e44f9"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "3d5285d5"
+title = "backlog add does not write the minted id back into the RED test's #[ignore] (RED(<id>))"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "red-traceability",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-16 at 202efa14a: 62 files with #[ignore = "RED", 51 of them carry no resolvable backlog id (test is committed before add mints the id). User ruling 2026-11-16 (option 1): on successful add, rewrite the referenced test's #[ignore = "RED..."] to #[ignore = "RED(<id>): ..."]. RED 28b8a1e4f."""
+created_at = 1794821176
+updated_at = 1794891875
+weight = 0.0
+issue_number = 1832
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1832"
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261116_add_writes_id_back_to_red_test -- --include-ignored"
+rev = "55a1044bfa6bf6d1e929a41dd3816c13baa0b987"
+observed_at = 1794821176
+detail = """
+exit 101: yuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.35s
+     Running tests/backlog_20261116_add_writes_id_back_to_red_test.rs (target/debug/deps/backlog_20261116_add_writes_id_back_to_red_test-cb11645522549853)
+error: test failed, to rerun pass `-p backlog --test backlog_20261116_add_writes_id_back_to_red_test`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261116_add_writes_id_back_to_red_test -- --include-ignored"
+exit = 0
+passed = 1
+rev = "2a5576751ebdce4ad708ee58769dc29af876f92e"
+observed_at = 1794891871
+output_digest = "sha256:87c6b840d5dd0aea115b3aef31457cf9f8ae0eb5bf6a09c63d454ebaf0dd315c"
+excerpt = """
+
+running 1 test
+test add_writes_minted_id_back_into_red_test ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+   Compiling backlog v0.3.138 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.99s
+     Running tests/backlog_20261116_add_writes_id_back_to_red_test.rs (target/debug/deps/backlog_20261116_add_writes_id_back_to_red_test-6196beb0510d6bf1)
+"""
+
+[task.closure.red]
+rev = "28b8a1e4f0255c66d5a8df17ac386748f0616b34"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "0c301e8b"
+title = "condukt testscope: tdd green after a confirmed tdd red of the same command on an unchanged tree is allowed"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "testscope",
+    "tdd",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-17 at cd09054b1 (t2 verifier finding on 310d9a671, RED aa9077fc7). judge_words records tdd red --cmd X under the bare key; tdd green --cmd X is checked only against its TDD_GREEN_ROUTE-tagged key, so tdd red then tdd green on the same unchanged tree is Allow. Expected deny: GREEN with no change since RED proves nothing (F-to-P oracle). Controls: bare run then one tdd green allowed, second denied; tdd green after tdd red on a changed tree allowed. Module doc currently describes the allow, so the doc changes with the fix."
+created_at = 1794887615
+updated_at = 1794895159
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261117_tdd_red_then_green_same_tree -- --include-ignored"
+rev = "8358077eb972490b4979ba3ecab651d33c0786f4"
+observed_at = 1794887615
+detail = """
+exit 101: me/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.58s
+     Running tests/backlog_20261117_tdd_red_then_green_same_tree.rs (target/debug/deps/backlog_20261117_tdd_red_then_green_same_tree-818cafe96793a5f5)
+error: test failed, to rerun pass `-p condukt --test backlog_20261117_tdd_red_then_green_same_tree`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261117_tdd_red_then_green_same_tree -- --include-ignored"
+exit = 0
+passed = 3
+rev = "3c5bd361d9f389f19ca9e8d8aa0cc9b916c56106"
+observed_at = 1794895148
+output_digest = "sha256:4f4d7971dbd81c042639a4d21dd25c80ac29b0f7d7f3d887b4dd75ad9d00f46c"
+excerpt = """
+
+running 3 tests
+test red_tdd_green_after_tdd_red_on_same_tree_is_denied ... ok
+test control_tdd_green_after_tdd_red_on_changed_tree_is_allowed ... ok
+test control_tdd_green_after_bare_run_is_allowed_once ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+   Compiling condukt v0.7.448 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.28s
+     Running tests/backlog_20261117_tdd_red_then_green_same_tree.rs (target/debug/deps/backlog_20261117_tdd_red_then_green_same_tree-5d8ac9f55498ab5b)
+"""
+
+[task.closure.red]
+rev = "aa9077fc762ca04fce040d2a3eef296ea1949a1f"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -3269,3 +3269,32 @@ exit 101: uard-zsh-equals-20261118/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 9.68s
      Running tests/backlog_20261118_quoted_heredoc_backtick_equals_word_fp.rs (target/debug/deps/backlog_20261118_quoted_heredoc_backtick_equals_word_fp-950f9c89ac5f7e75)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261118_quoted_heredoc_backtick_equals_word_fp`"""
+
+[[task]]
+id = "7f9f2457"
+title = "blastguard fail-open: rsync --delete into the home directory itself or ~/.ssh is Allow (harms_system target; rsync arm checks only system dirs)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = 'Observed 2026-11-18 at origin/main 1dfa60681 (blastguard 0.2.699), hermetic fixture HOME, main+subagent: rsync -a --delete /tmp/empty/ ~/ , "$HOME", <abs home>/, ~/.ssh/, and (cwd=$HOME) rsync -a --delete build/ ./ are all allow. Controls: rsync -a --delete /tmp/empty/ /usr/ is system-harm deny (detect/system_paths.rs rsync_mutated judges the destination only via scope::is_inside_system_dir); rm -rf ~ and rm -rf ~/.ssh are deny. Expected deny: SUBSET.md ruling 3 + Table C System row = harm_mark::harms_system (home itself, irreplaceable home asset); user ruling 2026-11-07 system-harm-always-deny. RED 3cc3c61e5 (branch red/bg-leads-20261118, 5 ignored cases). NOT pinned (spec gap, rsync not in Table B): rsync --delete into a non-asset home subdir (~/Documents/) is allow while rm -rf ~/Documents/* and find ~/Documents -delete are deny.'
+created_at = 1794946875
+updated_at = 1794946875
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_rsync_delete_home_target_fail_open -- --ignored"
+rev = "3cc3c61e5aa501f3904e1961d8d6c075039235fe"
+observed_at = 1794946875
+detail = """
+exit 101: src/.harness-worktrees/bg-leads-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.90s
+     Running tests/backlog_20261118_rsync_delete_home_target_fail_open.rs (target/debug/deps/backlog_20261118_rsync_delete_home_target_fail_open-c1225f41b45b2862)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_rsync_delete_home_target_fail_open`"""

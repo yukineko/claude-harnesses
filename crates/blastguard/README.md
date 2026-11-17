@@ -599,11 +599,11 @@ creates its own directory with `create_dir`.
 The hooks (`hooks/hooks.json`): **PreToolUse** with matcher
 `Bash|Edit|Write|MultiEdit|NotebookEdit` (timeout 10) calls
 `${CLAUDE_PLUGIN_ROOT}/bin/blastguard`; **PostToolUse** with matcher `Bash`
-(timeout 10) calls `${CLAUDE_PLUGIN_ROOT}/bin/blastguard record-approval` and
-`blastguard relay mark-executed`; **PostToolUseFailure** with matcher `Bash`
-calls `blastguard relay mark-executed`; **PostToolUse** with matcher
-`SendMessage` calls `blastguard relay mark-relayed`; **Stop** calls
-`blastguard relay stop` (all timeout 10).
+(timeout 10) calls `${CLAUDE_PLUGIN_ROOT}/bin/blastguard record-approval`.
+The subagent-Ask relay hooks (PostToolUse / PostToolUseFailure `mark-executed`,
+PostToolUse `SendMessage` `mark-relayed`, Stop `stop`) are no longer
+blastguard's: they belong to the `askrelay` plugin (`crates/askrelay`).
+blastguard only enqueues a subagent Ask and still denies it in the subagent.
 `bin/blastguard` is a POSIX-sh launcher that execs the matching
 `blastguard-<os>-<arch>` build. If no build is bundled for the host platform,
 the launcher prints a warning to stderr **and emits a PreToolUse decision**

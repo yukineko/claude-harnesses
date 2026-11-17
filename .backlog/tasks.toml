@@ -3107,3 +3107,34 @@ exit 101: 4 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/cra
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.01s
      Running tests/backlog_20261117_mirror_config_undetermined.rs (target/debug/deps/backlog_20261117_mirror_config_undetermined-57c17f6f35038ac8)
 error: test failed, to rerun pass `-p backlog --test backlog_20261117_mirror_config_undetermined`"""
+
+[[task]]
+id = "410e9514"
+title = "backlog test done_closes_issue_inline.rs fails with Author identity unknown since add lands the row via git commit-tree"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "test-fixture",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-17 at cd09054b1. bl() runs the binary with env_clear and HOME set to an empty tempdir and passes no GIT_AUTHOR_* or GIT_COMMITTER_*; since 18f91ae7b add runs git commit-tree in land_row_on_main, which exits 128 (Author identity unknown), so both tests die at the add assertion before the inline-close path they pin. Fixture defect, not a binary defect: add GIT_AUTHOR_NAME/EMAIL, GIT_COMMITTER_NAME/EMAIL and GIT_CONFIG_GLOBAL/SYSTEM=/dev/null like github_mirror_disabled_close_20261117.rs. While red, mirror_close_for inline close has no working end-to-end test here."
+created_at = 1794887649
+updated_at = 1794887649
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test done_closes_issue_inline"
+rev = "8358077eb972490b4979ba3ecab651d33c0786f4"
+observed_at = 1794887649
+detail = """
+exit 101: ered out; finished in 0.20s
+
+   Compiling backlog v0.3.134 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.95s
+     Running tests/done_closes_issue_inline.rs (target/debug/deps/done_closes_issue_inline-e1737e45ff03d3d8)
+error: test failed, to rerun pass `-p backlog --test done_closes_issue_inline`"""

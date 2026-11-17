@@ -3541,6 +3541,8 @@ notes = 'Observed 2026-11-18 (session 1e000416, relays bgr-c1761eb0eaab and bgr-
 created_at = 1794943239
 updated_at = 1794943239
 weight = 0.0
+issue_number = 1858
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1858"
 rev = 0
 
 [task.repro]

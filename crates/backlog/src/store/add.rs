@@ -72,6 +72,7 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
         force,
         now,
         remote_url,
+        true,
         run,
         |_: &Path, _: &str| Ok(()),
         Intake {
@@ -126,6 +127,11 @@ impl Intake {
 /// two cannot diverge). A degraded `gh` (absent / failed) leaves the row on
 /// the primary branch without an issue, says so on stderr, and still returns
 /// `Ok` — `backlog sync --apply` mirrors it later.
+///
+/// `issue_mirror = false` (`github_mirror = false` in `config.toml`): steps 1
+/// and 2 run unchanged (the row is still landed on the primary branch), but
+/// step 3 is skipped — `run` is never called, so no `gh` process runs. The
+/// caller is responsible for saying on stderr that the mirror is disabled.
 #[allow(clippy::too_many_arguments)]
 pub fn add_finding<R, L>(
     path: &Path,
@@ -138,6 +144,7 @@ pub fn add_finding<R, L>(
     force: bool,
     now: i64,
     remote_url: &str,
+    issue_mirror: bool,
     run: R,
     land: L,
     intake: Intake,
@@ -226,6 +233,9 @@ where
                 path.display()
             )
         })?;
+    }
+    if !issue_mirror {
+        return Ok(id);
     }
     // Only now may an issue exist. A degraded outcome on a GitHub remote is
     // SAID on stderr: the row is on the primary branch, but the mirror the
@@ -361,6 +371,7 @@ mod land_order_tests {
             false,
             1000,
             remote,
+            true,
             run,
             land,
             intake(),

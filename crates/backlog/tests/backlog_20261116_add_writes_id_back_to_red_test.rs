@@ -73,8 +73,6 @@ const TEST_REL: &str = "crates/x/tests/red_one.rs";
 const REPRO: &str = "cargo test -p x --test red_one -- --include-ignored";
 
 #[test]
-// test-weakening-justified: new RED for an unfixed defect (2026-11-16).
-#[ignore = "RED: 2026-11-16 backlog add does not write the minted id back into the #[ignore = \"RED...\"] test"]
 fn add_writes_minted_id_back_into_red_test() {
     let f = Fixture::new("add-writeback");
     f.write_exec_shim("cargo", FAKE_CARGO_RED);

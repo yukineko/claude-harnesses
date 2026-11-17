@@ -17,6 +17,7 @@ mod liveness;
 mod lock;
 mod merge_driver;
 mod recheck;
+mod red_writeback;
 mod store;
 mod task;
 mod timefmt;
@@ -891,6 +892,7 @@ fn run(cli: Cli) -> Result<()> {
             force,
             repro_test,
         } => {
+            let issue_mirror = cfg.github_mirror.require("backlog add")?;
             let tasks_path = write_store_path("backlog add")?;
             // With the store as the scope (see `read_project_scope`), a task
             // written here under ANOTHER repo's label would be listed as this
@@ -959,11 +961,15 @@ fn run(cli: Cli) -> Result<()> {
                 force,
                 now,
                 &remote_url,
+                issue_mirror,
                 gh_probe,
                 integrate::land_row_on_main,
                 intake,
             )?;
             println!("added: {id}");
+            if !issue_mirror {
+                eprintln!("backlog add: {}", config::GithubMirror::DISABLED_LINE);
+            }
             if let Some((o, d)) = outcome {
                 eprintln!("repro: {o} ({d}); filed as pending");
             }
@@ -974,6 +980,7 @@ fn run(cli: Cli) -> Result<()> {
             // command, and it never blocks — the ruling was
             // 「blocking しないまま、ただし必ず可視化」.
             dedup::report_near_duplicates(&tasks_path, &id, location.project_root());
+            red_writeback::after_add(repro_test.as_deref(), &id); // backlog 3d5285d5
         }
 
         Command::Overlap { project, all } => {
@@ -1400,6 +1407,11 @@ fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Sync { apply, limit, only } => {
+            // Mirror off: no `gh` at all, not even the dry run's `issue view`.
+            if !cfg.github_mirror.require("backlog sync")? {
+                println!("backlog sync: {}", config::GithubMirror::DISABLED_LINE);
+                return Ok(());
+            }
             // The dry run never writes; only `--apply` writes and mutates
             // GitHub. Both READ GitHub for `--only both` (`gh issue view`, below).
             let tasks_path = if apply {
@@ -1941,7 +1953,11 @@ fn store_repo_root(tasks_path: &Path) -> String {
 /// the caller has already committed the local state change and the mirror is
 /// downstream of it. A failure deliberately records NOTHING, so the task keeps
 /// its `issue_closed_at: None` and the next `backlog sync` retries.
+/// `github_mirror` off or not a bool: no `gh` (`GithubMirror::allows_inline_close`).
 pub(crate) fn mirror_close_for(tasks_path: &Path, id: &str) {
+    if !config::Config::load().github_mirror.allows_inline_close(id) {
+        return;
+    }
     let Ok(tasks) = store::load(tasks_path) else {
         eprintln!("warning: could not re-read the store to close {id}'s issue; run `backlog sync`");
         return;

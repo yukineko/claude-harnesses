@@ -19,7 +19,7 @@ mod bounded;
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 struct Env {
     home: PathBuf,
@@ -44,9 +44,8 @@ fn env(name: &str) -> Env {
 }
 
 fn relay_stop(e: &Env, stdin: &str) -> Output {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_blastguard"));
-    c.args(["relay", "stop"])
-        .env("HOME", &e.home)
+    let mut c = bounded::command_for(&["relay", "stop"]);
+    c.env("HOME", &e.home)
         .env("BLASTGUARD_RELAY_DIR", &e.relay)
         .env("BLASTGUARD_APPROVALS_DIR", &e.approvals)
         .env("CLAUDE_CODE_SESSION_ID", "sessEnvIgnored")

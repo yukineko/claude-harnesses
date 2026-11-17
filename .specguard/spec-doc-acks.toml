@@ -188,6 +188,14 @@ path = "crates/parallelguard/src/protection.rs"
 reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; parallelguard has no docs/specs/parallelguard.md. Spec debt."
 
 [[ack]]
+path = "crates/askrelay/src/main.rs"
+reason = "askrelay is new (2026-11-17, relay moved out of blastguard); it has no docs/specs/askrelay.md and no specguard area. The relay behaviour is described in docs/specs/blastguard.md (enqueue side) and crates/askrelay/README.md. Spec debt."
+
+[[ack]]
+path = "crates/askrelay/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; askrelay has no docs/specs/askrelay.md. Spec debt."
+
+[[ack]]
 path = "crates/mutategate/src/protection.rs"
 reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; mutategate.md does not describe it."
 

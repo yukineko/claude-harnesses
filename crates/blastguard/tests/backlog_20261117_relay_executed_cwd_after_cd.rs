@@ -40,11 +40,14 @@
 //!      elsewhere.
 //!
 //! Test: a subagent Ask is queued with cwd C; the main session runs the same
-//! command (PreToolUse with cwd C), and the PostToolUse hook (`blastguard
-//! relay mark-executed`) is fed the same command with `cwd` = a different
-//! directory D (the post-run cwd). Asserted: `blastguard relay stop` no longer
-//! lists the id as `not executed in the main session`. CONTROL in the same
-//! file: the identical PostToolUse with `cwd` = C marks it executed.
+//! command (PreToolUse with cwd C), and the PostToolUse hook (`askrelay
+//! mark-executed`, formerly `blastguard relay mark-executed`) is fed the same
+//! command with `cwd` = a different directory D (the post-run cwd). Asserted:
+//! `askrelay stop` no longer lists the id as `not executed in the main
+//! session`. CONTROL in the same file: the identical PostToolUse with `cwd` =
+//! C marks it executed. Since #1808 the fixture also writes the agent's
+//! sidechain (`<root>/transcript/subagents/agent-<AGENT>.jsonl`): without it
+//! the row is Refuted and Stop does not list it.
 //!
 //! DOES NOT PROVE: what `cwd` real Claude Code puts in the PostToolUse payload
 //! after a command that `cd`s (that the payload carries the post-run cwd is
@@ -87,13 +90,75 @@ fn setup(tag: &str) -> Root {
         ),
     )
     .unwrap();
+    // #1808: provenance is read from the subagent sidechain
+    // `<root>/transcript/subagents/agent-<AGENT>.jsonl` (the transcript's
+    // stem is `transcript`).
+    let sub = root.join("transcript").join("subagents");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(
+        sub.join(format!("agent-{AGENT}.jsonl")),
+        format!(
+            "{}\n",
+            json!({"type":"user","sessionId":SESSION,"agentId":AGENT,"isSidechain":true,
+                   "message":{"role":"user","content":"task"}})
+        ),
+    )
+    .unwrap();
     Root(root)
 }
 
+/// The relay subcommands moved out of blastguard into the `askrelay` binary
+/// (4766abe3c); since 10c8c7371 `blastguard relay <sub>` exits 2 and prints
+/// nothing to stdout. `["relay", sub, ..]` therefore runs `askrelay sub ..`;
+/// every other argument list is a blastguard PreToolUse call.
+fn command_for(args: &[&str]) -> Command {
+    match args.split_first() {
+        Some((&"relay", rest)) => {
+            let mut c = Command::new(askrelay_bin());
+            c.args(rest);
+            c
+        }
+        _ => {
+            let mut c = Command::new(env!("CARGO_BIN_EXE_blastguard"));
+            c.args(args);
+            c
+        }
+    }
+}
+
+/// The askrelay binary next to the blastguard one, built with the same
+/// profile. Cargo only provides `CARGO_BIN_EXE_*` for this package's own
+/// binaries. A failed build panics: a missing counterpart must fail the test,
+/// never skip it.
+fn askrelay_bin() -> PathBuf {
+    static BIN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    BIN.get_or_init(|| {
+        let me = PathBuf::from(env!("CARGO_BIN_EXE_blastguard"));
+        let dir = me.parent().expect("blastguard binary has a parent dir");
+        let exe = dir.join(format!("askrelay{}", std::env::consts::EXE_SUFFIX));
+        let mut build = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+        build.args(["build", "-p", "askrelay", "--bin", "askrelay", "--quiet"]);
+        match dir.file_name().and_then(|n| n.to_str()) {
+            Some("debug") => {}
+            Some("release") => {
+                build.arg("--release");
+            }
+            other => panic!("cannot tell the cargo profile from target dir {other:?}"),
+        }
+        let o = bounded::run_bounded(&mut build, b"", std::time::Duration::from_secs(600));
+        assert!(
+            o.status.success() && exe.exists(),
+            "could not build the askrelay binary the relay half drives: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        exe
+    })
+    .clone()
+}
+
 fn run(root: &Path, args: &[&str], stdin: &str) -> Output {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_blastguard"));
-    c.args(args)
-        .env("HOME", root.join("home"))
+    let mut c = command_for(args);
+    c.env("HOME", root.join("home"))
         .env("TMPDIR", root.join("home"))
         .env("BLASTGUARD_RELAY_DIR", root.join("relay"))
         .env("BLASTGUARD_APPROVALS_DIR", root.join("approvals"))

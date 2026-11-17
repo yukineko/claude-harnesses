@@ -35,7 +35,7 @@ scripts/mutation-gate.sh
 PILOT=difflog MIN_KILL_RATE=0.70 scripts/mutation-gate.sh
 PILOT=specguard scripts/mutation-gate.sh
 PILOT=condukt scripts/mutation-gate.sh
-PILOT=blastguard scripts/mutation-gate.sh
+PILOT=riskgrade scripts/mutation-gate.sh
 
 # このゲートが何を・何から・何を根拠に守るかを、判定なしで表示
 cargo run -p mutategate -- --protects
@@ -58,7 +58,7 @@ FAIL 時は overwatch の fleet violation ledger に違反イベントも追記�
 - パイロット1: `harness-core`（既定）。
 - パイロット2: `specguard` — 既定で `--file crates/specguard/src/similarity.rs` に絞り込み、`ack_blocks_when_no_new_commits_since_raised` という1テストを `--skip` する。
 - パイロット3: `condukt` — 既定で `--file crates/condukt/src/circuit.rs` に絞り込む。
-- パイロット4: `blastguard` — 既定で `--file crates/blastguard/src/classify.rs` に絞り込む。
+- パイロット4: `riskgrade` — 既定で `--file crates/riskgrade/src/classify.rs` に絞り込む。2026-11-17 までは `blastguard` パイロットだったが、分類器が riskgrade crate へ移ったのでパイロットも移した（再計測の記録は `scripts/mutation-gate.sh` のコメント）。
 - `PILOT=<crate>` で任意のクレートに切り替えられる。`MUTANTS_EXTRA`（例: `MUTANTS_EXTRA="--file crates/harness-core/src/hash.rs"`）は cargo-mutants にそのまま渡され、スクリプトは呼び出し元のディレクトリに関係なく repo root から cargo-mutants を走らせる。空でない `MUTANTS_EXTRA` を指定すると、パイロット別の既定値は完全に上書きされる。
 
  blastguard と同時に計測した GATE クレートのうち stuckguard / propguard はバーに届かず、overwatch はベースライン失敗で計測できなかったため、3 つともパイロットにしなかった。

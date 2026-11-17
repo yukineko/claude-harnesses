@@ -31,10 +31,8 @@
 //! module existed.
 
 pub mod approve;
-pub mod classify;
 pub mod deletion;
 pub mod detect;
-pub mod diffrisk;
 pub mod exclude;
 pub mod hookio;
 pub mod interactive;

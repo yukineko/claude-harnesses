@@ -1,6 +1,6 @@
 //! Graded risk / reversibility classifier for a *planned* action.
 //!
-//! [`crate::detect`] answers a binary allow/deny for a single tool call. The
+//! [`blastguard::detect`] answers a binary allow/deny for a single tool call. The
 //! autonomy policy engine needs finer axes: *how risky* is an action and *is it
 //! reversible*. This module supplies them as pure, deterministic functions over
 //! a task's prose (title + done-criteria + touched files: [`classify`]) and,
@@ -14,8 +14,8 @@ use harness_core::verdict::Determination;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::detect;
 use crate::diffrisk::{self, SensitiveConfig};
+use blastguard::detect;
 
 /// How much blast radius an action carries. Serialises lowercase
 /// (`"low"`/`"medium"`/`"high"`) so callers can emit `{risk, reversible}`.
@@ -362,7 +362,7 @@ pub fn classify(prose: &str) -> RiskAssessment {
 /// `Low` + `reversible: true` is not a neutral default here: it is the exact
 /// pair `condukt::gate_exec::decide_gate_exec` reads as
 /// `GateExec::AutoExec`, i.e. "run this without human sign-off". Routing an
-/// `Ask` — which `crate::model::Decision` defines as "NOT a verdict about the
+/// `Ask` — which `blastguard::model::Decision` defines as "NOT a verdict about the
 /// command, it is a refusal to guess about one" — into that pair turns
 /// blastguard's refusal to analyse into permission to proceed. That is the
 /// fail-open CLAUDE.md §3 forbids, one layer up from where `Ask` was
@@ -859,7 +859,7 @@ mod tests {
     /// What [`detect`] answers for `text` as a Bash command — the exact call
     /// `classify_command` makes internally, so a precondition assert here
     /// observes the same verdict `classify_command` sees.
-    fn detect_verdict(text: &str) -> crate::model::Decision {
+    fn detect_verdict(text: &str) -> blastguard::model::Decision {
         detect::detect("Bash", Some(&json!({ "command": text })))
     }
 
@@ -917,7 +917,7 @@ mod tests {
         for text in ["refactor the parser", "fix a typo in the README"] {
             let d = detect_verdict(text);
             assert!(
-                matches!(d, crate::model::Decision::Allow),
+                matches!(d, blastguard::model::Decision::Allow),
                 "precondition: {text:?} must be plainly allowed by detect, got {d:?}"
             );
 

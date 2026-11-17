@@ -9,7 +9,7 @@
 //!   sidecar ([`crate::model::Task`]).
 //! - **Scope**: the task's DECLARED `touched_files` / `target_symbols`
 //!   (decomposition-level, not a recomputed live diff).
-//! - **Sensitive-path driver**: [`blastguard::diffrisk::SensitiveConfig`]
+//! - **Sensitive-path driver**: [`riskgrade::diffrisk::SensitiveConfig`]
 //!   classifying each declared touched file.
 //! - **Tripped invariants**: [`overwatch::violation::ViolationEvent`]s whose
 //!   `task_key` matches this run/task (the same `"<run_id>/<task_id>"` key
@@ -21,9 +21,9 @@
 //! keeps this module directly unit-testable.
 
 use crate::precedent::{match_precedent, Precedent, PrecedentMatch};
-use blastguard::diffrisk::SensitiveConfig;
 use harness_core::verdict::Required;
 use overwatch::violation::{ViolationEvent, ViolationSource};
+use riskgrade::diffrisk::SensitiveConfig;
 use serde::Serialize;
 use std::collections::BTreeSet;
 

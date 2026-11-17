@@ -22,7 +22,7 @@
   互いに `deps` 無しのときだけ。`entries_conflict` は不確実なら「衝突あり」に倒す（誤衝突は直列化＝安全、
   取りこぼしは同一ファイル競合＝危険）。LLM 宣言の `Class`（`parallel`/`serial`/`gated`）より file-overlap が
   優先される。`shared_globs` に触れるタスクは警告付きで直列へ降格。
-- **force-gate（risk 分類の権威）** — `blastguard::classify::classify_change("", task_commands(t),
+- **force-gate（risk 分類の権威）** — `riskgrade::classify::classify_change("", task_commands(t),
   touched_files, ..)`（宣言コマンド + sensitive-path）が `requires_gate()` / Medium 以上 / 判定不能のタスク、
   および散文 `classify(task_action_text(t))` が `requires_gate()`（deploy/push/publish の needle =
   High + 非可逆）のタスクは、LLM が宣言した `class` に関わらず `gated` へ強制隔離される。散文（title/
@@ -156,8 +156,8 @@
   `LearningSignal`（lessons-hit 群と miss 群の replan 平均などの対比）を `aggregate`/`compute` で導く。
   元台帳は書き換えず追加もしない（純粋な read-side）。CLI 入口は `condukt learning-signal`
   （`Command::LearningSignal` → `learning_signal::compute`）。
-- **`diffrisk_record`** — 実行後（post-execution）に worktree の **実 diff** を blastguard の
-  public-API / 機微パス分類器（`blastguard::diffrisk::classify_diff`）へ通し、High-risk 判定を overwatch
+- **`diffrisk_record`** — 実行後（post-execution）に worktree の **実 diff** を riskgrade の
+  public-API / 機微パス分類器（`riskgrade::diffrisk::classify_diff`。2026-11-17 に blastguard から移設）へ通し、High-risk 判定を overwatch
   violation レジストリへ記録する（finding 4 / WorkItem-A）。狙いは、本番で dead になっていた
   public-API シグナル（`changes_public_symbol`）に実データ経路を与えること。タスクの実行完了報告時、
   すなわち `state set --status done` ハンドラ（`main.rs`）から `record_post_execution_diff_risk` として

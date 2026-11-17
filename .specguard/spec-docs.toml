@@ -140,9 +140,9 @@ doc = "docs/specs/blastguard.md"
 reason = "'module 責務' exclude (ALLOW_GLOBS, glob_set, normalize, is_config_file, is_git_internal) and the 'config ファイル除外' invariant."
 
 [[spec]]
-path = "crates/blastguard/src/classify.rs"
-doc = "docs/specs/blastguard.md"
-reason = "'module 責務' classify: RiskAssessment/Risk tiers, requires_gate precedence; 'detect と classify の lockstep' invariant; classify_change in the diffrisk section."
+path = "crates/riskgrade/src/classify.rs"
+doc = "docs/specs/riskgrade.md"
+reason = "(moved from crates/blastguard/src/classify.rs 2026-11-17) 'module 責務' classify: RiskAssessment/Risk tiers, requires_gate precedence; 'detect と classify の lockstep' invariant; classify_change in the diffrisk section."
 
 [[spec]]
 path = "crates/blastguard/src/model.rs"
@@ -155,9 +155,9 @@ doc = "docs/specs/blastguard.md"
 reason = "'module 責務' hookio and the 'PreToolUse deny JSON は単一行' invariant (deny_json shape)."
 
 [[spec]]
-path = "crates/blastguard/src/diffrisk.rs"
-doc = "docs/specs/blastguard.md"
-reason = "Section '一般化リスクスコアリング (diff-level 意味的リスク)': DEFAULT_SENSITIVE_GLOBS, SensitiveConfig, changes_public_symbol, classify_diff, merge rules."
+path = "crates/riskgrade/src/diffrisk.rs"
+doc = "docs/specs/riskgrade.md"
+reason = "(moved from crates/blastguard/src/diffrisk.rs 2026-11-17) Section '一般化リスクスコアリング (diff-level 意味的リスク)': DEFAULT_SENSITIVE_GLOBS, SensitiveConfig, changes_public_symbol, classify_diff, merge rules."
 
 [[spec]]
 path = "crates/blastguard/src/rule_id.rs"

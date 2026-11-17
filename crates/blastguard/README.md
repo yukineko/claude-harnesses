@@ -537,31 +537,14 @@ of this README for how each undetermined case is resolved.
 
 `src/lib.rs` exposes the same detection to other crates in this repo (pure, no
 I/O): specguard's forge runs an LLM-generated `test_cmd` through `detect::detect`
-before ever handing it to `sh -c`, and condukt's scheduler uses the graded
-`classify::classify` risk/reversibility assessor to force outward, irreversible
-actions (a deploy, `git push`, a release) through its GATED gate even when an
-upstream LLM mislabelled the task.
-A deploy word that appears only inside a file name in the task text (for example
-`rollout` in `scripts/check-plugin-rollout.py`) does not force the gate.
-A file-path token is a word containing `/`, or one ending in a known extension
-such as `.py`/`.rs`/`.sh`/`.md`/`.toml`, with no `:` or `@`.
-A path still counts when it comes first, follows a runner word (`run`, `bash`,
-...) or shell separator, or starts with `./`.
-A path quoted in backticks still counts.
-Task prose is never parsed as a command: `classify` reads prose with the deploy
-and history needles only, so prose that merely describes a command (for example
-quotes `git config core.hooksPath` in backticks) is not force-gated.
-The commands a task will actually run are passed separately and go through the
-full `classify_command` analysis, so the same command passed as a command still
-gates.
-`classify_change` with no declared command list (`None`) is undetermined, never
-Low.
+before ever handing it to `sh -c`, and condukt's verifier refuses a destructive
+verify command the same way.
 
-A diff-level module is exported as well (pure, no I/O): `diffrisk`
-(`classify_diff` / `changes_public_symbol`). The caller enumeration it is paired
-with (`changed_symbol_names` / `enumerate_callers`) lives in
-`harness_core::callgraph`; blastguard no longer re-exports it. condukt consumes
-both (`crates/condukt/src/diffrisk_record.rs`).
+The graded risk/reversibility classifier (`classify`) and the diff-level risk
+signals (`diffrisk`) that used to live here moved to the `riskgrade` crate on
+2026-11-17 (user ruling: blastguard holds the command-safety verdict only); see
+`crates/riskgrade/README.md`. riskgrade still reuses `detect::detect` for its
+local-destruction tier.
 
 ## Build
 

@@ -4,9 +4,9 @@
 //!
 //! ## Why this exists (finding 4 / WorkItem-A)
 //!
-//! blastguard's [`blastguard::diffrisk::classify_diff`] has two signals: a
+//! blastguard's [`riskgrade::diffrisk::classify_diff`] has two signals: a
 //! sensitive-path glob hit and a public-API surface change
-//! ([`blastguard::diffrisk::changes_public_symbol`]). The public-API signal was
+//! ([`riskgrade::diffrisk::changes_public_symbol`]). The public-API signal was
 //! DEAD in production: the only in-workspace callers
 //! ([`crate::gate_exec::gather_assessment`] and [`crate::schedule::schedule`])
 //! run at a *pre-execution* stage where no diff exists yet, so they pass an
@@ -55,9 +55,9 @@
 use crate::config::Config;
 use crate::gatelog::DiffRiskOutcome;
 use crate::state::TaskState;
-use blastguard::classify::Risk;
-use blastguard::diffrisk::{classify_diff, classify_diff_with_callers, SensitiveConfig};
 use overwatch::violation::{build_event, RawViolation, ViolationSource};
+use riskgrade::classify::Risk;
+use riskgrade::diffrisk::{classify_diff, classify_diff_with_callers, SensitiveConfig};
 use std::path::{Path, PathBuf};
 
 /// The rule id / discriminator recorded for a High-risk post-execution diff.

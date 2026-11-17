@@ -294,6 +294,23 @@ force-remove、ブランチを force-delete）で常に破棄される — 本�
 | `trajectoryeval` | Phase 6: transcript から worker の tool-call 軌跡を `extract` し、タスクの `expected_trajectory` と `check` で照合する（`done_criteria` と並ぶ第2の経路面 verifier 次元）。タスクに `expected_trajectory` が無い、またはバイナリ不在なら丸ごと skip。 |
 | `curate` | golden 化: `done_criteria` が機械的な `verified` タスクに対し、スキルが HOTL 確認（`AskUserQuestion`）を1回提示する。明示的に yes のときだけ `curate promote "<task.title>" --dataset <name>` を実行して evalkit golden へ promote し、否なら何も書き込まない。 |
 
+## testscope の rerun ledger（実行確認済みの run）
+
+PreToolUse の `condukt testscope` は、フルスイート・run 途中の main merge・scope 外のテスト対象・
+「同一ツリーで既に走ったテストの再実行」を拒否する。「既に走った」とは実行が **確認済み**であること。
+PreToolUse は pending 行しか書けない（他の hook がその呼び出しを止めうる）ので、`condukt testscope-confirm`
+（PostToolUse / PostToolUseFailure、matcher `Bash`。中断された実行も実行済み）が同じ `tool_use_id` の行を昇格する。
+確認済みの再実行は **deny**、pending だけが前歴（未確認・legacy `ledger.tsv` 行・Post が行に一致しなかった場合）の
+再実行は **ask**（`permissionDecision: ask`）になる。hook が deny / ask した呼び出しでは Post が発火しないので、
+実行された呼び出しと区別できないため。新しい記録は `ledger.v2.tsv` に append-only で書き、確認時に旧 3 列行も
+`ledger.tsv` へ追記するので、古い cache バイナリも確認済みの再実行を拒否できる。読めない・パースできない
+`ledger.v2.tsv` は deny（「前歴なし」とは読まない）。`condukt state test` は自分の実行を自分で確認し、spawn 失敗時は
+自分の行を invalidate する。確認 hook が panic / 書き込み失敗したときは `systemMessage` を出し、block しない。
+
+実測（claude 2.1.284、headless `claude -p`、spec `testscope-confirmed-run` R10）: hook が `ask` を返した Bash 呼び出しは
+headless では `permission_denied` になり、PostToolUse も PostToolUseFailure も発火しない。つまり実質 deny である。
+subagent での ask の解決は testscope について **まだ実測していない**（R10 の残り。測定後にここへ追記する）。
+
 ## 制約
 
 - **マシンごとのマーケットプレイス登録。** 各ユーザーが一度 `/plugin marketplace add <url>` する必要がある — Claude Code はチェックインされたリポジトリからマーケットプレイスを自動登録しない。

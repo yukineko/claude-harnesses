@@ -760,6 +760,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `detect/ast`: Analysis/Cause/Script/SimpleCommand contract of the parser + static-eval layer (RedirTarget / SimpleCommand.cwd relative-target representation); read by the path-resolution detectors through targets.rs only."
 
 [[spec]]
+path = "crates/blastguard/src/detect/ast/judge.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/ast/judge`: S1 frozen types (Effect / PathClass / Finding / Judgement / PathCtx) and the judge/classify stubs (always Undetermined / Unresolved, not wired into detect) of the structural effect x target-path judgement specified in crates/blastguard/src/detect/ast/SUBSET.md."
+
+[[spec]]
 path = "crates/blastguard/src/detect/ast/targets.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `detect/ast` (task migrate-path): the index the path-resolution detectors read — resolve(spelling, role) returns the evaluated literal paths only at depth 0, not suspended (diverging bash 3.2 pass / comment candidate), when every textual occurrence of the spelling is exactly one evaluated argv or redirect-target word and every word in the detector's role is a plain Literal; otherwise None and the old verdict stands."

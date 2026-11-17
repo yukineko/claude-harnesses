@@ -56,14 +56,41 @@ fn run(env: &Env, cmd: &str, cwd: &Path) -> (Option<i32>, String) {
 }
 
 fn run_tool(env: &Env, tool: &str, cmd: &str, cwd: &Path) -> (Option<i32>, String) {
-    let payload = serde_json::json!({
+    run_tool_as("testscope", None, env, tool, cmd, cwd)
+}
+
+/// `run`, then (when the hook allowed it, i.e. the command ran) the
+/// PostToolUse that confirms the run (spec testscope-confirmed-run R2: input
+/// only, the asserts stay as they were).
+fn run_confirmed(env: &Env, cmd: &str, cwd: &Path) -> (Option<i32>, String) {
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let id = format!("tu-{}", N.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+    let res = run_tool_as("testscope", Some(&id), env, "Bash", cmd, cwd);
+    if res.1.trim().is_empty() {
+        run_tool_as("testscope-confirm", Some(&id), env, "Bash", cmd, cwd);
+    }
+    res
+}
+
+fn run_tool_as(
+    sub: &str,
+    tuid: Option<&str>,
+    env: &Env,
+    tool: &str,
+    cmd: &str,
+    cwd: &Path,
+) -> (Option<i32>, String) {
+    let mut payload = serde_json::json!({
         "session_id": "s",
         "tool_name": tool,
         "tool_input": {"command": cmd},
         "cwd": cwd.to_str().unwrap(),
     });
+    if let Some(id) = tuid {
+        payload["tool_use_id"] = serde_json::json!(id);
+    }
     let mut child = Command::new(env!("CARGO_BIN_EXE_condukt"))
-        .arg("testscope")
+        .arg(sub)
         .env("HOME", env.home.path())
         .env("CONDUKT_TESTSCOPE_LEDGER", env.ledger())
         .current_dir(cwd)
@@ -231,7 +258,7 @@ fn rule3_same_tree_rerun_is_denied_until_tree_changes() {
     let r = repo();
     let cmd = "cargo test -p x --test y";
 
-    assert_allow(&run(&env, cmd, r.path()), "first run");
+    assert_allow(&run_confirmed(&env, cmd, r.path()), "first run");
 
     let second = run(&env, cmd, r.path());
     let reason = assert_deny(&second, "second run, unchanged tree");

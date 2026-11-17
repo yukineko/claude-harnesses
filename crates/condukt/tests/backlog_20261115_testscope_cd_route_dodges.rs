@@ -49,14 +49,39 @@ fn repo() -> TempDir {
 }
 
 fn run(home: &Path, ledger: &Path, cmd: &str, cwd: &Path) -> (Option<i32>, String) {
-    let payload = serde_json::json!({
+    run_as("testscope", None, home, ledger, cmd, cwd)
+}
+
+/// `run`, then (when the hook allowed it, i.e. the command ran) the
+/// PostToolUse that confirms the run (spec testscope-confirmed-run R2: input
+/// only, the asserts stay as they were).
+fn run_confirmed(home: &Path, ledger: &Path, cmd: &str, cwd: &Path) -> (Option<i32>, String) {
+    let res = run_as("testscope", Some("tu-1"), home, ledger, cmd, cwd);
+    if res.1.trim().is_empty() {
+        run_as("testscope-confirm", Some("tu-1"), home, ledger, cmd, cwd);
+    }
+    res
+}
+
+fn run_as(
+    sub: &str,
+    tuid: Option<&str>,
+    home: &Path,
+    ledger: &Path,
+    cmd: &str,
+    cwd: &Path,
+) -> (Option<i32>, String) {
+    let mut payload = serde_json::json!({
         "session_id": "s",
         "tool_name": "Bash",
         "tool_input": {"command": cmd},
         "cwd": cwd.to_str().unwrap(),
     });
+    if let Some(id) = tuid {
+        payload["tool_use_id"] = serde_json::json!(id);
+    }
     let mut child = Command::new(env!("CARGO_BIN_EXE_condukt"))
-        .arg("testscope")
+        .arg(sub)
         .env("HOME", home)
         .env("CONDUKT_TESTSCOPE_LEDGER", ledger)
         .current_dir(cwd)
@@ -106,6 +131,20 @@ impl Fx {
     fn go(&self, cmd: &str) -> (Option<i32>, String) {
         run(self.home.path(), &self.ledger(), cmd, self.p.path())
     }
+    fn go_confirmed(&self, cmd: &str) -> (Option<i32>, String) {
+        run_confirmed(self.home.path(), &self.ledger(), cmd, self.p.path())
+    }
+    /// `route` whose seeding plain run is also confirmed as executed.
+    fn route_confirmed(&self, route: &str) -> (Option<i32>, String) {
+        let first = self.go_confirmed(PLAIN);
+        assert!(
+            !denied(&first),
+            "first plain run in P must be allowed: {first:?}"
+        );
+        let second = self.go(route);
+        eprintln!("route {route:?} -> {second:?}");
+        second
+    }
     /// Seed the ledger with a plain run in P, then run `route` (built from X).
     fn route(&self, route: &str) -> (Option<i32>, String) {
         let first = self.go(PLAIN);
@@ -134,7 +173,7 @@ fn r1_cd_with_amp_redirect_piped_into_cargo_is_denied() {
 fn r2_env_cd_then_cargo_is_denied() {
     let fx = Fx::new();
     let route = format!("env cd {} && {PLAIN}", fx.x.path().display());
-    let res = fx.route(&route);
+    let res = fx.route_confirmed(&route);
     assert!(
         denied(&res),
         "route did not move cargo into X yet was allowed: {res:?}"

@@ -51,6 +51,7 @@ mod store;
 mod subagent_stop;
 mod teardown_gate;
 mod testscope;
+mod testscope_hook;
 mod timings;
 #[cfg(test)]
 mod verifier_f7a0cadc;
@@ -97,9 +98,17 @@ enum Command {
     /// test (bare, via `tdd red|green --cmd`, or `state test`), and a test
     /// target outside the owning task's scope inside its worktree; records
     /// the per-session marker `state set --status running` requires (see
-    /// `testscope.rs`). Prints a `permissionDecision: deny` JSON or
-    /// nothing; a panic exits 2 (fail-closed via `run_pretooluse_guarded`).
+    /// `testscope.rs`). Prints a `permissionDecision: deny` / `ask` JSON
+    /// (`ask`: the only prior of a rerun is unconfirmed) or nothing; a panic exits 2 (fail-closed via `run_pretooluse_guarded`).
     Testscope,
+    /// PostToolUse / PostToolUseFailure(Bash) hook: confirm that a test
+    /// command `condukt testscope` recorded as pending actually executed
+    /// (matched by `tool_use_id`; an interrupted run counts). A Bash call with
+    /// no test command prints nothing and writes nothing. It never blocks: a
+    /// ledger IO failure or a panic prints a `systemMessage` saying the
+    /// confirmation was not recorded (the rows stay pending, so a rerun asks)
+    /// and exits 0 (see `testscope.rs`).
+    TestscopeConfirm,
     /// SubagentStop hook: when a child sub-agent terminates, advance the owning
     /// run task's durable `updated_at` — the timestamp `state probe`, `circuit
     /// check` and the claim reap gate measure idleness against — to that moment.
@@ -1860,9 +1869,11 @@ fn main() {
                 run_editgate();
             })
         }
-        Command::Testscope => {
-            harness_core::hook::run_pretooluse_guarded("condukt testscope", run_testscope)
-        }
+        Command::Testscope => harness_core::hook::run_pretooluse_guarded(
+            "condukt testscope",
+            testscope_hook::run_testscope,
+        ),
+        Command::TestscopeConfirm => testscope_hook::run_testscope_confirm_guarded(),
         Command::SessionHeartbeat => {
             let heartbeat = try_read_stdin()
                 .context(
@@ -1923,87 +1934,6 @@ fn editgate_block_reason(verdict: &serde_json::Value) -> String {
     {
         Some(diag) => format!("{reason}\n{diag}"),
         None => reason.to_string(),
-    }
-}
-
-/// PreToolUse(Bash) test-scope gate (see `testscope.rs`). Writes the
-/// per-session marker `<ledger parent>/sessions/<session_id>` whenever the
-/// payload carries a session id (what `state set --status running` requires),
-/// then judges the command and prints a `permissionDecision: deny` JSON or
-/// nothing. An unreadable / unparseable payload, a Bash payload without a
-/// command, an undeterminable cwd and an unset `$HOME` (no ledger location)
-/// deny. Called under `harness_core::hook::run_pretooluse_guarded`: a panic
-/// exits 2 (fail-closed).
-fn run_testscope() {
-    // An unreadable payload is undetermined: which command is about to run is
-    // unknown, so deny (CLAUDE.md §3).
-    let deny = |reason: String| {
-        let out = serde_json::json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason,
-            }
-        });
-        println!("{out}");
-    };
-    let raw = match try_read_stdin() {
-        Ok(raw) => raw,
-        Err(e) => {
-            deny(format!(
-                "condukt testscope could not read the PreToolUse payload: {e}"
-            ));
-            return;
-        }
-    };
-    let v: serde_json::Value = match serde_json::from_str(&raw) {
-        Ok(v) => v,
-        Err(e) => {
-            deny(format!(
-                "condukt testscope could not parse the PreToolUse payload: {e}"
-            ));
-            return;
-        }
-    };
-    if v.get("tool_name").and_then(|t| t.as_str()) != Some("Bash") {
-        return;
-    }
-    let Some(command) = v.pointer("/tool_input/command").and_then(|c| c.as_str()) else {
-        deny("condukt testscope: Bash payload carries no tool_input.command".to_string());
-        return;
-    };
-    let cwd = match v.get("cwd").and_then(|c| c.as_str()) {
-        Some(c) => std::path::PathBuf::from(c),
-        None => match std::env::current_dir() {
-            Ok(d) => d,
-            Err(e) => {
-                deny(format!("condukt testscope cannot determine the cwd: {e}"));
-                return;
-            }
-        },
-    };
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let Some(ledger) = testscope::ledger_path(home.as_deref()) else {
-        deny("condukt testscope: HOME is unset, so the rerun ledger has no location".to_string());
-        return;
-    };
-    // Rule A: record that this hook is loaded in this session, so `condukt
-    // state set --status running` can refuse a session that never loaded it. A
-    // marker that cannot be written leaves the session unmarked, which is the
-    // restricted side (its `state set running` is refused); it is named on
-    // stderr, and this command is still judged below.
-    if let Some(sid) = v.get("session_id").and_then(|s| s.as_str()) {
-        if let Err(e) = testscope::write_session_marker(&ledger, sid) {
-            eprintln!(
-                "condukt testscope: could not write the session marker for '{sid}' ({e}); \
-                 `condukt state set --status running` will be refused in this session"
-            );
-        }
-    }
-    if let testscope::Decision::Deny(reason) =
-        testscope::judge(command, &cwd, home.as_deref(), &ledger)
-    {
-        deny(reason);
     }
 }
 
@@ -2842,6 +2772,7 @@ fn run_user(cmd: Command) -> Result<()> {
         | Command::Statusline
         | Command::Editgate
         | Command::Testscope
+        | Command::TestscopeConfirm
         | Command::SubagentStop
         | Command::SessionHeartbeat => {
             bail!("internal: hook subcommands must be dispatched in main(), not run_user()")
@@ -3700,12 +3631,26 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
                 }
                 None => None,
             };
-            let path = worktree::create_namespaced(
+            // A retry worktree's topic is `<task>-rN`; record the identity of
+            // the real task when the run has it (backlog b2d9cb6b). A run that
+            // cannot be loaded keeps the topic as identity (refused later).
+            let task = match run.as_deref() {
+                Some(r) => match state::RunState::load(cfg, cwd, r) {
+                    Ok(rs) => {
+                        let ids: Vec<&str> = rs.tasks.iter().map(|t| t.id.as_str()).collect();
+                        worktree::resolve_retry_topic(&topic, &ids)
+                    }
+                    Err(_) => topic.clone(),
+                },
+                None => topic.clone(),
+            };
+            let path = worktree::create_namespaced_for_task(
                 &repo,
                 &cfg.worktree_base,
                 run.as_deref(),
                 &topic,
                 &branch,
+                &task,
             )?;
             println!("{}", path.display());
         }

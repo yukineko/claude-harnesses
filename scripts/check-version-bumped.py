@@ -22,7 +22,9 @@ exists at base but whose version is unreadable). New plugins (plugin.json absent
 from the base TREE) are OK; "unreadable at base" is NOT "new". Deleted plugins
 are ignored.
 
-It also enforces the SHARED-CRATE half of the same rule: crates/harness-core is
+It also enforces the SHARED-CRATE half of the same rule (SHARED_CRATES:
+harness-core, and since 2026-11-17 riskgrade — same rule, same carve-out 2,
+applied per crate): crates/harness-core is
 statically linked into every plugin binary, so a change there changes ~36 shipped
 binaries while no plugin.json moves. The gate used to diff only crates/<plugin>/,
 so harness-core could move with no version anywhere moving — leaving a version
@@ -44,7 +46,7 @@ rather than applied silently:
   1. a plugin whose changed paths are ALL under crates/<name>/bin/ (compiled
      output, not source) does not require a bump. Mixed bin+source is still
      enforced. Covered by scripts/tests/version-bumped-bin-only.sh.
-  2. a harness-core change confined to paths that are NOT linked into a plugin
+  2. a shared-crate (harness-core / riskgrade) change confined to paths that are NOT linked into a plugin
      binary (tests/, *.md) does not require a bump. This is structural, not a
      guess: crates/harness-core/tests/ is a separate integration-test target.
      Anything else under harness-core — including a #[cfg(test)] block inside
@@ -151,11 +153,19 @@ def plugin_version_worktree(path):
 # shipped binary, so its own version is what must move.
 SHARED_CRATE = "harness-core"
 
-# Paths under the shared crate that are NOT compiled into a plugin binary.
+# Every non-plugin library crate whose own [package].version must move when its
+# linked source changes. harness-core is linked into every plugin; riskgrade
+# (classify + diffrisk, moved out of blastguard 2026-11-17) is linked into
+# condukt. Neither has a plugin.json, so the plugin loop never sees them; the
+# same rule and the same carve-out (tests/, *.md) apply to each. Covered by
+# scripts/test_check_version_bumped_riskgrade.py.
+SHARED_CRATES = (SHARED_CRATE, "riskgrade")
+
+# Paths under a shared crate that are NOT compiled into a plugin binary.
 # Structural, not heuristic: `tests/` is a separate integration-test target and
 # `*.md` is prose. Everything else counts as linked (fail-closed).
-def _is_linked_shared_path(path):
-    if path.startswith(f"{CRATES}/{SHARED_CRATE}/tests/"):
+def _is_linked_shared_path(path, crate=SHARED_CRATE):
+    if path.startswith(f"{CRATES}/{crate}/tests/"):
         return False
     if path.endswith(".md"):
         return False
@@ -206,32 +216,32 @@ def crate_version_worktree(path):
         return None
 
 
-def check_shared_crate(base, head=None):
+def check_shared_crate(base, head=None, crate=SHARED_CRATE):
     """Enforce the shared-crate bump. Returns (verdict, message).
 
     verdict is "ok", "exempt", "fail", or "error" — four answers rather than a
     bool, so "could not diff" cannot be recorded as "nothing changed".
     """
-    manifest = f"{CRATES}/{SHARED_CRATE}/Cargo.toml"
+    manifest = f"{CRATES}/{crate}/Cargo.toml"
     if head is None and not os.path.isfile(manifest):
         # Not this repo's layout (or running in a sandbox without the shared
         # crate). Nothing to enforce, and nothing to claim.
         return "ok", None
 
-    diff = git("diff", "--name-only", *_range(base, head), "--", f"{CRATES}/{SHARED_CRATE}/")
+    diff = git("diff", "--name-only", *_range(base, head), "--", f"{CRATES}/{crate}/")
     if diff.returncode != 0:
         return "error", (
-            f"cannot diff {CRATES}/{SHARED_CRATE} against {base}: "
+            f"cannot diff {CRATES}/{crate} against {base}: "
             f"{diff.stderr.strip()}"
         )
     changed = [ln for ln in diff.stdout.splitlines() if ln.strip()]
     if not changed:
         return "ok", None
 
-    linked = [p for p in changed if _is_linked_shared_path(p)]
+    linked = [p for p in changed if _is_linked_shared_path(p, crate)]
     if not linked:
         return "exempt", (
-            f"check-version-bumped: {SHARED_CRATE} changed in "
+            f"check-version-bumped: {crate} changed in "
             f"{len(changed)} file(s), all of which are not linked into any plugin "
             f"binary (tests/ or *.md); no bump required"
         )
@@ -255,14 +265,14 @@ def check_shared_crate(base, head=None):
             return "error", str(e)
     if cur_v is None:
         return "fail", (
-            f"{SHARED_CRATE}: cannot read [package].version from {manifest} "
+            f"{crate}: cannot read [package].version from {manifest} "
             f"(base was {base_v}). A version that cannot be read has NOT been "
             f"shown to have moved."
         )
     bs, cs = semver(base_v), semver(cur_v)
     if bs is None or cs is None or not (cs > bs):
         return "fail", (
-            f"{SHARED_CRATE}: version still {cur_v} (base {base_v}), but "
+            f"{crate}: version still {cur_v} (base {base_v}), but "
             f"{len(linked)} linked file(s) changed:\n"
             + "\n".join(f"        {p}" for p in linked[:8])
             + (f"\n        ... (+{len(linked) - 8} more)" if len(linked) > 8 else "")
@@ -380,18 +390,19 @@ def main():
         if cs is None or bs is None or not (cs > bs):
             offenders.append((name, base_v, cur_v, changed))
 
-    # The shared crate (harness-core) is not a plugin, so the loop above skipped
-    # it; its own version is what must move when it changes.
-    shared_verdict, shared_msg = check_shared_crate(base, head)
-    if shared_verdict == "error":
-        print(f"check-version-bumped: {shared_msg}", file=sys.stderr)
-        return 2
-    if shared_verdict == "exempt":
-        print(shared_msg)
-    if shared_verdict == "fail":
-        offenders_shared = shared_msg
-    else:
-        offenders_shared = None
+    # The shared crates (harness-core, riskgrade) are not plugins, so the loop
+    # above skipped them; each one's own version is what must move when it
+    # changes. Every crate is checked; one failing never hides another.
+    offenders_shared = []
+    for crate in SHARED_CRATES:
+        shared_verdict, shared_msg = check_shared_crate(base, head, crate)
+        if shared_verdict == "error":
+            print(f"check-version-bumped: {shared_msg}", file=sys.stderr)
+            return 2
+        if shared_verdict == "exempt":
+            print(shared_msg)
+        if shared_verdict == "fail":
+            offenders_shared.append((crate, shared_msg))
 
     # Announce the carve-out. A gate that narrows its own coverage must say so;
     # a silent exemption reads downstream as "nothing changed there".
@@ -403,22 +414,30 @@ def main():
             f"bin/ ({total} derived-artifact file(s)); no bump required: {names}"
         )
 
-    if offenders_shared:
+    for crate, msg in offenders_shared:
         print(
-            f"VERSION-BUMP GATE FAILED: {SHARED_CRATE} changed without a version "
+            f"VERSION-BUMP GATE FAILED: {crate} changed without a version "
             f"bump vs {base}.",
             file=sys.stderr,
         )
-        print(f"  - {offenders_shared}", file=sys.stderr)
-        print(
-            f"\nEvery plugin statically links {SHARED_CRATE}, so this change alters "
-            f"every shipped binary while no plugin.json moves. Bump\n"
-            f"[package].version in {CRATES}/{SHARED_CRATE}/Cargo.toml (>= micro). "
-            f"The 36 linking plugins do NOT need bumps.",
-            file=sys.stderr,
-        )
-        if not offenders:
-            return 1
+        print(f"  - {msg}", file=sys.stderr)
+        if crate == SHARED_CRATE:
+            print(
+                f"\nEvery plugin statically links {SHARED_CRATE}, so this change alters "
+                f"every shipped binary while no plugin.json moves. Bump\n"
+                f"[package].version in {CRATES}/{SHARED_CRATE}/Cargo.toml (>= micro). "
+                f"The 36 linking plugins do NOT need bumps.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"\n{crate} is a library linked into plugin binaries and has no "
+                f"plugin.json. Bump\n[package].version in {CRATES}/{crate}/Cargo.toml "
+                f"(>= micro). The linking plugins do NOT need bumps.",
+                file=sys.stderr,
+            )
+    if offenders_shared and not offenders:
+        return 1
 
     if offenders:
         print(
@@ -440,7 +459,7 @@ def main():
 
     print(
         f"OK: no changed plugin left un-bumped vs {base} ({checked} plugins "
-        f"scanned, plus the {SHARED_CRATE} shared crate)"
+        f"scanned, plus the shared crate(s) {', '.join(SHARED_CRATES)})"
     )
     return 0
 

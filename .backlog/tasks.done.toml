@@ -81789,3 +81789,250 @@ rev = "5975d68af788dd49e89e2bd34c6699a4346421d5"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "02ec6595"
+title = "donegate: when_changed checks (lint-changed / test-changed) run on another session's dirty crates in main and block a session that changed nothing"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "donegate",
+    "false-positive",
+    "attribution",
+]
+touched_files = []
+status = "done"
+notes = """
+観測事実（session 1e000416、2026-11-17、依頼文より逐語）:
+同じ Stop で donegate も、main に一時的にあった condukt の変更に対してチェックを走らせ、FAIL しています。lint-changed は「cargo fmt --check FAILED for condukt」、test-changed は condukt の audit_b12_oracle_ids_and_teardown です。
+このセッションは condukt を一切触っていません。直後の main の git status --short は空でした。
+このセッションは main の cwd（/Users/yuki/src/harness）から、読み取り専用のコマンドを多く打っています。例: git status、git log、git -C <wt> ...、blastguard probe（hook JSON を stdin に渡すもの）、tdd skip、blastguard relay dismiss。
+
+原因経路（rev 7767e6a8f のコード）:
+1. crates/donegate/src/gate.rs:133 scan_scope(crate::git::changed_files(root)) — when_changed の対象範囲は tree 全体の変更集合。
+2. crates/donegate/src/git.rs:41 changed_files = git diff --name-only + --cached + untracked + merge-base(main)..HEAD。session 入力なし。
+3. scripts/test-changed-crates.sh（changed= 行付近: git diff --name-only HEAD / ls-files --others / merge-base..HEAD）と scripts/lint-changed-crates.sh も tree の dirt から crate を選ぶ。session 入力なし。
+意図との矛盾: donegate.toml:18-22「ATTRIBUTION IS THE OTHER CONSTRAINT: ... a red crate the current turn never touched blocked the stop of whoever WAS working」— 意図は turn/session 単位、実装は tree 単位。gate.rs:370-372 は「the workspace-wide checks routinely fail on ANOTHER session changes (CLAUDE.md §8 measured attribution bug)」と既知の帰属バグとして記述。CLAUDE.md §8 末尾も同種の要求を「帰属のバグ」と呼ぶ。tree 全体検査を仕様とする記述は見つからなかった（test-changed-crates.sh:3「crates touched in the working tree」は tree 単位だが、session 帰属を否定する仕様文ではない）。
+
+RED commit: 9179c4652（branch red/stopverify-misattr-20261117、未 merge、donegate 0.1.95）
+テスト: crates/donegate/tests/foreign_main_dirt_attribution_20261117.rs
+  RED (#[ignore]): readonly_session_is_not_blocked_by_foreign_crate_dirt_in_main — transcript は Bash git status / git log のみ、main に別 writer の dirty な crates/condukt/src/main.rs、check は when_changed **/*.rs で exit 1。結果 decision=block、marker あり。
+  対照 (GREEN): control_own_edit_of_the_crate_still_runs_the_check_and_blocks — 同じ dirt を自セッションの Edit として transcript に記録すると check が走り block。
+未確認: 実際の観測で donegate が見た condukt dirt の出所（別セッションの具体的操作）。関連: dc97fc2d（stop-verify-worktree 側の同種帰属バグ）。"""
+created_at = 1794869981
+updated_at = 1794944705
+weight = 0.0
+issue_number = 1845
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1845"
+issue_closed_at = 1794944709
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test foreign_main_dirt_attribution_20261117 -- --ignored"
+rev = "9179c4652ae3cc7e78c9eb7acfe1ca1d3928fcfe"
+observed_at = 1794869981
+detail = """
+exit 101: st result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 1.33s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/foreign_main_dirt_attribution_20261117.rs (target/debug/deps/foreign_main_dirt_attribution_20261117-c549ed4350a10543)
+error: test failed, to rerun pass `-p donegate --test foreign_main_dirt_attribution_20261117`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p donegate --test foreign_main_dirt_attribution_20261117"
+exit = 0
+passed = 5
+rev = "53000e082e09000053488778638cc8077414d25c"
+observed_at = 1794944704
+output_digest = "sha256:1372718963426c8819f74addeb16f685f7a2813843fbeab194b9a50b60c8a89d"
+excerpt = """
+
+running 5 tests
+test readonly_session_is_not_blocked_by_foreign_crate_dirt_in_main ... ok
+test control_own_edit_of_the_crate_still_runs_the_check_and_blocks ... ok
+test session_with_unnamed_writing_command_keeps_full_scope ... ok
+test cd_abs_then_cargo_fmt_keeps_full_scope ... ok
+test cd_rel_then_cargo_fmt_keeps_full_scope ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.19s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/foreign_main_dirt_attribution_20261117.rs (target/debug/deps/foreign_main_dirt_attribution_20261117-45978ca2de62a87f)
+"""
+
+[task.closure.red]
+rev = "9179c4652ae3cc7e78c9eb7acfe1ca1d3928fcfe"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "439fb07d"
+title = "attribution: naming any existing file makes a path-less write attributable (cargo fmt -- a.rs, python3 gen.py, git apply, cp to dir)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "attribution",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "has_unattributable_write returns Known(false) for cargo fmt -- a.rs, python3 gen.py [existing.rs], bash fmt.sh, cargo build a.rs, rustfmt a.rs, git apply a.rs, patch -p1 < a.rs, cp a.rs other_dir/, git stash pop a.rs. Controls (sed -i, tee, touch, cp to named dest, cat, git diff) pass."
+created_at = 1794942983
+updated_at = 1794944710
+weight = 0.0
+issue_number = 1857
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1857"
+issue_closed_at = 1794944713
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test backlog_20261118_named_file_attribution_holes -- --ignored"
+rev = "aeb6d0aeb98e005ecce1f85cd3f3652362e9f33d"
+observed_at = 1794942983
+detail = """
+exit 101: d; 10 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261118_named_file_attribution_holes.rs (target/debug/deps/backlog_20261118_named_file_attribution_holes-b911ce4087c6677c)
+error: test failed, to rerun pass `-p harness-core --test backlog_20261118_named_file_attribution_holes`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test backlog_20261118_named_file_attribution_holes"
+exit = 0
+passed = 25
+rev = "53000e082e09000053488778638cc8077414d25c"
+observed_at = 1794944709
+output_digest = "sha256:5c76b0848ecaffbdbc5b43c0a0ad75c2b6a8cc5c14a5829cdccef5b2098d92c0"
+excerpt = """
+
+running 25 tests
+test cargo_build_with_named_file_is_unattributable ... ok
+test control_tee_named_file_is_attributable ... ok
+test bash_script_is_unattributable ... ok
+test control_cat_is_read_only ... ok
+test control_sed_in_place_named_file_is_attributable ... ok
+test control_git_diff_is_read_only ... ok
+test control_cp_to_named_existing_dest_is_attributable ... ok
+test cargo_fmt_with_named_file_is_unattributable ... ok
+test control_touch_named_file_is_attributable ... ok
+test f1_dot_slash_touch_is_unattributable ... ok
+test f1_absolute_tee_is_unattributable ... ok
+test f1_nested_rm_is_unattributable ... ok
+test f1_dot_slash_sed_is_unattributable ... ok
+test f2_redirect_into_symlink_is_unattributable ... ok
+test f2_cp_onto_symlink_is_unattributable ... ok
+test cp_into_directory_is_unattributable ... ok
+test f2_sed_in_place_symlink_is_unattributable ... ok
+test git_stash_pop_with_named_file_is_unattributable ... ok
+test f2_tee_symlink_is_unattributable ... ok
+test f2_touch_symlink_is_unattributable ... ok
+test patch_with_stdin_patch_file_is_unattributable ... ok
+test python_script_with_existing_arg_is_unattributable ... ok
+test python_script_alone_is_unattributable ... ok
+test git_apply_patch_file_is_unattributable ... ok
+test rustfmt_with_named_file_is_unattributable ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261118_named_file_attribution_holes.rs (target/debug/deps/backlog_20261118_named_file_attribution_holes-28ee403f73b6bee5)
+"""
+
+[task.closure.red]
+rev = "aeb6d0aeb98e005ecce1f85cd3f3652362e9f33d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "dc97fc2d"
+title = "stop-verify-worktree: read-only main-cwd session blamed for another session's concurrent main write (guard-maintree-bash over-attribution)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "stop-verify-worktree",
+    "false-positive",
+    "attribution",
+]
+touched_files = []
+status = "done"
+notes = """
+観測事実（session 1e000416、2026-11-17、依頼文より逐語）:
+(a) Stop のとき、stop-verify-worktree.py が次を出しました（逐語）。
+「Do not stop yet: main-tree paths THIS session wrote are still uncommitted in /Users/yuki/src/harness.」
+対象として挙げられたのは `.backlog/tasks.toml` でした。このファイルは別セッションの commit（a7857dbbe と aa18dda2c、どちらも "backlog: file 7768aeaf"）が書いたものです。直後に `git status` を見ると空でした。
+(b) 次の Stop では、`.claude-plugin/marketplace.json`、`Cargo.lock`、`crates/condukt/**` の 29 path（src/main.rs、state.rs、testscope.rs、testscope_hook.rs、tests/testscope_*_20261117.rs など）、`docs/specs/condukt.md` を「THIS session wrote」として挙げました。このセッションは condukt を一切触っていません。直後の main の `git status --short` は空でした。
+同じ Stop で donegate も、main に一時的にあった condukt の変更に対してチェックを走らせ、FAIL しています。lint-changed は「cargo fmt --check FAILED for condukt」、test-changed は condukt の `audit_b12_oracle_ids_and_teardown` です。
+このセッションは main の cwd（/Users/yuki/src/harness）から、読み取り専用のコマンドを多く打っています。例: `git status`、`git log`、`git -C <wt> ...`、blastguard probe（hook JSON を stdin に渡すもの）、`tdd skip`、`blastguard relay dismiss`。
+
+原因経路（rev 7767e6a8f で読んだコード）:
+1. scripts/guard-maintree-bash.py:1014 `touched = changed_paths(before, after) ...` — main-cwd の Bash 呼び出しの Pre/Post snapshot 差分（changed_paths, :713）を、コマンド内容（`git status` 等の read-only を含む）に関係なく全部取る。
+2. scripts/guard-maintree-bash.py:1019 `deny_ledger.record_writes(...)` — それをこのセッションの write record (~/.claude/state/maintree-writes/<sid>.jsonl) に追記。module doc :131-134 と deny_ledger.py:931-935 が「another session writing main during that very call ... is recorded too (over-attribution: the restrictive side)」と意図として明記。
+3. scripts/stop-verify-worktree.py:362 `deny_ledger.writes_stop_check(sid, own_root)` → scripts/deny_ledger.py:1039 writes_stop_check が record 中の path で今 dirty なものを block。2026-11-15 の mtime フィルタ（:1118 `if mtime > max_epoch + 30`）は、foreign write が呼び出し窓の内側（mtime < Post 時の epoch）なので効かない。
+4. stop-verify-worktree は harness-core attribution.rs（read_only_stage、bd07c598）を使っていない（純 Python。grep で attribution.rs / read_only_stage の参照なし）。bd07c598 とは別経路。
+
+未確認: 実際の (a)(b) の foreign write が、このセッションのどの Bash 呼び出しの Pre/Post 窓に入ったか（record ファイルの中身は今回読んでいない）。donegate の FAIL が同じ record を使うかは未調査。
+
+RED commit: 18920337a（branch red/stopverify-misattr-20261117、未 merge）
+テスト: scripts/test_stop_verify_worktree_readonly_concurrent_20261117.py
+  RED: ReadOnlySessionConcurrentForeignWrite::test_readonly_call_with_concurrent_foreign_write_does_not_block_stop（rc=2 != 0、stderr に tracked.txt と .backlog/tasks.toml を「THIS session wrote」として列挙）
+  対照(GREEN): test_control_real_write_by_this_call_still_blocks_stop
+修正は read-only 判定か別の帰属手段の導入で guard-maintree-bash.py の over-attribution 契約を変えることになる（可視な契約変更）。"""
+created_at = 1794869811
+updated_at = 1794944722
+weight = 0.0
+issue_number = 1844
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1844"
+issue_closed_at = 1794944725
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_stop_verify_worktree_readonly_concurrent_20261117.py::ReadOnlySessionConcurrentForeignWrite::test_readonly_call_with_concurrent_foreign_write_does_not_block_stop"
+rev = "18920337a46de5f9f29827556b02f7a8fde2e302"
+observed_at = 1794869811
+detail = """
+exit 1: ktree_readonly_concurrent_20261117.py:96: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_stop_verify_worktree_readonly_concurrent_20261117.py::ReadOnlySessionConcurrentForeignWrite::test_readonly_call_with_concurrent_foreign_write_does_not_block_stop
+============================== 1 failed in 0.61s ==============================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_stop_verify_worktree_readonly_concurrent_20261117.py"
+exit = 0
+passed = 3
+rev = "53000e082e09000053488778638cc8077414d25c"
+observed_at = 1794944717
+output_digest = "sha256:8be0c2fe42c2fbcf1cd95f9e214f1bca68a2dbaa55a40fc4246e0bdf95413563"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-stopverify-dc97fc2d
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 3 items
+
+scripts/test_stop_verify_worktree_readonly_concurrent_20261117.py ...    [100%]
+
+============================== 3 passed in 3.07s ===============================
+"""
+
+[task.closure.red]
+rev = "18920337a46de5f9f29827556b02f7a8fde2e302"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

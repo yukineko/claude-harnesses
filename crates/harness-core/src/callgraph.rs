@@ -1,7 +1,8 @@
 //! Deterministic, purely-lexical call graph — "who references this symbol".
 //!
 //! This module is the **single implementation**. It was lifted here from
-//! `blastguard::callgraph`, which now re-exports it: two copies of a
+//! `blastguard::callgraph` (whose re-export was removed 2026-11-17; callers
+//! import this module directly): two copies of a
 //! same-shape lexical scanner is exactly the "independent reinvention" class
 //! this repository's audits keep finding, and adding a second one while
 //! extending the first would be self-defeating.

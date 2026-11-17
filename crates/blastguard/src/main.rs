@@ -61,9 +61,11 @@
 use blastguard::model::Decision;
 use blastguard::rule_id::INTERNAL_ERROR_REASON;
 use blastguard::scope::SafeRoots;
-use blastguard::{approve, blocklog, detect, hookio, interactive, log, retro, rule_id};
+use blastguard::{approve, detect, hookio, interactive, rule_id};
+use harness_core::blocklog;
 use harness_core::hook::{self, HookInput};
 use harness_core::relay;
+use overwatch::retro;
 use std::process::exit;
 
 fn main() {
@@ -99,7 +101,9 @@ fn main() {
                 exit(run_retro(rest));
             }
             "log" => {
-                exit(log::run_log(rest));
+                // Compatibility path: the listing lives in overwatch since
+                // 2026-11-17 (`overwatch blastguard-log`); same args, same output.
+                exit(overwatch::blastguard_log::run_log(rest));
             }
             "record-approval" => {
                 // PostToolUse. This path has NO verdict: it prints nothing and
@@ -155,13 +159,14 @@ fn run_verdict_guarded<F: FnOnce()>(body: F) -> ! {
         // that was read, if any (`RAW_STDIN`). A failure is reported on
         // stderr, which Claude Code shows the model for an exit-2 block.
         let raw = RAW_STDIN.get().map(String::as_str).unwrap_or("");
-        let block = blastguard::blocklog::Block {
+        let block = blocklog::Block {
             decision: "deny",
-            kind: blastguard::blocklog::DecisionKind::PanicBlocked,
+            kind: blocklog::DecisionKind::PanicBlocked,
             actor: "unknown",
             system_harm: false,
             reason: "internal error (panic) on the verdict path; blocked with exit 2",
             rule_id: "internal-error-panic",
+            blastguard_version: env!("CARGO_PKG_VERSION"),
         };
         // Its failure note is already on stderr; there is no reason text to add it to.
         record_block(raw, false, &block);
@@ -258,7 +263,7 @@ fn parse_retro_args(rest: &[String]) -> Result<RetroArgs, String> {
 /// intervention (gate, rule id, outcome, raw reason, recorded command); pair
 /// it with `--rule-id <id>` to narrow the listing to a single rule, e.g. to
 /// compare which specific interventions a fix made a rule stop raising
-/// (see [`blastguard::retro::render_list`]). `--rule-id` alone (no explicit
+/// (see [`overwatch::retro::render_list`]). `--rule-id` alone (no explicit
 /// `--list`) also switches to listing mode — see [`parse_retro_args`].
 ///
 /// # Exit status is a verdict, not a formality
@@ -266,7 +271,7 @@ fn parse_retro_args(rest: &[String]) -> Result<RetroArgs, String> {
 /// `2` when the corpus could not be read. A reviewer scripting this must be
 /// able to tell "no gate ever stopped anything" from "I read nothing", and an
 /// exit 0 printing an empty table conflates them — the same fail-open the
-/// report body refuses (see [`blastguard::retro`]).
+/// report body refuses (see [`overwatch::retro`]).
 fn run_retro(rest: &[String]) -> i32 {
     let args = match parse_retro_args(rest) {
         Ok(a) => a,
@@ -288,7 +293,7 @@ fn run_retro(rest: &[String]) -> i32 {
             return 2;
         }
     };
-    let report = retro::build_report(retro::scan_dir(&dir));
+    let report = retro::build_report(retro::scan_dir(&dir, rule_id::rule_id));
     let out = if args.list {
         retro::render_list(&report, args.rule_filter.as_deref())
     } else {
@@ -518,7 +523,7 @@ fn emit(
     agent_id: Option<&str>,
 ) {
     // How the printed decision is reached is recorded in the block log
-    // (`blastguard::blocklog`): an `Ask` that is printed as a `Deny` must not
+    // (`harness_core::blocklog`): an `Ask` that is printed as a `Deny` must not
     // read as a plain `Deny` there.
     let was_ask = decision.is_ask();
     // A subagent can never answer an `ask` — user ruling 2026-11-01, after a
@@ -691,6 +696,7 @@ fn emit_line_annotated(
         system_harm: decision.is_system_harm(),
         reason: printed_reason,
         rule_id: rid,
+        blastguard_version: env!("CARGO_PKG_VERSION"),
     };
     let unrecorded = record_block(source.raw, input.is_some(), &block);
     let printed = match (printed, unrecorded) {

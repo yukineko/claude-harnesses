@@ -84254,3 +84254,78 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; fini
 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running tests/backlog_20261118_quoted_heredoc_backtick_redirect_fp.rs (target/debug/deps/backlog_20261118_quoted_heredoc_backtick_redirect_fp-a85f48d6c03f73a2)"""
+
+[[task]]
+id = "cec1ff7b"
+title = "blastguard: single-quoted perl -ne program using a perl special variable (dollar-dot) is refused as a shell expansion (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+RED 7b96fb5e (tests/backlog_20261114_perl_single_quoted_dollar_fp.rs) by the flow-8cca7ef5 orchestrator at main 3423cc72 2026-11-14: the read-only single-quoted perl -ne print-if-line-9 program on /dev/null is ask in main and deny in subagent, reason 'that program contains a shell expansion'. Single quotes pass the variable through literally, so the command text IS the program. Observed live on the deployed 0.2.527/0.2.529 hook several times this run (also when the perl text was only data inside a heredoc or a commit-message heredoc). Control: double-quoted perl -ne with HOME expansion is not Allow (passes).
+won't-do per user ruling S4 R2 (2026-11-18): perl/ruby/node -e PROG is Undetermined (main Ask, subagent Deny). Observed at main 762ce4db5: backlog_20261114_perl_single_quoted_dollar_fp single_quoted_perl_special_variable_is_allowed -> main=ask subagent=deny (intended). s4_b5_layer_20261118 r2_perl_e_undetermined passes. Side shapes in the issue (perl text only as heredoc data / commit-message heredoc) probed allow at 762ce4db5 (main mode, ad-hoc probe, no committed test). GH #1732."""
+created_at = 1794599022
+updated_at = 1795040347
+weight = 0.0
+issue_number = 1732
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1732"
+issue_closed_at = 1795040350
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_perl_single_quoted_dollar_fp -- --include-ignored"
+rev = "7b96fb5e164a16db916880d687e8843f9dd18039"
+observed_at = 1794599022
+detail = """
+exit 101: rktrees/flow-8cca7ef5-c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.57s
+     Running tests/backlog_20261114_perl_single_quoted_dollar_fp.rs (target/debug/deps/backlog_20261114_perl_single_quoted_dollar_fp-78124a0de3e79bba)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_perl_single_quoted_dollar_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "won't-do per user ruling S4 R2 (2026-11-18): perl/ruby/node -e PROG is Undetermined (main Ask, subagent Deny). Observed at main 762ce4db5: backlog_20261114_perl_single_quoted_dollar_fp single_quoted_perl_special_variable_is_allowed -> main=ask subagent=deny (intended). s4_b5_layer_20261118 r2_perl_e_undetermined passes. Side shapes in the issue (perl text only as heredoc data / commit-message heredoc) probed allow at 762ce4db5 (main mode, ad-hoc probe, no committed test). GH #1732."
+
+[[task]]
+id = "ec087b02"
+title = "blastguard FP: perl $. inside a single-quoted -e program is denied as a shell expansion"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Side finding run-20261114-130020-46995, RED in 3d99f03e (2026-11-14). Observed live: relay bgr-b57a7fb9f47c, reason 'that program contains a shell expansion'. Possibly same as GH #1732. Readings: (a) FP — single quotes do not expand; (b) intended — distinguish via a real shell quoting parser.
+won't-do per user ruling S4 R2 (2026-11-18): perl/ruby/node -e PROG is Undetermined (main Ask, subagent Deny). Observed at main 762ce4db5: backlog_20261114_perl_single_quoted_dollar_dot_fp perl_single_quoted_program_with_dollar_dot_is_allowed -> subagent=deny (Undetermined, intended); control -pi -e -> deny 'option -pi not modelled (Table B.5: Undetermined)'. s4_b5_layer_20261118 r2_perl_e_undetermined passes. GH #1761."""
+created_at = 1794629181
+updated_at = 1795040350
+weight = 0.0
+issue_number = 1761
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1761"
+issue_closed_at = 1795040353
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_perl_single_quoted_dollar_dot_fp -- --include-ignored"
+rev = "3d99f03eacaeefa68c963747d3dbb7d17c599b3a"
+observed_at = 1794629181
+detail = """
+exit 101: ki/src/.harness-worktrees/session-b3435a5e/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.66s
+     Running tests/backlog_20261114_perl_single_quoted_dollar_dot_fp.rs (target/debug/deps/backlog_20261114_perl_single_quoted_dollar_dot_fp-5b415bce532c3ab8)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_perl_single_quoted_dollar_dot_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "won't-do per user ruling S4 R2 (2026-11-18): perl/ruby/node -e PROG is Undetermined (main Ask, subagent Deny). Observed at main 762ce4db5: backlog_20261114_perl_single_quoted_dollar_dot_fp perl_single_quoted_program_with_dollar_dot_is_allowed -> subagent=deny (Undetermined, intended); control -pi -e -> deny 'option -pi not modelled (Table B.5: Undetermined)'. s4_b5_layer_20261118 r2_perl_e_undetermined passes. GH #1761."

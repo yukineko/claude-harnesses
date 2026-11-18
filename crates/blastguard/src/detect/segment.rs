@@ -758,6 +758,36 @@ pub(super) fn assignment_execution_is_unconditional(segs: &[SeparatedSegment], i
     !guarded_within_own_and_or_list(segs, idx)
 }
 
+/// True when segment `idx` passes every check of
+/// [`assignment_execution_is_unconditional`] EXCEPT the and-or guard: no
+/// unclosed here-document and no unmodelled compound construct before it, and
+/// no brace group earlier on the line (whose inner `;` would hide where the
+/// and-or list starts and ends).
+///
+/// Such a segment may itself be guarded by `&&`/`||`, so whether it RAN is a
+/// run-time fact for the line as a whole. It is a text fact only for a later
+/// segment of the same and-or list that every separator from `idx` on is an
+/// `&&`: in `c1 op … ck && … && cm`, `cm` runs only when the list up to its
+/// left `&&` is true, which by induction requires `ck` to have run (and an
+/// assignment without a substitution always exits 0). The resolver keeps
+/// such a binding scoped to that `&&` chain (backlog a0551e29,
+/// [`crate::detect::readings`] static bindings); this predicate only says
+/// the segment is ordinary top-level code of the line.
+pub(super) fn assignment_execution_is_guarded_only_by_and_or(
+    segs: &[SeparatedSegment],
+    idx: usize,
+) -> bool {
+    let (_, unclosed_here_doc) = here_document_layout(segs);
+    if unclosed_here_doc.map(|o| o < idx).unwrap_or(false) {
+        return false;
+    }
+    let earlier = segs.iter().take(idx);
+    !earlier.clone().any(|s| opens_unmodelled_construct(&s.text))
+        && !earlier
+            .clone()
+            .any(|s| s.text.split_whitespace().any(|w| w == "{"))
+}
+
 /// True when a [`SegmentSep::Conditional`] precedes segment `idx` inside the
 /// same and-or list. See [`assignment_execution_is_unconditional`] for why the
 /// walk stops where it does. `idx` past the end is clamped to the line's

@@ -128,17 +128,13 @@ fn expect_allow(command: &str) {
 }
 
 /// Two assigned literals (the live relay command had `$a $b`).
-// test-weakening-justified: ignore-added on a new RED for an unfixed FP (backlog 2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 blastguard FP — `a=lit && b=lit && git add -- $a $b` not resolved statically; observed main Ask"]
 fn two_assigned_literal_pathspecs_git_add_allows() {
     expect_allow("a=tests/new_fp.rs && b=README && git add -- $a $b");
 }
 
 /// One assigned literal after a literal `cd` to the project.
-// test-weakening-justified: ignore-added on a new RED for an unfixed FP (backlog 2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 blastguard FP — `cd /abs && a=lit && git add -- $a` not resolved statically; observed main Ask"]
 fn assigned_literal_pathspec_after_cd_git_add_allows() {
     let (fx, proj) = repo("cd");
     let command = format!(

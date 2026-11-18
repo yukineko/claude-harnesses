@@ -125,9 +125,7 @@ fn decision(fx: &Fx, cwd: &Path, command: &str) -> (String, String) {
     )
 }
 
-// test-weakening-justified: ignore-added on a new RED for an unfixed FP (backlog 2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 blastguard FP — `-> Decision` inside a quoted perl -e regex read as a redirect onto `\\`; observed Deny"]
 fn blocked_perl_regex_rewrite_is_not_deny_in_main_mode() {
     let fx = fixture("red");
     let proj = fx.base.join("src").join("proj");

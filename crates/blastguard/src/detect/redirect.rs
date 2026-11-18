@@ -590,6 +590,35 @@ pub(super) fn is_redirect_token_end(b: u8) -> bool {
     b.is_ascii_whitespace() || b == b';' || b == b'|' || b == b'&' || b == b'>' || b == b')'
 }
 
+/// End (exclusive) of the redirect word that starts at `start`: the first
+/// unescaped [`is_redirect_token_end`] byte, or the end of the text.
+///
+/// An unquoted backslash escapes the next character (POSIX 2.2.1), so the
+/// pair is part of the word and never ends it: in `>\)` the word is `\)` (the
+/// file `)`), not `\` followed by a closing paren. Reading that `)` as a
+/// terminator was backlog ebbd1074: the shell pass over a `perl -e` program
+/// text read `<.\_>\)` as a truncating redirect onto a file named `\` and
+/// denied a regex rewrite. Only the WORD's extent changes; whether a `>` is a
+/// redirect at all is still decided by the caller's scan.
+///
+/// Slicing callers stay on char boundaries: the loop only stops on an ASCII
+/// terminator or at the end, so stepping into a multi-byte character just
+/// continues over its continuation bytes.
+pub(super) fn redirect_word_end(bytes: &[u8], start: usize) -> usize {
+    let mut j = start;
+    while j < bytes.len() {
+        if bytes[j] == b'\\' && j + 1 < bytes.len() {
+            j += 2;
+            continue;
+        }
+        if is_redirect_token_end(bytes[j]) {
+            break;
+        }
+        j += 1;
+    }
+    j
+}
+
 /// Step over the blanks between a redirect operator and its word, starting at
 /// `j`. Only the shell's blanks (space, tab) are crossed, NEVER a newline:
 /// a redirect word cannot sit on the next line (`echo x >` + newline +
@@ -667,19 +696,13 @@ pub(super) fn redirect_targets(seg: &str) -> Vec<String> {
             // command terminator / end-of-token.
             let fd_dup_amp = next == b'&' && {
                 let tstart = i + 2;
-                let mut k = tstart;
-                while k < bytes.len() {
-                    // Same terminator set as the target scan below — see
-                    // `is_redirect_token_end`. The two MUST agree: when this
-                    // scan ran longer than that one, `2>&1)` produced the
-                    // fd token `1)` (not all-digits, so "not a dup") while the
-                    // target scan produced the filename `1`, and a command
-                    // that only dups a file descriptor was denied.
-                    if is_redirect_token_end(bytes[k]) {
-                        break;
-                    }
-                    k += 1;
-                }
+                // Same word scan as the target scan below — see
+                // `redirect_word_end`. The two MUST agree: when this
+                // scan ran longer than that one, `2>&1)` produced the
+                // fd token `1)` (not all-digits, so "not a dup") while the
+                // target scan produced the filename `1`, and a command
+                // that only dups a file descriptor was denied.
+                let k = redirect_word_end(bytes, tstart);
                 let tok = &bytes[tstart..k];
                 // All-digit fd number (>=1 digit) => dup; bare `-` => fd close.
                 (!tok.is_empty() && tok.iter().all(u8::is_ascii_digit)) || tok == b"-"
@@ -722,12 +745,7 @@ pub(super) fn redirect_targets(seg: &str) -> Vec<String> {
             }
             j = skip_redirect_word_gap(bytes, j);
             let start = j;
-            while j < bytes.len() {
-                if is_redirect_token_end(bytes[j]) {
-                    break;
-                }
-                j += 1;
-            }
+            j = redirect_word_end(bytes, start);
             let tok = &seg[start..j];
             // A bare `-` target is an fd CLOSE (`>&-` / `>& -`), not a file —
             // bash touches no file, so it is non-destructive.
@@ -774,21 +792,8 @@ pub(super) fn append_redirect_targets(seg: &str) -> Vec<String> {
         if c == b'>' && !in_s && !in_d && bytes.get(i + 1) == Some(&b'>') {
             // Same target-token scan as `redirect_targets`: ASCII-only
             // delimiters, so `seg[start..j]` never splits a multi-byte char.
-            let mut j = skip_redirect_word_gap(bytes, i + 2);
-            let start = j;
-            while j < bytes.len() {
-                let cj = bytes[j];
-                if cj.is_ascii_whitespace()
-                    || cj == b';'
-                    || cj == b'|'
-                    || cj == b'&'
-                    || cj == b'>'
-                    || cj == b')'
-                {
-                    break;
-                }
-                j += 1;
-            }
+            let start = skip_redirect_word_gap(bytes, i + 2);
+            let j = redirect_word_end(bytes, start);
             if start < j {
                 targets.push(seg[start..j].to_string());
             }

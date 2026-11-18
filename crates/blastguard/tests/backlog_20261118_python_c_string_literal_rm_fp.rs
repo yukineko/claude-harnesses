@@ -249,7 +249,7 @@ fn assert_parity(fx: &Fx, cmd: &str, twin: &str) {
 // ------------------------------------------------------------------- RED
 
 #[test]
-#[ignore = "RED: 2026-11-18 observed python3 -I -c read-and-filter program with \"rm -rf\" / r\"rm -r\" search-pattern literals is Deny (recursive rm); S5 (python parser) acceptance criterion"]
+#[ignore = "RED(f281b0b1): 2026-11-18 observed python3 -I -c read-and-filter program with \"rm -rf\" / r\"rm -r\" search-pattern literals is Deny (recursive rm); S5 (python parser) acceptance criterion"]
 fn observed_filter_program_rm_patterns_match_harmless_twin() {
     let fx = fixture("red-observed");
     for isolated in [true, false] {
@@ -262,7 +262,7 @@ fn observed_filter_program_rm_patterns_match_harmless_twin() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-18 python3 -c string literal holding operand-less \"rm -rf\" / \"rm -r\" is Deny (recursive rm) in every quoting; S5 (python parser) acceptance criterion"]
+#[ignore = "RED(f281b0b1): 2026-11-18 python3 -c string literal holding operand-less \"rm -rf\" / \"rm -r\" is Deny (recursive rm) in every quoting; S5 (python parser) acceptance criterion"]
 fn operandless_rm_literal_matches_harmless_twin() {
     let fx = fixture("red-operandless");
     for lit in ["rm -rf", "rm -r", "rm -R", "rm --recursive"] {
@@ -276,7 +276,7 @@ fn operandless_rm_literal_matches_harmless_twin() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-18 python3 -c string literal \"rm -rf ~\" is Deny as system harm though never executed; S5 (python parser) acceptance criterion"]
+#[ignore = "RED(f281b0b1): 2026-11-18 python3 -c string literal \"rm -rf ~\" is Deny as system harm though never executed; S5 (python parser) acceptance criterion"]
 fn rm_home_literal_matches_harmless_twin() {
     let fx = fixture("red-home");
     assert_parity(&fx, &print_dq("rm -rf ~"), &print_dq(HARMLESS));
@@ -284,14 +284,14 @@ fn rm_home_literal_matches_harmless_twin() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-18 python3 -c string literal \"rm -rf /etc\" is Deny (system directory) though never executed; S5 (python parser) acceptance criterion"]
+#[ignore = "RED(f281b0b1): 2026-11-18 python3 -c string literal \"rm -rf /etc\" is Deny (system directory) though never executed; S5 (python parser) acceptance criterion"]
 fn rm_etc_literal_matches_harmless_twin() {
     let fx = fixture("red-etc");
     assert_parity(&fx, &print_dq("rm -rf /etc"), &print_dq(HARMLESS));
 }
 
 #[test]
-#[ignore = "RED: 2026-11-18 python3 -c string literal \"a; rm -rf\" (rm after `;` inside the literal) is Deny (recursive rm); S5 (python parser) acceptance criterion"]
+#[ignore = "RED(f281b0b1): 2026-11-18 python3 -c string literal \"a; rm -rf\" (rm after `;` inside the literal) is Deny (recursive rm); S5 (python parser) acceptance criterion"]
 fn rm_after_semicolon_inside_literal_matches_harmless_twin() {
     let fx = fixture("red-semicolon");
     assert_parity(&fx, &print_dq("a; rm -rf"), &print_dq("a; ls -l"));

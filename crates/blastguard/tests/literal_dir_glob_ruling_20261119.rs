@@ -82,9 +82,24 @@ fn allow_chmod_src_glob() {
     Fx::new().allow("chmod 644 src/*.rs");
 }
 
+/// Re-anchored per user ruling 2026-11-19 (R1): a bare cwd glob `rm *.o` is
+/// NOT placed by a parent directory (Table B option rule: `*` may expand to a
+/// filename like `-rf`), so it stays Ask.
 #[test]
-fn allow_rm_glob_in_cwd() {
-    Fx::new().allow("rm *.o");
+fn ask_rm_bare_glob_in_cwd_is_not_allow() {
+    Fx::new().not_allow("rm *.o");
+}
+
+/// R1: `--` ends option parsing, so the glob is placed by the cwd.
+#[test]
+fn allow_rm_dashdash_glob_in_cwd() {
+    Fx::new().allow("rm -- *.o");
+}
+
+/// R1: `./` prefix makes the glob's parent literal (cwd).
+#[test]
+fn allow_rm_dotslash_glob_in_cwd() {
+    Fx::new().allow("rm ./*.o");
 }
 
 #[test]

@@ -197,24 +197,43 @@ fn k_cd_relative_dir_is_not_allow() {
     not_allow("cd d && rm -rf sub", f.run(&f.tmp, "cd d && rm -rf sub"));
 }
 
-/// LB: every character of `D` must be in the literal set (here `:`, `*`).
+/// Re-anchored per user ruling 2026-11-19 (R2): a cd target with `:` is Allow,
+/// like its absolute twin `rm -rf <tmp>/a:b/sub`. (`w*` / `q=r` are not in the
+/// ruling and are not asserted here.)
 #[test]
-fn k_cd_dir_with_non_literal_char_is_not_allow() {
+fn c_cd_dir_with_colon_char_allows() {
     let f = Fx::new("lb");
-    for name in ["a:b", "w*", "q=r"] {
-        let d = f.tmp.join(name);
-        f.write(&d.join("sub/f"), "x\n");
-        let cmd = format!("cd {} && rm -rf sub", d.display());
-        not_allow(&cmd.clone(), f.run(&f.proj, &cmd));
-    }
+    let d = f.tmp.join("a:b");
+    f.write(&d.join("sub/f"), "x\n");
+    let cmd = format!("cd {} && rm -rf sub", d.display());
+    want(&cmd.clone(), f.run(&f.proj, &cmd), V::Allow);
 }
 
-/// L3a: no component of `D` may be `.`.
+/// Re-anchored per user ruling 2026-11-19 (R2): a `.` component in the cd
+/// target is Allow, like the absolute twin.
 #[test]
-fn k_cd_dir_with_dot_component_is_not_allow() {
+fn c_cd_dir_with_dot_component_allows() {
     let f = Fx::new("l3a");
     f.tmp_d();
     let cmd = format!("cd {}/./d && rm -rf sub", f.tmp.display());
+    want(&cmd.clone(), f.run(&f.proj, &cmd), V::Allow);
+}
+
+/// R2 kill (replaces LB/L3a intent): a variable cd target is not literal.
+#[test]
+fn k_cd_variable_target_is_not_allow() {
+    let f = Fx::new("rv");
+    f.tmp_d();
+    let cmd = "cd $X && rm -rf sub";
+    not_allow(cmd, f.run(&f.proj, cmd));
+}
+
+/// R2 kill: a symlink cd target pointing outside scratch (to /usr).
+#[test]
+fn k_cd_symlink_target_outside_scratch_is_not_allow() {
+    let f = Fx::new("rs");
+    std::os::unix::fs::symlink("/usr", f.tmp.join("sys")).unwrap();
+    let cmd = format!("cd {}/sys && rm -rf lib", f.tmp.display());
     not_allow(&cmd.clone(), f.run(&f.proj, &cmd));
 }
 

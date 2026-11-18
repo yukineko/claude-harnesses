@@ -1378,6 +1378,63 @@ forge・condukt のスケジューラが再利用）。
   `Finding` / `PathCtx` の型を S1 で凍結した。S1 時点の `judge` と `classify` は stub で、常に
   `Undetermined(Cause::NotImplemented)` / `PathClass::Unresolved` を返し、detect へは未接続（判定に寄与しない）。
   S3（path-cutover）で接続する。
+  **S3b（user ruling 2026-11-18）で Table B B.1 の行だけ接続した**: `detect/ast/mod.rs` の `table_b_verdict` を
+  `detect/readings.rs::detect_bash_every_reading` が呼び、旧判定へ raise-only（`Deny > Ask > Allow`、同順位は
+  旧理由）で畳む。`detect/ast/judge/table_b.rs` の `extract` が 1 つの評価済み `SimpleCommand` について
+  `Row::None`（B.1 の行が無い: 未知 program・wrapper・interpreter・不定の command word・`-i` の無い `sed` 等。
+  扱いは不変）/ `Row::Undetermined`（行の option 一覧に無い option、option でありうる不定語、`k=v` でない `dd`
+  operand）/ `Row::Targets`（行が名指す (効果, target 値) の組。値は書かれたまま、`SimpleCommand::cwd` で解決）
+  を返す。option 一覧は SUBSET.md の B.1 行（2026-11-18 裁定で `cp -f/-i/-n/-p/-v`・`sed -E/-r/-n/-s`・
+  `chmod/chown/chgrp -v` を追加。一覧外の literal option は単独でも `Undetermined`、`--help`/`--version` は受理）。
+  `Row::Undetermined` → Ask（理由に `is outside its SUBSET.md Table B row`、rule id `ast-table-b-undetermined`）、
+  値の決まらない target（unquoted glob・`~user`・`$( )`・未束縛 parameter・不定の cd の後の相対パス・stdin から
+  読む `xargs` operand）→ `PathClass::Unresolved` finding → Ask（理由に `a target of a SUBSET.md Table B command
+  cannot be placed`、rule id `ast-table-b-unresolved`）、`judge` の panic → Ask。subagent では Deny に硬化。
+  値が決まった target には finding を出さない（`classify` は S1 stub のまま、置けたパスは旧 string 層が判定）。
+  `analyze` 自体が `Undetermined` のときはこの層は Allow（旧層だけが判定、従来どおり）。
+  **cwd の到達条件**: `cd X && … && cmd rel` の `cmd` は cd 成功時しか実行されないので cwd は X に決まる。
+  `cd X; cmd rel`・`cd X || true; cmd rel` は cd が失敗した経路（cwd は hook の cwd のまま）も到達し、
+  評価器は 2 経路の状態を `join` する（`eval.rs::join`。初期 cwd は記号的な `Cwd::Hook` で、payload の cwd 値とは
+  比較しない）ので cwd は `Undetermined`（`cwd: differs between the paths that reach here (a cd may have
+  failed)`）になり、その相対 target は Ask。
+- **`detect/heredoc_data`** — `detect_bash` の手順 0a（backlog f6102045 / 19baba2f、user rulings 2026-11-08 /
+  2026-11-17 / 2026-11-18）。brush-parser（`detect::ast::analyze`）が DATA と示す QUOTED here-document 本文を、
+  string rule が行を読む前に取り除く（`without_data_heredoc_bodies`）。本文が data になるのは次をすべて満たすとき
+  だけ（どれか欠ければ全本文を残し従来どおり全 rule で判定）: quoted で本文 span が parse 結果とバイト一致・
+  区切り語が素朴・`#!` 行で始まらない／読み手が `cat`（`-` 以外の option 無し）・`tee`（`-a`/`--append` のみ）・
+  `git commit -F -` 系で全語が決まり `program_source` が `None`／`cat`/`tee` の行き先が literal の data・非 shell
+  コード・JSON/TOML/YAML ファイル（`.md`・`.txt`・`.rs`・`.json`・`.jsonl`・`.toml`・`.yaml`・`.yml` 等。
+  `.sh`・拡張子無し・`.py` は除く。TOML/YAML は 2026-11-18 裁定で追加、command を走らせる設定は Protected target
+  判定が止める）か端末・`/dev/null`・stderr・`$( )`／同じ行のどのコマンドもその本文を program として走らせえない
+  （`.`/`source` は literal `$HOME/.cargo/env` だけ許容）／他コマンドが着地パスを literal 語で名指さない
+  （素の `cd`・`heredoc::INERT_LATER_COMMANDS`・素の `cargo test`/`cargo build` は除く。不定の語は本文を除いた
+  うえで、全本文を残した行も Allow でない限り Allow を Ask に上げる＝`DataView::floor`）／本文外が printable
+  ASCII・空白・tab・改行だけ。
+- **`detect/rm/new_layer`** — 新層（`detect::ast`、SUBSET.md Table B/C）による 1 つの `rm` の判定で、その行に
+  ついて旧 `rm` string reading を退役させる（user ruling 2026-11-18「ruling 14 replaced per rule」）。
+  `known_allow` は、option が Table B の `rm` 行（`-r -R -f -i -d -v` の cluster、`--recursive --force --dir
+  --verbose`）だけ・評価器が旧 token を評価済み top-level `rm` に対応付けられ operand が 1 つ以上・全 operand 値が
+  `Literal`（絶対、または cd 無しで session cwd 相対、`..` 無し、`.` 終端でない）・全 target の Table C class が
+  System / Protected 等の先行 class を経たうえで **Scratch** か **OwnWorktree** のときだけ `true`。それ以外は
+  「Known でない」で `analyze_rm` は旧判定のまま（この関数は Ask/Deny を返さず、判定を下げない）。
+  **rsync の Delete 行（SUBSET.md Table B、user ruling 2026-11-18）**: `rsync --delete`/`--del`/`--delete-*` は
+  destination 配下で source に無いものを再帰削除するので、`detect/rm.rs::analyze_rsync_delete` が local
+  destination を `rm -rf` の operand として判定する — `new_layer::rsync_dest_allows`（literal 語か評価器が解決
+  した展開の全パスが Scratch / OwnWorktree）なら Allow、それ以外は `rm -r -f <dest>` と同じ判定（理由に rsync の
+  形を前置）。delete flag 無し・remote destination・list mode はこの rule では Allow（他の rsync rule は残る）。
+- **`scope/reading`** — `SafeRoots` の配置述語に渡す operand の読み方 `Reading` と、それに依存する配置の核
+  （`classify_disposable_in` / `classify_disposable_value` / `lexical_absolute_as` / `irreplaceable_home_asset_value`
+  / `classify_worktree_as` / `classify_against_as`）。`Reading::Spelled` は shell TEXT（展開・再読されうる文字
+  ＝`NOT_A_LITERAL_PATH` を含めば `Undetermined`）、`Reading::Value` は評価器が証明した値（quote 除去・展開後の
+  `Value::Literal`。`"~/x"` の `~` はディレクトリ名で home ではない。制御文字・空値だけ拒否）。それ以外の規則
+  （相対 base・`..` の字句 collapse と残余 `..` の拒否・resolver・最長 root 一致・`IsRoot`・symlink 禁止）は
+  Spelled と同一。`scope.rs` から分割（file-growth cap）。
+- **`detect/confined`** — confined-ask helper（`shape_deny_or_confined_ask`・`confined_ask`。形だけが理由の
+  rule で、全 target が safe root の内側に解決したら Ask、そうでなければその rule の Deny）。`detect.rs` から挙動を
+  変えずに移した（file-growth cap）。
+- **`detect/payload/echo_output`** — 素の `echo` の出力 helper（`plain_echo_output`: 全語が static で backslash
+  を含まない `echo [-neE…] WORD…` の出力、`quote_bare_echo_words`: 同じ出力を pipe rule が literal program と
+  読む quoted 形に書き直す）。`detect/payload.rs` から挙動を変えずに移した（file-growth cap）。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。
 

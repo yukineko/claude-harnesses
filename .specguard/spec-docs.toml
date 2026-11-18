@@ -818,3 +818,33 @@ reason = "'振る舞い' bullet '`git apply`/`git am` に here-document で渡�
 path = "crates/blastguard/src/detect/interpreter/python_written_files.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'quoted `python3 - <<'PY'` program が書いたファイルも…同じ判定にかける': the literal open().write / Path().write_text readers, unreadable-write and opaque-target fallbacks, over-approximations and GAP list (backlog 245a4c5f)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/judge/table_b.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/ast/judge`, S3b paragraph (user ruling 2026-11-18): Table B B.1 option parsing and target extraction (Row::None / Row::Undetermined / Row::Targets), the 2026-11-18 option list, the two Ask phrases and the cwd reachability of `cd X && …` vs `cd X; …`."
+
+[[spec]]
+path = "crates/blastguard/src/detect/heredoc_data.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/heredoc_data`: step 0a removal of parser-proven QUOTED here-document DATA bodies (cat/tee/git commit -F - readers, data/non-shell-code/JSON/TOML/YAML landing files, no runner, no naming command, DataView::floor), rulings 2026-11-08/11-17/11-18."
+
+[[spec]]
+path = "crates/blastguard/src/detect/rm/new_layer.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/rm/new_layer`: known_allow retiring the legacy rm reading only for Known Scratch/OwnWorktree Table C cells (ruling 2026-11-18 'ruling 14 replaced per rule'), and rsync_dest_allows for the rsync --delete Delete row."
+
+[[spec]]
+path = "crates/blastguard/src/scope/reading.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `scope/reading`: Reading::Spelled vs Reading::Value operand reading and the placement core that depends on it, split out of scope.rs (file-growth cap)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/confined.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/confined`: shape_deny_or_confined_ask / confined_ask moved out of detect.rs without behaviour change (file-growth cap)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/payload/echo_output.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/payload/echo_output`: plain_echo_output / quote_bare_echo_words moved out of detect/payload.rs without behaviour change (file-growth cap)."

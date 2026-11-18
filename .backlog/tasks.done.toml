@@ -82555,3 +82555,95 @@ rev = "3cc3c61e5aa501f3904e1961d8d6c075039235fe"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "acf42846"
+title = "blastguard fail-open: rm -rf target/../src (dotdot escape out of an ignored target dir) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-18 by the compound-sysdir-rm worker: rm_by_target::not_allow_dotdot_escape_out_of_ignored_target fails ('rm -rf target/../src: must NOT be Allow; got empty output'), also at base 28257127f with that worker's src changes stashed, so it predates 4de75ad02. Expected: not Allow (the operand lexically leaves the ignored target/ dir and names src/)."
+created_at = 1795005420
+updated_at = 1795008037
+weight = 0.0
+issue_number = 1860
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1860"
+issue_closed_at = 1795008040
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test rm_by_target not_allow_dotdot_escape_out_of_ignored_target"
+rev = "32f47da2c5a45e8a87400eb0dd96438c4e4e821d"
+observed_at = 1795005420
+detail = """
+exit 101:  failed; 0 ignored; 0 measured; 29 filtered out; finished in 0.58s
+
+   Compiling blastguard v0.2.706 (/Users/yuki/src/.harness-worktrees/session-fcf56f45/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
+     Running tests/rm_by_target.rs (target/debug/deps/rm_by_target-7e3a071671a5651c)
+error: test failed, to rerun pass `-p blastguard --test rm_by_target`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test rm_by_target"
+exit = 0
+passed = 30
+rev = "d302e39f7386ee7b3e112a5be711c2e9b4c755c8"
+observed_at = 1795008029
+output_digest = "sha256:255d5078a73572e57c76db6c8835db5e4cebd18ace1c6ddf2a0d4f9aa8daa899"
+excerpt = """
+
+running 30 tests
+test allow_rm_rf_strictly_inside_home_dot_cache ... ok
+test allow_rm_rf_strictly_inside_home_library_caches ... ok
+test allow_rm_rf_strictly_inside_tmpdir_env ... ok
+test allow_rm_rf_strictly_inside_real_slash_tmp ... ok
+test control_protected_dot_claude_still_denied ... ok
+test deny_home_itself ... ok
+test deny_home_level_config_dir ... ok
+test deny_mixed_one_allowed_one_denied_operand ... ok
+test deny_cache_roots_themselves ... ok
+test allow_tracked_clean_fully_committed_subdirectory ... ok
+test deny_tmpdir_root_itself ... ok
+test deny_slash_tmp_root_itself ... ok
+test allow_tracked_clean_dir_named_target_via_recoverable_class ... ok
+test control_protected_dot_git_still_denied ... ok
+test deny_gitignored_secrets_dir_not_named_like_build_output ... ok
+test deny_tracked_dir_containing_ignored_non_build_content ... ok
+test not_allow_dotdot_escape_out_of_temp_root ... ok
+test deny_tracked_dir_with_modified_file ... ok
+test deny_tracked_dir_with_untracked_file ... ok
+test not_allow_glob_operand_in_temp_root ... ok
+test allow_gitignored_target_and_node_modules ... ok
+test deny_tracked_dir_with_staged_uncommitted_file ... ok
+test deny_project_root_itself ... ok
+test not_allow_symlink_in_temp_root_pointing_at_home ... ok
+test not_allow_when_non_rm_segment_precedes_the_rm ... ok
+test deny_tracked_not_ignored_target_with_untracked_content ... ok
+test not_allow_system_dirs ... ok
+test not_allow_nonexistent_operand_cannot_be_judged ... ok
+test not_allow_symlinked_target_pointing_at_parent ... ok
+test not_allow_dotdot_escape_out_of_ignored_target ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.26s
+
+   Compiling blastguard v0.2.708 (/Users/yuki/src/.harness-worktrees/session-fcf56f45/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.50s
+     Running tests/rm_by_target.rs (target/debug/deps/rm_by_target-acbd7f91a2f04f86)
+"""
+
+[task.closure.red]
+rev = "79b2aaec387734b94619b1f54cbac2df9f3961ba"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

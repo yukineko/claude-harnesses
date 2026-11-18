@@ -3298,34 +3298,33 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; 
 error: test failed, to rerun pass `-p condukt --test audit_b12_oracle_ids_and_teardown`"""
 
 [[task]]
-id = "acf42846"
-title = "blastguard fail-open: rm -rf target/../src (dotdot escape out of an ignored target dir) is Allow"
+id = "b424eaed"
+title = "blastguard FP: backticked rm -rf ~ inside a Python string literal in a python3 heredoc program is system-harm Deny"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = [
     "blastguard",
-    "fail-open",
-    "p0",
+    "s5",
+    "false-positive",
+    "p1",
 ]
 touched_files = []
 status = "pending"
-notes = "Observed 2026-11-18 by the compound-sysdir-rm worker: rm_by_target::not_allow_dotdot_escape_out_of_ignored_target fails ('rm -rf target/../src: must NOT be Allow; got empty output'), also at base 28257127f with that worker's src changes stashed, so it predates 4de75ad02. Expected: not Allow (the operand lexically leaves the ignored target/ dir and names src/)."
-created_at = 1795005420
-updated_at = 1795005420
+notes = """Observed 2026-11-18 at main 79b2aaec3 (blastguard 0.2.706), main session writing an Obsidian note via python3 - <<'EOF' whose string literal contained prose with `rm -rf ~` in backticks: Deny 'recursive rm (-r) can delete an entire directory tree [system harm: refused on every request, never handed back as a question]'. Trigger is the backticks: same text without backticks is allow/allow; backticked harmless text (`ls -l`) is allow. Program uses no os/subprocess/exec. S5 acceptance criterion (user ruling 15, 2026-11-17: python stays on the legacy reader until S5); peer blastguard-false-positive-reduction will pick it up with S5. Controls kept Deny/not-Allow: os.system('rm -rf ~'), os.__dict__['sys'+'tem']('rm -rf ~') (c1873b73 twin). Also seen, not pinned: same class inside python3 -I -c (string literals "rm -rf")."""
+created_at = 1795008040
+updated_at = 1795008040
 weight = 0.0
-issue_number = 1860
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1860"
+issue_number = 1861
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1861"
 rev = 0
 
 [task.repro]
 outcome = "reproduced"
-cmd = "cargo test -p blastguard --test rm_by_target not_allow_dotdot_escape_out_of_ignored_target"
-rev = "32f47da2c5a45e8a87400eb0dd96438c4e4e821d"
-observed_at = 1795005420
+cmd = "cargo test -p blastguard --test backlog_20261118_python_heredoc_string_literal_rm_home_fp -- --include-ignored"
+rev = "d302e39f7386ee7b3e112a5be711c2e9b4c755c8"
+observed_at = 1795008040
 detail = """
-exit 101:  failed; 0 ignored; 0 measured; 29 filtered out; finished in 0.58s
-
-   Compiling blastguard v0.2.706 (/Users/yuki/src/.harness-worktrees/session-fcf56f45/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
-     Running tests/rm_by_target.rs (target/debug/deps/rm_by_target-7e3a071671a5651c)
-error: test failed, to rerun pass `-p blastguard --test rm_by_target`"""
+exit 101: s/session-fcf56f45/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
+     Running tests/backlog_20261118_python_heredoc_string_literal_rm_home_fp.rs (target/debug/deps/backlog_20261118_python_heredoc_string_literal_rm_home_fp-e4782d1962985dbd)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_python_heredoc_string_literal_rm_home_fp`"""

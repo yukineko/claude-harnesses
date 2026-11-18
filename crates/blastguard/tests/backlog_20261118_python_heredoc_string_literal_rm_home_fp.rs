@@ -242,7 +242,7 @@ fn assert_backticks_do_not_change_verdict(fx: &Fx, with_bt: &str, twin: &str) {
 // ------------------------------------------------------------------- RED
 
 #[test]
-#[ignore = "RED: 2026-11-18 backtick-wrapped `rm -rf ~` inside a python heredoc string literal (no write, no exec) is Deny as system harm; S5 (python parser) acceptance criterion"]
+#[ignore = "RED(b424eaed): 2026-11-18 backtick-wrapped `rm -rf ~` inside a python heredoc string literal (no write, no exec) is Deny as system harm; S5 (python parser) acceptance criterion"]
 fn no_write_backtick_rm_home_in_string_is_allow() {
     let fx = fixture("red-nowrite");
     for lit in [
@@ -261,7 +261,7 @@ fn no_write_backtick_rm_home_in_string_is_allow() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-18 observed shape (python3 - <path> heredoc, argv read-replace-write) with backtick `rm -rf ~` in a string is Deny as system harm; S5 (python parser) acceptance criterion"]
+#[ignore = "RED(b424eaed): 2026-11-18 observed shape (python3 - <path> heredoc, argv read-replace-write) with backtick `rm -rf ~` in a string is Deny as system harm; S5 (python parser) acceptance criterion"]
 fn observed_argv_shape_backtick_text_does_not_change_verdict() {
     let fx = fixture("red-observed");
     let target = fx.vault().join("record.md");
@@ -274,7 +274,7 @@ fn observed_argv_shape_backtick_text_does_not_change_verdict() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-18 literal-path read-replace-write of an existing .md with backtick `rm -rf ~` in a string is Deny as system harm; S5 (python parser) acceptance criterion"]
+#[ignore = "RED(b424eaed): 2026-11-18 literal-path read-replace-write of an existing .md with backtick `rm -rf ~` in a string is Deny as system harm; S5 (python parser) acceptance criterion"]
 fn existing_md_literal_path_backtick_text_does_not_change_verdict() {
     let fx = fixture("red-md");
     let target = fx.proj().join("README.md");

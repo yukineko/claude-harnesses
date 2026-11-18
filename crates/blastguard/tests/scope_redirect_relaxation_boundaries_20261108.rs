@@ -16,9 +16,13 @@
 //!
 //! Fixture: fake HOME, a repo, a session worktree, a linked worktree under
 //! `$HOME/.condukt/worktrees`, "another project" repos, and a fake scratchpad
-//! under /private/tmp. The filesystem here must be case-insensitive for the
+//! under the fixed temp root (`/private/tmp` on macOS, `/tmp` on Linux;
+//! `support/fixed_tmp.rs`). The filesystem here must be case-insensitive for the
 //! case-fold tests to bite (APFS default); on a case-sensitive one they pass
 //! trivially.
+
+#[path = "support/fixed_tmp.rs"]
+mod fixed_tmp;
 
 #[path = "support/neutral_base.rs"]
 mod neutral_base;
@@ -120,7 +124,8 @@ impl Fx {
         std::fs::create_dir_all(&other).unwrap();
         init_repo_with_tracked(&home, &other);
 
-        let tmp_root = PathBuf::from(format!("/private/tmp/bg-scope-relax-{uniq}"));
+        let tmp_root =
+            fixed_tmp::canonical_fixed_temp_root().join(format!("bg-scope-relax-{uniq}"));
         let _ = std::fs::remove_dir_all(&tmp_root);
         let session = "bf349dd5-8e0c-4418-af43-0de710b93593".to_string();
         let scratch = tmp_root
@@ -195,7 +200,11 @@ impl Drop for Fx {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.tmp_root);
         let _ = std::fs::remove_dir_all(&self.base);
-        let _ = std::fs::remove_file(format!("/private/tmp/bg-scope-relax-Link-{}", self.uniq));
+        let _ = std::fs::remove_file(format!(
+            "{}/bg-scope-relax-Link-{}",
+            fixed_tmp::canonical_fixed_temp_root_str(),
+            self.uniq
+        ));
     }
 }
 
@@ -286,7 +295,7 @@ fn case_fold_symlink_to_etc_hosts_is_not_allowed() {
 
 /// Dangling symlink with case-different spelling pointing into another repo
 /// at a tracked path that does not exist yet is not a prefix problem; instead
-/// point the dangling link outside /private/tmp.
+/// point the dangling link outside the fixed temp root.
 #[test]
 fn case_fold_dangling_symlink_outside_tmp_is_not_allowed() {
     let fx = Fx::new("cf-dangling");
@@ -317,15 +326,23 @@ fn case_fold_symlinked_dir_component_with_different_case_is_not_allowed() {
     );
 }
 
-/// Symlink directly under the /private/tmp root (the first component below
+/// Symlink directly under the fixed temp root (the first component below
 /// the root), case-different.
 #[test]
 fn case_fold_symlink_directly_below_tmp_root_is_not_allowed() {
     let fx = Fx::new("cf-top");
-    let link = format!("/private/tmp/bg-scope-relax-Link-{}", fx.uniq);
+    let link = format!(
+        "{}/bg-scope-relax-Link-{}",
+        fixed_tmp::canonical_fixed_temp_root_str(),
+        fx.uniq
+    );
     let _ = std::fs::remove_file(&link);
     symlink(fx.other.join("crates/condukt/src"), &link).unwrap();
-    let lower = format!("/private/tmp/bg-scope-relax-link-{}/maintree.rs", fx.uniq);
+    let lower = format!(
+        "{}/bg-scope-relax-link-{}/maintree.rs",
+        fixed_tmp::canonical_fixed_temp_root_str(),
+        fx.uniq
+    );
     let same = fx.bash(&fx.sess, &format!("echo hi > {link}/maintree.rs"));
     let diff = fx.bash(&fx.sess, &format!("echo hi > {lower}"));
     assert_restrictive("symlink under tmp root, case-different", &diff);

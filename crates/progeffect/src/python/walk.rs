@@ -38,8 +38,12 @@ pub(super) trait Visit {
     /// The traversal cannot continue (too deep, an import form not modelled,
     /// a non-ASCII identifier). The pass must end Undetermined.
     fn fail(&mut self, why: String);
-    /// A call (its callee and arguments are walked separately).
+    /// A call (its callee and arguments are walked separately, after this
+    /// hook).
     fn call(&mut self, _c: &ExprCall) {}
+    /// The value of an expression statement, whose result is discarded (the
+    /// value itself is walked separately, after this hook).
+    fn discarded(&mut self, _e: &Expr) {}
     /// A name read as a value (not as a callee and not as the base of an
     /// attribute access).
     fn name_value(&mut self, _n: &ExprName) {}
@@ -265,7 +269,10 @@ impl<V: Visit> Walker<'_, V> {
                     self.bind(n.as_str(), Bind::Other);
                 }
             }
-            Stmt::Expr(e) => self.expr(&e.value),
+            Stmt::Expr(e) => {
+                self.v.discarded(&e.value);
+                self.expr(&e.value);
+            }
             Stmt::Pass(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
         }
         self.leave();

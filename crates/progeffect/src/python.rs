@@ -14,7 +14,10 @@
 //!   f-strings are data. Only calls are effects.
 //! - **Dynamic dispatch is Undetermined**: any reference to `exec`, `eval`,
 //!   `compile`, `__import__`, `getattr`, `setattr`, `delattr`, `globals`,
-//!   `locals`, `vars`, `breakpoint`, `help`, `__builtins__`; any dunder
+//!   `locals`, `vars`, `breakpoint`, `help`, `__builtins__` (except a
+//!   `globals()` / `locals()` / `vars(x)` call whose result is only
+//!   displayed or discarded: a positional `print` argument or an
+//!   expression statement, optionally subscripted); any dunder
 //!   attribute other than `__name__` / `__doc__` / `__file__` /
 //!   `__version__` / `__qualname__` (so `os.__dict__[…]` is Undetermined);
 //!   `sys.modules`; an effect-capable function or module used as a value

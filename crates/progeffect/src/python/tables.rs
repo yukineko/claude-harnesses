@@ -414,7 +414,10 @@ pub(super) const TEMPFILE_CREATORS: &[&str] = &[
 /// Builtins that run code given as data, reach an object by a computed
 /// name, expose a namespace as a mapping, or start an interactive tool that
 /// runs commands from the environment (`help` → pager). Any reference to one
-/// of these names — called or not — is Undetermined.
+/// of these names — called or not — is Undetermined, with one exception: a
+/// [`NAMESPACE_BUILTINS`] call whose result is only displayed or discarded
+/// (a positional argument of the builtin `print`, or an expression
+/// statement, optionally subscripted; see `judge::Judge::inert_result`).
 pub(super) const DANGEROUS_BUILTINS: &[&str] = &[
     "exec",
     "eval",
@@ -432,6 +435,11 @@ pub(super) const DANGEROUS_BUILTINS: &[&str] = &[
     "__loader__",
     "__spec__",
 ];
+
+/// The namespace builtins of [`DANGEROUS_BUILTINS`]: they expose a namespace
+/// as a mapping, which is dynamic dispatch only when a value fetched from it
+/// is called (user ruling 2026-11-19).
+pub(super) const NAMESPACE_BUILTINS: &[&str] = &["globals", "locals", "vars"];
 
 /// Dunder attributes that do not reach another namespace or code object. Any
 /// other `__x__` attribute (`__dict__`, `__globals__`, `__class__`,

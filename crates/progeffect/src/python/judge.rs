@@ -3,11 +3,13 @@
 //! (Undetermined).
 
 use rustpython_parser::ast::{Expr, ExprAttribute, ExprCall, ExprContext, ExprName, ExprSubscript};
+use rustpython_parser::text_size::TextRange;
 
 use super::bind::{Bindings, Resolved};
 use super::tables::{
     DANGEROUS_BUILTINS, EXEC_NAMES, FILE_WRITER_NAMES, FS_METHOD_NAMES, HARMLESS_DUNDERS,
-    READ_ONLY, SAFE_MODULES, STDLIB, SUBPROCESS_PLAIN_KEYWORDS, TEMPFILE_CREATORS,
+    NAMESPACE_BUILTINS, READ_ONLY, SAFE_MODULES, STDLIB, SUBPROCESS_PLAIN_KEYWORDS,
+    TEMPFILE_CREATORS,
 };
 use super::value::{bool_lit, int, Cx};
 use super::walk::{Bind, Visit};
@@ -21,6 +23,11 @@ pub(super) struct Judge<'a> {
     pub cx: Cx<'a>,
     pub effects: Vec<Effect>,
     pub failure: Option<String>,
+    /// Ranges of the `globals` / `locals` / `vars` callee names whose call
+    /// result is only displayed or discarded (see
+    /// [`Judge::inert_result`]); every other reference to one of them stays
+    /// Undetermined.
+    inert_ns: Vec<TextRange>,
 }
 
 impl<'a> Judge<'a> {
@@ -29,6 +36,66 @@ impl<'a> Judge<'a> {
             cx: Cx { b, argv, src },
             effects: Vec::new(),
             failure: None,
+            inert_ns: Vec::new(),
+        }
+    }
+
+    /// User ruling 2026-11-19: a namespace builtin (`globals()`, `locals()`,
+    /// `vars(x)`) whose result is only displayed and never called is not
+    /// dynamic dispatch.
+    ///
+    /// `e` is an expression in an inert position: a positional argument of
+    /// the unbound builtin `print` ([`Judge::display_args`]) or the value of
+    /// an expression statement (its result is discarded). When `e` is a call
+    /// of an unbound [`NAMESPACE_BUILTINS`] name (no keywords, no `*`, no
+    /// argument for `globals` / `locals`, at most one for `vars`),
+    /// optionally subscripted any number of times (`print(globals()["x"])`),
+    /// its callee name is recorded as inert: nothing in that shape calls a
+    /// value fetched from the namespace. Anything else — a call on a fetched
+    /// value (`globals()["x"]()`), a binding (`g = globals()`), any other
+    /// enclosing call, `.get` / `.values()` — is not matched and stays
+    /// Undetermined in `name_head`. The subscript indices and the `vars`
+    /// argument are walked and judged as usual. (`compile` is NOT handled
+    /// here: it stays Undetermined on any reference.)
+    fn inert_result(&mut self, e: &Expr) {
+        let mut e = e;
+        while let Expr::Subscript(s) = e {
+            if !matches!(s.ctx, ExprContext::Load) {
+                return;
+            }
+            e = &s.value;
+        }
+        let Expr::Call(inner) = e else {
+            return;
+        };
+        let Expr::Name(n) = inner.func.as_ref() else {
+            return;
+        };
+        let id = n.id.as_str();
+        if !matches!(self.cx.b.resolve(id), Resolved::Unbound) {
+            return;
+        }
+        let max_args = usize::from(id == "vars");
+        if NAMESPACE_BUILTINS.contains(&id)
+            && inner.keywords.is_empty()
+            && inner.args.len() <= max_args
+            && !inner.args.iter().any(|x| matches!(x, Expr::Starred(_)))
+        {
+            self.inert_ns.push(n.range);
+        }
+    }
+
+    /// The positional arguments of a call of the unbound builtin `print`
+    /// are inert positions (they are only displayed).
+    fn display_args(&mut self, c: &ExprCall) {
+        let Expr::Name(f) = c.func.as_ref() else {
+            return;
+        };
+        if f.id.as_str() != "print" || !matches!(self.cx.b.resolve("print"), Resolved::Unbound) {
+            return;
+        }
+        for a in &c.args {
+            self.inert_result(a);
         }
     }
 
@@ -616,7 +683,14 @@ impl Visit for Judge<'_> {
         self.undetermined(why);
     }
 
+    fn discarded(&mut self, e: &Expr) {
+        self.inert_result(e);
+    }
+
     fn call(&mut self, c: &ExprCall) {
+        // Before the callee and arguments are walked (the walker calls this
+        // hook first), so `name_head` sees the inert marks.
+        self.display_args(c);
         match c.func.as_ref() {
             Expr::Name(n) => match self.cx.b.resolve(n.id.as_str()) {
                 Resolved::Module(q) => {
@@ -664,7 +738,11 @@ impl Visit for Judge<'_> {
 
     fn name_head(&mut self, n: &ExprName) {
         let id = n.id.as_str();
-        if DANGEROUS_BUILTINS.contains(&id) {
+        if NAMESPACE_BUILTINS.contains(&id) && self.inert_ns.contains(&n.range) {
+            // Inert (see `inert_result`): the call's result is only
+            // displayed or discarded, so nothing fetched from the namespace
+            // is called.
+        } else if DANGEROUS_BUILTINS.contains(&id) {
             self.undetermined(format!(
                 "the program uses `{id}`, which runs code or reaches objects by a computed name"
             ));

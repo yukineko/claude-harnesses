@@ -9,7 +9,7 @@
 # (scripts/check-version-bumped.py SHARED_CRATES).
 [package]
 name = "progeffect"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.85"
 description = "Effects (shell commands, process runs, file-system operations on literal paths) of an embedded program, read with a real parser for its language (Python: rustpython-parser). Fail-closed: anything it cannot resolve is Undetermined."

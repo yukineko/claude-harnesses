@@ -247,12 +247,18 @@ pub fn oracle_report_slots(
     // answers "undetermined" below — no value is invented for it.
     type Resolved = Vec<(Option<String>, Option<bool>)>;
     let mut why: Vec<String> = Vec::new();
-    let mut resolve = |kind: &str, list: &[SlotProof]| -> Resolved {
+    // Sides ("red"/"green") with at least one unreadable proof: their
+    // `has_*` is null (neither observed), never a bool.
+    let mut bad_sides: Vec<&str> = Vec::new();
+    let mut resolve = |kind: &'static str, list: &[SlotProof]| -> Resolved {
         let mut out = Vec::new();
         for p in list {
             match (read_known(&p.cmd), read_known(&p.passed)) {
                 (Ok(cmd), Ok(passed)) => out.push((cmd, passed)),
                 (cmd, passed) => {
+                    if !bad_sides.contains(&kind) {
+                        bad_sides.push(kind);
+                    }
                     if let Err(e) = cmd {
                         why.push(format!("{kind} cmd: {e}"));
                     }
@@ -270,8 +276,8 @@ pub fn oracle_report_slots(
         let report = json!({
             "transition": "undetermined",
             "valid_fp_oracle": false,
-            "has_red": !reds.is_empty(),
-            "has_green": !greens.is_empty(),
+            "has_red": if bad_sides.contains(&"red") { Value::Null } else { json!(!reds.is_empty()) },
+            "has_green": if bad_sides.contains(&"green") { Value::Null } else { json!(!greens.is_empty()) },
             "undetermined": why,
         });
         return (report, ORACLE_EXIT_UNDETERMINED);

@@ -290,9 +290,20 @@ fn parse_result_line(line: &str) -> Option<(u64, u64, u64)> {
     let (mut p, mut f, mut i) = (None, None, None);
     for part in nums.split(';') {
         let part = part.trim();
-        let (n, label) = part.split_once(' ')?;
-        let n: u64 = n.parse().ok()?;
-        match label.trim() {
+        // Non-count segments (`finished in 0.01s`) are skipped; a segment
+        // labelled passed/failed/ignored whose number is unparseable is
+        // undetermined (-> None), never silently 0.
+        let Some((n, label)) = part.split_once(' ') else {
+            continue;
+        };
+        let label = label.trim();
+        let counted = matches!(label, "passed" | "failed" | "ignored");
+        let n: u64 = match n.parse() {
+            Ok(n) => n,
+            Err(_) if counted => return None,
+            Err(_) => continue,
+        };
+        match label {
             "passed" => p = Some(n),
             "failed" => f = Some(n),
             "ignored" => i = Some(n),
@@ -410,6 +421,21 @@ mod tests {
             Some((2, 3, 4))
         );
         assert_eq!(parse_result_line("test result: ok. 2 passed"), None);
+    }
+
+    #[test]
+    fn result_line_real_libtest_tail_with_finished_in() {
+        assert_eq!(
+            parse_result_line(
+                "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+            ),
+            Some((3, 0, 1))
+        );
+        // A count label with an unparseable number is undetermined, not 0.
+        assert_eq!(
+            parse_result_line("test result: ok. x passed; 0 failed; 1 ignored"),
+            None
+        );
     }
 
     #[test]

@@ -54,6 +54,11 @@ pub fn artifact_path(root: &Path, cfg: &Config, task: &str, kind: &str) -> PathB
 enum SlotCmd {
     Absent,
     Cmd(String),
+    /// Valid JSON object that records no `cmd` at all: a proof written before
+    /// slots existed. At the legacy-named path it is the task's one slot
+    /// whatever the command (the pre-slot behaviour); anywhere else it is
+    /// `Unknown`.
+    CmdLess,
     /// Exists but its `cmd` cannot be read: not "absent", not "another command".
     Unknown(String),
 }
@@ -62,15 +67,19 @@ fn peek_cmd(path: &Path) -> SlotCmd {
     match harness_core::boundary::read_to_string(path) {
         Determination::Known(None) => SlotCmd::Absent,
         Determination::Known(Some(text)) => {
-            match serde_json::from_str::<serde_json::Value>(&text)
-                .ok()
-                .and_then(|v| v.get("cmd").and_then(|c| c.as_str().map(str::to_string)))
-            {
-                Some(c) => SlotCmd::Cmd(c),
-                None => SlotCmd::Unknown(format!(
-                    "{} is not valid JSON or records no `cmd`",
-                    path.display()
-                )),
+            match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(v) => match v.get("cmd") {
+                    Some(c) => match c.as_str() {
+                        Some(c) => SlotCmd::Cmd(c.to_string()),
+                        None => SlotCmd::Unknown(format!(
+                            "{} records a `cmd` that is not a string",
+                            path.display()
+                        )),
+                    },
+                    None if v.is_object() => SlotCmd::CmdLess,
+                    None => SlotCmd::Unknown(format!("{} is not a JSON object", path.display())),
+                },
+                Err(_) => SlotCmd::Unknown(format!("{} is not valid JSON", path.display())),
             }
         }
         Determination::Undetermined(why) => SlotCmd::Unknown(why.as_str().to_string()),
@@ -92,14 +101,18 @@ fn find_slot(
     kind: &str,
     cmd: &str,
 ) -> Result<Option<PathBuf>> {
-    for p in [
-        artifact_path(root, cfg, task, kind),
-        hashed_path(root, cfg, task, kind, cmd),
-    ] {
+    let legacy = artifact_path(root, cfg, task, kind);
+    for p in [legacy.clone(), hashed_path(root, cfg, task, kind, cmd)] {
         match peek_cmd(&p) {
             SlotCmd::Absent => {}
             SlotCmd::Cmd(c) if c == cmd => return Ok(Some(p)),
             SlotCmd::Cmd(_) => {}
+            SlotCmd::CmdLess if p == legacy => return Ok(Some(p)),
+            SlotCmd::CmdLess => bail!(
+                "{} records no `cmd` but is not the legacy-named slot; refusing to guess — fix \
+                 or remove that file and run again.",
+                p.display()
+            ),
             SlotCmd::Unknown(why) => bail!(
                 "cannot tell which test command {} records ({why}); refusing to guess — fix or \
                  remove that file and run again.",
@@ -579,7 +592,16 @@ pub fn green(
     // The RED that counts is the one recorded for THIS command (its slot): a
     // RED of command A is no RED for command B (backlog 519f089e / dc37a4da).
     let cmdline = resolve_cmd(cmd, cfg);
-    let red_slot = find_slot(root, cfg, task, "red", cmdline)?;
+    let red_slot = match find_slot(root, cfg, task, "red", cmdline) {
+        Ok(s) => s,
+        // Under strict_separation an unreadable RED proof is, above all, a RED
+        // author that cannot be read: refuse with that reason (still a refusal).
+        Err(e) if cfg.strict_separation => bail!(
+            "strict_separation is enabled but the RED proof's author could not be read, so \
+             separation cannot be verified (refusing GREEN): {e}"
+        ),
+        Err(e) => return Err(e),
+    };
     let has_red = red_slot.is_some();
     if !has_red {
         if let Ok(others) = slot_files(root, cfg, task, "red") {

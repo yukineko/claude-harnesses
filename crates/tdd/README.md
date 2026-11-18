@@ -164,7 +164,7 @@ one GREEN.
 `command_mismatch`). Otherwise proofs are paired by `cmd` and the oracle is valid (exit 0) only if
 EVERY command went Fail→Pass. A command with only one side, a proof with no recorded `cmd`, or two
 same-kind proofs of one command is invalid (exit 1); a RED/GREEN pair whose commands differ is never
-valid. `slots` in the report lists each command. An unreadable proof is `undetermined` (exit 2).
+valid. `slots` in the report lists each command. An unreadable proof is `undetermined` (exit 2), and that side's `has_red` / `has_green` is `null`, not a bool.
 
 **Old layout.** A single-slot `<task>.red.json` / `<task>.green.json` written by an older tdd is read
 unchanged as one slot (it only lacks the new fields); one that recorded no `cmd` stays

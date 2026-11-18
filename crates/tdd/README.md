@@ -168,7 +168,12 @@ valid. `slots` in the report lists each command. An unreadable proof is `undeter
 
 **Old layout.** A single-slot `<task>.red.json` / `<task>.green.json` written by an older tdd is read
 unchanged as one slot (it only lacks the new fields); one that recorded no `cmd` stays
-`command_mismatch`, as before.
+`command_mismatch`, as before. On the write side, a cmd-less RED at the legacy name
+(`<task>.red.json`) counts as the slot of every command. So `tdd green --cmd B` accepts it as its
+RED and writes a GREEN, and `tdd red --cmd A` overwrites it. The oracle still reads that RED's
+`cmd` as `null`, so the pair stays `command_mismatch` (`valid_fp_oracle:false`) and never becomes
+valid. A cmd-less proof at any other name, or one that is not valid JSON, is refused because its
+command slot cannot be determined.
 
 **The oracle does not compare trees** (ruling 2026-11-17). Whether the tree changed after GREEN is
 compared by `condukt merge` (backlog 7768aeaf); tdd only records the values. From `green.json` alone

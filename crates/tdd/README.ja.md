@@ -75,6 +75,10 @@ cmd が一致しない RED/GREEN の組は valid にしない。レポートは 
 
 **旧形式との互換**: 旧 tdd が書いた単一 slot の `<task>.red.json` / `<task>.green.json` はそのまま 1 つの slot として読む（`tree_identity` などの新フィールドが無いだけ）。
 旧 tdd が cmd を記録しなかった証跡は `command_mismatch` になる（従来どおり）。
+書き込み側では、旧名（`<task>.red.json`）にある cmd 無しの RED はどの cmd の slot としても扱う。
+そのため `tdd green --cmd B` はそれを RED として受け付けて GREEN を書き、`tdd red --cmd A` はそれを上書きする。
+ただし oracle は RED の cmd を `null` と読むので、その組は `command_mismatch`（`valid_fp_oracle:false`）のままで valid にはならない。
+旧名以外の場所にある cmd 無しの証跡や、JSON として読めない証跡は、どの cmd の slot かを判定できないとして拒否する。
 
 **oracle は tree を比較しない**（ユーザー裁定 2026-11-17）。GREEN の後に tree が変わったかの比較は `condukt merge`（backlog 7768aeaf）が担う。tdd は比較に必要な値を証跡に記録するだけである。
 7768aeaf は `green.json` だけから次を読める: GREEN の passed 集合（`tests` で `"pass"` の名前）が RED の failed 集合（`red_failed_tests`。`null` は不明）を含むか、`counts.passed > 0` か（`counts.determined` が `true` のときだけ。

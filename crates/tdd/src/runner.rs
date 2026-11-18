@@ -12,12 +12,31 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use harness_core::gate::runner;
 
+// Declared here, not in `main.rs`: `tests/fault_injection.rs` pulls `proof.rs`
+// and `runner.rs` in through `#[path]` with no crate root of its own, so the
+// evidence code must be reachable from `runner` alone.
+#[path = "evidence.rs"]
+pub mod evidence;
+
 pub struct Outcome {
     pub passed: bool,
     pub exit_code: Option<i32>,
     pub timed_out: bool,
     pub spawn_error: Option<String>,
     pub output_tail: String,
+    /// Per-test results by name, parsed from the full run log
+    /// ([`crate::evidence::parse_test_log`]).
+    pub tests: serde_json::Value,
+    /// Counts from the libtest `test result:` lines; `determined: false`
+    /// when none could be parsed (never `0 passed`).
+    pub counts: serde_json::Value,
+}
+
+fn no_parse(why: &str) -> (serde_json::Value, serde_json::Value) {
+    (
+        serde_json::json!({}),
+        serde_json::json!({"determined": false, "reason": why}),
+    )
 }
 
 /// Run `cmd` in `root` with a timeout, returning the outcome and a bounded tail.
@@ -52,17 +71,28 @@ pub fn run_cmd(cmd: &str, root: &Path, timeout: u64, tail_lines: usize, tmp_dir:
         // spawn_error via `judge_ran` and refuse (no artifact written); the
         // message is carried in output_tail so any artifact says why.
         let msg = format!("could not create a unique run log in {}", tmp_dir.display());
+        let (tests, counts) = no_parse("the test command never ran");
         return Outcome {
             passed: false,
             exit_code: None,
             timed_out: false,
             spawn_error: Some(msg.clone()),
             output_tail: msg,
+            tests,
+            counts,
         };
     };
     let raw = runner::run(cmd, root, timeout, tail_lines, &log_path);
+    // Parse the FULL log before it is removed (the tail is bounded).
+    let (tests, counts) = if raw.spawn_error.is_some() {
+        no_parse("the test command never ran")
+    } else {
+        evidence::parse_test_log(&log_path)
+    };
     let _ = std::fs::remove_file(&log_path);
     Outcome {
+        tests,
+        counts,
         passed: raw.passed,
         exit_code: raw.exit_code,
         timed_out: raw.timed_out,

@@ -14,6 +14,9 @@ mod exec_fds;
 mod node_source;
 mod procsub_split;
 mod program_source;
+mod program_word;
+
+pub(super) use program_word::inline_eval_program_word;
 
 use exec_fds::{exec_opened_fds, ExecFd};
 use node_source::{is_node_head, node_program_source};

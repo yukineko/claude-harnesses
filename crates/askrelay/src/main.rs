@@ -95,9 +95,13 @@ fn mark_executed() {
         return;
     };
     let session = relay::session_of(&input.session_id);
+    // The payload's transcript is the trust root: only rows verified against
+    // it are marked (backlog #1808).
+    let transcript = relay::transcript_of(&input.transcript_path);
     if let Err(e) = relay::mark_executed(
         &relay::relay_dir(),
         &session,
+        transcript.as_deref(),
         &input.cwd,
         &command,
         relay::exit_code_of(&value),
@@ -128,7 +132,9 @@ fn mark_relayed() {
     };
     let text = tool_input.to_string();
     let session = relay::session_of(&input.session_id);
-    if let Err(e) = relay::mark_relayed(&relay::relay_dir(), &session, &text) {
+    let transcript = relay::transcript_of(&input.transcript_path);
+    if let Err(e) = relay::mark_relayed(&relay::relay_dir(), &session, transcript.as_deref(), &text)
+    {
         eprintln!(
             "askrelay mark-relayed: WARNING could not mark ({e}); the entry stays \
              pending and the Stop gate keeps listing it"
@@ -167,7 +173,8 @@ fn stop() -> i32 {
             exit(0);
         };
         let session = relay::session_of(&input.session_id);
-        match relay::stop_outcome(&relay::relay_dir(), &session) {
+        let transcript = relay::transcript_of(&input.transcript_path);
+        match relay::stop_outcome(&relay::relay_dir(), &session, transcript.as_deref()) {
             relay::StopOutcome::Block(reason) => println!(
                 "{}",
                 serde_json::json!({ "decision": "block", "reason": reason })
@@ -182,8 +189,9 @@ fn stop() -> i32 {
 }
 
 /// `askrelay dismiss <id> --reason <text>`. Exit 0 on success, 2 for a usage
-/// error / blank reason / unknown id, 3 when a queue could not be read or
-/// written.
+/// error / blank reason / unknown id / a row whose own session_id does not
+/// match the queue file it sits in (forged provenance, backlog #1808), 3 when
+/// a queue could not be read or written.
 fn dismiss(rest: &[String]) -> i32 {
     let mut id: Option<&str> = None;
     let mut reason: Option<&str> = None;
@@ -226,6 +234,19 @@ fn dismiss(rest: &[String]) -> i32 {
         }
         Err(relay::DismissError::UnknownId(id)) => {
             eprintln!("askrelay dismiss: no relay entry {id}");
+            2
+        }
+        Err(relay::DismissError::SessionMismatch {
+            id,
+            row_session,
+            file,
+        }) => {
+            eprintln!(
+                "askrelay dismiss: refused: relay row {id} carries session_id `{row_session}`, \
+                 which is not the session of the queue file it sits in ({}); its provenance is \
+                 forged, so no dismissal is recorded. Inspect that file.",
+                file.display()
+            );
             2
         }
         Err(relay::DismissError::Io(e)) => {

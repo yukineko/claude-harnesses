@@ -18,21 +18,53 @@ session adjudicates that Ask instead of forgetting it. It is a **GATE crate**
    (override: `BLASTGUARD_RELAY_DIR`) and names the id in the deny reason.
 2. **Executed** (`askrelay mark-executed`, PostToolUse / PostToolUseFailure on
    Bash) — a main-session Bash call whose command and cwd are byte-identical to
-   a pending entry marks it executed. A subagent's call marks nothing.
+   a pending **Verified** entry (see Trust boundary) marks it executed. A
+   subagent's call marks nothing.
 3. **Relayed** (`askrelay mark-relayed`, PostToolUse on SendMessage) — a
-   main-session SendMessage naming the relay id marks an executed entry relayed.
-4. **Stop** (`askrelay stop`) — blocks while any entry of the session is neither
-   executed-and-relayed nor dismissed, and lists id, agent_id, cwd and exact
-   command. It blocks on re-entry too. An unreadable queue, an unparseable
-   line, an event naming an unknown id, an unparseable Stop payload, a panic
-   (`run_guarded`) and a missing platform binary (launcher) all block
-   (fail-closed). No queue file allows.
+   main-session SendMessage naming the relay id marks an executed Verified
+   entry relayed.
+4. **Stop** (`askrelay stop`) — blocks while any Verified entry of the session
+   is neither executed-and-relayed nor dismissed, and lists id, agent_id, cwd
+   and exact command with the run procedure. A pending Undetermined entry also
+   blocks, but WITHOUT the run procedure (inspect or dismiss it); a pending
+   Refuted entry does not block and is named in a `systemMessage`. It blocks on
+   re-entry too. An unreadable queue, an unparseable line, an event naming an
+   unknown id, an unparseable Stop payload, a panic (`run_guarded`) and a
+   missing platform binary (launcher) all block (fail-closed). No queue file
+   allows.
 5. **Dismiss** (`askrelay dismiss <id> --reason "<text>"`) — for a prompt the
-   human declined or a command that cannot be re-run. A blank reason or unknown
-   id is exit 2; an unreadable queue is exit 3. Dismissals are recorded in the
-   queue file and no longer shown on later Stops.
+   human declined or a command that cannot be re-run. A blank reason, an
+   unknown id, or a row whose own `session_id` does not match the queue file it
+   sits in (forged provenance; nothing is written) is exit 2; an unreadable
+   queue is exit 3. Dismissals are recorded in the queue file and no longer
+   shown on later Stops.
 
 It never executes a command and never resolves, stats or enters the stored cwd.
+
+## Trust boundary (backlog #1808)
+
+The queue is not a trusted channel: **any local process can append a row to
+any session's queue file** (a synthetic PreToolUse payload with a real session
+id and an invented `agent_id` is enough). The writer (blastguard) stays
+untrusted; the readers verify each row. **The trust root is the session
+transcript** — the `transcript_path` Claude Code puts in the Stop /
+PostToolUse payload. A row is:
+
+* **Verified** — its own `session_id` is the session of its file, and its
+  `agent_id` has a sidechain `<transcript dir>/<session>/subagents/agent-<agent_id>.jsonl`;
+* **Refuted** — a session mismatch, or the subagents directory was listed and
+  has no sidechain for its `agent_id`;
+* **Undetermined** — no `transcript_path`, an unreadable transcript or
+  subagents directory, or no `agent_id`. Never treated as Refuted.
+
+Two Claude processes sharing one session id share its queue file and its
+subagents directory, so the subagents of either are Verified (user ruling
+2026-11-17). blastguard's main-session denial record (`mark_denied`) has no
+transcript, so it skips only session-mismatched rows; a `denied` line never
+resolves an entry.
+
+**Known limit**: a forged row that names an `agent_id` which really exists in
+that session is classified Verified. This design does not detect it.
 
 ## Layout
 

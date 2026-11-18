@@ -207,6 +207,16 @@ pub(super) fn advance_cwd_and_rewrite(
         return (seg.to_string(), None, cwd.clone());
     };
     let head = normalized_command(strip_edge_parens(head_tok));
+    // zsh `=cd` / `=pushd` / `=popd` run the PATH program of that name (see
+    // `words::equals_command_word`), a separate process that cannot move this
+    // shell's directory. Tracking it as a `cd` would place later relative
+    // operands in a directory the shell never entered (`=cd /tmp/x && rm -rf
+    // build` deletes `./build`), so such a segment is judged as an ordinary
+    // command and the tracked cwd is left as it was.
+    let head = match super::words::equals_command_word(strip_edge_parens(head_tok)) {
+        Some(_) if matches!(head.as_str(), "cd" | "pushd" | "popd") => String::new(),
+        _ => head,
+    };
     let head = head.as_str();
 
     // `ln -s SRC DEST`: record a static symlink alias so a LATER `cd DEST`

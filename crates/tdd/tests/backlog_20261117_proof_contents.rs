@@ -5,6 +5,10 @@
 //! code, (d) per-test results by name (pass/fail/ignored) and counts, (e) the
 //! output tail.
 //!
+//! The `#[ignore]` of the three RED tests below was removed on 2026-11-17 by
+//! the fix commit (backlog 05b5dcaf / 97185747 / 519f089e); the asserts are
+//! unchanged. The status list that follows describes the pre-fix state.
+//!
 //! Status at HEAD (observed from the proof JSON of this file's runs):
 //!   (a) OK  `cmd` in both proofs        (c) OK  `exit_code` in both proofs
 //!   (e) RED for green only (red has `output_tail`): `green_proof_carries_output_tail_like_red`
@@ -118,8 +122,6 @@ fn hexish(v: &serde_json::Value, out: &mut Vec<String>) {
     }
 }
 
-// test-weakening-justified: new RED for an unfixed defect (2026-11-17).
-#[ignore = "RED: 2026-11-17 green proof records no output_tail (red does)"]
 #[test]
 fn green_proof_carries_output_tail_like_red() {
     let d = Dir(std::env::temp_dir().join(format!("tdd-green-tail-{}", std::process::id())));
@@ -173,8 +175,6 @@ fn green_proof_carries_output_tail_like_red() {
 }
 
 /// (b) tree identity: commit sha + hash of the uncommitted diff, in both proofs.
-// test-weakening-justified: new RED for an unfixed defect (2026-11-17).
-#[ignore = "RED: 2026-11-17 tdd proofs carry no tree identity (commit sha + uncommitted-diff hash)"]
 #[test]
 fn proofs_carry_tree_identity() {
     let (_d, home, work) = repo("treeid");
@@ -226,8 +226,6 @@ fn proofs_carry_tree_identity() {
 
 /// (d) per-test results by name (pass/fail/ignored) and counts. Test names and
 /// counts are looked for OUTSIDE `output_tail`, which holds only raw text.
-// test-weakening-justified: new RED for an unfixed defect (2026-11-17).
-#[ignore = "RED: 2026-11-17 tdd proofs carry no per-test results or counts"]
 #[test]
 fn proofs_carry_per_test_results_and_counts() {
     let (_d, home, work) = repo("pertest");

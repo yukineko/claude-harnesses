@@ -70,8 +70,15 @@ use std::process::exit;
 
 fn main() {
     // Minimal CLI surface: version/help/protects/retro short-circuit before touching stdin.
+    // The PreToolUse hook runs with NO arguments (hooks/hooks.json); any
+    // argument is a CLI call and must name a known subcommand. An unknown
+    // one — including the `relay` family, which moved to the askrelay
+    // plugin — fails loudly (exit 2 + stderr). Falling through to the
+    // stdin verdict path used to read an empty stdin and exit 0 silently,
+    // which callers read as "the subcommand succeeded" (backlog 2026-11-18).
     let args: Vec<String> = std::env::args().skip(1).collect();
-    for (i, arg) in args.iter().enumerate() {
+    if let Some(arg) = args.first() {
+        let rest = &args[1..];
         match arg.as_str() {
             "--version" | "-V" => {
                 println!("blastguard {}", env!("CARGO_PKG_VERSION"));
@@ -91,12 +98,12 @@ fn main() {
                 exit(0);
             }
             "retro" => {
-                exit(run_retro(&args[i + 1..]));
+                exit(run_retro(rest));
             }
             "log" => {
                 // Compatibility path: the listing lives in overwatch since
                 // 2026-11-17 (`overwatch blastguard-log`); same args, same output.
-                exit(overwatch::blastguard_log::run_log(&args[i + 1..]));
+                exit(overwatch::blastguard_log::run_log(rest));
             }
             "record-approval" => {
                 // PostToolUse. This path has NO verdict: it prints nothing and
@@ -106,7 +113,21 @@ fn main() {
                 // `run_hook` never returns — it exits 0 itself.
                 hook::run_hook(record_approval);
             }
-            _ => {}
+            "relay" => {
+                eprintln!(
+                    "blastguard: the `relay` subcommand moved to the askrelay plugin; \
+                     nothing was done here. Use `askrelay {}` instead.",
+                    rest.join(" ")
+                );
+                exit(2);
+            }
+            other => {
+                eprintln!(
+                    "blastguard: unknown subcommand `{other}`; nothing was done. \
+                     See `blastguard --help`."
+                );
+                exit(2);
+            }
         }
     }
     // The verdict path. Panics inside the ANALYSIS are caught by `analyse`

@@ -234,8 +234,11 @@ SCENARIOS = [
             "list, so the Stop gate never blocks on an unadjudicated "
             "subagent Ask (the queue is read and then ignored)."
         ),
-        old="    let pending: Vec<&Entry> = entries.iter().filter(|e| !e.is_resolved()).collect();\n",
-        new="    let _ = &entries;\n    let pending: Vec<&Entry> = Vec::new();\n",
+        # Since #1808 (a77bfc2eb) the fold sorts unresolved rows by provenance
+        # in a loop instead of collecting them into `pending`; the mutant
+        # empties that loop's input.
+        old="    for e in entries.iter().filter(|e| !e.is_resolved()) {\n",
+        new="    let _ = &entries;\n    for e in std::iter::empty::<&Entry>() {\n",
         # The relay queue logic lives in harness-core (shared with blastguard,
         # which enqueues); askrelay's integration tests drive it through the
         # askrelay binary. Evidence (2026-11-17, this scenario run via

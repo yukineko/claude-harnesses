@@ -283,12 +283,7 @@ it first; blastguard allows deleting only what is recoverable or disposable.{ref
         ));
     }
     if !refused.is_empty() {
-        return RmJudgement::Deny(format!(
-            "recursive rm (-r) can delete an entire directory tree, and this one must not be \
-deleted — {}. The root of a temp / cache / worktree area, the home directory or anything \
-directly in it, a system directory and a git work-tree root are never deleted from here.",
-            refused.join("; ")
-        ));
+        return RmJudgement::Deny(refused_reason(&refused));
     }
     if judged
         .iter()
@@ -297,6 +292,87 @@ directly in it, a system directory and a git work-tree root are never deleted fr
         RmJudgement::Allow
     } else {
         RmJudgement::FallThrough
+    }
+}
+
+/// The `Deny` reason for refused operands (each already `` `op`: why ``).
+fn refused_reason(refused: &[String]) -> String {
+    format!(
+        "recursive rm (-r) can delete an entire directory tree, and this one must not be \
+deleted — {}. The root of a temp / cache / worktree area, the home directory or anything \
+directly in it, a system directory and a git work-tree root are never deleted from here.",
+        refused.join("; ")
+    )
+}
+
+/// The system-directory refusal of [`judge_rm`] ALONE, for a recursive `rm`
+/// that the rm arm would otherwise answer with the confined `Ask` — in
+/// particular on a line `deletion_rm_eligible` refuses, where [`judge_rm`] is
+/// never consulted (`true && rm -rf build`, `echo x; rm -rf build`, a `cd` to
+/// a literal directory that does not exist, `=cd D && rm -rf build`).
+///
+/// Eligibility exists to withhold the deletion principle's `Allow` from a
+/// line whose other segments could change what an operand names; a refusal
+/// only RAISES the verdict, so it must not depend on eligibility. Without
+/// this, a target strictly inside a session safe root that itself lies under
+/// a [`SYSTEM_PREFIXES`] entry (a project under `/private/var/folders`, no
+/// `TMPDIR`) was the confined `Ask` on a compound line while the single
+/// command was this `Deny`.
+///
+/// Mirrors [`judge_operand`]'s order up to and including the system check of
+/// [`never_project`]: the raw-cwd refusal, a non-ordinary operand, worktree
+/// storage (Inside / IsRoot) and temp / cache (Inside / IsRoot) answer first
+/// and are NOT a system refusal here, exactly as they are not one in
+/// [`judge_rm`]. An operand that cannot be placed or resolved is not refused
+/// here either; the caller keeps its own verdict (the confined `Ask`, never an
+/// `Allow`). Only the system-directory refusal is raised — the home-level,
+/// work-tree-root and git-loss refusals stay with the eligible path.
+///
+/// `Some(reason)` (the same text [`judge_rm`] gives) when at least one operand
+/// is a system directory; otherwise `None`.
+pub fn system_dir_refusal(
+    scope: &SafeRoots,
+    operands: &[&str],
+    cwd: Option<&str>,
+) -> Option<String> {
+    if scope.deletion_refusal().is_some() {
+        return None;
+    }
+    let refused: Vec<String> = operands
+        .iter()
+        .filter_map(|o| system_dir_operand(scope, o, cwd).map(|why| format!("`{o}`: {why}")))
+        .collect();
+    if refused.is_empty() {
+        None
+    } else {
+        Some(refused_reason(&refused))
+    }
+}
+
+/// One operand of [`system_dir_refusal`]: `Some(why)` only when
+/// [`judge_operand`] would refuse it as a system directory.
+fn system_dir_operand(scope: &SafeRoots, operand: &str, cwd: Option<&str>) -> Option<String> {
+    if operand.starts_with('-') || exclude::touches_protected(operand) {
+        return None;
+    }
+    match scope.classify_worktree(operand, cwd) {
+        Determination::Known(Placement::Inside { .. } | Placement::IsRoot { .. }) => return None,
+        Determination::Known(Placement::Outside { .. }) | Determination::Undetermined(_) => {}
+    }
+    match scope.classify_disposable(operand, cwd) {
+        Determination::Known(Placement::Inside { .. } | Placement::IsRoot { .. }) => return None,
+        Determination::Known(Placement::Outside { .. }) | Determination::Undetermined(_) => {}
+    }
+    let Determination::Known(lexical) = scope.lexical_absolute(operand, cwd) else {
+        return None;
+    };
+    let real = scope.resolve(&lexical)?;
+    if !is_system_path(&real) {
+        return None;
+    }
+    match never_project(&real, scope.home_real()) {
+        Some(OperandJudgement::Refused(why)) => Some(why),
+        _ => None,
     }
 }
 

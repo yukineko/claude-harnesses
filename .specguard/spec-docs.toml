@@ -858,3 +858,48 @@ reason = "'module 責務' bullet `detect/payload/echo_output`: plain_echo_output
 path = "crates/blastguard/src/detect/ast/b5.rs"
 doc = "docs/specs/script-quarantine.md"
 reason = "Stage S4 Table B.5 layer (user rulings 2026-11-18): an interpreter or direct exec running a program file whose text is not in the command is Undetermined (main Ask / subagent Deny); literal stdin / process-substitution bodies are judged recursively; git-tracked unmodified files, `bash -n` and inherited stdin get no B.5 opinion. Raise-only over the legacy + Table B verdict. script-quarantine.md describes this Ask and the later quarantine plugin that lowers it for recorded-safe files."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/s5.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/ast/s5` and section 'inline Python program の parser 判定（S5）' (user rulings 2026-11-17): inline Python programs parsed by progeffect, each effect judged by the full detector on its shell spelling (with `cd 'D' && ` for a literal cwd), Known programs retired from the legacy readings through the neutral text, Undetermined ones keep them raise-only."
+
+[[spec]]
+path = "crates/progeffect/src/lib.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet crate `progeffect`: Analysis::Known(effects) / Undetermined(why) contract; Undetermined is never 'no effect'; the crate places no path, the host judges Effect::shell_spelling."
+
+[[spec]]
+path = "crates/progeffect/src/effect.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Section 'inline Python program の parser 判定（S5）' item 2 and SUBSET.md 'Effects and their shell spelling': the Effect / FsOp vocabulary and each one's shell spelling (single-quoted operands, NUL → None)."
+
+[[spec]]
+path = "crates/progeffect/src/python.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Section 'inline Python program の parser 判定（S5）': analyze() preprocessing (NUL, coding cookie, BOM, CR/CRLF, 16 KiB cap), rustpython-parser under catch_unwind, binding pass then judging pass; any failure → Undetermined."
+
+[[spec]]
+path = "crates/progeffect/src/python/walk.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Section 'inline Python program の parser 判定（S5）': the exhaustive AST traversal (no `_` arms; the generated rustpython Visitor skips comprehensions / keywords / withitems / arguments / match cases) and its depth cap; relative / star imports and non-ASCII identifiers fail the reading."
+
+[[spec]]
+path = "crates/progeffect/src/python/bind.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Section 'inline Python program の parser 判定（S5）' / SUBSET.md 'Undetermined': a name resolves only when every binding is the same import (alias followed) or it is bound once by a module-level assignment; anything else is Ambiguous."
+
+[[spec]]
+path = "crates/progeffect/src/python/value.rs"
+doc = "docs/specs/blastguard.md"
+reason = "SUBSET.md 'Python programs (S5)' Operands: the static string / path values (literals, field-less f-strings, `+`, single module-level binding, literal sys.argv words, str / os.fspath / os.path.join / pathlib joins); anything else None."
+
+[[spec]]
+path = "crates/progeffect/src/python/judge.rs"
+doc = "docs/specs/blastguard.md"
+reason = "SUBSET.md 'Python programs (S5)' effect table and 'Undetermined' list: the call table (os / subprocess / open / shutil / pathlib) and the dynamic-dispatch, value-escape, unmodelled-module and method-name rules."
+
+[[spec]]
+path = "crates/progeffect/src/python/tables.rs"
+doc = "docs/specs/blastguard.md"
+reason = "SUBSET.md 'Python programs (S5)' 'Undetermined': the closed name tables (stdlib, safe modules, read-only calls, dangerous builtins, harmless dunders, exec / fs-method / file-writer names, plain subprocess keywords), each with its restrictive default."

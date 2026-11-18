@@ -1308,7 +1308,7 @@ forge・condukt のスケジューラが再利用）。
   記録は判定確定後・表示前に書き、判定を変えない。書けない（panic を含む）ときは表示理由に
   `could NOT be recorded` とエラーを付け stderr にも警告する（沈黙しない）。relay（subagent の Bash Ask の
   再実行 queue）とは別物で、block log は真の `Deny` と main の `Ask` を含む全 block を記録する。
-- **`detect/ast`**（`mod.rs` / `parse.rs` / `eval.rs` / `eval/words.rs` / `eval/decl.rs` / `arith.rs` / `support.rs` / `targets.rs`）— shell parser（brush-parser `=0.4.0`）＋静的評価層
+- **`detect/ast`**（`mod.rs` / `parse.rs` / `eval.rs` / `eval/words.rs` / `eval/decl.rs` / `eval/cwd.rs` / `arith.rs` / `support.rs` / `targets.rs`）— shell parser（brush-parser `=0.4.0`）＋静的評価層
   （ユーザー裁定 2026-11-15「parser ＋ 静的評価で一体にする」）。`analyze(&str) -> Analysis`
   （`Known(Script)` / `Undetermined(Cause)`、`Cause` = `NotImplemented`/`TooLong`/`TooDeep`/`Timeout`/
   `Parse`/`Panic`/`ZshOnly`/`Unsupported`）と `program_source(&SimpleCommand) -> Option<ProgramSource>`。
@@ -1351,6 +1351,9 @@ forge・condukt のスケジューラが再利用）。
   展開後の語の最終値（tilde・word split・pathname/brace 展開・heredoc 展開の判定）を担う。
   `eval/decl.rs` も `eval.rs` の子 module で、declare 系 builtin（`export`/`declare`/`typeset`/`local`/
   `readonly`）の integer 属性付与・代入と compound key の算術検査・binding を担う。
+  `eval/cwd.rs` も `eval.rs` の子 module で、追跡する cwd（`Cwd`: `Hook` / `Known` / 有限候補集合 `OneOf` /
+  `Undetermined`。ユーザー裁定 2026-11-18、下の `detect/ast/judge` の「cwd の到達条件」）と、相対パスをそれに
+  対して置く `resolve` を担う（file-growth cap のため `eval.rs` から分割）。
   **path 解決系の検出器が `targets.rs` 経由で読む**（task migrate-path）。`detect_bash_every_reading` は
   static_bindings 解決後の本文を `analyze` し、`Known` のときだけ index を有効にして全 reading を走らせる
   （`Undetermined` なら index なし＝旧経路のまま）。文字列 reading が置けない対象 —— 切り詰め redirect
@@ -1394,9 +1397,19 @@ forge・condukt のスケジューラが再利用）。
   `analyze` 自体が `Undetermined` のときはこの層は Allow（旧層だけが判定、従来どおり）。
   **cwd の到達条件**: `cd X && … && cmd rel` の `cmd` は cd 成功時しか実行されないので cwd は X に決まる。
   `cd X; cmd rel`・`cd X || true; cmd rel` は cd が失敗した経路（cwd は hook の cwd のまま）も到達し、
-  評価器は 2 経路の状態を `join` する（`eval.rs::join`。初期 cwd は記号的な `Cwd::Hook` で、payload の cwd 値とは
-  比較しない）ので cwd は `Undetermined`（`cwd: differs between the paths that reach here (a cd may have
-  failed)`）になり、その相対 target は Ask。
+  評価器は 2 経路の状態を `join` する（`eval.rs::join`）。**ユーザー裁定 2026-11-18**: 合流する全経路の cwd が
+  既知（記号の `Cwd::Hook` か literal の `Cwd::Known`）で、候補が `MAX_CWD_CANDIDATES` = 4 個以下なら、cwd は
+  有限集合 `Cwd::OneOf` になり（`SimpleCommand::cwd_candidates`、`None` = hook の cwd）、judge が相対 target を
+  候補ごとに判定して最も厳しい結果を採る（全候補が Allow のときだけ Allow）。`classify` が stub の間、候補での判定は
+  検出器全体（旧 string 層＋judge）に合成テキスト — hook の cwd なら `<argv>`、既知ディレクトリ d なら
+  `cd d && <argv>` — をかけた結果で、既存の述語が literal 表記と同じく operand を置く（`judge::judge_candidates`。
+  Ask / Deny は `PathClass::AtCandidate` finding、Deny は `Judgement::Deny`、system-harm の印は保持）。
+  例: hook の cwd が `$HOME` で `cd <scratch>; rm -rf .ssh` は hook 側候補 `$HOME/.ssh` で system-harm Deny。
+  候補が 4 個を超える（`cwd: more than 4 directories reach here (a cd may have failed)`）、候補が不明（`cd "$X"`・
+  `cd -`・hook の cwd からの相対 cd 等。`cwd: differs between the paths that reach here (a cd may have failed)`）、
+  argv に合成できない語（非 literal・制御文字・quote が要る command word）がある、hook の cwd が不明、1 script で
+  候補判定が 32 回を超える — のいずれかなら `Unresolved` で Ask（subagent では Deny）。judge 以外の読み手
+  （`targets.rs`・`RedirTarget::Path`・`ProgramSource::File`）にとって `OneOf` は従来どおり `Undetermined`。
 - **`detect/heredoc_data`** — `detect_bash` の手順 0a（backlog f6102045 / 19baba2f、user rulings 2026-11-08 /
   2026-11-17 / 2026-11-18）。brush-parser（`detect::ast::analyze`）が DATA と示す QUOTED here-document 本文を、
   string rule が行を読む前に取り除く（`without_data_heredoc_bodies`）。本文が data になるのは次をすべて満たすとき

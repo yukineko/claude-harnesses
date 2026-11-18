@@ -825,6 +825,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `detect/ast/judge`, S3b paragraph (user ruling 2026-11-18): Table B B.1 option parsing and target extraction (Row::None / Row::Undetermined / Row::Targets), the 2026-11-18 option list, the two Ask phrases and the cwd reachability of `cd X && …` vs `cd X; …`."
 
 [[spec]]
+path = "crates/blastguard/src/detect/ast/eval/cwd.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/ast` (eval/cwd.rs sentence) and `detect/ast/judge` 'cwd の到達条件' (user ruling 2026-11-18): the tracked Cwd with the finite candidate set OneOf (cap 4), its join inputs, and resolve, split out of eval.rs (file-growth cap)."
+
+[[spec]]
 path = "crates/blastguard/src/detect/heredoc_data.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `detect/heredoc_data`: step 0a removal of parser-proven QUOTED here-document DATA bodies (cat/tee/git commit -F - readers, data/non-shell-code/JSON/TOML/YAML landing files, no runner, no naming command, DataView::floor), rulings 2026-11-08/11-17/11-18."

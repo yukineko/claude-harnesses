@@ -34,7 +34,11 @@
 //!   the chain have no effect other than making the state opaque.
 //! * cwd: `cd <literal>` moves the tracked cwd for the commands that run only
 //!   if it succeeded (`cd x && ...`); after `cd x;` the cd may have failed, so
-//!   the cwd is the join of both and `Undetermined`. `cd -`, `cd` alone,
+//!   the cwd is the join of both: [`Cwd::OneOf`] when every joined path has a
+//!   known cwd and there are at most 4 of them (`eval/cwd.rs`
+//!   `MAX_CWD_CANDIDATES`; user
+//!   ruling 2026-11-18; one cwd to every reader but the judge), else
+//!   `Undetermined`. `cd -`, `cd` alone,
 //!   `cd` with options, `cd $(..)`, an undetermined operand, `pushd` / `popd`
 //!   make it `Undetermined`. A relative `cd` from the hook's cwd, a relative
 //!   `cd` while `CDPATH` may apply, and any `..` component are `Undetermined`.
@@ -119,8 +123,11 @@ use std::ops::Range;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use words::{finish, param};
 
+mod cwd;
 mod decl;
 mod words;
+
+use cwd::{resolve, Cwd};
 
 /// The reason carried by [`SimpleCommand::cwd`] when no `cd` applies to the
 /// command: it runs in the hook's cwd, which the command text does not name.
@@ -243,32 +250,6 @@ impl<'t> Text<'t> {
 }
 
 // ---------------------------------------------------------------- state
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Cwd {
-    /// No `cd` applies: the hook's cwd.
-    Hook,
-    Known(String),
-    Undetermined(String),
-}
-
-impl Cwd {
-    fn value(&self) -> Value {
-        match self {
-            Cwd::Hook => Value::Undetermined(HOOK_CWD.to_string()),
-            Cwd::Known(c) => Value::Literal(c.clone()),
-            Cwd::Undetermined(r) => Value::Undetermined(r.clone()),
-        }
-    }
-
-    fn from_value(v: &Value) -> Cwd {
-        match v {
-            Value::Literal(c) => Cwd::Known(c.clone()),
-            Value::Undetermined(r) if r == HOOK_CWD => Cwd::Hook,
-            Value::Undetermined(r) => Cwd::Undetermined(r.clone()),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Env {
@@ -455,9 +436,12 @@ fn join(a: Env, b: Env) -> Env {
     let cwd = if a.cwd == b.cwd {
         a.cwd
     } else {
-        Cwd::Undetermined(
-            "cwd: differs between the paths that reach here (a cd may have failed)".into(),
-        )
+        match (a.cwd.candidates(), b.cwd.candidates()) {
+            (Ok(x), Ok(y)) => Cwd::from_candidates(x.union(&y).cloned().collect()),
+            _ => Cwd::Undetermined(
+                "cwd: differs between the paths that reach here (a cd may have failed)".into(),
+            ),
+        }
     };
     let stdin = if a.stdin == b.stdin {
         a.stdin
@@ -570,32 +554,8 @@ fn is_ident(s: &str) -> bool {
 
 // ---------------------------------------------------------------- paths
 
-/// A redirect target / script operand as the pinned representation wants
-/// it: absolute stays as written; relative stays as written when no `cd`
-/// applies (the consumer reads it against the hook's cwd); relative after a
-/// literal `cd` is joined to it; relative after an undetermined `cd` (or
-/// with a `..` component after a `cd`) is `Undetermined`.
-fn resolve(cwd: &Cwd, v: Value) -> Value {
-    let p = match v {
-        Value::Literal(p) => p,
-        u => return u,
-    };
-    if p.starts_with('/') {
-        return Value::Literal(p);
-    }
-    match cwd {
-        Cwd::Hook => Value::Literal(p),
-        Cwd::Undetermined(r) => undet(format!(
-            "relative path `{p}` after an undetermined cd ({r})"
-        )),
-        Cwd::Known(c) => match join_path(c, &p) {
-            Some(j) => Value::Literal(j),
-            None => undet(format!(
-                "`{p}` after cd {c}: `..` / empty path not resolved (symlinks make it unsound)"
-            )),
-        },
-    }
-}
+// `resolve` (a relative path placed against the tracked cwd) lives in
+// `eval/cwd.rs` with the `Cwd` type.
 
 // ---------------------------------------------------------------- evaluator
 
@@ -906,6 +866,7 @@ impl Ev {
                 assignments: Vec::new(),
                 redirects,
                 cwd: env.cwd.value(),
+                cwd_candidates: env.cwd.candidate_list(),
                 stdin: stdin.clone(),
                 context: ctx.clone(),
                 span: span.clone(),
@@ -1277,6 +1238,7 @@ impl Ev {
             assignments,
             redirects,
             cwd: env.cwd.value(),
+            cwd_candidates: env.cwd.candidate_list(),
             stdin,
             context: ctx.clone(),
             span,
@@ -1470,6 +1432,10 @@ impl Ev {
                             "cwd: `cd {t}` is relative to the hook's cwd"
                         )),
                         Cwd::Undetermined(r) => Cwd::Undetermined(r.clone()),
+                        Cwd::OneOf(_) => Cwd::Undetermined(format!(
+                            "cwd: `cd {t}` is relative to a cwd that differs between the paths \
+                             that reach here"
+                        )),
                         Cwd::Known(c) => match join_path(c, t) {
                             Some(j) => Cwd::Known(j),
                             None => {

@@ -3,7 +3,7 @@
 # 1.85, so this crate sets its own (precedent: crates/budgetguard sets 1.89).
 rust-version = "1.88"
 name = "blastguard"
-version = "0.2.732"
+version = "0.2.733"
 edition = "2021"
 description = "PreToolUse hook that denies or asks before project-destroying Bash commands and file operations, as a single self-contained Rust binary."
 license = "MIT"
@@ -26,6 +26,8 @@ brush-parser = { version = "=0.4.0", default-features = false }
 trybuild = "1"
 harness-core = { path = "../harness-core", features = ["fault-injection"] }
 tempfile = { workspace = true }
+# Real Rust lexer for tests/no_unbounded_child_wait.rs (separates code tokens from literals and comments).
+proc-macro2 = { version = "1", default-features = false, features = ["span-locations"] }
 
 # ワークスペースの [workspace.lints.clippy] を継承する（unwrap_used / expect_used = deny）。
 # 判定を持つ crate では panic は判定不能そのものなので、production 側に unwrap / expect を

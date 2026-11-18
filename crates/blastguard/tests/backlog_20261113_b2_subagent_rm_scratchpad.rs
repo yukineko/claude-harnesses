@@ -155,14 +155,13 @@ fn b2_subagent_rm_rf_dotdot_spelling_inside_scratchpad_is_not_denied() {
 #[test]
 fn b2_witness_subagent_hardening_ask_to_deny() {
     let s = scratch("witness");
-    let g = Command::new("git")
-        .args(["init", "-q"])
+    let mut git = Command::new("git");
+    git.args(["init", "-q"])
         .current_dir(s.cwd.join("proj"))
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .status()
-        .unwrap();
-    assert!(g.success(), "fixture: git init failed");
+        .env("GIT_CONFIG_NOSYSTEM", "1");
+    let g = bounded::run_bounded_stdin(&mut git, bounded::ChildStdin::Null, bounded::TOOL_DEADLINE);
+    assert!(g.status.success(), "fixture: git init failed");
     std::fs::write(s.cwd.join("proj/untracked.txt"), "u").unwrap();
     let c = "git -C proj clean -fd";
     let (main_d, main_r) = run_as(c, &s, false);

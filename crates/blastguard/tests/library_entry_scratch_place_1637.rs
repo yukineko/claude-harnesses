@@ -14,8 +14,10 @@
 
 use blastguard::detect::detect;
 use blastguard::model::Decision;
-use std::io::Write;
-use std::process::{Command, Stdio};
+#[path = "support/bounded.rs"]
+mod bounded;
+
+use std::process::Command;
 
 const OUTSIDE: &str = "/var/blastguard-1637-outside/clone";
 
@@ -37,25 +39,14 @@ fn hook_output() -> String {
         "tool_input": { "command": command() },
     })
     .to_string();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_blastguard"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("CLAUDE_PROJECT_DIR", &cwd)
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_blastguard"));
+    cmd.env("CLAUDE_PROJECT_DIR", &cwd)
         .env("BLASTGUARD_APPROVALS_DIR", base.join("store"))
         .env("HOME", &home)
         .env_remove("BLASTGUARD_ASK")
         .env_remove("TMPDIR")
-        .current_dir(&base)
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(payload.as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
+        .current_dir(&base);
+    let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
     let _ = std::fs::remove_dir_all(&base);
     assert_eq!(out.status.code(), Some(0));
     String::from_utf8_lossy(&out.stdout).into_owned()

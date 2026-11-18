@@ -78,7 +78,8 @@ fn run_child(extra: &[(&str, &str)]) -> (bool, String) {
     for (k, v) in extra {
         cmd.env(k, v);
     }
-    let out = cmd.output().unwrap();
+    let out =
+        bounded::run_bounded_stdin(&mut cmd, bounded::ChildStdin::Null, bounded::TOOL_DEADLINE);
     let text = format!(
         "status: {:?}\n--- stdout ---\n{}\n--- stderr ---\n{}",
         out.status,

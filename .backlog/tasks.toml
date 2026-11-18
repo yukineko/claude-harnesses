@@ -2364,64 +2364,6 @@ exit 101: d; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.33s
 error: test failed, to rerun pass `-p blastguard --test backlog_20261118_python_c_string_literal_rm_fp`"""
 
 [[task]]
-id = "ebbd1074"
-title = '''blastguard FP: '-> Decision' inside a quoted perl -e regex read as a redirect onto '\''''
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "false-positive",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1795009572
-updated_at = 1795009572
-weight = 0.0
-issue_number = 1862
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1862"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261118_perl_regex_arrow_read_as_redirect_fp -- --ignored"
-rev = "55f28e447d9ad4a3dfef41cdddcda977e3173a55"
-observed_at = 1795009572
-detail = """
-exit 101: rness-worktrees/bg-s4-20261118/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.15s
-     Running tests/backlog_20261118_perl_regex_arrow_read_as_redirect_fp.rs (target/debug/deps/backlog_20261118_perl_regex_arrow_read_as_redirect_fp-b37da4b752bc0bcc)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261118_perl_regex_arrow_read_as_redirect_fp`"""
-
-[[task]]
-id = "a0551e29"
-title = "blastguard FP: assigned-literal pathspecs (a=lit && b=lit, or after cd) not resolved statically in git add"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "false-positive",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1795009619
-updated_at = 1795009619
-weight = 0.0
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261118_assigned_literal_pathspec_git_add_fp -- --ignored"
-rev = "55f28e447d9ad4a3dfef41cdddcda977e3173a55"
-observed_at = 1795009619
-detail = """
-exit 101: rness-worktrees/bg-s4-20261118/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.47s
-     Running tests/backlog_20261118_assigned_literal_pathspec_git_add_fp.rs (target/debug/deps/backlog_20261118_assigned_literal_pathspec_git_add_fp-d110fa76cb28b8a6)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261118_assigned_literal_pathspec_git_add_fp`"""
-
-[[task]]
 id = "834e586c"
 title = "blastguard FP: shell text inside a Python string literal in a python3 heredoc is refused as system harm"
 project = "/Users/yuki/src/harness"

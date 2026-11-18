@@ -198,15 +198,27 @@ fn k_cd_relative_dir_is_not_allow() {
 }
 
 /// Re-anchored per user ruling 2026-11-19 (R2): a cd target with `:` is Allow,
-/// like its absolute twin `rm -rf <tmp>/a:b/sub`. (`w*` / `q=r` are not in the
-/// ruling and are not asserted here.)
+/// like its absolute twin `rm -rf <tmp>/a:b/sub`; `q=r` uses the same literal
+/// characters.
 #[test]
 fn c_cd_dir_with_colon_char_allows() {
     let f = Fx::new("lb");
-    let d = f.tmp.join("a:b");
+    for name in ["a:b", "q=r"] {
+        let d = f.tmp.join(name);
+        f.write(&d.join("sub/f"), "x\n");
+        let cmd = format!("cd {} && rm -rf sub", d.display());
+        want(&cmd.clone(), f.run(&f.proj, &cmd), V::Allow);
+    }
+}
+
+/// LB kill kept: a glob cd target does not fix the placement, so never Allow.
+#[test]
+fn k_cd_dir_glob_target_is_not_allow() {
+    let f = Fx::new("lbg");
+    let d = f.tmp.join("w*");
     f.write(&d.join("sub/f"), "x\n");
     let cmd = format!("cd {} && rm -rf sub", d.display());
-    want(&cmd.clone(), f.run(&f.proj, &cmd), V::Allow);
+    not_allow(&cmd.clone(), f.run(&f.proj, &cmd));
 }
 
 /// Re-anchored per user ruling 2026-11-19 (R2): a `.` component in the cd

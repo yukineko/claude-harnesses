@@ -13,10 +13,15 @@
 //! One test fn per construct. The needles are assembled at run time so this
 //! file does not contain the constructs it searches for.
 //!
-//! Scope of the line match:
-//! - Comments and string / char literals are blanked by a Rust lexer
-//!   (`mask_non_code`) before matching, so text that only names a construct
-//!   (docs, comments, a script a fixture feeds to another program) is not code.
+//! How a file is read: it is lexed by `proc_macro2` (a real Rust lexer) into
+//! tokens with line numbers. Comments are dropped by the lexer and every
+//! literal is one opaque token, so text that only names a construct (docs,
+//! comments, a script a fixture feeds to another program) is not code. A file
+//! the lexer rejects is undetermined and fails the scan; it is never skipped.
+//!
+//! Scope of the match:
+//! - `wait_with_output(`, `.output()` and `.status()` match as token
+//!   sequences (identifier followed by `(`, or `.` identifier `(` `)`).
 //! - The child-wait construct matches when the receiver is an identifier bound
 //!   by a `let` statement that contains a spawn call (the statement may span
 //!   lines), or whose name contains `child`. A `Barrier::wait` is neither.
@@ -24,6 +29,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -81,146 +87,88 @@ fn scanned_files() -> Vec<(String, String)> {
     files
 }
 
-/// `src` with every comment and every string / char literal blanked to spaces
-/// (newlines kept, so line numbers and columns are unchanged). A scan for a
-/// construct then sees executed code only: Rust text that merely names the
-/// construct (a doc line, a string a fixture feeds to another program) is gone.
-///
-/// This is Rust's own lexical grammar for the four token kinds that can hide
-/// text: line comments, nested block comments, (raw / byte / C) string
-/// literals, and char literals as against lifetimes. It does not guess from
-/// line shape.
-fn mask_non_code(src: &str) -> String {
-    let c: Vec<char> = src.chars().collect();
-    let mut out: Vec<char> = c.clone();
-    let blank = |out: &mut Vec<char>, from: usize, to: usize| {
-        for ch in &mut out[from..to] {
-            if *ch != '\n' {
-                *ch = ' ';
-            }
-        }
-    };
-    let is_ident = |ch: char| ch.is_alphanumeric() || ch == '_';
-    let n = c.len();
-    let mut i = 0;
-    while i < n {
-        let ch = c[i];
-        if ch == '/' && c.get(i + 1) == Some(&'/') {
-            let end = c[i..].iter().position(|x| *x == '\n').map_or(n, |p| i + p);
-            blank(&mut out, i, end);
-            i = end;
-        } else if ch == '/' && c.get(i + 1) == Some(&'*') {
-            let mut depth = 1;
-            let mut j = i + 2;
-            while j < n && depth > 0 {
-                if c[j] == '/' && c.get(j + 1) == Some(&'*') {
-                    depth += 1;
-                    j += 2;
-                } else if c[j] == '*' && c.get(j + 1) == Some(&'/') {
-                    depth -= 1;
-                    j += 2;
-                } else {
-                    j += 1;
+/// One code token: its text and 1-based source line. A literal is the opaque
+/// text `<lit>`; delimiters are their own tokens; comments do not appear.
+type Tok = (String, usize);
+
+fn flatten(ts: TokenStream, out: &mut Vec<Tok>) {
+    for tt in ts {
+        match tt {
+            TokenTree::Ident(i) => out.push((i.to_string(), i.span().start().line)),
+            TokenTree::Punct(p) => out.push((p.as_char().to_string(), p.span().start().line)),
+            TokenTree::Literal(l) => out.push(("<lit>".to_string(), l.span().start().line)),
+            TokenTree::Group(g) => {
+                let (open, close) = match g.delimiter() {
+                    Delimiter::Parenthesis => ("(", ")"),
+                    Delimiter::Brace => ("{", "}"),
+                    Delimiter::Bracket => ("[", "]"),
+                    Delimiter::None => ("", ""),
+                };
+                if !open.is_empty() {
+                    out.push((open.to_string(), g.span_open().start().line));
+                }
+                flatten(g.stream(), out);
+                if !close.is_empty() {
+                    out.push((close.to_string(), g.span_close().start().line));
                 }
             }
-            blank(&mut out, i, j);
-            i = j;
-        } else if ch == '"' {
-            let mut j = i + 1;
-            while j < n && c[j] != '"' {
-                j += if c[j] == '\\' { 2 } else { 1 };
-            }
-            let end = (j + 1).min(n);
-            blank(&mut out, i, end);
-            i = end;
-        } else if ch == 'r'
-            && (i == 0
-                || !is_ident(c[i - 1])
-                || (matches!(c[i - 1], 'b' | 'c') && (i < 2 || !is_ident(c[i - 2]))))
-            && {
-                let hashes = c[i + 1..].iter().take_while(|x| **x == '#').count();
-                c.get(i + 1 + hashes) == Some(&'"')
-            }
-        {
-            let hashes = c[i + 1..].iter().take_while(|x| **x == '#').count();
-            let mut j = i + 2 + hashes;
-            let closer: Vec<char> = std::iter::once('"')
-                .chain(std::iter::repeat_n('#', hashes))
-                .collect();
-            while j < n && c[j..].get(..closer.len()) != Some(&closer[..]) {
-                j += 1;
-            }
-            let end = (j + closer.len()).min(n);
-            blank(&mut out, i, end);
-            i = end;
-        } else if ch == '\'' {
-            // A char literal is `'\...'` or `'x'`; anything else is a lifetime.
-            if c.get(i + 1) == Some(&'\\') {
-                let mut j = i + 2;
-                while j < n && c[j] != '\'' {
-                    j += if c[j] == '\\' { 2 } else { 1 };
-                }
-                let end = (j + 1).min(n);
-                blank(&mut out, i, end);
-                i = end;
-            } else if c.get(i + 2) == Some(&'\'') {
-                blank(&mut out, i, i + 3);
-                i += 3;
-            } else {
-                i += 1;
-            }
-        } else {
-            i += 1;
         }
     }
-    out.into_iter().collect()
 }
 
-/// The identifier immediately before `needle_at` in `line`.
-fn receiver(line: &str, needle_at: usize) -> &str {
-    let head = &line[..needle_at];
-    let start = head
-        .rfind(|c: char| !(c.is_alphanumeric() || c == '_'))
-        .map_or(0, |i| i + 1);
-    &head[start..]
+/// The code tokens of `src`, or why the lexer rejected it.
+fn lex(src: &str) -> Result<Vec<Tok>, String> {
+    let ts: TokenStream = src
+        .parse()
+        .map_err(|e| format!("not lexable as Rust, so undetermined: {e}"))?;
+    let mut out = Vec::new();
+    flatten(ts, &mut out);
+    Ok(out)
 }
 
-/// `file:line: text` for every code line (comments and literals masked out)
-/// that `hit` accepts.
-fn flagged(hit: impl Fn(&str) -> bool) -> Vec<String> {
+fn text(toks: &[Tok], i: usize) -> &str {
+    toks.get(i).map_or("", |t| t.0.as_str())
+}
+
+/// Lines of `name(` (an identifier directly followed by `(`).
+fn call_lines(src: &str, name: &str) -> Result<Vec<usize>, String> {
+    let toks = lex(src)?;
+    Ok((0..toks.len())
+        .filter(|&i| text(&toks, i) == name && text(&toks, i + 1) == "(")
+        .map(|i| toks[i].1)
+        .collect())
+}
+
+/// Lines of `.name()` (a method call with no arguments).
+fn method_lines(src: &str, name: &str) -> Result<Vec<usize>, String> {
+    let toks = lex(src)?;
+    Ok((0..toks.len())
+        .filter(|&i| {
+            text(&toks, i) == "."
+                && text(&toks, i + 1) == name
+                && text(&toks, i + 2) == "("
+                && text(&toks, i + 3) == ")"
+        })
+        .map(|i| toks[i + 1].1)
+        .collect())
+}
+
+/// `file:line: text` for every line `find` reports; a file `find` cannot
+/// determine is reported too, so it fails the scan.
+fn flagged(find: impl Fn(&str) -> Result<Vec<usize>, String>) -> Vec<String> {
     let mut found = Vec::new();
     for (rel, src) in scanned_files() {
-        let masked = mask_non_code(&src);
-        for ((i, line), code) in src.lines().enumerate().zip(masked.lines()) {
-            if hit(code) {
-                found.push(format!("{rel}:{}: {}", i + 1, line.trim()));
+        match find(&src) {
+            Ok(lines) => {
+                let all: Vec<&str> = src.lines().collect();
+                for n in lines {
+                    found.push(format!("{rel}:{n}: {}", all[n - 1].trim()));
+                }
             }
+            Err(e) => found.push(format!("{rel}: {e}")),
         }
     }
     found
-}
-
-#[test]
-fn mask_blanks_comments_and_literals_but_not_code() {
-    let n = format!(".sta{}", "tus()");
-    let src = [
-        format!("let a = x{n};"),
-        format!("// doc {n}"),
-        format!("/* a /* nested {n} */ still comment {n} */ let b = y{n};"),
-        format!("let s = \"quoted {n} \\\" more {n}\";"),
-        format!("let r = r#\"raw \" {n}\"#; let c = '\"'; let d = z{n};"),
-        format!("fn f<'a>(x: &'a str) {{ w{n}; }}"),
-    ]
-    .join("\n");
-    let masked = mask_non_code(&src);
-    assert_eq!(masked.lines().count(), src.lines().count());
-    let hit: Vec<usize> = masked
-        .lines()
-        .enumerate()
-        .filter(|(_, l)| l.contains(&n))
-        .map(|(i, _)| i + 1)
-        .collect();
-    assert_eq!(hit, vec![1, 3, 5, 6]);
 }
 
 fn assert_none(construct: &str, found: Vec<String>) {
@@ -234,8 +182,8 @@ fn assert_none(construct: &str, found: Vec<String>) {
 
 #[test]
 fn no_wait_with_output_outside_the_bounded_helper() {
-    let needle = format!("wait_with{}(", "_output");
-    assert_none(&needle, flagged(|l| l.contains(&needle)));
+    let needle = format!("wait_with{}", "_output");
+    assert_none(&format!("{needle}("), flagged(|s| call_lines(s, &needle)));
 }
 
 fn wait_needle() -> String {
@@ -248,52 +196,64 @@ fn spawn_needle() -> String {
 
 /// 1-based line numbers of child waits in `src`: `<recv>.wait()` where `recv`
 /// was bound by a `let` statement containing a spawn call, or contains `child`.
-fn child_wait_lines(src: &str) -> Vec<usize> {
-    let (wait, spawn) = (wait_needle(), spawn_needle());
+fn child_wait_lines(src: &str) -> Result<Vec<usize>, String> {
+    let toks = lex(src)?;
+    let spawn = format!("spa{}", "wn");
+    let wait = format!("wa{}", "it");
     let mut bound: HashSet<String> = HashSet::new();
-    // The identifier of the `let` statement currently open (no `;` seen yet).
-    let mut open_let: Option<String> = None;
+    // Open `let` statements: (brace/paren depth of the `let`, bound identifier).
+    let mut open_lets: Vec<(usize, String)> = Vec::new();
+    let mut depth = 0usize;
     let mut waits: Vec<(usize, String)> = Vec::new();
-    let masked = mask_non_code(src);
-    for (i, line) in masked.lines().enumerate() {
-        let t = line.trim_start();
-        if let Some(rest) = t.strip_prefix("let ") {
-            let rest = rest.strip_prefix("mut ").unwrap_or(rest);
-            let ident: String = rest
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect();
-            open_let = Some(ident);
-        }
-        if line.contains(&spawn) {
-            if let Some(id) = &open_let {
-                bound.insert(id.clone());
+    for i in 0..toks.len() {
+        match text(&toks, i) {
+            "(" | "[" | "{" => depth += 1,
+            ")" | "]" | "}" => {
+                depth = depth.saturating_sub(1);
+                while open_lets.last().is_some_and(|(d, _)| *d > depth) {
+                    open_lets.pop();
+                }
             }
-        }
-        for (at, _) in line.match_indices(&wait) {
-            waits.push((i + 1, receiver(line, at).to_string()));
-        }
-        if t.trim_end().ends_with(';') {
-            open_let = None;
+            ";" => {
+                while open_lets.last().is_some_and(|(d, _)| *d >= depth) {
+                    open_lets.pop();
+                }
+            }
+            "let" => {
+                let mut j = i + 1;
+                if text(&toks, j) == "mut" {
+                    j += 1;
+                }
+                open_lets.push((depth, text(&toks, j).to_string()));
+            }
+            "." if text(&toks, i + 1) == spawn && text(&toks, i + 2) == "(" => {
+                if let Some((_, id)) = open_lets.last() {
+                    bound.insert(id.clone());
+                }
+            }
+            "." if text(&toks, i + 1) == wait
+                && text(&toks, i + 2) == "("
+                && text(&toks, i + 3) == ")"
+                && i > 0 =>
+            {
+                waits.push((toks[i + 1].1, text(&toks, i - 1).to_string()));
+            }
+            _ => {}
         }
     }
-    waits
+    Ok(waits
         .into_iter()
         .filter(|(_, r)| bound.contains(r) || r.contains("child"))
         .map(|(n, _)| n)
-        .collect()
+        .collect())
 }
 
 #[test]
 fn no_child_wait_outside_the_bounded_helper() {
-    let mut found = Vec::new();
-    for (rel, src) in scanned_files() {
-        let lines: Vec<&str> = src.lines().collect();
-        for n in child_wait_lines(&src) {
-            found.push(format!("{rel}:{n}: {}", lines[n - 1].trim()));
-        }
-    }
-    assert_none(&format!("child{}", wait_needle()), found);
+    assert_none(
+        &format!("child{}", wait_needle()),
+        flagged(child_wait_lines),
+    );
 }
 
 #[test]
@@ -303,7 +263,7 @@ fn detector_flags_a_child_bound_to_another_name() {
         format!("p{};", wait_needle()),
     ]
     .join("\n");
-    assert_eq!(child_wait_lines(&fixture), vec![2]);
+    assert_eq!(child_wait_lines(&fixture), Ok(vec![2]));
 }
 
 #[test]
@@ -316,7 +276,7 @@ fn detector_flags_a_renamed_child_spawned_across_lines() {
         format!("let _ = proc{};", wait_needle()),
     ]
     .join("\n");
-    assert_eq!(child_wait_lines(&fixture), vec![5]);
+    assert_eq!(child_wait_lines(&fixture), Ok(vec![5]));
 }
 
 #[test]
@@ -326,7 +286,7 @@ fn detector_does_not_flag_barrier_wait() {
         format!("b{};", wait_needle()),
     ]
     .join("\n");
-    assert_eq!(child_wait_lines(&fixture), Vec::<usize>::new());
+    assert_eq!(child_wait_lines(&fixture), Ok(Vec::<usize>::new()));
 }
 
 #[test]
@@ -337,17 +297,68 @@ fn detector_does_not_flag_a_wait_on_a_name_bound_after_an_unrelated_let() {
         format!("q{};", wait_needle()),
     ]
     .join("\n");
-    assert_eq!(child_wait_lines(&fixture), Vec::<usize>::new());
+    assert_eq!(child_wait_lines(&fixture), Ok(Vec::<usize>::new()));
 }
 
 #[test]
 fn no_command_output_outside_the_bounded_helper() {
-    let needle = format!(".out{}", "put()");
-    assert_none(&needle, flagged(|l| l.contains(&needle)));
+    let name = format!("out{}", "put");
+    assert_none(&format!(".{name}()"), flagged(|s| method_lines(s, &name)));
 }
 
 #[test]
 fn no_command_status_outside_the_bounded_helper() {
-    let needle = format!(".sta{}", "tus()");
-    assert_none(&needle, flagged(|l| l.contains(&needle)));
+    let name = format!("sta{}", "tus");
+    assert_none(&format!(".{name}()"), flagged(|s| method_lines(s, &name)));
+}
+
+/// Literal and comment forms that must neither hide the code after them nor
+/// be read as code themselves.
+fn tricky_literals() -> Vec<&'static str> {
+    vec![
+        r"let p = x.replace('\\', 1);",
+        r"let p = x.replace('\'', 1);",
+        r#"let p = x.replace('"', 1);"#,
+        r#"let p = "\"";"#,
+        r##"let p = r#"a " b"#;"##,
+        r"let p = b'\\';",
+        "fn f<'a>(x: &'a str) {}",
+        "/* a /* nested */ still */ let p = 1;",
+    ]
+}
+
+#[test]
+fn literal_forms_do_not_hide_following_code() {
+    let name = format!("sta{}", "tus");
+    for lit in tricky_literals() {
+        let src = format!("{lit}\nlet o = cmd.{name}();");
+        assert_eq!(
+            method_lines(&src, &name),
+            Ok(vec![2]),
+            "code after {lit:?} was hidden or mis-read"
+        );
+    }
+}
+
+#[test]
+fn text_inside_comments_and_literals_is_not_code() {
+    let name = format!("sta{}", "tus");
+    let call = format!("x.{name}()");
+    let src = [
+        format!("// {call}"),
+        format!("/* a /* nested {call} */ still comment {call} */"),
+        format!("/// doc {call}"),
+        format!("let s = \"quoted {call} \\\" more {call}\";"),
+        format!("let r = r#\"raw \" {call}\"#;"),
+        format!("let c = '\"'; let d = z.{name}();"),
+    ]
+    .join("\n");
+    assert_eq!(method_lines(&src, &name), Ok(vec![6]));
+}
+
+#[test]
+fn unlexable_source_is_undetermined_not_clean() {
+    assert!(lex("let s = \"unterminated;").is_err());
+    assert!(call_lines("let s = \"unterminated;", "f").is_err());
+    assert!(child_wait_lines("let s = \"unterminated;").is_err());
 }

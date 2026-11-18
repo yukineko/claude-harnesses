@@ -126,7 +126,9 @@ pub(crate) const TABLE_B_UNRESOLVED: &str =
 /// * [`judge::Judgement::Undetermined`] or [`judge::Judgement::Ask`] → `Ask`
 ///   (main) — the hook's `ask_available` hardens it to Deny in a subagent;
 /// * a `judge` panic → `Ask` (SUBSET.md "Undetermined handling" rule 4);
-/// * [`judge::Judgement::Deny`] → `Deny` (not produced in S3b).
+/// * [`judge::Judgement::Deny`] → `Deny`, produced only by the per-candidate
+///   cwd judgement (user ruling 2026-11-18): the reasons are those of the
+///   detector at that candidate, so a system-harm Deny keeps its mark.
 pub(crate) fn table_b_verdict(
     command: &str,
     scope: &crate::scope::SafeRoots,
@@ -137,9 +139,15 @@ pub(crate) fn table_b_verdict(
     let Analysis::Known(script) = analyze(command) else {
         return Decision::Allow;
     };
+    // User ruling 2026-11-18: a command whose cwd is one of a finite set is
+    // judged once per candidate by the whole detector (see
+    // `judge::judge_candidates`); the synthetic text it builds has one known
+    // cwd, so this never recurses past one level.
+    let legacy = |text: &str| super::readings::detect_bash_every_reading(text, scope);
     let ctx = judge::PathCtx {
         scope,
         hook_cwd: scope.session_cwd(),
+        legacy: Some(&legacy),
     };
     let judged = catch_unwind(AssertUnwindSafe(|| judge::judge(&script, &ctx)))
         .unwrap_or(Judgement::Undetermined(Cause::Panic));
@@ -245,10 +253,30 @@ pub(crate) struct SimpleCommand {
     /// are already resolved against this cwd (see [`RedirTarget::Path`]);
     /// relative paths in `argv` are as written.
     pub cwd: Value,
+    /// The cwd as a candidate set (user ruling 2026-11-18); read only by the
+    /// judge. See [`CwdCandidates`].
+    pub cwd_candidates: CwdCandidates,
     pub stdin: StdinSource,
     pub context: Context,
     /// BYTE offsets into the original command.
     pub span: Range<usize>,
+}
+
+/// The directories a [`SimpleCommand`] may run in (user ruling 2026-11-18).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CwdCandidates {
+    /// One cwd, the one [`SimpleCommand::cwd`] states (the hook's cwd or a
+    /// literal directory).
+    One,
+    /// The paths that reach the command have different but known cwds
+    /// (`cd x; cmd`: `x` or the hook's cwd), at most `MAX_CWD_CANDIDATES`
+    /// (4, `eval/cwd.rs`) of them: each candidate (`None` = the hook's cwd).
+    /// [`SimpleCommand::cwd`] is `Undetermined` for every other reader; the
+    /// judge judges every candidate.
+    OneOf(Vec<Option<String>>),
+    /// No finite set of cwds is known (the reason, as in
+    /// [`SimpleCommand::cwd`]): a relative target cannot be placed.
+    Undetermined(String),
 }
 
 /// Where a [`SimpleCommand`] sits in the script: the innermost enclosing

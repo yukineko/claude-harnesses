@@ -24,6 +24,13 @@
 //!   still the S1 stub, and the legacy string layer (raise-only, ruling 14)
 //!   alone judges placed paths. So [`Judgement::Allow`] here means "S3b found
 //!   nothing undetermined", not "every Table C cell is Allow";
+//! * a relative target whose cwd is one of a finite set (`cd x; cmd rel`;
+//!   [`super::SimpleCommand::cwd_candidates`], user ruling 2026-11-18) is
+//!   judged once per candidate cwd by the whole detector
+//!   ([`PathCtx::legacy`], `judge_candidates`); an Ask / Deny at any
+//!   candidate is a [`PathClass::AtCandidate`] finding (a Deny there makes
+//!   the judgement [`Judgement::Deny`]), and a candidate that cannot be
+//!   judged is `Unresolved`;
 //! * a command without a B.1 row — unknown program, empty `argv`,
 //!   undetermined command word, B.2 redirects, B.3 wrappers, B.4 git, B.5
 //!   interpreters — contributes nothing: its handling is unchanged (the
@@ -148,6 +155,12 @@ pub(crate) enum PathClass {
     /// path with no known base, a `..` component, a predicate answering
     /// `Undetermined`. Always restrictive in Table C.
     Unresolved(String),
+    /// A relative target placed against ONE candidate cwd of a command whose
+    /// cwd is one of a finite set (user ruling 2026-11-18) and judged there by
+    /// the whole detector, which answered Ask / Deny (the reason says which
+    /// candidate and why). Until `classify` lands the detector's predicates
+    /// are the Table C cells for a placed path.
+    AtCandidate(String),
 }
 
 /// One judged (effect, target) pair.
@@ -172,7 +185,7 @@ pub(crate) struct Finding {
 /// [`crate::interactive::ask_available`]; no cell needs another rule.
 #[allow(
     dead_code,
-    reason = "`Deny` is produced once `classify` places paths (S3); S3b produces the others"
+    reason = "every variant is produced since the 2026-11-18 per-candidate cwd ruling; kept for the S1 freeze"
 )]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
@@ -205,7 +218,16 @@ pub(crate) enum Judgement {
 pub(crate) struct PathCtx<'a> {
     pub scope: &'a SafeRoots,
     pub hook_cwd: Option<&'a str>,
+    /// The verdict of the whole detector for a command text (the legacy
+    /// string layer and this judge, raise-only), used to judge one candidate
+    /// cwd of a [`SimpleCommand::cwd_candidates`] command. `None`: such a
+    /// command's relative targets stay `Unresolved`.
+    pub legacy: Option<&'a dyn Fn(&str) -> crate::model::Decision>,
 }
+
+/// Candidate-cwd judgements ([`judge_candidates`]) one [`judge`] may run
+/// before the rest are `Unresolved`.
+const MAX_CANDIDATE_RUNS: usize = 32;
 
 /// Judge `script` by Table B B.1 and the Table C `Unresolved` row (S3b; see
 /// the module doc for what is and is not judged yet).
@@ -214,8 +236,10 @@ pub(crate) struct PathCtx<'a> {
 /// [`Judgement::Undetermined`]; otherwise every unresolved target is an
 /// [`Judgement::Ask`] finding; otherwise [`Judgement::Allow`].
 pub(crate) fn judge(script: &Script, ctx: &PathCtx) -> Judgement {
-    let _ = ctx; // placed paths are not classified in S3b (`classify` stub)
     let mut findings = Vec::new();
+    let mut denied = Vec::new();
+    let mut system_harm = false;
+    let mut runs = 0;
     for c in &script.commands {
         let targets = match table_b::extract(c) {
             table_b::Row::None => continue,
@@ -224,6 +248,29 @@ pub(crate) fn judge(script: &Script, ctx: &PathCtx) -> Judgement {
             }
             table_b::Row::Targets(t) => t,
         };
+        // User ruling 2026-11-18: a relative target after a `cd` that may
+        // have failed, when the cwd is one of a known finite set, is judged
+        // once per candidate cwd; the most restrictive verdict stands.
+        // Only a `OneOf` cwd is split per candidate. A single cwd and an
+        // `Undetermined` one take the `resolve_at` path below, where a
+        // relative target after an undetermined cwd is an `Unresolved`
+        // finding (Ask / Deny).
+        let (relative, targets): (Vec<_>, Vec<_>) = targets.into_iter().partition(|(_, t)| {
+            matches!(c.cwd_candidates, super::CwdCandidates::OneOf(_))
+                && matches!(t, Value::Literal(p) if !p.starts_with('/'))
+        });
+        if let (super::CwdCandidates::OneOf(set), false) = (&c.cwd_candidates, relative.is_empty())
+        {
+            for f in judge_candidates(c, set, &relative, ctx, &mut runs) {
+                match f {
+                    CandidateFinding::Ask(f) => findings.push(f),
+                    CandidateFinding::Deny(f, harm) => {
+                        system_harm |= harm;
+                        denied.push(f);
+                    }
+                }
+            }
+        }
         for (effect, target) in targets {
             let resolved = super::eval::resolve_at(&c.cwd, target);
             if let Value::Undetermined(why) = &resolved {
@@ -237,11 +284,160 @@ pub(crate) fn judge(script: &Script, ctx: &PathCtx) -> Judgement {
             }
         }
     }
-    if findings.is_empty() {
+    if !denied.is_empty() {
+        denied.extend(findings);
+        Judgement::Deny {
+            findings: denied,
+            system_harm,
+        }
+    } else if findings.is_empty() {
         Judgement::Allow
     } else {
         Judgement::Ask(findings)
     }
+}
+
+/// A non-Allow verdict for one candidate cwd ([`judge_candidates`]).
+enum CandidateFinding {
+    Ask(Finding),
+    /// The finding and whether it is a system-harm Deny.
+    Deny(Finding, bool),
+}
+
+/// The relative `targets` of `c`, whose cwd is one of
+/// [`SimpleCommand::cwd_candidates`] (user ruling 2026-11-18): the command is
+/// judged once per candidate, as if it ran there — `<argv>` for the hook's
+/// cwd, `cd <dir> && <argv>` for a known directory — by the whole detector
+/// (`ctx.legacy`, which places the operands against that base by the same
+/// predicates as a literal spelling). A candidate is Allow only when that
+/// verdict is Allow; an Ask / Deny is a finding (most restrictive wins in
+/// [`judge`]). When a candidate cannot be judged — no `ctx.legacy`, the
+/// hook's cwd unknown, an argv word that is not a literal the synthetic text
+/// can spell, or more than [`MAX_CANDIDATE_RUNS`] runs — every target is
+/// `Unresolved` (Ask / Deny), never Allow.
+fn judge_candidates(
+    c: &super::SimpleCommand,
+    cwds: &[Option<String>],
+    targets: &[(Effect, Value)],
+    ctx: &PathCtx,
+    runs: &mut usize,
+) -> Vec<CandidateFinding> {
+    let names = || {
+        targets
+            .iter()
+            .map(|(_, t)| match t {
+                Value::Literal(p) => format!("`{p}`"),
+                Value::Undetermined(r) => r.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let effect = targets[0].0;
+    let finding = |class: PathClass, reason: String| Finding {
+        effect,
+        target: targets[0].1.clone(),
+        class,
+        span: c.span.clone(),
+        reason,
+    };
+    let unresolved = |why: &str| {
+        let reason = format!(
+            "{effect:?} target cannot be placed: relative path {} after a cd that may have \
+             failed, and {why}",
+            names()
+        );
+        vec![CandidateFinding::Ask(finding(
+            PathClass::Unresolved(reason.clone()),
+            reason,
+        ))]
+    };
+    let Some(legacy) = ctx.legacy else {
+        return unresolved("no per-directory judgement is available");
+    };
+    let Some(argv) = spell_argv(c) else {
+        return unresolved("the command cannot be re-spelled for a per-directory judgement");
+    };
+    if *runs + cwds.len() > MAX_CANDIDATE_RUNS {
+        return unresolved("the per-directory judgement budget is spent");
+    }
+    let mut out = Vec::new();
+    for cand in cwds {
+        let (text, label) = match cand {
+            None => match ctx.hook_cwd {
+                Some(h) => (argv.clone(), format!("the hook's cwd `{h}`")),
+                None => return unresolved("the hook's cwd is not known"),
+            },
+            Some(d) => match spell(d) {
+                Some(q) => (format!("cd {q} && {argv}"), format!("`{d}`")),
+                None => return unresolved("a candidate directory cannot be spelled"),
+            },
+        };
+        *runs += 1;
+        let verdict = legacy(&text);
+        let say = |r: &str| {
+            format!(
+                "{effect:?} target {} in {label} (the cd before it may have failed): {r}",
+                names()
+            )
+        };
+        match verdict {
+            crate::model::Decision::Allow => {}
+            crate::model::Decision::Ask(ref r) => {
+                let reason = say(r);
+                out.push(CandidateFinding::Ask(finding(
+                    PathClass::AtCandidate(reason.clone()),
+                    reason,
+                )));
+            }
+            crate::model::Decision::Deny(ref r) => {
+                let reason = say(r);
+                out.push(CandidateFinding::Deny(
+                    finding(PathClass::AtCandidate(reason.clone()), reason),
+                    verdict.is_system_harm(),
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// `c`'s argv as shell text that runs the same words, or `None` when a word
+/// is not a `Literal` the text can spell (a control character), or the
+/// command word would need quoting.
+fn spell_argv(c: &super::SimpleCommand) -> Option<String> {
+    let mut words = Vec::with_capacity(c.argv.len());
+    for (i, w) in c.argv.iter().enumerate() {
+        let Value::Literal(v) = &w.value else {
+            return None;
+        };
+        let s = spell(v)?;
+        if i == 0 && (s != *v || v.contains('=')) {
+            return None;
+        }
+        words.push(s);
+    }
+    (!words.is_empty()).then(|| words.join(" "))
+}
+
+/// `v` as one shell word: bare when every character means itself, else
+/// single-quoted. `None` for a control character.
+fn spell(v: &str) -> Option<String> {
+    if v.chars().any(char::is_control) {
+        return None;
+    }
+    let plain = !v.is_empty()
+        && v.chars().all(|ch| {
+            ch.is_ascii_alphanumeric()
+                || matches!(
+                    ch,
+                    '/' | '.' | '_' | '+' | ',' | ':' | '@' | '%' | '^' | '=' | '-'
+                )
+        });
+    Some(if plain {
+        v.to_string()
+    } else {
+        format!("'{}'", v.replace('\'', r"'\''"))
+    })
 }
 
 /// The [`PathClass`] of `target` under `effect` (some classes depend on the

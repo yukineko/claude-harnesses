@@ -435,6 +435,15 @@ fn classify(
     if fam == Family::Shell && noexec_only(args) {
         return Decision::Allow;
     }
+    // A shell given `-c` and nothing else runs no program: it fails with
+    // "-c: option requires an argument", exit 2, even with a piped stdin
+    // (observed 2026-11-19, relay bgr-41bb2e87c9a7). No B.5 opinion (the
+    // legacy verdict stands). Only this exact shape is covered; any other
+    // `-c` spelling without an operand, and zsh / dash / ksh (not observed),
+    // stay Undetermined.
+    if matches!(base, "bash" | "sh") && dash_c_alone(args) {
+        return Decision::Allow;
+    }
     let inner = SimpleCommand {
         argv: cmd.argv.get(k..).unwrap_or(&[]).to_vec(),
         ..cmd.clone()
@@ -888,6 +897,11 @@ fn judge_body(body: &str, runner: Runner<'_>, judge: &Probes<'_>) -> Decision {
     let verdict = (judge.judge)(&format!("{shell} -c {quoted}"));
     JUDGE_DEPTH.with(|d| d.set(active));
     verdict
+}
+
+/// `bash -c` / `sh -c` with no other word: see the caller.
+fn dash_c_alone(args: &[Word]) -> bool {
+    matches!(args, [only] if literal(only).is_ok_and(|v| v == "-c"))
 }
 
 // ------------------------------------------------- T3: noexec syntax check

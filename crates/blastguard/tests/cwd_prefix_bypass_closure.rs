@@ -17,8 +17,8 @@
 //! false-clear as "everything is Allow" was before.
 
 use blastguard::detect::{detect, detect_scoped};
-use blastguard::scope::SafeRoots;
 use blastguard::model::Decision;
+use blastguard::scope::SafeRoots;
 use serde_json::json;
 
 fn bash(cmd: &str) -> Decision {
@@ -245,7 +245,10 @@ fn relative_operand_that_escapes_the_tracked_dir_stays_allowed() {
     // actually resolves back INTO the protected tree. Re-anchored per user
     // ruling 2026-11-19: the payload cwd is a known value, `..` resolves on the
     // real path, so the fixture is a real tree with a canonical cwd.
-    let dir = tempfile::Builder::new().prefix("bg-relcd-").tempdir().unwrap();
+    let dir = tempfile::Builder::new()
+        .prefix("bg-relcd-")
+        .tempdir()
+        .unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap();
     std::fs::create_dir(root.join(".githooks")).unwrap();
     std::fs::create_dir(root.join("src")).unwrap();

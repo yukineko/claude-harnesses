@@ -153,7 +153,14 @@ fn python_writes_harmful_sh_then_same_call_runs_it_is_not_allowed() {
     }
 }
 
-/// Control (passes at HEAD): a benign written script run in the same call is not over-blocked.
+// Re-anchored per user ruling 2026-11-18 (S4 B.5)
+//
+// Was: main-mode Allow. The write and the run are joined by a newline, so the
+// written body is not judged (only `&&` joins are) and `sh t_test.sh` runs a
+// program file whose text is not in the command: B.5 Undetermined, main Ask.
+// Observed at ddc2a3b05 (0.2.732): ask, reason "`sh` runs the program file
+// `t_test.sh`, whose text is not in the command — blastguard cannot judge what
+// it would do (Table B.5: Undetermined)".
 #[test]
 fn control_benign_written_sh_then_run_is_allow() {
     let home = unique_home("benign");
@@ -162,7 +169,30 @@ fn control_benign_written_sh_then_run_is_allow() {
         py_heredoc("open(\"t_test.sh\", \"w\").write(\"echo hi\\n\")")
     );
     let (m, mr) = run_as(&cmd, &home, false);
-    assert_eq!(m, "allow", "benign body must stay allow; reason={mr}");
+    assert_eq!(
+        m, "ask",
+        "newline-joined write+run is B.5 Undetermined; reason={mr}"
+    );
+    assert!(
+        mr.contains("Table B.5") && mr.contains("`t_test.sh`"),
+        "reason must be the B.5 one naming t_test.sh: {mr}"
+    );
+}
+
+/// Benign twin: the same python writer joined to the run by `&&`, the join
+/// under which the S4 ruling judges a body written in the same command. A
+/// benign written body must not be over-blocked there.
+#[test]
+#[ignore = "UNCLEAR: ask at 0.2.732 (B.5 `t_test.sh`); whether the S4 `&&` rule covers a body written by a python program (not a shell writer) is not settled"]
+fn control_benign_written_sh_then_and_and_run_is_allow() {
+    let home = unique_home("benign-and");
+    let cmd =
+        "python3 - <<'PY' && sh t_test.sh\nopen(\"t_test.sh\", \"w\").write(\"echo hi\\n\")\nPY";
+    let (m, mr) = run_as(cmd, &home, false);
+    assert_eq!(
+        m, "allow",
+        "benign body joined by && must stay allow; reason={mr}"
+    );
 }
 
 /// Control (passes at HEAD): the shell-heredoc equivalent is already refused, so

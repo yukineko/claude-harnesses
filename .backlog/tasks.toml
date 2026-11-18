@@ -3354,3 +3354,34 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
      Running tests/audit_b12_oracle_ids_and_teardown.rs (target/debug/deps/audit_b12_oracle_ids_and_teardown-ac213ffa702b7908)
 error: test failed, to rerun pass `-p condukt --test audit_b12_oracle_ids_and_teardown`"""
+
+[[task]]
+id = "acf42846"
+title = "blastguard fail-open: rm -rf target/../src (dotdot escape out of an ignored target dir) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-18 by the compound-sysdir-rm worker: rm_by_target::not_allow_dotdot_escape_out_of_ignored_target fails ('rm -rf target/../src: must NOT be Allow; got empty output'), also at base 28257127f with that worker's src changes stashed, so it predates 4de75ad02. Expected: not Allow (the operand lexically leaves the ignored target/ dir and names src/)."
+created_at = 1795005420
+updated_at = 1795005420
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test rm_by_target not_allow_dotdot_escape_out_of_ignored_target"
+rev = "32f47da2c5a45e8a87400eb0dd96438c4e4e821d"
+observed_at = 1795005420
+detail = """
+exit 101:  failed; 0 ignored; 0 measured; 29 filtered out; finished in 0.58s
+
+   Compiling blastguard v0.2.706 (/Users/yuki/src/.harness-worktrees/session-fcf56f45/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
+     Running tests/rm_by_target.rs (target/debug/deps/rm_by_target-7e3a071671a5651c)
+error: test failed, to rerun pass `-p blastguard --test rm_by_target`"""

@@ -3252,3 +3252,35 @@ exit 101:  failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 9m 31s
      Running tests/testscope_fault_seams_20261117.rs (target/debug/deps/testscope_fault_seams_20261117-0680b439b7ed3bdb)
 error: test failed, to rerun pass `-p condukt --test testscope_fault_seams_20261117`"""
+
+[[task]]
+id = "b400219d"
+title = "condukt: fp_oracle_e2e (2) and audit_b12 oracle_refusal tests fail on main: verify refuses with 'no recorded worktree and no archived tdd proof' before the oracle runs"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "test-red",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-18 at main 74e23c6fe (condukt 0.7.448) by main and by the t1 verifier (verify-t1r-base). fp_oracle_e2e: fix_task_with_valid_fail_to_pass_oracle_is_verified (:199) and fix_task_without_valid_fail_to_pass_oracle_is_refused (:253) fail; audit_b12_oracle_ids_and_teardown: oracle_refusal_names_the_proof_ids_it_found (:156) fails. Verbatim stderr: 'condukt: refusing to verify task t1: task t1 in run run-b12-ids has no recorded worktree and no archived tdd proof in .../run-b12-ids.tdd-proofs/t1; cannot determine which tree to judge the F→P oracle in'. Readings: (a) the fixtures predate the no-worktree refusal and never record a worktree, so the tests no longer reach the oracle (test drift); (b) the refusal regressed the oracle path. Distinguish by checking whether the fixtures call state set --worktree before verified."
+created_at = 1794963680
+updated_at = 1794963680
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test audit_b12_oracle_ids_and_teardown"
+rev = "74e23c6fe3aabe85750ee59d021dc639ba6f8355"
+observed_at = 1794963680
+detail = """
+exit 101: ids_it_found
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running tests/audit_b12_oracle_ids_and_teardown.rs (target/debug/deps/audit_b12_oracle_ids_and_teardown-ac213ffa702b7908)
+error: test failed, to rerun pass `-p condukt --test audit_b12_oracle_ids_and_teardown`"""

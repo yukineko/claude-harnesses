@@ -3263,6 +3263,8 @@ notes = """Observed 2026-11-19 (blastguard 0.2.722, S4 triage subagent): python3
 created_at = 1795027786
 updated_at = 1795027786
 weight = 0.0
+issue_number = 1864
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1864"
 rev = 0
 
 [task.repro]

@@ -3358,3 +3358,32 @@ exit 101: harness-worktrees/bg-leads-red/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.61s
      Running tests/backlog_20261118_compound_line_weakens_sysdir_rm_deny.rs (target/debug/deps/backlog_20261118_compound_line_weakens_sysdir_rm_deny-91079b9cce231417)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261118_compound_line_weakens_sysdir_rm_deny`"""
+
+[[task]]
+id = "84816911"
+title = "blastguard fail-open: rsync --delete/--delete-* into a non-asset home subdir (~/Documents/) is Allow while rm -rf ~/Documents/x is Deny (ruling 2026-11-18: rsync --delete is a Table B Delete row)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Ruling 2026-11-18: rsync --delete / --delete-* is a Table B Delete row; destination judged by Table C like rm (Scratch and own worktree Allow, else same as rm). Observed at a19a34553 (0.2.702), hermetic fixture HOME, main+subagent: rsync -a --delete|--delete-after|--delete-excluded src/ ~/Documents/ allow/allow; rm -rf ~/Documents/x deny/deny. Cause: detect/system_paths.rs rsync_mutated judges the destination only against system dirs. Controls GREEN: /tmp, absolute TMPDIR, own worktree (rel+abs) Allow; rsync without --delete into /tmp Allow. Not pinned: $TMPDIR-spelled destination (Table A resolves only HOME; rsync ask/deny, rm -rf $TMPDIR/x deny/deny). Home itself / ~/.ssh: 7f9f2457. RED 96c9f5e4d (branch red/bg-rsync-tableb-pyc-sys-20261118, 3 ignored)."
+created_at = 1795005003
+updated_at = 1795005003
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_rsync_delete_table_b_row -- --ignored"
+rev = "96c9f5e4d209c1fbcab579fd18d31ea70a858eb4"
+observed_at = 1795005003
+detail = """
+exit 101: d v0.2.703 (/Users/yuki/src/.harness-worktrees/bg-rsync-tableb-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.12s
+     Running tests/backlog_20261118_rsync_delete_table_b_row.rs (target/debug/deps/backlog_20261118_rsync_delete_table_b_row-16a6dd1173676192)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_rsync_delete_table_b_row`"""

@@ -96,8 +96,19 @@ fn exec_stdin_herestring_harmful_bash_script_file_should_allow_in_both_modes() {
     let cmd = "exec <<< 'chmod 777 /etc/hosts'; bash script.sh";
     let (m, mr) = run_as(cmd, &home, false);
     let (s, sr) = run_as(cmd, &home, true);
-    assert_eq!(m, "allow", "main reason={mr}");
-    assert_eq!(s, "allow", "subagent reason={sr}");
+    // Re-anchored allow -> Undetermined: user ruling 2026-11-18 (S4 B.5),
+    // SUBSET.md ruling 10 (`script.sh` is untracked in the fixture). The
+    // FP this test pins still holds: the reason is the B.5 program-file
+    // one, not the exec-stdin harm (`bash` reading the herestring).
+    assert_eq!(m, "ask", "main reason={mr}");
+    assert_eq!(s, "deny", "subagent reason={sr}");
+    for r in [&mr, &sr] {
+        assert!(
+            r.contains("runs the program file `script.sh`") && r.contains("Table B.5"),
+            "reason={r}"
+        );
+        assert!(!r.contains("chmod"), "reason={r}");
+    }
 }
 
 #[test]

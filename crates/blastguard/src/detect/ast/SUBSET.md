@@ -190,7 +190,18 @@ script is still `Known`: the word's `Value` is `Undetermined` and feeds Table C 
 ### A.5 Builtins with state effects (evaluator, not Table B)
 
 `cd` (literal, `&&`-tied) moves the tracked cwd; `cd -` / bare / options / `pushd`
-/ `popd` / `..` → cwd Undetermined. `eval`, `source`, `.`, `trap`, `alias`,
+/ `popd` → cwd Undetermined. **User ruling 2026-11-19:** (1) the evaluator holds
+the hook's cwd (the payload `cwd`, `SafeRoots::session_cwd`, set per detection
+by `eval/cwd.rs::with_hook_dir` in `readings.rs::detect_bash_every_reading`) as a
+known value, so a relative `cd` from it (`cd .githooks`) is resolved
+(`Cwd::Known`); with no payload cwd it stays Undetermined. (2) A relative path
+with a `..` component — a `cd` operand, or a relative target / redirect after a
+known `cd` — is resolved on the REAL path (`eval/cwd.rs::real_join`): the cwd
+must be its own canonical path, every component up to the last `..` must be an
+existing directory that is not a symlink, `..` is its real parent, and the
+components after the last `..` are joined lexically. A missing target, a walk
+through a symlink (`cd link && rm ../x`), or a failed canonicalize → Undetermined
+(Ask / Deny), as before. `eval`, `source`, `.`, `trap`, `alias`,
 `shopt`, `builtin`, `command`, an undetermined command word, `declare`-family
 options, non-plain `set` make the state opaque (later values Undetermined).
 **Exception (user ruling 2026-11-18, r21):** `. F` whose value is exactly
@@ -213,8 +224,9 @@ Common rules for every row:
 * A target word with an Undetermined value → `PathClass::Unresolved`.
 * A relative target: resolved against `SimpleCommand::cwd` exactly as
   `RedirTarget::Path` / `eval::resolve_at` (literal as written when no `cd`
-  applies → placed against `PathCtx::hook_cwd`; Undetermined after an
-  undetermined `cd`).
+  applies → placed against `PathCtx::hook_cwd`; joined after a known `cd`,
+  a `..` component on the real path per user ruling 2026-11-19 (A.5);
+  Undetermined after an undetermined `cd`).
 * A relative target after a `cd` that may have failed (`cd x; cmd rel`,
   `cd x || true; cmd rel`) — user ruling 2026-11-18: when every path that
   reaches the command has a known cwd (the `cd` target, the hook's cwd, a
@@ -230,7 +242,7 @@ Common rules for every row:
   (`judge::judge_candidates`; an Ask / Deny there is a
   `PathClass::AtCandidate` finding, a system-harm Deny stays system harm).
   More than 4 candidates, a candidate that is not known (`cd "$X"`, `cd -`,
-  a relative `cd` from the hook's cwd, …), an argv word that is not a
+  a relative `cd` from an unknown hook cwd, …), an argv word that is not a
   spellable literal, an unknown hook cwd, or more than 32 candidate runs in
   one script → `Unresolved` (Ask / Deny), never Allow. `cd x && cmd rel`
   reaches `cmd` only through the successful `cd`, so its cwd is `x` (one

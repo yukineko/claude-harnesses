@@ -16,7 +16,8 @@
 //! stay `Allow` — otherwise "everything is Deny now" would be as vacuous a
 //! false-clear as "everything is Allow" was before.
 
-use blastguard::detect::detect;
+use blastguard::detect::{detect, detect_scoped};
+use blastguard::scope::SafeRoots;
 use blastguard::model::Decision;
 use serde_json::json;
 
@@ -241,15 +242,42 @@ fn relative_operand_that_escapes_the_tracked_dir_stays_allowed() {
     // OUT of the tracked (protected) directory into somewhere ordinary must
     // stay `Allow` — the fix must not treat "any relative operand after a
     // `cd` into a protected dir" as inherently suspicious, only one that
-    // actually resolves back INTO the protected tree.
+    // actually resolves back INTO the protected tree. Re-anchored per user
+    // ruling 2026-11-19: the payload cwd is a known value, `..` resolves on the
+    // real path, so the fixture is a real tree with a canonical cwd.
+    let dir = tempfile::Builder::new().prefix("bg-relcd-").tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    std::fs::create_dir(root.join(".githooks")).unwrap();
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("src").join("build.o"), b"").unwrap();
+    let cwd = root.to_string_lossy().into_owned();
+    let scope = SafeRoots::new(Some(&cwd), Some(&cwd), None, None, Some(real_path));
+    let scoped = |cmd: &str| detect_scoped("Bash", Some(&json!({ "command": cmd })), &scope);
     assert_eq!(
-        bash("cd .githooks && rm ../src/build.o"),
+        scoped("cd .githooks && rm ../src/build.o"),
         Decision::Allow,
-        "expected Allow for `cd .githooks && rm ../src/build.o`"
+        "expected Allow for `cd .githooks && rm ../src/build.o` with a known payload cwd"
     );
     assert_eq!(
-        bash("cd src && rm ./foo.o"),
+        scoped("cd src && rm ./foo.o"),
         Decision::Allow,
         "expected Allow for `cd src && rm ./foo.o`"
+    );
+}
+
+fn real_path(p: &str) -> Option<String> {
+    std::fs::canonicalize(p)
+        .ok()
+        .map(|c| c.to_string_lossy().into_owned())
+}
+
+#[test]
+fn relative_escape_without_payload_cwd_is_not_allow() {
+    // Fail-closed side of the ruling: scope-less `detect()` has no payload cwd,
+    // so the relative `cd` is unresolvable and the verdict is Ask.
+    let d = bash("cd .githooks && rm ../src/build.o");
+    assert!(
+        matches!(d, Decision::Ask(_)),
+        "no payload cwd: expected Ask, got {d:?}"
     );
 }

@@ -80,6 +80,12 @@ mod static_bindings;
 /// layer (stage S4, [`super::ast::b5::raise`]): `max(B.5, legacy)`, never
 /// lower than the legacy verdict.
 pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision {
+    // User ruling 2026-11-19 ①: the AST evaluator holds the hook's cwd (the
+    // payload cwd) as a known value, so a relative `cd` is resolved.
+    super::ast::with_hook_dir(scope.session_cwd(), || every_reading_scoped(c, scope))
+}
+
+fn every_reading_scoped(c: &str, scope: &SafeRoots) -> Decision {
     // Backlog 3a950c6c / 5ef2d51f: every reading below — and every rule inside
     // each — judges the text with the line's own literal bindings already
     // resolved (`W=/x; sed -i … $W/f` is judged as `sed -i … /x/f`). One

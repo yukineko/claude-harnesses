@@ -1353,7 +1353,15 @@ forge・condukt のスケジューラが再利用）。
   `readonly`）の integer 属性付与・代入と compound key の算術検査・binding を担う。
   `eval/cwd.rs` も `eval.rs` の子 module で、追跡する cwd（`Cwd`: `Hook` / `Known` / 有限候補集合 `OneOf` /
   `Undetermined`。ユーザー裁定 2026-11-18、下の `detect/ast/judge` の「cwd の到達条件」）と、相対パスをそれに
-  対して置く `resolve` を担う（file-growth cap のため `eval.rs` から分割）。
+  対して置く `resolve` を担う（file-growth cap のため `eval.rs` から分割）。**ユーザー裁定 2026-11-19**:
+  ① 評価器は hook の cwd（payload の cwd = `SafeRoots::session_cwd`。`readings.rs::detect_bash_every_reading`
+  が検出ごとに `eval/cwd.rs::with_hook_dir` で thread-local に設定）を既知の値として持ち、相対の cd
+  （`cd .githooks`）も `Cwd::Known` に解決する（payload の cwd が無いときは従来どおり Undetermined）。
+  ② `..` を含む相対パス（cd の operand、既知の cd 後の相対 target / redirect）は実パスで解決する
+  （`eval/cwd.rs::real_join`）: cwd 自身が canonical であること、最後の `..` までの各要素が存在する
+  symlink でないディレクトリであることを確かめ、`..` はその実の親、最後の `..` より後は字句で join する。
+  対象が存在しない / symlink を通る（`cd link && rm ../x`）/ canonicalize が失敗する場合は従来どおり
+  Undetermined → Ask（subagent では Deny）。
   **path 解決系の検出器が `targets.rs` 経由で読む**（task migrate-path）。`detect_bash_every_reading` は
   static_bindings 解決後の本文を `analyze` し、`Known` のときだけ index を有効にして全 reading を走らせる
   （`Undetermined` なら index なし＝旧経路のまま）。文字列 reading が置けない対象 —— 切り詰め redirect
@@ -1406,7 +1414,7 @@ forge・condukt のスケジューラが再利用）。
   Ask / Deny は `PathClass::AtCandidate` finding、Deny は `Judgement::Deny`、system-harm の印は保持）。
   例: hook の cwd が `$HOME` で `cd <scratch>; rm -rf .ssh` は hook 側候補 `$HOME/.ssh` で system-harm Deny。
   候補が 4 個を超える（`cwd: more than 4 directories reach here (a cd may have failed)`）、候補が不明（`cd "$X"`・
-  `cd -`・hook の cwd からの相対 cd 等。`cwd: differs between the paths that reach here (a cd may have failed)`）、
+  `cd -`・不明な hook の cwd からの相対 cd 等。`cwd: differs between the paths that reach here (a cd may have failed)`）、
   argv に合成できない語（非 literal・制御文字・quote が要る command word）がある、hook の cwd が不明、1 script で
   候補判定が 32 回を超える — のいずれかなら `Unresolved` で Ask（subagent では Deny）。judge 以外の読み手
   （`targets.rs`・`RedirTarget::Path`・`ProgramSource::File`）にとって `OneOf` は従来どおり `Undetermined`。

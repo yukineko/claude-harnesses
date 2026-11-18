@@ -279,6 +279,25 @@ fn assert_allow_both(tag: &str, command: &str, git: bool) {
     );
 }
 
+/// Re-anchor target of user ruling 2026-11-18 (S4 B.5): the command runs a
+/// program file (`python3 x.py`, a direct project-path exec), which is
+/// Undetermined — main Ask, subagent Deny. The main reason must be the B.5
+/// layer's: B.5 never replaces a legacy Ask's reason (equal rank keeps
+/// legacy), so a B.5 reason shows the legacy readings — the FP this file
+/// targets — answered Allow.
+fn assert_b5_undetermined(tag: &str, command: &str, git: bool) {
+    let fx = fixture(tag, git);
+    let (dm, rm) = fx.run(command, false);
+    println!("[{tag}] subagent=false => {dm} {rm:?}");
+    assert!(
+        dm == "ask" && rm.contains("Table B.5"),
+        "{tag}: expected the B.5 Ask in main mode, got {dm} ({rm})"
+    );
+    let (ds, rs) = fx.run(command, true);
+    println!("[{tag}] subagent=true => {ds} {rs:?}");
+    assert_eq!(ds, "deny", "{tag}: subagent expected Deny ({rs})");
+}
+
 /// In both modes the verdict must be Allow, or its reason must not name the
 /// unresolved word `spelling` (i.e. the verdict is not caused by the
 /// path / stdin rule this file targets). The hook reports ONE reason, so this
@@ -1264,7 +1283,8 @@ fn sanity_line_66_resolved_twin_is_allow() {
 
 #[test]
 fn sanity_line_73_resolved_twin_is_allow() {
-    assert_allow_both("sanity_73", T73, false);
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5).
+    assert_b5_undetermined("sanity_73", T73, false);
 }
 
 #[test]
@@ -1274,7 +1294,12 @@ fn sanity_line_99_resolved_twin_is_allow() {
 
 #[test]
 fn sanity_line_149_resolved_twin_is_allow() {
-    assert_allow_both("sanity_149", T149, false);
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5).
+    // The twin ends in a direct exec of the scratch-built
+    // `@SCRATCH@/tw/debug/blastguard` (not a system dir, not git-tracked).
+    // It became visible to B.5 once `. "$HOME/.cargo/env"` stopped
+    // discarding the AST state (main 70f8e714c).
+    assert_b5_undetermined("sanity_149", T149, false);
 }
 
 #[test]
@@ -1294,12 +1319,14 @@ fn sanity_line_172_resolved_twin_is_allow() {
 
 #[test]
 fn sanity_line_195_resolved_twin_is_allow() {
-    assert_allow_both("sanity_195", T195, false);
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5).
+    assert_b5_undetermined("sanity_195", T195, false);
 }
 
 #[test]
 fn sanity_line_200_resolved_twin_is_allow() {
-    assert_allow_both("sanity_200", T200, false);
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5).
+    assert_b5_undetermined("sanity_200", T200, false);
 }
 
 #[test]
@@ -1314,7 +1341,8 @@ fn sanity_line_224_resolved_twin_is_allow() {
 
 #[test]
 fn sanity_line_227_resolved_twin_is_allow() {
-    assert_allow_both("sanity_227", T227, false);
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5).
+    assert_b5_undetermined("sanity_227", T227, false);
 }
 
 #[test]
@@ -1329,7 +1357,8 @@ fn sanity_line_250_resolved_twin_is_allow() {
 
 #[test]
 fn sanity_line_263_resolved_twin_is_allow() {
-    assert_allow_both("sanity_263", T263, false);
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5).
+    assert_b5_undetermined("sanity_263", T263, false);
 }
 
 #[test]
@@ -1359,7 +1388,8 @@ fn sanity_line_298_resolved_twin_is_allow() {
 
 #[test]
 fn sanity_line_299_resolved_twin_is_allow() {
-    assert_allow_both("sanity_299", T299, false);
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5).
+    assert_b5_undetermined("sanity_299", T299, false);
 }
 
 #[test]
@@ -1473,7 +1503,8 @@ fn fp_line_66_o_scratch_file_var_redirect() {
 /// Line 73 [var] (73=subagent). Label: `cat > $S/c1.json <<'J'` with S literal scratchpad assigned on same line; quoted heredoc JSON data
 #[test]
 fn fp_line_73_s_scratch_var_quoted_heredoc_redirect() {
-    assert_allow_both("fp_73", L73, false);
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5).
+    assert_b5_undetermined("fp_73", L73, false);
 }
 
 /// Line 99 [var] (99=subagent). Label: `sed -i '' '94d' $F` with F=crates/blastguard/tests/...rs assigned literally after literal cd; changes were also saved via git diff > fix.patch
@@ -1513,13 +1544,15 @@ fn fp_line_172_f_literal_var_sed_in_place_after_rm() {
 /// Line 195 [var] (195=subagent). Label: P assigned literal scratchpad p.sh on the same line; `chmod +x $P` is on a scratch file
 #[test]
 fn fp_line_195_p_scratch_var_chmod() {
-    assert_allow_both("fp_195", L195, false);
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5).
+    assert_b5_undetermined("fp_195", L195, false);
 }
 
 /// Line 200 [var] (200=subagent). Label: S literal scratchpad; `sed -i.bak ... $S/run.py` on scratch file
 #[test]
 fn fp_line_200_s_scratch_var_sed_in_place() {
-    assert_allow_both("fp_200", L200, false);
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5).
+    assert_b5_undetermined("fp_200", L200, false);
 }
 
 /// Line 221 [stdin] (221=interactive, 222=interactive, 223=subagent). Label: `echo hi | bash /dev/stdin`: stdin program is the literal `hi`, determinable and harmless
@@ -1565,7 +1598,8 @@ fn fp_line_250_bash_dash_c_quoted_dev_stdin_is_dollar0() {
 /// Line 263 [for] (263=subagent). Label: `> $S/p_$m.json` with S a literal scratchpad path and m looped over literal `main sub`; fully determinable scratch file
 #[test]
 fn fp_line_263_for_loop_var_in_scratch_redirect_jq() {
-    assert_allow_both("fp_263", L263, false);
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5).
+    assert_b5_undetermined("fp_263", L263, false);
 }
 
 /// Line 265 [var] (265=interactive). Label: `F=crates/...rs && ... > $F` F is a literal assigned earlier in the && chain (own worktree test file)

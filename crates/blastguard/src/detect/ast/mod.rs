@@ -53,8 +53,9 @@
 //! redirect targets, `rm` operands, the `sed -i` / `chmod` / … mutated files
 //! and the `cp` / `mv` / `install` destination that the string readings
 //! cannot place are judged on the values [`targets::resolve`] hands back.
-//! No other detector reads this module yet ([`program_source`] and the stdin
-//! sources are the next migration's).
+//! The Table B.5 layer ([`b5`], stage S4) reads [`program_source`], the
+//! stdin sources and the process-substitution / pipe producers of every
+//! command, and raises the legacy verdict (`max(B.5, legacy)`).
 //!
 //! `judge.rs` freezes the EFFECT x TARGET-PATH judgement (`Effect`,
 //! `PathClass`, `Judgement`, `judge`) specified in `SUBSET.md` (task S1
@@ -63,12 +64,14 @@
 //! Table B B.1 commands only (undetermined option / unresolved target → Ask);
 //! `classify` is still a stub (see `judge.rs`).
 
-// Only `targets` and `table_b_verdict` have callers so far; the rest of the contract (e.g.
-// `program_source`, `StdinSource`) is wired in by the later migration tasks
-// of run-20261116-020031-33040, which remove this allow.
+// `targets`, `table_b_verdict` and `b5` (which reads `program_source` /
+// `StdinSource`) are the callers so far; the rest of the contract (e.g.
+// `Cause` variants no detector distinguishes) is still unread, so this allow
+// stays until the later migration tasks remove it.
 #![allow(dead_code)]
 
 mod arith;
+pub(super) mod b5;
 mod eval;
 mod judge;
 mod parse;

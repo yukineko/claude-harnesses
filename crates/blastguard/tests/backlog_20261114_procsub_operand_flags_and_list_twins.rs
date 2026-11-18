@@ -180,12 +180,20 @@ fn control_harmless_procsubs_are_allowed() {
         &[
             ("stdin-echo", "bash < <(echo hi)"),
             ("diff", "diff <(sort a) <(sort b)"),
-            ("script-stdin", "bash script.sh < <(echo y)"),
         ],
         "ctl-allow",
         |d| d == "allow",
     );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5) --
+    // `bash script.sh` runs a program file (the substitution is only its
+    // stdin data), so main Ask / subagent Deny.
+    let home = unique_home("ctl-script-stdin");
+    for (subagent, want) in [(false, "ask"), (true, "deny")] {
+        let (d, r) = run_as("bash script.sh < <(echo y)", &home, subagent);
+        assert_eq!(d, want, "subagent={subagent}: {r}");
+        assert!(r.contains("script.sh"), "subagent={subagent}: {r}");
+    }
 }
 
 #[test]

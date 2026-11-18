@@ -431,12 +431,27 @@ fn harmless_shell_script_is_allowed() {
     f.script("d.sh", "#!/bin/sh\ncargo build\n", true);
     let mut cmds = Vec::new();
     for name in ["a.sh", "c.sh", "d.sh"] {
-        for pre in ["bash ", "sh ", "./", "source ", ". "] {
+        // `source` / `.` stay as today (ruling 16 / R7).
+        for pre in ["source ", ". "] {
             cmds.push(format!("{pre}{name}"));
         }
     }
     let bad = not_allow(&f, &cmds);
     assert_none(&bad, "a harmless / tmp-only script must be Allow");
+    // Re-anchored Allow -> Ask: user ruling 2026-11-18 (S4 B.5) -- running a
+    // program file (`bash x`, `sh x`, `./x`) is Undetermined whatever its
+    // body; the quarantine plugin is what will return safe files to Allow.
+    let mut bad = Vec::new();
+    for name in ["a.sh", "c.sh", "d.sh"] {
+        for pre in ["bash ", "sh ", "./"] {
+            let c = format!("{pre}{name}");
+            let (d, reason) = f.verdict(&c);
+            if d != "ask" {
+                bad.push(format!("{c:?} -> {d} ({reason})"));
+            }
+        }
+    }
+    assert_none(&bad, "a program file run must be Ask (S4 B.5)");
 }
 
 /// User ruling (2026-10-14, follow-up 1): a script's content gets the SAME
@@ -467,8 +482,16 @@ fn harmless_interpreter_files_are_allowed() {
     let f = Fixture::new("harmless_interp");
     f.script("h.py", "print('hi')\n", false);
     f.script("h.js", "console.log('hi');\n", false);
-    let bad = not_allow(&f, &s(&["python3 h.py", "node h.js"]));
-    assert_none(&bad, "a harmless interpreter file must be Allow");
+    // Re-anchored Allow -> Ask: user ruling 2026-11-18 (S4 B.5) -- an
+    // interpreter running a program file is Undetermined.
+    let mut bad = Vec::new();
+    for c in ["python3 h.py", "node h.js"] {
+        let (d, reason) = f.verdict(c);
+        if d != "ask" {
+            bad.push(format!("{c:?} -> {d} ({reason})"));
+        }
+    }
+    assert_none(&bad, "an interpreter file run must be Ask (S4 B.5)");
 }
 
 // ------------------------------------------------------------------ controls
@@ -524,7 +547,10 @@ fn control_inline_dot_slash_rm_in_repo_matches_plain_spelling() {
 /// 0.2.109 + the uncommitted here-string change in `detect.rs`, before any
 /// script-content reading existed): `./echo hi` with `echo` a copy of
 /// `/bin/echo` was Allow.
-const BINARY_EXEC_VERDICT_TODAY: &str = "allow";
+///
+/// Re-anchored Allow -> Ask: user ruling 2026-11-18 (S4 B.5) -- direct
+/// execution of a project path (`./echo`) is Undetermined, binary or not.
+const BINARY_EXEC_VERDICT_TODAY: &str = "ask";
 
 fn copy_binary(f: &Fixture, name: &str) -> PathBuf {
     let src = Path::new("/bin/echo");

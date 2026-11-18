@@ -129,12 +129,31 @@ fn harmless_stdin_piped_to_node_option_then_script_is_allow() {
         "node --experimental-strip-types s.ts",
         "node --trace-warnings script.js",
     ]);
-    let bad = mismatched(&cmds, "allow", "red");
+    // Re-anchored Allow -> Undetermined (main Ask / subagent Deny): user
+    // ruling 2026-11-18 (S4 B.5) -- node runs the script FILE (not stdin),
+    // and a program file run is Undetermined.
+    let bad = undetermined_mismatched(&cmds, "red");
     assert!(
         bad.is_empty(),
-        "expected Allow (node runs the script file, not stdin):\n{}",
+        "expected Undetermined (node runs the script file, not stdin):\n{}",
         bad.join("\n")
     );
+}
+
+/// Main Ask / subagent Deny for every command (user ruling 2026-11-18, S4
+/// B.5 Undetermined), and the reason names the program file, not stdin.
+fn undetermined_mismatched(cmds: &[String], tag: &str) -> Vec<String> {
+    let home = unique_home(tag);
+    let mut bad = Vec::new();
+    for cmd in cmds {
+        for (subagent, want) in [(false, "ask"), (true, "deny")] {
+            let (d, r) = run_as(cmd, &home, subagent);
+            if d != want || r.contains("stdin") {
+                bad.push(format!("subagent={subagent} {cmd:?} => {d} ({r})"));
+            }
+        }
+    }
+    bad
 }
 
 #[test]
@@ -144,10 +163,12 @@ fn control_harmless_stdin_piped_to_node_script_stays_allow() {
         "node -r m script.js",
         "node --no-warnings script.js",
     ]);
-    let bad = mismatched(&cmds, "allow", "ctl-allow");
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5) --
+    // a node program file run is Undetermined (main Ask / subagent Deny).
+    let bad = undetermined_mismatched(&cmds, "ctl-allow");
     assert!(
         bad.is_empty(),
-        "control shapes must stay Allow:\n{}",
+        "control shapes must be Undetermined:\n{}",
         bad.join("\n")
     );
 }

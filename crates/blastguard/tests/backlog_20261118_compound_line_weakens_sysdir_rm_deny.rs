@@ -165,25 +165,21 @@ fn control_absolute_rm_denies() {
 // --------------------------------------------------------------------- RED
 
 #[test]
-#[ignore = "RED: `true && rm -rf build` under a /private/var cwd is the confined Ask; single command is Deny"]
 fn and_prefix_denies() {
     deny("and", |_| "true && rm -rf build".to_string());
 }
 
 #[test]
-#[ignore = "RED: `echo x; rm -rf build` under a /private/var cwd is the confined Ask; single command is Deny"]
 fn semicolon_prefix_denies() {
     deny("semi", |_| "echo x; rm -rf build".to_string());
 }
 
 #[test]
-#[ignore = "RED: `cd <same literal dir> && rm -rf build` under a /private/var cwd is the confined Ask; single command is Deny"]
 fn literal_cd_same_dir_denies() {
     deny("cd", |fx| format!("cd {} && rm -rf build", fx.wt()));
 }
 
 #[test]
-#[ignore = "RED: `=cd D && rm -rf build` under a /private/var cwd is the confined Ask; single command is Deny"]
 fn zsh_equals_cd_prefix_denies() {
     deny("eqcd", |_| "=cd D && rm -rf build".to_string());
 }

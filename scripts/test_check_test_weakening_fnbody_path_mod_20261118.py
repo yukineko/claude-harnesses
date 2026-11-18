@@ -12,10 +12,12 @@ the guards of the fn-body / doc-line branches.
        `#![allow(...)]` and the `//!` doc block, plus a fn-body edit (GH #1697).
   reject (exit 1 or 2), each carrying a safe helper-body edit as well:
     2. the same insert between `#[test]` and `fn` (after an outer attribute);
+       2b. the same after a non-test outer attribute (`#[inline]`);
     3. the insert under a module name that already appears in the base code;
     4. a fn-body edit adding `#[cfg(...)]` / `return` / `macro_rules!`;
     5. an edited `///` line that is really inside a raw string;
-    6. a helper-fn edit that removes an `assert!` from the helper.
+    6. a helper-fn edit that removes an `assert!` from the helper;
+       6b. the same with the assert replaced so the assert count is unchanged.
 
 Mutation runs: TW_GATE_SCRIPT may point the tests at a COPY of
 check-test-weakening.py (in a directory holding mutated copies of its sibling
@@ -47,6 +49,7 @@ const BANNER: &str = r#"
 /// banner line kept verbatim
 "#;
 
+#[inline]
 fn tmp_root() -> String {
     String::from("/tmp")
 }
@@ -170,6 +173,15 @@ class FnBodyPathModShape(unittest.TestCase):
             (TEST_HEAD, "#[test]\n" + PATH_MOD_X + "fn standalone_control_allows()"),
         ))
 
+    def test_2b_path_mod_after_non_test_outer_attr_rejected(self) -> None:
+        # Isolates the item-boundary guard: with `#[test]` (test_2) the gate's
+        # later #[test]->fn attribution also rejects; `#[inline]` has no such
+        # backstop, so only `_at_item_boundary` stops the stolen attribute.
+        self.assert_not_clean(edit(
+            BASE, (HELPER_OLD, HELPER_NEW),
+            ("#[inline]\nfn tmp_root()", "#[inline]\n" + PATH_MOD_X + "fn tmp_root()"),
+        ))
+
     # -- 3. name already in the base ----------------------------------------
     def test_3_path_mod_name_seen_in_base_rejected(self) -> None:
         self.assertIn("tmp_root", BASE)
@@ -210,6 +222,16 @@ class FnBodyPathModShape(unittest.TestCase):
             BASE, (HELPER_OLD, HELPER_NEW),
             ("    assert!(!prog.is_empty());\n", ""),
         ))
+
+    def test_6b_helper_fn_edit_replaces_assert_same_count_rejected(self) -> None:
+        # Isolates the assert-survival guard: the assertion-macro count stays
+        # the same, so the gate's count finding cannot catch the lost check.
+        after = edit(
+            BASE, (HELPER_OLD, HELPER_NEW),
+            ("    assert!(!prog.is_empty());\n", "    assert!(prog.len() < usize::MAX);\n"),
+        )
+        self.assertEqual(after.count("assert"), BASE.count("assert"))
+        self.assert_not_clean(after)
 
 
 if __name__ == "__main__":

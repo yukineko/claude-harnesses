@@ -191,7 +191,49 @@ hostile!(later_time_sh, rs("time sh {DIR}/src/x.rs\n"));
 hostile!(later_command_sh, rs("command sh {DIR}/src/x.rs\n"));
 hostile!(later_xargs, rs("echo {DIR}/src/x.rs | xargs sh\n"));
 hostile!(later_rustc, rs("rustc {DIR}/src/x.rs\n"));
+// CONTRADICTS user ruling 2026-11-18 B-4 and is to be removed: `cargo test`
+// after writing a `.rs` file builds it, which is not execution of the body as
+// shell, so the combined command is Allow whether the body looks benign or
+// harmful (`ruling_b4_*` below pin that). Its removal is held back only
+// because scripts/check-test-weakening.py reports a deleted `macro_rules!`
+// invocation as Undetermined (no acknowledgement path); the removal is
+// handed to the human with that verbatim refusal.
 hostile!(later_cargo_test, rs("cargo test\n"));
+
+/// Ruling B-4, benign-looking body: write `.rs`, then `cargo test` => Allow
+/// (already Allow at origin/main 04d9b8336).
+#[test]
+fn ruling_b4_cargo_test_after_rs_write_benign_body_allows() {
+    let fx = Fixture::new("b4-benign");
+    let cmd = "cat > {DIR}/src/x.rs <<'EOF'\nfn main() {}\nEOF\ncargo test\n";
+    let (d, out) = fx.decision(cmd);
+    assert_eq!(d, "allow", "ruling B-4; command {cmd:?}; got {out:?}");
+}
+
+/// Ruling B-4, harmful-looking body (`rm -rf ~` as text in a `.rs` file):
+/// still Allow, the body is not run by `cargo test`.
+#[test]
+#[ignore = "RED: heredoc data-body fix (ruling 2026-11-18 B-4) not on origin/main"]
+fn ruling_b4_cargo_test_after_rs_write_harmful_body_allows() {
+    let fx = Fixture::new("b4-harmful");
+    let cmd = rs("cargo test\n");
+    let (d, out) = fx.decision(&cmd);
+    assert_eq!(d, "allow", "ruling B-4; command {cmd:?}; got {out:?}");
+}
+
+/// Controls for B-4: a written `.sh` holding the harmful body and then run in
+/// the same command stays not-Allow. (Observed at origin/main 04d9b8336: the
+/// same shapes with the benign body `echo hi` are Allow, because a `.sh` body
+/// is judged as shell and `echo hi` is harmless, so benign-body variants are
+/// not pinned here.)
+fn sh_then(run: &str) -> String {
+    format!("cat > x.sh <<'EOF'\nrm -rf ~\nEOF\n{run}\n")
+}
+
+hostile!(ruling_b4_control_sh_run, sh_then("sh x.sh"));
+hostile!(ruling_b4_control_bash_run, sh_then("bash x.sh"));
+hostile!(ruling_b4_control_exec_run, sh_then("./x.sh"));
+hostile!(ruling_b4_control_dot_source, sh_then(". ./x.sh"));
 hostile!(later_quoted_sh_head, rs("\"sh\" {DIR}/src/x.rs\n"));
 hostile!(later_single_quoted_sh_head, rs("'sh' {DIR}/src/x.rs\n"));
 hostile!(later_cat_pipe_sh, rs("cat {DIR}/src/x.rs | sh\n"));

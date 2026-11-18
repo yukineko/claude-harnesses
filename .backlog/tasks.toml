@@ -3371,6 +3371,8 @@ notes = "Observed 2026-11-18 by the compound-sysdir-rm worker: rm_by_target::not
 created_at = 1795005420
 updated_at = 1795005420
 weight = 0.0
+issue_number = 1860
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1860"
 rev = 0
 
 [task.repro]

@@ -285,6 +285,16 @@ Common rules for every row:
 | `>&word` with a non-fd word | `Truncate` | the word, as a path |
 | compound-command redirects (`{ …; } > f`, `done > f`) | as above | the extra empty-argv `SimpleCommand` |
 
+**Relink layer consumer (backlog dc053fcf, 2026-11-19).** The string-level relink
+layer (`detect/relink.rs`) reads the same values through [`targets::resolve`]: a
+relinking command (`mv`, `cp`, `ln`, …) whose destination or source word is not a
+literal but has values the evaluator proved (a `for` variable over a literal list,
+unrolled as above) is judged once per value, and the strictest answer stands. A
+word with no proven values (`$(ls)`, a glob, an undetermined variable) keeps the
+`Ask`. Values are combined per word, not per iteration, so a combination of two
+values of different words may be judged although no single iteration runs it; that
+only adds judgements, it never removes one.
+
 ### B.3 Wrappers (unwrap, then judge the wrapped command by its own row)
 
 | Wrapper | Skipped before the wrapped command | Notes |

@@ -125,7 +125,6 @@ fn loop_cmd(home: &Home, list: &str) -> String {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-15 for-loop over a literal word list: `> $D/$f.tmp` + mv is refused as 'path cannot be placed' because the loop variable is left unresolved — remove when fixed"]
 fn literal_list_for_loop_tmp_then_mv_is_allowed() {
     let home = unique_home("fp");
     let cmd = loop_cmd(&home, "decomp decomp.routed");

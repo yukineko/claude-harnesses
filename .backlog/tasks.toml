@@ -3187,3 +3187,31 @@ exit 101: rness-worktrees/bg-s4-20261118/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.15s
      Running tests/backlog_20261118_perl_regex_arrow_read_as_redirect_fp.rs (target/debug/deps/backlog_20261118_perl_regex_arrow_read_as_redirect_fp-b37da4b752bc0bcc)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261118_perl_regex_arrow_read_as_redirect_fp`"""
+
+[[task]]
+id = "120165e0"
+title = "blastguard FP: backtick-and-> inside a quoted <<'EOF' heredoc body read as a redirect with a shell expansion"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1795009598
+updated_at = 1795009598
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_quoted_heredoc_backtick_redirect_fp -- --ignored"
+rev = "55f28e447d9ad4a3dfef41cdddcda977e3173a55"
+observed_at = 1795009598
+detail = """
+exit 101: .harness-worktrees/bg-s4-20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/backlog_20261118_quoted_heredoc_backtick_redirect_fp.rs (target/debug/deps/backlog_20261118_quoted_heredoc_backtick_redirect_fp-a3bfd873f3a8048a)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_quoted_heredoc_backtick_redirect_fp`"""

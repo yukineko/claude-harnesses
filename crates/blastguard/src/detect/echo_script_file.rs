@@ -41,11 +41,13 @@
 //!     `python3` / `python3.N` word whose program operand — the first
 //!     non-option operand after python's own options ([`python_program`]) —
 //!     names the file (`python3 x.py`); or whose program is stdin (`-`, no
-//!     operand), comes from `-m`, or cannot be read statically (an unknown
-//!     option, a non-literal operand), when the pipeline names the file
-//!     anywhere (`python3 < x.py`, `cat x.py | python3`). A file named only
-//!     as a later operand (`python3 s.py x.txt`, `sys.argv` data) or beside
-//!     `-c` is not read as the program (backlog dc27f669 / bf90fa9d). A
+//!     operand), comes from `-c` or `-m` (an inline body or a module can run
+//!     a later operand: `exec(open(sys.argv[1]).read())`, `runpy`), or
+//!     cannot be read statically (an unknown option, a non-literal operand),
+//!     when the pipeline names the file anywhere (`python3 < x.py`,
+//!     `cat x.py | python3`, `python3 -c '…' x.py`). A file named only as a
+//!     later operand of a program FILE (`python3 s.py x.txt`, `sys.argv`
+//!     data) is not read as the program (backlog dc27f669 / bf90fa9d). A
 //!     non-literal written path keeps the old reading: any python word runs it;
 //!   * the same, read as that interpreter's program, for a pipeline that
 //!     names the file and holds another code-interpreter word
@@ -893,12 +895,12 @@ enum PythonProgram<'a> {
     /// The first non-option operand: the program file. Later operands are
     /// `sys.argv` data, not the program (backlog dc27f669 / bf90fa9d).
     File(&'a str),
-    /// `-c` (the program is the next argument's text) or `--version` /
-    /// `--help*`: no program file is run.
+    /// `--version` / `--help*`: python prints and exits, no program is run.
     NoFile,
-    /// `-` or no operand (the program is read from stdin), `-m` (the module
-    /// may run a later operand as a program: `runpy`, `pdb`, `cProfile`), or
-    /// an option blastguard does not know.
+    /// `-` or no operand (the program is read from stdin), `-c` (the inline
+    /// body may run a later operand as a program, e.g. through `sys.argv`),
+    /// `-m` (the module may run a later operand as a program: `runpy`, `pdb`,
+    /// `cProfile`), or an option blastguard does not know.
     StdinOrUndetermined,
 }
 
@@ -944,8 +946,11 @@ fn python_program<'a>(args: &[&'a str]) -> PythonProgram<'a> {
         };
         for (pos, c) in cluster.char_indices() {
             match c {
-                'c' => return PythonProgram::NoFile,
-                'm' => return PythonProgram::StdinOrUndetermined,
+                // A `-c` body is code in the command that can run any later
+                // operand (`exec(open(sys.argv[1]).read())`,
+                // `subprocess.run([sys.executable, sys.argv[1]])`), so it
+                // does not settle that a named file is only data.
+                'c' | 'm' => return PythonProgram::StdinOrUndetermined,
                 'W' | 'X' => {
                     if pos + 1 == cluster.len() {
                         i += 1;

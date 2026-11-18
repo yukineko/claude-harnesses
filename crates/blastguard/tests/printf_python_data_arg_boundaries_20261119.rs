@@ -150,19 +150,23 @@ fn cat_written_file_piped_to_python_is_not_allow() {
     assert_not_allow("cat-pipe", "&& cat d.txt | python3");
 }
 
-// Implementer's claimed-correct lowering (e313e9ad4): `-c` names no program
-// file, the body `print(1)` does not read argv, so `d.txt` is pure data and
-// the printf text is not judged as Python. Pinned at the verdict observed in
-// this worktree at ddc2a3b05 (blastguard 0.2.732); before the fix this shape
-// was refused. If this changes, re-check against the fail-open cases above.
+// The implementer's lowering at e313e9ad4 (`-c` names no program file, so
+// `d.txt` is pure data and Allow) was REJECTED: a `-c` body is code in the
+// command that can exec argv (`subprocess.run([sys.executable,
+// sys.argv[1]])`, `os.execv(...)`, `exec(open(sys.argv[1]).read())`), which
+// made the harmful shapes above fail open. `-c` is now read like
+// stdin/undetermined, so this benign shape is back at the legacy printf
+// reading (the reason this file's header says refused it before the fix):
+// main ask / subagent deny, observed after the `-c` correction on top of
+// 2367b937d. Not re-observed at fb4080bb6 by the implementer.
 #[test]
 fn benign_c_print_with_written_data_file_is_pinned() {
     let home = unique_home("benign");
     let shape = "printf '%s\\n' a b > d.txt && python3 -c 'print(1)' d.txt";
-    for subagent in [false, true] {
+    for (subagent, want) in [(false, "ask"), (true, "deny")] {
         let (d, r) = run_as(shape, &home, subagent);
         eprintln!("VERDICT benign subagent={subagent}: {d} | {r}");
-        assert_eq!(d, "allow", "{shape:?} (subagent={subagent}): {r}");
+        assert_eq!(d, want, "{shape:?} (subagent={subagent}): {r}");
     }
 }
 
@@ -171,7 +175,6 @@ fn benign_c_print_with_written_data_file_is_pinned() {
 // `runpy.` markers the inline-eval detector keys on.
 
 #[test]
-#[ignore = "RED: fail-open: printf-written harmful d.txt run via `python3 -c subprocess.run([sys.executable, sys.argv[1]]) d.txt` is allow/allow at 0.2.732 (deny/deny at fb4080bb6, pre-fix)"]
 fn c_body_subprocess_runs_argv1_with_sys_executable_is_not_allow() {
     assert_not_allow(
         "subproc",
@@ -180,7 +183,6 @@ fn c_body_subprocess_runs_argv1_with_sys_executable_is_not_allow() {
 }
 
 #[test]
-#[ignore = "RED: fail-open: printf-written harmful d.txt run via `python3 -c os.execv(sys.executable,[..., sys.argv[1]]) d.txt` is allow/allow at 0.2.732 (deny/deny at fb4080bb6, pre-fix)"]
 fn c_body_os_execv_argv1_is_not_allow() {
     assert_not_allow(
         "execv",
@@ -204,7 +206,6 @@ fn c_body_obfuscated_exec_of_argv1_is_not_allow() {
 // fail-open tests above). Observed via the VERDICT lines of `assert_not_allow`
 // run against both revisions.
 #[test]
-#[ignore = "RED: system-harm Deny lowered to Ask/Allow for -c bodies that run argv[1] (0.2.732; deny/deny at fb4080bb6)"]
 fn c_body_running_written_harmful_file_stays_system_harm_deny() {
     let home = unique_home("sysharm");
     let mut bad = Vec::new();

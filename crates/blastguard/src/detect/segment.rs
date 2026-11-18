@@ -765,14 +765,17 @@ pub(super) fn assignment_execution_is_unconditional(segs: &[SeparatedSegment], i
 /// and-or list starts and ends).
 ///
 /// Such a segment may itself be guarded by `&&`/`||`, so whether it RAN is a
-/// run-time fact for the line as a whole. It is a text fact only for a later
-/// segment of the same and-or list that every separator from `idx` on is an
-/// `&&`: in `c1 op … ck && … && cm`, `cm` runs only when the list up to its
-/// left `&&` is true, which by induction requires `ck` to have run (and an
-/// assignment without a substitution always exits 0). The resolver keeps
-/// such a binding scoped to that `&&` chain (backlog a0551e29,
-/// [`crate::detect::readings`] static bindings); this predicate only says
-/// the segment is ordinary top-level code of the line.
+/// run-time fact for the line as a whole. It is a text fact only when EVERY
+/// separator of its and-or list, from the list's first command up to a later
+/// segment `cm`, is `&&`: `c1 && … && ck && … && cm` runs `cm` only when
+/// every command before it ran and succeeded, `ck` included (an assignment
+/// without a substitution always exits 0). A `||` ANYWHERE before `ck` breaks
+/// that: `X || ck && cm` is `(X || ck) && cm`, which runs `cm` without `ck`
+/// whenever `X` succeeds (the fail-open of the first a0551e29 fix, test
+/// `fp_fix_boundaries_20261119`). This predicate does NOT check the
+/// separators; the resolver does (its `and_prefix` and `&&`-chain map,
+/// backlog a0551e29, `readings/static_bindings.rs`). It only says the
+/// segment is ordinary top-level code of the line.
 pub(super) fn assignment_execution_is_guarded_only_by_and_or(
     segs: &[SeparatedSegment],
     idx: usize,

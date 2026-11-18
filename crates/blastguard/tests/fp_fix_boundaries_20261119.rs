@@ -17,13 +17,15 @@
 //! Restrictive cases assert: NOT Allow, and the SAME verdict (main and
 //! subagent mode) as the unbound `$b` / `$d` twin. Harm cases assert Deny.
 //!
-//! FAIL-OPENS FOUND (kept as `#[ignore = "RED: …"]`):
+//! FAIL-OPENS FOUND. FIXED (ignore removed, RED observed then GREEN):
 //!   * `a=x || b=README && git add -- $b` and `true || b=README && git add --
-//!     $b` are Allow: the chain map binds an assignment that a `||` right
+//!     $b` were Allow: the chain map bound an assignment that a `||` right
 //!     BEFORE it may skip (`(true || b=…) && git add` runs git add without
 //!     ever assigning `b`). Introduced by a0551e29 (unbound is Ask).
-//!   * harm form of the same hole: `true || d=tests && rm -rf -- $d` is Ask
+//!   * harm form of the same hole: `true || d=tests && rm -rf -- $d` was Ask
 //!     in main mode, while the unbound `rm -rf -- $d` is Deny.
+//!
+//! STILL OPEN (kept as `#[ignore = "RED: …"]`):
 //!   * `echo x > a\ b` / `>& a\ b` onto an EXISTING untracked file `a b`,
 //!     `echo x > \a` onto existing `a`, and `cat <<'EOF' > out\).txt` onto
 //!     existing `out).txt` are Allow: the word extent is right now, but the
@@ -224,14 +226,12 @@ fn or_after_assignment_drops_binding() {
 /// `(a=x || b=README) && git add -- $b`; `a=x` succeeds, so `b=README` is
 /// skipped and git add runs with whatever `$b` the environment holds.
 #[test]
-#[ignore = "RED: `a=x || b=README && git add -- $b` is Allow; the &&-chain map binds an assignment that the preceding `||` skips (a0551e29 fail-open)"]
 fn or_before_assignment_does_not_bind() {
     same_as_unbound("a=x || b=README && git add -- $b", UNBOUND_ADD);
 }
 
 /// FAIL-OPEN (a0551e29): `true || b=README` NEVER runs the assignment.
 #[test]
-#[ignore = "RED: `true || b=README && git add -- $b` is Allow although `b=README` never runs (a0551e29 fail-open)"]
 fn never_run_assignment_after_or_does_not_bind() {
     same_as_unbound("true || b=README && git add -- $b", UNBOUND_ADD);
 }
@@ -371,7 +371,6 @@ fn unbound_rm_is_deny() {
 /// FAIL-OPEN, harm form (a0551e29): `d=tests` never runs, so `$d` is the
 /// environment's; the unbound form is Deny but this is Ask in main mode.
 #[test]
-#[ignore = "RED: `true || d=tests && rm -rf -- $d` is Ask in main mode; unbound `rm -rf -- $d` is Deny — the binding weakened a Deny (a0551e29 fail-open)"]
 fn never_run_assignment_rm_matches_unbound_deny() {
     expect_deny(false, "true || d=tests && rm -rf -- $d", None);
 }

@@ -82429,3 +82429,129 @@ rev = "5502e2d188b5755e5bccb1ad40daa638a86d27ad"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "7f9f2457"
+title = "blastguard fail-open: rsync --delete into the home directory itself or ~/.ssh is Allow (harms_system target; rsync arm checks only system dirs)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = 'Observed 2026-11-18 at origin/main 1dfa60681 (blastguard 0.2.699), hermetic fixture HOME, main+subagent: rsync -a --delete /tmp/empty/ ~/ , "$HOME", <abs home>/, ~/.ssh/, and (cwd=$HOME) rsync -a --delete build/ ./ are all allow. Controls: rsync -a --delete /tmp/empty/ /usr/ is system-harm deny (detect/system_paths.rs rsync_mutated judges the destination only via scope::is_inside_system_dir); rm -rf ~ and rm -rf ~/.ssh are deny. Expected deny: SUBSET.md ruling 3 + Table C System row = harm_mark::harms_system (home itself, irreplaceable home asset); user ruling 2026-11-07 system-harm-always-deny. RED 3cc3c61e5 (branch red/bg-leads-20261118, 5 ignored cases). NOT pinned (spec gap, rsync not in Table B): rsync --delete into a non-asset home subdir (~/Documents/) is allow while rm -rf ~/Documents/* and find ~/Documents -delete are deny.'
+created_at = 1794946875
+updated_at = 1795005411
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_rsync_delete_home_target_fail_open -- --ignored"
+rev = "3cc3c61e5aa501f3904e1961d8d6c075039235fe"
+observed_at = 1794946875
+detail = """
+exit 101: src/.harness-worktrees/bg-leads-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.90s
+     Running tests/backlog_20261118_rsync_delete_home_target_fail_open.rs (target/debug/deps/backlog_20261118_rsync_delete_home_target_fail_open-c1225f41b45b2862)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_rsync_delete_home_target_fail_open`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261118_rsync_delete_home_target_fail_open"
+exit = 0
+passed = 8
+rev = "32f47da2c5a45e8a87400eb0dd96438c4e4e821d"
+observed_at = 1795005410
+output_digest = "sha256:f0913fcffb317411bb54987727b46403309c457cd3ad7dc2065c6cf97aceb14f"
+excerpt = """
+
+running 8 tests
+test rsync_delete_into_absolute_home_denies ... ok
+test rsync_delete_into_ssh_denies ... ok
+test rsync_delete_into_dot_with_cwd_home_denies ... ok
+test rsync_delete_into_dollar_home_denies ... ok
+test rsync_delete_into_tilde_home_denies ... ok
+test control_rsync_delete_into_usr_denies ... ok
+test control_rsync_without_delete_into_home_subdir_allows ... ok
+test control_rm_rf_home_and_ssh_deny ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running tests/backlog_20261118_rsync_delete_home_target_fail_open.rs (target/debug/deps/backlog_20261118_rsync_delete_home_target_fail_open-05585b80c9b4fdaa)
+"""
+
+[task.closure.red]
+rev = "3cc3c61e5aa501f3904e1961d8d6c075039235fe"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "d6de38be"
+title = "blastguard FP: expansion in an argv operand after python3 -c PROG is reported as an expansion in the program (read-only program Ask/Deny; bgr-32cea6e4ce95)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-18 relay bgr-32cea6e4ce95, re-judged at origin/main 1dfa60681 (0.2.699): main ask / subagent deny, verbatim 'that program contains a shell expansion (`$D/blocks.jsonl`) — the text on the command line is a template'. The -c program has no $; the expansion is sys.argv[1]. Cause: detect/payload.rs interpreter_payloads_after returns every shell word after -c as a candidate program, and the template check in detect/interpreter.rs asks on any candidate containing $. Minimal: python3 -c "import sys;print(open(sys.argv[1]).read())" "$HOME/x" (also "$1", literal-bound "$D/x") -> ask; literal argv -> allow. Ruling 2026-11-12 (python-c-expansion-in-literal-deny) recommends passing paths via argv. Controls kept not-allow: expansion inside the program; write to unresolved argv path. RED 3cc3c61e5 (branch red/bg-leads-20261118, 3 ignored)."""
+created_at = 1794947135
+updated_at = 1795005413
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_python_c_argv_expansion_read_as_program_fp -- --ignored"
+rev = "3cc3c61e5aa501f3904e1961d8d6c075039235fe"
+observed_at = 1794947135
+detail = """
+exit 101: bg-leads-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.31s
+     Running tests/backlog_20261118_python_c_argv_expansion_read_as_program_fp.rs (target/debug/deps/backlog_20261118_python_c_argv_expansion_read_as_program_fp-510e379e782aa619)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_python_c_argv_expansion_read_as_program_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261118_python_c_argv_expansion_read_as_program_fp"
+exit = 0
+passed = 6
+rev = "32f47da2c5a45e8a87400eb0dd96438c4e4e821d"
+observed_at = 1795005412
+output_digest = "sha256:4e83d83a699eb44b35f5fa3ce10e14bf2cbb57c694d5a48820a29b9f08b73481"
+excerpt = """
+
+running 6 tests
+test control_literal_argv_allows ... ok
+test argv_home_expansion_allows ... ok
+test argv_positional_allows ... ok
+test argv_line_bound_var_allows ... ok
+test control_expansion_inside_program_not_allow ... ok
+test control_write_to_unresolved_argv_not_allow ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261118_python_c_argv_expansion_read_as_program_fp.rs (target/debug/deps/backlog_20261118_python_c_argv_expansion_read_as_program_fp-720579c69856e214)
+"""
+
+[task.closure.red]
+rev = "3cc3c61e5aa501f3904e1961d8d6c075039235fe"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -299,7 +299,11 @@ value against the command's cwd (`resolve_at`), but a symlink holds its source
 text and resolves it from the directory holding the link, so `ln -s $f /private/L`
 with `f=etc` would be read as `<cwd>/etc` instead of `/private/etc`. Such a source
 stays spelled and the write through the link stays an `Ask` (backlog dc053fcf
-retry, 2026-11-19).
+retry, 2026-11-19). An `ln`/`cp` with a long option the relink layer does not
+know by its full name — an abbreviation GNU getopt_long accepts (`ln --sym`,
+`cp --sym`) or any other unmodelled `--` option — is not interpreted: it is
+opaque (never read as a hard link or a plain copy), its sources are not
+replaced, and a write below its destination is an `Ask`.
 
 ### B.3 Wrappers (unwrap, then judge the wrapped command by its own row)
 

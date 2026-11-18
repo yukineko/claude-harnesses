@@ -32,9 +32,16 @@
 //! resolved from the directory holding the link, so a relative source would
 //! be placed at the wrong path; it stays spelled, an `Ask`.
 //!
+//! An `ln`/`cp` with a long option this layer does not know by its full name
+//! — including an abbreviation GNU getopt_long accepts (`ln --sym` is
+//! `--symbolic`, `cp --sym` is `--symbolic-link`) — is [`Kind::Opaque`]: it
+//! cannot be told whether it makes a symlink, so it is not read as a hard
+//! link or a plain copy, and its sources are never replaced by a value.
+//!
 //! When the landing cannot be determined — a non-literal source or
 //! destination with no proven values (`$(ls)`, a glob), an unknown cwd,
-//! `rsync`/`install -l`, a source that another
+//! `rsync`/`install -l`, an `ln`/`cp` with an unknown long option, a source
+//! that another
 //! command of the line relinks too, two readings of one command, or an
 //! unmodelled command that names a relinking verb together with a component
 //! of the target or a non-literal word — the redirect is an `Ask`, never an
@@ -354,7 +361,8 @@ enum Kind {
     Moved,
     /// A link-preserving `cp`: symlinks in the copied part stay symlinks.
     CopiedLinks,
-    /// `rsync`, `install -l`: what it creates is not modelled.
+    /// `rsync`, `install -l`, an `ln`/`cp` with a long option outside
+    /// [`LN_LONG`]/[`CP_LONG`]: what it creates is not modelled.
     Opaque,
 }
 
@@ -514,8 +522,18 @@ fn parse(command: &str, cwd: CwdState) -> Parsed {
             .any(|o| !o.starts_with("--") && o[1..].chars().any(|c| letters.contains(c)))
     };
     let long = |names: &[&str]| opts.iter().any(|o| names.iter().any(|n| o.starts_with(n)));
+    // A long option not known by its full name (an abbreviation such as
+    // `--sym`, or an option this layer does not model) cannot be interpreted
+    // with certainty: getopt_long may read it as `--symbolic`.
+    let unknown_long = |known: &[&str]| {
+        opts.iter().any(|o| {
+            o.starts_with("--") && !known.contains(&o.split_once('=').map_or(*o, |(name, _)| name))
+        })
+    };
     let is_ln = matches!(head.as_str(), "ln" | "gln" | "link");
     let kind = match head.as_str() {
+        "ln" | "gln" if unknown_long(LN_LONG) => Kind::Opaque,
+        "cp" | "gcp" if unknown_long(CP_LONG) => Kind::Opaque,
         "ln" | "gln" if short("s") || long(&["--symbolic"]) => Kind::Symbolic,
         "ln" | "gln" | "link" => Kind::Hard,
         "cp" | "gcp" if short("s") || long(&["--symbolic-link"]) => Kind::Symbolic,
@@ -574,6 +592,41 @@ fn parse(command: &str, cwd: CwdState) -> Parsed {
         cwd,
     })
 }
+
+/// The long options of `ln` this layer reads by their FULL name; any other
+/// `--` option (an abbreviation included) makes the command [`Kind::Opaque`].
+const LN_LONG: &[&str] = &[
+    "--backup",
+    "--force",
+    "--interactive",
+    "--logical",
+    "--no-dereference",
+    "--no-target-directory",
+    "--physical",
+    "--suffix",
+    "--symbolic",
+    "--target-directory",
+    "--verbose",
+];
+
+/// As [`LN_LONG`], for `cp`.
+const CP_LONG: &[&str] = &[
+    "--archive",
+    "--backup",
+    "--force",
+    "--interactive",
+    "--no-clobber",
+    "--no-dereference",
+    "--no-target-directory",
+    "--preserve",
+    "--recursive",
+    "--remove-destination",
+    "--suffix",
+    "--symbolic-link",
+    "--target-directory",
+    "--update",
+    "--verbose",
+];
 
 /// The whitespace words of `command`, subshell parentheses stripped.
 fn plain_words(command: &str) -> Vec<&str> {
@@ -679,7 +732,8 @@ fn proven_values(word: &str, role: Role) -> Option<Vec<String>> {
 /// the source TEXT, resolved from the link's own directory ([`hit`]), but a
 /// proven value is already placed against the cwd (`ln -s $f /private/L` with
 /// `f=etc` would be read as `<cwd>/etc` instead of `/private/etc`). They stay
-/// spelled, an `Ask`. An op with nothing to expand, or more than
+/// spelled, an `Ask`. Nor are those of a [`Kind::Opaque`] op (an `ln --sym`
+/// whose kind is not known). An op with nothing to expand, or more than
 /// [`MAX_EXPANSIONS`] combinations, is returned unchanged.
 fn expand(op: LinkOp) -> Vec<LinkOp> {
     let dest_values = proven_values(&op.dest, Role::Argv);
@@ -687,7 +741,7 @@ fn expand(op: LinkOp) -> Vec<LinkOp> {
         .sources
         .iter()
         .map(|s| {
-            if op.kind == Kind::Symbolic {
+            if matches!(op.kind, Kind::Symbolic | Kind::Opaque) {
                 None
             } else {
                 proven_values(s, Role::Argv)

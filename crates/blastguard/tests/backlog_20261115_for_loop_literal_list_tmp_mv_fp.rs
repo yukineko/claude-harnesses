@@ -303,3 +303,83 @@ fn control_loop_relative_symlink_source_several_values_is_not_allowed() {
         "`ln -s ../$f /tmp/L` with f in etc tmp may land in /etc; reason={mr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Controls added 2026-11-19 (t2, second retry): an ABBREVIATED long option.
+// GNU getopt_long accepts any unique prefix of a long option, so `ln --sym`
+// and `ln --symb` are `ln --symbolic`, and `cp --sym` is `cp
+// --symbolic-link`. 64bad5ec1 recognised the symbolic kind only through
+// `-s` or an option starting with the FULL name, so `ln --sym` was read as
+// a hard link (its source then replaced by the cwd-placed loop value) and
+// `cp --sym` as a plain copy (no relink at all).
+//
+// Asserted: every form != "allow"; the `ln` loop forms also name the
+// unmodelled relink as the reason (the source is not placed). DOES NOT PROVE:
+// the verdict of an abbreviated option that does NOT make a symlink, the
+// `cp` reason text (another layer may answer first), or the subagent verdict.
+// ---------------------------------------------------------------------------
+
+/// The reason the relink layer gives when it does not place the link's
+/// source.
+const UNPLACED_SOURCE: &str = "a command whose effect is not modelled may relink it";
+
+fn assert_loop_not_allowed(cmd: &str, home: &Home, why: &str, reason_names_relink: bool) {
+    let (m, mr) = run_as(cmd, home, false);
+    assert_ne!(m, "allow", "{why}; command={cmd} reason={mr}");
+    if reason_names_relink {
+        assert!(
+            mr.contains(UNPLACED_SOURCE),
+            "{why}: the reason must be the unplaced relink; command={cmd} reason={mr}"
+        );
+    }
+}
+
+/// `ln -s $f` in a loop: the source stays spelled, so the reason is the
+/// unplaced relink (stronger than the `!= allow` control above).
+#[test]
+fn control_loop_symlink_source_reason_is_unplaced_relink() {
+    let home = unique_home("ln-reason");
+    let (deep, name) = deep_cwd_and_name(&home, "reason");
+    let cmd = format!(
+        "cd {deep} && for f in etc; do ln -s $f /private/{name}; done; echo x > /private/{name}/passwd"
+    );
+    assert_loop_not_allowed(&cmd, &home, "`ln -s $f` with f=etc", true);
+}
+
+#[test]
+fn control_loop_abbreviated_ln_symbolic_is_not_allowed() {
+    let home = unique_home("ln-abbr");
+    for opt in ["--sym", "--symb", "--symbolic"] {
+        let (deep, name) = deep_cwd_and_name(&home, "abbr");
+        let cmd = format!(
+            "cd {deep} && for f in etc; do ln {opt} $f /private/{name}; done; echo x > /private/{name}/passwd"
+        );
+        assert_loop_not_allowed(&cmd, &home, &format!("`ln {opt} $f` with f=etc"), true);
+    }
+}
+
+#[test]
+fn control_loop_abbreviated_cp_symbolic_is_not_allowed() {
+    let home = unique_home("cp-abbr");
+    for opt in ["--sym", "--symbolic", "--symbolic-link"] {
+        let (deep, name) = deep_cwd_and_name(&home, "cpabbr");
+        let cmd = format!(
+            "cd {deep} && for f in etc; do cp {opt} $f /private/{name}; done; echo x > /private/{name}/passwd"
+        );
+        assert_loop_not_allowed(&cmd, &home, &format!("`cp {opt} $f` with f=etc"), false);
+    }
+}
+
+/// Without a loop: an abbreviated symbolic option with a literal source must
+/// not be read as a hard link / plain copy either.
+#[test]
+fn control_no_loop_abbreviated_symbolic_is_not_allowed() {
+    let home = unique_home("abbr-noloop");
+    for (verb, opt) in [("ln", "--sym"), ("ln", "--symb"), ("cp", "--sym")] {
+        let (deep, name) = deep_cwd_and_name(&home, "abbrnl");
+        let cmd = format!(
+            "cd {deep} && {verb} {opt} etc /private/{name}; echo x > /private/{name}/passwd"
+        );
+        assert_loop_not_allowed(&cmd, &home, &format!("`{verb} {opt} etc`"), false);
+    }
+}

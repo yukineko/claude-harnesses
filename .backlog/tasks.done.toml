@@ -83027,3 +83027,1227 @@ rev = "79b2aaec387734b94619b1f54cbac2df9f3961ba"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "4880afab"
+title = "blastguard FP: heredoc 本文のデータ中の symlink 作成文言を実コマンドとしてモデルし、後続の redirect を deny する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed live 3 times 2026-11-13 in subagents (backlog add with a long notes argument; a cat append heredoc probe; and the orchestrator's own backlog add while filing this very item): a redirect target was denied because quoted/data text describing a symlink-then-create sequence was modelled as executed (reason: may create or rename an entry on this path and is not modelled). RED 02d939d3 by a non-implementer: minimal repro is a heredoc body holding that sentence as data followed by a line with a redirect; single-line quoted arguments are Allow (green control). Control: a real symlink into /etc then create stays not-Allow. Same family as c619b13f. A separate deny of a double-quoted command-substitution argument (reason: the command word dollar-paren-cat is an expansion) did not reproduce in tests; not filed.
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261113_quoted_arg_text_read_as_command_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: wed ... ok
+test control_single_line_quoted_shapes_are_allowed ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.66s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261113_quoted_arg_text_read_as_command_fp.rs (target/debug/deps/backlog_20261113_quoted_arg_text_read_as_command_fp-7cedcdc37ef7c76d)"""
+created_at = 1794527104
+updated_at = 1795039855
+weight = 0.0
+issue_number = 1674
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1674"
+issue_closed_at = 1795039855
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_quoted_arg_text_read_as_command_fp -- --include-ignored"
+rev = "02d939d31bcb908052fe61e1c516b122efcc6cfa"
+observed_at = 1794527104
+detail = """
+exit 101: ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_quoted_arg_text_read_as_command_fp.rs (target/debug/deps/backlog_20261113_quoted_arg_text_read_as_command_fp-571a5a0477c1f04d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_quoted_arg_text_read_as_command_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261113_quoted_arg_text_read_as_command_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: wed ... ok
+test control_single_line_quoted_shapes_are_allowed ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.66s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261113_quoted_arg_text_read_as_command_fp.rs (target/debug/deps/backlog_20261113_quoted_arg_text_read_as_command_fp-7cedcdc37ef7c76d)"""
+
+[[task]]
+id = "53a97aa3"
+title = "blastguard: quoted here-doc 本文の行頭バッククォートをコマンド語として扱う誤検知を直す"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+RED febfee9c (crates/blastguard/tests/quoted_heredoc_body_backtick_fp_20261113.rs r1/r2, ignored). Shape: git commit -q -F - <<'EOF' with a body line starting with a backticked word, then a command after EOF -> ask/deny 'the command word detect is an expansion'. Nothing after EOF, or a mid-line backtick -> allow. Hit by a subagent commit 2026-11-13. Controls c1 (allow) and c2 (top-level backtick stays not Allow) must hold. | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open.
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test quoted_heredoc_body_backtick_fp_20261113 -- --ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: command_is_allowed ... ok
+test r2_observed_subagent_commit_message_shape_is_allowed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.57s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/quoted_heredoc_body_backtick_fp_20261113.rs (target/debug/deps/quoted_heredoc_body_backtick_fp_20261113-913839c7ed978b29)"""
+created_at = 1794542097
+updated_at = 1795039857
+weight = 0.0
+issue_number = 1680
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1680"
+issue_closed_at = 1795039858
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test quoted_heredoc_body_backtick_fp_20261113 -- --ignored"
+rev = "febfee9c14ac41ec7a7a18099e953625453f5d1e"
+observed_at = 1794542097
+detail = """
+exit 101: t: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.14s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/quoted_heredoc_body_backtick_fp_20261113.rs (target/debug/deps/quoted_heredoc_body_backtick_fp_20261113-fec620ef97438896)
+error: test failed, to rerun pass `-p blastguard --test quoted_heredoc_body_backtick_fp_20261113`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test quoted_heredoc_body_backtick_fp_20261113 -- --ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: command_is_allowed ... ok
+test r2_observed_subagent_commit_message_shape_is_allowed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.57s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/quoted_heredoc_body_backtick_fp_20261113.rs (target/debug/deps/quoted_heredoc_body_backtick_fp_20261113-913839c7ed978b29)"""
+
+[[task]]
+id = "070b696c"
+title = "blastguard FP: quoted heredoc appending Rust source to a .rs file is Ask/Deny when its body has multi-line python3 -c string literals and a command follows"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = '''
+Observed 2026-11-13 at main 50474876 (blastguard 0.2.506) by the flow-8cca7ef5 orchestrator in subagent mode: cat >> <wt>/crates/blastguard/tests/x.rs <<'EOF' with Rust string literals "python3 -c \"... Path('/etc/hosts').chmod(0o777)\"" followed by cd <wt> && cargo test was denied: 'python3 is invoked with an inline-eval flag, and its program cannot be tokenised as Python (an unterminated string or an unbalanced bracket)'. Main mode: ask. Standing ruling: .rs heredoc body is data. RED bccf0730 (merged 4fb5d734) written by an independent subagent; one-line body is allow (control).
+blocked 2026-11-14 run-20261114-130020-46995: Q6 — the command runs cargo test which compiles the appended tests/x.rs (ruling exception 'unless run in the same command'); conflicts with 596ef57d cases h_rs_rustc/h_rs_cargo_script/h_rs_build_rs. Proposal: Allow only if body is provably inert Rust (const/static literals). Needs ruling. | RULED 2026-11-14 by user (AskUserQuestion): Q6 Allow only when the .rs body compiled in the same command is provably inert Rust (const/static literals); anything else stays not-Allow.
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes fp1_rs_heredoc_body_with_python_c_text_is_allowed -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: fp1_rs_heredoc_body_with_python_c_text_is_allowed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.50s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs (target/debug/deps/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes-ed0ceded09867306)'''
+created_at = 1794569079
+updated_at = 1795039859
+weight = 0.0
+issue_number = 1707
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1707"
+issue_closed_at = 1795039860
+rev = 4
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes fp1_rs_heredoc_body_with_python_c_text_is_allowed -- --include-ignored"
+rev = "706e25e16a8558ac93233aeb4b8e991c92189f54"
+observed_at = 1794569079
+detail = """
+exit 101: -cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.61s
+     Running tests/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs (target/debug/deps/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes-a8fc5a5e6c06304a)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes fp1_rs_heredoc_body_with_python_c_text_is_allowed -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: fp1_rs_heredoc_body_with_python_c_text_is_allowed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.50s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs (target/debug/deps/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes-ed0ceded09867306)"""
+
+[[task]]
+id = "f6028f18"
+title = "blastguard FP: git commit text with nested escaped quotes inside a .rs heredoc body is read as an unclosed double quote (whole-tree staging Ask/Deny) when a command follows"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = '''
+Observed 2026-11-13 at main 50474876 (blastguard 0.2.506): orchestrator's explicit-path git add && git commit -m ... -m "python3 -c \"...\" ..." was denied with 'blastguard cannot determine whether this git add/commit is whole-tree staging (an unclosed double quote)'. The plain command did NOT reproduce in isolation (independent subagent, both modes allow); the reproducing shape (FP2b) is a cat >> x.rs <<'EOF' body containing a git add/commit Rust string with nested escaped quotes followed by cargo test. RED bccf0730 (merged 4fb5d734). The exact trigger of the orchestrator's original block is not identified.
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes fp2b_rs_heredoc_body_with_git_commit_text_is_allowed -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: b_rs_heredoc_body_with_git_commit_text_is_allowed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.56s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs (target/debug/deps/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes-ed0ceded09867306)'''
+created_at = 1794569092
+updated_at = 1795039861
+weight = 0.0
+issue_number = 1708
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1708"
+issue_closed_at = 1795039862
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes fp2b_rs_heredoc_body_with_git_commit_text_is_allowed -- --include-ignored"
+rev = "706e25e16a8558ac93233aeb4b8e991c92189f54"
+observed_at = 1794569092
+detail = """
+exit 101: d; 6 filtered out; finished in 0.45s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs (target/debug/deps/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes-a8fc5a5e6c06304a)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes fp2b_rs_heredoc_body_with_git_commit_text_is_allowed -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: b_rs_heredoc_body_with_git_commit_text_is_allowed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.56s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs (target/debug/deps/backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes-ed0ceded09867306)"""
+
+[[task]]
+id = "efd4ec4b"
+title = "blastguard: quoted heredoc .rs body containing a match arrow (=>) is judged as a redirect (false positive)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-14 by a condukt worker at main 144906a1 (blastguard 0.2.523 live); reproduced at 279e5a66 (0.2.524). Denied with reason: '> format!("{v:.p$}"' destroys the file's current contents and `format!("{v:.p$}"` contains a shell expansion, so blastguard cannot tell which file this names, let alone whether its contents are recoverable. Minimal shape: cat > x.rs <<'EOF' / b'f' => format!("{v:.p$}"), / EOF followed by python3 - <<'EOF' / print(1) / EOF (the .rs heredoc alone is Allow). Controls ': > /etc/hosts' and an executed heredoc stay Deny. RED commit 1f211cef on branch test/bg-fp-heredoc-arrow-red (worktree /Users/yuki/src/.harness-worktrees/bg-fp-heredoc-arrow-red).
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_heredoc_rs_body_match_arrow_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: denied ... ok
+test quoted_heredoc_rs_body_with_match_arrow_is_allowed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261114_heredoc_rs_body_match_arrow_fp.rs (target/debug/deps/backlog_20261114_heredoc_rs_body_match_arrow_fp-6ba3d49c099687ff)"""
+created_at = 1794598391
+updated_at = 1795039863
+weight = 0.0
+issue_number = 1731
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1731"
+issue_closed_at = 1795039864
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_heredoc_rs_body_match_arrow_fp -- --include-ignored"
+rev = "1f211cef0eed508277602d09c44d3aeb5b72e14c"
+observed_at = 1794598391
+detail = """
+exit 101: 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/backlog_20261114_heredoc_rs_body_match_arrow_fp.rs (target/debug/deps/backlog_20261114_heredoc_rs_body_match_arrow_fp-c2e07066c7408162)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_heredoc_rs_body_match_arrow_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_heredoc_rs_body_match_arrow_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: denied ... ok
+test quoted_heredoc_rs_body_with_match_arrow_is_allowed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261114_heredoc_rs_body_match_arrow_fp.rs (target/debug/deps/backlog_20261114_heredoc_rs_body_match_arrow_fp-6ba3d49c099687ff)"""
+
+[[task]]
+id = "d462444e"
+title = "blastguard false positive: multi-line backtick span in quoted heredoc body after a preceding command"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-14 in a subagent. A command that runs one command, then a semicolon or double ampersand, then a command with a quoted heredoc whose body has a backtick span crossing a line break, is judged Ask because the word on the second line inside the span is read as a command word. Quoted heredoc bodies are data. Minimal repro is test f2. Without the preceding command (f1), with a single-line span (f3), it is Allow. Unquoted heredoc stays non-Allow (c1). | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open.
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test quoted_heredoc_multiline_backtick_fp_20261114 -- --ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: ine_backtick_is_allowed ... ok
+test f0_exact_recovered_command_is_allowed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.58s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/quoted_heredoc_multiline_backtick_fp_20261114.rs (target/debug/deps/quoted_heredoc_multiline_backtick_fp_20261114-03765725160af72e)"""
+created_at = 1794603914
+updated_at = 1795039865
+weight = 0.0
+issue_number = 1739
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1739"
+issue_closed_at = 1795039866
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test quoted_heredoc_multiline_backtick_fp_20261114 -- --ignored"
+rev = "4f2b114bd20f55b8647925ba3c6f7e2c038cee57"
+observed_at = 1794603914
+detail = """
+exit 101: 2.545 (/Users/yuki/src/harness-wt-fp-heredoc-backtick2/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.11s
+     Running tests/quoted_heredoc_multiline_backtick_fp_20261114.rs (target/debug/deps/quoted_heredoc_multiline_backtick_fp_20261114-a0bd5b5b0b5f77e4)
+error: test failed, to rerun pass `-p blastguard --test quoted_heredoc_multiline_backtick_fp_20261114`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test quoted_heredoc_multiline_backtick_fp_20261114 -- --ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: ine_backtick_is_allowed ... ok
+test f0_exact_recovered_command_is_allowed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.58s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/quoted_heredoc_multiline_backtick_fp_20261114.rs (target/debug/deps/quoted_heredoc_multiline_backtick_fp_20261114-03765725160af72e)"""
+
+[[task]]
+id = "234cae6f"
+title = """git commit -m "$(cat <<'EOF' ... backtick ... EOF)" is Ask/Deny though the quoted heredoc body is literal (FP)"""
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b) | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open.
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: ktick_in_quoted_heredoc_commit_message_is_allow ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp.rs (target/debug/deps/backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp-38ccb37b85b9907a)"""
+created_at = 1794626818
+updated_at = 1795039867
+weight = 0.0
+issue_number = 1755
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1755"
+issue_closed_at = 1795039868
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626818
+detail = """
+exit 101: ession-7e01fcf0/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp.rs (target/debug/deps/backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp-8f521eb05a2af65d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: ktick_in_quoted_heredoc_commit_message_is_allow ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp.rs (target/debug/deps/backlog_20261114_git_commit_msg_quoted_heredoc_backtick_fp-38ccb37b85b9907a)"""
+
+[[task]]
+id = "9d347af5"
+title = "quoted heredoc body line resembling git commit -m with backtick is judged as a command when the heredoc is not the first statement (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b) | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open.
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: _is_allow ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp.rs (target/debug/deps/backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp-a5bbe3894994c53a)"""
+created_at = 1794626839
+updated_at = 1795039869
+weight = 0.0
+issue_number = 1759
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1759"
+issue_closed_at = 1795039870
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626839
+detail = """
+exit 101: ofile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp.rs (target/debug/deps/backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp-99b7743c0d81c17f)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: _is_allow ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp.rs (target/debug/deps/backlog_20261114_quoted_heredoc_body_git_commit_line_after_first_statement_fp-a5bbe3894994c53a)"""
+
+[[task]]
+id = "f869115c"
+title = "blastguard FP: quoted heredoc writing .json whose body has backticked sh <<'EOF' text is denied as a stdin program"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "heredoc-fp",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Side finding run-20261114-130020-46995, RED in 3d99f03e (2026-11-14). Observed live: relay bgr-028db5975780, reason '`sh <<'EOF'` takes its program from stdin'. Readings: (a) FP, .json body is data; (b) intended — distinguish: nothing executes the .json.
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_json_heredoc_body_sh_heredoc_text_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: ok
+test json_heredoc_body_with_sh_heredoc_text_is_allowed ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261114_json_heredoc_body_sh_heredoc_text_fp.rs (target/debug/deps/backlog_20261114_json_heredoc_body_sh_heredoc_text_fp-60fbd8bdf28af7c7)"""
+created_at = 1794629115
+updated_at = 1795039871
+weight = 0.0
+issue_number = 1760
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1760"
+issue_closed_at = 1795039872
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_json_heredoc_body_sh_heredoc_text_fp -- --include-ignored"
+rev = "3d99f03eacaeefa68c963747d3dbb7d17c599b3a"
+observed_at = 1794629115
+detail = """
+exit 101: ess-worktrees/session-b3435a5e/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.88s
+     Running tests/backlog_20261114_json_heredoc_body_sh_heredoc_text_fp.rs (target/debug/deps/backlog_20261114_json_heredoc_body_sh_heredoc_text_fp-021fb1a9b8d57db3)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_json_heredoc_body_sh_heredoc_text_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_json_heredoc_body_sh_heredoc_text_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: ok
+test json_heredoc_body_with_sh_heredoc_text_is_allowed ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261114_json_heredoc_body_sh_heredoc_text_fp.rs (target/debug/deps/backlog_20261114_json_heredoc_body_sh_heredoc_text_fp-60fbd8bdf28af7c7)"""
+
+[[task]]
+id = "d292ce6e"
+title = "blastguard FP: quoted heredoc body line starting with a backtick is judged as a command word (true && git commit -F - <<'EOF' ... `import re` ...)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+F18. Original command: relay bgr-837357910fb9 (t4 worker commit), reproduced verbatim by independent author on 0.2.606; RED 0633bb8ec observed by main with reason 'the command word ``import` is an expansion whose value only exists at run time'. Fires only when the heredoc command is not the first bare command and the backtick is at column 0. Readings: (a) defect - quoted heredoc body is data; (b) intended - column-0 backtick deliberately shell. Tell apart: same body mid-line, or bare first git commit, is allow. | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open.
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261115_quoted_heredoc_backtick_commit_msg_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: uoted_heredoc_fed_to_sh_with_backtick_rm_is_not_allowed ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261115_quoted_heredoc_backtick_commit_msg_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_backtick_commit_msg_fp-d03b1dfecf5cbab7)"""
+created_at = 1794730885
+updated_at = 1795039873
+weight = 0.0
+issue_number = 1793
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1793"
+issue_closed_at = 1795039874
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_quoted_heredoc_backtick_commit_msg_fp -- --include-ignored"
+rev = "6fbcfcb7fd03418ea503c61e6ab0529ea29e2e29"
+observed_at = 1794730885
+detail = """
+exit 101: -worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.21s
+     Running tests/backlog_20261115_quoted_heredoc_backtick_commit_msg_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_backtick_commit_msg_fp-17f6762ef1215f15)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_heredoc_backtick_commit_msg_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261115_quoted_heredoc_backtick_commit_msg_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: uoted_heredoc_fed_to_sh_with_backtick_rm_is_not_allowed ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261115_quoted_heredoc_backtick_commit_msg_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_backtick_commit_msg_fp-d03b1dfecf5cbab7)"""
+
+[[task]]
+id = "a826bdab"
+title = "blastguard: backtick text inside a quoted heredoc body (<<'EOF') is judged as a command-word expansion (FP; Deny in subagent, Ask in main)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-15 in a subagent: cat > decomp.json <<'EOF' ... EOF with a JSON body containing "done_criteria":"`cargo test -p x` passes" was denied with: the command word `"done_criteria":"`cargo` is an expansion whose value only exists at run time — blastguard cannot tell what program this runs. Measured 2026-11-15 at main 2ace975d1 (RED committed ef03ba804, branch fp/quoted-heredoc-json-backtick-20261115): f0 (recovered shape: cd scratch && cat > decomp.json <<'EOF' JSON EOF; cd .. && ls scratch) and f1 (minimal: cat > scratch/d.json <<'EOF' {"done_criteria":"`cargo test -p x` passes"} EOF) both: assertion `left == right` failed: (subagent, main) left: ("deny", "ask") right: ("allow", "allow"). Control c1 (unquoted <<EOF with `$X`) passes non-Allow: subagent deny / main ask with 'the command word `$X` is an expansion ...'. Subagent mode = payload agent_id (same as backlog_20261113_heredoc_body_fp.rs). Readings: (a) defect - a quoted-delimiter heredoc body is literal data and is never expanded, so the backtick span is not a command; the quoted body of a cat > file target is not executed; (b) intended - body is treated as possibly-executed. Tell apart: (b) would also need the body to reach an interpreter; here it is cat into a .json file, and the reason names a 'command word' that only exists if the body is shell-parsed, i.e. the quoted body was tokenized as shell. Fix must keep c1 (unquoted heredoc backtick substitution) non-Allow. DOES NOT PROVE: whether the "key":" prefix glued to the backtick, line position, or trailing commands is the trigger; other delimiters (<<"EOF", <<-'EOF'). | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open.
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261115_quoted_heredoc_json_backtick_subagent_fp -- --ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0:  f0_recovered_shape_is_allow_in_subagent_and_main ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.61s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261115_quoted_heredoc_json_backtick_subagent_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_json_backtick_subagent_fp-e64f107e9724cd1e)"""
+created_at = 1794732083
+updated_at = 1795039876
+weight = 0.0
+issue_number = 1795
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1795"
+issue_closed_at = 1795039876
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_quoted_heredoc_json_backtick_subagent_fp -- --ignored"
+rev = "ef03ba804a8e6a1d1a431edd51bf6e2cad911d2d"
+observed_at = 1794732083
+detail = """
+exit 101: wt-fp-heredoc-json/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.24s
+     Running tests/backlog_20261115_quoted_heredoc_json_backtick_subagent_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_json_backtick_subagent_fp-83306c7d27f04712)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_heredoc_json_backtick_subagent_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261115_quoted_heredoc_json_backtick_subagent_fp -- --ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0:  f0_recovered_shape_is_allow_in_subagent_and_main ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.61s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261115_quoted_heredoc_json_backtick_subagent_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_json_backtick_subagent_fp-e64f107e9724cd1e)"""
+
+[[task]]
+id = "0bc46ca0"
+title = "blastguard FP: quoted heredoc body backtick span with $ text judged as live shell when a later rm/mv/cp/git add follows"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+ | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open.
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: eredoc_backtick_span_is_data_even_with_later_rm ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp-cf1a8cd7d30ae9f3)"""
+created_at = 1794743487
+updated_at = 1795039878
+weight = 0.0
+issue_number = 1804
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1804"
+issue_closed_at = 1795039878
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp -- --include-ignored"
+rev = "c82d9725085e6bd5c378274f0ebad8fb810665ab"
+observed_at = 1794743487
+detail = """
+exit 101: ession-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp-50023bed9ac872cf)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: eredoc_backtick_span_is_data_even_with_later_rm ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp.rs (target/debug/deps/backlog_20261115_quoted_heredoc_backtick_span_later_cmd_fp-cf1a8cd7d30ae9f3)"""
+
+[[task]]
+id = "27f5e584"
+title = "blastguard --lib red at main: rule_id a_resolution_that_lost_the_cwd_gets_its_own_id_not_the_unresolvable_one fails"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "lib-red",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-16 by run-20261116-020031-33040 migrate-path worker: fails at base 07bf4b5f2 (687 passed; 7 failed incl. this) and at the migrate-path tree; one of 6 pre-existing --lib failures. Cause guessed (UNVERIFIED): 536f63e5d static_bindings resolves $BIN/$CMD command words statically so pins expecting Ask/an unresolvable id now get Deny/another id. Readings: (a) test pin stale after an intended rule change; (b) regression in rule_id.
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --lib rule_id::tests::a_resolution_that_lost_the_cwd_gets_its_own_id_not_the_unresolvable_one; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: 
+running 1 test
+test rule_id::tests::a_resolution_that_lost_the_cwd_gets_its_own_id_not_the_unresolvable_one ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 635 filtered out; finished in 0.03s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-65bb001ec4dc3e7e)"""
+created_at = 1794826606
+updated_at = 1795039879
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --lib rule_id::tests::a_resolution_that_lost_the_cwd_gets_its_own_id_not_the_unresolvable_one"
+rev = "e6c63919736aab6a7a2279efc90130c4a13dcf06"
+observed_at = 1794826606
+detail = """
+exit 101: rees/run-20261116-020031-33040-backlog-libred/crates/overwatch)
+   Compiling blastguard v0.2.662 (/Users/yuki/.condukt/worktrees/run-20261116-020031-33040-backlog-libred/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 26.98s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-a07d982b4f0a36d7)
+error: test failed, to rerun pass `-p blastguard --lib`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --lib rule_id::tests::a_resolution_that_lost_the_cwd_gets_its_own_id_not_the_unresolvable_one; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: 
+running 1 test
+test rule_id::tests::a_resolution_that_lost_the_cwd_gets_its_own_id_not_the_unresolvable_one ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 635 filtered out; finished in 0.03s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-65bb001ec4dc3e7e)"""
+
+[[task]]
+id = "04fc7f20"
+title = "blastguard: git apply reader after trailing-pipe continuation then sh run.sh judged allow"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-16, main fa58e3698 (blastguard 0.2.672), run-20261116-143410-12142: cat heredoc ending in pipe, newline, patch, EOF, newline, git apply, newline, sh run.sh (patch writes run.sh with chmod 777 /etc/hosts) is allow in main and subagent. git_apply_patch.rs KNOWN GAP (pipe at end of line, per-physical-line segments). Expected: not allow.
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261116_git_apply_patch_known_gaps c_trailing -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: 
+running 1 test
+test c_trailing_pipe_continuation_reader ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-c06d8875cd64d3fe)"""
+created_at = 1794813495
+updated_at = 1795039881
+weight = 0.0
+issue_number = 1827
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1827"
+issue_closed_at = 1795039881
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261116_git_apply_patch_known_gaps c_trailing -- --include-ignored"
+rev = "a6e29aec99889d915c30082dc00de16d95407ded"
+observed_at = 1794813495
+detail = """
+exit 101: me/hiroyuki_nakayama/src/.harness-worktrees/followup-bg-df7c/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.05s
+     Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-80ffcfc78037f570)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261116_git_apply_patch_known_gaps`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261116_git_apply_patch_known_gaps c_trailing -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: 
+running 1 test
+test c_trailing_pipe_continuation_reader ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-c06d8875cd64d3fe)"""
+
+[[task]]
+id = "5f4dc912"
+title = "blastguard: git apply heredoc with TAB-indented added line then sh run.sh judged allow"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-16, main fa58e3698 (blastguard 0.2.672), run-20261116-143410-12142: git apply with a dash-heredoc where only the added line is TAB-indented (+chmod 777 /etc/hosts), then sh run.sh, is allow in main and subagent. Module strips one plus-or-space prefix, the shell strips the TAB. git_apply_patch.rs KNOWN GAP. Expected: not allow.
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261116_git_apply_patch_known_gaps d_tab -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: 
+running 1 test
+test d_tab_indented_dash_heredoc_reader ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-c06d8875cd64d3fe)"""
+created_at = 1794813550
+updated_at = 1795039883
+weight = 0.0
+issue_number = 1828
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1828"
+issue_closed_at = 1795039883
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261116_git_apply_patch_known_gaps d_tab -- --include-ignored"
+rev = "a6e29aec99889d915c30082dc00de16d95407ded"
+observed_at = 1794813550
+detail = """
+exit 101: . 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.08s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-80ffcfc78037f570)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261116_git_apply_patch_known_gaps`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261116_git_apply_patch_known_gaps d_tab -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: 
+running 1 test
+test d_tab_indented_dash_heredoc_reader ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-c06d8875cd64d3fe)"""
+
+[[task]]
+id = "4264c8c1"
+title = "blastguard: quoted 'git' apply heredoc patch then sh run.sh judged allow"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-16, main fa58e3698 (blastguard 0.2.672), run-20261116-143410-12142: quoted git word, apply, heredoc patch creating run.sh (chmod 777 /etc/hosts), then sh run.sh, is allow in main and subagent. Variable form (g=git; $g apply) is already deny (control). git_apply_patch.rs KNOWN GAP. Expected: not allow.
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261116_git_apply_patch_known_gaps f3_quoted -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: 
+running 1 test
+test f3_quoted_git_word ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-c06d8875cd64d3fe)"""
+created_at = 1794813600
+updated_at = 1795039885
+weight = 0.0
+issue_number = 1829
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1829"
+issue_closed_at = 1795039886
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261116_git_apply_patch_known_gaps f3_quoted -- --include-ignored"
+rev = "a6e29aec99889d915c30082dc00de16d95407ded"
+observed_at = 1794813600
+detail = """
+exit 101: red out; finished in 0.04s
+
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-80ffcfc78037f570)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261116_git_apply_patch_known_gaps`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261116_git_apply_patch_known_gaps f3_quoted -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: 
+running 1 test
+test f3_quoted_git_word ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-c06d8875cd64d3fe)"""
+
+[[task]]
+id = "bd2a44e0"
+title = """blastguard FP: backtick in quoted heredoc body inside "$(cat <<'EOF' ...)" is Ask/Deny (backlog add and plain echo forms)"""
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+観測（2026-11-17、session 1e000416、relay bgr-ce850d320ab9 / bgr-2759af22e775）:
+subagent の backlog add --notes "$(cat <<'EOF' ... EOF)" が Deny された。理由（逐語）:
+「a backtick inside a double-quoted argument of `backlog add` is command substitution: the shell runs that span and silently deletes it from the stored text. Use single quotes (or escape the backtick) to keep it literal」
+同じコマンドを main で実行すると通り、保存された notes（dc97fc2d）にはバッククォートがそのまま残った = 置換は起きていない。引用付き heredoc の本文は bash では展開されない。
+
+probe（稼働 0.2.679 と worktree 0.2.684 で全行一致、main / subagent）:
+- Q1 echo "$(cat <<'EOF' 本文 `ls` EOF)": ask / deny。「the command executed here comes from ``ls``, whose value only exists at run time — blastguard cannot see what would actually run」
+- Q2 backlog add --notes "$(cat <<'EOF' 本文 `.backlog/tasks.toml` EOF)": ask / deny（上の backtick_text 理由）
+- Q3 Q2 に cd /tmp && と 2>&1 | tail -20 を付けた形: ask / deny
+- 対照: C1（バッククォート無し）allow/allow、U2 と D1（本物の置換）ask/deny、H1 と H2（引用なし heredoc の chmod 777 /etc/hosts）deny/deny
+- H3（引用付き heredoc 本文に chmod 777 /etc/hosts の文字列）: ask/deny。正しい判定は未確定のため RED には入れていない。
+
+原因は 2 経路:
+(1) crates/blastguard/src/detect/backtick_text.rs:11 backtick_in_double_quoted_text（backlog add/edit と git commit 限定。$(...) や引用付き heredoc の内側かを見ない）
+(2) 一般の echo の形で「the command executed here comes from …」を出す別の検出器
+関連: 234cae6f（#1755）は git commit の形だけを RED で検査しており、backlog add と一般の echo の形は検査していない。
+
+RED: commit 53faf5d35（branch red/blastguard-heredoc-backtick-cmdsubst-20261117、blastguard 0.2.685、未 merge）
+テスト: crates/blastguard/tests/backlog_20261117_quoted_heredoc_backtick_in_dq_cmdsubst_fp.rs
+  RED: backtick_in_quoted_heredoc_inside_dq_cmdsubst_is_allow（3 passed; 1 failed）
+  対照: control_quoted_heredoc_without_backtick_is_allow / control_genuine_substitution_stays_ask_in_main_deny_in_subagent / control_unquoted_heredoc_system_harm_stays_deny
+
+起票の経緯: subagent が notes をシングルクォートで渡した backlog add は condukt testscope に止められた。理由（逐語）「condukt testscope cannot tokenize this command (unbalanced quote), and it mentions a cargo test / git merge, so whether it is a full suite or a mid-run main merge is undetermined: …」。シングルクォート内の奇数個のバッククォートを未閉じの引用と読んだ testscope 側の FP の疑い（未テスト）。ユーザー判断により notes をファイル経由で渡して起票した。
+未確認: subagent の Python heredoc probe が「`installed-0.2.679:` is a command blastguard has no rule for …」で止められた件（dict キーをコマンド語と読んだ疑い）。
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261117_quoted_heredoc_backtick_in_dq_cmdsubst_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: k_in_quoted_heredoc_inside_dq_cmdsubst_is_allow ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.87s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_20261117_quoted_heredoc_backtick_in_dq_cmdsubst_fp.rs (target/debug/deps/backlog_20261117_quoted_heredoc_backtick_in_dq_cmdsubst_fp-0f3bce3bd398b7de)"""
+created_at = 1794913091
+updated_at = 1795039889
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261117_quoted_heredoc_backtick_in_dq_cmdsubst_fp -- --include-ignored"
+rev = "53faf5d35ee4384c69da88af65b1abf33c86cf4c"
+observed_at = 1794913091
+detail = """
+exit 101: dsubst-20261117/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.82s
+     Running tests/backlog_20261117_quoted_heredoc_backtick_in_dq_cmdsubst_fp.rs (target/debug/deps/backlog_20261117_quoted_heredoc_backtick_in_dq_cmdsubst_fp-9343383bd6b6a238)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261117_quoted_heredoc_backtick_in_dq_cmdsubst_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261117_quoted_heredoc_backtick_in_dq_cmdsubst_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: k_in_quoted_heredoc_inside_dq_cmdsubst_is_allow ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.87s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_20261117_quoted_heredoc_backtick_in_dq_cmdsubst_fp.rs (target/debug/deps/backlog_20261117_quoted_heredoc_backtick_in_dq_cmdsubst_fp-0f3bce3bd398b7de)"""
+
+[[task]]
+id = "46b8e76d"
+title = "blastguard FP: python stdin heredoc with >=1, and a triple-quoted <&str, after a literal cd is read as a relative redirect after an unresolved cd"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "s6-retire-readings",
+    "s5-python-parser",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-17 relay bgr-d2f040bc9abe (subagent deny / main ask), reproduced on main 0.2.679/0.2.681 hermetic HOME. Verbatim: ''> =1,' is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve'. Minimal: cd D && python3 /dev/stdin <<'EOF' / assert a>=1, b / x=''' / Option<&str>, / ''' / EOF. Allow when: no cd, no >=1, <&str in a single-line string or bare line, cat > n.txt with same body, triple-quoted text without <&. Python program text re-read as shell. RED 31c938dd6 (branch red/blastguard-fp-batch-20261117, 0.2.682). Stage: S6 retire-readings (S3 judges redirects from AST; S6 removes the string re-reading); GREEN also needs S5 since python stdin is Undetermined until S5. Distinct from 3764e463 (python -c, backtick '>> `y`'), 9d88d739/c9da0437/06c51772 (backtick-in-string).
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261117_python_stdin_triple_quote_redirect_after_cd_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: pe_writing_a_system_file_stays_denied ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.40s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261117_python_stdin_triple_quote_redirect_after_cd_fp.rs (target/debug/deps/backlog_20261117_python_stdin_triple_quote_redirect_after_cd_fp-ea3b44ce5ecafbcd)"""
+created_at = 1794872347
+updated_at = 1795039891
+weight = 0.0
+issue_number = 1847
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1847"
+issue_closed_at = 1795039893
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261117_python_stdin_triple_quote_redirect_after_cd_fp -- --include-ignored"
+rev = "31c938dd6444bb88927be8222cb10dc78362fb85"
+observed_at = 1794872347
+detail = """
+exit 101: /crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/backlog_20261117_python_stdin_triple_quote_redirect_after_cd_fp.rs (target/debug/deps/backlog_20261117_python_stdin_triple_quote_redirect_after_cd_fp-815829cea95d5864)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261117_python_stdin_triple_quote_redirect_after_cd_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261117_python_stdin_triple_quote_redirect_after_cd_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: pe_writing_a_system_file_stays_denied ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.40s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261117_python_stdin_triple_quote_redirect_after_cd_fp.rs (target/debug/deps/backlog_20261117_python_stdin_triple_quote_redirect_after_cd_fp-ea3b44ce5ecafbcd)"""
+
+[[task]]
+id = "f6102045"
+title = "blastguard FP: quoted git commit -F - heredoc message (5th statement of an && chain) has its message lines judged as commands ('X is not a command blastguard recognises ... parses as a destructive command line')"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-18 relay bgr-0dd8923dc0f3 (subagent deny; main ran it, commit 23f5a3211). RED + control in commit 34f79f4a7 (branch red/blastguard-commit-heredoc-body-fp-20261118, 0.2.692); exact command = PREFIX + git commit -q -F - <<'EOF' MESSAGE EOF + SUFFIX in the test. Re-observed at 0.2.692 tree: main=ask with the same body-as-command reason. Control: the same message as a bare first git commit -q -F - is NOT misread. Not a duplicate of 3ab6109f (needs a quoted $ option value on the opener; none here), d292ce6e (column-0 backtick; no backtick in this body), 648a6641 (; before a backtick span; no backtick), bd2a44e0 ("$(cat <<'EOF' ...)" form), 2d2ef773 (python stdin heredoc). Same family: a quoted heredoc body is data (user ruling 2026-11-17 on d292ce6e); trigger line/position not isolated.
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-demonstrated; exit 0; cmd: cargo test -p blastguard --test backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp -- --ignored refused_commit_heredoc_body_is_not_read_as_commands; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. An `#[ignore]`d repro must be run with `-- --ignored` (e.g. `cargo test -p <crate> --test <file> -- --ignored`), and a test-name filter must match the repro: 
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp.rs (target/debug/deps/backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp-94f2e47ef5d4b550)"""
+created_at = 1794942412
+updated_at = 1795039895
+weight = 0.0
+issue_number = 1854
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1854"
+issue_closed_at = 1795039897
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp -- --ignored refused_commit_heredoc_body_is_not_read_as_commands"
+rev = "34f79f4a7d84491cfebf83b97ae20560287d459d"
+observed_at = 1794942412
+detail = """
+exit 101: -20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.00s
+     Running tests/backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp.rs (target/debug/deps/backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp-473aa388e6897006)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-demonstrated; exit 0; cmd: cargo test -p blastguard --test backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp -- --ignored refused_commit_heredoc_body_is_not_read_as_commands; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. An `#[ignore]`d repro must be run with `-- --ignored` (e.g. `cargo test -p <crate> --test <file> -- --ignored`), and a test-name filter must match the repro: 
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp.rs (target/debug/deps/backlog_20261118_commit_msg_heredoc_body_read_as_commands_fp-94f2e47ef5d4b550)"""
+
+[[task]]
+id = "19baba2f"
+title = "blastguard FP: quoted heredoc written to a .rs file whose Rust doc text mentions 'git checkout <branch> -- .' is denied as git checkout -- . (rule git-checkout-dash-dot)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-18 ~/.blastguard/blocks/blocks.jsonl line 692 (session 06c2bd77, subagent a611cdac32e08bddb, 0.2.675, ts 1794941931): cd <wt> && cat > crates/tdd/tests/backlog_20261118_unnamed_write_excluded_from_scope.rs <<'EOF' ... EOF then '. "$HOME/.cargo/env"; cargo test -p tdd ...' -> deny 'git checkout -- . discards all working-tree changes'. Exact command kept byte-exact as crates/blastguard/tests/fixtures/backlog_20261118_rs_heredoc_checkout_fp.cmd (jq -j .tool_input.command; 10952 bytes; sha256 c42b19da...; the log's tool_input_bytes 11544 / tool_input_sha256 efbd0f... do not equal the raw command's size/hash, apparently computed over another serialization - not verified). RED + control in commit 34f79f4a7 (0.2.692); re-observed at that tree: main=deny same reason. Control: the phrase alone in a quoted .rs heredoc is NOT misread, so the trigger is elsewhere in the 10.9 KB body (not isolated). The command is > 8 KiB (MAX_PARSE_BYTES): a TooLong Deny would be a separate, ruled verdict; the RED asserts only that it is not the git-checkout misreading. Memory ruling: .rs heredoc body is not shell (note: the same command then runs cargo test on that file - the ruling's 'unless run in same command' clause is about shell-run, which this is not, but this reading is an interpretation). Not a duplicate of 2d2ef773 (python stdin), 648a6641 (backtick command-word, different reason), bd2a44e0 ($(cat) form), d292ce6e (column-0 backtick).
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-demonstrated; exit 0; cmd: cargo test -p blastguard --test backlog_20261118_rs_heredoc_checkout_text_fp -- --ignored logged_rs_heredoc_is_not_read_as_git_checkout; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. An `#[ignore]`d repro must be run with `-- --ignored` (e.g. `cargo test -p <crate> --test <file> -- --ignored`), and a test-name filter must match the repro: 
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/backlog_20261118_rs_heredoc_checkout_text_fp.rs (target/debug/deps/backlog_20261118_rs_heredoc_checkout_text_fp-c524405ea47832b2)"""
+created_at = 1794942463
+updated_at = 1795039899
+weight = 0.0
+issue_number = 1855
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1855"
+issue_closed_at = 1795039900
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_rs_heredoc_checkout_text_fp -- --ignored logged_rs_heredoc_is_not_read_as_git_checkout"
+rev = "34f79f4a7d84491cfebf83b97ae20560287d459d"
+observed_at = 1794942463
+detail = """
+exit 101: uki/src/.harness-worktrees/red-commit-heredoc-fp-20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.57s
+     Running tests/backlog_20261118_rs_heredoc_checkout_text_fp.rs (target/debug/deps/backlog_20261118_rs_heredoc_checkout_text_fp-57f7c3880d353448)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_rs_heredoc_checkout_text_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-demonstrated; exit 0; cmd: cargo test -p blastguard --test backlog_20261118_rs_heredoc_checkout_text_fp -- --ignored logged_rs_heredoc_is_not_read_as_git_checkout; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. An `#[ignore]`d repro must be run with `-- --ignored` (e.g. `cargo test -p <crate> --test <file> -- --ignored`), and a test-name filter must match the repro: 
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/backlog_20261118_rs_heredoc_checkout_text_fp.rs (target/debug/deps/backlog_20261118_rs_heredoc_checkout_text_fp-c524405ea47832b2)"""
+
+[[task]]
+id = "693a76ea"
+title = "blastguard: backtick =word inside a quoted heredoc body read as an undetermined command word (Ask/Deny FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-18 (session 1e000416, relays bgr-c1761eb0eaab and bgr-360d450f9569). A backtick-quoted equals-word (e.g. the text BACKTICK =x BACKTICK) inside a QUOTED heredoc body (<<EOF with quoted delimiter) is reported as "the command word ... is an expansion whose value only exists at run time" when another command follows the EOF terminator: Ask in main, Deny in subagent. A quoted heredoc body is never expanded, so nothing in it runs. Minimal repro (worktree debug build 0.2.691): cat with quoted heredoc, body = backticked =x, then a line "true" -> ask/deny; without the trailing command -> allow/allow. Same body to git commit -q -F - then true -> allow/allow, but followed by "git log --oneline -1; backlog add --help 2>&1 | head -40" -> ask/deny (the shape that blocked a subagent commit). Not asserted: backticked "rm -rf ~" (no equals) in a quoted cat heredoc body then true is deny/deny in the worktree build (possible related FP). RED test: crates/blastguard/tests/backlog_20261118_quoted_heredoc_backtick_equals_word_fp.rs (commit 1bcc184a6, branch red/blastguard-zsh-equals-20261118), RED is #[ignore]d; run with --include-ignored. Controls: real "=$x foo" stays ask/deny; bash heredoc running chmod 777 /etc/hosts stays deny. Related: aa7acd12 (zsh =cmd system-harm fail-open); the fix for that must not widen this FP.
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261118_quoted_heredoc_backtick_equals_word_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0:  backtick_equals_word_in_quoted_heredoc_body_is_allow ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/backlog_20261118_quoted_heredoc_backtick_equals_word_fp.rs (target/debug/deps/backlog_20261118_quoted_heredoc_backtick_equals_word_fp-36bfdd2e0adb832c)"""
+created_at = 1794943239
+updated_at = 1795039903
+weight = 0.0
+issue_number = 1858
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1858"
+issue_closed_at = 1795039904
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_quoted_heredoc_backtick_equals_word_fp -- --include-ignored"
+rev = "1bcc184a67cb645c1f269bec8a5e1ff627fbdb04"
+observed_at = 1794943239
+detail = """
+exit 101: uard-zsh-equals-20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.68s
+     Running tests/backlog_20261118_quoted_heredoc_backtick_equals_word_fp.rs (target/debug/deps/backlog_20261118_quoted_heredoc_backtick_equals_word_fp-950f9c89ac5f7e75)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_quoted_heredoc_backtick_equals_word_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261118_quoted_heredoc_backtick_equals_word_fp -- --include-ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0:  backtick_equals_word_in_quoted_heredoc_body_is_allow ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/backlog_20261118_quoted_heredoc_backtick_equals_word_fp.rs (target/debug/deps/backlog_20261118_quoted_heredoc_backtick_equals_word_fp-36bfdd2e0adb832c)"""
+
+[[task]]
+id = "0298c734"
+title = "blastguard: with the session cwd under /private/var (no TMPDIR), rm -rf <in-cwd> is Deny as one command but the confined Ask behind any && / ; / cd prefix"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-18 at origin/main 1dfa60681 (0.2.699), HOME/cwd = non-existent sentinel /private/var/folders/zz/<x>/home/wt, hook env without TMPDIR: rm -rf build / rm -rf D/build / rm -rf <abs>/build -> deny ('… is a system directory [system harm …]', deletion::judge_rm). true && rm -rf build, echo x; rm -rf build, cd <same abs wt> && rm -rf build, =cd D && rm -rf build -> main ask ('recursive rm (-r) is confined to …/wt — a safe root'); subagent deny in every case. Table C: System row escapes via confined_root, so Project row -> legacy deletion::judge_rm = Deny; a no-op prefix must not lower it (raise-only legacy layer). With HOME under ~/.blastguard-test-fixtures or /private/tmp both shapes are the confined Ask (no inconsistency). Separate, unpinned: the [system harm] marker on the single-command deny vs harm_mark::harms_system's confined_root escape. RED 3cc3c61e5 (branch red/bg-leads-20261118, 4 ignored).
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-demonstrated; exit 0; cmd: cargo test -p blastguard --test backlog_20261118_compound_line_weakens_sysdir_rm_deny -- --ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. An `#[ignore]`d repro must be run with `-- --ignored` (e.g. `cargo test -p <crate> --test <file> -- --ignored`), and a test-name filter must match the repro: 
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261118_compound_line_weakens_sysdir_rm_deny.rs (target/debug/deps/backlog_20261118_compound_line_weakens_sysdir_rm_deny-3f654cef25ff5a5a)"""
+created_at = 1794947239
+updated_at = 1795039906
+weight = 0.0
+issue_number = 1859
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1859"
+issue_closed_at = 1795039907
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_compound_line_weakens_sysdir_rm_deny -- --ignored"
+rev = "3cc3c61e5aa501f3904e1961d8d6c075039235fe"
+observed_at = 1794947239
+detail = """
+exit 101: harness-worktrees/bg-leads-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.61s
+     Running tests/backlog_20261118_compound_line_weakens_sysdir_rm_deny.rs (target/debug/deps/backlog_20261118_compound_line_weakens_sysdir_rm_deny-91079b9cce231417)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_compound_line_weakens_sysdir_rm_deny`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-demonstrated; exit 0; cmd: cargo test -p blastguard --test backlog_20261118_compound_line_weakens_sysdir_rm_deny -- --ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. An `#[ignore]`d repro must be run with `-- --ignored` (e.g. `cargo test -p <crate> --test <file> -- --ignored`), and a test-name filter must match the repro: 
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261118_compound_line_weakens_sysdir_rm_deny.rs (target/debug/deps/backlog_20261118_compound_line_weakens_sysdir_rm_deny-3f654cef25ff5a5a)"""
+
+[[task]]
+id = "84816911"
+title = "blastguard fail-open: rsync --delete/--delete-* into a non-asset home subdir (~/Documents/) is Allow while rm -rf ~/Documents/x is Deny (ruling 2026-11-18: rsync --delete is a Table B Delete row)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Ruling 2026-11-18: rsync --delete / --delete-* is a Table B Delete row; destination judged by Table C like rm (Scratch and own worktree Allow, else same as rm). Observed at a19a34553 (0.2.702), hermetic fixture HOME, main+subagent: rsync -a --delete|--delete-after|--delete-excluded src/ ~/Documents/ allow/allow; rm -rf ~/Documents/x deny/deny. Cause: detect/system_paths.rs rsync_mutated judges the destination only against system dirs. Controls GREEN: /tmp, absolute TMPDIR, own worktree (rel+abs) Allow; rsync without --delete into /tmp Allow. Not pinned: $TMPDIR-spelled destination (Table A resolves only HOME; rsync ask/deny, rm -rf $TMPDIR/x deny/deny). Home itself / ~/.ssh: 7f9f2457. RED 96c9f5e4d (branch red/bg-rsync-tableb-pyc-sys-20261118, 3 ignored).
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-demonstrated; exit 0; cmd: cargo test -p blastguard --test backlog_20261118_rsync_delete_table_b_row -- --ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. An `#[ignore]`d repro must be run with `-- --ignored` (e.g. `cargo test -p <crate> --test <file> -- --ignored`), and a test-name filter must match the repro: 
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/backlog_20261118_rsync_delete_table_b_row.rs (target/debug/deps/backlog_20261118_rsync_delete_table_b_row-d85a1591fc2d6364)"""
+created_at = 1795005003
+updated_at = 1795039908
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_rsync_delete_table_b_row -- --ignored"
+rev = "96c9f5e4d209c1fbcab579fd18d31ea70a858eb4"
+observed_at = 1795005003
+detail = """
+exit 101: d v0.2.703 (/Users/yuki/src/.harness-worktrees/bg-rsync-tableb-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.12s
+     Running tests/backlog_20261118_rsync_delete_table_b_row.rs (target/debug/deps/backlog_20261118_rsync_delete_table_b_row-16a6dd1173676192)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_rsync_delete_table_b_row`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-demonstrated; exit 0; cmd: cargo test -p blastguard --test backlog_20261118_rsync_delete_table_b_row -- --ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. An `#[ignore]`d repro must be run with `-- --ignored` (e.g. `cargo test -p <crate> --test <file> -- --ignored`), and a test-name filter must match the repro: 
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/backlog_20261118_rsync_delete_table_b_row.rs (target/debug/deps/backlog_20261118_rsync_delete_table_b_row-d85a1591fc2d6364)"""
+
+[[task]]
+id = "120165e0"
+title = "blastguard FP: backtick-and-> inside a quoted <<'EOF' heredoc body read as a redirect with a shell expansion"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261118_quoted_heredoc_backtick_redirect_fp -- --ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: edoc_commit_message_with_backticks_is_not_deny_in_main_mode ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.68s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261118_quoted_heredoc_backtick_redirect_fp.rs (target/debug/deps/backlog_20261118_quoted_heredoc_backtick_redirect_fp-a85f48d6c03f73a2)"""
+created_at = 1795009598
+updated_at = 1795039910
+weight = 0.0
+issue_number = 1863
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1863"
+issue_closed_at = 1795039910
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_quoted_heredoc_backtick_redirect_fp -- --ignored"
+rev = "55f28e447d9ad4a3dfef41cdddcda977e3173a55"
+observed_at = 1795009598
+detail = """
+exit 101: .harness-worktrees/bg-s4-20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/backlog_20261118_quoted_heredoc_backtick_redirect_fp.rs (target/debug/deps/backlog_20261118_quoted_heredoc_backtick_redirect_fp-a3bfd873f3a8048a)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_quoted_heredoc_backtick_redirect_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog recheck` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261118_quoted_heredoc_backtick_redirect_fp -- --ignored; rev: 63fe7ccb69094268cc427877041ea06e5b45905e; observed: exit 0: edoc_commit_message_with_backticks_is_not_deny_in_main_mode ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.68s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261118_quoted_heredoc_backtick_redirect_fp.rs (target/debug/deps/backlog_20261118_quoted_heredoc_backtick_redirect_fp-a85f48d6c03f73a2)"""

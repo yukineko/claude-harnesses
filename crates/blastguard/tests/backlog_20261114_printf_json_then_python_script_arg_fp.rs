@@ -11,12 +11,17 @@
 //! file, not the program python runs; (2) intended: any written file also named
 //! on a python command line is judged as a program. Tell apart: python's program
 //! is its first non-option operand (probe.py); a later operand is argv. Control:
-//! `python3 probe.py cases5.json` alone is allow.
+//! `python3 probe.py cases5.json` alone (now Undetermined under S4 B.5, see the
+//! control test).
 //!
-//! Asserted: subagent == "allow".
+//! Asserted (re-anchored per user ruling 2026-11-18, S4: same verdict as the
+//! program alone, reason names the program; originally subagent == "allow"):
+//! the verdict equals that of `python3 probe.py cases5.json` alone in main and
+//! subagent mode, the main-mode reason cites Table B.5 and names `probe.py`,
+//! and no reason contains the legacy "judged as the Python program" reading.
 //!
 //! DOES NOT PROVE: `python3 cases5.json` (running the written file; must stay
-//! refused/judged), main mode.
+//! refused/judged).
 //!
 //! RED written by an independent test author, not the implementer.
 
@@ -88,15 +93,42 @@ fn seed(home: &Home) {
     .unwrap();
 }
 
+// Re-anchored per user ruling 2026-11-18 (S4: same verdict as the program alone, reason names the program)
+//
+// Was: subagent == "allow". Under S4 Table B.5 `python3 probe.py` (program
+// text not in the command) is Undetermined, so the verdict must equal that of
+// `python3 probe.py cases5.json` alone in both modes, and the reason must be
+// the B.5 one naming `probe.py`, not the legacy printf reading that judges the
+// data file `cases5.json` as the Python program.
 #[test]
-#[ignore = "RED: 2026-11-14 printf-written json passed as python script arg denied — remove the ignore when fixed"]
-fn printf_json_then_python_script_with_json_arg_is_allow() {
+#[ignore = "RED: #1735/#1766 reason names the data file, not the program (ruling 2026-11-18)"]
+fn printf_json_then_python_script_with_json_arg_judged_as_program_alone() {
     let home = unique_home("red");
     seed(&home);
     let cmd =
         "printf '%s\\n' '[{\"cmd\":\"echo hi\"}]' > cases5.json && python3 probe.py cases5.json";
-    let (d, r) = run_as(cmd, &home, true);
-    assert_eq!(d, "allow", "cmd={cmd:?} reason={r}");
+    let alone = "python3 probe.py cases5.json";
+    let mut bad = Vec::new();
+    for subagent in [false, true] {
+        let (d, r) = run_as(cmd, &home, subagent);
+        let (da, ra) = run_as(alone, &home, subagent);
+        if d != da {
+            bad.push(format!(
+                "subagent={subagent}: {d} ({r}); program alone => {da} ({ra})"
+            ));
+        }
+        if !subagent && !(r.contains("Table B.5") && r.contains("`probe.py`")) {
+            bad.push(format!(
+                "subagent={subagent}: reason must cite Table B.5 and name `probe.py`: {r}"
+            ));
+        }
+        if r.contains("judged as the Python program") {
+            bad.push(format!(
+                "subagent={subagent}: legacy data-file-as-program reading: {r}"
+            ));
+        }
+    }
+    assert!(bad.is_empty(), "cmd={cmd:?}\n{}", bad.join("\n"));
 }
 
 #[test]

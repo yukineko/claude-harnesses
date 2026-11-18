@@ -26,8 +26,16 @@
 //! hit a different refusal, symlink resolution of a nonexistent dir, which is
 //! an artifact of the probe environment and not asserted here.)
 //!
-//! Asserted (RED, `#[ignore]`d): the data-argument shapes are Allow in main
-//! and in subagent mode. Controls (not ignored): the file IS the program
+//! Asserted (RED, `#[ignore]`d), re-anchored per user ruling 2026-11-18 (S4:
+//! same verdict as the program alone, reason names the program): each
+//! data-argument shape has the verdict of its `python3 s.py ...` alone in main
+//! and subagent mode, its main-mode reason cites Table B.5 and names `s.py`,
+//! and no reason contains the legacy "judged as the Python program" reading.
+//! (Originally asserted Allow; under S4 B.5 the unseen program is
+//! Undetermined.) Further controls (not ignored): a harmful written program
+//! run directly stays Deny; a benign written program run directly is pinned at
+//! main ask / subagent deny (observed at cd45a8f66); a harmful-looking data
+//! file passed as data is not Allow. Controls (not ignored): the file IS the program
 //! (`> s.py && python3 s.py`, and `python3 d.txt`) stays non-Allow, so the fix
 //! must not blanket-allow printf-then-python.
 //!
@@ -104,24 +112,84 @@ const DATA_ARG_SHAPES: &[&str] = &[
     "printf '%s\\n' a b > d.txt && python3 s.py bin d.txt",
 ];
 
+/// The python command of each shape alone, without the printf (same index as
+/// `DATA_ARG_SHAPES`).
+const PROGRAM_ALONE: &[&str] = &[
+    "python3 s.py d.txt",
+    "python3 s.py d.txt",
+    "python3 s.py bin d.txt",
+];
+
+// Re-anchored per user ruling 2026-11-18 (S4: same verdict as the program alone, reason names the program)
+//
+// Was: every DATA_ARG_SHAPES entry is Allow in both modes. Under S4 Table B.5
+// `python3 s.py` (program text not in the command) is Undetermined, so the
+// shape's verdict must equal that of the program alone, and the reason must be
+// the B.5 one naming `s.py`, not the legacy printf reading that judges the
+// data file `d.txt` as the Python program.
 #[test]
-#[ignore = "RED: 2026-11-14 printf-written file passed as a data argument to a python script is judged as the program — remove the ignore when fixed"]
-fn printf_file_passed_as_python_data_argument_is_allow() {
+#[ignore = "RED: #1735/#1766 reason names the data file, not the program (ruling 2026-11-18)"]
+fn printf_file_passed_as_python_data_argument_judged_as_program_alone() {
     let home = unique_home("red");
     let mut bad = Vec::new();
-    for shape in DATA_ARG_SHAPES {
+    for (shape, alone) in DATA_ARG_SHAPES.iter().zip(PROGRAM_ALONE) {
         for subagent in [false, true] {
             let (d, r) = run_as(shape, &home, subagent);
-            if d != "allow" {
-                bad.push(format!("subagent={subagent} {shape:?} => {d} ({r})"));
+            let (da, ra) = run_as(alone, &home, subagent);
+            if d != da {
+                bad.push(format!(
+                    "subagent={subagent} {shape:?} => {d} ({r}); program alone {alone:?} => {da} ({ra})"
+                ));
+            }
+            if !subagent && !(r.contains("Table B.5") && r.contains("`s.py`")) {
+                bad.push(format!(
+                    "subagent={subagent} {shape:?}: reason must cite Table B.5 and name `s.py`: {r}"
+                ));
+            }
+            if r.contains("judged as the Python program") {
+                bad.push(format!(
+                    "subagent={subagent} {shape:?}: legacy data-file-as-program reading: {r}"
+                ));
             }
         }
     }
-    assert!(
-        bad.is_empty(),
-        "expected Allow for every shape:\n{}",
-        bad.join("\n")
-    );
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// Control (a): the written file IS the program and holds a harmful program.
+/// The legacy reading of the written text must still apply: Deny in both modes.
+#[test]
+fn control_printf_harmful_program_file_then_run_is_deny() {
+    let home = unique_home("ctl-a");
+    let shape = "printf 'import os\\nos.system(\"rm -rf ~\")\\n' > x.py && python3 x.py";
+    for subagent in [false, true] {
+        let (d, r) = run_as(shape, &home, subagent);
+        assert_eq!(d, "deny", "control {shape:?} (subagent={subagent}): {r}");
+    }
+}
+
+/// Control (b): the written file IS the program and is benign. Pinned to the
+/// verdict observed at main cd45a8f66 (blastguard 0.2.730): main ask /
+/// subagent deny. The fix must not make this weaker.
+#[test]
+fn control_printf_benign_program_file_then_run_is_pinned() {
+    let home = unique_home("ctl-b");
+    let shape = "printf 'print(1)\\n' > x.py && python3 x.py";
+    for (subagent, want) in [(false, "ask"), (true, "deny")] {
+        let (d, r) = run_as(shape, &home, subagent);
+        assert_eq!(d, want, "control {shape:?} (subagent={subagent}): {r}");
+    }
+}
+
+/// Control (c): a harmful-looking data file passed as data must not be Allow.
+#[test]
+fn control_printf_harmful_data_file_as_python_data_argument_is_not_allow() {
+    let home = unique_home("ctl-c");
+    let shape = "printf 'rm -rf ~' > d.txt && python3 s.py d.txt";
+    for subagent in [false, true] {
+        let (d, r) = run_as(shape, &home, subagent);
+        assert_ne!(d, "allow", "control {shape:?} (subagent={subagent}): {r}");
+    }
 }
 
 #[test]

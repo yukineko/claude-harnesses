@@ -853,3 +853,8 @@ reason = "'module 責務' bullet `detect/confined`: shape_deny_or_confined_ask /
 path = "crates/blastguard/src/detect/payload/echo_output.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `detect/payload/echo_output`: plain_echo_output / quote_bare_echo_words moved out of detect/payload.rs without behaviour change (file-growth cap)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/b5.rs"
+doc = "docs/specs/script-quarantine.md"
+reason = "Stage S4 Table B.5 layer (user rulings 2026-11-18): an interpreter or direct exec running a program file whose text is not in the command is Undetermined (main Ask / subagent Deny); literal stdin / process-substitution bodies are judged recursively; git-tracked unmodified files, `bash -n` and inherited stdin get no B.5 opinion. Raise-only over the legacy + Table B verdict. script-quarantine.md describes this Ask and the later quarantine plugin that lowers it for recorded-safe files."

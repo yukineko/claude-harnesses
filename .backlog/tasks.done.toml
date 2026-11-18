@@ -84254,3 +84254,125 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; fini
 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running tests/backlog_20261118_quoted_heredoc_backtick_redirect_fp.rs (target/debug/deps/backlog_20261118_quoted_heredoc_backtick_redirect_fp-a85f48d6c03f73a2)"""
+
+[[task]]
+id = "a0551e29"
+title = "blastguard FP: assigned-literal pathspecs (a=lit && b=lit, or after cd) not resolved statically in git add"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795009619
+updated_at = 1795040860
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_assigned_literal_pathspec_git_add_fp -- --ignored"
+rev = "55f28e447d9ad4a3dfef41cdddcda977e3173a55"
+observed_at = 1795009619
+detail = """
+exit 101: rness-worktrees/bg-s4-20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.47s
+     Running tests/backlog_20261118_assigned_literal_pathspec_git_add_fp.rs (target/debug/deps/backlog_20261118_assigned_literal_pathspec_git_add_fp-d110fa76cb28b8a6)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_assigned_literal_pathspec_git_add_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261118_assigned_literal_pathspec_git_add_fp"
+exit = 0
+passed = 5
+rev = "fc304ce5c3766c6cee0804eae9aceb87e3326a60"
+observed_at = 1795040851
+output_digest = "sha256:43e97243309eb713a15237d5d642febde0f848ef034f1252e714cbf00ca5570f"
+excerpt = """
+
+running 5 tests
+test literal_pathspec_git_add_allows ... ok
+test two_assigned_literal_pathspecs_git_add_allows ... ok
+test one_assigned_literal_pathspec_git_add_allows ... ok
+test unbound_pathspec_git_add_not_allowed ... ok
+test assigned_literal_pathspec_after_cd_git_add_allows ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.31s
+
+   Compiling blastguard v0.2.731 (/Users/yuki/src/.harness-worktrees/bg-fp-20261119/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.18s
+     Running tests/backlog_20261118_assigned_literal_pathspec_git_add_fp.rs (target/debug/deps/backlog_20261118_assigned_literal_pathspec_git_add_fp-7033ef7d6281d071)
+"""
+
+[task.closure.red]
+rev = "55f28e447d9ad4a3dfef41cdddcda977e3173a55"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "ebbd1074"
+title = '''blastguard FP: '-> Decision' inside a quoted perl -e regex read as a redirect onto '\''''
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795009572
+updated_at = 1795040866
+weight = 0.0
+issue_number = 1862
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1862"
+issue_closed_at = 1795040868
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_perl_regex_arrow_read_as_redirect_fp -- --ignored"
+rev = "55f28e447d9ad4a3dfef41cdddcda977e3173a55"
+observed_at = 1795009572
+detail = """
+exit 101: rness-worktrees/bg-s4-20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.15s
+     Running tests/backlog_20261118_perl_regex_arrow_read_as_redirect_fp.rs (target/debug/deps/backlog_20261118_perl_regex_arrow_read_as_redirect_fp-b37da4b752bc0bcc)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_perl_regex_arrow_read_as_redirect_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261118_perl_regex_arrow_read_as_redirect_fp"
+exit = 0
+passed = 2
+rev = "fc304ce5c3766c6cee0804eae9aceb87e3326a60"
+observed_at = 1795040863
+output_digest = "sha256:40fd34c38c11bf5a923034c0c5fdf17b941e51e15d7360c4da9bf441c4d990b6"
+excerpt = """
+
+running 2 tests
+test real_redirect_onto_backslash_file_still_refused ... ok
+test blocked_perl_regex_rewrite_is_not_deny_in_main_mode ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
+
+   Compiling blastguard v0.2.731 (/Users/yuki/src/.harness-worktrees/bg-fp-20261119/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.87s
+     Running tests/backlog_20261118_perl_regex_arrow_read_as_redirect_fp.rs (target/debug/deps/backlog_20261118_perl_regex_arrow_read_as_redirect_fp-d7f85ef6671bd538)
+"""
+
+[task.closure.red]
+rev = "3f77df731744d714ab2f7672a186a28e91c11b6b"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

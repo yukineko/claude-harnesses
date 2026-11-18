@@ -128,7 +128,6 @@ const PROGRAM_ALONE: &[&str] = &[
 // the B.5 one naming `s.py`, not the legacy printf reading that judges the
 // data file `d.txt` as the Python program.
 #[test]
-#[ignore = "RED: #1735/#1766 reason names the data file, not the program (ruling 2026-11-18)"]
 fn printf_file_passed_as_python_data_argument_judged_as_program_alone() {
     let home = unique_home("red");
     let mut bad = Vec::new();

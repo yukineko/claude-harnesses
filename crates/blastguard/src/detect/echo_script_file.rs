@@ -37,8 +37,16 @@
 //!   * a pipeline (one statement) that names the file anywhere and holds a
 //!     shell, `.` or `source` word anywhere (`sh x.sh`, `bash -e x.sh`,
 //!     `. x.sh`, `sh < x.sh`, `cat x.sh | sh`, `find . -exec sh {} \;`);
-//!   * the same, read as a Python program, for a pipeline that names the file
-//!     and holds a `python` / `python3` / `python3.N` word (`python3 x.py`);
+//!   * read as a Python program, for a pipeline holding a `python` /
+//!     `python3` / `python3.N` word whose program operand — the first
+//!     non-option operand after python's own options ([`python_program`]) —
+//!     names the file (`python3 x.py`); or whose program is stdin (`-`, no
+//!     operand), comes from `-m`, or cannot be read statically (an unknown
+//!     option, a non-literal operand), when the pipeline names the file
+//!     anywhere (`python3 < x.py`, `cat x.py | python3`). A file named only
+//!     as a later operand (`python3 s.py x.txt`, `sys.argv` data) or beside
+//!     `-c` is not read as the program (backlog dc27f669 / bf90fa9d). A
+//!     non-literal written path keeps the old reading: any python word runs it;
 //!   * the same, read as that interpreter's program, for a pipeline that
 //!     names the file and holds another code-interpreter word
 //!     (`is_code_interpreter`: `node x.js`, `perl x.pl`, …; F7);
@@ -804,6 +812,11 @@ fn statement_may_run(stages: &[&str], target: &Target) -> Runs {
     let mut names = false;
     let mut runner_word = false;
     let mut python_word = false;
+    // For a literal target: a python word whose program operand names the
+    // file, and one whose program is stdin or cannot be determined (run of
+    // the file when the pipeline names it anywhere, as before).
+    let mut python_runs_named = false;
+    let mut python_open = false;
     let mut code_word: Option<String> = None;
     let mut expansion_head = false;
     let mut runs = Runs::default();
@@ -833,12 +846,24 @@ fn statement_may_run(stages: &[&str], target: &Target) -> Runs {
                 runs.shell |= word_names(head, path);
             }
         }
-        for w in &cleaned {
+        for (k, w) in cleaned.iter().enumerate() {
             let n = normalized_command(w);
             if is_shell(&n) || matches!(n.as_str(), "." | "source") {
                 runner_word = true;
             }
-            python_word |= is_python(&n);
+            if is_python(&n) {
+                python_word = true;
+                if let Target::Literal(path) = target {
+                    match python_program(&cleaned[k + 1..]) {
+                        PythonProgram::File(op) => match word_literal(op) {
+                            Some(_) => python_runs_named |= word_names(op, path),
+                            None => python_open = true,
+                        },
+                        PythonProgram::NoFile => {}
+                        PythonProgram::StdinOrUndetermined => python_open = true,
+                    }
+                }
+            }
             if code_word.is_none() && !is_python(&n) && is_code_interpreter(&n) {
                 code_word = Some(n.clone());
             }
@@ -852,11 +877,88 @@ fn statement_may_run(stages: &[&str], target: &Target) -> Runs {
         Target::Opaque(_) => true,
     };
     runs.shell |= (ran && runner_word) || (matches!(target, Target::Opaque(_)) && expansion_head);
-    runs.python |= ran && python_word;
+    runs.python |= match target {
+        Target::Literal(_) => python_runs_named || (names && python_open),
+        Target::Opaque(_) => python_word,
+    };
     if ran && runs.code.is_none() {
         runs.code = code_word;
     }
     runs
+}
+
+/// What a `python` word runs as its program, read from the words after it
+/// (`args`, one stage).
+enum PythonProgram<'a> {
+    /// The first non-option operand: the program file. Later operands are
+    /// `sys.argv` data, not the program (backlog dc27f669 / bf90fa9d).
+    File(&'a str),
+    /// `-c` (the program is the next argument's text) or `--version` /
+    /// `--help*`: no program file is run.
+    NoFile,
+    /// `-` or no operand (the program is read from stdin), `-m` (the module
+    /// may run a later operand as a program: `runpy`, `pdb`, `cProfile`), or
+    /// an option blastguard does not know.
+    StdinOrUndetermined,
+}
+
+/// Python's program operand among `args` (CPython's command line: options
+/// first, then the program). Redirect words are skipped; an option it does not
+/// know makes the program undetermined.
+fn python_program<'a>(args: &[&'a str]) -> PythonProgram<'a> {
+    let mut i = 0;
+    while i < args.len() {
+        let w = args[i];
+        i += 1;
+        if w.is_empty() {
+            continue;
+        }
+        if let Some(redirect) = redirect_parts(w) {
+            if redirect.rest.is_empty() {
+                i += 1;
+            }
+            continue;
+        }
+        if w == "-" {
+            return PythonProgram::StdinOrUndetermined;
+        }
+        if w == "--" {
+            return match args.get(i) {
+                Some(op) => PythonProgram::File(op),
+                None => PythonProgram::StdinOrUndetermined,
+            };
+        }
+        if let Some(long) = w.strip_prefix("--") {
+            match long {
+                "version" | "help" | "help-env" | "help-xoptions" | "help-all" => {
+                    return PythonProgram::NoFile
+                }
+                "check-hash-based-pycs" => i += 1,
+                l if l.starts_with("check-hash-based-pycs=") => {}
+                _ => return PythonProgram::StdinOrUndetermined,
+            }
+            continue;
+        }
+        let Some(cluster) = w.strip_prefix('-') else {
+            return PythonProgram::File(w);
+        };
+        for (pos, c) in cluster.char_indices() {
+            match c {
+                'c' => return PythonProgram::NoFile,
+                'm' => return PythonProgram::StdinOrUndetermined,
+                'W' | 'X' => {
+                    if pos + 1 == cluster.len() {
+                        i += 1;
+                    }
+                    break;
+                }
+                'b' | 'B' | 'd' | 'E' | 'h' | 'i' | 'I' | 'O' | 'P' | 'q' | 'R' | 's' | 'S'
+                | 'u' | 'v' | 'V' | 'x' | '3' | '?' => {}
+                _ => return PythonProgram::StdinOrUndetermined,
+            }
+        }
+    }
+    PythonProgram::StdinOrUndetermined
 }
 
 /// True when `word` (an input redirect prefix such as `<` / `0<` allowed)

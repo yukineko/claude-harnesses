@@ -215,6 +215,28 @@ Common rules for every row:
   `RedirTarget::Path` / `eval::resolve_at` (literal as written when no `cd`
   applies → placed against `PathCtx::hook_cwd`; Undetermined after an
   undetermined `cd`).
+* A relative target after a `cd` that may have failed (`cd x; cmd rel`,
+  `cd x || true; cmd rel`) — user ruling 2026-11-18: when every path that
+  reaches the command has a known cwd (the `cd` target, the hook's cwd, a
+  previous literal `cd`) and there are at most 4 of them
+  (`MAX_CWD_CANDIDATES` in `eval/cwd.rs`; `Cwd::OneOf`,
+  `SimpleCommand::cwd_candidates`),
+  the command is judged once per candidate cwd and the most restrictive
+  verdict stands; it is Allow only when every candidate is Allow. Until
+  `classify` lands, "judged at a candidate" means: the whole detector
+  (legacy layer + this judge) on the synthetic text `<argv>` (the hook's cwd)
+  or `cd <dir> && <argv>` (a known directory), so the existing predicates
+  place the operand exactly as for a literal spelling there
+  (`judge::judge_candidates`; an Ask / Deny there is a
+  `PathClass::AtCandidate` finding, a system-harm Deny stays system harm).
+  More than 4 candidates, a candidate that is not known (`cd "$X"`, `cd -`,
+  a relative `cd` from the hook's cwd, …), an argv word that is not a
+  spellable literal, an unknown hook cwd, or more than 32 candidate runs in
+  one script → `Unresolved` (Ask / Deny), never Allow. `cd x && cmd rel`
+  reaches `cmd` only through the successful `cd`, so its cwd is `x` (one
+  candidate, unchanged). Every reader other than the judge (`targets.rs`,
+  `RedirTarget::Path`, `ProgramSource::File`) still sees such a cwd as
+  `Undetermined`.
 * A command not in this table (and not a wrapper / interpreter) has no effect
   model → no finding (Allow); its redirects are still judged (B.2). An
   interpreter running a program file is NOT such a command (ruling 10, B.5).
@@ -367,7 +389,10 @@ Notes:
   "undetermined command word → Undetermined" rule, and every Table C cell of
   a target whose value IS determined — `classify` is still the S1 stub, so a
   placed target gets no finding and the raise-only legacy layer alone judges
-  it (S3b `Judgement::Allow` = "nothing undetermined found").
+  it (S3b `Judgement::Allow` = "nothing undetermined found"). Exception (user
+  ruling 2026-11-18): a relative target whose cwd is one of a finite set is
+  judged per candidate (Table B "Common rules"), which can produce
+  `Judgement::Deny`.
 * Option lists: the B.1 rows above, plus the GNU long spelling of a listed
   short option (`--append` = `-a`, `--target-directory=DIR` = `-t DIR`, …;
   list in `table_b.rs`). Options after operands count as options (GNU

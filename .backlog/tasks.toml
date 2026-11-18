@@ -3245,3 +3245,35 @@ exit 101: rness-worktrees/bg-s4-20261118/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.47s
      Running tests/backlog_20261118_assigned_literal_pathspec_git_add_fp.rs (target/debug/deps/backlog_20261118_assigned_literal_pathspec_git_add_fp-d110fa76cb28b8a6)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261118_assigned_literal_pathspec_git_add_fp`"""
+
+[[task]]
+id = "834e586c"
+title = "blastguard FP: shell text inside a Python string literal in a python3 heredoc is refused as system harm"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "s5",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-19 (blastguard 0.2.722, S4 triage subagent): python3 - <<'EOF' with body s = "exec <<< 'chmod <mode> /etc/hosts'; bash script.sh"; print(len(s)) was denied as system harm (chmod re-permissions /etc/hosts). Nothing runs chmod; the heredoc is quoted and the text is Python data. RED: crates/blastguard/tests/backlog_20261119_python_heredoc_string_literal_system_harm_fp.rs (ignored; controls os.system call and plain chmod stay Deny). Near twins f281b0b1 (python -c rm -r literal), b424eaed (heredoc backtick span)."""
+created_at = 1795027786
+updated_at = 1795027786
+weight = 0.0
+issue_number = 1864
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1864"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261119_python_heredoc_string_literal_system_harm_fp -- --ignored"
+rev = "8b3fac9e54cdf8bd290b8c23fb8e55b4ae426aa7"
+observed_at = 1795027786
+detail = """
+exit 101: 261119/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.02s
+     Running tests/backlog_20261119_python_heredoc_string_literal_system_harm_fp.rs (target/debug/deps/backlog_20261119_python_heredoc_string_literal_system_harm_fp-9a684a5899ca781c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261119_python_heredoc_string_literal_system_harm_fp`"""

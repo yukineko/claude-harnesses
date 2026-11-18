@@ -290,10 +290,60 @@ fn k_opener_non_cd_head_is_not_split() {
 }
 
 /// O2: a `cd` head that is not a permitted literal (quoted) is not split.
+///
+/// Re-anchored per user ruling 2026-11-17 (d292ce6e) / 2026-11-18: a quoted
+/// heredoc body written to a DATA file (`.txt`) is data, not shell, so the
+/// `.txt` shape is Allow whatever the `cd` head looks like and can no longer
+/// observe whether the head was split. The mutation-kill intent (a non-literal
+/// `cd` head is not split off, so the heredoc is judged under the unsplit
+/// command) is kept on shapes whose body is still judged as shell: a `.sh`
+/// target and an extension-less target. The `.txt` case is pinned as Allow.
+fn heredoc_to(prefix: &str, target: &Path, name: &str) -> String {
+    format!(
+        "{prefix}cat > {}/{name} <<'EOF'\nrm -rf ~/Documents\nEOF",
+        target.display()
+    )
+}
+
 #[test]
 fn k_opener_non_literal_cd_head_is_not_split() {
     let f = Fx::new("o2");
-    let cmd = heredoc(&format!("cd \"{}\" && ", f.tmp.display()), &f.tmp);
+    let head = format!("cd \"{}\" && ", f.tmp.display());
+    for name in ["notes.sh", "notes"] {
+        let cmd = heredoc_to(&head, &f.tmp, name);
+        not_allow(&cmd.clone(), f.run(&f.proj, &cmd));
+    }
+}
+
+/// O2 data-file twin: the quoted body written to `.txt` is data (ruling above).
+#[test]
+fn c_opener_non_literal_cd_head_txt_body_is_data() {
+    let f = Fx::new("o2t");
+    let cmd = heredoc_to(
+        &format!("cd \"{}\" && ", f.tmp.display()),
+        &f.tmp,
+        "notes.txt",
+    );
+    want(
+        "cd \"<tmp>\" && cat > notes.txt <<'EOF'",
+        f.run(&f.proj, &cmd),
+        V::Allow,
+    );
+}
+
+/// O2 executed-later shape: the `.txt` body is run by `sh`, so it is shell.
+#[test]
+fn k_opener_non_literal_cd_head_txt_body_then_sh_is_not_allow() {
+    let f = Fx::new("o2s");
+    let cmd = format!(
+        "{}\nsh {}/notes.txt",
+        heredoc_to(
+            &format!("cd \"{}\" && ", f.tmp.display()),
+            &f.tmp,
+            "notes.txt"
+        ),
+        f.tmp.display()
+    );
     not_allow(&cmd.clone(), f.run(&f.proj, &cmd));
 }
 

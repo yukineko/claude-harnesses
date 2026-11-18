@@ -175,13 +175,11 @@ fn control_write_to_unresolved_argv_not_allow() {
 // --------------------------------------------------------------------- RED
 
 #[test]
-#[ignore = "RED: \"$HOME/x\" argv operand read as an expansion in the python3 -c program (FP, bgr-32cea6e4ce95)"]
 fn argv_home_expansion_allows() {
     allow("home", &format!("{READ_PROG} \"$HOME/bg-sentinel-x\""));
 }
 
 #[test]
-#[ignore = "RED: literal-bound \"$D/x\" argv operand read as an expansion in the python3 -c program (FP, bgr-32cea6e4ce95)"]
 fn argv_line_bound_var_allows() {
     allow(
         "bound",
@@ -190,7 +188,6 @@ fn argv_line_bound_var_allows() {
 }
 
 #[test]
-#[ignore = "RED: \"$1\" argv operand read as an expansion in a read-only python3 -c program (FP, bgr-32cea6e4ce95)"]
 fn argv_positional_allows() {
     allow("pos", &format!("{READ_PROG} \"$1\""));
 }

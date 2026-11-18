@@ -151,8 +151,9 @@ use interpreter::{
 
 use payload::{
     analyze_interpreter_stdin_exec, dash_c_payloads, faithful_tail, inline_command_payloads,
-    interpreter_payloads_after, interpreter_stdin_operand, payloads_after,
-    split_substitution_opening_assignments, strip_wrapping_quotes, word_separators_lost,
+    inline_eval_program_word, interpreter_payloads_after, interpreter_stdin_operand,
+    payloads_after, split_substitution_opening_assignments, strip_wrapping_quotes,
+    word_separators_lost,
 };
 
 use compound::{

@@ -746,6 +746,7 @@ fn l9_read_only_and_never_waits_on_stdin() {
     if status.is_none() {
         let _ = Command::new("kill")
             .arg("-TERM")
+            .arg("--")
             .arg(format!("-{}", child.id()))
             .status();
         drop(held_stdin);

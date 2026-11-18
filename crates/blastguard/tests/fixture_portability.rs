@@ -82,3 +82,41 @@ fn no_hardcoded_private_tmp_bg_mutkill_fixture_roots() {
         report.join("\n")
     );
 }
+
+/// GitHub issue #1697 (backlog a77dd80f): the integration-test targets whose
+/// fixtures were placed under a literal `/private/tmp/...` panicked in setup on
+/// Linux (`/private` does not exist there). 7fba2b82c moved 7 of the 8 targets
+/// onto `support/fixed_tmp.rs`; this pins all 8 so the literal cannot return.
+/// Needle: a string literal (quote immediately followed by the path, which
+/// covers `format!` literals) beginning with `/private/tmp`.
+#[test]
+fn issue_1697_targets_have_no_hardcoded_private_tmp_literal() {
+    const TARGETS: &[&str] = &[
+        "tests/scope_redirect_relaxation_boundaries_20261108.rs",
+        "tests/mutation_kill_cd_rest_tmp.rs",
+        "tests/tmp_truncation_recoverable.rs",
+        "tests/tmp_truncation_refusals.rs",
+        "tests/scratchpad_truncating_redirect_fp_20261107.rs",
+        "tests/cd_and_chain_equivalence.rs",
+        "tests/git_exec_subcommand_failopen_20261107.rs",
+        "tests/managed_place_destructive_allow_20261107.rs",
+    ];
+    let mut hits = Vec::new();
+    for rel in TARGETS {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel);
+        // Unreadable is "cannot determine", never "clean".
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {} to scan it: {e}", path.display()));
+        for (i, l) in text.lines().enumerate() {
+            if l.contains("\"/private/tmp") {
+                hits.push(format!("  {rel}:{}: {}", i + 1, l.trim()));
+            }
+        }
+    }
+    assert!(
+        hits.is_empty(),
+        "hard-coded macOS-only /private/tmp literal in an issue-1697 target (derive the root \
+         with support/fixed_tmp.rs canonical_fixed_temp_root instead):\n{}",
+        hits.join("\n")
+    );
+}

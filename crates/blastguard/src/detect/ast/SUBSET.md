@@ -54,6 +54,17 @@ S2 supplement rulings (user ruling 2026-11-17, after the S2 RED verification):
     every row, not only the harm readings. A Table C Allow that a legacy
     reading answers Ask / Deny today (`dd of=`, `truncate`, `find -delete` on
     Scratch) stays at the legacy verdict until S6 retires that reading.
+    **ruling 14 replaced per rule (2026-11-18): rm legacy reading retired
+    when new layer is Known** (user ruling 2026-11-18: retire the legacy
+    layer rule by rule). For `rm`, when every target of the command is
+    statically resolved and lands in a Table C Allow class (Scratch /
+    OwnWorktree), the legacy `rm` reading (`detect/rm.rs` `analyze_rm`) no
+    longer raises it: `detect/rm/new_layer.rs`. Scratch included by user
+    ruling 2026-11-18 ("仕様どおり Allow": a quoted in-scratch literal gets
+    its unquoted spelling's verdict). Every other `rm` (an unmodelled
+    option, an Undetermined value, a `legacy` / Unresolved / System /
+    Protected / Workflow class) keeps the legacy reading as before. Other
+    legacy readings of the same command line still apply.
 15. Python keeps the legacy readings until S5 (the Python parser).
 16. `.` / `source` become Ask (main) / Deny (subagent) **together with the
     quarantine plugin**, not in S4. Until then their verdict is legacy

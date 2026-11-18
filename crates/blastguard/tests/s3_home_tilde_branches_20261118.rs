@@ -291,7 +291,6 @@ fn unsafe_char_home_tilde_not_allow() {
 /// operand unquoted is Allow.
 // test-weakening-justified: new RED
 #[test]
-#[ignore = "RED: S3 Table C OwnWorktree x Delete(rec) - quoted relative operand (quoted ~) is Deny, spec Allow"]
 fn quoted_tilde_is_relative_in_own_worktree_allows() {
     let fx = fixture("qtilde");
     let wt = fx.own_worktree();
@@ -306,7 +305,6 @@ fn quoted_tilde_is_relative_in_own_worktree_allows() {
 /// DOES NOT PROVE: whether this predates S3 (not measured on main).
 // test-weakening-justified: new RED
 #[test]
-#[ignore = "RED: S3 Table C OwnWorktree x Delete(rec) - quoted relative operand is Deny, spec Allow"]
 fn quoted_relative_in_own_worktree_allows() {
     let fx = fixture("qrel");
     let wt = fx.own_worktree();
@@ -321,7 +319,6 @@ fn quoted_relative_in_own_worktree_allows() {
 /// DOES NOT PROVE: whether this predates S3 (not measured on main).
 // test-weakening-justified: new RED
 #[test]
-#[ignore = "RED: S3 Table A.3/C - mid-word literal ~ (./~/x) in own worktree is Deny, spec Allow"]
 fn midword_literal_tilde_in_own_worktree_allows() {
     let fx = fixture("midtilde");
     let wt = fx.own_worktree();

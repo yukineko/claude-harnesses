@@ -2485,3 +2485,32 @@ exit 101: red out; finished in 0.91s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.39s
      Running tests/fp_fix_boundaries_20261119.rs (target/debug/deps/fp_fix_boundaries_20261119-56bc1626e6f6ba8c)
 error: test failed, to rerun pass `-p blastguard --test fp_fix_boundaries_20261119`"""
+
+[[task]]
+id = "063aadd0"
+title = "askrelay: remove the main-session adjudication of relayed Asks (Stop hook + re-run duty)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "askrelay",
+    "user-ruling",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "User rulings 2026-11-19 (verbatim): 「relayの判定はすべてやらない。上記の方針通り。他のsessionにも通達」 / 「この機能そのものを削除するように、起票」 / 「sesssion間relayはやってもいいが裁定はしない。」 / 「session間relayはタスク分割のためにやることとする」. Remove: the askrelay Stop hook (askrelay stop) that blocks the main session until it re-runs each queued subagent Ask byte-for-byte or dismisses it, plus the re-run/mark-executed/mark-relayed duty it implies. Keep: subagent Ask resolves fail-closed (Deny with reason) inside the subagent; cross-session messaging stays, used only for task splitting. RED: crates/askrelay/tests/backlog_20261119_relay_adjudication_removed.rs (ignored, c14d7a027). Filed by blastguard-false-positive-reduction; the exact extent (whether mark-executed/mark-relayed PostToolUse hooks and the queue go too) should be confirmed with the user by the implementing session."
+created_at = 1795042671
+updated_at = 1795042671
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p askrelay --test backlog_20261119_relay_adjudication_removed -- --ignored"
+rev = "c14d7a027cf42448b7437cfe03ac6354c47091b7"
+observed_at = 1795042671
+detail = """
+exit 101: 0.1.4 (/Users/yuki/src/.harness-worktrees/backlog-relay-20261119/crates/askrelay)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running tests/backlog_20261119_relay_adjudication_removed.rs (target/debug/deps/backlog_20261119_relay_adjudication_removed-34457ac0db682947)
+error: test failed, to rerun pass `-p askrelay --test backlog_20261119_relay_adjudication_removed`"""

@@ -1,7 +1,9 @@
+use super::segment::segment_spans;
 use super::{
-    has_glob_meta, has_unresolvable_expansion, is_relative_operand, is_shell_identifier,
-    line_changes_cwd_before, referenced_variable_name, resolve_expanded_command_word,
-    split_segments_with_separators, CommandWordOrigin, Ctx, CwdState,
+    has_glob_meta, has_unresolvable_expansion, here_document_layout, is_relative_operand,
+    is_shell_identifier, line_changes_cwd_before, referenced_variable_name,
+    resolve_expanded_command_word, split_segments_with_separators, CommandWordOrigin, Ctx,
+    CwdState,
 };
 use crate::exclude;
 use crate::model::Decision;
@@ -464,7 +466,8 @@ pub(super) fn literal_suffix(suffix: &str) -> Option<String> {
 ///
 /// Returns `None` - meaning "resolve nothing on this line, keep the
 /// pre-existing verdict for every target" - unless the per-segment scan
-/// reproduces the line-level scan of [`redirect_targets`] exactly, in order.
+/// reproduces the line-level scan ([`line_targets`]) exactly, in
+/// order.
 /// The two scanners can disagree (segment splitting cuts on `&`, `|`, `;` and
 /// newlines, which also delimit fd-dup syntax), and a per-segment scan that
 /// dropped or reordered a target would hand an occurrence the wrong segment's
@@ -487,11 +490,71 @@ pub(super) fn append_target_occurrences(cmd: &str) -> Option<Vec<(usize, String)
     target_occurrences_by(cmd, append_redirect_targets)
 }
 
+/// The append-redirect targets of the whole line `cmd`, read by
+/// [`line_targets`] (the `>>` axes iterate this list; the `>` axes iterate
+/// `line_targets(cmd, redirect_targets)`).
+pub(super) fn line_append_targets(cmd: &str) -> Vec<String> {
+    line_targets(cmd, append_redirect_targets)
+}
+
+/// `scan` of the whole line `cmd`, with every here-document BODY segment
+/// ([`here_document_layout`]) scanned on its own and every maximal run of
+/// shell-text segments between bodies scanned as one text, in line order.
+///
+/// Why: `scan` tracks quotes, and a body is data in which an apostrophe
+/// (`hook's`) is not a quote. Scanning the line in one pass let a body
+/// apostrophe open a single-quoted span that ran past the delimiter line, so
+/// every redirect AFTER the here-document was invisible to the line-level
+/// list the `>` / `>>` axes iterate (measured 2026-11-18 on the deployed
+/// 0.2.702: `cat > /tmp/x <<'EOF'` / `it's` / `EOF` / `echo x >
+/// /etc/<sentinel>` answered Allow in main and subagent mode, while the
+/// literal `echo x > /etc/<sentinel>` alone is a system-harm Deny), and the
+/// line-level list no longer matched the per-segment one, so
+/// [`target_occurrences_by`] resolved nothing on such a line (`S=<p>; cat >
+/// $S/f <<'EOF'` / `the hook's` / `EOF` / … stayed the expansion Deny).
+/// The segmenters already read a body this way ([`super::here_doc_body_spans`]):
+/// each body line is a segment of its own, so a body segment scanned alone
+/// is exactly what the per-segment scan reads, and a body `>` is still judged
+/// as a redirect (the pre-existing conservative treatment of a body).
+///
+/// The shell-text runs are scanned exactly as the line was before, so the
+/// corroboration of [`target_occurrences_by`] still compares two independent
+/// readings of all shell text. When the segments cannot be mapped back onto
+/// `cmd` ([`segment_spans`]) or no segment is body, the line is scanned in
+/// one pass, as before.
+pub(super) fn line_targets(cmd: &str, scan: fn(&str) -> Vec<String>) -> Vec<String> {
+    let segs = split_segments_with_separators(cmd);
+    let (is_body, _) = here_document_layout(&segs);
+    if !is_body.iter().any(|&b| b) {
+        return scan(cmd);
+    }
+    let Some(spans) = segment_spans(cmd, &segs) else {
+        return scan(cmd);
+    };
+    let mut out = Vec::new();
+    // Byte range of the current run of shell-text segments.
+    let mut run: Option<(usize, usize)> = None;
+    for (idx, &(start, end)) in spans.iter().enumerate() {
+        if is_body.get(idx).copied().unwrap_or(false) {
+            if let Some((s, e)) = run.take() {
+                out.extend(scan(&cmd[s..e]));
+            }
+            out.extend(scan(&segs[idx].text));
+        } else {
+            run = Some(run.map_or((start, end), |(s, _)| (s, end)));
+        }
+    }
+    if let Some((s, e)) = run {
+        out.extend(scan(&cmd[s..e]));
+    }
+    out
+}
+
 pub(super) fn target_occurrences_by(
     cmd: &str,
     scan: fn(&str) -> Vec<String>,
 ) -> Option<Vec<(usize, String)>> {
-    let line_level = scan(cmd);
+    let line_level = line_targets(cmd, scan);
     let mut per_segment: Vec<(usize, String)> = Vec::new();
     for (seg_idx, seg) in split_segments_with_separators(cmd).iter().enumerate() {
         for target in scan(&seg.text) {

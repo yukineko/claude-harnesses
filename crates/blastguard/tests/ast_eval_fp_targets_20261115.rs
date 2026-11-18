@@ -1294,7 +1294,12 @@ fn sanity_line_99_resolved_twin_is_allow() {
 
 #[test]
 fn sanity_line_149_resolved_twin_is_allow() {
-    assert_allow_both("sanity_149", T149, false);
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5).
+    // The twin ends in a direct exec of the scratch-built
+    // `@SCRATCH@/tw/debug/blastguard` (not a system dir, not git-tracked).
+    // It became visible to B.5 once `. "$HOME/.cargo/env"` stopped
+    // discarding the AST state (main 70f8e714c).
+    assert_b5_undetermined("sanity_149", T149, false);
 }
 
 #[test]

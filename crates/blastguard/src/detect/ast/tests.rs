@@ -1248,9 +1248,18 @@ mod env_arith_opaque {
         assert_unsupported("eval foo; n=$X; cat > /tmp/f");
     }
 
+    // Re-anchored (user ruling 2026-11-18, r21): the literal
+    // `. "$HOME/.cargo/env"` no longer makes the state opaque, so the opaque
+    // `.` here is another sourced file; the cargo env spelling is pinned
+    // Known by the pair below.
     #[test]
     fn dot_source_then_prefix_assign_is_unsupported() {
-        assert_unsupported(". \"$HOME/.cargo/env\" && X=$Y cat > /tmp/f");
+        assert_unsupported(". ./env.sh && X=$Y cat > /tmp/f");
+    }
+
+    #[test]
+    fn cargo_env_dot_source_then_prefix_assign_stays_known() {
+        assert_known(". \"$HOME/.cargo/env\" && X=$Y cat > /tmp/f");
     }
 
     #[test]

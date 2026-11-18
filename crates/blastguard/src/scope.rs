@@ -313,6 +313,8 @@ use harness_core::verdict::Determination;
 mod case_fold;
 mod checkout;
 mod deletion_roots;
+mod reading;
+pub(crate) use reading::Reading;
 
 use case_fold::is_case_only_same_entry;
 use checkout::{is_linked_checkout, CheckoutProbe};
@@ -860,7 +862,7 @@ impl SafeRoots {
             .chain(self.cache_roots.iter())
             .cloned()
             .collect();
-        self.classify_disposable_in(&roots, "temp or cache", operand, cwd)
+        self.classify_disposable_in(&roots, "temp or cache", operand, cwd, Reading::Spelled)
     }
 
     /// [`SafeRoots::classify_disposable`] restricted to the FIXED temp
@@ -886,7 +888,7 @@ impl SafeRoots {
             .filter(|r| fixed.contains(r))
             .cloned()
             .collect();
-        self.classify_disposable_in(&roots, "fixed temp", operand, cwd)
+        self.classify_disposable_in(&roots, "fixed temp", operand, cwd, Reading::Spelled)
     }
 
     /// True ONLY when no directory from the parent of `real` up to `root`
@@ -935,140 +937,9 @@ impl SafeRoots {
                 .is_ok_and(|m| m.file_type().is_file() && m.nlink() == 1)
     }
 
-    fn classify_disposable_in(
-        &self,
-        roots: &[String],
-        kind: &str,
-        operand: &str,
-        cwd: Option<&str>,
-    ) -> Determination<Placement> {
-        if let Some(why) = &self.worktree_refusal {
-            return Determination::undetermined(why.clone());
-        }
-        if roots.is_empty() {
-            return Determination::undetermined(format!(
-                "blastguard has no {kind} deletion root for this session"
-            ));
-        }
-        let lexical = match self.lexical_absolute(operand, cwd) {
-            Determination::Known(l) => l,
-            Determination::Undetermined(u) => return Determination::Undetermined(u),
-        };
-        let placement = match self.classify_against(roots, operand, cwd) {
-            Determination::Known(p) => p,
-            Determination::Undetermined(u) => return Determination::Undetermined(u),
-        };
-        let Placement::Inside { root, .. } = &placement else {
-            return Determination::known(placement);
-        };
-        match self.no_symlink_below(&lexical, root) {
-            Determination::Known(true) => Determination::known(placement),
-            Determination::Known(false) => Determination::undetermined(format!(
-                "`{operand}` reaches {root} through a symlink below the root, so what it deletes \
-is not decided by where it is spelled"
-            )),
-            Determination::Undetermined(u) => Determination::Undetermined(u),
-        }
-    }
-
-    /// The operand as an absolute, lexically normalised path (no symlink
-    /// resolution), or why it cannot be one. The literal-path, relative-base
-    /// and residual-`..` rules are exactly [`SafeRoots::classify`]'s (it uses
-    /// this function).
-    pub(crate) fn lexical_absolute(
-        &self,
-        operand: &str,
-        cwd: Option<&str>,
-    ) -> Determination<String> {
-        if operand.is_empty() {
-            return Determination::undetermined("empty operand");
-        }
-        if operand
-            .chars()
-            .any(|c| NOT_A_LITERAL_PATH.contains(&c) || c.is_control())
-        {
-            return Determination::undetermined(
-                "operand is not a literal path (expansion, glob, quoting or a find -exec placeholder)",
-            );
-        }
-        let absolute = if operand.starts_with('/') {
-            match normalize_abs(operand) {
-                Some(a) => a,
-                None => return Determination::undetermined("operand did not normalise to a path"),
-            }
-        } else {
-            let Some(base) = cwd else {
-                return Determination::undetermined(
-                    "relative operand with no known working directory",
-                );
-            };
-            if !base.starts_with('/') {
-                return Determination::undetermined("working directory is not absolute");
-            }
-            match normalize_abs(&format!("{}/{}", base.trim_end_matches('/'), operand)) {
-                Some(a) => a,
-                None => return Determination::undetermined("operand did not normalise to a path"),
-            }
-        };
-        // A relative operand that climbed above its base, or an absolute one
-        // whose `..` could not be collapsed, still carries `..` here. Lexical
-        // resolution has run; anything left is a path this module cannot name.
-        if absolute.split('/').any(|c| c == "..") {
-            return Determination::undetermined("operand still contains an unresolved `..`");
-        }
-        Determination::known(absolute)
-    }
-
-    /// Does deleting `operand` (one directory entry, not a tree) destroy an
-    /// irreplaceable `$HOME`-level asset (backlog 6067a527)? `Some(path)` names
-    /// the landing path when it is:
-    ///
-    ///  * inside a credential store at the top of `$HOME`
-    ///    ([`IRREPLACEABLE_HOME_DIRS`]: `~/.ssh/id_rsa`, `~/.gnupg/…`), or
-    ///  * a home-level dotfile directly at `$HOME/.<name>` (`~/.zshrc`,
-    ///    `~/.gitconfig`) — the "home-level config" deletion class.
-    ///
-    /// `~`, `~/…`, `$HOME/…` and `${HOME}/…` are expanded against the
-    /// canonical home; a relative operand is placed against `cwd`. The landing
-    /// path is compared to the home both as spelled and with its PARENT
-    /// resolved (`rm` removes the final entry itself, so a final symlink is not
-    /// followed), so `/var/…` spelling a `/private/var/…` home still matches.
-    ///
-    /// `None` means "not recognised as a home asset", which keeps the caller's
-    /// existing verdict; it is not a determination that the path is safe.
-    pub(crate) fn irreplaceable_home_asset(
-        &self,
-        operand: &str,
-        cwd: Option<&str>,
-    ) -> Option<String> {
-        let home = self.home_real()?.trim_end_matches('/');
-        let expanded = ["${HOME}", "$HOME", "~"]
-            .iter()
-            .find_map(|p| {
-                operand.strip_prefix(p).and_then(|rest| {
-                    (rest.is_empty() || rest.starts_with('/')).then(|| format!("{home}{rest}"))
-                })
-            })
-            .unwrap_or_else(|| operand.to_string());
-        let Determination::Known(lexical) = self.lexical_absolute(&expanded, cwd) else {
-            return None;
-        };
-        let mut candidates = vec![lexical.clone()];
-        if let Some((parent, name)) = lexical.rsplit_once('/') {
-            let parent = if parent.is_empty() { "/" } else { parent };
-            if let Some(real_parent) = self.resolve(parent) {
-                candidates.push(format!("{}/{name}", real_parent.trim_end_matches('/')));
-            }
-        }
-        candidates.into_iter().find(|path| {
-            let Some(rel) = path.strip_prefix(&format!("{home}/")) else {
-                return false;
-            };
-            let first = rel.split('/').next().unwrap_or("");
-            IRREPLACEABLE_HOME_DIRS.contains(&first)
-                || (!rel.contains('/') && first.starts_with('.'))
-        })
-    }
+    // `classify_disposable_in`, `lexical_absolute`, `irreplaceable_home_asset`
+    // and `classify_against` live in `scope/reading.rs` (spelled vs value
+    // reading of an operand).
 
     /// "Between `root` and `lexical`, is there no symlink at all?"
     ///
@@ -1270,15 +1141,7 @@ its own real path, so its physical parent is not its lexical one"
     /// worktree storage roots (always the case for [`SafeRoots::none`]) the
     /// answer is `Undetermined`, which the caller must read as "not allowed".
     pub fn classify_worktree(&self, operand: &str, cwd: Option<&str>) -> Determination<Placement> {
-        if let Some(why) = &self.worktree_refusal {
-            return Determination::undetermined(why.clone());
-        }
-        if self.worktree_roots.is_empty() {
-            return Determination::undetermined(
-                "blastguard has no worktree storage root for this session (no HOME / cwd / project dir)",
-            );
-        }
-        self.classify_against(&self.worktree_roots, operand, cwd)
+        self.classify_worktree_as(operand, cwd, Reading::Spelled)
     }
 
     /// True when this model was built by the filesystem-aware hook binary
@@ -1341,44 +1204,6 @@ before resolving symlinks, so where it lands is not decided by its spelling",
             );
         }
         self.classify_against(&managed, operand, cwd)
-    }
-
-    fn classify_against(
-        &self,
-        roots: &[String],
-        operand: &str,
-        cwd: Option<&str>,
-    ) -> Determination<Placement> {
-        let absolute = match self.lexical_absolute(operand, cwd) {
-            Determination::Known(a) => a,
-            Determination::Undetermined(u) => return Determination::Undetermined(u),
-        };
-        let Some(real) = resolve_with(&absolute, self.resolver) else {
-            return Determination::undetermined(
-                "real path could not be resolved (no resolver, or the filesystem said no)",
-            );
-        };
-        for root in roots {
-            if &real == root {
-                return Determination::known(Placement::IsRoot { root: root.clone() });
-            }
-        }
-        // Longest matching root wins, so a nested root (`/tmp` and a project
-        // that happens to live under it) reports the more specific one.
-        let mut best: Option<&String> = None;
-        for root in roots {
-            let prefix = format!("{}/", root.trim_end_matches('/'));
-            if real.starts_with(&prefix) && best.is_none_or(|b| root.len() > b.len()) {
-                best = Some(root);
-            }
-        }
-        match best {
-            Some(root) => Determination::known(Placement::Inside {
-                root: root.clone(),
-                path: real,
-            }),
-            None => Determination::known(Placement::Outside { path: real }),
-        }
     }
 }
 

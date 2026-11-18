@@ -87,10 +87,23 @@ pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision 
     let resolved = static_bindings::resolve_static_bindings(c);
     let c: &str = &resolved;
     let legacy = targets::with_index(c, || every_reading(c, scope));
-    // S4: the standalone Table B.5 layer; it only raises (`max(B.5, legacy)`).
+    // Stage S3b (user ruling 2026-11-18): the AST judge for the commands with
+    // a SUBSET.md Table B B.1 row — an unlisted option or an operand the
+    // evaluator cannot resolve is Ask (main) / Deny (subagent). Raise-only:
+    // a legacy Deny is kept, a legacy Ask keeps its reason, and the judge
+    // never lowers the legacy verdict.
+    let mut acc = VerdictAcc::default();
+    if let Some(deny) = acc.record(legacy) {
+        return deny;
+    }
+    if let Some(deny) = acc.record(super::ast::table_b_verdict(c, scope)) {
+        return deny;
+    }
+    let before_b5 = acc.finish();
+    // S4: the standalone Table B.5 layer; it only raises (`max(B.5, …)`).
     let judge = |text: &str| detect_bash_every_reading(text, scope);
     super::ast::b5::raise(
-        legacy,
+        before_b5,
         c,
         &super::ast::b5::Probes {
             judge: &judge,
@@ -141,9 +154,17 @@ fn every_reading(c: &str, scope: &SafeRoots) -> Decision {
             // An Ask never short-circuits, so there is nothing to return here.
             let _ = acc.record(Decision::ask(LINE_CONTINUATION_UNDETERMINED));
         }
+        // The joined text is the program the shell runs, so it gets EVERY
+        // reading the original gets (its function-call reading, its bash 3.2
+        // readings, ...), not only the plain one: a reading of the original
+        // that splits at a continuation (`git add \` alone, judged as adding
+        // nothing; `f() { git add \` / `-A; }; f` inlined unjoined) is only
+        // sound because the joined text is judged in full. The recursion
+        // ends: what `line_continuation_reading` leaves joined (single
+        // quotes, comments, here-document bodies) reads `Same` the second
+        // time.
         ShellLexed::Text(joined) => {
-            ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
-            if let Some(deny) = acc.record(detect_bash(&joined, 0, &Ctx::new(scope, &joined))) {
+            if let Some(deny) = acc.record(every_reading(&joined, scope)) {
                 return deny;
             }
         }
@@ -217,10 +238,13 @@ pub(super) fn shell_payload_verdict(payload: &str, depth: usize, ctx: &Ctx<'_>) 
     if let Some(deny) = acc.record(detect_bash(payload, depth + 1, ctx)) {
         return deny;
     }
+    // The joined payload gets every reading of this function (its own
+    // function-call reading included), as at the top level; the recursion
+    // ends because the joined text reads `Same` the second time.
     let joined = match line_continuation_reading(payload) {
         ShellLexed::Same => Decision::Allow,
         ShellLexed::Undetermined => Decision::ask(LINE_CONTINUATION_UNDETERMINED),
-        ShellLexed::Text(joined) => detect_bash(&joined, depth + 1, ctx),
+        ShellLexed::Text(joined) => shell_payload_verdict(&joined, depth, ctx),
     };
     if let Some(deny) = acc.record(joined) {
         return deny;

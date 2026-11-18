@@ -191,7 +191,51 @@ hostile!(later_time_sh, rs("time sh {DIR}/src/x.rs\n"));
 hostile!(later_command_sh, rs("command sh {DIR}/src/x.rs\n"));
 hostile!(later_xargs, rs("echo {DIR}/src/x.rs | xargs sh\n"));
 hostile!(later_rustc, rs("rustc {DIR}/src/x.rs\n"));
-hostile!(later_cargo_test, rs("cargo test\n"));
+// Re-anchored to user ruling 2026-11-18 (B-4), not deleted. This case used to
+// pin `rs("cargo test\n")` (write `.rs`, then `cargo test`) as not-Allow; the
+// ruling makes that exact command Allow (building is not running the body),
+// and `ruling_b4_cargo_test_after_rs_write_harmful_body_allows` below pins it
+// Allow. What the ruling keeps restricted is running the written file with a
+// shell after the build, so the hostile case now pins THAT: `cargo test`
+// followed by `sh` on the same file stays not-Allow. (A `hostile!`
+// invocation can only assert not-Allow and scripts/check-test-weakening.py
+// cannot prove an invocation's removal safe, so the name is kept and its
+// command moved to the ruling's restricted side.)
+hostile!(later_cargo_test, rs("cargo test && sh {DIR}/src/x.rs\n"));
+
+/// Ruling B-4, benign-looking body: write `.rs`, then `cargo test` => Allow
+/// (already Allow at origin/main 04d9b8336).
+#[test]
+fn ruling_b4_cargo_test_after_rs_write_benign_body_allows() {
+    let fx = Fixture::new("b4-benign");
+    let cmd = "cat > {DIR}/src/x.rs <<'EOF'\nfn main() {}\nEOF\ncargo test\n";
+    let (d, out) = fx.decision(cmd);
+    assert_eq!(d, "allow", "ruling B-4; command {cmd:?}; got {out:?}");
+}
+
+/// Ruling B-4, harmful-looking body (`rm -rf ~` as text in a `.rs` file):
+/// still Allow, the body is not run by `cargo test`.
+#[test]
+fn ruling_b4_cargo_test_after_rs_write_harmful_body_allows() {
+    let fx = Fixture::new("b4-harmful");
+    let cmd = rs("cargo test\n");
+    let (d, out) = fx.decision(&cmd);
+    assert_eq!(d, "allow", "ruling B-4; command {cmd:?}; got {out:?}");
+}
+
+/// Controls for B-4: a written `.sh` holding the harmful body and then run in
+/// the same command stays not-Allow. (Observed at origin/main 04d9b8336: the
+/// same shapes with the benign body `echo hi` are Allow, because a `.sh` body
+/// is judged as shell and `echo hi` is harmless, so benign-body variants are
+/// not pinned here.)
+fn sh_then(run: &str) -> String {
+    format!("cat > x.sh <<'EOF'\nrm -rf ~\nEOF\n{run}\n")
+}
+
+hostile!(ruling_b4_control_sh_run, sh_then("sh x.sh"));
+hostile!(ruling_b4_control_bash_run, sh_then("bash x.sh"));
+hostile!(ruling_b4_control_exec_run, sh_then("./x.sh"));
+hostile!(ruling_b4_control_dot_source, sh_then(". ./x.sh"));
 hostile!(later_quoted_sh_head, rs("\"sh\" {DIR}/src/x.rs\n"));
 hostile!(later_single_quoted_sh_head, rs("'sh' {DIR}/src/x.rs\n"));
 hostile!(later_cat_pipe_sh, rs("cat {DIR}/src/x.rs | sh\n"));
@@ -227,10 +271,30 @@ hostile!(
     later_echo_redirect_clobbers,
     rs("echo hi > {HOME}/.zshrc\n")
 );
+// Re-anchored to user ruling 2026-11-18 (heredoc body by target language):
+// the old command `rs("echo 'a\nsh {DIR}/src/x.rs\n'\n")` has `sh …` only
+// inside echo's quoted argument, so nothing runs the written `.rs` and the
+// ruling makes it Allow (`later_multi_line_quote_hides_sh_ruled_allow`
+// below). The hostile case now pins a multi-line quote FOLLOWED by a real
+// `sh` line: the quote must not hide the command after it.
 hostile!(
     later_multi_line_quote_hides_sh,
-    rs("echo 'a\nsh {DIR}/src/x.rs\n'\n")
+    rs("echo 'a\nb\n'\nsh {DIR}/src/x.rs\n")
 );
+
+/// Ruling 2026-11-18 side of `later_multi_line_quote_hides_sh`'s old command:
+/// `sh {DIR}/src/x.rs` is text inside echo's quoted argument, nothing runs the
+/// written `.rs`, so its body is data and the command is Allow.
+#[test]
+fn later_multi_line_quote_hides_sh_ruled_allow() {
+    let fx = Fixture::new("mlq-ruled-allow");
+    let cmd = rs("echo 'a\nsh {DIR}/src/x.rs\n'\n");
+    let (d, out) = fx.decision(&cmd);
+    assert_eq!(
+        d, "allow",
+        "ruling 2026-11-18; command {cmd:?}; got {out:?}"
+    );
+}
 
 // ---- inert-list tools that can execute a command ---------------------------
 
@@ -312,16 +376,52 @@ hostile!(
     cat_pipe_only_to_sh,
     opener("cat", "ls\n").replacen("<<'EOF'", "<<'EOF' | sh", 1)
 );
+// Re-anchored to user ruling 2026-11-18: the old tail was `ls\n`, so nobody
+// runs the written `.rs` and the ruling makes it Allow
+// (`cat_dash_then_stdout_sh_ruled_allow` below). The hostile case now runs
+// the written file with `sh`, which the ruling keeps restricted.
 hostile!(
     cat_dash_then_stdout_sh,
-    opener("cat - > {DIR}/src/x.rs 2>&1", "ls\n")
+    opener("cat - > {DIR}/src/x.rs 2>&1", "sh {DIR}/src/x.rs\n")
 );
+
+/// Ruling 2026-11-18 side of `cat_dash_then_stdout_sh`'s old command: the
+/// `.rs` body written by `cat - > … 2>&1` is never run (`ls` only), so it is
+/// data and the command is Allow.
+#[test]
+fn cat_dash_then_stdout_sh_ruled_allow() {
+    let fx = Fixture::new("catdash-ruled-allow");
+    let cmd = opener("cat - > {DIR}/src/x.rs 2>&1", "ls\n");
+    let (d, out) = fx.decision(&cmd);
+    assert_eq!(
+        d, "allow",
+        "ruling 2026-11-18; command {cmd:?}; got {out:?}"
+    );
+}
 hostile!(
     cat_no_target_runs_nothing_but_pipe,
     opener("cat {DIR}/src/x.rs", "sh\n")
 );
 hostile!(target_glob, opener("cat > {DIR}/src/*.rs", "ls\n"));
-hostile!(target_var, opener("cat > $HOME/x.rs", "ls\n"));
+// Re-anchored to user ruling 2026-11-18 (and SUBSET.md ruling 12: `$HOME` is
+// a Known value): the old tail was `ls\n`, so the `.rs` body landing in
+// `$HOME/x.rs` is never run and the ruling makes it Allow
+// (`target_var_ruled_allow` below). The hostile case now runs that file with
+// `sh` through the same `$HOME` spelling.
+hostile!(target_var, opener("cat > $HOME/x.rs", "sh $HOME/x.rs\n"));
+
+/// Ruling 2026-11-18 side of `target_var`'s old command: a `.rs` body written
+/// to `$HOME/x.rs` (Known `HOME`, ruling 12) and then only `ls` is data, Allow.
+#[test]
+fn target_var_ruled_allow() {
+    let fx = Fixture::new("targetvar-ruled-allow");
+    let cmd = opener("cat > $HOME/x.rs", "ls\n");
+    let (d, out) = fx.decision(&cmd);
+    assert_eq!(
+        d, "allow",
+        "ruling 2026-11-18; command {cmd:?}; got {out:?}"
+    );
+}
 hostile!(
     target_cmdsub,
     opener("cat > $(echo {HOME}/.zshrc).rs", "ls\n")

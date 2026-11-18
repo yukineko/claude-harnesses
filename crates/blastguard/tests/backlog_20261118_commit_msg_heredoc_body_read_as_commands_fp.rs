@@ -119,7 +119,6 @@ fn body_read_as_commands(r: &str) -> bool {
 /// scope.
 // test-weakening-justified: new RED for an observed FP (2026-11-18)
 #[test]
-#[ignore = "RED: quoted git commit -F - heredoc body read as commands"]
 fn refused_commit_heredoc_body_is_not_read_as_commands() {
     let home = unique_home("red");
     let command = refused();

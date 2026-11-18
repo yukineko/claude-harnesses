@@ -60,6 +60,14 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains("is confined to") {
         return "scoped-destructive-confined";
     }
+    // Stage S3b (SUBSET.md Table B): a modelled file command the AST judge
+    // cannot judge. Before the verb arms, whose words the reason embeds.
+    if reason.contains(crate::detect::TABLE_B_UNDETERMINED) {
+        return "ast-table-b-undetermined";
+    }
+    if reason.contains(crate::detect::TABLE_B_UNRESOLVED) {
+        return "ast-table-b-unresolved";
+    }
     // Write handling.
     if reason.contains("overwrite git internals") {
         return "write-git-internals";
@@ -647,6 +655,12 @@ mod tests {
                 "Bash",
                 json!({ "command": "CONDUKT_AUTONOMOUS=1 condukt policy answer --id q1 --choice yes" }),
             ),
+            // Stage S3b (SUBSET.md Table B): the two Ask wordings of
+            // `ast::table_b_verdict`. An unlisted option of a B.1 row
+            // (`cp -X`, BSD "no extended attributes") is Undetermined; a
+            // target word the evaluator cannot place (`~user`) is Unresolved.
+            ("Bash", json!({ "command": "cp -X a.txt b.txt" })),
+            ("Bash", json!({ "command": "cp a.txt ~nosuchuser/x" })),
         ];
 
         for (tool, input) in cases {
@@ -655,6 +669,24 @@ mod tests {
             assert_ne!(
                 id, "unknown",
                 "reason {reason:?} (from {tool} {input}) did not classify to a stable rule id"
+            );
+        }
+    }
+
+    #[test]
+    fn table_b_reasons_get_their_own_ids_not_unknown() {
+        // The loop above only proves "not unknown"; pin the S3b ids themselves
+        // (they are matched before the verb arms, whose words the reasons
+        // embed, so a reorder would silently refile them under a verb id).
+        for (command, want) in [
+            ("cp -X a.txt b.txt", "ast-table-b-undetermined"),
+            ("cp a.txt ~nosuchuser/x", "ast-table-b-unresolved"),
+        ] {
+            let reason = deny_reason("Bash", json!({ "command": command }));
+            assert_eq!(
+                rule_id(&reason),
+                want,
+                "command: {command:?}, reason: {reason:?}"
             );
         }
     }

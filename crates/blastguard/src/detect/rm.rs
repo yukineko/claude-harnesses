@@ -6,6 +6,7 @@ use super::{
     Determination, Placement, SafeRoots, SegmentSep,
 };
 
+mod new_layer;
 mod operand_words;
 use operand_words::{
     expand_operand_with, has_unquoted_glob, place_literal, rm_operand_words, OperandSpelling,
@@ -249,6 +250,14 @@ fn collect_substitution_commands(text: &str, depth: usize, out: &mut Vec<String>
 }
 
 pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+    // Ruling 14 replaced for `rm` (user ruling 2026-11-18): when the new
+    // layer's verdict for this `rm` is Known — every target statically
+    // resolved and in a Table C Allow class (Scratch / OwnWorktree) — the
+    // legacy reading below may not raise it. Anything the new layer does not
+    // decide keeps the legacy verdict exactly as before. See `new_layer`.
+    if new_layer::known_allow(rest, ctx) {
+        return Decision::Allow;
+    }
     // An operand spelled through an expansion the AST evaluator resolves
     // (task `migrate-path`): every combination of the paths it names is
     // judged by this function as its literal spelling would be, the most
@@ -264,6 +273,33 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         return acc.finish();
     }
     analyze_rm_literal(rest, ctx)
+}
+
+/// `rsync --delete` / `--del` / `--delete-*` (SUBSET.md Table B, user ruling
+/// 2026-11-18): rsync recursively deletes whatever under the destination the
+/// source lacks, so the destination is judged as the operand of `rm -rf`
+/// (Table C): Allow when every path it names is Scratch / OwnWorktree
+/// ([`new_layer::rsync_dest_allows`]), else exactly the `rm -r -f <dest>`
+/// verdict, its reason prefixed with the rsync shape. No delete flag, a
+/// remote destination or list mode: Allow here (the other rsync rules stand).
+pub(super) fn analyze_rsync_delete(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+    let Some(dest) = super::system_paths::rsync_delete_destination(rest) else {
+        return Decision::Allow;
+    };
+    if new_layer::rsync_dest_allows(dest, ctx) {
+        return Decision::Allow;
+    }
+    let why = |r: String| {
+        format!(
+            "`rsync` with a delete flag removes, recursively, what the source lacks under \
+`{dest}`, so it is judged as `rm -rf {dest}`: {r}"
+        )
+    };
+    match analyze_rm(&["-r", "-f", dest], ctx) {
+        Decision::Allow => Decision::Allow,
+        Decision::Ask(r) => Decision::Ask(why(r)),
+        Decision::Deny(r) => Decision::Deny(why(r)),
+    }
 }
 
 /// At most this many operand combinations are judged by [`analyze_rm`];

@@ -59,13 +59,15 @@
 //!
 //! `judge.rs` freezes the EFFECT x TARGET-PATH judgement (`Effect`,
 //! `PathClass`, `Judgement`, `judge`) specified in `SUBSET.md` (task S1
-//! `subset-spec`, user rulings 2026-11-17). It is a stub and is not wired
-//! into `detect` yet; stage S3 (`path-cutover`) implements and wires it.
+//! `subset-spec`, user rulings 2026-11-17). Stage S3b (user ruling
+//! 2026-11-18) wires it into `detect` through [`table_b_verdict`] for the
+//! Table B B.1 commands only (undetermined option / unresolved target → Ask);
+//! `classify` is still a stub (see `judge.rs`).
 
-// `targets` and `b5` (which reads `program_source` / `StdinSource`) are the
-// callers so far; parts of the contract (e.g. `judge.rs`, `Cause` variants
-// no detector distinguishes) are still unread until S3, which removes this
-// allow.
+// `targets`, `table_b_verdict` and `b5` (which reads `program_source` /
+// `StdinSource`) are the callers so far; the rest of the contract (e.g.
+// `Cause` variants no detector distinguishes) is still unread, so this allow
+// stays until the later migration tasks remove it.
 #![allow(dead_code)]
 
 mod arith;
@@ -104,6 +106,74 @@ pub(crate) fn analyze(command: &str) -> Analysis {
     match parse::parse(command) {
         Ok(program) => eval::evaluate(command, &program),
         Err(cause) => Analysis::Undetermined(cause),
+    }
+}
+
+/// Phrase every S3b Ask for an undetermined Table B row carries
+/// ([`crate::rule_id`] keys `ast-table-b-undetermined` on it).
+pub(crate) const TABLE_B_UNDETERMINED: &str = "is outside its SUBSET.md Table B row";
+
+/// Phrase every S3b Ask for an unresolved Table B target carries
+/// ([`crate::rule_id`] keys `ast-table-b-unresolved` on it).
+pub(crate) const TABLE_B_UNRESOLVED: &str =
+    "a target of a SUBSET.md Table B command cannot be placed";
+
+/// Stage S3b (user ruling 2026-11-18): the [`judge::judge`] verdict of
+/// `command` for the commands that have a Table B B.1 row, as a
+/// [`Decision`](crate::model::Decision) the caller folds into the legacy
+/// verdict raise-only (`Deny > Ask > Allow`; the legacy reason wins a tie).
+///
+/// * [`Analysis::Undetermined`] → `Allow` from this layer: analyze-wide
+///   Undetermined handling is unchanged by S3b (the legacy layer alone
+///   answers it, as before);
+/// * [`judge::Judgement::Undetermined`] or [`judge::Judgement::Ask`] → `Ask`
+///   (main) — the hook's `ask_available` hardens it to Deny in a subagent;
+/// * a `judge` panic → `Ask` (SUBSET.md "Undetermined handling" rule 4);
+/// * [`judge::Judgement::Deny`] → `Deny` (not produced in S3b).
+pub(crate) fn table_b_verdict(
+    command: &str,
+    scope: &crate::scope::SafeRoots,
+) -> crate::model::Decision {
+    use crate::model::Decision;
+    use judge::Judgement;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    let Analysis::Known(script) = analyze(command) else {
+        return Decision::Allow;
+    };
+    let ctx = judge::PathCtx {
+        scope,
+        hook_cwd: scope.session_cwd(),
+    };
+    let judged = catch_unwind(AssertUnwindSafe(|| judge::judge(&script, &ctx)))
+        .unwrap_or(Judgement::Undetermined(Cause::Panic));
+    match judged {
+        Judgement::Allow => Decision::Allow,
+        Judgement::Undetermined(cause) => {
+            let why = match cause {
+                Cause::Unsupported(s) | Cause::Parse(s) | Cause::ZshOnly(s) => s,
+                other => format!("{other:?}"),
+            };
+            Decision::ask(format!(
+                "{why}: this {TABLE_B_UNDETERMINED}, so blastguard cannot judge its effect and \
+                 asks rather than guess"
+            ))
+        }
+        Judgement::Ask(findings) => Decision::ask(format!(
+            "{TABLE_B_UNRESOLVED} — {} — so blastguard cannot tell what it changes and asks \
+             rather than guess",
+            findings
+                .iter()
+                .map(|f| f.reason.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        )),
+        Judgement::Deny { findings, .. } => Decision::deny(
+            findings
+                .iter()
+                .map(|f| f.reason.as_str())
+                .collect::<Vec<_>>()
+                .join("; "),
+        ),
     }
 }
 

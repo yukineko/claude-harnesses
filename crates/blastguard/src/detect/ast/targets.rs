@@ -83,12 +83,47 @@ struct Index {
     /// `(byte range of the word in text, role, evaluated value)`; one entry
     /// per evaluated instance (an unrolled loop repeats a range).
     words: Vec<(Range<usize>, Role, Value)>,
+    /// Every evaluated simple command whose command word is the literal
+    /// `rm` (see [`rm_operand_values`]): its argv after the command word as
+    /// `(byte range, raw spelling, value resolved against the command's
+    /// cwd)`, one entry per evaluated instance. `None` for a command one of
+    /// whose argv words is not spelled verbatim in the text at its span.
+    rm_commands: Vec<Option<RmArgv>>,
+}
+
+/// One `rm` command's argv after the command word: `(byte range, raw
+/// spelling, value resolved against the command's cwd)` per word.
+type RmArgv = Vec<(Range<usize>, String, Value)>;
+
+/// The command words read as `rm` itself (not a wrapper, not a function).
+fn is_rm_command_word(v: &Value) -> bool {
+    matches!(v, Value::Literal(w) if matches!(w.as_str(), "rm" | "/bin/rm" | "/usr/bin/rm"))
 }
 
 impl Index {
     fn build(text: &str, script: &Script) -> Index {
         let mut words = Vec::new();
+        let mut rm_commands = Vec::new();
         for cmd in &script.commands {
+            if cmd
+                .argv
+                .first()
+                .is_some_and(|w| is_rm_command_word(&w.value))
+            {
+                let argv: Option<Vec<_>> = cmd.argv[1..]
+                    .iter()
+                    .map(|w| {
+                        (text.get(w.span.clone()) == Some(w.raw.as_str())).then(|| {
+                            (
+                                w.span.clone(),
+                                w.raw.clone(),
+                                resolve_at(&cmd.cwd, w.value.clone()),
+                            )
+                        })
+                    })
+                    .collect();
+                rm_commands.push(argv);
+            }
             for w in &cmd.argv {
                 if text.get(w.span.clone()) == Some(w.raw.as_str()) {
                     let v = resolve_at(&cmd.cwd, w.value.clone());
@@ -104,7 +139,54 @@ impl Index {
         Index {
             text: text.to_string(),
             words,
+            rm_commands,
         }
+    }
+
+    /// See [`rm_operand_values`].
+    fn rm_operands(&self, rest: &[&str]) -> Option<Vec<RmOperand>> {
+        // The AST `rm` commands spelled exactly as `rest`.
+        let matching: Vec<&RmArgv> = self
+            .rm_commands
+            .iter()
+            .map(|c| c.as_ref())
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .filter(|argv| {
+                argv.len() == rest.len() && argv.iter().zip(rest).all(|(w, r)| w.1 == *r)
+            })
+            .collect();
+        if matching.is_empty() {
+            return None;
+        }
+        let mut out: Vec<RmOperand> = Vec::new();
+        for (i, spelling) in rest.iter().enumerate() {
+            if spelling.starts_with('-') || spelling.is_empty() {
+                continue;
+            }
+            // Every occurrence of the spelling in the text must be this
+            // operand of one of the matching `rm` commands: an occurrence
+            // anywhere else (another command's argv — `xargs rm -r a` next
+            // to `rm -r a` —, a quoted string, a heredoc body, a comment)
+            // may be the text the caller is reading, and that one was not
+            // evaluated as this `rm`'s operand.
+            for (at, _) in self.text.char_indices() {
+                if !self.text.get(at..).is_some_and(|t| t.starts_with(spelling)) {
+                    continue;
+                }
+                let range = at..at + spelling.len();
+                if !matching.iter().any(|argv| argv[i].0 == range) {
+                    return None;
+                }
+            }
+            for argv in &matching {
+                out.push(RmOperand {
+                    spelling: (*spelling).to_string(),
+                    value: argv[i].2.clone(),
+                });
+            }
+        }
+        Some(out)
     }
 
     fn lookup(&self, spelling: &str, role: Role) -> Option<Vec<String>> {
@@ -141,6 +223,41 @@ impl Index {
         }
         (!out.is_empty()).then_some(out)
     }
+}
+
+/// One evaluated operand of an `rm` command ([`rm_operand_values`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RmOperand {
+    /// The operand as spelled in the text.
+    pub spelling: String,
+    /// Its evaluated value: absolute after a literal `cd`, as written when
+    /// no `cd` applies (relative to the hook's cwd), `Undetermined`
+    /// otherwise.
+    pub value: Value,
+}
+
+/// The evaluated operands of the top-level `rm` command whose argv after the
+/// command word is spelled exactly `rest` (the legacy reading's tokens), for
+/// the new-layer `rm` judgement (`detect/rm/new_layer.rs`). One entry per
+/// operand (a token not starting with `-`) per evaluated instance of every
+/// such command; values are NOT filtered — an `Undetermined` value is handed
+/// back for the caller to refuse.
+///
+/// `None` (the caller keeps the legacy verdict) unless all of these hold:
+/// the index is active, `Known`, not [`suspended`], at shell depth 0; the
+/// text has at least one evaluated simple command whose command word is the
+/// literal `rm` (`/bin/rm`, `/usr/bin/rm`) and whose argv after it is spelled
+/// exactly `rest`; every `rm` command in the text has its argv spelled
+/// verbatim at its spans; and every occurrence of every operand spelling in
+/// the text is that operand's word of one of those `rm` commands.
+pub(crate) fn rm_operand_values(rest: &[&str]) -> Option<Vec<RmOperand>> {
+    if SUSPENDED.with(Cell::get) || DEPTH.with(Cell::get) != 0 {
+        return None;
+    }
+    INDEX.with(|i| match &*i.borrow() {
+        Active::Known(index) => index.rm_operands(rest),
+        Active::Inactive | Active::Undetermined => None,
+    })
 }
 
 /// The byte range of a file redirect's target word: its span minus the

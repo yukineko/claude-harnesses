@@ -214,3 +214,19 @@ fn a_readable_operand_still_reaches_the_real_analysis() {
     )
     .is_deny());
 }
+
+/// Re-anchor of `ca_blastguard_011_help_flag_does_not_disable_detection`'s
+/// old `rm -h` → Allow pin (user ruling 2026-11-18, SUBSET.md Table B): `-h`
+/// is not on the `rm` row, and an unlisted literal no-argument option is
+/// Undetermined → Ask even with no operand. The help flag still does not
+/// disable detection: only the `--help` spelling every row accepts is Allow.
+/// (Placed here, not in tests.rs, because of tests.rs's file-growth cap.)
+#[test]
+fn ca_blastguard_011_rm_h_unlisted_option_is_not_allow() {
+    assert_eq!(bash("rm --help"), Decision::Allow);
+    assert_ne!(
+        bash("rm -h"),
+        Decision::Allow,
+        "rm -h: unlisted option, Ask or stricter"
+    );
+}

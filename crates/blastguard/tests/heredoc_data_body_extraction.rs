@@ -118,14 +118,16 @@ fn bodies_that_may_run_stay_judged() {
         format!("enable -n cat\ncat <<'EOF'\n{RM}\nEOF"),
         // The data file is fed to an interpreter later on the same line.
         format!("cat <<'EOF' > x.txt\n{RM}\nEOF\nxargs -a x.txt sh -c"),
-        // Anything but the permitted shapes before or after the here-document.
-        format!("cat <<'EOF' > a.txt\n{RM}\nEOF\necho done"),
-        format!("X=1\ncat <<'EOF' > a.txt\n{RM}\nEOF"),
+        // A non-literal `cd` before the here-document moves the relative
+        // write target to an undetermined directory. (`X=1` before and
+        // `echo done` after are re-anchored to parity below, ruling B-3.)
         format!("cd $D\ncat <<'EOF' > a.txt\n{RM}\nEOF"),
-        // Formats that commonly hold executable configuration are not data.
-        format!("cat <<'EOF' > a.json\n{RM}\nEOF"),
-        format!("cat <<'EOF' > a.toml\n{RM}\nEOF"),
-        format!("cat <<'EOF' > a.yaml\n{RM}\nEOF"),
+        // `a.json` / `a.toml` / `a.yaml` used to be pinned here ("formats that
+        // commonly hold executable configuration are not data"). User ruling
+        // 2026-11-18 makes those bodies data; they moved to
+        // `config_format_bodies_are_data`, and the configuration that does
+        // run commands is pinned by its target path in
+        // `command_running_config_targets_stay_blocked`.
         // Code after the opener on its own line.
         format!("cat <<'EOF' > a.txt; {RM}\nx\nEOF"),
         // Unclosed body: undetermined, so judged.
@@ -155,6 +157,102 @@ fn bodies_that_may_run_stay_judged() {
         "bodies that may run were not denied:\n{}",
         wrong.join("\n")
     );
+}
+
+/// User ruling 2026-11-18: a quoted heredoc body written to a `.json` /
+/// `.toml` / `.yaml` file is data, not shell, so the harmful-looking body does
+/// not make the command non-Allow (moved here from
+/// `bodies_that_may_run_stay_judged`).
+#[test]
+fn config_format_bodies_are_data() {
+    let cases = [
+        format!("cat <<'EOF' > a.json\n{RM}\nEOF"),
+        format!("cat <<'EOF' > a.toml\n{RM}\nEOF"),
+        format!("cat <<'EOF' > a.yaml\n{RM}\nEOF"),
+    ];
+    let mut wrong = Vec::new();
+    for cmd in &cases {
+        let (d, r) = verdict(cmd);
+        if d != "allow" {
+            wrong.push(format!("{cmd:?} => {d} | {r}"));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "config-format data bodies judged as code:\n{}",
+        wrong.join("\n")
+    );
+}
+
+/// Control for `config_format_bodies_are_data` (user ruling 2026-11-18): the
+/// configuration files that DO make commands run — Claude Code settings and
+/// hook wiring, and the `.githooks/` tree — stay blocked by the judgement of
+/// the write's TARGET path (Protected), whatever the body is. A plain JSON
+/// body `{}` is used as well as the harmful one, so the block cannot come
+/// from reading the body as shell.
+#[test]
+fn command_running_config_targets_stay_blocked() {
+    let mut wrong = Vec::new();
+    for target in [
+        ".claude/settings.json",
+        ".claude/settings.local.json",
+        ".claude/hooks.json",
+        ".githooks/pre-commit",
+    ] {
+        for body in ["{}", RM] {
+            let cmd = format!("cat <<'EOF' > {target}\n{body}\nEOF");
+            let (d, r) = verdict(&cmd);
+            if d == "allow" {
+                wrong.push(format!("{cmd:?} => {d} | {r}"));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "writes to command-running config were allowed:\n{}",
+        wrong.join("\n")
+    );
+}
+
+fn rank(d: &str) -> u8 {
+    match d {
+        "allow" => 0,
+        "ask" => 1,
+        "deny" => 2,
+        other => panic!("unexpected decision {other:?}"),
+    }
+}
+
+/// User ruling 2026-11-18 (B-3): a benign command before or after a data
+/// here-document is judged on its own merits, so the combined command gets
+/// exactly the strictest verdict of (the bare here-document alone, each
+/// surrounding command alone).
+fn assert_parity(bare: &str, parts: &[&str], combined: &str) {
+    let (mut want, _) = verdict(bare);
+    for part in parts {
+        let (d, _) = verdict(part);
+        if rank(&d) > rank(&want) {
+            want = d;
+        }
+    }
+    let (got, r) = verdict(combined);
+    assert_eq!(
+        got, want,
+        "combined must equal the strictest of bare {bare:?} + parts {parts:?}; \
+         got {got} ({r}) for {combined:?}"
+    );
+}
+
+#[test]
+fn parity_benign_command_after_data_heredoc() {
+    let bare = format!("cat <<'EOF' > a.txt\n{RM}\nEOF");
+    assert_parity(&bare, &["echo done"], &format!("{bare}\necho done"));
+}
+
+#[test]
+fn parity_assignment_before_data_heredoc() {
+    let bare = format!("cat <<'EOF' > a.txt\n{RM}\nEOF");
+    assert_parity(&bare, &["X=1"], &format!("X=1\n{bare}"));
 }
 
 #[test]

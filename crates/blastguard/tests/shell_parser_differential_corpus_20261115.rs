@@ -717,12 +717,21 @@ fn sanity_allow_twins_of_fp_targets_are_allowed_here() {
         "git commit -q -F - --trailer \"Condukt-Task: lit\" <<'EOF'\nsubject line\n\nThe ruling is read narrowly (no git worktree /\nsecond checkout). Prose in .githooks/pre-push, the docstrings\nis updated to match.\nEOF\n",
         // #1778 sanity
         "python3 - <<'EOF'\nfrom pathlib import Path\np = Path('out.py')\np.write_text(r'''shutil.copy(x)\n''')\nEOF\n",
-        // #1761 control 1
-        "perl -pi -e 's/\"0\\.2\\.578\"/\"0.2.579\"/' m.json",
-        // #1791 twin
-        "bash <&'$fd'",
     ];
     assert_allow("sanity", &commands, &[false, true]);
+    // #1791 twin. Re-anchored Allow -> Undetermined (main Ask / subagent
+    // Deny): user ruling 2026-11-18 (S4 B.5): program from an fd is
+    // Undetermined.
+    check_control("sanity_1791_twin_fd", "bash <&'$fd'", "ask", "deny");
+    // #1761 control 1. Re-anchored Allow -> Undetermined (main Ask /
+    // subagent Deny): user ruling 2026-11-18 (S4 B.5) -- a perl `-e` inline
+    // program is Undetermined.
+    check_control(
+        "sanity_perl_pi_e",
+        "perl -pi -e 's/\"0\\.2\\.578\"/\"0.2.579\"/' m.json",
+        "ask",
+        "deny",
+    );
 }
 
 // ===================================================================

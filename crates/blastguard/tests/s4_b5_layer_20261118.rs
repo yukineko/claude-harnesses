@@ -203,84 +203,72 @@ fn pinned(tag: &str, command: &str, main: &str, sub: &str) {
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R1 bash file run is Undetermined"]
 fn r1_bash_file_undetermined() {
     undetermined("r1bash", "bash x.sh");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R1/R10 sh file run is Undetermined"]
 fn r1_sh_file_undetermined() {
     undetermined("r1sh", "sh x.sh");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R1 zsh file run is Undetermined"]
 fn r1_zsh_file_undetermined() {
     undetermined("r1zsh", "zsh x.sh");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R1 dash file run is Undetermined"]
 fn r1_dash_file_undetermined() {
     undetermined("r1dash", "dash x.sh");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R1 python3 file run is Undetermined"]
 fn r1_python3_file_undetermined() {
     undetermined("r1py", "python3 x.py");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R1 perl file run is Undetermined"]
 fn r1_perl_file_undetermined() {
     undetermined("r1pl", "perl x.pl");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R1 node file run is Undetermined"]
 fn r1_node_file_undetermined() {
     undetermined("r1node", "node x.js");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R1 ruby file run is Undetermined"]
 fn r1_ruby_file_undetermined() {
     undetermined("r1rb", "ruby x.rb");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R1 env wrapper -> bash file run is Undetermined"]
 fn r1_env_bash_file_undetermined() {
     undetermined("r1env", "env bash x.sh");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R1 env -i wrapper -> bash file run is Undetermined"]
 fn r1_env_i_bash_file_undetermined() {
     undetermined("r1envi", "env -i bash x.sh");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R1 nohup wrapper -> bash file run is Undetermined"]
 fn r1_nohup_bash_file_undetermined() {
     undetermined("r1nohup", "nohup bash x.sh");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R1 timeout wrapper -> python3 file run is Undetermined"]
 fn r1_timeout_python3_file_undetermined() {
     undetermined("r1timeout", "timeout 5 python3 x.py");
 }
@@ -288,7 +276,6 @@ fn r1_timeout_python3_file_undetermined() {
 /// Later operands are data: an extra operand does not change the reading.
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R1 bash file run with a data operand is Undetermined"]
 fn r1_bash_file_with_data_operand_undetermined() {
     undetermined("r1data", "bash x.sh data.txt");
 }
@@ -296,7 +283,6 @@ fn r1_bash_file_with_data_operand_undetermined() {
 /// A benign follow-up command does not launder the file run.
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R1 bash file run followed by ; echo is Undetermined"]
 fn r1_bash_file_then_echo_undetermined() {
     undetermined("r1then", "bash x.sh; echo done");
 }
@@ -307,21 +293,18 @@ fn r1_bash_file_then_echo_undetermined() {
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R2 perl -e is Undetermined"]
 fn r2_perl_e_undetermined() {
     undetermined("r2perl", "perl -e 'print 1'");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R2 node -e is Undetermined"]
 fn r2_node_e_undetermined() {
     undetermined("r2node", "node -e 1");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R2 ruby -e is Undetermined"]
 fn r2_ruby_e_undetermined() {
     undetermined("r2ruby", "ruby -e 1");
 }
@@ -351,42 +334,36 @@ fn r2_ruby_stdin_undetermined() {
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R3 ./run.sh direct exec is Undetermined"]
 fn r3_dot_slash_run_sh_undetermined() {
     undetermined("r3dot", "./run.sh");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R3 scripts/foo.sh direct exec is Undetermined"]
 fn r3_relative_dir_script_undetermined() {
     undetermined("r3rel", "scripts/foo.sh");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R3 ./target/debug/x direct exec is Undetermined"]
 fn r3_target_debug_binary_undetermined() {
     undetermined("r3tgt", "./target/debug/x");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R3 .venv/bin/pytest direct exec is Undetermined"]
 fn r3_venv_bin_undetermined() {
     undetermined("r3venv", ".venv/bin/pytest");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R3 cd /tmp && ./run.sh direct exec is Undetermined"]
 fn r3_cd_then_dot_slash_undetermined() {
     undetermined("r3cd", "cd /tmp && ./run.sh");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R3 absolute project path direct exec is Undetermined"]
 fn r3_absolute_project_path_undetermined() {
     let fx = fixture("r3abs");
     let cmd = format!("{}", fx.proj().join("bin").join("x").display());
@@ -423,21 +400,18 @@ fn r3_homebrew_gh_version_allows() {
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R4 python3 -m is Undetermined"]
 fn r4_python3_m_undetermined() {
     undetermined("r4m", "python3 -m http.server");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R4 .py written then run (&&) is Undetermined until S5"]
 fn r4_py_written_and_then_run_undetermined() {
     undetermined("r4and", "cat > x.py <<'PY' && python3 x.py\nprint(1)\nPY");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R4 .py written then run (newline) is Undetermined until S5"]
 fn r4_py_written_newline_run_undetermined() {
     undetermined("r4nl", "cat > x.py <<'PY'\nprint(1)\nPY\npython3 x.py");
 }
@@ -476,21 +450,18 @@ fn r5_and_joined_harm_body_denies() {
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R5 newline-joined write then run is Undetermined"]
 fn r5_newline_joined_undetermined() {
     undetermined("r5nl", "cat > x.sh <<'EOF'\necho hi\nEOF\nbash x.sh");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R5 ;-joined write then run is Undetermined"]
 fn r5_semicolon_joined_undetermined() {
     undetermined("r5semi", "cat > x.sh <<'EOF'; bash x.sh\necho hi\nEOF");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R5 false && write; run is Undetermined"]
 fn r5_false_and_write_then_run_undetermined() {
     undetermined(
         "r5false",
@@ -500,7 +471,6 @@ fn r5_false_and_write_then_run_undetermined() {
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R5 sed -i edit then run is Undetermined"]
 fn r5_sed_edit_then_run_undetermined() {
     undetermined("r5sed", "sed -i s/a/b/ x.sh && bash x.sh");
 }
@@ -560,14 +530,12 @@ fn r6_curl_pipe_bash_not_allowed() {
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R6 bash < file is Undetermined"]
 fn r6_bash_stdin_file_undetermined() {
     undetermined("r6lt", "bash < x.sh");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R6 eval is Undetermined"]
 fn r6_eval_undetermined() {
     undetermined("r6eval", "eval 'ls'");
 }
@@ -611,7 +579,6 @@ fn r9_data_operand_same_decision_as_program_alone() {
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 R9 python3 s.py d.txt is Undetermined and the reason names s.py, not d.txt"]
 fn r9_reason_names_program_not_data() {
     let (rm, rs) = undetermined("r9reason", "python3 s.py d.txt");
     for (mode, r) in [("main", &rm), ("subagent", &rs)] {

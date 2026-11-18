@@ -75,6 +75,10 @@ mod static_bindings;
 /// AST evaluator proved it names. A bash 3.2 pass whose parse differs from
 /// the modern one, and the comment-hides-quotes candidate, run without it
 /// ([`bash32_pass`]).
+///
+/// The verdict of all those (legacy) readings is then raised by the Table B.5
+/// layer (stage S4, [`super::ast::b5::raise`]): `max(B.5, legacy)`, never
+/// lower than the legacy verdict.
 pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision {
     // Backlog 3a950c6c / 5ef2d51f: every reading below — and every rule inside
     // each — judges the text with the line's own literal bindings already
@@ -82,7 +86,17 @@ pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision 
     // resolver, run once, before anything else; see `static_bindings`.
     let resolved = static_bindings::resolve_static_bindings(c);
     let c: &str = &resolved;
-    targets::with_index(c, || every_reading(c, scope))
+    let legacy = targets::with_index(c, || every_reading(c, scope));
+    // S4: the standalone Table B.5 layer; it only raises (`max(B.5, legacy)`).
+    let judge = |text: &str| detect_bash_every_reading(text, scope);
+    super::ast::b5::raise(
+        legacy,
+        c,
+        &super::ast::b5::Probes {
+            judge: &judge,
+            scope,
+        },
+    )
 }
 
 /// [`under_bash32_reading`] of `pass`. When that reading closed a construct

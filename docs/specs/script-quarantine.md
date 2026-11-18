@@ -547,8 +547,9 @@ fail-closed のケース（§3 の判定不能すべて）には **(fc)** を付
 - T-P0-1 `bash x.sh`（実在、中身 `echo hi`）→ main では Ask、subagent では Deny。現在 0.2.679 では Allow（§1.1）なので RED になる。
 - T-P0-2 `python3 x.py` → 同上。
 - T-P0-3 (**[裁定済み Q2]**) `./run.sh`、`scripts/foo.sh`、絶対パスでの直接実行 → 同上。RED は追加予定（S2 追補。harness-5a が追加中で、commit hash はまだ届いていない）。
+- T-P0-1〜3 の例外（**2026-11-18 裁定 T1**）: git で tracked かつ未変更（work tree と index が clean で、同じコマンドの他の部分が書き込まない）のプログラムファイルには B.5 の意見を出さない（従来の判定が残る）。`python3 -m` と、git が答えられない場合は Undetermined のまま。`bash -n` / `sh -n`（noexec）も B.5 の意見なし（T3）。fd から読むプログラム（`bash <&'$fd'`）は Undetermined（T2）。（SUBSET.md ruling 22–24）
 - T-P0-7 `. ./env.sh` / `source env.sh` → 検疫 plugin の導入と同時に Ask（subagent では Deny）。S4 の時点では Ask にしない（追加裁定、§1.2 P0-b）。`ceed4a0db` の ruling 13 の RED は ignore 理由ラベルが S4 のままで、受け入れの時期（検疫の導入時）と食い違う（§1.1。扱いは harness-5a 側）。
-- T-P0-4 対照: `cat > x.sh <<'EOF'\necho hi\nEOF\nbash x.sh` → S4 の再帰判定で Allow（検疫は呼ばない）。
+- T-P0-4 対照（**2026-11-18 裁定で訂正**）: 同じコマンドで書いた本体を S4 が再帰判定するのは、書き込みと実行が `&&` だけで繋がっているときに限る。`cat > x.sh <<'EOF' && bash x.sh\necho hi\nEOF` → Allow（検疫は呼ばない）。改行（`cat > x.sh <<'EOF'\necho hi\nEOF\nbash x.sh`）や `;` で繋いだ場合、また `false && cat > x.sh …; bash x.sh` は Undetermined（main では Ask、subagent では Deny）。（SUBSET.md ruling 20）
 - T-P0-5 (fc) `bash "$f"` → Ask（Value Undetermined、検疫を呼ばない）。
 - T-P0-6 (fc) undetermined な `cd` の後の `bash x.sh` → Ask。
 

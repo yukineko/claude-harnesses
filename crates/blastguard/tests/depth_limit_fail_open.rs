@@ -335,9 +335,18 @@ fn ordinary_shallow_commands_are_still_allowed() {
         "echo hi | xargs echo",
         "git diff | head -50",
         "rg TODO crates/",
-        "python3 scripts/check-plugin-versions.py",
     ] {
         assert_allow(cmd, "over-block guard");
+    }
+    // Re-anchored Allow -> Ask: user ruling 2026-11-18 (S4 B.5) -- a python
+    // program file run is Undetermined (not a depth-cap Ask).
+    {
+        let cmd = "python3 scripts/check-plugin-versions.py";
+        let d = analyse(cmd);
+        assert!(
+            matches!(&d, Decision::Ask(r) if r.contains("Table B.5")),
+            "{cmd}: expected the B.5 Ask, got {d:?}"
+        );
     }
 }
 

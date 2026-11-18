@@ -158,11 +158,13 @@ fn controls() {
 /// control and a scope fence. GREEN today, must stay GREEN.
 #[test]
 fn interpreter_script_file_invocation_stays_allow() {
-    assert_allow("python3 script.py");
-    assert_allow("python3 -u script.py");
-    assert_allow("python3 -m http.server");
-    assert_allow("node server.js");
-    assert_allow("ruby app.rb");
+    // Re-anchored Allow -> Ask: user ruling 2026-11-18 (S4 B.5) -- an
+    // interpreter running a program file (and `python3 -m`) is Undetermined.
+    assert_ask("python3 script.py");
+    assert_ask("python3 -u script.py");
+    assert_ask("python3 -m http.server");
+    assert_ask("node server.js");
+    assert_ask("ruby app.rb");
 }
 
 // ---------------------------------------------------------------------------
@@ -202,12 +204,14 @@ fn destructive_inline_payload_is_denied() {
 #[test]
 fn benign_inline_payload_is_allowed_and_the_allow_is_earned_by_reading() {
     assert_allow(r#"python3 -c "print(1)""#);
-    assert_allow(r#"node -e "console.log(1)""#);
-    assert_allow(r#"ruby -e 'puts 1'"#);
-    assert_allow(r#"perl -e 'print 1'"#);
+    // Re-anchored Allow -> Ask: user ruling 2026-11-18 (S4 B.5) -- perl /
+    // ruby / node inline programs (`-e`, `-p`) are Undetermined.
+    assert_ask(r#"node -e "console.log(1)""#);
+    assert_ask(r#"ruby -e 'puts 1'"#);
+    assert_ask(r#"perl -e 'print 1'"#);
     assert_allow(r#"php -r 'echo 1;'"#);
     assert_allow(r#"lua -e 'print(1)'"#);
-    assert_allow(r#"node -p "1+1""#);
+    assert_ask(r#"node -p "1+1""#);
     // OTHER SIDE 1 — the Allow is EARNED by reading, never a default. A payload
     // the shell will substitute, and an empty one, are both unread and must
     // still refuse to guess.

@@ -305,21 +305,18 @@ fn b1_rm_r_other_worktree_with_cwd_outside_allows() {
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S4 B.5 perl -e out of subset (ruling 4)"]
 fn b2_perl_inline_restricts() {
     restrict("b2perl", "perl -e 'print 1'");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S4 B.5 ruby -e out of subset (ruling 4)"]
 fn b2_ruby_inline_restricts() {
     restrict("b2ruby", "ruby -e 'puts 1'");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S4 B.5 node -e out of subset (ruling 4)"]
 fn b2_node_inline_restricts() {
     restrict("b2node", "node -e '1'");
 }
@@ -327,7 +324,6 @@ fn b2_node_inline_restricts() {
 /// Same row, `node -p`.
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S4 B.5 node -p out of subset (ruling 4)"]
 fn b2_node_print_inline_restricts() {
     restrict("b2nodep", "node -p '1'");
 }
@@ -335,7 +331,6 @@ fn b2_node_print_inline_restricts() {
 /// Same row, `perl -E`.
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S4 B.5 perl -E out of subset (ruling 4)"]
 fn b2_perl_big_e_inline_restricts() {
     restrict("b2perlE", "perl -E 'say 1'");
 }
@@ -422,28 +417,24 @@ fn b3_source_relative_restricts() {
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S4 B.5 script-file row (ruling 10)"]
 fn b4_bash_script_file_restricts() {
     restrict("b4bash", "bash script.sh");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S4 B.5 script-file row sh (ruling 10)"]
 fn b4_sh_script_file_restricts() {
     restrict("b4sh", "sh ./script.sh");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S4 B.5 script-file row python3 (ruling 10)"]
 fn b4_python3_script_file_restricts() {
     restrict("b4py", "python3 x.py");
 }
 
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S4 B.5 script-file row perl (ruling 10)"]
 fn b4_perl_script_file_restricts() {
     restrict("b4pl", "perl x.pl");
 }
@@ -451,7 +442,6 @@ fn b4_perl_script_file_restricts() {
 /// Table B.5 wrapper row: unwrap (`env`, B.3), then the script-file row.
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S4 B.5 wrapper -> script-file row (ruling 10)"]
 fn b4_env_wrapped_script_file_restricts() {
     restrict("b4env", "env bash script.sh");
 }
@@ -460,7 +450,6 @@ fn b4_env_wrapped_script_file_restricts() {
 /// (`./run.sh`) is Undetermined -> Ask / Deny.
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S4 B.5 direct-execution row ./ (ruling 17)"]
 fn b4_direct_exec_dot_slash_restricts() {
     restrict("b4dot", "./run.sh");
 }
@@ -468,7 +457,6 @@ fn b4_direct_exec_dot_slash_restricts() {
 /// Ruling 17: a relative path with a directory component.
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S4 B.5 direct-execution row relative dir (ruling 17)"]
 fn b4_direct_exec_relative_dir_restricts() {
     restrict("b4rel", "scripts/foo.sh");
 }
@@ -476,7 +464,6 @@ fn b4_direct_exec_relative_dir_restricts() {
 /// Ruling 17: an absolute path (non-existent sentinel under `/tmp`).
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S4 B.5 direct-execution row absolute (ruling 17)"]
 fn b4_direct_exec_absolute_restricts() {
     restrict("b4abs", "/tmp/bg-s2-sentinel-exec/run.sh");
 }
@@ -484,7 +471,6 @@ fn b4_direct_exec_absolute_restricts() {
 /// Ruling 17 + B.3: a wrapper in front of a direct execution.
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S4 B.5 wrapper -> direct-execution row (ruling 17)"]
 fn b4_direct_exec_env_wrapped_restricts() {
     restrict("b4envd", "env ./run.sh");
 }
@@ -753,7 +739,6 @@ fn b6_env_bash_herestring_dynamic_restricts() {
 /// Undetermined -> Ask / Deny, even though the fd holds a benign body.
 // test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-17)
 #[test]
-#[ignore = "RED: S4 B.5 shell stdin Fd -> Undetermined"]
 fn b6_exec_fd_herestring_bash_dup_restricts() {
     restrict("b6fd", "exec 3<<<'touch /etc/bg-sentinel'; bash <&'3'");
 }

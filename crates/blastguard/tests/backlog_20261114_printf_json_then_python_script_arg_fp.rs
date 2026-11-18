@@ -105,5 +105,12 @@ fn control_python_probe_alone_is_allow() {
     seed(&home);
     std::fs::write(home.0.join("wt").join("cases5.json"), "[]").unwrap();
     let (d, r) = run_as("python3 probe.py cases5.json", &home, true);
-    assert_eq!(d, "allow", "control reason={r}");
+    // Re-anchored Allow -> Deny (subagent Undetermined): user ruling
+    // 2026-11-18 (S4 B.5) -- a python program file run is Undetermined; the
+    // reason names the program, not the data operand.
+    assert_eq!(d, "deny", "control reason={r}");
+    assert!(
+        r.contains("probe.py") && !r.contains("cases5.json"),
+        "reason={r}"
+    );
 }

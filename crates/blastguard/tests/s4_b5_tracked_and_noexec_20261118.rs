@@ -307,67 +307,49 @@ fn expect_deny(fx: &Fx, command: &str) {
 // T1 — tracked AND unmodified program file: no B.5 opinion, legacy stands.
 // ---------------------------------------------------------------------------
 
-// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 T1 tracked+clean file gets no B.5 opinion; observed main Ask"]
 fn t1_python3_tracked_clean_allows() {
     expect_allow(&repo_fixture("py"), "python3 scripts/x.py");
 }
 
-// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 T1 tracked+clean file gets no B.5 opinion; observed main Ask"]
 fn t1_bash_tracked_clean_allows() {
     expect_allow(&repo_fixture("bash"), "bash scripts/x.sh");
 }
 
-// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 T1 tracked+clean file gets no B.5 opinion; observed main Ask"]
 fn t1_sh_tracked_clean_allows() {
     expect_allow(&repo_fixture("sh"), "sh scripts/x.sh");
 }
 
-// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 T1 tracked+clean file gets no B.5 opinion; observed main Ask"]
 fn t1_node_tracked_clean_allows() {
     expect_allow(&repo_fixture("node"), "node x.js");
 }
 
-// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 T1 tracked+clean file gets no B.5 opinion; observed main Ask"]
 fn t1_dot_slash_tracked_clean_allows() {
     expect_allow(&repo_fixture("dotslash"), "./scripts/run.sh");
 }
 
-// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 T1 tracked+clean file gets no B.5 opinion; observed main Ask"]
 fn t1_relative_dir_tracked_clean_allows() {
     expect_allow(&repo_fixture("reldir"), "scripts/run.sh");
 }
 
-// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 T1 tracked+clean file gets no B.5 opinion; observed main Ask"]
 fn t1_bash_dot_slash_spelling_tracked_clean_allows() {
     expect_allow(&repo_fixture("bashdot"), "bash ./scripts/x.sh");
 }
 
 /// Data operands after the program do not change the T1 reading (R9).
-// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 T1 tracked+clean file gets no B.5 opinion; observed main Ask"]
 fn t1_python3_tracked_clean_with_data_operand_allows() {
     expect_allow(&repo_fixture("pydata"), "python3 scripts/x.py d.txt");
 }
 
 /// The absolute spelling of a tracked clean file inside the repo.
-// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 T1 tracked+clean file gets no B.5 opinion; observed main Ask"]
 fn t1_absolute_path_tracked_clean_allows() {
     let fx = repo_fixture("abs");
     let cmd = format!("bash {}", fx.proj().join("scripts/x.sh").display());
@@ -509,32 +491,24 @@ fn t2_bash_dup_fd_double_quoted_undetermined() {
 // T3 — noexec syntax check.
 // ---------------------------------------------------------------------------
 
-// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 T3 noexec -n gets no B.5 opinion; observed main Ask"]
 fn t3_bash_n_allows() {
     expect_allow(&fixture("bashn"), "bash -n x.sh");
 }
 
-// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 T3 noexec -n gets no B.5 opinion; observed main Ask"]
 fn t3_sh_n_allows() {
     expect_allow(&fixture("shn"), "sh -n x.sh");
 }
 
 /// Also inside a repo, for an untracked file (T3 does not depend on T1).
-// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 T3 noexec -n gets no B.5 opinion; observed main Ask"]
 fn t3_bash_n_untracked_in_repo_allows() {
     expect_allow(&repo_fixture("bashnrepo"), "bash -n scripts/new.sh");
 }
 
 /// Author's call: `-x` only traces; noexec holds.
-// test-weakening-justified: new RED for unbuilt S4 behaviour (2026-11-18)
 #[test]
-#[ignore = "RED: 2026-11-18 S4 T3 noexec -n gets no B.5 opinion; observed main Ask"]
 fn t3_bash_nx_allows() {
     expect_allow(&fixture("bashnx"), "bash -nx x.sh");
 }

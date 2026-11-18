@@ -37,7 +37,8 @@ Follow-up rulings (2026-11-17, on the S1 open questions):
 10. A program whose text is not in the command (`bash script.sh`) is
     Undetermined → Ask (subagent Deny): an interpreter running a file is an
     exception to "unknown program → Allow". When the same command writes that
-    file, the written body is judged recursively instead (S4).
+    file, the written body is judged recursively instead (S4) — only when
+    the write and the run are joined by `&&` (ruling 20).
 11. The remaining open questions stay legacy (today's behaviour) and are
     revisited at S6; see "Open questions".
 
@@ -55,12 +56,59 @@ S2 supplement rulings (user ruling 2026-11-17, after the S2 RED verification):
     reading answers Ask / Deny today (`dd of=`, `truncate`, `find -delete` on
     Scratch) stays at the legacy verdict until S6 retires that reading.
 15. Python keeps the legacy readings until S5 (the Python parser).
+    **Narrowed by the S4 rulings (2026-11-18, ruling 18):** a python3 program
+    FILE run (`python3 x.py`) and `python3 -m mod` are Undetermined from S4
+    on (B.5 beats this ruling); `-c` and a literal stdin program stay legacy.
 16. `.` / `source` become Ask (main) / Deny (subagent) **together with the
     quarantine plugin**, not in S4. Until then their verdict is legacy
     (today's). This refines ruling 13's timing.
 17. Direct execution of a program file (`./run.sh`, `scripts/foo.sh`, an
     absolute path) whose body is not in the command text is Undetermined →
     Ask (main) / Deny (subagent), like ruling 10's `bash script.sh` (S4).
+
+S4 rulings (user ruling 2026-11-18):
+
+18. S4 lands as a standalone B.5 layer (`b5.rs`), not waiting for the S3
+    judge; the final verdict is `max(B.5, legacy)` — the legacy layer only
+    raises, a legacy Deny / Ask is never lowered. The B.5 Undetermined
+    shapes (interpreter program file, also behind `env` / `env -i` /
+    `nohup` / `timeout`; perl / ruby / node `-e`; a non-literal stdin
+    program; `bash < x.sh`; `eval`; direct exec of a project path; and, per
+    the Table B common rules, an undetermined command word) are Ask
+    from the layer itself — distinct from a whole-line parse failure, which
+    gives no B.5 opinion (legacy decides). A python3 program file run and
+    `python3 -m` are Undetermined (B.5 beats ruling 15) until S5.
+19. A binary under a system / PATH dir (`/bin`, `/usr/bin`, `/usr/local/bin`,
+    `/opt/homebrew/bin`, …; `b5.rs` `SYSTEM_BIN_DIRS`) is judged by basename
+    like the bare name; bare names (`make`, `cargo`, unknown tools) get no
+    B.5 opinion.
+20. A body written in the same command and then run is judged as the program
+    ONLY when the write and the run are joined by `&&` (a benign body is
+    Allow, a harmful one Deny); `;`, a newline, or `false && write; run` →
+    Undetermined. A `.py` written then run stays Undetermined (S5). The
+    reason names the program file, never a data operand; a data operand
+    gets the program's verdict. A body run by `sh` gets the `sh -c` reading.
+21. Literal process-substitution or pipe content (all `echo` / `printf`
+    literal producers) is read like a literal stdin body: a shell body is
+    judged recursively; a perl / ruby / node / python body gives no B.5
+    opinion (legacy decides). A bare shell reading the inherited stdin gives
+    no B.5 opinion (the Bash tool's stdin is empty).
+22. (T1) A program file that is git-tracked AND unmodified gets no B.5
+    opinion (legacy decides), for interpreter file runs and direct exec.
+    Unmodified = clean in the work tree and index (`git ls-files
+    --error-unmatch` + `git status --porcelain`, from the hook's cwd, exit
+    status checked) AND not written by any other part of the same command
+    (any unknown command counts as a possible writer). `-m`, an untracked /
+    modified / staged / absent file, a path outside the repo (a symlink
+    leaving it included), a `-c` body, an injecting env var on the line
+    (`PATH`, `PYTHON*`, `LD_*`, …) and anything git cannot answer stay
+    Undetermined.
+23. (T2) A program read from a file descriptor (`bash <&'$fd'`) is
+    Undetermined.
+24. (T3) `bash -n` / `sh -n` (noexec; also with `x` / `v` / `e` / `u`)
+    gets no B.5 opinion. `-ni` (bash ignores `-n` when interactive) and
+    `x.sh -n` (a script argument) stay Undetermined; `-n -c BODY` judges
+    BODY as if it ran.
 
 Vocabulary: **Undetermined** = `Judgement::Undetermined(cause)`, resolved to
 Ask (main) / Deny (subagent, `interactive::ask_available`). **Unresolved** =
@@ -216,13 +264,14 @@ else the command's cwd).
 | Command | Program source | Judgement |
 |---|---|---|
 | `bash` / `sh` / `zsh` / `dash` / `ksh` `-c PROG` | `InlineLiteral` | PROG analysed and judged recursively (S4); Undetermined PROG → Undetermined |
-| same, stdin (`bash`, `-s`, `-`, `/dev/stdin`) | `Stdin(StdinSource)` | `Literal` body judged recursively (S4); `FromCommand` / `File` / `Fd` / `Undetermined` → Undetermined |
-| same, script file (`bash x.sh`); likewise any interpreter running a program file (`python3 x.py`, `perl x.pl`, …) | `File(Value)` | **Undetermined** → Ask / Deny (ruling 10). Exception: when an earlier command of the same script writes that file (matched by resolved path) with a determined body (`cat > x.sh <<'EOF' … EOF`), that body is analysed and judged recursively (S4) |
+| same, stdin (`bash`, `-s`, `-`, `/dev/stdin`) | `Stdin(StdinSource)` | `Literal` body — and the literal output of a process substitution / previous pipe stage — judged recursively (S4, ruling 21); `FromCommand` / `File` / `Fd` / `Undetermined` → Undetermined; `Inherited` → no B.5 opinion (ruling 21) |
+| same, script file (`bash x.sh`); likewise any interpreter running a program file (`python3 x.py`, `perl x.pl`, …) | `File(Value)` | **Undetermined** → Ask / Deny (ruling 10). Exception (shells and direct exec only): when an earlier command of the same script writes that file (matched by resolved path) with a determined body (`cat > x.sh <<'EOF' … EOF`) and the write and the run are joined by `&&` only, that body is judged as the program (S4, ruling 20). A git-tracked, unmodified file → no B.5 opinion (ruling 22). `-n` noexec → no B.5 opinion (ruling 24) |
 | `eval` | `Undetermined` | Undetermined (S4) |
-| direct execution of a program file (`./run.sh`, `scripts/foo.sh`, `/abs/run.sh`) | `File(Value)` | **Undetermined** → Ask / Deny (ruling 17, S4), same exception as the script-file row |
+| direct execution of a program file (`./run.sh`, `scripts/foo.sh`, `/abs/run.sh`) | `File(Value)` | **Undetermined** → Ask / Deny (ruling 17, S4), same exceptions as the script-file row (ruling 20, ruling 22) |
 | `source`, `.` (reading a file) | `File(Value)` | **Ask** (main) / Deny (subagent) together with the quarantine plugin; legacy until then (rulings 13, 16); not judged recursively in S4 |
-| `python*` `-c` / stdin / file / `-m` | as `program_source` | legacy readings until S5 (ruling 15); from S5 the Python parser |
-| `perl` / `ruby` `-e`/`-E`, `-i`, stdin, `node` `-e`/`-p`/stdin | — | **out of subset** → Undetermined (ruling 4) |
+| `python*` program file / `-m` | `File` / `Undetermined` | **Undetermined** from S4 (ruling 18, beats ruling 15); a git-tracked, unmodified file → no B.5 opinion (ruling 22; never `-m`); from S5 the Python parser |
+| `python*` `-c` / literal stdin | as `program_source` | legacy readings until S5 (ruling 15); a non-literal stdin → Undetermined (S4) |
+| `perl` / `ruby` `-e`/`-E`, `-i`, `node` `-e`/`-p`, non-literal stdin | — | **out of subset** → Undetermined (ruling 4, S4); a literal stdin / process-substitution / pipe body → no B.5 opinion, legacy decides (ruling 21) |
 | wrapper whose operand is an interpreter or Undetermined | `Undetermined` | unwrap (B.3), then the interpreter's row |
 
 ## Table C — PathClass × Effect → verdict
@@ -286,6 +335,7 @@ Notes:
 | S3 `path-cutover` | Table A enforcement for judged commands; Table B B.1 (all rows except `perl -i` which is already Undetermined), B.2, B.3, B.4; Table C (all rows); `classify` from the existing predicates; wire `judge` into `detect` with the "Undetermined handling" layer |
 | S3 status (2026-11-18) | done: ruling 12 — `$HOME` / `${HOME}` / leading `~` are the hook environment's `HOME`, in the evaluator (`eval.rs` `Env::initial`) and in the one static resolver every legacy reading sees (`readings/static_bindings.rs`), so a `$HOME` spelling is judged exactly as its absolute spelling. NOT done: `judge` / `classify` are still the S1 stubs and are not wired (open question raised to the user: under raise-only every Known Allow cell is inert, so wiring only adds Asks — including `Undetermined` for every unmodelled option such as `cp -p` — whose effect on commands allowed today is not measured by the block-log replay) |
 | S4 `stdin-program` | Table B B.5 rows for shells: `-c` inline, stdin (`StdinSource::Literal` bodies), `eval`; the script-file row and the direct-execution row (Undetermined, and the recursive judgement of a body the same command writes — rulings 10, 17); wrapper → interpreter unwrap. `source` / `.` are NOT in S4 (ruling 16) |
+| S4 status (2026-11-18) | **landed** as the standalone B.5 layer `b5.rs` (rulings 18–21), raising the legacy verdict in `readings.rs::detect_bash_every_reading`; `judge.rs` stays unwired. Wrappers unwrapped: `env`, `nohup`, `timeout`, `nice`, `time`, `exec`, `command`. Known gaps (legacy alone judges them): other wrappers (`sudo`, `xargs`, `su`, `flock`, `find -exec`, …) and `BASH_ENV` / `ENV` assignments |
 | S5 `python-parser` | Table B B.5 python row (a real Python parser; effects × targets of the parsed program judged by Table C); legacy python readings until then (ruling 15) |
 | S6 `retire-readings` | remove the string-reading fallbacks of every migrated row (`targets.rs::resolve` callers, `readings.rs` re-readings); until S6 the whole legacy layer is raise-only (ruling 14), so Table C Allow cells a legacy reading answers Ask / Deny today turn GREEN here; revisit the deferred Open questions 1–4 |
 | quarantine plugin (separate) | `source` / `.` → Ask (main) / Deny (subagent), introduced together with the script-quarantine plugin (ruling 16) |

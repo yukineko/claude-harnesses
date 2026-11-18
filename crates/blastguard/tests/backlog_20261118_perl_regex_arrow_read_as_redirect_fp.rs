@@ -151,7 +151,11 @@ fn blocked_perl_regex_rewrite_is_not_deny_in_main_mode() {
 fn real_redirect_onto_backslash_file_still_refused() {
     let fx = fixture("ctl");
     let proj = fx.base.join("src").join("proj");
-    std::fs::write(proj.join("\\"), "precious\n").unwrap();
+    // A file NAMED `\` (on unix `\` is not a path separator; clippy's
+    // join_absolute_paths misreads it).
+    #[allow(clippy::join_absolute_paths)]
+    let victim = proj.join("\\");
+    std::fs::write(victim, "precious\n").unwrap();
     let (d, r) = decision(&fx, &proj, "echo x > \\\\");
     assert_ne!(d, "allow", "a real `> \\` redirect was allowed ({r})");
 }

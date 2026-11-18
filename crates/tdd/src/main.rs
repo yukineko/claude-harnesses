@@ -39,6 +39,7 @@ mod state;
 mod transition;
 #[cfg(test)]
 mod trust_worktree_tests;
+mod unattributed;
 mod warned;
 
 use std::path::Path;

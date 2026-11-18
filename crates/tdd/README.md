@@ -57,8 +57,10 @@ On each stop `tdd gate`:
    the **whole checkout** is scanned, with the reason saying authorship was not
    verified
   .
-   Known gap: a file written by a command that never names it (`cargo fmt`, a
-   shell glob, a script) is excluded too;
+   A write that names no path (`cargo fmt`, a shell glob, a script) is NOT
+   excluded: user ruling 2026-11-18 supersedes 2026-10-17 — if the session ran
+   any such Bash call (or its Bash calls cannot be read), the **whole
+   checkout** is scanned and authorship is reported as not verified;
 4. counts *added implementation lines* (impl-glob files, minus test files and
    inline test markers) and looks for **test evidence** (an added `#[test]` /
    `def test_` / `func Test…` / `it(...)`, or a changed file under `tests/`).

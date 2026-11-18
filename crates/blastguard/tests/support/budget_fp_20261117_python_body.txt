@@ -1,0 +1,38 @@
+p='relay.rs'
+new_head='''//! The subagent Ask relay: a subagent's Ask is adjudicated in the main s
+//! This module moved out of blastguard (`
+
+//!   reads, stats or runs anything in the subagent's `cwd`. That `cwd`
+
+
+s=s.replace('''//! 1. Inside a subagent nobody can answer a permission prompt, so `emit`
+//!    (main.rs) hardens an `Ask` to a `Deny`
+
+//!    ([`crate::interactive::ask_available`
+//!    appended to this session's relay queue ([`queue`
+//!    `interactive::ask_available`
+//!    this session's relay queue ([`queue`]).''')
+
+
+
+//!    recorded on the entry ([`mark_denied`
+//!    PostToolUseFailure hook (`askrelay mark-executed`, [`mark_executed`
+
+//!    instead, blastguard records the denial on the entry ([`mark_denied`
+
+
+//!    (`askrelay mark-relayed`, [`mark_relayed`
+//! 4. A main-session Stop hook (`askrelay stop`, [`stop_outcome`]) blocks'''
+s=s.replace('''/// The queue directory: `BLASTGUARD_RELAY_DIR`, else `~/.blastguard/relay`
+/// Lives in blastguard's own state dir, outside every repo and worktree.''','''/// The queue directory: `BLASTGUARD_RELAY_DIR`, else `
+/// Lives in blastguard's state dir, o
+/// directory and t
+/// askrelay so that queues written before t
+/// them is a separate, later step.'''
+s=s.replace('''/// `blastguard relay dismiss <id> --reason <text>`: find the id''','''/// `askrelay dismiss <id> --reason <text>`: find the id'''
+s=s.replace('''`blastguard relay dismiss <id> --reason \\"<why>\\"`; the dismissal''','''`askrelay dismiss <id> --reason \\"<why>\\"`; the dismissal'''
+s=s.replace('''not run; record the outcome with `blastguard relay dismiss {} --reason \\"<why>\\"` \\''','''not run; record the outcome with `askrelay dismiss {} --reason \\"<why>\\"` \\'''
+s=s.replace('''"blastguard relay: the subagent Ask relay queue for this session could not be \\''','''"askrelay: the subagent Ask relay queue for this session could not be \\'''
+s=s.replace('''"blastguard relay: {} subagent Ask(s) in this session have not been adjudicated in the \\''','''"askrelay: {} subagent Ask(s) in this session have not been adjudicated in the \\''
+open(p,'w'
+EOF

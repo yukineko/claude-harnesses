@@ -26,9 +26,8 @@
 //! its subagent sidechains, or a `Bash` command naming its path outside a
 //! read-only statement such as `git diff` / `grep` / `tdd skip`). Files not
 //! attributed are excluded and NAMED ([`attribution_note`], and the block
-//! reason). Residual hole, stated rather than hidden: a file this session
-//! wrote through a command that never names it (`cargo fmt`, a glob, a script)
-//! is excluded too. When attribution is undetermined (no / unreadable
+//! reason). A path-less Bash write (`cargo fmt`, glob `sed -i`) keeps the whole
+//! scan: user ruling 2026-11-18 supersedes 2026-10-17, see `unattributed`. When attribution is undetermined (no / unreadable
 //! transcript, a manual run) the whole checkout is scanned and the message
 //! says authorship was NOT verified — undetermined is never read as "this
 //! session wrote nothing" (CLAUDE.md §3).
@@ -583,14 +582,13 @@ pub fn committed_test_evidence(
 /// ruling 2026-10-17, 「検証テストの範囲は書いた文だけでいい」), via the rule
 /// shared with reviewgate: `harness_core::attribution::attribute_own_writes`.
 ///
-/// The universe attributed is `changed ∪ files of added/removed lines`: `git
-/// status` collapses an untracked directory to `dir/`, while `diff_lines`
-/// lists the files inside it; a session commit that only deleted lines from a
-/// file is in neither. All three sides are filtered by the same kept set.
+/// The universe attributed is `changed ∪ files of added/removed lines` (`git
+/// status` collapses an untracked directory to `dir/`; a commit that only
+/// deleted lines from a file is in neither); all three sides share one kept set.
 ///
-/// A `Failed` / `NotRepo` scan passes through untouched (there is nothing to
-/// attribute, and `classify` already decides those). Undetermined attribution
-/// passes the WHOLE scan through and records why.
+/// A `Failed` / `NotRepo` scan passes through untouched (`classify` decides
+/// those). Undetermined attribution, or a path-less Bash write
+/// (`unattributed`, user ruling 2026-11-18), passes the WHOLE scan through.
 pub fn scope_to_session(
     root: &Path,
     transcript_path: &str,
@@ -610,6 +608,9 @@ pub fn scope_to_session(
     universe.sort();
     match harness_core::attribution::attribute_own_writes(root, transcript_path, &universe) {
         harness_core::attribution::Attribution::Narrowed { keep, excluded } => {
+            if let Some(why) = crate::unattributed::why_not_narrowable(transcript_path, &excluded) {
+                return (changed, added, removed, Authorship::Unverified { why });
+            }
             let keep: std::collections::BTreeSet<String> = keep.into_iter().collect();
             let files = files
                 .iter()
@@ -800,8 +801,8 @@ fn generic_block_reason(
                 };
                 format!(
                     " {}, not attributed to this session, were excluded: {}{more}. \
-                     A file you wrote through a command that never named it (cargo fmt, a glob, a \
-                     script) is among the excluded ones, not counted above.",
+                     (This session ran no Bash command that writes without naming a path; \
+                     otherwise nothing would have been excluded.)",
                     excluded_label::counts(authorship),
                     shown.join(", ")
                 )

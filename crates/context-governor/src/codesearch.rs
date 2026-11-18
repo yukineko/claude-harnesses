@@ -248,7 +248,7 @@ pub fn freshness(root: &Path, current: &[(String, u64, i64)]) -> Determination<b
 /// open by rejecting.
 ///
 /// Closing that gap needs a persisted **reference** store. The enumerator
-/// exists (`blastguard::callgraph::enumerate_callers`) but its edges are
+/// exists (`harness_core::callgraph::enumerate_callers`) but its edges are
 /// recomputed per invocation and never written to disk, so obtaining references
 /// today costs the very full-tree scan this short-circuit is meant to avoid.
 ///

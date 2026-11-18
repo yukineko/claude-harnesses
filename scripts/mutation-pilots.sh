@@ -29,6 +29,9 @@
 # three did NOT, so they stay deliberately absent:
 #
 #   blastguard  src/classify.rs   95.0%  (19/20 viable)            ADDED
+#     -> 2026-11-17: classify.rs moved to crates/riskgrade; the pilot entry is now
+#        `riskgrade` (same file). blastguard itself is no longer a pilot. The
+#        riskgrade re-measurement is recorded in scripts/mutation-gate.sh.
 #   stuckguard  src/detect.rs     78.8%  (41/52, 11 survived)      below bar
 #   propguard   src/config.rs     48.7%  (19/39, 20 survived)      below bar
 #   overwatch   src/canary.rs     UNDETERMINED (baseline failure)  unmeasurable
@@ -43,7 +46,7 @@ set -euo pipefail
 
 # Priority order = the order pilots are emitted when several changed. Also the
 # fallback default (first entry) when nothing calibrated matched.
-PILOTS="harness-core specguard condukt blastguard"
+PILOTS="harness-core specguard condukt riskgrade"
 DEFAULT_PILOT="harness-core"
 
 changed="$(cat)"

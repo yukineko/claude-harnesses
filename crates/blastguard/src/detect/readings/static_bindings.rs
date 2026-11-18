@@ -20,6 +20,15 @@
 //!   * a value built from names already bound (`B=$A/x`) resolves too, since
 //!     the value is rewritten before it is read.
 //!
+//! `HOME` is bound before the first statement to the hook environment's own
+//! `HOME` (user ruling 2026-11-17, SUBSET.md ruling 12: `$HOME` / `${HOME}`
+//! / `~` are Known), so `rm -r "$HOME/.cache/x"` and `rm -r ~/.cache/x` are
+//! judged exactly as their absolute spelling; every rule below that drops or
+//! rebinds a name applies to it unchanged. Unlike a line-bound name, `HOME`
+//! is NOT substituted inside a longer double-quoted string (only unquoted or
+//! as a whole double-quoted word), so `perl -ne "print $HOME"` and
+//! `"$HOME/My Docs"` keep their spelling and their legacy verdict.
+//!
 //! A value is recorded only when it is a non-empty literal made of characters
 //! whose meaning is the same unquoted and in a word (`[A-Za-z0-9/._+,:@%^-]`):
 //! no whitespace, quote, `$`, backtick, backslash, glob, brace, `~`, `=`, `#`
@@ -86,6 +95,10 @@ const SHELL_MAINTAINED: &[&str] = &[
     "FUNCNAME",
 ];
 
+/// Names bound from the hook's environment rather than by the line (ruling
+/// 12): see [`substitute_references`] for where they are substituted.
+const ENV_SEEDED: &[&str] = &["HOME"];
+
 /// Words whose presence anywhere makes the line ineligible (see module doc).
 const BAIL_WORDS: &[&str] = &["trap", "alias", "readonly", "declare", "typeset", "local"];
 
@@ -93,7 +106,28 @@ const BAIL_WORDS: &[&str] = &["trap", "alias", "readonly", "declare", "typeset",
 /// fix replaced by that value; `cmd` unchanged when nothing resolves or the
 /// line is ineligible (see the module doc).
 pub(super) fn resolve_static_bindings(cmd: &str) -> String {
-    if !cmd.contains('$') || line_is_ineligible(cmd) {
+    resolve_static_bindings_with_home(cmd, hook_home().as_deref())
+}
+
+/// `HOME` of the hook's own environment when it may be substituted (user
+/// ruling 2026-11-17, SUBSET.md ruling 12): non-empty, absolute, and made
+/// only of [`is_substitutable_char`] characters, so the substituted text
+/// reads as one plain word.
+fn hook_home() -> Option<String> {
+    std::env::var("HOME")
+        .ok()
+        .filter(|h| h.starts_with('/') && h.chars().all(is_substitutable_char))
+}
+
+/// [`resolve_static_bindings`] with the hook environment's `HOME` given:
+/// `HOME` starts bound to it (ruling 12: `$HOME` / `${HOME}` are Known), so
+/// it resolves under exactly the rules of a name an earlier statement bound
+/// — a statement that rebinds, unsets or otherwise names `HOME` drops or
+/// replaces it — and a bare `~` that starts a word ([`substitute_tilde`]) is
+/// that value too while `HOME` is still bound.
+fn resolve_static_bindings_with_home(cmd: &str, home: Option<&str>) -> String {
+    let tilde_candidate = home.is_some() && cmd.contains('~');
+    if (!cmd.contains('$') && !tilde_candidate) || line_is_ineligible(cmd) {
         return cmd.to_string();
     }
     let segs = split_segments_with_separators(cmd);
@@ -103,6 +137,11 @@ pub(super) fn resolve_static_bindings(cmd: &str) -> String {
     let (is_body, unclosed_opener) = here_document_layout(&segs);
     let loop_start = segs.iter().position(|s| opens_loop(&s.text));
     let mut env: HashMap<String, String> = HashMap::new();
+    if let Some(h) = home {
+        env.insert("HOME".to_string(), h.to_string());
+    }
+    // `~` inside arithmetic is bitwise NOT, not a home directory.
+    let tilde_ok = tilde_candidate && !cmd.contains("((") && !cmd.contains("$[");
     let mut out = String::with_capacity(cmd.len());
     let mut cursor = 0;
     for (idx, (seg, &(start, end))) in segs.iter().zip(spans.iter()).enumerate() {
@@ -136,7 +175,12 @@ pub(super) fn resolve_static_bindings(cmd: &str) -> String {
             }
             Some(value.clone())
         };
-        let text = substitute_references(&seg.text, &lookup);
+        let mut text = substitute_references(&seg.text, &lookup);
+        if tilde_ok {
+            if let Some(h) = lookup("HOME") {
+                text = substitute_tilde(&text, &h);
+            }
+        }
         update_env(&mut env, &segs, idx, &text);
         out.push_str(&text);
     }
@@ -354,7 +398,17 @@ fn substitute_references(text: &str, lookup: &dyn Fn(&str) -> Option<String>) ->
         }
         if c == '$' && !in_s {
             if let Some((name, len)) = reference_at(&chars, i) {
-                if let Some(v) = lookup(&name) {
+                // An environment-seeded name is substituted only where the
+                // result is one plain word (unquoted, or a whole
+                // double-quoted span `resolved_double_quoted_span` resolved
+                // above) — never inside a longer double-quoted string such
+                // as interpreter program text (`perl -ne "print $HOME"`):
+                // there the substitution would turn a run-time expansion
+                // into program text the readings then clear, lowering the
+                // legacy Ask (raise-only until S6, ruling 14; corpus control
+                // `control_1732_perl_double_quoted_home`).
+                let seeded_in_quotes = in_d && ENV_SEEDED.contains(&name.as_str());
+                if let Some(v) = lookup(&name).filter(|_| !seeded_in_quotes) {
                     out.push_str(&v);
                     i += len;
                     continue;
@@ -401,6 +455,50 @@ fn resolved_double_quoted_span(
         return None;
     }
     Some((out, close))
+}
+
+/// Replace each bare `~` that starts a word outside quotes and is followed by
+/// `/`, a blank, a separator or the end (`~`, `~/x`; not `~user`, `~+`, `~-`,
+/// not `a=~/x` or `x:~/y`, whose expansion depends on how bash classifies
+/// the word — those keep their spelling and so their restrictive verdict)
+/// by `home`: the expansion bash performs (ruling 12).
+fn substitute_tilde(text: &str, home: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let (mut in_s, mut in_d) = (false, false);
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\\' && !in_s {
+            out.push(c);
+            if let Some(n) = chars.get(i + 1) {
+                out.push(*n);
+            }
+            i += 2;
+            continue;
+        }
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+        } else if c == '"' && !in_s {
+            in_d = !in_d;
+        } else if c == '~' && !in_s && !in_d {
+            let at_word_start = i == 0
+                || chars.get(i - 1).is_some_and(|p| {
+                    p.is_whitespace() || matches!(p, ';' | '&' | '|' | '(' | ')' | '`')
+                });
+            let ends_prefix = chars.get(i + 1).is_none_or(|n| {
+                *n == '/' || n.is_whitespace() || matches!(n, ';' | '&' | '|' | ')' | '`')
+            });
+            if at_word_start && ends_prefix {
+                out.push_str(home);
+                i += 1;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
 }
 
 /// The name and char length of a plain reference starting at `chars[at]`

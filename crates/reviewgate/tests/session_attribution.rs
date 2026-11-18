@@ -38,9 +38,11 @@
 //! and the "Why the first row is a subtraction" argument below are historical;
 //! the `Known` row is now `changed ∩ mine` where `mine` includes Bash mentions,
 //! which is what answers the `sed -i` measurement quoted below. The
-//! `Undetermined` row is unchanged (whole checkout, disclosed). Residual hole
-//! accepted by the ruling: writes by commands that never name the path
-//! (`cargo fmt`, globs, scripts) are not attributed. The new contract is pinned
+//! `Undetermined` row is unchanged (whole checkout, disclosed). The residual
+//! hole the ruling accepted (writes by commands that never name the path:
+//! `cargo fmt`, globs, scripts) is CLOSED: user ruling 2026-11-18 supersedes
+//! 2026-10-17 — a session with any path-less Bash write keeps ALL changed files
+//! in scope. The new contract is pinned
 //! in `session_scope_own.rs`; the tests here that asserted the old rule were
 //! updated to it.
 //!
@@ -550,8 +552,12 @@ fn a_file_a_peer_only_read_is_excluded_as_unattributed() {
 
 /// 2026-10-17 CONTRACT (was `an_unattributed_file_stays_in_the_review_set`,
 /// superseded). The user ruled that a file with no Edit/Write/Bash attribution
-/// to this session is excluded; the residual hole (a `cargo fmt`/glob/script
-/// write that never names the path) is accepted explicitly.
+/// to this session is excluded when the session's Bash calls are all read-only
+/// or path-naming. User ruling 2026-11-18 supersedes 2026-10-17 on the former
+/// "accepted residual hole": a path-less write (`cargo fmt`/glob/script) is NOT
+/// excluded, it keeps the full scope (see
+/// `backlog_20261118_unnamed_write_excluded_from_scope.rs`). This transcript has
+/// only an Edit, so the exclusion still applies.
 ///
 /// Asserting the block as well as the file list is what distinguishes "reviewed
 /// mine.rs only" from "the gate went dark and reviewed nothing".
@@ -583,8 +589,9 @@ fn an_unattributed_file_is_excluded_from_the_review_set() {
     assert_eq!(
         o.log_files,
         vec!["mine.rs".to_string()],
-        "2026-10-17 ruling: unowned.rs is attributed to no one in this session's \
-         transcript and is excluded"
+        "2026-10-17 ruling, narrowed by user ruling 2026-11-18 (path-less writes keep \
+         full scope; none here, only an Edit of mine.rs): unowned.rs is attributed to \
+         no one in this session's transcript and is excluded"
     );
 }
 

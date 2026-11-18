@@ -133,7 +133,6 @@ fn verdict(out: &str) -> &'static str {
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: arithmetic expansion body is parsed as a command line; its first operand is judged as a command word"]
 fn r1_command_substitution_operand_in_arithmetic_is_allowed() {
     let f = Fx::new("r1");
     let cmd = "echo $(( $(date +%s) - $(cat scratch/stamp) ))";
@@ -145,7 +144,6 @@ fn r1_command_substitution_operand_in_arithmetic_is_allowed() {
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: arithmetic expansion body is parsed as a command line; its first operand is judged as a command word"]
 fn r2_variable_operand_in_arithmetic_is_allowed() {
     let f = Fx::new("r2");
     let cmd = "x=4; echo $(( $x + 1 ))";
@@ -157,7 +155,6 @@ fn r2_variable_operand_in_arithmetic_is_allowed() {
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: arithmetic expansion body is parsed as a command line; its first operand is judged as a command word"]
 fn r3_backtick_operand_in_arithmetic_is_allowed() {
     let f = Fx::new("r3");
     let cmd = format!("echo $(( {BT}date +%s{BT} - 5 ))");
@@ -195,6 +192,37 @@ fn c3_control_real_subshell_with_expansion_command_word_stays_not_allowed() {
     assert_ne!(
         v, "allow",
         "an expansion as a real command word must not be Allow: {cmd}"
+    );
+    assert_ne!(v, "other", "unrecognised hook output: {cmd}");
+}
+
+/// 6efd5a40 (task t3, written by the implementer of the fix — not an
+/// independent test): an arithmetic body is expanded as if double-quoted, so
+/// a `'` there does not hide a nested substitution; reading `'…'` as a quote
+/// inside `$((…))` would let this through.
+#[test]
+fn c4_control_single_quote_in_arithmetic_does_not_hide_substitution() {
+    let f = Fx::new("c4");
+    let cmd = "echo $(( '$(rm -rf /etc)' + 1 ))";
+    let v = f.bash(cmd);
+    assert_ne!(
+        v, "allow",
+        "a `'` inside arithmetic is not a quote; the nested rm runs: {cmd}"
+    );
+    assert_ne!(v, "other", "unrecognised hook output: {cmd}");
+}
+
+/// 6efd5a40 (task t3, implementer-written): `$((cmd) )` — the inner `(` does
+/// not close right before the outer `)` — is a command substitution holding a
+/// subshell, not arithmetic, so its body is still judged as commands.
+#[test]
+fn c5_control_dollar_paren_subshell_is_not_arithmetic() {
+    let f = Fx::new("c5");
+    let cmd = "echo $((rm -rf /etc) )";
+    let v = f.bash(cmd);
+    assert_ne!(
+        v, "allow",
+        "`$((…) )` is a subshell in a command substitution: {cmd}"
     );
     assert_ne!(v, "other", "unrecognised hook output: {cmd}");
 }

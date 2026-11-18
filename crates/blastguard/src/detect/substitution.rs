@@ -816,8 +816,20 @@ pub(super) fn backtick_payloads(stage: &str) -> Vec<String> {
 /// in source order: `$(...)` and backtick bodies at the top level or inside
 /// double quotes, and unquoted `<(...)`/`>(...)` process-substitution bodies,
 /// but NOT inside single quotes (`'$(rm x)'` is literal text).
-/// `$((...))` arithmetic is a `$(` too and is returned like the rest; its
-/// body is an expression, which the analyser finds nothing destructive in.
+///
+/// `$((...))` arithmetic expansion is a syntax node of its own, not a command
+/// substitution: its body is an EXPRESSION, never run as a command line, so
+/// the body itself is not returned (its first operand is not a command word).
+/// The substitutions NESTED in that expression are run, though, and are
+/// returned like the rest: `$(( $(rm -rf /etc) + 1 ))` yields `rm -rf /etc`.
+/// The body is expanded as if double-quoted (bash: "the same expansions as if
+/// it were within double quotes"), so a `'` there does NOT hide a nested
+/// `$(...)`, and `<(`/`>(` is not a process substitution there. `$((` is
+/// arithmetic only in bash's own structural reading (`parse_arith_cmd`): the
+/// `(` after `$(` closes IMMEDIATELY before the `)` that closes the `$(`
+/// (`$(( … ))`). Any other shape (`$((a) )`, `$((a);(b))`, an inner scan
+/// that cannot be closed) is a command substitution whose body is a
+/// subshell, and is returned whole as before.
 ///
 /// Unlike [`command_substitution_payloads`] (used by the fetch/decode egress
 /// scans, where over-reporting a single-quoted body is harmless) this one
@@ -832,7 +844,30 @@ pub(super) fn backtick_payloads(stage: &str) -> Vec<String> {
 pub(super) fn executed_substitution_payloads(seg: &str) -> Vec<String> {
     let chars: Vec<char> = seg.chars().collect();
     let mut out = Vec::new();
-    let mut in_double = false;
+    // An unclosed construct ends the scan; what was found before it is kept
+    // (the pieces after it are analysed as segments of their own, see above).
+    let _ = executed_payloads_in(&chars, false, &mut out);
+    out
+}
+
+/// The expression of the `$(...)` opened at `open` (the index of `$`) and
+/// closed at `end`, when it is an arithmetic expansion `$(( expr ))` by
+/// bash's structural rule (see [`executed_substitution_payloads`]); `None`
+/// for every other shape, which the caller keeps as a command substitution.
+fn arithmetic_body(chars: &[char], open: usize, end: usize) -> Option<&[char]> {
+    if chars.get(open + 2) != Some(&'(') {
+        return None;
+    }
+    let inner_end = scan_balanced(chars, open + 3, Stop::Paren, 0)?;
+    (inner_end + 1 == end).then(|| &chars[open + 3..inner_end])
+}
+
+/// [`executed_substitution_payloads`] over `chars`, appending to `out`.
+/// `arithmetic` marks the body of `$((…))`, expanded as if double-quoted with
+/// `"` removed: neither `'` nor `"` quotes anything there. Returns `false`
+/// when a construct in `chars` could not be closed (the scan stopped there).
+fn executed_payloads_in(chars: &[char], arithmetic: bool, out: &mut Vec<String>) -> bool {
+    let mut in_double = arithmetic;
     let mut k = 0;
     while k < chars.len() {
         match chars[k] {
@@ -848,28 +883,37 @@ pub(super) fn executed_substitution_payloads(seg: &str) -> Vec<String> {
                 k = j + 1;
                 continue;
             }
-            '"' => in_double = !in_double,
+            '"' if !arithmetic => in_double = !in_double,
             '$' if chars.get(k + 1) == Some(&'(') => {
-                let Some(end) = scan_balanced(&chars, k + 2, Stop::Paren, 0) else {
-                    break;
+                let Some(end) = scan_balanced(chars, k + 2, Stop::Paren, 0) else {
+                    return false;
                 };
-                out.push(chars[k + 2..end].iter().collect());
+                // An expression whose nested substitutions cannot all be
+                // closed is not read as arithmetic: its whole body is kept,
+                // as every `$(` body was before (the strict side).
+                let mut nested = Vec::new();
+                match arithmetic_body(chars, k, end) {
+                    Some(expr) if executed_payloads_in(expr, true, &mut nested) => {
+                        out.append(&mut nested);
+                    }
+                    _ => out.push(chars[k + 2..end].iter().collect()),
+                }
                 k = end + 1;
                 continue;
             }
             // e2b9ffb1: a `<(...)`/`>(...)` process substitution body is run
             // too (unquoted only; inside double quotes it is literal text).
             '<' | '>' if !in_double && chars.get(k + 1) == Some(&'(') => {
-                let Some(end) = scan_balanced(&chars, k + 2, Stop::Paren, 0) else {
-                    break;
+                let Some(end) = scan_balanced(chars, k + 2, Stop::Paren, 0) else {
+                    return false;
                 };
                 out.push(chars[k + 2..end].iter().collect());
                 k = end + 1;
                 continue;
             }
             '`' => {
-                let Some(end) = scan_balanced(&chars, k + 1, Stop::Backtick, 0) else {
-                    break;
+                let Some(end) = scan_balanced(chars, k + 1, Stop::Backtick, 0) else {
+                    return false;
                 };
                 out.push(backtick_body_as_run(&chars[k + 1..end]));
                 k = end + 1;
@@ -879,7 +923,7 @@ pub(super) fn executed_substitution_payloads(seg: &str) -> Vec<String> {
         }
         k += 1;
     }
-    out
+    true
 }
 
 /// The command text bash actually runs for a backtick body: inside backticks

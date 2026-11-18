@@ -60,10 +60,12 @@ use crate::model::Decision;
 use crate::scope::{Placement, SafeRoots};
 use harness_core::verdict::Determination;
 mod ast;
+pub(crate) use ast::{TABLE_B_UNDETERMINED, TABLE_B_UNRESOLVED};
 mod backtick_text;
 mod budget;
 mod compound;
 mod condukt;
+mod confined;
 mod cwd;
 mod denoise;
 mod echo_script_file;
@@ -80,6 +82,7 @@ mod git_unmerged;
 mod harm_mark;
 mod here_string_file;
 mod heredoc;
+mod heredoc_data;
 mod high_blast;
 mod interpreter;
 mod payload;
@@ -100,6 +103,7 @@ mod vars;
 mod verdict_acc;
 mod words;
 
+use confined::{confined_ask, shape_deny_or_confined_ask};
 use verdict_acc::VerdictAcc;
 
 #[cfg(test)]
@@ -203,7 +207,7 @@ use vars::{
 };
 
 use redirect::{
-    append_redirect_targets, append_target_occurrences, physical_redirect_spelling,
+    append_target_occurrences, line_append_targets, line_targets, physical_redirect_spelling,
     place_redirect_target, redirect_target_candidates, redirect_target_is_safe,
     redirect_target_occurrences, redirect_target_undeterminable, redirect_targets,
     temp_disposable_redirect_target, unplaceable_redirect_ask,
@@ -499,80 +503,6 @@ impl<'a> Ctx<'a> {
     }
 }
 
-/// True for the verbs whose relative operands [`rewrite_relative_operands`]
-/// has already re-expressed against the session cwd.
-///
-/// Kept as its own list rather than derived from [`verb_targets`] at runtime
-/// (that function needs a token slice to answer), and pinned to it by
-/// `verb_rewrite_list_matches_verb_targets` in the test module below — if a verb
-/// is added to `verb_targets` and not here, that test fails rather than this
-/// module silently resolving its operands against the wrong base.
-/// The verdict for a rule whose only objection is the SHAPE of the command:
-/// an Ask when every target resolved strictly inside a safe root, otherwise the
-/// Deny that rule always returned.
-///
-/// `verb` selects the base for relative operands (see [`Ctx::base_for`]);
-/// `action` is what the Ask calls the operation.
-fn shape_deny_or_confined_ask<S: AsRef<str>>(
-    ctx: &Ctx<'_>,
-    verb: &str,
-    action: &str,
-    targets: &[S],
-    deny_reason: &str,
-) -> Decision {
-    match ctx.confined_root(verb, targets) {
-        Some(root) => confined_ask(action, &root, targets),
-        None => Decision::deny(deny_reason),
-    }
-}
-
-impl Decision {
-    /// Second chance for a rule whose operand is NOT the thing destroyed
-    /// (`chmod -R`, `chown -R`): if the shape-only Deny stands, retry the
-    /// placement accepting a safe root itself.
-    ///
-    /// Written as a post-hoc widening rather than a flag on
-    /// [`shape_deny_or_confined_ask`] so the narrow rule stays the default: a
-    /// verb that must NOT accept its own root (every deleting verb) cannot pick
-    /// this up by forgetting to pass `false`.
-    fn or_root_itself<S: AsRef<str>>(
-        self,
-        ctx: &Ctx<'_>,
-        verb: &str,
-        action: &str,
-        targets: &[S],
-    ) -> Decision {
-        match self {
-            Decision::Deny(reason) => match ctx.confined_root_or_root_itself(verb, targets) {
-                Some(root) => confined_ask(action, &root, targets),
-                None => Decision::Deny(reason),
-            },
-            other => other,
-        }
-    }
-}
-
-/// The `Ask` for a destructive command whose every target resolved inside a
-/// safe root.
-///
-/// The wording is load-bearing in two ways: it names the ROOT (so the operator
-/// can see what "confined" was measured against, rather than trusting the
-/// word), and it carries the fixed phrase `is confined to`, which
-/// [`crate::rule_id`] keys the `scoped-destructive-confined` id on.
-fn confined_ask<S: AsRef<str>>(action: &str, root: &str, targets: &[S]) -> Decision {
-    Decision::ask(format!(
-        "{action} is confined to {root} — a safe root for this session (its project tree, its \
-worktree, or a temp dir), and every target ({}) resolved to a real path strictly inside it, \
-symlinks included. The blast radius is bounded, so this is a question rather than a refusal: \
-approve it if that is the tree you meant.",
-        targets
-            .iter()
-            .map(|t| t.as_ref())
-            .collect::<Vec<&str>>()
-            .join(" ")
-    ))
-}
-
 /// The shared wording for "this call is mine to judge and I could not read its
 /// operand", so [`crate::rule_id`] gives the whole class ONE stable signature.
 ///
@@ -726,8 +656,25 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
             "command is too complex to analyse within the safety budget — blastguard cannot vouch for it either way",
         );
     }
-    let _ast_depth = ast::targets::enter_depth(depth); // AST values are depth 0's only
+    // AST values are depth 0's only.
+    let _ast_depth = ast::targets::enter_depth(depth);
+    // 0a. QUOTED heredoc bodies the shell parser shows are data (fed to `cat`
+    // / `tee` / `git commit -F -`, landing in no file any command of the line
+    // runs) are removed, and the rest is judged by every rule below; an
+    // undetermined word that may name the landing file floors an Allow at Ask
+    // unless the whole line is Allow too (backlog f6102045 / 19baba2f). Shape
+    // rule: `heredoc_data`.
+    if depth == 0 {
+        if let Some(view) = heredoc_data::without_data_heredoc_bodies(cmd) {
+            let judged = detect_bash(&view.text, depth, ctx);
+            return view.floor(judged, || detect_bash_whole(cmd, depth, ctx));
+        }
+    }
+    detect_bash_whole(cmd, depth, ctx)
+}
 
+/// Steps 0 and 0d of [`detect_bash`] on `cmd` with no body removed by 0a.
+fn detect_bash_whole(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // 0. When the command is effectively ONE here-document fed to a data-only
     // reader (`cat > notes.txt <<'EOF'`, `git commit -F - <<'EOF'`), with no
     // other command around it (a quoted `git commit -F -` may be followed by
@@ -848,7 +795,7 @@ primitive, not a filesystem path",
     // Which segments are interpreter program text (4a1cf1ad); see
     // `interpreter_program_body_segments`.
     let program_body = interpreter_program_body_segments(rcmd);
-    for (occurrence, raw_target) in redirect_targets(rcmd).into_iter().enumerate() {
+    for (occurrence, raw_target) in line_targets(rcmd, redirect_targets).into_iter().enumerate() {
         let seg_idx = redirect_segments
             .as_ref()
             .and_then(|occ| occ.get(occurrence))
@@ -1090,7 +1037,7 @@ does not parse that body, but blastguard cannot show the program does not use it
     //     (a83802ad): `P=/etc/fstab; echo x >> $P` names `/etc/fstab`, and
     //     judging the raw `$P` token instead let it through every axis.
     let append_segments = append_target_occurrences(rcmd);
-    for (occurrence, raw_target) in append_redirect_targets(rcmd).into_iter().enumerate() {
+    for (occurrence, raw_target) in line_append_targets(rcmd).into_iter().enumerate() {
         let seg_idx = append_segments
             .as_ref()
             .and_then(|occ| occ.get(occurrence))
@@ -1934,6 +1881,7 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         // scan for the `\;` form without depending on where the split fell.
         "-exec" | "-execdir" | "-ok" | "-okdir" => analyze_find(&tokens[idx..], seg, depth, ctx),
         "rm" => analyze_rm(rest, ctx),
+        "rsync" => rm::analyze_rsync_delete(rest, ctx),
         "gh" => analyze_gh(rest),
         // 12ba5845: granting autonomy is human-only. `tokens[..idx]` carries the
         // env-assignment prefix (`CONDUKT_AUTONOMOUS=1 condukt …`) that

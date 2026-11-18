@@ -21,7 +21,11 @@
 //!   `source`, `.`, `trap`, `alias`, `shopt`, `builtin`, `command`, an
 //!   undetermined command word, `declare`-family options, `set` with options
 //!   other than the plain ones — makes the state *opaque*: from there on every
-//!   variable, the cwd and stdin are `Undetermined`. `builtin [--] w ...` and
+//!   variable, the cwd and stdin are `Undetermined`. Sole exception (user
+//!   ruling 2026-11-18): `. F` where `F`'s value is `<hook HOME>/.cargo/env`
+//!   (rustup's PATH setup), unwrapped and without a prefix assignment, keeps
+//!   the state; `source` of it and every other sourced file stay opaque.
+//!   `builtin [--] w ...` and
 //!   `command [-p] [--] w ...` (nested too) are unwrapped first: the wrapped
 //!   command `w` has its effects and assignment checks as if it ran alone
 //!   (a wrapped declaration builtin's operands keep Field mode), and then the
@@ -407,12 +411,25 @@ impl Env {
 }
 
 /// `HOME` of the hook's own process environment, when it is a non-empty
-/// absolute path (ruling 12). Anything else (unset, relative, not UTF-8)
-/// leaves `$HOME` / `~` `Undetermined`.
+/// absolute path made only of `[A-Za-z0-9/._+,:@%^-]` (ruling 12) — the same
+/// rule the static resolver applies before it substitutes `HOME`
+/// (`readings/static_bindings.rs` `hook_home`), so both layers agree on when
+/// `HOME` is Known. Anything else (unset, relative, not UTF-8, a blank or
+/// other special character) leaves `$HOME` / `~` `Undetermined`.
 fn hook_home() -> Option<String> {
-    std::env::var("HOME")
-        .ok()
-        .filter(|h| h.starts_with('/') && !h.contains('\0'))
+    std::env::var("HOME").ok().filter(|h| {
+        h.starts_with('/')
+            && h.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || matches!(c, '/' | '.' | '_' | '+' | ',' | ':' | '@' | '%' | '^' | '-')
+            })
+    })
+}
+
+/// True when `v` is the literal `<hook HOME>/.cargo/env` (r21 exemption).
+fn is_cargo_env(v: &Value) -> bool {
+    matches!((v, hook_home()), (Value::Literal(p), Some(h))
+        if *p == format!("{}/.cargo/env", h.trim_end_matches('/')))
 }
 
 fn undet(s: impl Into<String>) -> Value {
@@ -1415,6 +1432,10 @@ impl Ev {
                     }
                 }
             }
+            // User ruling 2026-11-18 (r21): `. "$HOME/.cargo/env"` (the
+            // hook's HOME, unwrapped, no prefix assignment) is rustup's PATH
+            // setup only and keeps the state; any other `.` / `source` does not.
+            "." if sc.assignments.is_empty() && matches!(args, [w] if is_cargo_env(&w.value)) => {}
             n if OPAQUE_BUILTINS.contains(&n) => env.make_opaque(&format!("`{n}` ran")),
             _ => {}
         }

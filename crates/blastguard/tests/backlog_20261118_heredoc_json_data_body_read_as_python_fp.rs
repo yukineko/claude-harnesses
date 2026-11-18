@@ -154,13 +154,11 @@ fn control_jsonl_without_semicolon_allows() {
 // --------------------------------------------------------------------- RED
 
 #[test]
-#[ignore = "RED: quoted heredoc .jsonl data body read as shell → python3 -c fragment refused (FP, bgr-d085f75f9fa7)"]
 fn jsonl_target_allows() {
     allow("jsonl", &heredoc("cases.jsonl", BODY));
 }
 
 #[test]
-#[ignore = "RED: quoted heredoc .json data body read as shell → python3 -c fragment refused (FP, bgr-d085f75f9fa7)"]
 fn json_target_allows() {
     allow("json", &heredoc("cases.json", BODY));
 }

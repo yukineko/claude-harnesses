@@ -6,11 +6,21 @@
 //! here-doc opener) and of `permitted_prefix_line` (`git add <literal>...`).
 //!
 //! The quoted body is data, so a `>` or a backtick in it is not a redirect.
-//! Everything else on the command must still be judged: a head that is not a
-//! plain `cd`/`git add` with literal arguments, a redirect on the opener line,
-//! a redirect after the closing delimiter, and an unquoted delimiter must all
-//! stay restrictive (deny or ask). Each case runs with a fresh HOME so the
-//! repeat-deny downgrade cannot change a verdict.
+//! Everything else on the command must still be judged: a redirect on the
+//! opener line, a redirect after the closing delimiter, a real backtick
+//! redirect in the head, a destructive head, and an unquoted delimiter must
+//! all stay restrictive (deny or ask).
+//!
+//! User ruling 2026-11-18 (B-2): a head in front of the data here-document is
+//! judged on its own merits, not by whether it is one of a whitelisted shape.
+//! So the `parity_*` cases require the combined command to get exactly the
+//! strictest of (the bare here-document alone, each head command alone): no
+//! more permissive than any part, and no stricter just because the parts are
+//! joined (`||`, `;`, `|`, `git -c`, `git rm`, `rm -rf build`, `git add $X`).
+//! A head that is restrictive alone (for example `rm -rf build`, deny alone
+//! at origin/main 04d9b8336) therefore keeps that verdict on the combined
+//! line; `git rm -rf x` alone was observed Allow there, so its parity is Allow. Each case runs with a fresh HOME
+//! so the repeat-deny downgrade cannot change a verdict.
 
 #[path = "support/bounded.rs"]
 mod bounded;
@@ -90,39 +100,73 @@ fn head_with_real_backtick_redirect_stays_restrictive() {
     assert_restrictive("add-redirect-head", &heredoc("git add a.txt > `pwd` &&"));
 }
 
-#[test]
-fn head_with_variable_path_stays_restrictive() {
-    assert_restrictive("add-var", &heredoc("git add $X &&"));
+fn rank(tag: &str, d: &str) -> u8 {
+    match d {
+        "allow" => 0,
+        "ask" => 1,
+        "deny" => 2,
+        other => panic!("[{tag}] unexpected decision {other:?}"),
+    }
+}
+
+/// The combined command must get exactly the strictest verdict among the
+/// bare here-document alone and each head command alone (ruling B-2).
+fn assert_parity(tag: &str, head_parts: &[&str], combined: &str) {
+    let bare = format!("git commit -F - <<'EOF'\n{BODY}\nEOF");
+    let (mut want, _) = verdict(&format!("{tag}/bare"), &bare);
+    for part in head_parts {
+        let (d, _) = verdict(&format!("{tag}/part {part:?}"), part);
+        if rank(tag, &d) > rank(tag, &want) {
+            want = d;
+        }
+    }
+    let (got, r) = verdict(tag, combined);
+    assert_eq!(
+        got, want,
+        "[{tag}] combined must equal the strictest of bare heredoc + head parts \
+         ({head_parts:?}); got {got} ({r}) for {combined:?}"
+    );
 }
 
 #[test]
-fn head_with_git_global_option_stays_restrictive() {
-    assert_restrictive("git-c-add", &heredoc("git -c a=b add a &&"));
+fn parity_head_with_variable_path() {
+    assert_parity("add-var", &["git add $X"], &heredoc("git add $X &&"));
 }
 
 #[test]
-fn head_git_rm_stays_restrictive() {
-    assert_restrictive("git-rm", &heredoc("git rm -rf x &&"));
+fn parity_head_with_git_global_option() {
+    assert_parity(
+        "git-c-add",
+        &["git -c a=b add a"],
+        &heredoc("git -c a=b add a &&"),
+    );
 }
 
 #[test]
-fn head_rm_rf_stays_restrictive() {
-    assert_restrictive("rm-rf", &heredoc("rm -rf build &&"));
+fn parity_head_git_rm() {
+    assert_parity("git-rm", &["git rm -rf x"], &heredoc("git rm -rf x &&"));
+}
+
+/// Already holds at origin/main 04d9b8336: `rm -rf build` alone is deny, so
+/// the combined line keeps deny.
+#[test]
+fn parity_head_rm_rf() {
+    assert_parity("rm-rf", &["rm -rf build"], &heredoc("rm -rf build &&"));
 }
 
 #[test]
-fn head_or_stays_restrictive() {
-    assert_restrictive("or-head", &heredoc("git add a.txt ||"));
+fn parity_head_or() {
+    assert_parity("or-head", &["git add a.txt"], &heredoc("git add a.txt ||"));
 }
 
 #[test]
-fn head_semicolon_stays_restrictive() {
-    assert_restrictive("semi-head", &heredoc("git add a.txt ;"));
+fn parity_head_semicolon() {
+    assert_parity("semi-head", &["git add a.txt"], &heredoc("git add a.txt ;"));
 }
 
 #[test]
-fn head_pipe_stays_restrictive() {
-    assert_restrictive("pipe-head", &heredoc("git add a.txt |"));
+fn parity_head_pipe() {
+    assert_parity("pipe-head", &["git add a.txt"], &heredoc("git add a.txt |"));
 }
 
 #[test]

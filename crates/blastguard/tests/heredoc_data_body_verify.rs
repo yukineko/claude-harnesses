@@ -114,13 +114,46 @@ fn contract_executing_bodies_and_real_lines_stay_judged() {
         format!("cat <<'EOF' > notes.txt\nit's\nEOF\n{RM}\nx'\nEOF"),
         // line continuation on the opener puts code on its logical line
         format!("cat <<'EOF' > notes.txt \\\n; {RM}\nhi\nEOF"),
-        // two here-documents
-        format!("cat <<'A' > a.txt; cat <<'B' > b.txt\nx\nA\n{RM}\nB"),
+        // two here-documents, then a real command after the second close
+        // (two data here-documents opened on one line are re-anchored to
+        // parity below, ruling B-3)
         format!("cat <<'A' > a.txt\nx\nA\ncat <<'B' > b.txt\ny\nB\n{RM}"),
         format!("tee notes.txt run.sh <<'EOF'\n{RM}\nEOF"),
         format!("tee -a ~/.bashrc <<'EOF'\n{RM}\nEOF"),
     ];
     assert_all(&rows, false);
+}
+
+fn rank(d: &str) -> u8 {
+    match d {
+        "allow" => 0,
+        "ask" => 1,
+        "deny" => 2,
+        other => panic!("unexpected decision {other:?}"),
+    }
+}
+
+/// User ruling 2026-11-18 (B-3): two data here-documents opened on one line
+/// (`cat <<'A' > a.txt; cat <<'B' > b.txt`, bodies `x` then the rm text) are
+/// two data writes. The combined command gets exactly the strictest verdict
+/// of each here-document alone.
+#[test]
+fn parity_two_data_heredocs_on_one_line() {
+    let alone = [
+        "cat <<'A' > a.txt\nx\nA".to_string(),
+        format!("cat <<'B' > b.txt\n{RM}\nB"),
+    ];
+    let want = alone
+        .iter()
+        .map(|c| verdict(c))
+        .max_by_key(|d| rank(d))
+        .unwrap();
+    let combined = format!("cat <<'A' > a.txt; cat <<'B' > b.txt\nx\nA\n{RM}\nB");
+    let got = verdict(&combined);
+    assert_eq!(
+        got, want,
+        "combined must equal the strictest of each heredoc alone; {combined:?}"
+    );
 }
 
 /// A CR before the newline is part of the delimiter word in bash (`\r` is not

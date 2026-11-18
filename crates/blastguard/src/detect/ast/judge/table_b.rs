@@ -12,7 +12,10 @@
 //!   option, a `dd` operand that is not `k=v`;
 //! * [`Row::Targets`] — every (effect, target word value) pair the row names.
 //!   The values are as written; the caller resolves them against
-//!   [`SimpleCommand::cwd`].
+//!   [`SimpleCommand::cwd`]. A target word that is an unquoted glob confined
+//!   to its final component under a literal directory ([`literal_dir_glob`],
+//!   user ruling 2026-11-19) is handed back as its spelling, a `Literal`
+//!   placed by that parent directory; any other glob stays `Undetermined`.
 //!
 //! NOT modelled here (stated, not hidden): the B.2 redirect rows, the B.3
 //! wrappers (`sudo rm …`, `command rm …` are [`Row::None`]: their verdict is
@@ -369,7 +372,59 @@ fn parse(cmd: &str, args: &[Word], o: &Opts) -> Result<Parsed, String> {
 }
 
 fn values(ws: Vec<Word>, effect: Effect) -> Vec<(Effect, Value)> {
-    ws.into_iter().map(|w| (effect, w.value)).collect()
+    ws.iter().map(|w| (effect, target_value(w))).collect()
+}
+
+/// The value a target word is placed by: [`literal_dir_glob`]'s spelling
+/// when the word is such a glob, else the evaluated value.
+fn target_value(w: &Word) -> Value {
+    match literal_dir_glob(w) {
+        Some(spelling) => Value::Literal(spelling),
+        None => w.value.clone(),
+    }
+}
+
+/// User ruling 2026-11-19 (literal-dir glob): an unquoted glob word whose
+/// prefix up to the last `/` is a literal directory and whose glob
+/// metacharacters are only in the final component is placed by that parent
+/// directory — it can only expand to entries directly inside it. Returns the
+/// word's spelling (a relative one is placed against the command's cwd like
+/// any relative target), or `None` — the value stays `Undetermined`, so the
+/// target stays `Unresolved` — unless ALL of these hold:
+///
+/// * the word is unquoted and its value is `Undetermined` (the evaluator
+///   refused it as a glob);
+/// * every character is a plain path character
+///   (`[A-Za-z0-9/._+,:@%^=-]`) or a glob metacharacter `*` `?` `[` `]`, so
+///   no expansion (`$`, `` ` ``, `~`, braces, `(`), quote, escape or `!` is in
+///   it and the evaluator's only reason to refuse it is the glob;
+/// * the prefix (empty for a bare glob: the cwd) has no glob metacharacter
+///   and no `..` component;
+/// * the final component has a glob metacharacter and does not start with
+///   `.` (`.*` may match `.` and `..` — older bash — i.e. the parent itself
+///   and ITS parent).
+pub(super) fn literal_dir_glob(w: &Word) -> Option<String> {
+    const GLOB: [char; 4] = ['*', '?', '[', ']'];
+    if w.quoting != Quoting::Unquoted || !matches!(w.value, Value::Undetermined(_)) {
+        return None;
+    }
+    let raw = w.raw.as_str();
+    let plain = !raw.is_empty()
+        && raw.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || GLOB.contains(&c)
+                || matches!(
+                    c,
+                    '/' | '.' | '_' | '+' | ',' | ':' | '@' | '%' | '^' | '=' | '-'
+                )
+        });
+    let (prefix, last) = raw.rsplit_once('/').unwrap_or(("", raw));
+    let ok = plain
+        && !prefix.contains(GLOB)
+        && !prefix.split('/').any(|c| c == "..")
+        && last.contains(['*', '?', '['])
+        && !last.starts_with('.');
+    ok.then(|| raw.to_string())
 }
 
 fn rm(args: &[Word]) -> Targets {
@@ -390,7 +445,7 @@ fn sources_and_dest(p: Parsed) -> (Vec<Word>, Option<Value>) {
         return (p.operands, Some(dir));
     }
     let mut ops = p.operands;
-    let dest = ops.pop().map(|w| w.value);
+    let dest = ops.pop().map(|w| target_value(&w));
     (ops, dest)
 }
 
@@ -575,7 +630,7 @@ fn find(args: &[Word]) -> Targets {
         {
             break;
         }
-        roots.push(w.value.clone());
+        roots.push(target_value(w));
         i += 1;
     }
     let mut t = Vec::new();
@@ -588,7 +643,7 @@ fn find(args: &[Word]) -> Targets {
                 if matches!(s.as_str(), "-fprint" | "-fprint0" | "-fprintf" | "-fls") =>
             {
                 if let Some(f) = args.get(i) {
-                    t.push((Effect::Truncate, f.value.clone()));
+                    t.push((Effect::Truncate, target_value(f)));
                     i += 1;
                 }
             }

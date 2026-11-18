@@ -440,7 +440,11 @@ fn analyze_rm_placed(rest: &[&str], ctx: &Ctx<'_>, unplaced: &mut Option<String>
         SystemHarm::Clear => {}
     }
 
-    if !recursive && !wildcard {
+    // User ruling 2026-11-19 (literal-dir glob): a non-recursive wildcard rm
+    // whose every wildcard is placed by its literal parent directory in the
+    // project / scratch / own worktree is judged like the named files it
+    // expands to — this arm. See [`nonrec_glob_placed`].
+    if !recursive && (!wildcard || (!dir_flag && nonrec_glob_placed(ctx, &operands))) {
         // Backlog eba15868: ONE file can still be the whole checkout. A linked
         // worktree's `.git` is a `gitdir:` FILE, so `rm <wt>/.git` succeeds
         // without `-r` and severs the work tree from its repository — while
@@ -1546,6 +1550,82 @@ fn tmp_glob_confined(ctx: &Ctx<'_>, operands: &[&str]) -> bool {
             )
         }
     })
+}
+
+/// The non-recursive literal-dir glob placement (user ruling 2026-11-19): true
+/// only when the session has no deletion refusal and EVERY wildcard operand
+/// (literal operands are left to the caller's named-file arm) is
+///
+///   * spelled only with plain path characters and `*` `?` `[` `]` — no
+///     quote, escape, expansion, brace or `~` (any of those keeps the legacy
+///     verdict);
+///   * a glob only in its final component, which does not start with `.`,
+///     under a literal parent (none for a bare glob: the rm's base dir) with
+///     no `..` component, placed absolutely against [`Ctx::base_for`] (an
+///     unknown base — an unresolved `cd` — is `false`);
+///   * not a parent with a `.git` component or that touches a protected
+///     path, nor a pattern any entry of
+///     which may be protected ([`exclude::glob_entry_may_touch_protected`];
+///     `?` / `[` always may);
+///   * and placed: a parent outside every temp / cache root that
+///     [`SafeRoots::classify`] puts `Inside` / `IsRoot` a session safe root
+///     (Table C **Project**, whose non-recursive Delete cell is this named-file
+///     arm), or else a wildcard [`tmp_glob_operand_allowed`] accepts (Scratch /
+///     own checkout, with the `/tmp` root head rule of 2026-11-05).
+///
+/// Every `Undetermined` placement is `false`; the caller then keeps the
+/// wildcard verdict it had before the ruling.
+fn nonrec_glob_placed(ctx: &Ctx<'_>, operands: &[&str]) -> bool {
+    if operands.is_empty() || ctx.scope.deletion_refusal().is_some() {
+        return false;
+    }
+    let base = ctx.base_for("rm");
+    operands
+        .iter()
+        .filter(|o| has_glob_meta(o))
+        .all(|o| nonrec_glob_operand_placed(ctx, o, base))
+}
+
+/// One wildcard operand of [`nonrec_glob_placed`].
+fn nonrec_glob_operand_placed(ctx: &Ctx<'_>, operand: &str, base: Option<&str>) -> bool {
+    const GLOB: [char; 4] = ['*', '?', '[', ']'];
+    let plain = operand.chars().all(|c| {
+        c.is_ascii_alphanumeric()
+            || GLOB.contains(&c)
+            || matches!(
+                c,
+                '/' | '.' | '_' | '+' | ',' | ':' | '@' | '%' | '^' | '=' | '-'
+            )
+    });
+    let (parent, pattern) = match operand.rsplit_once('/') {
+        Some(("", p)) => ("/", p),
+        Some((d, p)) => (d, p),
+        None => (".", operand),
+    };
+    if !plain
+        || parent.contains(GLOB)
+        || parent.split('/').any(|c| c == "..")
+        || !pattern.contains(['*', '?', '['])
+        || pattern.starts_with('.')
+    {
+        return false;
+    }
+    let Determination::Known(abs_parent) = ctx.scope.lexical_absolute(parent, base) else {
+        return false;
+    };
+    if abs_parent.split('/').any(|c| c == ".git")
+        || exclude::touches_protected(&abs_parent)
+        || exclude::glob_entry_may_touch_protected(&abs_parent, pattern)
+    {
+        return false;
+    }
+    match ctx.scope.classify_disposable(parent, base) {
+        Determination::Known(Placement::Outside { .. }) => matches!(
+            ctx.scope.classify(parent, base),
+            Determination::Known(Placement::Inside { .. } | Placement::IsRoot { .. })
+        ),
+        _ => tmp_glob_operand_allowed(ctx, operand, base),
+    }
 }
 
 /// Minimum length, in characters, of the literal head before the first `*`

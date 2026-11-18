@@ -145,7 +145,21 @@ impl Index {
 
     /// See [`rm_operand_values`].
     fn rm_operands(&self, rest: &[&str]) -> Option<Vec<RmOperand>> {
-        // The AST `rm` commands spelled exactly as `rest`.
+        // The AST `rm` commands spelled as `rest`: each token is the word's
+        // raw spelling, or — the legacy walk rewrites a relative operand
+        // after a literal `cd` to its absolute path (`detect/cwd.rs`
+        // `advance_cwd_and_rewrite`) — the absolute value the AST evaluator
+        // resolved a relative raw spelling to. That value is absolute only
+        // when the command's cwd is a Known literal (`resolve_at`: the hook's
+        // cwd leaves it relative, an undetermined cwd makes it
+        // `Undetermined`), so a rewritten token matches only when both
+        // readings placed the operand at the same path.
+        let token_matches = |w: &(Range<usize>, String, Value), r: &str| {
+            w.1 == r
+                || (r.starts_with('/')
+                    && !w.1.starts_with('/')
+                    && matches!(&w.2, Value::Literal(v) if v == r))
+        };
         let matching: Vec<&RmArgv> = self
             .rm_commands
             .iter()
@@ -153,7 +167,7 @@ impl Index {
             .collect::<Option<Vec<_>>>()?
             .into_iter()
             .filter(|argv| {
-                argv.len() == rest.len() && argv.iter().zip(rest).all(|(w, r)| w.1 == *r)
+                argv.len() == rest.len() && argv.iter().zip(rest).all(|(w, r)| token_matches(w, r))
             })
             .collect();
         if matching.is_empty() {
@@ -164,19 +178,29 @@ impl Index {
             if spelling.starts_with('-') || spelling.is_empty() {
                 continue;
             }
-            // Every occurrence of the spelling in the text must be this
-            // operand of one of the matching `rm` commands: an occurrence
-            // anywhere else (another command's argv — `xargs rm -r a` next
-            // to `rm -r a` —, a quoted string, a heredoc body, a comment)
-            // may be the text the caller is reading, and that one was not
-            // evaluated as this `rm`'s operand.
-            for (at, _) in self.text.char_indices() {
-                if !self.text.get(at..).is_some_and(|t| t.starts_with(spelling)) {
-                    continue;
+            // Every occurrence of the operand's spelling in the text must be
+            // this operand of one of the matching `rm` commands: an
+            // occurrence anywhere else (another command's argv — `xargs rm
+            // -r a` next to `rm -r a` —, a quoted string, a heredoc body, a
+            // comment) may be the text the caller is reading, and that one
+            // was not evaluated as this `rm`'s operand. The spellings checked
+            // are the token itself and every matching command's raw word (the
+            // pre-rewrite spelling of a rewritten token).
+            let mut spellings: Vec<&str> = vec![spelling];
+            for argv in &matching {
+                if !spellings.contains(&argv[i].1.as_str()) {
+                    spellings.push(argv[i].1.as_str());
                 }
-                let range = at..at + spelling.len();
-                if !matching.iter().any(|argv| argv[i].0 == range) {
-                    return None;
+            }
+            for spelled in spellings.iter().filter(|s| !s.is_empty()) {
+                for (at, _) in self.text.char_indices() {
+                    if !self.text.get(at..).is_some_and(|t| t.starts_with(spelled)) {
+                        continue;
+                    }
+                    let range = at..at + spelled.len();
+                    if !matching.iter().any(|argv| argv[i].0 == range) {
+                        return None;
+                    }
                 }
             }
             for argv in &matching {
@@ -247,9 +271,13 @@ pub(crate) struct RmOperand {
 /// the index is active, `Known`, not [`suspended`], at shell depth 0; the
 /// text has at least one evaluated simple command whose command word is the
 /// literal `rm` (`/bin/rm`, `/usr/bin/rm`) and whose argv after it is spelled
-/// exactly `rest`; every `rm` command in the text has its argv spelled
-/// verbatim at its spans; and every occurrence of every operand spelling in
-/// the text is that operand's word of one of those `rm` commands.
+/// exactly `rest` — a token may also be the absolute value the evaluator
+/// resolved a relative word to after a literal `cd` (the legacy walk's
+/// rewrite of that operand; only a Known cwd yields an absolute value); every
+/// `rm` command in the text has its argv spelled verbatim at its spans; and
+/// every occurrence of every operand spelling in the text (the token and the
+/// matching word's raw spelling) is that operand's word of one of those `rm`
+/// commands.
 pub(crate) fn rm_operand_values(rest: &[&str]) -> Option<Vec<RmOperand>> {
     if SUSPENDED.with(Cell::get) || DEPTH.with(Cell::get) != 0 {
         return None;

@@ -14,9 +14,11 @@
 //!   option are not modelled;
 //! * the AST evaluator ([`super::super::ast::targets::rm_operand_values`]) ties
 //!   the legacy tokens to evaluated top-level `rm` commands (command word the
-//!   literal `rm`, argv spelled exactly as the tokens, every occurrence of
-//!   every operand spelling being that operand of such a command), and there
-//!   is at least one operand;
+//!   literal `rm`, argv spelled exactly as the tokens — or a token being the
+//!   absolute path the evaluator resolved a relative word to under a Known
+//!   literal `cd`, the legacy walk having rewritten that operand —, every
+//!   occurrence of every operand spelling being that operand of such a
+//!   command), and there is at least one operand;
 //! * every evaluated operand value is a `Literal`, absolute or (no `cd`
 //!   applies) relative to the session cwd, with no `..` component and not
 //!   ending in a `.` component;

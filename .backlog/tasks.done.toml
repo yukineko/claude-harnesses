@@ -84329,3 +84329,41 @@ error: test failed, to rerun pass `-p blastguard --test backlog_20261114_perl_si
 [task.closure]
 reason = "discard"
 discard_reason = "won't-do per user ruling S4 R2 (2026-11-18): perl/ruby/node -e PROG is Undetermined (main Ask, subagent Deny). Observed at main 762ce4db5: backlog_20261114_perl_single_quoted_dollar_dot_fp perl_single_quoted_program_with_dollar_dot_is_allowed -> subagent=deny (Undetermined, intended); control -pi -e -> deny 'option -pi not modelled (Table B.5: Undetermined)'. s4_b5_layer_20261118 r2_perl_e_undetermined passes. GH #1761."
+
+[[task]]
+id = "063aadd0"
+title = "askrelay: remove the main-session adjudication of relayed Asks (Stop hook + re-run duty)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "askrelay",
+    "user-ruling",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+User rulings 2026-11-19 (verbatim): 「relayの判定はすべてやらない。上記の方針通り。他のsessionにも通達」 / 「この機能そのものを削除するように、起票」 / 「sesssion間relayはやってもいいが裁定はしない。」 / 「session間relayはタスク分割のためにやることとする」. Remove: the askrelay Stop hook (askrelay stop) that blocks the main session until it re-runs each queued subagent Ask byte-for-byte or dismisses it, plus the re-run/mark-executed/mark-relayed duty it implies. Keep: subagent Ask resolves fail-closed (Deny with reason) inside the subagent; cross-session messaging stays, used only for task splitting. RED: crates/askrelay/tests/backlog_20261119_relay_adjudication_removed.rs (ignored, c14d7a027). Filed by blastguard-false-positive-reduction; the exact extent (whether mark-executed/mark-relayed PostToolUse hooks and the queue go too) should be confirmed with the user by the implementing session.
+Misfiled: user clarified 2026-11-19 「sub agentからのrelayは判定できないと終了するからやってる、目的はすすめるため」 — the subagent-Ask relay (askrelay Stop hook + main re-run) is kept. The removal request was about something else; RED c14d7a027 is removed in the same change."""
+created_at = 1795042671
+updated_at = 1795042805
+weight = 0.0
+issue_number = 1866
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1866"
+issue_closed_at = 1795042808
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p askrelay --test backlog_20261119_relay_adjudication_removed -- --ignored"
+rev = "c14d7a027cf42448b7437cfe03ac6354c47091b7"
+observed_at = 1795042671
+detail = """
+exit 101: 0.1.4 (/Users/yuki/src/.harness-worktrees/backlog-relay-20261119/crates/askrelay)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running tests/backlog_20261119_relay_adjudication_removed.rs (target/debug/deps/backlog_20261119_relay_adjudication_removed-34457ac0db682947)
+error: test failed, to rerun pass `-p askrelay --test backlog_20261119_relay_adjudication_removed`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "Misfiled: user clarified 2026-11-19 「sub agentからのrelayは判定できないと終了するからやってる、目的はすすめるため」 — the subagent-Ask relay (askrelay Stop hook + main re-run) is kept. The removal request was about something else; RED c14d7a027 is removed in the same change."

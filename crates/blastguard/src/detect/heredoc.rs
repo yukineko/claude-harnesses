@@ -887,6 +887,13 @@ pub(super) fn non_shell_code_file_here_document(cmd: &str) -> Option<String> {
     inert.then_some(parts.without_body)
 }
 
+/// [`non_shell_code_file_here_document`]'s split WITHOUT its later-lines
+/// check: only for `heredoc_data`'s over-cap path, which re-checks the rest of
+/// the command with the shell parser before removing the body.
+pub(super) fn quoted_code_file_here_document_parts(cmd: &str) -> Option<HereDocumentParts> {
+    here_document_body_parts(cmd, OutputTargets::NonShellCodeFiles)
+}
+
 /// Commands [`non_shell_code_file_here_document`] accepts after the close: each
 /// reads or lists files, or prints its arguments, and none runs, sources or
 /// builds a file. The program word must be spelled exactly so (no path, no

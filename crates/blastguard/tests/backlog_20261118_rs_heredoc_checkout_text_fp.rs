@@ -103,7 +103,6 @@ fn assert_not_misread(tag: &str, command: &str) {
 /// RED: the exact logged command.
 // test-weakening-justified: new RED for an observed FP (2026-11-18)
 #[test]
-#[ignore = "RED: .rs quoted heredoc text read as git checkout -- ."]
 fn logged_rs_heredoc_is_not_read_as_git_checkout() {
     assert_not_misread("red", REFUSED);
 }

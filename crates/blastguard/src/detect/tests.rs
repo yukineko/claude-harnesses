@@ -454,8 +454,16 @@ fn allows_benign_shell_wrappers() {
     // (re-analyse-inline bias: a bare path is not a destructive command).
     assert_eq!(bash("source .venv/bin/activate"), Decision::Allow);
     assert_eq!(bash(". ~/.bashrc"), Decision::Allow);
-    // A shell running a script file (no -c) — file unknowable, allowed.
-    assert_eq!(bash("bash build.sh"), Decision::Allow);
+    // A shell running a script file (no -c): its text is not in the command.
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5),
+    // SUBSET.md ruling 10 (`build.sh` is not git-tracked, so T1 does not
+    // apply). The benign `-c` twins above stay Allow.
+    let d = bash("bash build.sh");
+    assert!(
+        matches!(&d, Decision::Ask(r) if r.contains("Table B.5: Undetermined")),
+        "{d:?}"
+    );
+    assert!(d.hardened().is_deny());
     // find -exec with a non-shell, non-rm command.
     assert_eq!(
         bash("find . -name '*.rs' -exec grep todo {} ;"),
@@ -667,9 +675,18 @@ fn ca_blastguard_006_bare_top_level_interpreter_inline_eval_is_denied() {
     // an inline-eval flag (no `find` wrapper) must be denied — the check
     // used to exist only inside analyze_find's -exec/-ok handling.
     assert!(bash("python3 -c \"import os; os.system('rm -rf /')\"").is_deny());
-    // Control: a plain script-file invocation (no inline-eval flag) stays
-    // allowed — no over-blocking.
-    assert_eq!(bash("python3 script.py"), Decision::Allow);
+    // Control: a plain script-file invocation (no inline-eval flag) is not
+    // read as the inline-eval Deny.
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5),
+    // SUBSET.md ruling 18 (a python3 program file is Undetermined until S5;
+    // `script.py` is not git-tracked). Still Ask, never the Deny above.
+    let d = bash("python3 script.py");
+    assert!(
+        matches!(&d, Decision::Ask(r) if r.contains("Table B.5: Undetermined")),
+        "{d:?}"
+    );
+    // A benign twin with no program file stays allowed.
+    assert_eq!(bash("python3 --version"), Decision::Allow);
 }
 
 #[test]
@@ -733,59 +750,8 @@ fn xargs_destructive_payload_is_denied() {
 // moved to tests/file_ops.rs (file-growth cap).
 mod file_ops;
 
-// ---- UTF-8 boundary safety (regression: multi-byte text must not panic) ----
-
-#[test]
-fn multibyte_after_redirect_marker_does_not_panic() {
-    // '頻' = U+983B = E9 A0 BB. Byte 0xA0, cast `as char`, is U+00A0
-    // (no-break space / whitespace) — the old byte-scan broke mid-char here
-    // and `seg[start..j]` panicked ("not a char boundary"). A `>` adjacent
-    // to Japanese prose (common in this repo's task text) must classify
-    // without crashing.
-    let _ = redirect_targets("band>=1・低頻度で再注入");
-    let _ = redirect_targets("値を >低頻度 に絞る");
-    let _ = bash("echo band>=1・低頻度で再注入");
-}
-
-#[test]
-fn split_segments_preserves_multibyte_text() {
-    // Byte-as-char split used to mangle non-ASCII into Latin-1 mojibake.
-    let segs = split_segments("echo 低頻度 && ls 監査");
-    assert_eq!(segs.len(), 2);
-    assert!(segs[0].contains("低頻度"));
-    assert!(segs[1].contains("監査"));
-}
-
-#[test]
-fn redirect_target_after_multibyte_is_extracted_intact() {
-    // A genuine truncating redirect whose target follows multi-byte text is
-    // still read, and the extracted token is valid UTF-8 (no mid-char cut).
-    assert_eq!(
-        single_redirect_target("低頻度 > out.txt"),
-        Some("out.txt".to_string())
-    );
-}
-
-#[test]
-fn kebab_case_angle_placeholder_is_not_a_redirect() {
-    // `<run-id>` / `<pdo-unit-id>` are placeholder prose, not redirects — the
-    // hyphen must not break placeholder recognition (regression: these were
-    // force-denied as `>` truncating redirects).
-    assert!(single_redirect_target("overwatch begin --key <pdo-unit-id> --title x").is_none());
-    assert!(single_redirect_target("condukt heartbeat --run <run-id>").is_none());
-    assert!(!bash("echo state --run <session-id> done").is_deny());
-}
-
-#[test]
-fn hyphenated_real_redirect_still_detected() {
-    // A real truncating redirect with a hyphenated target (no preceding `<`)
-    // is still caught — allowing hyphens only matches true `<...>` pairs.
-    assert_eq!(
-        single_redirect_target("foo-bar > out-file.txt"),
-        Some("out-file.txt".to_string())
-    );
-    assert!(bash("cat x > important-data.txt").is_deny());
-}
+// ---- UTF-8 boundary safety: moved to tests/utf8_boundary.rs (file-growth cap).
+mod utf8_boundary;
 
 // ---- Regression: CA-blastguard-012 (trailing token defeats `-c` payload) ----
 #[test]
@@ -1249,14 +1215,9 @@ fn bg1_dash_c_payload_behind_value_taking_options() {
     assert!(bash(r#"sh -c "rm -rf /some/path" ; true"#).is_deny());
 }
 
-#[test]
-fn bg1_benign_dash_c_invocations_stay_allowed() {
-    assert_eq!(bash(r#"sh -c "ls""#), Decision::Allow);
-    assert_eq!(bash("bash -c 'echo hi'"), Decision::Allow);
-    assert_eq!(bash("bash -c -o pipefail 'cargo test'"), Decision::Allow);
-    assert_eq!(bash("sh -c ''"), Decision::Allow);
-    assert_eq!(bash("bash -c"), Decision::Allow);
-}
+// ---- `-c` without a program (bg1 + the B.5 no-opinion twin): moved to
+// tests/dash_c.rs (file-growth cap).
+mod dash_c;
 
 // ---- D1: the `is_temp_scratch` carve-out was a universal bypass ----
 // At the time, `exclude::normalize` did not resolve `..`, so a `/tmp/../`
@@ -1580,8 +1541,22 @@ fn the_corpus_shape_a_literal_binary_path_invoked_behind_an_and_is_allowed() {
     // wrong.
     let cmd = "BIN=/Users/yuki/src/harness/target/release/condukt\n\
                cd \"$SB\" && \"$BIN\" guard main-tree --json";
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5),
+    // SUBSET.md rulings 17 / 19. A project `target/` binary is a program
+    // file whose text is not in the command. The Ask names the RESOLVED
+    // path, so the `&&` still does not block the resolution.
     let d = bash(cmd);
-    assert_eq!(verdict_name(&d), "allow", "for {cmd:?}, got {d:?}");
+    assert!(
+        matches!(&d, Decision::Ask(r)
+            if r.contains("direct execution of the program file `/Users/yuki/src/harness/target/release/condukt`")),
+        "for {cmd:?}, got {d:?}"
+    );
+    // The same shape with a binary under a system dir (judged by basename,
+    // ruling 19) is still allowed: the resolution through `&&` holds.
+    let twin = "BIN=/bin/echo\n\
+                cd \"$SB\" && \"$BIN\" guard main-tree --json";
+    let d = bash(twin);
+    assert_eq!(verdict_name(&d), "allow", "for {twin:?}, got {d:?}");
 }
 
 #[test]
@@ -3535,8 +3510,19 @@ fn a_rebinding_inside_a_compound_command_or_a_function_body_is_not_skipped() {
 fn invariance_a_wholly_quoted_word_is_a_command_not_a_rebinding() {
     let cmd = "BIN=/bin/echo; \"BIN=/bin/rm\"; $BIN -rf /some/path";
     assert_eq!(resolve_first_expansion_word(cmd), lit("/bin/echo"));
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5),
+    // SUBSET.md ruling 17. The quoted word contains a `/`, so bash runs it
+    // as the relative program file `./BIN=/bin/rm` (observed 2026-11-19,
+    // relay bgr-41bb2e87c9a7: an executable at that path printed its
+    // output, then `$BIN` still ran `/bin/echo`). The Ask must be that
+    // direct-exec reason, not a `$BIN` = `/bin/rm` rebinding reading.
     let d = bash(cmd);
-    assert_eq!(verdict_name(&d), "allow", "for {cmd:?}, got {d:?}");
+    assert!(
+        matches!(&d, Decision::Ask(r)
+            if r.contains("direct execution of the program file `BIN=/bin/rm`")
+                && r.contains("Table B.5: Undetermined")),
+        "for {cmd:?}, got {d:?}"
+    );
 }
 
 /// A here-STRING consumes no following line, so the segment after it really
@@ -4023,14 +4009,25 @@ fn fd_dup_is_not_a_segment_separator() {
         r#"python3 -c "print(1)" 2>&1"#,
         "python3 -c foo 2>&1",
         "python3 -c foo 2>&1 | head -3",
-        "perl -e foo 2>&1",
-        "node -e foo 2>&1",
     ] {
         assert_eq!(
             bash(c),
             Decision::Allow,
             "an fd dup is not a truncating redirect: {c}"
         );
+    }
+    // Re-anchored Allow -> Undetermined: user ruling 2026-11-18 (S4 B.5),
+    // SUBSET.md ruling 4 (perl / node `-e` inline programs are out of the
+    // subset). The fd dup is still not read as a redirect: the only reason
+    // is the B.5 inline-program one, and `2>&1` does not change it.
+    for c in ["perl -e foo", "node -e foo"] {
+        let with_dup = bash(&format!("{c} 2>&1"));
+        assert!(
+            matches!(&with_dup, Decision::Ask(r) if r.contains("runs an inline program")
+                && r.contains("Table B.5: Undetermined")),
+            "an fd dup is not a truncating redirect: {c} 2>&1 -> {with_dup:?}"
+        );
+        assert_eq!(with_dup, bash(c), "`2>&1` must not change the verdict: {c}");
     }
 }
 

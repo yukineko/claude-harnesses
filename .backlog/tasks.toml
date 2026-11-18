@@ -3126,3 +3126,34 @@ exit 101: s/session-fcf56f45/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
      Running tests/backlog_20261118_python_heredoc_string_literal_rm_home_fp.rs (target/debug/deps/backlog_20261118_python_heredoc_string_literal_rm_home_fp-e4782d1962985dbd)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261118_python_heredoc_string_literal_rm_home_fp`"""
+
+[[task]]
+id = "f281b0b1"
+title = "blastguard FP: a Python string literal starting with rm -r inside python3 -c is read as a recursive rm and denied"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "s5",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-18 (blastguard 0.2.706): a subagent's read-only python3 -I -c log filter whose string literals were the search patterns "rm -rf" / r"rm -r" was denied 'recursive rm (-r) can delete an entire directory tree'. Minimal trigger (0.2.711 debug, main=subagent): string literal content starting with rm -r… with no operand or a protected operand, also after ';' inside the literal; no backticks needed; -I and quote kind irrelevant. Allow: not at start, harmless operand, comment, 'ls -l' twin. RED asserts parity with the harmless twin. Controls stay deny: os.system('rm -rf ~'), subprocess.run(['rm','-rf','/etc']). Sibling: b424eaed (heredoc, backticks). S5 acceptance. Also seen, not pinned: shell positional arg python3 -c 'print(1)' "rm -rf" denied; a bash heredoc commit message body containing the rm text refused."""
+created_at = 1795008755
+updated_at = 1795008755
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_python_c_string_literal_rm_fp -- --include-ignored"
+rev = "1b64e9203ddce1ff903c62f3867f2c9ef3708b5b"
+observed_at = 1795008755
+detail = """
+exit 101: d; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.33s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/backlog_20261118_python_c_string_literal_rm_fp.rs (target/debug/deps/backlog_20261118_python_c_string_literal_rm_fp-56b600839e4d58ff)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_python_c_string_literal_rm_fp`"""

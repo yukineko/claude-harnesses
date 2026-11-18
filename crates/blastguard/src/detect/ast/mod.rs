@@ -80,6 +80,8 @@ pub(super) mod targets;
 #[cfg(test)]
 mod tests;
 
+pub(super) use eval::with_hook_dir;
+
 use std::ops::Range;
 
 /// Inputs longer than this many bytes are not parsed:

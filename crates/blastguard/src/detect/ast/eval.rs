@@ -108,8 +108,8 @@
 //! the declaration builtins (`declaration`) in the child module `eval/decl.rs`.
 
 use super::support::{
-    apply_stdin, conv_fd, decode_ansi_c, join_path, normalise_abs, parse_fd_target,
-    parse_heredoc_contained, piped_stdin, set_is_harmless, unescape_backquote,
+    apply_stdin, conv_fd, decode_ansi_c, normalise_abs, parse_fd_target, parse_heredoc_contained,
+    piped_stdin, set_is_harmless, unescape_backquote,
 };
 use super::{
     arith, has_subst, parse, Analysis, Cause, Context, FdTarget, HereDoc, Quoting, RedirOp,
@@ -127,7 +127,8 @@ mod cwd;
 mod decl;
 mod words;
 
-use cwd::{resolve, Cwd};
+pub(crate) use cwd::with_hook_dir;
+use cwd::{cd_join, resolve, Cwd};
 
 /// The reason carried by [`SimpleCommand::cwd`] when no `cd` applies to the
 /// command: it runs in the hook's cwd, which the command text does not name.
@@ -1416,7 +1417,7 @@ impl Ev {
                 }
                 Value::Literal(t) if t.starts_with('/') => match normalise_abs(t) {
                     Some(c) => Cwd::Known(c),
-                    None => Cwd::Undetermined(format!("cwd: `cd {t}` has a `..` component")),
+                    None => cd_join("/", t.trim_start_matches('/'), t),
                 },
                 Value::Literal(t) => {
                     let cdpath = !sc.assignments.is_empty()
@@ -1428,20 +1429,19 @@ impl Ev {
                         _ if cdpath => {
                             Cwd::Undetermined(format!("cwd: `cd {t}` may search CDPATH"))
                         }
-                        Cwd::Hook => Cwd::Undetermined(format!(
-                            "cwd: `cd {t}` is relative to the hook's cwd"
-                        )),
+                        // User ruling 2026-11-19 ①: the hook's cwd is known.
+                        Cwd::Hook => match cwd::hook_dir() {
+                            Some(h) => cd_join(&h, t, t),
+                            None => Cwd::Undetermined(format!(
+                                "cwd: `cd {t}` is relative to the hook's cwd"
+                            )),
+                        },
                         Cwd::Undetermined(r) => Cwd::Undetermined(r.clone()),
                         Cwd::OneOf(_) => Cwd::Undetermined(format!(
                             "cwd: `cd {t}` is relative to a cwd that differs between the paths \
                              that reach here"
                         )),
-                        Cwd::Known(c) => match join_path(c, t) {
-                            Some(j) => Cwd::Known(j),
-                            None => {
-                                Cwd::Undetermined(format!("cwd: `cd {t}` has a `..` component"))
-                            }
-                        },
+                        Cwd::Known(c) => cd_join(c, t, t),
                     }
                 }
             },

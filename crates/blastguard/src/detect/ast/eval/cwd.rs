@@ -10,11 +10,125 @@
 //! judge reads it through `SimpleCommand::cwd_candidates` and judges every
 //! candidate (most restrictive wins). To every reader that takes ONE cwd
 //! ([`Cwd::value`], [`resolve`]) a `OneOf` is `Undetermined`, as before.
+//!
+//! User ruling 2026-11-19: (1) the evaluator holds the hook's cwd (the
+//! payload `cwd`, set per detection by [`with_hook_dir`]) as a known value,
+//! so a relative `cd` (`cd .githooks`) from the hook's cwd is resolved; (2) a
+//! relative path with a `..` component is resolved against the REAL path
+//! ([`real_join`]): the existing directory the `..` steps out of is
+//! canonicalized before the join. A target that does not exist, a walk that
+//! passes through a symlink, or a canonicalize that fails stays
+//! `Undetermined` (Ask), as before.
 
 use super::super::support::join_path;
 use super::super::{CwdCandidates, Value};
 use super::HOOK_CWD;
+use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+thread_local! {
+    /// The hook's cwd for the detection running on this thread (user ruling
+    /// 2026-11-19 ①). `None` when the caller has no payload cwd.
+    static HOOK_DIR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Runs `f` with `dir` as the hook's cwd the evaluator resolves a relative
+/// `cd` against. Only an absolute `dir` is held; anything else is no hook cwd
+/// (a relative `cd` from it stays `Undetermined`). The previous value is
+/// restored when `f` returns or unwinds.
+pub(crate) fn with_hook_dir<R>(dir: Option<&str>, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<String>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let prev = self.0.take();
+            HOOK_DIR.with(|h| *h.borrow_mut() = prev);
+        }
+    }
+    let dir = dir.filter(|d| d.starts_with('/')).map(str::to_string);
+    let _restore = Restore(HOOK_DIR.with(|h| h.replace(dir)));
+    f()
+}
+
+/// The hook's cwd set by [`with_hook_dir`], if any.
+pub(super) fn hook_dir() -> Option<String> {
+    HOOK_DIR.with(|h| h.borrow().clone())
+}
+
+/// The cwd after `cd {shown}` from the directory `base`, `rel` being the
+/// operand relative to `base` ([`real_join`]).
+pub(super) fn cd_join(base: &str, rel: &str, shown: &str) -> Cwd {
+    match real_join(base, rel) {
+        Ok(j) => Cwd::Known(j),
+        Err(why) => Cwd::Undetermined(format!("cwd: `cd {shown}` not resolved: {why}")),
+    }
+}
+
+/// `rel` joined to the directory `base` (user ruling 2026-11-19 ②).
+///
+/// Without a `..` component the join is lexical ([`join_path`]). With one,
+/// `..` is the REAL parent: `base` must already be its own canonical path
+/// (else the logical cwd a shell `cd` keeps and the physical one the kernel
+/// resolves `..` against differ — a symlink), and every component up to the
+/// last `..` must exist and not be a symlink; the components after it are
+/// joined lexically. Every failure is the reason the path is undetermined.
+pub(super) fn real_join(base: &str, rel: &str) -> Result<String, String> {
+    let parts: Vec<&str> = rel.split('/').collect();
+    let Some(last_up) = parts.iter().rposition(|p| *p == "..") else {
+        return join_path(base, rel).ok_or_else(|| format!("`{rel}` is an empty path"));
+    };
+    let canon = std::fs::canonicalize(base)
+        .map_err(|e| format!("`{rel}` after cd {base}: canonicalize {base} failed ({e})"))?;
+    if canon != Path::new(base).components().collect::<PathBuf>() {
+        return Err(format!(
+            "`{rel}` after cd {base}: {base} passes through a symlink (real path {})",
+            canon.display()
+        ));
+    }
+    let mut walk = canon;
+    for part in &parts[..=last_up] {
+        match *part {
+            "" | "." => {}
+            ".." => {
+                walk.pop();
+            }
+            p => {
+                walk.push(p);
+                match std::fs::symlink_metadata(&walk) {
+                    Ok(m) if m.file_type().is_symlink() => {
+                        return Err(format!(
+                            "`{rel}` after cd {base}: {} is a symlink",
+                            walk.display()
+                        ))
+                    }
+                    Ok(m) if m.is_dir() => {}
+                    Ok(_) => {
+                        return Err(format!(
+                            "`{rel}` after cd {base}: {} is not a directory",
+                            walk.display()
+                        ))
+                    }
+                    Err(e) => {
+                        return Err(format!(
+                            "`{rel}` after cd {base}: {} does not exist ({e})",
+                            walk.display()
+                        ))
+                    }
+                }
+            }
+        }
+    }
+    let Some(dir) = walk.to_str() else {
+        return Err(format!(
+            "`{rel}` after cd {base}: the real path is not UTF-8"
+        ));
+    };
+    let rest = parts[last_up + 1..].join("/");
+    if rest.is_empty() {
+        return Ok(dir.to_string());
+    }
+    join_path(dir, &rest).ok_or_else(|| format!("`{rel}` after cd {base}: empty path"))
+}
 
 /// Most directories a joined cwd may be one of (user ruling 2026-11-18)
 /// before it is `Undetermined`.
@@ -124,9 +238,10 @@ fn one_of_reason(set: &BTreeSet<CwdCand>) -> String {
 /// A redirect target / script operand as the pinned representation wants
 /// it: absolute stays as written; relative stays as written when no `cd`
 /// applies (the consumer reads it against the hook's cwd); relative after a
-/// literal `cd` is joined to it; relative after an undetermined `cd`, after a
-/// `cd` that may have failed ([`Cwd::OneOf`]), or with a `..` component after
-/// a `cd` is `Undetermined`.
+/// literal `cd` is joined to it ([`real_join`]: a `..` component is the real
+/// parent, user ruling 2026-11-19); relative after an undetermined `cd`, after
+/// a `cd` that may have failed ([`Cwd::OneOf`]), or whose `..` cannot be
+/// resolved on the real path after a `cd` is `Undetermined`.
 pub(super) fn resolve(cwd: &Cwd, v: Value) -> Value {
     let p = match v {
         Value::Literal(p) => p,
@@ -144,11 +259,9 @@ pub(super) fn resolve(cwd: &Cwd, v: Value) -> Value {
             "relative path `{p}` after an undetermined cd ({})",
             one_of_reason(set)
         )),
-        Cwd::Known(c) => match join_path(c, &p) {
-            Some(j) => Value::Literal(j),
-            None => Value::Undetermined(format!(
-                "`{p}` after cd {c}: `..` / empty path not resolved (symlinks make it unsound)"
-            )),
+        Cwd::Known(c) => match real_join(c, &p) {
+            Ok(j) => Value::Literal(j),
+            Err(why) => Value::Undetermined(format!("relative path not resolved: {why}")),
         },
     }
 }

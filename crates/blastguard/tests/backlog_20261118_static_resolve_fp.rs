@@ -752,15 +752,32 @@ fn rc5_assignment_inside_and_or_list_restricts() {
     restrict_at(&fx, &wt, &format!("cd {w} && D={s}; echo hi > $D/run.json"));
 }
 
-/// Row L7 shape: `S` is bound BEFORE `. "$HOME/.cargo/env"`; the sourced
-/// file (not in the command text) may reassign it. SUBSET.md A.5: `.` /
-/// `source` make the state opaque (later values Undetermined). So the value
-/// at the redirect is NOT text-determined and must stay refused.
+/// Row L7 shape: `S` is bound BEFORE a sourced file (not in the command
+/// text) that may reassign it. SUBSET.md A.5: `.` / `source` make the state
+/// opaque (later values Undetermined). So the value at the redirect is NOT
+/// text-determined and must stay refused. Re-anchored (user ruling
+/// 2026-11-18, r21): the literal `. "$HOME/.cargo/env"` no longer makes the
+/// state opaque, so the sourced file here is `./env.sh`; the cargo env
+/// spelling is pinned Allow by `rc6_var_bound_before_cargo_env_source_allows`.
 #[test]
 fn rc6_var_bound_before_dot_source_restricts() {
     let fx = fixture("rc6");
     let s = scratch("rc6");
     restrict_at(
+        &fx,
+        &fx.proj(),
+        &format!("S={s}; . ./env.sh; echo x > $S/base.txt"),
+    );
+}
+
+/// User ruling 2026-11-18 (r21): the literal `. "$HOME/.cargo/env"` keeps
+/// the AST variable state, so `S` bound before it still names the scratch
+/// sentinel and the write answers as its literal spelling (Allow).
+#[test]
+fn rc6_var_bound_before_cargo_env_source_allows() {
+    let fx = fixture("rc6c");
+    let s = scratch("rc6c");
+    allow_at(
         &fx,
         &fx.proj(),
         &format!("S={s}; . \"$HOME/.cargo/env\"; echo x > $S/base.txt"),

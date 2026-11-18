@@ -210,13 +210,14 @@ fn a_rm_unlisted_option_restricts() {
     restrict("arm", "rm -P /tmp/bg-s3b-sentinel-rm");
 }
 
-/// B.1 `cp` (destination `Truncate`): `-p` is not in the row (the S3 status
-/// line of SUBSET.md names `cp -p` as an unmodelled option).
+/// B.1 `cp` (destination `Truncate`): `-c` (macOS cp: clone with
+/// clonefile(2)) is not in the row. Re-anchored: this used `-p`, which user
+/// ruling 2026-11-18 added to the row as effect-neutral.
 #[test]
 fn a_cp_unlisted_option_restricts() {
     restrict(
         "acp",
-        "cp -p /tmp/bg-s3b-sentinel-cp-a /tmp/bg-s3b-sentinel-cp-b",
+        "cp -c /tmp/bg-s3b-sentinel-cp-a /tmp/bg-s3b-sentinel-cp-b",
     );
 }
 

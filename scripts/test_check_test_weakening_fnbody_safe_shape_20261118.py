@@ -8,15 +8,16 @@ bodies) that lie outside every `macro_rules!` template. Every template body
 and every macro invocation stays byte-identical, and no `#[test]` item is
 removed or weakened.
 
-Today the gate raises Undetermined (exit 2) for this, verbatim:
+Before the shape landed (scripts/weakening_macro_fnbody.py) the gate raised
+Undetermined (exit 2) for this, verbatim:
 "#[test] inside a macro_rules! template in a file that exists at the base --
 the change is not one of the proven-safe shapes". Concrete trigger: GH #1697,
 crates/blastguard/tests/scope_redirect_relaxation_boundaries_20261108.rs,
 where a `format!("/private/tmp/...")` literal inside `Fx::new`,
 `impl Drop for Fx::drop` and a `#[test] fn` body is replaced by a helper call.
 
-RED (marked `@unittest.expectedFailure` until the shape lands; each asserts
-exit 0, and exits 2 today):
+RED (marked `@unittest.expectedFailure` until the shape landed; each asserts
+exit 0):
   a. one line in a helper fn body changes (literal -> fn call);
   b. the same inside an `impl Drop` fn body;
   c. the same inside a hand-written `#[test] fn` body (asserts kept);
@@ -208,22 +209,18 @@ class FnBodySafeShape(unittest.TestCase):
                       f"rc={rc} " + out)
 
     # -- RED ---------------------------------------------------------------
-    @unittest.expectedFailure
     def test_red_a_helper_fn_body_literal_to_call_passes(self) -> None:
         self.assert_clean(edit(BASE, (HELPER_OLD, HELPER_NEW)))
 
-    @unittest.expectedFailure
     def test_red_b_impl_drop_fn_body_edit_passes(self) -> None:
         self.assert_clean(edit(BASE, (DROP_OLD, DROP_NEW)))
 
-    @unittest.expectedFailure
     def test_red_c_standalone_test_fn_body_edit_keeps_asserts_passes(self) -> None:
         after = edit(BASE, (TEST_OLD, TEST_NEW))
         self.assertEqual(after.count("assert"), BASE.count("assert"))
         self.assertEqual(after.count("#[test]"), BASE.count("#[test]"))
         self.assert_clean(after)
 
-    @unittest.expectedFailure
     def test_red_d_gh1697_shape_passes(self) -> None:
         after = edit(
             BASE,

@@ -208,6 +208,7 @@ from weakening_vcs import (  # noqa: E402
     index_or_none,
 )
 from weakening_macro import template_invocation_edit_is_safe  # noqa: E402
+from weakening_macro_fnbody import fn_body_edit_is_safe  # noqa: E402
 
 
 # --- test-surface extraction ----------------------------------------------
@@ -1730,6 +1731,18 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
                         TEST_ATTR_RE,
                     )
                 )
+                and not (
+                    old == new
+                    and is_integration_tests_file(rep)
+                    and test_surface(before_src, old, base_side) == before_src
+                    and test_surface(after_src, new, after_side) == after_src
+                    and fn_body_edit_is_safe(
+                        before_src, after_src,
+                        _mask_noncode(before_src, rep), _mask_noncode(after_src, rep),
+                        lambda t: _mask_noncode(t, rep), _inserted_block_is_safe,
+                        (TEST_ATTR_RE, IGNORE_ATTR_RE, SHOULD_PANIC_RE),
+                    )
+                )
             ):
                 # A `macro_rules!` test template expands once per invocation,
                 # and invocations are not counted: dropping `t!(case, ...)` or
@@ -1756,6 +1769,15 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
                 # `#[cfg(test)] mod`s be inserted, comments included (backlog
                 # ed82c49b / 25b88447; judged on the top-level item sequence,
                 # not a line diff).
+                # A third proven-safe shape (user ruling 2026-11-18, GH #1697):
+                # an integration test file whose `macro_rules!` definitions
+                # (any matcher, repetitions included) and file-local macro
+                # invocations are byte-identical, whose edits lie only inside
+                # ordinary fn bodies outside every template, in `//!` / `///`
+                # doc lines, or in inserted top-level items, with no test
+                # attribute added/removed, no line moved between items and no
+                # assert-family macro lost from an edited fn
+                # (`fn_body_edit_is_safe`, weakening_macro_fnbody.py).
                 # Everything that module cannot prove stays Undetermined.
                 raise Undetermined(
                     f"{rep}: #[test] inside a macro_rules! template in a file "

@@ -82,6 +82,7 @@ mod git_unmerged;
 mod harm_mark;
 mod here_string_file;
 mod heredoc;
+mod heredoc_data;
 mod high_blast;
 mod interpreter;
 mod payload;
@@ -655,8 +656,25 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
             "command is too complex to analyse within the safety budget — blastguard cannot vouch for it either way",
         );
     }
-    let _ast_depth = ast::targets::enter_depth(depth); // AST values are depth 0's only
+    // AST values are depth 0's only.
+    let _ast_depth = ast::targets::enter_depth(depth);
+    // 0a. QUOTED heredoc bodies the shell parser shows are data (fed to `cat`
+    // / `tee` / `git commit -F -`, landing in no file any command of the line
+    // runs) are removed, and the rest is judged by every rule below; an
+    // undetermined word that may name the landing file floors an Allow at Ask
+    // unless the whole line is Allow too (backlog f6102045 / 19baba2f). Shape
+    // rule: `heredoc_data`.
+    if depth == 0 {
+        if let Some(view) = heredoc_data::without_data_heredoc_bodies(cmd) {
+            let judged = detect_bash(&view.text, depth, ctx);
+            return view.floor(judged, || detect_bash_whole(cmd, depth, ctx));
+        }
+    }
+    detect_bash_whole(cmd, depth, ctx)
+}
 
+/// Steps 0 and 0d of [`detect_bash`] on `cmd` with no body removed by 0a.
+fn detect_bash_whole(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // 0. When the command is effectively ONE here-document fed to a data-only
     // reader (`cat > notes.txt <<'EOF'`, `git commit -F - <<'EOF'`), with no
     // other command around it (a quoted `git commit -F -` may be followed by

@@ -60,6 +60,14 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains("is confined to") {
         return "scoped-destructive-confined";
     }
+    // Stage S3b (SUBSET.md Table B): a modelled file command the AST judge
+    // cannot judge. Before the verb arms, whose words the reason embeds.
+    if reason.contains(crate::detect::TABLE_B_UNDETERMINED) {
+        return "ast-table-b-undetermined";
+    }
+    if reason.contains(crate::detect::TABLE_B_UNRESOLVED) {
+        return "ast-table-b-unresolved";
+    }
     // Write handling.
     if reason.contains("overwrite git internals") {
         return "write-git-internals";

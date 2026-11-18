@@ -283,12 +283,16 @@ fn self_clean_runs_at_process_exit() {
     let sibling = parent.join("run-1-1");
     mkdir_with_file(&sibling);
 
-    let out = std::process::Command::new(std::env::current_exe().unwrap())
+    let mut child_cmd = std::process::Command::new(std::env::current_exe().unwrap());
+    child_cmd
         .args(["child_entry_creates_base", "--exact", "--nocapture"])
         .env(CHILD_ENV, "1")
-        .env("BLASTGUARD_TEST_FIXTURE_DIR", &over)
-        .output()
-        .unwrap();
+        .env("BLASTGUARD_TEST_FIXTURE_DIR", &over);
+    let out = bounded::run_bounded_stdin(
+        &mut child_cmd,
+        bounded::ChildStdin::Null,
+        bounded::TOOL_DEADLINE,
+    );
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     let child_run = stdout

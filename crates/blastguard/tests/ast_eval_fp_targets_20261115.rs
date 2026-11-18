@@ -228,14 +228,14 @@ fn verdict(out: &str) -> &'static str {
 /// ("git could not be asked") that has nothing to do with path resolution.
 fn git_init(dir: &std::path::Path) {
     let g = |args: &[&str]| {
-        let st = Command::new("git")
-            .args(args)
+        let mut git = Command::new("git");
+        git.args(args)
             .current_dir(dir)
             .env("HOME", dir)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .status()
-            .unwrap();
-        assert!(st.success(), "git {args:?} failed in the fixture");
+            .env("GIT_CONFIG_NOSYSTEM", "1");
+        let st =
+            bounded::run_bounded_stdin(&mut git, bounded::ChildStdin::Null, bounded::TOOL_DEADLINE);
+        assert!(st.status.success(), "git {args:?} failed in the fixture");
     };
     std::fs::write(dir.join("crates/blastguard/src/detect/git.rs"), "x\n").unwrap();
     g(&["init", "-q"]);

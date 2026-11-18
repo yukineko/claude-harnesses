@@ -7,9 +7,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 
 struct Run {
     out: Output,
@@ -37,11 +39,8 @@ fn run(tag: &str, args: &[&str], stdin: &str) -> Run {
     let home = base.join("home");
     std::fs::create_dir_all(&proj).expect("create proj");
     std::fs::create_dir_all(&home).expect("create home");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_blastguard"))
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_blastguard"));
+    cmd.args(args)
         .env("CLAUDE_PROJECT_DIR", &proj)
         .env("BLASTGUARD_APPROVALS_DIR", base.join("approvals"))
         .env("HOME", &home)
@@ -50,16 +49,8 @@ fn run(tag: &str, args: &[&str], stdin: &str) -> Run {
         .env_remove("BLASTGUARD_ASK")
         .env_remove("TMPDIR")
         .env_remove("CLAUDE_CODE_SESSION_ID")
-        .current_dir(&base)
-        .spawn()
-        .expect("spawn blastguard");
-    child
-        .stdin
-        .take()
-        .expect("stdin")
-        .write_all(stdin.as_bytes())
-        .expect("write stdin");
-    let out = child.wait_with_output().expect("wait");
+        .current_dir(&base);
+    let out = bounded::run_bounded(&mut cmd, stdin.as_bytes(), bounded::HOOK_DEADLINE);
     Run { out }
 }
 

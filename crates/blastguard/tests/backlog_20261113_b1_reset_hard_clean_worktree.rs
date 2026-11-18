@@ -80,7 +80,7 @@ impl Fx {
         Fx { base, home, wt }
     }
 
-    fn status(&self) -> String {
+    fn short_status(&self) -> String {
         let mut cmd = git_env::pinned(&self.wt);
         cmd.args(["status", "--short"])
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -142,7 +142,11 @@ fn verdict(out: &str) -> &'static str {
 #[test]
 fn b1_reset_hard_in_clean_linked_worktree_is_not_denied() {
     let f = Fx::new("clean");
-    assert_eq!(f.status().trim(), "", "fixture: worktree must be clean");
+    assert_eq!(
+        f.short_status().trim(),
+        "",
+        "fixture: worktree must be clean"
+    );
     let out = f.bash("git reset --hard HEAD");
     assert_ne!(
         verdict(&out),
@@ -157,7 +161,10 @@ fn b1_reset_hard_in_clean_linked_worktree_is_not_denied() {
 fn b1_control_reset_hard_in_dirty_linked_worktree_not_allow() {
     let f = Fx::new("dirty");
     std::fs::write(f.wt.join("tracked.txt"), "dirty\n").unwrap();
-    assert!(!f.status().trim().is_empty(), "fixture: worktree dirty");
+    assert!(
+        !f.short_status().trim().is_empty(),
+        "fixture: worktree dirty"
+    );
     let out = f.bash("git reset --hard HEAD");
     assert_ne!(
         verdict(&out),

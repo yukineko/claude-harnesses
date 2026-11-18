@@ -14,8 +14,9 @@
 //! file does not contain the constructs it searches for.
 //!
 //! Scope of the line match:
-//! - A line whose first non-blank characters are `//` is skipped (docs and
-//!   comments name the constructs without running them).
+//! - Comments and string / char literals are blanked by a Rust lexer
+//!   (`mask_non_code`) before matching, so text that only names a construct
+//!   (docs, comments, a script a fixture feeds to another program) is not code.
 //! - The child-wait construct matches when the receiver is an identifier bound
 //!   by a `let` statement that contains a spawn call (the statement may span
 //!   lines), or whose name contains `child`. A `Barrier::wait` is neither.
@@ -80,6 +81,101 @@ fn scanned_files() -> Vec<(String, String)> {
     files
 }
 
+/// `src` with every comment and every string / char literal blanked to spaces
+/// (newlines kept, so line numbers and columns are unchanged). A scan for a
+/// construct then sees executed code only: Rust text that merely names the
+/// construct (a doc line, a string a fixture feeds to another program) is gone.
+///
+/// This is Rust's own lexical grammar for the four token kinds that can hide
+/// text: line comments, nested block comments, (raw / byte / C) string
+/// literals, and char literals as against lifetimes. It does not guess from
+/// line shape.
+fn mask_non_code(src: &str) -> String {
+    let c: Vec<char> = src.chars().collect();
+    let mut out: Vec<char> = c.clone();
+    let blank = |out: &mut Vec<char>, from: usize, to: usize| {
+        for ch in &mut out[from..to] {
+            if *ch != '\n' {
+                *ch = ' ';
+            }
+        }
+    };
+    let is_ident = |ch: char| ch.is_alphanumeric() || ch == '_';
+    let n = c.len();
+    let mut i = 0;
+    while i < n {
+        let ch = c[i];
+        if ch == '/' && c.get(i + 1) == Some(&'/') {
+            let end = c[i..].iter().position(|x| *x == '\n').map_or(n, |p| i + p);
+            blank(&mut out, i, end);
+            i = end;
+        } else if ch == '/' && c.get(i + 1) == Some(&'*') {
+            let mut depth = 1;
+            let mut j = i + 2;
+            while j < n && depth > 0 {
+                if c[j] == '/' && c.get(j + 1) == Some(&'*') {
+                    depth += 1;
+                    j += 2;
+                } else if c[j] == '*' && c.get(j + 1) == Some(&'/') {
+                    depth -= 1;
+                    j += 2;
+                } else {
+                    j += 1;
+                }
+            }
+            blank(&mut out, i, j);
+            i = j;
+        } else if ch == '"' {
+            let mut j = i + 1;
+            while j < n && c[j] != '"' {
+                j += if c[j] == '\\' { 2 } else { 1 };
+            }
+            let end = (j + 1).min(n);
+            blank(&mut out, i, end);
+            i = end;
+        } else if ch == 'r'
+            && (i == 0
+                || !is_ident(c[i - 1])
+                || (matches!(c[i - 1], 'b' | 'c') && (i < 2 || !is_ident(c[i - 2]))))
+            && {
+                let hashes = c[i + 1..].iter().take_while(|x| **x == '#').count();
+                c.get(i + 1 + hashes) == Some(&'"')
+            }
+        {
+            let hashes = c[i + 1..].iter().take_while(|x| **x == '#').count();
+            let mut j = i + 2 + hashes;
+            let closer: Vec<char> = std::iter::once('"')
+                .chain(std::iter::repeat_n('#', hashes))
+                .collect();
+            while j < n && c[j..].get(..closer.len()) != Some(&closer[..]) {
+                j += 1;
+            }
+            let end = (j + closer.len()).min(n);
+            blank(&mut out, i, end);
+            i = end;
+        } else if ch == '\'' {
+            // A char literal is `'\...'` or `'x'`; anything else is a lifetime.
+            if c.get(i + 1) == Some(&'\\') {
+                let mut j = i + 2;
+                while j < n && c[j] != '\'' {
+                    j += if c[j] == '\\' { 2 } else { 1 };
+                }
+                let end = (j + 1).min(n);
+                blank(&mut out, i, end);
+                i = end;
+            } else if c.get(i + 2) == Some(&'\'') {
+                blank(&mut out, i, i + 3);
+                i += 3;
+            } else {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out.into_iter().collect()
+}
+
 /// The identifier immediately before `needle_at` in `line`.
 fn receiver(line: &str, needle_at: usize) -> &str {
     let head = &line[..needle_at];
@@ -89,20 +185,42 @@ fn receiver(line: &str, needle_at: usize) -> &str {
     &head[start..]
 }
 
-/// `file:line: text` for every non-comment line that `hit` accepts.
+/// `file:line: text` for every code line (comments and literals masked out)
+/// that `hit` accepts.
 fn flagged(hit: impl Fn(&str) -> bool) -> Vec<String> {
     let mut found = Vec::new();
     for (rel, src) in scanned_files() {
-        for (i, line) in src.lines().enumerate() {
-            if line.trim_start().starts_with("//") {
-                continue;
-            }
-            if hit(line) {
+        let masked = mask_non_code(&src);
+        for ((i, line), code) in src.lines().enumerate().zip(masked.lines()) {
+            if hit(code) {
                 found.push(format!("{rel}:{}: {}", i + 1, line.trim()));
             }
         }
     }
     found
+}
+
+#[test]
+fn mask_blanks_comments_and_literals_but_not_code() {
+    let n = format!(".sta{}", "tus()");
+    let src = [
+        format!("let a = x{n};"),
+        format!("// doc {n}"),
+        format!("/* a /* nested {n} */ still comment {n} */ let b = y{n};"),
+        format!("let s = \"quoted {n} \\\" more {n}\";"),
+        format!("let r = r#\"raw \" {n}\"#; let c = '\"'; let d = z{n};"),
+        format!("fn f<'a>(x: &'a str) {{ w{n}; }}"),
+    ]
+    .join("\n");
+    let masked = mask_non_code(&src);
+    assert_eq!(masked.lines().count(), src.lines().count());
+    let hit: Vec<usize> = masked
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| l.contains(&n))
+        .map(|(i, _)| i + 1)
+        .collect();
+    assert_eq!(hit, vec![1, 3, 5, 6]);
 }
 
 fn assert_none(construct: &str, found: Vec<String>) {
@@ -136,11 +254,9 @@ fn child_wait_lines(src: &str) -> Vec<usize> {
     // The identifier of the `let` statement currently open (no `;` seen yet).
     let mut open_let: Option<String> = None;
     let mut waits: Vec<(usize, String)> = Vec::new();
-    for (i, line) in src.lines().enumerate() {
+    let masked = mask_non_code(src);
+    for (i, line) in masked.lines().enumerate() {
         let t = line.trim_start();
-        if t.starts_with("//") {
-            continue;
-        }
         if let Some(rest) = t.strip_prefix("let ") {
             let rest = rest.strip_prefix("mut ").unwrap_or(rest);
             let ident: String = rest

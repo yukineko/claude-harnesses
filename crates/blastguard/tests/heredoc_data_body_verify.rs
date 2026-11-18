@@ -138,7 +138,6 @@ fn rank(d: &str) -> u8 {
 /// two data writes. The combined command gets exactly the strictest verdict
 /// of each here-document alone.
 #[test]
-#[ignore = "RED: heredoc data-body fix (ruling 2026-11-18 B-3) not on origin/main"]
 fn parity_two_data_heredocs_on_one_line() {
     let alone = [
         "cat <<'A' > a.txt\nx\nA".to_string(),

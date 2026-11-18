@@ -117,7 +117,6 @@ fn smuggle_consumer_redefined_out_of_sight() {
 /// stricter: the combined command gets the same verdict as the bare commit.
 /// Other sourced files (`. ./defs.sh`) stay pinned above.
 #[test]
-#[ignore = "RED: heredoc data-body fix (ruling 2026-11-18 B-1) not on origin/main"]
 fn parity_cargo_env_source_before_commit_heredoc() {
     let bare = format!("git commit -F - <<'EOF'\nfix: do not {RM}\nEOF");
     let combined = format!(". \"$HOME/.cargo/env\"\n{bare}");

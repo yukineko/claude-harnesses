@@ -129,13 +129,11 @@ fn assert_parity(tag: &str, head_parts: &[&str], combined: &str) {
 }
 
 #[test]
-#[ignore = "RED: heredoc data-body fix (ruling 2026-11-18 B-2) not on origin/main"]
 fn parity_head_with_variable_path() {
     assert_parity("add-var", &["git add $X"], &heredoc("git add $X &&"));
 }
 
 #[test]
-#[ignore = "RED: heredoc data-body fix (ruling 2026-11-18 B-2) not on origin/main"]
 fn parity_head_with_git_global_option() {
     assert_parity(
         "git-c-add",
@@ -145,7 +143,6 @@ fn parity_head_with_git_global_option() {
 }
 
 #[test]
-#[ignore = "RED: heredoc data-body fix (ruling 2026-11-18 B-2) not on origin/main"]
 fn parity_head_git_rm() {
     assert_parity("git-rm", &["git rm -rf x"], &heredoc("git rm -rf x &&"));
 }
@@ -158,19 +155,16 @@ fn parity_head_rm_rf() {
 }
 
 #[test]
-#[ignore = "RED: heredoc data-body fix (ruling 2026-11-18 B-2) not on origin/main"]
 fn parity_head_or() {
     assert_parity("or-head", &["git add a.txt"], &heredoc("git add a.txt ||"));
 }
 
 #[test]
-#[ignore = "RED: heredoc data-body fix (ruling 2026-11-18 B-2) not on origin/main"]
 fn parity_head_semicolon() {
     assert_parity("semi-head", &["git add a.txt"], &heredoc("git add a.txt ;"));
 }
 
 #[test]
-#[ignore = "RED: heredoc data-body fix (ruling 2026-11-18 B-2) not on origin/main"]
 fn parity_head_pipe() {
     assert_parity("pipe-head", &["git add a.txt"], &heredoc("git add a.txt |"));
 }

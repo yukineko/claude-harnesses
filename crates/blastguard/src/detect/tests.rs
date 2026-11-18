@@ -4346,12 +4346,11 @@ fn deletion_quoted_scratch_literal_matches_unquoted() {
         assert_eq!(f.run(&cmd), plain, "{cmd}");
     }
     // Each quoted spelling matches its own unquoted spelling.
-    for (unquoted, quoted) in [(
+    let (unquoted, quoted) = (
         format!("rm -rf {}/a/", f.tmp),
         format!("rm -rf \"{}/a/\"", f.tmp),
-    )] {
-        assert_eq!(f.run(&quoted), f.run(&unquoted), "{quoted} vs {unquoted}");
-    }
+    );
+    assert_eq!(f.run(&quoted), f.run(&unquoted), "{quoted} vs {unquoted}");
 }
 
 #[test]

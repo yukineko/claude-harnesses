@@ -732,6 +732,15 @@ forge・condukt のスケジューラが再利用）。
   R2 の Ask、redirect arm の先行する拒否（保護パス・system directory・置けない target）はそのまま。
   条件外の program は従来どおり判定する。program 語（`-c` の直後の語）が Python として tokenise
   できない（閉じない文字列・triple quote・括弧の不均衡）ときは、他に Deny が無ければ Ask（Allow しない）。
+- **`python3 -c PROG arg…` の `arg` の展開は program ではなく argv（backlog d6de38be）** — Python は
+  `-c` で option 列を終え、直後の 1 語だけが program、以降の語は `sys.argv[1:]`。program 語
+  （`detect/payload/program_word.rs` の `inline_eval_program_word`）が判定可能で、program 自体に `$`・
+  backtick が無く、`SHELL_STRING_EXEC_MARKERS`・動的実行 marker を含まず、Python tokenizer で読んで
+  文字列を shell/process に渡さない（`python_strings_never_reach_a_shell`）ときに限り、argv 語の展開で
+  「that program contains a shell expansion」の template Ask を出さない
+  （`detect/interpreter/invocation.rs` の `python_argv_expansions_are_data`）。program 内の展開は従来どおり
+  Ask（ユーザー裁定 2026-11-12）、program 語が判定不能なら従来の判定、未解決の argv path への書き込みは
+  path-mutation 側で Ask のまま。RED/対照: `crates/blastguard/tests/backlog_20261118_python_c_argv_expansion_read_as_program_fp.rs`。
 - **大文字小文字だけ違う綴りは symlink ではない（#1630）** — `SafeRoots::no_symlink_below` は、
   root 以下の component の realpath が `<親の real>/<綴った名前>` と**大文字小文字だけ**違うとき、
   同じ親・両名の `lstat` がどちらも symlink でない・`(st_dev, st_ino)` が一致する、を全て観測した場合に

@@ -2502,6 +2502,8 @@ notes = "User rulings 2026-11-19 (verbatim): 「relayの判定はすべてやら
 created_at = 1795042671
 updated_at = 1795042671
 weight = 0.0
+issue_number = 1866
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1866"
 rev = 0
 
 [task.repro]

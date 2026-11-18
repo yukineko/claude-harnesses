@@ -512,18 +512,20 @@ fn verify_command(task: &str) -> ! {
 /// Fail→Pass whose RED and GREEN proofs were not recorded with the same test
 /// command yields `transition="command_mismatch"`, exit 1 (see
 /// `transition::oracle_report_same_cmd`). Exit 0 only for a valid Fail→Pass
-/// oracle of one and the same command. A config that could not be honored
+/// oracle of one and the same command. A task may hold one slot per test
+/// command (see `proof.rs`); with several, the oracle is valid only when EVERY
+/// command's RED→GREEN is Fail→Pass (`transition::oracle_report_slots`). The
+/// oracle never compares trees; the identity each proof records is for
+/// `condukt merge` to compare. A config that could not be honored
 /// (untrusted project `tdd.toml`, unreadable / unparseable config) is
 /// "cannot determine": the refusal on stderr, no JSON, exit 2.
 fn oracle_command(task: &str) -> ! {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let cfg = Config::load(&root);
     refuse_on_unhonored_config(&cfg, 2);
-    let pre = proof::read_passed(&root, &cfg, task, "red");
-    let post = proof::read_passed(&root, &cfg, task, "green");
-    let red_cmd = proof::read_cmd(&root, &cfg, task, "red");
-    let green_cmd = proof::read_cmd(&root, &cfg, task, "green");
-    let (report, code) = transition::oracle_report_same_cmd(pre, post, red_cmd, green_cmd);
+    let reds = proof::read_slot_proofs(&root, &cfg, task, "red");
+    let greens = proof::read_slot_proofs(&root, &cfg, task, "green");
+    let (report, code) = transition::oracle_report_slots(reds, greens);
     println!("{report}");
     std::process::exit(code);
 }

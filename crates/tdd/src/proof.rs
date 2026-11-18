@@ -7,6 +7,10 @@
 //!   `tdd green` REQUIRES a prior RED proof, runs the tests, and REQUIRES them to
 //!               pass. It records `<proof_dir>/<task>.green.json`.
 //!   `tdd verify` succeeds iff both proofs exist (RED then GREEN happened).
+//!
+//! The file names above are the FIRST test command's slot; every further
+//! command of the task gets its own slot (see the slots section below), and
+//! `tdd green --cmd X` needs the RED slot of the same command `X`.
 
 use std::path::{Path, PathBuf};
 
@@ -35,6 +39,222 @@ pub fn proof_dir(root: &Path, cfg: &Config) -> PathBuf {
 
 pub fn artifact_path(root: &Path, cfg: &Config, task: &str, kind: &str) -> PathBuf {
     proof_dir(root, cfg).join(format!("{}.{kind}.json", safe(task)))
+}
+
+// ── slots (backlog 519f089e) ────────────────────────────────────────────────
+//
+// One proof file per (task, kind, test command). The FIRST command recorded
+// for a task and kind lives at the legacy name `<task>.<kind>.json` (so a
+// reader that knows only one slot still finds it, and a single-command task
+// is byte-for-byte the old layout). Every further command lives at
+// `<task>.<16 hex of fnv1a64(cmd)>.<kind>.json`. A slot is identified by the
+// `cmd` recorded INSIDE the file, never by its name.
+
+/// What the `cmd` of a proof file could be determined to be.
+enum SlotCmd {
+    Absent,
+    Cmd(String),
+    /// Exists but its `cmd` cannot be read: not "absent", not "another command".
+    Unknown(String),
+}
+
+fn peek_cmd(path: &Path) -> SlotCmd {
+    match harness_core::boundary::read_to_string(path) {
+        Determination::Known(None) => SlotCmd::Absent,
+        Determination::Known(Some(text)) => {
+            match serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| v.get("cmd").and_then(|c| c.as_str().map(str::to_string)))
+            {
+                Some(c) => SlotCmd::Cmd(c),
+                None => SlotCmd::Unknown(format!(
+                    "{} is not valid JSON or records no `cmd`",
+                    path.display()
+                )),
+            }
+        }
+        Determination::Undetermined(why) => SlotCmd::Unknown(why.as_str().to_string()),
+    }
+}
+
+fn hashed_path(root: &Path, cfg: &Config, task: &str, kind: &str, cmd: &str) -> PathBuf {
+    let h = harness_core::hash::fnv1a64(cmd.as_bytes());
+    proof_dir(root, cfg).join(format!("{}.{h:016x}.{kind}.json", safe(task)))
+}
+
+/// The slot file already holding `cmd`'s proof, if any. A candidate whose
+/// command cannot be determined is an error: guessing "other command" could
+/// overwrite evidence, guessing "same command" could pair the wrong proofs.
+fn find_slot(
+    root: &Path,
+    cfg: &Config,
+    task: &str,
+    kind: &str,
+    cmd: &str,
+) -> Result<Option<PathBuf>> {
+    for p in [
+        artifact_path(root, cfg, task, kind),
+        hashed_path(root, cfg, task, kind, cmd),
+    ] {
+        match peek_cmd(&p) {
+            SlotCmd::Absent => {}
+            SlotCmd::Cmd(c) if c == cmd => return Ok(Some(p)),
+            SlotCmd::Cmd(_) => {}
+            SlotCmd::Unknown(why) => bail!(
+                "cannot tell which test command {} records ({why}); refusing to guess — fix or \
+                 remove that file and run again.",
+                p.display()
+            ),
+        }
+    }
+    Ok(None)
+}
+
+/// The file `cmd`'s proof is written to: its existing slot, else the legacy
+/// name when free, else the hashed name when free.
+fn write_slot(root: &Path, cfg: &Config, task: &str, kind: &str, cmd: &str) -> Result<PathBuf> {
+    if let Some(p) = find_slot(root, cfg, task, kind, cmd)? {
+        return Ok(p);
+    }
+    for p in [
+        artifact_path(root, cfg, task, kind),
+        hashed_path(root, cfg, task, kind, cmd),
+    ] {
+        if matches!(peek_cmd(&p), SlotCmd::Absent) {
+            return Ok(p);
+        }
+    }
+    bail!("no free {kind} proof slot for this command (hash collision with another command)")
+}
+
+/// Every proof file of `kind` for `task`: the legacy-named one plus the
+/// hashed-name slots, sorted. A missing proof dir is "none"; any other read
+/// failure is an `Err` ("could not look" is not "nothing there").
+pub fn slot_files(
+    root: &Path,
+    cfg: &Config,
+    task: &str,
+    kind: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let dir = proof_dir(root, cfg);
+    let mut out = Vec::new();
+    let primary = artifact_path(root, cfg, task, kind);
+    match std::fs::symlink_metadata(&primary) {
+        Ok(_) => out.push(primary),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("cannot stat {}: {e}", primary.display())),
+    }
+    let rd = match std::fs::read_dir(&dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(format!("cannot read {}: {e}", dir.display())),
+    };
+    let prefix = format!("{}.", safe(task));
+    let suffix = format!(".{kind}.json");
+    let mut hashed = Vec::new();
+    for entry in rd {
+        let entry = entry.map_err(|e| format!("cannot read an entry of {}: {e}", dir.display()))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(mid) = name
+            .strip_prefix(&prefix)
+            .and_then(|n| n.strip_suffix(&suffix))
+        else {
+            continue;
+        };
+        if mid.len() == 16
+            && mid
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            hashed.push(entry.path());
+        }
+    }
+    hashed.sort();
+    out.extend(hashed);
+    Ok(out)
+}
+
+/// Read every slot of `kind` for the oracle: cmd and passed of each file.
+pub fn read_slot_proofs(
+    root: &Path,
+    cfg: &Config,
+    task: &str,
+    kind: &str,
+) -> Determination<Vec<crate::transition::SlotProof>> {
+    let files = match slot_files(root, cfg, task, kind) {
+        Ok(f) => f,
+        Err(e) => return Determination::undetermined(e),
+    };
+    let mut out = Vec::new();
+    for p in files {
+        out.push(match harness_core::boundary::read_to_string(&p) {
+            Determination::Known(Some(text)) => {
+                let v: Option<serde_json::Value> = serde_json::from_str(&text).ok();
+                crate::transition::SlotProof {
+                    cmd: Determination::known(
+                        v.as_ref()
+                            .and_then(|v| v.get("cmd")?.as_str().map(str::to_string)),
+                    ),
+                    passed: Determination::known(
+                        v.as_ref().and_then(|v| v.get("passed")?.as_bool()),
+                    ),
+                }
+            }
+            // Listed a moment ago and gone now: not "no proof".
+            Determination::Known(None) => crate::transition::SlotProof {
+                cmd: Determination::undetermined(format!("{} vanished while reading", p.display())),
+                passed: Determination::undetermined(format!(
+                    "{} vanished while reading",
+                    p.display()
+                )),
+            },
+            Determination::Undetermined(why) => crate::transition::SlotProof {
+                cmd: Determination::undetermined(why.as_str()),
+                passed: Determination::undetermined(why.as_str()),
+            },
+        });
+    }
+    Determination::known(out)
+}
+
+/// The fields every proof carries about the run itself: identity of the tree
+/// it saw, per-test results, counts, and the output tail.
+fn run_evidence(root: &Path, cfg: &Config, out: &runner::Outcome) -> serde_json::Value {
+    json!({
+        "tree_identity": runner::evidence::tree_identity(root, &cfg.proof_dir),
+        "tests": out.tests,
+        "counts": out.counts,
+        "output_tail": out.output_tail,
+    })
+}
+
+/// The names the paired RED proof recorded as `"fail"`, sorted, copied into
+/// the GREEN proof so a consumer needs only `green.json` to ask "did GREEN
+/// pass everything RED failed". `null` (NOT an empty list) when the RED proof
+/// has no readable `tests` map (an older tdd, or an unreadable file): "RED's
+/// failing set is unknown" must not read as "RED failed nothing".
+fn red_failed_tests(red_path: &Path) -> serde_json::Value {
+    let tests = match harness_core::boundary::read_to_string(red_path) {
+        Determination::Known(Some(text)) => serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v.get("tests").and_then(|t| t.as_object().cloned())),
+        _ => None,
+    };
+    match tests {
+        Some(map) => serde_json::Value::Array(
+            map.iter()
+                .filter(|(_, v)| v.as_str() == Some("fail"))
+                .map(|(k, _)| serde_json::Value::String(k.clone()))
+                .collect(),
+        ),
+        None => serde_json::Value::Null,
+    }
+}
+
+fn merge_into(base: &mut serde_json::Value, extra: serde_json::Value) {
+    if let (Some(b), serde_json::Value::Object(e)) = (base.as_object_mut(), extra) {
+        b.extend(e);
+    }
 }
 
 /// Decide whether a RED run is acceptable: the tests MUST have failed.
@@ -290,21 +510,19 @@ pub fn red(
     judge_ran(&out, Phase::Red)?;
     judge_exited(&out, Phase::Red, cfg.default_timeout_secs)?;
     judge_red(out.passed)?;
-    let path = artifact_path(root, cfg, task, "red");
+    let path = write_slot(root, cfg, task, "red", cmdline)?;
     let author = resolve_author(author);
-    write_artifact(
-        &path,
-        &json!({
-            "task": task,
-            "phase": "red",
-            "cmd": cmdline,
-            "passed": out.passed,
-            "exit_code": out.exit_code,
-            "ts": chrono::Local::now().to_rfc3339(),
-            "output_tail": out.output_tail,
-            "author": author,
-        }),
-    )?;
+    let mut proof = json!({
+        "task": task,
+        "phase": "red",
+        "cmd": cmdline,
+        "passed": out.passed,
+        "exit_code": out.exit_code,
+        "ts": chrono::Local::now().to_rfc3339(),
+        "author": author,
+    });
+    merge_into(&mut proof, run_evidence(root, cfg, &out));
+    write_artifact(&path, &proof)?;
     println!(
         "🔴 RED recorded for `{task}` — tests fail as expected ({}).\n   {}",
         out.status_str(),
@@ -320,9 +538,13 @@ pub fn red(
 /// than not-found is `Undetermined` — it is NOT folded into `Known(None)`:
 /// [`green`] refuses on it with the read error named, so an unreadable RED
 /// proof is reported as unreadable rather than as a missing `--author`.
+#[cfg(test)]
 fn read_author(root: &Path, cfg: &Config, task: &str, kind: &str) -> Determination<Option<String>> {
-    let path = artifact_path(root, cfg, task, kind);
-    harness_core::boundary::read_to_string(&path).map(|text| {
+    read_author_at(&artifact_path(root, cfg, task, kind))
+}
+
+fn read_author_at(path: &Path) -> Determination<Option<String>> {
+    harness_core::boundary::read_to_string(path).map(|text| {
         let value: serde_json::Value = serde_json::from_str(&text?).ok()?;
         value
             .get("author")?
@@ -354,8 +576,22 @@ pub fn green(
     cmd: &Option<String>,
     author: &Option<String>,
 ) -> Result<()> {
-    let red_path = artifact_path(root, cfg, task, "red");
-    let has_red = red_path.exists();
+    // The RED that counts is the one recorded for THIS command (its slot): a
+    // RED of command A is no RED for command B (backlog 519f089e / dc37a4da).
+    let cmdline = resolve_cmd(cmd, cfg);
+    let red_slot = find_slot(root, cfg, task, "red", cmdline)?;
+    let has_red = red_slot.is_some();
+    if !has_red {
+        if let Ok(others) = slot_files(root, cfg, task, "red") {
+            if !others.is_empty() {
+                bail!(
+                    "no RED proof found for this test command `{cmdline}` — RED proofs exist for \
+                     other command(s) of `{task}`, and a RED of one command is no RED for \
+                     another. Run `tdd red --task {task} --cmd <this command>` first."
+                );
+            }
+        }
+    }
     // Check RED-proof existence FIRST, before the strict_separation identity
     // check: otherwise a `tdd green --author X` run *without* a prior `tdd
     // red` gets misdiagnosed as "identity is missing" (there's no RED
@@ -372,7 +608,8 @@ pub fn green(
     judge_has_red(has_red)?;
     let author = resolve_author(author);
     if cfg.strict_separation {
-        let test_author = match read_author(root, cfg, task, "red").require() {
+        let red_file = red_slot.clone().unwrap_or_default();
+        let test_author = match read_author_at(&red_file).require() {
             Required::Determined(author) => author,
             Required::Blocked(why) => {
                 let verdict = why.into_verdict();
@@ -385,7 +622,6 @@ pub fn green(
         };
         judge_separation(true, test_author.as_deref(), Some(&author))?;
     }
-    let cmdline = resolve_cmd(cmd, cfg);
     let tmp = cfg.state_dir.join("tmp");
     let out = runner::run_cmd(
         cmdline,
@@ -397,20 +633,21 @@ pub fn green(
     judge_ran(&out, Phase::Green)?;
     judge_exited(&out, Phase::Green, cfg.default_timeout_secs)?;
     judge_green(out.passed, has_red)?;
-    let path = artifact_path(root, cfg, task, "green");
-    write_artifact(
-        &path,
-        &json!({
-            "task": task,
-            "phase": "green",
-            "cmd": cmdline,
-            "passed": out.passed,
-            "exit_code": out.exit_code,
-            "ts": chrono::Local::now().to_rfc3339(),
-            "red_proof": red_path.display().to_string(),
-            "author": author,
-        }),
-    )?;
+    let red_path = red_slot.unwrap_or_default();
+    let path = write_slot(root, cfg, task, "green", cmdline)?;
+    let mut proof = json!({
+        "task": task,
+        "phase": "green",
+        "cmd": cmdline,
+        "passed": out.passed,
+        "exit_code": out.exit_code,
+        "ts": chrono::Local::now().to_rfc3339(),
+        "red_proof": red_path.display().to_string(),
+        "author": author,
+    });
+    merge_into(&mut proof, run_evidence(root, cfg, &out));
+    proof["red_failed_tests"] = red_failed_tests(&red_path);
+    write_artifact(&path, &proof)?;
     println!(
         "🟢 GREEN recorded for `{task}` — tests pass after RED.\n   {}",
         path.display()
@@ -418,10 +655,11 @@ pub fn green(
     Ok(())
 }
 
-/// `tdd verify`: true iff both RED and GREEN proofs exist for the task.
+/// `tdd verify`: true iff the task has at least one RED proof and at least one
+/// GREEN proof (any slot). A proof dir that cannot be listed is "no" (§3).
 pub fn verify(root: &Path, cfg: &Config, task: &str) -> bool {
-    artifact_path(root, cfg, task, "red").exists()
-        && artifact_path(root, cfg, task, "green").exists()
+    let any = |kind: &str| slot_files(root, cfg, task, kind).is_ok_and(|f| !f.is_empty());
+    any("red") && any("green")
 }
 
 /// Read a proof artifact's `passed` field through the harness boundary.
@@ -434,6 +672,11 @@ pub fn verify(root: &Path, cfg: &Config, task: &str) -> bool {
 ///   `transition::oracle_report` reports it as `transition="undetermined"`,
 ///   `valid_fp_oracle=false`, and `tdd oracle` exits non-zero
 ///   ([`crate::transition::ORACLE_EXIT_UNDETERMINED`]).
+///
+/// Reads only the legacy-named slot `<task>.<kind>.json`. `tdd oracle` no
+/// longer calls this (it reads every slot through [`read_slot_proofs`]); it is
+/// kept because `tests/fault_injection.rs` pins its fail-closed behaviour.
+#[allow(dead_code)]
 pub fn read_passed(
     root: &Path,
     cfg: &Config,
@@ -444,34 +687,6 @@ pub fn read_passed(
     harness_core::boundary::read_to_string(&path).map(|text| {
         let value: serde_json::Value = serde_json::from_str(&text?).ok()?;
         value.get("passed")?.as_bool()
-    })
-}
-
-/// Read a proof artifact's recorded test command (`cmd`) through the harness
-/// boundary — the same tri-state as [`read_passed`]:
-///
-/// - `Known(None)`: the artifact is missing, not valid JSON, or lacks a string
-///   `cmd` field.
-/// - `Known(Some(cmd))`: the command `tdd red`/`tdd green` ran (after
-///   `--cmd` / `test_cmd` resolution).
-/// - `Undetermined`: the artifact exists but could not be read.
-///
-/// Feeds `transition::oracle_report_same_cmd`, which only accepts a Fail→Pass
-/// whose RED and GREEN were recorded with the SAME command; a `Known(None)`
-/// on either side cannot show that, so it is rejected, not accepted.
-pub fn read_cmd(
-    root: &Path,
-    cfg: &Config,
-    task: &str,
-    kind: &str,
-) -> Determination<Option<String>> {
-    let path = artifact_path(root, cfg, task, kind);
-    harness_core::boundary::read_to_string(&path).map(|text| {
-        let value: serde_json::Value = serde_json::from_str(&text?).ok()?;
-        value
-            .get("cmd")?
-            .as_str()
-            .map(std::string::ToString::to_string)
     })
 }
 
@@ -638,7 +853,7 @@ mod tests {
         };
         write_artifact(
             &artifact_path(&base, &cfg, "t1", "red"),
-            &json!({"passed": false, "author": "agent-a"}),
+            &json!({"passed": false, "author": "agent-a", "cmd": "true"}),
         )
         .unwrap();
 
@@ -673,7 +888,7 @@ mod tests {
         };
         write_artifact(
             &artifact_path(&base, &cfg, "t1", "red"),
-            &json!({"passed": false, "author": "agent-a"}),
+            &json!({"passed": false, "author": "agent-a", "cmd": "true"}),
         )
         .unwrap();
 
@@ -705,15 +920,18 @@ mod tests {
             ..Config::default()
         };
 
-        // "false" always exits 1 → satisfies judge_red's must-fail requirement.
+        // Fails (exit 1) until ok.flag exists, then passes: the SAME command
+        // for RED and GREEN, as a slot requires.
+        let flag_cmd = "test -f ok.flag".to_string();
         red(
             &base,
             &cfg,
             "t1",
-            &Some("false".to_string()),
+            &Some(flag_cmd.clone()),
             &Some("agent-a".to_string()),
         )
         .unwrap();
+        std::fs::write(base.join("ok.flag"), "x").unwrap();
         assert_eq!(
             read_author(&base, &cfg, "t1", "red")
                 .require()
@@ -726,7 +944,7 @@ mod tests {
             &base,
             &cfg,
             "t1",
-            &Some("true".to_string()),
+            &Some(flag_cmd),
             &Some("agent-a".to_string()),
         )
         .unwrap();
@@ -765,7 +983,9 @@ mod tests {
 
         // Same session for RED and GREEN → rejected (no --author given at all).
         std::env::set_var("CLAUDE_CODE_SESSION_ID", "sess-same-e2e");
-        red(&base, &cfg, "t1", &Some("false".to_string()), &None).unwrap();
+        let flag_cmd = Some("test -f ok.flag".to_string());
+        red(&base, &cfg, "t1", &flag_cmd, &None).unwrap();
+        std::fs::write(base.join("ok.flag"), "x").unwrap();
         assert_eq!(
             read_author(&base, &cfg, "t1", "red")
                 .require()
@@ -773,7 +993,7 @@ mod tests {
                 .as_deref(),
             Some("sess-same-e2e")
         );
-        let err = green(&base, &cfg, "t1", &Some("true".to_string()), &None).unwrap_err();
+        let err = green(&base, &cfg, "t1", &flag_cmd, &None).unwrap_err();
         assert!(
             err.to_string().contains("strict_separation"),
             "expected same-session auto id to be rejected under strict_separation, got: {err}"
@@ -782,7 +1002,7 @@ mod tests {
 
         // Different session for GREEN → allowed.
         std::env::set_var("CLAUDE_CODE_SESSION_ID", "sess-other-e2e");
-        green(&base, &cfg, "t1", &Some("true".to_string()), &None).unwrap();
+        green(&base, &cfg, "t1", &flag_cmd, &None).unwrap();
         assert_eq!(
             read_author(&base, &cfg, "t1", "green")
                 .require()
@@ -878,7 +1098,7 @@ mod tests {
         };
         write_artifact(
             &artifact_path(&base, &cfg, "t1", "red"),
-            &json!({"passed": false, "author": "agent-a"}),
+            &json!({"passed": false, "author": "agent-a", "cmd": "true"}),
         )
         .unwrap();
 

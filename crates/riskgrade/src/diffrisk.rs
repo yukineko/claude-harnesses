@@ -1,0 +1,703 @@
+//! Diff-level semantic risk signals: configurable sensitive-path globs and
+//! public-API surface changes. These feed the SAME [`crate::classify::RiskAssessment`]
+//! that command classification produces, so callers (e.g. condukt's
+//! `gate check` / force-gate escalation) reason over one graded axis rather
+//! than a parallel path. Pure, deterministic, no I/O, no LLM.
+
+use globset::{Glob, GlobSet, GlobSetBuilder};
+use harness_core::verdict::Determination;
+
+use crate::classify::{Risk, RiskAssessment};
+
+/// Built-in sensitive-path globs: directories/files that typically hold
+/// authn/authz, payment, or PII-handling logic. Deliberately conservative
+/// (name-based heuristics only) — callers can extend this list via
+/// [`SensitiveConfig::with_extra_globs`] with project-specific paths.
+pub const DEFAULT_SENSITIVE_GLOBS: &[&str] = &[
+    // auth / authn / authz
+    "**/auth/**",
+    "**/*auth*",
+    "**/authn/**",
+    "**/authz/**",
+    "**/login/**",
+    "**/session/**",
+    "**/oauth/**",
+    "**/*credential*",
+    "**/*secret*",
+    // payment / billing
+    "**/payment*/**",
+    "**/*payment*",
+    "**/billing/**",
+    "**/*billing*",
+    "**/checkout/**",
+    "**/*stripe*",
+    // PII / user data
+    "**/pii/**",
+    "**/*pii*",
+    "**/*personal_data*",
+    "**/gdpr/**",
+];
+
+/// Configurable sensitive-path glob set. `default()` uses
+/// [`DEFAULT_SENSITIVE_GLOBS`]; callers can layer project-specific globs on
+/// top via [`SensitiveConfig::with_extra_globs`] (e.g. sourced from
+/// condukt's `Config`, mirroring how `shared_globs` is threaded today).
+pub struct SensitiveConfig {
+    globs: Vec<String>,
+}
+
+impl Default for SensitiveConfig {
+    fn default() -> Self {
+        SensitiveConfig {
+            globs: DEFAULT_SENSITIVE_GLOBS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        }
+    }
+}
+
+impl SensitiveConfig {
+    /// Start from the built-in defaults plus caller-supplied extra globs.
+    pub fn with_extra_globs(extra: &[String]) -> Self {
+        let mut globs: Vec<String> = DEFAULT_SENSITIVE_GLOBS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        globs.extend(extra.iter().cloned());
+        SensitiveConfig { globs }
+    }
+
+    /// Start from ONLY caller-supplied globs (no built-in defaults). Useful
+    /// when a project wants to fully own the sensitive-path list.
+    pub fn from_globs(globs: Vec<String>) -> Self {
+        SensitiveConfig { globs }
+    }
+
+    /// Compile the configured globs into a [`GlobSet`], keeping "could not
+    /// compile" as its own answer.
+    ///
+    /// The glob list is **caller-supplied external input**
+    /// ([`SensitiveConfig::with_extra_globs`] / [`SensitiveConfig::from_globs`]
+    /// take it from a project config), so an unparseable pattern is a real,
+    /// reachable case — a typo, not a theoretical one. This used to `if let Ok`
+    /// past a bad `Glob::new` and `unwrap_or_else(|_| GlobSet::empty())` a bad
+    /// `build()`, which made "we could not compile your sensitive-path list"
+    /// byte-for-byte identical to "none of these paths is sensitive": the
+    /// permissive answer. That is the fail-open this repo's gate invariant
+    /// forbids (CLAUDE.md: 判定不能は必ず制限側に解決する), so **no error is
+    /// swallowed here**: either every pattern compiled, or the result is
+    /// [`Determination::Undetermined`] naming the offending pattern.
+    fn build(&self) -> Determination<GlobSet> {
+        let mut b = GlobSetBuilder::new();
+        for pat in &self.globs {
+            match Glob::new(pat) {
+                Ok(g) => {
+                    b.add(g);
+                }
+                Err(e) => {
+                    return Determination::undetermined(format!(
+                        "invalid sensitive glob `{pat}`: {e}"
+                    ));
+                }
+            }
+        }
+        match b.build() {
+            Ok(set) => Determination::Known(set),
+            Err(e) => {
+                Determination::undetermined(format!("could not build sensitive glob set: {e}"))
+            }
+        }
+    }
+
+    /// Whether any of `paths` matches a sensitive-path glob.
+    ///
+    /// `Known(true)`/`Known(false)` mean the glob set compiled and the paths
+    /// were actually tested. `Undetermined` means the configured glob set could
+    /// not be compiled at all, so **nothing was tested** — callers must resolve
+    /// that to the restricted side (treat as sensitive / escalate), never to
+    /// `false`. See [`SensitiveConfig::build`].
+    pub fn any_sensitive(&self, paths: &[String]) -> Determination<bool> {
+        self.build().map(|set| {
+            paths.iter().any(|p| {
+                let norm = p.trim().replace('\\', "/");
+                !norm.is_empty() && set.is_match(&norm)
+            })
+        })
+    }
+}
+
+/// True when a unified-diff-style text contains an added or removed line that
+/// changes Rust public API surface: `pub fn`, `pub struct`, `pub enum`,
+/// `pub trait`, `pub const`, `pub static`, `pub type`, or `pub mod` (also
+/// matches `pub(crate)`-qualified — treated the same as any `pub` marker,
+/// since narrowing/widening visibility is itself a surface change).
+///
+/// Deliberately line-oriented and diff-marker-aware (`+`/`-` prefix): plain
+/// context lines (no marker) are ignored so an unrelated diff that merely
+/// contains the substring "pub fn" in a comment/context line does not false
+/// positive. Pure text scan, no AST parsing — matches blastguard's existing
+/// idiom of cheap deterministic pattern matching over full static analysis.
+pub fn changes_public_symbol(diff_text: &str) -> bool {
+    const MARKERS: &[&str] = &[
+        "pub fn ",
+        "pub async fn ",
+        "pub struct ",
+        "pub enum ",
+        "pub trait ",
+        "pub const ",
+        "pub static ",
+        "pub type ",
+        "pub mod ",
+    ];
+    diff_text.lines().any(|line| {
+        let trimmed = line.trim_start();
+        let (marker, body) = if let Some(rest) = trimmed.strip_prefix('+') {
+            ('+', rest.trim_start())
+        } else if let Some(rest) = trimmed.strip_prefix('-') {
+            ('-', rest.trim_start())
+        } else {
+            return false;
+        };
+        // Exclude the `+++`/`---` file-header lines unified diffs emit.
+        if body.starts_with('+') || body.starts_with('-') {
+            return false;
+        }
+        let _ = marker;
+        MARKERS.iter().any(|m| {
+            if body.starts_with(m) {
+                return true;
+            }
+            // `pub(crate)`-qualified variant of the same marker. Every entry
+            // in MARKERS starts with the literal `"pub "` keyword, so the
+            // real Rust source spelling is obtained by replacing that
+            // leading `"pub "` with `"pub(crate) "` (e.g. `"pub fn "` ->
+            // `"pub(crate) fn "`), NOT by prepending `"pub(crate) "` in
+            // front of the already-`"pub "`-prefixed marker (that used to
+            // build the non-existent string `"pub(crate) pub fn "`, which
+            // never matches any real source line — see finding 6 in
+            // docs/review-redesign-implementation-items.md).
+            let pub_crate_variant = m.replacen("pub ", "pub(crate) ", 1);
+            body.starts_with(&pub_crate_variant)
+        })
+    })
+}
+
+/// Grade the diff-level semantic risk of a change given its touched paths and
+/// (optionally empty) unified-diff text, merging into the same
+/// [`RiskAssessment`] axes command classification uses:
+///
+///   - a touched path matches a sensitive-path glob → at least Medium,
+///     reversible (a human can still revert the commit; it is the *review*
+///     posture that must escalate, not undoability).
+///   - a public/exported symbol changed                → at least Medium,
+///     reversible, same rationale.
+///   - both signals fire                                → High, reversible
+///     (compounded review-worthiness forces the same GATED escalation path
+///     command classification uses for High + irreversible, via
+///     [`RiskAssessment::requires_gate`] which callers can OR with an
+///     explicit "review required" check — see module docs).
+///
+/// Additive only: never LOWERS a risk tier. Callers combine this with
+/// [`crate::classify::classify`] on the action text and take the
+/// higher-risk verdict (see [`crate::classify::classify_change`]).
+///
+/// ## Known limitation: `diff_text` is empty on the only in-workspace
+/// production call sites (finding 8, `docs/review-redesign-implementation-`
+/// `items.md`)
+///
+/// The two production callers of this function in the workspace —
+/// `condukt::gate_exec::gather_assessment` and `condukt::schedule::schedule`
+/// — both pass `diff_text = ""`. This is *intentional*, not an oversight:
+/// both call sites run at a pre-execution stage (force-gate / schedule-time
+/// risk classification) where the command has not run yet, so no actual
+/// diff exists to inspect — there is nothing to line-scan for `pub`/
+/// `pub(crate)` markers at that point in the pipeline. `changes_public_symbol`
+/// therefore always evaluates `false` on those paths today, and the
+/// `public_api` signal below only ever fires when a *caller downstream of an
+/// actual diff* (e.g. a future post-hoc/post-execution review pass, or any
+/// caller — in this crate's own tests, or a future integration — that has a
+/// real unified diff in hand) invokes `classify_diff` with non-empty
+/// `diff_text`. That is the realistic point at which item D (generalized
+/// risk scoring for public-API changes) is reachable and correct; see the
+/// unit tests below (`public_symbol_alone_raises_to_medium`,
+/// `both_signals_compound_to_high`, `pub_crate_*`) which pin this behavior
+/// with real diff text. Wiring an actual diff into the two schedule-time
+/// call sites is a separate, condukt-side change and out of scope here.
+///
+/// ## Why this returns a [`Determination`] rather than resolving internally
+///
+/// The sensitive-path signal can be *undetermined* (an unparseable configured
+/// glob — see [`SensitiveConfig::build`]). Two designs resolve that safely:
+/// fold it into a maximal `RiskAssessment` here, or propagate it. This function
+/// **propagates** it, deliberately:
+///
+/// * A `RiskAssessment` has no room for "why" — collapsing here would hand
+///   downstream a High tier with no way to tell a *real* sensitive-path hit
+///   from a *misconfigured* glob list. One of the consumers
+///   (`condukt::review_brief`) renders risk drivers as prose for a human, and
+///   must be able to say "conservatively treated as sensitive because the glob
+///   list did not compile" instead of silently claiming the change touches
+///   auth code.
+/// * Propagating makes the restricted resolution *explicit and greppable* at
+///   each call site, and `Determination`'s single extractor (`require`) means
+///   no call site can quietly substitute a permissive default.
+///
+/// What must never happen — under either design — is `Undetermined` becoming
+/// indistinguishable from "not sensitive". `Known(assessment)` therefore means
+/// the sensitive-path check actually ran.
+pub fn classify_diff(
+    paths: &[String],
+    diff_text: &str,
+    config: &SensitiveConfig,
+) -> Determination<RiskAssessment> {
+    let public_api = changes_public_symbol(diff_text);
+
+    config.any_sensitive(paths).map(|sensitive| {
+        let risk = match (sensitive, public_api) {
+            (true, true) => Risk::High,
+            (true, false) | (false, true) => Risk::Medium,
+            (false, false) => Risk::Low,
+        };
+
+        RiskAssessment {
+            risk,
+            reversible: true,
+        }
+    })
+}
+
+/// Caller-count threshold at/above which the blast-radius signal is graded
+/// [`Risk::High`]. Rationale: a change to a symbol referenced from **5 or more**
+/// distinct call sites has a wide blast radius — breaking it ripples across many
+/// callers, so the change deserves the same escalated review posture the base
+/// `sensitive-path` / `public-API` axes already grant to High-risk changes. The
+/// constant is deliberately small and fixed (deterministic, no config) so the
+/// signal is reproducible; any non-zero-but-below-threshold caller count still
+/// raises at least to [`Risk::Medium`] (some blast radius, but bounded).
+pub const HIGH_CALLER_THRESHOLD: usize = 5;
+
+/// Like [`classify_diff`], but folds in a **caller-blast-radius** signal derived
+/// from an already-enumerated caller map (see [`harness_core::callgraph::enumerate_callers`]).
+///
+/// This is purely **additive** over [`classify_diff`]: it starts from that base
+/// assessment and merges a blast-radius tier via the existing
+/// [`RiskAssessment::merge`] (max-risk semantics), so the caller signal can only
+/// **raise or hold** the tier — never lower it. `classify_diff`'s own signature
+/// and behavior are unchanged; existing callers keep compiling untouched.
+///
+/// ## Blast-radius signal
+///
+/// The changed symbols are [`harness_core::callgraph::changed_symbol_names`] of
+/// `diff_text`. Each changed symbol is looked up in `callers` and its enumerated
+/// [`CallSite`](harness_core::callgraph::CallSite) count summed across all changed
+/// symbols. That total maps to a tier:
+///
+///   - `>= HIGH_CALLER_THRESHOLD` call sites → [`Risk::High`] signal (wide blast
+///     radius: a widely-called symbol touches many downstream sites).
+///   - `>= 1` call site                      → [`Risk::Medium`] signal (some, but
+///     bounded, blast radius).
+///   - `0` call sites                         → [`Risk::Low`] signal (no observed
+///     callers → the base assessment is returned unchanged).
+///
+/// The signal's `reversible` is always `true`: a caller *count* is a blast-radius
+/// measure, not an irreversibility signal, so it must not spuriously flip
+/// `reversible` to `false` (which would wrongly force-gate a fully-undoable
+/// change). Irreversibility still flows only from the base assessment / command
+/// classification.
+///
+/// Returns a [`Determination`] for the same reason [`classify_diff`] does: the
+/// base assessment it builds on can be undetermined (unparseable sensitive-path
+/// glob), and an undetermined base must stay distinguishable from a Low one.
+/// The caller-blast-radius signal itself is always determinable (it is a pure
+/// count over an already-enumerated map), so it never introduces an
+/// `Undetermined` of its own.
+pub fn classify_diff_with_callers(
+    paths: &[String],
+    diff_text: &str,
+    callers: &std::collections::BTreeMap<String, Vec<harness_core::callgraph::CallSite>>,
+    config: &SensitiveConfig,
+) -> Determination<RiskAssessment> {
+    let base = classify_diff(paths, diff_text, config);
+
+    // Total enumerated caller sites across every symbol this diff changed.
+    let changed = harness_core::callgraph::changed_symbol_names(diff_text);
+    let total_callers: usize = changed
+        .iter()
+        .filter_map(|name| callers.get(name))
+        .map(|sites| sites.len())
+        .sum();
+
+    let signal_risk = if total_callers >= HIGH_CALLER_THRESHOLD {
+        Risk::High
+    } else if total_callers >= 1 {
+        Risk::Medium
+    } else {
+        Risk::Low
+    };
+
+    // Blast radius is not an irreversibility signal — keep the caller signal
+    // reversible so merge() never spuriously flips the result to non-reversible.
+    let signal = RiskAssessment {
+        risk: signal_risk,
+        reversible: true,
+    };
+
+    base.map(|b| b.merge(signal))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Unwrap a determination that the test asserts must be a real observation.
+    /// Panics (fails the test) on `Undetermined` — so a regression that turns a
+    /// working glob set into an undetermined one is a loud failure, not a
+    /// silently different value.
+    #[track_caller]
+    fn known<T>(d: Determination<T>) -> T {
+        d.require()
+            .expect("this test's config must classify to a Known value")
+    }
+
+    #[test]
+    fn sensitive_path_defaults_match_auth_payment_pii() {
+        let cfg = SensitiveConfig::default();
+        assert!(known(cfg.any_sensitive(&["src/auth/login.rs".to_string()])));
+        assert!(known(cfg.any_sensitive(&[
+            "crates/api/src/payment_gateway.rs".to_string()
+        ])));
+        assert!(known(
+            cfg.any_sensitive(&["services/billing/invoice.py".to_string()])
+        ));
+        assert!(known(cfg.any_sensitive(&["src/pii/redact.rs".to_string()])));
+        assert!(known(
+            cfg.any_sensitive(&["src/checkout/cart.rs".to_string()])
+        ));
+        assert!(!known(cfg.any_sensitive(&[
+            "src/parser.rs".to_string(),
+            "README.md".to_string()
+        ])));
+    }
+
+    #[test]
+    fn extra_globs_extend_defaults() {
+        let cfg = SensitiveConfig::with_extra_globs(&["**/secrets_vault/**".to_string()]);
+        assert!(known(
+            cfg.any_sensitive(&["infra/secrets_vault/keys.rs".to_string()])
+        ));
+        // Defaults still apply.
+        assert!(known(cfg.any_sensitive(&["src/auth/token.rs".to_string()])));
+    }
+
+    #[test]
+    fn from_globs_uses_only_caller_list() {
+        let cfg = SensitiveConfig::from_globs(vec!["**/custom/**".to_string()]);
+        assert!(known(cfg.any_sensitive(&["a/custom/b.rs".to_string()])));
+        assert!(!known(
+            cfg.any_sensitive(&["src/auth/login.rs".to_string()])
+        ));
+    }
+
+    #[test]
+    fn invalid_glob_must_not_be_indistinguishable_from_not_sensitive() {
+        // RED (pre-fix): `build()` swallowed `Glob::new` errors and fell back to
+        // `GlobSet::empty()`, so a caller-supplied typo'd glob turned every path
+        // into "not sensitive" — "could not determine" collapsed into "clean".
+        let cfg = SensitiveConfig::from_globs(vec!["[".to_string()]);
+        let out = cfg.any_sensitive(&["src/auth/login.rs".to_string()]);
+        assert!(
+            !matches!(out, Determination::Known(false)),
+            "an unparseable sensitive glob must NOT answer Known(false) — that is \
+             indistinguishable from 'this path is safe'; got {out:?}"
+        );
+        let why = match &out {
+            Determination::Undetermined(why) => why.as_str(),
+            _ => "",
+        };
+        assert!(
+            why.contains('['),
+            "expected an Undetermined naming the offending pattern, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn invalid_glob_anywhere_in_the_list_undetermines_the_whole_set() {
+        // A partially-compilable list must not be used: dropping the bad pattern
+        // and matching on the rest would report a confident `false` for paths the
+        // dropped pattern would have caught.
+        let cfg = SensitiveConfig::with_extra_globs(&["**/{unclosed".to_string()]);
+        assert!(matches!(
+            cfg.any_sensitive(&["src/parser.rs".to_string()]),
+            Determination::Undetermined(_)
+        ));
+        // ... and it propagates through both diff classifiers and classify_change.
+        assert!(matches!(
+            classify_diff(&["src/parser.rs".to_string()], "", &cfg),
+            Determination::Undetermined(_)
+        ));
+        let empty: std::collections::BTreeMap<String, Vec<harness_core::callgraph::CallSite>> =
+            std::collections::BTreeMap::new();
+        assert!(matches!(
+            classify_diff_with_callers(&["src/parser.rs".to_string()], "", &empty, &cfg),
+            Determination::Undetermined(_)
+        ));
+    }
+
+    #[test]
+    fn valid_globs_still_answer_known_both_ways() {
+        // Invariance guard: the Determination wrapper must not change WHAT a
+        // well-formed config decides — only make "could not decide" expressible.
+        let cfg = SensitiveConfig::default();
+        assert_eq!(
+            cfg.any_sensitive(&["src/auth/login.rs".to_string()]),
+            Determination::Known(true)
+        );
+        assert_eq!(
+            cfg.any_sensitive(&["src/parser.rs".to_string()]),
+            Determination::Known(false)
+        );
+    }
+
+    #[test]
+    fn public_fn_addition_detected() {
+        let diff = "-fn helper() {}\n+pub fn helper() {}\n";
+        assert!(changes_public_symbol(diff));
+    }
+
+    #[test]
+    fn public_struct_and_enum_detected() {
+        assert!(changes_public_symbol("+pub struct Foo { x: i32 }"));
+        assert!(changes_public_symbol("+pub enum Bar { A, B }"));
+        assert!(changes_public_symbol("-pub trait Baz {}"));
+    }
+
+    #[test]
+    fn private_change_not_detected() {
+        let diff = "-fn helper() {}\n+fn helper2() {}\n context line pub fn unrelated()\n";
+        assert!(!changes_public_symbol(diff));
+    }
+
+    #[test]
+    fn diff_file_headers_are_not_mistaken_for_pub_markers() {
+        // Unified diff file headers start with `+++`/`---`; must not match.
+        let diff = "+++ b/src/lib.rs\n--- a/src/lib.rs\n";
+        assert!(!changes_public_symbol(diff));
+    }
+
+    #[test]
+    fn neither_signal_is_low_baseline() {
+        let cfg = SensitiveConfig::default();
+        let a = known(classify_diff(
+            &["src/parser.rs".to_string()],
+            "-fn helper() {}\n+fn helper2() {}\n",
+            &cfg,
+        ));
+        assert_eq!(a.risk, Risk::Low);
+        assert!(a.reversible);
+        assert!(!a.requires_gate());
+    }
+
+    #[test]
+    fn sensitive_path_alone_raises_to_medium() {
+        let cfg = SensitiveConfig::default();
+        let a = known(classify_diff(&["src/auth/login.rs".to_string()], "", &cfg));
+        assert_eq!(a.risk, Risk::Medium);
+        assert!(a.reversible);
+    }
+
+    #[test]
+    fn public_symbol_alone_raises_to_medium() {
+        let cfg = SensitiveConfig::default();
+        let a = known(classify_diff(
+            &["src/lib.rs".to_string()],
+            "+pub fn new_api() {}",
+            &cfg,
+        ));
+        assert_eq!(a.risk, Risk::Medium);
+        assert!(a.reversible);
+    }
+
+    #[test]
+    fn both_signals_compound_to_high() {
+        let cfg = SensitiveConfig::default();
+        let a = known(classify_diff(
+            &["src/auth/token.rs".to_string()],
+            "+pub fn issue_token() {}",
+            &cfg,
+        ));
+        assert_eq!(a.risk, Risk::High);
+        assert!(a.reversible);
+    }
+
+    // -- finding 6: pub(crate) needle regression coverage --------------------
+
+    #[test]
+    fn pub_crate_fn_addition_detected() {
+        let diff = "-fn helper() {}\n+pub(crate) fn helper() {}\n";
+        assert!(changes_public_symbol(diff));
+    }
+
+    #[test]
+    fn pub_crate_fn_removal_detected() {
+        let diff = "-pub(crate) fn helper() {}\n+fn helper() {}\n";
+        assert!(changes_public_symbol(diff));
+    }
+
+    #[test]
+    fn pub_crate_struct_and_enum_and_trait_detected() {
+        assert!(changes_public_symbol("+pub(crate) struct Foo { x: i32 }"));
+        assert!(changes_public_symbol("+pub(crate) enum Bar { A, B }"));
+        assert!(changes_public_symbol("-pub(crate) trait Baz {}"));
+    }
+
+    #[test]
+    fn pub_crate_async_fn_detected() {
+        assert!(changes_public_symbol("+pub(crate) async fn fetch() {}"));
+    }
+
+    #[test]
+    fn pub_crate_alone_raises_diff_to_medium() {
+        // Regression for finding 6: before the fix, the needle built the
+        // non-existent string "pub(crate) pub fn " and never matched real
+        // `pub(crate) fn` source lines, so this diff-only change was
+        // silently scored Low instead of Medium.
+        let cfg = SensitiveConfig::default();
+        let a = known(classify_diff(
+            &["src/lib.rs".to_string()],
+            "+pub(crate) fn internal_api() {}",
+            &cfg,
+        ));
+        assert_eq!(a.risk, Risk::Medium);
+        assert!(a.reversible);
+    }
+
+    #[test]
+    fn malformed_pub_crate_needle_does_not_falsely_match() {
+        // The old (buggy) needle was "pub(crate) pub fn " — assert real
+        // source using the correct spelling doesn't require that broken
+        // prefix, i.e. this line must be detected without the redundant
+        // "pub " duplication ever being present in real source.
+        let diff = "+pub(crate) fn only_one_pub_keyword() {}\n";
+        assert!(!diff.contains("pub(crate) pub"));
+        assert!(changes_public_symbol(diff));
+    }
+
+    // -- callgraph-signal-wire: caller-blast-radius signal --------------------
+
+    use std::collections::BTreeMap;
+
+    use harness_core::callgraph::CallSite;
+
+    /// Build a `callers` map with `n` synthetic call sites for `symbol`.
+    fn callers_for(symbol: &str, n: usize) -> BTreeMap<String, Vec<CallSite>> {
+        let mut map = BTreeMap::new();
+        let sites: Vec<CallSite> = (0..n)
+            .map(|i| CallSite {
+                file: format!("src/caller_{i}.rs"),
+                line: i + 1,
+                caller: format!("uses_{i}"),
+            })
+            .collect();
+        map.insert(symbol.to_string(), sites);
+        map
+    }
+
+    #[test]
+    fn many_callers_raise_tier_over_same_diff_with_empty_callers() {
+        // Same public-symbol diff scored two ways: with >= threshold callers it
+        // must land on a strictly HIGHER tier than with an empty caller map.
+        let cfg = SensitiveConfig::default();
+        let paths = ["src/lib.rs".to_string()];
+        let diff = "+pub fn new_api() {}";
+
+        let empty: BTreeMap<String, Vec<CallSite>> = BTreeMap::new();
+        let with_empty = known(classify_diff_with_callers(&paths, diff, &empty, &cfg));
+
+        let heavy = callers_for("new_api", HIGH_CALLER_THRESHOLD);
+        let with_heavy = known(classify_diff_with_callers(&paths, diff, &heavy, &cfg));
+
+        assert!(
+            with_heavy.risk > with_empty.risk,
+            "{HIGH_CALLER_THRESHOLD}+ callers must raise the tier: heavy={with_heavy:?} empty={with_empty:?}"
+        );
+        assert_eq!(with_heavy.risk, Risk::High);
+    }
+
+    #[test]
+    fn zero_callers_equal_base_classify_diff() {
+        // No callers → Low signal → merge is a no-op → identical to the base.
+        let cfg = SensitiveConfig::default();
+        let paths = ["src/lib.rs".to_string()];
+        let diff = "+pub fn new_api() {}";
+
+        let empty: BTreeMap<String, Vec<CallSite>> = BTreeMap::new();
+        let base = known(classify_diff(&paths, diff, &cfg));
+        let with_empty = known(classify_diff_with_callers(&paths, diff, &empty, &cfg));
+        assert_eq!(
+            with_empty, base,
+            "empty callers must equal the base assessment"
+        );
+
+        // Also: an unrelated caller entry (not for a changed symbol) is ignored.
+        let unrelated = callers_for("some_other_symbol", 42);
+        let with_unrelated = known(classify_diff_with_callers(&paths, diff, &unrelated, &cfg));
+        assert_eq!(
+            with_unrelated, base,
+            "callers of unchanged symbols must not count"
+        );
+    }
+
+    #[test]
+    fn caller_heavy_non_public_change_respects_base_monotonic_up() {
+        // A private-symbol change is base-Low (no sensitive path, no public API).
+        // Even a caller-heavy signal can only raise it — never below the base,
+        // and the signal itself is at most its own tier (monotonic-up only).
+        let cfg = SensitiveConfig::default();
+        let paths = ["src/parser.rs".to_string()];
+        let diff = "-fn helper() {}\n+fn helper() { changed }";
+
+        let base = known(classify_diff(&paths, diff, &cfg));
+        assert_eq!(base.risk, Risk::Low);
+
+        let heavy = callers_for("helper", HIGH_CALLER_THRESHOLD);
+        let out = known(classify_diff_with_callers(&paths, diff, &heavy, &cfg));
+
+        // Never lowered below the base; only raised by the additive signal.
+        assert!(out.risk >= base.risk, "must never downgrade the base tier");
+        assert_eq!(out.risk, Risk::High, "5+ callers => High signal");
+    }
+
+    #[test]
+    fn single_caller_raises_low_base_to_medium() {
+        // >= 1 (but < threshold) callers => Medium signal.
+        let cfg = SensitiveConfig::default();
+        let paths = ["src/parser.rs".to_string()];
+        let diff = "+fn helper() {}";
+
+        let base = known(classify_diff(&paths, diff, &cfg));
+        assert_eq!(base.risk, Risk::Low);
+
+        let one = callers_for("helper", 1);
+        let out = known(classify_diff_with_callers(&paths, diff, &one, &cfg));
+        assert_eq!(out.risk, Risk::Medium);
+    }
+
+    #[test]
+    fn caller_signal_never_spuriously_flips_reversible_false() {
+        // The caller signal is a blast-radius measure, not an irreversibility
+        // signal: no caller count may set reversible=false on its own.
+        let cfg = SensitiveConfig::default();
+        let paths = ["src/lib.rs".to_string()];
+        let diff = "+pub fn new_api() {}";
+
+        for n in [0usize, 1, HIGH_CALLER_THRESHOLD, HIGH_CALLER_THRESHOLD * 3] {
+            let callers = callers_for("new_api", n);
+            let out = known(classify_diff_with_callers(&paths, diff, &callers, &cfg));
+            assert!(
+                out.reversible,
+                "{n} callers must not flip reversible to false: {out:?}"
+            );
+        }
+    }
+}

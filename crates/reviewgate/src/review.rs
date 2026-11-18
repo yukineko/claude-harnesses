@@ -149,9 +149,10 @@ fn now() -> i64 {
 /// the transcript (parent + subagent sidechains) shows an `Edit`/`Write`/
 /// `MultiEdit`/`NotebookEdit` of it, or a `Bash` command naming its path
 /// outside a read-only statement (`git diff`, `grep`, `cat`, `tdd skip`, …).
-/// Everything else is excluded and NAMED in the note. Residual hole: a file
-/// written by a command that never names it (`cargo fmt`, a glob, a script) is
-/// excluded too — which is why the exclusion list is always printed. Because
+/// Everything else is excluded and NAMED in the note. A path-less write is
+/// NOT a hole (user ruling 2026-11-18 supersedes 2026-10-17): a session Bash
+/// call that may write but names no path (`cargo fmt`, a glob, a script), or
+/// unreadable Bash evidence, resolves to `Undetermined` (whole checkout). Because
 /// attribution can fail to be computed, the type is three-valued in the shape
 /// 第3節 requires, and the failure reviews the whole checkout.
 enum Attribution {
@@ -178,6 +179,31 @@ enum Attribution {
 fn attribute(root: &Path, transcript_path: &str, changed: &[String]) -> Attribution {
     match harness_core::attribution::attribute_own_writes(root, transcript_path, changed) {
         harness_core::attribution::Attribution::Narrowed { keep, excluded } => {
+            // User ruling 2026-11-18 supersedes 2026-10-17: a session Bash call
+            // that may write but names no path (`cargo fmt`, a glob `sed -i`, a
+            // generator) could have changed any excluded file, so do NOT
+            // narrow. An unreadable transcript is the same: review everything.
+            if !excluded.is_empty() {
+                use harness_core::verdict::Determination;
+                match harness_core::attribution::has_unattributable_write(transcript_path) {
+                    Determination::Known(false) => {}
+                    Determination::Known(true) => {
+                        return Attribution::Undetermined {
+                            why: "this session ran a Bash command that may write without \
+                                  naming a path"
+                                .to_string(),
+                        }
+                    }
+                    Determination::Undetermined(why) => {
+                        return Attribution::Undetermined {
+                            why: format!(
+                                "this session's Bash writes cannot be read ({})",
+                                why.as_str()
+                            ),
+                        }
+                    }
+                }
+            }
             Attribution::Narrowed { keep, excluded }
         }
         harness_core::attribution::Attribution::Undetermined { why } => {
@@ -199,8 +225,8 @@ fn attribution_note(a: &Attribution) -> Option<String> {
             "⚖ 帰属: 変更 {total} 件のうち {n} 件は本セッションの transcript に書き込みの記録\
              （Edit/Write/MultiEdit/NotebookEdit、またはそのパスを名指しした Bash コマンド）が無く、\
              本セッションに帰属しない (not attributed to this session) ため、レビュー対象から除外しました: \
-             {list}。パスを名指ししないコマンド（cargo fmt・glob・スクリプト等）で自分が書いたファイルが\
-             含まれていれば、それは除外されています。",
+             {list}。（本セッションにパスを名指ししない書き込みコマンドは無かったため、\
+             除外分は本セッションが書いたものではありません。）",
             total = keep.len() + excluded.len(),
             n = excluded.len(),
             list = excluded.join(", "),

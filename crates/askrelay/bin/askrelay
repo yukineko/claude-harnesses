@@ -1,0 +1,59 @@
+#!/bin/sh
+# askrelay plugin launcher — selects the per-platform binary bundled here.
+# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/askrelay <stop|mark-executed|mark-relayed>`
+# (hooks/hooks.json); this execs the matching `askrelay-<os>-<arch>` build.
+#
+# WHEN NO BUILD EXISTS FOR THE HOST, the answer is NOT a blanket "exit 0": a
+# missing binary means the relay queue was NOT checked, and exit 0 with no
+# output is byte-for-byte what "nothing is pending" looks like (CLAUDE.md §1/§3).
+#
+#   stop            verdict-bearing -> block ("could not check the queue"). The
+#                   block is bounded: when the payload says stop_hook_active the
+#                   stop is allowed with a systemMessage, so a host that has no
+#                   build cannot trap the session in a stop loop.
+#   mark-*          no verdict (a lost mark leaves the entry pending, the
+#                   restrictive side) -> exit 1 with a stderr note, never a
+#                   silent exit 0.
+#   dismiss / other operator commands -> exit 1: a dismissal that recorded
+#                   nothing must not report success.
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+case "$(uname -s)" in
+  Linux)  os=linux ;;
+  Darwin) os=darwin ;;
+  MINGW*|MSYS*|CYGWIN*) os=windows ;;
+  *)      os="$(uname -s)" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64)   arch=x86_64 ;;
+  arm64|aarch64)  arch=arm64 ;;
+  *)              arch="$(uname -m)" ;;
+esac
+
+ext=""
+[ "$os" = windows ] && ext=".exe"
+
+binary="$root/askrelay-$os-$arch$ext"
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
+fi
+
+echo "askrelay: no bundled binary for $os-$arch ($binary). Build it with scripts/build-plugin-bin.sh on that platform." >&2
+
+case "${1:-}" in
+  stop)
+    payload="$(cat)"
+    case "$payload" in
+      *'"stop_hook_active":true'*|*'"stop_hook_active": true'*)
+        printf '{"systemMessage":"askrelay stop did not run: no bundled binary for %s-%s. The subagent Ask relay queue was NOT checked (UNKNOWN, not empty); this repeat stop is allowed only to avoid a stop loop."}\n' "$os" "$arch"
+        ;;
+      *)
+        printf '{"decision":"block","reason":"askrelay stop did not run: no bundled binary for %s-%s, so this session subagent Ask relay queue could NOT be checked. Pending relayed Asks, if any, are unknown. Build the binary with scripts/build-plugin-bin.sh, or remove the askrelay hooks."}\n' "$os" "$arch"
+        ;;
+    esac
+    exit 0
+    ;;
+  *)
+    exit 1
+    ;;
+esac

@@ -301,6 +301,33 @@ pub fn catch_and_log<F: FnOnce() + UnwindSafe>(hook_name: &str, f: F) -> bool {
     }
 }
 
+/// Is this hook call being made from inside a subagent?
+///
+/// A subagent cannot answer a permission prompt: nobody is watching it, and a
+/// background subagent that hit an `ask` on 2026-10-30 waited 10.6 h. The env
+/// cannot tell the two apart — measured byte-identical between a main-thread
+/// and a subagent Bash call, `CLAUDE_CODE_ENTRYPOINT=cli` included. The only
+/// measured discriminator is the payload: Claude Code adds `agent_id` (and
+/// `agent_type`) to a subagent's payload, and the main thread's carries
+/// neither. (Moved here from `blastguard::interactive` on 2026-11-17 so that
+/// blastguard and `askrelay` classify callers by one function.)
+///
+/// Fail-closed (CLAUDE.md §3): the main thread is only recognised by the
+/// ABSENCE of both keys. Any presence counts as a subagent, whatever the value
+/// — a non-string, `null` or empty `agent_id` is "cannot tell", and "cannot
+/// tell" must not read as "a human is here". A payload that is not JSON at all
+/// cannot be inspected structurally, so a raw `"agent_id"` / `"agent_type"`
+/// key anywhere in its bytes also counts as a subagent.
+pub fn payload_is_subagent(raw: &str) -> bool {
+    const KEYS: [&str; 2] = ["agent_id", "agent_type"];
+    match serde_json::from_str::<Value>(raw.trim()) {
+        Ok(Value::Object(map)) => KEYS.iter().any(|k| map.contains_key(*k)),
+        // Valid JSON that is not an object carries no keys at all.
+        Ok(_) => false,
+        Err(_) => KEYS.iter().any(|k| raw.contains(&format!("\"{k}\""))),
+    }
+}
+
 /// Run a hook handler with all panics caught and logged to stderr; always
 /// exits 0 so the turn is never broken.
 ///
@@ -909,6 +936,33 @@ pub fn hook_target_findings(settings: &Value, plugin_root: Option<&str>) -> Vec<
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn main_thread_payload_is_not_a_subagent() {
+        assert!(!payload_is_subagent(
+            r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#
+        ));
+        assert!(!payload_is_subagent("[1, 2, 3]"));
+        assert!(!payload_is_subagent("this is not json"));
+    }
+
+    #[test]
+    fn any_agent_marker_is_a_subagent_whatever_its_value() {
+        for v in [r#""ab06""#, r#""""#, "null", "7", "{}", "[]"] {
+            let raw = format!(r#"{{"tool_name":"Bash","agent_id":{v}}}"#);
+            assert!(payload_is_subagent(&raw), "agent_id={v}");
+        }
+        assert!(payload_is_subagent(
+            r#"{"tool_name":"Bash","agent_type":"general-purpose"}"#
+        ));
+    }
+
+    #[test]
+    fn unparseable_payload_mentioning_agent_id_is_a_subagent() {
+        assert!(payload_is_subagent(
+            r#"{"agent_id":"ab06","tool_input":{"command":"truncated "#
+        ));
+    }
 
     #[test]
     fn extract_binary_path_handles_plain_and_plugin_root_forms() {

@@ -1,6 +1,6 @@
 [package]
 name = "harness-core"
-version = "0.2.99"
+version = "0.2.110"
 edition = "2021"
 # MSRV: `is_none_or` (store.rs) was stabilized in Rust 1.82.
 rust-version.workspace = true
@@ -16,6 +16,8 @@ dirs = "5"
 chrono = { workspace = true }
 anyhow = { workspace = true }
 wait-timeout = "0.2"
+# sha256 (also used by blocklog for the blocked tool_input, moved from blastguard).
+sha2 = { workspace = true }
 
 [features]
 # Test-only seam: `boundary::fault` (a thread-local FaultPlan that forces the

@@ -32,6 +32,7 @@ compile_error!(
 pub mod append;
 pub mod attribution;
 pub mod autonomy;
+pub mod blocklog;
 pub mod boundary;
 pub mod callgraph;
 pub mod code_index;
@@ -61,6 +62,7 @@ pub mod pricing;
 pub mod primary_tree;
 pub mod progress;
 pub mod projkey;
+pub mod relay;
 pub mod repeat;
 pub mod retrieval;
 pub mod run_lock;

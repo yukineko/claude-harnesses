@@ -14,8 +14,11 @@
 //! Observation channels: stdout JSON (decision, reason), stderr, and the
 //! `files` list in `$HOME/.reviewgate/state/log.jsonl`.
 //!
-//! Residual hole accepted by the ruling: writes by commands that never name the
-//! path (`cargo fmt`, globs, scripts) are not attributed.
+//! The residual hole the 2026-10-17 ruling accepted (writes by commands that
+//! never name the path: `cargo fmt`, globs, scripts) is CLOSED: user ruling
+//! 2026-11-18 supersedes 2026-10-17; a session with any path-less Bash write
+//! keeps ALL changed files in scope (pinned in
+//! `backlog_20261118_unnamed_write_excluded_from_scope.rs`).
 //!
 //! Written by a disinterested author (CLAUDE.md section 2(a)).
 
@@ -91,7 +94,7 @@ impl Fixture {
 
     fn transcript(&self, uses: &[(&'static str, serde_json::Value)]) -> PathBuf {
         let p = self.slug_dir().join("this-session.jsonl");
-        std::fs::write(&p, lines(uses)).unwrap();
+        std::fs::write(&p, lines(uses, &self.repo)).unwrap();
         p
     }
 
@@ -177,7 +180,11 @@ fn git(dir: &Path, args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
-fn lines(uses: &[(&'static str, serde_json::Value)]) -> String {
+/// Every assistant record carries the `cwd` the real transcript records. Under
+/// the user ruling 2026-11-18 (supersedes 2026-10-17) a Bash write whose path
+/// cannot be resolved to an existing file is "names no path" and keeps the
+/// full scope, so a repo-relative path only attributes when the cwd is known.
+fn lines(uses: &[(&'static str, serde_json::Value)], cwd: &Path) -> String {
     let mut body = String::from(r#"{"type":"user","message":{"role":"user","content":"go"}}"#);
     body.push('\n');
     for (tool, input) in uses {
@@ -185,6 +192,7 @@ fn lines(uses: &[(&'static str, serde_json::Value)]) -> String {
             &serde_json::json!({
                 "parentUuid": "p",
                 "isSidechain": false,
+                "cwd": cwd.to_string_lossy(),
                 "message": {
                     "model": "claude-opus-5", "id": "msg_1", "type": "message",
                     "role": "assistant",

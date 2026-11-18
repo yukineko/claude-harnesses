@@ -2,7 +2,7 @@
 """Replay blastguard's block log through a blastguard binary (FP measuring stick).
 
 Reads blastguard's block log (``~/.blastguard/blocks/blocks.jsonl``, one record
-per Deny/Ask blastguard printed; see ``crates/blastguard/src/blocklog.rs``),
+per Deny/Ask blastguard printed; see ``crates/harness-core/src/blocklog.rs``),
 rebuilds the PreToolUse hook payload for each record, runs ``--binary`` on it
 the way the plugin hook does (``hooks/hooks.json``: plain ``blastguard`` with
 the payload on stdin, no arguments; ``bin/blastguard`` only dispatches to the

@@ -3,9 +3,9 @@
 //!
 //! `donegate` is a bin-only crate (no `[lib]` target, no `src/lib.rs`), so an
 //! external integration test cannot `use donegate::gate::...` the way
-//! `blastguard`'s equivalent positive control reaches into
-//! `blastguard::diffrisk::SensitiveConfig`. This is therefore NOT a copy of
-//! blastguard's control: gate.rs never calls `Verdict::adjudicate`,
+//! riskgrade's positive control reaches into
+//! `riskgrade::diffrisk::SensitiveConfig` (formerly blastguard's, moved
+//! 2026-11-17). This is therefore NOT a copy of that control: gate.rs never calls `Verdict::adjudicate`,
 //! `Verdict::violation`, `Verdict::undetermined`, or `Determination::map` —
 //! only the calls enumerated below, each traced to its exact line in
 //! `crates/donegate/src/gate.rs` as of this writing, and reproduced here in

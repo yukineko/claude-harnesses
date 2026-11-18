@@ -1,0 +1,30 @@
+# riskgrade — graded risk / reversibility of a planned action, and diff-level
+# risk signals. Moved out of blastguard 2026-11-17 (user ruling: blastguard
+# holds the command-safety verdict only).
+#
+# NOT a distributed Claude Code plugin: a pure library linked into condukt, so
+# it carries no `.claude-plugin/plugin.json` (CONTRIBUTING.md: internal code
+# that is not shipped needs only Cargo.toml). Its version is bumped on every
+# linked change like harness-core's (scripts/check-version-bumped.py).
+[package]
+# blastguard (a dependency) requires 1.88 for brush-parser.
+rust-version = "1.88"
+name = "riskgrade"
+version = "0.1.2"
+edition = "2021"
+description = "Graded risk / reversibility assessment of a planned action (classify) and diff-level semantic risk signals (diffrisk), built on blastguard's detector."
+license = "MIT"
+publish = false
+
+[dependencies]
+blastguard = { path = "../blastguard" }
+harness-core = { path = "../harness-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+globset = "0.4"
+
+[dev-dependencies]
+trybuild = "1"
+
+[lints]
+workspace = true

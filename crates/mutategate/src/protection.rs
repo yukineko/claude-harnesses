@@ -36,7 +36,7 @@ pub const PROTECTION: Protection = Protection {
         --min-kill-rate <= 1e-9 (src/lib.rs validate_min_kill_rate). \
         scripts/mutation-gate.sh exits 2 when cargo-mutants exits anything \
         other than 0 or 2, or writes no outcomes.json. One pilot per run \
-        (harness-core by default; specguard, condukt and blastguard narrowed \
+        (harness-core by default; specguard, condukt and riskgrade narrowed \
         to one file each by the script's `case \"$PILOT\"` block), so a run \
         says nothing about any other crate or file. A FAIL is also appended \
         to the overwatch violation ledger, fail-soft: a failed write is \

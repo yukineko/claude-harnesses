@@ -140,7 +140,10 @@ Alongside the lease registry, overwatch records gate-violation events with a **n
 overwatch record-violation --source <gate> --discriminator <d> --task <key> [--symbol <sym>] [--session <sid>] [--detail <text>]
 overwatch violations  [--json] [--threshold N] [--window-secs S]   # recurrence stats for every signature
 overwatch escalations [--json] [--threshold N] [--window-secs S]   # only the signatures judged systemic
+overwatch blastguard-log [OPTIONS]                                 # blastguard's lines only; same as `blastguard log`
 ```
+
+`overwatch::retro` (library only) is the retrospective behind `blastguard retro`: it joins each PreToolUse verdict in the transcripts to its `tool_result`. The reason -> rule-id table is injected by the caller (`RuleIdFn`), because blastguard owns it and overwatch cannot depend on blastguard.
 
 - `--source` accepts `blastguard | propguard | specguard | mutategate | donegate | reviewgate | tdd | budgetguard | autoflow | ctxrot`; an unknown token does not parse as a source.
 - Recurrence detection (`violation::detect_recurrence`) takes the clock as an argument.

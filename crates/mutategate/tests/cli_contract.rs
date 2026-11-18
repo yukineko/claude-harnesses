@@ -425,14 +425,16 @@ fn claim_pilot_condukt_default() {
 }
 
 #[test]
-fn claim_pilot_blastguard_default() {
-    let g = run_gate(&[("PILOT", "blastguard")], &pass_outcomes());
-    assert_eq!(flag_val(&g.mutants.args, "--package"), Some("blastguard"));
+fn claim_pilot_riskgrade_default() {
+    // Was claim_pilot_blastguard_default: the classifier pilot moved with
+    // classify.rs from blastguard to the riskgrade crate (2026-11-17).
+    let g = run_gate(&[("PILOT", "riskgrade")], &pass_outcomes());
+    assert_eq!(flag_val(&g.mutants.args, "--package"), Some("riskgrade"));
     assert!(
         has_pair(
             &g.mutants.args,
             "--file",
-            "crates/blastguard/src/classify.rs"
+            "crates/riskgrade/src/classify.rs"
         ),
         "{:?}",
         g.mutants.args

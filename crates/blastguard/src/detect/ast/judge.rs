@@ -19,7 +19,11 @@
 //! * a target word whose value the evaluator cannot determine (unquoted
 //!   glob, `~user`, `$( )`, an unbound / positional parameter, a relative
 //!   path after an undetermined `cd`, an `xargs` operand read from stdin) →
-//!   a [`PathClass::Unresolved`] finding → [`Judgement::Ask`];
+//!   a [`PathClass::Unresolved`] finding → [`Judgement::Ask`]. Except (user
+//!   ruling 2026-11-19): an unquoted glob whose metacharacters are only in
+//!   its final component, under a literal directory prefix with no `..`
+//!   (`table_b::literal_dir_glob`; a bare glob's parent is the cwd), is
+//!   placed by that parent directory like a literal target there;
 //! * a target whose value IS determined gets no finding: [`classify`] is
 //!   still the S1 stub, and the legacy string layer (raise-only, ruling 14)
 //!   alone judges placed paths. So [`Judgement::Allow`] here means "S3b found
@@ -403,10 +407,18 @@ fn judge_candidates(
 
 /// `c`'s argv as shell text that runs the same words, or `None` when a word
 /// is not a `Literal` the text can spell (a control character), or the
-/// command word would need quoting.
+/// command word would need quoting. A literal-dir glob argument
+/// ([`table_b::literal_dir_glob`], user ruling 2026-11-19) is spelled as
+/// written, unquoted, so the per-candidate text expands it in that directory.
 fn spell_argv(c: &super::SimpleCommand) -> Option<String> {
     let mut words = Vec::with_capacity(c.argv.len());
     for (i, w) in c.argv.iter().enumerate() {
+        if i > 0 {
+            if let Some(glob) = table_b::literal_dir_glob(w) {
+                words.push(glob);
+                continue;
+            }
+        }
         let Value::Literal(v) = &w.value else {
             return None;
         };

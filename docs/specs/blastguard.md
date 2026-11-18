@@ -1402,6 +1402,19 @@ forge・condukt のスケジューラが再利用）。
   読む `xargs` operand）→ `PathClass::Unresolved` finding → Ask（理由に `a target of a SUBSET.md Table B command
   cannot be placed`、rule id `ast-table-b-unresolved`）、`judge` の panic → Ask。subagent では Deny に硬化。
   値が決まった target には finding を出さない（`classify` は S1 stub のまま、置けたパスは旧 string 層が判定）。
+  **literal-dir glob（ユーザー裁定 2026-11-19）**: Table B の全行で、target 語が引用外の glob で、最後の `/` までの
+  prefix が literal なディレクトリ（`..` component・展開・引用・escape・brace・`~` 無し）、glob 文字が最終
+  component だけにあり（`.` 始まりでない）なら、その親ディレクトリの Table C class で置く
+  （`table_b.rs::literal_dir_glob`。値は綴りの `Literal`。`rm -rf /tmp/zqxv*` → `/tmp` → Scratch、
+  `chown yuki src/*.rs` → `src` → Project。素の glob の親は cwd、相対 prefix は他の相対 target と同じく cwd で解決。
+  `cwd_candidates` の候補判定では glob を書かれたまま合成テキストに綴る）。非最終 component の glob（`a/*/b`）・
+  `..`（`../*`）・prefix の展開（`$D/*`・`~/*`）・親を置けない glob は従来どおり `Unresolved` → Ask。語の値自体は
+  `Undetermined` のままなので、`-` で始まりうる glob（`rm *.o`）には「option でありうる不定語」規則が残る。
+  非再帰の `rm` では旧 rm arm も、全 wildcard operand がこの形で親が project（temp/cache 外で `SafeRoots::classify`
+  Inside/IsRoot）か `tmp_glob_operand_allowed` の受理する scratch / 自 checkout に置け、親が `.git` component・
+  protected path を含まず pattern の一致しうる entry も protected でないとき、named file と同じ arm で判定する
+  （`detect/rm.rs::nonrec_glob_placed`。wildcard Deny を置き換える。それ以外は旧判定のまま）。`/tmp` 直下の
+  4 文字 head 規則（2026-11-05、`rm -rf /tmp/ab*` は Allow にならない）は維持。
   `analyze` 自体が `Undetermined` のときはこの層は Allow（旧層だけが判定、従来どおり）。
   **cwd の到達条件**: `cd X && … && cmd rel` の `cmd` は cd 成功時しか実行されないので cwd は X に決まる。
   `cd X; cmd rel`・`cd X || true; cmd rel` は cd が失敗した経路（cwd は hook の cwd のまま）も到達し、
@@ -1434,7 +1447,10 @@ forge・condukt のスケジューラが再利用）。
 - **`detect/rm/new_layer`** — 新層（`detect::ast`、SUBSET.md Table B/C）による 1 つの `rm` の判定で、その行に
   ついて旧 `rm` string reading を退役させる（user ruling 2026-11-18「ruling 14 replaced per rule」）。
   `known_allow` は、option が Table B の `rm` 行（`-r -R -f -i -d -v` の cluster、`--recursive --force --dir
-  --verbose`）だけ・評価器が旧 token を評価済み top-level `rm` に対応付けられ operand が 1 つ以上・全 operand 値が
+  --verbose`）だけ・評価器が旧 token を評価済み top-level `rm` に対応付けられ（token は語の綴りそのもの、または
+  旧 walk が literal な `cd` の後で書き換えた絶対パス — 評価器が既知の cwd で相対語を解決した値と一致するときだけ。
+  `cd /tmp && true && rm -rf lib`・`(cd /tmp && rm -rf lib)` が `rm -rf /tmp/lib` と同じ判定になる。cwd が既知で
+  なければ値は絶対にならず対応付かない）operand が 1 つ以上・全 operand 値が
   `Literal`（絶対、または cd 無しで session cwd 相対、`..` 無し、`.` 終端でない）・全 target の Table C class が
   System / Protected 等の先行 class を経たうえで **Scratch** か **OwnWorktree** のときだけ `true`。それ以外は
   「Known でない」で `analyze_rm` は旧判定のまま（この関数は Ask/Deny を返さず、判定を下げない）。

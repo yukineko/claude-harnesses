@@ -197,24 +197,55 @@ fn k_cd_relative_dir_is_not_allow() {
     not_allow("cd d && rm -rf sub", f.run(&f.tmp, "cd d && rm -rf sub"));
 }
 
-/// LB: every character of `D` must be in the literal set (here `:`, `*`).
+/// Re-anchored per user ruling 2026-11-19 (R2): a cd target with `:` is Allow,
+/// like its absolute twin `rm -rf <tmp>/a:b/sub`; `q=r` uses the same literal
+/// characters.
 #[test]
-fn k_cd_dir_with_non_literal_char_is_not_allow() {
+fn c_cd_dir_with_colon_char_allows() {
     let f = Fx::new("lb");
-    for name in ["a:b", "w*", "q=r"] {
+    for name in ["a:b", "q=r"] {
         let d = f.tmp.join(name);
         f.write(&d.join("sub/f"), "x\n");
         let cmd = format!("cd {} && rm -rf sub", d.display());
-        not_allow(&cmd.clone(), f.run(&f.proj, &cmd));
+        want(&cmd.clone(), f.run(&f.proj, &cmd), V::Allow);
     }
 }
 
-/// L3a: no component of `D` may be `.`.
+/// LB kill kept: a glob cd target does not fix the placement, so never Allow.
 #[test]
-fn k_cd_dir_with_dot_component_is_not_allow() {
+fn k_cd_dir_glob_target_is_not_allow() {
+    let f = Fx::new("lbg");
+    let d = f.tmp.join("w*");
+    f.write(&d.join("sub/f"), "x\n");
+    let cmd = format!("cd {} && rm -rf sub", d.display());
+    not_allow(&cmd.clone(), f.run(&f.proj, &cmd));
+}
+
+/// Re-anchored per user ruling 2026-11-19 (R2): a `.` component in the cd
+/// target is Allow, like the absolute twin.
+#[test]
+fn c_cd_dir_with_dot_component_allows() {
     let f = Fx::new("l3a");
     f.tmp_d();
     let cmd = format!("cd {}/./d && rm -rf sub", f.tmp.display());
+    want(&cmd.clone(), f.run(&f.proj, &cmd), V::Allow);
+}
+
+/// R2 kill (replaces LB/L3a intent): a variable cd target is not literal.
+#[test]
+fn k_cd_variable_target_is_not_allow() {
+    let f = Fx::new("rv");
+    f.tmp_d();
+    let cmd = "cd $X && rm -rf sub";
+    not_allow(cmd, f.run(&f.proj, cmd));
+}
+
+/// R2 kill: a symlink cd target pointing outside scratch (to /usr).
+#[test]
+fn k_cd_symlink_target_outside_scratch_is_not_allow() {
+    let f = Fx::new("rs");
+    std::os::unix::fs::symlink("/usr", f.tmp.join("sys")).unwrap();
+    let cmd = format!("cd {}/sys && rm -rf lib", f.tmp.display());
     not_allow(&cmd.clone(), f.run(&f.proj, &cmd));
 }
 
@@ -290,10 +321,60 @@ fn k_opener_non_cd_head_is_not_split() {
 }
 
 /// O2: a `cd` head that is not a permitted literal (quoted) is not split.
+///
+/// Re-anchored per user ruling 2026-11-17 (d292ce6e) / 2026-11-18: a quoted
+/// heredoc body written to a DATA file (`.txt`) is data, not shell, so the
+/// `.txt` shape is Allow whatever the `cd` head looks like and can no longer
+/// observe whether the head was split. The mutation-kill intent (a non-literal
+/// `cd` head is not split off, so the heredoc is judged under the unsplit
+/// command) is kept on shapes whose body is still judged as shell: a `.sh`
+/// target and an extension-less target. The `.txt` case is pinned as Allow.
+fn heredoc_to(prefix: &str, target: &Path, name: &str) -> String {
+    format!(
+        "{prefix}cat > {}/{name} <<'EOF'\nrm -rf ~/Documents\nEOF",
+        target.display()
+    )
+}
+
 #[test]
 fn k_opener_non_literal_cd_head_is_not_split() {
     let f = Fx::new("o2");
-    let cmd = heredoc(&format!("cd \"{}\" && ", f.tmp.display()), &f.tmp);
+    let head = format!("cd \"{}\" && ", f.tmp.display());
+    for name in ["notes.sh", "notes"] {
+        let cmd = heredoc_to(&head, &f.tmp, name);
+        not_allow(&cmd.clone(), f.run(&f.proj, &cmd));
+    }
+}
+
+/// O2 data-file twin: the quoted body written to `.txt` is data (ruling above).
+#[test]
+fn c_opener_non_literal_cd_head_txt_body_is_data() {
+    let f = Fx::new("o2t");
+    let cmd = heredoc_to(
+        &format!("cd \"{}\" && ", f.tmp.display()),
+        &f.tmp,
+        "notes.txt",
+    );
+    want(
+        "cd \"<tmp>\" && cat > notes.txt <<'EOF'",
+        f.run(&f.proj, &cmd),
+        V::Allow,
+    );
+}
+
+/// O2 executed-later shape: the `.txt` body is run by `sh`, so it is shell.
+#[test]
+fn k_opener_non_literal_cd_head_txt_body_then_sh_is_not_allow() {
+    let f = Fx::new("o2s");
+    let cmd = format!(
+        "{}\nsh {}/notes.txt",
+        heredoc_to(
+            &format!("cd \"{}\" && ", f.tmp.display()),
+            &f.tmp,
+            "notes.txt"
+        ),
+        f.tmp.display()
+    );
     not_allow(&cmd.clone(), f.run(&f.proj, &cmd));
 }
 

@@ -81626,6 +81626,7 @@ updated_at = 1794891875
 weight = 0.0
 issue_number = 1832
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1832"
+issue_closed_at = 1795040165
 rev = 1
 
 [task.repro]
@@ -82640,6 +82641,7 @@ updated_at = 1794966617
 weight = 0.0
 issue_number = 1841
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1841"
+issue_closed_at = 1795040165
 rev = 1
 
 [task.repro]
@@ -82709,6 +82711,7 @@ updated_at = 1794966618
 weight = 0.0
 issue_number = 1823
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1823"
+issue_closed_at = 1795040165
 rev = 1
 
 [task.repro]

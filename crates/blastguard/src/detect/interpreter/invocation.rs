@@ -5,13 +5,15 @@
 
 use super::super::{
     faithful_tail, here_document_delimiter_is_quoted, here_string_operands,
-    inline_command_payloads, interpreter_payloads_after, interpreter_stdin_operand, is_short_flag,
-    opens_here_document, process_substitution_payloads, word_separators_lost, Ctx, Decision,
+    inline_command_payloads, inline_eval_program_word, interpreter_payloads_after,
+    interpreter_stdin_operand, is_short_flag, opens_here_document, process_substitution_payloads,
+    word_separators_lost, Ctx, Decision,
 };
+use super::inert_literal::has_dynamic_code_execution;
 use super::{
     interpreter_code_verdict, interpreter_edits_in_place, interpreter_eval_flag_letters,
     interpreter_inline_eval_pos, osascript_app_delete, protected_operand_ask, python_file,
-    quoted_string_literals, strip_version_suffix, PythonReader,
+    quoted_string_literals, runs_shell_strings, strip_version_suffix, PythonReader,
 };
 
 /// The operand that makes an interpreter read its program from STDIN rather
@@ -66,6 +68,51 @@ cannot tell what the interpreter would run, so it cannot vouch for it"
     verdict
 }
 
+/// Whether a shell expansion in the words AFTER a Python `-c` program is
+/// `argv` data that cannot become code, so the "that program contains a shell
+/// expansion" template Ask must not fire on it (backlog d6de38be:
+/// `python3 -c "import sys;print(open(sys.argv[1]).read())" "$HOME/x"` was
+/// asked about `$HOME/x`, a word Python never reads as program text).
+///
+/// Python ends its option list at `-c`: the next word is the program and every
+/// later word is `sys.argv[1:]`. But the candidate set judged by
+/// [`interpreter_code_verdict`] also holds those words (a program may run
+/// them), so the exemption is granted only when ALL of these are observed:
+///   * the interpreter is Python;
+///   * the program word is determined ([`inline_eval_program_word`]);
+///   * the program itself carries no `$` and no backtick — an expansion IN the
+///     program keeps the Ask (user ruling 2026-11-12);
+///   * the program, read with the Python tokenizer, never hands a string to a
+///     shell, a process or dynamic execution
+///     ([`python_file::python_strings_never_reach_a_shell`] plus the two
+///     marker scans), so an operand it receives cannot be run.
+///
+/// Anything else — including an undetermined program word — answers `false`
+/// and leaves the template check exactly as before. What the exemption does
+/// NOT cover: a command substitution in an operand runs in the SHELL and is
+/// judged by the shell analyser, not here; a program that writes or removes an
+/// `argv` path it cannot resolve is still asked by the path-mutation check.
+fn python_argv_expansions_are_data(
+    cmd: &str,
+    rest: &[&str],
+    pos: usize,
+    inline: &str,
+    source: Option<&str>,
+) -> bool {
+    if strip_version_suffix(cmd) != "python" {
+        return false;
+    }
+    let Some(program) = inline_eval_program_word(rest, pos, inline, source) else {
+        return false;
+    };
+    let program = python_file::python_newlines(&program);
+    !program.contains('$')
+        && !program.contains('`')
+        && !runs_shell_strings(&program)
+        && !has_dynamic_code_execution(&program)
+        && python_file::python_strings_never_reach_a_shell(&program)
+}
+
 /// [`analyze_code_interpreter`] before its undetermined-text check.
 fn judge_invocation(
     cmd: &str,
@@ -84,12 +131,14 @@ fn judge_invocation(
         // Glued forms, where the program is in the SAME token as the flag:
         // short `-c<payload>` and long `--eval=<payload>`.
         let flag = rest[pos];
+        let mut inline = "";
         if let Some((_, value)) = flag.split_once('=') {
+            inline = value;
             payloads.extend(inline_command_payloads(rest, pos, value, source));
         } else if is_short_flag(flag) {
             let letters = interpreter_eval_flag_letters(cmd);
             if let Some(idx) = flag[1..].find(|c: char| letters.contains(c)) {
-                let inline = &flag[1 + idx + 1..];
+                inline = &flag[1 + idx + 1..];
                 payloads.extend(inline_command_payloads(rest, pos, inline, source));
             }
         }
@@ -98,7 +147,7 @@ fn judge_invocation(
             &payloads,
             depth,
             ctx,
-            true,
+            !python_argv_expansions_are_data(cmd, rest, pos, inline, source),
             if strip_version_suffix(cmd) == "python" {
                 PythonReader::InlineEval
             } else {

@@ -2363,37 +2363,6 @@ exit 101: uki_nakayama/src/.harness-worktrees/red-ccwiden/crates/condukt)
 error: test failed, to rerun pass `-p condukt --test backlog_20261116_check_criteria_drops_test_target`"""
 
 [[task]]
-id = "97185747"
-title = "tdd green proof binds no tree/commit; change after GREEN still yields valid_fp_oracle:true"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "tdd",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-16 in run-20261116-164820-25374 t4: .tdd/t4.green.json keys are only author/cmd/exit_code/passed/phase/red_proof/task/ts; worker edited a caller after GREEN and condukt state check-oracle still returned valid_fp_oracle:true. Re-observed in main via relay bgr-26ea8713935e. Readings: (a) defect: GREEN-vs-final-commit correspondence is uncheckable; (b) intended: oracle checks only the transition. RED 55a1044bf."
-created_at = 1794821419
-updated_at = 1794821419
-weight = 0.0
-issue_number = 1823
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1823"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p tdd --test backlog_20261116_green_proof_has_no_tree_identity -- --include-ignored"
-rev = "8397d316c17c6e44b6b7216744d0042027031bf4"
-observed_at = 1794821419
-detail = """
-exit 101: iroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/tdd)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.62s
-     Running tests/backlog_20261116_green_proof_has_no_tree_identity.rs (target/debug/deps/backlog_20261116_green_proof_has_no_tree_identity-e8ca29d0d41f66b3)
-error: test failed, to rerun pass `-p tdd --test backlog_20261116_green_proof_has_no_tree_identity`"""
-
-[[task]]
 id = "23afadf2"
 title = "blastguard --lib red at main: detect::tests a_later_rebinding_of_the_name_is_not_readable_and_must_not_leave_a_stale_literal fails"
 project = "/Users/yuki/src/harness"
@@ -2658,40 +2627,6 @@ exit 101: .680 (/Users/yuki/src/.harness-worktrees/red-py-marker-fp-20261117/cra
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.73s
      Running tests/backlog_20261117_python_heredoc_marker_fp.rs (target/debug/deps/backlog_20261117_python_heredoc_marker_fp-fa709c95f374dc83)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261117_python_heredoc_marker_fp`"""
-
-[[task]]
-id = "05b5dcaf"
-title = "tdd: proofs lack tree identity, per-test results/counts, and green output_tail"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "tdd",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "User ruling 2026-11-17 (proof contract b,d,e). RED 25a27ee67 crates/tdd/tests/backlog_20261117_proof_contents.rs (3 ignored REDs). (a) cmd and (c) exit_code already recorded."
-created_at = 1794868790
-updated_at = 1794868790
-weight = 0.0
-issue_number = 1841
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1841"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p tdd --test backlog_20261117_proof_contents -- --ignored"
-rev = "9f1ad7438b27dee634223982a612de3266f60211"
-observed_at = 1794868790
-detail = """
-exit 101: fs_carry_tree_identity
-
-test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
-     Running tests/backlog_20261117_proof_contents.rs (target/debug/deps/backlog_20261117_proof_contents-60dcd892ca2f0f33)
-error: test failed, to rerun pass `-p tdd --test backlog_20261117_proof_contents`"""
 
 [[task]]
 id = "7768aeaf"
@@ -2977,35 +2912,6 @@ exit 101: 96 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/cr
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.03s
      Running tests/backlog_20261117_subagent_cd_relative_root.rs (target/debug/deps/backlog_20261117_subagent_cd_relative_root-2b3ed9b3f3f7e4c7)
 error: test failed, to rerun pass `-p donegate --test backlog_20261117_subagent_cd_relative_root`"""
-
-[[task]]
-id = "519f089e"
-title = "tdd: a second tdd green with another --cmd overwrites the first green proof (one slot per task)"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "tdd",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-17 at 1331e475d (tdd 0.1.93), run-20261117-100335-22251 t3: task with two repros; the second tdd green replaced .tdd/t3.green.json, oracle went command_mismatch / valid_fp_oracle false. README/src state no one-slot contract. Expected: the first F-to-P proof survives, or the overwrite is refused. RED 5502e2d18."
-created_at = 1794892278
-updated_at = 1794892278
-weight = 0.0
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p tdd --test backlog_20261117_green_second_cmd_overwrites -- --include-ignored second_green_with_other_cmd"
-rev = "4ccf146bf1cb4437405d7ba7efc72edaeebbc7fb"
-observed_at = 1794892278
-detail = """
-exit 101: 0.1.94 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/tdd)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
-     Running tests/backlog_20261117_green_second_cmd_overwrites.rs (target/debug/deps/backlog_20261117_green_second_cmd_overwrites-29bdba7173b3501d)
-error: test failed, to rerun pass `-p tdd --test backlog_20261117_green_second_cmd_overwrites`"""
 
 [[task]]
 id = "9a1a5129"

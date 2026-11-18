@@ -615,7 +615,6 @@ fn r23_dot_source_after_redirect_through_var() {
 /// Allow. The body is data (quoted delimiter) and `S` is bound before it.
 // test-weakening-justified: new RED for an unfixed FP, observed failing at origin/main 04d9b8336 (2026-11-18)
 #[test]
-#[ignore = "RED: quoted heredoc body apostrophes + later `.` + VAR=$S prefix unresolve the earlier target (redir-trunc-expansion, row L284)"]
 fn r24_heredoc_apostrophes_then_dot_source_and_env_prefix_after() {
     let fx = fixture("r24");
     let s = scratch("r24");
@@ -835,7 +834,6 @@ fn g05_git_add_two_vars() {
 /// word.
 // test-weakening-justified: new RED for an unfixed FP, observed failing at origin/main 04d9b8336 (2026-11-18)
 #[test]
-#[ignore = "RED: git_stage reads backslash-newline as `a backslash before whitespace` (rows L16/L62)"]
 fn g06_git_add_backslash_newline_continuation() {
     let fx = fixture("g06");
     let wt = fx.own_worktree();
@@ -851,7 +849,6 @@ fn g06_git_add_backslash_newline_continuation() {
 /// Same continuation shape followed by `&& git commit -F - <<'EOF'`.
 // test-weakening-justified: new RED for an unfixed FP, observed failing at origin/main 04d9b8336 (2026-11-18)
 #[test]
-#[ignore = "RED: git_stage reads backslash-newline as `a backslash before whitespace` (rows L16/L62)"]
 fn g07_git_add_continuation_then_commit_heredoc() {
     let fx = fixture("g07");
     let wt = fx.own_worktree();
@@ -877,7 +874,6 @@ fn g07_git_add_continuation_then_commit_heredoc() {
 /// contradiction is for the implementer to resolve with a ruling if needed.
 // test-weakening-justified: new RED for an unfixed FP, observed failing at origin/main 04d9b8336 (2026-11-18)
 #[test]
-#[ignore = "RED: git_stage treats a literal-dir-bounded glob as undeterminable (row L142)"]
 fn g08_git_add_bounded_glob_allows() {
     let fx = fixture("g08");
     let wt = fx.own_worktree();
@@ -888,7 +884,6 @@ fn g08_git_add_bounded_glob_allows() {
 /// "$(cat <<'EOF' … EOF)"`.
 // test-weakening-justified: new RED for an unfixed FP, observed failing at origin/main 04d9b8336 (2026-11-18)
 #[test]
-#[ignore = "RED: git_stage reads backslash-newline as `a backslash before whitespace` (row L16)"]
 fn g09_git_add_dashdash_continuation_then_commit_substitution() {
     let fx = fixture("g09");
     let wt = fx.own_worktree();
@@ -905,7 +900,6 @@ fn g09_git_add_dashdash_continuation_then_commit_substitution() {
 /// `git commit -q -F - <<'EOF' … | grep`. Direct expectation (see g08).
 // test-weakening-justified: new RED for an unfixed FP, observed failing at origin/main 04d9b8336 (2026-11-18)
 #[test]
-#[ignore = "RED: git_stage treats a literal-dir-bounded glob as undeterminable (rows L264/L266)"]
 fn g10_git_add_bounded_glob_and_paths_then_commit_allows() {
     let fx = fixture("g10");
     let wt = fx.own_worktree();

@@ -597,6 +597,32 @@ pub(super) fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment>
     segs
 }
 
+/// A character [`split_segments_with_separators`] consumes as a separator.
+pub(super) fn is_separator_char(c: char) -> bool {
+    matches!(c, ';' | '&' | '|' | '\n')
+}
+
+/// Byte span of each segment's text in `cmd`, found in order with only
+/// separator characters between consecutive spans; `None` when the texts do
+/// not map back onto `cmd` that way. (Moved from `readings::static_bindings`
+/// unchanged, so the redirect scans can share it.)
+pub(super) fn segment_spans(cmd: &str, segs: &[SeparatedSegment]) -> Option<Vec<(usize, usize)>> {
+    let mut spans = Vec::with_capacity(segs.len());
+    let mut cursor = 0;
+    for seg in segs {
+        let rest = cmd.get(cursor..)?;
+        let rel = rest.find(seg.text.as_str())?;
+        if !rest.get(..rel)?.chars().all(is_separator_char) {
+            return None;
+        }
+        let start = cursor + rel;
+        let end = start + seg.text.len();
+        spans.push((start, end));
+        cursor = end;
+    }
+    Some(spans)
+}
+
 /// True only when segment `idx` is executed by the parent shell itself, so an
 /// assignment standing alone in it is still set for every later segment.
 ///

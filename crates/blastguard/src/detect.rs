@@ -103,8 +103,8 @@ mod vars;
 mod verdict_acc;
 mod words;
 
-use verdict_acc::VerdictAcc;
 use confined::{confined_ask, shape_deny_or_confined_ask};
+use verdict_acc::VerdictAcc;
 
 #[cfg(test)]
 use budget::VISIT_PROBE;
@@ -207,7 +207,7 @@ use vars::{
 };
 
 use redirect::{
-    append_redirect_targets, append_target_occurrences, physical_redirect_spelling,
+    append_target_occurrences, line_append_targets, line_targets, physical_redirect_spelling,
     place_redirect_target, redirect_target_candidates, redirect_target_is_safe,
     redirect_target_occurrences, redirect_target_undeterminable, redirect_targets,
     temp_disposable_redirect_target, unplaceable_redirect_ask,
@@ -795,7 +795,7 @@ primitive, not a filesystem path",
     // Which segments are interpreter program text (4a1cf1ad); see
     // `interpreter_program_body_segments`.
     let program_body = interpreter_program_body_segments(rcmd);
-    for (occurrence, raw_target) in redirect_targets(rcmd).into_iter().enumerate() {
+    for (occurrence, raw_target) in line_targets(rcmd, redirect_targets).into_iter().enumerate() {
         let seg_idx = redirect_segments
             .as_ref()
             .and_then(|occ| occ.get(occurrence))
@@ -1037,7 +1037,7 @@ does not parse that body, but blastguard cannot show the program does not use it
     //     (a83802ad): `P=/etc/fstab; echo x >> $P` names `/etc/fstab`, and
     //     judging the raw `$P` token instead let it through every axis.
     let append_segments = append_target_occurrences(rcmd);
-    for (occurrence, raw_target) in append_redirect_targets(rcmd).into_iter().enumerate() {
+    for (occurrence, raw_target) in line_append_targets(rcmd).into_iter().enumerate() {
         let seg_idx = append_segments
             .as_ref()
             .and_then(|occ| occ.get(occurrence))

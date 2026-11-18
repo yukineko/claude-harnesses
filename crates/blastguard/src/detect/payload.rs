@@ -10,6 +10,7 @@ use super::{
 };
 
 mod compound_readers;
+mod echo_output;
 mod exec_fds;
 mod node_source;
 mod procsub_split;
@@ -18,6 +19,7 @@ mod program_word;
 
 pub(super) use program_word::inline_eval_program_word;
 
+use echo_output::{plain_echo_output, quote_bare_echo_words};
 use exec_fds::{exec_opened_fds, ExecFd};
 use node_source::{is_node_head, node_program_source};
 use procsub_split::procsub_stages;
@@ -443,11 +445,27 @@ tell whether the interpreter runs that stdin or a script file",
             // A shell removes its program's line continuations before it
             // splits words: judge that reading too (backlog 040b959b).
             if source_reader || is_shell(&normalized_command(tokens[idx])) {
+                let originals = program_texts.len();
                 let (readings, undetermined) =
                     super::readings::shell_program_readings(&program_texts);
                 program_texts = readings;
                 if let Some(deny) = undetermined.and_then(|ask| acc.record(ask)) {
                     return deny;
+                }
+                // A body's joined (line-continuation) program earns Asks no
+                // per-line reading sees, and `interpreter_code_verdict` keeps
+                // no layer-0 Ask: `bash <<'EOF'` / `git a\` / `dd -A` / `EOF`
+                // answered Allow (measured on the deployed 0.2.702). Keep that
+                // Ask; a Deny is the interpreter pass's to return below.
+                if heredoc_open {
+                    for joined in program_texts.iter().skip(originals) {
+                        let verdict = super::detect_bash(joined, depth + 1, ctx);
+                        if matches!(verdict, Decision::Ask(_)) {
+                            if let Some(deny) = acc.record(verdict) {
+                                return deny;
+                            }
+                        }
+                    }
                 }
             }
             let python = python_stdin_reading(cmd, tokens[idx], &program_texts, depth, ctx);
@@ -1127,103 +1145,6 @@ fn concatenated_outputs(members: &[String]) -> Result<Vec<String>, String> {
         readings = next;
     }
     Ok(readings)
-}
-
-/// What `echo [-neE…] WORD…` writes when every WORD is static and holds no
-/// backslash (so bash's and zsh's echo agree: no escape is decoded): plain
-/// characters, single-quoted text, or double-quoted text without `$`, a
-/// backtick, `\` or `!`. `None` for anything else, including a first word `-`
-/// or `--` (zsh and bash disagree on it) and any redirection.
-fn plain_echo_output(stage: &str) -> Option<String> {
-    let words = super::quote_aware_words(stage);
-    if words.first().map(String::as_str) != Some("echo") {
-        return None;
-    }
-    let flags = echo_flag_count(&words[1..]);
-    let no_newline = words[1..1 + flags].iter().any(|f| f.contains('n'));
-    let rest = &words[1 + flags..];
-    if rest.first().is_some_and(|w| w == "-" || w == "--") {
-        return None;
-    }
-    let mut out = Vec::new();
-    for word in rest {
-        out.push(static_word(word)?);
-    }
-    let mut text = out.join(" ");
-    if !no_newline {
-        text.push('\n');
-    }
-    Some(text)
-}
-
-/// How many leading `words` are echo option clusters: `-` followed only by
-/// `n`, `e`, `E` (`-n`, `-nE`, `-neE` …).
-fn echo_flag_count<S: AsRef<str>>(words: &[S]) -> usize {
-    words
-        .iter()
-        .take_while(|w| {
-            w.as_ref()
-                .strip_prefix('-')
-                .is_some_and(|f| !f.is_empty() && f.chars().all(|c| matches!(c, 'n' | 'e' | 'E')))
-        })
-        .count()
-}
-
-/// The text of one shell word built only from plain characters, single-quoted
-/// spans and double-quoted spans without `$`, a backtick, `\` or `!`; `None`
-/// for anything else (expansion, escape, glob, tilde, operator, unterminated
-/// quote, `#` comment).
-fn static_word(word: &str) -> Option<String> {
-    let mut out = String::new();
-    let mut chars = word.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '\'' | '"' => loop {
-                let d = chars.next()?;
-                if d == c {
-                    break;
-                }
-                if d == '\\' || (c == '"' && matches!(d, '$' | '`' | '!')) {
-                    return None;
-                }
-                out.push(d);
-            },
-            c if is_plain_word_char(c) => out.push(c),
-            _ => return None,
-        }
-    }
-    Some(out)
-}
-
-/// A character that means itself in an unquoted shell word (no quoting,
-/// escape, expansion, glob, tilde, comment or operator role).
-fn is_plain_word_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || "._-/:=@%+,".contains(c)
-}
-
-/// `echo [-neE…] WORD…` with every WORD made only of plain characters
-/// ([`is_plain_word_char`]) respelled as `echo [-neE…] 'WORD …'`: the same
-/// output, in the quoted form the pipe rule reads as a literal program (an
-/// unquoted `echo hi | bash` has no quoted text there and asks). The leading
-/// option clusters are any `-` followed only by `n` / `e` / `E` (`-nE`, `-En`,
-/// `-neE` too); a plain word holds no backslash, so `-e` decodes nothing. A
-/// first word `-` / `--` (zsh and bash read it differently) or anything else
-/// is returned unchanged, so it keeps whatever verdict the pipe rule gives.
-fn quote_bare_echo_words(inner: &str) -> String {
-    let tokens: Vec<&str> = inner.split_whitespace().collect();
-    if tokens.first() != Some(&"echo") {
-        return inner.to_string();
-    }
-    let flags = echo_flag_count(&tokens[1..]);
-    let words = &tokens[1 + flags..];
-    if words.is_empty()
-        || words[0] == "-"
-        || words[0] == "--"
-        || !words.iter().all(|w| w.chars().all(is_plain_word_char))
-    {
-        return inner.to_string();
-    }
-    format!("{} '{}'", tokens[..1 + flags].join(" "), words.join(" "))
 }
 
 /// True when `head` is `python`, `python3` or `python3.N`.

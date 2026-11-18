@@ -140,9 +140,17 @@ fn every_reading(c: &str, scope: &SafeRoots) -> Decision {
             // An Ask never short-circuits, so there is nothing to return here.
             let _ = acc.record(Decision::ask(LINE_CONTINUATION_UNDETERMINED));
         }
+        // The joined text is the program the shell runs, so it gets EVERY
+        // reading the original gets (its function-call reading, its bash 3.2
+        // readings, ...), not only the plain one: a reading of the original
+        // that splits at a continuation (`git add \` alone, judged as adding
+        // nothing; `f() { git add \` / `-A; }; f` inlined unjoined) is only
+        // sound because the joined text is judged in full. The recursion
+        // ends: what `line_continuation_reading` leaves joined (single
+        // quotes, comments, here-document bodies) reads `Same` the second
+        // time.
         ShellLexed::Text(joined) => {
-            ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
-            if let Some(deny) = acc.record(detect_bash(&joined, 0, &Ctx::new(scope, &joined))) {
+            if let Some(deny) = acc.record(every_reading(&joined, scope)) {
                 return deny;
             }
         }
@@ -216,10 +224,13 @@ pub(super) fn shell_payload_verdict(payload: &str, depth: usize, ctx: &Ctx<'_>) 
     if let Some(deny) = acc.record(detect_bash(payload, depth + 1, ctx)) {
         return deny;
     }
+    // The joined payload gets every reading of this function (its own
+    // function-call reading included), as at the top level; the recursion
+    // ends because the joined text reads `Same` the second time.
     let joined = match line_continuation_reading(payload) {
         ShellLexed::Same => Decision::Allow,
         ShellLexed::Undetermined => Decision::ask(LINE_CONTINUATION_UNDETERMINED),
-        ShellLexed::Text(joined) => detect_bash(&joined, depth + 1, ctx),
+        ShellLexed::Text(joined) => shell_payload_verdict(&joined, depth, ctx),
     };
     if let Some(deny) = acc.record(joined) {
         return deny;

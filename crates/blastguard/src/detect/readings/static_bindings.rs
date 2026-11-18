@@ -55,6 +55,7 @@
 //! tracking here does not model them), or its statements cannot be mapped
 //! back onto its text.
 
+use super::super::segment::{is_separator_char, segment_spans};
 use super::super::vars::{
     defines_shell_function, has_unresolvable_expansion, is_shell_identifier,
     mentions_name_outside_reference, quote_aware_words, unquote_literal_value,
@@ -235,30 +236,6 @@ fn has_comment_or_ansi_c_quote(cmd: &str) -> bool {
         i += 1;
     }
     false
-}
-
-fn is_separator_char(c: char) -> bool {
-    matches!(c, ';' | '&' | '|' | '\n')
-}
-
-/// Byte span of each segment's text in `cmd`, found in order with only
-/// separator characters between consecutive spans; `None` when the texts do
-/// not map back onto `cmd` that way.
-fn segment_spans(cmd: &str, segs: &[SeparatedSegment]) -> Option<Vec<(usize, usize)>> {
-    let mut spans = Vec::with_capacity(segs.len());
-    let mut cursor = 0;
-    for seg in segs {
-        let rest = cmd.get(cursor..)?;
-        let rel = rest.find(seg.text.as_str())?;
-        if !rest.get(..rel)?.chars().all(is_separator_char) {
-            return None;
-        }
-        let start = cursor + rel;
-        let end = start + seg.text.len();
-        spans.push((start, end));
-        cursor = end;
-    }
-    Some(spans)
 }
 
 fn opens_loop(seg: &str) -> bool {

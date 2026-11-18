@@ -275,6 +275,33 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     analyze_rm_literal(rest, ctx)
 }
 
+/// `rsync --delete` / `--del` / `--delete-*` (SUBSET.md Table B, user ruling
+/// 2026-11-18): rsync recursively deletes whatever under the destination the
+/// source lacks, so the destination is judged as the operand of `rm -rf`
+/// (Table C): Allow when every path it names is Scratch / OwnWorktree
+/// ([`new_layer::rsync_dest_allows`]), else exactly the `rm -r -f <dest>`
+/// verdict, its reason prefixed with the rsync shape. No delete flag, a
+/// remote destination or list mode: Allow here (the other rsync rules stand).
+pub(super) fn analyze_rsync_delete(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+    let Some(dest) = super::system_paths::rsync_delete_destination(rest) else {
+        return Decision::Allow;
+    };
+    if new_layer::rsync_dest_allows(dest, ctx) {
+        return Decision::Allow;
+    }
+    let why = |r: String| {
+        format!(
+            "`rsync` with a delete flag removes, recursively, what the source lacks under \
+`{dest}`, so it is judged as `rm -rf {dest}`: {r}"
+        )
+    };
+    match analyze_rm(&["-r", "-f", dest], ctx) {
+        Decision::Allow => Decision::Allow,
+        Decision::Ask(r) => Decision::Ask(why(r)),
+        Decision::Deny(r) => Decision::Deny(why(r)),
+    }
+}
+
 /// At most this many operand combinations are judged by [`analyze_rm`];
 /// more keeps the text as written (its old verdict).
 const MAX_AST_RM_VARIANTS: usize = 64;

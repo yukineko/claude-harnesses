@@ -25,7 +25,8 @@
 //!   of the reader is `None` (not an interpreter, `eval`, `source` or
 //!   wrapper);
 //! * where `cat` / `tee` put the body is a literal data, non-shell code or
-//!   JSON file (`.md`, `.txt`, `.rs`, `.json`, `.jsonl`, …; never `.sh`,
+//!   JSON / TOML / YAML file (`.md`, `.txt`, `.rs`, `.json`, `.jsonl`,
+//!   `.toml`, `.yaml`, `.yml`, …; never `.sh`,
 //!   extension-less or `.py`, which keep their own steps), the
 //!   terminal, `/dev/null`, stderr, or a `$( )` word. Never a non-final pipe
 //!   stage or a process substitution. `git commit` stores it in
@@ -383,13 +384,14 @@ fn reads_message_from_stdin(args: &[&str]) -> bool {
 }
 
 /// A literal landing file whose body is not shell: `/dev/null`, the data and
-/// non-shell code files of `heredoc`, or a `.json` / `.jsonl` file (backlog
-/// 9a4e07cf; user ruling 2026-11-08: only `.sh` / extension-less bodies are
-/// shell). `.toml` / `.yaml` are NOT added here: the pinned
-/// `heredoc_data_body_extraction` treats them, and `.json`, as configuration
-/// that may be executable — the `.json` row of that pin conflicts with
-/// 9a4e07cf and is reported for a ruling. Whether the same command runs the
-/// file is checked separately.
+/// non-shell code files of `heredoc`, or a `.json` / `.jsonl` / `.toml` /
+/// `.yaml` / `.yml` file (backlog 9a4e07cf; user ruling 2026-11-08: only
+/// `.sh` / extension-less bodies are shell; user ruling 2026-11-18: config
+/// formats are data). The configuration files that make commands run
+/// (`.claude/settings*.json`, `hooks.json`, `.githooks/`) are NOT exempted by
+/// this: the write's TARGET path is still judged (Protected) by the rules
+/// that see the redirect, whatever the body is. Whether the same command
+/// runs the file is checked separately.
 fn data_or_code_file(p: &str) -> bool {
     if is_data_file_target(p) || is_non_shell_code_file_target(p) {
         return true;
@@ -401,7 +403,10 @@ fn data_or_code_file(p: &str) -> bool {
         .rsplit_once('.')
         .map(|(stem, ext)| (stem.is_empty(), ext));
     shape_ok
-        && matches!(ext, Some((false, e)) if e.eq_ignore_ascii_case("json") || e.eq_ignore_ascii_case("jsonl"))
+        && matches!(ext, Some((false, e))
+            if ["json", "jsonl", "toml", "yaml", "yml"]
+                .iter()
+                .any(|d| e.eq_ignore_ascii_case(d)))
 }
 
 /// Where the stdout of a `cat` / `tee` reader goes, as landing file names;

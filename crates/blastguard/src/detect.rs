@@ -1881,6 +1881,7 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         // scan for the `\;` form without depending on where the split fell.
         "-exec" | "-execdir" | "-ok" | "-okdir" => analyze_find(&tokens[idx..], seg, depth, ctx),
         "rm" => analyze_rm(rest, ctx),
+        "rsync" => rm::analyze_rsync_delete(rest, ctx),
         "gh" => analyze_gh(rest),
         // 12ba5845: granting autonomy is human-only. `tokens[..idx]` carries the
         // env-assignment prefix (`CONDUKT_AUTONOMOUS=1 condukt …`) that

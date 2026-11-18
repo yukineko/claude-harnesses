@@ -347,6 +347,21 @@ fn rsync_mutated<'a>(words: &[&'a str]) -> Option<(&'static str, Vec<&'a str>)> 
     Some(("deletes files from", out))
 }
 
+/// The local destination of an `rsync` with `--delete` / `--del` /
+/// `--delete-*` (SUBSET.md Table B, user ruling 2026-11-18): `None` without
+/// such a flag, with fewer than two operands (list mode) or for a remote
+/// destination (`host:path`, `rsync://…`).
+pub(super) fn rsync_delete_destination<'a>(words: &[&'a str]) -> Option<&'a str> {
+    let deletes = words.iter().any(|w| {
+        let flag = w.split('=').next().unwrap_or(w);
+        flag == "--del" || flag == "--delete" || flag.starts_with("--delete-")
+    });
+    let ops = positional_operands(words, RSYNC_VALUE_FLAGS);
+    let dest = *ops.last()?;
+    let remote = dest.split('/').next().is_some_and(|h| h.contains(':'));
+    (deletes && ops.len() >= 2 && !remote).then_some(dest)
+}
+
 enum Judged {
     /// Lies inside a system directory: the system path hit.
     System(String),

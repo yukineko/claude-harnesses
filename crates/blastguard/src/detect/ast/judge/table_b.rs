@@ -105,9 +105,7 @@ fn never(_: &str) -> bool {
 }
 
 /// `--help` / `--version`: accepted by every row (they print and exit; the
-/// operands are still extracted and judged). S3b implementer addition, kept
-/// so the CA-blastguard-015 help invocations stay Allow — recorded in
-/// SUBSET.md for the user's confirmation.
+/// operands are still extracted and judged). User ruling 2026-11-18.
 const UNIVERSAL_LONG: &[&str] = &["--help", "--version"];
 
 const NO_OPTS: Opts = opts("", "");
@@ -137,9 +135,19 @@ const MV: Opts = Opts {
     ],
     ..opts("finvT", "t")
 };
+/// `-f -i -n -p -v`: effect-neutral (user ruling 2026-11-18; man notes in
+/// SUBSET.md B.1).
 const CP: Opts = Opts {
-    long: &[("--recursive", "-r"), ("--archive", "-a"), TARGET_DIR],
-    ..opts("rRa", "t")
+    long: &[
+        ("--recursive", "-r"),
+        ("--archive", "-a"),
+        ("--force", "-f"),
+        ("--interactive", "-i"),
+        ("--no-clobber", "-n"),
+        ("--verbose", "-v"),
+        TARGET_DIR,
+    ],
+    ..opts("rRafinpv", "t")
 };
 const INSTALL: Opts = Opts {
     long: &[
@@ -163,8 +171,12 @@ const LN: Opts = Opts {
     ..opts("sfnvT", "t")
 };
 const CHOWN: Opts = Opts {
-    long: &[("--recursive", "-R"), ("--reference", "--reference")],
-    ..opts("R", "")
+    long: &[
+        ("--recursive", "-R"),
+        ("--verbose", "-v"),
+        ("--reference", "--reference"),
+    ],
+    ..opts("Rv", "")
 };
 const CHMOD: Opts = Opts {
     operand_like: chmod_minus_mode,
@@ -176,8 +188,12 @@ const SED: Opts = Opts {
         ("--in-place", "-i"),
         ("--expression", "-e"),
         ("--file", "-f"),
+        ("--regexp-extended", "-E"),
+        ("--quiet", "-n"),
+        ("--silent", "-n"),
+        ("--separate", "-s"),
     ],
-    ..opts("", "ef")
+    ..opts("Enrs", "ef")
 };
 const TEE: Opts = Opts {
     long: &[("--append", "-a"), ("--ignore-interrupts", "-i")],
@@ -343,13 +359,10 @@ fn parse(cmd: &str, args: &[Word], o: &Opts) -> Result<Parsed, String> {
             break;
         }
     }
+    // An unlisted literal option is Undetermined even when no operand is
+    // left (`rm -P`, `rm -h`): user ruling 2026-11-18 removed the S3b
+    // implementer's "only no-arg options" exemption.
     match unlisted {
-        // Every word is a literal option without an argument (`rm -h`,
-        // `tee --frobnicate`): no word is left for an unmodelled option to
-        // turn into, or away from, a target, so there is nothing to judge.
-        // S3b implementer addition (CA-blastguard-011's `rm -h` Allow),
-        // recorded in SUBSET.md for the user's confirmation.
-        Some(_) if p.operands.is_empty() && p.options.iter().all(|(_, v)| v.is_none()) => Ok(p),
         Some(why) => Err(why),
         None => Ok(p),
     }

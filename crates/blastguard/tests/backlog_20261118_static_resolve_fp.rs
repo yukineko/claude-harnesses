@@ -555,7 +555,6 @@ fn r20_conditional_other_var_closed_then_target_var() {
 /// spelling is the unrolled loop after the same `.`.
 // test-weakening-justified: new RED for an unfixed FP, observed failing at origin/main 04d9b8336 (2026-11-18)
 #[test]
-#[ignore = "RED: for-list variable after `.` stays unresolved (redir-trunc-expansion, row L35)"]
 fn r21_for_list_var_after_dot_source() {
     let fx = fixture("r21");
     let s = scratch("r21");

@@ -164,7 +164,6 @@ fn bodies_that_may_run_stay_judged() {
 /// not make the command non-Allow (moved here from
 /// `bodies_that_may_run_stay_judged`).
 #[test]
-#[ignore = "RED: .toml/.yaml quoted heredoc bodies still judged as shell (ruling 2026-11-18: data); .json already Allow"]
 fn config_format_bodies_are_data() {
     let cases = [
         format!("cat <<'EOF' > a.json\n{RM}\nEOF"),

@@ -40,7 +40,7 @@
 
 use harness_core::verdict::Determination;
 
-use super::super::ast::targets::{rm_operand_values, RmOperand};
+use super::super::ast::targets::{resolve, rm_operand_values, RmOperand, Role};
 use super::super::ast::Value;
 use super::{exclude, Ctx, Placement};
 
@@ -72,15 +72,52 @@ fn modelled_option(t: &str) -> bool {
     }
 }
 
+/// The Table C Delete cell of the `rsync --delete` destination word `tok`
+/// (user ruling 2026-11-18: judged like an `rm -rf` operand) is Allow: every
+/// path it names — a plain literal word, or an expansion the AST evaluator
+/// resolves ([`resolve`]) — is Scratch / OwnWorktree by [`value_allows`].
+/// Anything else (a quote, an escape, a glob, an unresolved expansion, a
+/// relative path after a `cd` the analysis could not resolve) is not Known,
+/// and the caller keeps the legacy `rm` reading. A relative value is placed
+/// against this segment's base (`Ctx::raw_base`: the session cwd, or the
+/// directory of a resolved `cd`).
+pub(super) fn rsync_dest_allows(tok: &str, ctx: &Ctx<'_>) -> bool {
+    let values = if super::has_unresolvable_expansion(tok) {
+        match resolve(tok, Role::Argv) {
+            Some(v) => v,
+            None => return false,
+        }
+    } else if tok.contains(['\'', '"', '\\', '*', '?', '[', ']', '{', '}', '~', '$', '`']) {
+        return false;
+    } else {
+        vec![tok.to_string()]
+    };
+    let absolute = |v: &String| -> Option<String> {
+        if v.starts_with('/') {
+            return Some(v.clone());
+        }
+        let base = ctx.raw_base.as_deref().filter(|b| b.starts_with('/'))?;
+        Some(format!("{}/{v}", base.trim_end_matches('/')))
+    };
+    !values.is_empty()
+        && values
+            .iter()
+            .all(|v| absolute(v).is_some_and(|a| value_allows(&a, ctx)))
+}
+
 fn operand_allows(o: &RmOperand, ctx: &Ctx<'_>) -> bool {
     let Value::Literal(v) = &o.value else {
         return false;
     };
+    value_allows(v, ctx)
+}
+
+fn value_allows(v: &str, ctx: &Ctx<'_>) -> bool {
     if v.is_empty() {
         return false;
     }
     let path = if v.starts_with('/') {
-        v.clone()
+        v.to_string()
     } else {
         let Some(cwd) = ctx.scope.session_cwd() else {
             return false;

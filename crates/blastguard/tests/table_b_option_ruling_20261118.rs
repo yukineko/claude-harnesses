@@ -81,7 +81,6 @@ fn expect_all(cases: &[String], want: &str) {
 
 /// Effect-neutral options of `cp`, `sed -i` and `chmod` (ruling 2026-11-18).
 #[test]
-#[ignore = "RED: S3b Table B rows lack effect-neutral options cp -f/-p/-v/-i/-n, sed -E/-n/-r/-s, chmod -v (ruling 2026-11-18)"]
 fn effect_neutral_options_cp_sed_chmod_stay_allow() {
     let cases = [
         format!("cp -f {S}/a {S}/b"),
@@ -128,7 +127,6 @@ fn unlisted_no_arg_option_with_operands_asks() {
 /// deleting"; not in the `rm` row). The implementer's exemption answered
 /// Allow here; ruling 2026-11-18 removed it → Ask.
 #[test]
-#[ignore = "RED: S3b implementer exemption (all words literal no-arg options -> Allow) removed by ruling 2026-11-18; rm -P must Ask"]
 fn unlisted_no_arg_option_alone_asks() {
     expect_all(&["rm -P".to_string()], "ask");
 }

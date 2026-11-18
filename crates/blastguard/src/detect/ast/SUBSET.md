@@ -145,6 +145,12 @@ script is still `Known`: the word's `Value` is `Undetermined` and feeds Table C 
 / `popd` / `..` → cwd Undetermined. `eval`, `source`, `.`, `trap`, `alias`,
 `shopt`, `builtin`, `command`, an undetermined command word, `declare`-family
 options, non-plain `set` make the state opaque (later values Undetermined).
+**Exception (user ruling 2026-11-18, r21):** `. F` whose value is exactly
+`<hook HOME>/.cargo/env` (the literal `. "$HOME/.cargo/env"`, `HOME` not
+reassigned; unwrapped, no prefix assignment) is rustup's PATH setup only and
+does NOT make the state opaque (`eval.rs::builtin_effects`, `is_cargo_env`).
+Every other `.` / `source` — `source "$HOME/.cargo/env"` included — keeps the
+state opaque (reading A unchanged).
 For **judgement**, `eval` is Undetermined (it runs code not in the script) until
 S4 models it; `source` / `.` become Ask (main) / Deny (subagent) together with
 the quarantine plugin and are legacy until then (rulings 13, 16; B.5).
@@ -170,14 +176,15 @@ Common rules for every row:
 
 | Command | Effect | Targets | Notes |
 |---|---|---|---|
-| `rm` | `Delete{recursive: -r/-R/--recursive}` | every operand | `-f -i -I -v -d` modelled |
+| `rm` | `Delete{recursive: -r/-R/--recursive}` | every operand | `-f -i -I -v -d` modelled (`-v`: man rm "Be verbose when deleting files" — output only) |
 | `rmdir`, `unlink` | `Delete{recursive:false}` | every operand | `rmdir -p`: every ancestor component too |
-| `mv` | sources `Delete{recursive:true}`; destination `Truncate` | sources = all operands but the last (all with `-t DIR`); dest = last / `-t DIR` | `-f -i -n -v -T -t` |
-| `cp` | destination `Truncate`; with `-r/-R/-a` also `CreateTree` | last operand / `-t DIR` | sources are reads (no finding) |
+| `mv` | sources `Delete{recursive:true}`; destination `Truncate` | sources = all operands but the last (all with `-t DIR`); dest = last / `-t DIR` | `-f -i -n -v -T -t` (`-v`: man mv "showing files after they are moved" — output only) |
+| `cp` | destination `Truncate`; with `-r/-R/-a` also `CreateTree` | last operand / `-t DIR` | sources are reads (no finding). Effect-neutral (user ruling 2026-11-18; man cp): `-f` "remove it and create a new file" — same destination; `-i` prompt before overwriting — same or none; `-n` "Do not overwrite" — same or none; `-p` preserve times/mode/owner — metadata of the same destination; `-v` verbose — output only. GNU long: `--force --interactive --no-clobber --verbose` (`--preserve[=…]` not listed) |
+| `rsync --delete` / `--del` / `--delete-*` (user ruling 2026-11-18) | `Delete{recursive:true}` | the local destination (last operand; remote `host:path` / `rsync://` and one-operand list mode: no target) | judged like an `rm -rf` operand: Scratch / OwnWorktree → Allow (`rm/new_layer.rs::rsync_dest_allows`), else the `rm -r -f <dest>` verdict (`rm.rs::analyze_rsync_delete`); rsync options are not parsed (no Undetermined for unlisted ones), the system / home-asset Deny of `system_paths.rs` stands |
 | `install` | destination `Truncate` | last operand / `-t DIR`; `-d`: every operand `CreateTree` | `-m -o -g` take an argument |
-| `ln` | `Link` | link name = last operand / `-t DIR` (one operand: basename in cwd) | link target is not a target; `-s -f -n -v -T -t` |
-| `chmod`, `chown`, `chgrp` | `Metadata` (recursive with `-R`) | operands after the mode / owner spec | `--reference=F` reads F |
-| `sed -i` / `--in-place` | `Rewrite` | input files (script operand dropped unless `-e`/`-f` given) | BSD `-i ''` / `-i.bak` suffix; a script containing `w`/`W`/`e` or `s///w`/`s///e`: legacy until S6 (Open question 2) |
+| `ln` | `Link` | link name = last operand / `-t DIR` (one operand: basename in cwd) | link target is not a target; `-s -f -n -v -T -t` (`-v`: man ln "showing files as they are processed" — output only) |
+| `chmod`, `chown`, `chgrp` | `Metadata` (recursive with `-R`) | operands after the mode / owner spec | `--reference=F` reads F; `-v` / `--verbose` (user ruling 2026-11-18; man chmod / chown "Cause … to be verbose, showing filenames" — output only) |
+| `sed -i` / `--in-place` | `Rewrite` | input files (script operand dropped unless `-e`/`-f` given) | BSD `-i ''` / `-i.bak` suffix; a script containing `w`/`W`/`e` or `s///w`/`s///e`: legacy until S6 (Open question 2). Effect-neutral (user ruling 2026-11-18): `-E` / `-r` / `--regexp-extended` (man sed: extended regular expressions — regex syntax only), `-n` / `--quiet` / `--silent` (suppresses the echo to stdout — output only), `-s` / `--separate` (GNU sed manual: files as separate streams — addressing only, same files; not in BSD sed). Note: BSD `sed -i -E …` reads `-E` as the backup suffix (a `<file>-E` beside the same file) — same directory, not modelled as a separate target |
 | `perl -i` | — | — | **out of subset**: perl inline program → Undetermined (ruling 4) |
 | `tee` | `Truncate` (`Append` with `-a`) | every operand | `-a -i -p` |
 | `truncate` | `Truncate` | every operand | `-s` takes an argument; `-r RFILE` reads |
@@ -319,14 +326,14 @@ Notes:
   (`"/tmp/$x"`, `~user/f`). `chmod -w f`: a `-[rwxXst]+` word is the mode.
   `sed` has a row only when a literal `-…i…` / `--in-place` word is present;
   BSD `-i ''` is modelled.
-* **Implementer additions, pending the user's confirmation** (each keeps a
-  previously-passing test green — CA-blastguard-011 / -015 in
-  `detect/tests.rs`: `rm --help`, `rm -h`, `tee --help 2>&1`,
-  `truncate --help` → Allow):
-  1. `--help` / `--version` are accepted by every B.1 row;
-  2. an unlisted option is NOT Undetermined when every word after the
-     command is a literal option without an argument (`rm -h`): no word is
-     left for the option to turn into, or away from, a target.
+* **Implementer additions, decided by user ruling 2026-11-18:**
+  1. `--help` / `--version` are accepted by every B.1 row — **accepted**;
+  2. ~~an unlisted option is NOT Undetermined when every word after the
+     command is a literal option without an argument (`rm -h`)~~ —
+     **removed**: an unlisted literal option is Undetermined → Ask (main) /
+     Deny (subagent) even with no operand (`rm -h`, `rm -P`);
+  3. a GNU long spelling of a listed short option is that option
+     (`--append` = `-a`) — **accepted**.
 * `find`: an undetermined word in the expression is not read (it may be the
   argument of a primary; primary arities are not modelled), so `find . "$x"`
   where `$x` is `-delete` is NOT caught by S3b (legacy verdict unchanged).

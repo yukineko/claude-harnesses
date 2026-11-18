@@ -222,7 +222,6 @@ fn a_readable_operand_still_reaches_the_real_analysis() {
 /// disable detection: only the `--help` spelling every row accepts is Allow.
 /// (Placed here, not in tests.rs, because of tests.rs's file-growth cap.)
 #[test]
-#[ignore = "RED: S3b implementer exemption (all words literal no-arg options -> Allow) removed by ruling 2026-11-18; rm -h must not be Allow"]
 fn ca_blastguard_011_rm_h_unlisted_option_is_not_allow() {
     assert_eq!(bash("rm --help"), Decision::Allow);
     assert_ne!(

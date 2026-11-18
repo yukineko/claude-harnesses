@@ -196,7 +196,6 @@ fn same_as_rm_and_not_allow(fx: &Fx, cwd: &Path, rsync: &str, rm: &str) {
 /// unrelated rule would also satisfy it).
 // test-weakening-justified: new RED
 #[test]
-#[ignore = "RED: rsync --delete Table B Delete row (ruling 2026-11-18) - ~/Documents/ destination is Allow, rm -rf ~/Documents/x is Deny"]
 fn rsync_delete_into_home_subdir_same_as_rm() {
     let fx = fixture("docs");
     same_as_rm_and_not_allow(
@@ -211,7 +210,6 @@ fn rsync_delete_into_home_subdir_same_as_rm() {
 /// DOES NOT PROVE: the other `--delete-*` spellings.
 // test-weakening-justified: new RED
 #[test]
-#[ignore = "RED: rsync --delete-after Table B Delete row (ruling 2026-11-18) - ~/Documents/ destination is Allow, rm -rf ~/Documents/x is Deny"]
 fn rsync_delete_after_into_home_subdir_same_as_rm() {
     let fx = fixture("docs-after");
     same_as_rm_and_not_allow(
@@ -225,7 +223,6 @@ fn rsync_delete_after_into_home_subdir_same_as_rm() {
 /// `--delete-excluded` is a `--delete-*` flag: same row.
 // test-weakening-justified: new RED
 #[test]
-#[ignore = "RED: rsync --delete-excluded Table B Delete row (ruling 2026-11-18) - ~/Documents/ destination is Allow, rm -rf ~/Documents/x is Deny"]
 fn rsync_delete_excluded_into_home_subdir_same_as_rm() {
     let fx = fixture("docs-excl");
     same_as_rm_and_not_allow(

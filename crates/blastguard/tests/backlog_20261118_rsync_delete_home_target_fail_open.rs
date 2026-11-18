@@ -182,21 +182,18 @@ fn control_rsync_without_delete_into_home_subdir_allows() {
 // --------------------------------------------------------------------- RED
 
 #[test]
-#[ignore = "RED: rsync --delete into ~/ (empties $HOME) is Allow; harms_system target → Deny (ruling 3)"]
 fn rsync_delete_into_tilde_home_denies() {
     let fx = fixture("tilde");
     deny_at(&fx, &fx.proj(), "rsync -a --delete /tmp/empty/ ~/");
 }
 
 #[test]
-#[ignore = "RED: rsync --delete into \"$HOME\" is Allow; harms_system target → Deny (ruling 3, ruling 12)"]
 fn rsync_delete_into_dollar_home_denies() {
     let fx = fixture("dollar");
     deny_at(&fx, &fx.proj(), "rsync -a --delete /tmp/empty/ \"$HOME\"");
 }
 
 #[test]
-#[ignore = "RED: rsync --delete into the absolute home path is Allow; harms_system target → Deny (ruling 3)"]
 fn rsync_delete_into_absolute_home_denies() {
     let fx = fixture("abs");
     let cmd = format!("rsync -a --delete /tmp/empty/ {}/", fx.home.display());
@@ -204,7 +201,6 @@ fn rsync_delete_into_absolute_home_denies() {
 }
 
 #[test]
-#[ignore = "RED: rsync --delete into ~/.ssh/ (deletes SSH keys) is Allow; irreplaceable home asset → Deny (ruling 3)"]
 fn rsync_delete_into_ssh_denies() {
     let fx = fixture("ssh");
     deny_at(&fx, &fx.proj(), "rsync -a --delete /tmp/empty/ ~/.ssh/");
@@ -212,7 +208,6 @@ fn rsync_delete_into_ssh_denies() {
 
 /// Session cwd = `$HOME`: `./` is the home directory itself.
 #[test]
-#[ignore = "RED: with cwd = $HOME, rsync --delete build/ ./ is Allow; it empties $HOME → Deny (ruling 3)"]
 fn rsync_delete_into_dot_with_cwd_home_denies() {
     let fx = fixture("dot");
     let home = fx.home.clone();

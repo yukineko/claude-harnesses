@@ -25,6 +25,13 @@
 //! * `rsync` with a `--del*` flag — the destination; with
 //!   `--remove-source-files` — the sources.
 //!
+//! For `rsync` only, a judged file is ALSO system harm when
+//! [`super::harm_mark::harms_system`] says so — the home directory itself or
+//! an irreplaceable home-level asset (`~/.ssh`, …), with no safe-root escape
+//! (backlog 7f9f2457: `rsync -a --delete /tmp/empty/ ~/` empties `$HOME`, the
+//! same harm as `rm -rf ~`; SUBSET.md ruling 3). The other mutators keep the
+//! system-directory check only.
+//!
 //! Operands are re-split quote-aware and unquoted the way the shell would
 //! (`'…'`, `"…"`, `\x`). A leading `~` / `$HOME` / `${HOME}` is expanded with
 //! the session's home. Any other `$`/backtick expansion in a judged operand
@@ -87,6 +94,19 @@ configuration) can break the machine itself, so blastguard refuses it"
     ))
 }
 
+fn home_deny(cmd: &str, what: &str, raw: &str, hit: &str) -> Decision {
+    let shown = if hit == raw {
+        format!("`{raw}`")
+    } else {
+        format!("`{raw}` (which lands on `{hit}`)")
+    };
+    Decision::deny_system_harm(format!(
+        "`{cmd}` {what} {shown}, which is the home directory itself or an irreplaceable \
+home-level asset (`~/.ssh`, `~/.gnupg`, a home dotfile) — emptying it destroys keys and \
+configuration that cannot be recreated, so blastguard refuses it"
+    ))
+}
+
 /// The system-harm Deny for `cmd rest…` when a file it modifies is spelled
 /// with an expansion that `resolve` (the line's own literal assignments and
 /// `$(echo …)` bodies, see [`super::rm::known_path_harm`]) turns into a path
@@ -113,8 +133,10 @@ pub(super) fn known_mutation_harm(
             continue;
         }
         for path in resolve(raw).unwrap_or_default() {
-            if let Judged::System(hit) = judge(cmd, &path, ctx) {
-                return system_deny(cmd, what, raw, &hit);
+            match judge(cmd, &path, ctx) {
+                Judged::System(hit) => return system_deny(cmd, what, raw, &hit),
+                Judged::Home(hit) => return home_deny(cmd, what, raw, &hit),
+                Judged::Unresolved | Judged::Elsewhere => {}
             }
         }
     }
@@ -143,6 +165,7 @@ fn system_mutation(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Option<Decision> 
         for j in judged {
             match j {
                 Judged::System(hit) => return Some(system_deny(cmd, what, raw, &hit)),
+                Judged::Home(hit) => return Some(home_deny(cmd, what, raw, &hit)),
                 Judged::Unresolved if ask.is_none() => {
                     ask = Some(Decision::ask(format!(
                         "`{cmd}` {what} `{raw}`, whose path depends on an expansion blastguard \
@@ -327,6 +350,9 @@ fn rsync_mutated<'a>(words: &[&'a str]) -> Option<(&'static str, Vec<&'a str>)> 
 enum Judged {
     /// Lies inside a system directory: the system path hit.
     System(String),
+    /// (`rsync` only) The home directory itself or an irreplaceable
+    /// home-level asset (`harm_mark::harms_system`): the lexical path.
+    Home(String),
     /// Spelled with an expansion that cannot be resolved here.
     Unresolved,
     /// Not a system path, or not placeable for a reason other than expansion.
@@ -370,17 +396,26 @@ fn judge(cmd: &str, raw: &str, ctx: &Ctx<'_>) -> Judged {
     });
     let is_system = |p: &str| p == "/" || crate::scope::is_inside_system_dir(p);
     let hit = if is_system(&lexical) {
-        lexical.clone()
+        Some(lexical.clone())
     } else {
-        match parent_real.filter(|r| is_system(r)) {
-            Some(r) => r,
-            None => return Judged::Elsewhere,
-        }
+        parent_real.filter(|r| is_system(r))
     };
-    if ctx.confined_root(cmd, &[lexical.as_str()]).is_some() {
-        return Judged::Elsewhere;
+    if let Some(hit) = hit {
+        if ctx.confined_root(cmd, &[lexical.as_str()]).is_none() {
+            return Judged::System(hit);
+        }
     }
-    Judged::System(hit)
+    // What `rsync --del*` / `--remove-source-files` deletes is judged by the
+    // same predicate that marks `rm -rf ~` / `rm -rf ~/.ssh` as system harm
+    // (`harm_mark::harms_system`: the home directory itself, or an
+    // irreplaceable home-level asset; no safe-root escape for either).
+    // Only `rsync` — the other mutators here rename or re-permission single
+    // files, where a home-asset target (`chmod 600 ~/.ssh/id_ed25519`) is
+    // routine, not harm.
+    if cmd == "rsync" && super::harm_mark::harms_system(ctx, cmd, &spelled) {
+        return Judged::Home(lexical);
+    }
+    Judged::Elsewhere
 }
 
 /// The operand unquoted, with a leading `~`, `$HOME` or `${HOME}` replaced by

@@ -293,7 +293,13 @@ unrolled as above) is judged once per value, and the strictest answer stands. A
 word with no proven values (`$(ls)`, a glob, an undetermined variable) keeps the
 `Ask`. Values are combined per word, not per iteration, so a combination of two
 values of different words may be judged although no single iteration runs it; that
-only adds judgements, it never removes one.
+only adds judgements, it never removes one. The **source of a symlink**
+(`ln -s`, `cp -s`) is never replaced by a proven value: the evaluator places a
+value against the command's cwd (`resolve_at`), but a symlink holds its source
+text and resolves it from the directory holding the link, so `ln -s $f /private/L`
+with `f=etc` would be read as `<cwd>/etc` instead of `/private/etc`. Such a source
+stays spelled and the write through the link stays an `Ask` (backlog dc053fcf
+retry, 2026-11-19).
 
 ### B.3 Wrappers (unwrap, then judge the wrapped command by its own row)
 

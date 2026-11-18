@@ -26,7 +26,11 @@
 //! over a literal list, `ast::eval` unrolls it) is not a reason to give up:
 //! each relinking command is judged once per value ([`expand`]), and an
 //! operand with several values is judged per value and its landings must
-//! agree ([`operand_landing`]). The strictest answer stands.
+//! agree ([`operand_landing`]). The strictest answer stands. The SOURCE of a
+//! symlink (`ln -s`, `cp -s`) is never replaced by such a value: the
+//! evaluator places a value against the cwd, while a symlink's text is
+//! resolved from the directory holding the link, so a relative source would
+//! be placed at the wrong path; it stays spelled, an `Ask`.
 //!
 //! When the landing cannot be determined — a non-literal source or
 //! destination with no proven values (`$(ls)`, a glob), an unknown cwd,
@@ -652,8 +656,10 @@ const MAX_EXPANSIONS: usize = 256;
 /// takes: a non-literal word such as `$D/$f.tmp` after `for f in a b`, unrolled
 /// by `ast::eval`. `None` when the word is a literal (nothing to expand) or has
 /// no proven values (`$(ls)`, a glob, an undetermined variable) — the caller
-/// keeps its `Ask`. Every value must be absolute and literal, so it can be
-/// placed without the cwd.
+/// keeps its `Ask`. Every value must be absolute and literal: the evaluator
+/// has already placed it against the cwd of the command it belongs to
+/// (`ast::eval::resolve_at`), so it is only right where a word is read from
+/// the cwd — never for a symlink's source text ([`expand`]).
 fn proven_values(word: &str, role: Role) -> Option<Vec<String>> {
     if literal(word) {
         return None;
@@ -669,14 +675,24 @@ fn proven_values(word: &str, role: Role) -> Option<Vec<String>> {
 /// evaluator proved replaced by each value: one `LinkOp` per combination, so
 /// each value of a loop variable is judged as its own command. A word with no
 /// proven values stays spelled (its landing stays undetermined, an `Ask`).
-/// An op with nothing to expand, or more than [`MAX_EXPANSIONS`] combinations,
-/// is returned unchanged.
+/// The sources of a [`Kind::Symbolic`] op are never replaced: the link holds
+/// the source TEXT, resolved from the link's own directory ([`hit`]), but a
+/// proven value is already placed against the cwd (`ln -s $f /private/L` with
+/// `f=etc` would be read as `<cwd>/etc` instead of `/private/etc`). They stay
+/// spelled, an `Ask`. An op with nothing to expand, or more than
+/// [`MAX_EXPANSIONS`] combinations, is returned unchanged.
 fn expand(op: LinkOp) -> Vec<LinkOp> {
     let dest_values = proven_values(&op.dest, Role::Argv);
     let source_values: Vec<Option<Vec<String>>> = op
         .sources
         .iter()
-        .map(|s| proven_values(s, Role::Argv))
+        .map(|s| {
+            if op.kind == Kind::Symbolic {
+                None
+            } else {
+                proven_values(s, Role::Argv)
+            }
+        })
         .collect();
     if dest_values.is_none() && source_values.iter().all(Option::is_none) {
         return vec![op];

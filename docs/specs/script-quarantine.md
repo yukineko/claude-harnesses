@@ -6,6 +6,10 @@
 > 改めてユーザーに聞く論点は §9.1、実測で確かめる論点は §9.2 にまとめた。
 > **2026-11-17 の第 2 次ユーザー裁定（依頼者 harness-5a 経由。Q4-path / Q7 / Q9 / Q12 / Q14 / Q15）も反映した。** §9.1 の当初 5 件（Q4-path、Q7、Q9、Q14、Q15）はすべて裁定済みで、Q12 は裁定済みの内容を改訂した。
 > 裁定の反映で新たに生じた未決点・食い違いは §9.1 に置いた。
+> **2026-11-17 の第 3 次ユーザー裁定（依頼者 harness-5a 経由。D-1 / D-2 / D-3）も反映した。** §9.1 の D-1〜D-3 はすべて裁定済みである。
+> Q12 の「上げ忘れはゲートで検出」のゲートの置き場所と判定方法だけは未定のまま残し、実装の段階で改めてユーザーに聞く（§9.1）。
+> **2026-11-17 の第 4 次ユーザー裁定（依頼者 harness-5a 経由。E-1〜E-4）も反映した。** 第 3 次裁定の反映で仕様に足さなかった 4 点（検疫し直した結果の扱い、approvals ストアの schema 版、schema 版の定数の置き場所、常に Deny にする tool の範囲）への回答である（§9.1）。
+> **2026-11-17 の第 5 次ユーザー裁定（依頼者 harness-5a 経由。F-1〜F-3）も反映した。** 第 4 次裁定の反映で §9.1 に残した食い違い 3 点（読めない記録と §0 の裁定 4、「記録が無効」に当たる範囲、判定できない tool の扱い）への回答である（§9.1）。
 
 本文の各記述には次のラベルを付ける。
 
@@ -34,6 +38,9 @@
    - **[裁定済み Q13]** 「同じ hash は自動で通す」は、「Finding の列を保存し、実行のたびに今の PathCtx で Table C を引き直す」という意味に読み替える（§6.2）。
 3. **[決定]** 言語ごとの parser と「効果 × 対象パス」の判定規則は、共有 lib crate 1 つにまとめる。blastguard（コマンドに埋め込まれたプログラム。段階 S5）と検疫 plugin（ファイル内容）の両方がこの crate を使い、同じプログラムには同じ判定を出す。S5 の Python parser（`rustpython-parser` 0.4、`default-features = false` + `num-bigint`。malachite は LGPL なので使わない）もこの crate に作る。
 4. **[決定]** 判定不能 — IO 失敗、parse 不能、未知の言語、hash 記録が読めない、plugin 未導入 — は必ず Ask か Deny に解決する（CLAUDE.md §3）。Ask を出せない場面（subagent）では `interactive::ask_available` に従って Deny にする（SUBSET Table C の subagent 列と同じ規則）。
+   - **[裁定済み F-1・F-2]（2026-11-17）** 「hash 記録が読めない」は、次の場合と同じく「記録が無い」として扱う: 記録が読めない、key が無い、ストアの IO が失敗した、ディレクトリが読めない。
+     そのうえで今の中身を検疫し、検疫できたらその結果に従う。検疫そのものができなければ、main では Ask、subagent では Deny にする。新しい記録は、書けるときだけ書く。
+     これで裁定 4 と E-1 は両立する（§6.2、§9.1）。
 5. **[決定]** テストは実装者以外が書き、RED を観測してから GREEN にする（CLAUDE.md §2 (a)(b)）。
 6. **[決定]** blastguard にファイル読み取りやスクリプト内容の解析を足さない（memory `script-quarantine-plugin.md`「don't add file-reading/script-content analysis to blastguard」）。blastguard の責務外の処理は blastguard に入れない（memory `blastguard-scope-only-command-safety.md`）。
 
@@ -123,7 +130,7 @@ B.5 行の Ask だけが、検疫 Allow を条件に Allow へ下がる。
 blastguard と検疫は、どちらも Bash の PreToolUse で動く。連携方式の候補は次の 3 つ。
 
 - **(A) 両方が独立した PreToolUse hook を持つ。** blastguard は B.5 行を Ask にし、検疫は Allow / Ask / Deny を出す。最終判定は Claude Code の合成規則に任せる。
-  - Claude Code が複数 plugin の PreToolUse 判定をどう合成するか（たとえば deny > ask > allow の優先か、並列実行か）は **未確認・実測予定**（repo 内に記述が見つからない。Q21、§9.2）。
+  - Claude Code が複数 plugin の PreToolUse 判定をどう合成するかは、2026-11-18 に実測した（Q21、§9.2）。2 つの plugin の hook は並列に走り、deny は allow に勝ち、ask も allow に勝つ（headless では ask は拒否になる）。
   - もし「最も制限的な判定が勝つ」なら、blastguard の Ask が検疫の Allow に勝つので、(A) では自動通過が実現しない。
 - **(B) blastguard が検疫 binary を subprocess で呼ぶ。** `script-quarantine check --path <resolved> --lang-hint <interpreter> ...` の終了ステータスと stdout を判定に使う（CLAUDE.md §3: 終了ステータスを必ず使う）。
   - binary が見つからない、spawn できない、異常終了した、出力を parse できない場合はすべて Undetermined → Ask。plugin 未導入もここに含まれる。
@@ -153,7 +160,7 @@ blastguard と検疫は、どちらも Bash の PreToolUse で動く。連携方
 | `python3 x.py` / `python x.py`（`python_source` のとおり） | 対象 | 言語は Python に固定 |
 | `zsh x.zsh` / `dash` / `ksh` | Ask（**[裁定済み Q6]** 当面 Ask） | brush-parser は bash の文法。SUBSET A.1 の ZshOnly 検出が file 内容にも十分かどうかは未検証。初期は Ask（未対応言語） |
 | `perl x.pl` / `ruby` / `node` | Ask（未知言語） | parser が無い。裁定 4 の「perl/ruby/node は subset 外」に合わせる |
-| `. file` / `source file` | 対象（**[決定]** Ask 化は検疫 plugin の導入と同時。§1.2 P0-b） | 現在 `program_source` は `Undetermined`（「`source` runs shell code: not modelled」）。`File(Value)` を返すよう変えた場合に限り対象にする。実行は現在の shell（Bash ツールの shell。この環境では zsh。Claude Code が Bash ツールでどの shell を使うかは**未確認・実測予定**、§9.2）の中で、状態（cwd・変数）を共有する点が別 process の実行と違う |
+| `. file` / `source file` | 対象（**[決定]** Ask 化は検疫 plugin の導入と同時。§1.2 P0-b） | 現在 `program_source` は `Undetermined`（「`source` runs shell code: not modelled」）。`File(Value)` を返すよう変えた場合に限り対象にする。実行は現在の shell（Bash ツールの shell。この環境では `/bin/zsh` 5.9 と実測した。§9.2）の中で、状態（cwd・変数）を共有する点が別 process の実行と違う |
 | `./run.sh`、`scripts/foo.sh`、絶対パスの直接実行 | 対象（**[裁定済み Q2]**。S4 = P0-a） | 現在は B.5 の対象外（§1.1）で、S4 で `File(Value)` を返すようにする。言語は shebang で判別する（§4.1）。blastguard はファイルを読まない（裁定 6）ので、shebang を読むのは検疫の側である。interpreter が無いので `--lang-hint` は渡さない |
 | PATH 上の名前（`mytool`） | 対象外 | 効果モデルの無い未知プログラム（裁定 2: Allow）。これを変えるのは本仕様の範囲外 |
 | `python3 -m mod` | Ask | module の解決は sys.path に依存し、静的に決まらない（B.5 python 行）。将来の論点 |
@@ -189,7 +196,7 @@ blastguard と検疫は、どちらも Bash の PreToolUse で動く。連携方
 1. interpreter を書いて起動した形（`bash x.sh`、`python3 x.py`）: **interpreter が言語を決める**。shebang・拡張子は見ない（bash/python は shebang 行をコメントとして読み飛ばす）。
 2. 直接実行の形（**[裁定済み Q2]** で対象に含めた）: shebang だけで決める。`#!/bin/sh`、`#!/bin/bash`、`#!/usr/bin/env bash`、`#!/usr/bin/env python3` を既知とする。
    - `#!/usr/bin/env -S …` や、未知の interpreter・shebang 行の引数（`#!/bin/bash -e` のオプションは shell_source と同じ集合に限る）→ Ask。
-   - shebang が無い → Ask（execve の ENOEXEC 後に呼び出し側の shell が何で実行するかは shell ごとに違う。Bash ツールが使う shell は未確認・実測予定、§9.2）。
+   - shebang が無い → Ask（execve の ENOEXEC 後に呼び出し側の shell が何で実行するかは shell ごとに違う。この環境の Bash ツールの shell は `/bin/zsh` と実測した。§9.2）。
    - 拡張子は使わない。
 3. NUL バイトを含む、UTF-8 として読めない → Ask。
 
@@ -255,7 +262,8 @@ blastguard と検疫は、どちらも Bash の PreToolUse で動く。連携方
 
 1. 言語（`sh` / `bash` / `python`）
 2. **規則表の版**: **[裁定済み Q12]** crate の version は使わない。判定規則を変えたときだけ手で上げる定数 `RULESET_VERSION` を key に入れる。
-   - 上げ忘れはゲートで検出する（§10.1）。ゲートの検出方法はこの仕様ではまだ決めていない。
+   - 上げ忘れはゲートで検出する（§10.1）。ゲートの置き場所と判定方法は未定であり、実装の段階で改めてユーザーに聞く（§9.1）。
+   - 記録の形式（schema）の版は `RULESET_VERSION` とは別に持つ（**[裁定済み D-1]**。下の「記録の形式」）。
    - 前回の版でこの項に書いていた「共有 crate の package version をそのまま key に入れる」は、判断で書いたものであり、この裁定で撤回した。
 3. 対象ファイルの内容 hash
 4. source / import で辿った各ファイルの（実パス、内容 hash）を実パス順に並べたもの
@@ -269,13 +277,28 @@ blastguard と検疫は、どちらも Bash の PreToolUse で動く。連携方
 - (b) を採る理由（推奨時の理由）: 自分の worktree の中に効く `rm -rf build` を、別の場所で実行したときにも通してしまう事故を構造的に防げる。
 
 **記録の形式（Q13 の帰結）**: 記録の本体は Finding 列である。記録には key のほかに、Finding 列（Table C の引き直しの入力。相対パスは相対のまま、記録時の cwd で解決しない）、
-実パス、検疫した時刻、記録した主体（`auto` / `human`、§7）を持たせる。
+実パス、検疫した時刻、記録した主体（`auto` / `human`、§7）、**schema 版**を持たせる。
 **[提案]** Finding 列は共有 crate の型をそのまま直列化する。
-**未決（§9.1 の D-1）**: 直列化の形式の版を何で表すか。前回の版では key の 2（crate の package version）に含めるとしていたが、Q12 の裁定で crate の version を使わなくなった。
-形式の変更を「判定規則の変更」として `RULESET_VERSION` を上げる対象に含めるかは、裁定の文面からは決まらない。
+**[裁定済み D-1]（2026-11-17）**: 形式の版は `RULESET_VERSION` とは別に持つ。記録ごとに schema 版を入れる。
+知らない schema 版の記録や読めない記録は無効として扱い、検疫し直す。
+**[裁定済み E-1]（2026-11-17）**: 記録が無効で検疫し直し、結果が Allow だったときは、その回から Allow にする。結果が Ask や Deny なら、その判定に従う。
+- 前回の版では「判定不能なので Ask とし、検疫し直す」と書いていた。検疫し直した結果をその回の判定に使うかどうかは決めていなかったが、E-1 で決まった。
+- schema 版の定数は、この記録ストアを持つ crate（検疫 plugin の crate）に置く（**[裁定済み E-3]**、§8.2）。
+- 前回の版では、形式の版を key の 2（crate の package version）に含めるとしていた。Q12 の裁定で crate の version を使わなくなったので未決（D-1）としていたが、この裁定で決まった。
 **[提案]** 記録を作るのは、記録時の PathCtx で `Judgement::Allow` になった場合だけとする（§5 の「記録するのは Allow だけ」を維持する）。
-Finding 列を読めない・直列化の形式が合わない記録は Undetermined として扱い、Ask にする（裁定 4: 記録が読めない → Ask）。
-**[提案]** approve.rs と同じく、記録は自分が置かれている key を名乗る。名乗った key とファイル名が一致しない記録は Undetermined として扱う。
+Finding 列を読めない記録も、上の D-1 と同じく無効として扱い、検疫し直す。判定は検疫し直した結果に従う（**[裁定済み E-1]**: Allow ならその回から Allow、Ask や Deny ならその判定）。
+**[提案]** approve.rs と同じく、記録は自分が置かれている key を名乗る。
+**[G-1]（2026-11-17、harness-5a の判断。ユーザーには聞いていない）**: 名乗った key とファイル名が一致しない記録は信用しない。「無効な記録」として、記録が無い場合と同じに扱い、検疫し直す（下の F-1・F-2 と同じ扱い）。理由: F-1・F-2 と E-1 のどちらに当てはめても、記録を信用する以外の読み方は fail-open にならず、信用する読み方だけが fail-open になる。
+**[裁定済み F-1・F-2]（2026-11-17）**: 次の場合は、どれも「記録が無い」として扱う。
+- 記録が読めない
+- key が無い
+- ストアの IO が失敗した
+- ディレクトリが読めない
+
+そのうえで今の中身を検疫し、検疫できたらその結果に従う（Allow ならその回から Allow、Ask や Deny ならその判定）。検疫そのものができなければ、main では Ask、subagent では Deny にする。
+新しい記録は、書けるときだけ書く（記録が書けなくても、判定は検疫の結果に従う）。これで §0 の裁定 4 と E-1 は両立する。
+- 前回の版では、自分の key を名乗らない記録を Undetermined とし、ストアの IO 失敗と記録ディレクトリが読めない場合を Ask としていた。この裁定で置き換えた。
+- 名乗った key とファイル名が一致しない記録（key はあるが別の key を名乗っている）も、上の G-1 により同じく「記録が無い」として扱う（§9.1 で未決としていた点）。
 
 ### 6.3 置き場所・形式・書き込み主体
 
@@ -284,17 +307,31 @@ Finding 列を読めない・直列化の形式が合わない記録は Undeterm
 - **[提案]** 書き込み: 一意な tmp 名（pid + 乱数）に書いてから `rename` する。
   - 注意: approve.rs の `write_atomic` は tmp 名が `path.with_extension("tmp")` で固定なので、同じ key に同時に書くと tmp が衝突しうる。この形は複製しない。
   - 同じ key への同時書き込みは、内容が同じ（決定論的な判定）なら後勝ちでよい。rename は原子的なので、半端なファイルが見えることはない。
-- **[裁定済み Q14]** 記録ディレクトリと approvals ストア（`~/.blastguard/approvals/`）への書き込みは、Bash でも Write / Edit でも常に Deny にする。書けるのは検疫 plugin 自身だけである。
+- **[裁定済み Q14 / D-3]** 記録ディレクトリと approvals ストア（`~/.blastguard/approvals/`）に書けるのは、**そのストアを持つ plugin の hook プロセスだけ**である。
+  approvals ストアは blastguard の hook が、検疫の記録は検疫 plugin の hook が書く。
+  agent のツール呼び出しからの書き込みは、どちらのストアでも常に Deny にする。
   agent が直接書いた記録を「安全」と読ませないためである。
+  - **[裁定済み E-4]（2026-11-17）** 常に Deny にする対象は、書き込みをするすべての tool である。Bash、Write、Edit、MultiEdit、NotebookEdit に加え、書き込むかどうか判定できない tool も含める。
+    前回の版は対象を「Bash / Write / Edit」と書いていた。
+  - **[裁定済み F-3]（2026-11-17）** 書き込むかどうか判定できない tool は、引数にストアのパスが現れて、ストアを指すと分かるときだけ Deny にする。
+    それ以外は既存の判定に任せる（Undetermined なら Ask）。未知の tool をすべて Deny にはしない。
   - [観測] rev `6024bd3a3` の `crates/blastguard/src/exclude.rs` を grep しても、`.blastguard/` 系の保護パターンは見当たらなかった。したがってこの Deny は blastguard 側の変更として新たに入れる必要がある。
-  - **食い違い（§9.1 の D-3）**: rev `5222ef741` では、approvals ストアに書いているのは blastguard 自身である（`crates/blastguard/src/main.rs:997` の `harness_core::config::base_dir("blastguard").join("approvals")`、書き込みは `approve.rs` の `Store`）。
-    裁定の「書けるのは検疫 plugin 自身だけ」を approvals ストアにどう当てはめるか（blastguard 自身の書き込みを含めるか）は、裁定の文面からは決まらない。この仕様では決めない。
+  - 前回の版で D-3 とした食い違い（Q14 の「書けるのは検疫 plugin 自身だけ」と、rev `5222ef741` で approvals ストアに書いているのが blastguard 自身〈`crates/blastguard/src/main.rs:997` の `harness_core::config::base_dir("blastguard").join("approvals")`、書き込みは `approve.rs` の `Store`〉であること）は、
+    **[裁定済み D-3]（2026-11-17）** で書き込み主体を「そのストアを持つ plugin の hook プロセス」と定めたことで解消した。
+  - **[裁定済み E-2]（2026-11-17）** schema 版は approvals ストア（blastguard の `~/.blastguard/approvals/`）の記録にも入れる。
+    知らない schema 版の記録や読めない記録は、無効として扱い Ask にする（§10.3 T-R18）。
+    F-1・F-2（記録が無い扱い → 検疫し直す）は検疫記録についての裁定であり、approvals ストアには及ばない。approvals には検疫し直す手順が無いので、無効な記録は Ask のままとする（**[G-2]** 2026-11-17、harness-5a が確認。ユーザーには聞いていない）。
+    schema 版の定数は、そのストアを持つ crate（blastguard）に置く（**[裁定済み E-3]**、§8.2）。
   - **[提案]** 記録の改ざん検出（署名・HMAC）は、鍵も agent が読める場所にあるので実効性が低い。採らない。
 
 ### 6.4 規則変更時の無効化
 
 - **[提案]** key に規則表の版（§6.2-2。**[裁定済み Q12]** 手で上げる `RULESET_VERSION`）を入れるので、版が上がれば古い記録は参照されなくなり、自動的に無効になる。古いファイルの掃除は別の CLI（`script-quarantine gc`）で行い、判定の正しさには関わらない。
 - **[裁定済み Q15]** 規則の版が上がったら、記録はすべて無効になる（人間承認の記録〈§7〉も含む）。
+- **[裁定済み D-2]（2026-11-17）** 記録に期限は付けない。中身と `RULESET_VERSION` が同じなら、承認はずっと有効である。
+- **[裁定済み D-1 / E-1]** 知らない schema 版の記録や読めない記録は無効として扱い、検疫し直す。検疫し直した結果が Allow ならその回から Allow、Ask や Deny ならその判定に従う（§6.2）。
+- **[裁定済み F-1・F-2]** 記録が読めない、key が無い、ストアの IO が失敗した、ディレクトリが読めない場合は「記録が無い」として扱い、今の中身を検疫してその結果に従う。検疫そのものができなければ main では Ask、subagent では Deny。新しい記録は書けるときだけ書く（§6.2）。
+- **[裁定済み E-2]** approvals ストアの記録にも schema 版を入れる。知らない版や読めない記録は無効として扱い、Ask にする（§6.3）。
 
 ### 6.5 検疫〜実行の間の内容変化（TOCTOU）
 
@@ -303,7 +340,7 @@ PreToolUse の時点で hash を計算してから、Bash ツールが実際に�
 候補は次のとおり（**[裁定済み Q16]**: 推奨どおり (b) + (c)）。
 
 - (a) **内容アドレスのコピーを実行させる**: 検疫済みの内容を `~/.script-quarantine/blobs/<hash>` に保存し、PreToolUse の `updatedInput` でコマンドを書き換える。
-  - Claude Code の PreToolUse で `updatedInput` が使えるかは **未確認・実測予定**（Q22、§9.2）。
+  - Claude Code の PreToolUse は `updatedInput` を受け付け、書き換えた後のコマンドが実行されることを 2026-11-18 に実測した（Q22、§9.2）。(b)+(c) の裁定は変えない。
   - 書き換えると `$0` / `BASH_SOURCE` / `__file__` / Python の sys.path[0] が変わり、スクリプトのディレクトリを基準にする相対参照が壊れる。
   - コマンドの書き換えは blastguard のコマンド判定とも順序の問題を起こす。
 - (b) **残余リスクとして明記する**: PreToolUse 時の hash で判定し、TOCTOU の窓を残す。そのうえで、同じコマンド内での変更のうち Table B で効果先が決まる書き込みは §3.3 で Ask にして窓を狭める（前段の未知プログラムは **[裁定済み Q7]** により Ask にしない）。
@@ -321,7 +358,10 @@ PreToolUse の時点で hash を計算してから、Bash ツールが実際に�
   2. **subagent**: subagent では許可できないので、記録は起きない。
   3. **Deny**: Deny は承認で通せない。
   4. **規則の版**: 規則の版（`RULESET_VERSION`、§6.2）が上がったら、記録はすべて無効になる（人間承認の記録も含む）。
-- **未決（§9.1 の D-2）**: 承認の失効（期限）を持たせるかについて、裁定は触れていない。この仕様では決めない。
+- **[裁定済み D-2]（2026-11-17）**: 期限は付けない。中身と `RULESET_VERSION` が同じなら、承認はずっと有効である。
+- **[裁定済み D-3]**: 人間承認の記録を書くのは、検疫 plugin の hook（PostToolUse）である。agent のツール呼び出しからの書き込みは Deny（§6.3）。
+  - **[裁定済み E-4 / F-3]**: Deny の対象は、書き込みをするすべての tool（Bash、Write、Edit、MultiEdit、NotebookEdit）と、書き込むかどうか判定できない tool である（§6.3）。
+    判定できない tool は、引数にストアのパスが現れて、ストアを指すと分かるときだけ Deny にする。それ以外は既存の判定に任せる（Undetermined なら Ask）（**[裁定済み F-3]**）。
 
 ## 8. 共有 lib crate
 
@@ -345,7 +385,9 @@ crates/effectscope/
   src/version.rs        # 記録の key に入れる RULESET_VERSION（Q12 裁定済み。判定規則を変えたときだけ手で上げる。crate の version は使わない）
 ```
 
-- IO は持たない（純粋関数）。ファイルの読み取り、記録ストア、hook の入出力は利用側に置く。
+- 記録の schema 版は `RULESET_VERSION` とは別に持つ（**[裁定済み D-1]**、§6.2）。
+- **[裁定済み E-3]（2026-11-17）** schema 版の定数は、そのストアを持つ crate に置く。approvals ストアの schema 版は blastguard に、検疫記録の schema 版は検疫 plugin の crate に置く。共有 crate（`effectscope`）には置かない（この crate は記録ストアを持たない）。
+- IO は持たない（純粋関数）。ファイルの読み取り、記録ストア、hook の入出力は利用側に置く。記録ストアに書けるのは、そのストアを持つ plugin の hook プロセスだけである（**[裁定済み D-3]**、§6.3）。
 - SUBSET.md は共有 crate に移す。blastguard 側にはポインタだけを残す（表の複製を作らない）。
 
 ### 8.3 blastguard から移すもの
@@ -374,6 +416,9 @@ crates/effectscope/
 裁定は依頼者 harness-5a がユーザー裁定として伝えてきたものである。「推奨どおり採用」とした項目は、この文書の推奨案の本文をそのまま書いた。
 推奨が一意に決まらない Q、および依頼者の分類と本文が食い違う Q は「推奨どおり採用」とせず、§9.1 に移した。実測で確かめる論点は §9.2 に置いた。
 §9.1 に移した 5 件（Q4-path、Q7、Q9、Q14、Q15）と、前回「推奨どおり」とした Q12 の見直しは、2026-11-17 の第 2 次ユーザー裁定（依頼者 harness-5a 経由）で裁定済みになった。
+その反映で生じた D-1〜D-3 は、2026-11-17 の第 3 次ユーザー裁定（依頼者 harness-5a 経由）で裁定済みになった（§9.1）。
+第 3 次裁定の反映で仕様に足さなかった 4 点は、2026-11-17 の第 4 次ユーザー裁定（依頼者 harness-5a 経由）で裁定済みになった（§9.1 の E-1〜E-4）。
+第 4 次裁定の反映で残した食い違い 3 点は、2026-11-17 の第 5 次ユーザー裁定（依頼者 harness-5a 経由）で裁定済みになった（§9.1 の F-1〜F-3）。
 
 1. **Q1 前提の食い違い — 解消済み（依頼者 harness-5a、2026-11-17）**: 今は Allow であることを観測で確かめた（§1.1）。P0 は S4 の一部として入れ、S2 の RED（`ceed4a0db`）で固定済み。前倒しはしない。
    - 追加裁定（2026-11-17）: `.` / `source` の Ask 化（P0-b）だけは S4 ではなく、検疫 plugin の導入と同時に入れる。理由は `. "$HOME/.cargo/env"` が subagent で Deny にならないようにするため（§1.2）。ruling 13 の RED の ignore 理由ラベルが S4 のままである食い違いは §1.1 に記した（扱いは harness-5a 側）。
@@ -389,19 +434,24 @@ crates/effectscope/
 9. **Q9 検疫 Deny の伝播 — 裁定済み（2026-11-17）**: 検疫が Deny と判定したら、blastguard の判定も Deny に上げる（§2.1、§5）。
 10. **Q10 legacy 層の不適用 — 裁定済み（2026-11-17）: 推奨どおり。** legacy の string 層をファイル内容に適用しない（§5 の [提案]）。
 11. **Q11 ファイルサイズ上限 — 裁定済み（2026-11-17）: 256 KiB。超えたときは推奨どおり Ask。**
-12. **Q12 規則の版 — 裁定済み（2026-11-17、第 2 次裁定で改訂）**: crate の version は使わない。判定規則を変えたときだけ手で上げる `RULESET_VERSION` を key に入れる。上げ忘れはゲートで検出する（§6.2、§10.1）。
+12. **Q12 規則の版 — 裁定済み（2026-11-17、第 2 次裁定で改訂）**: crate の version は使わない。判定規則を変えたときだけ手で上げる `RULESET_VERSION` を key に入れる。上げ忘れはゲートで検出する（§6.2、§10.1）。ゲートの置き場所と判定方法は未定で、実装の段階で改めてユーザーに聞く（§9.1）。
+    - 記録の形式（schema）の版は `RULESET_VERSION` とは別に持つ（D-1 裁定済み、§9.1）。schema 版の定数は、そのストアを持つ crate に置く（E-3 裁定済み、§8.2）。
     - 前回の版は「推奨どおり crate の version（厳しい側）」とし、「§6.2 の推奨は一意に決まる」と判断して書いていた。これは判断であって裁定ではなかったので、この裁定で置き換えた。
 13. **Q13 判定文脈 — 裁定済み（2026-11-17）: (b) を採る。** Finding の列を保存し、実行のたびに今の PathCtx で Table C を引き直す。「同じ hash は自動で通す」はこの意味に読み替える（§0 裁定 2、§6.2）。
-14. **Q14 記録ディレクトリの保護 — 裁定済み（2026-11-17）**: 記録ディレクトリと approvals ストア（`~/.blastguard/approvals/`）への書き込みは、Bash でも Write / Edit でも常に Deny にする。書けるのは検疫 plugin 自身だけ（§6.3）。approvals ストアの現在の書き手との食い違いは §9.1 の D-3。
+14. **Q14 記録ディレクトリの保護 — 裁定済み（2026-11-17。書き込み主体は D-3、対象の tool は E-4 と F-3 で確定）**: 記録ディレクトリと approvals ストア（`~/.blastguard/approvals/`）への書き込みは、agent のツール呼び出しからは常に Deny にする。
+    対象は書き込みをするすべての tool（Bash、Write、Edit、MultiEdit、NotebookEdit）と、書き込むかどうか判定できない tool である（E-4）。
+    判定できない tool は、引数にストアのパスが現れて、ストアを指すと分かるときだけ Deny にする。それ以外は既存の判定に任せる（Undetermined なら Ask）。未知の tool をすべて Deny にはしない（F-3）。
+    書けるのは、そのストアを持つ plugin の hook プロセスだけ（approvals ストアは blastguard の hook、検疫の記録は検疫 plugin の hook。§6.3、§9.1 の D-3）。
 15. **Q15 人間承認 — 裁定済み（2026-11-17）**: 人間が Ask の許可プロンプトで許可し、かつ実行が成功したときだけ、PostToolUse でその hash を記録する。subagent では許可できないので、記録は起きない。Deny は承認で通せない。規則の版が上がったら、記録はすべて無効になる（§7）。
-    - 前回の版の推奨「規則の版が上がっても人間承認は無効にしない」は、この裁定で採らないことになった。承認の期限は裁定に含まれない（§9.1 の D-2）。
-16. **Q16 TOCTOU — 裁定済み（2026-11-17）: 推奨どおり (b)+(c)**（残余リスクを明記し、事後検出を足す）。(a) は `updatedInput`（Q22、未確認・実測予定）に依存する。
+    - 前回の版の推奨「規則の版が上がっても人間承認は無効にしない」は、この裁定で採らないことになった。
+    - 承認の期限は D-2 で裁定済み: 期限は付けない。中身と `RULESET_VERSION` が同じなら、承認はずっと有効である（§7、§9.1 の D-2）。
+16. **Q16 TOCTOU — 裁定済み（2026-11-17）: 推奨どおり (b)+(c)**（残余リスクを明記し、事後検出を足す）。(a) は `updatedInput`（Q22。受け付けることは 2026-11-18 に実測済み、§9.2）に依存する。
 17. **Q17 crate 名 — 裁定済み（2026-11-17）: `effectscope`。**
 18. **Q18 述語の置き場所 — 裁定済み（2026-11-17）: 推奨どおり**、PathClass の述語を trait として注入し、正典を blastguard に残す。
 19. **Q19 移行順序 — 裁定済み（2026-11-17）: 推奨どおり** §8.4 の順序（S3 は移設前に完了、M1 純粋移動、S4/S5 は共有 crate の上で実装）。
 20. **Q20 GATE crate 指定 — 裁定済み（2026-11-17）: 推奨どおり**、検疫 plugin を GATE crate にする（§10.1）。共有 crate の version bump は `scripts/check-version-bumped.py` を拡張して強制する（§10.1 の [提案]）。
-21. **Q21 Claude Code の合成規則 — 未確認・実測予定（§9.2）。**
-22. **Q22 `updatedInput` — 未確認・実測予定（§9.2）。**
+21. **Q21 Claude Code の合成規則 — 2026-11-18 に実測済み（§9.2）。**
+22. **Q22 `updatedInput` — 2026-11-18 に実測済み（§9.2）。**
 
 ### 9.1 ユーザーに聞く論点
 
@@ -416,21 +466,58 @@ crates/effectscope/
 | Q14 | 裁定済み（2026-11-17）。§9 の 14. |
 | Q15 | 裁定済み（2026-11-17）。§9 の 15. |
 
-裁定を本文へ反映する中で、裁定の文面からは決まらない点が新たに出た。自分の判断では埋めず、ここに残す。
+第 2 次裁定を本文へ反映する中で、裁定の文面からは決まらない点が新たに出た（D-1〜D-3）。これらは 2026-11-17 の第 3 次ユーザー裁定（依頼者 harness-5a 経由）で裁定済みになった。
 
-| id | 未決点 | 出どころ |
-|---|---|---|
-| D-1 | Finding 列の直列化形式の版を何で表すか。前回の版は crate の package version に含めていたが、Q12 で crate の version を使わなくなった。形式の変更を `RULESET_VERSION` を上げる対象に含めるか。 | Q12、§6.2 |
-| D-2 | 人間承認の記録に期限（失効）を持たせるか。Q15 の裁定は触れていない。 | Q15、§7 |
-| D-3 | Q14 の「書けるのは検疫 plugin 自身だけ」を approvals ストア（`~/.blastguard/approvals/`）にどう当てはめるか。rev `5222ef741` ではこのストアに書いているのは blastguard 自身（`crates/blastguard/src/main.rs:997`、`approve.rs` の `Store`）である。 | Q14、§6.3 |
+| id | 当初の未決点 | 状態 | 出どころ |
+|---|---|---|---|
+| D-1 | Finding 列の直列化形式の版を何で表すか。前回の版は crate の package version に含めていたが、Q12 で crate の version を使わなくなった。 | **裁定済み（2026-11-17）**: 形式の版は `RULESET_VERSION` とは別に持つ。記録ごとに schema 版を入れ、知らない版や読めない記録は無効として扱い、検疫し直す（§6.2、§6.4）。検疫し直した結果の扱いは E-1 で裁定済み。 | Q12、§6.2 |
+| D-2 | 人間承認の記録に期限（失効）を持たせるか。 | **裁定済み（2026-11-17）**: 期限は付けない。中身と `RULESET_VERSION` が同じなら、承認はずっと有効である（§6.4、§7）。 | Q15、§7 |
+| D-3 | Q14 の「書けるのは検疫 plugin 自身だけ」を approvals ストア（`~/.blastguard/approvals/`）にどう当てはめるか。rev `5222ef741` ではこのストアに書いているのは blastguard 自身（`crates/blastguard/src/main.rs:997`、`approve.rs` の `Store`）である。 | **裁定済み（2026-11-17）**: 書き込めるのは、そのストアを持つ plugin の hook プロセスだけである。approvals ストアは blastguard の hook が、検疫の記録は検疫 plugin の hook が書く。agent のツール呼び出しからの書き込みは、どちらのストアでも常に Deny（§6.3。対象の tool は E-4 と F-3 で裁定済み）。 | Q14、§6.3 |
 
-### 9.2 実測で確かめる論点（結果はまだ無い）
+第 3 次裁定の反映で仕様に足さなかった 4 点（E-1〜E-4）は、2026-11-17 の第 4 次ユーザー裁定（依頼者 harness-5a 経由）で裁定済みになった。
+
+| id | 当初の未決点 | 状態 | 反映先 |
+|---|---|---|---|
+| E-1 | 記録が無効で検疫し直したとき、検疫し直した結果をその回の判定に使うか。 | **裁定済み（2026-11-17）**: 結果が Allow なら、その回から Allow にする。結果が Ask や Deny なら、その判定に従う。 | §6.2、§6.4、T-R5、T-R11、T-R14 |
+| E-2 | schema 版を approvals ストア（`~/.blastguard/approvals/`）にも入れるか。 | **裁定済み（2026-11-17）**: 入れる。 | §6.3、§6.4、T-R18 |
+| E-3 | schema 版の定数をどの crate に置くか。 | **裁定済み（2026-11-17）**: そのストアを持つ crate に置く。approvals ストアは blastguard、検疫記録は検疫 plugin の crate。 | §6.2、§6.3、§8.2 |
+| E-4 | 常に Deny にする tool の範囲（前回の版は Bash / Write / Edit と書いていた）。 | **裁定済み（2026-11-17）**: 書き込みをするすべての tool。Bash、Write、Edit、MultiEdit、NotebookEdit に加え、書き込むかどうか判定できない tool も含める（判定できない tool の範囲は F-3 で裁定済み）。 | §6.3、§7、§9 の 14.、T-R9、T-R9b |
+
+E-1 / E-4 の反映で本文の記述に出た食い違い 3 点（F-1〜F-3）は、2026-11-17 の第 5 次ユーザー裁定（依頼者 harness-5a 経由）で裁定済みになった。
+
+| id | 当初の食い違い | 状態 | 反映先 |
+|---|---|---|---|
+| F-1 | §0 の裁定 4 は「hash 記録が読めない」を判定不能に挙げ、Ask か Deny に解決するとしている。E-1 では、読めない記録は無効として検疫し直し、結果が Allow ならその回から Allow になる。両者を両立すると読んでよいか。 | **裁定済み（2026-11-17）**: F-2 と合わせて回答。下の「F-1・F-2 の裁定」。 | §0 の裁定 4、§6.2、§6.4、T-R5、T-R6、T-R19 |
+| F-2 | 自分の key を名乗らない記録（前回の版は Undetermined）、ストアの IO 失敗（T-R5）、記録ディレクトリが読めない（T-R6）が、E-1 の「記録が無効」に当たるか。前回の版はこれらを Ask としていた。 | **裁定済み（2026-11-17）**: F-1 と合わせて回答。下の「F-1・F-2 の裁定」。 | §6.2、§6.4、T-R5、T-R6、T-R19 |
+| F-3 | E-4 の「書き込むかどうか判定できない tool」について、書き込み先がストアかどうかも判定できない場合、その tool の呼び出しをすべて Deny にするのか。 | **裁定済み（2026-11-17）**: 書き込むかどうか判定できない tool は、引数にストアのパスが現れて、ストアを指すと分かるときだけ Deny にする。それ以外は既存の判定に任せる（Undetermined なら Ask）。未知の tool をすべて Deny にはしない。 | §6.3、§7、§9 の 14.、T-R9、T-R9b、T-R20 |
+
+**F-1・F-2 の裁定（2026-11-17）**: 次の場合は、どれも「記録が無い」として扱う。
+
+- 記録が読めない
+- key が無い
+- ストアの IO が失敗した
+- ディレクトリが読めない
+
+そのうえで今の中身を検疫し、検疫できたらその結果に従う。検疫そのものができなければ、main では Ask、subagent では Deny にする。新しい記録は、書けるときだけ書く。これで §0 の裁定 4 と E-1 は両立する。
+
+F-1・F-2 の反映で決まらなかった次の 2 点は、harness-5a が判断した（2026-11-17。どちらもユーザーには聞いていない。fail-open にならない側を採ったため）。
+
+- **G-1**: 名乗った key とファイル名が一致しない記録（key はあるが、別の key を名乗っている。§6.2 の [提案]）は信用しない。「無効な記録」として、記録が無い場合と同じに扱い、検疫し直す。
+- **G-2**: approvals ストアの無効な記録は、F-1・F-2 の対象外として Ask のままとする（§6.3、T-R18）。
+
+残る未決点は、次の 1 件である。自分の判断では埋めず、**実装の段階で改めてユーザーに聞く**。
+
+| 未決点 | 出どころ |
+|---|---|
+| Q12 の「`RULESET_VERSION` の上げ忘れはゲートで検出する」について、ゲートの置き場所（どの script / hook に置くか）と判定方法（「判定規則を変えた」をどう機械判定するか）。 | Q12、§6.2、§10.1、T-R13 |
+
+### 9.2 実測で確かめる論点（2026-11-18 に実測）
 
 | 論点 | 状態 | 結果で変わるもの |
 |---|---|---|
-| Q21 複数の PreToolUse hook（複数 plugin）の判定がどう合成されるか（優先順位、並列か直列か） | 未確認・実測予定 | Q4 の (A) の可否（現在は (B) を裁定済み） |
-| Q22 Claude Code の PreToolUse が `updatedInput` を受け付けるか | 未確認・実測予定 | Q16 の (a) の可否（現在は (b)+(c) を裁定済み） |
-| Bash ツールが使う shell（この環境では zsh に見えるが確かめていない） | 未確認・実測予定 | `. file` / `source file` の実行文脈（§3.1）、shebang の無い直接実行の扱い（§4.1） |
+| Q21 複数の PreToolUse hook（複数 plugin）の判定がどう合成されるか（優先順位、並列か直列か） | **実測済み**: 並列に走る。deny は allow に勝つ（どちらの plugin が deny を返しても同じ）。ask も allow に勝つ（headless では拒否になる）。下の M-3 の c0〜c4。 | Q4 の (A) の可否（現在は (B) を裁定済み。裁定は変えない） |
+| Q22 Claude Code の PreToolUse が `updatedInput` を受け付けるか | **実測済み**: 受け付ける。書き換えた後のコマンドが実行され、元のコマンドは実行されない。2 つの plugin が両方書き換えると、片方だけが効く（どちらが効くかの規則は 1 回の観測では決まらない）。書き換えと deny が重なると deny になる。下の M-3 の c5〜c7。 | Q16 の (a) の可否（現在は (b)+(c) を裁定済み。裁定は変えない） |
+| Bash ツールが使う shell | **実測済み（この環境）**: `/bin/zsh` 5.9。`/bin/zsh -c 'source <shell snapshot> … && eval '<コマンド>''` の形で起動される（`setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL` が先に入る）。ログインシェルの設定に従うのかは確かめていない。 | `. file` / `source file` の実行文脈（§3.1）、shebang の無い直接実行の扱い（§4.1） |
 
 ## 10. GATE crate、rollout と有効化の順序、テスト計画
 
@@ -440,7 +527,7 @@ crates/effectscope/
   - GATE crate にすると、`scripts/rollout-plugins.sh` の `GATE_CRATES=` と、`scripts/check-gate-crates-sync.py` の SOURCES に登録された全コピー（`.githooks/pre-push`、`scripts/continuous-audit.sh`、`scripts/check-plugin-rollout.py`、`scripts/check-fail-open-mutation.py`、`crates/harness-core/src/fleet.rs`、`crates/overwatch/skills/continuous-audit/SKILL.md`、`docs/OVERVIEW.md` ほか）を同じ commit で揃える必要がある。rollout では canary が必須になる（`docs/repo-operations.md`「GATE クレートは canary 必須」）。
 - **[提案]** 共有 crate は非 plugin なので GATE crate の対象外になる。ただし `scripts/check-version-bumped.py` の `SHARED_CRATE = "harness-core"` は harness-core しか見ないので、共有 crate の bump-on-change を強制するよう拡張する必要がある（**[裁定済み Q20]** 推奨どおり拡張する）。共有 crate の変更は blastguard と検疫 plugin の両方の判定を変えるので、bump が無いと配布された版から判定規則を特定できなくなる。
 - **[裁定済み Q12]** 記録の key には crate の version ではなく、判定規則を変えたときだけ手で上げる `RULESET_VERSION` を入れる（§6.2）。`RULESET_VERSION` の上げ忘れはゲートで検出する。記録の無効化の正しさは、crate の version bump の強制ではなく、このゲートに依存する。
-  ゲートをどの script に置くか、「判定規則を変えた」をどう機械判定するかは、この仕様ではまだ決めていない。
+  ゲートをどの script に置くか、「判定規則を変えた」をどう機械判定するかは未定であり、実装の段階で改めてユーザーに聞く（§9.1）。
 
 ### 10.2 rollout と有効化の順序（**[提案]**）
 
@@ -500,19 +587,37 @@ fail-closed のケース（§3 の判定不能すべて）には **(fc)** を付
 - T-R1 同じ内容の 2 回目 → parse せず、保存した Finding 列から今の PathCtx で Table C を引き直して Allow（parser の呼び出し回数で観測する。**[裁定済み Q13]**）。
 - T-R2 1 バイト変更 → 再検疫。
 - T-R3 規則の版（`RULESET_VERSION`。**[裁定済み Q12]**）を上げる → 再検疫。人間承認の記録も無効になる（**[裁定済み Q15]**）。対照: 共有 crate の package version だけを上げ、`RULESET_VERSION` を据え置くと、記録は有効のまま（key に crate の version が入っていないことの証拠）。
-- T-R13 (fc) (**[裁定済み Q12]**) 判定規則を変えたのに `RULESET_VERSION` を上げていない差分 → ゲートが検出して止める。対照: 同じ差分で `RULESET_VERSION` を上げると通る。ゲートの置き場所と検出方法は未定（§10.1）。
+- T-R13 (fc) (**[裁定済み Q12]**) 判定規則を変えたのに `RULESET_VERSION` を上げていない差分 → ゲートが検出して止める。対照: 同じ差分で `RULESET_VERSION` を上げると通る。ゲートの置き場所と検出方法は未定で、実装の段階で改めてユーザーに聞く（§9.1、§10.1）。
 - T-R4 別のストア（`SCRIPT_QUARANTINE_DIR`）に向ける → 再検疫（T-R1 が本当にストアを読んでいる証拠）。
-- T-R5 (fc) 記録が壊れている（parse できない）、自分の key を名乗らない記録、ストアの IO 失敗 → Ask（**[決定]** 記録が読めない → Ask）。
-- T-R6 (fc) 記録ディレクトリが読めない（権限）→ Ask。
+- T-R5 (fc) (**[裁定済み D-1 / E-1 / F-1・F-2]**) 記録が読めない（壊れていて parse できない）、key が無い、ストアの IO が失敗した → 「記録が無い」として扱われ、今の中身を検疫する（parser の呼び出しで観測する）。判定は T-R19 の 3 通りで観測する。
+  - 前回の版では、自分の key を名乗らない記録とストアの IO 失敗は Ask としていた。F-1・F-2 の裁定で置き換えた。
+- T-R6 (fc) (**[裁定済み F-1・F-2]**) 記録ディレクトリが読めない（権限）→ 「記録が無い」として扱われ、今の中身を検疫する。判定は T-R19 の 3 通りで観測する。
+  - 前回の版では Ask としていた。F-1・F-2 の裁定で置き換えた。
+- T-R19 (fc) (**[裁定済み F-1・F-2]**、**[G-1]**) 記録が読めない・key が無い・名乗った key とファイル名が一致しない（G-1）・ストアの IO が失敗した・ディレクトリが読めない、の 5 つそれぞれについて、次の 3 つを観測する（5 × 3 = 15 ケース）。key の不一致は、別の内容で Allow として記録したファイルを、検疫できない中身の key の名前で置く形で作る（記録を信用すると Allow になってしまう形なので、信用していないことを観測できる）。
+  - 中身が安全 → Allow（記録が無い扱い → 検疫 → Allow。parser が呼ばれたことを観測する）。
+  - 検疫できない中身（parse 不能、未知の言語など）→ main で Ask、subagent で Deny。
+  - 記録が書けない（記録ディレクトリへの書き込みが失敗する）状態でも、判定は検疫の結果に従う（安全な中身なら Allow、検疫できない中身なら main で Ask / subagent で Deny）。書けなかった記録が残っていないことも観測する。
 - T-R7 同じ key に同時に書く（N プロセス）→ 半端な記録が見えない。どれか 1 つが残る。
 - T-R8 (**[裁定済み Q13]**) 同じ内容を別の cwd で実行 → Table C を引き直し、その場所の判定になる（例: 自分の worktree で Allow として記録した `rm -rf build` を、Table C で Allow にならない場所で実行すると Allow にならない）。
-- T-R11 (fc) 記録の Finding 列を読めない、直列化の形式が合わない → Ask（§6.2）。
+- T-R11 (fc) 記録の Finding 列を読めない → 記録は無効として扱われ、検疫し直す。判定は検疫し直した結果に従う（§6.2、**[裁定済み D-1 / E-1]**。T-R14 と同じ 3 通りを観測する）。
+- T-R14 (fc) (**[裁定済み D-1 / E-1]**) 記録の schema 版が知らない値（未来の版、未定義の値）、schema 版のフィールドが無い、または schema 版を読めない → 記録は無効として扱われ、検疫し直す（parser の呼び出しで観測する）。判定は検疫し直した結果に従うことを、ファイルの中身を変えた 3 通りで観測する。
+  - 検疫し直した結果が Allow になる中身 → **その回から** Allow（同じ呼び出しで Ask を挟まない）。
+  - 検疫し直した結果が Ask になる中身 → Ask（subagent では Deny）。
+  - 検疫し直した結果が Deny になる中身 → Deny（main でも Deny）。
+  - 対照: 同じ記録の schema 版を既知の値に戻すと、T-R1 と同じく parse せずに Table C を引き直す。
+- T-R16 (**[裁定済み D-2]**) 期限が無いことの確認: 検疫した時刻が古い記録（例: 時刻を数年前に書き換えた、または時計を進めた状態で読む）でも、中身と `RULESET_VERSION` が同じなら Allow（再検疫しない）。人間承認の記録（`recorded_by = human`）でも同じ。
 - T-R12 (fc) **[裁定済み Q5]** plugin を無効化した後、残っている記録があっても B.5 行は Ask。
-- T-R9 (fc) (**[裁定済み Q14]**) agent が記録ディレクトリ（`~/.script-quarantine/records/`）に書く → Write でも Edit でも Bash（`echo … > …`、`cp`、`mv` など）でも常に Deny（main でも Deny。Ask にならない）。
-- T-R9b (fc) (**[裁定済み Q14]**) agent が approvals ストア（`~/.blastguard/approvals/`）に Write / Edit / Bash で書く → 常に Deny。
-- T-R9c 対照: 検疫 plugin 自身による記録の書き込みは成功する（T-R0 で記録が 1 件できることと合わせて、T-R9 の Deny が「何も書けない」ではないことを示す）。
+- T-R9 (fc) (**[裁定済み Q14 / D-3 / E-4]**) agent のツール呼び出しで記録ディレクトリ（`~/.script-quarantine/records/`）に書く → Write、Edit、MultiEdit、NotebookEdit、Bash（`echo … > …`、`cp`、`mv` など）のどれでも常に Deny（main でも Deny。Ask にならない）。
+  書き込むかどうか判定できない tool の呼び出しは、引数にストアのパスが現れて、ストアを指すと分かるときだけ Deny（**[裁定済み E-4 / F-3]**。T-R20）。
+- T-R9b (fc) (**[裁定済み Q14 / D-3 / E-4]**) agent のツール呼び出しで approvals ストア（`~/.blastguard/approvals/`）に Write、Edit、MultiEdit、NotebookEdit、Bash で書く → 常に Deny（main でも Deny。Ask にならない）。書き込むかどうか判定できない tool の呼び出しは、引数にストアのパスが現れて、ストアを指すと分かるときだけ Deny（**[裁定済み F-3]**。T-R20）。
+- T-R20 (**[裁定済み F-3]**) 書き込むかどうか判定できない tool について、記録ディレクトリと approvals ストアのそれぞれで次の 2 つを観測する。
+  - (fc) 引数にストアのパスがあり、ストアを指すと分かる → Deny（main でも Deny）。
+  - 引数にストアのパスが無い → 既存の判定に従う（Undetermined なら Ask）。対照: 未知の tool がすべて Deny にはならないことを確かめる（同じ未知の tool で、ストアのパスを含まない呼び出しが Deny にならないことを観測する）。
+- T-R9c 対照 (**[裁定済み D-3]**): 検疫 plugin の hook プロセスによる記録ディレクトリへの書き込みは成功する（T-R0 で記録が 1 件できることと合わせて、T-R9 の Deny が「何も書けない」ではないことを示す）。
+- T-R9d 対照 (**[裁定済み D-3]**): blastguard の hook プロセスによる approvals ストアへの書き込みは許可され、成功する（`approve.rs` の `Store` による承認の記録が 1 件できる。T-R9b の Deny が「何も書けない」ではないことを示す）。
 - T-R10 Ask / Deny / Undetermined の判定は記録されない。
-
+- T-R18 (fc) (**[裁定済み E-2]**) approvals ストア（`~/.blastguard/approvals/`）の記録の schema 版が知らない値（未来の版、未定義の値）、schema 版のフィールドが無い、schema 版を読めない、または記録そのものを読めない → 記録は無効として扱われ、Ask になる（承認の記憶で Allow に下がらない。subagent では Deny）。
+  対照: 同じ記録の schema 版を blastguard が知っている値に戻すと、承認の記憶が効く（`tests/approval_memory.rs` の形に倣う）。
 **人間承認（**[裁定済み Q15]**）**
 - T-H1 main で Ask の許可プロンプトに人間が許可し、実行が成功 → PostToolUse でその hash が `recorded_by = human` として記録される。次回の同じ内容は聞かれない。
 - T-H2 (fc) 人間が許可したが実行が失敗（非 0 終了）→ 記録されない。
@@ -528,10 +633,15 @@ fail-closed のケース（§3 の判定不能すべて）には **(fc)** を付
 **計測（テストではなく観測）**
 - M-1 実在するスクリプト（この repo の `scripts/*.sh`）を検疫したとき、Allow / Ask / Deny が何件になるか。動的な source・`$HOME`・引数の多用によって Ask が多数になる予想（§4.3）を、数字で確かめる。数字には測定コマンド・rev・日付を併記する。
 - M-2 **[裁定済み Q3]** P0-a（S4）を入れたことによる Ask の増加を replay で測る。数字には測定コマンド・rev・日付を併記する。
-- M-3 §9.2 の実測（Q21 hook の合成規則、Q22 `updatedInput`、Bash ツールが使う shell）。いずれも未確認・実測予定で、結果はまだ無い。
+- M-3 §9.2 の実測（2026-11-18、Claude Code 2.1.284、macOS、origin/main `dc047ef9f`）。
+  - 手順: PreToolUse（matcher `Bash`）hook を 1 つずつ持つ使い捨ての plugin `pa`・`pb` を作った。hook は 2 秒待ってから、開始・終了時刻をログに書き、設定した判定を返す。これを `claude -p --model haiku --setting-sources project --plugin-dir pa --plugin-dir pb --output-format json "…touch <dir>/m_orig…"` で 1 ケース 1 回ずつ走らせ、どの marker ファイルができたかと `permission_denials` を見た。user 設定（稼働中の plugin）は読ませていない。
+  - c0 allow+無判定 → 実行された。c1 無判定+無判定 → 権限確認になり、headless なので拒否（対照）。c2 allow+deny、c3 deny+allow → どちらも拒否。c4 allow+ask → 拒否（理由に「pb says ask」）。どのケースでも 2 つの hook の開始時刻の差は 0.01 秒以内で、2 秒の待ちが重なっていた（並列）。
+  - c5 書き換え+無判定 → 書き換え後の `m_rewA` だけができた。c6 書き換え A+書き換え B → `m_rewB` だけができた。c7 書き換え+deny → 拒否、marker なし。
+  - 測っていないこと: 対話モードでの ask の扱い、marketplace から入れた plugin（`--plugin-dir` ではない）での合成、c6 で効く側の規則（1 回だけの観測）。Bash ツールの shell がログインシェルに従うかどうか。
 
 ## 11. 実装の順序（まとめ、**[提案]**）
 
-§9.1 の未決点（D-1〜D-3）の解消と §9.2 の実測 → S3 完了 → M1（共有 crate `effectscope` への純粋移動）→ S4（P0-a を含む。Ask の増加は replay で測る）→ 検疫 plugin の sh/bash 版（parked で配布）→ canary で有効化（同時に P0-b = `.`/`source` の Ask 化）→ S5（Python）→ 検疫 plugin の Python 対応。
+S3 完了 → M1（共有 crate `effectscope` への純粋移動）→ S4（P0-a を含む。Ask の増加は replay で測る）→ 検疫 plugin の sh/bash 版（parked で配布）→ canary で有効化（同時に P0-b = `.`/`source` の Ask 化）→ S5（Python）→ 検疫 plugin の Python 対応。
 
-Q1〜Q20 と Q4-path は 2026-11-17 に裁定済み（Q4-path、Q7、Q9、Q12〈改訂〉、Q14、Q15 は第 2 次裁定）。未裁定は §9.2 の実測 3 件（Q21、Q22、Bash ツールが使う shell）と、裁定の反映で生じた §9.1 の D-1〜D-3 である。
+Q1〜Q20 と Q4-path は 2026-11-17 に裁定済み（Q4-path、Q7、Q9、Q12〈改訂〉、Q14、Q15 は第 2 次裁定）。裁定の反映で生じた §9.1 の D-1〜D-3 も 2026-11-17 に裁定済み（第 3 次裁定）。第 3 次裁定の反映で足さなかった E-1〜E-4 も 2026-11-17 に裁定済み（第 4 次裁定）。E-1 / E-4 の反映で出た食い違い 3 点（F-1〜F-3）も 2026-11-17 に裁定済み（第 5 次裁定）。
+§9.2 の実測 3 件（Q21、Q22、Bash ツールが使う shell）は 2026-11-18 に測った（M-3）。未裁定は §9.1 に残した Q12 の上げ忘れ検出ゲートの置き場所と判定方法（実装の段階で改めてユーザーに聞く）である。F-1・F-2 の反映で決まらなかった 2 点（G-1、G-2）は harness-5a が判断した（§9.1）。

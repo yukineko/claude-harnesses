@@ -57,8 +57,10 @@ On each stop `tdd gate`:
    the **whole checkout** is scanned, with the reason saying authorship was not
    verified
   .
-   Known gap: a file written by a command that never names it (`cargo fmt`, a
-   shell glob, a script) is excluded too;
+   A write that names no path (`cargo fmt`, a shell glob, a script) is NOT
+   excluded: user ruling 2026-11-18 supersedes 2026-10-17 — if the session ran
+   any such Bash call (or its Bash calls cannot be read), the **whole
+   checkout** is scanned and authorship is reported as not verified;
 4. counts *added implementation lines* (impl-glob files, minus test files and
    inline test markers) and looks for **test evidence** (an added `#[test]` /
    `def test_` / `func Test…` / `it(...)`, or a changed file under `tests/`).
@@ -130,6 +132,56 @@ no recorded `cmd`) reports `transition:"command_mismatch"`,
 the `/tdd` skill's own phases — it's the machine oracle `condukt`'s Fail→Pass
 gate (`condukt state check-oracle`) calls to verify a `fix`/`feature` task's
 RED/GREEN proofs deterministically.
+
+### Proof schema and per-command slots (user ruling 2026-11-17)
+
+`red.json` / `green.json` carry:
+
+- `cmd`, `passed`, `exit_code`, `ts`, `author`; green also `red_proof` (the paired RED file).
+- `tree_identity`: the tree the run saw. `head` (HEAD commit sha), `diff_hash` (hash, via
+  `git hash-object`, of the uncommitted diff HEAD→working content, untracked files included) and
+  `tree` (content-based tree id: the working tree, untracked included, `git add -A`'d into a throwaway
+  index and `git write-tree`'d; `.gitignore` honoured, the proof dir `.tdd/` excluded; the same content
+  gives the same value before and after a commit; known limit: ignored files and submodule content are
+  not seen). A git failure, an unborn HEAD or a gitlink is never filled with an empty string or a
+  default: that component is `null`, the reason is under `undetermined.<component>`, and
+  `determined` is `false`.
+- `tests`: test name → `"pass"` / `"fail"` / `"ignored"`, from the libtest lines of the FULL run log
+  (a name reported twice with different results keeps the least favourable: fail > ignored > pass).
+- `counts`: `{"determined":true,"passed":N,"failed":N,"ignored":N,"result_lines":K}` (sum of the
+  `test result:` lines). With no parsable `test result:` line it is `{"determined":false,"reason":…}`,
+  which is NOT `0 passed`.
+- `output_tail`: recorded in both red and green.
+- green only: `red_failed_tests`, the names the paired RED proof recorded as `"fail"` (`null`, not an
+  empty list, when the RED proof has no readable `tests` map, e.g. one written by an older tdd).
+
+**Slots.** One task can hold several test commands. The first command recorded for a task and kind
+lives at `<task>.<kind>.json`; later ones at `<task>.<16 hex of fnv1a64(cmd)>.<kind>.json`. A slot is
+identified by the `cmd` inside the file, not by its name. Re-running a command overwrites its own slot,
+never another command's. `tdd green --cmd X` requires a RED slot for the same command `X` and refuses
+otherwise (a RED of one command is no RED for another). `tdd verify` succeeds with at least one RED and
+one GREEN.
+
+**Oracle over slots.** With at most one RED and one GREEN the verdict is the single-slot one (including
+`command_mismatch`). Otherwise proofs are paired by `cmd` and the oracle is valid (exit 0) only if
+EVERY command went Fail→Pass. A command with only one side, a proof with no recorded `cmd`, or two
+same-kind proofs of one command is invalid (exit 1); a RED/GREEN pair whose commands differ is never
+valid. `slots` in the report lists each command. An unreadable proof is `undetermined` (exit 2), and that side's `has_red` / `has_green` is `null`, not a bool.
+
+**Old layout.** A single-slot `<task>.red.json` / `<task>.green.json` written by an older tdd is read
+unchanged as one slot (it only lacks the new fields); one that recorded no `cmd` stays
+`command_mismatch`, as before. On the write side, a cmd-less RED at the legacy name
+(`<task>.red.json`) counts as the slot of every command. So `tdd green --cmd B` accepts it as its
+RED and writes a GREEN, and `tdd red --cmd A` overwrites it. The oracle still reads that RED's
+`cmd` as `null`, so the pair stays `command_mismatch` (`valid_fp_oracle:false`) and never becomes
+valid. A cmd-less proof at any other name, or one that is not valid JSON, is refused because its
+command slot cannot be determined.
+
+**The oracle does not compare trees** (ruling 2026-11-17). Whether the tree changed after GREEN is
+compared by `condukt merge` (backlog 7768aeaf); tdd only records the values. From `green.json` alone
+7768aeaf can read: whether GREEN's passed set (`tests` entries `"pass"`) contains RED's failed set
+(`red_failed_tests`; `null` = unknown), whether `counts.passed > 0` (only when `counts.determined` is `true`; `false`
+is undeterminable, not 0), and the content tree id at GREEN (`tree_identity.tree`).
 
 ## Config & other subcommands
 

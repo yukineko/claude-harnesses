@@ -9,6 +9,15 @@
 //! the proofs down with the worktree, and afterwards neither `tdd oracle` nor
 //! `condukt state check-oracle` could see the F→P oracle any more.
 //!
+//! Slots (backlog 519f089e): tdd keeps one proof file per test command. The
+//! first command of a task and kind is `<task>.<kind>.json`; further commands
+//! are `<task>.<16 hex>.<kind>.json`. Both end in `.red.json` / `.green.json`,
+//! so [`proof_files`] and [`persist_before_teardown`] copy every slot with no
+//! special case, and `tdd oracle` (which reads all slots) judges the copies.
+//! [`found_proof_ids_note`] groups a slot file under its task id. A proof
+//! directory written by an older tdd holds only the first-command files; they
+//! are read unchanged (a single slot).
+//!
 //! Contract:
 //!
 //! * [`persist_before_teardown`] copies every `<wt>/<proof dir>/*.red.json` /
@@ -183,7 +192,22 @@ pub fn found_proof_ids_note(dir: &Path, task: &str) -> String {
             .unwrap_or_default();
         for kind in ["red", "green"] {
             if let Some(id) = name.strip_suffix(&format!(".{kind}.json")) {
-                ids.entry(id.to_string()).or_default().push(kind);
+                // A per-command slot is `<task>.<16 hex>.<kind>.json` (tdd
+                // proof slots): it belongs to `<task>`, not to an id of its own.
+                let id = match id.rsplit_once('.') {
+                    Some((task, h))
+                        if h.len() == 16
+                            && h.bytes()
+                                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
+                    {
+                        task
+                    }
+                    _ => id,
+                };
+                let kinds = ids.entry(id.to_string()).or_default();
+                if !kinds.contains(&kind) {
+                    kinds.push(kind);
+                }
             }
         }
     }
@@ -561,6 +585,17 @@ mod tests {
         assert_eq!(configured_proof_dir(&f).unwrap(), Some(Some("pp".into())));
         std::fs::write(&f, "not = = toml").unwrap();
         assert_eq!(configured_proof_dir(&f).unwrap(), Some(None));
+    }
+
+    #[test]
+    fn found_proof_ids_groups_slot_files_under_their_task() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(&tmp.path().join(".tdd/t3.red.json"), "{}");
+        write(&tmp.path().join(".tdd/t3.0123456789abcdef.red.json"), "{}");
+        write(&tmp.path().join(".tdd/t3.green.json"), "{}");
+        let note = found_proof_ids_note(tmp.path(), "t9");
+        assert!(note.contains("t3 (red+green)"), "{note}");
+        assert!(!note.contains("0123456789abcdef"), "{note}");
     }
 
     #[test]

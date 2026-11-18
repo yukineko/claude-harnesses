@@ -30,7 +30,7 @@ overwatch バイナリをビルド済みにしておくこと。スクリプト�
 
 ## 対象 crate (既定)
 
-既定の target は GATE crates に audit 専用の backlog を加えた `blastguard,propguard,specguard,stuckguard,mutategate,overwatch,parallelguard,backlog` である。
+既定の target は GATE crates に audit 専用の backlog を加えた `blastguard,propguard,specguard,stuckguard,mutategate,overwatch,parallelguard,askrelay,backlog` である。
 `--target` で上書きできる。
 
 ### Step 0 — 引数を決めること

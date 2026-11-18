@@ -68,8 +68,8 @@ path = "crates/blastguard/src/protection.rs"
 reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; blastguard.md does not describe it."
 
 [[ack]]
-path = "crates/blastguard/src/retro.rs"
-reason = "Retrospective review of gate interventions; blastguard.md has no retro section (grep retro: 0 hits). Spec debt."
+path = "crates/overwatch/src/retro.rs"
+reason = "Retrospective review of gate interventions (moved from crates/blastguard/src/retro.rs 2026-11-17; `blastguard retro` injects the rule-id table); neither blastguard.md nor overwatch.md has a retro section. Spec debt, carried over unchanged."
 
 [[ack]]
 path = "crates/blastguard/src/reversible.rs"
@@ -186,6 +186,14 @@ reason = "Protection statement printed by --protects and parsed by scripts/check
 [[ack]]
 path = "crates/parallelguard/src/protection.rs"
 reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; parallelguard has no docs/specs/parallelguard.md. Spec debt."
+
+[[ack]]
+path = "crates/askrelay/src/main.rs"
+reason = "askrelay is new (2026-11-17, relay moved out of blastguard); it has no docs/specs/askrelay.md and no specguard area. The relay behaviour is described in docs/specs/blastguard.md (enqueue side) and crates/askrelay/README.md. Spec debt."
+
+[[ack]]
+path = "crates/askrelay/src/protection.rs"
+reason = "Protection statement printed by --protects and parsed by scripts/check-gate-protection.py; askrelay has no docs/specs/askrelay.md. Spec debt."
 
 [[ack]]
 path = "crates/mutategate/src/protection.rs"

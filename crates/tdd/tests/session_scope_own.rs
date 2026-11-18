@@ -11,9 +11,12 @@
 //! attributed that way are EXCLUDED. An unreadable/missing/empty transcript is
 //! undetermined: the whole checkout is judged and the message says so.
 //!
-//! Pinned only at the hook boundary (block/allow in stdout JSON). Residual hole
-//! this contract accepts: writes by commands that never name the path
-//! (`cargo fmt`, globs, scripts) are not attributed.
+//! Pinned only at the hook boundary (block/allow in stdout JSON). The residual
+//! hole the 2026-10-17 contract accepted (writes by commands that never name the
+//! path: `cargo fmt`, globs, scripts) is CLOSED: user ruling 2026-11-18
+//! supersedes 2026-10-17; a session with any path-less Bash write keeps ALL
+//! changed files in scope (pinned in
+//! `backlog_20261118_unnamed_write_excluded_from_scope.rs`).
 //!
 //! Written by a disinterested author (CLAUDE.md section 2(a)).
 

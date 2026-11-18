@@ -1,6 +1,6 @@
 [package]
 name = "tdd"
-version = "0.1.95"
+version = "0.1.100"
 edition = "2021"
 rust-version.workspace = true
 description = "Test-first gate for Claude Code: on Stop it blocks when implementation lines were added with no test visible in the uncommitted changes, and red/green/verify subcommands record RED before GREEN."
@@ -22,9 +22,9 @@ chrono = { workspace = true }
 clap = { workspace = true }
 dirs = "5"
 anyhow = { workspace = true }
+tempfile = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
 harness-core = { path = "../harness-core", features = ["fault-injection"] }
 
 [lints]

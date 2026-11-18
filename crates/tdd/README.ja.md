@@ -49,6 +49,41 @@ Fail→Pass のときだけ exit 0。有効とみなすのは RED と GREEN が�
 Fail→Pass ゲート（`condukt state check-oracle`）が `fix`/`feature` タスクの RED/GREEN 証跡を
 決定論的に検証するために呼ぶ機械オラクルである。
 
+#### 証跡の形（スキーマ）と cmd ごとの slot（ユーザー裁定 2026-11-17）
+
+`red.json` / `green.json` は次のフィールドを持つ。
+
+- `cmd` / `passed` / `exit_code` / `ts` / `author`。green は加えて `red_proof`（対になった RED 証跡のパス）。
+- `tree_identity`: その実行が見た tree。`head`（HEAD の commit sha）、`diff_hash`（未 commit 差分の hash。untracked を含み、HEAD から作業ツリー内容への差分を `git hash-object` したもの）、
+  `tree`（内容ベースの tree id。untracked を含む作業ツリーを使い捨て index に `git add -A` して `git write-tree` した値。`.gitignore` は守り、証跡ディレクトリ `.tdd/` は除外する。
+  内容が同じなら commit の前後で同じ値になる。既知の限界: ignore されたファイルと submodule の中身は見ない）。
+  git の失敗・unborn HEAD・gitlink の存在は空文字や既定値で埋めず、該当成分を `null` にして理由を `undetermined.<成分>` に書き、`determined:false` にする。
+- `tests`: テスト名 → `"pass"` / `"fail"` / `"ignored"`（実行ログ全文の libtest 行から取る。同名が複数 binary に現れて結果が食い違うときは fail > ignored > pass の順で厳しい方を残す）。
+- `counts`: `{"determined":true,"passed":N,"failed":N,"ignored":N,"result_lines":K}`（`test result:` 行の合計）。`test result:` 行を 1 本も parse できないときは
+  `{"determined":false,"reason":…}` であり、`0 passed` とは別の値である。
+- `output_tail`: red と green の両方に同じ名前で記録する。
+- green のみ `red_failed_tests`: 対になった RED 証跡で `"fail"` だった名前の一覧（RED 証跡に読める `tests` が無い場合 = 旧 tdd の証跡などは空配列ではなく `null`）。
+
+**slot**: 1 タスクが複数のテストコマンドを持てる。あるタスク・種別（red/green）で最初に記録された cmd は従来名 `<task>.<kind>.json`、2 本目以降は
+`<task>.<cmd の fnv1a64 を 16 桁 hex>.<kind>.json` に保存する。slot の同一性はファイル名ではなくファイル内の `cmd` で決める。同じ cmd を再実行するとその slot を上書きするが、別 cmd は上書きしない。
+`tdd green --cmd X` は **X と同じ cmd の RED slot** を要求し、無ければ拒否する（他 cmd の RED は X の RED ではない）。
+`tdd verify` は RED と GREEN がそれぞれ 1 つ以上あれば成功。
+
+**oracle の判定（複数 slot）**: RED と GREEN が各 1 つ以下ならこれまでの単一 slot の判定そのまま（`command_mismatch` を含む）。それ以外は cmd ごとに組にし、
+**全 cmd が RED→GREEN で Fail→Pass のときだけ valid**（exit 0）。片側しか無い cmd、`cmd` が記録されていない証跡、同じ cmd の同種証跡が 2 つ以上ある場合は invalid（exit 1）。
+cmd が一致しない RED/GREEN の組は valid にしない。レポートは `slots` に cmd ごとの結果を並べる。読めない証跡があれば `undetermined`（exit 2）。
+
+**旧形式との互換**: 旧 tdd が書いた単一 slot の `<task>.red.json` / `<task>.green.json` はそのまま 1 つの slot として読む（`tree_identity` などの新フィールドが無いだけ）。
+旧 tdd が cmd を記録しなかった証跡は `command_mismatch` になる（従来どおり）。
+書き込み側では、旧名（`<task>.red.json`）にある cmd 無しの RED はどの cmd の slot としても扱う。
+そのため `tdd green --cmd B` はそれを RED として受け付けて GREEN を書き、`tdd red --cmd A` はそれを上書きする。
+ただし oracle は RED の cmd を `null` と読むので、その組は `command_mismatch`（`valid_fp_oracle:false`）のままで valid にはならない。
+旧名以外の場所にある cmd 無しの証跡や、JSON として読めない証跡は、どの cmd の slot かを判定できないとして拒否する。
+
+**oracle は tree を比較しない**（ユーザー裁定 2026-11-17）。GREEN の後に tree が変わったかの比較は `condukt merge`（backlog 7768aeaf）が担う。tdd は比較に必要な値を証跡に記録するだけである。
+7768aeaf は `green.json` だけから次を読める: GREEN の passed 集合（`tests` で `"pass"` の名前）が RED の failed 集合（`red_failed_tests`。`null` は不明）を含むか、`counts.passed > 0` か（`counts.determined` が `true` のときだけ。
+`false` は 0 ではなく判定不能）、GREEN 時の内容 tree id（`tree_identity.tree`）。`red.json` の `tests` / `counts` も同じ形で読める。
+
 ### サブコマンド
 
 | サブコマンド | 目的 |

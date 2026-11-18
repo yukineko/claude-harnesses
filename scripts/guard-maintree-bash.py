@@ -131,7 +131,17 @@ Known blind spots (not visible to `git status`): files under .git itself
 (.git/config, .git/hooks) and gitignored files. Changes by ANOTHER session in
 main between a main-cwd call's Pre and Post are REFUSED (they cannot be told
 apart from this call's own writes) and recorded in THIS session's write record
-(over-attribution, the restrictive side); the message says so. One exception
+(over-attribution, the restrictive side); the message says so. EXCEPT when
+the command is PROVEN read-only (command_provably_read_only: a shlex lexer plus
+a closed allowlist, never a regex): its window changes are another process's,
+so they are still logged but flagged `"attributed": false` and the Stop gate
+ignores them (backlog dc97fc2d, user ruling 2026-11-17). `git -C <path>` is
+provable only when <path> (resolved against the call's cwd) is a checkout of
+THIS repository, i.e. its git common dir equals the guarded repo's (linked
+worktrees count); another repo, a nonexistent path or any git failure is not
+(user ruling 2026-11-18: reading another place with git is forbidden). Not provable
+(expansion, redirect, unknown program/option, unlexable) = recorded as before.
+One exception
 (pre_dirt_landed_in_head): HEAD moved, `git status` names no path at Post,
 every path dirty at Pre already held at Pre -- in both working tree and index
 -- exactly what the new HEAD holds, and integration_move explains the HEAD
@@ -159,6 +169,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -178,6 +189,213 @@ ALLOW = 0
 
 class Undetermined(Exception):
     pass
+
+
+# --- proven read-only commands (backlog dc97fc2d) --------------------------
+# User ruling 2026-11-17: "読むだけと証明できたら記録しない". A call whose command
+# is PROVEN read-only cannot have written the paths that changed in main during
+# its window, so those paths are another process's and must not be charged to
+# this session. Proof is a real lexer (shlex with punctuation tokens, as
+# deny-no-verify.py does) plus a closed allowlist; it is NOT a regex over the
+# text. Anything the lexer cannot follow, any operator outside the allowlist,
+# any expansion, any program/option outside the allowlist is "not proven" and
+# keeps the old behaviour (record as this session's write, restrictive side).
+# Closed per-program flag allowlists: (short flag chars, exact long names).
+# A flag is accepted only when it is listed here; ANY other flag is "not
+# provable". Long options are matched EXACTLY on the part before `=` (git and
+# GNU tools accept unique-prefix abbreviations such as `--out=` for `--output=`,
+# so an abbreviation can never be proven to be what it looks like).
+_RO_PROGRAMS = {
+    "ls": ("1aAdlhFpRtSrnLG", frozenset()),
+    "cat": ("nbsTEvA", frozenset()),
+    "head": ("nqc0123456789", frozenset()),
+    "tail": ("nqc0123456789", frozenset()),  # no -f/-F: follow never ends
+    "wc": ("lwcmL", frozenset()),
+    "pwd": ("LP", frozenset()),
+    "echo": ("n", frozenset()),
+    "true": ("", frozenset()),
+    "false": ("", frozenset()),
+    "grep": ("ivnclLoqsHhwxEFGrRe", frozenset()),
+    "stat": ("Lfc", frozenset()),
+    "file": ("bLi", frozenset()),  # NOT -C (compiles *.mgc) and NOT -m
+    "basename": ("as", frozenset()),
+    "dirname": ("", frozenset()),
+    "which": ("a", frozenset()),
+    "diff": ("uUcrqibBwNy0123456789", frozenset()),
+    "cmp": ("lsb", frozenset()),
+}
+# git subcommand -> (short chars, exact long names, exact extra short tokens)
+_RO_GIT = {
+    "status": ("sbvz", frozenset({
+        "--porcelain", "--short", "--branch", "--long", "--untracked-files",
+        "--ignored", "--no-renames", "--null", "--ahead-behind",
+        "--no-ahead-behind"}), frozenset({"-uall", "-uno", "-unormal"})),
+    "log": ("pn0123456789SG", frozenset({
+        "--oneline", "--graph", "--decorate", "--no-decorate", "--stat",
+        "--name-only", "--name-status", "--format", "--pretty", "--max-count",
+        "--since", "--until", "--author", "--grep", "--all", "--abbrev-commit",
+        "--no-merges", "--merges", "--first-parent", "--reverse", "--date",
+        "--follow", "--no-color", "--shortstat", "--numstat", "--patch",
+        "--no-patch", "--skip", "--abbrev", "--topo-order", "--date-order"}),
+        frozenset()),
+    "diff": ("pUwbq0123456789", frozenset({
+        "--stat", "--name-only", "--name-status", "--cached", "--staged",
+        "--numstat", "--shortstat", "--no-color", "--color", "--patch",
+        "--no-patch", "--quiet", "--exit-code", "--check", "--no-renames",
+        "--summary", "--unified", "--ignore-space-change",
+        "--ignore-all-space", "--word-diff", "--no-index", "--minimal",
+        "--histogram", "--patience", "--diff-filter", "--relative",
+        "--abbrev", "--full-index", "--binary", "--raw"}), frozenset()),
+    "show": ("ps", frozenset({
+        "--stat", "--name-only", "--name-status", "--oneline", "--format",
+        "--pretty", "--no-patch", "--patch", "--no-color", "--abbrev-commit",
+        "--numstat", "--shortstat", "--summary", "--date"}), frozenset()),
+    "rev-parse": ("q", frozenset({
+        "--show-toplevel", "--git-dir", "--git-common-dir", "--abbrev-ref",
+        "--short", "--verify", "--is-inside-work-tree", "--show-cdup",
+        "--show-prefix", "--symbolic-full-name", "--absolute-git-dir",
+        "--is-bare-repository", "--quiet"}), frozenset()),
+    "rev-list": ("n", frozenset({
+        "--count", "--max-count", "--oneline", "--parents", "--reverse",
+        "--all", "--first-parent", "--no-merges", "--abbrev-commit",
+        "--since", "--until", "--author", "--left-right",
+        "--ancestry-path"}), frozenset()),
+    "ls-files": ("cdmosuz", frozenset({
+        "--cached", "--deleted", "--modified", "--others", "--ignored",
+        "--stage", "--exclude-standard", "--unmerged", "--full-name",
+        "--error-unmatch"}), frozenset()),
+    "cat-file": ("tspe", frozenset(), frozenset()),  # NOT --filters/--textconv
+    "describe": ("", frozenset({
+        "--tags", "--abbrev", "--always", "--long", "--contains", "--all",
+        "--exact-match"}), frozenset()),
+    "blame": ("Lewsfnp", frozenset({
+        "--porcelain", "--line-porcelain", "--show-name", "--show-email",
+        "--abbrev", "--date"}), frozenset()),  # NOT --contents
+    "shortlog": ("sne", frozenset({"--summary", "--numbered", "--email"}),
+                 frozenset()),
+    "name-rev": ("", frozenset({
+        "--name-only", "--tags", "--refs", "--no-undefined"}), frozenset()),
+    "merge-base": ("a", frozenset({
+        "--is-ancestor", "--fork-point", "--all", "--octopus"}), frozenset()),
+    "diff-tree": ("rtp", frozenset({
+        "--name-only", "--name-status", "--no-commit-id", "--root", "--stat",
+        "--numstat"}), frozenset()),
+    "diff-index": ("", frozenset({
+        "--cached", "--name-only", "--name-status", "--quiet", "--raw"}),
+        frozenset()),
+    "ls-tree": ("rtdlz", frozenset({
+        "--name-only", "--full-tree", "--long", "--abbrev"}), frozenset()),
+    "for-each-ref": ("", frozenset({
+        "--format", "--sort", "--count", "--merged", "--no-merged",
+        "--contains", "--points-at"}), frozenset()),
+    "show-ref": ("dq", frozenset({
+        "--heads", "--tags", "--verify", "--hash", "--abbrev", "--quiet",
+        "--head", "--dereference"}), frozenset()),
+}
+_RO_SEPARATORS = frozenset({"|", "&&", "||", ";"})
+_RO_PUNCT = "();<>|&"
+
+
+def _ro_flags_ok(args: list[str], short: str, long_names, extra=frozenset()) -> bool:
+    for a in args:
+        if a == "--":
+            return True  # everything after is a positional argument
+        if a in extra or a == "-" or not a.startswith("-"):
+            continue
+        if a.startswith("--"):
+            if a.split("=", 1)[0] not in long_names:
+                return False
+        elif not all(c in short for c in a[1:]):
+            return False
+    return True
+
+
+def _ro_c_target_is_this_repo(path: str, cwd, common) -> bool:
+    """User ruling 2026-11-18 (「別の場所をgitでよむのは禁止。自分のrepoは読んで」):
+    `git -C <path>` is provable only when <path>, resolved against the call's
+    cwd, is a checkout of THIS repository -- its git common dir equals the
+    guarded repo's common dir (linked worktrees share it). Another repo, a
+    nonexistent path, a missing cwd/common, a resolution failure or a git
+    error/non-zero exit is NOT provable."""
+    if not isinstance(cwd, str) or not cwd or common is None:
+        return False
+    target = path if os.path.isabs(path) else os.path.join(cwd, path)
+    if not os.path.isdir(target):
+        return False
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")}
+    try:
+        proc = subprocess.run(
+            ["git", "-C", target, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True, text=True, env=env, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    out = proc.stdout.strip()
+    if proc.returncode != 0 or not out:
+        return False
+    try:
+        return os.path.realpath(out) == os.path.realpath(str(common))
+    except (OSError, ValueError):
+        return False
+
+
+def _ro_simple_command(argv: list[str], cwd=None, common=None) -> bool:
+    if not argv:
+        return False
+    prog = argv[0]
+    if prog in _RO_PROGRAMS:
+        short, long_names = _RO_PROGRAMS[prog]
+        return _ro_flags_ok(argv[1:], short, long_names)
+    if prog != "git":
+        return False
+    i = 1
+    seen_c = False
+    # only `-C <path>` / `--no-pager` may precede the subcommand: `-c k=v` can
+    # configure an arbitrary program to run. `-C` (at most once) must name a
+    # checkout of THIS repository (_ro_c_target_is_this_repo).
+    while i < len(argv):
+        if argv[i] == "-C" and i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+            if seen_c or not _ro_c_target_is_this_repo(argv[i + 1], cwd, common):
+                return False
+            seen_c = True
+            i += 2
+        elif argv[i] == "--no-pager":
+            i += 1
+        else:
+            break
+    if i >= len(argv) or argv[i] not in _RO_GIT:
+        return False
+    short, long_names, extra = _RO_GIT[argv[i]]
+    return _ro_flags_ok(argv[i + 1:], short, long_names, extra)
+
+
+def command_provably_read_only(command, cwd=None, common=None) -> bool:
+    """True only when `command` is proven to write nothing; False = not proven.
+    `cwd` (the call's cwd) and `common` (the guarded repo's git common dir)
+    are needed only to judge `git -C <path>`; without them any -C is False."""
+    if not isinstance(command, str) or not command.strip():
+        return False
+    # expansions, escapes and line breaks hide commands from a token view.
+    if any(ch in command for ch in ("$", "`", "\\", "\n", "\r")):
+        return False
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=_RO_PUNCT)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    current: list[str] = []
+    segments: list[list[str]] = []
+    for tok in tokens:
+        if tok in _RO_SEPARATORS:
+            segments.append(current)
+            current = []
+        elif tok and all(c in _RO_PUNCT for c in tok):
+            return False  # redirect, subshell, background, here-doc ...
+        else:
+            current.append(tok)
+    segments.append(current)
+    return all(_ro_simple_command(seg, cwd, common) for seg in segments)
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -1016,8 +1234,12 @@ def post(payload: dict, common: Path, main: Path) -> int:
         if deny_ledger is None:
             err = "scripts/deny_ledger.py could not be loaded (%s)" % _LEDGER_IMPORT_ERROR
         else:
+            tool_input = payload.get("tool_input")
             err = deny_ledger.record_writes(
-                payload, str(main), [str(main / p) for p in touched], "guard-maintree-bash.py")
+                payload, str(main), [str(main / p) for p in touched], "guard-maintree-bash.py",
+                attributed=not command_provably_read_only(
+                    tool_input.get("command") if isinstance(tool_input, dict) else None,
+                    cwd=payload.get("cwd"), common=common))
         if err is not None:
             print(
                 "Refused: the main-tree paths this call changed could not be recorded "

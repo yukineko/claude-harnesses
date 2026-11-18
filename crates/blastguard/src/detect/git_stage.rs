@@ -30,29 +30,46 @@
 //!   `.`, `./`, `..`), one starting with `:` (pathspec magic: `:/` is the
 //!   repository root, `:!x` / `:^x` mean "everything except x", and the other
 //!   magic words are not modelled), or one holding a glob character
-//!   (`*`, `?`, `[`; git matches a pathspec as a glob across the whole tree
-//!   even when the shell did not expand it, so `'*'` and `'*.rs'` are not
-//!   explicit paths). `git commit <pathspec>` commits the current content of
-//!   every tracked file the pathspec matches, so a whole-tree pathspec there
-//!   is the same sweep as `-a`.
+//!   (`*`, `?`, `[`) that is NOT confined to a literal directory (git matches
+//!   a pathspec as a glob even when the shell did not expand it, so `'*'`,
+//!   `'*.rs'`, `*` and `./*.rs` are not explicit paths). User ruling
+//!   2026-11-18: a glob whose text before the first glob character holds a
+//!   `/`-separated literal directory — relative, no component empty, `.` or
+//!   `..`, not starting with `:` or `-`, and no `..` component anywhere —
+//!   (`crates/x/tests/backlog_*.rs`, quoted or not) can only name paths under
+//!   that directory, both as the shell expands it and as git matches it, so
+//!   it is judged like the explicit directory pathspec `git add src/` (Allow;
+//!   see `glob_bounded_by_literal_dir`). `git commit <pathspec>` commits the
+//!   current content of every tracked file the pathspec matches, so a
+//!   whole-tree pathspec there is the same sweep as `-a`.
 //! * `--pathspec-from-file`: the paths are not on the command line.
 //! * a long option abbreviation that could be one of the above (`--al`,
 //!   `--up`, `--ren`): git accepts any unambiguous prefix, and an ambiguous
 //!   one is resolved to the restrictive side.
 //! * the argv cannot be determined (CLAUDE.md §3): an unclosed quote or
-//!   substitution, a backslash before whitespace, an unknown option or short
+//!   substitution, a backslash before whitespace other than a newline (a
+//!   backslash-newline in the raw segment is a line continuation the shell
+//!   removes, so `git add \` / `  a \` / `  b` is `git add a b`; once the
+//!   tokens had to be re-joined with spaces, see `raw_args`, it is not known
+//!   to have been one; a `\` that ENDS the text adds nothing — the reading
+//!   being judged split at a continuation there, and the line-continuation
+//!   reading judges the joined argv with every reading, see
+//!   `readings::every_reading`), an unknown option or short
 //!   flag, a word whose content is a runtime expansion (`$VAR`, `$(…)`,
 //!   `` `…` ``, `$'…'`, a leading `~`) in a flag or pathspec position, or an
-//!   unquoted expansion / glob / brace list anywhere (the shell may split it
-//!   into extra words, e.g. `-m *` passes every file as a pathspec). An
+//!   unquoted expansion / brace list anywhere, or an unquoted glob anywhere
+//!   that is not confined to a literal directory as above (the shell may
+//!   split it into extra words, e.g. `-m *` passes every file as a
+//!   pathspec). An
 //!   expansion INSIDE double quotes as the value of a value-taking option
 //!   (`-m "$(cat <<'EOF' … EOF)"`) is one word git consumes as the value and
 //!   stays Allow.
 //!
 //! Residual, measured as not covered: an explicit directory pathspec
-//! (`git add src/`, or an absolute path naming the repository root) stages
-//! everything under it and stays Allow (a directory is not told apart from a
-//! file without reading the filesystem); a git alias
+//! (`git add src/`, or an absolute path naming the repository root) and a
+//! glob confined to a literal directory (`src/*`) stage everything under it
+//! and stay Allow (a directory is not told apart from a file without reading
+//! the filesystem); a git alias
 //! whose body is `add -A` / `commit -a`; the `GIT_*` environment.
 //!
 //! Here-documents inside `$(…)`: the substitution is read with
@@ -93,9 +110,14 @@ struct Word {
     text: String,
     /// Some of the content is a runtime expansion: the text is not the word.
     opaque: bool,
-    /// An UNQUOTED expansion, glob or brace list: the shell may turn this one
-    /// token into any number of words, so not even the word count is known.
+    /// An UNQUOTED expansion or brace list: the shell may turn this one token
+    /// into any number of words, so not even the word count is known.
     split: bool,
+    /// An UNQUOTED glob character (`*`, `?`, `[`): the shell may expand the
+    /// word into several. Harmless only when every word it can become lies
+    /// under a literal directory ([`glob_bounded_by_literal_dir`]); see
+    /// `verdict`.
+    glob: bool,
 }
 
 /// Skip a `$`-expansion or backquote starting at `chars[i]`, marking `w`
@@ -150,9 +172,13 @@ fn double_quoted(chars: &[char], mut i: usize, w: &mut Word) -> Result<usize, &'
                     w.text.push(d);
                     i += 2;
                 }
+                // A line continuation: the shell removes the pair. A real
+                // newline is only present when the text is the raw segment
+                // (`raw_args`); re-joined tokens hold no newline.
+                Some('\n') => i += 2,
                 // The words may have been re-joined with single spaces (see
                 // `raw_args`), so whether this was an escaped newline (a
-                // continuation) is not known in general; not modelled.
+                // continuation) is not known; not modelled.
                 Some(d) if d.is_whitespace() => return Err("a backslash before whitespace"),
                 Some(_) => {
                     w.text.push('\\');
@@ -179,6 +205,16 @@ fn shell_words(text: &str) -> Result<Vec<Word>, &'static str> {
     let mut in_word = false;
     let mut i = 0;
     while let Some(&c) = chars.get(i) {
+        // Backslash-newline outside quotes is a line continuation: bash
+        // removes the pair before splitting words, so it neither ends nor
+        // starts a word (`a\<newline>b` is `ab`; `a \<newline>  b` is two
+        // words). A newline is only present in the raw segment text
+        // (`raw_args`); re-joined tokens never hold one, so there a lone `\`
+        // still reaches the "backslash before whitespace" refusal below.
+        if c == '\\' && chars.get(i + 1) == Some(&'\n') {
+            i += 2;
+            continue;
+        }
         if c.is_whitespace() {
             if in_word {
                 out.push(std::mem::take(&mut w));
@@ -203,6 +239,22 @@ fn shell_words(text: &str) -> Result<Vec<Word>, &'static str> {
                 Some(&d) if !d.is_whitespace() => {
                     w.text.push(d);
                     i += 2;
+                }
+                // A `\` that ends the text. The splitters keep every `\X`
+                // pair together, so a segment can end in a lone `\` only
+                // where a newline followed it (a line continuation that the
+                // reading being judged split at; the line-continuation
+                // reading, `shell_lex::line_continuation_reading`, judges the
+                // joined argv in addition) or at the end of the command,
+                // where bash drops it (measured, /bin/bash 3.2: `bash -c
+                // 'printf "[%s]\n" a \'` prints `[a]`). Either way it adds
+                // nothing to this argv.
+                None => {
+                    // A lone `\` is no word at all (not an empty pathspec).
+                    if at_start {
+                        in_word = false;
+                    }
+                    i += 1;
                 }
                 _ => return Err("a backslash before whitespace or at the end"),
             },
@@ -229,7 +281,7 @@ fn shell_words(text: &str) -> Result<Vec<Word>, &'static str> {
             }
             '*' | '?' | '[' => {
                 w.text.push(c);
-                w.split = true;
+                w.glob = true;
                 i += 1;
             }
             '{' => {
@@ -264,7 +316,7 @@ fn shell_words(text: &str) -> Result<Vec<Word>, &'static str> {
 /// True for a pathspec that matches the whole tree (or the current
 /// directory's whole subtree, or an ancestor's) — see the module doc.
 fn whole_tree_pathspec(p: &str) -> bool {
-    if p.starts_with(':') || p.contains(['*', '?', '[']) {
+    if p.starts_with(':') || (p.contains(['*', '?', '[']) && !glob_bounded_by_literal_dir(p)) {
         return true;
     }
     // Lexically normalised, nothing below the starting directory remains
@@ -280,6 +332,33 @@ fn whole_tree_pathspec(p: &str) -> bool {
         }
     }
     depth == 0
+}
+
+/// True for a glob pathspec confined to a literal directory (user ruling
+/// 2026-11-18): the text before the first glob character (`*`, `?`, `[`)
+/// holds a `/`, and the directory before the last such `/` is a relative
+/// literal path none of whose components is empty, `.` or `..`; the
+/// pathspec does not start with `:` (magic) or `-` (an option once
+/// expanded), and no component anywhere is `..` (`src/*/../..` expands to
+/// the tree root). Every path the shell expansion can produce, and every
+/// path git's own pathspec glob can match, then lies under that directory —
+/// the same as the explicit directory pathspec `git add src/`. A bare `*`,
+/// `*.rs`, `./*.rs`, `../x/*` or an absolute prefix is not confined this way
+/// (restrictive side).
+fn glob_bounded_by_literal_dir(p: &str) -> bool {
+    let Some(first) = p.find(['*', '?', '[']) else {
+        return false;
+    };
+    let Some(slash) = p[..first].rfind('/') else {
+        return false;
+    };
+    let dir = &p[..slash];
+    !p.starts_with([':', '-', '/'])
+        && !dir.is_empty()
+        && dir
+            .split('/')
+            .all(|c| !c.is_empty() && c != "." && c != "..")
+        && !p.split('/').any(|c| c == "..")
 }
 
 /// How a long option behaves, by full name.
@@ -469,7 +548,13 @@ fn verdict(sub: Sub, args: &[&str], seg: Option<&str>) -> Decision {
         Ok(w) => w,
         Err(why) => return undetermined(why),
     };
-    if words.iter().any(|w| w.split) {
+    // An unquoted glob confined to a literal directory may become several
+    // words, but each lies under that directory and none can be an option
+    // (`glob_bounded_by_literal_dir`), so the word count does not matter.
+    if words
+        .iter()
+        .any(|w| w.split || (w.glob && (w.opaque || !glob_bounded_by_literal_dir(&w.text))))
+    {
         return undetermined("an unquoted expansion, glob or brace list the shell may split");
     }
     let table = if sub == Sub::Add {

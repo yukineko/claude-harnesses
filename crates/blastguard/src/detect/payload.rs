@@ -440,11 +440,27 @@ tell whether the interpreter runs that stdin or a script file",
             // A shell removes its program's line continuations before it
             // splits words: judge that reading too (backlog 040b959b).
             if source_reader || is_shell(&normalized_command(tokens[idx])) {
+                let originals = program_texts.len();
                 let (readings, undetermined) =
                     super::readings::shell_program_readings(&program_texts);
                 program_texts = readings;
                 if let Some(deny) = undetermined.and_then(|ask| acc.record(ask)) {
                     return deny;
+                }
+                // A body's joined (line-continuation) program earns Asks no
+                // per-line reading sees, and `interpreter_code_verdict` keeps
+                // no layer-0 Ask: `bash <<'EOF'` / `git a\` / `dd -A` / `EOF`
+                // answered Allow (measured on the deployed 0.2.702). Keep that
+                // Ask; a Deny is the interpreter pass's to return below.
+                if heredoc_open {
+                    for joined in program_texts.iter().skip(originals) {
+                        let verdict = super::detect_bash(joined, depth + 1, ctx);
+                        if matches!(verdict, Decision::Ask(_)) {
+                            if let Some(deny) = acc.record(verdict) {
+                                return deny;
+                            }
+                        }
+                    }
                 }
             }
             let python = python_stdin_reading(cmd, tokens[idx], &program_texts, depth, ctx);

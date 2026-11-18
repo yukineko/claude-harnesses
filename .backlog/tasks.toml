@@ -2455,3 +2455,36 @@ exit 101: 261119/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.02s
      Running tests/backlog_20261119_python_heredoc_string_literal_system_harm_fp.rs (target/debug/deps/backlog_20261119_python_heredoc_string_literal_system_harm_fp-9a684a5899ca781c)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261119_python_heredoc_string_literal_system_harm_fp`"""
+
+[[task]]
+id = "eca57944"
+title = 'blastguard: redirect onto an existing non-git file whose name is escaped or quoted (a\ b, "a b", \a, out\).txt) judged allow'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1795041588
+updated_at = 1795041588
+weight = 0.0
+issue_number = 1865
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1865"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test fp_fix_boundaries_20261119 -- --ignored onto_existing_file_not_allowed"
+rev = "70abd956146bd5bdad1d076017cb2ce7a73e85b0"
+observed_at = 1795041588
+detail = """
+exit 101: red out; finished in 0.91s
+
+   Compiling blastguard v0.2.733 (/Users/yuki/src/.harness-worktrees/bg-fp-20261119/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.39s
+     Running tests/fp_fix_boundaries_20261119.rs (target/debug/deps/fp_fix_boundaries_20261119-56bc1626e6f6ba8c)
+error: test failed, to rerun pass `-p blastguard --test fp_fix_boundaries_20261119`"""

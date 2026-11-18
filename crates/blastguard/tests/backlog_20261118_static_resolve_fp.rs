@@ -570,6 +570,21 @@ fn r21_for_list_var_after_dot_source() {
     );
 }
 
+/// Control for `r21` (user ruling 2026-11-18): only the literal
+/// `. "$HOME/.cargo/env"` leaves the AST variable state determined. Any
+/// other sourced file (`. ./env.sh`) may redefine `S` / `t` (or `echo`), so
+/// the same for-loop shape after it stays not-Allow (main) / Deny (subagent).
+#[test]
+fn r21_control_for_list_var_after_other_source_stays_restricted() {
+    let fx = fixture("r21c");
+    let s = scratch("r21c");
+    restrict_at(
+        &fx,
+        &fx.proj(),
+        &format!(". ./env.sh && true; S={s}; for t in ta tb; do echo x > $S/$t.txt; done"),
+    );
+}
+
 /// Row L284, bisected: the refusal appears once the quoted here-document
 /// body contains a line with an apostrophe (`//!   => … line 2117's text`);
 /// with the first 5 body lines it is Allow. The body of a QUOTED

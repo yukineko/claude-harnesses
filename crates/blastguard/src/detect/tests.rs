@@ -430,7 +430,10 @@ fn ca_blastguard_011_help_flag_does_not_disable_detection() {
     // …while a genuine help invocation (flag is the ONLY argument) stays
     // allowed — the original no-false-positive intent is preserved.
     assert_eq!(bash("rm --help"), Decision::Allow);
-    assert_eq!(bash("rm -h"), Decision::Allow);
+    // `rm -h` used to be pinned Allow here. User ruling 2026-11-18 makes it
+    // not-Allow (re-anchored in tests/file_ops.rs
+    // `ca_blastguard_011_rm_h_unlisted_option_is_not_allow`, RED until the
+    // S3b exemption is removed); `--help` above stays Allow.
     assert_eq!(bash("git --help"), Decision::Allow);
     assert_eq!(bash("shred --help"), Decision::Allow);
     assert_eq!(bash("truncate --help"), Decision::Allow);

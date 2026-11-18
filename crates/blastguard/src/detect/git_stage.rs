@@ -677,7 +677,10 @@ mod tests {
             (":!foo", "ask"),
             ("'*'", "ask"),
             ("*", "ask"),
-            ("src/*.rs", "ask"),
+            // User ruling 2026-11-18: a glob with a literal directory prefix
+            // before its first glob character is Allow like `git add src/`;
+            // bare `*` / `'*'` / `'*.rs'` above and below stay whole-tree Ask.
+            ("src/*.rs", "allow"),
             ("'*.rs'", "ask"),
             ("$F", "ask"),
             ("\"$F\"", "ask"),

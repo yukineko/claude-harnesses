@@ -3327,3 +3327,92 @@ exit 101: bg-leads-red/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.31s
      Running tests/backlog_20261118_python_c_argv_expansion_read_as_program_fp.rs (target/debug/deps/backlog_20261118_python_c_argv_expansion_read_as_program_fp-510e379e782aa619)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261118_python_c_argv_expansion_read_as_program_fp`"""
+
+[[task]]
+id = "0298c734"
+title = "blastguard: with the session cwd under /private/var (no TMPDIR), rm -rf <in-cwd> is Deny as one command but the confined Ask behind any && / ; / cd prefix"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-18 at origin/main 1dfa60681 (0.2.699), HOME/cwd = non-existent sentinel /private/var/folders/zz/<x>/home/wt, hook env without TMPDIR: rm -rf build / rm -rf D/build / rm -rf <abs>/build -> deny ('… is a system directory [system harm …]', deletion::judge_rm). true && rm -rf build, echo x; rm -rf build, cd <same abs wt> && rm -rf build, =cd D && rm -rf build -> main ask ('recursive rm (-r) is confined to …/wt — a safe root'); subagent deny in every case. Table C: System row escapes via confined_root, so Project row -> legacy deletion::judge_rm = Deny; a no-op prefix must not lower it (raise-only legacy layer). With HOME under ~/.blastguard-test-fixtures or /private/tmp both shapes are the confined Ask (no inconsistency). Separate, unpinned: the [system harm] marker on the single-command deny vs harm_mark::harms_system's confined_root escape. RED 3cc3c61e5 (branch red/bg-leads-20261118, 4 ignored)."
+created_at = 1794947239
+updated_at = 1794947239
+weight = 0.0
+issue_number = 1859
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1859"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_compound_line_weakens_sysdir_rm_deny -- --ignored"
+rev = "3cc3c61e5aa501f3904e1961d8d6c075039235fe"
+observed_at = 1794947239
+detail = """
+exit 101: harness-worktrees/bg-leads-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.61s
+     Running tests/backlog_20261118_compound_line_weakens_sysdir_rm_deny.rs (target/debug/deps/backlog_20261118_compound_line_weakens_sysdir_rm_deny-91079b9cce231417)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_compound_line_weakens_sysdir_rm_deny`"""
+
+[[task]]
+id = "84816911"
+title = "blastguard fail-open: rsync --delete/--delete-* into a non-asset home subdir (~/Documents/) is Allow while rm -rf ~/Documents/x is Deny (ruling 2026-11-18: rsync --delete is a Table B Delete row)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Ruling 2026-11-18: rsync --delete / --delete-* is a Table B Delete row; destination judged by Table C like rm (Scratch and own worktree Allow, else same as rm). Observed at a19a34553 (0.2.702), hermetic fixture HOME, main+subagent: rsync -a --delete|--delete-after|--delete-excluded src/ ~/Documents/ allow/allow; rm -rf ~/Documents/x deny/deny. Cause: detect/system_paths.rs rsync_mutated judges the destination only against system dirs. Controls GREEN: /tmp, absolute TMPDIR, own worktree (rel+abs) Allow; rsync without --delete into /tmp Allow. Not pinned: $TMPDIR-spelled destination (Table A resolves only HOME; rsync ask/deny, rm -rf $TMPDIR/x deny/deny). Home itself / ~/.ssh: 7f9f2457. RED 96c9f5e4d (branch red/bg-rsync-tableb-pyc-sys-20261118, 3 ignored)."
+created_at = 1795005003
+updated_at = 1795005003
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_rsync_delete_table_b_row -- --ignored"
+rev = "96c9f5e4d209c1fbcab579fd18d31ea70a858eb4"
+observed_at = 1795005003
+detail = """
+exit 101: d v0.2.703 (/Users/yuki/src/.harness-worktrees/bg-rsync-tableb-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.12s
+     Running tests/backlog_20261118_rsync_delete_table_b_row.rs (target/debug/deps/backlog_20261118_rsync_delete_table_b_row-16a6dd1173676192)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_rsync_delete_table_b_row`"""
+
+[[task]]
+id = "8e261f24"
+title = "blastguard fail-open: python3 -c write to a System path passed as a literal sys.argv operand (open(sys.argv[1],'w'), pathlib.Path(sys.argv[1]).write_text) is Ask (main), not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = """Memory system-harm-always-deny (2026-11-07): harmful targets are Deny through any wrapper. Observed at a19a34553 (0.2.702), hermetic fixture HOME, main/subagent: python3 -c "import sys;open(sys.argv[1],'w').write('x')" /etc/bg-sentinel ask/deny (same for /etc/passwd); pathlib.Path(sys.argv[1]).write_text('x') /etc/bg-sentinel ask/deny; reason 'the program calls open on a path blastguard cannot resolve statically'. The argv operand is a literal, so the target is statically known (blastguard-must-resolve-statically). Literal-in-program twins (open('/etc/bg-sentinel','w'), pathlib.Path('/etc/bg-sentinel').write_text) are deny/deny (GREEN, pinned). Scratch: literal /tmp twins allow/allow (controls GREEN); argv /tmp twins ask/deny, NOT Allow (2 more ignored REDs; ruling 15 keeps python legacy until S5). Related: d6de38be (expansion argv). RED 96c9f5e4d (branch red/bg-rsync-tableb-pyc-sys-20261118, 4 ignored)."""
+created_at = 1795005086
+updated_at = 1795005086
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_python_c_argv_system_write_not_deny -- --ignored"
+rev = "96c9f5e4d209c1fbcab579fd18d31ea70a858eb4"
+observed_at = 1795005086
+detail = """
+exit 101: ess-worktrees/bg-rsync-tableb-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.84s
+     Running tests/backlog_20261118_python_c_argv_system_write_not_deny.rs (target/debug/deps/backlog_20261118_python_c_argv_system_write_not_deny-0e8be86b31995439)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_python_c_argv_system_write_not_deny`"""

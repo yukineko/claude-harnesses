@@ -81,6 +81,7 @@
 
 - **harness-core** — 全プラグインが共有する不変インフラの単一ソース（ビルド時依存。各バイナリに静的に焼き込まれる）。
 - **mutategate** — このワークスペース用の mutation-testing kill-rate ゲート（内製ツール・配布しない）。
+- **progeffect** — 埋め込み program（Python）を本物の parser（rustpython-parser 0.4、malachite なし）で読み、effect（shell 実行・process 実行・literal path のファイル操作）とその shell の綴りを返す純粋 lib（配布しない・blastguard の stage S5 にリンク。将来 script-quarantine plugin も使う。読めないものは Undetermined）。
 - **riskgrade** — 計画 action の段階的 risk/reversibility 分類（`classify`）と diff-level リスク信号（`diffrisk`。機微パス glob／公開シンボル変更）の純粋 lib（配布しない・condukt にリンク。2026-11-17 に blastguard から移設）。
 - **integration-tests** — ワークスペース横断の結合テスト専用クレート（プラグイン面なし）。
 

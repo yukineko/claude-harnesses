@@ -68,6 +68,19 @@ fn setup(tag: &str) -> PathBuf {
         ),
     )
     .unwrap();
+    // #1808: provenance is read from the subagent sidechain
+    // `<root>/transcript/subagents/agent-<AGENT>.jsonl`.
+    let sub = root.join("transcript").join("subagents");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(
+        sub.join(format!("agent-{AGENT}.jsonl")),
+        format!(
+            "{}\n",
+            json!({"type":"user","sessionId":SESSION,"agentId":AGENT,"isSidechain":true,
+                   "message":{"role":"user","content":"task"}})
+        ),
+    )
+    .unwrap();
     root
 }
 

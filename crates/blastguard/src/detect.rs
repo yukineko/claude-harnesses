@@ -151,8 +151,9 @@ use interpreter::{
 
 use payload::{
     analyze_interpreter_stdin_exec, dash_c_payloads, faithful_tail, inline_command_payloads,
-    interpreter_payloads_after, interpreter_stdin_operand, payloads_after,
-    split_substitution_opening_assignments, strip_wrapping_quotes, word_separators_lost,
+    inline_eval_program_word, interpreter_payloads_after, interpreter_stdin_operand,
+    payloads_after, split_substitution_opening_assignments, strip_wrapping_quotes,
+    word_separators_lost,
 };
 
 use compound::{
@@ -671,6 +672,23 @@ fn unreadable_operand(tool: &str, field: &str) -> Decision {
 pub(super) const EXPANSION_HEAD_TAIL: &str = " is an expansion whose value only exists at run time — blastguard cannot tell what program this runs";
 
 fn analyze_shell_payload(payload: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+    // The shell that runs `payload` is not named at these call sites
+    // (`flock -c`, `$(…)`, interpreter `system()` calls, …): treat it as one
+    // that performs zsh equals expansion, the strict side (user ruling
+    // 2026-11-18, see `words::equals_command_word`).
+    analyze_shell_payload_in(payload, depth, ctx, true)
+}
+
+/// [`analyze_shell_payload`] for a payload run by a shell whose equals
+/// expansion is known: `zsh_equals` is `false` only when that shell is
+/// positively bash (`bash -c`) or inherits such a shell (`eval` inside it).
+fn analyze_shell_payload_in(
+    payload: &str,
+    depth: usize,
+    ctx: &Ctx<'_>,
+    zsh_equals: bool,
+) -> Decision {
+    let _equals = words::equals_scope(zsh_equals);
     let prefixed = ctx.cwd_prefix.as_ref().map(|p| format!("{p}{payload}"));
     let payload = prefixed.as_deref().unwrap_or(payload);
     // With and without its line continuations (backlog 040b959b).
@@ -1838,7 +1856,10 @@ fn analyze_command_at(
             // Read off `seg` so a quoted program keeps its newlines.
             let joined = faithful_tail(seg, rest, 0).map_or_else(|| rest.join(" "), str::to_string);
             let inline = strip_wrapping_quotes(&joined);
-            if let Some(deny) = acc.record(analyze_shell_payload(inline, depth, ctx)) {
+            // Run by this same shell: its equals expansion carries over.
+            let same_shell = words::zsh_equals_active();
+            if let Some(deny) = acc.record(analyze_shell_payload_in(inline, depth, ctx, same_shell))
+            {
                 return deny;
             }
             // Backstop for backslash-over-escaped payloads (99b506b7). See
@@ -1849,9 +1870,15 @@ fn analyze_command_at(
         }
         // `sh -c "<payload>"` and friends evaluate the `-c` argument.
         // ASK-1: likewise a shell-evaluation position — `bash -c "$CMD"` asks.
+        // zsh `=word` expansion is shell-scoped (user ruling 2026-11-18): the
+        // payload of `bash -c` keeps `=rm` as a literal (unknown) command
+        // name; any other or unknown shell strips it (strict side).
         if is_shell(cmd) {
+            let zsh_equals = words::shell_expands_equals(cmd);
             for payload in dash_c_payloads(rest, seg) {
-                if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth, ctx)) {
+                if let Some(deny) =
+                    acc.record(analyze_shell_payload_in(&payload, depth, ctx, zsh_equals))
+                {
                     return deny;
                 }
             }
@@ -1878,6 +1905,8 @@ analyse — it cannot tell what this would do, so it refuses to guess"
             }
             // Backstop for backslash-over-escaped payloads that defeat the
             // structured extraction above (99b506b7). See `denoised_eval_rescan`.
+            // The rescanned text is this shell's payload: same equals scope.
+            let _equals = words::equals_scope(words::shell_expands_equals(cmd));
             if let Some(deny) = acc.record(denoised_eval_rescan(&rest.join(" "), depth, ctx)) {
                 return deny;
             }

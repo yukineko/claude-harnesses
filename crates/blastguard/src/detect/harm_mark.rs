@@ -138,7 +138,11 @@ fn quoted_paths(program: &str) -> Vec<String> {
 /// A system path strictly inside a safe root the session owns is not system
 /// harm; the home checks have no such escape. An operand that cannot be placed
 /// answers `false` (not marked; the Deny itself stands).
-fn harms_system(ctx: &Ctx<'_>, verb: &str, operand: &str) -> bool {
+///
+/// Also the judge of the files an `rsync --del*` / `--remove-source-files`
+/// deletes ([`super::system_paths`]): an rsync that empties `$HOME` or
+/// `~/.ssh` is the same system harm as `rm -rf ~` (SUBSET.md ruling 3).
+pub(super) fn harms_system(ctx: &Ctx<'_>, verb: &str, operand: &str) -> bool {
     let home = ctx.scope.home_real().map(|h| h.trim_end_matches('/'));
     let expanded = match home {
         Some(h) => ["${HOME}", "$HOME", "~"]

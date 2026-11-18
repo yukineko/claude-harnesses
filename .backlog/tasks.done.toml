@@ -82554,3 +82554,476 @@ rev = "5bf096847dbaf50696841ec5629cefab71de1a60"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "aa7acd12"
+title = "blastguard: zsh =cmd (equals expansion) in command position hides system harm (=rm -rf ~ is allow)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = 'Observed 2026-11-18, blastguard 0.2.690 deployed and origin/main c3dd9fd6d worktree build: =rm -rf ~, =chmod 777 /etc/hosts and =bash -c "chmod 777 /etc/hosts" are allow in main and subagent; the same without = are deny (system harm). The Bash tool runs /bin/zsh 5.9 with option equals on: echo =ls printed /bin/ls and =echo hi printed hi, so a command-position =word runs the PATH binary. RED: crates/blastguard/tests/backlog_20261118_zsh_equals_cmd_fail_open.rs at 105564832 (branch red/blastguard-zsh-equals-20261118, 0.2.691): 3 RED fail, 4 controls pass (plain harm deny, echo hi allow, echo =x / a==b / [[ $a == b ]] / x=1 echo hi allow, =$x foo ask main / deny subagent). Fix owner: harness-5a (resolve =word statically to word, undetermined name -> Undetermined).'
+created_at = 1794942814
+updated_at = 1794943773
+weight = 0.0
+issue_number = 1856
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1856"
+issue_closed_at = 1794943776
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_zsh_equals_cmd_fail_open -- --include-ignored"
+rev = "105564832bbde7adb5a2a750682034404e31ecb6"
+observed_at = 1794942814
+detail = """
+exit 101: rs/yuki/src/.harness-worktrees/red-blastguard-zsh-equals-20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.26s
+     Running tests/backlog_20261118_zsh_equals_cmd_fail_open.rs (target/debug/deps/backlog_20261118_zsh_equals_cmd_fail_open-e1b00426a45f6ff4)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_zsh_equals_cmd_fail_open`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261118_zsh_equals_cmd_fail_open"
+exit = 0
+passed = 7
+rev = "e8df66146cea9ce433d5d00ce26c932b8670d8ea"
+observed_at = 1794943772
+output_digest = "sha256:d77adf4c97ad4f64bbfbd016e5585fd9cacd8d67fbd092db5e63be18beeb60f3"
+excerpt = """
+
+running 7 tests
+test control_echo_hi_is_allow ... ok
+test equals_chmod_etc_hosts_is_deny ... ok
+test equals_rm_rf_home_is_deny ... ok
+test control_pin_undetermined_equals_command_word_is_ask_main_deny_subagent ... ok
+test equals_bash_c_chmod_is_not_allow ... ok
+test control_plain_system_harm_is_deny ... ok
+test control_pin_equals_shapes_outside_command_position_are_allow ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261118_zsh_equals_cmd_fail_open.rs (target/debug/deps/backlog_20261118_zsh_equals_cmd_fail_open-d944bff9b1073f11)
+"""
+
+[task.closure.red]
+rev = "105564832bbde7adb5a2a750682034404e31ecb6"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "05b5dcaf"
+title = "tdd: proofs lack tree identity, per-test results/counts, and green output_tail"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "User ruling 2026-11-17 (proof contract b,d,e). RED 25a27ee67 crates/tdd/tests/backlog_20261117_proof_contents.rs (3 ignored REDs). (a) cmd and (c) exit_code already recorded."
+created_at = 1794868790
+updated_at = 1794966617
+weight = 0.0
+issue_number = 1841
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1841"
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261117_proof_contents -- --ignored"
+rev = "9f1ad7438b27dee634223982a612de3266f60211"
+observed_at = 1794868790
+detail = """
+exit 101: fs_carry_tree_identity
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_20261117_proof_contents.rs (target/debug/deps/backlog_20261117_proof_contents-60dcd892ca2f0f33)
+error: test failed, to rerun pass `-p tdd --test backlog_20261117_proof_contents`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p tdd --test backlog_20261117_proof_contents"
+exit = 0
+passed = 3
+rev = "658ab6e2dade5c9709578fc22ae9ae27e7feb2ab"
+observed_at = 1794966605
+output_digest = "sha256:a6bc24ffe328cb878d0f04470cc9ff09c96dcb1a6777554ac4f22e03e433a039"
+excerpt = """
+
+running 3 tests
+test green_proof_carries_output_tail_like_red ... ok
+test proofs_carry_per_test_results_and_counts ... ok
+test proofs_carry_tree_identity ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+   Compiling once_cell v1.21.4
+   Compiling harness-core v0.2.110 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/harness-core)
+   Compiling tempfile v3.27.0
+   Compiling overwatch v0.2.127 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/overwatch)
+   Compiling tdd v0.1.100 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.00s
+     Running tests/backlog_20261117_proof_contents.rs (target/debug/deps/backlog_20261117_proof_contents-663c070083ee97cc)
+"""
+
+[task.closure.red]
+rev = "25a27ee67a17b5ff0bf0e2036c2d8964d4097aa0"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "97185747"
+title = "tdd green proof binds no tree/commit; change after GREEN still yields valid_fp_oracle:true"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-16 in run-20261116-164820-25374 t4: .tdd/t4.green.json keys are only author/cmd/exit_code/passed/phase/red_proof/task/ts; worker edited a caller after GREEN and condukt state check-oracle still returned valid_fp_oracle:true. Re-observed in main via relay bgr-26ea8713935e. Readings: (a) defect: GREEN-vs-final-commit correspondence is uncheckable; (b) intended: oracle checks only the transition. RED 55a1044bf."
+created_at = 1794821419
+updated_at = 1794966618
+weight = 0.0
+issue_number = 1823
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1823"
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261116_green_proof_has_no_tree_identity -- --include-ignored"
+rev = "8397d316c17c6e44b6b7216744d0042027031bf4"
+observed_at = 1794821419
+detail = """
+exit 101: iroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.62s
+     Running tests/backlog_20261116_green_proof_has_no_tree_identity.rs (target/debug/deps/backlog_20261116_green_proof_has_no_tree_identity-e8ca29d0d41f66b3)
+error: test failed, to rerun pass `-p tdd --test backlog_20261116_green_proof_has_no_tree_identity`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p tdd --test backlog_20261116_green_proof_has_no_tree_identity"
+exit = 0
+passed = 1
+rev = "658ab6e2dade5c9709578fc22ae9ae27e7feb2ab"
+observed_at = 1794966617
+output_digest = "sha256:d447361db6ab3a7c88fd30d41e0c6e410de5ab7508fd0e1b9118c3548a1fbe51"
+excerpt = """
+
+running 1 test
+test oracle_detects_change_made_after_green ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+   Compiling tdd v0.1.100 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running tests/backlog_20261116_green_proof_has_no_tree_identity.rs (target/debug/deps/backlog_20261116_green_proof_has_no_tree_identity-b3392ecbad520f2c)
+"""
+
+[task.closure.red]
+rev = "55a1044bfa6bf6d1e929a41dd3816c13baa0b987"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "519f089e"
+title = "tdd: a second tdd green with another --cmd overwrites the first green proof (one slot per task)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-17 at 1331e475d (tdd 0.1.93), run-20261117-100335-22251 t3: task with two repros; the second tdd green replaced .tdd/t3.green.json, oracle went command_mismatch / valid_fp_oracle false. README/src state no one-slot contract. Expected: the first F-to-P proof survives, or the overwrite is refused. RED 5502e2d18."
+created_at = 1794892278
+updated_at = 1794966619
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261117_green_second_cmd_overwrites -- --include-ignored second_green_with_other_cmd"
+rev = "4ccf146bf1cb4437405d7ba7efc72edaeebbc7fb"
+observed_at = 1794892278
+detail = """
+exit 101: 0.1.94 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running tests/backlog_20261117_green_second_cmd_overwrites.rs (target/debug/deps/backlog_20261117_green_second_cmd_overwrites-29bdba7173b3501d)
+error: test failed, to rerun pass `-p tdd --test backlog_20261117_green_second_cmd_overwrites`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p tdd --test backlog_20261117_green_second_cmd_overwrites"
+exit = 0
+passed = 2
+rev = "658ab6e2dade5c9709578fc22ae9ae27e7feb2ab"
+observed_at = 1794966619
+output_digest = "sha256:c56ba9816afebc10da2a81374e17a9959400781451e89c099a0bea557160e296"
+excerpt = """
+
+running 2 tests
+test control_single_repro_oracle_valid ... ok
+test second_green_with_other_cmd_must_not_destroy_first_proof ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+   Compiling tdd v0.1.100 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.50s
+     Running tests/backlog_20261117_green_second_cmd_overwrites.rs (target/debug/deps/backlog_20261117_green_second_cmd_overwrites-4be3c251050b5820)
+"""
+
+[task.closure.red]
+rev = "5502e2d188b5755e5bccb1ad40daa638a86d27ad"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "7f9f2457"
+title = "blastguard fail-open: rsync --delete into the home directory itself or ~/.ssh is Allow (harms_system target; rsync arm checks only system dirs)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = 'Observed 2026-11-18 at origin/main 1dfa60681 (blastguard 0.2.699), hermetic fixture HOME, main+subagent: rsync -a --delete /tmp/empty/ ~/ , "$HOME", <abs home>/, ~/.ssh/, and (cwd=$HOME) rsync -a --delete build/ ./ are all allow. Controls: rsync -a --delete /tmp/empty/ /usr/ is system-harm deny (detect/system_paths.rs rsync_mutated judges the destination only via scope::is_inside_system_dir); rm -rf ~ and rm -rf ~/.ssh are deny. Expected deny: SUBSET.md ruling 3 + Table C System row = harm_mark::harms_system (home itself, irreplaceable home asset); user ruling 2026-11-07 system-harm-always-deny. RED 3cc3c61e5 (branch red/bg-leads-20261118, 5 ignored cases). NOT pinned (spec gap, rsync not in Table B): rsync --delete into a non-asset home subdir (~/Documents/) is allow while rm -rf ~/Documents/* and find ~/Documents -delete are deny.'
+created_at = 1794946875
+updated_at = 1795005411
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_rsync_delete_home_target_fail_open -- --ignored"
+rev = "3cc3c61e5aa501f3904e1961d8d6c075039235fe"
+observed_at = 1794946875
+detail = """
+exit 101: src/.harness-worktrees/bg-leads-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.90s
+     Running tests/backlog_20261118_rsync_delete_home_target_fail_open.rs (target/debug/deps/backlog_20261118_rsync_delete_home_target_fail_open-c1225f41b45b2862)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_rsync_delete_home_target_fail_open`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261118_rsync_delete_home_target_fail_open"
+exit = 0
+passed = 8
+rev = "32f47da2c5a45e8a87400eb0dd96438c4e4e821d"
+observed_at = 1795005410
+output_digest = "sha256:f0913fcffb317411bb54987727b46403309c457cd3ad7dc2065c6cf97aceb14f"
+excerpt = """
+
+running 8 tests
+test rsync_delete_into_absolute_home_denies ... ok
+test rsync_delete_into_ssh_denies ... ok
+test rsync_delete_into_dot_with_cwd_home_denies ... ok
+test rsync_delete_into_dollar_home_denies ... ok
+test rsync_delete_into_tilde_home_denies ... ok
+test control_rsync_delete_into_usr_denies ... ok
+test control_rsync_without_delete_into_home_subdir_allows ... ok
+test control_rm_rf_home_and_ssh_deny ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running tests/backlog_20261118_rsync_delete_home_target_fail_open.rs (target/debug/deps/backlog_20261118_rsync_delete_home_target_fail_open-05585b80c9b4fdaa)
+"""
+
+[task.closure.red]
+rev = "3cc3c61e5aa501f3904e1961d8d6c075039235fe"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "d6de38be"
+title = "blastguard FP: expansion in an argv operand after python3 -c PROG is reported as an expansion in the program (read-only program Ask/Deny; bgr-32cea6e4ce95)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-18 relay bgr-32cea6e4ce95, re-judged at origin/main 1dfa60681 (0.2.699): main ask / subagent deny, verbatim 'that program contains a shell expansion (`$D/blocks.jsonl`) — the text on the command line is a template'. The -c program has no $; the expansion is sys.argv[1]. Cause: detect/payload.rs interpreter_payloads_after returns every shell word after -c as a candidate program, and the template check in detect/interpreter.rs asks on any candidate containing $. Minimal: python3 -c "import sys;print(open(sys.argv[1]).read())" "$HOME/x" (also "$1", literal-bound "$D/x") -> ask; literal argv -> allow. Ruling 2026-11-12 (python-c-expansion-in-literal-deny) recommends passing paths via argv. Controls kept not-allow: expansion inside the program; write to unresolved argv path. RED 3cc3c61e5 (branch red/bg-leads-20261118, 3 ignored)."""
+created_at = 1794947135
+updated_at = 1795005413
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_python_c_argv_expansion_read_as_program_fp -- --ignored"
+rev = "3cc3c61e5aa501f3904e1961d8d6c075039235fe"
+observed_at = 1794947135
+detail = """
+exit 101: bg-leads-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.31s
+     Running tests/backlog_20261118_python_c_argv_expansion_read_as_program_fp.rs (target/debug/deps/backlog_20261118_python_c_argv_expansion_read_as_program_fp-510e379e782aa619)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_python_c_argv_expansion_read_as_program_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261118_python_c_argv_expansion_read_as_program_fp"
+exit = 0
+passed = 6
+rev = "32f47da2c5a45e8a87400eb0dd96438c4e4e821d"
+observed_at = 1795005412
+output_digest = "sha256:4e83d83a699eb44b35f5fa3ce10e14bf2cbb57c694d5a48820a29b9f08b73481"
+excerpt = """
+
+running 6 tests
+test control_literal_argv_allows ... ok
+test argv_home_expansion_allows ... ok
+test argv_positional_allows ... ok
+test argv_line_bound_var_allows ... ok
+test control_expansion_inside_program_not_allow ... ok
+test control_write_to_unresolved_argv_not_allow ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261118_python_c_argv_expansion_read_as_program_fp.rs (target/debug/deps/backlog_20261118_python_c_argv_expansion_read_as_program_fp-720579c69856e214)
+"""
+
+[task.closure.red]
+rev = "3cc3c61e5aa501f3904e1961d8d6c075039235fe"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "acf42846"
+title = "blastguard fail-open: rm -rf target/../src (dotdot escape out of an ignored target dir) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-18 by the compound-sysdir-rm worker: rm_by_target::not_allow_dotdot_escape_out_of_ignored_target fails ('rm -rf target/../src: must NOT be Allow; got empty output'), also at base 28257127f with that worker's src changes stashed, so it predates 4de75ad02. Expected: not Allow (the operand lexically leaves the ignored target/ dir and names src/)."
+created_at = 1795005420
+updated_at = 1795008037
+weight = 0.0
+issue_number = 1860
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1860"
+issue_closed_at = 1795008040
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test rm_by_target not_allow_dotdot_escape_out_of_ignored_target"
+rev = "32f47da2c5a45e8a87400eb0dd96438c4e4e821d"
+observed_at = 1795005420
+detail = """
+exit 101:  failed; 0 ignored; 0 measured; 29 filtered out; finished in 0.58s
+
+   Compiling blastguard v0.2.706 (/Users/yuki/src/.harness-worktrees/session-fcf56f45/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
+     Running tests/rm_by_target.rs (target/debug/deps/rm_by_target-7e3a071671a5651c)
+error: test failed, to rerun pass `-p blastguard --test rm_by_target`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test rm_by_target"
+exit = 0
+passed = 30
+rev = "d302e39f7386ee7b3e112a5be711c2e9b4c755c8"
+observed_at = 1795008029
+output_digest = "sha256:255d5078a73572e57c76db6c8835db5e4cebd18ace1c6ddf2a0d4f9aa8daa899"
+excerpt = """
+
+running 30 tests
+test allow_rm_rf_strictly_inside_home_dot_cache ... ok
+test allow_rm_rf_strictly_inside_home_library_caches ... ok
+test allow_rm_rf_strictly_inside_tmpdir_env ... ok
+test allow_rm_rf_strictly_inside_real_slash_tmp ... ok
+test control_protected_dot_claude_still_denied ... ok
+test deny_home_itself ... ok
+test deny_home_level_config_dir ... ok
+test deny_mixed_one_allowed_one_denied_operand ... ok
+test deny_cache_roots_themselves ... ok
+test allow_tracked_clean_fully_committed_subdirectory ... ok
+test deny_tmpdir_root_itself ... ok
+test deny_slash_tmp_root_itself ... ok
+test allow_tracked_clean_dir_named_target_via_recoverable_class ... ok
+test control_protected_dot_git_still_denied ... ok
+test deny_gitignored_secrets_dir_not_named_like_build_output ... ok
+test deny_tracked_dir_containing_ignored_non_build_content ... ok
+test not_allow_dotdot_escape_out_of_temp_root ... ok
+test deny_tracked_dir_with_modified_file ... ok
+test deny_tracked_dir_with_untracked_file ... ok
+test not_allow_glob_operand_in_temp_root ... ok
+test allow_gitignored_target_and_node_modules ... ok
+test deny_tracked_dir_with_staged_uncommitted_file ... ok
+test deny_project_root_itself ... ok
+test not_allow_symlink_in_temp_root_pointing_at_home ... ok
+test not_allow_when_non_rm_segment_precedes_the_rm ... ok
+test deny_tracked_not_ignored_target_with_untracked_content ... ok
+test not_allow_system_dirs ... ok
+test not_allow_nonexistent_operand_cannot_be_judged ... ok
+test not_allow_symlinked_target_pointing_at_parent ... ok
+test not_allow_dotdot_escape_out_of_ignored_target ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.26s
+
+   Compiling blastguard v0.2.708 (/Users/yuki/src/.harness-worktrees/session-fcf56f45/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.50s
+     Running tests/rm_by_target.rs (target/debug/deps/rm_by_target-acbd7f91a2f04f86)
+"""
+
+[task.closure.red]
+rev = "79b2aaec387734b94619b1f54cbac2df9f3961ba"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

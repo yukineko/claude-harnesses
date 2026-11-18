@@ -451,11 +451,22 @@ fn not_allow_dotdot_escape_out_of_temp_root() {
     assert_not_allow("rm -rf $TMPDIR/../home/src", &out);
 }
 
+/// A `..` that leaves the ignored `target/` must not borrow target/'s
+/// disposability: the operand is judged as what it physically names
+/// (`<repo>/src`), like the plain spelling `rm -rf src`.
+///
+/// Re-anchored 2026-11-18 (backlog acf42846, user ruling): written when any
+/// `.`/`..` operand was never Allow; since `dbf39487f` (GH #1661) such operands
+/// are resolved physically and judged like the plain spelling, so a clean,
+/// fully committed `src/` is git-recoverable and Allow by design. `src/` now
+/// holds an UNTRACKED file, which git cannot restore — escaping into it through
+/// `target/..` must therefore stay not-Allow.
 #[test]
 fn not_allow_dotdot_escape_out_of_ignored_target() {
     let f = Fx::new("dotdot_target");
     f.init_repo(BUILD_IGNORE, &[("src/lib.rs", "x\n")]);
     f.write("target/debug/bin", "x");
+    f.write("src/untracked.rs", "x");
     let out = f.run("rm -rf target/../src");
     assert_not_allow("rm -rf target/../src", &out);
     let out = f.run(&format!("rm -rf {}/target/../src", f.repo.display()));

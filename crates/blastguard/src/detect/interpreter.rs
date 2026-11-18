@@ -1116,7 +1116,7 @@ fn is_expansion_head_ask(d: &Decision) -> bool {
 }
 
 /// Does `program` contain a [`SHELL_STRING_EXEC_MARKERS`] entry?
-fn runs_shell_strings(program: &str) -> bool {
+pub(super) fn runs_shell_strings(program: &str) -> bool {
     let lowered = program.to_ascii_lowercase();
     SHELL_STRING_EXEC_MARKERS
         .iter()

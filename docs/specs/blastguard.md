@@ -732,6 +732,15 @@ forge・condukt のスケジューラが再利用）。
   R2 の Ask、redirect arm の先行する拒否（保護パス・system directory・置けない target）はそのまま。
   条件外の program は従来どおり判定する。program 語（`-c` の直後の語）が Python として tokenise
   できない（閉じない文字列・triple quote・括弧の不均衡）ときは、他に Deny が無ければ Ask（Allow しない）。
+- **`python3 -c PROG arg…` の `arg` の展開は program ではなく argv（backlog d6de38be）** — Python は
+  `-c` で option 列を終え、直後の 1 語だけが program、以降の語は `sys.argv[1:]`。program 語
+  （`detect/payload/program_word.rs` の `inline_eval_program_word`）が判定可能で、program 自体に `$`・
+  backtick が無く、`SHELL_STRING_EXEC_MARKERS`・動的実行 marker を含まず、Python tokenizer で読んで
+  文字列を shell/process に渡さない（`python_strings_never_reach_a_shell`）ときに限り、argv 語の展開で
+  「that program contains a shell expansion」の template Ask を出さない
+  （`detect/interpreter/invocation.rs` の `python_argv_expansions_are_data`）。program 内の展開は従来どおり
+  Ask（ユーザー裁定 2026-11-12）、program 語が判定不能なら従来の判定、未解決の argv path への書き込みは
+  path-mutation 側で Ask のまま。RED/対照: `crates/blastguard/tests/backlog_20261118_python_c_argv_expansion_read_as_program_fp.rs`。
 - **大文字小文字だけ違う綴りは symlink ではない（#1630）** — `SafeRoots::no_symlink_below` は、
   root 以下の component の realpath が `<親の real>/<綴った名前>` と**大文字小文字だけ**違うとき、
   同じ親・両名の `lstat` がどちらも symlink でない・`(st_dev, st_ino)` が一致する、を全て観測した場合に
@@ -1273,6 +1282,14 @@ forge・condukt のスケジューラが再利用）。
   (2) main session の Bash `Deny` が queue 済み entry と command・cwd バイト一致なら `denied` を記録し、
   deny 理由に `askrelay dismiss <id> --reason "<why>"` を案内する。askrelay が無い・無効でも subagent の `Ask` は
   `Deny` のまま（fail-closed）で、失われるのは main の Stop を止めるリマインドだけ。
+  **信頼境界（backlog #1808）**: queue は信頼できる経路ではない — どのローカルプロセスでも任意の session の
+  queue ファイルに追記できる。書き手である blastguard は信頼しないまま変更せず、読み手（askrelay の Stop /
+  mark-executed / mark-relayed / dismiss）が payload の `transcript_path`（session transcript が信頼の根）で
+  行ごとに Verified（行の `session_id` がファイルの session と一致し、`agent_id` の sidechain
+  `<session>/subagents/agent-<id>.jsonl` が存在）/ Refuted / Undetermined を判定する。Refuted は Stop を
+  block せず、Undetermined は実行手順なしで block する。(2) の `mark_denied` は transcript を受け取らないので
+  行の `session_id` 不一致だけを除外する（`denied` は entry を解決しない）。実在する `agent_id` を名乗る偽造行は
+  Verified になり、この設計では検出しない。詳細は `crates/harness-core/src/relay.rs` の module doc。
 - **`blocklog`**（実装は `harness_core::blocklog`。2026-11-17 に blastguard から移設、blastguard は呼び出しのみ）— block log（ユーザー裁定 2026-11-14 逐語:「…完全なコマンドが残っていないため、
   これ以上は切り分けられません。というのは大変愚かなので記録をとること。止めたなら止めた責任をとる」）。
   表示した `Deny` / `Ask` ごとに 1 行を overwatch に依存せず `~/.blastguard/blocks/blocks.jsonl`

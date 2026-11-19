@@ -2530,3 +2530,33 @@ exit 101: 0 ignored; 0 measured; 12 filtered out; finished in 0.02s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.69s
      Running tests/high_blast_tier.rs (target/debug/deps/high_blast_tier-14ff33106b5e56ea)
 error: test failed, to rerun pass `-p blastguard --test high_blast_tier`"""
+
+[[task]]
+id = "975d8c8d"
+title = "blastguard test RED: rm/unlink/rmdir of ~/.ssh/id_rsa, ~/.gnupg judged Allow in home_asset tests"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "test-red",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "home_asset_unlink_rmdir_and_opt_root: control rm ~/.ssh/id_rsa must be Deny, got Allow (main; Deny on the Q3/Q4 tree); unlink ~/.ssh/id_rsa got Allow; rmdir ~/.gnupg got Allow; on the Q3/Q4 tree unlink HOME/.gnupg/pubring.kbx still Allow. Observed 2026-11-20 on main a0ba7bad0 (detached worktree verify-main-q3q4), found while integrating Q3/Q4 deny-target table (7275b9d9); same failure on the integration tree. Readings: (a) real regression on main; (b) stale assert vs a later ruling or the S5 AST evaluator; distinguish by git log -S on the asserted case."
+created_at = 1795110546
+updated_at = 1795110546
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test home_asset_unlink_rmdir_and_opt_root"
+rev = "4c286f7b61e70f4a56ccb658a200c3c4085bdf1a"
+observed_at = 1795110546
+detail = """
+exit 101: ompiling blastguard v0.2.761 (/Users/yuki/src/.harness-worktrees/session-179495ba/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/home_asset_unlink_rmdir_and_opt_root.rs (target/debug/deps/home_asset_unlink_rmdir_and_opt_root-3e77f852adefa4b8)
+error: test failed, to rerun pass `-p blastguard --test home_asset_unlink_rmdir_and_opt_root`"""

@@ -236,7 +236,6 @@ fn e3_python_stdin_heredoc_string_literal_shell_text_parity() {
 /// Control twin: the same program shape writing a System path stays Deny.
 /// Observed Allow in both modes at 47bd5a888 (system-harm fail-open).
 #[test]
-#[ignore = "RED fp-cand 2026-11-20: entry 3 control — cd <own wt> && python3 - heredoc system write is Allow (fail-open)"]
 fn e3_control_python_stdin_heredoc_system_write_is_deny() {
     let fx = fixture("e3c");
     let wt = fx.own_worktree();
@@ -302,7 +301,6 @@ fn e4_control_real_stdin_program_to_python_is_refused() {
 const SYS_PY_C: &str = "python3 -c 'open(\"/etc/bg-fpc-sentinel-cd\", \"w\").write(\"x\")'";
 
 #[test]
-#[ignore = "RED fp-cand 2026-11-20: entry 3 control — cd <dir> && python3 -c system write is Allow (fail-open)"]
 fn cd_and_prefix_python_c_system_write_is_deny() {
     let fx = fixture("cdpy");
     deny_at(

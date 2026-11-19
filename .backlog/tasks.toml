@@ -2366,3 +2366,44 @@ exit 101: ng blastguard v0.2.754 (/Users/yuki/src/.harness-worktrees/session-8ab
     Finished `test` profile [unoptimized + debuginfo] target(s) in 7.38s
      Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-b404579e77650688)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
+
+[[task]]
+id = "eaf0b2a4"
+title = "[bg-heredoc-script-failopen-596ef57d:R-fakeeof] heredoc が最初の終端子で閉じた後に、偽の EOF を挟んで python 本文が続く入れ子コマンド（v_nested_fake_eof）は Allow にならない。heredoc の外に出た行を、判定不能（パース不能）のまま Allow にしない。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-fakeeof",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-fakeeof から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: heredoc が最初の終端子で閉じた後に、偽の EOF を挟んで python 本文が続く入れ子コマンド（v_nested_fake_eof）は Allow にならない。heredoc の外に出た行を、判定不能（パース不能）のまま Allow にしない。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `... -- --ignored r_fakeeof` が pass する（main/sub とも allow 以外）
+
+canon:
+  - CLAUDE.md §3: "判定不能 — IO 失敗 / ロック取得失敗 / subprocess の異常終了 / パース不能 / panic / 空集合 — は `clean` ではない。必ず `block` か `ask` に解決する。"
+  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:289-298
+"""
+created_at = 1795109405
+updated_at = 1795109405
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_fakeeof"
+rev = "0cd5671971fbbb890ae3217eb3214a298aefcdea"
+observed_at = 1795109405
+detail = """
+exit 101: ng blastguard v0.2.755 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.51s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-4c78cce24a6bb217)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""

@@ -2384,6 +2384,8 @@ notes = "User-ruled false positive 2026-11-20. A Rust integration test file that
 created_at = 1795118253
 updated_at = 1795118253
 weight = 0.0
+issue_number = 1876
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1876"
 rev = 0
 
 [task.repro]

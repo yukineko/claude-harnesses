@@ -237,7 +237,6 @@ fn fixture_predicates_answer_as_assumed() {
 // ---------------------------------------------------------------- System
 
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); /etc/hosts must be System"]
 fn system_etc_file_is_system() {
     let fx = Fx::new();
     let c = class_in(&fx, &fx.proj(), TRUNC, "/etc/hosts");
@@ -245,7 +244,6 @@ fn system_etc_file_is_system() {
 }
 
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); / must be System"]
 fn system_root_is_system() {
     let fx = Fx::new();
     let c = class_in(&fx, &fx.proj(), DEL_R, "/");
@@ -253,7 +251,6 @@ fn system_root_is_system() {
 }
 
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); HOME itself must be System"]
 fn system_home_itself_is_system() {
     let fx = Fx::new();
     let home = fx.home();
@@ -262,7 +259,6 @@ fn system_home_itself_is_system() {
 }
 
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); $HOME/.ssh/x must be System"]
 fn system_home_ssh_asset_is_system() {
     let fx = Fx::new();
     let t = fx.p("home/.ssh/id_ed25519");
@@ -273,7 +269,6 @@ fn system_home_ssh_asset_is_system() {
 /// A spelling under Scratch whose symlink lands in `/etc` is System (System
 /// is judged on the symlink-resolved spelling too, and precedes Scratch).
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); a scratch symlink into /etc must be System"]
 fn system_scratch_symlink_into_etc_is_system() {
     let fx = Fx::new();
     let (_keep, sdir) = scratch_dir();
@@ -291,7 +286,6 @@ fn system_scratch_symlink_into_etc_is_system() {
 /// is created under `/opt`: the resolver re-attaches the missing tail to the
 /// real `/opt`, so the root and the target are placed without writing there.
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); a system path strictly inside a safe root (project under /opt) must be Project, not System"]
 fn system_path_strictly_inside_safe_root_is_not_system() {
     use crate::scope::Placement;
     use harness_core::verdict::Determination;
@@ -322,7 +316,6 @@ fn system_path_strictly_inside_safe_root_is_not_system() {
 /// "**Protected** (`exclude::is_protected_path`, ...)" and deny-target row
 /// "Q4 `.githooks`").
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); .githooks/x must be Protected"]
 fn protected_githooks_file_in_main_tree_is_protected() {
     let fx = Fx::new();
     let t = fx.p("src/proj/.githooks/pre-commit");
@@ -332,7 +325,6 @@ fn protected_githooks_file_in_main_tree_is_protected() {
 
 /// Relative spelling, placed against the hook cwd.
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); relative .githooks/x must be Protected"]
 fn protected_relative_githooks_is_protected() {
     let fx = Fx::new();
     let scope = fx.scope_at(&fx.proj());
@@ -353,7 +345,6 @@ fn protected_relative_githooks_is_protected() {
 /// `.githooks` file in the session's own linked checkout falls through to
 /// OwnWorktree.
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); .githooks/x inside the own linked checkout must be OwnWorktree (Protected lifted)"]
 fn githooks_inside_own_linked_checkout_is_not_protected() {
     use crate::scope::Placement;
     use harness_core::verdict::Determination;
@@ -377,7 +368,6 @@ fn githooks_inside_own_linked_checkout_is_not_protected() {
 // ---------------------------------------------------------------- Workflow
 
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); .github/workflows/x must be Workflow"]
 fn workflow_file_is_workflow() {
     let fx = Fx::new();
     let t = fx.p("src/proj/.github/workflows/ci.yml");
@@ -390,7 +380,6 @@ fn workflow_file_is_workflow() {
 /// A NEW file in a `Library/LaunchAgents` directory under a Truncate effect
 /// (`launch_agents_new_file_ask`, new file only).
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); a new LaunchAgents file must be Persistence"]
 fn persistence_new_launch_agent_is_persistence() {
     let fx = Fx::new();
     let t = fx.p("other/Library/LaunchAgents/com.example.zqxv.plist");
@@ -402,7 +391,6 @@ fn persistence_new_launch_agent_is_persistence() {
 // ---------------------------------------------------------------- Scratch
 
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); a file strictly inside /tmp must be Scratch"]
 fn scratch_file_inside_tmp_is_scratch() {
     let fx = Fx::new();
     let (_keep, sdir) = scratch_dir();
@@ -417,7 +405,6 @@ fn scratch_file_inside_tmp_is_scratch() {
 /// root (`rm -rf /tmp`) is NOT Scratch"; user ruling 2026-11-20 "/tmp root
 /// itself is not Scratch").
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); /tmp itself must be Project or Other, not Scratch"]
 fn scratch_root_tmp_itself_is_not_scratch() {
     let fx = Fx::new();
     for t in ["/tmp", &s(&canonical_fixed_temp_root())] {
@@ -454,7 +441,6 @@ fn scratch_dotdot_escape_is_not_scratch() {
 // ---------------------------------------------------------------- OwnWorktree
 
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); a file in the session's own linked checkout must be OwnWorktree"]
 fn own_worktree_file_is_own_worktree() {
     let fx = Fx::new();
     let wt = fx.wt("wt-a");
@@ -464,7 +450,6 @@ fn own_worktree_file_is_own_worktree() {
 }
 
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); relative file in own checkout must be OwnWorktree"]
 fn own_worktree_relative_file_is_own_worktree() {
     let fx = Fx::new();
     let wt = fx.wt("wt-a");
@@ -477,7 +462,6 @@ fn own_worktree_relative_file_is_own_worktree() {
 /// contains the session cwd", so never OwnWorktree; the storage root is
 /// still derived from `CLAUDE_PROJECT_DIR`, so the target is OtherWorktree.
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); with no cwd a checkout file must be OtherWorktree, never OwnWorktree"]
 fn no_cwd_is_never_own_worktree() {
     let fx = Fx::new();
     let wt = fx.wt("wt-a");
@@ -493,7 +477,6 @@ fn no_cwd_is_never_own_worktree() {
 /// `PathClass::OwnWorktree` doc). With the session cwd in wt-a and no hook
 /// cwd, an absolute target in wt-a is still OwnWorktree.
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); session_cwd in wt-a makes a wt-a file OwnWorktree without a hook cwd"]
 fn own_worktree_by_session_cwd_without_hook_cwd() {
     let fx = Fx::new();
     let wt = fx.wt("wt-a");
@@ -510,7 +493,6 @@ fn own_worktree_by_session_cwd_without_hook_cwd() {
 // ---------------------------------------------------------------- OtherWorktree
 
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); a sibling linked checkout must be OtherWorktree"]
 fn sibling_checkout_is_other_worktree() {
     let fx = Fx::new();
     let t = format!("{}/src/lib.rs", fx.wt("wt-b"));
@@ -521,7 +503,6 @@ fn sibling_checkout_is_other_worktree() {
 // ---------------------------------------------------------------- Project
 
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); a repo main-tree file must be Project"]
 fn main_tree_file_is_project() {
     let fx = Fx::new();
     let t = fx.p("src/proj/src/a.rs");
@@ -530,7 +511,6 @@ fn main_tree_file_is_project() {
 }
 
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); a relative main-tree file must be Project"]
 fn relative_main_tree_file_is_project() {
     let fx = Fx::new();
     let scope = fx.scope_at(&fx.proj());
@@ -541,7 +521,6 @@ fn relative_main_tree_file_is_project() {
 // ---------------------------------------------------------------- Other
 
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); $HOME/notes.txt outside every root must be Other"]
 fn home_plain_file_is_other() {
     let fx = Fx::new();
     let t = fx.p("home/notes.txt");

@@ -24,8 +24,10 @@
 //!   its final component, under a literal directory prefix with no `..`
 //!   (`table_b::literal_dir_glob`; a bare glob's parent is the cwd), is
 //!   placed by that parent directory like a literal target there;
-//! * a target whose value IS determined gets no finding: [`classify`] is
-//!   still the S1 stub, and the legacy string layer (raise-only, ruling 14)
+//! * a target whose value IS determined gets no finding: [`classify`]
+//!   answers its Table C class since S6-2 but `judge` does not call it (user
+//!   ruling 2026-11-20: S6 only retires), and the legacy string layer
+//!   (raise-only, ruling 14)
 //!   alone judges placed paths. So [`Judgement::Allow`] here means "S3b found
 //!   nothing undetermined", not "every Table C cell is Allow";
 //! * a relative target whose cwd is one of a finite set (`cd x; cmd rel`;
@@ -112,7 +114,7 @@ pub(crate) enum Effect {
 /// `Unresolved` is exclusive (no predicate could be consulted).
 #[allow(
     dead_code,
-    reason = "frozen in S1; constructed by S3 (path-cutover) in `classify`"
+    reason = "frozen in S1; constructed by `classify` (S6-2), which is not wired yet"
 )]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PathClass {
@@ -165,8 +167,8 @@ pub(crate) enum PathClass {
     /// A relative target placed against ONE candidate cwd of a command whose
     /// cwd is one of a finite set (user ruling 2026-11-18) and judged there by
     /// the whole detector, which answered Ask / Deny (the reason says which
-    /// candidate and why). Until `classify` lands the detector's predicates
-    /// are the Table C cells for a placed path.
+    /// candidate and why). While `classify` is not wired into [`judge`] the
+    /// detector's predicates are the Table C cells for a placed path.
     AtCandidate(String),
 }
 
@@ -480,16 +482,172 @@ fn spell(v: &str) -> Option<String> {
     })
 }
 
-/// The [`PathClass`] of `target` under `effect` (some classes depend on the
-/// effect: `Persistence` is for new files only, `IsRoot` is acceptable only
-/// for a search root). `cwd` is the command's [`super::SimpleCommand::cwd`].
+/// The [`PathClass`] of `target` under `effect` (stage S6-2). `cwd` is the
+/// command's [`super::SimpleCommand::cwd`]; a relative target with no `cd`
+/// applying is placed against [`PathCtx::hook_cwd`].
 ///
-/// S1 stub: always [`PathClass::Unresolved`] (the restrictive answer).
+/// NOT wired: no caller outside the tests uses it, so it changes no verdict
+/// ([`judge`] still gives a placed target no finding; user ruling 2026-11-20,
+/// S6 only retires readings).
+///
+/// The target is first placed as an absolute path value: an `Undetermined`
+/// target or cwd ([`super::eval::resolve_at`]), a relative path with no
+/// absolute hook cwd, an empty value, or a `..` component is
+/// [`PathClass::Unresolved`]. Then the classes are tried in the
+/// [`PathClass`] precedence, each from the predicates named on its variant;
+/// the first that holds wins:
+///
+/// * **System**: the home itself or an irreplaceable home asset
+///   (`rm::new_layer::home_harm`, no safe-root escape); else `/`, a system
+///   directory or a raw disk on any `rm::new_layer::system_spellings`
+///   spelling unless `detect::Ctx::confined_root` places the value
+///   strictly inside a safe root; else `protected::real_system_path_block`
+///   (the physical landing) answering a system-harm Deny;
+/// * **Protected**: `rm::new_layer::is_protected` on the value or on its
+///   `protected::physical_landing`, unless
+///   [`SafeRoots::classify_worktree_checkout_value`] is `Inside` (the lift);
+/// * **Workflow**: [`crate::exclude::is_workflow_path`] on the value or the
+///   landing;
+/// * **Persistence**: only for an effect that may create the entry
+///   (`Truncate`, `Append`, `Link`, `CreateTree`):
+///   `protected::launch_agents_new_file_ask` on the value or the landing;
+/// * **Scratch**: [`SafeRoots::classify_disposable_value`] `Inside`;
+/// * **OwnWorktree**: `rm::new_layer::own_worktree` (by
+///   [`SafeRoots::session_cwd`]);
+/// * **OtherWorktree**: [`SafeRoots::classify_worktree_value`] `Inside`;
+/// * **Project**: [`SafeRoots::classify_value`] `Inside` / `IsRoot`; `Outside`
+///   is **Other**.
+///
+/// Fail-closed: an `Undetermined` from the home-asset predicate, the
+/// physical landing (or a value it cannot place), the system landing, the
+/// scratch predicate or the safe-root predicate is [`PathClass::Unresolved`].
+/// The two worktree predicates are the exception their docs state ("any
+/// `Undetermined` is not `OwnWorktree`"): an `Undetermined` there (including
+/// a session with no worktree storage root) is "not that class" and falls
+/// through; this is never less restrictive, because `OwnWorktree` is an Allow
+/// cell while `OtherWorktree`, `Project` and `Other` are all `legacy` cells,
+/// and the fall-through still ends at the safe-root predicate.
 #[allow(
     dead_code,
-    reason = "frozen in S1; implemented by S3 (path-cutover) from the predicates named on `PathClass`"
+    reason = "S6-2: implemented but not wired into judge findings (user ruling 2026-11-20: S6 only retires)"
 )]
 pub(crate) fn classify(effect: Effect, target: &Value, cwd: &Value, ctx: &PathCtx) -> PathClass {
-    let _ = (effect, target, cwd, ctx);
-    PathClass::Unresolved("PathClass classification is implemented in stage S3".into())
+    match place(target, cwd, ctx).and_then(|path| class_of(effect, &path, ctx.scope)) {
+        Ok(class) => class,
+        Err(why) => PathClass::Unresolved(why),
+    }
+}
+
+/// `target` as an absolute path value with no `..` component, or why not.
+fn place(target: &Value, cwd: &Value, ctx: &PathCtx) -> Result<String, String> {
+    let p = match super::eval::resolve_at(cwd, target.clone()) {
+        Value::Literal(p) => p,
+        Value::Undetermined(why) => return Err(why),
+    };
+    if p.is_empty() {
+        return Err("empty target".into());
+    }
+    let abs = if p.starts_with('/') {
+        p
+    } else {
+        match ctx.hook_cwd {
+            Some(h) if h.starts_with('/') => format!("{}/{p}", h.trim_end_matches('/')),
+            _ => return Err(format!("relative path `{p}` with no known absolute cwd")),
+        }
+    };
+    if abs.split('/').any(|c| c == "..") {
+        return Err(format!(
+            "`{abs}` has a `..` component, so where it lands is not decided by its spelling"
+        ));
+    }
+    Ok(abs)
+}
+
+/// Table C class of the absolute, `..`-free value `path` (see [`classify`]).
+fn class_of(effect: Effect, path: &str, scope: &SafeRoots) -> Result<PathClass, String> {
+    use crate::detect::rm::new_layer;
+    use crate::detect::{harm_mark, protected};
+    use crate::scope::Placement;
+    use harness_core::verdict::Determination;
+
+    let undet = |u: &dyn std::fmt::Display| format!("`{path}` cannot be placed: {u}");
+    let legacy = crate::detect::Ctx::new(scope, "");
+
+    // System.
+    match new_layer::home_harm(path, scope) {
+        Determination::Known(true) => return Ok(PathClass::System),
+        Determination::Known(false) => {}
+        Determination::Undetermined(u) => return Err(undet(&u)),
+    }
+    let system = new_layer::system_spellings(path, scope).iter().any(|p| {
+        p.is_empty() || crate::scope::is_inside_system_dir(p) || harm_mark::is_raw_disk(p)
+    });
+    if system && legacy.confined_root("rm", &[path]).is_none() {
+        return Ok(PathClass::System);
+    }
+    match protected::real_system_path_block("write", path, &legacy) {
+        Ok(Some(d)) if d.is_system_harm() => return Ok(PathClass::System),
+        Ok(_) => {}
+        Err(u) => return Err(undet(&u)),
+    }
+
+    // Protected (lifted strictly inside a linked worktree checkout).
+    let landing = match protected::physical_landing(path, None) {
+        Some(Determination::Known(real)) => real,
+        Some(Determination::Undetermined(u)) => return Err(undet(&u)),
+        None => return Err(undet(&"its physical landing cannot be resolved")),
+    };
+    let spellings = [path, landing.as_str()];
+    let lifted = matches!(
+        scope.classify_worktree_checkout_value(path),
+        Determination::Known(Placement::Inside { .. })
+    );
+    if !lifted && spellings.iter().any(|p| new_layer::is_protected(p)) {
+        return Ok(PathClass::Protected);
+    }
+
+    // Workflow.
+    if spellings
+        .iter()
+        .any(|p| crate::exclude::is_workflow_path(p))
+    {
+        return Ok(PathClass::Workflow);
+    }
+
+    // Persistence: a NEW file only, so only for an effect that may create it.
+    let creates = matches!(
+        effect,
+        Effect::Truncate | Effect::Append | Effect::Link | Effect::CreateTree
+    );
+    if creates
+        && spellings
+            .iter()
+            .any(|p| protected::launch_agents_new_file_ask("write", p).is_some())
+    {
+        return Ok(PathClass::Persistence);
+    }
+
+    // Scratch (strictly inside; a temp / cache root itself is not Scratch).
+    match scope.classify_disposable_value(path) {
+        Determination::Known(Placement::Inside { .. }) => return Ok(PathClass::Scratch),
+        Determination::Known(_) => {}
+        Determination::Undetermined(u) => return Err(undet(&u)),
+    }
+
+    // OwnWorktree / OtherWorktree: an Undetermined is "not that class".
+    if new_layer::own_worktree(path, scope) {
+        return Ok(PathClass::OwnWorktree);
+    }
+    if let Determination::Known(Placement::Inside { .. }) = scope.classify_worktree_value(path) {
+        return Ok(PathClass::OtherWorktree);
+    }
+
+    // Project / Other.
+    match scope.classify_value(path) {
+        Determination::Known(Placement::Inside { .. } | Placement::IsRoot { .. }) => {
+            Ok(PathClass::Project)
+        }
+        Determination::Known(Placement::Outside { .. }) => Ok(PathClass::Other),
+        Determination::Undetermined(u) => Err(undet(&u)),
+    }
 }

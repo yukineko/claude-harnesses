@@ -187,7 +187,7 @@ pub(super) fn harms_system(ctx: &Ctx<'_>, verb: &str, operand: &str) -> bool {
 
 /// A block device that IS a disk or partition (`/dev/disk0`, `/dev/rdisk2s1`,
 /// `/dev/sda`, `/dev/nvme0n1`): raw bytes written there destroy a filesystem.
-fn is_raw_disk(p: &str) -> bool {
+pub(super) fn is_raw_disk(p: &str) -> bool {
     let Some(name) = p.strip_prefix("/dev/") else {
         return false;
     };

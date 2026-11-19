@@ -6,7 +6,7 @@ use super::{
     Determination, Placement, SafeRoots, SegmentSep,
 };
 
-mod new_layer;
+pub(super) mod new_layer;
 mod operand_words;
 use operand_words::{
     expand_operand_with, has_unquoted_glob, place_literal, rm_operand_words, OperandSpelling,

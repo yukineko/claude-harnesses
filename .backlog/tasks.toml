@@ -2425,6 +2425,8 @@ canon:
 created_at = 1795108483
 updated_at = 1795108483
 weight = 0.0
+issue_number = 1871
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1871"
 rev = 0
 
 [task.repro]

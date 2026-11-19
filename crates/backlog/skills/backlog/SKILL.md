@@ -11,6 +11,7 @@ allowed-tools: Bash(backlog:*), Bash(git:*), Read
 backlog list --status pending [--project <path>]   # ピックには使用禁止。キュー一覧（純粋な read）
 backlog next [--project <path>]                    # 次のアイテムを覗く（予約しない）
 backlog next --claim [--project <path>]            # 次のアイテムを予約して取る（driver はこちら）。払い出す前に repro を再実行し、再現しなければ自動 cancel して次へ（判定不能なら拒否）
+backlog unclaim <id>                               # 自セッション（CLAUDE_CODE_SESSION_ID）が保有する生きた lease を解放する。store は書かず task は pending のまま即再 claim 可。lease を解放するのはこれだけ（done/fail/cancel は解放しない）。lease 無し・他セッション保有・session id 無し・ledger 異常は非 0 で拒否
 backlog done <id> --test "<cmd>" --red-rev <rev>   # 完了（committed test が HEAD で GREEN を実測。REV は commit 解決と祖先判定だけして closure.red に executed = false で記録し、RED は実行しない: ユーザー裁定 2026-11-08）
 backlog done <id> --doc-only <commit>              # 完了（doc だけを触る祖先 commit が証拠）
 backlog done <id> --duplicate-of <id>              # 完了（重複。相手は pending / claimed / done）

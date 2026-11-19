@@ -9,8 +9,10 @@
 //!
 //! Spec (coordinator revision, after a first draft of these tests showed that
 //! RELEASING the lease on done/fail lets a diverged checkout re-dispatch
-//! finished or just-failed work): NOTHING releases the lease; exclusion is
-//! unchanged and ends only when the lease ages out at CLAIM_STALE_SECS. The fix
+//! finished or just-failed work): nothing but `backlog unclaim` (by the holder
+//! session) releases a lease — `done` / `fail` do not; exclusion is unchanged
+//! and ends only when the lease ages out at CLAIM_STALE_SECS or its holder runs
+//! `unclaim` (user ruling 2026-11-20, tests/unclaim_lease.rs). The fix
 //! is confined to the derived view:
 //!   * `pending` row + live lease: "claimed" (unchanged);
 //!   * `failed` row + live lease whose `claimed_at` is STRICTLY greater than

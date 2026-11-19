@@ -281,8 +281,14 @@ claimant が直前に fail したタスクは `claimed` と表示されないが
   `claimed` と表示される行を選ぶ。`--status pending` は lease 中を含まない。
 - 旧バイナリが `status = "claimed"` で保存した行は `pending` として読む。除外するのは生きた lease
   だけ。その行は、無関係なコマンドが次に store を保存したときに `pending` として書き直される。
-- `done`/`fail` は lease を解放しない。`edit --status pending` も lease を解放しない。終端でないタスクの lease は、holder の
-  最後の生存観測から 1h で期限切れになるまで除外を続ける。
+- lease を解放するのは、保有セッションが実行する `backlog unclaim <ID>` だけである。`done`/`fail`/`cancel` は lease を解放しない。
+  `edit --status pending` も lease を解放しない。終端でないタスクの lease は、holder の
+  最後の生存観測から 1h で期限切れになるか、holder が `unclaim` するまで除外を続ける。
+- `unclaim <ID>` が書くのは ledger だけで、トラックされた store は書かない（そのため primary でも実行できる）。
+  `CLAUDE_CODE_SESSION_ID` が lease の session と一致するとき、ID の生きた lease を取り除く。タスクは
+  `pending` のままで、すぐに再び claim できる。生きた lease が無い・lease が他セッションのもの・lease に
+  session id が無い（holder を判定できない）・呼び出し側に `CLAUDE_CODE_SESSION_ID` が無い・ledger を
+  ロック/読み/書きできない場合は、ledger を変えずにどのケースかを示して非 0 で拒否する。
 - `list`・素の `next`・`next --claim` は同じ方法 (上記の project identity) で ledger を特定する。
   repo 外ではその identity は正規化した cwd。identity を解決できない (例: worktree の `.git` リンクが
   切れている) か、ledger が存在するのに読めない・パースできない場合、`list` と素の `next` は

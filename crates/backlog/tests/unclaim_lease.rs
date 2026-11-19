@@ -10,11 +10,11 @@
 //!    claimable again via `next --claim` and no longer `claimed` in
 //!    `list --json`;
 //!  * REFUSES (non-zero exit, ledger file byte-identical) when
-//!      (a) no live lease for the id (never claimed, or lease aged out),
-//!      (b) the lease belongs to another session,
-//!      (c) the lease has no session_id (holder undeterminable),
-//!      (d) CLAUDE_CODE_SESSION_ID unset or empty in the unclaiming process,
-//!      (e) ledger unreadable/unparseable or its lock not acquired;
+//!    (a) no live lease for the id (never claimed, or lease aged out),
+//!    (b) the lease belongs to another session,
+//!    (c) the lease has no session_id (holder undeterminable),
+//!    (d) CLAUDE_CODE_SESSION_ID unset or empty in the unclaiming process,
+//!    (e) ledger unreadable/unparseable or its lock not acquired;
 //!  * every refusal says "NOT released" (case-sensitive) on stderr, and
 //!    stdout does not claim success;
 //!  * works from the PRIMARY checkout (ledger is outside the repo; must not

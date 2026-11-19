@@ -427,8 +427,9 @@ fn literal_assignment_span(tokens: &[&str], i: usize) -> usize {
 /// `y=$(L=/tmp/x; true) rm $L`) was never a command candidate and the line
 /// was Allow. The tokens joined by one space are scanned with the same
 /// substitution scan [`super::split_segments`] uses
-/// ([`super::closed_substitution_end`]); every space of the joined text is a
-/// token boundary, so the word's end maps back to a token count.
+/// ([`super::closed_substitution_end`]), and the word's end maps back to a
+/// token count only when it falls exactly on a token's end (never past the
+/// slice; anything else is `None`).
 fn substitution_assignment_word_span(tokens: &[&str], i: usize) -> Option<usize> {
     use super::segment::{closed_substitution_end, quote_escape_pair};
     let tok = *tokens.get(i)?;
@@ -479,7 +480,23 @@ fn substitution_assignment_word_span(tokens: &[&str], i: usize) -> Option<usize>
     if in_s || in_d {
         return None;
     }
-    Some(chars[..k].iter().filter(|c| **c == ' ').count() + 1)
+    // Map the word's end back onto `tokens[i..]` by each token's own end
+    // offset in `joined`. A caller's tokens need not be whitespace-free (a
+    // token holding a blank made a count of blanks overshoot the slice and
+    // panic, d068ef20 integration), so the end must coincide EXACTLY with a
+    // token end; anything else is undetermined and keeps the former reading.
+    let mut token_end = 0;
+    for (n, t) in tokens[i..].iter().enumerate() {
+        token_end += t.chars().count();
+        if token_end == k {
+            return Some(n + 1);
+        }
+        if token_end > k {
+            return None;
+        }
+        token_end += 1;
+    }
+    None
 }
 
 /// Indices of the command words an exec-wrapper chain can actually run —

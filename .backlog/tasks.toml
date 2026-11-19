@@ -2654,3 +2654,35 @@ exit 101: d out; finished in 0.79s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
      Running tests/redirect_target_resolution.rs (target/debug/deps/redirect_target_resolution-738d6878b3f12f47)
 error: test failed, to rerun pass `-p blastguard --test redirect_target_resolution`"""
+
+[[task]]
+id = "b07f2020"
+title = "blastguard test RED: suffixed redirect via local/declare assignment resolved to Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "test-red",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "redirect_target_suffix_resolution.rs:665: 4 shapes, e.g. declare P=/home/yuki/proj; echo hi > $P/x.log -> Allow, test says must stop the call. Observed 2026-11-20 on main a0ba7bad0 (detached worktree verify-main-q3q4), found while integrating Q3/Q4 deny-target table (7275b9d9); same failure on the integration tree. Readings: (a) real regression on main; (b) stale assert vs a later ruling or the S5 AST evaluator; distinguish by git log -S on the asserted case."
+created_at = 1795110602
+updated_at = 1795110602
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test redirect_target_suffix_resolution unresolvable_suffixed_shapes_keep_the_unresolved_verdict"
+rev = "4c286f7b61e70f4a56ccb658a200c3c4085bdf1a"
+observed_at = 1795110602
+detail = """
+exit 101: 16s
+
+   Compiling blastguard v0.2.761 (/Users/yuki/src/.harness-worktrees/session-179495ba/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running tests/redirect_target_suffix_resolution.rs (target/debug/deps/redirect_target_suffix_resolution-f2aefaf9126adad4)
+error: test failed, to rerun pass `-p blastguard --test redirect_target_suffix_resolution`"""

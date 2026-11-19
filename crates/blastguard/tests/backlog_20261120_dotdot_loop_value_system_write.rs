@@ -111,7 +111,7 @@ fn verdict(tag: &str, build: impl Fn(&str) -> String) -> (String, String, String
 }
 
 #[test]
-#[ignore = "RED(BACKLOG_ID): loop value with .. reaching /etc, cp a $f/hosts, is allowed"]
+#[ignore = "RED(cfb98cd5): loop value with .. reaching /etc, cp a $f/hosts, is allowed"]
 fn dotdot_loop_value_cp_into_etc_is_denied() {
     let (m, r, cmd) = verdict("cp-loop", |p| {
         format!("for f in {p}; do cp a $f/hosts; done")
@@ -120,7 +120,7 @@ fn dotdot_loop_value_cp_into_etc_is_denied() {
 }
 
 #[test]
-#[ignore = "RED(BACKLOG_ID): cp a ../../..(to /)/etc/hosts is allowed"]
+#[ignore = "RED(cfb98cd5): cp a ../../..(to /)/etc/hosts is allowed"]
 fn dotdot_cp_into_etc_no_loop_is_denied() {
     let (m, r, cmd) = verdict("cp-plain", |p| format!("cp a {p}/hosts"));
     assert_eq!(m, "deny", "writes /etc/hosts; command={cmd} reason={r}");

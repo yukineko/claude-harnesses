@@ -66,6 +66,8 @@ use std::ops::Range;
 use super::{Cause, Script, Value};
 use crate::scope::SafeRoots;
 
+#[cfg(test)]
+mod classify_tests;
 pub(super) mod deny_targets;
 mod table_b;
 

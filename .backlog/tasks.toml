@@ -2496,3 +2496,32 @@ exit 101: /worktrees/run-20261120-071122-49691-a-brace-group-feeder-piped-to-she
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.68s
      Running tests/brace_group_feeder_adversarial_20261120.rs (target/debug/deps/brace_group_feeder_adversarial_20261120-32fc257fff118929)
 error: test failed, to rerun pass `-p blastguard --test brace_group_feeder_adversarial_20261120`"""
+
+[[task]]
+id = "7d85ed1e"
+title = "blastguard FP: unquoted echo feeder piped to bash (echo a | bash) is Ask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-20 in run-20261120-071122-49691 task a-brace-group-feeder-piped-to-shell at 0b906f524 (and on main 5cfe8e73e): 'echo a | bash' and 'echo hi | bash' are ask: '`bash` takes its program from stdin, and that program is not on the command line — blastguard has no text to read, so it cannot tell whether anything here is irreversible'. Unquoted echo words are not read as literals, while quoted "echo 'echo hi' | bash" and (after the 7eb86bb3 fix) '{ echo a; echo b; } | bash' are Allow. Unknown programs default Allow (ruling 2026-11-17)."""
+created_at = 1795127934
+updated_at = 1795127934
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp -- --include-ignored"
+rev = "dfd2fa9e67f85ea5ab6c579f94b017065ec8aad1"
+observed_at = 1795127934
+detail = """
+exit 101: group-feeder-piped-to-shell/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.93s
+     Running tests/backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp.rs (target/debug/deps/backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp-71b6ff5cfd040988)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp`"""

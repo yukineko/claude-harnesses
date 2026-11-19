@@ -133,7 +133,7 @@ fn value_allows(v: &str, ctx: &Ctx<'_>) -> bool {
     if is_system(&path, ctx) || is_protected(&path) || exclude::is_workflow_path(&path) {
         return false;
     }
-    scratch(&path, ctx) || own_worktree(&path, ctx)
+    scratch(&path, ctx) || own_worktree(&path, ctx.scope)
 }
 
 /// Table C **Scratch**: strictly inside a temp / cache deletion root
@@ -145,40 +145,68 @@ fn scratch(path: &str, ctx: &Ctx<'_>) -> bool {
     )
 }
 
-/// Table C **System** (restrictive superset: no safe-root escape).
+/// Table C **System** (restrictive superset: no safe-root escape, all of
+/// `/dev`).
 fn is_system(path: &str, ctx: &Ctx<'_>) -> bool {
+    let dev = |p: &str| p == "/dev" || p.starts_with("/dev/");
+    system_spellings(path, ctx.scope)
+        .iter()
+        .any(|p| dev(p) || crate::scope::is_inside_system_dir(p) || p.is_empty())
+        // An asset that cannot be placed is refused like one that is placed.
+        || !matches!(home_harm(path, ctx.scope), Determination::Known(false))
+}
+
+/// Every spelling of the absolute path VALUE `path` the Table C **System**
+/// class is judged on, each normalised ([`exclude::normalize`]) with trailing
+/// `/` trimmed (so `/` is the empty string): as written, symlink-resolved,
+/// and with only its parent resolved (`rm` removes the final entry itself).
+/// Shared with `detect::ast::judge::classify`.
+pub(in crate::detect) fn system_spellings(
+    path: &str,
+    scope: &crate::scope::SafeRoots,
+) -> Vec<String> {
     let mut candidates = vec![path.to_string()];
-    if let Some(real) = ctx.scope.resolve(path) {
+    if let Some(real) = scope.resolve(path) {
         candidates.push(real);
     }
     if let Some((parent, name)) = path.rsplit_once('/') {
         let parent = if parent.is_empty() { "/" } else { parent };
-        if let Some(real_parent) = ctx.scope.resolve(parent) {
+        if let Some(real_parent) = scope.resolve(parent) {
             candidates.push(format!("{}/{name}", real_parent.trim_end_matches('/')));
         }
     }
-    let home = ctx.scope.home_real().map(|h| h.trim_end_matches('/'));
-    let system = |p: &str| {
-        let p = exclude::normalize(p);
-        let p = p.trim_end_matches('/');
-        p.is_empty()
-            || crate::scope::is_inside_system_dir(p)
-            || p == "/dev"
-            || p.starts_with("/dev/")
-            || home.is_some_and(|h| p == h)
-    };
-    if candidates.iter().any(|p| system(p)) {
-        return true;
-    }
-    // An asset that cannot be placed is refused like one that is placed.
-    !matches!(
-        ctx.scope.irreplaceable_home_asset_value(path),
-        Determination::Known(None)
-    )
+    candidates
+        .iter()
+        .map(|p| exclude::normalize(p).trim_end_matches('/').to_string())
+        .collect()
 }
 
-/// Table C **Protected** (not lifted inside a worktree checkout here).
-fn is_protected(path: &str) -> bool {
+/// The home part of Table C **System**, which has no safe-root escape: one of
+/// [`system_spellings`] IS the home directory, or the value is an
+/// irreplaceable home asset ([`crate::scope::SafeRoots::irreplaceable_home_asset_value`]).
+/// `Undetermined` when the asset predicate cannot place the value (the
+/// caller must not read that as "not a home asset"). Shared with
+/// `detect::ast::judge::classify`.
+pub(in crate::detect) fn home_harm(
+    path: &str,
+    scope: &crate::scope::SafeRoots,
+) -> Determination<bool> {
+    let home = scope.home_real().map(|h| h.trim_end_matches('/'));
+    if system_spellings(path, scope)
+        .iter()
+        .any(|p| home.is_some_and(|h| p == h))
+    {
+        return Determination::known(true);
+    }
+    match scope.irreplaceable_home_asset_value(path) {
+        Determination::Known(asset) => Determination::known(asset.is_some()),
+        Determination::Undetermined(u) => Determination::Undetermined(u),
+    }
+}
+
+/// Table C **Protected** (not lifted inside a worktree checkout here; the
+/// lift is the caller's: `detect::ast::judge::classify`).
+pub(in crate::detect) fn is_protected(path: &str) -> bool {
     exclude::is_protected_path(path)
         || exclude::holds_protected_paths(path)
         || exclude::touches_protected(path)
@@ -187,17 +215,19 @@ fn is_protected(path: &str) -> bool {
 }
 
 /// Table C **OwnWorktree**: strictly inside the linked worktree checkout that
-/// contains the session cwd (the cwd is that checkout or inside it).
-fn own_worktree(path: &str, ctx: &Ctx<'_>) -> bool {
+/// contains the session cwd (the cwd is that checkout or inside it). Any
+/// `Undetermined`, and no session cwd, is `false`. Shared with
+/// `detect::ast::judge::classify`.
+pub(in crate::detect) fn own_worktree(path: &str, scope: &crate::scope::SafeRoots) -> bool {
     let Determination::Known(Placement::Inside { root, .. }) =
-        ctx.scope.classify_worktree_checkout_value(path)
+        scope.classify_worktree_checkout_value(path)
     else {
         return false;
     };
-    let Some(cwd) = ctx.scope.session_cwd() else {
+    let Some(cwd) = scope.session_cwd() else {
         return false;
     };
-    match ctx.scope.classify_worktree_checkout_value(cwd) {
+    match scope.classify_worktree_checkout_value(cwd) {
         Determination::Known(Placement::Inside { root: r, .. })
         | Determination::Known(Placement::IsRoot { root: r }) => r == root,
         _ => false,

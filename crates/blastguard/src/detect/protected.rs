@@ -302,7 +302,7 @@ $PATH), so whether the old bytes were recoverable does not make it safe"
 /// overwrite — answering Ask first would downgrade that Deny. A target whose
 /// existence cannot be read (`symlink_metadata` fails with anything other
 /// than "not found") is also an Ask (CLAUDE.md §3).
-fn launch_agents_new_file_ask(action: &str, target: &str) -> Option<Decision> {
+pub(super) fn launch_agents_new_file_ask(action: &str, target: &str) -> Option<Decision> {
     let expanded;
     let target = match target.strip_prefix("~/") {
         Some(rest) => match std::env::var("HOME") {

@@ -287,7 +287,7 @@ fn r_python_unknown_sink() {
 }
 
 #[test]
-#[ignore = "RED: backlog 596ef57d R-fakeeof"]
+#[ignore = "RED(eaf0b2a4): backlog 596ef57d R-fakeeof"]
 fn r_fakeeof() {
     let b = "import os\nos.system(\"rm -rf ~\")";
     let cases = vec![(
@@ -298,7 +298,7 @@ fn r_fakeeof() {
 }
 
 #[test]
-#[ignore = "RED: backlog 596ef57d R-cargo"]
+#[ignore = "RED(73655802): backlog 596ef57d R-cargo"]
 fn r_cargo() {
     // A1: build.rs + cargo build, and .rs + cargo run, are not Allow.
     let cases = vec![

@@ -2527,3 +2527,34 @@ exit 101: group-feeder-piped-to-shell/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.93s
      Running tests/backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp.rs (target/debug/deps/backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp-71b6ff5cfd040988)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp`"""
+
+[[task]]
+id = "606a93ab"
+title = "blastguard allows git discard into another session's dirty linked worktree"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "User ruling 2026-11-20, fail-open. Hard reset, checkout of the whole tree, restore of a path or of the whole tree, and clean with force and directories, aimed at a linked worktree that does NOT hold the session cwd, are Allow in both modes even when that worktree has a modified tracked file (or an untracked file for clean). Both the -C spelling and the cd-then-git spelling, from a main-tree cwd and from the session's own worktree: 20 of 20 cells Allow. Measurer's cause: managed_worktree_git in detect/git.rs accepts any linked worktree under the storage root, not only the one holding the session cwd. Ruling: dirty other worktree gives Ask in main and Deny in subagent; own worktree keeps today's verdict; clean other worktree pinned as measured (Allow). Controls are in the same test file. When fixed, re-anchor the OtherWorktree column of the dirty git rows and the protected restore row in the S6 Table C characterization file."
+created_at = 1795128557
+updated_at = 1795128557
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test otherwt_git_discard_20261120 -- --ignored"
+rev = "b240d59be2e171aec308670350f6322c766af97b"
+observed_at = 1795128557
+detail = """
+exit 101: d out; finished in 1.33s
+
+   Compiling blastguard v0.2.767 (/Users/yuki/src/.harness-worktrees/bg-owt-git/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.38s
+     Running tests/otherwt_git_discard_20261120.rs (target/debug/deps/otherwt_git_discard_20261120-59bf5534d88c20ad)
+error: test failed, to rerun pass `-p blastguard --test otherwt_git_discard_20261120`"""

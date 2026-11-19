@@ -2141,3 +2141,95 @@ exit 101: ness-worktrees/red-dotdot-loop-redirect-20261120/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.07s
      Running tests/backlog_20261120_dotdot_loop_value_system_write.rs (target/debug/deps/backlog_20261120_dotdot_loop_value_system_write-dee0d3a72796bdd5)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_dotdot_loop_value_system_write`"""
+
+[[task]]
+id = "e93d3701"
+title = "[bg-heredoc-script-failopen-596ef57d:R-kill] Q5: shell の `kill -9 -1`（ケース c_kill_all）は、main・subagent の両モードで Deny になる。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-kill",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-kill から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: Q5: shell の `kill -9 -1`（ケース c_kill_all）は、main・subagent の両モードで Deny になる。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_kill` が pass する（#[ignore] を外すだけで、assert は無変更。check は Need::Deny = main == "deny" && sub == "deny"）
+  - HEAD（326c23463 系）では同じテストが FAILED になる（RED を観測済み: "test result: FAILED. 0 passed; 7 failed" @ acdfd56cb）
+
+canon:
+  - .backlog/tasks.toml 596ef57d: "Q5 kill -9 -1 / os.kill(-1,9) -> Deny."
+  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:215-221 r_kill
+"""
+created_at = 1795108483
+updated_at = 1795108483
+weight = 0.0
+issue_number = 1871
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1871"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_kill"
+rev = "eee4290d589b104b33b644dd521d993c0730b69b"
+observed_at = 1795108483
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.92s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-fdb863a4edef468c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
+
+[[task]]
+id = "eddabe3d"
+title = "[bg-heredoc-script-failopen-596ef57d:R-protect] Q3: HOME ではない /Users/<n> ディレクトリ自体の移動と、**/.ssh/** 配下（.ssh ディレクトリ自体を含む）への書き込み・置換・chmod・chown は、shell・python stdin のどちらの経路でも Deny になる。複数の判定が当たる場合は最も厳しいもの（Deny > Ask > Allow）が勝つ。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-protect",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-protect から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: Q3: HOME ではない /Users/<n> ディレクトリ自体の移動と、**/.ssh/** 配下（.ssh ディレクトリ自体を含む）への書き込み・置換・chmod・chown は、shell・python stdin のどちらの経路でも Deny になる。複数の判定が当たる場合は最も厳しいもの（Deny > Ask > Allow）が勝つ。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `... --test backlog_20261120_596ef57d_requirements -- --ignored r_protect` が pass する。対象は c_mv_home, c_cp_authkeys, stdin_x_os_replace_authkeys, stdin_x_os_chmod_ssh, stdin_x_open_wb, stdin_x_open_x_mode, stdin_x_os_utime_chown の 7 件で、いずれも main/sub とも deny
+  - fixture の HOME は <base>/home（/Users/yuki ではない）のまま、assert も無変更で pass する
+
+canon:
+  - .backlog/tasks.toml 596ef57d: "Q3 protect /Users/<n>, /home/<n>, **/.ssh/**, **/.gitconfig even when not HOME (Deny)."
+  - .backlog/tasks.toml 596ef57d round 3: "(2) Q3 scope = the directory /Users/<n> or /home/<n> itself (delete, move away, chmod/chown of the dir); files under it are judged by **/.ssh/**, **/.gitconfig and the existing HOME rules."
+  - .backlog/tasks.toml 596ef57d round 3: "when several judgements apply the strictest wins: Deny > Ask > Allow (Q3/Q5 Deny always win over the allowlist Ask)"
+  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:223-242 r_protect
+"""
+created_at = 1795108511
+updated_at = 1795108511
+weight = 0.0
+issue_number = 1872
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1872"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_protect"
+rev = "eee4290d589b104b33b644dd521d993c0730b69b"
+observed_at = 1795108511
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 1.50s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-fdb863a4edef468c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""

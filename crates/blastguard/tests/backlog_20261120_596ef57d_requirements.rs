@@ -213,7 +213,7 @@ fn bodies(names: &[&str]) -> Vec<(String, String)> {
 }
 
 #[test]
-#[ignore = "backlog 596ef57d: RED R-kill"]
+#[ignore = "RED(e93d3701): backlog 596ef57d R-kill"]
 fn r_kill() {
     // Q5: kill -9 -1 -> Deny (variants(): c_kill_all).
     let cases = vec![("c_kill_all".to_string(), "kill -9 -1".to_string())];
@@ -221,7 +221,7 @@ fn r_kill() {
 }
 
 #[test]
-#[ignore = "backlog 596ef57d: RED R-protect"]
+#[ignore = "RED(eddabe3d): backlog 596ef57d R-protect"]
 fn r_protect() {
     // Q3: /Users/<n>, **/.ssh/**, **/.gitconfig are protected even when not HOME -> Deny.
     let mut cases = vec![
@@ -242,7 +242,7 @@ fn r_protect() {
 }
 
 #[test]
-#[ignore = "backlog 596ef57d: RED R-gate"]
+#[ignore = "RED: backlog 596ef57d R-gate"]
 fn r_gate() {
     // Q4: gate scripts (scripts/check-*.py, .githooks/**, ...) must not be overwritten.
     let mut cases = vec![
@@ -262,7 +262,7 @@ fn r_gate() {
 }
 
 #[test]
-#[ignore = "backlog 596ef57d: RED R-stdin-effect"]
+#[ignore = "RED: backlog 596ef57d R-stdin-effect"]
 fn r_stdin_effect() {
     // Round 2: an allowlisted sink API is judged by its argv effect.
     let cases = bodies(&[
@@ -276,7 +276,7 @@ fn r_stdin_effect() {
 }
 
 #[test]
-#[ignore = "backlog 596ef57d: RED R-python-unknown-sink"]
+#[ignore = "RED: backlog 596ef57d R-python-unknown-sink"]
 fn r_python_unknown_sink() {
     // A2a: a sink with no effect model (asyncio subprocess_shell) -> Ask, not Allow.
     check(
@@ -287,7 +287,7 @@ fn r_python_unknown_sink() {
 }
 
 #[test]
-#[ignore = "backlog 596ef57d: RED R-fakeeof"]
+#[ignore = "RED: backlog 596ef57d R-fakeeof"]
 fn r_fakeeof() {
     let b = "import os\nos.system(\"rm -rf ~\")";
     let cases = vec![(
@@ -298,7 +298,7 @@ fn r_fakeeof() {
 }
 
 #[test]
-#[ignore = "backlog 596ef57d: RED R-cargo"]
+#[ignore = "RED: backlog 596ef57d R-cargo"]
 fn r_cargo() {
     // A1: build.rs + cargo build, and .rs + cargo run, are not Allow.
     let cases = vec![

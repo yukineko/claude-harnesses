@@ -2513,6 +2513,8 @@ notes = """Observed 2026-11-20 in run-20261120-071122-49691 task a-brace-group-f
 created_at = 1795127934
 updated_at = 1795127934
 weight = 0.0
+issue_number = 1880
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1880"
 rev = 0
 
 [task.repro]

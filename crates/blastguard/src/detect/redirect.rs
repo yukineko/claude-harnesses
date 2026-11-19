@@ -26,15 +26,32 @@ use harness_core::verdict::Determination;
 /// per-segment scan could not be corroborated (`seg_idx` is `None`) on a line
 /// that changes directory. Judging it against the starting directory would
 /// probe and place the WRONG file, so the caller must not (CLAUDE.md §3).
+///
+/// Relative or absolute is decided on the name the kernel opens, not on the
+/// spelling ([`redirect_word_relativity`]): `'/etc/x'` and `"/etc/x"` are
+/// absolute. Deciding on the spelling (the first character is a quote) read
+/// them as relative and joined them onto the `cd` directory, so `cd /tmp &&
+/// : > '/etc/x'` was judged as the file `/tmp/'/etc/x'` and every axis
+/// (system directory included) answered for a path that is never written —
+/// Allow for a NEW file in `/etc` (fail-open; reached through S5, whose
+/// effect spellings quote every path, by `cd DIR && python3 -c 'open("/etc/x",
+/// "w")'`). A quoted word that cannot be dequoted after a `cd` is not
+/// placed (`Err`): it may be absolute or relative, and joining it would judge
+/// the wrong file.
 pub(super) fn place_redirect_target(
     cmd: &str,
     seg_idx: Option<usize>,
     seg_cwds: &[CwdState],
     target: String,
 ) -> Result<String, String> {
-    if !is_relative_operand(&target) || has_unresolvable_expansion(&target) {
+    if has_unresolvable_expansion(&target) {
         return Ok(target);
     }
+    let relative = match redirect_word_relativity(&target) {
+        Determination::Known(false) => return Ok(target),
+        Determination::Known(true) => true,
+        Determination::Undetermined(_) => false,
+    };
     let state = match seg_idx {
         Some(idx) => seg_cwds.get(idx).cloned().unwrap_or(CwdState::Unknown),
         None if line_changes_cwd_before(cmd, usize::MAX) => CwdState::Unknown,
@@ -42,12 +59,38 @@ pub(super) fn place_redirect_target(
     };
     match state {
         CwdState::Root => Ok(target),
-        CwdState::Known(dir) => Ok(exclude::normalize(&format!(
+        // `cwd::known_dir` never yields `""` (the base is `"."`); should one
+        // appear, joining it would root-anchor the target (`/<target>`,
+        // backlog 5f02eb88), so it is left unplaced (the unplaceable Ask).
+        CwdState::Known(dir) if dir.is_empty() => Err(target),
+        CwdState::Known(dir) if relative => Ok(exclude::normalize(&format!(
             "{}/{}",
             dir.trim_end_matches('/'),
             target
         ))),
-        CwdState::Unknown => Err(target),
+        CwdState::Known(_) | CwdState::Unknown => Err(target),
+    }
+}
+
+/// Whether a redirect WORD names a path relative to the cwd: decided on the
+/// word with its shell quoting removed ([`dequoted_redirect_word`]), so a
+/// quoted absolute path (`'/etc/x'`, `"/etc/x"`, `\/etc/x`) is absolute.
+///
+/// * A word [`is_relative_operand`] calls absolute or home-relative (its
+///   first character is `/` or `~`) is `Known(false)`, as before.
+/// * Otherwise `Known(true)` unless the dequoted name starts with `/`
+///   (`Known(false)`). A quoted `'~/x'` stays relative: the shell does not
+///   expand a quoted `~`, so it names a directory called `~`.
+/// * `Undetermined` when the word carries quoting that cannot be removed to
+///   one literal name: the caller must not place it against a `cd`
+///   directory (it may be absolute).
+pub(super) fn redirect_word_relativity(word: &str) -> Determination<bool> {
+    if !is_relative_operand(word) {
+        return Determination::known(false);
+    }
+    match dequoted_redirect_word(word) {
+        Determination::Known(name) => Determination::known(!name.starts_with('/')),
+        Determination::Undetermined(why) => Determination::undetermined(why.to_string()),
     }
 }
 
@@ -68,13 +111,20 @@ pub(super) fn physical_redirect_spelling(
     seg_cwds: &[CwdState],
     target: &str,
 ) -> String {
-    if !is_relative_operand(target) || has_unresolvable_expansion(target) {
+    // Relative on the dequoted name, exactly as `place_redirect_target`; a
+    // word that cannot be dequoted is not placed there either (`Err` after a
+    // `cd`), so its spelling is returned unchanged.
+    if has_unresolvable_expansion(target)
+        || !matches!(redirect_word_relativity(target), Determination::Known(true))
+    {
         return target.to_string();
     }
     match seg_idx.and_then(|idx| seg_cwds.get(idx)) {
-        // `cd link && cd ..` tracks as `Known("")`: the line's own base, so
-        // the target is already relative to it (never `/<target>`).
-        Some(CwdState::Known(dir)) if !dir.is_empty() => {
+        // `cd link && cd ..` tracks as `Known(".")` (`cwd::known_dir`): the
+        // line's own base, so the target is already relative to it. The
+        // empty guard stays as defence in depth: `""` must never become
+        // `/<target>`.
+        Some(CwdState::Known(dir)) if !dir.is_empty() && dir != "." => {
             format!("{}/{}", dir.trim_end_matches('/'), target)
         }
         _ => target.to_string(),

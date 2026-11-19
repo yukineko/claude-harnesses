@@ -85282,3 +85282,239 @@ rev = "e17ee5e922bd7f057848f61393a410c781e4b596"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "5f02eb88"
+title = "blastguard: after a cd into a subdirectory and back out with a parent cd, a relative redirect target is placed at the filesystem root instead of the starting directory (wrong file judged both ways)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "false-positive",
+    "blastguard",
+]
+touched_files = []
+status = "done"
+notes = "Observed at e56699977 (blastguard 0.2.751), hermetic HOME. The cwd tracker records the round-trip as a known empty directory, and the redirect placement joins the empty directory and the target with a slash, so a relative target is judged as an absolute path under the root. physical_redirect_spelling already guards the empty case; place_redirect_target does not. Fail-open: truncating an existing untracked project file through the round-trip is Allow in both modes, while the same truncation without the round-trip (same real file) is Ask in main and Deny in subagent. False positive: appending to a new file under a project subdirectory named etc through the round-trip is Deny as a system-directory write, while without the round-trip it is Allow. The round-trip through a symlinked directory was also observed Allow for the truncation in a probe (not reached in the test because the first variant fails first). Protected-config targets give the same Ask either way (only the reason names the wrong path), not pinned. Expected: the variant answers exactly as the baseline that writes the same real file. Root cause not fixed. Test: crates/blastguard/tests/fp_candidates_b_20261120.rs"
+created_at = 1795107986
+updated_at = 1795109457
+weight = 0.0
+issue_number = 1870
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1870"
+issue_closed_at = 1795109461
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test fp_candidates_b_20261120 cd_roundtrip_ -- --include-ignored"
+rev = "8ec29d108a4e648c3372f2f5e08ae66489f2b206"
+observed_at = 1795107986
+detail = """
+exit 101: ndtrip_truncate_existing_file_parity
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.77s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/fp_candidates_b_20261120.rs (target/debug/deps/fp_candidates_b_20261120-027634bcafc7f041)
+error: test failed, to rerun pass `-p blastguard --test fp_candidates_b_20261120`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test fp_candidates_b_20261120"
+exit = 0
+passed = 6
+rev = "43704c3a0853b602c38054344a7a3fcc4b16044e"
+observed_at = 1795109428
+output_digest = "sha256:44a29230b699b0a63a5de440673f0448be2e3266010305669606de7f6095c5e0"
+excerpt = """
+ompiling num-integer v0.1.47
+   Compiling errno v0.3.14
+   Compiling rustpython-parser-vendored v0.4.0
+   Compiling ahash v0.8.12
+   Compiling colorchoice v1.0.5
+   Compiling anstyle v1.0.14
+   Compiling bitflags v2.13.0
+   Compiling ar_archive_writer v0.5.1
+   Compiling itoa v1.0.18
+   Compiling option-ext v0.2.0
+   Compiling thiserror v2.0.21
+   Compiling core-foundation-sys v0.8.7
+   Compiling anstyle-query v1.1.5
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling scopeguard v1.2.0
+   Compiling winnow v0.7.15
+   Compiling toml_write v0.1.2
+   Compiling smallvec v1.16.5
+   Compiling lock_api v0.4.14
+   Compiling ppv-lite86 v0.2.21
+   Compiling iana-time-zone v0.1.65
+   Compiling anstream v1.0.0
+   Compiling dirs-sys v0.4.1
+   Compiling rand_chacha v0.3.1
+   Compiling psm v0.1.31
+   Compiling rand v0.8.8
+   Compiling regex-automata v0.4.14
+   Compiling phf_generator v0.11.3
+   Compiling phf_codegen v0.11.3
+   Compiling darling_core v0.21.3
+   Compiling unicode_names2_generator v1.3.0
+   Compiling pest v2.9.5
+   Compiling darling_core v0.20.11
+   Compiling rustpython-parser v0.4.0
+   Compiling unicode_names2 v1.3.0
+   Compiling serde_derive v1.0.228
+   Compiling is-macro v0.3.8
+   Compiling rustpython-parser-core v0.4.0
+   Compiling phf v0.11.3
+   Compiling num-bigint v0.4.8
+   Compiling pest_meta v2.9.5
+   Compiling digest v0.10.7
+   Compiling thiserror-impl v2.0.21
+   Compiling darling_macro v0.20.11
+   Compiling darling_macro v0.21.3
+   Compiling darling v0.20.11
+   Compiling darling v0.21.3
+   Compiling pest_generator v2.9.5
+   Compiling cpufeatures v0.2.17
+   Compiling foldhash v0.2.0
+   Compiling allocator-api2 v0.2.21
+   Compiling static_assertions v1.1.0
+   Compiling peg-runtime v0.8.6
+   Compiling either v1.19.0
+   Compiling fastrand v2.4.1
+   Compiling clap_lex v1.1.0
+   Compiling peg-macros v0.8.6
+   Compiling itertools v0.11.0
+   Compiling tempfile v3.27.0
+   Compiling clap_builder v4.6.0
+   Compiling hashbrown v0.16.1
+   Compiling bon-macros v3.9.3
+   Compiling pest_derive v2.9.5
+   Compiling rustpython-ast v0.4.0
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling toml_edit v0.22.27
+   Compiling sha2 v0.10.9
+   Compiling cached_proc_macro v0.27.0
+   Compiling regex v1.12.4
+   Compiling clap_derive v4.6.1
+   Compiling tracing-attributes v0.1.31
+   Compiling dirs v5.0.1
+   Compiling chrono v0.4.45
+   Compiling parking_lot v0.12.5
+   Compiling unic-emoji-char v0.9.0
+   Compiling unic-ucd-ident v0.9.0
+   Compiling console v0.16.6
+   Compiling wait-timeout v0.2.1
+   Compiling tracing-core v0.1.36
+   Compiling pin-project-lite v0.2.17
+   Compiling web-time v1.1.0
+   Compiling cached_proc_macro_types v0.1.1
+   Compiling arrayvec v0.7.8
+   Compiling rustc-hash v1.1.0
+   Compiling lalrpop-util v0.20.2
+   Compiling similar v2.7.0
+   Compiling tracing v0.1.44
+   Compiling clap v4.6.1
+   Compiling insta v1.49.0
+   Compiling toml v0.8.23
+   Compiling utf8-chars v3.0.7
+   Compiling peg v0.8.6
+   Compiling cached v0.59.0
+   Compiling bstr v1.12.2
+   Compiling harness-core v0.2.110 (/Users/yuki/src/.harness-worktrees/bg-backlog-done/crates/harness-core)
+   Compiling winnow v1.0.4
+   Compiling target-triple v1.0.1
+   Compiling indenter v0.3.4
+   Compiling globset v0.4.18
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling bon v3.9.3
+   Compiling serde_spanned v1.1.1
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling glob v0.3.3
+   Compiling toml v1.1.3+spec-1.1.0
+   Compiling termcolor v1.4.1
+   Compiling brush-parser v0.4.0
+   Compiling progeffect v0.1.3 (/Users/yuki/src/.harness-worktrees/bg-backlog-done/crates/progeffect)
+   Compiling trybuild v1.0.118
+   Compiling overwatch v0.2.127 (/Users/yuki/src/.harness-worktrees/bg-backlog-done/crates/overwatch)
+   Compiling blastguard v0.2.753 (/Users/yuki/src/.harness-worktrees/bg-backlog-done/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 27.72s
+     Running tests/fp_candidates_b_20261120.rs (target/debug/deps/fp_candidates_b_20261120-8fa87a921d83f5c1)
+"""
+
+[task.closure.red]
+rev = "8ec29d108a4e648c3372f2f5e08ae66489f2b206"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "b56a5813"
+title = "blastguard: argv text of a non-interpreter behind a command wrapper (env, env -u, nice) that mentions a python open-for-write of a System path is judged as an interpreter write and denied as system harm"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "false-positive",
+    "blastguard",
+]
+touched_files = []
+status = "done"
+notes = "Observed at e56699977 (blastguard 0.2.751), hermetic HOME, main and subagent: Deny with reason naming an interpreter write of the System sentinel path with a trailing backslash (an escaped double quote of the argv text read as program quoting). The same argument without the wrapper is Allow (passing pin unwrapped_mentions_are_allow), so only the wrapper differs. Controls: the real program bare and behind env stays Deny (control_real_python_system_write_is_deny). Original block: subagent session 06c2bd77, recovered verbatim from the blastguard blocks log (installed 0.2.675). Expected Allow: the text is data for the wrapped program. Root cause not investigated. Test: crates/blastguard/tests/fp_candidates_b_20261120.rs"
+created_at = 1795107952
+updated_at = 1795109463
+weight = 0.0
+issue_number = 1869
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1869"
+issue_closed_at = 1795109466
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test fp_candidates_b_20261120 wrapped_ -- --include-ignored"
+rev = "8ec29d108a4e648c3372f2f5e08ae66489f2b206"
+observed_at = 1795107952
+detail = """
+exit 101: ered out; finished in 0.86s
+
+   Compiling blastguard v0.2.752 (/Users/yuki/src/.harness-worktrees/bg-fp-cand-20261120/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.86s
+     Running tests/fp_candidates_b_20261120.rs (target/debug/deps/fp_candidates_b_20261120-027634bcafc7f041)
+error: test failed, to rerun pass `-p blastguard --test fp_candidates_b_20261120`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test fp_candidates_b_20261120"
+exit = 0
+passed = 6
+rev = "43704c3a0853b602c38054344a7a3fcc4b16044e"
+observed_at = 1795109462
+output_digest = "sha256:642818f38fe3edf055f90eff46dc8ea31ad4c14e262ecf65822b2dfb37ed85b1"
+excerpt = """
+
+running 6 tests
+test wrapped_backlog_title_mentioning_python_system_write_is_allow ... ok
+test wrapped_echo_mentioning_python_system_write_is_allow ... ok
+test unwrapped_mentions_are_allow ... ok
+test cd_roundtrip_redirect_into_project_etc_parity ... ok
+test control_real_python_system_write_is_deny ... ok
+test cd_roundtrip_truncate_existing_file_parity ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.97s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/fp_candidates_b_20261120.rs (target/debug/deps/fp_candidates_b_20261120-8fa87a921d83f5c1)
+"""
+
+[task.closure.red]
+rev = "8ec29d108a4e648c3372f2f5e08ae66489f2b206"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

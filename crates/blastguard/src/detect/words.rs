@@ -285,6 +285,11 @@ pub(super) fn is_exec_wrapper(cmd: &str) -> bool {
 /// That is a false positive, and a recoverable one — the acceptable side of this
 /// module's fail-closed bias.
 ///
+/// "Every position" means every position where a shell WORD STARTS
+/// ([`wrapped_word_starts`]): a whitespace-split token strictly inside a
+/// quoted word whose quotes provably close is part of one argv entry, never a
+/// command word the wrapper could exec (backlog b56a5813).
+///
 /// When the first non-assignment token is NOT a wrapper, exactly one candidate
 /// is returned, so ordinary commands are unaffected.
 pub(super) fn command_candidates(tokens: &[&str]) -> Vec<usize> {
@@ -300,14 +305,49 @@ pub(super) fn command_candidates(tokens: &[&str]) -> Vec<usize> {
             continue;
         }
         if is_exec_wrapper(&normalized_command(t)) {
-            // Every position behind the wrapper is a candidate.
-            return (i + 1..tokens.len())
-                .filter(|&j| !tokens[j].is_empty() && !opens_unclosed_quote(tokens[j]))
-                .collect();
+            return wrapped_word_starts(tokens, i + 1);
         }
         return vec![i];
     }
     Vec::new()
+}
+
+/// The D3 candidate positions behind a wrapper, from `tokens[from]` on: the
+/// first token of every shell word, minus a word's first token that opens a
+/// quote it does not close ([`opens_unclosed_quote`], unchanged).
+///
+/// Backlog b56a5813: the candidates used to be EVERY non-empty token, so the
+/// fragments INSIDE one quoted argument were read as command words.
+/// `env -u VAR backlog add --title "x: python3 -c 'open(\"/etc/f\",\"w\")'
+/// ok"` made the fragment `python3` a candidate, its neighbours `-c
+/// 'open(\"/etc/f\",\"w\")'` an inline program, and the line was Denied as
+/// an interpreter write of `/etc/f\'` — text no process ever runs; the same
+/// argument without the wrapper (one candidate, `backlog`) was Allow.
+///
+/// A word is skipped whole only when [`super::payload::shell_word_token_span`]
+/// shows where it ends. When it cannot (a quote still open at the end of the
+/// tokens) that word's first token is skipped as before and every LATER token
+/// stays a candidate — the undetermined case keeps the wider, restrictive
+/// candidate set. Not a fail-open for the same reason given on
+/// [`opens_unclosed_quote`]: a quoted multi-word argument is never the program
+/// a wrapper execs, and the wrappers that RUN a string (`env -S`, `flock -c`,
+/// `sh -c` behind any wrapper) are re-analysed by their own arms over the
+/// reassembled word.
+fn wrapped_word_starts(tokens: &[&str], from: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut j = from;
+    while j < tokens.len() {
+        let t = tokens[j];
+        if t.is_empty() {
+            j += 1;
+            continue;
+        }
+        if !opens_unclosed_quote(t) {
+            out.push(j);
+        }
+        j += super::payload::shell_word_token_span(tokens, j).unwrap_or(1);
+    }
+    out
 }
 
 /// Tokens [`command_candidates`] skips for the leading assignment at

@@ -334,16 +334,16 @@ even where an Ask was available: {failing:?}"
 
 #[test]
 fn appending_to_a_protected_path_is_gated_in_both_contexts() {
-    // `tee -a .githooks/pre-commit` adds bytes to a gate file. Whether those
-    // bytes arm it further or disarm it is not derivable from the command line,
-    // so this is the same refusal-to-guess as an Edit: Ask where a human can
-    // answer, Deny where none can.
+    // `tee -a .githooks/pre-commit` adds bytes to a gate file. User ruling
+    // 2026-11-20 (Q3/Q4 deny-target table, backlog 7275b9d9): writes and tee
+    // to `.githooks/**` are Deny, so this is Deny even where a human could
+    // answer an Ask (it used to be Ask there, under the 2026-11-01 ruling).
     let cmd = "tee -a .githooks/pre-commit";
 
     let (_, stdout) = run_with_env(&bash_payload(cmd), &[("BLASTGUARD_ASK", "always")]);
     assert!(
-        stdout.contains(r#""permissionDecision":"ask""#),
-        "with a human present this must Ask, got stdout: {stdout}"
+        stdout.contains(r#""permissionDecision":"deny""#),
+        "with a human present this must still Deny (ruling 2026-11-20), got stdout: {stdout}"
     );
 
     let (_, stdout) = run_with_env(&bash_payload(cmd), &[("BLASTGUARD_ASK", "never")]);

@@ -493,6 +493,17 @@ fn protected_case(name: &str, tool: &str, rel: &str, links: &[(&str, &str)]) {
         let p = f.repo.join(rel);
         f.call(tool, wf_input(tool, &p), &f.repo)
     };
+    // User ruling 2026-11-20 supersedes 2026-11-01 for this one spelling: a
+    // Bash write straight to `.githooks/<file>` is Deny (Q3/Q4 deny-target
+    // table, backlog 7275b9d9). Symlink spellings and Write/Edit stay Ask.
+    if tool == "Bash" && links.is_empty() && rel.starts_with(".githooks/") {
+        assert_eq!(decision(&out), "deny", "{what} must Deny; got {out:?}");
+        assert!(
+            out.contains("deny-target table"),
+            "{what}: reason must name the deny-target table; got {out:?}"
+        );
+        return;
+    }
     assert_protected_ask(&out, &what);
 }
 
@@ -867,7 +878,7 @@ fn p_symlink_loop_write_is_answered_within_bound() {
     );
 }
 
-// Mutant (d) guard: `cd sub && cd ..` tracks the cwd as `Known("")` (back at the
+// Mutant (d) guard: `cd sub && cd ..` tracks the cwd as `Known(".")` (back at the
 // project root). The physical spelling must not become `/sysln` there.
 fn cd_roundtrip_case(name: &str, links: &[(&str, &str)], cmd: &str) -> String {
     let f = Fx::new(name);

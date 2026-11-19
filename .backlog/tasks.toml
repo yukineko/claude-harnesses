@@ -2458,3 +2458,93 @@ exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-fdb863a4edef468c)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
+
+[[task]]
+id = "c3f6d88b"
+title = "[bg-heredoc-script-failopen-596ef57d:R-stdin-effect] python stdin プログラム内のプロセス起動 sink は「API 名 + 引数の効果」で判定する。allowlist 外の sink は Ask にする。allowlist 内の sink は argv を既存の shell effect/path ルールで判定し、Allow になるのはそのルールが Allow を返す場合だけにする。静的に解決できない引数は Ask にする。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-stdin-effect",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-stdin-effect から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: python stdin プログラム内のプロセス起動 sink は「API 名 + 引数の効果」で判定する。allowlist 外の sink は Ask にする。allowlist 内の sink は argv を既存の shell effect/path ルールで判定し、Allow になるのはそのルールが Allow を返す場合だけにする。静的に解決できない引数は Ask にする。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `... -- --ignored r_stdin_effect` が pass する。対象は stdin_popen_git_reset_hard, stdin_from_subprocess_import_run, stdin_p1_check_output_git_clean, stdin_p1_list_concat_cmd, stdin_multiline_call_args で、main/sub とも allow 以外
+  - control_subprocess_git_status_stdin_allow（subprocess.run(['git','status','--short'])）が pass し続ける（main/sub とも allow）
+
+canon:
+  - .backlog/tasks.toml 596ef57d round 2: "GRANULARITY = API name + argument effect: an allowlisted sink is then judged by its argv/path args through the existing shell effect/path rules, Allow only if those give Allow; unresolvable args -> Ask; non-allowlisted sink -> Ask."
+  - docs/blastguard/python-sink-set.md: "Examples from the ruling: `subprocess.run(['git','status','--short'])` is Allow; `subprocess.run(['git','reset','--hard'])` is not Allow."
+  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:264-276, 345-354
+"""
+created_at = 1795109223
+updated_at = 1795109223
+weight = 0.0
+issue_number = 1873
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1873"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_stdin_effect"
+rev = "96f5d589309a32c97ba2a255bb1af79cd606bfa2"
+observed_at = 1795109223
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 1.43s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-9132e453e006d9a6)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
+
+[[task]]
+id = "2f159843"
+title = "[bg-heredoc-script-failopen-596ef57d:R-python-unknown-sink] A2a: 効果モデルを持たない python sink（例: asyncio の loop.subprocess_shell）は Ask になる。python sink には「unknown program = Allow」を適用しない。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-python-unknown-sink",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-python-unknown-sink から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: A2a: 効果モデルを持たない python sink（例: asyncio の loop.subprocess_shell）は Ask になる。python sink には「unknown program = Allow」を適用しない。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `... -- --ignored r_python_unknown_sink` が pass する。対象は stdin_x_loop_subprocess_shell で、main/sub とも allow 以外
+
+canon:
+  - .backlog/tasks.toml 596ef57d: "A2a Python sinks with no effect model (e.g. asyncio subprocess_shell) -> Ask per Q1 (11-17 unknown=Allow does NOT apply to Python sinks)."
+  - docs/blastguard/python-sink-set.md: "Not modelled (no effect model found at HEAD): `loop.subprocess_shell` / `loop.subprocess_exec` (case `stdin_x_loop_subprocess_shell`). Per A2a this must be Ask until an effect model exists."
+  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:278-287
+"""
+created_at = 1795109370
+updated_at = 1795109370
+weight = 0.0
+issue_number = 1874
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1874"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_python_unknown_sink"
+rev = "9b61378da7e7bf0289e88b4cd89dd151d0485db4"
+observed_at = 1795109370
+detail = """
+exit 101: ng blastguard v0.2.754 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.38s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-b404579e77650688)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""

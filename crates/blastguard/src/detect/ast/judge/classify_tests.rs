@@ -92,6 +92,8 @@ impl Fx {
             )
             .unwrap();
             touch(&format!("src/.harness-worktrees/{wt}/src/lib.rs"));
+            mk(&format!("src/.harness-worktrees/{wt}/.githooks"));
+            touch(&format!("src/.harness-worktrees/{wt}/.githooks/pre-commit"));
         }
         mk("other/Library/LaunchAgents");
         Fx { _dir: dir, base }
@@ -282,6 +284,35 @@ fn system_scratch_symlink_into_etc_is_system() {
     assert_eq!(c, PathClass::System, "{STUB}; target {t}");
 }
 
+/// judge.rs `PathClass::System` doc (judge.rs:124-125): "A system path
+/// strictly inside a safe root (`Ctx::confined_root`, a project under `/opt`)
+/// is not `System`." A session whose project is `/opt/<x>/proj` owns
+/// `/opt/<x>/proj/src/a.rs` (safe root `Inside`), so it is Project. Nothing
+/// is created under `/opt`: the resolver re-attaches the missing tail to the
+/// real `/opt`, so the root and the target are placed without writing there.
+#[test]
+#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); a system path strictly inside a safe root (project under /opt) must be Project, not System"]
+fn system_path_strictly_inside_safe_root_is_not_system() {
+    use crate::scope::Placement;
+    use harness_core::verdict::Determination;
+    let fx = Fx::new();
+    let proj = format!("/opt/bg-s6-2-zqxv-{}/proj", std::process::id());
+    assert!(!Path::new(&proj).exists(), "fixture: {proj} must not exist");
+    let scope = fx.scope_at(&proj);
+    let t = format!("{proj}/src/a.rs");
+    assert!(
+        crate::scope::is_inside_system_dir(&t),
+        "fixture: {t} is a system path"
+    );
+    assert!(
+        matches!(scope.classify(&t, None), Determination::Known(Placement::Inside { ref root, .. }) if *root == proj),
+        "fixture: {t} must be strictly Inside the safe root {proj}"
+    );
+    let c = classify_at(&scope, Some(&proj), TRUNC, &lit(&t));
+    assert_ne!(c, PathClass::System, "{STUB}");
+    assert_eq!(c, PathClass::Project, "{STUB}");
+}
+
 // ---------------------------------------------------------------- Protected
 
 /// `.githooks/**` is a protected path (`exclude.rs` PROTECTED_GLOBS:
@@ -312,6 +343,35 @@ fn protected_relative_githooks_is_protected() {
         &lit(".githooks/pre-commit"),
     );
     assert_eq!(c, PathClass::Protected, "{STUB}");
+}
+
+/// Protected is lifted strictly inside a linked worktree checkout
+/// (judge.rs `PathClass::Protected` doc: "Lifted (falls through to the next
+/// class) strictly inside a linked worktree checkout:
+/// [`SafeRoots::classify_worktree_checkout`] `Inside`"; SUBSET.md Table C
+/// Protected row "lifted inside `classify_worktree_checkout` Inside"), so a
+/// `.githooks` file in the session's own linked checkout falls through to
+/// OwnWorktree.
+#[test]
+#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); .githooks/x inside the own linked checkout must be OwnWorktree (Protected lifted)"]
+fn githooks_inside_own_linked_checkout_is_not_protected() {
+    use crate::scope::Placement;
+    use harness_core::verdict::Determination;
+    let fx = Fx::new();
+    let wt = fx.wt("wt-a");
+    let t = format!("{wt}/.githooks/pre-commit");
+    let scope = fx.scope_at(&wt);
+    assert!(
+        matches!(scope.classify_worktree_checkout_value(&t), Determination::Known(Placement::Inside { ref root, .. }) if *root == wt),
+        "fixture: {t} must be checkout-Inside wt-a"
+    );
+    assert!(
+        crate::exclude::is_protected_path(&t),
+        "fixture: {t} is protected-named"
+    );
+    let c = classify_at(&scope, Some(&wt), TRUNC, &lit(&t));
+    assert_ne!(c, PathClass::Protected, "{STUB}");
+    assert_eq!(c, PathClass::OwnWorktree, "{STUB}");
 }
 
 // ---------------------------------------------------------------- Workflow
@@ -427,17 +487,24 @@ fn no_cwd_is_never_own_worktree() {
     assert_eq!(c, PathClass::OtherWorktree, "{STUB}");
 }
 
-/// Session cwd known to the scope, but the PathCtx has no hook cwd: still
-/// never OwnWorktree (task statement "no hook cwd → never OwnWorktree").
+/// OwnWorktree is defined by [`SafeRoots::session_cwd`], not by
+/// `PathCtx::hook_cwd` (SUBSET.md Table C notes: "the session cwd
+/// (`SafeRoots::session_cwd`) is `R` or inside `R`"; judge.rs
+/// `PathClass::OwnWorktree` doc). With the session cwd in wt-a and no hook
+/// cwd, an absolute target in wt-a is still OwnWorktree.
 #[test]
-#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); with no hook cwd a checkout file must be OtherWorktree, never OwnWorktree"]
-fn no_hook_cwd_is_never_own_worktree() {
+#[ignore = "RED S6-2 2026-11-20: classify is the S1 stub (always Unresolved); session_cwd in wt-a makes a wt-a file OwnWorktree without a hook cwd"]
+fn own_worktree_by_session_cwd_without_hook_cwd() {
     let fx = Fx::new();
     let wt = fx.wt("wt-a");
     let scope = fx.scope_at(&wt);
+    assert_eq!(
+        scope.session_cwd(),
+        Some(wt.as_str()),
+        "fixture: session cwd"
+    );
     let c = classify_at(&scope, None, DEL_R, &lit(&format!("{wt}/src/lib.rs")));
-    assert_ne!(c, PathClass::OwnWorktree);
-    assert_eq!(c, PathClass::OtherWorktree, "{STUB}");
+    assert_eq!(c, PathClass::OwnWorktree, "{STUB}");
 }
 
 // ---------------------------------------------------------------- OtherWorktree

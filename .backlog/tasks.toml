@@ -2622,3 +2622,35 @@ exit 101: ompiling blastguard v0.2.761 (/Users/yuki/src/.harness-worktrees/sessi
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.73s
      Running tests/quoted_heredoc_python_gt_fp_20261107.rs (target/debug/deps/quoted_heredoc_python_gt_fp_20261107-0768242a20dc1f70)
 error: test failed, to rerun pass `-p blastguard --test quoted_heredoc_python_gt_fp_20261107`"""
+
+[[task]]
+id = "f1b5acd3"
+title = "blastguard test RED: redirect target via brace-group/local/declare assignment resolved to Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "test-red",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "redirect_target_resolution.rs:440: 3 shapes resolved, e.g. { P=/home/yuki/proj/ok.log; }; echo hi > $P and local P=... -> Allow, test says must stop the call. Observed 2026-11-20 on main a0ba7bad0 (detached worktree verify-main-q3q4), found while integrating Q3/Q4 deny-target table (7275b9d9); same failure on the integration tree. Readings: (a) real regression on main; (b) stale assert vs a later ruling or the S5 AST evaluator; distinguish by git log -S on the asserted case."
+created_at = 1795110589
+updated_at = 1795110589
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test redirect_target_resolution unresolvable_shapes_keep_the_unresolved_verdict"
+rev = "4c286f7b61e70f4a56ccb658a200c3c4085bdf1a"
+observed_at = 1795110589
+detail = """
+exit 101: d out; finished in 0.79s
+
+   Compiling blastguard v0.2.761 (/Users/yuki/src/.harness-worktrees/session-179495ba/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/redirect_target_resolution.rs (target/debug/deps/redirect_target_resolution-738d6878b3f12f47)
+error: test failed, to rerun pass `-p blastguard --test redirect_target_resolution`"""

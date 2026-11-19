@@ -89,7 +89,6 @@ const MENTIONS: &str = r##"printf '\n[[spec]]\nreason = "%s"\n' "comment-bearing
 const HARMLESS: &str = r##"printf '\n[[spec]]\nreason = "%s"\n' "comment-bearing programs, find -exec sh -c and ANSI-C programs calling os.chmod on /etc/hosts stay not-Allow." >> notes.toml"##;
 
 #[test]
-#[ignore = "RED: printf operand text mentioning a command line is judged as executed (backlog p1 FP)"]
 fn printf_operand_text_is_not_judged_as_a_command() {
     let home = unique_home("fp");
     let (d_m, r_m) = run_as(MENTIONS, &home, false);

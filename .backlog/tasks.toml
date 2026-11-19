@@ -2395,3 +2395,46 @@ test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 4 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
      Running tests/fp_candidates_b_20261120.rs (target/debug/deps/fp_candidates_b_20261120-027634bcafc7f041)
 error: test failed, to rerun pass `-p blastguard --test fp_candidates_b_20261120`"""
+
+[[task]]
+id = "e93d3701"
+title = "[bg-heredoc-script-failopen-596ef57d:R-kill] Q5: shell の `kill -9 -1`（ケース c_kill_all）は、main・subagent の両モードで Deny になる。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-kill",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-kill から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: Q5: shell の `kill -9 -1`（ケース c_kill_all）は、main・subagent の両モードで Deny になる。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_kill` が pass する（#[ignore] を外すだけで、assert は無変更。check は Need::Deny = main == "deny" && sub == "deny"）
+  - HEAD（326c23463 系）では同じテストが FAILED になる（RED を観測済み: "test result: FAILED. 0 passed; 7 failed" @ acdfd56cb）
+
+canon:
+  - .backlog/tasks.toml 596ef57d: "Q5 kill -9 -1 / os.kill(-1,9) -> Deny."
+  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:215-221 r_kill
+"""
+created_at = 1795108483
+updated_at = 1795108483
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_kill"
+rev = "eee4290d589b104b33b644dd521d993c0730b69b"
+observed_at = 1795108483
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.92s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-fdb863a4edef468c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""

@@ -555,38 +555,6 @@ exit 101: s/yuki/src/.harness-worktrees/bg-red-pipe-reader-and-py-argv/crates/bl
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_zsh_c_literal_echo_dash_fp`"""
 
 [[task]]
-id = "b663c5f5"
-title = "fail-open mutation script leaves test-written files behind in the working tree"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open-mutation",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1794606394
-updated_at = 1794606394
-weight = 0.0
-issue_number = 1741
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1741"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_fail_open_mutation_leaves_no_artifacts.py"
-rev = "bd13fa12b73aedfc460f596f77cdf42a0c4fef40"
-observed_at = 1794606394
-detail = """
-exit 1: nd still exited 0
-
-scripts/test_fail_open_mutation_leaves_no_artifacts.py:102: AssertionError
-=========================== short test summary info ============================
-FAILED scripts/test_fail_open_mutation_leaves_no_artifacts.py::MutationRunArtifacts::test_run_created_untracked_file_is_not_silently_left_behind
-========================= 1 failed, 1 passed in 0.51s =========================="""
-
-[[task]]
 id = "7eb86bb3"
 title = "blastguard FP: harmless brace-group feeder piped to bash is Ask/Deny"
 project = "/Users/yuki/src/harness"
@@ -1643,11 +1611,11 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "Observed 2026-11-17 at cd09054b1. bl() runs the binary with env_clear and HOME set to an empty tempdir and passes no GIT_AUTHOR_* or GIT_COMMITTER_*; since 18f91ae7b add runs git commit-tree in land_row_on_main, which exits 128 (Author identity unknown), so both tests die at the add assertion before the inline-close path they pin. Fixture defect, not a binary defect: add GIT_AUTHOR_NAME/EMAIL, GIT_COMMITTER_NAME/EMAIL and GIT_CONFIG_GLOBAL/SYSTEM=/dev/null like github_mirror_disabled_close_20261117.rs. While red, mirror_close_for inline close has no working end-to-end test here."
+notes = "Observed 2026-11-17 at cd09054b1. bl() runs the binary with env_clear and HOME set to an empty tempdir and passes no GIT_AUTHOR_* or GIT_COMMITTER_*; since 18f91ae7b add runs git commit-tree in land_row_on_main, which exits 128 (Author identity unknown), so both tests die at the add assertion before the inline-close path they pin. Fixture defect, not a binary defect: add GIT_AUTHOR_NAME/EMAIL, GIT_COMMITTER_NAME/EMAIL and GIT_CONFIG_GLOBAL/SYSTEM=/dev/null like github_mirror_disabled_close_20261117.rs. While red, mirror_close_for inline close has no working end-to-end test here. Update 2026-11-20 (macOS host): the original test passes here only because git auto-detects an identity from the login name and the .local hostname. Host-independent RED: crates/backlog/tests/backlog_20261120_done_inline_close_no_git_identity.rs, function no_detectable_identity_add_then_done_closes_inline (ignored). It runs the same add then done scenario in the bl() env shape plus an empty XDG_CONFIG_HOME, GIT_CONFIG_NOSYSTEM=1 and useConfigOnly in the isolated global config; a probe confirms git var GIT_AUTHOR_IDENT fails there. Observed: add exits 1, commit-tree exited 128 with Author identity unknown, auto-detection is disabled. The sibling auto_detected_identity variant passes on this host. Repro: cargo test -p backlog --test backlog_20261120_done_inline_close_no_git_identity -- --ignored. Open question for the fix: fixture identity env (as the notes propose) versus the binary supplying an identity for its own bookkeeping commits; the new test pins the binary behaviour, so a fixture-only fix leaves it RED."
 created_at = 1794887649
-updated_at = 1794887649
+updated_at = 1795111321
 weight = 0.0
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

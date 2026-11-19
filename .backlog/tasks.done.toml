@@ -85764,3 +85764,40 @@ rev = "9fe913745a6a0634dc83723658f0c131086eacc3"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "b663c5f5"
+title = "fail-open mutation script leaves test-written files behind in the working tree"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open-mutation",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = "Not reproducible since the 2026-11-14 scratch-copy ruling. The original repro test passes only vacuously because its stub never runs (d5c404c0). At 1858cf6da a new test, scripts/test_fail_open_mutation_artifacts_exercised_20261120.py, drives run_scenarios with a stub that has the real run_crate_tests call shape and writes a proptest-like regression seed file under the tree cargo runs in. Observed on macOS: 2 passed. The stub was called once, it ran in the scratch copy rather than the invoking tree, the scenario reached status caught with exit 0, the scratch copy holding the artifact was removed, and no new untracked file appeared in the invoking tree. The sensitivity control, which writes into the invoking tree, is detected as a leak, so the measurement is not blind. Not proven: real cargo or proptest path resolution, or tests that write into the invoking tree through an absolute path."
+created_at = 1794606394
+updated_at = 1795111177
+weight = 0.0
+issue_number = 1741
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1741"
+issue_closed_at = 1795111180
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_fail_open_mutation_leaves_no_artifacts.py"
+rev = "bd13fa12b73aedfc460f596f77cdf42a0c4fef40"
+observed_at = 1794606394
+detail = """
+exit 1: nd still exited 0
+
+scripts/test_fail_open_mutation_leaves_no_artifacts.py:102: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_fail_open_mutation_leaves_no_artifacts.py::MutationRunArtifacts::test_run_created_untracked_file_is_not_silently_left_behind
+========================= 1 failed, 1 passed in 0.51s =========================="""
+
+[task.closure]
+reason = "discard"
+discard_reason = "Not reproducible since the 2026-11-14 scratch-copy ruling. The original repro test passes only vacuously because its stub never runs (d5c404c0). At 1858cf6da a new test, scripts/test_fail_open_mutation_artifacts_exercised_20261120.py, drives run_scenarios with a stub that has the real run_crate_tests call shape and writes a proptest-like regression seed file under the tree cargo runs in. Observed on macOS: 2 passed. The stub was called once, it ran in the scratch copy rather than the invoking tree, the scenario reached status caught with exit 0, the scratch copy holding the artifact was removed, and no new untracked file appeared in the invoking tree. The sensitivity control, which writes into the invoking tree, is detected as a leak, so the measurement is not blind. Not proven: real cargo or proptest path resolution, or tests that write into the invoking tree through an absolute path."

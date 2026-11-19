@@ -123,6 +123,12 @@ fn every_reading_scoped(c: &str, scope: &SafeRoots) -> Decision {
     if let Some(deny) = acc.record(super::ast::table_b_verdict(c, scope)) {
         return deny;
     }
+    // Backlog 7275b9d9 (user rulings 2026-11-14): the Q3/Q4 deny-target
+    // table over the resolved write-target values. Raise-only. An S5 Python
+    // effect reaches it through `judge` on its shell spelling.
+    if let Some(deny) = acc.record(super::ast::deny_target_verdict(c, scope)) {
+        return deny;
+    }
     let before_b5 = acc.finish();
     // S4: the standalone Table B.5 layer; it only raises (`max(B.5, …)`).
     super::ast::b5::raise(

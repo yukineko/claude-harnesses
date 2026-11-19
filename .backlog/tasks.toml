@@ -2467,3 +2467,34 @@ exit 101: mpiling blastguard v0.2.757 (/Users/yuki/src/.harness-worktrees/sessio
     Finished `test` profile [unoptimized + debuginfo] target(s) in 16.60s
      Running tests/heredoc_script_failopen_red_20261108.rs (target/debug/deps/heredoc_script_failopen_red_20261108-822eb2aee4979ab1)
 error: test failed, to rerun pass `-p blastguard --test heredoc_script_failopen_red_20261108`"""
+
+[[task]]
+id = "b1e6f2a7"
+title = "blastguard test RED: daf7611b allow_env_dash_s_ls gets Ask (env -S not modelled)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "test-red",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "env -S 'ls -la' gets Ask: env option -S is not modelled (Table B.5: Undetermined); test expects Allow. Observed 2026-11-20 on main a0ba7bad0 (detached worktree verify-main-q3q4), found while integrating Q3/Q4 deny-target table (7275b9d9); same failure on the integration tree. Readings: (a) real regression on main; (b) stale assert vs a later ruling or the S5 AST evaluator; distinguish by git log -S on the asserted case."
+created_at = 1795110476
+updated_at = 1795110476
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test daf7611b_executor_behaviour allow_env_dash_s_ls"
+rev = "4c286f7b61e70f4a56ccb658a200c3c4085bdf1a"
+observed_at = 1795110476
+detail = """
+exit 101: 5ba/crates/progeffect)
+   Compiling blastguard v0.2.761 (/Users/yuki/src/.harness-worktrees/session-179495ba/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.20s
+     Running tests/daf7611b_executor_behaviour.rs (target/debug/deps/daf7611b_executor_behaviour-913846659bed5835)
+error: test failed, to rerun pass `-p blastguard --test daf7611b_executor_behaviour`"""

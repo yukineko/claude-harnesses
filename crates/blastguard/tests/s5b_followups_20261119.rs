@@ -146,7 +146,6 @@ fn assert_ask_main_not_allow_sub(r: ((String, String), (String, String)), what: 
 
 // user ruling 2026-11-19 (S5b a): a module file in the cwd shadows the import → not Allow.
 #[test]
-#[ignore = "RED s5b 2026-11-19: os.py in the hook cwd shadows `import os` -> Ask"]
 fn import_os_with_os_py_in_cwd_is_ask() {
     let r = shadowed(
         IMPORT_OS,
@@ -158,7 +157,6 @@ fn import_os_with_os_py_in_cwd_is_ask() {
 
 // user ruling 2026-11-19 (S5b a): a package dir in the cwd shadows the import → not Allow.
 #[test]
-#[ignore = "RED s5b 2026-11-19: os/ in the hook cwd shadows `import os` -> Ask"]
 fn import_os_with_os_dir_in_cwd_is_ask() {
     let r = shadowed(
         IMPORT_OS,
@@ -173,7 +171,6 @@ fn import_os_with_os_dir_in_cwd_is_ask() {
 
 // user ruling 2026-11-19 (S5b a), with a module CPython does not preload.
 #[test]
-#[ignore = "RED s5b 2026-11-19: shutil.py in the hook cwd shadows `import shutil` -> Ask"]
 fn import_shutil_with_shutil_py_in_cwd_is_ask() {
     let r = shadowed(
         IMPORT_SHUTIL,
@@ -266,7 +263,6 @@ fn control_direct_system_write_is_deny() {
 
 // user ruling 2026-11-19 (S5b c): bash -c "python3 -c ..." judged like direct.
 #[test]
-#[ignore = "RED s5b 2026-11-19: python in bash -c is judged by S5 like the direct spelling (literal-only program -> Allow)"]
 fn bash_c_literal_program_is_allow() {
     let ((m, mr), (s, sr)) = both_of(LITERAL_BASH_C, "c-lb");
     assert_eq!(m, "allow", "main; cmd={LITERAL_BASH_C:?} reason={mr}");
@@ -313,7 +309,6 @@ fn prefixed_system_write_is_deny() {
 
 // user ruling 2026-11-19 (S5b d): echoing $HOME through sh -c / bash -c → Allow.
 #[test]
-#[ignore = "RED s5b 2026-11-19: sh -c / bash -c 'echo \"$HOME\"' is Allow (FP: Ask on `$HOME` as command word)"]
 fn sh_c_echo_home_is_allow() {
     let mut bad = Vec::new();
     for cmd in [r#"sh -c 'echo "$HOME"'"#, r#"bash -c 'echo "$HOME"'"#] {

@@ -1565,8 +1565,15 @@ path/target を埋め込む。例: `"Write would replace {path} with empty conte
    effect（または出力 redirect）があって行の他の command がファイルを実行しうる（write-then-run は legacy と
    harness-5b の担当する読みに残す）、`-c` の program が command を実行し行が Python の stdin を与えている、
    neutral text が同じ command 列に再解析できない、のいずれか。
-4. 判定不能・未読の一覧、既知の gap（here-string / pipe の program は外さない、`bash -c` の中の Python は legacy
-   だけ、`sudo` 等の wrapper、cwd の module による標準ライブラリの shadowing）は SUBSET.md に置く。
+4. 判定不能・未読の一覧、既知の gap（here-string / pipe の program は外さない、下の形以外の `bash -c` の中の
+   Python は legacy だけ、`sudo` 等の wrapper、同じ行で作られた shadowing ファイル）は SUBSET.md に置く。
+5. S5b（ユーザー裁定 2026-11-19、詳細は SUBSET.md「S5b follow-ups」）:
+   (a) program が import する module `M` について、実行ディレクトリに `M.py`・`M/`・compiled な `M` があれば
+   判定不能（Ask）。ディレクトリを list できない（IO エラー、payload に cwd が無い、cwd が判定不能）ときも判定不能。
+   (c) 素の `bash -c SCRIPT` / `sh -c SCRIPT`（`b5` の wrapper の後。`sudo` は対象外）の literal script は、直接書いた
+   のと同じく S5 で判定し、Known の program は外側の行の legacy readings から外す。
+   (d) shell の `-c` payload の候補は `-c` 以降の word 境界だけ（word の途中から始まる断片は候補にしない）。
+   `sh -c 'echo "$HOME"'` は Allow。
 
 受け入れテスト: `tests/backlog_20261119_python_heredoc_string_literal_system_harm_fp.rs`・
 `tests/backlog_20261118_python_heredoc_string_literal_rm_home_fp.rs`・`tests/backlog_20261118_python_c_string_literal_rm_fp.rs`・

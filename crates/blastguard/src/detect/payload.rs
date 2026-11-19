@@ -1557,7 +1557,15 @@ pub(super) fn strip_wrapping_quotes(s: &str) -> &str {
 /// the "reason about token positions" approach that has regressed this file
 /// three rounds running, and every value-taking option added later (`-o`, `-O`,
 /// `+o`, `--rcfile`, `--init-file`, …) would reopen the same gap. Instead it
-/// pushes a candidate for EVERY position after `-c`. The candidate set is
+/// pushes a candidate for EVERY shell-word boundary after `-c` (an option and
+/// its value are whole words, so every position the shell may pick as the
+/// command string is one). Positions strictly INSIDE a word whose quotes all
+/// close are not candidates ([`interpreter_payloads_after`], backlog 1943843c):
+/// no process receives that text as a command string, and the word's whole
+/// text is a candidate. User ruling 2026-11-19 (S5b d): `sh -c 'echo "$HOME"'`
+/// read the mid-word fragment `"$HOME"'` as a command line and asked about
+/// `$HOME` as its command word. A word whose quote never closes keeps every
+/// position as a candidate (undetermined → the widening side). The set is
 /// additive and evaluated deny-if-ANY, so extra candidates can only ever WIDEN
 /// detection: whichever position the real shell picks as the command string is
 /// guaranteed to be among them, however the intervening options parse.
@@ -1585,7 +1593,7 @@ pub(super) fn dash_c_payloads(rest: &[&str], source: Option<&str>) -> Vec<String
     else {
         return Vec::new();
     };
-    let mut out = payloads_after(rest, pos, source);
+    let mut out = interpreter_payloads_after(rest, pos, source);
     // Glued short form `-c<payload>` (value in the SAME token, after `c`):
     // `payloads_after` only sees LATER tokens, so `flock /l -c'rm -rf /'` left
     // the payload unanalysed — the twin of the `--command=` attached-form
@@ -1752,8 +1760,9 @@ pub(super) fn shell_word_token_span(rest: &[&str], from: usize) -> Option<usize>
 }
 
 /// The [`payloads_after`] candidate set for an INTERPRETER's inline-eval flag
-/// (`python3 -c`, `perl -e`, `node -e`, …), minus the candidates that start
-/// INSIDE an already-delimited shell word.
+/// (`python3 -c`, `perl -e`, `node -e`, …) and for a shell's `-c`
+/// ([`dash_c_payloads`], user ruling 2026-11-19 S5b d), minus the candidates
+/// that start INSIDE an already-delimited shell word.
 ///
 /// Backlog 1943843c: `payloads_after` re-reads EVERY whitespace position after
 /// the flag as a fresh command string. Inside a quoted program that means a

@@ -50,8 +50,9 @@ pub(crate) fn with_hook_dir<R>(dir: Option<&str>, f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// The hook's cwd set by [`with_hook_dir`], if any.
-pub(super) fn hook_dir() -> Option<String> {
+/// The hook's cwd set by [`with_hook_dir`], if any. Also read by stage S5
+/// (`ast/s5.rs`), which lists it for files that shadow an imported module.
+pub(in crate::detect::ast) fn hook_dir() -> Option<String> {
     HOOK_DIR.with(|h| h.borrow().clone())
 }
 

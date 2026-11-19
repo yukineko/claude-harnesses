@@ -34,9 +34,10 @@
 //! * a shell `-c PROG` with a literal PROG: PROG analysed by this layer
 //!   recursively (the legacy layer judges its effects); an undetermined PROG
 //!   → Undetermined;
-//! * python: a program file and `-m` → Undetermined (S5 will parse Python);
-//!   `-c` and a literal stdin program give no opinion (legacy readings until
-//!   S5, ruling 15); any other stdin → Undetermined;
+//! * python: a program file and `-m` → Undetermined (S5 reads inline
+//!   programs only); `-c` and a literal stdin program give no B.5 opinion —
+//!   stage S5 (`s5.rs`) parses and judges them; any other stdin →
+//!   Undetermined;
 //! * `eval` with operands → Undetermined;
 //! * an undetermined command word (after unwrapping) → Undetermined (Table B
 //!   common rules: it may be an interpreter);
@@ -191,7 +192,7 @@ fn layer(text: &str, depth: usize, judge: &Probes<'_>) -> Decision {
 /// A word's value: `Ok(literal)`, or `Err(reason)` when it is undetermined.
 /// Every caller resolves `Err` to its restrictive side (not a modelled
 /// option / writer / producer → Undetermined, or an Undetermined verdict).
-fn literal(w: &Word) -> Result<&str, &str> {
+pub(super) fn literal(w: &Word) -> Result<&str, &str> {
     match &w.value {
         Value::Literal(s) => Ok(s.as_str()),
         Value::Undetermined(r) => Err(r.as_str()),
@@ -204,12 +205,12 @@ fn literals(argv: &[Word]) -> Result<Vec<&str>, &str> {
     argv.iter().map(literal).collect()
 }
 
-fn basename(s: &str) -> &str {
+pub(super) fn basename(s: &str) -> &str {
     s.rsplit('/').next().unwrap_or(s)
 }
 
 /// The directory part of a path (`None` without a slash).
-fn dirname(s: &str) -> Option<&str> {
+pub(super) fn dirname(s: &str) -> Option<&str> {
     let i = s.rfind('/')?;
     Some(if i == 0 {
         "/"
@@ -219,14 +220,14 @@ fn dirname(s: &str) -> Option<&str> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Family {
+pub(super) enum Family {
     Shell,
     Python,
     PerlLike,
     Node,
 }
 
-fn family(base: &str) -> Option<Family> {
+pub(super) fn family(base: &str) -> Option<Family> {
     match base {
         "bash" | "sh" | "zsh" | "dash" | "ksh" => Some(Family::Shell),
         "perl" | "ruby" => Some(Family::PerlLike),
@@ -254,7 +255,7 @@ fn info_only(fam: Family, args: &[Word]) -> bool {
 }
 
 /// Where unwrapping a wrapper leaves the command.
-enum Unwrapped {
+pub(super) enum Unwrapped {
     /// The wrapped command starts at this argv index.
     At(usize),
     /// Nothing is run (`env` alone, `command -v x`).
@@ -266,7 +267,7 @@ enum Unwrapped {
 }
 
 /// `argv[k]` as an unwrapped wrapper (see the module doc for the set).
-fn unwrap_at(argv: &[Word], k: usize) -> Unwrapped {
+pub(super) fn unwrap_at(argv: &[Word], k: usize) -> Unwrapped {
     let Some(Ok(name)) = argv.get(k).map(literal) else {
         return Unwrapped::NotWrapper;
     };
@@ -501,7 +502,8 @@ fn classify(
 }
 
 /// A literal program body: a shell body is read by this layer recursively;
-/// any other interpreter's body gives no B.5 opinion (python until S5; perl /
+/// any other interpreter's body gives no B.5 opinion (python: stage S5,
+/// `s5.rs`, judges it; perl /
 /// ruby / node: the legacy program-text reading decides, user ruling
 /// 2026-11-18 (a)).
 fn literal_body(fam: Family, body: &str, depth: usize, judge: &Probes<'_>) -> Decision {
@@ -588,7 +590,7 @@ fn procsub_content(
 /// The program `cmd` (argv from `k`) reads, when it is delivered as literal
 /// text by a process substitution (`bash <(echo hi)`, `bash < <(echo hi)`)
 /// or by the previous stage of a pipe (`printf '%s' x | node`).
-fn literal_delivered_program(
+pub(super) fn literal_delivered_program(
     text: &str,
     commands: &[SimpleCommand],
     idx: usize,
@@ -1105,7 +1107,7 @@ impl Target<'_> {
 /// A variable that [`injects`] is set anywhere on the line (prefix
 /// assignment, `env NAME=V`, `export NAME=V`, an assignment-only command), or
 /// a declarer has an undetermined operand.
-fn sets_injecting_var(commands: &[SimpleCommand]) -> bool {
+pub(super) fn sets_injecting_var(commands: &[SimpleCommand]) -> bool {
     commands.iter().any(|c| {
         if c.assignments.iter().any(|(n, _)| injects(n)) {
             return true;

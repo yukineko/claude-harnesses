@@ -23,8 +23,8 @@ from the base TREE) are OK; "unreadable at base" is NOT "new". Deleted plugins
 are ignored.
 
 It also enforces the SHARED-CRATE half of the same rule (SHARED_CRATES:
-harness-core, and since 2026-11-17 riskgrade — same rule, same carve-out 2,
-applied per crate): crates/harness-core is
+harness-core, and since 2026-11-17 riskgrade, since 2026-11-19 progeffect —
+same rule, same carve-out 2, applied per crate): crates/harness-core is
 statically linked into every plugin binary, so a change there changes ~36 shipped
 binaries while no plugin.json moves. The gate used to diff only crates/<plugin>/,
 so harness-core could move with no version anywhere moving — leaving a version
@@ -46,7 +46,7 @@ rather than applied silently:
   1. a plugin whose changed paths are ALL under crates/<name>/bin/ (compiled
      output, not source) does not require a bump. Mixed bin+source is still
      enforced. Covered by scripts/tests/version-bumped-bin-only.sh.
-  2. a shared-crate (harness-core / riskgrade) change confined to paths that are NOT linked into a plugin
+  2. a shared-crate (harness-core / riskgrade / progeffect) change confined to paths that are NOT linked into a plugin
      binary (tests/, *.md) does not require a bump. This is structural, not a
      guess: crates/harness-core/tests/ is a separate integration-test target.
      Anything else under harness-core — including a #[cfg(test)] block inside
@@ -156,10 +156,12 @@ SHARED_CRATE = "harness-core"
 # Every non-plugin library crate whose own [package].version must move when its
 # linked source changes. harness-core is linked into every plugin; riskgrade
 # (classify + diffrisk, moved out of blastguard 2026-11-17) is linked into
-# condukt. Neither has a plugin.json, so the plugin loop never sees them; the
-# same rule and the same carve-out (tests/, *.md) apply to each. Covered by
-# scripts/test_check_version_bumped_riskgrade.py.
-SHARED_CRATES = (SHARED_CRATE, "riskgrade")
+# condukt; progeffect (the per-language program parsers + effect extraction,
+# user ruling 2026-11-17, blastguard stage S5) is linked into blastguard and,
+# later, the script-quarantine plugin. None has a plugin.json, so the plugin
+# loop never sees them; the same rule and the same carve-out (tests/, *.md)
+# apply to each. Covered by scripts/test_check_version_bumped_riskgrade.py.
+SHARED_CRATES = (SHARED_CRATE, "riskgrade", "progeffect")
 
 # Paths under a shared crate that are NOT compiled into a plugin binary.
 # Structural, not heuristic: `tests/` is a separate integration-test target and
@@ -390,7 +392,7 @@ def main():
         if cs is None or bs is None or not (cs > bs):
             offenders.append((name, base_v, cur_v, changed))
 
-    # The shared crates (harness-core, riskgrade) are not plugins, so the loop
+    # The shared crates (harness-core, riskgrade, progeffect) are not plugins, so the loop
     # above skipped them; each one's own version is what must move when it
     # changes. Every crate is checked; one failing never hides another.
     offenders_shared = []

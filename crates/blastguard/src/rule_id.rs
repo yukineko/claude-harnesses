@@ -175,6 +175,18 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason == "fork bomb pattern detected" {
         return "fork-bomb";
     }
+    // Stage S5: an effect of an inline Python program, judged by the full
+    // detector on its shell spelling. The id is the spelling's own, except
+    // that a truncation of an existing file is the interpreter-side id below
+    // (the same rule the pre-S5 reading reported for `os.truncate(f, 0)`).
+    if let Some(rest) = reason.strip_prefix(crate::detect::S5_EFFECT_PREFIX) {
+        if let Some((_, inner)) = rest.split_once("`): ") {
+            return match rule_id(inner) {
+                "truncating-redirect" => "interpreter-unrecoverable-write",
+                other => other,
+            };
+        }
+    }
     // The reason this matches replaced `truncates and overwrites an existing
     // file`, which asserted an existence check the crate never performed. The
     // rule id is unchanged on purpose: it is the same rule, now reporting what

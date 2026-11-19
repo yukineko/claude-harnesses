@@ -10,6 +10,7 @@ asking nicely.
 | 1 | Claude Code's built-in `"language"` key in `~/.claude/settings.json`, e.g. `"language": "japanese"` | Claude Code itself — **not part of this crate** (set separately) | settings.json |
 | 2 | **inject**: SessionStart / UserPromptSubmit add the target language to `additionalContext` | `answerlang session-start`, `answerlang prompt` | `inject` |
 | 3 | **enforce**: the Stop hook blocks a final answer that is not in the target language's script | `answerlang stop` | `enforce` |
+| 3b | **enforce (questions)**: a PreToolUse hook on `AskUserQuestion` denies a question whose prose is not in the target language's script | `answerlang ask` | `enforce` |
 
 Everything is switchable; `enabled = false` silences all hooks (empty stdout, exit 0). Exception: when the hook's stdin itself cannot be read, that is handled as undetermined before the config is consulted (Stop blocks; the inject hooks print that injection did NOT run).
 
@@ -191,6 +192,30 @@ previous stop of this session was blocked by answerlang".
 - Panics go through `harness_core::gate::run::run_guarded` (fail closed); a
   stdin read error goes through `read_stop_payload_guarded`.
 
+## Layer 3b (PreToolUse on `AskUserQuestion`)
+
+`hooks.json` registers `PreToolUse` with matcher `AskUserQuestion` →
+`answerlang ask`. A question reaches the user before any Stop, so the Stop
+gate cannot see it; this hook judges it before the dialog is shown.
+
+- Judged text: every question's `question` and `header`, and every option's
+  `label` and `description`, joined with `\n`. `preview` is **not** judged
+  (code / mock-ups). Stripping and measuring are exactly the Stop gate's
+  (`measure::judge`): under 40 letters is clean by rule.
+- Violation → `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"..."}}`;
+  the reason names the target language and asks for the questions to be rewritten.
+- Undetermined → **deny** (fail closed): stdin unreadable, payload
+  unparseable, `tool_input` / `tool_input.questions` missing, `questions` not
+  an array, a question or option not an object, `options` not an array, a
+  judged field present but not a string, the recorded prompt language
+  unreadable in `auto` mode, or a panic.
+- Not judged (no deny): `enabled = false` / `enforce = false` (silent); config
+  file absent, a language with no measurable script, or an undetermined target
+  (`systemMessage`); `tool_name` other than `AskUserQuestion` (stderr note —
+  the matcher never routes one here).
+- No re-entry marker: a PreToolUse deny does not loop; the model issues a new
+  call. Operator escape: `answerlang set --enforce off`.
+
 ## Launcher without a bundled binary
 
 `bin/answerlang` execs `answerlang-<os>-<arch>`. When it is missing:
@@ -202,6 +227,9 @@ previous stop of this session was blocked by answerlang".
   `stop_hook_active` alone bounds it.
 - `session-start` / `prompt` → exit 0 with a `systemMessage` +
   `additionalContext` saying language injection did NOT run.
+- `ask` → **deny** the `AskUserQuestion` with a reason saying the check did
+  NOT run (cannot determine). It does not trap the session: the model can still
+  ask in plain text.
 - anything else → exit 1.
 
 ## Enabling

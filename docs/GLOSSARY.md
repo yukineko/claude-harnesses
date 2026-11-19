@@ -31,7 +31,7 @@
 
 | クレート | 分類 | 一言 |
 |---|---|---|
-| answerlang | always-on | 回答・結論をユーザーの言語で出させる。SessionStart/UserPromptSubmit で対象言語を注入し、Stop で最終回答の文字体系比率が閾値未満ならブロック（再入は有界） |
+| answerlang | always-on | 回答・結論をユーザーの言語で出させる。SessionStart/UserPromptSubmit で対象言語を注入し、Stop で最終回答の文字体系比率が閾値未満ならブロック（再入は有界）、`AskUserQuestion` の PreToolUse で質問文・選択肢も同様に判定し deny |
 | askrelay | always-on | subagent の Ask は main で裁定する relay のゲート（GATE crate）。subagent 内で `Deny` に硬化された Ask の queue を、main の Stop が「再実行して返送済み、または理由付き dismiss」になるまで block する。queue 形式は harness-core の `relay`、enqueue は blastguard |
 | autoflow | always-on | Stop で `/record`→`/condukt` を回すセッション終了オートフローゲート |
 | backlog | manual | クロスプロジェクト・タスクキュー（`/backlog` skill + SessionStart 通知 + binary） |
@@ -81,6 +81,7 @@
 
 - **harness-core** — 全プラグインが共有する不変インフラの単一ソース（ビルド時依存。各バイナリに静的に焼き込まれる）。
 - **mutategate** — このワークスペース用の mutation-testing kill-rate ゲート（内製ツール・配布しない）。
+- **progeffect** — 埋め込み program（Python）を本物の parser（rustpython-parser 0.4、malachite なし）で読み、effect（shell 実行・process 実行・literal path のファイル操作）とその shell の綴りを返す純粋 lib（配布しない・blastguard の stage S5 にリンク。将来 script-quarantine plugin も使う。読めないものは Undetermined）。
 - **riskgrade** — 計画 action の段階的 risk/reversibility 分類（`classify`）と diff-level リスク信号（`diffrisk`。機微パス glob／公開シンボル変更）の純粋 lib（配布しない・condukt にリンク。2026-11-17 に blastguard から移設）。
 - **integration-tests** — ワークスペース横断の結合テスト専用クレート（プラグイン面なし）。
 

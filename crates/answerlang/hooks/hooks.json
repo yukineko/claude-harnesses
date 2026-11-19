@@ -14,6 +14,14 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/answerlang ask", "timeout": 10 }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

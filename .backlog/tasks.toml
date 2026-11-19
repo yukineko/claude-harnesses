@@ -2335,3 +2335,70 @@ exit 101: ssed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.9
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
      Running tests/scope_redirect_relaxation_boundaries_20261108.rs (target/debug/deps/scope_redirect_relaxation_boundaries_20261108-74a67a02a5bc0479)
 error: test failed, to rerun pass `-p blastguard --test scope_redirect_relaxation_boundaries_20261108`"""
+
+[[task]]
+id = "74810d3e"
+title = "check-test-weakening cannot acknowledge an intended macro template re-anchor in a file that exists at the base"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "test-weakening",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "User-ruled false positive 2026-11-20. A Rust integration test file that exists at the base and holds a macro_rules test template: three invocations of a template asserting a restrictive decision are replaced by invocations of a new template asserting Allow (shape of the blastguard scope redirect relaxation boundaries test, backlog 266b5ded). The gate raises Undetermined (exit 2) because the change is not one of the proven-safe shapes and reports no finding, so a test-weakening-justified line naming the path and a kind acknowledges nothing; the only exit is a bypass. Expected: such a change is still never silently clean (non-zero without a justified line), but it is reported as a finding with a kind for that path, and a matching justified line makes it exit 0 with an ack finding. A justified line for another path must not acknowledge it. Verbatim RED (--runxfail): AssertionError no finding (kind) reported for the path, so no justified line can name it; rc=2 out verdict undetermined, findings empty. DOES NOT PROVE which kind the gate should report; the test reads it from the gate's own json output. RED: scripts/test_check_test_weakening_macro_reanchor_20261120.py (xfail strict, commit c8a79e56a, branch red/test-weakening-macro-reanchor-20261120)."
+created_at = 1795118253
+updated_at = 1795118253
+weight = 0.0
+issue_number = 1876
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1876"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_check_test_weakening_macro_reanchor_20261120.py"
+rev = "c8a79e56ac814d90f0727d0edcb9cd32f9ab041d"
+observed_at = 1795118253
+detail = '''
+exit 1: cannot be ruled out\n'
+
+scripts/test_check_test_weakening_macro_reanchor_20261120.py:207: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_test_weakening_macro_reanchor_20261120.py::MacroReanchor::test_red_justified_line_acknowledges_the_reanchor
+========================= 1 failed, 2 passed in 1.52s =========================='''
+
+[[task]]
+id = "a130a99c"
+title = "blastguard tests: egress_exec_closure controls eval <(curl) and 'curl -o f; bash f' are Ask, expected Allow (stale vs B.5 rulings?)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-20 at main f041db0c1 (detached base worktree of session 3510aa71, run for items 7eb86bb3/e79485cb/40dc52c0/3ab6109f). Not covered by 40dc52c0 (which names only the two recursion controls). Verbatim: eval_process_substitution_stays_allow_inert_not_remote_exec left Ask('`eval` runs shell code built at run time — blastguard cannot judge what it would do (Table B.5: Undetermined)'); sequential_fetch_then_shell_not_piped_stays_allow left Ask('`bash` runs the program file `/tmp/x.sh`, whose text is not in the command — blastguard cannot judge what it would do (Table B.5: Undetermined)'). Readings: (a) controls stale after S1/S4 rulings 2026-11-17 (bash script.sh with body not in command = Undetermined -> Ask; eval B.5) -> re-anchor (messages say 'inert, not remote-exec' / 'sequential, not piped', naming the egress property, but fn names say stays_allow); (b) real FP. Tell apart by frozen-assert rule + user ruling."
+created_at = 1795118604
+updated_at = 1795118604
+weight = 0.0
+issue_number = 1877
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1877"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test egress_exec_closure -- eval_process_substitution_stays_allow_inert_not_remote_exec sequential_fetch_then_shell_not_piped_stays_allow"
+rev = "4cdd780dc7e0f841597029a7501b30844c4ae275"
+observed_at = 1795118604
+detail = """
+exit 101:  sequential_fetch_then_shell_not_piped_stays_allow
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.04s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running tests/egress_exec_closure.rs (target/debug/deps/egress_exec_closure-ed08ca99f388ce70)
+error: test failed, to rerun pass `-p blastguard --test egress_exec_closure`"""

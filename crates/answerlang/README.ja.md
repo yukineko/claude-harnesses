@@ -9,6 +9,7 @@
 | 1 | Claude Code 組み込みの `~/.claude/settings.json` の `"language"` キー（例: `"language": "japanese"`） | Claude Code 本体 — **このクレートの一部ではない**（別途設定する） | settings.json |
 | 2 | **inject**: SessionStart / UserPromptSubmit で対象言語を `additionalContext` に注入 | `answerlang session-start` / `answerlang prompt` | `inject` |
 | 3 | **enforce**: 最終回答が対象言語の文字体系で書かれていなければ Stop hook がブロック | `answerlang stop` | `enforce` |
+| 3b | **enforce（質問）**: `AskUserQuestion` の PreToolUse hook が、対象言語の文字体系で書かれていない質問を deny | `answerlang ask` | `enforce` |
 
 すべて切り替え可能。`enabled = false` で全 hook が沈黙する（stdout 空・exit 0）。例外: hook の stdin 自体が読めないときは config を読む前に判定不能として扱う（Stop は block、inject 系は「注入されなかった」旨を表示）。
 
@@ -155,6 +156,24 @@ share = 対象文字体系の文字数 / 文字数。`share < min_share`（ま�
 - panic は `harness_core::gate::run::run_guarded`（fail closed）、stdin 読み取り失敗は
   `read_stop_payload_guarded` を通る。
 
+## 層 3b（`AskUserQuestion` の PreToolUse）
+
+`hooks.json` は matcher `AskUserQuestion` の `PreToolUse` → `answerlang ask` を登録する。
+質問は Stop より前にユーザーへ届くので Stop ゲートからは見えない。ダイアログ表示前にこの hook が判定する。
+
+- 判定対象: 全 question の `question`・`header` と全 option の `label`・`description` を `\n` で連結したもの。
+  `preview` は判定**しない**（コード・モックアップ用）。除去と計測は Stop ゲートと同一（`measure::judge`）で、
+  40 文字未満は規則により clean。
+- 違反 → `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"..."}}`。
+  理由は対象言語を名指しし、質問の書き直しを求める。
+- 判定不能 → **deny**（fail closed）: stdin が読めない・ペイロードがパース不能・`tool_input` / `tool_input.questions` が無い・
+  `questions` が配列でない・question や option がオブジェクトでない・`options` が配列でない・判定対象フィールドが文字列以外・
+  `auto` で prompt 言語の記録が読めない・panic。
+- 判定しない（deny しない）: `enabled = false` / `enforce = false`（沈黙）、設定ファイル無し・測れる文字体系の無い言語・
+  対象言語未決定（`systemMessage`）、`tool_name` が `AskUserQuestion` 以外（stderr に注記。matcher 上ここには来ない）。
+- 再入マーカーは持たない: PreToolUse の deny はループしない（モデルが新しい呼び出しを出す）。運用上の逃げ道は
+  `answerlang set --enforce off`。
+
 ## 同梱バイナリが無いときのランチャー
 
 `bin/answerlang` は `answerlang-<os>-<arch>` を exec する。無い場合:
@@ -163,6 +182,8 @@ share = 対象文字体系の文字数 / 文字数。`share < min_share`（ま�
   再入（ペイロードに `"stop_hook_active": true`）では検査が実行されなかった旨の `systemMessage` 付きで通す。
   ランチャーにはゲート別マーカーが無いので、ここでは `stop_hook_active` だけで有界にしている。
 - `session-start` / `prompt` → 注入が実行されなかった旨の `systemMessage` + `additionalContext` を出して exit 0。
+- `ask` → 検査が走らなかった＝判定不能として `AskUserQuestion` を **deny** し、その旨を理由に書く。
+  セッションは詰まない（モデルは平文で質問できる）。
 - それ以外 → exit 1。
 
 ## 有効化

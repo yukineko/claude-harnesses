@@ -320,37 +320,6 @@ exit 101: ured; 3 filtered out; finished in 0.06s
 error: test failed, to rerun pass `-p blastguard --test quoted_heredoc_body_string_parsed_as_command_fp_20261113`"""
 
 [[task]]
-id = "6efd5a40"
-title = "blastguard: arithmetic expansion body parsed as a command line, first operand judged as an unresolvable command word"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-13 on deployed blastguard 0.2.499, main 8dedad41, identical in main and subagent mode. Denied: an arithmetic expansion whose first operand is a command substitution of date plus-percent-s minus 5, reason verbatim: the command word DOLLAR-PAREN-date is an expansion whose value only exists at run time - blastguard cannot tell what program this runs. Same deny when the first operand is a plain variable (reason names DOLLAR-x as the command word) or a backtick substitution. Allowed: arithmetic with only literal or bare-name operands; the same date substitution outside arithmetic. bash evaluates all these as arithmetic and prints numbers. So date is not what is rejected: the arithmetic body is split as a command line and its first operand judged as a command word. This contradicts the doc comment of executed_substitution_payloads in src/detect/substitution.rs which says the arithmetic body is an expression in which the analyser finds nothing destructive. Readings: (a) defect, arithmetic operands are never executed as a command name; (b) intended, DOLLAR-double-paren deliberately treated as a command substitution holding a subshell. bash reads it as a subshell only when the body does not parse as arithmetic; all repro cases parse as arithmetic. If (b) is intended, fix the docstring and delete the RED cases instead. RED r1..r3 ignored, observed failing at 8dedad41 exit 101 (Ask in the test fixture, Deny on the deployed binary). Controls c1 plain arithmetic Allow; c2 recursive rm of /etc inside a substitution nested in arithmetic stays not Allow; c3 a real subshell inside a substitution with an expansion command word stays not Allow. RED commit 447c20b5."
-created_at = 1794546242
-updated_at = 1794546242
-weight = 0.0
-issue_number = 1694
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1694"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test arithmetic_expansion_operand_as_command_word_fp_20261113 -- --ignored"
-rev = "447c20b5d894a3935001842b7f09983ae9b664fe"
-observed_at = 1794546242
-detail = """
-exit 101: rees/fp-file-20261113/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.64s
-     Running tests/arithmetic_expansion_operand_as_command_word_fp_20261113.rs (target/debug/deps/arithmetic_expansion_operand_as_command_word_fp_20261113-8df5a1fb1455a5cd)
-error: test failed, to rerun pass `-p blastguard --test arithmetic_expansion_operand_as_command_word_fp_20261113`"""
-
-[[task]]
 id = "a77dd80f"
 title = "blastguard: 105 integration tests hard-code macOS /private/tmp fixtures and fail at setup on Linux at 8dedad41 (8 targets)"
 project = "/home/hiroyuki_nakayama/src/harness"
@@ -383,40 +352,6 @@ test result: FAILED. 0 passed; 11 failed; 0 ignored; 0 measured; 0 filtered out;
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.04s
      Running tests/tmp_truncation_recoverable.rs (target/debug/deps/tmp_truncation_recoverable-6e7824e28c0732cb)
 error: test failed, to rerun pass `-p blastguard --test tmp_truncation_recoverable`"""
-
-[[task]]
-id = "99c1a088"
-title = "blastguard: no_unbounded_child_wait source-scan lint fails at 8dedad41 (3 tests, not Linux-specific)"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "linux-baseline",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-13 at main 8dedad41 and 1fd747e9 (Linux WSL2, but this is a pure source scan of tests/*.rs, no platform dependence). Failing: no_child_wait_outside_the_bounded_helper (log_subcommand_20261113.rs:752 child.wait), no_wait_with_output_outside_the_bounded_helper (library_entry_scratch_place_1637.rs:58 wait_with_output), no_command_status_outside_the_bounded_helper (7 hits: backlog_20261113_b1_reset_hard_clean_worktree.rs:146 and :161, log_subcommand_20261113.rs:750, backlog_20261113_b2_subagent_rm_scratchpad.rs:165, heredoc_script_failopen_red_20261108.rs:585-587). Reading (a) product defect: not applicable (lint over test sources). Reading (b) newer test files bypass the run_bounded helper the lint mandates, plus probable lint false positives: the b1 hits are a fixture helper named status (git status), and the heredoc_script hits are inside string literals of Rust source shown to blastguard as payload text. Distinguishing check: read the flagged lines; the log_subcommand and library_entry and b2 hits are real unbounded waits, the b1 and heredoc_script hits are not child waits. Fix both: route the real waits through run_bounded, and make the scan skip string-literal and non-Command status matches (or rename the helper)."
-created_at = 1794547860
-updated_at = 1794547860
-weight = 0.0
-issue_number = 1699
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1699"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test no_unbounded_child_wait"
-rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
-observed_at = 1794547860
-detail = """
-exit 101: _with_output_outside_the_bounded_helper
-
-test result: FAILED. 5 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.21s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
-     Running tests/no_unbounded_child_wait.rs (target/debug/deps/no_unbounded_child_wait-af4dc3e3783a09d4)
-error: test failed, to rerun pass `-p blastguard --test no_unbounded_child_wait`"""
 
 [[task]]
 id = "596ef57d"
@@ -555,37 +490,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 20 filtered out;
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
      Running tests/scoped_destructive.rs (target/debug/deps/scoped_destructive-395b282c42c733bf)
 error: test failed, to rerun pass `-p blastguard --test scoped_destructive`"""
-
-[[task]]
-id = "3c1a3f35"
-title = "blastguard tests: budget_bound wall-clock 2s assert fails under CPU load (depth_limit_fail_open:499)"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "flaky-timing",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-13. depth_limit_fail_open::budget_bound_is_still_reachable_with_its_own_reason asserts detect() on budget_hog() (300 x find -exec unit) finishes < 2s wall clock (depth_limit_fail_open.rs:499). Unloaded: 1.6-1.8s per cargo finished-in (debug build, 12 CPUs) = 80-92% of the bound. Parent session at main 45fd3365: with 18 busy yes processes it failed 5/5 at :499 (message: a PreToolUse hook must never hang the turn: analysis took ...); the Deny assert was never reached. RED at b3b0b0a3: tests/budget_bound_wallclock_under_load_20261113.rs spawns 1.5 x available_parallelism busy-spin threads; ignored RED exits 101 3/3 (9.64s, 9.04s, 8.42s, 18 spinners, host loadavg ~38 with other sessions active); non-ignored control passes: decision under load is still the exact budget Deny after hardening (7.99s) - budget is a node count (MAX_ANALYSIS_NODES=2000, detect/budget.rs), so the verdict is load-independent. Readings: (a) a wall-clock bound in a test is load-sensitive by design (shared host / parallel cargo test); (b) detect() on budget_hog is genuinely near its time budget (80-92% unloaded, debug build) and a real PreToolUse hook under load would also be slow. Distinguish by measuring node visits consumed vs elapsed time (e.g. the cfg(test) VISIT_PROBE in detect/budget.rs, or a release-build timing of the hook binary): if time scales with load at fixed node count it is (a); if per-node cost or node count regressed it is (b). Not decided here."
-created_at = 1794550453
-updated_at = 1794550453
-weight = 0.0
-issue_number = 1705
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1705"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test budget_bound_wallclock_under_load_20261113 -- --ignored"
-rev = "b3b0b0a32d201164cd006e50c6e28192cdcc7876"
-observed_at = 1794550453
-detail = """
-exit 101: uki_nakayama/src/.harness-worktrees/file-test-defects-20261113/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 58.63s
-     Running tests/budget_bound_wallclock_under_load_20261113.rs (target/debug/deps/budget_bound_wallclock_under_load_20261113-43c8b446a6eb9c64)
-error: test failed, to rerun pass `-p blastguard --test budget_bound_wallclock_under_load_20261113`"""
 
 [[task]]
 id = "7ec1bb90"
@@ -923,36 +827,6 @@ exit 101: 0 (/Users/yuki/src/.harness-worktrees/session-b3435a5e/crates/blastgua
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.67s
      Running tests/backlog_20261114_quoted_heredoc_body_side_fps.rs (target/debug/deps/backlog_20261114_quoted_heredoc_body_side_fps-e32d5314fa6568e9)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_quoted_heredoc_body_side_fps`"""
-
-[[task]]
-id = "6cd305a9"
-title = "blastguard FP: rm $L inside $(...) is denied as system harm although L is rebound before the rm (body assignment, prefix assignment, function)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. `L=/etc/hosts; x=$(L=/tmp/x; rm -f $L)`, `L=/etc/hosts; L=/tmp/x y=$(rm -f $L)`, `f() { L=/tmp/x; }; L=/etc/hosts; x=$(f; rm -f $L)` => deny/deny ('this rm deletes from a system directory: `$L)`'), but bash deletes /tmp/x. Pre-existing path: rm::known_path_harm on the outer segment after split_substitution_opening_assignments (the operand keeps the closing paren). Readings: (a) FP; (b) intended over-approximation. Tell apart: run in bash with a dry-run echo."
-created_at = 1794634387
-updated_at = 1794634387
-weight = 0.0
-issue_number = 1768
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1768"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261114_rm_substitution_body_rebind_false_deny -- --include-ignored"
-rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
-observed_at = 1794634387
-detail = """
-exit 101: 61114-125811-45041-integ/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
-     Running tests/backlog_20261114_rm_substitution_body_rebind_false_deny.rs (target/debug/deps/backlog_20261114_rm_substitution_body_rebind_false_deny-c7f67f061b9d2b24)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261114_rm_substitution_body_rebind_false_deny`"""
 
 [[task]]
 id = "40dc52c0"

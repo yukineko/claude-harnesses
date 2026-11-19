@@ -85017,3 +85017,197 @@ auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はあり
    Compiling blastguard v0.2.738 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.77s
      Running tests/backlog_20261114_shutil_copy2_source_judged_as_write_fp.rs (target/debug/deps/backlog_20261114_shutil_copy2_source_judged_as_write_fp-74da9ce17e926a5e)"""
+
+[[task]]
+id = "eca57944"
+title = 'blastguard: redirect onto an existing non-git file whose name is escaped or quoted (a\ b, "a b", \a, out\).txt) judged allow'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795041588
+updated_at = 1795101637
+weight = 0.0
+issue_number = 1865
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1865"
+issue_closed_at = 1795101640
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test fp_fix_boundaries_20261119 -- --ignored onto_existing_file_not_allowed"
+rev = "70abd956146bd5bdad1d076017cb2ce7a73e85b0"
+observed_at = 1795041588
+detail = """
+exit 101: red out; finished in 0.91s
+
+   Compiling blastguard v0.2.733 (/Users/yuki/src/.harness-worktrees/bg-fp-20261119/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.39s
+     Running tests/fp_fix_boundaries_20261119.rs (target/debug/deps/fp_fix_boundaries_20261119-56bc1626e6f6ba8c)
+error: test failed, to rerun pass `-p blastguard --test fp_fix_boundaries_20261119`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test fp_fix_boundaries_20261119 onto_existing_file_not_allowed"
+exit = 0
+passed = 5
+rev = "11ecb02beecae497075b86308955cfc905f8a2f0"
+observed_at = 1795101629
+output_digest = "sha256:ca7e7eba34fe275ba639392e42636df56a3a4ef19aa32f4c702b19b04f86596c"
+excerpt = """
+
+running 5 tests
+test escaped_space_amp_onto_existing_file_not_allowed ... ok
+test heredoc_escaped_paren_onto_existing_file_not_allowed ... ok
+test quoted_space_onto_existing_file_not_allowed ... ok
+test escaped_space_onto_existing_file_not_allowed ... ok
+test escaped_letter_onto_existing_file_not_allowed ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 1.28s
+
+   Compiling blastguard v0.2.743 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.33s
+     Running tests/fp_fix_boundaries_20261119.rs (target/debug/deps/fp_fix_boundaries_20261119-63269119ef1c7b60)
+"""
+
+[task.closure.red]
+rev = "c92d77e74587df6ef103031b088473fcb37e010b"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "7bf91f5a"
+title = "blastguard: printf の二重引用符 operand（エスケープした PY 変数と command 風の文言を含む）を実行される command line と判定して Ask にする false positive を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "FP, RED ae5e7750 by the flow-8cca7ef5 orchestrator at main a473ba71 2026-11-14. Exact commands are the MENTIONS/HARMLESS constants of the test file. printf whose double-quoted operand holds escaped PY-variable text plus a find -exec sh -c / os.chmod phrase is Ask in main and Deny in subagent with reason: printf is not a command blastguard recognises, and what follows it parses as a destructive command line. The twin without the PY text is Allow (control). Live hits in the same family on 2026-11-14: a printf append to .specguard/spec-docs.toml, a python3 /dev/stdin heredoc editing the RED file, and the first attempt at this very backlog add whose notes quoted the operand (reason listed backlog, add, p1 ... as unrecognised commands, then: plus is not a command blastguard recognises, and what follows it parses as a destructive command line)."
+created_at = 1794589692
+updated_at = 1795101647
+weight = 0.0
+issue_number = 1725
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1725"
+issue_closed_at = 1795101650
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_printf_operand_judged_as_command_fp -- --include-ignored printf_operand_text_is_not_judged_as_a_command"
+rev = "ae5e7750029010af16850a08159b21c171b6a971"
+observed_at = 1794589692
+detail = """
+exit 101: -c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.22s
+     Running tests/backlog_20261114_printf_operand_judged_as_command_fp.rs (target/debug/deps/backlog_20261114_printf_operand_judged_as_command_fp-90eba1c145325263)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_printf_operand_judged_as_command_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_printf_operand_judged_as_command_fp printf_operand_text_is_not_judged_as_a_command"
+exit = 0
+passed = 1
+rev = "11ecb02beecae497075b86308955cfc905f8a2f0"
+observed_at = 1795101645
+output_digest = "sha256:8de2f065ec4cb1de0f84f4f1f08f00ccfc2fa6aaba7dfa5204f5330b51298f65"
+excerpt = """
+
+running 1 test
+test printf_operand_text_is_not_judged_as_a_command ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.56s
+
+   Compiling blastguard v0.2.743 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running tests/backlog_20261114_printf_operand_judged_as_command_fp.rs (target/debug/deps/backlog_20261114_printf_operand_judged_as_command_fp-ca574d5dfcd4ba56)
+"""
+
+[task.closure.red]
+rev = "c92d77e74587df6ef103031b088473fcb37e010b"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "ab2097c5"
+title = "blastguard: wait with the last-background-PID argument inside sh -c is judged as a command word (FP; bare form is Allow)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-14 in a subagent: a sh -c script with a background subshell followed by wait and the last-background-PID parameter was blocked with the reason that the command word is an expansion whose value only exists at run time. The real command word is wait; the parameter is only its argument. Reproduced at c4336b61 on 2026-11-14: the bare form (sleep 1 in background, then wait with that parameter) is Allow, but the same text wrapped in /bin/sh -c is Ask with that reason. Controls stay non-Allow: the parameter as a real command word, and wait followed by a destructive rm of /etc. Test file: crates/blastguard/tests/wait_bang_argument_fp_20261114.rs (r2 is the ignored RED). Second shape, UNVERIFIED: the same family blocked this very backlog add (rev 3feeb8bc, 2026-11-14) when its quoted title contained the text wait backslash-dollar-bang; the block said wait is not a command blastguard recognises and the following token parses as a destructive command line. Not isolated into a test."
+created_at = 1794602089
+updated_at = 1795101652
+weight = 0.0
+issue_number = 1737
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1737"
+issue_closed_at = 1795101655
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test wait_bang_argument_fp_20261114 -- --ignored"
+rev = "ccd48c0bf99a794e7a1c88104a968cd2e9800ca1"
+observed_at = 1794602089
+detail = """
+exit 101: d out; finished in 1.09s
+
+   Compiling blastguard v0.2.543 (/Users/yuki/src/harness-wt-fp-wait-bang/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.71s
+     Running tests/wait_bang_argument_fp_20261114.rs (target/debug/deps/wait_bang_argument_fp_20261114-3e368ab0dd0b3bd6)
+error: test failed, to rerun pass `-p blastguard --test wait_bang_argument_fp_20261114`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test wait_bang_argument_fp_20261114"
+exit = 0
+passed = 4
+rev = "11ecb02beecae497075b86308955cfc905f8a2f0"
+observed_at = 1795101650
+output_digest = "sha256:724f66829c8c914da1e0bac236169aa8477bcdb7b004d5bef8f6089e794a4916"
+excerpt = """
+
+running 4 tests
+test r1_control_wait_bang_plain_is_allowed ... ok
+test r2_wait_bang_inside_sh_c_is_allowed ... ok
+test c1_control_bang_as_real_command_word_stays_not_allowed ... ok
+test c2_control_destructive_command_after_wait_bang_stays_not_allowed ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+
+   Compiling blastguard v0.2.743 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.47s
+     Running tests/wait_bang_argument_fp_20261114.rs (target/debug/deps/wait_bang_argument_fp_20261114-dacea2ead3a7ba9c)
+"""
+
+[task.closure.red]
+rev = "c92d77e74587df6ef103031b088473fcb37e010b"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -61,19 +61,9 @@ pub const MAX_SOURCE_BYTES: usize = 16 * 1024;
 /// `python3 -c`, `['-', …]` / `['']` for a program on stdin); an element is
 /// `None` when the host could not determine that word.
 pub fn analyze(source: &str, argv: &[Option<String>]) -> Analysis {
-    let source = match normalise(source) {
-        Ok(s) => s,
+    let (source, body) = match parse(source) {
+        Ok(p) => p,
         Err(why) => return Analysis::Undetermined(why),
-    };
-    let parsed = catch_unwind(AssertUnwindSafe(|| {
-        rustpython_parser::ast::Suite::parse(&source, "<string>")
-    }));
-    let body = match parsed {
-        Ok(Ok(body)) => body,
-        Ok(Err(e)) => {
-            return Analysis::Undetermined(format!("the Python program does not parse: {e}"))
-        }
-        Err(_) => return Analysis::Undetermined("the Python parser failed on the program".into()),
     };
     let b = bind::Bindings::collect(&body);
     if let Some(why) = b.failure.clone() {
@@ -84,6 +74,60 @@ pub fn analyze(source: &str, argv: &[Option<String>]) -> Analysis {
     match j.failure {
         Some(why) => Analysis::Undetermined(why),
         None => Analysis::Known(j.effects),
+    }
+}
+
+/// The top-level name of every module the program imports (`import a.b` /
+/// `import a.b as x` / `from a.b import c` → `a`), wherever the import
+/// statement sits (a function body, an unreachable branch), sorted and
+/// deduplicated; `Err(why)` when the program is not read (the same refusals
+/// as [`analyze`]: oversized, NUL, a non-UTF-8 coding cookie, a parse error,
+/// a relative import, a non-ASCII identifier, too deep).
+///
+/// User ruling 2026-11-19 (blastguard S5b a): `python -c` / a program on
+/// stdin puts the working directory first on `sys.path`, so a file `a.py` or
+/// a directory `a/` there replaces the module `a` the program imports. The
+/// host lists the program's directory for these names; this crate does not
+/// touch the file system. Only the names the program itself imports are
+/// listed — the modules those modules import in turn are not.
+pub fn imported_modules(source: &str) -> Result<Vec<String>, String> {
+    struct Imports {
+        names: std::collections::BTreeSet<String>,
+        failure: Option<String>,
+    }
+    impl walk::Visit for Imports {
+        fn bind(&mut self, _name: &str, how: walk::Bind<'_>) {
+            if let walk::Bind::Import(q) = how {
+                let top = q.split('.').next().unwrap_or(&q).to_string();
+                self.names.insert(top);
+            }
+        }
+        fn fail(&mut self, why: String) {
+            self.failure.get_or_insert(why);
+        }
+    }
+    let (_, body) = parse(source)?;
+    let mut v = Imports {
+        names: std::collections::BTreeSet::new(),
+        failure: None,
+    };
+    walk::module(&mut v, &body);
+    match v.failure {
+        Some(why) => Err(why),
+        None => Ok(v.names.into_iter().collect()),
+    }
+}
+
+/// The normalised source and its parsed body, or why it is not read.
+fn parse(source: &str) -> Result<(String, rustpython_parser::ast::Suite), String> {
+    let source = normalise(source)?;
+    let parsed = catch_unwind(AssertUnwindSafe(|| {
+        rustpython_parser::ast::Suite::parse(&source, "<string>")
+    }));
+    match parsed {
+        Ok(Ok(body)) => Ok((source, body)),
+        Ok(Err(e)) => Err(format!("the Python program does not parse: {e}")),
+        Err(_) => Err("the Python parser failed on the program".into()),
     }
 }
 

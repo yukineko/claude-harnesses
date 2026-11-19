@@ -504,15 +504,47 @@ dc27f669 / bf90fa9d, is untouched); is a `-c` program that runs a command
 while the line feeds Python's stdin; or when the neutral text does not
 re-analyse to the same commands.
 
+### S5b follow-ups (user rulings 2026-11-19)
+
+* (a) **Import shadowing.** `python -c` / a program on stdin puts the
+  directory it runs in first on `sys.path`. A program that imports `M`
+  (`import M…` / `from M… import`, top-level name, anywhere in the program)
+  while that directory holds `M.py`, a directory `M/`, or a compiled
+  `M.pyc` / `M.*.so` / `M.pyd` (names compared ignoring ASCII case) is
+  **Undetermined**. So is one whose directory cannot be listed (an IO error,
+  the hook's cwd absent from the payload, a cwd the text does not determine).
+  A directory that does not exist holds nothing that shadows. Listing:
+  `harness_core::boundary::read_dir_entries_checked` (`s5.rs::shadowed_import`).
+* (c) **`bash -c` / `sh -c`.** The literal script of a plain `bash -c SCRIPT`
+  / `sh -c SCRIPT` (after the `b5` wrappers; `sudo` excluded) is judged by S5
+  exactly like the same text written directly, and its Known programs are
+  retired from the outer line's legacy readings (the script word is replaced
+  by its neutral text). Only this shape is read (`s5.rs::shell_c_script`):
+  `bash` / `sh` bare or in a system bin directory, exactly `-c SCRIPT` (no
+  `$0` / positional words, no other option), nothing feeding its stdin, the
+  hook's cwd or one literal directory, and no command on the line that
+  assigns a variable or runs `export` / `declare` / `typeset` / `local` /
+  `readonly` / `env` / `unset` / `source` / `.` / `eval` / `alias` / `enable`
+  / `shopt` / `set` (the script is analysed on its own). Any other shape keeps
+  the legacy readings only, as before.
+* (d) **`sh -c 'echo "$HOME"'`.** A shell's `-c` payload candidates are the
+  word boundaries after `-c`, no longer every whitespace position
+  (`payload.rs::dash_c_payloads` → `interpreter_payloads_after`, backlog
+  1943843c): the mid-word fragment `"$HOME"'` was read as a command line whose
+  command word was `$HOME`. A word whose quote never closes keeps every
+  position.
+
 ### Known gaps (S5)
 
 * A here-string / piped literal program is analysed but never retired.
-* Python nested in `bash -c '…'` (or any other word) is judged by the legacy
-  readings only.
+* Python nested in a `bash -c` outside the shape above, or in any other word,
+  is judged by the legacy readings only.
 * Wrappers other than those `b5` unwraps (`sudo`, `xargs`, …) get no S5
   opinion.
-* A standard-library module shadowed by a file in the working directory
-  (`-c` / stdin put the cwd first on `sys.path`) is not detected.
+* Import shadowing: a shadowing entry created by another command of the same
+  line (the directory is listed when the hook runs), a module imported by an
+  imported module, and `.pth` / `PYTHONPATH` / site-packages entries are not
+  detected.
 
 ## Stage map
 

@@ -147,7 +147,7 @@ BEFORE = HEADER + BEFORE_MID + TAIL
 AFTER = HEADER + AFTER_MID + TAIL
 
 RED_REASON = (
-    "backlog (id pending): an intended macro-template re-anchor in a file that exists "
+    "backlog 74810d3e: an intended macro-template re-anchor in a file that exists "
     "at the base is Undetermined and no test-weakening-justified line can "
     "acknowledge it (user-ruled false positive 2026-11-20)"
 )

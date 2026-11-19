@@ -1472,6 +1472,15 @@ forge・condukt のスケジューラが再利用）。
 - **`detect/payload/echo_output`** — 素の `echo` の出力 helper（`plain_echo_output`: 全語が static で backslash
   を含まない `echo [-neE…] WORD…` の出力、`quote_bare_echo_words`: 同じ出力を pipe rule が literal program と
   読む quoted 形に書き直す）。`detect/payload.rs` から挙動を変えずに移した（file-growth cap）。
+- **`detect/ast/s5`** — stage S5。行の中の inline Python program（`python3 -c`・stdin の here-document・
+  literal の pipe）を crate `progeffect` で parse し、各 effect を shell の綴りにして full detector で判定する
+  （`prepare`）。parser が Known と読んだ program だけを `pass` に置き換えた neutral text を legacy readings に
+  渡す。詳細は下の「inline Python program の parser 判定（S5）」。
+- **crate `progeffect`**（plugin ではない共有 lib。harness-core と同じく `Cargo.toml` の version だけを持ち、
+  `scripts/check-version-bumped.py` の `SHARED_CRATES` に登録）— 埋め込み program の effect を、言語ごとの
+  本物の parser で読む。Python は rustpython-parser 0.4（`default-features = false` + `num-bigint`。LGPL の
+  malachite を link しない）。effect × target の判定表は持たず、各 effect の shell の綴り
+  （`Effect::shell_spelling`）を host に渡す。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。
 
@@ -1518,3 +1527,48 @@ path/target を埋め込む。例: `"Write would replace {path} with empty conte
    - 再現テスト: `crates/blastguard/tests/backlog_20261114_exec_stdin_herestring_literal_harm.rs`（fd 0 の here-string に literal の system harm を入れて後で `bash` が読む形は main・subagent とも Deny）と、`crates/blastguard/tests/backlog_20261114_exec_stdin_harm_non_stdin_reader_fp.rs`（script ファイルや `-c` を実行する reader は Allow のまま、close の後は main で Deny にしない）と、`crates/blastguard/tests/backlog_20261115_exec_dup_onto_stdin_literal_harm.rs`（fd 3 の here-string を `exec 0<&3`・`exec 0<&3 3<&-`・`exec <&3` で fd 0 に複製して後で shell が読む形は main・subagent とも Deny、中身が harm でない形は直接の形 `exec <<< 'echo hi'; bash` と同じく main で Ask・subagent で Deny、`cat`・`bash script.sh` は Deny にしない）。
    - quote された数字の複製先（backlog cf0bf4ca、2026-11-15）: `<&` / `>&` の複製先の fd 番号は、shell が単語を読むのと同じく quote を外してから数字として読む。`exec 3<<< 'chmod 777 /etc/hosts'; bash <&'3'` と `bash <&"3"` は `<&3` と同じ形として追跡し、main・subagent とも Deny とする。quote を外しても数字にならない複製先（`-` や名前）は従来どおり。quote を外せない複製先（閉じていない quote・ANSI-C `$'…'`・末尾の孤立した backslash）と展開を含む複製先は判定不能として扱い、制限側に倒す（落とさない）。ここでの展開は本文が値を決めないもの（`<&$((1+2))`、どこでも代入されない `$fd` など）で、行の中で literal に束縛された `$fd`（`fd=3; exec 3<<< '…'; bash <&$fd`）は `resolve_static_bindings` がどの rule より先に literal に置き換えるため、literal の `<&3` と同じ判定になる（backlog 54231a0a、2026-11-16 のユーザー裁定。回帰テスト: `crates/blastguard/tests/backlog_20261116_static_fd_var_matches_literal.rs`）。実装は `exec_fds.rs` の `decode_literal_word` で、`exec_fds.rs` にある複製先の単語の読み取りは `exec_fds::dup_fd_number` を、`payload.rs` の `procsub_programs` にある stdin の複製先の読み取りは `exec_fds::stdin_dup_target`（下の移動の形も読む）を通して、すべてこれを使う。読めない形の言及を見落とさないための文字列上の数え上げ（`exec_fds::raw_fd_mentions`）も、`&` の後の単語を同じく quote を外して読み、先頭が fd 番号なら言及として数える。したがって quote した形は、quote しない形と同じ所で同じ数だけ数えられ、判定は quote しない形と同じになる（例: `eval 'bash <&3' 2>&'3'` と `x=$(bash <&3) 2>&'3'` は `2>&3` の形と同じく main・subagent とも Deny、`cat <&'3'` は `cat <&3` と同じ、移動の形 `bash <&'3'-` は `bash <&3-` と同じく Deny）。再現テスト: `crates/blastguard/tests/backlog_20261115_quoted_numeric_dup_target.rs` と、quote した形と quote しない形の判定の一致を見る `crates/blastguard/tests/backlog_20261115_quoted_numeric_dup_consistency.rs`。
    - stdin への移動の形（backlog 967fd65c、2026-11-16）: reader の stage の `<&N-` / `0<&N-`（fd N を stdin へ移動し N を閉じる）は、bash が展開・quote 除去の後に末尾の `-` を 1 つ外して読むのと同じく、`<&N` と同じ stdin の複製として読む（`exec_fds::stdin_dup_target`）。したがって `bash <&3-` と `bash 0<&3-` は `bash <&3` と同じく main で Allow にせず、subagent で Deny とする。`-` だけ（`<&-`、stdin を閉じる）は何も読まない。`-` を外しても fd 番号にならない移動の形（`<&abc-`）は stdin の出どころが判定不能として制限側に倒す。`exec` の行の複製（`exec 4<&3-`）は `exec_fds::dup_fd_number` のままで、この読み替えの対象外。再現テスト: `crates/blastguard/tests/backlog_20261114_stdin_dup_move_fd_suffix.rs`。
+
+## inline Python program の parser 判定（S5）— ユーザー裁定 2026-11-17
+
+裁定（`crates/blastguard/src/detect/ast/SUBSET.md` の「Python programs (S5)」に逐語で引用）:
+
+- 構造の方向（2026-11-17）: 個別の patch は当てない。埋め込まれた Python は本物の parser で読み、その effect を
+  shell と同じ effect × target の規則（Table B / C）で判定する。対象は `python3 -c`、`python3 - <<'EOF'`、
+  stdin から渡る Python。
+- parser は rustpython-parser 0.4（`default-features = false` + `num-bigint`）。malachite（LGPL）は link しない。
+- 言語ごとの parser と effect × target の規則は 1 つの共有 lib crate（`crates/progeffect`）に置き、blastguard と
+  将来の script-quarantine plugin が使う。
+- text と code の区別は parser が決める（heuristic にしない）。文字列 literal・comment・f-string の literal 部分は
+  data で、effect になるのは呼び出しだけ。
+- 判定不能（動的 dispatch: `getattr`・`__dict__`・`exec`/`eval`/`compile`・`__import__`・`importlib`・
+  `globals`/`vars`/`locals`、追えない alias、literal でない argv、parse error）は main で Ask、subagent で Deny。
+- system harm はどの wrapper を通しても Deny。
+- `python3 x.py` は S4 の B.5 Undetermined のまま。S5 の対象は inline の program だけ。
+- legacy の文字列読みを外すのは parser が Known を返した program だけ。Undetermined の program では legacy の
+  読みを raise-only で残す（S3b と同じ型）。
+
+振る舞い（`detect/ast/s5.rs::prepare`、`detect/readings.rs` の `every_reading_scoped` から呼ぶ）:
+
+1. 行の各 simple command について、`env`/`nohup`/`timeout`/`nice`/`time`/`exec`/`command` を外した先が
+   `python*` で、program が `-c` の literal か literal の stdin（here-document・here-string・literal producer の
+   pipe）なら、`sys.argv`（`-c` は `['-c', …]`、stdin は `['-', …]` か `['']`）と一緒に `progeffect::python::analyze`
+   に渡す。`-i`・`-x` は判定不能。
+2. Known なら、各 effect を shell の綴りにして full detector（`detect_bash_every_reading`）で判定する。
+   `os.system(S)` などの shell 実行は `S` そのもの、ファイル操作は `rm -- 'P'`・`: > 'P'`・`mv -- 'A' 'B'` など
+   （一覧は SUBSET.md）。command の cwd が literal なら `cd 'D' && ` を前に付け、cwd が候補集合か判定不能なら
+   effect を持つ program は判定不能。reason は ``the Python program calls `CALL` on `PATH` (judged as `…`): `` に
+   続けて shell 側の reason（rule id は shell 側の id。既存ファイルの truncate は
+   `interpreter-unrecoverable-write`）。
+3. Known の program は、neutral text（その program を `pass` に置き換えた行）を legacy readings に渡すことで
+   legacy の文字列読みから外す。外さない（legacy を元の text で残す）のは: Undetermined、command / process
+   substitution の中・他の command の word / redirect / here-document 本文の中・pipeline の最後でない stage、
+   effect（または出力 redirect）があって行の他の command がファイルを実行しうる（write-then-run は legacy と
+   harness-5b の担当する読みに残す）、`-c` の program が command を実行し行が Python の stdin を与えている、
+   neutral text が同じ command 列に再解析できない、のいずれか。
+4. 判定不能・未読の一覧、既知の gap（here-string / pipe の program は外さない、`bash -c` の中の Python は legacy
+   だけ、`sudo` 等の wrapper、cwd の module による標準ライブラリの shadowing）は SUBSET.md に置く。
+
+受け入れテスト: `tests/backlog_20261119_python_heredoc_string_literal_system_harm_fp.rs`・
+`tests/backlog_20261118_python_heredoc_string_literal_rm_home_fp.rs`・`tests/backlog_20261118_python_c_string_literal_rm_fp.rs`・
+`tests/backlog_20261118_python_c_argv_system_write_not_deny.rs`・`tests/backlog_20261116_python_dict_lookup_system_group_pipe.rs`・
+`tests/ast_effect_rules_20261117.rs`（c1873b73 の形）・`tests/backlog_20261116_python_os_system_literal_spelling_bypass.rs`。

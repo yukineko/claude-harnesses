@@ -322,8 +322,8 @@ else the command's cwd).
 | `eval` | `Undetermined` | Undetermined (S4) |
 | direct execution of a program file (`./run.sh`, `scripts/foo.sh`, `/abs/run.sh`) | `File(Value)` | **Undetermined** → Ask / Deny (ruling 17, S4), same exceptions as the script-file row (ruling 20, ruling 22) |
 | `source`, `.` (reading a file) | `File(Value)` | **Ask** (main) / Deny (subagent) together with the quarantine plugin; legacy until then (rulings 13, 16); not judged recursively in S4 |
-| `python*` program file / `-m` | `File` / `Undetermined` | **Undetermined** from S4 (ruling 18, beats ruling 15); a git-tracked, unmodified file → no B.5 opinion (ruling 22; never `-m`); from S5 the Python parser |
-| `python*` `-c` / literal stdin | as `program_source` | legacy readings until S5 (ruling 15); a non-literal stdin → Undetermined (S4) |
+| `python*` program file / `-m` | `File` / `Undetermined` | **Undetermined** from S4 (ruling 18, beats ruling 15); a git-tracked, unmodified file → no B.5 opinion (ruling 22; never `-m`); S5 does NOT read program files (they stay here) |
+| `python*` `-c` / literal stdin (here-document, here-string, literal pipe) | as `program_source` | **S5**: parsed (crate `progeffect`), each effect judged on its shell spelling — see "Python programs (S5)"; parse failure / dynamic dispatch → Undetermined; a non-literal stdin → Undetermined (S4) |
 | `perl` / `ruby` `-e`/`-E`, `-i`, `node` `-e`/`-p`, non-literal stdin | — | **out of subset** → Undetermined (ruling 4, S4); a literal stdin / process-substitution / pipe body → no B.5 opinion, legacy decides (ruling 21) |
 | wrapper whose operand is an interpreter or Undetermined | `Undetermined` | unwrap (B.3), then the interpreter's row |
 
@@ -379,6 +379,121 @@ Notes:
    detector no longer has a string-reading fallback (ruling 7).
 4. A `judge` panic is caught and is `Undetermined(Panic)` → rule 1.
 
+## Python programs (S5)
+
+### Rulings (quoted)
+
+* 2026-11-17, structural direction: no per-issue patches; embedded Python
+  gets a real parser, and its effects are judged with the same effect ×
+  target rules (Tables B / C) as shell — `python3 -c`, `python3 - <<'EOF'`
+  and Python fed through stdin.
+* Parser: rustpython-parser 0.4 with `default-features = false` +
+  `num-bigint`. malachite is LGPL and must not be linked
+  (`cargo tree -p progeffect -e normal | grep -i malachite` prints nothing).
+* Shared crate: the per-language parsers and the effect × target rules live
+  in ONE shared lib crate (`crates/progeffect`), used by blastguard
+  (embedded programs) and by the future script-quarantine plugin; versioned
+  like harness-core (Cargo.toml only, registered in
+  `scripts/check-version-bumped.py` `SHARED_CRATES`).
+* Text vs code is decided by a real parser, never by heuristics: string
+  literals, comments and the literal parts of f-strings are DATA; only calls
+  are effects.
+* Undetermined → Ask (main) / Deny (subagent): dynamic dispatch (`getattr`,
+  `__dict__`, `exec` / `eval` / `compile`, `__import__`, `importlib`,
+  `globals` / `vars` / `locals`, aliasing that cannot be followed, a
+  non-literal argv) and a parse error. A call with no effect-capable name is
+  Allow; anything that can run code or touch the file system by a name not
+  listed is Undetermined. When in doubt, Undetermined.
+* System harm stays Deny through any wrapper.
+* `python3 x.py` stays B.5 Undetermined (S4); S5 covers only inline programs
+  (`-c`, a stdin here-document, a literal piped in).
+* Legacy string readings for python are retired ONLY where the parser gives
+  a Known verdict; where it gives Undetermined the legacy reading is kept,
+  raise-only (the S3b pattern).
+
+### Effects and their shell spelling (`progeffect::Effect::shell_spelling`)
+
+Each effect is judged by the FULL detector on the shell command that has
+exactly that effect (prefixed with `cd 'DIR' && ` when the command's cwd is a
+literal directory; a `OneOf` / undetermined cwd with any effect →
+Undetermined). One rule table, no drift: this is the `judge_candidates`
+precedent while `classify` is the S1 stub.
+
+| Python call (after import / alias resolution) | Effect | Judged as |
+|---|---|---|
+| `os.system(S)`, `os.popen(S[, 'r'])`, `subprocess.getoutput(S)` / `getstatusoutput(S)`, `subprocess.*(S, shell=True)` | Shell | `S` itself (the command `/bin/sh -c S` runs); with a literal cwd `cd 'D' && { S⏎}` |
+| `subprocess.run` / `call` / `check_call` / `check_output` / `Popen` with a literal list (or string) | Exec | the quoted argv; `shell=True` with a list → `sh -c …` |
+| `open` / `io.open` / `codecs.open` / `gzip|bz2|lzma.open` with mode `w` / `x` / `+` (`r+` read as truncate) / `a`; `Path.write_text` / `write_bytes`; `Path.open('w')`; `os.open` unless `O_RDONLY` | Truncate / Append | `: > 'P'` / `: >> 'P'` |
+| `os.remove` / `unlink`, `Path.unlink` | Delete | `rm -- 'P'` |
+| `shutil.rmtree` | Delete (recursive) | `rm -rf -- 'P'` |
+| `os.rmdir`, `Path.rmdir` | RemoveDir | `rmdir -- 'P'` |
+| `os.rename` / `replace` / `renames`, `shutil.move`, `Path.rename` / `replace` | Move | `mv -- 'A' 'B'` |
+| `shutil.copy` / `copy2` / `copyfile` / `copytree` | Copy | `cp [-R] -- 'A' 'B'` |
+| `os.chmod` / `lchmod`, `Path.chmod` (integer literal mode) | Chmod | `chmod MODE -- 'P'` |
+| `os.chown` / `lchown`, `shutil.chown` (literal owner) | Chown | `chown 'O' -- 'P'` |
+| `os.symlink` / `link`, `Path.symlink_to` / `hardlink_to` | Link | `ln [-s] -- 'T' 'L'` |
+| `os.mkdir` / `makedirs`, `Path.mkdir` | MakeDir | `mkdir -p -- 'P'` |
+| `os.utime`, `Path.touch` | Touch | `touch -- 'P'` |
+| `os.truncate(P, N)` | Resize | `: > 'P'` for 0, else `truncate -s N -- 'P'` |
+
+Operands: string literals, f-strings without fields, `+` concatenation, a
+name bound once by a module-level `name = value`, `sys.argv[i]` of a literal
+command-line word (`['-c', …]` for `-c`, `['-', …]` / `['']` for stdin),
+`str()`, `os.fspath`, `os.path.join`, `pathlib.Path(…)` and `/` joins.
+Anything else → Undetermined.
+
+### Undetermined (the program is not read)
+
+* a parse error, a NUL byte, a non-UTF-8 coding cookie, a program over
+  16 KiB, nesting deeper than 200;
+* any reference to `exec`, `eval`, `compile`, `__import__`, `getattr`,
+  `setattr`, `delattr`, `globals`, `locals`, `vars`, `breakpoint`, `help`,
+  `__builtins__`, `__loader__`, `__spec__`; a dunder attribute other than
+  `__name__` / `__doc__` / `__file__` / `__version__` / `__qualname__`
+  (`os.__dict__[…]`, backlog c1873b73); `sys.modules`;
+* an import of a module outside the standard library, a relative import,
+  `from m import *`; a non-ASCII identifier (Python NFKC-normalises them);
+* an import alias whose name is ALSO bound some other way (an alias is
+  followed only when every binding of the name is the same import);
+* an effect-capable function or module used as a value (`f = os.system`), a
+  store into a module (`os.environ[…] = …`, `sys.argv = …`);
+* a call into an effect-capable standard-library module that is not
+  modelled (`os.fork`, `importlib.*`, `pickle.loads`, `shutil.unpack_archive`, …);
+  a method named like a process / file-system operation on a receiver this
+  reading does not resolve (`x.system(…)`, `p.unlink()`, `df.to_csv(path)`);
+* an effect whose command / path is not determined; `subprocess` keywords
+  that change what or how it runs (`executable`, `env`, `cwd`, `input`,
+  `stdin`, `preexec_fn`, …); `os.popen(…, 'w')`; `dir_fd`; `opener`;
+* the program both writes a file and runs a program;
+* `python -i` / `python -x`; a line that sets `PATH`, `PYTHON*`, `LD_*`, … ;
+* a non-ASCII directory component in a path of a program that uses a
+  `\N{…}` escape (backlog 47b20647 pinned `open('/\N{SNOWMAN}tc/hosts','w')`
+  as undetermined; S5 does not lower that on its own authority).
+
+### Retiring the legacy readings
+
+`ast/s5.rs::prepare` hands the legacy readings a NEUTRAL text in which each
+Known program is `pass` (the `-c` operand, or the here-document body). A
+program is NOT retired (its legacy readings keep running on the original
+text, raise-only) when it is Undetermined; sits in a command / process
+substitution, inside another command's word / redirect / here-document body,
+or is a non-last pipeline stage; has an effect (or an output redirect) while
+another command on the line may run a file (write-then-run stays with the
+legacy readings — and the harness-5b-owned written-file reading,
+dc27f669 / bf90fa9d, is untouched); is a `-c` program that runs a command
+while the line feeds Python's stdin; or when the neutral text does not
+re-analyse to the same commands.
+
+### Known gaps (S5)
+
+* A here-string / piped literal program is analysed but never retired.
+* Python nested in `bash -c '…'` (or any other word) is judged by the legacy
+  readings only.
+* Wrappers other than those `b5` unwraps (`sudo`, `xargs`, …) get no S5
+  opinion.
+* A standard-library module shadowed by a file in the working directory
+  (`-c` / stdin put the cwd first on `sys.path`) is not detected.
+
 ## Stage map
 
 | Stage | Implements |
@@ -391,6 +506,7 @@ Notes:
 | S4 `stdin-program` | Table B B.5 rows for shells: `-c` inline, stdin (`StdinSource::Literal` bodies), `eval`; the script-file row and the direct-execution row (Undetermined, and the recursive judgement of a body the same command writes — rulings 10, 17); wrapper → interpreter unwrap. `source` / `.` are NOT in S4 (ruling 16) |
 | S4 status (2026-11-18) | **landed** as the standalone B.5 layer `b5.rs` (rulings 18–21), raising the legacy verdict in `readings.rs::detect_bash_every_reading`; `judge.rs` stays unwired. Wrappers unwrapped: `env`, `nohup`, `timeout`, `nice`, `time`, `exec`, `command`. Known gaps (legacy alone judges them): other wrappers (`sudo`, `xargs`, `su`, `flock`, `find -exec`, …) and `BASH_ENV` / `ENV` assignments |
 | S5 `python-parser` | Table B B.5 python row (a real Python parser; effects × targets of the parsed program judged by Table C); legacy python readings until then (ruling 15) |
+| S5 status (2026-11-19) | **landed**: shared crate `crates/progeffect` (rustpython-parser 0.4, `default-features = false` + `num-bigint`; no malachite) reads the program; `ast/s5.rs::prepare` judges every effect with the full detector on its shell spelling and retires the legacy readings of Known programs (`readings.rs`). See "Python programs (S5)" |
 | S6 `retire-readings` | remove the string-reading fallbacks of every migrated row (`targets.rs::resolve` callers, `readings.rs` re-readings); until S6 the whole legacy layer is raise-only (ruling 14), so Table C Allow cells a legacy reading answers Ask / Deny today turn GREEN here; revisit the deferred Open questions 1–4 |
 | quarantine plugin (separate) | `source` / `.` → Ask (main) / Deny (subagent), introduced together with the script-quarantine plugin (ruling 16) |
 

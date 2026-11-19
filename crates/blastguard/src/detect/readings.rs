@@ -79,6 +79,13 @@ mod static_bindings;
 /// The verdict of all those (legacy) readings is then raised by the Table B.5
 /// layer (stage S4, [`super::ast::b5::raise`]): `max(B.5, legacy)`, never
 /// lower than the legacy verdict.
+///
+/// Stage S5 ([`super::ast::s5::prepare`]) runs first: every inline Python
+/// program is parsed and its effects judged by this function on their shell
+/// spelling (that verdict is folded in like the others), and the legacy
+/// readings judge a text in which each program the parser read as Known is
+/// `pass` — so they no longer read its string literals as commands. A program
+/// the parser cannot read keeps its legacy readings.
 pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision {
     // User ruling 2026-11-19 ①: the AST evaluator holds the hook's cwd (the
     // payload cwd) as a known value, so a relative `cd` is resolved.
@@ -92,7 +99,15 @@ fn every_reading_scoped(c: &str, scope: &SafeRoots) -> Decision {
     // resolver, run once, before anything else; see `static_bindings`.
     let resolved = static_bindings::resolve_static_bindings(c);
     let c: &str = &resolved;
-    let legacy = targets::with_index(c, || every_reading(c, scope));
+    let judge = |text: &str| detect_bash_every_reading(text, scope);
+    // Stage S5 (user rulings 2026-11-17): every inline Python program is read
+    // with a real parser and its effects are judged by this same detector on
+    // their shell spelling. A program the parser reads as Known is retired
+    // from the legacy string readings (they judge `s5.neutral`, where it is
+    // `pass`); an Undetermined one keeps them, raise-only.
+    let s5 = super::ast::s5::prepare(c, &judge);
+    let legacy_text: &str = s5.neutral.as_deref().unwrap_or(c);
+    let legacy = targets::with_index(legacy_text, || every_reading(legacy_text, scope));
     // Stage S3b (user ruling 2026-11-18): the AST judge for the commands with
     // a SUBSET.md Table B B.1 row — an unlisted option or an operand the
     // evaluator cannot resolve is Ask (main) / Deny (subagent). Raise-only:
@@ -102,12 +117,14 @@ fn every_reading_scoped(c: &str, scope: &SafeRoots) -> Decision {
     if let Some(deny) = acc.record(legacy) {
         return deny;
     }
+    if let Some(deny) = acc.record(s5.verdict) {
+        return deny;
+    }
     if let Some(deny) = acc.record(super::ast::table_b_verdict(c, scope)) {
         return deny;
     }
     let before_b5 = acc.finish();
     // S4: the standalone Table B.5 layer; it only raises (`max(B.5, …)`).
-    let judge = |text: &str| detect_bash_every_reading(text, scope);
     super::ast::b5::raise(
         before_b5,
         c,

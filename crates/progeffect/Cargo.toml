@@ -1,0 +1,27 @@
+# progeffect — the EFFECTS of an embedded program, read with a real parser for
+# its language (user ruling 2026-11-17: "parsers per language + the effect x
+# target rules live in ONE shared lib crate", used by blastguard for embedded
+# programs and by the future script-quarantine plugin).
+#
+# NOT a distributed Claude Code plugin: a pure library linked into blastguard,
+# so it carries no `.claude-plugin/plugin.json`. Its version is bumped on every
+# linked change like harness-core's / riskgrade's
+# (scripts/check-version-bumped.py SHARED_CRATES).
+[package]
+name = "progeffect"
+version = "0.1.2"
+edition = "2021"
+rust-version = "1.85"
+description = "Effects (shell commands, process runs, file-system operations on literal paths) of an embedded program, read with a real parser for its language (Python: rustpython-parser). Fail-closed: anything it cannot resolve is Undetermined."
+license = "MIT"
+publish = false
+
+[dependencies]
+# User ruling 2026-11-17: rustpython-parser 0.4 with default-features = false
+# plus num-bigint. The default feature set pulls malachite (LGPL), which must
+# not be linked; `cargo tree -p progeffect -e normal | grep -i malachite` must
+# print nothing.
+rustpython-parser = { version = "0.4", default-features = false, features = ["num-bigint"] }
+
+[lints]
+workspace = true

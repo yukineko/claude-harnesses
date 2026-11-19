@@ -266,67 +266,56 @@ fn ids(v: &[&str]) -> Vec<String> {
 // ---- RED: observed main=allow sub=allow on rev 84d930e83 ----
 
 #[test]
-#[ignore = "RED(7275b9d9): .ssh/authorized_keys under /Users/<n> (not HOME) write/mv/cp/chmod/rm/ln are allow"]
 fn red_ssh_authkeys_users_all_ops() {
     assert_all_deny(&target_ids("ssh_authkeys_users", ALL_OPS));
 }
 
 #[test]
-#[ignore = "RED(7275b9d9): <anydir>/.ssh/id_rsa write/mv/cp/chmod/rm/ln are allow"]
 fn red_ssh_idrsa_anydir_all_ops() {
     assert_all_deny(&target_ids("ssh_idrsa_anydir", ALL_OPS));
 }
 
 #[test]
-#[ignore = "RED(7275b9d9): scripts/check-*.py write/mv/cp/chmod/rm/ln are allow"]
 fn red_gate_check_script_all_ops() {
     assert_all_deny(&target_ids("gate_check_script", ALL_OPS));
 }
 
 #[test]
-#[ignore = "RED(7275b9d9): crates/*/hooks/** write/mv/cp/chmod/rm/ln are allow"]
 fn red_crate_hooks_all_ops() {
     assert_all_deny(&target_ids("crate_hooks", ALL_OPS));
 }
 
 #[test]
-#[ignore = "RED(7275b9d9): <anydir>/.gitconfig write/mv/cp/chmod/rm/ln are allow"]
 fn red_gitconfig_anydir_all_ops() {
     assert_all_deny(&target_ids("gitconfig_anydir", ALL_OPS));
 }
 
 #[test]
-#[ignore = "RED(7275b9d9): chmod 777 on .githooks/** is allow (observed main=allow sub=allow)"]
 fn red_githooks_chmod777() {
     assert_all_deny(&target_ids("githooks_precommit", &["chmod777"]));
 }
 
 #[test]
-#[ignore = "RED(7275b9d9): chmod 777 on ~/.claude/plugins/cache/**/bin is allow (observed main=allow sub=allow)"]
 fn red_plugin_cache_chmod777() {
     assert_all_deny(&target_ids("plugin_cache_bin", &["chmod777"]));
 }
 
 #[test]
-#[ignore = "RED(7275b9d9): mv/ln -sf of the home directory itself (/Users/<n>, /home/<n>) is allow"]
 fn red_home_dir_mv_and_ln() {
     assert_all_deny(&ids(&["users_mv_away", "users_ln_sf", "home_mv_away"]));
 }
 
 #[test]
-#[ignore = "RED(7275b9d9): python os.replace onto /Users/<n>/.ssh/authorized_keys is allow"]
 fn red_py_os_replace_users_authkeys() {
     assert_all_deny(&ids(&["py_os_replace_users_authkeys"]));
 }
 
 #[test]
-#[ignore = "RED(7275b9d9): python os.chmod on <anydir>/.ssh/id_rsa is allow"]
 fn red_py_os_chmod_anydir_idrsa() {
     assert_all_deny(&ids(&["py_os_chmod_anydir_idrsa"]));
 }
 
 #[test]
-#[ignore = "RED(7275b9d9): python open(...,'wb') on scripts/check-*.py is allow"]
 fn red_py_open_wb_gate_script() {
     assert_all_deny(&ids(&["py_open_wb_gate_script"]));
 }
@@ -334,7 +323,6 @@ fn red_py_open_wb_gate_script() {
 // ---- RED: observed main=ask sub=deny (Q4 ruling says Deny) ----
 
 #[test]
-#[ignore = "RED(7275b9d9): write/mv/cp/ln -sf onto .githooks/** is main=ask sub=deny; ruling is Deny"]
 fn red_githooks_write_ops_main_ask() {
     assert_all_deny(&target_ids(
         "githooks_precommit",
@@ -343,7 +331,6 @@ fn red_githooks_write_ops_main_ask() {
 }
 
 #[test]
-#[ignore = "RED(7275b9d9): write/mv/cp/ln -sf onto ~/.claude/plugins/cache/**/bin is main=ask sub=deny; ruling is Deny"]
 fn red_plugin_cache_write_ops_main_ask() {
     assert_all_deny(&target_ids(
         "plugin_cache_bin",

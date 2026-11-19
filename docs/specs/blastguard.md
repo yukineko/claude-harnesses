@@ -1431,6 +1431,31 @@ forge・condukt のスケジューラが再利用）。
   argv に合成できない語（非 literal・制御文字・quote が要る command word）がある、hook の cwd が不明、1 script で
   候補判定が 32 回を超える — のいずれかなら `Unresolved` で Ask（subagent では Deny）。judge 以外の読み手
   （`targets.rs`・`RedirTarget::Path`・`ProgramSource::File`）にとって `OneOf` は従来どおり `Undetermined`。
+- **`detect/ast/judge/deny_targets`** — Q3/Q4 の deny-target 表（user rulings 2026-11-14、設計承認 2026-11-19、
+  backlog 7275b9d9。仕様は `SUBSET.md`「Deny-target table」）。表は 1 つだけ（`TABLE`）で、`ast/mod.rs` の
+  `deny_target_verdict` を `detect/readings.rs::detect_bash_every_reading` が `table_b_verdict` の後に呼び、
+  raise-only（`Deny > Ask > Allow`）で畳む。照合するのは評価器が解決した path の**値**だけ（B.1 行の target を
+  `resolve_at` で解決したもの、cd が無ければ session cwd に結合した綴りも。B.2 の書き込み redirect
+  `>`/`>|`/`>>`/`&>`/`&>>`/`<>`/`>&path`）で、生のコマンド文字列・再構成した文字列には一切照合しない。
+  S5 の Python `Fs` 効果は shell 綴り（`os.replace` → `mv --`、`os.chmod` → `chmod MODE --`、
+  `open(.., 'wb')` → `: >`）経由で同じ表に当たる（第二の表は無い）。行: Q3 = home ディレクトリそのもの
+  `/Users/*`・`/home/*`（削除・`mv` の移動元・mode 変更・link のみ）、`**/.ssh`(`/**`)、`**/.gitconfig`
+  （$HOME の外でも）。Q4 = `**/.githooks`(`/**`)、`**/scripts/check-*.py`、`**/crates/*/hooks`(`/**`)、
+  `**/.claude/plugins/cache/**/{bin,hooks}`(`/**`)。Q3 の home 以外と Q4 は全書き込み効果を Deny し、
+  chmod も Deny（従来の chmod arm は read/exec を外す mode だけ）。ただしユーザー裁定 2026-11-20
+  「書込み Deny・exec 付与は許可」により、Q4 の 4 行では exec bit を**付与するだけ**の chmod（全語 literal、
+  `--` 以外の option 無し、mode が `[ugoa]*+x` の節か octal `755`/`775`）は上げない（従来の判定のまま）。
+  それ以外の mode 変更（`777`・`o+w`・`-x`・`000`・`-R …`・`+X`）と Q3 行への chmod は Deny。読み取りは
+  照合しない。component 単位・大文字小文字無視の glob（`*` は `/` を跨がない）で、書かれたままの綴りと `..` を
+  字句解決した綴りの和集合で照合する（`/tmp/sshx/f`・`/tmp/notscripts/check-x.txt` は一致しない）。safe root・
+  scratch・temp・cache の免除は行に効かない。唯一の例外は既存の protected-path lift（user ruling 2026-10-03）で、
+  repo 相対の Q4 3 行（`.githooks`・`scripts/check-*.py`・`crates/*/hooks`）は linked worktree checkout の内側
+  （`classify_worktree_checkout_value` Inside）では上げない。一致 → Deny（main・subagent とも、理由に
+  `is on blastguard's Q3/Q4 deny-target table`、rule id `ast-deny-target`）。表を読み込めず書き込み target が
+  ある・B.1 の target 値が不定で他に一致が無い（Table B が同じ値に既に出す Ask と同じ）・panic → Ask
+  （subagent では Deny）。それ以外はこの層は意見なし（Allow）。不定の redirect target・未モデルの
+  wrapper（`sudo` 等）・`analyze` が `Undetermined`・展開すれば行に当たりうる glob・symlink の着地先・行
+  ディレクトリ以外の祖先の再帰削除はこの層では判定しない（旧層の判定のまま）。
 - **`detect/heredoc_data`** — `detect_bash` の手順 0a（backlog f6102045 / 19baba2f、user rulings 2026-11-08 /
   2026-11-17 / 2026-11-18）。brush-parser（`detect::ast::analyze`）が DATA と示す QUOTED here-document 本文を、
   string rule が行を読む前に取り除く（`without_data_heredoc_bodies`）。本文が data になるのは次をすべて満たすとき

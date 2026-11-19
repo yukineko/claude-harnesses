@@ -384,6 +384,65 @@ Notes:
   deletes stay "unchanged". Where today's rule answers Deny (e.g. recursive `rm`
   of an unplaceable operand), the raise-only legacy layer keeps that Deny.
 
+## Deny-target table (Q3/Q4, backlog 7275b9d9)
+
+User rulings 2026-11-14 (Q3, Q4), design approved 2026-11-19. ONE table
+(`ast/judge/deny_targets.rs::TABLE`), wired as its own raise-only layer
+(`ast/mod.rs::deny_target_verdict`, folded in
+`readings.rs::detect_bash_every_reading` after `table_b_verdict`). It is
+matched ONLY against the path VALUES the evaluator resolved — never against
+the raw or a reconstructed command text:
+
+* the B.1 targets of every command with a B.1 row (resolved with
+  `eval::resolve_at`; a relative value is also joined to the session cwd
+  when no `cd` applies, and its spelling as written is matched too, since
+  every non-home row is `**/`-anchored);
+* the B.2 writing redirects (`>`, `>|`, `>>`, `&>`, `&>>`, `<>`, `>&path`).
+
+An S5 Python `Fs` effect reaches it through its shell spelling (`os.replace`
+→ `mv --`, `os.chmod` → `chmod MODE --`, `open(.., 'wb')` → `: >`); there is
+no second table.
+
+| Row | Patterns (component-anchored, case-insensitive) | Effects denied | Lifted inside a linked worktree checkout |
+|---|---|---|---|
+| Q3 home directory itself | `/Users/*`, `/home/*` | Delete (`rm`, `mv` source), Metadata, Link | no |
+| Q3 `.ssh` | `**/.ssh`, `**/.ssh/**` | every write effect | no |
+| Q3 `.gitconfig` | `**/.gitconfig` | every write effect | no |
+| Q4 `.githooks` | `**/.githooks`, `**/.githooks/**` | every write effect | yes |
+| Q4 gate scripts | `**/scripts/check-*.py` | every write effect | yes |
+| Q4 plugin hooks | `**/crates/*/hooks`, `**/crates/*/hooks/**` | every write effect | yes |
+| Q4 deployed plugin | `**/.claude/plugins/cache/**/{bin,hooks}` and below | every write effect | no |
+
+* "Every write effect" includes `chmod` / `chown` / `chgrp`. User ruling
+  2026-11-20 「書込み Deny・exec 付与は許可」: on the four Q4 rows a `chmod`
+  that ONLY adds exec bits — every word literal, no option but a lone `--`,
+  MODE `[ugoa]*+x` clauses (`+x`, `u+x`, `a+x`, `ug+x`) or octal `755` /
+  `775` — is not raised (today's verdict stands). Every other mode change
+  (`777`, `o+w`, `-x`, `000`, `-R …`, `+X`) on any row, and any `chmod` on a
+  Q3 row, is Deny (the legacy chmod arm denies only modes that remove read /
+  exec). Reads (`cat`, `<`, a `cp` source, `open(.., 'r')`) are never
+  matched.
+* Each target is matched as written (`//`, `/./`, leading `./`, trailing `/`
+  collapsed) and with `..` resolved lexically; a match in either counts.
+  `/tmp/sshx/f` and `/tmp/notscripts/check-x.txt` do not match (`*` never
+  crosses `/`).
+* No safe root, scratch / temp / cache root exempts a row. The only place a
+  row does not raise is the existing protected-path lift (user ruling
+  2026-10-03): the three repository-relative Q4 rows strictly inside a linked
+  worktree checkout (`SafeRoots::classify_worktree_checkout_value` Inside).
+* Verdict: a match → **Deny** (main and subagent). The table failing to load
+  while a write target exists, a B.1 target value that is `Undetermined`
+  with no match elsewhere (the same Ask Table B already gives it), or a
+  panic → Ask (main) / Deny (subagent). Otherwise the layer has no opinion
+  (`Allow`, folded `Deny > Ask > Allow`), so it never lowers another layer's
+  verdict.
+* Not judged by this layer (the legacy layers still judge them): an
+  `Undetermined` redirect target, an unmodelled wrapper (`sudo`,
+  `env`, …), `analyze` = `Undetermined`, a glob that might expand to a row
+  (`/x/.ss*`; matched as spelled), the symlink-resolved landing, and a
+  recursive delete of an ancestor of a row other than the row directories
+  themselves (`rm -rf <repo>/scripts`).
+
 ## Undetermined handling (raise-only legacy layer)
 
 1. `analyze(text)` = `Undetermined(cause)` or `judge(..)` = `Undetermined(cause)`

@@ -68,6 +68,11 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains(crate::detect::TABLE_B_UNRESOLVED) {
         return "ast-table-b-unresolved";
     }
+    // Backlog 7275b9d9: the Q3/Q4 deny-target table. Before the verb arms,
+    // whose words the reason embeds.
+    if reason.contains(crate::detect::DENY_TARGET) {
+        return "ast-deny-target";
+    }
     // Write handling.
     if reason.contains("overwrite git internals") {
         return "write-git-internals";
@@ -693,6 +698,8 @@ mod tests {
         for (command, want) in [
             ("cp -X a.txt b.txt", "ast-table-b-undetermined"),
             ("cp a.txt ~nosuchuser/x", "ast-table-b-unresolved"),
+            // Backlog 7275b9d9: the Q3/Q4 deny-target table.
+            ("chmod 777 /x/anydir/.ssh/id_rsa", "ast-deny-target"),
         ] {
             let reason = deny_reason("Bash", json!({ "command": command }));
             assert_eq!(

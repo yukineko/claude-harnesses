@@ -188,6 +188,43 @@ pub(crate) fn table_b_verdict(
     }
 }
 
+/// Phrase every deny-target Deny carries ([`crate::rule_id`] keys
+/// `ast-deny-target` on it).
+pub(crate) const DENY_TARGET: &str = judge::deny_targets::DENY_TARGET;
+
+/// The Q3/Q4 deny-target table (user rulings 2026-11-14, backlog 7275b9d9;
+/// `SUBSET.md` "Deny-target table") over the write targets of `command`
+/// that the evaluator resolved, as a [`Decision`](crate::model::Decision)
+/// the caller folds in raise-only (`Deny > Ask > Allow`):
+///
+/// * [`Analysis::Undetermined`] → `Allow` from this layer (no opinion; the
+///   other layers answer it, as for [`table_b_verdict`]);
+/// * a matched target → `Deny`;
+/// * the table cannot be loaded while a write target exists, a B.1 target
+///   value is `Undetermined` and no target matched (Table B asks about the
+///   same value), or the table judge panicked → `Ask` (main) / Deny
+///   (subagent);
+/// * otherwise `Allow` (no opinion).
+pub(crate) fn deny_target_verdict(
+    command: &str,
+    scope: &crate::scope::SafeRoots,
+) -> crate::model::Decision {
+    use crate::model::Decision;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    let Analysis::Known(script) = analyze(command) else {
+        return Decision::Allow;
+    };
+    catch_unwind(AssertUnwindSafe(|| {
+        judge::deny_targets::verdict(&script, scope)
+    }))
+    .unwrap_or_else(|_| {
+        Decision::ask(
+            "the deny-target table judge panicked on this command, so blastguard cannot tell \
+             whether it writes a protected path and asks rather than guess",
+        )
+    })
+}
+
 /// The result of [`analyze`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Analysis {

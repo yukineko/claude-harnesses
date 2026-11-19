@@ -2482,6 +2482,8 @@ notes = """Observed 2026-11-20 by an independent test author in run-20261120-071
 created_at = 1795127895
 updated_at = 1795127895
 weight = 0.0
+issue_number = 1879
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1879"
 rev = 0
 
 [task.repro]

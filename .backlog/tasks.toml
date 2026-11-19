@@ -2402,3 +2402,129 @@ test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 39 filtered out;
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
      Running tests/egress_exec_closure.rs (target/debug/deps/egress_exec_closure-ed08ca99f388ce70)
 error: test failed, to rerun pass `-p blastguard --test egress_exec_closure`"""
+
+[[task]]
+id = "8ec6de86"
+title = "blastguard fail-open: split brace-group feeder piped to bash inside if/for is Ask, not Deny (system harm)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-20 by an independent test author in run-20261120-071122-49691 task a-brace-group-feeder-piped-to-shell (worktree HEAD 0b906f524/0fdcf812c, blastguard 0.2.765/0.2.766) and also at 5cfe8e73e (fix reverted) — pre-existing. main mode: 'if true; then { printf 'rm -rf /e'; printf 'tc'; } | bash; fi' and the same inside a for loop are Ask: '`bash` takes its program from stdin, and that program is not on the command line — blastguard has no text to read, so it cannot tell whether anything here is irreversible'. Control: 'if true; then printf 'rm -rf /etc' | bash; fi' is Deny. System harm must be Deny through any spelling (user ruling 2026-11-07)."
+created_at = 1795127762
+updated_at = 1795127762
+weight = 0.0
+issue_number = 1878
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1878"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test brace_group_feeder_adversarial_20261120 -- --ignored finding2_preexisting_split_group_feeder_in_compound_is_deny"
+rev = "0fdcf812c6b2d18d806d29c2697881913908ad7c"
+observed_at = 1795127762
+detail = """
+exit 101: worktrees/run-20261120-071122-49691-a-brace-group-feeder-piped-to-shell/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.75s
+     Running tests/brace_group_feeder_adversarial_20261120.rs (target/debug/deps/brace_group_feeder_adversarial_20261120-edf8be8c032c3fc0)
+error: test failed, to rerun pass `-p blastguard --test brace_group_feeder_adversarial_20261120`"""
+
+[[task]]
+id = "e0288820"
+title = "blastguard fail-open: Ask-class program (git push --force) fed to bash by an echo/printf feeder is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-20 by an independent test author in run-20261120-071122-49691 task a-brace-group-feeder-piped-to-shell; pre-existing at 5cfe8e73e. 'git push --force' alone is Ask, but "echo 'git push --force' | bash" is allow () in main and subagent mode, before and after the 7eb86bb3 fix. The fix extends the same reading to "{ echo 'git push --force'; } | bash" and "{ printf 'git push '; echo --force; } | bash" (Allow at 0b906f524; not Allow at 5cfe8e73e). Readings: (a) fail-open — the stdin program should get the same verdict as the same text on the command line; (b) intended if the stdin-program judge only lifts Deny-class. Tell apart: compare against inline_eval mirror rules / the user ruling on stdin programs (S4)."""
+created_at = 1795127895
+updated_at = 1795127895
+weight = 0.0
+issue_number = 1879
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1879"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test brace_group_feeder_adversarial_20261120 -- --ignored finding3_preexisting_ask_class_program_through_feeder_is_not_allow"
+rev = "9ab9d7a5e9ba9787b4ac2bfddd3352edb480e922"
+observed_at = 1795127895
+detail = """
+exit 101: /worktrees/run-20261120-071122-49691-a-brace-group-feeder-piped-to-shell/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.68s
+     Running tests/brace_group_feeder_adversarial_20261120.rs (target/debug/deps/brace_group_feeder_adversarial_20261120-32fc257fff118929)
+error: test failed, to rerun pass `-p blastguard --test brace_group_feeder_adversarial_20261120`"""
+
+[[task]]
+id = "7d85ed1e"
+title = "blastguard FP: unquoted echo feeder piped to bash (echo a | bash) is Ask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-20 in run-20261120-071122-49691 task a-brace-group-feeder-piped-to-shell at 0b906f524 (and on main 5cfe8e73e): 'echo a | bash' and 'echo hi | bash' are ask: '`bash` takes its program from stdin, and that program is not on the command line — blastguard has no text to read, so it cannot tell whether anything here is irreversible'. Unquoted echo words are not read as literals, while quoted "echo 'echo hi' | bash" and (after the 7eb86bb3 fix) '{ echo a; echo b; } | bash' are Allow. Unknown programs default Allow (ruling 2026-11-17)."""
+created_at = 1795127934
+updated_at = 1795127934
+weight = 0.0
+issue_number = 1880
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1880"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp -- --include-ignored"
+rev = "dfd2fa9e67f85ea5ab6c579f94b017065ec8aad1"
+observed_at = 1795127934
+detail = """
+exit 101: group-feeder-piped-to-shell/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.93s
+     Running tests/backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp.rs (target/debug/deps/backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp-71b6ff5cfd040988)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp`"""
+
+[[task]]
+id = "606a93ab"
+title = "blastguard allows git discard into another session's dirty linked worktree"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "User ruling 2026-11-20, fail-open. Hard reset, checkout of the whole tree, restore of a path or of the whole tree, and clean with force and directories, aimed at a linked worktree that does NOT hold the session cwd, are Allow in both modes even when that worktree has a modified tracked file (or an untracked file for clean). Both the -C spelling and the cd-then-git spelling, from a main-tree cwd and from the session's own worktree: 20 of 20 cells Allow. Measurer's cause: managed_worktree_git in detect/git.rs accepts any linked worktree under the storage root, not only the one holding the session cwd. Ruling: dirty other worktree gives Ask in main and Deny in subagent; own worktree keeps today's verdict; clean other worktree pinned as measured (Allow). Controls are in the same test file. When fixed, re-anchor the OtherWorktree column of the dirty git rows and the protected restore row in the S6 Table C characterization file."
+created_at = 1795128557
+updated_at = 1795128557
+weight = 0.0
+issue_number = 1881
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1881"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test otherwt_git_discard_20261120 -- --ignored"
+rev = "b240d59be2e171aec308670350f6322c766af97b"
+observed_at = 1795128557
+detail = """
+exit 101: d out; finished in 1.33s
+
+   Compiling blastguard v0.2.767 (/Users/yuki/src/.harness-worktrees/bg-owt-git/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.38s
+     Running tests/otherwt_git_discard_20261120.rs (target/debug/deps/otherwt_git_discard_20261120-59bf5534d88c20ad)
+error: test failed, to rerun pass `-p blastguard --test otherwt_git_discard_20261120`"""

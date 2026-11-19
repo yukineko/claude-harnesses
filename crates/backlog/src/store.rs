@@ -1481,10 +1481,12 @@ pub fn next_excluding(
 ///   - terminal rows are never reported claimed, whatever the ledger still
 ///     remembers.
 ///
-/// Display-only: exclusion is NOT decided here. Nothing releases a lease, so a
-/// failed row whose claimant just failed it stays excluded from `next` /
-/// `next --claim` until the lease ages out ([`CLAIM_STALE_SECS`] after its
-/// holder was last seen alive). The
+/// Display-only: exclusion is NOT decided here. Nothing but `backlog unclaim`
+/// (by the holder session, `claim_ledger::release_lease`) releases a lease —
+/// `done` / `fail` / `cancel` do not — so a failed row whose claimant just
+/// failed it stays excluded from `next` / `next --claim` until the lease ages
+/// out ([`CLAIM_STALE_SECS`] after its holder was last seen alive) or its
+/// holder runs `unclaim`. The
 /// result must never be saved.
 pub fn derive_claimed(tasks: &mut [Task], leases: &std::collections::HashMap<String, i64>) {
     for t in tasks.iter_mut() {

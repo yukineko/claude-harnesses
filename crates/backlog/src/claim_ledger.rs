@@ -662,6 +662,85 @@ pub(crate) fn refresh_leases(
     }
 }
 
+/// Why [`release_lease`] did not release anything. Every variant is a REFUSAL:
+/// the ledger was left byte-identical and the caller must exit non-zero.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReleaseRefusal {
+    /// No entry for the id is live (never claimed, or already aged out).
+    NoLiveLease,
+    /// The live lease is held by a different session (named).
+    OtherSession(String),
+    /// The live lease carries no session id: its holder cannot be determined.
+    NoSessionId,
+    /// The ledger could not be stat'ed / locked / read / parsed / written.
+    Ledger(String),
+}
+
+/// Release the LIVE lease on `id` held by `session_id` in `identity`'s
+/// project-wide ledger (`backlog unclaim`). Only the holder session may
+/// release; the tracked store is never touched, so the task is immediately
+/// claimable again by any checkout. This is the ONLY path that releases a
+/// lease (`done` / `fail` / `cancel` / `edit` do not — see
+/// `tests/claim_lease_release.rs`).
+///
+/// Every live entry for `id` must be held by `session_id`; one held by another
+/// session, or one with no session id (holder undeterminable), refuses the
+/// whole release and leaves the ledger untouched (CLAUDE.md §3). Stale entries
+/// for `id` are kept as history and are not considered.
+pub(crate) fn release_lease(
+    identity: &str,
+    id: &str,
+    session_id: &str,
+    override_dir: Option<&Path>,
+) -> std::result::Result<(), ReleaseRefusal> {
+    let dir = claims_dir(override_dir);
+    let path = ledger_path(&dir, identity);
+    match std::fs::symlink_metadata(&path) {
+        // No checkout of this project ever claimed: there is no lease at all.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(ReleaseRefusal::NoLiveLease)
+        }
+        Err(e) => {
+            return Err(ReleaseRefusal::Ledger(format!(
+                "could not stat the project-wide claim ledger {} ({e})",
+                path.display()
+            )))
+        }
+        Ok(_) => {}
+    }
+    let _guard = match acquire_ledger_lock(&ledger_lock_path(&dir, identity)) {
+        Determination::Known(g) => g,
+        Determination::Undetermined(why) => {
+            return Err(ReleaseRefusal::Ledger(why.as_str().to_string()))
+        }
+    };
+    let mut ledger = match read_ledger(&path) {
+        Determination::Known(l) => l,
+        Determination::Undetermined(why) => {
+            return Err(ReleaseRefusal::Ledger(why.as_str().to_string()))
+        }
+    };
+    let now = now_unix();
+    let mut any_live = false;
+    for e in ledger
+        .entries
+        .iter()
+        .filter(|e| e.id == id && is_live(e, now))
+    {
+        any_live = true;
+        match e.session_id.as_deref().filter(|s| !s.trim().is_empty()) {
+            None => return Err(ReleaseRefusal::NoSessionId),
+            Some(s) if s != session_id => return Err(ReleaseRefusal::OtherSession(s.to_string())),
+            Some(_) => {}
+        }
+    }
+    if !any_live {
+        return Err(ReleaseRefusal::NoLiveLease);
+    }
+    ledger.entries.retain(|e| !(e.id == id && is_live(e, now)));
+    write_ledger(&path, &ledger).map_err(ReleaseRefusal::Ledger)
+}
+
 /// Test-only: backdate every entry of `identity`'s ledger to `claimed_at`, so
 /// a test can make its leases stale without sleeping for an hour.
 #[cfg(test)]

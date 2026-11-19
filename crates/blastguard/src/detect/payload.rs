@@ -16,10 +16,13 @@ mod node_source;
 mod procsub_split;
 mod program_source;
 mod program_word;
+mod stdin_operand;
 #[cfg(test)]
 mod word_boundary_tests;
 
 pub(super) use program_word::inline_eval_program_word;
+pub(super) use stdin_operand::interpreter_stdin_operand;
+use stdin_operand::stage_stdin_operand;
 
 use echo_output::{plain_echo_output, quote_bare_echo_words};
 use exec_fds::{exec_opened_fds, ExecFd};
@@ -425,7 +428,7 @@ tell whether the interpreter runs that stdin or a script file",
                 stage_has_program_operand(rest)
             };
             let takes_stdin_program = source_reader
-                || interpreter_stdin_operand(rest).is_some()
+                || stage_stdin_operand(&tokens, idx).is_some()
                 || (!has_program_file && (i > 0 || heredoc_open));
             if !takes_stdin_program {
                 continue;
@@ -1488,17 +1491,6 @@ proves nothing about what it does"
     // to run a here-string blastguard could not clear, so it carries
     // `RECOMMEND_NO`. A Deny returned above is unaffected.
     recommend_against(acc.finish())
-}
-
-pub(super) fn interpreter_stdin_operand<'a>(rest: &[&'a str]) -> Option<&'a str> {
-    rest.iter()
-        .find(|t| {
-            matches!(
-                **t,
-                "-" | "/dev/stdin" | "/dev/fd/0" | "/proc/self/fd/0" | "/dev/tty"
-            )
-        })
-        .copied()
 }
 
 /// Strip one layer of matching surrounding quotes from a reconstructed

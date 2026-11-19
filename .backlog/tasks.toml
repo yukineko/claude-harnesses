@@ -2434,3 +2434,32 @@ test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 39 filtered out;
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
      Running tests/egress_exec_closure.rs (target/debug/deps/egress_exec_closure-ed08ca99f388ce70)
 error: test failed, to rerun pass `-p blastguard --test egress_exec_closure`"""
+
+[[task]]
+id = "8ec6de86"
+title = "blastguard fail-open: split brace-group feeder piped to bash inside if/for is Ask, not Deny (system harm)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-20 by an independent test author in run-20261120-071122-49691 task a-brace-group-feeder-piped-to-shell (worktree HEAD 0b906f524/0fdcf812c, blastguard 0.2.765/0.2.766) and also at 5cfe8e73e (fix reverted) — pre-existing. main mode: 'if true; then { printf 'rm -rf /e'; printf 'tc'; } | bash; fi' and the same inside a for loop are Ask: '`bash` takes its program from stdin, and that program is not on the command line — blastguard has no text to read, so it cannot tell whether anything here is irreversible'. Control: 'if true; then printf 'rm -rf /etc' | bash; fi' is Deny. System harm must be Deny through any spelling (user ruling 2026-11-07)."
+created_at = 1795127762
+updated_at = 1795127762
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test brace_group_feeder_adversarial_20261120 -- --ignored finding2_preexisting_split_group_feeder_in_compound_is_deny"
+rev = "0fdcf812c6b2d18d806d29c2697881913908ad7c"
+observed_at = 1795127762
+detail = """
+exit 101: worktrees/run-20261120-071122-49691-a-brace-group-feeder-piped-to-shell/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.75s
+     Running tests/brace_group_feeder_adversarial_20261120.rs (target/debug/deps/brace_group_feeder_adversarial_20261120-edf8be8c032c3fc0)
+error: test failed, to rerun pass `-p blastguard --test brace_group_feeder_adversarial_20261120`"""

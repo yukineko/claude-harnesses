@@ -14,6 +14,10 @@
 # * `session-start` / `prompt`: exit 0 (the session/prompt goes through) with a
 #   JSON systemMessage + additionalContext saying language injection did NOT
 #   run — silence would read as "nothing to inject".
+# * `ask` (PreToolUse on AskUserQuestion): the question-language check did
+#   NOT run — "cannot determine" — so the call is DENIED with a reason saying
+#   so (CLAUDE.md §3). A deny does not trap the session: the model can still
+#   ask in plain text, and `answerlang` can be disabled in enabledPlugins.
 # * anything else: exit 1.
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
@@ -50,6 +54,13 @@ case "${1:-}" in
       msg="answerlang: the answer-language check did NOT run (no bundled binary for $os-$arch), so this stop is blocked once. Stop again to continue without the check. $fix"
       printf '{"decision":"block","reason":"%s"}\n' "$msg"
     fi
+    exit 0
+    ;;
+  ask)
+    cat >/dev/null
+    echo "answerlang: no bundled binary for $os-$arch ($binary); the question-language check did NOT run. $fix" >&2
+    msg="answerlang: the AskUserQuestion language check did NOT run (no bundled binary for $os-$arch), so this AskUserQuestion is denied. $fix"
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$msg"
     exit 0
     ;;
   session-start|prompt)

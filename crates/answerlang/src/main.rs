@@ -4,12 +4,15 @@
 //!   `additionalContext`;
 //! * layer 3 (`stop`): block a Stop whose final answer is written in another
 //!   script (bounded re-entry; panics fail closed via `run_guarded`);
+//! * `ask` (PreToolUse on AskUserQuestion): deny a question whose prose is
+//!   not in the target language (fail-closed on an undeterminable payload);
 //! * `set` / `show`: manage `~/.answerlang/config.toml`.
 //!
 //! Layer 1 (Claude Code's own settings.json `"language"` key) is not part of
 //! this crate. See README.md for the full contract.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod ask;
 mod cli;
 mod config;
 mod detect;
@@ -19,7 +22,7 @@ mod measure;
 mod state;
 mod transcript;
 
-const USAGE: &str = "usage: answerlang <session-start|prompt|stop|set|show>\n  set [--language <name|tag|auto>] [--inject on|off] [--enforce on|off] [--enabled on|off]\n  show";
+const USAGE: &str = "usage: answerlang <session-start|prompt|stop|ask|set|show>\n  set [--language <name|tag|auto>] [--inject on|off] [--enforce on|off] [--enabled on|off]\n  show";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -27,6 +30,7 @@ fn main() {
         Some("session-start") => hooks::inject(hooks::InjectEvent::SessionStart),
         Some("prompt") => hooks::inject(hooks::InjectEvent::UserPromptSubmit),
         Some("stop") => hooks::stop(),
+        Some("ask") => ask::ask(),
         Some("set") => cli::set(&args[1..]),
         Some("show") => cli::show(),
         Some("--version") | Some("version") => {

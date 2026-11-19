@@ -2378,6 +2378,8 @@ notes = "Observed at e56699977 (blastguard 0.2.751), hermetic HOME. The cwd trac
 created_at = 1795107986
 updated_at = 1795107986
 weight = 0.0
+issue_number = 1870
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1870"
 rev = 0
 
 [task.repro]

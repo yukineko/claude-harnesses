@@ -52,13 +52,36 @@
 //! * the neutral text does not analyse to the same commands with `pass` as
 //!   the program.
 //!
+//! # `bash -c` / `sh -c` (user ruling 2026-11-19, S5b c)
+//!
+//! The literal script of a plain `bash -c SCRIPT` / `sh -c SCRIPT` (after the
+//! wrappers `b5` unwraps; `sudo` excluded) is run through [`prepare`] itself,
+//! so the Python programs in it are judged exactly as if written directly;
+//! the script word is then replaced by the script's neutral text, quoted
+//! ([`shell_c_script`] lists the shapes read; any other shape keeps the
+//! legacy readings only).
+//!
+//! # Import shadowing (user ruling 2026-11-19, S5b a)
+//!
+//! A program that imports `M` while the directory it runs in holds `M.py`,
+//! `M/`, or a compiled `M` is Undetermined; so is one whose directory cannot
+//! be listed or is not known ([`shadowed_import`]).
+//!
+//! User ruling 2026-11-20 (S5c): so is one for which a command run before it
+//! on the same line (or its own output redirect) may write such an entry into
+//! that directory, and one for which such a command's write target cannot be
+//! placed ([`same_line_shadow`]; modelled writes only: output redirects, the
+//! creating Table B B.1 targets, `mkdir`, `touch`).
+//!
 //! # Known gaps
 //!
-//! A here-string / piped literal program is analysed but not retired; Python
-//! nested in `bash -c '…'` is judged by the legacy readings only; wrappers
-//! other than the ones `b5` unwraps (`sudo`, `xargs`, …) get no S5 opinion;
-//! a standard-library module shadowed by a file in the working directory
-//! (`-c` puts the cwd first on `sys.path`) is not detected.
+//! A here-string / piped literal program is analysed but not retired;
+//! wrappers other than the ones `b5` unwraps (`sudo`, `xargs`, …) get no S5
+//! opinion; a `bash -c` outside [`shell_c_script`]'s shapes gets none either;
+//! a module imported by an imported module is not detected; a shadowing entry
+//! written on the same line by a program with no effect model (`git
+//! checkout`, `tar`, `curl -o`, …), or outside a `bash -c` whose script runs
+//! the program, is not detected.
 
 use std::cell::Cell;
 use std::ops::Range;
@@ -147,6 +170,22 @@ pub(crate) fn prepare(text: &str, judge: &dyn Fn(&str) -> Decision) -> Prepared 
     let mut deny: Option<Decision> = None;
     let mut edits: Vec<Edit> = Vec::new();
     for (idx, cmd) in commands.iter().enumerate() {
+        // User ruling 2026-11-19 (S5b c): the script of `bash -c` / `sh -c`
+        // is judged by this stage as if it were written directly.
+        match shell_c_script(commands, cmd) {
+            ShellCRead::Script(sc) => {
+                let (verdict, edit) = judge_shell_c(commands, idx, cmd, &sc, judge);
+                if let Some(d) = acc.record(verdict) {
+                    deny.get_or_insert(d);
+                }
+                edits.extend(edit);
+                continue;
+            }
+            // Explicit: not read by S5, not retired; the legacy readings and
+            // S4 keep judging the original text (raise-only).
+            ShellCRead::LeftToLegacy(_) => continue,
+            ShellCRead::NotShellC => {}
+        }
         let Some(found) = python_program(text, commands, idx, cmd) else {
             continue;
         };
@@ -161,7 +200,7 @@ pub(crate) fn prepare(text: &str, judge: &dyn Fn(&str) -> Decision) -> Prepared 
             Found::LeftToS4 => continue,
             Found::Program(p) => p,
         };
-        let (verdict, known_effects) = judge_program(&program, commands, cmd, judge);
+        let (verdict, known_effects) = judge_program(&program, text, commands, idx, judge);
         if let Some(d) = acc.record(verdict) {
             deny.get_or_insert(d);
         }
@@ -434,10 +473,17 @@ fn heredoc_site(cmd: &SimpleCommand, body: &str) -> Option<Site> {
 /// whether it has any effect.
 fn judge_program(
     p: &Program,
+    text: &str,
     commands: &[SimpleCommand],
-    cmd: &SimpleCommand,
+    idx: usize,
     judge: &dyn Fn(&str) -> Decision,
 ) -> (Decision, Option<bool>) {
+    let Some(cmd) = commands.get(idx) else {
+        return (
+            undetermined("the command running the Python program is not on the line"),
+            None,
+        );
+    };
     if b5::sets_injecting_var(commands) {
         return (
             undetermined(
@@ -454,6 +500,9 @@ fn judge_program(
             return (verdict, None);
         }
     };
+    if let Some(why) = shadowed_import(p, text, commands, idx, cmd) {
+        return (undetermined(why), None);
+    }
     let runs = effects.iter().any(progeffect::Effect::runs_program);
     if runs && effects.iter().any(progeffect::Effect::writes_file) {
         return (
@@ -536,26 +585,576 @@ fn judge_program(
     (acc.finish(), (!keep_legacy).then_some(!effects.is_empty()))
 }
 
+/// Why the program may run a module other than the one it names (user
+/// ruling 2026-11-19, S5b a), or `None` when no import can be shadowed.
+///
+/// `python -c` and a program on stdin put the directory the interpreter runs
+/// in first on `sys.path`, so an entry of that directory named after a module
+/// the program imports — `M.py`, a package directory `M/`, or a compiled
+/// module `M.pyc` / `M.*.so` / `M.pyd` — is loaded instead of the standard
+/// library module. Any such entry (compared ignoring ASCII case, the
+/// restrictive side on a case-insensitive file system) is Undetermined. So is
+/// a directory this stage cannot list (an IO error, the hook's cwd unknown,
+/// a cwd the text does not determine). A directory that does not exist holds
+/// nothing that can shadow (`read_dir_entries_checked` → `Known(None)`).
+///
+/// An entry another command of the same line may create before Python runs
+/// is read by [`same_line_shadow`] (user ruling 2026-11-20, S5c).
+///
+/// NOT covered: the modules an imported module imports in turn, `.pth` /
+/// `PYTHONPATH` / site-packages entries.
+fn shadowed_import(
+    p: &Program,
+    text: &str,
+    commands: &[SimpleCommand],
+    idx: usize,
+    cmd: &SimpleCommand,
+) -> Option<String> {
+    let modules = match progeffect::python::imported_modules(&p.source) {
+        Ok(m) => m,
+        Err(why) => {
+            return Some(format!(
+                "the Python program's imports cannot be read: {why}"
+            ))
+        }
+    };
+    if modules.is_empty() {
+        return None;
+    }
+    let shown = modules
+        .iter()
+        .map(|m| format!("`{m}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let dirs = match program_dirs(cmd) {
+        Ok(d) => d,
+        Err(why) => {
+            return Some(format!(
+                "the Python program imports {shown}, which a file of the directory it runs in \
+                 would replace, and {why}"
+            ))
+        }
+    };
+    for dir in &dirs {
+        let entries =
+            match harness_core::boundary::read_dir_entries_checked(std::path::Path::new(&dir)) {
+                harness_core::verdict::Determination::Known(Some(e)) => e,
+                harness_core::verdict::Determination::Known(None) => continue,
+                harness_core::verdict::Determination::Undetermined(why) => {
+                    return Some(format!(
+                        "the Python program imports {shown}, and the directory it runs in \
+                         (`{dir}`) cannot be listed for a file that would replace one of them: {}",
+                        why.as_str()
+                    ))
+                }
+            };
+        for entry in &entries {
+            let Some(name) = entry.file_name() else {
+                continue;
+            };
+            let name = name.to_string_lossy();
+            if let Some(m) = modules.iter().find(|m| shadows(&name, m)) {
+                return Some(format!(
+                    "`{dir}/{name}` would be imported instead of the module `{m}` the Python \
+                     program imports (the directory it runs in is first on `sys.path`)"
+                ));
+            }
+        }
+    }
+    let line = Line {
+        text,
+        commands,
+        idx,
+        cmd,
+    };
+    same_line_shadow(&line, &modules, &dirs, &shown)
+}
+
+/// The program's command (`commands[idx]`) on its analysed line.
+struct Line<'a> {
+    text: &'a str,
+    commands: &'a [SimpleCommand],
+    idx: usize,
+    cmd: &'a SimpleCommand,
+}
+
+/// User ruling 2026-11-20 (S5c): another command of the same line that runs
+/// before the program (or the program's own redirects, which the shell opens
+/// first) may create, in a directory the program runs in (`dirs`), an entry
+/// that shadows one of `modules` — `M.py`, `M/`, a compiled `M` ([`shadows`]),
+/// or anything deeper under such a name. Returns why the program is then
+/// Undetermined, or `None`.
+///
+/// The writes read are the modelled ones only, through the existing target
+/// extraction: the output redirects (Table B B.2, `RedirTarget::Path`, already
+/// resolved against the command's cwd) and the creating targets of the B.1
+/// rows plus `mkdir` / `touch` (`judge::entry_writes`), after the `b5`
+/// wrappers, resolved by `eval::resolve_at`. Undetermined (never Allow): a
+/// write target that cannot be placed (an undetermined value, a relative path
+/// after an undetermined `cd`, a relative path when the hook's cwd is not
+/// known), a modelled command with an unmodelled option, a wrapper that
+/// cannot be unwrapped, and a write to a program directory itself (its new
+/// entry's name — `cp x .` — is not read here). A target is compared with a
+/// program directory both as spelled and through the real path of its
+/// longest existing ancestor; directory prefixes are compared ignoring ASCII
+/// case (the restrictive side on a case-insensitive file system), and a real
+/// path that cannot be read is Undetermined.
+///
+/// Which commands run before the program: those that start before it ends in
+/// the text, unless the program is not top-level (a pipeline stage, a
+/// substitution, a subshell, background) or the line has a loop or a function
+/// (`b5::has_loop_or_function`) — then every command of the line.
+///
+/// NOT covered (no effect model, as in the S3b judge): unknown programs
+/// (`git checkout`, `tar`, `curl -o`, …), `xargs` wrapping `mkdir` / `touch`,
+/// a `sed -i` backup suffix, and — for a program inside `bash -c` — the
+/// commands of the outer line.
+fn same_line_shadow(
+    line: &Line,
+    modules: &[String],
+    dirs: &[String],
+    shown: &str,
+) -> Option<String> {
+    let Line {
+        text,
+        commands,
+        idx,
+        cmd,
+    } = *line;
+    let every = cmd.context != Context::TopLevel || b5::has_loop_or_function(text);
+    let mut targets: Vec<Value> = Vec::new();
+    for (j, c) in commands.iter().enumerate() {
+        if !(j == idx || every || c.span.start < cmd.span.end) {
+            continue;
+        }
+        targets.extend(c.redirects.iter().filter_map(|r| {
+            let writes = matches!(
+                r.op,
+                RedirOp::Out
+                    | RedirOp::Append
+                    | RedirOp::Clobber
+                    | RedirOp::InOut
+                    | RedirOp::DupOut
+                    | RedirOp::OutErr
+                    | RedirOp::AppendOutErr
+            );
+            match &r.target {
+                RedirTarget::Path(v) if writes => Some(v.clone()),
+                // Not a file this redirect opens (a process substitution's
+                // commands are commands of the line, read in this loop).
+                RedirTarget::Path(_)
+                | RedirTarget::Fd(_)
+                | RedirTarget::HereDoc(_)
+                | RedirTarget::HereString(_)
+                | RedirTarget::ProcessSubstitution => None,
+            }
+        }));
+        if j == idx {
+            // The program's own argv is the Python run, read by S5 itself.
+            continue;
+        }
+        match command_entry_writes(c) {
+            Ok(t) => targets.extend(t),
+            Err(why) => {
+                return Some(format!(
+                    "the Python program imports {shown}, and a command before it on the line may \
+                     write a file that replaces one of them: {why}"
+                ))
+            }
+        }
+    }
+    let dir_spellings = match dirs
+        .iter()
+        .map(|d| real_spellings(d).map(|s| (d, s)))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(d) => d,
+        Err(why) => {
+            return Some(format!(
+                "the Python program imports {shown}, and the directory it runs in cannot be \
+                 compared with what a command before it on the line writes: {why}"
+            ))
+        }
+    };
+    for t in targets {
+        let placed = match place(t) {
+            Ok(p) => p,
+            Err(why) => {
+                return Some(format!(
+                    "the Python program imports {shown}, and a command before it on the line \
+                     writes a target that cannot be placed ({why}), which may be a file that \
+                     replaces one of them"
+                ))
+            }
+        };
+        let target_spellings = match real_spellings(&placed) {
+            Ok(s) => s,
+            Err(why) => {
+                return Some(format!(
+                    "the Python program imports {shown}, and `{placed}`, which a command before \
+                     it on the line writes, cannot be compared with the directory it runs in: \
+                     {why}"
+                ))
+            }
+        };
+        for (dir, ds) in &dir_spellings {
+            for d in ds {
+                for t in &target_spellings {
+                    match entry_under(t, d) {
+                        EntryUnder::Outside => {}
+                        EntryUnder::TheDir => {
+                            return Some(format!(
+                                "the Python program imports {shown}, and a command before it on \
+                                 the line writes into the directory it runs in (`{dir}`, as \
+                                 `{placed}`) an entry whose name is not read here, which may \
+                                 replace one of them"
+                            ))
+                        }
+                        EntryUnder::Entry(name) => {
+                            if let Some(m) = modules.iter().find(|m| shadows(&name, m)) {
+                                return Some(format!(
+                                    "`{placed}`, which a command before the Python program on \
+                                     the line may write, would make `{dir}/{name}` be imported \
+                                     instead of the module `{m}` the program imports (the \
+                                     directory it runs in is first on `sys.path`)"
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The creating targets of `c`'s argv (`judge::entry_writes`, after the
+/// `b5` wrappers), resolved against its cwd; `Err` when they are not
+/// determined. A command without a model has none (S3b's contract).
+fn command_entry_writes(c: &SimpleCommand) -> Result<Vec<Value>, String> {
+    let mut k = 0;
+    loop {
+        match b5::unwrap_at(&c.argv, k) {
+            Unwrapped::NotWrapper => break,
+            Unwrapped::Nothing => return Ok(Vec::new()),
+            Unwrapped::Undetermined(why) => {
+                return Err(format!("a wrapper cannot be unwrapped ({why})"))
+            }
+            Unwrapped::At(next) => k = next,
+        }
+    }
+    let inner = SimpleCommand {
+        argv: c.argv.get(k..).unwrap_or(&[]).to_vec(),
+        ..c.clone()
+    };
+    match super::judge::entry_writes(&inner) {
+        super::judge::EntryWrites::NoModel => Ok(Vec::new()),
+        super::judge::EntryWrites::Undetermined(why) => Err(why),
+        super::judge::EntryWrites::Targets(t) => Ok(t
+            .into_iter()
+            .map(|(_, v)| super::eval::resolve_at(&c.cwd, v))
+            .collect()),
+    }
+}
+
+/// `v` (a resolved target) as an absolute path: a relative literal is under
+/// the hook's cwd (`..` taken on the real path, `eval::resolve_at`).
+fn place(v: Value) -> Result<String, String> {
+    let p = match v {
+        Value::Literal(p) => p,
+        Value::Undetermined(why) => return Err(why),
+    };
+    if p.starts_with('/') {
+        return super::support::normalise_abs(&p)
+            .ok_or_else(|| format!("`{p}` has a `..` component"));
+    }
+    let Some(hook) = super::eval::hook_dir() else {
+        return Err(format!(
+            "relative path `{p}` and the hook's cwd (the directory it runs in) is not known"
+        ));
+    };
+    match super::eval::resolve_at(&Value::Literal(hook), Value::Literal(p)) {
+        Value::Literal(abs) => Ok(abs),
+        Value::Undetermined(why) => Err(why),
+    }
+}
+
+/// `p` as spelled and through the real path of its longest existing ancestor
+/// (the rest joined lexically); `Err` when an existing ancestor's real path
+/// cannot be read.
+fn real_spellings(p: &str) -> Result<Vec<String>, String> {
+    let path = std::path::Path::new(p);
+    let mut rest: Vec<&std::ffi::OsStr> = Vec::new();
+    let mut at = Some(path);
+    while let Some(a) = at {
+        match std::fs::symlink_metadata(a) {
+            Ok(_) => {
+                let mut real = match std::fs::canonicalize(a) {
+                    Ok(r) => r,
+                    Err(e) => return Err(format!("the real path of `{}`: {e}", a.display())),
+                };
+                real.extend(rest.iter().rev());
+                let Some(real) = real.to_str() else {
+                    return Err(format!("the real path of `{p}` is not UTF-8"));
+                };
+                return Ok(vec![p.to_string(), real.to_string()]);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if let Some(name) = a.file_name() {
+                    rest.push(name);
+                }
+                at = a.parent();
+            }
+            Err(e) => return Err(format!("`{}` cannot be read: {e}", a.display())),
+        }
+    }
+    Err(format!("no ancestor of `{p}` exists"))
+}
+
+/// Where `target` lies relative to the directory `dir` (both absolute,
+/// normalised).
+enum EntryUnder {
+    Outside,
+    /// `target` is `dir` itself.
+    TheDir,
+    /// `target` is the entry `name` of `dir`, or lies under it.
+    Entry(String),
+}
+
+/// See [`EntryUnder`]; the prefix is compared ignoring ASCII case.
+fn entry_under(target: &str, dir: &str) -> EntryUnder {
+    let t = target.trim_end_matches('/');
+    let d = dir.trim_end_matches('/');
+    let (tl, dl) = (t.to_ascii_lowercase(), d.to_ascii_lowercase());
+    if tl == dl {
+        return EntryUnder::TheDir;
+    }
+    let Some(rest) = tl
+        .strip_prefix(&dl)
+        .filter(|r| r.starts_with('/') || dl.is_empty())
+    else {
+        return EntryUnder::Outside;
+    };
+    // `rest` is lowercased; take the same byte range of the original.
+    let start = t.len() - rest.len();
+    let name = t
+        .get(start..)
+        .unwrap_or(rest)
+        .trim_start_matches('/')
+        .split('/')
+        .next()
+        .unwrap_or("");
+    if name.is_empty() {
+        EntryUnder::TheDir
+    } else {
+        EntryUnder::Entry(name.to_string())
+    }
+}
+
+/// The directory entry `name` is importable as the module `m`.
+fn shadows(name: &str, m: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let m = m.to_ascii_lowercase();
+    if name == m {
+        return true;
+    }
+    name.strip_prefix(&m).is_some_and(|rest| {
+        rest.starts_with('.')
+            && [".py", ".pyc", ".pyw", ".so", ".pyd"]
+                .iter()
+                .any(|ext| rest.ends_with(ext))
+    })
+}
+
+/// Every directory `cmd` may run in, or why that is not determined.
+fn program_dirs(cmd: &SimpleCommand) -> Result<Vec<String>, String> {
+    let hook = || {
+        super::eval::hook_dir()
+            .ok_or_else(|| "the hook's cwd (the directory it runs in) is not known".to_string())
+    };
+    match (&cmd.cwd_candidates, &cmd.cwd) {
+        (CwdCandidates::One, Value::Literal(d)) => Ok(vec![d.clone()]),
+        (CwdCandidates::One, Value::Undetermined(r)) if r == super::eval::HOOK_CWD => {
+            Ok(vec![hook()?])
+        }
+        (CwdCandidates::OneOf(cands), _) => cands
+            .iter()
+            .map(|c| match c {
+                Some(d) => Ok(d.clone()),
+                None => hook(),
+            })
+            .collect(),
+        (CwdCandidates::One, Value::Undetermined(r)) | (CwdCandidates::Undetermined(r), _) => {
+            Err(format!("the directory it runs in is not determined ({r})"))
+        }
+    }
+}
+
+/// A `bash -c SCRIPT` / `sh -c SCRIPT` whose script S5 judges as if it were
+/// written directly (user ruling 2026-11-19, S5b c).
+struct ShellC {
+    /// The script.
+    script: String,
+    /// Where the script word sits in the text.
+    span: Range<usize>,
+    /// The words after the wrappers (`argv[k]` is the shell).
+    k: usize,
+    /// `cd 'DIR' && { ` when the shell runs in a literal directory (the script
+    /// is judged inside that group), else empty (the hook's cwd).
+    prefix: String,
+}
+
+/// Commands that change what a child shell inherits (its environment, or
+/// what its words expand to) in a way the script's own analysis cannot see.
+const ENV_CHANGERS: &[&str] = &[
+    "export", "declare", "typeset", "local", "readonly", "env", "unset", "source", ".", "eval",
+    "alias", "enable", "shopt", "set",
+];
+
+/// The `bash -c` / `sh -c` S5 reads as its script, if `cmd` is one.
+///
+/// Only the plain shape is read: optional unwrapped wrappers (`b5`: `env`,
+/// `timeout`, `nice`, `nohup`, …; not `sudo`), the shell `bash` / `sh` bare or
+/// in a system bin directory, then exactly `-c SCRIPT` with a literal script
+/// (no `$0` / positional words, no other option), nothing feeding its stdin,
+/// a cwd that is the hook's or one literal directory, and a line on which no
+/// command assigns a variable or runs an [`ENV_CHANGERS`] word (the script is
+/// analysed on its own, so a variable the line hands it would be misread —
+/// `HOME`, the one variable taken from outside the text, included). Any other
+/// shape is [`ShellCRead::LeftToLegacy`]: no S5 opinion here, the legacy
+/// readings (and S4) judge it as before — which only over-restricts, since
+/// nothing is retired.
+fn shell_c_script(commands: &[SimpleCommand], cmd: &SimpleCommand) -> ShellCRead {
+    use ShellCRead::{LeftToLegacy, NotShellC};
+    let mut k = 0;
+    loop {
+        match b5::unwrap_at(&cmd.argv, k) {
+            Unwrapped::NotWrapper => break,
+            // A wrapper that runs nothing runs no shell.
+            Unwrapped::Nothing => return NotShellC,
+            Unwrapped::Undetermined(why) => return LeftToLegacy(why),
+            Unwrapped::At(next) => k = next,
+        }
+    }
+    let name = match cmd.argv.get(k).map(b5::literal) {
+        None => return NotShellC,
+        Some(Err(why)) => return LeftToLegacy(format!("the command word is undetermined ({why})")),
+        Some(Ok(name)) => name,
+    };
+    if name.contains('/') && !b5::dirname(name).is_some_and(|d| b5::SYSTEM_BIN_DIRS.contains(&d)) {
+        return NotShellC;
+    }
+    if !matches!(b5::basename(name), "bash" | "sh") {
+        return NotShellC;
+    }
+    let Some([flag, script]) = cmd.argv.get(k + 1..) else {
+        return LeftToLegacy("not exactly `-c SCRIPT`".into());
+    };
+    match b5::literal(flag) {
+        Ok("-c") => {}
+        Ok(_) => return LeftToLegacy("not exactly `-c SCRIPT`".into()),
+        Err(why) => return LeftToLegacy(format!("an option is undetermined ({why})")),
+    }
+    let text = match b5::literal(script) {
+        Ok(t) => t,
+        Err(why) => return LeftToLegacy(format!("the script is undetermined ({why})")),
+    };
+    if cmd.stdin != StdinSource::Inherited {
+        return LeftToLegacy("the shell's stdin is fed".into());
+    }
+    let untouched = commands.iter().all(|c| {
+        c.assignments.is_empty()
+            && c.argv.iter().all(|w| match b5::literal(w) {
+                Ok(s) => !ENV_CHANGERS.contains(&b5::basename(s)),
+                Err(_) => false,
+            })
+    });
+    if !untouched {
+        return LeftToLegacy("the line may change what the shell inherits".into());
+    }
+    let prefix = match (&cmd.cwd_candidates, &cmd.cwd) {
+        (CwdCandidates::One, Value::Literal(d)) => match progeffect::shell_quote(d) {
+            Some(q) => format!("cd {q} && {{ "),
+            None => return LeftToLegacy("the cwd cannot be spelt".into()),
+        },
+        (CwdCandidates::One, Value::Undetermined(r)) if r == super::eval::HOOK_CWD => String::new(),
+        _ => return LeftToLegacy("the cwd is not one known directory".into()),
+    };
+    ShellCRead::Script(ShellC {
+        script: text.to_string(),
+        span: script.span.clone(),
+        k,
+        prefix,
+    })
+}
+
+/// What [`shell_c_script`] reads in one command.
+enum ShellCRead {
+    /// Not a `bash` / `sh` command (or a wrapper that runs nothing).
+    NotShellC,
+    /// A `bash` / `sh` this stage does not read (the reason why): no S5
+    /// opinion, the legacy readings and S4 judge the original text, nothing
+    /// is retired.
+    LeftToLegacy(String),
+    /// A plain `-c SCRIPT` S5 judges.
+    Script(ShellC),
+}
+
+/// The S5 verdict of the script of `sc` ([`prepare`] on it), and the edit
+/// that retires its Known programs from the outer line's legacy readings:
+/// the script word is replaced by the script's neutral text, quoted.
+fn judge_shell_c(
+    commands: &[SimpleCommand],
+    idx: usize,
+    cmd: &SimpleCommand,
+    sc: &ShellC,
+    judge: &dyn Fn(&str) -> Decision,
+) -> (Decision, Option<Edit>) {
+    let suffix = if sc.prefix.is_empty() { "" } else { "\n}" };
+    let judged = format!("{}{}{suffix}", sc.prefix, sc.script);
+    let inner = prepare(&judged, judge);
+    let edit = (|| {
+        let neutral = inner.neutral.as_deref()?;
+        let n = neutral
+            .strip_prefix(sc.prefix.as_str())?
+            .strip_suffix(suffix)?;
+        // Whatever the script's programs do, another command of the line
+        // that may run a file keeps the legacy readings.
+        if !site_retirable(commands, idx, cmd, true) {
+            return None;
+        }
+        Some(Edit {
+            span: sc.span.clone(),
+            with: progeffect::shell_quote(n)?,
+            idx,
+            k: sc.k,
+            expect: Some(n.to_string()),
+        })
+    })();
+    (inner.verdict, edit)
+}
+
 /// The neutralising edit of a Known program, when it may be retired.
 struct Edit {
     span: Range<usize>,
     with: String,
     idx: usize,
     k: usize,
+    /// The inline program the edited command must run (`None`: `pass`).
+    expect: Option<String>,
 }
 
-fn retirable(
-    text: &str,
+/// `cmd` sits where its program may be retired from the legacy readings
+/// (see the module doc, "When a program is NOT retired").
+fn site_retirable(
     commands: &[SimpleCommand],
     idx: usize,
     cmd: &SimpleCommand,
-    p: &Program,
     has_effect: bool,
-) -> Option<Edit> {
-    let site = p.site.as_ref()?;
+) -> bool {
     match cmd.context {
-        Context::CommandSubstitution | Context::ProcessSubstitution => return None,
-        Context::Pipeline { pos, len } if pos + 1 < len => return None,
+        Context::CommandSubstitution | Context::ProcessSubstitution => return false,
+        Context::Pipeline { pos, len } if pos + 1 < len => return false,
         Context::Pipeline { .. } | Context::TopLevel | Context::Subshell | Context::Background => {}
     }
     let inside = |r: &Range<usize>| r.start <= cmd.span.start && cmd.span.end <= r.end;
@@ -569,7 +1168,7 @@ fn retirable(
                 }))
     });
     if enclosed {
-        return None;
+        return false;
     }
     let writes_out = cmd.redirects.iter().any(|r| {
         matches!(
@@ -582,12 +1181,23 @@ fn retirable(
                 | RedirOp::AppendOutErr
         ) && matches!(r.target, RedirTarget::Path(_))
     });
-    if (has_effect || writes_out)
+    !((has_effect || writes_out)
         && commands
             .iter()
             .enumerate()
-            .any(|(j, o)| j != idx && may_run_file(o))
-    {
+            .any(|(j, o)| j != idx && may_run_file(o)))
+}
+
+fn retirable(
+    text: &str,
+    commands: &[SimpleCommand],
+    idx: usize,
+    cmd: &SimpleCommand,
+    p: &Program,
+    has_effect: bool,
+) -> Option<Edit> {
+    let site = p.site.as_ref()?;
+    if !site_retirable(commands, idx, cmd, has_effect) {
         return None;
     }
     let (span, with) = match site {
@@ -606,6 +1216,7 @@ fn retirable(
         with,
         idx,
         k: p.k,
+        expect: None,
     })
 }
 
@@ -638,7 +1249,8 @@ fn may_run_file(c: &SimpleCommand) -> bool {
 }
 
 /// The text with every edit applied, checked to analyse to the same
-/// commands with `pass` as each retired program.
+/// commands with `pass` as each retired program (and, for a `bash -c` /
+/// `sh -c` script, with the script's neutral text as its program).
 fn neutral_text(text: &str, commands: &[SimpleCommand], mut edits: Vec<Edit>) -> Option<String> {
     edits.sort_by_key(|e| (e.span.start, e.span.end));
     edits.dedup_by(|a, b| a.span == b.span && a.with == b.with);
@@ -667,9 +1279,10 @@ fn neutral_text(text: &str, commands: &[SimpleCommand], mut edits: Vec<Edit>) ->
             argv: c.argv.get(e.k..).unwrap_or(&[]).to_vec(),
             ..c.clone()
         };
-        let ok = match program_source(&inner)? {
-            ProgramSource::InlineLiteral(p) => p == "pass",
-            ProgramSource::Stdin(StdinSource::Literal(b)) => b.trim_end() == "pass",
+        let ok = match (program_source(&inner)?, &e.expect) {
+            (ProgramSource::InlineLiteral(p), Some(x)) => &p == x,
+            (ProgramSource::InlineLiteral(p), None) => p == "pass",
+            (ProgramSource::Stdin(StdinSource::Literal(b)), None) => b.trim_end() == "pass",
             _ => false,
         };
         if !ok {

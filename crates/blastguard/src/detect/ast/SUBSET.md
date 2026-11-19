@@ -285,6 +285,26 @@ Common rules for every row:
 | `>&word` with a non-fd word | `Truncate` | the word, as a path |
 | compound-command redirects (`{ …; } > f`, `done > f`) | as above | the extra empty-argv `SimpleCommand` |
 
+**Relink layer consumer (backlog dc053fcf, 2026-11-19).** The string-level relink
+layer (`detect/relink.rs`) reads the same values through [`targets::resolve`]: a
+relinking command (`mv`, `cp`, `ln`, …) whose destination or source word is not a
+literal but has values the evaluator proved (a `for` variable over a literal list,
+unrolled as above) is judged once per value, and the strictest answer stands. A
+word with no proven values (`$(ls)`, a glob, an undetermined variable) keeps the
+`Ask`. Values are combined per word, not per iteration, so a combination of two
+values of different words may be judged although no single iteration runs it; that
+only adds judgements, it never removes one. The **source of a symlink**
+(`ln -s`, `cp -s`) is never replaced by a proven value: the evaluator places a
+value against the command's cwd (`resolve_at`), but a symlink holds its source
+text and resolves it from the directory holding the link, so `ln -s $f /private/L`
+with `f=etc` would be read as `<cwd>/etc` instead of `/private/etc`. Such a source
+stays spelled and the write through the link stays an `Ask` (backlog dc053fcf
+retry, 2026-11-19). An `ln`/`cp` with a long option the relink layer does not
+know by its full name — an abbreviation GNU getopt_long accepts (`ln --sym`,
+`cp --sym`) or any other unmodelled `--` option — is not interpreted: it is
+opaque (never read as a hard link or a plain copy), its sources are not
+replaced, and a write below its destination is an `Ask`.
+
 ### B.3 Wrappers (unwrap, then judge the wrapped command by its own row)
 
 | Wrapper | Skipped before the wrapped command | Notes |
@@ -484,15 +504,74 @@ dc27f669 / bf90fa9d, is untouched); is a `-c` program that runs a command
 while the line feeds Python's stdin; or when the neutral text does not
 re-analyse to the same commands.
 
+### S5b follow-ups (user rulings 2026-11-19)
+
+* (a) **Import shadowing.** `python -c` / a program on stdin puts the
+  directory it runs in first on `sys.path`. A program that imports `M`
+  (`import M…` / `from M… import`, top-level name, anywhere in the program)
+  while that directory holds `M.py`, a directory `M/`, or a compiled
+  `M.pyc` / `M.*.so` / `M.pyd` (names compared ignoring ASCII case) is
+  **Undetermined**. So is one whose directory cannot be listed (an IO error,
+  the hook's cwd absent from the payload, a cwd the text does not determine).
+  A directory that does not exist holds nothing that shadows. Listing:
+  `harness_core::boundary::read_dir_entries_checked` (`s5.rs::shadowed_import`).
+* (a') **Same-line shadowing (S5c, user ruling 2026-11-20).** "When a command
+  EARLIER on the same line may write `<mod>.py` / `<mod>/` (or any of the
+  shadow spellings S5b already checks) into the directory a later python3
+  program runs in, for a module that program imports → Undetermined (Ask).
+  An earlier write whose target is undetermined → also not Allow."
+  Implemented in `s5.rs::same_line_shadow` from the existing target
+  extraction only: output redirects (`>` `>>` `>|` `<>` `>&word` `&>` `&>>`,
+  B.2 `RedirTarget::Path`, the program's own included — the shell opens them
+  first) and the creating targets of the B.1 rows (`Truncate` / `Append` /
+  `Rewrite` / `Link` / `CreateTree`: `cp` / `mv` / `install` destination,
+  `ln` link name, `tee`, `truncate`, `dd of=`, `sed -i`, `find -fprint`)
+  plus `mkdir` (`-p -v -m`) and `touch` (`-a -c -f -h -m`, `-A -d -r -t`),
+  rows that exist only for this reader (`judge/table_b.rs::entry_writes`;
+  the S3b judge is unchanged), after the `b5` wrappers, resolved by
+  `eval::resolve_at`. An entry of a program directory whose name shadows an
+  imported module (same spellings and case rule as (a)), or any path under
+  such an entry, → Undetermined. Also Undetermined: a write target that
+  cannot be placed, a modelled command with an unmodelled option, a wrapper
+  that cannot be unwrapped, a write to the program directory itself (`cp x
+  .`: the new entry's name is not read), a real path that cannot be read.
+  Targets and directories are compared as spelled and through the real path
+  of their longest existing ancestor, the directory prefix ignoring ASCII
+  case. "Earlier": the commands that start before the program ends in the
+  text; every command of the line when the program is not top-level (a
+  pipeline stage runs concurrently) or the line has a loop or a function.
+* (c) **`bash -c` / `sh -c`.** The literal script of a plain `bash -c SCRIPT`
+  / `sh -c SCRIPT` (after the `b5` wrappers; `sudo` excluded) is judged by S5
+  exactly like the same text written directly, and its Known programs are
+  retired from the outer line's legacy readings (the script word is replaced
+  by its neutral text). Only this shape is read (`s5.rs::shell_c_script`):
+  `bash` / `sh` bare or in a system bin directory, exactly `-c SCRIPT` (no
+  `$0` / positional words, no other option), nothing feeding its stdin, the
+  hook's cwd or one literal directory, and no command on the line that
+  assigns a variable or runs `export` / `declare` / `typeset` / `local` /
+  `readonly` / `env` / `unset` / `source` / `.` / `eval` / `alias` / `enable`
+  / `shopt` / `set` (the script is analysed on its own). Any other shape keeps
+  the legacy readings only, as before.
+* (d) **`sh -c 'echo "$HOME"'`.** A shell's `-c` payload candidates are the
+  word boundaries after `-c`, no longer every whitespace position
+  (`payload.rs::dash_c_payloads` → `interpreter_payloads_after`, backlog
+  1943843c): the mid-word fragment `"$HOME"'` was read as a command line whose
+  command word was `$HOME`. A word whose quote never closes keeps every
+  position.
+
 ### Known gaps (S5)
 
 * A here-string / piped literal program is analysed but never retired.
-* Python nested in `bash -c '…'` (or any other word) is judged by the legacy
-  readings only.
+* Python nested in a `bash -c` outside the shape above, or in any other word,
+  is judged by the legacy readings only.
 * Wrappers other than those `b5` unwraps (`sudo`, `xargs`, …) get no S5
   opinion.
-* A standard-library module shadowed by a file in the working directory
-  (`-c` / stdin put the cwd first on `sys.path`) is not detected.
+* Import shadowing: a module imported by an imported module, and `.pth` /
+  `PYTHONPATH` / site-packages entries are not detected. Same-line (S5c): a
+  shadowing entry written by a program with no effect model (`git checkout`,
+  `tar`, `unzip`, `curl -o`, an unknown program), by `xargs` wrapping
+  `mkdir` / `touch`, as a `sed -i` backup suffix, or by a command outside the
+  `bash -c` whose script runs the program, is not detected.
 
 ## Stage map
 

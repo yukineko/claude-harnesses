@@ -22,8 +22,26 @@
 //! A link that points inside the tree lands inside the tree and is judged
 //! there, so ordinary in-tree links keep their verdict.
 //!
+//! A non-literal word whose values the AST evaluator proved (a `for` variable
+//! over a literal list, `ast::eval` unrolls it) is not a reason to give up:
+//! each relinking command is judged once per value ([`expand`]), and an
+//! operand with several values is judged per value and its landings must
+//! agree ([`operand_landing`]). The strictest answer stands. The SOURCE of a
+//! symlink (`ln -s`, `cp -s`) is never replaced by such a value: the
+//! evaluator places a value against the cwd, while a symlink's text is
+//! resolved from the directory holding the link, so a relative source would
+//! be placed at the wrong path; it stays spelled, an `Ask`.
+//!
+//! An `ln`/`cp` with a long option this layer does not know by its full name
+//! — including an abbreviation GNU getopt_long accepts (`ln --sym` is
+//! `--symbolic`, `cp --sym` is `--symbolic-link`) — is [`Kind::Opaque`]: it
+//! cannot be told whether it makes a symlink, so it is not read as a hard
+//! link or a plain copy, and its sources are never replaced by a value.
+//!
 //! When the landing cannot be determined — a non-literal source or
-//! destination, an unknown cwd, `rsync`/`install -l`, a source that another
+//! destination with no proven values (`$(ls)`, a glob), an unknown cwd,
+//! `rsync`/`install -l`, an `ln`/`cp` with an unknown long option, a source
+//! that another
 //! command of the line relinks too, two readings of one command, or an
 //! unmodelled command that names a relinking verb together with a component
 //! of the target or a non-literal word — the redirect is an `Ask`, never an
@@ -33,6 +51,7 @@
 //! a command whose text names neither a relinking verb nor the target (an
 //! archive extraction, a build script, `git checkout` of a tracked symlink).
 
+use super::ast::targets::{self, Role};
 use super::{
     analyze_segment, compound_views, first_shell_word, has_glob_meta, has_unresolvable_expansion,
     is_assignment, normalized_command, positional_operands, protected_path_block_at,
@@ -295,6 +314,27 @@ fn operand_landing(
     cwd: &CwdState,
     base: Option<&str>,
 ) -> Result<Option<String>, String> {
+    // A word the AST evaluator proved takes several values (a `for` variable
+    // over a literal list): each value is judged on its own, and the landings
+    // must agree, or the operand is an Ask.
+    if let Some(values) = proven_values(word, Role::Argv) {
+        let mut landed: Option<Option<String>> = None;
+        for value in &values {
+            let real =
+                operand_landing(value, reach, line, seg_idx, seg_cwds, &CwdState::Root, base)?;
+            match &landed {
+                None => landed = Some(real),
+                Some(prev) if *prev == real => {}
+                Some(_) => {
+                    return Err(
+                        "it lands on different paths for different values of a loop variable"
+                            .into(),
+                    )
+                }
+            }
+        }
+        return Ok(landed.flatten());
+    }
     let at =
         |path: &str, from: &CwdState| relinked(line, Some(seg_idx), seg_cwds, path, from, base);
     let Some(t) = absolute(word, cwd, base) else {
@@ -329,7 +369,8 @@ enum Kind {
     Moved,
     /// A link-preserving `cp`: symlinks in the copied part stay symlinks.
     CopiedLinks,
-    /// `rsync`, `install -l`: what it creates is not modelled.
+    /// `rsync`, `install -l`, an `ln`/`cp` with a long option outside
+    /// [`LN_LONG`]/[`CP_LONG`]: what it creates is not modelled.
     Opaque,
 }
 
@@ -399,6 +440,9 @@ fn relinked(
     if ops.is_empty() && unmodelled.is_empty() {
         return Ok(None);
     }
+    // A relinking command whose words the AST evaluator resolved (a `for`
+    // variable) is judged once per value.
+    let ops: Vec<LinkOp> = ops.into_iter().flat_map(expand).collect();
     let t = absolute(target, target_cwd, base).ok_or_else(|| {
         "a command that may relink it runs first and the path cannot be placed".to_string()
     })?;
@@ -486,8 +530,18 @@ fn parse(command: &str, cwd: CwdState) -> Parsed {
             .any(|o| !o.starts_with("--") && o[1..].chars().any(|c| letters.contains(c)))
     };
     let long = |names: &[&str]| opts.iter().any(|o| names.iter().any(|n| o.starts_with(n)));
+    // A long option not known by its full name (an abbreviation such as
+    // `--sym`, or an option this layer does not model) cannot be interpreted
+    // with certainty: getopt_long may read it as `--symbolic`.
+    let unknown_long = |known: &[&str]| {
+        opts.iter().any(|o| {
+            o.starts_with("--") && !known.contains(&o.split_once('=').map_or(*o, |(name, _)| name))
+        })
+    };
     let is_ln = matches!(head.as_str(), "ln" | "gln" | "link");
     let kind = match head.as_str() {
+        "ln" | "gln" if unknown_long(LN_LONG) => Kind::Opaque,
+        "cp" | "gcp" if unknown_long(CP_LONG) => Kind::Opaque,
         "ln" | "gln" if short("s") || long(&["--symbolic"]) => Kind::Symbolic,
         "ln" | "gln" | "link" => Kind::Hard,
         "cp" | "gcp" if short("s") || long(&["--symbolic-link"]) => Kind::Symbolic,
@@ -546,6 +600,41 @@ fn parse(command: &str, cwd: CwdState) -> Parsed {
         cwd,
     })
 }
+
+/// The long options of `ln` this layer reads by their FULL name; any other
+/// `--` option (an abbreviation included) makes the command [`Kind::Opaque`].
+const LN_LONG: &[&str] = &[
+    "--backup",
+    "--force",
+    "--interactive",
+    "--logical",
+    "--no-dereference",
+    "--no-target-directory",
+    "--physical",
+    "--suffix",
+    "--symbolic",
+    "--target-directory",
+    "--verbose",
+];
+
+/// As [`LN_LONG`], for `cp`.
+const CP_LONG: &[&str] = &[
+    "--archive",
+    "--backup",
+    "--force",
+    "--interactive",
+    "--no-clobber",
+    "--no-dereference",
+    "--no-target-directory",
+    "--preserve",
+    "--recursive",
+    "--remove-destination",
+    "--suffix",
+    "--symbolic-link",
+    "--target-directory",
+    "--update",
+    "--verbose",
+];
 
 /// The whitespace words of `command`, subshell parentheses stripped.
 fn plain_words(command: &str) -> Vec<&str> {
@@ -618,6 +707,96 @@ fn unquote(word: &str) -> String {
 
 fn literal(word: &str) -> bool {
     !word.starts_with('~') && !has_unresolvable_expansion(word) && !has_glob_meta(word)
+}
+
+/// Most `LinkOp`s one relinking command expands into; beyond it the command
+/// keeps its spelled words, which are an `Ask`.
+const MAX_EXPANSIONS: usize = 256;
+
+/// The absolute literal paths the AST evaluator proved `word` (read in `role`)
+/// takes: a non-literal word such as `$D/$f.tmp` after `for f in a b`, unrolled
+/// by `ast::eval`. `None` when the word is a literal (nothing to expand) or has
+/// no proven values (`$(ls)`, a glob, an undetermined variable) — the caller
+/// keeps its `Ask`. Every value must be absolute and literal: the evaluator
+/// has already placed it against the cwd of the command it belongs to
+/// (`ast::eval::resolve_at`), so it is only right where a word is read from
+/// the cwd — never for a symlink's source text ([`expand`]).
+fn proven_values(word: &str, role: Role) -> Option<Vec<String>> {
+    if literal(word) {
+        return None;
+    }
+    let values = targets::resolve(word, role)?;
+    values
+        .iter()
+        .all(|v| v.starts_with('/') && literal(v))
+        .then_some(values)
+}
+
+/// `op` with every destination and source word whose values the AST
+/// evaluator proved replaced by each value: one `LinkOp` per combination, so
+/// each value of a loop variable is judged as its own command. A word with no
+/// proven values stays spelled (its landing stays undetermined, an `Ask`).
+/// The sources of a [`Kind::Symbolic`] op are never replaced: the link holds
+/// the source TEXT, resolved from the link's own directory ([`hit`]), but a
+/// proven value is already placed against the cwd (`ln -s $f /private/L` with
+/// `f=etc` would be read as `<cwd>/etc` instead of `/private/etc`). They stay
+/// spelled, an `Ask`. Nor are those of a [`Kind::Opaque`] op (an `ln --sym`
+/// whose kind is not known). An op with nothing to expand, or more than
+/// [`MAX_EXPANSIONS`] combinations, is returned unchanged.
+fn expand(op: LinkOp) -> Vec<LinkOp> {
+    let dest_values = proven_values(&op.dest, Role::Argv);
+    let source_values: Vec<Option<Vec<String>>> = op
+        .sources
+        .iter()
+        .map(|s| {
+            if matches!(op.kind, Kind::Symbolic | Kind::Opaque) {
+                None
+            } else {
+                proven_values(s, Role::Argv)
+            }
+        })
+        .collect();
+    if dest_values.is_none() && source_values.iter().all(Option::is_none) {
+        return vec![op];
+    }
+    let alternatives = |spelled: &str, values: &Option<Vec<String>>| {
+        values.clone().unwrap_or_else(|| vec![spelled.to_string()])
+    };
+    let mut source_combos: Vec<Vec<String>> = vec![Vec::new()];
+    for (spelled, values) in op.sources.iter().zip(&source_values) {
+        let alts = alternatives(spelled, values);
+        source_combos = source_combos
+            .iter()
+            .flat_map(|combo| {
+                alts.iter().map(move |alt| {
+                    let mut next = combo.clone();
+                    next.push(alt.clone());
+                    next
+                })
+            })
+            .collect();
+        if source_combos.len() > MAX_EXPANSIONS {
+            return vec![op];
+        }
+    }
+    let dests = alternatives(&op.dest, &dest_values);
+    if dests.len() * source_combos.len() > MAX_EXPANSIONS {
+        return vec![op];
+    }
+    let mut out = Vec::new();
+    for dest in &dests {
+        for sources in &source_combos {
+            out.push(LinkOp {
+                kind: op.kind,
+                sources: sources.clone(),
+                dest: dest.clone(),
+                into_dir: op.into_dir,
+                no_deref: op.no_deref,
+                cwd: op.cwd.clone(),
+            });
+        }
+    }
+    out
 }
 
 /// `word` as an absolute, lexically normalised path for a segment run in

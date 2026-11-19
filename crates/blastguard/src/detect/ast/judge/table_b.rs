@@ -71,6 +71,72 @@ pub(super) fn extract(cmd: &SimpleCommand) -> Row {
     }
 }
 
+/// Stage S5c (user ruling 2026-11-20, same-line import shadowing): every
+/// (effect, target word value) of `cmd` that may CREATE or replace a
+/// directory entry — the [`extract`] targets whose effect does
+/// ([`creates_entry`]), plus the `mkdir` / `touch` rows below, which exist
+/// only for this reader (they are NOT B.1 rows: [`extract`], and so the S3b
+/// judge, is unchanged by them). A command with neither is [`Row::None`]
+/// (no effect model, as in [`extract`]); an option outside a row is
+/// [`Row::Undetermined`].
+pub(super) fn entry_writes(cmd: &SimpleCommand) -> Row {
+    match extract(cmd) {
+        Row::Targets(t) => Row::Targets(t.into_iter().filter(|(e, _)| creates_entry(*e)).collect()),
+        Row::Undetermined(why) => Row::Undetermined(why),
+        Row::None => creation_row(cmd),
+    }
+}
+
+/// `effect` may leave an entry at its target that was not there before.
+fn creates_entry(effect: Effect) -> bool {
+    match effect {
+        Effect::Truncate | Effect::Append | Effect::Rewrite | Effect::Link | Effect::CreateTree => {
+            true
+        }
+        Effect::Delete { .. } | Effect::Metadata | Effect::GitDiscard | Effect::GitStage => false,
+    }
+}
+
+/// `mkdir` (BSD / GNU: `-p -v`, `-m MODE`) creates every operand as a
+/// directory (`CreateTree`; with `-p` its missing ancestors too, which share
+/// the operand's first component). `touch` (`-a -c -f -h -m`, `-A -d -r -t`
+/// with an argument) creates every operand as an empty file unless it exists;
+/// it is listed as `Append` (it adds no bytes — the precedent is
+/// `python_semantics.rs`, where `Path.touch` is `Write { append: true }`).
+/// `touch -c` creates nothing but is still listed (the restrictive side).
+fn creation_row(cmd: &SimpleCommand) -> Row {
+    let Some(first) = cmd.argv.first() else {
+        return Row::None;
+    };
+    let Value::Literal(name) = &first.value else {
+        return Row::None;
+    };
+    let args = cmd.argv.get(1..).unwrap_or(&[]);
+    let found = match name.rsplit('/').next().unwrap_or(name) {
+        "mkdir" => parse("mkdir", args, &MKDIR).map(|p| values(p.operands, Effect::CreateTree)),
+        "touch" => parse("touch", args, &TOUCH).map(|p| values(p.operands, Effect::Append)),
+        _ => return Row::None,
+    };
+    match found {
+        Ok(t) => Row::Targets(t),
+        Err(why) => Row::Undetermined(why),
+    }
+}
+
+const MKDIR: Opts = Opts {
+    long: &[("--parents", "-p"), ("--verbose", "-v"), ("--mode", "-m")],
+    ..opts("pv", "m")
+};
+const TOUCH: Opts = Opts {
+    long: &[
+        ("--no-create", "-c"),
+        ("--no-dereference", "-h"),
+        ("--date", "-d"),
+        ("--reference", "-r"),
+    ],
+    ..opts("acfhm", "Adrt")
+};
+
 /// The option list of one row.
 struct Opts {
     /// Short options without an argument.

@@ -85211,3 +85211,74 @@ rev = "c92d77e74587df6ef103031b088473fcb37e010b"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "dc053fcf"
+title = "blastguard FP: for-loop over a literal word list writing $D/$f.tmp then mv is refused (loop var left unresolved)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-15 (relay bgr-d51baecd617b; probe by independent designer on 0.2.611): for f in a b; do ... > $D/$f.tmp && mv ...; done is ask/deny with "a command that may relink it runs first and the path cannot be placed"; $D resolves but $f is shown unexpanded. Same literal paths without the variable = allow; no-loop with $D = allow; unrelated mv gives the same reason. Candidate cause crates/blastguard/src/detect/relink.rs ~394 (absolute(...).ok_or_else on loop/relink lines). Secondary (not asserted): loop write without mv / with rm / cp is deny 'destroys the file's current contents' with $f unexpanded — check after fix. Controls kept restrictive: $(ls) list, ln -s /etc write."""
+created_at = 1794734286
+updated_at = 1795102846
+weight = 0.0
+issue_number = 1800
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1800"
+issue_closed_at = 1795102848
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_for_loop_literal_list_tmp_mv_fp -- --ignored"
+rev = "cfa64022e3b6c2bde0dcb838e92f156cf050269b"
+observed_at = 1794734286
+detail = """
+exit 101: /yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.07s
+     Running tests/backlog_20261115_for_loop_literal_list_tmp_mv_fp.rs (target/debug/deps/backlog_20261115_for_loop_literal_list_tmp_mv_fp-8f7ede9a6c651cbc)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_for_loop_literal_list_tmp_mv_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261115_for_loop_literal_list_tmp_mv_fp"
+exit = 0
+passed = 12
+rev = "93f68a80a08a99954831e9109e202aaf81f686d8"
+observed_at = 1795102844
+output_digest = "sha256:2bd3bbc4b7b40a9d507e3c8b1abaa6ec1c1e1be9c0834bcd5bfcbb3a75aef732"
+excerpt = """
+
+running 12 tests
+test control_loop_relative_symlink_source_into_etc_is_not_allowed ... ok
+test control_loop_dotdot_symlink_source_into_etc_is_not_allowed ... ok
+test control_loop_symlink_source_reason_is_unplaced_relink ... ok
+test control_loop_over_command_substitution_is_not_allowed ... ok
+test control_loop_relative_cp_symbolic_source_into_etc_is_not_allowed ... ok
+test control_no_loop_relative_symlink_source_into_etc_is_denied ... ok
+test control_write_through_earlier_symlink_is_not_allowed ... ok
+test control_loop_relative_symlink_source_several_values_is_not_allowed ... ok
+test control_loop_abbreviated_cp_symbolic_is_not_allowed ... ok
+test control_loop_abbreviated_ln_symbolic_is_not_allowed ... ok
+test control_no_loop_abbreviated_symbolic_is_not_allowed ... ok
+test literal_list_for_loop_tmp_then_mv_is_allowed ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/backlog_20261115_for_loop_literal_list_tmp_mv_fp.rs (target/debug/deps/backlog_20261115_for_loop_literal_list_tmp_mv_fp-00fd288d1ad866d6)
+"""
+
+[task.closure.red]
+rev = "e17ee5e922bd7f057848f61393a410c781e4b596"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

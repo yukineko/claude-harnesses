@@ -1040,37 +1040,6 @@ exit 101: -empty-worktree/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_stdin_heredoc_backtick_redirect_fp`"""
 
 [[task]]
-id = "dc053fcf"
-title = "blastguard FP: for-loop over a literal word list writing $D/$f.tmp then mv is refused (loop var left unresolved)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-15 (relay bgr-d51baecd617b; probe by independent designer on 0.2.611): for f in a b; do ... > $D/$f.tmp && mv ...; done is ask/deny with "a command that may relink it runs first and the path cannot be placed"; $D resolves but $f is shown unexpanded. Same literal paths without the variable = allow; no-loop with $D = allow; unrelated mv gives the same reason. Candidate cause crates/blastguard/src/detect/relink.rs ~394 (absolute(...).ok_or_else on loop/relink lines). Secondary (not asserted): loop write without mv / with rm / cp is deny 'destroys the file's current contents' with $f unexpanded — check after fix. Controls kept restrictive: $(ls) list, ln -s /etc write."""
-created_at = 1794734286
-updated_at = 1794734286
-weight = 0.0
-issue_number = 1800
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1800"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261115_for_loop_literal_list_tmp_mv_fp -- --ignored"
-rev = "cfa64022e3b6c2bde0dcb838e92f156cf050269b"
-observed_at = 1794734286
-detail = """
-exit 101: /yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.07s
-     Running tests/backlog_20261115_for_loop_literal_list_tmp_mv_fp.rs (target/debug/deps/backlog_20261115_for_loop_literal_list_tmp_mv_fp-8f7ede9a6c651cbc)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261115_for_loop_literal_list_tmp_mv_fp`"""
-
-[[task]]
 id = "3109dbf3"
 title = "blastguard: python3 - heredoc program with rmtree only inside a plain (single-line) string literal asked/denied (no exec/eval sink)"
 project = "/Users/yuki/src/harness"
@@ -2114,3 +2083,61 @@ exit 101: rness-worktrees/red-ln-combined-t-20261119/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.13s
      Running tests/backlog_20261119_ln_combined_short_t_symlink_harm.rs (target/debug/deps/backlog_20261119_ln_combined_short_t_symlink_harm-802f7e7185421f22)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261119_ln_combined_short_t_symlink_harm`"""
+
+[[task]]
+id = "7275b9d9"
+title = "blastguard fail-open: Q3/Q4 deny targets (.ssh, home dir, gate scripts, .gitconfig) outside $HOME are not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed at rev 84d930e83 (tree incl S5), 2026-11-20, hermetic HOME != /Users/<n>. 59-case probe: /private/tmp/claude-502/-Users-yuki-src-harness/179495ba-af97-4f48-aa93-614e6ece918d/scratchpad/q3q4_probe.txt. Allow/Allow for ALL ops (redirect,mv,cp,chmod 777,rm,ln -sf) on /Users/x/.ssh/authorized_keys, <dir>/.ssh/id_rsa, <dir>/.gitconfig, scripts/check-*.py, crates/*/hooks/**; mv and ln -sf of /Users/x and /home/x allow; python os.replace/os.chmod/open(wb) allow. .githooks and ~/.claude/plugins/cache/**/bin: write/mv/cp/ln = main ask sub deny; chmod 777 allow; rm deny. rm -rf and chmod -R of /Users/x deny already. Reading (a): protections are $HOME-relative only (IRREPLACEABLE_HOME_DIRS, SYSTEM_PREFIXES w/o /Users, exclude.rs globs lack .ssh/scripts/check-*/crates/*/hooks) and chmod rule only denies read/exec-removing modes. Reading (b): the fixture/hermetic HOME just does not match literal /Users/<n>, i.e. rules exist but are keyed to real HOME. Distinguishing check: rerun with HOME=/Users/somebody for the .ssh/authorized_keys cases; if they flip to deny it is (b), if still allow it is (a); the {BASE}/anydir/.ssh/id_rsa and .gitconfig cases (not under any HOME) separate Q3 'even when not HOME' either way. Controls (reads, /tmp scratch, /tmp/sshx/f, /tmp/notscripts/check-x.txt) are allow today and asserted as-is. Not verified: reading (a) vs (b) was not executed."
+created_at = 1795103122
+updated_at = 1795103122
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_q3q4_deny_target_table -- --ignored"
+rev = "346489342fe1397ab7bbb1e9377c5ecba5fb76bc"
+observed_at = 1795103122
+detail = """
+exit 101: d v0.2.745 (/Users/yuki/src/.harness-worktrees/red-q3q4-targets-20261120/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.82s
+     Running tests/backlog_20261120_q3q4_deny_target_table.rs (target/debug/deps/backlog_20261120_q3q4_deny_target_table-2303afeeed54ab7d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_q3q4_deny_target_table`"""
+
+[[task]]
+id = "cfb98cd5"
+title = "blastguard: cp into /etc via .. segments (loop value or plain) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-19 (0.2.738, main 5a27f8ecd) and re-observed 2026-11-20 on 0.2.744 (branch red/bg-dotdot-loop-redirect-20261120, feacfbc14). cwd=HOME/wt/a/b/c/d, '..' chain reaching /: 'for f in ../..(to /)../etc; do cp a $f/hosts; done' and plain 'cp a ../..(to /)../etc/hosts' are Allow at every '..' count 11..14 (fixture canonical depth 12). Controls deny: redirect via same '..' loop value / plain, 'for f in /etc; do cp a $f/hosts', cd / form. The originally reported loop REDIRECT Allow is NOT reproduced (10 '..' did not reach /etc from a deeper cwd; fixture issue). Readings: (a) real defect: cp destination not resolved against cwd before system-dir check while redirect targets are; (b) intended: cp judged only when absolute. Distinguishing: absolute cp form denies and system harm is Deny through any spelling => (a). Not probed: mv/tee/install/dd of=, subagent verdict."
+created_at = 1795103126
+updated_at = 1795103126
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_dotdot_loop_value_system_write -- --ignored"
+rev = "feacfbc1412254974358ecf0d7c090e2d168a084"
+observed_at = 1795103126
+detail = """
+exit 101: ness-worktrees/red-dotdot-loop-redirect-20261120/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.07s
+     Running tests/backlog_20261120_dotdot_loop_value_system_write.rs (target/debug/deps/backlog_20261120_dotdot_loop_value_system_write-dee0d3a72796bdd5)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_dotdot_loop_value_system_write`"""

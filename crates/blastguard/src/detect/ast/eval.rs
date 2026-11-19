@@ -127,6 +127,7 @@ mod cwd;
 mod decl;
 mod words;
 
+pub(super) use cwd::hook_dir;
 pub(crate) use cwd::with_hook_dir;
 use cwd::{cd_join, resolve, Cwd};
 

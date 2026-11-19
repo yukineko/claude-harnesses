@@ -2361,3 +2361,35 @@ exit 101: ered out; finished in 0.86s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.86s
      Running tests/fp_candidates_b_20261120.rs (target/debug/deps/fp_candidates_b_20261120-027634bcafc7f041)
 error: test failed, to rerun pass `-p blastguard --test fp_candidates_b_20261120`"""
+
+[[task]]
+id = "5f02eb88"
+title = "blastguard: after a cd into a subdirectory and back out with a parent cd, a relative redirect target is placed at the filesystem root instead of the starting directory (wrong file judged both ways)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "false-positive",
+    "blastguard",
+]
+touched_files = []
+status = "pending"
+notes = "Observed at e56699977 (blastguard 0.2.751), hermetic HOME. The cwd tracker records the round-trip as a known empty directory, and the redirect placement joins the empty directory and the target with a slash, so a relative target is judged as an absolute path under the root. physical_redirect_spelling already guards the empty case; place_redirect_target does not. Fail-open: truncating an existing untracked project file through the round-trip is Allow in both modes, while the same truncation without the round-trip (same real file) is Ask in main and Deny in subagent. False positive: appending to a new file under a project subdirectory named etc through the round-trip is Deny as a system-directory write, while without the round-trip it is Allow. The round-trip through a symlinked directory was also observed Allow for the truncation in a probe (not reached in the test because the first variant fails first). Protected-config targets give the same Ask either way (only the reason names the wrong path), not pinned. Expected: the variant answers exactly as the baseline that writes the same real file. Root cause not fixed. Test: crates/blastguard/tests/fp_candidates_b_20261120.rs"
+created_at = 1795107986
+updated_at = 1795107986
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test fp_candidates_b_20261120 cd_roundtrip_ -- --include-ignored"
+rev = "8ec29d108a4e648c3372f2f5e08ae66489f2b206"
+observed_at = 1795107986
+detail = """
+exit 101: ndtrip_truncate_existing_file_parity
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.77s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/fp_candidates_b_20261120.rs (target/debug/deps/fp_candidates_b_20261120-027634bcafc7f041)
+error: test failed, to rerun pass `-p blastguard --test fp_candidates_b_20261120`"""

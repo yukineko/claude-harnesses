@@ -20,6 +20,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'module 責務' lib: public pure API re-exporting the detector modules for specforge/condukt reuse; 概要 last sentence."
 
 [[spec]]
+path = "crates/blastguard/src/detect/ast/judge/deny_targets.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/ast/judge/deny_targets`: the single Q3/Q4 deny-target table (user rulings 2026-11-14, design approved 2026-11-19, backlog 7275b9d9) judged over resolved write targets, rule id `ast-deny-target`; an unreadable table resolves to the restrictive side."
+
+[[spec]]
 path = "crates/blastguard/src/relay.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `relay`: subagent Ask relay (user ruling 2026-11-14 「sub agentのAskはmainで裁定する」) — append-only per-session queue, queued only for a hardened subagent Bash Ask, mark-executed / mark-relayed / Stop block / dismiss with reason, fail-closed on unreadable or corrupt queue."

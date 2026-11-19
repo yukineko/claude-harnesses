@@ -97,7 +97,6 @@ const FP_SHAPES: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: 2026-11-14 shell -c literal program with `echo - foo` is refused as stdin-program — remove the ignore when fixed"]
 fn shell_c_literal_echo_lone_dash_is_allow() {
     let home = unique_home("red");
     let mut bad = Vec::new();

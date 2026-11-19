@@ -126,7 +126,9 @@ enum Reach {
 
 /// Operands of a command blastguard judges by target path, as `(index into
 /// rest, value prefix, reach)`; empty for every other command (reads included).
-fn path_operands(head: &str, rest: &[&str]) -> Vec<(usize, &'static str, Reach)> {
+/// The prefix is the part of the word before the value (`-o` of `-oF`, `-st`
+/// of `ln -stDIR`), kept when the value is rewritten.
+fn path_operands<'a>(head: &str, rest: &[&'a str]) -> Vec<(usize, &'a str, Reach)> {
     let index = |w: &str| rest.iter().position(|r| std::ptr::eq(*r, w));
     let all = |reach| {
         positional_operands(rest, &[])
@@ -186,18 +188,16 @@ fn path_operands(head: &str, rest: &[&str]) -> Vec<(usize, &'static str, Reach)>
             } else {
                 Reach::Follows
             };
-            let mut sources: Vec<usize> =
-                positional_operands(rest, super::fileops::COPY_VALUE_FLAGS)
-                    .into_iter()
-                    .filter_map(index)
-                    .collect();
-            let target_dir = rest.iter().enumerate().find_map(|(j, w)| match *w {
-                "-t" | "--target-directory" => Some((j + 1, "")),
-                _ if w.starts_with("--target-directory=") => Some((j, "--target-directory=")),
-                _ => None,
-            });
-            let dest = match target_dir {
-                Some((j, prefix)) => (j < rest.len()).then_some((j, prefix)),
+            // One getopt split for the operands AND the `-t` directory, so a
+            // short cluster (`ln -st DIR`, `cp -at DIR`) is read as `-s -t DIR`
+            // (backlog 42d5fa32: `-t` was matched only as a whole word).
+            let split = super::fileops::copy_split(head, rest);
+            let mut sources: Vec<usize> = split.operands.into_iter().filter_map(index).collect();
+            let dest = match split.target_at {
+                Some((j, off)) => rest
+                    .get(j)
+                    .and_then(|w| w.get(..off))
+                    .map(|prefix| (j, prefix)),
                 None => sources.pop().map(|j| (j, "")),
             };
             // A source is read (`cp`, `install`) or is link text (`ln`); only
@@ -205,7 +205,7 @@ fn path_operands(head: &str, rest: &[&str]) -> Vec<(usize, &'static str, Reach)>
             if !matches!(head, "mv" | "gmv") {
                 sources.clear();
             }
-            let mut ops: Vec<(usize, &'static str, Reach)> = sources
+            let mut ops: Vec<(usize, &'a str, Reach)> = sources
                 .into_iter()
                 .map(|j| (j, "", Reach::Removed))
                 .collect();
@@ -566,17 +566,27 @@ fn parse(command: &str, cwd: CwdState) -> Parsed {
         _ if words.iter().any(|w| is_relink_word(w)) => return Parsed::Unmodelled,
         _ => return Parsed::Inert,
     };
-    let target_dir = rest.iter().enumerate().find_map(|(j, w)| {
-        if *w == "-t" || *w == "--target-directory" {
-            rest.get(j + 1).map(|d| d.to_string())
-        } else {
-            w.strip_prefix("--target-directory=").map(str::to_string)
+    // `cp`/`mv`/`install`/`ln`: the shared getopt split, so `-t` inside a
+    // short cluster (`ln -st DIR SRC`, `ln -sft DIR`, `cp -at DIR`) is the
+    // target directory exactly as a separate `-t DIR` is (backlog 42d5fa32).
+    // `link` / `rsync` keep the word heuristic: `rsync -t` is a boolean.
+    let (target_dir, operands): (Option<String>, Vec<&str>) = match head.as_str() {
+        "cp" | "gcp" | "mv" | "gmv" | "install" | "ginstall" | "ln" | "gln" => {
+            let split = super::fileops::copy_split(&head, &rest);
+            (split.target_dir, split.operands)
         }
-    });
-    let mut operands: Vec<String> = positional_operands(&rest, super::fileops::COPY_VALUE_FLAGS)
-        .into_iter()
-        .map(unquote)
-        .collect();
+        _ => (
+            rest.iter().enumerate().find_map(|(j, w)| {
+                if *w == "-t" || *w == "--target-directory" {
+                    rest.get(j + 1).map(|d| d.to_string())
+                } else {
+                    w.strip_prefix("--target-directory=").map(str::to_string)
+                }
+            }),
+            positional_operands(&rest, super::fileops::COPY_VALUE_FLAGS),
+        ),
+    };
+    let mut operands: Vec<String> = operands.into_iter().map(unquote).collect();
     let (dest, into_dir) = match target_dir {
         Some(d) => (unquote(&d), true),
         // `ln -s SRC` alone links into the cwd.
@@ -736,24 +746,29 @@ fn proven_values(word: &str, role: Role) -> Option<Vec<String>> {
 /// evaluator proved replaced by each value: one `LinkOp` per combination, so
 /// each value of a loop variable is judged as its own command. A word with no
 /// proven values stays spelled (its landing stays undetermined, an `Ask`).
-/// The sources of a [`Kind::Symbolic`] op are never replaced: the link holds
-/// the source TEXT, resolved from the link's own directory ([`hit`]), but a
-/// proven value is already placed against the cwd (`ln -s $f /private/L` with
-/// `f=etc` would be read as `<cwd>/etc` instead of `/private/etc`). They stay
-/// spelled, an `Ask`. Nor are those of a [`Kind::Opaque`] op (an `ln --sym`
-/// whose kind is not known). An op with nothing to expand, or more than
+/// The sources of a [`Kind::Symbolic`] op are replaced only by values proven
+/// absolute AS WRITTEN ([`Role::ArgvAsWritten`]): the link holds the source
+/// TEXT, resolved from the link's own directory ([`hit`]), so a cwd-placed
+/// value would misread a relative one (`ln -s $f /private/L` with `f=etc`
+/// would be read as `<cwd>/etc` instead of `/private/etc`). A word any of
+/// whose values is relative or unproven stays spelled, an `Ask` (backlog
+/// 42d5fa32: `for f in /etc; do ln -st D $f; done` is the link `D/etc ->
+/// /etc`). The sources of a [`Kind::Opaque`] op (an `ln --sym` whose kind is
+/// not known) are never replaced. An op with nothing to expand, or more than
 /// [`MAX_EXPANSIONS`] combinations, is returned unchanged.
 fn expand(op: LinkOp) -> Vec<LinkOp> {
     let dest_values = proven_values(&op.dest, Role::Argv);
     let source_values: Vec<Option<Vec<String>>> = op
         .sources
         .iter()
-        .map(|s| {
-            if matches!(op.kind, Kind::Symbolic | Kind::Opaque) {
-                None
-            } else {
-                proven_values(s, Role::Argv)
-            }
+        .map(|s| match op.kind {
+            // The link holds the source TEXT: only values the evaluator
+            // proved are absolute AS WRITTEN (before any cwd placement) are
+            // that text; [`proven_values`] refuses the whole word when any
+            // value is relative, so it stays spelled (an `Ask`).
+            Kind::Symbolic => proven_values(s, Role::ArgvAsWritten),
+            Kind::Opaque => None,
+            _ => proven_values(s, Role::Argv),
         })
         .collect();
     if dest_values.is_none() && source_values.iter().all(Option::is_none) {

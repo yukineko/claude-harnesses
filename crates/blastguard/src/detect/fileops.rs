@@ -564,6 +564,11 @@ struct CopyArgs<'a> {
     /// glued (`-tDIR`), inside a short cluster (`-rt DIR`, `-rtDIR`), `=`-joined
     /// or abbreviated (`--target DIR`).
     target_dir: Option<String>,
+    /// Where [`Self::target_dir`] is spelled: `(index into rest, byte offset of
+    /// the value in that word)` — `-t DIR` is `(j+1, 0)`, `-stDIR` is `(j, 3)`,
+    /// `--target-directory=DIR` is `(j, 19)`. Lets a caller rewrite the value in
+    /// place (the relink layer substitutes the real landing for it).
+    target_at: Option<(usize, usize)>,
 }
 
 /// Parse `rest` the way getopt does for `cmd` (backlog ef7c9fbe rework: the
@@ -580,10 +585,12 @@ fn parse_copy_args<'a>(cmd: &str, rest: &[&'a str]) -> Result<CopyArgs<'a>, Stri
     let (value_short, bool_short, longs) = copy_option_table(cmd);
     let mut operands = Vec::new();
     let mut target_dir: Option<String> = None;
-    let mut set_target = |v: String| -> Result<(), String> {
+    let mut target_at: Option<(usize, usize)> = None;
+    let mut set_target = |v: String, at: (usize, usize)| -> Result<(), String> {
         if target_dir.replace(v).is_some() {
             return Err(format!("`{cmd}` is given more than one target directory"));
         }
+        target_at = Some(at);
         Ok(())
     };
     let mut opts_done = false;
@@ -630,17 +637,18 @@ fn parse_copy_args<'a>(cmd: &str, rest: &[&'a str]) -> Result<CopyArgs<'a>, Stri
                     return Err(format!("`{cmd}` option `{}` takes no value", resolved.0))
                 }
                 (LongArg::No | LongArg::Optional, None) => None,
-                (_, Some(v)) => Some(v.to_string()),
+                (_, Some(v)) => Some((v.to_string(), (i - 1, name.len() + 1))),
                 (LongArg::Required, None) => match rest.get(i) {
                     Some(v) => {
                         i += 1;
-                        Some((*v).to_string())
+                        Some(((*v).to_string(), (i - 1, 0)))
                     }
                     None => return Err(format!("`{cmd}` option `{}` has no value", resolved.0)),
                 },
             };
             if resolved.0 == "--target-directory" {
-                set_target(value.unwrap_or_default())?;
+                let (v, at) = value.unwrap_or_else(|| (String::new(), (i - 1, t.len())));
+                set_target(v, at)?;
             }
             continue;
         }
@@ -648,20 +656,21 @@ fn parse_copy_args<'a>(cmd: &str, rest: &[&'a str]) -> Result<CopyArgs<'a>, Stri
         let cluster = &t[1..];
         for (pos, c) in cluster.char_indices() {
             if value_short.contains(c) {
+                let tail_at = 1 + pos + c.len_utf8();
                 let tail = &cluster[pos + c.len_utf8()..];
-                let value = if tail.is_empty() {
+                let (value, at) = if tail.is_empty() {
                     match rest.get(i) {
                         Some(v) => {
                             i += 1;
-                            (*v).to_string()
+                            ((*v).to_string(), (i - 1, 0))
                         }
                         None => return Err(format!("`{cmd} -{c}` has no value")),
                     }
                 } else {
-                    tail.to_string()
+                    (tail.to_string(), (i - 1, tail_at))
                 };
                 if c == 't' {
-                    set_target(value)?;
+                    set_target(value, at)?;
                 }
                 break;
             }
@@ -673,39 +682,128 @@ fn parse_copy_args<'a>(cmd: &str, rest: &[&'a str]) -> Result<CopyArgs<'a>, Stri
     Ok(CopyArgs {
         operands,
         target_dir,
+        target_at,
     })
 }
 
 /// The legacy word heuristic (kept ONLY as the fallback when
 /// [`parse_copy_args`] cannot split the line, so a Deny it finds still stands).
+///
+/// It never fails: an unknown option is skipped as a boolean flag. It is
+/// nevertheless getopt-cluster-aware (backlog 42d5fa32): a short cluster is
+/// scanned letter by letter and a value letter of [`COPY_VALUE_FLAGS`]
+/// (`t`, `S`, `m`, `o`, `g`) takes the rest of the cluster, else the next
+/// word — so `ln -st DIR SRC`, `-sft DIR` and `-stDIR` see `DIR` as the
+/// target directory exactly as `-s -t DIR` does, instead of reading `DIR` as
+/// an operand. A separate long value option (`--target-directory DIR`) takes
+/// the next word; `--target-directory=DIR` carries its own.
 fn legacy_copy_args<'a>(rest: &[&'a str]) -> CopyArgs<'a> {
-    CopyArgs {
-        operands: positional_operands(rest, COPY_VALUE_FLAGS),
-        target_dir: target_directory(rest),
-    }
-}
-
-/// The `-t DIR` / `--target-directory=DIR` destination directory, if given.
-/// Legacy heuristic: only a bare `-t` or a leading `-tX` (see
-/// [`legacy_copy_args`]); [`parse_copy_args`] is the real parser.
-fn target_directory(rest: &[&str]) -> Option<String> {
+    const VALUE_LETTERS: &str = "tSmog";
+    let mut operands = Vec::new();
+    let mut target: Option<(String, (usize, usize))> = None;
     let mut i = 0;
     while i < rest.len() {
         let t = rest[i];
-        if t == "-t" || t == "--target-directory" {
-            return rest.get(i + 1).map(|v| (*v).to_string());
+        i += 1;
+        if t.is_empty() {
+            continue;
+        }
+        if is_bare_redirect_op(t) {
+            i += 1;
+            continue;
+        }
+        if is_redirect_token(t) {
+            continue;
         }
         if let Some(v) = t.strip_prefix("--target-directory=") {
-            return Some(v.to_string());
+            target.get_or_insert((v.to_string(), (i - 1, t.len() - v.len())));
+            continue;
         }
-        if let Some(v) = t.strip_prefix("-t") {
-            if !v.is_empty() && !v.starts_with('-') {
-                return Some(v.to_string());
+        if t.starts_with("--") {
+            if COPY_VALUE_FLAGS.contains(&t) {
+                if t == "--target-directory" {
+                    if let Some(v) = rest.get(i) {
+                        target.get_or_insert(((*v).to_string(), (i, 0)));
+                    }
+                }
+                i += 1;
             }
+            continue;
         }
-        i += 1;
+        if !t.starts_with('-') || t.len() == 1 {
+            operands.push(t);
+            continue;
+        }
+        let cluster = &t[1..];
+        for (pos, c) in cluster.char_indices() {
+            if !VALUE_LETTERS.contains(c) {
+                continue;
+            }
+            let tail_at = 1 + pos + c.len_utf8();
+            if tail_at == t.len() {
+                if c == 't' {
+                    if let Some(v) = rest.get(i) {
+                        target.get_or_insert(((*v).to_string(), (i, 0)));
+                    }
+                }
+                i += 1;
+            } else if c == 't' {
+                target.get_or_insert((t[tail_at..].to_string(), (i - 1, tail_at)));
+            }
+            break;
+        }
     }
-    None
+    let (target_dir, target_at) = match target {
+        Some((d, at)) => (Some(d), Some(at)),
+        None => (None, None),
+    };
+    CopyArgs {
+        operands,
+        target_dir,
+        target_at,
+    }
+}
+
+/// The getopt split of a `cp` / `mv` / `install` / `ln` argv (`g`-prefixed
+/// names included), shared by every layer that needs its operands or its
+/// `-t` target directory (the relink layer, the system-path `mv` source rule)
+/// so a short cluster (`-st DIR`, `-sft DIR`, `-at DIR`, `-ftDIR`) is read the
+/// same way everywhere (backlog 42d5fa32).
+///
+/// [`parse_copy_args`] when it splits the argv with certainty, else the
+/// cluster-aware [`legacy_copy_args`] heuristic. The heuristic split is NOT a
+/// verdict: [`analyze_copy_move`] keeps its own Ask for an unsplittable line.
+pub(super) struct CopySplit<'a> {
+    /// Positional operands, in order (the input words themselves).
+    pub(super) operands: Vec<&'a str>,
+    /// The target directory value, if any.
+    pub(super) target_dir: Option<String>,
+    /// `(index into rest, byte offset of the value in that word)` of
+    /// [`Self::target_dir`].
+    pub(super) target_at: Option<(usize, usize)>,
+}
+
+/// See [`CopySplit`]. `cmd` is the normalized command name; anything but
+/// `cp`/`mv`/`install`/`ln` (and their `g` forms) gets the heuristic split.
+pub(super) fn copy_split<'a>(cmd: &str, rest: &[&'a str]) -> CopySplit<'a> {
+    let verb = match cmd {
+        "cp" | "gcp" => "cp",
+        "mv" | "gmv" => "mv",
+        "install" | "ginstall" => "install",
+        "ln" | "gln" => "ln",
+        _ => "",
+    };
+    let parsed = if verb.is_empty() {
+        None
+    } else {
+        parse_copy_args(verb, rest).ok()
+    };
+    let args = parsed.unwrap_or_else(|| legacy_copy_args(rest));
+    CopySplit {
+        operands: args.operands,
+        target_dir: args.target_dir,
+        target_at: args.target_at,
+    }
 }
 
 /// `cp` / `mv` / `install` / `ln`: the DESTINATION is what gets overwritten —

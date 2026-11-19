@@ -2257,6 +2257,8 @@ notes = "Observed 2026-11-19 at main 5a27f8ecd (blastguard 0.2.738), macOS, herm
 created_at = 1795097871
 updated_at = 1795097871
 weight = 0.0
+issue_number = 1867
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1867"
 rev = 0
 
 [task.repro]

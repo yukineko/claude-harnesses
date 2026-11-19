@@ -2498,3 +2498,35 @@ exit 101: 5ba/crates/progeffect)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.20s
      Running tests/daf7611b_executor_behaviour.rs (target/debug/deps/daf7611b_executor_behaviour-913846659bed5835)
 error: test failed, to rerun pass `-p blastguard --test daf7611b_executor_behaviour`"""
+
+[[task]]
+id = "bf9a13f6"
+title = "blastguard test RED: high_blast_tier outside_tree_rm_with_a_resolving_cd_stays_allowed fails"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "test-red",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "high_blast_tier.rs:257: a cd that resolves the .. back to an ordinary place must stay Allow. Observed 2026-11-20 on main a0ba7bad0 (detached worktree verify-main-q3q4), found while integrating Q3/Q4 deny-target table (7275b9d9); same failure on the integration tree. Readings: (a) real regression on main; (b) stale assert vs a later ruling or the S5 AST evaluator; distinguish by git log -S on the asserted case."
+created_at = 1795110533
+updated_at = 1795110533
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test high_blast_tier outside_tree_rm_with_a_resolving_cd_stays_allowed"
+rev = "4c286f7b61e70f4a56ccb658a200c3c4085bdf1a"
+observed_at = 1795110533
+detail = """
+exit 101: 0 ignored; 0 measured; 12 filtered out; finished in 0.02s
+
+   Compiling blastguard v0.2.761 (/Users/yuki/src/.harness-worktrees/session-179495ba/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.69s
+     Running tests/high_blast_tier.rs (target/debug/deps/high_blast_tier-14ff33106b5e56ea)
+error: test failed, to rerun pass `-p blastguard --test high_blast_tier`"""

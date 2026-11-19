@@ -129,9 +129,13 @@ const PROTECTED_GLOBS: &[&str] = &[
     // Measured (blastguard 0.2.59): `chmod -x
     // $HOME/.claude/plugins/cache/yukineko/blastguard/0.2.58/bin/blastguard`
     // was ALLOW. Scoped to `bin/` and `hooks/` only: the rest of a version dir
-    // (skills, docs, plugin.json) keeps the ordinary rules. Reads and
-    // `chmod +x` stay allowed; the chmod arm denies only modes that remove
-    // read or exec.
+    // (skills, docs, plugin.json) keeps the ordinary rules. Reads stay
+    // allowed. The chmod arm that consults this list denies only modes that
+    // remove read or exec; a shell `chmod` of any other mode that does not
+    // ONLY add exec bits (`777`, `o+w`, `-R …`) on these trees is Deny
+    // through the Q3/Q4 deny-target table (`detect/ast/judge/deny_targets.rs`,
+    // backlog 7275b9d9, user ruling 2026-11-20); `chmod +x` / `755` stay
+    // allowed.
     ".claude/plugins/cache/**/bin/**",
     "**/.claude/plugins/cache/**/bin/**",
     ".claude/plugins/cache/**/hooks/**",

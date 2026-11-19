@@ -84883,6 +84883,148 @@ executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
 
 [[task]]
+id = "dc053fcf"
+title = "blastguard FP: for-loop over a literal word list writing $D/$f.tmp then mv is refused (loop var left unresolved)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-15 (relay bgr-d51baecd617b; probe by independent designer on 0.2.611): for f in a b; do ... > $D/$f.tmp && mv ...; done is ask/deny with "a command that may relink it runs first and the path cannot be placed"; $D resolves but $f is shown unexpanded. Same literal paths without the variable = allow; no-loop with $D = allow; unrelated mv gives the same reason. Candidate cause crates/blastguard/src/detect/relink.rs ~394 (absolute(...).ok_or_else on loop/relink lines). Secondary (not asserted): loop write without mv / with rm / cp is deny 'destroys the file's current contents' with $f unexpanded — check after fix. Controls kept restrictive: $(ls) list, ln -s /etc write."""
+created_at = 1794734286
+updated_at = 1795102846
+weight = 0.0
+issue_number = 1800
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1800"
+issue_closed_at = 1795102848
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_for_loop_literal_list_tmp_mv_fp -- --ignored"
+rev = "cfa64022e3b6c2bde0dcb838e92f156cf050269b"
+observed_at = 1794734286
+detail = """
+exit 101: /yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.07s
+     Running tests/backlog_20261115_for_loop_literal_list_tmp_mv_fp.rs (target/debug/deps/backlog_20261115_for_loop_literal_list_tmp_mv_fp-8f7ede9a6c651cbc)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_for_loop_literal_list_tmp_mv_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261115_for_loop_literal_list_tmp_mv_fp"
+exit = 0
+passed = 12
+rev = "93f68a80a08a99954831e9109e202aaf81f686d8"
+observed_at = 1795102844
+output_digest = "sha256:2bd3bbc4b7b40a9d507e3c8b1abaa6ec1c1e1be9c0834bcd5bfcbb3a75aef732"
+excerpt = """
+
+running 12 tests
+test control_loop_relative_symlink_source_into_etc_is_not_allowed ... ok
+test control_loop_dotdot_symlink_source_into_etc_is_not_allowed ... ok
+test control_loop_symlink_source_reason_is_unplaced_relink ... ok
+test control_loop_over_command_substitution_is_not_allowed ... ok
+test control_loop_relative_cp_symbolic_source_into_etc_is_not_allowed ... ok
+test control_no_loop_relative_symlink_source_into_etc_is_denied ... ok
+test control_write_through_earlier_symlink_is_not_allowed ... ok
+test control_loop_relative_symlink_source_several_values_is_not_allowed ... ok
+test control_loop_abbreviated_cp_symbolic_is_not_allowed ... ok
+test control_loop_abbreviated_ln_symbolic_is_not_allowed ... ok
+test control_no_loop_abbreviated_symbolic_is_not_allowed ... ok
+test literal_list_for_loop_tmp_then_mv_is_allowed ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/backlog_20261115_for_loop_literal_list_tmp_mv_fp.rs (target/debug/deps/backlog_20261115_for_loop_literal_list_tmp_mv_fp-00fd288d1ad866d6)
+"""
+
+[task.closure.red]
+rev = "e17ee5e922bd7f057848f61393a410c781e4b596"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "7275b9d9"
+title = "blastguard fail-open: Q3/Q4 deny targets (.ssh, home dir, gate scripts, .gitconfig) outside $HOME are not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed at rev 84d930e83 (tree incl S5), 2026-11-20, hermetic HOME != /Users/<n>. 59-case probe: /private/tmp/claude-502/-Users-yuki-src-harness/179495ba-af97-4f48-aa93-614e6ece918d/scratchpad/q3q4_probe.txt. Allow/Allow for ALL ops (redirect,mv,cp,chmod 777,rm,ln -sf) on /Users/x/.ssh/authorized_keys, <dir>/.ssh/id_rsa, <dir>/.gitconfig, scripts/check-*.py, crates/*/hooks/**; mv and ln -sf of /Users/x and /home/x allow; python os.replace/os.chmod/open(wb) allow. .githooks and ~/.claude/plugins/cache/**/bin: write/mv/cp/ln = main ask sub deny; chmod 777 allow; rm deny. rm -rf and chmod -R of /Users/x deny already. Reading (a): protections are $HOME-relative only (IRREPLACEABLE_HOME_DIRS, SYSTEM_PREFIXES w/o /Users, exclude.rs globs lack .ssh/scripts/check-*/crates/*/hooks) and chmod rule only denies read/exec-removing modes. Reading (b): the fixture/hermetic HOME just does not match literal /Users/<n>, i.e. rules exist but are keyed to real HOME. Distinguishing check: rerun with HOME=/Users/somebody for the .ssh/authorized_keys cases; if they flip to deny it is (b), if still allow it is (a); the {BASE}/anydir/.ssh/id_rsa and .gitconfig cases (not under any HOME) separate Q3 'even when not HOME' either way. Controls (reads, /tmp scratch, /tmp/sshx/f, /tmp/notscripts/check-x.txt) are allow today and asserted as-is. Not verified: reading (a) vs (b) was not executed."
+created_at = 1795103122
+updated_at = 1795109395
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_q3q4_deny_target_table -- --ignored"
+rev = "346489342fe1397ab7bbb1e9377c5ecba5fb76bc"
+observed_at = 1795103122
+detail = """
+exit 101: d v0.2.745 (/Users/yuki/src/.harness-worktrees/red-q3q4-targets-20261120/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.82s
+     Running tests/backlog_20261120_q3q4_deny_target_table.rs (target/debug/deps/backlog_20261120_q3q4_deny_target_table-2303afeeed54ab7d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_q3q4_deny_target_table`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261120_q3q4_deny_target_table"
+exit = 0
+passed = 15
+rev = "fb992f68b6e564bd48316c73771d8a8196d60730"
+observed_at = 1795109392
+output_digest = "sha256:812b6eea5a57ba9d0cc9642f0f50b3699a8c7c92cf1b5f7bf487cb0a1e2ee991"
+excerpt = """
+
+running 15 tests
+test red_githooks_chmod777 ... ok
+test red_plugin_cache_chmod777 ... ok
+test red_home_dir_mv_and_ln ... ok
+test red_py_open_wb_gate_script ... ok
+test red_githooks_write_ops_main_ask ... ok
+test red_py_os_chmod_anydir_idrsa ... ok
+test red_py_os_replace_users_authkeys ... ok
+test already_deny_rm_of_githooks_plugin_cache_and_home_dir ... ok
+test red_gitconfig_anydir_all_ops ... ok
+test red_plugin_cache_write_ops_main_ask ... ok
+test red_crate_hooks_all_ops ... ok
+test red_gate_check_script_all_ops ... ok
+test controls_keep_current_verdict ... ok
+test red_ssh_idrsa_anydir_all_ops ... ok
+test red_ssh_authkeys_users_all_ops ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.81s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/backlog_20261120_q3q4_deny_target_table.rs (target/debug/deps/backlog_20261120_q3q4_deny_target_table-0f7abb1c19dd14a8)
+"""
+
+[task.closure.red]
+rev = "346489342fe1397ab7bbb1e9377c5ecba5fb76bc"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
 id = "c1873b73"
 title = """blastguard: python heredoc os.__dict__['sys'+'tem']("cat x | { bash; }") judged allow"""
 project = "/home/hiroyuki_nakayama/src/harness"
@@ -85208,77 +85350,6 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 [task.closure.red]
 rev = "c92d77e74587df6ef103031b088473fcb37e010b"
-kind = "not-executed"
-executed = false
-note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
-
-[[task]]
-id = "dc053fcf"
-title = "blastguard FP: for-loop over a literal word list writing $D/$f.tmp then mv is refused (loop var left unresolved)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "done"
-notes = """Observed 2026-11-15 (relay bgr-d51baecd617b; probe by independent designer on 0.2.611): for f in a b; do ... > $D/$f.tmp && mv ...; done is ask/deny with "a command that may relink it runs first and the path cannot be placed"; $D resolves but $f is shown unexpanded. Same literal paths without the variable = allow; no-loop with $D = allow; unrelated mv gives the same reason. Candidate cause crates/blastguard/src/detect/relink.rs ~394 (absolute(...).ok_or_else on loop/relink lines). Secondary (not asserted): loop write without mv / with rm / cp is deny 'destroys the file's current contents' with $f unexpanded — check after fix. Controls kept restrictive: $(ls) list, ln -s /etc write."""
-created_at = 1794734286
-updated_at = 1795102846
-weight = 0.0
-issue_number = 1800
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1800"
-issue_closed_at = 1795102848
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261115_for_loop_literal_list_tmp_mv_fp -- --ignored"
-rev = "cfa64022e3b6c2bde0dcb838e92f156cf050269b"
-observed_at = 1794734286
-detail = """
-exit 101: /yuki/src/.harness-worktrees/session-6dcca0ad/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.07s
-     Running tests/backlog_20261115_for_loop_literal_list_tmp_mv_fp.rs (target/debug/deps/backlog_20261115_for_loop_literal_list_tmp_mv_fp-8f7ede9a6c651cbc)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261115_for_loop_literal_list_tmp_mv_fp`"""
-
-[task.closure]
-reason = "fixed"
-
-[task.closure.green]
-runner = "cargo-test"
-cmd = "cargo test -p blastguard --test backlog_20261115_for_loop_literal_list_tmp_mv_fp"
-exit = 0
-passed = 12
-rev = "93f68a80a08a99954831e9109e202aaf81f686d8"
-observed_at = 1795102844
-output_digest = "sha256:2bd3bbc4b7b40a9d507e3c8b1abaa6ec1c1e1be9c0834bcd5bfcbb3a75aef732"
-excerpt = """
-
-running 12 tests
-test control_loop_relative_symlink_source_into_etc_is_not_allowed ... ok
-test control_loop_dotdot_symlink_source_into_etc_is_not_allowed ... ok
-test control_loop_symlink_source_reason_is_unplaced_relink ... ok
-test control_loop_over_command_substitution_is_not_allowed ... ok
-test control_loop_relative_cp_symbolic_source_into_etc_is_not_allowed ... ok
-test control_no_loop_relative_symlink_source_into_etc_is_denied ... ok
-test control_write_through_earlier_symlink_is_not_allowed ... ok
-test control_loop_relative_symlink_source_several_values_is_not_allowed ... ok
-test control_loop_abbreviated_cp_symbolic_is_not_allowed ... ok
-test control_loop_abbreviated_ln_symbolic_is_not_allowed ... ok
-test control_no_loop_abbreviated_symbolic_is_not_allowed ... ok
-test literal_list_for_loop_tmp_then_mv_is_allowed ... ok
-
-test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
-     Running tests/backlog_20261115_for_loop_literal_list_tmp_mv_fp.rs (target/debug/deps/backlog_20261115_for_loop_literal_list_tmp_mv_fp-00fd288d1ad866d6)
-"""
-
-[task.closure.red]
-rev = "e17ee5e922bd7f057848f61393a410c781e4b596"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

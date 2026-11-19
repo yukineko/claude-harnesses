@@ -66,6 +66,7 @@ use std::ops::Range;
 use super::{Cause, Script, Value};
 use crate::scope::SafeRoots;
 
+pub(super) mod deny_targets;
 mod table_b;
 
 /// What a modelled command (Table B) does to one target path.

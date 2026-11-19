@@ -1970,7 +1970,7 @@ fn append_redirect_targeting_protected_path_is_gated() {
     // malicious hook entry or setting, so a protected TARGET must override
     // the append-is-safe default and stay gated.
     assert_protected_modify(bash("echo malicious >> ~/.claude/settings.json"));
-    assert_protected_modify(bash("echo malicious >> .githooks/pre-commit"));
+    assert!(bash("echo malicious >> .githooks/pre-commit").is_deny()); // Q4: Deny, ruling 2026-11-20
     assert_protected_modify(bash("echo malicious >> deny.toml"));
 }
 
@@ -2128,7 +2128,7 @@ fn cp_mv_sed_onto_protected_paths_are_gated() {
     assert_protected_modify(bash("sed -i s/a/b/ .claude/settings.json"));
     // `mv` onto a protected DESTINATION is a modify; moving one AWAY is a
     // disarm and keeps its flat Deny (see `moving_a_protected_path_away_*`).
-    assert_protected_modify(bash("mv evil.sh .githooks/pre-commit"));
+    assert!(bash("mv evil.sh .githooks/pre-commit").is_deny()); // Q4: Deny, ruling 2026-11-20
 }
 
 #[test]
@@ -2455,7 +2455,7 @@ fn tee_append_onto_a_protected_path_is_gated() {
         failing.is_empty(),
         "tee -a writes to its file argument; a protected target must be gated: {failing:?}"
     );
-    assert_protected_modify(bash("tee -a .githooks/pre-commit"));
+    assert!(bash("tee -a .githooks/pre-commit").is_deny()); // Q4: Deny, ruling 2026-11-20
 }
 
 #[test]
@@ -4081,8 +4081,8 @@ fn tee_asks_the_same_questions_as_the_redirect_it_mirrors() {
         bash("echo x | tee /etc/sudoers.d/evil").is_deny(),
         "creating a file in a system policy directory is not an absent-target allow"
     );
-    // The protected-path axis the arm already had stays intact.
-    assert_protected_modify(bash("echo x | tee .githooks/pre-commit"));
+    // The protected-path axis stays intact (Q4 gate script: Deny, ruling 2026-11-20).
+    assert!(bash("echo x | tee .githooks/pre-commit").is_deny()); // Q4: Deny, ruling 2026-11-20
 
     let _ = std::fs::remove_file(&real);
 }

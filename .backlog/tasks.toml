@@ -2085,35 +2085,6 @@ exit 101: rness-worktrees/red-ln-combined-t-20261119/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261119_ln_combined_short_t_symlink_harm`"""
 
 [[task]]
-id = "7275b9d9"
-title = "blastguard fail-open: Q3/Q4 deny targets (.ssh, home dir, gate scripts, .gitconfig) outside $HOME are not Deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "Observed at rev 84d930e83 (tree incl S5), 2026-11-20, hermetic HOME != /Users/<n>. 59-case probe: /private/tmp/claude-502/-Users-yuki-src-harness/179495ba-af97-4f48-aa93-614e6ece918d/scratchpad/q3q4_probe.txt. Allow/Allow for ALL ops (redirect,mv,cp,chmod 777,rm,ln -sf) on /Users/x/.ssh/authorized_keys, <dir>/.ssh/id_rsa, <dir>/.gitconfig, scripts/check-*.py, crates/*/hooks/**; mv and ln -sf of /Users/x and /home/x allow; python os.replace/os.chmod/open(wb) allow. .githooks and ~/.claude/plugins/cache/**/bin: write/mv/cp/ln = main ask sub deny; chmod 777 allow; rm deny. rm -rf and chmod -R of /Users/x deny already. Reading (a): protections are $HOME-relative only (IRREPLACEABLE_HOME_DIRS, SYSTEM_PREFIXES w/o /Users, exclude.rs globs lack .ssh/scripts/check-*/crates/*/hooks) and chmod rule only denies read/exec-removing modes. Reading (b): the fixture/hermetic HOME just does not match literal /Users/<n>, i.e. rules exist but are keyed to real HOME. Distinguishing check: rerun with HOME=/Users/somebody for the .ssh/authorized_keys cases; if they flip to deny it is (b), if still allow it is (a); the {BASE}/anydir/.ssh/id_rsa and .gitconfig cases (not under any HOME) separate Q3 'even when not HOME' either way. Controls (reads, /tmp scratch, /tmp/sshx/f, /tmp/notscripts/check-x.txt) are allow today and asserted as-is. Not verified: reading (a) vs (b) was not executed."
-created_at = 1795103122
-updated_at = 1795103122
-weight = 0.0
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_q3q4_deny_target_table -- --ignored"
-rev = "346489342fe1397ab7bbb1e9377c5ecba5fb76bc"
-observed_at = 1795103122
-detail = """
-exit 101: d v0.2.745 (/Users/yuki/src/.harness-worktrees/red-q3q4-targets-20261120/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.82s
-     Running tests/backlog_20261120_q3q4_deny_target_table.rs (target/debug/deps/backlog_20261120_q3q4_deny_target_table-2303afeeed54ab7d)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_q3q4_deny_target_table`"""
-
-[[task]]
 id = "cfb98cd5"
 title = "blastguard: cp into /etc via .. segments (loop value or plain) is Allow"
 project = "/Users/yuki/src/harness"
@@ -2235,49 +2206,6 @@ exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
 
 [[task]]
-id = "f6716c2b"
-title = "[bg-heredoc-script-failopen-596ef57d:R-gate] Q4: プロジェクトの scripts/check-*.py の上書きは、heredoc（絶対パス・相対パス）と python stdin の open(...,'w') のどちらでも Allow にならない（裁定上は Ask）。"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "spec",
-    "spec:bg-heredoc-script-failopen-596ef57d",
-    "req:bg-heredoc-script-failopen-596ef57d:R-gate",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-gate から自動起票 (ratify 時).
-spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
-statement: Q4: プロジェクトの scripts/check-*.py の上書きは、heredoc（絶対パス・相対パス）と python stdin の open(...,'w') のどちらでも Allow にならない（裁定上は Ask）。
-
-done_criteria (spec の acceptance を逐語で。言い換えないこと):
-  - `... -- --ignored r_gate` が pass する。対象は v_gate_script_overwrite, h_overwrite_worktree_isolation, stdin_x_check_worktree_isolation_overwrite で、main/sub とも allow 以外
-  - Q4 の上書き判定は Deny ではなく Ask を返す（round 3 (4)）。ただし同じコマンドで別の Deny 判定が当たった場合は strictest-wins に従う
-
-canon:
-  - .backlog/tasks.toml 596ef57d: "Q4 gate scripts = .githooks/**, scripts/check-*.py, crates/*/hooks/**, ~/.claude/plugins/cache/**/{bin,hooks}."
-  - .backlog/tasks.toml 596ef57d round 3: "(4) Q4 gate-script overwrite -> Ask (not Deny)."
-  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:244-262 r_gate
-"""
-created_at = 1795109176
-updated_at = 1795109176
-weight = 0.0
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_gate"
-rev = "546930a554046a5a4704b5978a588068b4c0a279"
-observed_at = 1795109176
-detail = """
-exit 101: ng blastguard v0.2.751 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.87s
-     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-9132e453e006d9a6)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
-
-[[task]]
 id = "c3f6d88b"
 title = "[bg-heredoc-script-failopen-596ef57d:R-stdin-effect] python stdin プログラム内のプロセス起動 sink は「API 名 + 引数の効果」で判定する。allowlist 外の sink は Ask にする。allowlist 内の sink は argv を既存の shell effect/path ルールで判定し、Allow になるのはそのルールが Allow を返す場合だけにする。静的に解決できない引数は Ask にする。"
 project = "/Users/yuki/src/harness"
@@ -2365,6 +2293,49 @@ detail = """
 exit 101: ng blastguard v0.2.754 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 7.38s
      Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-b404579e77650688)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
+
+[[task]]
+id = "f6716c2b"
+title = "[bg-heredoc-script-failopen-596ef57d:R-gate] Q4: プロジェクトの scripts/check-*.py の上書きは、heredoc（絶対パス・相対パス）と python stdin の open(...,'w') のどちらでも Allow にならない（裁定上は Ask）。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-gate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-gate から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: Q4: プロジェクトの scripts/check-*.py の上書きは、heredoc（絶対パス・相対パス）と python stdin の open(...,'w') のどちらでも Allow にならない（裁定上は Ask）。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `... -- --ignored r_gate` が pass する。対象は v_gate_script_overwrite, h_overwrite_worktree_isolation, stdin_x_check_worktree_isolation_overwrite で、main/sub とも allow 以外
+  - Q4 の上書き判定は Deny ではなく Ask を返す（round 3 (4)）。ただし同じコマンドで別の Deny 判定が当たった場合は strictest-wins に従う
+
+canon:
+  - .backlog/tasks.toml 596ef57d: "Q4 gate scripts = .githooks/**, scripts/check-*.py, crates/*/hooks/**, ~/.claude/plugins/cache/**/{bin,hooks}."
+  - .backlog/tasks.toml 596ef57d round 3: "(4) Q4 gate-script overwrite -> Ask (not Deny)."
+  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:244-262 r_gate
+"""
+created_at = 1795109176
+updated_at = 1795109176
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_gate"
+rev = "546930a554046a5a4704b5978a588068b4c0a279"
+observed_at = 1795109176
+detail = """
+exit 101: ng blastguard v0.2.751 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.87s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-9132e453e006d9a6)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
 
 [[task]]

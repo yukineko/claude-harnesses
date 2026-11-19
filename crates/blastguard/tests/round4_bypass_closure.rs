@@ -171,9 +171,12 @@ fn chmod_that_keeps_read_and_exec_or_targets_ordinary_files_stays_allow() {
         bash("chmod 755 .githooks/pre-commit"),
         "chmod 755 .githooks/pre-commit",
     );
-    assert_allow(
-        bash("chmod 700 .githooks/pre-commit"),
-        "chmod 700 .githooks/pre-commit",
+    // User ruling 2026-11-20 (Q3/Q4 deny-target table, backlog 7275b9d9):
+    // only exec-adding chmod stays Allow on a Q4 gate script; 700 also drops
+    // group/other bits, so it is Deny (it was Allow before that ruling).
+    assert!(
+        bash("chmod 700 .githooks/pre-commit").is_deny(),
+        "chmod 700 .githooks/pre-commit must Deny (ruling 2026-11-20)"
     );
     // Ordinary non-protected targets stay Allow regardless of mode.
     assert_allow(bash("chmod 644 README.md"), "chmod 644 README.md");

@@ -85801,3 +85801,244 @@ FAILED scripts/test_fail_open_mutation_leaves_no_artifacts.py::MutationRunArtifa
 [task.closure]
 reason = "discard"
 discard_reason = "Not reproducible since the 2026-11-14 scratch-copy ruling. The original repro test passes only vacuously because its stub never runs (d5c404c0). At 1858cf6da a new test, scripts/test_fail_open_mutation_artifacts_exercised_20261120.py, drives run_scenarios with a stub that has the real run_crate_tests call shape and writes a proptest-like regression seed file under the tree cargo runs in. Observed on macOS: 2 passed. The stub was called once, it ran in the scratch copy rather than the invoking tree, the scenario reached status caught with exit 0, the scratch copy holding the artifact was removed, and no new untracked file appeared in the invoking tree. The sensitivity control, which writes into the invoking tree, is detected as a leak, so the measurement is not blind. Not proven: real cargo or proptest path resolution, or tests that write into the invoking tree through an absolute path."
+
+[[task]]
+id = "a77dd80f"
+title = "blastguard: 105 integration tests hard-code macOS /private/tmp fixtures and fail at setup on Linux at 8dedad41 (8 targets)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-13 at main 8dedad41 and again at 1fd747e9 (blastguard 0.2.500), Linux WSL2 6.6.87.2, /tmp is a plain dir on the ext4 root fs (not tmpfs), TMPDIR unset, /private does not exist. Targets and counts: scope_redirect_relaxation_boundaries_20261108 64, mutation_kill_cd_rest_tmp 19, tmp_truncation_recoverable 11, tmp_truncation_refusals 3, scratchpad_truncating_redirect_fp_20261107 3, cd_and_chain_equivalence 3, git_exec_subcommand_failopen_20261107 1 (control_rm_rf_inside_private_tmp_scratch_stays_allow), managed_place_destructive_allow_20261107 1 (target_rm_rf_dir_inside_private_tmp_place_allow). Every one panics in fixture setup before blastguard is asked anything: create_dir_all of a literal /private/tmp/... path -> Os code 13 PermissionDenied (104 tests), or create_dir -> Os code 2 NotFound (managed_place). Rerun per target: identical, 0 panics other than these. Reading (b) test assumption: fixtures assume macOS where /tmp is a symlink to /private/tmp; scope_redirect_relaxation also states it needs a case-insensitive FS (APFS) for its case-fold tests to bite. Reading (a) real Linux verdict defect: cannot be the cause of these panics (the verdict is never reached), but it means the Linux verdict for these 105 cases is UNTESTED. Distinguishing probe run: 9 representative cases replayed by hand against the hook binary with /tmp in place of /private/tmp and the same env as the fixtures (HOME/project outside /tmp, TMPDIR removed): truncating redirect onto existing /tmp file, redirect to new /tmp file, cd into /tmp dir then redirect, recursive rm of a dir inside /tmp, cd into /tmp dir then recursive rm of sub, recursive rm of nonexistent /tmp/foo -> all allow as the tests expect; dotdot escape out of /tmp and symlink escape out of /tmp onto a project file -> ask; cd up out of /tmp then recursive rm of the project -> deny, as expected. Not checked: the other 96 cases. Prior art: tests/fixture_portability.rs (issue 1486) bans the /private/tmp literal only in src unit tests, not in tests/. Fix direction: use the canonical-temp-root helper (src/scope.rs test helper documents /private/tmp on macOS, /tmp on Linux) in these fixtures.
+Linux-only defect (user ruling 2026-11-20). The named tests pass on this macOS host and Linux is not observable here, so nothing on this host demonstrates the defect. Re-file with a fresh repro if it reproduces on Linux."""
+created_at = 1794547570
+updated_at = 1795111358
+weight = 0.0
+issue_number = 1697
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1697"
+issue_closed_at = 1795111362
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test tmp_truncation_recoverable"
+rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
+observed_at = 1794547570
+detail = """
+exit 101: isting_nested_tmp_file_allows
+
+test result: FAILED. 0 passed; 11 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.04s
+     Running tests/tmp_truncation_recoverable.rs (target/debug/deps/tmp_truncation_recoverable-6e7824e28c0732cb)
+error: test failed, to rerun pass `-p blastguard --test tmp_truncation_recoverable`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "Linux-only defect (user ruling 2026-11-20). The named tests pass on this macOS host and Linux is not observable here, so nothing on this host demonstrates the defect. Re-file with a fresh repro if it reproduces on Linux."
+
+[[task]]
+id = "7ec1bb90"
+title = "blastguard: 13 Allow-expecting /tmp tests in 7 targets get the confined Ask on Linux - neutral_base alias puts fixture HOME under /tmp (contains_home)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Newly visible 2026-11-13 after 7fba2b82 (a77dd80f; pre-rebase sha de8b82ca) made these fixtures place their temp dirs under canonicalize(/tmp) instead of a literal /private/tmp; before that they panicked in setup on Linux and were never able to run. Linux WSL2 ext4, TMPDIR unset. Observed vs expected (all: expected Allow, observed ask, reason 'recursive rm (-r) is confined to /tmp - a safe root for this session ...' or 'truncating redirect is confined to /tmp - a safe root ...'): mutation_kill_cd_rest_tmp c_cd_tied_rest_allows_and_untied_does_not, c_tmp_plain_existing_file_allows, k_tmp_file_under_dot_git_entry_is_not_allow (its plain/w.txt control); tmp_truncation_recoverable t1..t4; tmp_truncation_refusals c1_plain_existing_single_link_file_in_tmp_allows; scratchpad_truncating_redirect_fp_20261107 control_scratchpad_log_redirect_existing_same_case_allows; cd_and_chain_equivalence c2_tmp_absolute_form_allow, r2_cd_tmpdir_then_rm_sub_is_allow; git_exec_subcommand_failopen_20261107 control_rm_rf_inside_private_tmp_scratch_stays_allow; managed_place_destructive_allow_20261107 target_rm_rf_dir_inside_private_tmp_place_allow. Cause, observed: tests/support/neutral_base.rs spells the fixture base via an alias symlink in std::env::temp_dir() (= /tmp on Linux), so fixture HOME is spelled under /tmp, and src/scope/deletion_roots.rs drops any temp deletion root containing HOME (!contains_home), so /tmp is no disposable root and the relaxation is withheld. Distinguishing checks run: (1) with BLASTGUARD_TEST_FIXTURE_DIR=/home/<user>/a77-fixture-base (outside /tmp, no git) all 7 targets pass 100%; (2) hand probe of the hook binary: HOME under /tmp -> ask, HOME outside /tmp -> allow, project location irrelevant. Linux verdict is MORE restrictive (not fail-open); refusing a temp root containing HOME is intended. Same root cause as 9653d25d (script_file_content_exec); fix both in neutral_base (alias location on Linux) together.
+Linux-only defect (user ruling 2026-11-20). The named tests pass on this macOS host and Linux is not observable here, so nothing on this host demonstrates the defect. Re-file with a fresh repro if it reproduces on Linux."""
+created_at = 1794551632
+updated_at = 1795111362
+weight = 0.0
+issue_number = 1706
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1706"
+issue_closed_at = 1795111365
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test tmp_truncation_recoverable"
+rev = "de8b82ca2fa4a46938bcb38559e7156697c6bc5f"
+observed_at = 1794551632
+detail = """
+exit 101: )
+   Compiling blastguard v0.2.503 (/home/hiroyuki_nakayama/src/.harness-worktrees/fix-private-tmp-a77dd80f-bl/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 28.29s
+     Running tests/tmp_truncation_recoverable.rs (target/debug/deps/tmp_truncation_recoverable-134965f141cc1ad8)
+error: test failed, to rerun pass `-p blastguard --test tmp_truncation_recoverable`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "Linux-only defect (user ruling 2026-11-20). The named tests pass on this macOS host and Linux is not observable here, so nothing on this host demonstrates the defect. Re-file with a fresh repro if it reproduces on Linux."
+
+[[task]]
+id = "f9f3eed8"
+title = "blastguard: relink_operands h3a/h3b deny-reason needle assumes macOS spelling of /etc, fails on Linux at 8dedad41 (2 tests)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-13 at 8dedad41 and 1fd747e9, Linux WSL2 (/etc is a real dir, not a symlink to /private/etc). Failing: h3a_cp_t_into_relinked_dir and h3b_cp_target_directory_into_relinked_dir. Verbatim: deny reason must name the real landing (one of [/etc/, /private/etc]); got a deny whose reason begins: cp target /etc writes into a system directory - a NEW file there is itself the change ... [system harm: refused on every request, never handed back as a question]. The verdict is deny, as the test requires; only the reason-text needle fails. On Linux the landing is spelled /etc without a trailing slash, which neither needle matches; on macOS it would read /private/etc. Reading (a) defect: verdict correct and the reason does name the real landing, so not a gate fail-open; at most a wording inconsistency (other cases name /etc/hosts). Reading (b) test assumption: the needle list was written for the macOS spelling. Distinguishing check: the other 12 tests in the target (h1, h2 etc., naming /etc/hosts) pass on Linux; the h3 verdict is deny in the observed output.
+Linux-only defect (user ruling 2026-11-20). The named tests pass on this macOS host and Linux is not observable here, so nothing on this host demonstrates the defect. Re-file with a fresh repro if it reproduces on Linux."""
+created_at = 1794547960
+updated_at = 1795111365
+weight = 0.0
+issue_number = 1701
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1701"
+issue_closed_at = 1795111368
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test relink_operands_20261112 h3"
+rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
+observed_at = 1794547960
+detail = """
+exit 101: _target_directory_into_relinked_dir
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.14s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/relink_operands_20261112.rs (target/debug/deps/relink_operands_20261112-5ddaa57b4f473dd9)
+error: test failed, to rerun pass `-p blastguard --test relink_operands_20261112`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "Linux-only defect (user ruling 2026-11-20). The named tests pass on this macOS host and Linux is not observable here, so nothing on this host demonstrates the defect. Re-file with a fresh repro if it reproduces on Linux."
+
+[[task]]
+id = "9653d25d"
+title = "blastguard: script_file_content_exec inline control fails on Linux - fixture HOME spelled under /tmp disqualifies /tmp as deletion root (1 test)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-13 at 8dedad41 and 1fd747e9, Linux WSL2, TMPDIR unset so temp_dir() is /tmp. Verbatim: inline harmless baseline must be Allow: rm -rf /tmp/foo -> ask (recursive rm (-r) is confined to /tmp - a safe root for this session ...). Cause, observed: tests/support/neutral_base.rs, when the cargo target dir lies under .harness-worktrees, spells the fixture base through an alias symlink created in temp_dir(), i.e. /tmp/blastguard-wtfix-HASH/run-.../home. The fixture HOME spelling is therefore under /tmp, and src/scope/deletion_roots.rs refuses any temp deletion root that contains HOME (contains_home), so /tmp stops being a disposable root and the rm becomes a confined Ask instead of Allow. On macOS temp_dir() is /var/folders/..., so HOME is not under /tmp. Reading (a) defect: the Linux verdict is MORE restrictive (ask), not fail-open; refusing a temp root that contains HOME is intended. Reading (b) fixture artefact: confirmed. Distinguishing check run: with BLASTGUARD_TEST_FIXTURE_DIR set to a dir under HOME/.cache (outside /tmp, outside git), the target passes 6/6 (14 ignored). A hand probe with HOME outside /tmp also gives allow for rm -rf /tmp/foo. Other neutral_base users on Linux are exposed to the same alias-under-/tmp effect.
+Linux-only defect (user ruling 2026-11-20). The named tests pass on this macOS host and Linux is not observable here, so nothing on this host demonstrates the defect. Re-file with a fresh repro if it reproduces on Linux."""
+created_at = 1794547962
+updated_at = 1795111369
+weight = 0.0
+issue_number = 1702
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1702"
+issue_closed_at = 1795111371
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test script_file_content_exec control_inline_harmless_text_is_allowed_in_this_fixture"
+rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
+observed_at = 1794547962
+detail = """
+exit 101: ess_text_is_allowed_in_this_fixture
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.10s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/script_file_content_exec.rs (target/debug/deps/script_file_content_exec-aa97529daaea1fbb)
+error: test failed, to rerun pass `-p blastguard --test script_file_content_exec`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "Linux-only defect (user ruling 2026-11-20). The named tests pass on this macOS host and Linux is not observable here, so nothing on this host demonstrates the defect. Re-file with a fresh repro if it reproduces on Linux."
+
+[[task]]
+id = "91828a5e"
+title = "blastguard: scoped_destructive relaxed_truncating_forms expects Ask for a /tmp probe file that the 2026-10-28 ruling makes Allow on Linux (1 test)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "linux-baseline",
+    "p2",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-13 at 8dedad41 and 1fd747e9, Linux WSL2, TMPDIR unset. Verbatim: cargo test > /tmp/blastguard-scoped-redirect-PID/blastguard-scoped-redirect-probe.txt is confined to a safe root, so it must Ask (not refuse); got Allow. The test writes an existing probe file into std::env::temp_dir(), which is /tmp on Linux and /var/folders/.../T on macOS. src/detect.rs (Unrecoverable arm, temp_disposable_redirect_target) allows a truncating redirect onto an existing file in a fixed temp root (/tmp, /private/tmp) outside any git tree, per user ruling 2026-10-28. The test's own comment says on Linux temp_dir() is /tmp and claims the two agree, which predates that ruling. Reading (a) fail-open: the Linux verdict is weaker than the test expects, but it is exactly what the ruling and the source comment prescribe, so not a defect unless the ruling is re-read. Reading (b) test assumption (temp_dir not a fixed temp root): confirmed. Distinguishing check run: with TMPDIR pointed at a dir under HOME/.cache (outside /tmp and git) the whole target passes 21/21. Needs a human decision only if the ruling is meant not to cover this shape.
+Linux-only defect (user ruling 2026-11-20). The named tests pass on this macOS host and Linux is not observable here, so nothing on this host demonstrates the defect. Re-file with a fresh repro if it reproduces on Linux."""
+created_at = 1794547964
+updated_at = 1795111372
+weight = 0.0
+issue_number = 1703
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1703"
+issue_closed_at = 1795111374
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test scoped_destructive relaxed_truncating_forms_inside_the_project"
+rev = "1fd747e9cc71dbefbe920c6f69397641daf914fb"
+observed_at = 1794547964
+detail = """
+exit 101: ures:
+    relaxed_truncating_forms_inside_the_project
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.04s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/scoped_destructive.rs (target/debug/deps/scoped_destructive-395b282c42c733bf)
+error: test failed, to rerun pass `-p blastguard --test scoped_destructive`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "Linux-only defect (user ruling 2026-11-20). The named tests pass on this macOS host and Linux is not observable here, so nothing on this host demonstrates the defect. Re-file with a fresh repro if it reproduces on Linux."
+
+[[task]]
+id = "db316cf2"
+title = "condukt tests panic where git and sh share /usr/bin: testscope_fault_seams / testscope_state_test_confirm cannot build the spawn-failure fixture"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "test-env",
+    "p2",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-17 by the t2 verifier (run-20261117-142919-13013) at 3c5bd361d and at base 6f23efe25: testscope_fault_seams_20261117 (2 failed: r8_control_without_fault_spawn_failure_invalidates_and_rerun_runs, r8_invalidate_append_failure_is_reported_leaves_row_pending_and_rerun_asks) and testscope_state_test_confirm_20261117 (1 failed: spawn_failure_invalidates_pending_row_so_rerun_runs) panic: environment cannot build a PATH with git but without sh (/usr/bin): spawn failure not constructible here (testscope_fault_seams_20261117.rs:263, testscope_state_test_confirm_20261117.rs:132). Readings: (a) defect: the fixture depends on git and sh living in different dirs, so spec R8 is unverified on this machine; (b) intended fail-loud: the panic refuses a fake pass. Either way the R8 behaviour is not observed here; the fixture needs a spawn failure that does not rely on PATH layout.
+Linux-only defect (user ruling 2026-11-20). The named tests pass on this macOS host and Linux is not observable here, so nothing on this host demonstrates the defect. Re-file with a fresh repro if it reproduces on Linux."""
+created_at = 1794895183
+updated_at = 1795111375
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test testscope_fault_seams_20261117"
+rev = "18879c00b55136db298f30f84128ac29d0403366"
+observed_at = 1794895183
+detail = """
+exit 101:  failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9m 31s
+     Running tests/testscope_fault_seams_20261117.rs (target/debug/deps/testscope_fault_seams_20261117-0680b439b7ed3bdb)
+error: test failed, to rerun pass `-p condukt --test testscope_fault_seams_20261117`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "Linux-only defect (user ruling 2026-11-20). The named tests pass on this macOS host and Linux is not observable here, so nothing on this host demonstrates the defect. Re-file with a fresh repro if it reproduces on Linux."

@@ -99,10 +99,7 @@ fn check_not_denied(tag: &str, command: &str) {
 
 #[test]
 fn ln_sf_onto_existing_system_symlink_is_not_denied() {
-    check_not_denied(
-        "ln",
-        "ln -sf /opt/homebrew/bin/python3 venv/bin/python",
-    );
+    check_not_denied("ln", "ln -sf /opt/homebrew/bin/python3 venv/bin/python");
 }
 
 #[test]

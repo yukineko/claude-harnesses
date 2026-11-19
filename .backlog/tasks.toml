@@ -827,39 +827,6 @@ FAILED scripts/test_fail_open_mutation_leaves_no_artifacts_stub_invoked_20261114
 ============================== 1 failed in 0.24s ==============================="""
 
 [[task]]
-id = "bf8d8fab"
-title = "test_rollout_refuses_dirty_source.py MutationMarker test_f fails: fake_tests lacks test_args and asserts in-place mutation"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "scripts",
-    "test-stale",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-14 at main 670f82987 and at 202d33f25 (side finding of run-20261114-163341-69351 task b793fddc). Verbatim: scripts/test_rollout_refuses_dirty_source.py:253 AssertionError: None is not true : fixture: mutation not applied while tests ran (error: unexpected exception: TypeError("MutationMarker.test_f_evaluate_scenario_brackets_mutation_with_marker_and_seq.<locals>.fake_tests() got an unexpected keyword argument 'test_args'")). Second defect in the same test: it checks seen['mutated_on_disk'] = 'NEW' in the invoking tree's file, which contradicts USER RULING 2026-11-14 (mutate a scratch copy, never the invoking tree; landed in a53976406). A fix must re-anchor that assertion on the scratch copy (cwd/_ACTIVE_SCRATCH) while keeping the marker+seq bracketing property; per frozen-assert rules, ask if the assertion's named property is ambiguous."""
-created_at = 1794653953
-updated_at = 1794653953
-weight = 0.0
-issue_number = 1776
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1776"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_rollout_refuses_dirty_source.py::MutationMarker::test_f_evaluate_scenario_brackets_mutation_with_marker_and_seq"
-rev = "9fe913745a6a0634dc83723658f0c131086eacc3"
-observed_at = 1794653953
-detail = """
-exit 1: expected keyword argument 'test_args'"))
-
-scripts/test_rollout_refuses_dirty_source.py:253: AssertionError
-=========================== short test summary info ============================
-FAILED scripts/test_rollout_refuses_dirty_source.py::MutationMarker::test_f_evaluate_scenario_brackets_mutation_with_marker_and_seq
-============================== 1 failed in 0.22s ==============================="""
-
-[[task]]
 id = "3ab6109f"
 title = "blastguard: quoted git commit -F - heredoc body judged when opener has a quoted $ option value (protected path in message read as command)"
 project = "/Users/yuki/src/harness"
@@ -984,33 +951,6 @@ exit 101: ndukt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.05s
      Running tests/backlog_20261114_txt_data_heredoc_python_probe.rs (target/debug/deps/backlog_20261114_txt_data_heredoc_python_probe-8821daae300377ea)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_txt_data_heredoc_python_probe`"""
-
-[[task]]
-id = "4242986e"
-title = "condukt testscope: Rule C (task scope) judges the hook payload cwd, not a leading cd target, so cd <task worktree> && cargo test <out of scope> is allowed (fail-open)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-15 at main 2ace975d1: two rerun refusals carried byte-identical fingerprint (2ace975d1fc8783b496cc853711bed7992c900a7:1dcbe1ce95dcba8e); the second command was 'cd /Users/yuki/.condukt/worktrees/run-20261115-173313-90185-t1 && cargo check -p blastguard && tdd green ...' while that worktree was at ddefb055b with payload.rs modified; 2ace975d1 is HEAD of the main checkout = hook payload cwd. Measured: 1dcbe1ce95dcba8e is the dirty-hash of an empty diff + empty untracked list (any clean temp repo gives it), so the payload cwd tree was fingerprinted. Probe with payload cwd = edited tree (uncommitted removal of two #[ignore] lines) allowed the rerun -> the uncommitted-edit hypothesis does NOT reproduce; root cause is cd-prefix. Rerun-ledger half already filed as 214b39b5 (RED backlog_20261114_testscope_cd_tree_identity still fails at 2ace975d1). THIS row: Rule C half. crates/condukt/src/testscope.rs judge(command, cwd) takes cwd from the payload; check_task_scope(tests, cwd) never sees the cd target. RED at 70d8e2116 (independent author), measured 2026-11-15 with main at 95fbd0631, verbatim: 'payload cwd = repo root, cd into task worktree, --test old_t (out of scope): expected a deny, stdout not JSON (EOF while parsing a value at line 1 column 0): ""' (empty stdout = Allow). Control control_out_of_scope_test_with_payload_cwd_in_task_worktree_is_denied passes. Readings: (a) defect - the tree a test runs against is the cd target, both rules must judge it; (b) intended - cd prefix not modelled; even then fail-closed must hold: an unmodelled cd that may move into a task worktree is cannot-determine and must not resolve to Allow. Either reading makes the asserted case non-Allow; they differ only in reason text. Fix constraint: cd must not become a way to dodge the rerun ledger (e.g. cd to a fresh copy to re-run the same test on the same code); a fix that keys on the cd target must keep same-code reruns refused. Also observed live while writing this RED: the hook recorded attempts that never ran (blastguard-blocked / no-test-target), keyed on main's clean tree, and refused the first real run twice (see the unexecuted-attempt row). DOES NOT PROVE: cd chains, pushd, git -C, subshells, cargo --manifest-path."""
-created_at = 1794733334
-updated_at = 1794733334
-weight = 0.0
-issue_number = 1796
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1796"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261115_testscope_cd_prefix_rule_c -- --ignored out_of_scope_test_via_cd_into_task_worktree_is_denied"
-rev = "70d8e2116e4c7c05a0913a0c85aae7e55bcaef51"
-observed_at = 1794733334
-detail = """
-exit 101: ng condukt v0.7.413 (/Users/yuki/src/harness-wt-red-empty-worktree/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.50s
-     Running tests/backlog_20261115_testscope_cd_prefix_rule_c.rs (target/debug/deps/backlog_20261115_testscope_cd_prefix_rule_c-98af5fb69044e43b)
-error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_cd_prefix_rule_c`"""
 
 [[task]]
 id = "4270601a"
@@ -1279,33 +1219,6 @@ exit 101: ssed; 4 failed; 0 ignored; 0 measured; 4 filtered out; finished in 1.1
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
      Running tests/backlog_20261115_testscope_verifier_suspicions.rs (target/debug/deps/backlog_20261115_testscope_verifier_suspicions-c2916ab2cf2e0ae4)
 error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_verifier_suspicions`"""
-
-[[task]]
-id = "f2750dde"
-title = "blastguard relay: forged session_id/agent_id payload is queued and main Stop hook orders byte-for-byte re-run (cross-session command injection)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-16 main ec356662, peer cbe8af8e fed a synthetic PreToolUse (session_id=ec356662-..., agent_id=a7f9e57c28c3b88e5) to the blastguard binary; queued as bgr-d6e6d207c7fc / bgr-9c12da6932b3; the relay Stop hook told main to 'Run the EXACT command, byte-for-byte' and main ran a python3 heredoc that overwrote a real scratchpad file. No provenance: relay::queue never checks agent_id against the session transcript / no nonce. relay.rs and README state no trust boundary (grep trust/forg/provenance in relay.rs, README, docs/specs/blastguard.md: none), so reading (a) defect. Mitigation today only the normal permission prompt. RED: crates/blastguard/tests/backlog_20261116_relay_forged_session_entry.rs. Related FP by same peer (do NOT file separately; heredoc-body-interp class, in scope of the ongoing AST migration): python3 - <<'EOF' with open(<own scratchpad>/msg.txt,'w') is ask(main)/deny(subagent) while > redirect to the same path is allow."
-created_at = 1794762252
-updated_at = 1794762252
-weight = 0.0
-issue_number = 1808
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1808"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261116_relay_forged_session_entry -- --ignored"
-rev = "e053f6faebf1b7c41ddc034ddbc72ce385205e4f"
-observed_at = 1794762252
-detail = """
-exit 101: blastguard v0.2.622 (/Users/yuki/src/harness-wt-relay-forged/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.56s
-     Running tests/backlog_20261116_relay_forged_session_entry.rs (target/debug/deps/backlog_20261116_relay_forged_session_entry-5d22a94ba37e4155)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261116_relay_forged_session_entry`"""
 
 [[task]]
 id = "7fc71b27"

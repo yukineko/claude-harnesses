@@ -59,6 +59,10 @@ pub(super) fn place_redirect_target(
     };
     match state {
         CwdState::Root => Ok(target),
+        // `cwd::known_dir` never yields `""` (the base is `"."`); should one
+        // appear, joining it would root-anchor the target (`/<target>`,
+        // backlog 5f02eb88), so it is left unplaced (the unplaceable Ask).
+        CwdState::Known(dir) if dir.is_empty() => Err(target),
         CwdState::Known(dir) if relative => Ok(exclude::normalize(&format!(
             "{}/{}",
             dir.trim_end_matches('/'),
@@ -116,9 +120,11 @@ pub(super) fn physical_redirect_spelling(
         return target.to_string();
     }
     match seg_idx.and_then(|idx| seg_cwds.get(idx)) {
-        // `cd link && cd ..` tracks as `Known("")`: the line's own base, so
-        // the target is already relative to it (never `/<target>`).
-        Some(CwdState::Known(dir)) if !dir.is_empty() => {
+        // `cd link && cd ..` tracks as `Known(".")` (`cwd::known_dir`): the
+        // line's own base, so the target is already relative to it. The
+        // empty guard stays as defence in depth: `""` must never become
+        // `/<target>`.
+        Some(CwdState::Known(dir)) if !dir.is_empty() && dir != "." => {
             format!("{}/{}", dir.trim_end_matches('/'), target)
         }
         _ => target.to_string(),

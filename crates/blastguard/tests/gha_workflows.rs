@@ -867,7 +867,7 @@ fn p_symlink_loop_write_is_answered_within_bound() {
     );
 }
 
-// Mutant (d) guard: `cd sub && cd ..` tracks the cwd as `Known("")` (back at the
+// Mutant (d) guard: `cd sub && cd ..` tracks the cwd as `Known(".")` (back at the
 // project root). The physical spelling must not become `/sysln` there.
 fn cd_roundtrip_case(name: &str, links: &[(&str, &str)], cmd: &str) -> String {
     let f = Fx::new(name);

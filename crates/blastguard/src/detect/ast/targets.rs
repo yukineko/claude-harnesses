@@ -75,6 +75,15 @@ pub(crate) enum Role {
     RedirectTarget,
     /// A word of a simple command's argv.
     Argv,
+    /// A word of a simple command's argv, its value AS WRITTEN: the evaluated
+    /// value before it is placed against the command's cwd (no
+    /// `resolve_at`). The value a word holds as TEXT rather than as a path
+    /// opened from the cwd — a symlink's source, which the link stores
+    /// verbatim and which is resolved from the link's own directory
+    /// (backlog 42d5fa32: `for f in /etc; do ln -st D $f; done`). A relative
+    /// value stays relative here, so a caller that needs an absolute value
+    /// sees it is not one instead of a cwd-placed path.
+    ArgvAsWritten,
 }
 
 /// The evaluated words of one analysed text.
@@ -128,6 +137,7 @@ impl Index {
                 if text.get(w.span.clone()) == Some(w.raw.as_str()) {
                     let v = resolve_at(&cmd.cwd, w.value.clone());
                     words.push((w.span.clone(), Role::Argv, v));
+                    words.push((w.span.clone(), Role::ArgvAsWritten, w.value.clone()));
                 }
             }
             for r in &cmd.redirects {

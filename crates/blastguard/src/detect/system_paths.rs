@@ -188,13 +188,12 @@ fn mutated_files<'a>(cmd: &str, words: &[&'a str]) -> Option<(&'static str, Vec<
         "unlink" => Some(("removes", positional_operands(words, &[]))),
         "rmdir" => Some(("removes the directory", positional_operands(words, &[]))),
         "mv" => {
-            let ops = positional_operands(words, MV_VALUE_FLAGS);
-            let has_target_dir = words.iter().any(|w| {
-                *w == "-t"
-                    || w.starts_with("--target-directory")
-                    || (w.starts_with("-t") && !w.starts_with("--"))
-            });
-            let sources = if has_target_dir {
+            // The shared getopt split: `-t` inside a cluster (`mv -ft DIR a`)
+            // is a target directory too, so every operand is a source
+            // (backlog 42d5fa32).
+            let split = super::fileops::copy_split("mv", words);
+            let ops = split.operands;
+            let sources = if split.target_dir.is_some() {
                 ops
             } else {
                 ops.split_last()
@@ -212,7 +211,6 @@ fn mutated_files<'a>(cmd: &str, words: &[&'a str]) -> Option<(&'static str, Vec<
     }
 }
 
-const MV_VALUE_FLAGS: &[&str] = &["-t", "--target-directory", "-S", "--suffix"];
 const SED_VALUE_FLAGS: &[&str] = &["-e", "--expression", "-f", "--file", "-l", "--line-length"];
 const RSYNC_VALUE_FLAGS: &[&str] = &[
     "-e",

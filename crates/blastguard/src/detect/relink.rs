@@ -222,11 +222,9 @@ pub(super) fn operand_landing_verdict(
     ctx: &Ctx<'_>,
     seg_ctx: &Ctx<'_>,
 ) -> Decision {
-    // Fast path: `parse` finds no relinking command on a line naming no
-    // relinking verb.
-    if !plain_words(line).into_iter().any(is_relink_word) {
-        return Decision::Allow;
-    }
+    // The caller decides, ONCE per line, whether this runs at all: on a line
+    // for which [`line_names_relink_verb`] is false, `parse` finds no
+    // relinking command, so the verdict is `Allow` without calling this.
     let words = plain_words(command);
     let start = command_start(&words);
     let Some(head) = words.get(start).map(|w| normalized_command(w)) else {
@@ -273,6 +271,16 @@ command really reaches"
     } else {
         Decision::Allow
     }
+}
+
+/// Whether `line` names a relinking verb ([`is_relink_word`]) at all. When it
+/// does not, no command of the line relinks anything and
+/// [`operand_landing_verdict`] is `Allow` for every segment, so the caller
+/// computes this once per line instead of once per segment — rescanning the
+/// whole line per segment made long `;`-chains quadratic (backlog 3c1a3f35:
+/// the 300-unit budget input spent ~80% of its time here).
+pub(super) fn line_names_relink_verb(line: &str) -> bool {
+    plain_words(line).into_iter().any(is_relink_word)
 }
 
 /// The physical path `word` (an operand of segment `seg_idx`, run in `cwd`)

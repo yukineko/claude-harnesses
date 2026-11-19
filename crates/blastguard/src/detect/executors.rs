@@ -771,11 +771,17 @@ pub(super) fn env_exec_var_verdict(seg: &str, line: &str, depth: usize, ctx: &Ct
     let words = quote_aware_words(seg);
     let mut assigning_context = false;
     let mut exporting_context = false;
+    // Which command bases occurred BEFORE word `i` (see `EarlierBases`),
+    // accumulated here so each word's base is computed once — recomputing
+    // every earlier word's base per word was quadratic (backlog 3c1a3f35).
+    let mut earlier = EarlierBases::default();
     for (i, word) in words.iter().enumerate() {
         let plain = unquote_literal_value(word);
         let head = plain.as_deref().unwrap_or(word.as_str());
         let head_base = head.rsplit('/').next().unwrap_or(head);
-        if let Some(d) = non_equals_assignment(&words, i) {
+        let seen = earlier;
+        earlier.note(head_base);
+        if let Some(d) = non_equals_assignment(&words, i, seen) {
             if let Some(deny) = acc.record(d) {
                 return deny;
             }
@@ -940,7 +946,11 @@ fn line_assigns_literally(line: &str, name: &str) -> bool {
 /// An Ask when `words[i]` assigns a watched variable WITHOUT a `NAME=` word:
 /// `printf -v NAME …` / `printf -vNAME …`, `read … NAME`, or a `${NAME:=…}` /
 /// `${NAME=…}` default-assignment expansion anywhere in the word.
-fn non_equals_assignment(words: &[String], i: usize) -> Option<Decision> {
+///
+/// `earlier` says whether any of `words[..i]` has the base `printf` / `read`
+/// (the base of a word being its unquoted literal value, or the word itself,
+/// after its last `/`).
+fn non_equals_assignment(words: &[String], i: usize, earlier: EarlierBases) -> Option<Decision> {
     let word = words[i].as_str();
     let ask = |name: &str, how: &str| {
         Some(Decision::ask(format!(
@@ -960,14 +970,9 @@ may run or load it, and blastguard cannot see what it is"
         }
         rest = body;
     }
-    let base_at = |j: usize| -> String {
-        let w = &words[j];
-        let p = unquote_literal_value(w).unwrap_or_else(|| w.clone());
-        p.rsplit('/').next().unwrap_or(&p).to_string()
-    };
     let plain = unquote_literal_value(word).unwrap_or_else(|| word.to_string());
     // `printf -v NAME` / `printf -vNAME`.
-    if (0..i).any(|j| base_at(j) == "printf") {
+    if earlier.printf {
         let named = if i > 0 && words[i - 1] == "-v" {
             Some(plain.as_str())
         } else {
@@ -978,10 +983,26 @@ may run or load it, and blastguard cannot see what it is"
         }
     }
     // `read [opts] NAME…`: any later operand that is a watched name.
-    if (0..i).any(|j| base_at(j) == "read") && is_watched_env_name(&plain) {
+    if earlier.read && is_watched_env_name(&plain) {
         return ask(&plain, "`read`");
     }
     None
+}
+
+/// Whether a word with the command base `printf` / `read` occurred before the
+/// word [`non_equals_assignment`] is looking at.
+#[derive(Clone, Copy, Default)]
+struct EarlierBases {
+    printf: bool,
+    read: bool,
+}
+
+impl EarlierBases {
+    /// Record one more word's base.
+    fn note(&mut self, base: &str) {
+        self.printf |= base == "printf";
+        self.read |= base == "read";
+    }
 }
 
 /// Judge git's serialised `-c` list as carried by `GIT_CONFIG_PARAMETERS`.

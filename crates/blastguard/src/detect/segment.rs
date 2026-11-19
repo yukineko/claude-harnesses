@@ -138,8 +138,13 @@ pub(super) fn closed_substitution_end_strict(chars: &[char], i: usize) -> Option
 /// Uses the extraction scan [`scan_balanced`] (bash 3.2's end under
 /// [`super::substitution::under_bash32_reading`]).
 pub(super) fn closed_process_substitution_end(chars: &[char], i: usize) -> Option<usize> {
+    // The opener test first: it is O(1) and fails on almost every character,
+    // and the backslash count only matters once it holds (backlog 3c1a3f35).
+    if !matches!(chars[i], '<' | '>') || chars.get(i + 1) != Some(&'(') {
+        return None;
+    }
     let escaped = chars[..i].iter().rev().take_while(|&&c| c == '\\').count() % 2 == 1;
-    if escaped || !matches!(chars[i], '<' | '>') || chars.get(i + 1) != Some(&'(') {
+    if escaped {
         return None;
     }
     scan_balanced(chars, i + 2, Stop::Paren, 0)
@@ -150,6 +155,11 @@ fn substitution_end_with(
     i: usize,
     scan: fn(&[char], usize, Stop, usize) -> Option<usize>,
 ) -> Option<usize> {
+    // Only an opener can start a substitution; test that (O(1)) before
+    // counting the backslashes before it (backlog 3c1a3f35).
+    if !matches!(chars[i], '`' | '$') {
+        return None;
+    }
     let escaped = chars[..i].iter().rev().take_while(|&&c| c == '\\').count() % 2 == 1;
     if escaped {
         return None;

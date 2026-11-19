@@ -744,13 +744,19 @@ fn l9_read_only_and_never_waits_on_stdin() {
         std::thread::sleep(Duration::from_millis(20));
     };
     if status.is_none() {
-        let _ = Command::new("kill")
-            .arg("-TERM")
-            .arg("--")
-            .arg(format!("-{}", child.id()))
-            .status();
+        let mut kill = Command::new("kill");
+        kill.arg("-TERM").arg("--").arg(format!("-{}", child.id()));
+        let _ = bounded::run_bounded_stdin(
+            &mut kill,
+            bounded::ChildStdin::Null,
+            bounded::TOOL_DEADLINE,
+        );
         drop(held_stdin);
-        let _ = child.wait();
+        // Reap with a bound: a child that ignores SIGTERM is left, not waited on.
+        let reap_until = Instant::now() + Duration::from_secs(5);
+        while matches!(child.try_wait(), Ok(None)) && Instant::now() < reap_until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
         panic!("`blastguard log` did not exit within 10s with an open, silent stdin");
     }
     drop(held_stdin);

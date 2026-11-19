@@ -290,31 +290,31 @@ fn red(op: &str, d: Dirt) {
 }
 
 #[test]
-#[ignore = "backlog TBD: fail-open RED; other session's dirty linked worktree, git reset --hard is Allow"]
+#[ignore = "backlog 606a93ab: fail-open RED; other session's dirty linked worktree, git reset --hard is Allow"]
 fn red_other_dirty_reset_hard() {
     red("reset --hard", Dirt::Modified);
 }
 
 #[test]
-#[ignore = "backlog TBD: fail-open RED; other session's dirty linked worktree, git checkout . is Allow"]
+#[ignore = "backlog 606a93ab: fail-open RED; other session's dirty linked worktree, git checkout . is Allow"]
 fn red_other_dirty_checkout_dot() {
     red("checkout .", Dirt::Modified);
 }
 
 #[test]
-#[ignore = "backlog TBD: fail-open RED; other session's dirty linked worktree, git restore <path> is Allow"]
+#[ignore = "backlog 606a93ab: fail-open RED; other session's dirty linked worktree, git restore <path> is Allow"]
 fn red_other_dirty_restore_path() {
     red("restore m.txt", Dirt::Modified);
 }
 
 #[test]
-#[ignore = "backlog TBD: fail-open RED; other session's dirty linked worktree, git restore . is Allow"]
+#[ignore = "backlog 606a93ab: fail-open RED; other session's dirty linked worktree, git restore . is Allow"]
 fn red_other_dirty_restore_dot() {
     red("restore .", Dirt::Modified);
 }
 
 #[test]
-#[ignore = "backlog TBD: fail-open RED; other session's linked worktree with an untracked file, git clean -fd is Allow"]
+#[ignore = "backlog 606a93ab: fail-open RED; other session's linked worktree with an untracked file, git clean -fd is Allow"]
 fn red_other_untracked_clean_fd() {
     red("clean -fd", Dirt::Untracked);
 }

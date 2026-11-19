@@ -2271,3 +2271,34 @@ exit 101: worktrees/red-prefix-sub-rm-20261119/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.48s
      Running tests/backlog_20261119_prefix_substitution_rm_system_harm.rs (target/debug/deps/backlog_20261119_prefix_substitution_rm_system_harm-ac73dfda6428ecf1)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261119_prefix_substitution_rm_system_harm`"""
+
+[[task]]
+id = "42d5fa32"
+title = "blastguard: ln -st DIR /etc (combined short -t) then write through the link is Allow (system-harm fail-open)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-19 on blastguard 0.2.738 built at main 5a27f8ecd (hermetic HOME, PreToolUse Bash JSON, empty stdout = Allow): 'for f in /etc; do ln -st /tmp/L15 $f; done; echo x > /tmp/L15/etc/passwd' -> allow; same without the loop ('ln -st /tmp/L40 /etc; echo x > /tmp/L40/etc/passwd') -> allow; '-sft' also allow. Controls: '--target-directory=DIR' and '--target-directory DIR -s' -> ask; 'for f in /etc/hosts; do echo x > $f' -> deny. Readings: (a) fail-open: -t inside a combined short option is not seen; (b) intended: -st is not a target-directory form. Distinguishing check: GNU and BSD ln parse getopt clusters so -st DIR == -s -t DIR and creates DIR/etc -> /etc; the refused long-form control creates the identical link -> reading (a). Suspected root cause (read only): target_dir in crates/blastguard/src/detect/relink.rs and positional_operands in crates/blastguard/src/detect/fileops.rs compare -t by exact match. User ruling: system harm must be Deny through any wrapper. Not probed: other clusters (-sT, cp -at, mv -ft, install -t). Test: crates/blastguard/tests/backlog_20261119_ln_combined_short_t_symlink_harm.rs, branch red/bg-ln-combined-t-20261119."
+created_at = 1795098098
+updated_at = 1795098098
+weight = 0.0
+issue_number = 1868
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1868"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261119_ln_combined_short_t_symlink_harm -- --ignored"
+rev = "bf9d2b1d7de62bdc67410bf2c15714f2abae2e2e"
+observed_at = 1795098098
+detail = """
+exit 101: rness-worktrees/red-ln-combined-t-20261119/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.13s
+     Running tests/backlog_20261119_ln_combined_short_t_symlink_harm.rs (target/debug/deps/backlog_20261119_ln_combined_short_t_symlink_harm-802f7e7185421f22)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261119_ln_combined_short_t_symlink_harm`"""

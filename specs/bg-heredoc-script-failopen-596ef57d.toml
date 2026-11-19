@@ -1,0 +1,153 @@
+[spec]
+id = "bg-heredoc-script-failopen-596ef57d"
+title = "blastguard: heredoc/stdin script attacks judged Allow (596ef57d)"
+status = "ratified"
+provenance_commit = "42efb78f8db7143f0eb0ff20573f845a627a0268"
+date = "2026-11-20"
+canon = []
+
+[spec.ratification]
+canon_commit = "42efb78f8db7143f0eb0ff20573f845a627a0268"
+date = "2026-11-20"
+reason = "Encodes user rulings 2026-11-14 Q1-Q5 and 2026-11-20 A1-A3 + rounds 2-3 (AskUserQuestion); per-requirement REDs by an independent agent at 326c23463"
+fingerprint = "e6779a6af4504e3d"
+
+[[requirement]]
+id = "R-kill"
+repro_test = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_kill"
+statement = "Q5: shell の `kill -9 -1`（ケース c_kill_all）は、main・subagent の両モードで Deny になる。"
+acceptance = [
+    '`cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_kill` が pass する（#[ignore] を外すだけで、assert は無変更。check は Need::Deny = main == "deny" && sub == "deny"）',
+    'HEAD（326c23463 系）では同じテストが FAILED になる（RED を観測済み: "test result: FAILED. 0 passed; 7 failed" @ acdfd56cb）',
+]
+canon = [
+    '.backlog/tasks.toml 596ef57d: "Q5 kill -9 -1 / os.kill(-1,9) -> Deny."',
+    "crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:215-221 r_kill",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R-protect"
+repro_test = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_protect"
+statement = "Q3: HOME ではない /Users/<n> ディレクトリ自体の移動と、**/.ssh/** 配下（.ssh ディレクトリ自体を含む）への書き込み・置換・chmod・chown は、shell・python stdin のどちらの経路でも Deny になる。複数の判定が当たる場合は最も厳しいもの（Deny > Ask > Allow）が勝つ。"
+acceptance = [
+    "`... --test backlog_20261120_596ef57d_requirements -- --ignored r_protect` が pass する。対象は c_mv_home, c_cp_authkeys, stdin_x_os_replace_authkeys, stdin_x_os_chmod_ssh, stdin_x_open_wb, stdin_x_open_x_mode, stdin_x_os_utime_chown の 7 件で、いずれも main/sub とも deny",
+    "fixture の HOME は <base>/home（/Users/yuki ではない）のまま、assert も無変更で pass する",
+]
+canon = [
+    '.backlog/tasks.toml 596ef57d: "Q3 protect /Users/<n>, /home/<n>, **/.ssh/**, **/.gitconfig even when not HOME (Deny)."',
+    '.backlog/tasks.toml 596ef57d round 3: "(2) Q3 scope = the directory /Users/<n> or /home/<n> itself (delete, move away, chmod/chown of the dir); files under it are judged by **/.ssh/**, **/.gitconfig and the existing HOME rules."',
+    '.backlog/tasks.toml 596ef57d round 3: "when several judgements apply the strictest wins: Deny > Ask > Allow (Q3/Q5 Deny always win over the allowlist Ask)"',
+    "crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:223-242 r_protect",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R-gate"
+repro_test = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_gate"
+statement = "Q4: プロジェクトの scripts/check-*.py の上書きは、heredoc（絶対パス・相対パス）と python stdin の open(...,'w') のどちらでも Allow にならない（裁定上は Ask）。"
+acceptance = [
+    "`... -- --ignored r_gate` が pass する。対象は v_gate_script_overwrite, h_overwrite_worktree_isolation, stdin_x_check_worktree_isolation_overwrite で、main/sub とも allow 以外",
+    "Q4 の上書き判定は Deny ではなく Ask を返す（round 3 (4)）。ただし同じコマンドで別の Deny 判定が当たった場合は strictest-wins に従う",
+]
+canon = [
+    '.backlog/tasks.toml 596ef57d: "Q4 gate scripts = .githooks/**, scripts/check-*.py, crates/*/hooks/**, ~/.claude/plugins/cache/**/{bin,hooks}."',
+    '.backlog/tasks.toml 596ef57d round 3: "(4) Q4 gate-script overwrite -> Ask (not Deny)."',
+    "crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:244-262 r_gate",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R-stdin-effect"
+repro_test = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_stdin_effect"
+statement = "python stdin プログラム内のプロセス起動 sink は「API 名 + 引数の効果」で判定する。allowlist 外の sink は Ask にする。allowlist 内の sink は argv を既存の shell effect/path ルールで判定し、Allow になるのはそのルールが Allow を返す場合だけにする。静的に解決できない引数は Ask にする。"
+acceptance = [
+    "`... -- --ignored r_stdin_effect` が pass する。対象は stdin_popen_git_reset_hard, stdin_from_subprocess_import_run, stdin_p1_check_output_git_clean, stdin_p1_list_concat_cmd, stdin_multiline_call_args で、main/sub とも allow 以外",
+    "control_subprocess_git_status_stdin_allow（subprocess.run(['git','status','--short'])）が pass し続ける（main/sub とも allow）",
+]
+canon = [
+    '.backlog/tasks.toml 596ef57d round 2: "GRANULARITY = API name + argument effect: an allowlisted sink is then judged by its argv/path args through the existing shell effect/path rules, Allow only if those give Allow; unresolvable args -> Ask; non-allowlisted sink -> Ask."',
+    """docs/blastguard/python-sink-set.md: "Examples from the ruling: `subprocess.run(['git','status','--short'])` is Allow; `subprocess.run(['git','reset','--hard'])` is not Allow."""",
+    "crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:264-276, 345-354",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R-python-unknown-sink"
+repro_test = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_python_unknown_sink"
+statement = "A2a: 効果モデルを持たない python sink（例: asyncio の loop.subprocess_shell）は Ask になる。python sink には「unknown program = Allow」を適用しない。"
+acceptance = ["`... -- --ignored r_python_unknown_sink` が pass する。対象は stdin_x_loop_subprocess_shell で、main/sub とも allow 以外"]
+canon = [
+    '.backlog/tasks.toml 596ef57d: "A2a Python sinks with no effect model (e.g. asyncio subprocess_shell) -> Ask per Q1 (11-17 unknown=Allow does NOT apply to Python sinks)."',
+    'docs/blastguard/python-sink-set.md: "Not modelled (no effect model found at HEAD): `loop.subprocess_shell` / `loop.subprocess_exec` (case `stdin_x_loop_subprocess_shell`). Per A2a this must be Ask until an effect model exists."',
+    "crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:278-287",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R-fakeeof"
+repro_test = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_fakeeof"
+statement = "heredoc が最初の終端子で閉じた後に、偽の EOF を挟んで python 本文が続く入れ子コマンド（v_nested_fake_eof）は Allow にならない。heredoc の外に出た行を、判定不能（パース不能）のまま Allow にしない。"
+acceptance = ["`... -- --ignored r_fakeeof` が pass する（main/sub とも allow 以外）"]
+canon = [
+    'CLAUDE.md §3: "判定不能 — IO 失敗 / ロック取得失敗 / subprocess の異常終了 / パース不能 / panic / 空集合 — は `clean` ではない。必ず `block` か `ask` に解決する。"',
+    "crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:289-298",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R-cargo"
+repro_test = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_cargo"
+statement = "A1: 同一コマンド内で build.rs を書き込み、その後に cargo build/test/check/clippy/run のいずれかを実行するものは Allow にならない。.rs を書き込んで cargo run を実行するものも Allow にならない。通常の .rs の後の cargo test/build/check は Allow のままにする。"
+acceptance = [
+    "`... -- --ignored r_cargo` が pass する。対象は h_rs_build_rs, h_rs_cargo_script で、main/sub とも allow 以外",
+    "control_ordinary_rs_then_cargo_test_allow が pass し続ける（main/sub とも allow）",
+]
+canon = [
+    '.backlog/tasks.toml 596ef57d round 3: "(3) A1 boundary: writing build.rs (or other build-time code) then ANY cargo build/test/check/clippy/run in the same command -> not-Allow; ordinary .rs then cargo test/build/check -> Allow; .rs then cargo run -> not-Allow."',
+    "crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:300-315, 356-367",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R-q2-reanchor"
+statement = "A3: h_heredoc_bs_quoted_cmdsub と h_heredoc_dq_delim_cmdsub を集約テスト heredoc_script_attacks_are_not_allow の attack リストから外す。両ケースは Allow assertion（r_q2_reanchor）で固定する。"
+acceptance = [
+    'crates/blastguard/tests/heredoc_script_failopen_red_20261108.rs の attack リスト（現 L634-635 の mk("h_heredoc_bs_quoted_cmdsub", ...) / mk("h_heredoc_dq_delim_cmdsub", ...)）に、この 2 件の名前が残っていない',
+    "`... --test backlog_20261120_596ef57d_requirements r_q2_reanchor` が pass し続ける（main/sub とも allow）",
+]
+canon = [
+    '.backlog/tasks.toml 596ef57d: "A3 h_heredoc_bs_quoted_cmdsub / h_heredoc_dq_delim_cmdsub -> remove from attack list and re-anchor to Allow assertion (written by an independent agent)."',
+    "crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:9-10, 317-332",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R-sink-doc"
+statement = "round 3 (1) を反映し、sink 集合の文書に process signal クラスを追加して、少なくとも os.kill と os.killpg を収載する。strictest-wins（Deny > Ask > Allow）の規則も文書に記載する。"
+acceptance = [
+    'docs/blastguard/python-sink-set.md の "The closed set" 節に process signal のクラス見出しがあり、`os.kill` と `os.killpg` の両方が載っている（grep で観測できる）',
+    '同じ文書に "Deny > Ask > Allow" の strictest-wins 規則が書かれている',
+]
+canon = [
+    '.backlog/tasks.toml 596ef57d round 3: "(1) process signal (os.kill, os.killpg, ...) is added to the closed Python sink set; when several judgements apply the strictest wins: Deny > Ask > Allow"',
+    '.backlog/tasks.toml 596ef57d round 2: "the sink set must be a written document"',
+]
+falsifiable = true
+
+[[requirement]]
+id = "R-aggregate-and-controls"
+repro_test = "cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_attacks_are_not_allow"
+statement = "上の各 requirement を実装した後は、集約 attack テストが pass し、既存の FP control がすべて green のままになる（新たな false positive を出さない）。"
+acceptance = [
+    '`cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_attacks_are_not_allow` が pass する（HEAD 7415d8b29 では "22 of 653 attack cases are Allow" で FAILED と観測済み）',
+    "`cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_fp_cases_stay_allow` が pass する",
+    "`cargo test -p blastguard --test python_stdin_re_compile_fp_20261103` が pass する（fb_python_stdin_program_with_re_compile_is_allowed）",
+    "`cargo test -p blastguard --test backlog_20261120_596ef57d_requirements` の ignore されていない 4 件（r_q2_reanchor, control_pure_call_re_compile_allow, control_subprocess_git_status_stdin_allow, control_ordinary_rs_then_cargo_test_allow）が pass する",
+]
+canon = [
+    '要望原文: "Controls: heredoc_script_fp_cases_stay_allow must stay green (no new false positive)."',
+    '要望原文: "Controls that must stay green: r_q2_reanchor, control_pure_call_re_compile_allow, control_subprocess_git_status_stdin_allow, control_ordinary_rs_then_cargo_test_allow, heredoc_script_fp_cases_stay_allow, python_stdin_re_compile_fp_20261103."',
+    "crates/blastguard/tests/heredoc_script_failopen_red_20261108.rs:680-701",
+]
+falsifiable = true

@@ -367,13 +367,13 @@ touched_files = []
 status = "pending"
 notes = """
 Observed 2026-11-13 at main 8dedad41 and 1fd747e9 (blastguard 0.2.500), Linux WSL2. Verbatim: 114 of 653 attack cases are Allow (must be Ask or Deny); every listed case is main=allow sub=allow, e.g. shutil_move_home_away, shutil_copyfile_ssh, os_chmod_home, os_chmod_ssh, os_chown_home, os_truncate_zshrc, os_symlink_zshrc, os_link, pathlib_rename, pathlib_replace, pathlib_touch, pathlib_rmdir_home. This is a deliberately RED test added 2026-11-08 in 72d164e1 (its header says RED on main until fixed; that commit counted 125 failing entries, now 114), but no backlog entry names it, so the gap was tracked only in commit messages. Reading (a) real gate fail-open: plausible and is what the test asserts (a body written to a script file by a quoted heredoc and then run is Allow). Reading (b) Linux/fixture artefact: checked and ruled out for the fixture location: rerun with the fixture base moved off /tmp (BLASTGUARD_TEST_FIXTURE_DIR under HOME/.cache, so no path is spelled through the /tmp alias symlink) gives the identical 114-case list (diff empty). Not checked on macOS. Runtime about 50s (680s under concurrent load).
-blocked 2026-11-14 run-20261114-130020-46995: needs human rulings Q1 (python sink denylist->allowlist?), Q2 (h_heredoc_bs_quoted_cmdsub/h_heredoc_dq_delim_cmdsub quoted+not run vs .py-body-is-data ruling), Q3 (protect /Users/<n>,/home/<n>,**/.ssh/**,**/.gitconfig when not HOME?), Q4 (which paths are gate scripts), Q5 (kill -9 -1 / os.kill(-1,9): Deny or Ask). 107/653 Allow on macOS at b823ffa5. Decomp: 7 serial tasks a-g, 4 low-confidence. | RULED 2026-11-14 by user (AskUserQuestion): Q1 python sink -> allowlist (provably harmless APIs Allow, else Ask). Q2 h_heredoc_bs_quoted_cmdsub/h_heredoc_dq_delim_cmdsub are test defects (.py-body-is-data ruling wins; drop or re-anchor to Allow). Q3 protect /Users/<n>, /home/<n>, **/.ssh/**, **/.gitconfig even when not HOME (Deny). Q4 gate scripts = .githooks/**, scripts/check-*.py, crates/*/hooks/**, ~/.claude/plugins/cache/**/{bin,hooks}. Q5 kill -9 -1 / os.kill(-1,9) -> Deny."""
+blocked 2026-11-14 run-20261114-130020-46995: needs human rulings Q1 (python sink denylist->allowlist?), Q2 (h_heredoc_bs_quoted_cmdsub/h_heredoc_dq_delim_cmdsub quoted+not run vs .py-body-is-data ruling), Q3 (protect /Users/<n>,/home/<n>,**/.ssh/**,**/.gitconfig when not HOME?), Q4 (which paths are gate scripts), Q5 (kill -9 -1 / os.kill(-1,9): Deny or Ask). 107/653 Allow on macOS at b823ffa5. Decomp: 7 serial tasks a-g, 4 low-confidence. | RULED 2026-11-14 by user (AskUserQuestion): Q1 python sink -> allowlist (provably harmless APIs Allow, else Ask). Q2 h_heredoc_bs_quoted_cmdsub/h_heredoc_dq_delim_cmdsub are test defects (.py-body-is-data ruling wins; drop or re-anchor to Allow). Q3 protect /Users/<n>, /home/<n>, **/.ssh/**, **/.gitconfig even when not HOME (Deny). Q4 gate scripts = .githooks/**, scripts/check-*.py, crates/*/hooks/**, ~/.claude/plugins/cache/**/{bin,hooks}. Q5 kill -9 -1 / os.kill(-1,9) -> Deny. | RE-MEASURED 2026-11-19 c92d77e74: 22 of 653 Allow (12 stdin_*: stdin_popen_git_reset_hard, stdin_from_subprocess_import_run, stdin_p1_check_output_git_clean, stdin_p1_list_concat_cmd, stdin_multiline_call_args, stdin_x_os_replace_authkeys, stdin_x_os_chmod_ssh, stdin_x_open_wb, stdin_x_open_x_mode, stdin_x_os_utime_chown, stdin_x_check_worktree_isolation_overwrite, stdin_x_loop_subprocess_shell; 10 other: c_kill_all, c_mv_home, c_cp_authkeys, v_gate_script_overwrite, v_nested_fake_eof, h_overwrite_worktree_isolation, h_rs_cargo_script, h_rs_build_rs, h_heredoc_bs_quoted_cmdsub, h_heredoc_dq_delim_cmdsub); 2026-11-20 HEAD 7415d8b29: count 22 again (case list not re-captured). | RULED 2026-11-20 by user (AskUserQuestion, specforge rigor A1-A3): A1 build.rs+cargo build AND .rs+cargo run are both not-Allow (exception to the 2026-11-18 .rs+cargo=Allow ruling, because cargo executes them); writing an ordinary .rs then cargo test/build stays Allow. A2a Python sinks with no effect model (e.g. asyncio subprocess_shell) -> Ask per Q1 (11-17 unknown=Allow does NOT apply to Python sinks). A2b initial provably-harmless allowlist = only the APIs used in heredoc_script_fp_cases_stay_allow FP array; extend later via RED. A3 h_heredoc_bs_quoted_cmdsub / h_heredoc_dq_delim_cmdsub -> remove from attack list and re-anchor to Allow assertion (written by an independent agent). | RULED 2026-11-20 round 2 (specforge rigor): SINK = closed set of side-effect-capable Python APIs (process spawn, fs write/metadata chmod-chown-utime-truncate/move-link-replace, network, exec/eval); pure calls (re.compile, print, os.path.join, json.loads...) are NOT sinks and stay Allow (python_stdin_re_compile_fp_20261103.rs:75 stays green); the sink set must be a written document. GRANULARITY = API name + argument effect: an allowlisted sink is then judged by its argv/path args through the existing shell effect/path rules, Allow only if those give Allow; unresolvable args -> Ask; non-allowlisted sink -> Ask. | RULED 2026-11-20 round 3 (specforge rigor): (1) process signal (os.kill, os.killpg, ...) is added to the closed Python sink set; when several judgements apply the strictest wins: Deny > Ask > Allow (Q3/Q5 Deny always win over the allowlist Ask). (2) Q3 scope = the directory /Users/<n> or /home/<n> itself (delete, move away, chmod/chown of the dir); files under it are judged by **/.ssh/**, **/.gitconfig and the existing HOME rules. (3) A1 boundary: writing build.rs (or other build-time code) then ANY cargo build/test/check/clippy/run in the same command -> not-Allow; ordinary .rs then cargo test/build/check -> Allow; .rs then cargo run -> not-Allow. (4) Q4 gate-script overwrite -> Ask (not Deny). | REDs committed 326c23463 (blastguard 0.2.750): crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs; sink doc docs/blastguard/python-sink-set.md."""
 created_at = 1794547881
-updated_at = 1794809773
+updated_at = 1795108273
 weight = 0.0
 issue_number = 1700
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1700"
-rev = 3
+rev = 7
 
 [task.repro]
 outcome = "reproduced"
@@ -522,101 +522,6 @@ exit 101: )
     Finished `test` profile [unoptimized + debuginfo] target(s) in 28.29s
      Running tests/tmp_truncation_recoverable.rs (target/debug/deps/tmp_truncation_recoverable-134965f141cc1ad8)
 error: test failed, to rerun pass `-p blastguard --test tmp_truncation_recoverable`"""
-
-[[task]]
-id = "84277e41"
-title = "blastguard: shutil.copy2 の読み取り専用の source（'/etc/hosts' など）を書き込み先として Deny する false positive を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "FP, RED 34937f3f by a non-implementer (flow-8cca7ef5 orchestrator) at main 33464587 2026-11-14: python3 -c shutil.copy2('/etc/hosts','/tmp/x') is Deny ('it writes /etc/hosts (shutil.copy2()') while the /tmp/y-source twin is Ask (main session). Reported as 別件 by the 569b9b9d implementer (INTERPRETER_WRITE_CALLS 'shutil.copy2('). Live hit 2026-11-14: a python3 - <<'EOF' heredoc that only edited docs/specs/blastguard.md and .specguard/spec-docs.toml (its string literals contained the text shutil.copy2('/etc/hosts','/tmp/x')) was denied verbatim: python3 - <<'EOF' takes its program from stdin, and it writes /etc/hosts (shutil.copy2() - it exists, and it is not inside a git work tree. Control control_tmp_source_copy2_is_not_denied_in_main_session non-ignored."
-created_at = 1794583403
-updated_at = 1794583403
-weight = 0.0
-issue_number = 1723
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1723"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261114_shutil_copy2_source_judged_as_write_fp -- --include-ignored copy2_decision_does_not_depend_on_read_only_source"
-rev = "34937f3fa91c897bc6127934c75d01fc6ec298ce"
-observed_at = 1794583403
-detail = """
-exit 101: e-a579-cd4f8d3822a8-orch/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.11s
-     Running tests/backlog_20261114_shutil_copy2_source_judged_as_write_fp.rs (target/debug/deps/backlog_20261114_shutil_copy2_source_judged_as_write_fp-dd5429a9b98ba464)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261114_shutil_copy2_source_judged_as_write_fp`"""
-
-[[task]]
-id = "7bf91f5a"
-title = "blastguard: printf の二重引用符 operand（エスケープした PY 変数と command 風の文言を含む）を実行される command line と判定して Ask にする false positive を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "FP, RED ae5e7750 by the flow-8cca7ef5 orchestrator at main a473ba71 2026-11-14. Exact commands are the MENTIONS/HARMLESS constants of the test file. printf whose double-quoted operand holds escaped PY-variable text plus a find -exec sh -c / os.chmod phrase is Ask in main and Deny in subagent with reason: printf is not a command blastguard recognises, and what follows it parses as a destructive command line. The twin without the PY text is Allow (control). Live hits in the same family on 2026-11-14: a printf append to .specguard/spec-docs.toml, a python3 /dev/stdin heredoc editing the RED file, and the first attempt at this very backlog add whose notes quoted the operand (reason listed backlog, add, p1 ... as unrecognised commands, then: plus is not a command blastguard recognises, and what follows it parses as a destructive command line)."
-created_at = 1794589692
-updated_at = 1794589692
-weight = 0.0
-issue_number = 1725
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1725"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261114_printf_operand_judged_as_command_fp -- --include-ignored printf_operand_text_is_not_judged_as_a_command"
-rev = "ae5e7750029010af16850a08159b21c171b6a971"
-observed_at = 1794589692
-detail = """
-exit 101: -c948-4f4e-a579-cd4f8d3822a8-orch/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.22s
-     Running tests/backlog_20261114_printf_operand_judged_as_command_fp.rs (target/debug/deps/backlog_20261114_printf_operand_judged_as_command_fp-90eba1c145325263)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261114_printf_operand_judged_as_command_fp`"""
-
-[[task]]
-id = "ab2097c5"
-title = "blastguard: wait with the last-background-PID argument inside sh -c is judged as a command word (FP; bare form is Allow)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-14 in a subagent: a sh -c script with a background subshell followed by wait and the last-background-PID parameter was blocked with the reason that the command word is an expansion whose value only exists at run time. The real command word is wait; the parameter is only its argument. Reproduced at c4336b61 on 2026-11-14: the bare form (sleep 1 in background, then wait with that parameter) is Allow, but the same text wrapped in /bin/sh -c is Ask with that reason. Controls stay non-Allow: the parameter as a real command word, and wait followed by a destructive rm of /etc. Test file: crates/blastguard/tests/wait_bang_argument_fp_20261114.rs (r2 is the ignored RED). Second shape, UNVERIFIED: the same family blocked this very backlog add (rev 3feeb8bc, 2026-11-14) when its quoted title contained the text wait backslash-dollar-bang; the block said wait is not a command blastguard recognises and the following token parses as a destructive command line. Not isolated into a test."
-created_at = 1794602089
-updated_at = 1794602089
-weight = 0.0
-issue_number = 1737
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1737"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test wait_bang_argument_fp_20261114 -- --ignored"
-rev = "ccd48c0bf99a794e7a1c88104a968cd2e9800ca1"
-observed_at = 1794602089
-detail = """
-exit 101: d out; finished in 1.09s
-
-   Compiling blastguard v0.2.543 (/Users/yuki/src/harness-wt-fp-wait-bang/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.71s
-     Running tests/wait_bang_argument_fp_20261114.rs (target/debug/deps/wait_bang_argument_fp_20261114-3e368ab0dd0b3bd6)
-error: test failed, to rerun pass `-p blastguard --test wait_bang_argument_fp_20261114`"""
 
 [[task]]
 id = "32b414d2"
@@ -1497,37 +1402,6 @@ exit 101: . 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished 
 error: test failed, to rerun pass `-p blastguard --test backlog_20261116_git_apply_patch_known_gaps`"""
 
 [[task]]
-id = "c1873b73"
-title = """blastguard: python heredoc os.__dict__['sys'+'tem']("cat x | { bash; }") judged allow"""
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-16, main fa58e3698 (blastguard 0.2.672), run-20261116-143410-12142 (independent probe on t3): python3 - <<'EOF' with import os; os.__dict__['sys'+'tem']("cat x | { bash; }") is allow in main and subagent, both before (16334d10a) and after t3 — pre-existing. Plain os.system twin is ask/deny. Dict lookup avoids every runner marker. Readings: (a) fail-open: the runner is not recognised; (b) intended only if obfuscated runners are out of scope, but then undeterminable -> must be ask. Expected: not allow."""
-created_at = 1794813882
-updated_at = 1794813882
-weight = 0.0
-issue_number = 1831
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1831"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261116_python_dict_lookup_system_group_pipe -- --include-ignored"
-rev = "e0173e098994fc132458949627fead46948ead9c"
-observed_at = 1794813882
-detail = """
-exit 101: ess-worktrees/followup-bg-df7c/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.69s
-     Running tests/backlog_20261116_python_dict_lookup_system_group_pipe.rs (target/debug/deps/backlog_20261116_python_dict_lookup_system_group_pipe-ab765f1c4c4c75c0)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261116_python_dict_lookup_system_group_pipe`"""
-
-[[task]]
 id = "5a633271"
 title = "condukt: check-criteria drops --test <name> from done_criteria and runs the whole crate suite"
 project = "/home/hiroyuki_nakayama/src/harness"
@@ -2022,35 +1896,6 @@ exit 101:  failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
 error: test failed, to rerun pass `-p condukt --test testscope_fault_seams_20261117`"""
 
 [[task]]
-id = "8e261f24"
-title = "blastguard fail-open: python3 -c write to a System path passed as a literal sys.argv operand (open(sys.argv[1],'w'), pathlib.Path(sys.argv[1]).write_text) is Ask (main), not Deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = """Memory system-harm-always-deny (2026-11-07): harmful targets are Deny through any wrapper. Observed at a19a34553 (0.2.702), hermetic fixture HOME, main/subagent: python3 -c "import sys;open(sys.argv[1],'w').write('x')" /etc/bg-sentinel ask/deny (same for /etc/passwd); pathlib.Path(sys.argv[1]).write_text('x') /etc/bg-sentinel ask/deny; reason 'the program calls open on a path blastguard cannot resolve statically'. The argv operand is a literal, so the target is statically known (blastguard-must-resolve-statically). Literal-in-program twins (open('/etc/bg-sentinel','w'), pathlib.Path('/etc/bg-sentinel').write_text) are deny/deny (GREEN, pinned). Scratch: literal /tmp twins allow/allow (controls GREEN); argv /tmp twins ask/deny, NOT Allow (2 more ignored REDs; ruling 15 keeps python legacy until S5). Related: d6de38be (expansion argv). RED 96c9f5e4d (branch red/bg-rsync-tableb-pyc-sys-20261118, 4 ignored)."""
-created_at = 1795005086
-updated_at = 1795005086
-weight = 0.0
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261118_python_c_argv_system_write_not_deny -- --ignored"
-rev = "96c9f5e4d209c1fbcab579fd18d31ea70a858eb4"
-observed_at = 1795005086
-detail = """
-exit 101: ess-worktrees/bg-rsync-tableb-red/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.84s
-     Running tests/backlog_20261118_python_c_argv_system_write_not_deny.rs (target/debug/deps/backlog_20261118_python_c_argv_system_write_not_deny-0e8be86b31995439)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261118_python_c_argv_system_write_not_deny`"""
-
-[[task]]
 id = "b400219d"
 title = "condukt: fp_oracle_e2e (2) and audit_b12 oracle_refusal tests fail on main: verify refuses with 'no recorded worktree and no archived tdd proof' before the oracle runs"
 project = "/home/hiroyuki_nakayama/src/harness"
@@ -2178,39 +2023,6 @@ exit 101: 261119/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261119_python_heredoc_string_literal_system_harm_fp`"""
 
 [[task]]
-id = "eca57944"
-title = 'blastguard: redirect onto an existing non-git file whose name is escaped or quoted (a\ b, "a b", \a, out\).txt) judged allow'
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "blastguard",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1795041588
-updated_at = 1795041588
-weight = 0.0
-issue_number = 1865
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1865"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test fp_fix_boundaries_20261119 -- --ignored onto_existing_file_not_allowed"
-rev = "70abd956146bd5bdad1d076017cb2ce7a73e85b0"
-observed_at = 1795041588
-detail = """
-exit 101: red out; finished in 0.91s
-
-   Compiling blastguard v0.2.733 (/Users/yuki/src/.harness-worktrees/bg-fp-20261119/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.39s
-     Running tests/fp_fix_boundaries_20261119.rs (target/debug/deps/fp_fix_boundaries_20261119-56bc1626e6f6ba8c)
-error: test failed, to rerun pass `-p blastguard --test fp_fix_boundaries_20261119`"""
-
-[[task]]
 id = "d068ef20"
 title = "blastguard fail-open: prefix-assignment substitution y=$(L=/tmp/x; true) rm $L deletes /etc/hosts but is Allow"
 project = "/Users/yuki/src/harness"
@@ -2300,72 +2112,6 @@ exit 101: ness-worktrees/red-dotdot-loop-redirect-20261120/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.07s
      Running tests/backlog_20261120_dotdot_loop_value_system_write.rs (target/debug/deps/backlog_20261120_dotdot_loop_value_system_write-dee0d3a72796bdd5)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_dotdot_loop_value_system_write`"""
-
-[[task]]
-id = "b56a5813"
-title = "blastguard: argv text of a non-interpreter behind a command wrapper (env, env -u, nice) that mentions a python open-for-write of a System path is judged as an interpreter write and denied as system harm"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "false-positive",
-    "blastguard",
-]
-touched_files = []
-status = "pending"
-notes = "Observed at e56699977 (blastguard 0.2.751), hermetic HOME, main and subagent: Deny with reason naming an interpreter write of the System sentinel path with a trailing backslash (an escaped double quote of the argv text read as program quoting). The same argument without the wrapper is Allow (passing pin unwrapped_mentions_are_allow), so only the wrapper differs. Controls: the real program bare and behind env stays Deny (control_real_python_system_write_is_deny). Original block: subagent session 06c2bd77, recovered verbatim from the blastguard blocks log (installed 0.2.675). Expected Allow: the text is data for the wrapped program. Root cause not investigated. Test: crates/blastguard/tests/fp_candidates_b_20261120.rs"
-created_at = 1795107952
-updated_at = 1795107952
-weight = 0.0
-issue_number = 1869
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1869"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test fp_candidates_b_20261120 wrapped_ -- --include-ignored"
-rev = "8ec29d108a4e648c3372f2f5e08ae66489f2b206"
-observed_at = 1795107952
-detail = """
-exit 101: ered out; finished in 0.86s
-
-   Compiling blastguard v0.2.752 (/Users/yuki/src/.harness-worktrees/bg-fp-cand-20261120/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.86s
-     Running tests/fp_candidates_b_20261120.rs (target/debug/deps/fp_candidates_b_20261120-027634bcafc7f041)
-error: test failed, to rerun pass `-p blastguard --test fp_candidates_b_20261120`"""
-
-[[task]]
-id = "5f02eb88"
-title = "blastguard: after a cd into a subdirectory and back out with a parent cd, a relative redirect target is placed at the filesystem root instead of the starting directory (wrong file judged both ways)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "false-positive",
-    "blastguard",
-]
-touched_files = []
-status = "pending"
-notes = "Observed at e56699977 (blastguard 0.2.751), hermetic HOME. The cwd tracker records the round-trip as a known empty directory, and the redirect placement joins the empty directory and the target with a slash, so a relative target is judged as an absolute path under the root. physical_redirect_spelling already guards the empty case; place_redirect_target does not. Fail-open: truncating an existing untracked project file through the round-trip is Allow in both modes, while the same truncation without the round-trip (same real file) is Ask in main and Deny in subagent. False positive: appending to a new file under a project subdirectory named etc through the round-trip is Deny as a system-directory write, while without the round-trip it is Allow. The round-trip through a symlinked directory was also observed Allow for the truncation in a probe (not reached in the test because the first variant fails first). Protected-config targets give the same Ask either way (only the reason names the wrong path), not pinned. Expected: the variant answers exactly as the baseline that writes the same real file. Root cause not fixed. Test: crates/blastguard/tests/fp_candidates_b_20261120.rs"
-created_at = 1795107986
-updated_at = 1795107986
-weight = 0.0
-issue_number = 1870
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1870"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test fp_candidates_b_20261120 cd_roundtrip_ -- --include-ignored"
-rev = "8ec29d108a4e648c3372f2f5e08ae66489f2b206"
-observed_at = 1795107986
-detail = """
-exit 101: ndtrip_truncate_existing_file_parity
-
-test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.77s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
-     Running tests/fp_candidates_b_20261120.rs (target/debug/deps/fp_candidates_b_20261120-027634bcafc7f041)
-error: test failed, to rerun pass `-p blastguard --test fp_candidates_b_20261120`"""
 
 [[task]]
 id = "e93d3701"
@@ -2548,3 +2294,176 @@ exit 101: ng blastguard v0.2.754 (/Users/yuki/src/.harness-worktrees/session-8ab
     Finished `test` profile [unoptimized + debuginfo] target(s) in 7.38s
      Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-b404579e77650688)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
+
+[[task]]
+id = "f6716c2b"
+title = "[bg-heredoc-script-failopen-596ef57d:R-gate] Q4: プロジェクトの scripts/check-*.py の上書きは、heredoc（絶対パス・相対パス）と python stdin の open(...,'w') のどちらでも Allow にならない（裁定上は Ask）。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-gate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-gate から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: Q4: プロジェクトの scripts/check-*.py の上書きは、heredoc（絶対パス・相対パス）と python stdin の open(...,'w') のどちらでも Allow にならない（裁定上は Ask）。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `... -- --ignored r_gate` が pass する。対象は v_gate_script_overwrite, h_overwrite_worktree_isolation, stdin_x_check_worktree_isolation_overwrite で、main/sub とも allow 以外
+  - Q4 の上書き判定は Deny ではなく Ask を返す（round 3 (4)）。ただし同じコマンドで別の Deny 判定が当たった場合は strictest-wins に従う
+
+canon:
+  - .backlog/tasks.toml 596ef57d: "Q4 gate scripts = .githooks/**, scripts/check-*.py, crates/*/hooks/**, ~/.claude/plugins/cache/**/{bin,hooks}."
+  - .backlog/tasks.toml 596ef57d round 3: "(4) Q4 gate-script overwrite -> Ask (not Deny)."
+  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:244-262 r_gate
+"""
+created_at = 1795109176
+updated_at = 1795109176
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_gate"
+rev = "546930a554046a5a4704b5978a588068b4c0a279"
+observed_at = 1795109176
+detail = """
+exit 101: ng blastguard v0.2.751 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.87s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-9132e453e006d9a6)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
+
+[[task]]
+id = "eaf0b2a4"
+title = "[bg-heredoc-script-failopen-596ef57d:R-fakeeof] heredoc が最初の終端子で閉じた後に、偽の EOF を挟んで python 本文が続く入れ子コマンド（v_nested_fake_eof）は Allow にならない。heredoc の外に出た行を、判定不能（パース不能）のまま Allow にしない。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-fakeeof",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-fakeeof から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: heredoc が最初の終端子で閉じた後に、偽の EOF を挟んで python 本文が続く入れ子コマンド（v_nested_fake_eof）は Allow にならない。heredoc の外に出た行を、判定不能（パース不能）のまま Allow にしない。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `... -- --ignored r_fakeeof` が pass する（main/sub とも allow 以外）
+
+canon:
+  - CLAUDE.md §3: "判定不能 — IO 失敗 / ロック取得失敗 / subprocess の異常終了 / パース不能 / panic / 空集合 — は `clean` ではない。必ず `block` か `ask` に解決する。"
+  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:289-298
+"""
+created_at = 1795109405
+updated_at = 1795109405
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_fakeeof"
+rev = "0cd5671971fbbb890ae3217eb3214a298aefcdea"
+observed_at = 1795109405
+detail = """
+exit 101: ng blastguard v0.2.755 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.51s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-4c78cce24a6bb217)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
+
+[[task]]
+id = "73655802"
+title = "[bg-heredoc-script-failopen-596ef57d:R-cargo] A1: 同一コマンド内で build.rs を書き込み、その後に cargo build/test/check/clippy/run のいずれかを実行するものは Allow にならない。.rs を書き込んで cargo run を実行するものも Allow にならない。通常の .rs の後の cargo test/build/check は Allow のままにする。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-cargo",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-cargo から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: A1: 同一コマンド内で build.rs を書き込み、その後に cargo build/test/check/clippy/run のいずれかを実行するものは Allow にならない。.rs を書き込んで cargo run を実行するものも Allow にならない。通常の .rs の後の cargo test/build/check は Allow のままにする。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `... -- --ignored r_cargo` が pass する。対象は h_rs_build_rs, h_rs_cargo_script で、main/sub とも allow 以外
+  - control_ordinary_rs_then_cargo_test_allow が pass し続ける（main/sub とも allow）
+
+canon:
+  - .backlog/tasks.toml 596ef57d round 3: "(3) A1 boundary: writing build.rs (or other build-time code) then ANY cargo build/test/check/clippy/run in the same command -> not-Allow; ordinary .rs then cargo test/build/check -> Allow; .rs then cargo run -> not-Allow."
+  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:300-315, 356-367
+"""
+created_at = 1795109417
+updated_at = 1795109417
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_cargo"
+rev = "1941243cf1b37acb80d94e2d6e65cbc2240e6009"
+observed_at = 1795109417
+detail = """
+exit 101: ng blastguard v0.2.756 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.03s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-815351eedd2d3b24)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
+
+[[task]]
+id = "ad6db3d8"
+title = "[bg-heredoc-script-failopen-596ef57d:R-aggregate-and-controls] 上の各 requirement を実装した後は、集約 attack テストが pass し、既存の FP control がすべて green のままになる（新たな false positive を出さない）。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-aggregate-and-controls",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-aggregate-and-controls から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: 上の各 requirement を実装した後は、集約 attack テストが pass し、既存の FP control がすべて green のままになる（新たな false positive を出さない）。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_attacks_are_not_allow` が pass する（HEAD 7415d8b29 では "22 of 653 attack cases are Allow" で FAILED と観測済み）
+  - `cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_fp_cases_stay_allow` が pass する
+  - `cargo test -p blastguard --test python_stdin_re_compile_fp_20261103` が pass する（fb_python_stdin_program_with_re_compile_is_allowed）
+  - `cargo test -p blastguard --test backlog_20261120_596ef57d_requirements` の ignore されていない 4 件（r_q2_reanchor, control_pure_call_re_compile_allow, control_subprocess_git_status_stdin_allow, control_ordinary_rs_then_cargo_test_allow）が pass する
+
+canon:
+  - 要望原文: "Controls: heredoc_script_fp_cases_stay_allow must stay green (no new false positive)."
+  - 要望原文: "Controls that must stay green: r_q2_reanchor, control_pure_call_re_compile_allow, control_subprocess_git_status_stdin_allow, control_ordinary_rs_then_cargo_test_allow, heredoc_script_fp_cases_stay_allow, python_stdin_re_compile_fp_20261103."
+  - crates/blastguard/tests/heredoc_script_failopen_red_20261108.rs:680-701
+"""
+created_at = 1795109428
+updated_at = 1795109428
+weight = 0.0
+issue_number = 1875
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1875"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_attacks_are_not_allow"
+rev = "5be205c1791a3cad8e8669323dd8b56ccae60a3b"
+observed_at = 1795109428
+detail = """
+exit 101: mpiling blastguard v0.2.757 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.60s
+     Running tests/heredoc_script_failopen_red_20261108.rs (target/debug/deps/heredoc_script_failopen_red_20261108-822eb2aee4979ab1)
+error: test failed, to rerun pass `-p blastguard --test heredoc_script_failopen_red_20261108`"""

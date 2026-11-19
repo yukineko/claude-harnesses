@@ -191,7 +191,6 @@ const MENTION: &str =
 /// The originally blocked shape, minimised: `env -u VAR backlog add --title
 /// "<text>"`. Expected Allow: the text is data passed to `backlog`.
 #[test]
-#[ignore = "RED fp-cand-b 2026-11-20: env-wrapped non-interpreter argv text mentioning a python System write is Deny (interpreter write)"]
 fn wrapped_backlog_title_mentioning_python_system_write_is_allow() {
     let fx = fixture("i1a");
     allow_at(
@@ -203,7 +202,6 @@ fn wrapped_backlog_title_mentioning_python_system_write_is_allow() {
 
 /// `echo` twin behind `env` and behind `nice`.
 #[test]
-#[ignore = "RED fp-cand-b 2026-11-20: env/nice-wrapped echo of text mentioning a python System write is Deny (interpreter write)"]
 fn wrapped_echo_mentioning_python_system_write_is_allow() {
     let fx = fixture("i1b");
     for c in [
@@ -259,7 +257,6 @@ fn item2_fixture(tag: &str) -> Fx {
 /// Truncating an existing untracked project file: the round-trip variants
 /// write the same real file and must not answer more permissively.
 #[test]
-#[ignore = "RED fp-cand-b 2026-11-20: cd sub && cd .. then a relative truncating redirect is placed at /T and answers Allow"]
 fn cd_roundtrip_truncate_existing_file_parity() {
     let fx = item2_fixture("i2a");
     for variant in [
@@ -279,7 +276,6 @@ fn cd_roundtrip_truncate_existing_file_parity() {
 /// A project file under `<proj>/etc`: the round-trip variant must not be
 /// judged as the System path `/etc/...`.
 #[test]
-#[ignore = "RED fp-cand-b 2026-11-20: cd sub && cd .. then a relative redirect into proj/etc is judged as /etc (system harm Deny)"]
 fn cd_roundtrip_redirect_into_project_etc_parity() {
     let fx = item2_fixture("i2b");
     parity_at(

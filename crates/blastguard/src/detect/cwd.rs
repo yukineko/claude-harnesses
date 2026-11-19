@@ -23,7 +23,11 @@ pub(super) enum CwdState {
     Root,
     /// A `cd`/`pushd` (or a `cd` through a `ln -s`-created alias) this
     /// analysis could resolve LEXICALLY to a literal directory — relative or
-    /// absolute, `..` collapsed via [`exclude::normalize`].
+    /// absolute, `..` collapsed via [`exclude::normalize`]. Never the empty
+    /// string: a relative walk that cancels back to the line's own base
+    /// (`cd sub && cd ..`) is `Known(".")` (see [`known_dir`]), because every
+    /// consumer joins `"{dir}/{x}"` and an empty `dir` would turn a relative
+    /// `x` into the root-anchored `/x` (backlog 5f02eb88).
     Known(String),
     /// A directory change occurred but its target could not be resolved
     /// statically (`cd $VAR`, bare `cd -`, `cd ~`, or a `popd` — this
@@ -175,17 +179,38 @@ pub(super) fn resolve_dir_token(
 ) -> CwdState {
     let tok = strip_edge_parens(tok);
     if let Some(target) = aliases.get(tok) {
-        return CwdState::Known(target.clone());
+        return known_dir(target.clone());
     }
     if tok.starts_with('/') {
-        return CwdState::Known(exclude::normalize(tok));
+        return known_dir(exclude::normalize(tok));
     }
     let joined = match cwd {
         CwdState::Known(dir) => format!("{dir}/{tok}"),
         CwdState::Root => tok.to_string(),
         CwdState::Unknown => return CwdState::Unknown,
     };
-    CwdState::Known(exclude::normalize(&joined))
+    known_dir(exclude::normalize(&joined))
+}
+
+/// [`CwdState::Known`] for a lexically resolved directory, spelling the
+/// line's own base as `"."` rather than `""`.
+///
+/// [`exclude::normalize`] cancels a relative walk that returns to where it
+/// started (`sub/..`) to the EMPTY string. Every consumer of `Known(dir)`
+/// joins `"{dir}/{x}"` (redirect placement, operand rewriting, the next
+/// `cd`), so `""` placed a relative `x` at the root-anchored `/x`: `cd sub
+/// && cd .. && echo x > existing.txt` was judged as `/existing.txt` (Allow,
+/// not the project file's Ask) and a target under a project `etc/` dir as a
+/// System path (Deny) — backlog 5f02eb88. `"."` names the same directory and
+/// joins to `./x`, which `exclude::normalize` collapses back to `x`; it is
+/// the state a literal `cd .` already produced. An absolute path never
+/// normalises to `""` (`/..` is `/`), so only the relative case changes.
+fn known_dir(dir: String) -> CwdState {
+    if dir.is_empty() {
+        CwdState::Known(".".to_string())
+    } else {
+        CwdState::Known(dir)
+    }
 }
 
 /// One step of the left-to-right cwd walk [`detect_bash`] runs across a

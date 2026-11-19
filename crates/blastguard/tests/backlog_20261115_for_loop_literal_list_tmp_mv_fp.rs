@@ -125,7 +125,6 @@ fn loop_cmd(home: &Home, list: &str) -> String {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-15 for-loop over a literal word list: `> $D/$f.tmp` + mv is refused as 'path cannot be placed' because the loop variable is left unresolved — remove when fixed"]
 fn literal_list_for_loop_tmp_then_mv_is_allowed() {
     let home = unique_home("fp");
     let cmd = loop_cmd(&home, "decomp decomp.routed");
@@ -169,4 +168,218 @@ fn control_write_through_earlier_symlink_is_not_allowed() {
         m, "allow",
         "a write through a symlink into /etc must not be allowed; reason={mr}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Controls added 2026-11-19 (condukt run-20261119-072406-79324 t2, retry): a
+// RELATIVE symlink source spelled through a literal-list loop variable.
+// `ln -s etc L` makes `L` point at the TEXT `etc`, resolved from the directory
+// holding `L` — not from the cwd. 21d8ea853 replaced the source word by the
+// value the AST evaluator proved, which is already placed against the cwd
+// (`HOME/wt/a/b/c/d/etc`), so the write through the link was judged as landing
+// in the tree.
+//
+// Observed on 21d8ea853 (this file's harness, temporary diagnostic test, cwd =
+// HOME/wt, HOME under /tmp):
+//   cd D && for f in etc; do ln -s $f /private/L; done; echo x > /private/L/passwd
+//       -> allow (no output)
+//   cd D && ln -s etc /private/L; echo x > /private/L/passwd
+//       -> deny 'redirect /private/etc/passwd' writes into a system directory
+//   cd D && for f in etc; do ln -s ../$f /tmp/L; done; echo x > /tmp/L/passwd
+//       -> ask (not modelled ... into `/tmp/L`) in this harness; the main
+//          session reported allow for the same shape with its own probe (cwd =
+//          scratchpad/home/wt), not reproduced here.
+//   cd D && for f in etc; do cp -s $f /private/L; done; ...
+//       -> ask (`cp` option `-s` not modelled, another layer)
+//   cd D && for f in etc tmp; do ln -s $f /private/L; done; ...
+//       -> ask (more than one command of the line relinks this path)
+//
+// Asserted: every loop form != "allow"; the no-loop reference forms == "deny".
+// DOES NOT PROVE: that the loop forms are Deny (only != allow: a symlink source
+// spelled through a loop variable stays an Ask), why the `../$f` form is an
+// Ask here but was reported allow by the main session, anything about absolute
+// symlink sources, or the subagent verdict.
+// ---------------------------------------------------------------------------
+
+/// A scratch cwd four levels below HOME/wt and a link name that does not exist.
+fn deep_cwd_and_name(home: &Home, tag: &str) -> (String, String) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let deep = home.0.join("wt").join("a").join("b").join("c").join("d");
+    std::fs::create_dir_all(&deep).unwrap();
+    let name = format!(
+        "bg-loopln-{tag}-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::SeqCst)
+    );
+    (deep.display().to_string(), name)
+}
+
+/// Reference: no loop; `etc` from `/private` is `/private/etc` -> system harm.
+#[test]
+fn control_no_loop_relative_symlink_source_into_etc_is_denied() {
+    let home = unique_home("ln-noloop");
+    let (deep, name) = deep_cwd_and_name(&home, "noloop");
+    let cmd = format!("cd {deep} && ln -s etc /private/{name}; echo x > /private/{name}/passwd");
+    let (m, mr) = run_as(&cmd, &home, false);
+    assert_eq!(
+        m, "deny",
+        "a write through `ln -s etc /private/L` lands in /private/etc; reason={mr}"
+    );
+}
+
+/// The same line with the source spelled through a literal-list loop
+/// variable lands in `/private/etc` exactly as above: never allow.
+#[test]
+fn control_loop_relative_symlink_source_into_etc_is_not_allowed() {
+    let home = unique_home("ln-loop");
+    let (deep, name) = deep_cwd_and_name(&home, "loop");
+    let cmd = format!(
+        "cd {deep} && for f in etc; do ln -s $f /private/{name}; done; echo x > /private/{name}/passwd"
+    );
+    let (m, mr) = run_as(&cmd, &home, false);
+    assert_ne!(
+        m, "allow",
+        "`ln -s $f /private/L` with f=etc lands in /private/etc; reason={mr}"
+    );
+}
+
+/// The shape the main session reported: `../$f` from a link in `/tmp`.
+#[test]
+fn control_loop_dotdot_symlink_source_into_etc_is_not_allowed() {
+    let home = unique_home("ln-dotdot");
+    let (deep, name) = deep_cwd_and_name(&home, "dotdot");
+    let cmd = format!(
+        "cd {deep} && for f in etc; do ln -s ../$f /tmp/{name}; done; echo x > /tmp/{name}/passwd"
+    );
+    let (m, mr) = run_as(&cmd, &home, false);
+    assert_ne!(
+        m, "allow",
+        "`ln -s ../$f /tmp/L` with f=etc lands in /etc; reason={mr}"
+    );
+}
+
+/// `cp -s` makes a symlink to the source text too.
+#[test]
+fn control_loop_relative_cp_symbolic_source_into_etc_is_not_allowed() {
+    let home = unique_home("cps-loop");
+    let (deep, name) = deep_cwd_and_name(&home, "cps");
+    let reference =
+        format!("cd {deep} && cp -s etc /private/{name}; echo x > /private/{name}/passwd");
+    let (m, mr) = run_as(&reference, &home, false);
+    assert_eq!(
+        m, "deny",
+        "a write through `cp -s etc /private/L` lands in /private/etc; reason={mr}"
+    );
+    let cmd = format!(
+        "cd {deep} && for f in etc; do cp -s $f /private/{name}; done; echo x > /private/{name}/passwd"
+    );
+    let (m, mr) = run_as(&cmd, &home, false);
+    assert_ne!(
+        m, "allow",
+        "`cp -s $f /private/L` with f=etc lands in /private/etc; reason={mr}"
+    );
+}
+
+/// Several values for the symlink source: the link may point at any of them.
+#[test]
+fn control_loop_relative_symlink_source_several_values_is_not_allowed() {
+    let home = unique_home("ln-multi");
+    let (deep, name) = deep_cwd_and_name(&home, "multi");
+    let onto = format!(
+        "cd {deep} && for f in etc tmp; do ln -s $f /private/{name}; done; echo x > /private/{name}/passwd"
+    );
+    let (m, mr) = run_as(&onto, &home, false);
+    assert_ne!(
+        m, "allow",
+        "`ln -s $f /private/L` with f in etc tmp may land in /private/etc; reason={mr}"
+    );
+    let dotdot = format!(
+        "cd {deep} && for f in etc tmp; do ln -s ../$f /tmp/{name}; done; echo x > /tmp/{name}/passwd"
+    );
+    let (m, mr) = run_as(&dotdot, &home, false);
+    assert_ne!(
+        m, "allow",
+        "`ln -s ../$f /tmp/L` with f in etc tmp may land in /etc; reason={mr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Controls added 2026-11-19 (t2, second retry): an ABBREVIATED long option.
+// GNU getopt_long accepts any unique prefix of a long option, so `ln --sym`
+// and `ln --symb` are `ln --symbolic`, and `cp --sym` is `cp
+// --symbolic-link`. 64bad5ec1 recognised the symbolic kind only through
+// `-s` or an option starting with the FULL name, so `ln --sym` was read as
+// a hard link (its source then replaced by the cwd-placed loop value) and
+// `cp --sym` as a plain copy (no relink at all).
+//
+// Asserted: every form != "allow"; the `ln` loop forms also name the
+// unmodelled relink as the reason (the source is not placed). DOES NOT PROVE:
+// the verdict of an abbreviated option that does NOT make a symlink, the
+// `cp` reason text (another layer may answer first), or the subagent verdict.
+// ---------------------------------------------------------------------------
+
+/// The reason the relink layer gives when it does not place the link's
+/// source.
+const UNPLACED_SOURCE: &str = "a command whose effect is not modelled may relink it";
+
+fn assert_loop_not_allowed(cmd: &str, home: &Home, why: &str, reason_names_relink: bool) {
+    let (m, mr) = run_as(cmd, home, false);
+    assert_ne!(m, "allow", "{why}; command={cmd} reason={mr}");
+    if reason_names_relink {
+        assert!(
+            mr.contains(UNPLACED_SOURCE),
+            "{why}: the reason must be the unplaced relink; command={cmd} reason={mr}"
+        );
+    }
+}
+
+/// `ln -s $f` in a loop: the source stays spelled, so the reason is the
+/// unplaced relink (stronger than the `!= allow` control above).
+#[test]
+fn control_loop_symlink_source_reason_is_unplaced_relink() {
+    let home = unique_home("ln-reason");
+    let (deep, name) = deep_cwd_and_name(&home, "reason");
+    let cmd = format!(
+        "cd {deep} && for f in etc; do ln -s $f /private/{name}; done; echo x > /private/{name}/passwd"
+    );
+    assert_loop_not_allowed(&cmd, &home, "`ln -s $f` with f=etc", true);
+}
+
+#[test]
+fn control_loop_abbreviated_ln_symbolic_is_not_allowed() {
+    let home = unique_home("ln-abbr");
+    for opt in ["--sym", "--symb", "--symbolic"] {
+        let (deep, name) = deep_cwd_and_name(&home, "abbr");
+        let cmd = format!(
+            "cd {deep} && for f in etc; do ln {opt} $f /private/{name}; done; echo x > /private/{name}/passwd"
+        );
+        assert_loop_not_allowed(&cmd, &home, &format!("`ln {opt} $f` with f=etc"), true);
+    }
+}
+
+#[test]
+fn control_loop_abbreviated_cp_symbolic_is_not_allowed() {
+    let home = unique_home("cp-abbr");
+    for opt in ["--sym", "--symbolic", "--symbolic-link"] {
+        let (deep, name) = deep_cwd_and_name(&home, "cpabbr");
+        let cmd = format!(
+            "cd {deep} && for f in etc; do cp {opt} $f /private/{name}; done; echo x > /private/{name}/passwd"
+        );
+        assert_loop_not_allowed(&cmd, &home, &format!("`cp {opt} $f` with f=etc"), false);
+    }
+}
+
+/// Without a loop: an abbreviated symbolic option with a literal source must
+/// not be read as a hard link / plain copy either.
+#[test]
+fn control_no_loop_abbreviated_symbolic_is_not_allowed() {
+    let home = unique_home("abbr-noloop");
+    for (verb, opt) in [("ln", "--sym"), ("ln", "--symb"), ("cp", "--sym")] {
+        let (deep, name) = deep_cwd_and_name(&home, "abbrnl");
+        let cmd = format!(
+            "cd {deep} && {verb} {opt} etc /private/{name}; echo x > /private/{name}/passwd"
+        );
+        assert_loop_not_allowed(&cmd, &home, &format!("`{verb} {opt} etc`"), false);
+    }
 }

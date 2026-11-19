@@ -84367,3 +84367,251 @@ error: test failed, to rerun pass `-p askrelay --test backlog_20261119_relay_adj
 [task.closure]
 reason = "discard"
 discard_reason = "Misfiled: user clarified 2026-11-19 「sub agentからのrelayは判定できないと終了するからやってる、目的はすすめるため」 — the subagent-Ask relay (askrelay Stop hook + main re-run) is kept. The removal request was about something else; RED c14d7a027 is removed in the same change."
+
+[[task]]
+id = "a0551e29"
+title = "blastguard FP: assigned-literal pathspecs (a=lit && b=lit, or after cd) not resolved statically in git add"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795009619
+updated_at = 1795040860
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_assigned_literal_pathspec_git_add_fp -- --ignored"
+rev = "55f28e447d9ad4a3dfef41cdddcda977e3173a55"
+observed_at = 1795009619
+detail = """
+exit 101: rness-worktrees/bg-s4-20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.47s
+     Running tests/backlog_20261118_assigned_literal_pathspec_git_add_fp.rs (target/debug/deps/backlog_20261118_assigned_literal_pathspec_git_add_fp-d110fa76cb28b8a6)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_assigned_literal_pathspec_git_add_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261118_assigned_literal_pathspec_git_add_fp"
+exit = 0
+passed = 5
+rev = "fc304ce5c3766c6cee0804eae9aceb87e3326a60"
+observed_at = 1795040851
+output_digest = "sha256:43e97243309eb713a15237d5d642febde0f848ef034f1252e714cbf00ca5570f"
+excerpt = """
+
+running 5 tests
+test literal_pathspec_git_add_allows ... ok
+test two_assigned_literal_pathspecs_git_add_allows ... ok
+test one_assigned_literal_pathspec_git_add_allows ... ok
+test unbound_pathspec_git_add_not_allowed ... ok
+test assigned_literal_pathspec_after_cd_git_add_allows ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.31s
+
+   Compiling blastguard v0.2.731 (/Users/yuki/src/.harness-worktrees/bg-fp-20261119/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.18s
+     Running tests/backlog_20261118_assigned_literal_pathspec_git_add_fp.rs (target/debug/deps/backlog_20261118_assigned_literal_pathspec_git_add_fp-7033ef7d6281d071)
+"""
+
+[task.closure.red]
+rev = "55f28e447d9ad4a3dfef41cdddcda977e3173a55"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "ebbd1074"
+title = '''blastguard FP: '-> Decision' inside a quoted perl -e regex read as a redirect onto '\''''
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795009572
+updated_at = 1795040866
+weight = 0.0
+issue_number = 1862
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1862"
+issue_closed_at = 1795040868
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_perl_regex_arrow_read_as_redirect_fp -- --ignored"
+rev = "55f28e447d9ad4a3dfef41cdddcda977e3173a55"
+observed_at = 1795009572
+detail = """
+exit 101: rness-worktrees/bg-s4-20261118/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.15s
+     Running tests/backlog_20261118_perl_regex_arrow_read_as_redirect_fp.rs (target/debug/deps/backlog_20261118_perl_regex_arrow_read_as_redirect_fp-b37da4b752bc0bcc)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_perl_regex_arrow_read_as_redirect_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261118_perl_regex_arrow_read_as_redirect_fp"
+exit = 0
+passed = 2
+rev = "fc304ce5c3766c6cee0804eae9aceb87e3326a60"
+observed_at = 1795040863
+output_digest = "sha256:40fd34c38c11bf5a923034c0c5fdf17b941e51e15d7360c4da9bf441c4d990b6"
+excerpt = """
+
+running 2 tests
+test real_redirect_onto_backslash_file_still_refused ... ok
+test blocked_perl_regex_rewrite_is_not_deny_in_main_mode ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
+
+   Compiling blastguard v0.2.731 (/Users/yuki/src/.harness-worktrees/bg-fp-20261119/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.87s
+     Running tests/backlog_20261118_perl_regex_arrow_read_as_redirect_fp.rs (target/debug/deps/backlog_20261118_perl_regex_arrow_read_as_redirect_fp-d7f85ef6671bd538)
+"""
+
+[task.closure.red]
+rev = "3f77df731744d714ab2f7672a186a28e91c11b6b"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "dc27f669"
+title = "blastguard: printf (format-reuse) file passed as a data argument to a python script is judged as the python program (Ask / subagent Deny)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = '''Observed 2026-11-14 in flow session: printf '%s\n' 'echo hi | bash' 'echo hi |& bash' > c.txt && python3 p.py bin c.txt refused in subagent mode: printf writes the file, another part may run it with Python, written text judged as the Python program; printf option/format-reuse rules not modelled. Reproduced at main 4139f1d2 (0.2.539): printf '%s\n' a b > d.txt && python3 s.py d.txt is ask (main) / deny (subagent); single-conversion printf is Allow; true-positive controls (file is the program) stay non-Allow. RED commit fa080792 on branch test/bg-red-pipe-reader-and-py-argv.'''
+created_at = 1794601343
+updated_at = 1795041141
+weight = 0.0
+issue_number = 1735
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1735"
+issue_closed_at = 1795041144
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_printf_file_as_python_data_arg_fp -- --include-ignored"
+rev = "fa080792966cccefbe3e040a53de25b6add39720"
+observed_at = 1794601343
+detail = """
+exit 101: orktrees/bg-red-pipe-reader-and-py-argv/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/backlog_20261114_printf_file_as_python_data_arg_fp.rs (target/debug/deps/backlog_20261114_printf_file_as_python_data_arg_fp-232693ec2b1af97c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_printf_file_as_python_data_arg_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_printf_file_as_python_data_arg_fp"
+exit = 0
+passed = 5
+rev = "e313e9ad4c083e17cddb9845ecd4ce46d79cb9c6"
+observed_at = 1795041135
+output_digest = "sha256:68258f3f21d311d16f3adc823fe515420980ff2727fd52d09a1c748a7b19fe47"
+excerpt = """
+
+running 5 tests
+test control_printf_benign_program_file_then_run_is_pinned ... ok
+test control_printf_harmful_program_file_then_run_is_deny ... ok
+test control_printf_harmful_data_file_as_python_data_argument_is_not_allow ... ok
+test control_printf_file_that_is_the_python_program_is_not_allow ... ok
+test printf_file_passed_as_python_data_argument_judged_as_program_alone ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s
+
+   Compiling blastguard v0.2.732 (/Users/yuki/src/.harness-worktrees/bg-printf-data-arg-20261119/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.25s
+     Running tests/backlog_20261114_printf_file_as_python_data_arg_fp.rs (target/debug/deps/backlog_20261114_printf_file_as_python_data_arg_fp-2adc362e1673e97e)
+"""
+
+[task.closure.red]
+rev = "fb4080bb68d5b8910949813029282c81303ba38c"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "bf90fa9d"
+title = "blastguard FP: printf writing a .json data file and python3 script.py reading it as an argument is denied in subagent mode"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = '''Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. `printf '%s\n' '[{"cmd":"echo hi"}]' > cases5.json && python3 probe.py cases5.json` => deny (subagent) with reason that the written file may be run with Python. The json is a data argument to a script, not the program. Readings: (a) FP - argument-position file treated as program; (b) intended conservative pairing of printf writes with later interpreter runs. Tell apart: python3 runs probe.py, cases5.json is argv[1].'''
+created_at = 1794634347
+updated_at = 1795041146
+weight = 0.0
+issue_number = 1766
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1766"
+issue_closed_at = 1795041150
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_printf_json_then_python_script_arg_fp -- --include-ignored"
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634347
+detail = """
+exit 101: 20261114-125811-45041-integ/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running tests/backlog_20261114_printf_json_then_python_script_arg_fp.rs (target/debug/deps/backlog_20261114_printf_json_then_python_script_arg_fp-2333295ec2028b8d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_printf_json_then_python_script_arg_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_printf_json_then_python_script_arg_fp"
+exit = 0
+passed = 2
+rev = "e313e9ad4c083e17cddb9845ecd4ce46d79cb9c6"
+observed_at = 1795041144
+output_digest = "sha256:53429ee9ad94a8607a41f006faffe4e1bfcdcf4a59c482e2da244db8aeaf62ca"
+excerpt = """
+
+running 2 tests
+test control_python_probe_alone_is_allow ... ok
+test printf_json_then_python_script_with_json_arg_judged_as_program_alone ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+   Compiling blastguard v0.2.732 (/Users/yuki/src/.harness-worktrees/bg-printf-data-arg-20261119/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running tests/backlog_20261114_printf_json_then_python_script_arg_fp.rs (target/debug/deps/backlog_20261114_printf_json_then_python_script_arg_fp-c583828a247bed18)
+"""
+
+[task.closure.red]
+rev = "fb4080bb68d5b8910949813029282c81303ba38c"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

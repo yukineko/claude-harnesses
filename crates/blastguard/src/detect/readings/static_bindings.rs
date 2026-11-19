@@ -18,7 +18,18 @@
 //!   * a statement that is only assignments: `X=lit`, `X="lit"`, `X='lit'`;
 //!   * `export X=lit` (operands all `NAME=value` or bare names, no flags);
 //!   * a value built from names already bound (`B=$A/x`) resolves too, since
-//!     the value is rewritten before it is read.
+//!     the value is rewritten before it is read;
+//!   * an assignment that only an `&&` guard keeps from being unconditional
+//!     (`cd /p && a=lit`, `a=x && b=lit`) binds ONLY along its own `&&`
+//!     chain, and only when every separator of its and-or list BEFORE it is
+//!     `&&` too: then a later segment reached from it through nothing but
+//!     `&&` runs only if every earlier command of the list ran, the
+//!     assignment included (backlog a0551e29), so `cd /p && a=lit && git add
+//!     -- $a` resolves. A `||` anywhere before it binds nothing (`X || b=lit
+//!     && cmd $b` is `(X || b=lit) && cmd`, which runs `cmd` without `b=lit`
+//!     when `X` succeeds). A `||`, `;`, newline, `|` or `&` after it ends the
+//!     binding, and the name is then unbound (it may or may not have been
+//!     assigned). See `assignment_execution_is_guarded_only_by_and_or`.
 //!
 //! `HOME` is bound before the first statement to the hook environment's own
 //! `HOME` (user ruling 2026-11-17, SUBSET.md ruling 12: `$HOME` / `${HOME}`
@@ -37,7 +48,8 @@
 //!
 //! Everything whose value exists only at run time stays unresolved (and so
 //! keeps its restrictive verdict): `$(cmd)` / backtick values and reassignment
-//! from them, unassigned names, assignments guarded by `&&`/`||` or inside an
+//! from them, unassigned names, assignments guarded by `&&`/`||` (outside
+//! their own `&&` chain, see above) or inside an
 //! `if`/loop/`case`/subshell/brace group, a pipeline stage or `&`, arrays,
 //! `+=`, any other statement mentioning the name outside a plain reference
 //! (`read X`, `for X in`, `unset X`, `printf -v X`, `(X=…`, `$(X=…)`; the
@@ -61,8 +73,9 @@ use super::super::vars::{
     mentions_name_outside_reference, quote_aware_words, unquote_literal_value,
 };
 use super::super::{
-    assignment_execution_is_unconditional, assignments_reach_parent_shell, here_document_layout,
-    is_assignment, normalized_command, split_segments_with_separators, SeparatedSegment,
+    assignment_execution_is_guarded_only_by_and_or, assignment_execution_is_unconditional,
+    assignments_reach_parent_shell, here_document_layout, is_assignment, normalized_command,
+    split_segments_with_separators, SegmentSep, SeparatedSegment,
 };
 use std::collections::HashMap;
 
@@ -143,11 +156,45 @@ fn resolve_static_bindings_with_home(cmd: &str, home: Option<&str>) -> String {
     }
     // `~` inside arithmetic is bitwise NOT, not a home directory.
     let tilde_ok = tilde_candidate && !cmd.contains("((") && !cmd.contains("$[");
+    // Bindings of an `&&`-guarded assignment, valid only along its own `&&`
+    // chain (see `assignment_execution_is_guarded_only_by_and_or`). Consulted
+    // before `env`: such an assignment removed the name from `env`.
+    let mut chain: HashMap<String, String> = HashMap::new();
+    let mut and_prefix = true;
     let mut out = String::with_capacity(cmd.len());
     let mut cursor = 0;
     for (idx, (seg, &(start, end))) in segs.iter().zip(spans.iter()).enumerate() {
         let Some(gap) = cmd.get(cursor..start) else {
             return cmd.to_string();
+        };
+        // The chain continues only across a plain `&&`; `||`, `;`, a
+        // newline, `|` or `&` ends what the text guarantees about it.
+        let continues_chain = idx > 0
+            && matches!(segs[idx - 1].sep_after, SegmentSep::Conditional)
+            && gap.trim() == "&&";
+        if !continues_chain {
+            chain.clear();
+        }
+        // Every separator from the start of this segment's and-or list up to
+        // it is `&&` (or it starts the list). Only then does a later `&&`
+        // segment running imply this one ran: `X || b=lit && cmd` is
+        // `(X || b=lit) && cmd`, which runs `cmd` without `b=lit` when `X`
+        // succeeds. A list start is only trusted after a `;`/newline/`&` that
+        // follows an ordinary code segment: a blank or comment-only segment
+        // (the line break after a trailing `&&`/`||`) or a here-document body
+        // line can sit INSIDE a continued and-or list.
+        and_prefix = match idx.checked_sub(1).and_then(|p| segs.get(p)) {
+            None => true,
+            Some(prev) => match prev.sep_after {
+                SegmentSep::Conditional => and_prefix && continues_chain,
+                SegmentSep::Sequential | SegmentSep::Background | SegmentSep::EndOfLine => {
+                    let t = prev.text.trim_start();
+                    !t.is_empty()
+                        && !t.starts_with('#')
+                        && !is_body.get(idx - 1).copied().unwrap_or(true)
+                }
+                SegmentSep::Pipe => false,
+            },
         };
         out.push_str(gap);
         cursor = end;
@@ -162,7 +209,7 @@ fn resolve_static_bindings_with_home(cmd: &str, home: Option<&str>) -> String {
         }
         let in_loop = loop_start.is_some_and(|l| idx >= l);
         let lookup = |name: &str| -> Option<String> {
-            let value = env.get(name)?;
+            let value = chain.get(name).or_else(|| env.get(name))?;
             if mentions_name_outside_reference(&seg.text, name) {
                 return None;
             }
@@ -182,7 +229,7 @@ fn resolve_static_bindings_with_home(cmd: &str, home: Option<&str>) -> String {
                 text = substitute_tilde(&text, &h);
             }
         }
-        update_env(&mut env, &segs, idx, &text);
+        update_env(&mut env, &mut chain, and_prefix, &segs, idx, &text);
         out.push_str(&text);
     }
     match cmd.get(cursor..) {
@@ -265,15 +312,23 @@ fn is_substitutable_char(c: char) -> bool {
         || matches!(c, '/' | '.' | '_' | '+' | ',' | ':' | '@' | '%' | '^' | '-')
 }
 
-/// Record what segment `idx` (already rewritten to `text`) binds.
+/// Record what segment `idx` (already rewritten to `text`) binds: in `env`
+/// when the assignment runs unconditionally, in `chain` (valid only along
+/// the `&&` chain it stands in, backlog a0551e29) when only an `&&` guard
+/// stops it from being unconditional and `and_prefix` says every separator of
+/// its and-or list before it is `&&`. Anything that drops a name from `env`
+/// drops it from `chain` too.
 fn update_env(
     env: &mut HashMap<String, String>,
+    chain: &mut HashMap<String, String>,
+    and_prefix: bool,
     segs: &[SeparatedSegment],
     idx: usize,
     text: &str,
 ) {
     let Some(orig) = segs.get(idx).map(|s| s.text.as_str()) else {
         env.clear();
+        chain.clear();
         return;
     };
     let words = quote_aware_words(text);
@@ -290,6 +345,7 @@ fn update_env(
             .any(|w| matches!(unquote_literal_value(w).as_deref(), Some("eval" | "source")))
     {
         env.clear();
+        chain.clear();
         return;
     }
     let assignments: Option<&[String]> = if words.iter().all(|w| is_assignment(w)) {
@@ -305,26 +361,36 @@ fn update_env(
     } else {
         None
     };
-    let runs_here = assignments_reach_parent_shell(segs, idx)
-        && assignment_execution_is_unconditional(segs, idx);
+    let reaches_parent = assignments_reach_parent_shell(segs, idx);
+    let runs_here = reaches_parent && assignment_execution_is_unconditional(segs, idx);
+    let runs_in_chain =
+        reaches_parent && and_prefix && assignment_execution_is_guarded_only_by_and_or(segs, idx);
     match assignments {
-        Some(list) if runs_here => {
+        Some(list) if runs_here || runs_in_chain => {
             for w in list {
                 let Some(eq) = w.find('=') else {
                     continue;
                 };
                 let (name, raw) = (&w[..eq], &w[eq + 1..]);
-                match literal_value(raw) {
-                    Some(v) if !SHELL_MAINTAINED.contains(&name) => {
-                        env.insert(name.to_string(), v);
-                    }
-                    _ => {
-                        env.remove(name);
-                    }
+                // Whichever map the name is bound in, the other one's binding
+                // is stale now.
+                chain.remove(name);
+                env.remove(name);
+                let Some(v) = literal_value(raw).filter(|_| !SHELL_MAINTAINED.contains(&name))
+                else {
+                    continue;
+                };
+                if runs_here {
+                    env.insert(name.to_string(), v);
+                } else {
+                    chain.insert(name.to_string(), v);
                 }
             }
         }
-        _ => env.retain(|name, _| !mentions_name_outside_reference(orig, name)),
+        _ => {
+            env.retain(|name, _| !mentions_name_outside_reference(orig, name));
+            chain.retain(|name, _| !mentions_name_outside_reference(orig, name));
+        }
     }
 }
 

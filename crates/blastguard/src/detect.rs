@@ -188,9 +188,10 @@ use heredoc::{
 use heredoc::{opener_consumer, permitted_prefix_line};
 
 use segment::{
-    assignment_execution_is_unconditional, assignments_reach_parent_shell, closed_substitution_end,
-    closed_substitution_end_strict, here_doc_body_spans, split_segments,
-    split_segments_paren_aware, split_segments_with_separators, SegmentSep, SeparatedSegment,
+    assignment_execution_is_guarded_only_by_and_or, assignment_execution_is_unconditional,
+    assignments_reach_parent_shell, closed_substitution_end, closed_substitution_end_strict,
+    here_doc_body_spans, split_segments, split_segments_paren_aware,
+    split_segments_with_separators, SegmentSep, SeparatedSegment,
 };
 
 use words::{

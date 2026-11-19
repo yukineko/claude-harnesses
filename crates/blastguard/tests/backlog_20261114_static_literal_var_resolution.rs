@@ -179,6 +179,56 @@ fn assert_resolved_like_literal(fx: &Fx, var_cmd: &str, literal_cmd: &str, modes
     }
 }
 
+/// Same intent as [`assert_resolved_like_literal`] for a literal spelling
+/// that runs a program file from a project / non-system path. Re-anchored per
+/// user ruling 2026-11-18 (S4 B.5 direct exec of a project path): such a
+/// literal is no longer Allow but "direct execution of the program file …
+/// (Table B.5: Undetermined)" (ruling 17: project and non-system paths are
+/// Undetermined). The anti-vacuity anchor is therefore "the literal gets the
+/// B.5 refusal" instead of "the literal is allow"; the resolved form must
+/// still get the SAME decision and the SAME reason (so it is judged on the
+/// resolved path, not refused as unresolvable), with none of the
+/// "cannot resolve" phrasing.
+fn assert_resolved_like_literal_b5(fx: &Fx, var_cmd: &str, literal_cmd: &str, modes: &[bool]) {
+    for &sub in modes {
+        let who = if sub { "subagent" } else { "main" };
+        let (ld, lr) = run_as(fx, literal_cmd, sub);
+        assert_ne!(
+            ld, "allow",
+            "anti-vacuity: literal spelling is expected to be the B.5 refusal ({who}); cmd={literal_cmd:?}"
+        );
+        let (_, main_lr) = run_as(fx, literal_cmd, false);
+        assert!(
+            main_lr.contains("Table B.5: Undetermined"),
+            "anti-vacuity: literal spelling must be refused under Table B.5, not for another reason; cmd={literal_cmd:?} reason={main_lr}"
+        );
+        let (vd, vr) = run_as(fx, var_cmd, sub);
+        for m in UNRESOLVED_MARKERS {
+            assert!(
+                !vr.contains(m),
+                "({who}) the value is fixed by the command text, yet the reason says {m:?}; cmd={var_cmd:?} decision={vd} reason={vr}"
+            );
+        }
+        assert_eq!(
+            vd, ld,
+            "({who}) resolved form must be judged like the literal; cmd={var_cmd:?} reason={vr}"
+        );
+        // The subagent reason ends with a per-call relay id; compare the
+        // verdict text before it.
+        let judged = |r: &str| {
+            r.split("\n\nblastguard relay:")
+                .next()
+                .unwrap_or("")
+                .to_string()
+        };
+        assert_eq!(
+            judged(&vr),
+            judged(&lr),
+            "({who}) resolved form must carry the literal's reason (judged on the resolved path); cmd={var_cmd:?}"
+        );
+    }
+}
+
 const BOTH: &[bool] = &[false, true];
 
 fn sed_cargo_literal(fx: &Fx) -> String {
@@ -307,7 +357,8 @@ fn tdd_literal(fx: &Fx) -> String {
 fn red_command_word_quoted_concat() {
     let fx = fixture("t3");
     let lit = tdd_literal(&fx);
-    assert_resolved_like_literal(
+    // Re-anchored per user ruling 2026-11-18 (S4 B.5 direct exec of a project path)
+    assert_resolved_like_literal_b5(
         &fx,
         &format!(
             "T={}; \"$T\"bin/tdd red --cmd \"cargo test -p x --test y\"",
@@ -322,7 +373,8 @@ fn red_command_word_quoted_concat() {
 fn red_command_word_brace_concat_after_and_and() {
     let fx = fixture("t3b");
     let lit = tdd_literal(&fx);
-    assert_resolved_like_literal(
+    // Re-anchored per user ruling 2026-11-18 (S4 B.5 direct exec of a project path)
+    assert_resolved_like_literal_b5(
         &fx,
         &format!(
             "T={} && ${{T}}bin/tdd red --cmd \"cargo test -p x --test y\"",
@@ -340,7 +392,8 @@ fn red_command_word_unquoted_concat() {
         "{}/bin/tdd red --cmd \"cargo test -p x --test y\"",
         fx.tdd_dir()
     );
-    assert_resolved_like_literal(
+    // Re-anchored per user ruling 2026-11-18 (S4 B.5 direct exec of a project path)
+    assert_resolved_like_literal_b5(
         &fx,
         &format!(
             "T={}; $T/bin/tdd red --cmd \"cargo test -p x --test y\"",
@@ -355,7 +408,8 @@ fn red_command_word_unquoted_concat() {
 fn red_command_word_export_assignment() {
     let fx = fixture("b4e");
     let bl = fx.backlog_bin();
-    assert_resolved_like_literal(
+    // Re-anchored per user ruling 2026-11-18 (S4 B.5 direct exec of a project path)
+    assert_resolved_like_literal_b5(
         &fx,
         &format!("export B={bl}; $B list"),
         &format!("{bl} list"),
@@ -367,7 +421,8 @@ fn red_command_word_export_assignment() {
 fn red_glob_under_resolved_dir_as_command_word() {
     let fx = fixture("g5m");
     let wt = fx.wt();
-    assert_resolved_like_literal(
+    // Re-anchored per user ruling 2026-11-18 (S4 B.5 direct exec of a project path)
+    assert_resolved_like_literal_b5(
         &fx,
         &format!("W={wt}; $W/crates/condukt/tests/*.rs"),
         &format!("{wt}/crates/condukt/tests/*.rs"),
@@ -389,7 +444,8 @@ fn red_export_etc_hosts_is_system_harm_deny() {
 fn guard_command_word_plain_assignment_resolves() {
     let fx = fixture("b4");
     let bl = fx.backlog_bin();
-    assert_resolved_like_literal(
+    // Re-anchored per user ruling 2026-11-18 (S4 B.5 direct exec of a project path)
+    assert_resolved_like_literal_b5(
         &fx,
         &format!("B={bl}; $B list"),
         &format!("{bl} list"),

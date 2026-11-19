@@ -173,10 +173,38 @@ fn verdicts(cmd: &str, tag: &str) -> Vec<(bool, String, String)> {
         .collect()
 }
 
+// Re-anchored per user ruling 2026-11-18 (S4 B.5)
+//
+// Was: not Deny in either mode. `x.py` is a program file whose text is not in
+// the command, so it is B.5 Undetermined: main Ask / subagent Deny. Observed at
+// ddc2a3b05 (0.2.732), subagent: deny, reason "`python3` runs the program file
+// `x.py`, whose text is not in the command — blastguard cannot judge what it
+// would do (Table B.5: Undetermined)".
 #[test]
 fn control_benign_pipe_to_python_script_is_not_deny() {
     let cmd = format!("{BENIGN}python3 x.py");
     let bad: Vec<_> = verdicts(&cmd, "ctl-benign")
+        .into_iter()
+        .filter(|(s, d, r)| {
+            let want = if *s { "deny" } else { "ask" };
+            d != want || !(r.contains("Table B.5") && r.contains("`x.py`"))
+        })
+        .map(|(s, d, r)| format!("subagent={s} {cmd:?} => {d} ({r})"))
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "expected B.5 main ask / subagent deny naming x.py:\n{}",
+        bad.join("\n")
+    );
+}
+
+/// Benign twin: the same benign program read from stdin (`python3 -`), whose
+/// text IS in the command, is not Deny in either mode.
+#[test]
+#[ignore = "UNCLEAR: `echo 'print(1)' | python3 -` is deny in subagent mode at 0.2.732; whether the S4 ruling covers a piped stdin program is not settled"]
+fn control_benign_pipe_to_python_stdin_program_is_not_deny() {
+    let cmd = format!("{BENIGN}python3 -");
+    let bad: Vec<_> = verdicts(&cmd, "ctl-benign-stdin")
         .into_iter()
         .filter(|(_, d, _)| d == "deny")
         .map(|(s, d, r)| format!("subagent={s} {cmd:?} => {d} ({r})"))

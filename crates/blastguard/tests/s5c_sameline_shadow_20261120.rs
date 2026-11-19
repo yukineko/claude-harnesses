@@ -132,7 +132,6 @@ fn assert_allow_both(command: &str, tag: &str) {
 
 // user ruling 2026-11-20 (S5c): `> json.py` earlier on the line shadows `import json`.
 #[test]
-#[ignore = "RED s5c 2026-11-20: earlier same-line write of json.py into the program cwd shadows import json -> Ask"]
 fn redirect_writes_json_py_then_import_json_is_ask() {
     assert_ask_main_not_allow_sub(
         "echo 'print(2)' > json.py; python3 -c 'import json; print(1)'",
@@ -142,14 +141,12 @@ fn redirect_writes_json_py_then_import_json_is_ask() {
 
 // user ruling 2026-11-20 (S5c): `cp ... json.py &&` shadows `import json`.
 #[test]
-#[ignore = "RED s5c 2026-11-20: earlier same-line cp to json.py into the program cwd shadows import json -> Ask"]
 fn cp_to_json_py_then_import_json_is_ask() {
     assert_ask_main_not_allow_sub("cp /tmp/x json.py && python3 -c 'import json'", "cp");
 }
 
 // user ruling 2026-11-20 (S5c): `mkdir json &&` (package dir) shadows `import json`.
 #[test]
-#[ignore = "RED s5c 2026-11-20: earlier same-line mkdir json/ in the program cwd shadows import json -> Ask"]
 fn mkdir_json_then_import_json_is_ask() {
     assert_ask_main_not_allow_sub("mkdir json && python3 -c 'import json'", "mkdir");
 }

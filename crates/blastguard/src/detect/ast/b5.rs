@@ -1129,8 +1129,9 @@ pub(super) fn sets_injecting_var(commands: &[SimpleCommand]) -> bool {
 }
 
 /// The line has a loop or a function, so a command written AFTER the run in
-/// the text may execute before a later iteration / call of it.
-fn has_loop_or_function(text: &str) -> bool {
+/// the text may execute before a later iteration / call of it. Also read by
+/// stage S5c (`s5.rs`, same-line import shadowing).
+pub(super) fn has_loop_or_function(text: &str) -> bool {
     text.contains("()")
         || text
             .split(|c: char| c.is_whitespace() || ";&|(){}<>".contains(c))

@@ -301,6 +301,31 @@ pub(crate) fn judge(script: &Script, ctx: &PathCtx) -> Judgement {
     }
 }
 
+/// What [`entry_writes`] found for one command (stage S5c).
+pub(super) enum EntryWrites {
+    /// No row models the command (an unknown program, an empty `argv`, an
+    /// undetermined command word): it has no effect model, as in [`judge`].
+    NoModel,
+    /// The command has a row and a word is outside it.
+    Undetermined(String),
+    /// Every (effect, target word value) that may create or replace a
+    /// directory entry; the values are as written (resolve them against
+    /// [`super::SimpleCommand::cwd`]).
+    Targets(Vec<(Effect, Value)>),
+}
+
+/// The targets `c` may create or replace an entry at (stage S5c, user ruling
+/// 2026-11-20): the creating Table B B.1 targets plus `mkdir` / `touch`
+/// (`table_b::entry_writes`). Redirects are not included (B.2: read them off
+/// [`super::SimpleCommand::redirects`]).
+pub(super) fn entry_writes(c: &super::SimpleCommand) -> EntryWrites {
+    match table_b::entry_writes(c) {
+        table_b::Row::None => EntryWrites::NoModel,
+        table_b::Row::Undetermined(why) => EntryWrites::Undetermined(why),
+        table_b::Row::Targets(t) => EntryWrites::Targets(t),
+    }
+}
+
 /// A non-Allow verdict for one candidate cwd ([`judge_candidates`]).
 enum CandidateFinding {
     Ask(Finding),

@@ -13,15 +13,16 @@
 //! direct `... | python3 -m asyncio`; (2) intended: what a spawned child
 //! reads from stdin is out of scope. Tell apart: the user ruling is that
 //! system harm is deny through any wrapper, and `os.system` is a wrapper the
-//! detector already descends into -> reading (1). Benign stdin must not be
-//! deny (control).
+//! detector already descends into -> reading (1).
 //!
-//! Asserted: harmful stdin -> deny in main and subagent mode.
+//! Asserted: harmful stdin -> deny in main and subagent mode. Benign stdin
+//! (`print(1)`): per user ruling 2026-11-19 (S5) Ask in main (neither allow
+//! nor deny), not allow in a subagent (Deny accepted there) — for both the
+//! os.system spelling and the shell spelling `python3 -m asyncio` (parity).
 //!
 //! DOES NOT PROVE: other REPL spellings (`python3 -i`, `node`, `ruby -e`
 //! none, `bash`), `subprocess.run`/`os.popen` wrappers, non-stdin pipes, or the
-//! reason text. The control shows only that the same command with benign
-//! stdin `print(1)` is not deny.
+//! reason text. The benign-stdin tests show only the decision for `print(1)`.
 //!
 //! RED written by an independent test author, not the implementer.
 
@@ -99,12 +100,42 @@ fn harmful_stdin_into_os_system_nested_repl_is_deny() {
     assert_eq!(s, "deny", "subagent must deny; cmd={cmd:?} reason={sr}");
 }
 
+// user ruling 2026-11-19 (S5): exec (input()) / os.system("python3 -m asyncio") → Ask.
+// Supersedes the old "benign stdin is not deny" control in subagent mode:
+// main must be neither allow nor deny (i.e. Ask); in a subagent Deny is the
+// accepted rendering of Ask, so only "not allow" is asserted there.
 #[test]
-fn control_benign_stdin_into_nested_repl_is_not_deny() {
+fn ruled_benign_stdin_into_os_system_nested_repl_is_ask_in_main_not_allow_in_subagent() {
     let cmd = nested_repl("print(1)");
     let home = unique_home("ctl");
     let (m, mr) = run_as(&cmd, &home, false);
     let (s, sr) = run_as(&cmd, &home, true);
-    assert_ne!(m, "deny", "main; cmd={cmd:?} reason={mr}");
-    assert_ne!(s, "deny", "subagent; cmd={cmd:?} reason={sr}");
+    assert_ne!(m, "allow", "main must not allow; cmd={cmd:?} reason={mr}");
+    assert_ne!(
+        m, "deny",
+        "main must not deny (Ask); cmd={cmd:?} reason={mr}"
+    );
+    assert_ne!(
+        s, "allow",
+        "subagent must not allow; cmd={cmd:?} reason={sr}"
+    );
+}
+
+// Parity twin: the shell spelling `python3 -m asyncio` with the same piped
+// benign stdin gets the same treatment as the os.system spelling above.
+#[test]
+fn parity_benign_stdin_into_shell_python_m_asyncio_is_ask_in_main_not_allow_in_subagent() {
+    let cmd = "echo 'print(1)' | python3 -m asyncio";
+    let home = unique_home("shell");
+    let (m, mr) = run_as(cmd, &home, false);
+    let (s, sr) = run_as(cmd, &home, true);
+    assert_ne!(m, "allow", "main must not allow; cmd={cmd:?} reason={mr}");
+    assert_ne!(
+        m, "deny",
+        "main must not deny (Ask); cmd={cmd:?} reason={mr}"
+    );
+    assert_ne!(
+        s, "allow",
+        "subagent must not allow; cmd={cmd:?} reason={sr}"
+    );
 }

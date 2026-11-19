@@ -415,9 +415,11 @@ pub(super) const TEMPFILE_CREATORS: &[&str] = &[
 /// name, expose a namespace as a mapping, or start an interactive tool that
 /// runs commands from the environment (`help` → pager). Any reference to one
 /// of these names — called or not — is Undetermined, with one exception: a
-/// [`NAMESPACE_BUILTINS`] call whose result is only displayed or discarded
-/// (a positional argument of the builtin `print`, or an expression
-/// statement, optionally subscripted; see `judge::Judge::inert_result`).
+/// [`NAMESPACE_BUILTINS`] or `compile` call whose result is only displayed
+/// or discarded (a positional argument of the builtin `print`, or an
+/// expression statement, optionally subscripted; see
+/// `judge::Judge::inert_result`). A `compile` result that is bound, called
+/// or passed to any other call (`exec(compile(...))`) stays Undetermined.
 pub(super) const DANGEROUS_BUILTINS: &[&str] = &[
     "exec",
     "eval",

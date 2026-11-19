@@ -20,15 +20,24 @@
 //! system harm is deny through any wrapper, so an alias that reaches the same
 //! `exec` is the same defect -> reading (1).
 //!
-//! Asserted: harmful stdin -> deny in main and subagent mode for each of the
-//! three programs. Benign stdin (`print(1)`) is recorded as allow/allow: that
-//! is an observation of the space-sensitive markers, NOT a requirement; if a
-//! fix makes it ask, update this test deliberately.
+//! Asserted: harmful stdin -> deny in main and subagent mode for
+//! `exec (input())` and the globals alias. Benign stdin (`print(1)`), per user
+//! rulings 2026-11-19 (S5): `exec (input())` and the globals alias are Ask
+//! (asserted "not allow").
+//!
+//! `compile (input(),...)` whose result is never executed: per user ruling
+//! 2026-11-19 (S5) ("compile not executed → Allow, even when the stdin it
+//! compiles is harmful; nothing runs") it is Allow in main and subagent for
+//! both benign and harmful stdin. This supersedes the earlier "harmful stdin
+//! -> deny" expectation for SPACED_COMPILE. The protection stays where code
+//! actually runs: the same harmful stdin through
+//! `exec (compile (input(),"x","exec"))` is asserted "not allow" in both modes.
 //!
 //! DOES NOT PROVE: other aliases (`getattr(__builtins__, ...)`), harm other
 //! than `os.chmod` on /etc/hosts, reason text, or behaviour with a real
-//! interpreter. The control only shows `exec(input())` with harmful stdin is
-//! deny.
+//! interpreter; nor that compile results reaching `eval` or a stored-then-
+//! executed variable (`c=compile(...); exec(c)`) are caught. The control only
+//! shows `exec(input())` with harmful stdin is deny.
 //!
 //! RED written by an independent test author, not the implementer.
 
@@ -97,6 +106,7 @@ const HARM_STDIN: &str = r#"import os; os.chmod("/etc/hosts", 0o777)"#;
 const SPACED_EXEC: &str = "exec (input())";
 const SPACED_COMPILE: &str = r#"compile (input(),"x","exec")"#;
 const GLOBALS_ALIAS: &str = r#"g=globals; g()["exec"](input())"#;
+const SPACED_EXEC_COMPILE: &str = r#"exec (compile (input(),"x","exec"))"#;
 
 fn piped(stdin_text: &str, prog: &str) -> String {
     format!("echo '{stdin_text}' | python3 -c '{prog}'")
@@ -116,9 +126,34 @@ fn spaced_exec_input_with_harmful_stdin_is_deny() {
     assert_deny_both(SPACED_EXEC, "a");
 }
 
+// user ruling 2026-11-19 (S5): compile(...) whose result is never executed →
+// Allow, even when the stdin it compiles is harmful (nothing runs). compile
+// whose result reaches exec/eval stays not-Allow (pinned by the twin below).
+// Supersedes the earlier deny/deny expectation for this command.
 #[test]
-fn spaced_compile_input_with_harmful_stdin_is_deny() {
-    assert_deny_both(SPACED_COMPILE, "b");
+fn ruled_harmful_stdin_into_unexecuted_spaced_compile_is_allow() {
+    let home = unique_home("b");
+    let cmd = piped(HARM_STDIN, SPACED_COMPILE);
+    let (m, mr) = run_as(&cmd, &home, false);
+    let (s, sr) = run_as(&cmd, &home, true);
+    assert_eq!(m, "allow", "main must allow; cmd={cmd:?} reason={mr}");
+    assert_eq!(s, "allow", "subagent must allow; cmd={cmd:?} reason={sr}");
+}
+
+// user ruling 2026-11-19 (S5): compile whose result reaches exec/eval stays
+// not-Allow. Twin of the test above: the same harmful stdin, but the compiled
+// code object is executed, so the stdin program runs and cannot be judged.
+#[test]
+fn harmful_stdin_into_spaced_exec_of_spaced_compile_is_not_allow() {
+    let home = unique_home("b2");
+    let cmd = piped(HARM_STDIN, SPACED_EXEC_COMPILE);
+    let (m, mr) = run_as(&cmd, &home, false);
+    let (s, sr) = run_as(&cmd, &home, true);
+    assert_ne!(m, "allow", "main must not allow; cmd={cmd:?} reason={mr}");
+    assert_ne!(
+        s, "allow",
+        "subagent must not allow; cmd={cmd:?} reason={sr}"
+    );
 }
 
 #[test]
@@ -126,16 +161,39 @@ fn globals_alias_exec_input_with_harmful_stdin_is_deny() {
     assert_deny_both(GLOBALS_ALIAS, "c");
 }
 
+// user ruling 2026-11-19 (S5): exec (input()) / os.system("python3 -m asyncio") → Ask.
+// user ruling 2026-11-19 (S5): calling a globals()/locals()-derived value → Ask;
+// compile not executed → Allow.
+// The program is read from stdin, so it cannot be judged: main must not Allow
+// (Ask expected; Deny is accepted in a subagent). Supersedes the old
+// allow/allow observation for SPACED_EXEC and GLOBALS_ALIAS.
 #[test]
-fn observation_benign_stdin_with_space_sensitive_spellings_is_allow() {
-    let home = unique_home("obs");
-    for prog in [SPACED_EXEC, SPACED_COMPILE, GLOBALS_ALIAS] {
+fn ruled_benign_stdin_into_spaced_exec_and_globals_alias_is_not_allow() {
+    let home = unique_home("ruled");
+    for prog in [SPACED_EXEC, GLOBALS_ALIAS] {
         let cmd = piped("print(1)", prog);
         let (m, mr) = run_as(&cmd, &home, false);
         let (s, sr) = run_as(&cmd, &home, true);
-        assert_eq!(m, "allow", "observation (main); cmd={cmd:?} reason={mr}");
-        assert_eq!(s, "allow", "observation (sub); cmd={cmd:?} reason={sr}");
+        assert_ne!(m, "allow", "main must not allow; cmd={cmd:?} reason={mr}");
+        assert_ne!(
+            s, "allow",
+            "subagent must not allow; cmd={cmd:?} reason={sr}"
+        );
     }
+}
+
+// user ruling 2026-11-19 (S5): calling a globals()/locals()-derived value → Ask;
+// compile not executed → Allow.
+// `compile (input(),...)` only builds a code object that is never executed,
+// so benign stdin stays allow/allow (same expectation as before, now ruled).
+#[test]
+fn ruled_benign_stdin_into_unexecuted_spaced_compile_is_allow() {
+    let home = unique_home("obs");
+    let cmd = piped("print(1)", SPACED_COMPILE);
+    let (m, mr) = run_as(&cmd, &home, false);
+    let (s, sr) = run_as(&cmd, &home, true);
+    assert_eq!(m, "allow", "main must allow; cmd={cmd:?} reason={mr}");
+    assert_eq!(s, "allow", "subagent must allow; cmd={cmd:?} reason={sr}");
 }
 
 #[test]

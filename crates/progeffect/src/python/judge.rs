@@ -23,8 +23,8 @@ pub(super) struct Judge<'a> {
     pub cx: Cx<'a>,
     pub effects: Vec<Effect>,
     pub failure: Option<String>,
-    /// Ranges of the `globals` / `locals` / `vars` callee names whose call
-    /// result is only displayed or discarded (see
+    /// Ranges of the `globals` / `locals` / `vars` / `compile` callee names
+    /// whose call result is only displayed or discarded (see
     /// [`Judge::inert_result`]); every other reference to one of them stays
     /// Undetermined.
     inert_ns: Vec<TextRange>,
@@ -40,23 +40,26 @@ impl<'a> Judge<'a> {
         }
     }
 
-    /// User ruling 2026-11-19: a namespace builtin (`globals()`, `locals()`,
+    /// User rulings 2026-11-19: a namespace builtin (`globals()`, `locals()`,
     /// `vars(x)`) whose result is only displayed and never called is not
-    /// dynamic dispatch.
+    /// dynamic dispatch, and a `compile(...)` whose result is never passed to
+    /// `exec` / `eval`, never bound and never called runs nothing (whatever
+    /// source it compiles).
     ///
     /// `e` is an expression in an inert position: a positional argument of
     /// the unbound builtin `print` ([`Judge::display_args`]) or the value of
     /// an expression statement (its result is discarded). When `e` is a call
     /// of an unbound [`NAMESPACE_BUILTINS`] name (no keywords, no `*`, no
-    /// argument for `globals` / `locals`, at most one for `vars`),
-    /// optionally subscripted any number of times (`print(globals()["x"])`),
-    /// its callee name is recorded as inert: nothing in that shape calls a
-    /// value fetched from the namespace. Anything else — a call on a fetched
-    /// value (`globals()["x"]()`), a binding (`g = globals()`), any other
-    /// enclosing call, `.get` / `.values()` — is not matched and stays
-    /// Undetermined in `name_head`. The subscript indices and the `vars`
-    /// argument are walked and judged as usual. (`compile` is NOT handled
-    /// here: it stays Undetermined on any reference.)
+    /// argument for `globals` / `locals`, at most one for `vars`) or of an
+    /// unbound `compile` (any arguments), optionally subscripted any number
+    /// of times (`print(globals()["x"])`), its callee name is recorded as
+    /// inert: nothing in that shape calls a value fetched from the namespace
+    /// or runs the compiled code. Anything else — a call on a fetched value
+    /// (`globals()["x"]()`, `compile(...)()`), a binding (`g = globals()`,
+    /// `c = compile(...)`), any other enclosing call (`exec(compile(...))`),
+    /// `.get` / `.values()` — is not matched and stays Undetermined in
+    /// `name_head`. The subscript indices and the call's own arguments are
+    /// walked and judged as usual.
     fn inert_result(&mut self, e: &Expr) {
         let mut e = e;
         while let Expr::Subscript(s) = e {
@@ -76,11 +79,11 @@ impl<'a> Judge<'a> {
             return;
         }
         let max_args = usize::from(id == "vars");
-        if NAMESPACE_BUILTINS.contains(&id)
+        let namespace = NAMESPACE_BUILTINS.contains(&id)
             && inner.keywords.is_empty()
             && inner.args.len() <= max_args
-            && !inner.args.iter().any(|x| matches!(x, Expr::Starred(_)))
-        {
+            && !inner.args.iter().any(|x| matches!(x, Expr::Starred(_)));
+        if namespace || id == "compile" {
             self.inert_ns.push(n.range);
         }
     }
@@ -738,10 +741,11 @@ impl Visit for Judge<'_> {
 
     fn name_head(&mut self, n: &ExprName) {
         let id = n.id.as_str();
-        if NAMESPACE_BUILTINS.contains(&id) && self.inert_ns.contains(&n.range) {
+        if (NAMESPACE_BUILTINS.contains(&id) || id == "compile") && self.inert_ns.contains(&n.range)
+        {
             // Inert (see `inert_result`): the call's result is only
             // displayed or discarded, so nothing fetched from the namespace
-            // is called.
+            // is called and no compiled code is run.
         } else if DANGEROUS_BUILTINS.contains(&id) {
             self.undetermined(format!(
                 "the program uses `{id}`, which runs code or reaches objects by a computed name"

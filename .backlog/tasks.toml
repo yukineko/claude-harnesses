@@ -2407,3 +2407,45 @@ exit 101: ng blastguard v0.2.755 (/Users/yuki/src/.harness-worktrees/session-8ab
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.51s
      Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-4c78cce24a6bb217)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
+
+[[task]]
+id = "73655802"
+title = "[bg-heredoc-script-failopen-596ef57d:R-cargo] A1: 同一コマンド内で build.rs を書き込み、その後に cargo build/test/check/clippy/run のいずれかを実行するものは Allow にならない。.rs を書き込んで cargo run を実行するものも Allow にならない。通常の .rs の後の cargo test/build/check は Allow のままにする。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-cargo",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-cargo から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: A1: 同一コマンド内で build.rs を書き込み、その後に cargo build/test/check/clippy/run のいずれかを実行するものは Allow にならない。.rs を書き込んで cargo run を実行するものも Allow にならない。通常の .rs の後の cargo test/build/check は Allow のままにする。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `... -- --ignored r_cargo` が pass する。対象は h_rs_build_rs, h_rs_cargo_script で、main/sub とも allow 以外
+  - control_ordinary_rs_then_cargo_test_allow が pass し続ける（main/sub とも allow）
+
+canon:
+  - .backlog/tasks.toml 596ef57d round 3: "(3) A1 boundary: writing build.rs (or other build-time code) then ANY cargo build/test/check/clippy/run in the same command -> not-Allow; ordinary .rs then cargo test/build/check -> Allow; .rs then cargo run -> not-Allow."
+  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:300-315, 356-367
+"""
+created_at = 1795109417
+updated_at = 1795109417
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_cargo"
+rev = "1941243cf1b37acb80d94e2d6e65cbc2240e6009"
+observed_at = 1795109417
+detail = """
+exit 101: ng blastguard v0.2.756 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.03s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-815351eedd2d3b24)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""

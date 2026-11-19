@@ -17,6 +17,9 @@
 //! Observed NOT Allow, so deliberately excluded: `y=$(L=/tmp/x) rm $L` (deny)
 //! and the backtick spelling (main: ask, subagent: deny).
 //!
+//! Variants `y=$(L=/tmp/x) <rm> $L` (deny) and the backtick form (main: ask, not
+//! Allow) were observed NOT to be Allow and are deliberately excluded.
+//!
 //! DOES NOT PROVE: backtick / process substitution, exact reason text, which
 //! internal pass is responsible.
 //!
@@ -95,25 +98,25 @@ const PRIMARY: &str = "L=/etc/hosts; y=$(L=/tmp/x; true) rm $L";
 const DASH_F: &str = "L=/etc/hosts; y=$(L=/tmp/x; true) rm -f $L";
 
 #[test]
-#[ignore = "RED: system-harm fail-open (backlog 20261119 prefix-substitution rm)"]
+#[ignore = "RED(d068ef20): system-harm fail-open (backlog 20261119 prefix-substitution rm)"]
 fn red_primary_main_is_deny() {
     assert_deny(PRIMARY, "p0", false);
 }
 
 #[test]
-#[ignore = "RED: system-harm fail-open (backlog 20261119 prefix-substitution rm)"]
+#[ignore = "RED(d068ef20): system-harm fail-open (backlog 20261119 prefix-substitution rm)"]
 fn red_primary_subagent_is_deny() {
     assert_deny(PRIMARY, "p1", true);
 }
 
 #[test]
-#[ignore = "RED: system-harm fail-open (backlog 20261119 prefix-substitution rm)"]
+#[ignore = "RED(d068ef20): system-harm fail-open (backlog 20261119 prefix-substitution rm)"]
 fn red_dash_f_main_is_deny() {
     assert_deny(DASH_F, "f0", false);
 }
 
 #[test]
-#[ignore = "RED: system-harm fail-open (backlog 20261119 prefix-substitution rm)"]
+#[ignore = "RED(d068ef20): system-harm fail-open (backlog 20261119 prefix-substitution rm)"]
 fn red_dash_f_subagent_is_deny() {
     assert_deny(DASH_F, "f1", true);
 }

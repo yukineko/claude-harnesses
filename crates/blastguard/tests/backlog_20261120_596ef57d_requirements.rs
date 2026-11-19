@@ -242,7 +242,7 @@ fn r_protect() {
 }
 
 #[test]
-#[ignore = "RED: backlog 596ef57d R-gate"]
+#[ignore = "RED(f6716c2b): backlog 596ef57d R-gate"]
 fn r_gate() {
     // Q4: gate scripts (scripts/check-*.py, .githooks/**, ...) must not be overwritten.
     let mut cases = vec![
@@ -262,7 +262,7 @@ fn r_gate() {
 }
 
 #[test]
-#[ignore = "RED: backlog 596ef57d R-stdin-effect"]
+#[ignore = "RED(c3f6d88b): backlog 596ef57d R-stdin-effect"]
 fn r_stdin_effect() {
     // Round 2: an allowlisted sink API is judged by its argv effect.
     let cases = bodies(&[

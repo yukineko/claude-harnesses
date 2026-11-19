@@ -270,10 +270,71 @@ pub(super) fn resolve_redirect_target_at(
 /// [`crate::reversible::probe`] — not the git-failure rows, whose target IS
 /// known and only its recoverability is not. (Moved here from `detect.rs`
 /// unchanged, file-growth cap.)
+///
+/// A quoted or escaped target whose dequoted word cannot be determined
+/// ([`dequoted_redirect_word`] is `Undetermined`) names no determinable file
+/// either; otherwise the dequoted word is what gets placed.
 pub(super) fn redirect_target_undeterminable(target: &str, base: Option<&str>) -> bool {
-    target.contains('$')
-        || target.contains('`')
-        || crate::reversible::resolve(target, base).is_none()
+    if target.contains('$') || target.contains('`') {
+        return true;
+    }
+    match dequoted_redirect_word(target) {
+        Determination::Known(word) => crate::reversible::resolve(&word, base).is_none(),
+        Determination::Undetermined(_) => true,
+    }
+}
+
+/// The file name a redirect WORD hands the kernel: the word with one level of
+/// shell quoting removed (`a\ b` -> `a b`, `"a b"` -> `a b`, `\a` -> `a`,
+/// `out\).txt` -> `out).txt`). The existence / recoverability probe must ask
+/// about THAT name: asked about the spelling, it answers for a file that does
+/// not exist and reports `NothingToDestroy` for a write onto an existing one
+/// (fail-open, the `fp_fix_boundaries_20261119` escaped / quoted cases).
+///
+/// The dequoting is the AST parser's, not a string rewrite: the word is
+/// parsed and statically evaluated as the target of `: > <word>`
+/// ([`super::ast::analyze`]), and only a `Literal` file-redirect target of
+/// that one command is accepted.
+///
+/// * A word with no quote or backslash is returned unchanged (the shell
+///   removes nothing from it), so every such target keeps exactly the
+///   spelling it was probed with before.
+/// * `Undetermined` — the caller must resolve it to Ask / Deny, never Allow —
+///   for a word carrying an expansion (`$`, a backquote), and for every word
+///   the parser / evaluator does not reduce to one literal path: an unclosed
+///   quote, a parse failure, a glob, an empty result, or any shape other
+///   than exactly one command with exactly one file-redirect target.
+pub(super) fn dequoted_redirect_word(word: &str) -> Determination<String> {
+    use super::ast::{analyze, Analysis, RedirTarget, Value};
+    if !word.contains(['\\', '\'', '"']) {
+        return Determination::known(word.to_string());
+    }
+    let undetermined = |why: &str| {
+        Determination::undetermined(format!(
+            "the quoted / escaped redirect word `{word}` could not be dequoted to one literal \
+file name ({why}), so the file it names cannot be determined"
+        ))
+    };
+    if word.contains('$') || word.contains('`') {
+        return undetermined("it holds a shell expansion");
+    }
+    let script = match analyze(&format!(": > {word}")) {
+        Analysis::Known(script) => script,
+        Analysis::Undetermined(cause) => return undetermined(&format!("{cause:?}")),
+    };
+    let [command] = script.commands.as_slice() else {
+        return undetermined("it did not parse as one command");
+    };
+    let [redirect] = command.redirects.as_slice() else {
+        return undetermined("it did not parse as one redirect");
+    };
+    match &redirect.target {
+        RedirTarget::Path(Value::Literal(path)) if !path.is_empty() => {
+            Determination::known(path.clone())
+        }
+        RedirTarget::Path(Value::Undetermined(why)) => undetermined(why),
+        _ => undetermined("it did not parse as one non-empty file path"),
+    }
 }
 
 /// The targets the `>` / `>>` axes judge for ONE redirect occurrence `raw` of
@@ -601,20 +662,48 @@ pub(super) fn is_redirect_token_end(b: u8) -> bool {
 /// denied a regex rewrite. Only the WORD's extent changes; whether a `>` is a
 /// redirect at all is still decided by the caller's scan.
 ///
+/// A quote inside the word quotes the terminators up to its close (POSIX
+/// 2.2.2 / 2.2.3): in `> "a b"` the word is `"a b"` (the file `a b`), not
+/// `"a` followed by a stray `b"` whose quote then reads the rest of the line
+/// as quoted. Inside `"…"` a backslash still escapes the next byte; inside
+/// `'…'` nothing does. An UNCLOSED quote extends the word to the end of the
+/// text: the shell would not end the word there either, and the caller's
+/// dequoting ([`dequoted_redirect_word`]) answers `Undetermined` for it.
+///
 /// Slicing callers stay on char boundaries: the loop only stops on an ASCII
-/// terminator or at the end, so stepping into a multi-byte character just
-/// continues over its continuation bytes.
+/// terminator, after an ASCII quote, or at the end, so stepping into a
+/// multi-byte character just continues over its continuation bytes.
 pub(super) fn redirect_word_end(bytes: &[u8], start: usize) -> usize {
     let mut j = start;
     while j < bytes.len() {
-        if bytes[j] == b'\\' && j + 1 < bytes.len() {
-            j += 2;
-            continue;
+        match bytes[j] {
+            b'\\' if j + 1 < bytes.len() => {
+                j += 2;
+                continue;
+            }
+            b'\'' => {
+                j += 1;
+                while j < bytes.len() && bytes[j] != b'\'' {
+                    j += 1;
+                }
+                j = (j + 1).min(bytes.len());
+                continue;
+            }
+            b'"' => {
+                j += 1;
+                while j < bytes.len() && bytes[j] != b'"' {
+                    j += if bytes[j] == b'\\' && j + 1 < bytes.len() {
+                        2
+                    } else {
+                        1
+                    };
+                }
+                j = (j + 1).min(bytes.len());
+                continue;
+            }
+            b if is_redirect_token_end(b) => break,
+            _ => j += 1,
         }
-        if is_redirect_token_end(bytes[j]) {
-            break;
-        }
-        j += 1;
     }
     j
 }

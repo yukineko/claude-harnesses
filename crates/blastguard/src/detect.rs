@@ -209,10 +209,10 @@ use vars::{
 };
 
 use redirect::{
-    append_target_occurrences, line_append_targets, line_targets, physical_redirect_spelling,
-    place_redirect_target, redirect_target_candidates, redirect_target_is_safe,
-    redirect_target_occurrences, redirect_target_undeterminable, redirect_targets,
-    temp_disposable_redirect_target, unplaceable_redirect_ask,
+    append_target_occurrences, dequoted_redirect_word, line_append_targets, line_targets,
+    physical_redirect_spelling, place_redirect_target, redirect_target_candidates,
+    redirect_target_is_safe, redirect_target_occurrences, redirect_target_undeterminable,
+    redirect_targets, temp_disposable_redirect_target, unplaceable_redirect_ask,
 };
 
 /// Top-level entry WITH a location model: same dispatch as [`detect`], but the
@@ -875,7 +875,18 @@ primitive, not a filesystem path",
                 // axis: a gate/config file is surfaced however recoverable it is,
                 // because a silently disabled gate voids every later verdict. Only
                 // targets that cleared it reach here.
-                let recovery = crate::reversible::probe(&target, ctx.raw_base.as_deref());
+                // Probed under the name the kernel opens, not the spelling:
+                // `a\ b`, `"a b"`, `\a` name the files `a b`, `a b`, `a`
+                // (`dequoted_redirect_word`). A word that cannot be dequoted is
+                // Undetermined, which never runs unattended.
+                let recovery = match dequoted_redirect_word(&target) {
+                    Determination::Known(name) => {
+                        crate::reversible::probe(&name, ctx.raw_base.as_deref())
+                    }
+                    Determination::Undetermined(why) => {
+                        crate::reversible::Recovery::Undetermined(why.to_string())
+                    }
+                };
                 // RECOVERABLE **AND MINE**. Recoverability alone used to allow, and
                 // that was a fail-open across project boundaries: any git-tracked
                 // file in ANY checkout on this machine probes as recoverable, so

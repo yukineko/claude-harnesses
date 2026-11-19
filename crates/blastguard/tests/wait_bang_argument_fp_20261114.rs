@@ -99,7 +99,6 @@ fn r1_control_wait_bang_plain_is_allowed() {
 }
 
 #[test]
-#[ignore = "RED 2026-11-14: `wait $!` argument judged as a command word"]
 fn r2_wait_bang_inside_sh_c_is_allowed() {
     let f = Fx::new("r2");
     let cmd = "/bin/sh -c 'sleep 1 & wait $!'";

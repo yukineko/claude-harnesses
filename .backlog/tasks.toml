@@ -2417,6 +2417,8 @@ notes = "Observed 2026-11-20 at main f041db0c1 (detached base worktree of sessio
 created_at = 1795118604
 updated_at = 1795118604
 weight = 0.0
+issue_number = 1877
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1877"
 rev = 0
 
 [task.repro]

@@ -1616,25 +1616,42 @@ fn unknown_wrapper_ask(
     // opening token left the scan free to resume INSIDE the string, so
     // `echo 'eval rm -rf /'` skipped `'eval` and then started the tail at `rm`,
     // asking about `echo` over text that is an argument, never a command. So
-    // `in_quote` runs to the token that closes the quote.
-    let mut in_quote: Option<char> = None;
+    // the string runs to the token where the SHELL closes the quote, which
+    // `payload::shell_word_token_span` decides by lexing the tokens with
+    // backslash escapes honoured (`\"` inside double quotes is a literal `"`,
+    // not the closing quote). Backlog 2026-11-14 (printf operand FP): the
+    // former scan closed the string at the first token merely CONTAINING the
+    // quote char, so the operand `"… \\\"\$PY\\\" -c, find -exec sh -c …"`
+    // "closed" at the escaped `\"`, the scan resumed inside the string, and
+    // `find -exec sh -c …` — printed text — was judged as a command line.
+    //
+    // When the lexer cannot close the quote at all (`None`: still open at the
+    // end of the segment), the end of the string is undetermined, and the
+    // former token-contains-quote reading is kept so this answer is never
+    // more permissive than it was before the lexer was consulted.
     let mut start = None;
-    for (j, &t) in tokens.iter().enumerate().skip(idx + 1) {
-        if let Some(q) = in_quote {
-            // The closing token ends the string; it is still data itself. An
-            // unterminated quote never closes, so the whole rest of the line is
-            // data and no ask is raised — the safe direction here, since an
-            // unbalanced quote means the shell would not run it as written.
-            if t.contains(q) {
-                in_quote = None;
-            }
-            continue;
-        }
+    let mut j = idx + 1;
+    while j < tokens.len() {
+        let t = tokens[j];
         if let Some(q) = unclosed_quote_char(t) {
-            in_quote = Some(q);
+            j += match payload::shell_word_token_span(tokens, j) {
+                // The whole shell word (opening fragment through closing
+                // fragment) is data.
+                Some(span) => span,
+                // Unbalanced under the real lexer: the former reading. The
+                // closing token ends the string and is data itself; a quote
+                // that never closes leaves the whole rest of the line data.
+                None => {
+                    1 + tokens[j + 1..]
+                        .iter()
+                        .position(|t| t.contains(q))
+                        .map_or(tokens.len() - j - 1, |p| p + 1)
+                }
+            };
             continue;
         }
         if t.is_empty() || t.starts_with('-') || is_redirect_token(t) {
+            j += 1;
             continue;
         }
         start = Some(j);

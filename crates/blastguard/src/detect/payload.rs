@@ -16,6 +16,8 @@ mod node_source;
 mod procsub_split;
 mod program_source;
 mod program_word;
+#[cfg(test)]
+mod word_boundary_tests;
 
 pub(super) use program_word::inline_eval_program_word;
 
@@ -1557,7 +1559,11 @@ pub(super) fn strip_wrapping_quotes(s: &str) -> &str {
 /// the "reason about token positions" approach that has regressed this file
 /// three rounds running, and every value-taking option added later (`-o`, `-O`,
 /// `+o`, `--rcfile`, `--init-file`, …) would reopen the same gap. Instead it
-/// pushes a candidate for EVERY position after `-c`. The candidate set is
+/// pushes a candidate for EVERY shell-word boundary after `-c` (an option,
+/// its value and the command string are each whole words; a position INSIDE
+/// a word whose quotes all close is not a candidate — task ab2097c5, see
+/// [`word_payloads_after`]; an undetermined word end falls back to every
+/// whitespace position). The candidate set is
 /// additive and evaluated deny-if-ANY, so extra candidates can only ever WIDEN
 /// detection: whichever position the real shell picks as the command string is
 /// guaranteed to be among them, however the intervening options parse.
@@ -1585,7 +1591,10 @@ pub(super) fn dash_c_payloads(rest: &[&str], source: Option<&str>) -> Vec<String
     else {
         return Vec::new();
     };
-    let mut out = payloads_after(rest, pos, source);
+    // Word boundaries only, not every whitespace position: see
+    // [`word_payloads_after`] for the mid-word candidate (`$!'` of
+    // `sh -c 'sleep 1 & wait $!'`) this excludes.
+    let mut out = word_payloads_after(rest, pos, source);
     // Glued short form `-c<payload>` (value in the SAME token, after `c`):
     // `payloads_after` only sees LATER tokens, so `flock /l -c'rm -rf /'` left
     // the payload unanalysed — the twin of the `--command=` attached-form
@@ -1593,7 +1602,13 @@ pub(super) fn dash_c_payloads(rest: &[&str], source: Option<&str>) -> Vec<String
     // is last in a short bundle, so everything after the first `c` is its value.
     if let Some(cidx) = rest[pos].find('c') {
         let inline = &rest[pos][cidx + 1..];
-        out.extend(inline_command_payloads(rest, pos, inline, source));
+        out.extend(inline_payloads_with(
+            rest,
+            pos,
+            inline,
+            source,
+            word_payloads_after,
+        ));
     }
     out
 }
@@ -1789,6 +1804,25 @@ pub(super) fn interpreter_payloads_after(
     pos: usize,
     source: Option<&str>,
 ) -> Vec<String> {
+    word_payloads_after(rest, pos, source)
+}
+
+/// The word-boundary candidate set behind [`interpreter_payloads_after`] and
+/// [`dash_c_payloads`]: one candidate per shell WORD after the flag (plus the
+/// legacy join-then-peel string), never one starting inside a word whose
+/// quotes all close. Undetermined word ends fall back to [`payloads_after`]'s
+/// every-position set.
+///
+/// Why the shell `-c` operand needs this too (2026-11-14 FP, task ab2097c5):
+/// `/bin/sh -c 'sleep 1 & wait $!'` splits into the tokens `'sleep`, `1`, `&`,
+/// `wait`, `$!'`. The every-position set made the mid-word token `$!'` a
+/// payload of its own — [`first_shell_word`] reads it as `$!` — and that
+/// "command line" `$!` reached `unknown_wrapper_ask` with `$!` as its command
+/// word: Ask. No shell ever runs `$!` there; it is `wait`'s argument inside the
+/// one word the shell receives. The options CA-blastguard-014 / BG-1 guard
+/// against (`-o pipefail`, `--`, `-x`) are whole words, so every position a
+/// shell can take its command string from is still a word boundary.
+fn word_payloads_after(rest: &[&str], pos: usize, source: Option<&str>) -> Vec<String> {
     let mut keep: Vec<String> = Vec::new();
     let mut boundary = pos + 1;
     while boundary < rest.len() {
@@ -1833,15 +1867,27 @@ pub(super) fn inline_command_payloads(
     // An empty inline means the value is NOT glued (`--command`, `-c`, or a
     // bundle like `-nc` with the value in the next token) — `payloads_after`
     // already covers that, so there is nothing extra to reconstruct here.
+    inline_payloads_with(rest, pos, inline, source, payloads_after)
+}
+
+/// [`inline_command_payloads`] with the candidate set `after` instead of
+/// [`payloads_after`] ([`dash_c_payloads`] uses [`word_payloads_after`]).
+fn inline_payloads_with(
+    rest: &[&str],
+    pos: usize,
+    inline: &str,
+    source: Option<&str>,
+    after: fn(&[&str], usize, Option<&str>) -> Vec<String>,
+) -> Vec<String> {
     if inline.is_empty() {
         return Vec::new();
     }
-    // A dummy flag at index 0 lets us reuse `payloads_after`'s "everything after
-    // the flag" candidate logic with the inline value spliced in as the first
-    // operand token.
+    // A dummy flag at index 0 lets us reuse the "everything after the flag"
+    // candidate logic with the inline value spliced in as the first operand
+    // token.
     let mut synthetic = vec!["--x", inline];
     synthetic.extend_from_slice(&rest[pos + 1..]);
-    payloads_after(&synthetic, 0, source)
+    after(&synthetic, 0, source)
 }
 
 /// Split a leading assignment whose value OPENS a command substitution that

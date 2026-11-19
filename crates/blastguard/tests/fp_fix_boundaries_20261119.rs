@@ -426,28 +426,24 @@ fn control_plain_existing_target_not_allowed() {
 
 /// FAIL-OPEN: existing untracked `a b`, escaped spelling.
 #[test]
-#[ignore = "RED: `echo x > a\\ b` onto an existing untracked file `a b` is Allow; the existence check uses the escaped spelling"]
 fn escaped_space_onto_existing_file_not_allowed() {
     expect_not_allow_naming("echo x > a\\ b", &["a b", "a\\ b"]);
 }
 
 /// FAIL-OPEN: same through `>&`.
 #[test]
-#[ignore = "RED: `echo x >& a\\ b` onto an existing untracked file `a b` is Allow"]
 fn escaped_space_amp_onto_existing_file_not_allowed() {
     expect_not_allow_naming("echo x >& a\\ b", &["a b", "a\\ b"]);
 }
 
 /// FAIL-OPEN: `\a` is `a`, which exists.
 #[test]
-#[ignore = "RED: `echo x > \\a` onto an existing untracked file `a` is Allow"]
 fn escaped_letter_onto_existing_file_not_allowed() {
     expect_not_allow_naming("echo x > \\a", &["(a)", "\\a"]);
 }
 
 /// FAIL-OPEN: here-doc to `out\).txt`, i.e. existing `out).txt`.
 #[test]
-#[ignore = "RED: `cat <<'EOF' > out\\).txt` onto an existing untracked `out).txt` is Allow"]
 fn heredoc_escaped_paren_onto_existing_file_not_allowed() {
     expect_not_allow_naming(
         "cat <<'EOF' > out\\).txt\nhi\nEOF",
@@ -457,7 +453,6 @@ fn heredoc_escaped_paren_onto_existing_file_not_allowed() {
 
 /// FAIL-OPEN (pre-existing, not ebbd1074): quoted target with a space.
 #[test]
-#[ignore = "RED: `echo x > \"a b\"` onto an existing untracked file `a b` is Allow (quoted target with a space; not caused by ebbd1074)"]
 fn quoted_space_onto_existing_file_not_allowed() {
     expect_not_allow_naming("echo x > \"a b\"", &["a b"]);
 }

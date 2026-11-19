@@ -106,7 +106,7 @@ fn assert_deny(command: &str, tag: &str) {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-19 `ln -st DIR /etc` combined short -t not seen; write through the link into /etc is Allow — remove when fixed"]
+#[ignore = "RED(42d5fa32): 2026-11-19 `ln -st DIR /etc` combined short -t not seen; write through the link into /etc is Allow — remove when fixed"]
 fn for_loop_ln_st_then_write_through_link_is_deny() {
     assert_deny(
         "for f in /etc; do ln -st /tmp/L15 $f; done; echo x > /tmp/L15/etc/passwd",
@@ -115,7 +115,7 @@ fn for_loop_ln_st_then_write_through_link_is_deny() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-19 `ln -sft DIR /etc` combined short -t not seen — remove when fixed"]
+#[ignore = "RED(42d5fa32): 2026-11-19 `ln -sft DIR /etc` combined short -t not seen — remove when fixed"]
 fn for_loop_ln_sft_then_write_through_link_is_deny() {
     assert_deny(
         "for f in /etc; do ln -sft /tmp/L1 $f; done; echo x > /tmp/L1/etc/passwd",
@@ -124,7 +124,7 @@ fn for_loop_ln_sft_then_write_through_link_is_deny() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-19 non-loop `ln -st DIR /etc` then write through the link — remove when fixed"]
+#[ignore = "RED(42d5fa32): 2026-11-19 non-loop `ln -st DIR /etc` then write through the link — remove when fixed"]
 fn plain_ln_st_then_write_through_link_is_deny() {
     assert_deny(
         "ln -st /tmp/L40 /etc; echo x > /tmp/L40/etc/passwd",

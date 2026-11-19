@@ -2273,35 +2273,6 @@ exit 101: rness-worktrees/red-ln-combined-t-20261119/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261119_ln_combined_short_t_symlink_harm`"""
 
 [[task]]
-id = "7275b9d9"
-title = "blastguard fail-open: Q3/Q4 deny targets (.ssh, home dir, gate scripts, .gitconfig) outside $HOME are not Deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "Observed at rev 84d930e83 (tree incl S5), 2026-11-20, hermetic HOME != /Users/<n>. 59-case probe: /private/tmp/claude-502/-Users-yuki-src-harness/179495ba-af97-4f48-aa93-614e6ece918d/scratchpad/q3q4_probe.txt. Allow/Allow for ALL ops (redirect,mv,cp,chmod 777,rm,ln -sf) on /Users/x/.ssh/authorized_keys, <dir>/.ssh/id_rsa, <dir>/.gitconfig, scripts/check-*.py, crates/*/hooks/**; mv and ln -sf of /Users/x and /home/x allow; python os.replace/os.chmod/open(wb) allow. .githooks and ~/.claude/plugins/cache/**/bin: write/mv/cp/ln = main ask sub deny; chmod 777 allow; rm deny. rm -rf and chmod -R of /Users/x deny already. Reading (a): protections are $HOME-relative only (IRREPLACEABLE_HOME_DIRS, SYSTEM_PREFIXES w/o /Users, exclude.rs globs lack .ssh/scripts/check-*/crates/*/hooks) and chmod rule only denies read/exec-removing modes. Reading (b): the fixture/hermetic HOME just does not match literal /Users/<n>, i.e. rules exist but are keyed to real HOME. Distinguishing check: rerun with HOME=/Users/somebody for the .ssh/authorized_keys cases; if they flip to deny it is (b), if still allow it is (a); the {BASE}/anydir/.ssh/id_rsa and .gitconfig cases (not under any HOME) separate Q3 'even when not HOME' either way. Controls (reads, /tmp scratch, /tmp/sshx/f, /tmp/notscripts/check-x.txt) are allow today and asserted as-is. Not verified: reading (a) vs (b) was not executed."
-created_at = 1795103122
-updated_at = 1795103122
-weight = 0.0
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_q3q4_deny_target_table -- --ignored"
-rev = "346489342fe1397ab7bbb1e9377c5ecba5fb76bc"
-observed_at = 1795103122
-detail = """
-exit 101: d v0.2.745 (/Users/yuki/src/.harness-worktrees/red-q3q4-targets-20261120/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.82s
-     Running tests/backlog_20261120_q3q4_deny_target_table.rs (target/debug/deps/backlog_20261120_q3q4_deny_target_table-2303afeeed54ab7d)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_q3q4_deny_target_table`"""
-
-[[task]]
 id = "cfb98cd5"
 title = "blastguard: cp into /etc via .. segments (loop value or plain) is Allow"
 project = "/Users/yuki/src/harness"

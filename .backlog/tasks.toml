@@ -2367,3 +2367,34 @@ exit 101: ssed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.9
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
      Running tests/scope_redirect_relaxation_boundaries_20261108.rs (target/debug/deps/scope_redirect_relaxation_boundaries_20261108-74a67a02a5bc0479)
 error: test failed, to rerun pass `-p blastguard --test scope_redirect_relaxation_boundaries_20261108`"""
+
+[[task]]
+id = "74810d3e"
+title = "check-test-weakening cannot acknowledge an intended macro template re-anchor in a file that exists at the base"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "test-weakening",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "User-ruled false positive 2026-11-20. A Rust integration test file that exists at the base and holds a macro_rules test template: three invocations of a template asserting a restrictive decision are replaced by invocations of a new template asserting Allow (shape of the blastguard scope redirect relaxation boundaries test, backlog 266b5ded). The gate raises Undetermined (exit 2) because the change is not one of the proven-safe shapes and reports no finding, so a test-weakening-justified line naming the path and a kind acknowledges nothing; the only exit is a bypass. Expected: such a change is still never silently clean (non-zero without a justified line), but it is reported as a finding with a kind for that path, and a matching justified line makes it exit 0 with an ack finding. A justified line for another path must not acknowledge it. Verbatim RED (--runxfail): AssertionError no finding (kind) reported for the path, so no justified line can name it; rc=2 out verdict undetermined, findings empty. DOES NOT PROVE which kind the gate should report; the test reads it from the gate's own json output. RED: scripts/test_check_test_weakening_macro_reanchor_20261120.py (xfail strict, commit c8a79e56a, branch red/test-weakening-macro-reanchor-20261120)."
+created_at = 1795118253
+updated_at = 1795118253
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_check_test_weakening_macro_reanchor_20261120.py"
+rev = "c8a79e56ac814d90f0727d0edcb9cd32f9ab041d"
+observed_at = 1795118253
+detail = '''
+exit 1: cannot be ruled out\n'
+
+scripts/test_check_test_weakening_macro_reanchor_20261120.py:207: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_test_weakening_macro_reanchor_20261120.py::MacroReanchor::test_red_justified_line_acknowledges_the_reanchor
+========================= 1 failed, 2 passed in 1.52s =========================='''

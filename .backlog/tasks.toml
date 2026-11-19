@@ -2544,6 +2544,8 @@ notes = "User ruling 2026-11-20, fail-open. Hard reset, checkout of the whole tr
 created_at = 1795128557
 updated_at = 1795128557
 weight = 0.0
+issue_number = 1881
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1881"
 rev = 0
 
 [task.repro]

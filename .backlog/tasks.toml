@@ -2465,3 +2465,32 @@ exit 101: worktrees/run-20261120-071122-49691-a-brace-group-feeder-piped-to-shel
     Finished `test` profile [unoptimized + debuginfo] target(s) in 21.75s
      Running tests/brace_group_feeder_adversarial_20261120.rs (target/debug/deps/brace_group_feeder_adversarial_20261120-edf8be8c032c3fc0)
 error: test failed, to rerun pass `-p blastguard --test brace_group_feeder_adversarial_20261120`"""
+
+[[task]]
+id = "e0288820"
+title = "blastguard fail-open: Ask-class program (git push --force) fed to bash by an echo/printf feeder is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-20 by an independent test author in run-20261120-071122-49691 task a-brace-group-feeder-piped-to-shell; pre-existing at 5cfe8e73e. 'git push --force' alone is Ask, but "echo 'git push --force' | bash" is allow () in main and subagent mode, before and after the 7eb86bb3 fix. The fix extends the same reading to "{ echo 'git push --force'; } | bash" and "{ printf 'git push '; echo --force; } | bash" (Allow at 0b906f524; not Allow at 5cfe8e73e). Readings: (a) fail-open — the stdin program should get the same verdict as the same text on the command line; (b) intended if the stdin-program judge only lifts Deny-class. Tell apart: compare against inline_eval mirror rules / the user ruling on stdin programs (S4)."""
+created_at = 1795127895
+updated_at = 1795127895
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test brace_group_feeder_adversarial_20261120 -- --ignored finding3_preexisting_ask_class_program_through_feeder_is_not_allow"
+rev = "9ab9d7a5e9ba9787b4ac2bfddd3352edb480e922"
+observed_at = 1795127895
+detail = """
+exit 101: /worktrees/run-20261120-071122-49691-a-brace-group-feeder-piped-to-shell/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.68s
+     Running tests/brace_group_feeder_adversarial_20261120.rs (target/debug/deps/brace_group_feeder_adversarial_20261120-32fc257fff118929)
+error: test failed, to rerun pass `-p blastguard --test brace_group_feeder_adversarial_20261120`"""

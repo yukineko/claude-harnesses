@@ -2329,3 +2329,33 @@ exit 101: ness-worktrees/red-dotdot-loop-redirect-20261120/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.07s
      Running tests/backlog_20261120_dotdot_loop_value_system_write.rs (target/debug/deps/backlog_20261120_dotdot_loop_value_system_write-dee0d3a72796bdd5)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_dotdot_loop_value_system_write`"""
+
+[[task]]
+id = "b56a5813"
+title = "blastguard: argv text of a non-interpreter behind a command wrapper (env, env -u, nice) that mentions a python open-for-write of a System path is judged as an interpreter write and denied as system harm"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "false-positive",
+    "blastguard",
+]
+touched_files = []
+status = "pending"
+notes = "Observed at e56699977 (blastguard 0.2.751), hermetic HOME, main and subagent: Deny with reason naming an interpreter write of the System sentinel path with a trailing backslash (an escaped double quote of the argv text read as program quoting). The same argument without the wrapper is Allow (passing pin unwrapped_mentions_are_allow), so only the wrapper differs. Controls: the real program bare and behind env stays Deny (control_real_python_system_write_is_deny). Original block: subagent session 06c2bd77, recovered verbatim from the blastguard blocks log (installed 0.2.675). Expected Allow: the text is data for the wrapped program. Root cause not investigated. Test: crates/blastguard/tests/fp_candidates_b_20261120.rs"
+created_at = 1795107952
+updated_at = 1795107952
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test fp_candidates_b_20261120 wrapped_ -- --include-ignored"
+rev = "8ec29d108a4e648c3372f2f5e08ae66489f2b206"
+observed_at = 1795107952
+detail = """
+exit 101: ered out; finished in 0.86s
+
+   Compiling blastguard v0.2.752 (/Users/yuki/src/.harness-worktrees/bg-fp-cand-20261120/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.86s
+     Running tests/fp_candidates_b_20261120.rs (target/debug/deps/fp_candidates_b_20261120-027634bcafc7f041)
+error: test failed, to rerun pass `-p blastguard --test fp_candidates_b_20261120`"""

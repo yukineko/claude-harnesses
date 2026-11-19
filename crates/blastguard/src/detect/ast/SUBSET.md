@@ -515,6 +515,31 @@ re-analyse to the same commands.
   the hook's cwd absent from the payload, a cwd the text does not determine).
   A directory that does not exist holds nothing that shadows. Listing:
   `harness_core::boundary::read_dir_entries_checked` (`s5.rs::shadowed_import`).
+* (a') **Same-line shadowing (S5c, user ruling 2026-11-20).** "When a command
+  EARLIER on the same line may write `<mod>.py` / `<mod>/` (or any of the
+  shadow spellings S5b already checks) into the directory a later python3
+  program runs in, for a module that program imports → Undetermined (Ask).
+  An earlier write whose target is undetermined → also not Allow."
+  Implemented in `s5.rs::same_line_shadow` from the existing target
+  extraction only: output redirects (`>` `>>` `>|` `<>` `>&word` `&>` `&>>`,
+  B.2 `RedirTarget::Path`, the program's own included — the shell opens them
+  first) and the creating targets of the B.1 rows (`Truncate` / `Append` /
+  `Rewrite` / `Link` / `CreateTree`: `cp` / `mv` / `install` destination,
+  `ln` link name, `tee`, `truncate`, `dd of=`, `sed -i`, `find -fprint`)
+  plus `mkdir` (`-p -v -m`) and `touch` (`-a -c -f -h -m`, `-A -d -r -t`),
+  rows that exist only for this reader (`judge/table_b.rs::entry_writes`;
+  the S3b judge is unchanged), after the `b5` wrappers, resolved by
+  `eval::resolve_at`. An entry of a program directory whose name shadows an
+  imported module (same spellings and case rule as (a)), or any path under
+  such an entry, → Undetermined. Also Undetermined: a write target that
+  cannot be placed, a modelled command with an unmodelled option, a wrapper
+  that cannot be unwrapped, a write to the program directory itself (`cp x
+  .`: the new entry's name is not read), a real path that cannot be read.
+  Targets and directories are compared as spelled and through the real path
+  of their longest existing ancestor, the directory prefix ignoring ASCII
+  case. "Earlier": the commands that start before the program ends in the
+  text; every command of the line when the program is not top-level (a
+  pipeline stage runs concurrently) or the line has a loop or a function.
 * (c) **`bash -c` / `sh -c`.** The literal script of a plain `bash -c SCRIPT`
   / `sh -c SCRIPT` (after the `b5` wrappers; `sudo` excluded) is judged by S5
   exactly like the same text written directly, and its Known programs are
@@ -541,10 +566,12 @@ re-analyse to the same commands.
   is judged by the legacy readings only.
 * Wrappers other than those `b5` unwraps (`sudo`, `xargs`, …) get no S5
   opinion.
-* Import shadowing: a shadowing entry created by another command of the same
-  line (the directory is listed when the hook runs), a module imported by an
-  imported module, and `.pth` / `PYTHONPATH` / site-packages entries are not
-  detected.
+* Import shadowing: a module imported by an imported module, and `.pth` /
+  `PYTHONPATH` / site-packages entries are not detected. Same-line (S5c): a
+  shadowing entry written by a program with no effect model (`git checkout`,
+  `tar`, `unzip`, `curl -o`, an unknown program), by `xargs` wrapping
+  `mkdir` / `touch`, as a `sed -i` backup suffix, or by a command outside the
+  `bash -c` whose script runs the program, is not detected.
 
 ## Stage map
 

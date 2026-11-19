@@ -524,37 +524,6 @@ exit 101: )
 error: test failed, to rerun pass `-p blastguard --test tmp_truncation_recoverable`"""
 
 [[task]]
-id = "84277e41"
-title = "blastguard: shutil.copy2 の読み取り専用の source（'/etc/hosts' など）を書き込み先として Deny する false positive を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "FP, RED 34937f3f by a non-implementer (flow-8cca7ef5 orchestrator) at main 33464587 2026-11-14: python3 -c shutil.copy2('/etc/hosts','/tmp/x') is Deny ('it writes /etc/hosts (shutil.copy2()') while the /tmp/y-source twin is Ask (main session). Reported as 別件 by the 569b9b9d implementer (INTERPRETER_WRITE_CALLS 'shutil.copy2('). Live hit 2026-11-14: a python3 - <<'EOF' heredoc that only edited docs/specs/blastguard.md and .specguard/spec-docs.toml (its string literals contained the text shutil.copy2('/etc/hosts','/tmp/x')) was denied verbatim: python3 - <<'EOF' takes its program from stdin, and it writes /etc/hosts (shutil.copy2() - it exists, and it is not inside a git work tree. Control control_tmp_source_copy2_is_not_denied_in_main_session non-ignored."
-created_at = 1794583403
-updated_at = 1794583403
-weight = 0.0
-issue_number = 1723
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1723"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261114_shutil_copy2_source_judged_as_write_fp -- --include-ignored copy2_decision_does_not_depend_on_read_only_source"
-rev = "34937f3fa91c897bc6127934c75d01fc6ec298ce"
-observed_at = 1794583403
-detail = """
-exit 101: e-a579-cd4f8d3822a8-orch/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.11s
-     Running tests/backlog_20261114_shutil_copy2_source_judged_as_write_fp.rs (target/debug/deps/backlog_20261114_shutil_copy2_source_judged_as_write_fp-dd5429a9b98ba464)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261114_shutil_copy2_source_judged_as_write_fp`"""
-
-[[task]]
 id = "7bf91f5a"
 title = "blastguard: printf の二重引用符 operand（エスケープした PY 変数と command 風の文言を含む）を実行される command line と判定して Ask にする false positive を直す"
 project = "/Users/yuki/src/harness"
@@ -1528,37 +1497,6 @@ exit 101: . 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished 
 error: test failed, to rerun pass `-p blastguard --test backlog_20261116_git_apply_patch_known_gaps`"""
 
 [[task]]
-id = "c1873b73"
-title = """blastguard: python heredoc os.__dict__['sys'+'tem']("cat x | { bash; }") judged allow"""
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-16, main fa58e3698 (blastguard 0.2.672), run-20261116-143410-12142 (independent probe on t3): python3 - <<'EOF' with import os; os.__dict__['sys'+'tem']("cat x | { bash; }") is allow in main and subagent, both before (16334d10a) and after t3 — pre-existing. Plain os.system twin is ask/deny. Dict lookup avoids every runner marker. Readings: (a) fail-open: the runner is not recognised; (b) intended only if obfuscated runners are out of scope, but then undeterminable -> must be ask. Expected: not allow."""
-created_at = 1794813882
-updated_at = 1794813882
-weight = 0.0
-issue_number = 1831
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1831"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261116_python_dict_lookup_system_group_pipe -- --include-ignored"
-rev = "e0173e098994fc132458949627fead46948ead9c"
-observed_at = 1794813882
-detail = """
-exit 101: ess-worktrees/followup-bg-df7c/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.69s
-     Running tests/backlog_20261116_python_dict_lookup_system_group_pipe.rs (target/debug/deps/backlog_20261116_python_dict_lookup_system_group_pipe-ab765f1c4c4c75c0)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261116_python_dict_lookup_system_group_pipe`"""
-
-[[task]]
 id = "5a633271"
 title = "condukt: check-criteria drops --test <name> from done_criteria and runs the whole crate suite"
 project = "/home/hiroyuki_nakayama/src/harness"
@@ -2051,35 +1989,6 @@ exit 101:  failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 9m 31s
      Running tests/testscope_fault_seams_20261117.rs (target/debug/deps/testscope_fault_seams_20261117-0680b439b7ed3bdb)
 error: test failed, to rerun pass `-p condukt --test testscope_fault_seams_20261117`"""
-
-[[task]]
-id = "8e261f24"
-title = "blastguard fail-open: python3 -c write to a System path passed as a literal sys.argv operand (open(sys.argv[1],'w'), pathlib.Path(sys.argv[1]).write_text) is Ask (main), not Deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = """Memory system-harm-always-deny (2026-11-07): harmful targets are Deny through any wrapper. Observed at a19a34553 (0.2.702), hermetic fixture HOME, main/subagent: python3 -c "import sys;open(sys.argv[1],'w').write('x')" /etc/bg-sentinel ask/deny (same for /etc/passwd); pathlib.Path(sys.argv[1]).write_text('x') /etc/bg-sentinel ask/deny; reason 'the program calls open on a path blastguard cannot resolve statically'. The argv operand is a literal, so the target is statically known (blastguard-must-resolve-statically). Literal-in-program twins (open('/etc/bg-sentinel','w'), pathlib.Path('/etc/bg-sentinel').write_text) are deny/deny (GREEN, pinned). Scratch: literal /tmp twins allow/allow (controls GREEN); argv /tmp twins ask/deny, NOT Allow (2 more ignored REDs; ruling 15 keeps python legacy until S5). Related: d6de38be (expansion argv). RED 96c9f5e4d (branch red/bg-rsync-tableb-pyc-sys-20261118, 4 ignored)."""
-created_at = 1795005086
-updated_at = 1795005086
-weight = 0.0
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261118_python_c_argv_system_write_not_deny -- --ignored"
-rev = "96c9f5e4d209c1fbcab579fd18d31ea70a858eb4"
-observed_at = 1795005086
-detail = """
-exit 101: ess-worktrees/bg-rsync-tableb-red/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.84s
-     Running tests/backlog_20261118_python_c_argv_system_write_not_deny.rs (target/debug/deps/backlog_20261118_python_c_argv_system_write_not_deny-0e8be86b31995439)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261118_python_c_argv_system_write_not_deny`"""
 
 [[task]]
 id = "b400219d"

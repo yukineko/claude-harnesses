@@ -81,6 +81,23 @@ fn rm_is_recursive(rest: &[&str]) -> bool {
 /// executed substitution bodies get the same resolution against `line`
 /// ([`known_path_harm_in_substitutions`], backlog e5a8fcc2). That second pass
 /// only ever contributes a Deny; any other verdict is this segment's own.
+///
+/// A command candidate of `tokens` that starts INSIDE one of `seg`'s
+/// substitution bodies (the first command of `x=$(rm -f $L)`, exposed by
+/// [`super::split_substitution_opening_assignments`]) runs in that body's
+/// subshell, not in this segment: its names are resolved with the same
+/// guarded substitution-scope lookup [`known_path_harm_in_substitutions`]
+/// uses ([`substitution_scope_lookup`], backlog 6cd305a9). Before, it was
+/// resolved straight against `line`, so `L=/etc/hosts; x=$(L=/tmp/x; rm -f
+/// $L)` was denied on the outer `L` although the body rebinds it first, while
+/// the same rebind before a later statement of the body was not.
+///
+/// For every candidate, an `rm` operand neither lookup resolves is then read
+/// through the AST evaluator ([`super::ast::targets::resolve`]), exactly as
+/// the `cp` / `mv` / mutator files already were; that is what keeps
+/// `L=/etc/hosts; x=$(L=/tmp/x rm -f $L)` (a prefix assignment does not
+/// change its own command's words: `/etc/hosts` is removed) a Deny once the
+/// guarded lookup refuses the name.
 pub(super) fn known_path_harm(
     tokens: &[&str],
     seg: &str,
@@ -94,7 +111,21 @@ pub(super) fn known_path_harm(
             CommandWordOrigin::Literal(v) => Some(v),
             _ => None,
         };
-    let own = known_path_harm_with(tokens, ctx, &vars);
+    // The body commands are collected through a `cd` too: a `cd` moves the
+    // cwd, it binds no variable, so it does not affect the rebind guard.
+    let mut body_commands: Vec<String> = Vec::new();
+    let body_listed = collect_substitution_commands(seg, 0, &mut body_commands, false);
+    let guarded = substitution_scope_lookup(seg, line, seg_idx, &body_commands);
+    // A depth-exhausted body list cannot be checked for rebinding: no name of
+    // a body candidate is resolved from `line` then (the AST reading and the
+    // body's own analysis still apply).
+    let refuse = |_: &str| None;
+    let body_vars: VarLookup<'_> = if body_listed { &guarded } else { &refuse };
+    let spans = substitution_body_spans(seg);
+    let in_body = |token: &str| {
+        offset_in(seg, token).is_some_and(|at| spans.iter().any(|r| r.start < at && at < r.end))
+    };
+    let own = known_path_harm_with(tokens, ctx, &vars, body_vars, &in_body);
     if own.is_deny() {
         return own;
     }
@@ -105,18 +136,108 @@ pub(super) fn known_path_harm(
     own
 }
 
+/// Byte offset of `token` within `seg` when `token` is a subslice of it
+/// (the whitespace tokens of a segment are), else `None`.
+fn offset_in(seg: &str, token: &str) -> Option<usize> {
+    let at = (token.as_ptr() as usize).checked_sub(seg.as_ptr() as usize)?;
+    (at + token.len() <= seg.len()).then_some(at)
+}
+
+/// Byte ranges of `seg` spanned by its outermost CLOSED `$(…)` / backtick
+/// substitutions and (outside double quotes) `<(…)` / `>(…)` process
+/// substitutions, opener and closer included — the same spans
+/// [`super::split_segments`] keeps whole (same quote tracking, same
+/// [`super::closed_substitution_end`] / process-substitution scan).
+fn substitution_body_spans(seg: &str) -> Vec<std::ops::Range<usize>> {
+    use super::segment::{closed_process_substitution_end, quote_escape_pair};
+    let indexed: Vec<(usize, char)> = seg.char_indices().collect();
+    let chars: Vec<char> = indexed.iter().map(|(_, c)| *c).collect();
+    let byte_at = |i: usize| indexed.get(i).map_or(seg.len(), |(b, _)| *b);
+    let mut spans = Vec::new();
+    let (mut in_s, mut in_d) = (false, false);
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+        } else if c == '"' && !in_s {
+            in_d = !in_d;
+        } else if quote_escape_pair(&chars, i, in_s, in_d).is_some() {
+            i += 2;
+            continue;
+        } else if !in_s {
+            let end = super::closed_substitution_end(&chars, i)
+                .or_else(|| (!in_d).then(|| closed_process_substitution_end(&chars, i))?);
+            if let Some(end) = end {
+                spans.push(byte_at(i)..byte_at(end + 1));
+                i = end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    spans
+}
+
+/// The name lookup for a command that runs inside one of `seg`'s
+/// substitution bodies (`commands`, from [`collect_substitution_commands`]):
+/// a name is resolved from `line` (as `seg`, at `seg_idx`, sees it) only when
+/// nothing between that assignment and the use can have rebound it — see
+/// [`known_path_harm_in_substitutions`] for the conditions. `None` means
+/// "unresolved", never a value.
+fn substitution_scope_lookup<'a>(
+    seg: &'a str,
+    line: &'a str,
+    seg_idx: usize,
+    commands: &'a [String],
+) -> impl Fn(&str) -> Option<String> + 'a {
+    use super::vars::{
+        defines_shell_function, mentions_name_outside_reference, resolve_expanded_command_word,
+        segment_may_rebind, CommandWordOrigin,
+    };
+    let defines_function = defines_shell_function(line);
+    move |name: &str| {
+        if defines_function
+            || mentions_name_outside_reference(seg, name)
+            || segment_may_rebind(seg, name)
+            || commands.iter().any(|c| segment_may_rebind(c, name))
+        {
+            return None;
+        }
+        match resolve_expanded_command_word(line, seg_idx, &format!("${{{name}}}")) {
+            CommandWordOrigin::Literal(v) => Some(v),
+            _ => None,
+        }
+    }
+}
+
 /// [`known_path_harm`] with the variable lookup supplied by the caller, so the
 /// same judgement can run on a command that sits INSIDE a command
 /// substitution while its `$NAME` operands are resolved against the line that
-/// encloses it ([`known_path_harm_in_substitutions`]).
-fn known_path_harm_with(tokens: &[&str], ctx: &Ctx<'_>, vars: VarLookup<'_>) -> Decision {
+/// encloses it ([`known_path_harm_in_substitutions`]). A candidate whose
+/// command word `in_body` places inside a substitution body is resolved with
+/// `body_vars`, every other one with `vars`.
+fn known_path_harm_with(
+    tokens: &[&str],
+    ctx: &Ctx<'_>,
+    vars: VarLookup<'_>,
+    body_vars: VarLookup<'_>,
+    in_body: &dyn Fn(&str) -> bool,
+) -> Decision {
     // Then the paths the AST evaluator proved the word names (task
     // `migrate-path`, `super::ast::targets`).
-    let resolve = |word: &str| match expand_operand_with(word, ctx.scope.home_real(), Some(vars)) {
-        OperandSpelling::Paths(p) => Some(p),
-        OperandSpelling::Unresolvable(_) => super::ast::targets::resolve(word, Role::Argv),
-    };
+    let ast = |word: &str| super::ast::targets::resolve(word, Role::Argv);
     for idx in super::words::command_candidates(tokens) {
+        let vars: VarLookup<'_> = if in_body(tokens[idx]) {
+            body_vars
+        } else {
+            vars
+        };
+        let resolve =
+            |word: &str| match expand_operand_with(word, ctx.scope.home_real(), Some(vars)) {
+                OperandSpelling::Paths(p) => Some(p),
+                OperandSpelling::Unresolvable(_) => ast(word),
+            };
         let cmd = super::words::normalized_command(tokens[idx]);
         let rest = &tokens[idx + 1..];
         if matches!(cmd.as_str(), "cp" | "mv" | "install") {
@@ -138,7 +259,7 @@ fn known_path_harm_with(tokens: &[&str], ctx: &Ctx<'_>, vars: VarLookup<'_>) -> 
             continue;
         }
         if let SystemHarm::Deny(deny) =
-            rm_system_harm(ctx, &words, rm_is_recursive(rest), Some(vars))
+            rm_system_harm(ctx, &words, rm_is_recursive(rest), Some(vars), Some(&ast))
         {
             return deny;
         }
@@ -162,6 +283,12 @@ fn known_path_harm_with(tokens: &[&str], ctx: &Ctx<'_>, vars: VarLookup<'_>) -> 
 ///
 /// It only ever ADDS a Deny: it never returns an Ask and never clears one, so
 /// an operand it cannot resolve stays whatever the body's own analysis said.
+/// An operand whose name the lookup below refuses is still read through the
+/// AST evaluator ([`known_path_harm_with`]), which models the body's own
+/// assignments, so `x=$(L=/etc/hosts; rm -f $L)` and `x=$(L=/x rm -f $L)`
+/// (inherited `L=/etc/hosts`) are judged on the value bash uses.
+/// The lookup is [`substitution_scope_lookup`], shared with the body
+/// candidates of [`known_path_harm`]'s own pass.
 /// A name is resolved from `line` only when nothing between that assignment
 /// and the use can have rebound it, which is established restrictively
 /// (refusing means "unresolved", i.e. the existing Ask):
@@ -184,33 +311,21 @@ fn known_path_harm_in_substitutions(
     seg_idx: usize,
     ctx: &Ctx<'_>,
 ) -> Decision {
-    use super::vars::{
-        defines_shell_function, mentions_name_outside_reference, resolve_expanded_command_word,
-        segment_may_rebind, CommandWordOrigin,
-    };
     let mut commands: Vec<String> = Vec::new();
-    if !collect_substitution_commands(seg, 0, &mut commands) {
+    if !collect_substitution_commands(seg, 0, &mut commands, true) {
         return Decision::Allow;
     }
-    if !commands.iter().any(|c| has_unresolvable_expansion(c)) || defines_shell_function(line) {
+    if !commands.iter().any(|c| has_unresolvable_expansion(c))
+        || super::vars::defines_shell_function(line)
+    {
         return Decision::Allow;
     }
-    let vars = |name: &str| {
-        if mentions_name_outside_reference(seg, name)
-            || segment_may_rebind(seg, name)
-            || commands.iter().any(|c| segment_may_rebind(c, name))
-        {
-            return None;
-        }
-        match resolve_expanded_command_word(line, seg_idx, &format!("${{{name}}}")) {
-            CommandWordOrigin::Literal(v) => Some(v),
-            _ => None,
-        }
-    };
+    let vars = substitution_scope_lookup(seg, line, seg_idx, &commands);
     for command in &commands {
         let tokens =
             super::split_substitution_opening_assignments(command.split_whitespace().collect());
-        let verdict = known_path_harm_with(&tokens, ctx, &vars);
+        // Every command here already runs in a body, resolved with `vars`.
+        let verdict = known_path_harm_with(&tokens, ctx, &vars, &vars, &|_| false);
         if verdict.is_deny() {
             return verdict;
         }
@@ -222,8 +337,14 @@ fn known_path_harm_in_substitutions(
 /// recursively (nested substitutions included, bounded by `MAX_SHELL_DEPTH`),
 /// with compound syntax (`{`, `then`, `do`, …) removed by
 /// [`super::compound_views`]. Returns `false` — the caller must not judge —
-/// when a body changes directory or the depth bound is reached.
-fn collect_substitution_commands(text: &str, depth: usize, out: &mut Vec<String>) -> bool {
+/// when the depth bound is reached, or (with `stop_at_cd`) when a body
+/// changes directory.
+fn collect_substitution_commands(
+    text: &str,
+    depth: usize,
+    out: &mut Vec<String>,
+    stop_at_cd: bool,
+) -> bool {
     let payloads = super::substitution::executed_substitution_payloads(text);
     if payloads.is_empty() {
         return true;
@@ -236,11 +357,11 @@ fn collect_substitution_commands(text: &str, depth: usize, out: &mut Vec<String>
             let command = view.command.trim();
             if let Some(first) = command.split_whitespace().next() {
                 let head = super::words::normalized_command(first);
-                if matches!(head.as_str(), "cd" | "pushd" | "popd") {
+                if stop_at_cd && matches!(head.as_str(), "cd" | "pushd" | "popd") {
                     return false;
                 }
             }
-            if !collect_substitution_commands(command, depth + 1, out) {
+            if !collect_substitution_commands(command, depth + 1, out, stop_at_cd) {
                 return false;
             }
             out.push(command.to_string());
@@ -638,20 +759,35 @@ pub(super) fn rm_system_harm_deny(
     operands: &[String],
     recursive: bool,
 ) -> SystemHarm {
-    rm_system_harm(ctx, operands, recursive, None)
+    rm_system_harm(ctx, operands, recursive, None, None)
 }
 
+/// A second resolver for an operand [`expand_operand_with`] leaves
+/// unresolvable: the paths it names, or `None`.
+type PathFallback<'a> = &'a dyn Fn(&str) -> Option<Vec<String>>;
+
 /// [`rm_system_harm_deny`], with `vars` resolving the expansions
-/// [`expand_operand_with`] models.
+/// [`expand_operand_with`] models and, for an operand those leave
+/// unresolvable, `fallback` (the AST evaluator's proven paths, see
+/// [`known_path_harm_with`]) naming its paths; `None` from it keeps the
+/// operand unplaced.
 fn rm_system_harm(
     ctx: &Ctx<'_>,
     operands: &[String],
     recursive: bool,
     vars: Option<VarLookup<'_>>,
+    fallback: Option<PathFallback<'_>>,
 ) -> SystemHarm {
     let mut unplaced: Option<String> = None;
     for word in operands {
-        let paths = match expand_operand_with(word, ctx.scope.home_real(), vars) {
+        let spelled = match expand_operand_with(word, ctx.scope.home_real(), vars) {
+            OperandSpelling::Unresolvable(why) => match fallback.and_then(|f| f(word)) {
+                Some(p) => OperandSpelling::Paths(p),
+                None => OperandSpelling::Unresolvable(why),
+            },
+            resolved => resolved,
+        };
+        let paths = match spelled {
             OperandSpelling::Paths(p) => p,
             OperandSpelling::Unresolvable(why) => {
                 unplaced = unplaced.or(Some(format!(

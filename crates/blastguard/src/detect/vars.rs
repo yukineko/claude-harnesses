@@ -299,7 +299,10 @@ pub(super) fn binds_name_as_operand(head: &str) -> bool {
 ///     all, which is why they are matched on the HEAD;
 ///   * `unset BIN` — `marker: command not found`, i.e. the word expanded to
 ///     nothing and some later token became the program;
-///   * `read BIN` and `printf -v BIN` — `PROG_B`.
+///   * `read BIN` and `printf -v BIN` — `PROG_B`;
+///   * a word opening a subshell, `( BIN=…` / `( { BIN=…` — not measured as a
+///     rebind of the PARENT (it is not one); refused because the use may sit
+///     inside the same subshell, where it is (backlog 6cd305a9).
 ///
 /// Answering true only makes the caller refuse to name a program, so the
 /// coarseness here (a `printf` mentioning `BIN` anywhere, a `local` at top
@@ -325,6 +328,20 @@ pub(super) fn segment_may_rebind(seg: &str, name: &str) -> bool {
             let plain = unquote_literal_value(w).unwrap_or_else(|| w.to_string());
             plain == name || word_binds_name(&plain, name)
         })
+    {
+        return true;
+    }
+    // A word that OPENS a subshell or arithmetic command (`(L=x`, `( { L=x`,
+    // `((L=5))`): `quote_aware_words` keeps everything after an unclosed `(`
+    // in that one word, so the word tests below never see the statements
+    // inside it. Any mention of the name there other than a plain reference
+    // counts (backlog 6cd305a9: the function-call reading spells `f` of
+    // `x=$(f; rm -f $L)` as `( { L=/tmp/x` / `}; rm -f $L` / `)`, and the
+    // `rm` read the outer `L`). Coarse in the restrictive direction: an
+    // assignment in a subshell that does NOT enclose the use refuses too.
+    if words
+        .iter()
+        .any(|w| w.starts_with('(') && mentions_name_outside_reference(w, name))
     {
         return true;
     }

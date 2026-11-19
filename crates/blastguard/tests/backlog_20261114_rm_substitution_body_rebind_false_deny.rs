@@ -86,7 +86,6 @@ fn run_as(command: &str, home: &Home, subagent: bool) -> (String, String) {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 rm in $(...) whose body rebinds L is denied via the outer L=/etc/hosts — remove the ignore when fixed"]
 fn rm_in_substitution_body_rebinding_var_is_not_denied() {
     let home = unique_home("red1");
     let cmd = "L=/etc/hosts; x=$(L=/tmp/x; rm -f $L)";
@@ -95,7 +94,6 @@ fn rm_in_substitution_body_rebinding_var_is_not_denied() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 rm in y=$(...) with prefix assignment L=/tmp/x is denied via the outer L=/etc/hosts — remove the ignore when fixed"]
 fn rm_in_substitution_with_prefix_assignment_rebind_is_not_denied() {
     let home = unique_home("red2");
     let cmd = "L=/etc/hosts; L=/tmp/x y=$(rm -f $L)";
@@ -104,7 +102,6 @@ fn rm_in_substitution_with_prefix_assignment_rebind_is_not_denied() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 rm in $(f; rm -f $L) where f rebinds L is denied via the outer L=/etc/hosts — remove the ignore when fixed"]
 fn rm_in_substitution_with_function_rebind_is_not_denied() {
     let home = unique_home("red3");
     let cmd = "f() { L=/tmp/x; }; L=/etc/hosts; x=$(f; rm -f $L)";
@@ -116,6 +113,66 @@ fn rm_in_substitution_with_function_rebind_is_not_denied() {
 fn control_rm_in_substitution_without_rebind_is_deny() {
     let home = unique_home("ctl");
     let cmd = "L=/etc/hosts; x=$(rm -f $L)";
+    let (d, r) = run_as(cmd, &home, false);
+    assert_eq!(
+        d, "deny",
+        "control must stay deny (system harm); cmd={cmd:?} reason={r}"
+    );
+}
+
+// ---- Added 2026-11-19 (run-20261119-072406-79324 t1) ------------------------
+//
+// Hypothesis under test: the segment's own `known_path_harm` pass reads the
+// FIRST command of an opening substitution (`x=$(` split off by
+// `split_substitution_opening_assignments`) and resolves its `$L` against the
+// enclosing line with no rebind guard, while `known_path_harm_in_substitutions`
+// (later statements of the same body) refuses a name the segment rebinds.
+//
+// DOES NOT PROVE: which internal pass produces the verdict (only the hook's
+// final decision is observed), subagent mode, backtick / process
+// substitution forms, the exact reason text.
+
+/// RED: the flagless spelling of the first-statement rebind (`$L)` resolved
+/// through the outer `L=/etc/hosts`). Not `rm -rf`: a recursive rm whose
+/// operand the outer segment cannot place is a shape Deny ("recursive rm (-r)
+/// can delete an entire directory tree") independent of any rebinding.
+#[test]
+fn rm_in_substitution_first_statement_after_rebind_is_not_denied() {
+    let home = unique_home("red4");
+    let cmd = "L=/etc/hosts; y=$(L=/tmp/x; rm $L)";
+    let (d, r) = run_as(cmd, &home, false);
+    assert_ne!(d, "deny", "must not deny; cmd={cmd:?} reason={r}");
+}
+
+/// Asymmetry witness: the same rebind when the `rm` is NOT the first
+/// statement of the body (only the substitutions pass reaches it).
+#[test]
+fn rm_in_substitution_later_statement_after_rebind_is_not_denied() {
+    let home = unique_home("wit");
+    let cmd = "L=/etc/hosts; x=$(echo a; L=/tmp/x; rm -f $L)";
+    let (d, r) = run_as(cmd, &home, false);
+    assert_ne!(d, "deny", "must not deny; cmd={cmd:?} reason={r}");
+}
+
+/// Control: a PREFIX assignment does not change the expansion of its own
+/// command's words — bash expands `$L` (inherited `/etc/hosts`) before it
+/// applies `L=/tmp/x` to `rm`'s environment, so this removes /etc/hosts.
+#[test]
+fn control_prefix_assignment_on_rm_in_substitution_is_deny() {
+    let home = unique_home("ctl2");
+    let cmd = "L=/etc/hosts; x=$(L=/tmp/x rm -f $L)";
+    let (d, r) = run_as(cmd, &home, false);
+    assert_eq!(
+        d, "deny",
+        "control must stay deny (system harm); cmd={cmd:?} reason={r}"
+    );
+}
+
+/// Control: a rebind that lands ON a system path stays a system-harm Deny.
+#[test]
+fn control_rebind_to_system_path_in_substitution_is_deny() {
+    let home = unique_home("ctl3");
+    let cmd = "L=/tmp/x; x=$(L=/etc/hosts; rm -f $L)";
     let (d, r) = run_as(cmd, &home, false);
     assert_eq!(
         d, "deny",

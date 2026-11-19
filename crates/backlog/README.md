@@ -332,9 +332,18 @@ yet is still not handed out until the lease ages out.
 - a row that an older binary persisted as `status = "claimed"` is read as
   `pending`; only a live lease excludes it. It is rewritten as `pending` the
   next time an unrelated command saves the store.
-- `done` and `fail` do not release a lease. `edit --status pending` does not release a lease either. A leased
+- Only `backlog unclaim <ID>`, run by the holder session, releases a lease.
+  `done`, `fail` and `cancel` do not release a lease, and neither does `edit --status pending`. A leased
   non-terminal task stays excluded until the lease ages out (1h after the
-  holder was last seen alive).
+  holder was last seen alive) or its holder runs `unclaim`.
+- `unclaim <ID>` writes only the ledger (never the tracked store, so it is
+  allowed from the primary tree): it removes the live lease on ID when
+  `CLAUDE_CODE_SESSION_ID` equals the lease's session, and the task, still
+  `pending`, is immediately claimable again. It is refused non-zero with the
+  ledger unchanged, naming the case, when there is no live lease, the lease
+  belongs to another session, the lease has no session id (holder
+  undeterminable), the caller has no `CLAUDE_CODE_SESSION_ID`, or the ledger
+  cannot be locked, read or written.
 - `list`, plain `next` and `next --claim` locate the ledger the same way (the
   project identity, see above); outside any repo that identity is the
   canonical cwd. If the identity cannot be resolved (for example a dangling worktree

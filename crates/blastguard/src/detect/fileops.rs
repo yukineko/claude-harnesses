@@ -1,8 +1,9 @@
 use super::has_unresolvable_expansion;
+use super::protected::{system_entry_landing_block, system_landing_block};
 use super::{
     basename, exclude, is_bare_redirect_op, is_redirect_token, is_short_flag,
     protected_disarm_deny, protected_glob_deny, protected_landing_block, protected_path_block,
-    protected_tree_deny, system_path_block, Ctx, Decision,
+    protected_tree_deny, Ctx, Decision,
 };
 
 /// `unlink` / `rmdir`: the single-file and empty-directory twins of `rm`.
@@ -836,12 +837,19 @@ pub(super) fn copy_split<'a>(cmd: &str, rest: &[&'a str]) -> CopySplit<'a> {
 /// [`protected_landing_block`].
 ///
 /// Every destination shape above is ALSO judged on the system-directory axis
-/// ([`system_path_block`]), after the protected-path axis and in the same order
+/// ([`system_landing_block`]), after the protected-path axis and in the same order
 /// the redirect rule uses. This function used to consult only the protected
 /// axis, so `cp evil /etc/paths.d/zz`, `install -m755 evil /usr/local/bin/x`
 /// and `mv evil /Library/LaunchDaemons/e.plist` were ALLOW while the redirect
 /// into the very same path was DENY: the same file created, a different
-/// verdict depending only on the verb (backlog d5613105).
+/// verdict depending only on the verb (backlog d5613105). The axis judges the
+/// lexical spelling AND the path the verb really writes, resolved against
+/// the segment's cwd the way a redirect target is, so a RELATIVE destination
+/// that climbs into `/etc` through `..` (or lands there through a symlink) is
+/// the same Deny (backlog cfb98cd5; it was Allow because only the lexical,
+/// absolute-only check ran here). "Really writes" depends on the verb at a
+/// destination that is already a symlink: `cp` writes through it, `mv` /
+/// `install` / `ln` replace it ([`dest_system_block`]).
 pub(super) fn analyze_copy_move(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     let args = match parse_copy_args(cmd, rest) {
         Ok(a) => a,
@@ -1009,7 +1017,7 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
             if let Some(block) = protected_landing_block(ctx, &action, &landing) {
                 return block;
             }
-            if let Some(deny) = system_path_block(&action, &landing, ctx) {
+            if let Some(deny) = dest_system_block(ctx, cmd, &action, &landing) {
                 return deny;
             }
         }
@@ -1032,12 +1040,12 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
         // SYSTEM-DIRECTORY axis, after the protected one (the redirect rule's
         // order). The directory itself is judged, and so is each file landed
         // in it, so `/usr/local/bin/` and `/usr/local/bin/x` cannot disagree.
-        if let Some(deny) = system_path_block(&action, &dir, ctx) {
+        if let Some(deny) = system_landing_block(ctx, &action, &dir) {
             return deny;
         }
         for src in sources {
             let landed = format!("{base}/{}", basename(src));
-            if let Some(deny) = system_path_block(&action, &landed, ctx) {
+            if let Some(deny) = dest_system_block(ctx, cmd, &action, &landed) {
                 return deny;
             }
         }
@@ -1047,11 +1055,29 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
     match operands.last() {
         Some(dest) => protected_path_block(ctx, &action, dest)
             .or_else(|| protected_glob_deny(&action, dest))
-            .or_else(|| system_path_block(&action, dest, ctx))
+            .or_else(|| dest_system_block(ctx, cmd, &action, dest))
             .unwrap_or(Decision::Allow),
         // One operand or none: nothing is being written over (`cp a` is an
         // error, `mv -t DIR` with no source does nothing).
         None => Decision::Allow,
+    }
+}
+
+/// The system-directory axis on the destination ENTRY of a `cp` / `mv` /
+/// `install` / `ln`: what the verb does to a symlink already sitting there
+/// decides which file is judged. `cp` writes THROUGH it (opens the path, so
+/// the kernel writes the link's target): [`system_landing_block`]. `mv`,
+/// `install` and `ln` REPLACE it (rename / unlink-then-create /
+/// unlink-then-symlink), so the entry itself, under its physically resolved
+/// parent, is what they create: [`system_entry_landing_block`]. Judging the
+/// followed link for them denied `ln -sf /opt/homebrew/bin/python3
+/// venv/bin/python` over an existing `venv/bin/python -> /opt/homebrew/...`
+/// (a false positive introduced with backlog cfb98cd5's physical landing).
+fn dest_system_block(ctx: &Ctx<'_>, cmd: &str, action: &str, dest: &str) -> Option<Decision> {
+    if cmd == "cp" {
+        system_landing_block(ctx, action, dest)
+    } else {
+        system_entry_landing_block(ctx, action, dest)
     }
 }
 

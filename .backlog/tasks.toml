@@ -2149,3 +2149,34 @@ exit 101: red out; finished in 0.91s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.39s
      Running tests/fp_fix_boundaries_20261119.rs (target/debug/deps/fp_fix_boundaries_20261119-56bc1626e6f6ba8c)
 error: test failed, to rerun pass `-p blastguard --test fp_fix_boundaries_20261119`"""
+
+[[task]]
+id = "d068ef20"
+title = "blastguard fail-open: prefix-assignment substitution y=$(L=/tmp/x; true) rm $L deletes /etc/hosts but is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-19 at main 5a27f8ecd (blastguard 0.2.738), macOS, hermetic HOME, PreToolUse Bash JSON to target/debug/blastguard. L=/etc/hosts; y=$(L=/tmp/x; true) rm $L -> empty stdout = Allow (also with rm -f; main and subagent). Control L=/etc/hosts; rm $L -> deny (system directory). Readings: (a) real fail-open: the substitution body assignment is treated as rebinding the outer L; (b) intended. Distinguishing check: bash semantics - command substitution runs in a subshell, so L stays /etc/hosts and rm deletes /etc/hosts; user ruling: system harm is Deny through any wrapper. Not Allow (excluded): y=$(L=/tmp/x) rm $L (deny); backtick form (main ask, subagent deny). Repro test commit 4365963e1 on branch red/bg-prefix-sub-rm-20261119."
+created_at = 1795097871
+updated_at = 1795097871
+weight = 0.0
+issue_number = 1867
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1867"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261119_prefix_substitution_rm_system_harm -- --ignored"
+rev = "4365963e119510e9a9e68851cb08dd565f394e96"
+observed_at = 1795097871
+detail = """
+exit 101: worktrees/red-prefix-sub-rm-20261119/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.48s
+     Running tests/backlog_20261119_prefix_substitution_rm_system_harm.rs (target/debug/deps/backlog_20261119_prefix_substitution_rm_system_harm-ac73dfda6428ecf1)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261119_prefix_substitution_rm_system_harm`"""

@@ -86042,3 +86042,133 @@ error: test failed, to rerun pass `-p condukt --test testscope_fault_seams_20261
 [task.closure]
 reason = "discard"
 discard_reason = "Linux-only defect (user ruling 2026-11-20). The named tests pass on this macOS host and Linux is not observable here, so nothing on this host demonstrates the defect. Re-file with a fresh repro if it reproduces on Linux."
+
+[[task]]
+id = "d068ef20"
+title = "blastguard fail-open: prefix-assignment substitution y=$(L=/tmp/x; true) rm $L deletes /etc/hosts but is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-19 at main 5a27f8ecd (blastguard 0.2.738), macOS, hermetic HOME, PreToolUse Bash JSON to target/debug/blastguard. L=/etc/hosts; y=$(L=/tmp/x; true) rm $L -> empty stdout = Allow (also with rm -f; main and subagent). Control L=/etc/hosts; rm $L -> deny (system directory). Readings: (a) real fail-open: the substitution body assignment is treated as rebinding the outer L; (b) intended. Distinguishing check: bash semantics - command substitution runs in a subshell, so L stays /etc/hosts and rm deletes /etc/hosts; user ruling: system harm is Deny through any wrapper. Not Allow (excluded): y=$(L=/tmp/x) rm $L (deny); backtick form (main ask, subagent deny). Repro test commit 4365963e1 on branch red/bg-prefix-sub-rm-20261119."
+created_at = 1795097871
+updated_at = 1795117942
+weight = 0.0
+issue_number = 1867
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1867"
+issue_closed_at = 1795117945
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261119_prefix_substitution_rm_system_harm -- --ignored"
+rev = "4365963e119510e9a9e68851cb08dd565f394e96"
+observed_at = 1795097871
+detail = """
+exit 101: worktrees/red-prefix-sub-rm-20261119/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.48s
+     Running tests/backlog_20261119_prefix_substitution_rm_system_harm.rs (target/debug/deps/backlog_20261119_prefix_substitution_rm_system_harm-ac73dfda6428ecf1)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261119_prefix_substitution_rm_system_harm`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261119_prefix_substitution_rm_system_harm -- --include-ignored"
+exit = 0
+passed = 6
+rev = "03492df8e5fc7e6f3a357aab05f368351bacea97"
+observed_at = 1795117941
+output_digest = "sha256:ecd439e8690f758a2361137e82780a7a256cda60acd1af1ff5d1f9854dcbb6b4"
+excerpt = """
+
+running 6 tests
+test control_plain_rm_subagent_is_deny ... ok
+test control_plain_rm_main_is_deny ... ok
+test red_dash_f_subagent_is_deny ... ok
+test red_primary_subagent_is_deny ... ok
+test red_primary_main_is_deny ... ok
+test red_dash_f_main_is_deny ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261119_prefix_substitution_rm_system_harm.rs (target/debug/deps/backlog_20261119_prefix_substitution_rm_system_harm-fea912fb4e2ac6e6)
+"""
+
+[task.closure.red]
+rev = "124d6253ab71bda788f802b96fa2461217a56ded"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "42d5fa32"
+title = "blastguard: ln -st DIR /etc (combined short -t) then write through the link is Allow (system-harm fail-open)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-19 on blastguard 0.2.738 built at main 5a27f8ecd (hermetic HOME, PreToolUse Bash JSON, empty stdout = Allow): 'for f in /etc; do ln -st /tmp/L15 $f; done; echo x > /tmp/L15/etc/passwd' -> allow; same without the loop ('ln -st /tmp/L40 /etc; echo x > /tmp/L40/etc/passwd') -> allow; '-sft' also allow. Controls: '--target-directory=DIR' and '--target-directory DIR -s' -> ask; 'for f in /etc/hosts; do echo x > $f' -> deny. Readings: (a) fail-open: -t inside a combined short option is not seen; (b) intended: -st is not a target-directory form. Distinguishing check: GNU and BSD ln parse getopt clusters so -st DIR == -s -t DIR and creates DIR/etc -> /etc; the refused long-form control creates the identical link -> reading (a). Suspected root cause (read only): target_dir in crates/blastguard/src/detect/relink.rs and positional_operands in crates/blastguard/src/detect/fileops.rs compare -t by exact match. User ruling: system harm must be Deny through any wrapper. Not probed: other clusters (-sT, cp -at, mv -ft, install -t). Test: crates/blastguard/tests/backlog_20261119_ln_combined_short_t_symlink_harm.rs, branch red/bg-ln-combined-t-20261119."
+created_at = 1795098098
+updated_at = 1795117946
+weight = 0.0
+issue_number = 1868
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1868"
+issue_closed_at = 1795117949
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261119_ln_combined_short_t_symlink_harm -- --ignored"
+rev = "bf9d2b1d7de62bdc67410bf2c15714f2abae2e2e"
+observed_at = 1795098098
+detail = """
+exit 101: rness-worktrees/red-ln-combined-t-20261119/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.13s
+     Running tests/backlog_20261119_ln_combined_short_t_symlink_harm.rs (target/debug/deps/backlog_20261119_ln_combined_short_t_symlink_harm-802f7e7185421f22)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261119_ln_combined_short_t_symlink_harm`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261119_ln_combined_short_t_symlink_harm -- --include-ignored"
+exit = 0
+passed = 6
+rev = "03492df8e5fc7e6f3a357aab05f368351bacea97"
+observed_at = 1795117945
+output_digest = "sha256:736587d399c8ed90e631422738c7d2d9c6bec8c88eb451e8991c9b504a81e98c"
+excerpt = """
+
+running 6 tests
+test plain_ln_st_then_write_through_link_is_deny ... ok
+test for_loop_ln_sft_then_write_through_link_is_deny ... ok
+test control_direct_loop_write_into_etc_is_deny ... ok
+test control_long_target_directory_equals_form_is_not_allowed ... ok
+test for_loop_ln_st_then_write_through_link_is_deny ... ok
+test control_long_target_directory_separate_arg_is_not_allowed ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261119_ln_combined_short_t_symlink_harm.rs (target/debug/deps/backlog_20261119_ln_combined_short_t_symlink_harm-11d95e4f14fd2ce5)
+"""
+
+[task.closure.red]
+rev = "124d6253ab71bda788f802b96fa2461217a56ded"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

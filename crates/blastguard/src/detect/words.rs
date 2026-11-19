@@ -292,7 +292,30 @@ pub(super) fn is_exec_wrapper(cmd: &str) -> bool {
 ///
 /// When the first non-assignment token is NOT a wrapper, exactly one candidate
 /// is returned, so ordinary commands are unaffected.
+///
+/// A leading assignment WORD whose value is a command substitution spanning
+/// several tokens ([`substitution_assignment_word_span`]:
+/// `y=$(L=/tmp/x; true) rm $L`) contributes two candidate sets: the body's
+/// own (its first command word, kept for backlog a03fe3cd) AND the outer
+/// command's after the whole word (backlog d068ef20: before, the body's
+/// tokens were the only candidates and the outer `rm` was never judged).
+/// When that word's end is undetermined the former reading applies unchanged.
 pub(super) fn command_candidates(tokens: &[&str]) -> Vec<usize> {
+    candidates_from(tokens, true)
+}
+
+/// [`command_candidates`] without the candidates that start INSIDE a leading
+/// assignment's command substitution: the command word(s) of the simple
+/// command itself. For a rule about the shape of that ONE command
+/// ([`super::unknown_wrapper_ask`]); a substitution body is judged as its own
+/// command line by `executed_substitution_payloads`. Identical to
+/// [`command_candidates`] when no leading assignment word spans a
+/// substitution.
+pub(super) fn outer_command_candidates(tokens: &[&str]) -> Vec<usize> {
+    candidates_from(tokens, false)
+}
+
+fn candidates_from(tokens: &[&str], with_bodies: bool) -> Vec<usize> {
     let mut i = 0;
     while i < tokens.len() {
         let t = tokens[i];
@@ -301,6 +324,23 @@ pub(super) fn command_candidates(tokens: &[&str]) -> Vec<usize> {
             continue;
         }
         if is_assignment(t) {
+            if let Some(span) = substitution_assignment_word_span(tokens, i) {
+                let end = i + span;
+                let mut out: Vec<usize> = if with_bodies {
+                    candidates_from(&tokens[i + 1..end], true)
+                        .into_iter()
+                        .map(|k| k + i + 1)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                out.extend(
+                    candidates_from(&tokens[end..], with_bodies)
+                        .into_iter()
+                        .map(|k| k + end),
+                );
+                return out;
+            }
             i += literal_assignment_span(tokens, i);
             continue;
         }
@@ -368,6 +408,78 @@ fn literal_assignment_span(tokens: &[&str], i: usize) -> usize {
         Some(span) if !tokens[i..i + span].iter().any(|t| t.contains(['$', '`'])) => span,
         _ => 1,
     }
+}
+
+/// Number of whitespace-split tokens, from `tokens[i]` on, that make up ONE
+/// shell word when `tokens[i]` is an assignment whose value opens a command
+/// substitution (`$(` or a backtick, optionally behind a leading `"`) that
+/// `tokens[i]` itself does not close — `y=$(L=/tmp/x;` `true)` is one word,
+/// and so is its split form `y=$(` `L=/tmp/x;` `true)` from
+/// [`super::split_substitution_opening_assignments`]. `None` when `tokens[i]`
+/// is no such opener (including `$((` arithmetic and a substitution closed
+/// inside the token) or when the word's end is undetermined: the substitution
+/// never closes in `tokens`, or a quote / nested substitution after it never
+/// does.
+///
+/// Backlog d068ef20: a prefix assignment whose substitution body holds
+/// whitespace was read as several words, every one of them an assignment or
+/// body text, so the OUTER command after the word (`rm $L` in
+/// `y=$(L=/tmp/x; true) rm $L`) was never a command candidate and the line
+/// was Allow. The tokens joined by one space are scanned with the same
+/// substitution scan [`super::split_segments`] uses
+/// ([`super::closed_substitution_end`]); every space of the joined text is a
+/// token boundary, so the word's end maps back to a token count.
+fn substitution_assignment_word_span(tokens: &[&str], i: usize) -> Option<usize> {
+    use super::segment::{closed_substitution_end, quote_escape_pair};
+    let tok = *tokens.get(i)?;
+    if !is_assignment(tok) {
+        return None;
+    }
+    let eq = tok.find('=')?;
+    let value = &tok[eq + 1..];
+    let quote = usize::from(value.starts_with('"'));
+    let after_quote = &value[quote..];
+    if !(after_quote.starts_with("$(") || after_quote.starts_with('`'))
+        || after_quote.starts_with("$((")
+    {
+        return None;
+    }
+    let joined = tokens[i..].join(" ");
+    let chars: Vec<char> = joined.chars().collect();
+    let open = tok[..eq + 1 + quote].chars().count();
+    let close = closed_substitution_end(&chars, open)?;
+    if close < tok.chars().count() {
+        // Closed inside its own token: the one-token reading already holds.
+        return None;
+    }
+    // The word continues after the closer up to the first blank outside
+    // quotes; a leading `"` is still open there.
+    let (mut in_s, mut in_d) = (false, quote == 1);
+    let mut k = close + 1;
+    while k < chars.len() {
+        let c = chars[k];
+        if quote_escape_pair(&chars, k, in_s, in_d).is_some() {
+            k += 2;
+            continue;
+        }
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+        } else if c == '"' && !in_s {
+            in_d = !in_d;
+        } else if !in_s && matches!(c, '$' | '`') {
+            if c == '`' || chars.get(k + 1) == Some(&'(') {
+                k = closed_substitution_end(&chars, k)? + 1;
+                continue;
+            }
+        } else if c.is_whitespace() && !in_s && !in_d {
+            break;
+        }
+        k += 1;
+    }
+    if in_s || in_d {
+        return None;
+    }
+    Some(chars[..k].iter().filter(|c| **c == ' ').count() + 1)
 }
 
 /// Indices of the command words an exec-wrapper chain can actually run —

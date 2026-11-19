@@ -1489,8 +1489,12 @@ fn unknown_wrapper_ask(
     if depth >= MAX_SHELL_DEPTH {
         return depth_exhausted();
     }
-    // Resolve the head exactly as `analyze_segment` did.
-    let candidates = command_candidates(tokens);
+    // Resolve the head exactly as `analyze_segment` did, minus the candidates
+    // inside a leading assignment's command substitution (`y=$(a; b) cmd …`,
+    // backlog d068ef20): that body is judged as its own command line by
+    // `executed_substitution_payloads`, and the head this rule is about is the
+    // simple command's own. See `words::outer_command_candidates`.
+    let candidates = words::outer_command_candidates(tokens);
     // Behind a known wrapper `command_candidates` returns many positions; this
     // rule is only about the single-candidate (non-wrapper head) shape.
     let [idx] = candidates[..] else {

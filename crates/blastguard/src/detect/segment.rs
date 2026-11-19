@@ -150,6 +150,72 @@ pub(super) fn closed_process_substitution_end(chars: &[char], i: usize) -> Optio
     scan_balanced(chars, i + 2, Stop::Paren, 0)
 }
 
+/// Char ranges (`start..end`, end exclusive) of the BODIES of `text`'s
+/// outermost closed substitutions that run in a SUBSHELL: `$(…)`, backtick
+/// and (outside double quotes) `<(…)` / `>(…)`. Opener and closer are not
+/// included. `$((…))` arithmetic runs in the current shell (its assignments
+/// stick) and is never a range. Quote tracking and the scan are the ones
+/// [`split_segments`] uses ([`quote_escape_pair`], [`closed_substitution_end`],
+/// [`closed_process_substitution_end`]).
+///
+/// An unclosed substitution yields no range: its text stays visible to every
+/// caller (the restrictive reading — nothing is hidden on a guess).
+pub(super) fn subshell_substitution_bodies(text: &str) -> Vec<std::ops::Range<usize>> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let (mut in_s, mut in_d) = (false, false);
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if quote_escape_pair(&chars, i, in_s, in_d).is_some() {
+            i += 2;
+            continue;
+        }
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+        } else if c == '"' && !in_s {
+            in_d = !in_d;
+        } else if !in_s {
+            let arithmetic = c == '$' && chars.get(i + 1..i + 3) == Some(&['(', '('][..]);
+            let end = if arithmetic {
+                None
+            } else {
+                closed_substitution_end(&chars, i)
+                    .or_else(|| (!in_d).then(|| closed_process_substitution_end(&chars, i))?)
+            };
+            if let Some(end) = end {
+                let body_start = if c == '`' { i + 1 } else { i + 2 };
+                out.push(body_start..end);
+                i = end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// `text` with every [`subshell_substitution_bodies`] body replaced by
+/// blanks (one space per char): what the CURRENT shell itself binds or names,
+/// with the subshells' own text removed. `L=/etc/hosts; y=$(L=/tmp/x; true)
+/// rm $L` rebinds `L` only in the subshell; this view no longer mentions it.
+pub(super) fn blank_subshell_bodies(text: &str) -> String {
+    let bodies = subshell_substitution_bodies(text);
+    if bodies.is_empty() {
+        return text.to_string();
+    }
+    text.chars()
+        .enumerate()
+        .map(|(k, c)| {
+            if bodies.iter().any(|r| r.contains(&k)) {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 fn substitution_end_with(
     chars: &[char],
     i: usize,

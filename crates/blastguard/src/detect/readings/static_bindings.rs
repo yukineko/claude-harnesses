@@ -52,10 +52,15 @@
 //! their own `&&` chain, see above) or inside an
 //! `if`/loop/`case`/subshell/brace group, a pipeline stage or `&`, arrays,
 //! `+=`, any other statement mentioning the name outside a plain reference
-//! (`read X`, `for X in`, `unset X`, `printf -v X`, `(X=…`, `$(X=…)`; the
+//! (`read X`, `for X in`, `unset X`, `printf -v X`, `(X=…`, `$((X=…))`; the
 //! name as a path component between two slashes — the `fd` of `/dev/fd/$fd`
 //! — is literal text and does not count, so `fd=3; …; bash /dev/fd/$fd`
-//! resolves to `bash /dev/fd/3` like `<&$fd` does, backlog 54231a0a), a
+//! resolves to `bash /dev/fd/3` like `<&$fd` does, backlog 54231a0a; a
+//! mention inside a closed `$(…)` / backtick / `<(…)` / `>(…)` body binds
+//! only in that subshell and does not count for a reference OUTSIDE the
+//! bodies — `X=lit; y=$(X=o; true) cmd $X` resolves the outer `$X`, backlog
+//! d068ef20 — while a reference INSIDE a body is refused whenever the
+//! segment mentions the name anywhere outside a plain reference), a
 //! name rebound anywhere inside a loop (from the loop opener on), `eval` /
 //! `source` / `.` (the environment is dropped), shell-maintained names
 //! (`PWD`, `RANDOM`, `_`, …), and here-document bodies.
@@ -67,7 +72,9 @@
 //! tracking here does not model them), or its statements cannot be mapped
 //! back onto its text.
 
-use super::super::segment::{is_separator_char, segment_spans};
+use super::super::segment::{
+    blank_subshell_bodies, is_separator_char, segment_spans, subshell_substitution_bodies,
+};
 use super::super::vars::{
     defines_shell_function, has_unresolvable_expansion, is_shell_identifier,
     mentions_name_outside_reference, quote_aware_words, unquote_literal_value,
@@ -208,9 +215,17 @@ fn resolve_static_bindings_with_home(cmd: &str, home: Option<&str>) -> String {
             continue;
         }
         let in_loop = loop_start.is_some_and(|l| idx >= l);
+        // What THIS shell binds: the segment with its subshell substitution
+        // bodies blanked (backlog d068ef20). `y=$(L=/tmp/x; true) rm $L`
+        // rebinds `L` only inside the subshell, so the outer `$L` keeps the
+        // earlier binding. A reference INSIDE a body is still refused when
+        // the raw text mentions the name anywhere (`$(L=/tmp/x; rm $L)`
+        // reads the body's own `L`), see `body_lookup` below.
+        let parent_view = blank_subshell_bodies(&seg.text);
+        let bodies = subshell_substitution_bodies(&seg.text);
         let lookup = |name: &str| -> Option<String> {
             let value = chain.get(name).or_else(|| env.get(name))?;
-            if mentions_name_outside_reference(&seg.text, name) {
+            if mentions_name_outside_reference(&parent_view, name) {
                 return None;
             }
             if in_loop
@@ -223,9 +238,24 @@ fn resolve_static_bindings_with_home(cmd: &str, home: Option<&str>) -> String {
             }
             Some(value.clone())
         };
-        let mut text = substitute_references(&seg.text, &lookup);
+        // Inside a body, and for `~` (substituted over the whole text): the
+        // raw segment must not mention the name at all.
+        let strict_lookup = |name: &str| -> Option<String> {
+            if mentions_name_outside_reference(&seg.text, name) {
+                return None;
+            }
+            lookup(name)
+        };
+        let body_lookup = |name: &str, at: usize| -> Option<String> {
+            if bodies.iter().any(|r| r.contains(&at)) {
+                strict_lookup(name)
+            } else {
+                lookup(name)
+            }
+        };
+        let mut text = substitute_references(&seg.text, &body_lookup);
         if tilde_ok {
-            if let Some(h) = lookup("HOME") {
+            if let Some(h) = strict_lookup("HOME") {
                 text = substitute_tilde(&text, &h);
             }
         }
@@ -388,8 +418,11 @@ fn update_env(
             }
         }
         _ => {
-            env.retain(|name, _| !mentions_name_outside_reference(orig, name));
-            chain.retain(|name, _| !mentions_name_outside_reference(orig, name));
+            // A name bound inside a subshell substitution body (`y=$(L=x; …)
+            // cmd`) is not rebound here (backlog d068ef20).
+            let parent_view = blank_subshell_bodies(orig);
+            env.retain(|name, _| !mentions_name_outside_reference(&parent_view, name));
+            chain.retain(|name, _| !mentions_name_outside_reference(&parent_view, name));
         }
     }
 }
@@ -405,7 +438,7 @@ fn update_env(
 /// is judged, and reported, as `> /etc/fstab`). A span that keeps anything
 /// else — an unresolved reference, a glob character, a space — keeps its
 /// quotes.
-fn substitute_references(text: &str, lookup: &dyn Fn(&str) -> Option<String>) -> String {
+fn substitute_references(text: &str, lookup: &dyn Fn(&str, usize) -> Option<String>) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     let (mut in_s, mut in_d) = (false, false);
@@ -451,7 +484,7 @@ fn substitute_references(text: &str, lookup: &dyn Fn(&str) -> Option<String>) ->
                 // legacy Ask (raise-only until S6, ruling 14; corpus control
                 // `control_1732_perl_double_quoted_home`).
                 let seeded_in_quotes = in_d && ENV_SEEDED.contains(&name.as_str());
-                if let Some(v) = lookup(&name).filter(|_| !seeded_in_quotes) {
+                if let Some(v) = lookup(&name, i).filter(|_| !seeded_in_quotes) {
                     out.push_str(&v);
                     i += len;
                     continue;
@@ -472,7 +505,7 @@ fn substitute_references(text: &str, lookup: &dyn Fn(&str) -> Option<String>) ->
 fn resolved_double_quoted_span(
     chars: &[char],
     open: usize,
-    lookup: &dyn Fn(&str) -> Option<String>,
+    lookup: &dyn Fn(&str, usize) -> Option<String>,
 ) -> Option<(String, usize)> {
     let close = (open + 1..chars.len()).find(|&k| chars.get(k) == Some(&'"'))?;
     let content = chars.get(open + 1..close)?;
@@ -483,7 +516,7 @@ fn resolved_double_quoted_span(
     let mut k = 0;
     while k < content.len() {
         if let Some((name, len)) = reference_at(content, k) {
-            out.push_str(&lookup(&name)?);
+            out.push_str(&lookup(&name, open + 1 + k)?);
             k += len;
             continue;
         }

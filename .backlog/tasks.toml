@@ -2233,3 +2233,46 @@ exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-fdb863a4edef468c)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
+
+[[task]]
+id = "f6716c2b"
+title = "[bg-heredoc-script-failopen-596ef57d:R-gate] Q4: プロジェクトの scripts/check-*.py の上書きは、heredoc（絶対パス・相対パス）と python stdin の open(...,'w') のどちらでも Allow にならない（裁定上は Ask）。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-gate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-gate から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: Q4: プロジェクトの scripts/check-*.py の上書きは、heredoc（絶対パス・相対パス）と python stdin の open(...,'w') のどちらでも Allow にならない（裁定上は Ask）。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `... -- --ignored r_gate` が pass する。対象は v_gate_script_overwrite, h_overwrite_worktree_isolation, stdin_x_check_worktree_isolation_overwrite で、main/sub とも allow 以外
+  - Q4 の上書き判定は Deny ではなく Ask を返す（round 3 (4)）。ただし同じコマンドで別の Deny 判定が当たった場合は strictest-wins に従う
+
+canon:
+  - .backlog/tasks.toml 596ef57d: "Q4 gate scripts = .githooks/**, scripts/check-*.py, crates/*/hooks/**, ~/.claude/plugins/cache/**/{bin,hooks}."
+  - .backlog/tasks.toml 596ef57d round 3: "(4) Q4 gate-script overwrite -> Ask (not Deny)."
+  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:244-262 r_gate
+"""
+created_at = 1795109176
+updated_at = 1795109176
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_gate"
+rev = "546930a554046a5a4704b5978a588068b4c0a279"
+observed_at = 1795109176
+detail = """
+exit 101: ng blastguard v0.2.751 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.87s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-9132e453e006d9a6)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""

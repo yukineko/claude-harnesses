@@ -64,7 +64,17 @@
 //!   undetermined argument (`git add $X`) may or may not name one: the body
 //!   is still removed (it is not shell code either way), but a verdict of
 //!   Allow on the rest becomes Ask (refusal to guess) unless the line judged
-//!   with every body kept is Allow too;
+//!   with every body kept is Allow too. An interpreter running a literal
+//!   program FILE whose text is not in the command (`python3 probe.py <dir>`,
+//!   backlog 2026-11-14), with nothing on the line feeding its stdin (a pipe
+//!   or `<` keeps every body), that literally names a landing file or a directory
+//!   above it is treated the same way: the previous condition has already
+//!   shown it does not run the landing file itself, and whether its unseen
+//!   program uses the body is as unknown as what the command alone does, so
+//!   the body is removed (a `.txt` body is never read as shell) and an Allow
+//!   is floored at Ask. A command that can run the landing file (`bash
+//!   cmds.txt`, `. cmds.txt`, `./cmds.txt`, `sh -c`, piped stdin, `eval`, a
+//!   wrapper) is refused by the previous condition and keeps every body;
 //! * the text outside the removed bodies is printable ASCII, space, tab and
 //!   newline only (a CR, NBSP, zero-width or look-alike character is where
 //!   the parser and the executing shell may disagree).
@@ -260,6 +270,14 @@ fn data_bodies(script: &Script, text: &str) -> Option<(Vec<Range<usize>>, bool)>
             match names_landing_path(c, &landing, &script.function_names) {
                 Naming::Clear => {}
                 Naming::Undetermined => unsure = true,
+                // An interpreter running an unseen literal program file
+                // (`python3 probe.py <dir>`) may do anything with a path it is
+                // handed, but `runs_no_landing_file` above has already shown it
+                // is not running the landing file itself. Whether the program
+                // uses the body is exactly as unknown as what the command
+                // alone does, so the body (not shell code either way) is
+                // removed and an Allow floored at Ask — not read as shell.
+                Naming::Names if runs_unseen_program_file(c) => unsure = true,
                 Naming::Names => return None,
             }
         }
@@ -406,6 +424,22 @@ fn names_landing_path(c: &SimpleCommand, landing: &[String], functions: &[String
         }
     }
     naming
+}
+
+/// True when `c` is an interpreter whose program is a literal FILE operand
+/// (`python3 probe.py …`, `bash probe.sh …`): its program text is not in the
+/// command. Called only after [`runs_no_landing_file`] accepted `c`, so that
+/// file is neither a landing file nor named by another command. Its stdin
+/// must be inherited (nothing on the line feeds it): a piped or redirected
+/// stdin (`cat cmds.txt | python3 probe.py <dir>`, `< cmds.txt`, `<&N`) may
+/// hand the body to the program, so it is not this shape. An inline program
+/// (`-c`), a program read from stdin, `eval`, `source` / `.`, a wrapper or an
+/// undetermined program is not this shape either.
+fn runs_unseen_program_file(c: &SimpleCommand) -> bool {
+    matches!(
+        program_source(c),
+        Some(ProgramSource::File(Value::Literal(_)))
+    ) && matches!(c.stdin, StdinSource::Inherited)
 }
 
 /// True when the heredoc operator at `span` (as the parser placed it) is
@@ -692,4 +726,100 @@ fn file_not_reachable(script: &Script, i: usize, p: &str, landing: &[String]) ->
                     _ => false,
                 })
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::without_data_heredoc_bodies;
+    use crate::detect::detect;
+    use crate::model::Decision;
+
+    fn bash(cmd: &str) -> Decision {
+        detect("Bash", Some(&serde_json::json!({ "command": cmd })))
+    }
+
+    fn line(landing: &str, body: &str, later: &str) -> String {
+        format!("cat > {landing} <<'EOF'\n{body}EOF\n{later}\n")
+    }
+
+    const SHELLISH: &str = "echo hi >&$fd\nprobe 3<<< x\n";
+
+    /// An interpreter of an unseen literal program file that names the
+    /// landing file or a directory above it: the body is removed (never read
+    /// as shell) and the view is marked unsure, so an Allow is floored at Ask.
+    #[test]
+    fn heredoc_data_unseen_program_file_naming_landing_is_floored() {
+        for later in [
+            "python3 /w/probe.py /w",
+            "python3 /w/probe.py /w/",
+            "python3 /w/probe.py /w/cmds.txt",
+            "python3 /w/probe.py cmds.txt",
+            "python3 /w/probe.py .",
+            "bash /w/probe.sh /w",
+        ] {
+            let cmd = line("/w/cmds.txt", SHELLISH, later);
+            let view = without_data_heredoc_bodies(&cmd);
+            assert!(view.is_some(), "body kept for `{later}`");
+            let Some(view) = view else { continue };
+            assert!(!view.text.contains("hi >&"), "{later}: {}", view.text);
+            assert!(view.unsure, "{later}: not floored");
+            let floored = view.floor(Decision::Allow, || Decision::ask("whole"));
+            assert!(matches!(floored, Decision::Ask(_)), "{later}: {floored:?}");
+        }
+    }
+
+    /// A command that can run the landing file (or a body by another route)
+    /// keeps every body.
+    #[test]
+    fn heredoc_data_runner_of_landing_file_keeps_body() {
+        for (landing, later) in [
+            ("/w/cmds.txt", "bash /w/cmds.txt"),
+            ("/w/cmds.txt", "sh /w/cmds.txt"),
+            ("/w/cmds.txt", "python3 /w/cmds.txt"),
+            ("/w/cmds.txt", ". /w/cmds.txt"),
+            ("/w/cmds.txt", "source /w/cmds.txt"),
+            ("/w/cmds.txt", "/w/cmds.txt"),
+            ("cmds.txt", "./cmds.txt"),
+            ("/w/cmds.txt", "sh -c 'echo hi' /w"),
+            ("/w/cmds.txt", "python3 -c 'pass' /w"),
+            ("/w/cmds.txt", "cat /w/cmds.txt | python3"),
+            ("/w/cmds.txt", "cat /w/cmds.txt | python3 /w/probe.py /w"),
+            ("/w/cmds.txt", "python3 /w/probe.py /w < /w/cmds.txt"),
+            ("/w/cmds.txt", "eval echo /w"),
+            ("/w/cmds.txt", "env python3 /w/probe.py /w"),
+            ("/w/cmds.txt", "xargs python3 /w/probe.py /w"),
+            ("/w/cmds.txt", "bash -s /w < /w/cmds.txt"),
+            (
+                "/w/cmds.txt",
+                "python3 /w/probe.py /w; cp /w/cmds.txt /w/probe.py",
+            ),
+        ] {
+            let cmd = line(landing, SHELLISH, later);
+            assert!(
+                without_data_heredoc_bodies(&cmd).is_none(),
+                "body removed for `{later}`"
+            );
+        }
+    }
+
+    /// A system-harm body stays Deny where the landing file can be run, and a
+    /// `.txt` body under an unseen-program interpreter is never Allow.
+    #[test]
+    fn heredoc_data_system_harm_body_verdicts() {
+        let harm = "rm -rf /\n";
+        for later in [
+            "bash /w/cmds.txt",
+            "sh /w/cmds.txt",
+            ". /w/cmds.txt",
+            "/w/cmds.txt",
+            "eval \"$(cat /w/cmds.txt)\"",
+            "cat /w/cmds.txt | sh",
+            "env bash /w/cmds.txt",
+        ] {
+            let d = bash(&line("/w/cmds.txt", harm, later));
+            assert!(d.is_deny(), "`{later}`: {d:?}");
+        }
+        let d = bash(&line("/w/cmds.txt", harm, "python3 /w/probe.py /w"));
+        assert!(d.is_blocking(), "{d:?}");
+    }
 }

@@ -497,7 +497,6 @@ const OWN_WORKTREE_CONFIG_LIFT: &[Pin] = &[
 ];
 
 #[test]
-#[ignore = "RED ruling 2026-11-20 own-worktree config lift: all 5 dd rows deny/deny at bb3ca4e39"]
 fn own_worktree_config_lift_is_allow() {
     check("own-cfg-lift", OWN_WORKTREE_CONFIG_LIFT);
 }

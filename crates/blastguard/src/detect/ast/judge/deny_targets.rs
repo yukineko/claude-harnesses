@@ -403,11 +403,49 @@ fn spellings(path: &str, session_cwd: Option<&str>) -> (Vec<String>, Option<Stri
 /// (stage S6-4, user ruling 2026-11-20 「Deny のまま（推奨）」); it raises
 /// nothing itself.
 pub(crate) fn matches_any_row_unlifted(path: &str, session_cwd: Option<&str>) -> bool {
+    matches_rows(path, session_cwd, Rows::All)
+}
+
+/// Which rows of the table a predicate consults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Rows {
+    /// Every row.
+    All,
+    /// Only the rows NOT lifted inside a linked worktree checkout
+    /// (`lift_in_checkout == false`: home, `.ssh`, `.gitconfig`, the plugin
+    /// cache). User ruling 2026-11-20: in the own worktree the lifted gate
+    /// entries (`.githooks`, `scripts/check-*.py`, `crates/*/hooks`) are the
+    /// checkout's own files.
+    NotLiftedInCheckout,
+    /// Only the rows lifted inside a linked worktree checkout.
+    LiftedInCheckout,
+}
+
+impl Rows {
+    fn has(self, e: &Entry) -> bool {
+        match self {
+            Rows::All => true,
+            Rows::NotLiftedInCheckout => !e.lift_in_checkout,
+            Rows::LiftedInCheckout => e.lift_in_checkout,
+        }
+    }
+}
+
+/// True when `path` matches a row in `rows`. A table that cannot be loaded
+/// is `true` for every selection except [`Rows::LiftedInCheckout`], where
+/// `false` is the restrictive answer (nothing is lifted).
+pub(crate) fn matches_rows(path: &str, session_cwd: Option<&str>, rows: Rows) -> bool {
     let Determination::Known(table) = compiled() else {
-        return true;
+        return rows != Rows::LiftedInCheckout;
     };
     let (spelled, _) = spellings(path, session_cwd);
-    spelled.iter().any(|s| table.set.is_match(s))
+    spelled.iter().any(|s| {
+        table
+            .set
+            .matches(s)
+            .into_iter()
+            .any(|i| table.row_of.get(i).is_some_and(|&r| rows.has(&TABLE[r])))
+    })
 }
 
 /// True when a file directly in the directory `parent` whose name matches
@@ -416,18 +454,24 @@ pub(crate) fn matches_any_row_unlifted(path: &str, session_cwd: Option<&str>) ->
 /// for some pattern `<pp>/<pl>`, a spelling of `parent` ([`spellings`])
 /// matches `<pp>` and `last` may intersect `<pl>` ([`globs_may_intersect`];
 /// `**` intersects every name), or `parent` itself matches a pattern ending
-/// in `/**`. Over-approximates (fail-closed): a pattern or a spelling that
-/// does not compile, or a table that cannot be loaded, is `true`.
+/// in `/**`. Only the rows in `rows` are consulted. Over-approximates
+/// (fail-closed): a pattern or a spelling that does not compile, or a table
+/// that cannot be loaded, is `true`.
 pub(crate) fn may_match_child_unlifted(
     parent: &str,
     last: &str,
     session_cwd: Option<&str>,
+    rows: Rows,
 ) -> bool {
     if !matches!(compiled(), Determination::Known(_)) {
         return true;
     }
     let (spelled, _) = spellings(if parent.is_empty() { "/" } else { parent }, session_cwd);
-    for pat in TABLE.iter().flat_map(|e| e.patterns.iter()) {
+    for pat in TABLE
+        .iter()
+        .filter(|e| rows.has(e))
+        .flat_map(|e| e.patterns.iter())
+    {
         let Some((pp, pl)) = pat.rsplit_once('/') else {
             return true;
         };
@@ -459,9 +503,18 @@ pub(crate) fn may_match_child_unlifted(
 /// literal prefix or suffix that cannot agree proves them disjoint, and
 /// anything else is `true` (fail-closed). A glob that does not compile is
 /// `true`.
+///
+/// `a` is the SHELL glob: the shell's filename expansion matches a name
+/// starting with `.` only through a literal leading `.` in the pattern (bash
+/// without `dotglob`, zsh without `GLOB_DOTS`), so an `a` that does not
+/// start with `.` cannot match a `b` that does (`*` vs `.ssh`). Stated
+/// limit: a line that turns `dotglob` / `GLOB_DOTS` on is not seen here.
 pub(crate) fn globs_may_intersect(a: &str, b: &str) -> bool {
     const META: [char; 3] = ['*', '?', '['];
     let (a, b) = (a.to_lowercase(), b.to_lowercase());
+    if !a.starts_with('.') && b.starts_with('.') {
+        return false;
+    }
     let matches = |glob: &str, name: &str| {
         GlobBuilder::new(glob)
             .literal_separator(true)

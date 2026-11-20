@@ -503,7 +503,6 @@ const OWN_WORKTREE_CONFIG_LIFT: &[Pin] = &[
 ];
 
 #[test]
-#[ignore = "RED ruling 2026-11-20 own-worktree config lift: all 9 rows non-Allow at bb3ca4e39 (hooks.json / crates hooks / check-x.py tee deny/deny; .githooks rows ask/deny)"]
 fn own_worktree_config_lift_is_allow() {
     check("own-cfg-lift", OWN_WORKTREE_CONFIG_LIFT);
 }
@@ -632,7 +631,6 @@ fn red_failopen_glob_home_dir() {
 /// Own-worktree command-running config: the expanded spelling is Allow under
 /// user ruling 2026-11-20 (was deny/deny at 5b2b3a6b8), so the glob is too.
 #[test]
-#[ignore = "RED ruling 2026-11-20 own-worktree config lift: glob and expanded both deny/deny at bb3ca4e39"]
 fn glob_own_worktree_crate_hooks_same_as_expanded() {
     expect_same_as_expanded(
         "fo-hooks",
@@ -644,7 +642,6 @@ fn glob_own_worktree_crate_hooks_same_as_expanded() {
 
 /// As above for `scripts/check-*.py`.
 #[test]
-#[ignore = "RED ruling 2026-11-20 own-worktree config lift: glob and expanded both deny/deny at bb3ca4e39"]
 fn glob_own_worktree_check_script_same_as_expanded() {
     expect_same_as_expanded(
         "fo-check",
@@ -675,13 +672,11 @@ fn expect_own_config_allow(tag: &str, template: &str) {
 }
 
 #[test]
-#[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
 fn tee_append_own_hooks_json_is_allow() {
     expect_own_config_allow("fo-a-hooks", "echo x | tee -a {W}/hooks/hooks.json");
 }
 
 #[test]
-#[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
 fn tee_append_own_crate_hooks_is_allow() {
     expect_own_config_allow(
         "fo-a-crate",
@@ -690,13 +685,11 @@ fn tee_append_own_crate_hooks_is_allow() {
 }
 
 #[test]
-#[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
 fn tee_append_own_check_script_is_allow() {
     expect_own_config_allow("fo-a-check", "echo x | tee -a {W}/scripts/check-x.py");
 }
 
 #[test]
-#[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
 fn tee_append_own_mixed_with_check_script_is_allow() {
     expect_own_config_allow(
         "fo-a-mixed",
@@ -705,19 +698,16 @@ fn tee_append_own_mixed_with_check_script_is_allow() {
 }
 
 #[test]
-#[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
 fn redirect_append_own_hooks_json_is_allow() {
     expect_own_config_allow("fo-r-hooks", "echo x >> {W}/hooks/hooks.json");
 }
 
 #[test]
-#[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
 fn redirect_append_own_crate_hooks_is_allow() {
     expect_own_config_allow("fo-r-crate", "echo x >> {W}/crates/x/hooks/hooks.json");
 }
 
 #[test]
-#[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
 fn redirect_append_own_check_script_is_allow() {
     expect_own_config_allow("fo-r-check", "echo x >> {W}/scripts/check-x.py");
 }

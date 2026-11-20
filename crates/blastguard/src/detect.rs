@@ -828,8 +828,9 @@ primitive, not a filesystem path",
             if let Some(deny) = protected_path_block_at(ctx, "redirect", &target, &physical) {
                 return deny;
             }
-            // Command-running config the lifted protected axis does not stop:
-            // never looser than `>>` (rule 2b; user ruling 2026-11-20, 2e704124).
+            // Command-running config the lifted protected axis does not stop
+            // (own checkout: settings only, ruling 2026-11-20): never looser
+            // than `>>` (rule 2b; 2e704124).
             if tee::redirect_names_command_running_config(&target, ctx) {
                 let ask = tee::command_running_config_write_ask(">", "overwrites", &target);
                 line_level_asks.push(ask);
@@ -1089,9 +1090,9 @@ does not parse that body, but blastguard cannot show the program does not use it
             {
                 return deny;
             }
-            // ...and command-running config the protected list does not cover
-            // (`hooks/hooks.json`, `crates/*/hooks/…`, `scripts/check-*.py`;
-            // user ruling 2026-11-20, the `tee -a` twin is in `tee.rs`).
+            // ...and command-running config the lifted protected axis does not
+            // stop (outside the own checkout; there only settings, user ruling
+            // 2026-11-20; the `tee -a` twin is in `tee.rs`).
             if tee::redirect_names_command_running_config(&target, ctx) {
                 line_level_asks.push(tee::command_running_config_append_ask(">>", &target));
             }

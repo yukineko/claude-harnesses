@@ -60,15 +60,16 @@ pub(super) fn analyze_tee(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         return deny;
     }
     if rest.iter().any(|t| *t == "-a" || *t == "--append") {
-        // User ruling 2026-11-20 (S6-6 open question 1): an append onto
-        // command-running configuration in the OWN worktree that
-        // `protected_path_block` does not cover (`hooks/hooks.json`,
-        // `crates/*/hooks/…`, `scripts/check-*.py`) is Ask (main) / Deny
-        // (subagent), like the `.claude/settings.json` / `.githooks/`
-        // appends above: one appended line is a new hook entry or gate
-        // command. The predicate is the one S6-4 keeps Deny with
-        // (`names_command_running_config`, unlifted); a target it cannot
-        // place counts as naming it (fail-closed).
+        // An append onto command-running configuration that
+        // `protected_path_block` does not stop is Ask (main) / Deny
+        // (subagent): one appended line is a new hook entry or gate
+        // command. The predicate is `names_command_running_config`, which
+        // (user ruling 2026-11-20, superseding the same day's
+        // "own-worktree append → Ask") names only `.claude/settings*.json`
+        // and the never-lifted entries in the session's own checkout, and
+        // the full list (`hooks/hooks.json`, `crates/*/hooks/…`,
+        // `scripts/check-*.py`, `.githooks/…`) everywhere else; a target it
+        // cannot place counts as naming it (fail-closed).
         if let Some(shown) = append_command_running_config(rest, &targets, ctx) {
             return command_running_config_append_ask("tee -a", &shown);
         }
@@ -274,9 +275,9 @@ fn append_command_running_config(
 
 /// `true` when the placed redirect target `path` names command-running
 /// configuration ([`names_command_running_config`]); for rule 2 (`>`) and
-/// rule 2b (`>>` / `&>>`) in `detect_bash` (user ruling 2026-11-20: such
-/// config in the own worktree is Ask / Deny, appends included, and an
-/// overwrite is never looser than an append; backlog 2e704124). Judged on
+/// rule 2b (`>>` / `&>>`) in `detect_bash`: an overwrite is never looser
+/// than an append (backlog 2e704124); which names count in the session's
+/// own checkout is the predicate's (user ruling 2026-11-20). Judged on
 /// the name the kernel opens ([`super::redirect::dequoted_redirect_word`]);
 /// a word that cannot be dequoted counts as naming it (fail-closed).
 pub(super) fn redirect_names_command_running_config(path: &str, ctx: &Ctx<'_>) -> bool {

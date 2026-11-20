@@ -339,98 +339,55 @@ fn red_redirect_glob_home_docs_matches_existing_file() {
 
 cases! { expect_allow;
     // hooks/hooks.json — literal
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_hooks_json_redirect_is_allow: "echo x > {W}/hooks/hooks.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_hooks_json_redirect_relative_is_allow: "echo x > hooks/hooks.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_hooks_json_append_is_allow: "echo x >> {W}/hooks/hooks.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
     own_hooks_json_tee_is_allow: "tee {W}/hooks/hooks.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
     own_hooks_json_tee_pipe_is_allow: "echo x | tee {W}/hooks/hooks.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_hooks_json_tee_append_is_allow: "tee -a {W}/hooks/hooks.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_hooks_json_truncate_is_allow: "truncate -s0 {W}/hooks/hooks.json";
     // hooks/hooks.json — final-component glob
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
     own_hooks_json_glob_redirect_is_allow: "echo x > {W}/hooks/*.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_hooks_json_glob_append_is_allow: "echo x >> {W}/hooks/*.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
     own_hooks_json_glob_tee_is_allow: "tee {W}/hooks/*.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_hooks_json_glob_tee_append_is_allow: "tee -a {W}/hooks/*.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
     own_hooks_json_glob_truncate_is_allow: "truncate -s0 {W}/hooks/*.json";
     // crates/x/hooks/hooks.json — literal
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_crate_hooks_redirect_is_allow: "echo x > {W}/crates/x/hooks/hooks.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_crate_hooks_append_is_allow: "echo x >> {W}/crates/x/hooks/hooks.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
     own_crate_hooks_tee_is_allow: "echo x | tee {W}/crates/x/hooks/hooks.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_crate_hooks_tee_append_is_allow: "echo x | tee -a {W}/crates/x/hooks/hooks.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_crate_hooks_truncate_is_allow: "truncate -s0 {W}/crates/x/hooks/hooks.json";
     // crates/x/hooks/hooks.json — final-component glob
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
     own_crate_hooks_glob_redirect_is_allow: "echo x > {W}/crates/x/hooks/*.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_crate_hooks_glob_append_is_allow: "echo x >> {W}/crates/x/hooks/*.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
     own_crate_hooks_glob_tee_is_allow: "echo x | tee {W}/crates/x/hooks/*.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_crate_hooks_glob_tee_append_is_allow: "echo x | tee -a {W}/crates/x/hooks/*.json";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
     own_crate_hooks_glob_truncate_is_allow: "truncate -s0 {W}/crates/x/hooks/*.json";
     // .githooks/pre-commit — literal
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_githooks_redirect_is_allow: "echo x > {W}/.githooks/pre-commit";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_githooks_append_is_allow: "echo x >> {W}/.githooks/pre-commit";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_githooks_tee_is_allow: "echo x | tee {W}/.githooks/pre-commit";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_githooks_tee_append_is_allow: "echo x | tee -a {W}/.githooks/pre-commit";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
     own_githooks_truncate_is_allow: "truncate -s0 {W}/.githooks/pre-commit";
     // .githooks/pre-commit — final-component glob
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_githooks_glob_redirect_is_allow: "echo x > {W}/.githooks/pre-*";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_githooks_glob_append_is_allow: "echo x >> {W}/.githooks/pre-*";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_githooks_glob_tee_is_allow: "echo x | tee {W}/.githooks/pre-*";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_githooks_glob_tee_append_is_allow: "echo x | tee -a {W}/.githooks/pre-*";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
     own_githooks_glob_truncate_is_allow: "truncate -s0 {W}/.githooks/pre-*";
     // scripts/check-x.py — literal
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_check_script_redirect_is_allow: "echo x > {W}/scripts/check-x.py";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_check_script_append_is_allow: "echo x >> {W}/scripts/check-x.py";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
     own_check_script_tee_is_allow: "echo x | tee {W}/scripts/check-x.py";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_check_script_tee_append_is_allow: "echo x | tee -a {W}/scripts/check-x.py";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_check_script_truncate_is_allow: "truncate -s0 {W}/scripts/check-x.py";
     // scripts/check-x.py — final-component glob (the only `*.py` there)
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
     own_check_script_glob_redirect_is_allow: "echo x > {W}/scripts/*.py";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
     own_check_script_glob_named_redirect_is_allow: "echo x > {W}/scripts/check-*.py";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_check_script_glob_append_is_allow: "echo x >> {W}/scripts/check-*.py";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
     own_check_script_glob_tee_is_allow: "echo x | tee {W}/scripts/check-*.py";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
     own_check_script_glob_tee_append_is_allow: "echo x | tee -a {W}/scripts/check-*.py";
-    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
     own_check_script_glob_truncate_is_allow: "truncate -s0 {W}/scripts/check-*.py";
 }
 

@@ -556,6 +556,17 @@ pub(crate) fn classify(effect: Effect, target: &Value, cwd: &Value, ctx: &PathCt
 ///
 /// Fail-closed: a target that cannot be placed, or whose landing cannot be
 /// resolved, is `true`.
+///
+/// OWN-WORKTREE LIFT (user ruling 2026-11-20, superseding the same day's
+/// "own-worktree config append → Ask"): a spelling (the value or its
+/// landing, each on its own) in the session's own linked worktree checkout
+/// ([`in_own_checkout`]) is judged by
+/// [`own_checkout_spelling_names_config`], which drops the four gate
+/// entries the 2026-10-03 linked-worktree lift covers (`.githooks/`,
+/// `hooks/hooks.json`, `crates/*/hooks/`, `scripts/check-*.py`) and keeps
+/// the rest (`.claude/settings*.json` and the other protected names).
+/// Every other placement (the project main tree, another worktree, an
+/// undetermined one) keeps the full list.
 pub(crate) fn names_command_running_config(target: &Value, cwd: &Value, ctx: &PathCtx) -> bool {
     use crate::detect::protected;
     use harness_core::verdict::Determination;
@@ -567,9 +578,85 @@ pub(crate) fn names_command_running_config(target: &Value, cwd: &Value, ctx: &Pa
         Some(Determination::Known(real)) => real,
         Some(Determination::Undetermined(_)) | None => return true,
     };
-    [path.as_str(), landing.as_str()]
-        .iter()
-        .any(|p| spelling_names_command_running_config(p, ctx))
+    [path.as_str(), landing.as_str()].iter().any(|p| {
+        if in_own_checkout(p, ctx.scope) {
+            own_checkout_spelling_names_config(p, ctx)
+        } else {
+            spelling_names_command_running_config(p, ctx)
+        }
+    })
+}
+
+/// True when the absolute spelling `p` is strictly inside a linked worktree
+/// checkout ([`SafeRoots::classify_worktree_checkout_value`] `Inside`) that
+/// is the session's own: the session cwd is that checkout or inside it, or
+/// the session cwd is inside NO linked checkout (a main-tree session; the
+/// 2026-10-03 ruling: a linked checkout under this session's worktree
+/// storage roots is this session's tree too). A session in ANOTHER checkout,
+/// no session cwd, and any `Undetermined` are `false` (the full list).
+fn in_own_checkout(p: &str, scope: &SafeRoots) -> bool {
+    use crate::scope::Placement;
+    use harness_core::verdict::Determination;
+    let Some(root) = checkout_root_of(p, scope) else {
+        return false;
+    };
+    let Some(cwd) = scope.session_cwd() else {
+        return false;
+    };
+    match scope.classify_worktree_checkout_value(cwd) {
+        Determination::Known(Placement::Inside { root: r, .. })
+        | Determination::Known(Placement::IsRoot { root: r }) => r == root,
+        Determination::Known(Placement::Outside { .. }) => true,
+        Determination::Undetermined(_) => false,
+    }
+}
+
+/// The linked worktree checkout root `p` is strictly inside
+/// ([`SafeRoots::classify_worktree_checkout_value`] `Inside`), or `None`. A
+/// final-component glob (a literal-dir glob value, user ruling 2026-11-19:
+/// glob metacharacters only in the last component) is placed by its parent
+/// directory, which must itself be strictly inside (a glob directly in the
+/// checkout root is not placed; backlog 2e704124).
+fn checkout_root_of(p: &str, scope: &SafeRoots) -> Option<String> {
+    use crate::scope::Placement;
+    use harness_core::verdict::Determination;
+    const META: [char; 3] = ['*', '?', '['];
+    let inside = |q: &str| match scope.classify_worktree_checkout_value(q) {
+        Determination::Known(Placement::Inside { root, .. }) => Some(root),
+        _ => None,
+    };
+    match p.rsplit_once('/') {
+        Some((parent, last)) if last.contains(META) => (!parent.is_empty()
+            && !parent.contains(META))
+        .then(|| inside(parent))
+        .flatten(),
+        _ => inside(p),
+    }
+}
+
+/// [`spelling_names_command_running_config`] for a spelling in the
+/// session's own checkout ([`names_command_running_config`]): a protected
+/// name (`rm::new_layer::is_protected`) that no lifted deny-target row
+/// (`.githooks/`, `scripts/check-*.py`, `crates/*/hooks/`) matches, or a
+/// row that is never lifted (home, `.ssh`, `.gitconfig`, the plugin cache),
+/// also as a final-component glob that may match one. The hook-wiring
+/// `hooks/hooks.json` is not consulted (lifted). Known over-lift: a
+/// protected name nested under a lifted entry
+/// (`crates/x/hooks/.claude/settings.json`) is lifted with it.
+fn own_checkout_spelling_names_config(p: &str, ctx: &PathCtx) -> bool {
+    use crate::detect::rm::new_layer;
+    use deny_targets::Rows;
+    let cwd = ctx.scope.session_cwd();
+    let lifted = deny_targets::matches_rows(p, cwd, Rows::LiftedInCheckout);
+    let glob_child = match p.to_lowercase().rsplit_once('/') {
+        Some((parent, last)) if last.contains(['*', '?', '[']) => {
+            deny_targets::may_match_child_unlifted(parent, last, cwd, Rows::NotLiftedInCheckout)
+        }
+        _ => false,
+    };
+    (new_layer::is_protected(p) && !lifted)
+        || deny_targets::matches_rows(p, cwd, Rows::NotLiftedInCheckout)
+        || glob_child
 }
 
 /// The three predicates of [`names_command_running_config`] on one path
@@ -596,7 +683,12 @@ pub(crate) fn spelling_names_command_running_config(p: &str, ctx: &PathCtx) -> b
         Some((parent, last)) if last.contains(['*', '?', '[']) => {
             let dir = parent.rsplit('/').next().unwrap_or(parent);
             (dir == "hooks" && deny_targets::globs_may_intersect(last, "hooks.json"))
-                || deny_targets::may_match_child_unlifted(parent, last, ctx.scope.session_cwd())
+                || deny_targets::may_match_child_unlifted(
+                    parent,
+                    last,
+                    ctx.scope.session_cwd(),
+                    deny_targets::Rows::All,
+                )
         }
         _ => false,
     };
@@ -666,10 +758,7 @@ fn class_of(effect: Effect, path: &str, scope: &SafeRoots) -> Result<PathClass, 
         None => return Err(undet(&"its physical landing cannot be resolved")),
     };
     let spellings = [path, landing.as_str()];
-    let lifted = matches!(
-        scope.classify_worktree_checkout_value(path),
-        Determination::Known(Placement::Inside { .. })
-    );
+    let lifted = checkout_root_of(path, scope).is_some();
     if !lifted && spellings.iter().any(|p| new_layer::is_protected(p)) {
         return Ok(PathClass::Protected);
     }

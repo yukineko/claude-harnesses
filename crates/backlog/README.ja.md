@@ -179,8 +179,12 @@ store は repo ごとに解決される (`<repo root>/.backlog/tasks.toml`)。
   いずれもミラーが無効である旨を 1 行出し、SessionStart hook は「GitHub mirror drift」の代わりに
   その 1 行を注入する。キーが無いか `true` なら従来どおりミラーする。bool 以外の値
   （例: `github_mirror = "no"`）は既定値に倒さずエラーとして報告し、ミラーしない
-  （`add` / `sync` は非0で終了、`done` 等は issue を閉じずに `error:` を出す）。なお
-  config.toml 自体が読めない／TOML として不正な場合は、従来どおり全項目が既定値（ミラー ON）になる。
+  （`add` / `sync` は非0で終了、`done` 等は issue を閉じずに `error:` を出して非0で終了する）。
+  **`config.toml` が存在するのに読めない／TOML として不正な場合も同じ扱い（判定不能はミラーしない）:**
+  既定値（ミラー ON）には倒さない。`add` / `sync` / `done` / `cancel` / `recheck` は `gh` を一切呼ばず、
+  `config.toml` の名前を含む `error:` を出して非0で終了する。`add` / `sync` / `recheck` は副作用の前に拒否する
+  （`recheck` は行を一切触らない）。`done` / `cancel` はローカルの状態変更を先に行うが、issue は閉じず非0で終了する。
+  `config.toml` が存在しない場合だけ、従来どおり全項目が既定値（ミラー ON）になる。
 
 `project` フィールド自体は残る（誰が起票したかを示し、そのラベルが推測だった場合は `list` が
 `[project unresolved: …]` と表示する） が、**何が見えるかを決めるものではなくなった**。

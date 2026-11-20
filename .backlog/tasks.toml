@@ -3108,6 +3108,8 @@ notes = "Observed 2026-11-21 at main 99b2bff81 (and at fix/rollout-selfcontained
 created_at = 1795199570
 updated_at = 1795199570
 weight = 0.0
+issue_number = 1910
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1910"
 rev = 0
 
 [task.repro]

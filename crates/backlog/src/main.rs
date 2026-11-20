@@ -512,7 +512,7 @@ enum LockAction {
 
 fn main() {
     let cli = Cli::parse();
-    if let Err(e) = run(cli) {
+    if let Err(e) = run(cli).and_then(|()| config::undetermined_refusal_result()) {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
@@ -813,7 +813,7 @@ fn guard_store_divergence(
 }
 
 fn run(cli: Cli) -> Result<()> {
-    let cfg = config::Config::load();
+    let cfg = config::Config::load_checked(matches!(cli.command, Command::Recheck(_)))?;
     // The store's LOCATION is always resolved from THIS PROCESS'S OWN cwd,
     // never from `--project` (CLAUDE.md §8). `--project` names which project a
     // task BELONGS to — a value the caller supplies and this binary does not

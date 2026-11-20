@@ -21,6 +21,12 @@
 //!   verdict MEASURED at the same base (the command-running-config siblings
 //!   and the middle-component glob: measured at main 9f6cb2fea). A control is
 //!   a characterization pin, not an endorsement.
+//! * Own-worktree config lift (user ruling 2026-11-20, superseding the
+//!   earlier same-day ruling that kept these as controls):
+//!   `own_worktree_config_lift_is_allow` — `truncate` onto `.githooks/*`,
+//!   `hooks/hooks.json`, `crates/*/hooks/*`, `scripts/check-*.py` in the OWN
+//!   worktree is Allow in both modes. `.claude/settings*.json` and the own
+//!   worktree's `.git` stay in `control_protected`.
 //! * Target behaviour without an ignore (added 2026-11-20, after the
 //!   implementer removed the ignores): a `0` path component next to `-s 0`
 //!   (the tie defect), and a final-component glob under a literal Scratch dir
@@ -173,6 +179,7 @@ fn fixture(tag: &str) -> Fx {
         "{}\n",
     );
     write(&own.join(".githooks").join("pre-commit"), "#!/bin/sh\n");
+    write(&own.join("scripts").join("check-x.py"), "pass\n");
     write(&fx.tmpdir().join("sub").join("f.txt"), "a\n");
     write(&fx.home().join(".cache").join("x").join("f.txt"), "a\n");
     write(&fx.home().join(".ssh").join("id_rsa"), "k\n");
@@ -408,6 +415,7 @@ fn check(table: &str, pins: &[Pin]) {
     );
 }
 
+const A: &str = "allow/allow";
 const AD: &str = "ask/deny";
 const D: &str = "deny/deny";
 
@@ -434,21 +442,41 @@ const PROTECTED: &[Pin] = &[
     // FLAGGED (module doc): classify lifts Protected inside a linked
     // worktree checkout; pinned as today's per the caller's instruction.
     ("Protected .git file of own worktree", "truncate -s 0 {W}/.git", D),
-    // User ruling 2026-11-20 「Deny のまま（推奨）」: command-running config
-    // inside the own worktree keeps its verdict (measured at main 9f6cb2fea).
+    // User ruling 2026-11-20 「Deny のまま（推奨）」, narrowed by the later
+    // same-day ruling: `.claude/settings*.json` inside the own worktree keeps
+    // its verdict (measured at main 9f6cb2fea); the other command-running
+    // config rows moved to `OWN_WORKTREE_CONFIG_LIFT` (Allow).
     ("Protected .claude/settings.json, own worktree", "truncate -s 0 {W}/.claude/settings.json", D),
     ("command-running config .claude/settings.local.json, own worktree", "truncate -s 0 {W}/.claude/settings.local.json", D),
-    // FLAGGED: hooks.json is a confined Ask (not Deny) at main 9f6cb2fea;
-    // pinned as measured. Unless it is Protected / Workflow in Table C, the
-    // new layer places it OwnWorktree and S6-4 would move it to Allow.
-    ("command-running config hooks/hooks.json, own worktree", "truncate -s 0 {W}/hooks/hooks.json", AD),
-    ("command-running config crates/x/hooks/hooks.json, own worktree", "truncate -s 0 {W}/crates/x/hooks/hooks.json", AD),
-    ("command-running config .githooks/pre-commit, own worktree", "truncate -s 0 {W}/.githooks/pre-commit", D),
 ];
 
 #[test]
 fn control_protected() {
     check("protected", PROTECTED);
+}
+
+// User ruling 2026-11-20 (supersedes the earlier same-day ruling
+// "own-worktree command-running config → keeps its verdict"): in the OWN
+// worktree `truncate` (literal or final-component glob) onto `.githooks/*`,
+// `hooks/hooks.json`, `crates/*/hooks/*`, `scripts/check-*.py` is Allow in
+// both modes — the 2026-10-03 linked-worktree lift wins. The first three rows
+// were pinned in `control_protected` (ask/deny, ask/deny, deny/deny) before
+// the ruling; `.claude/settings*.json` stays there.
+#[rustfmt::skip]
+const OWN_WORKTREE_CONFIG_LIFT: &[Pin] = &[
+    ("hooks/hooks.json, own worktree", "truncate -s 0 {W}/hooks/hooks.json", A),
+    ("crates/x/hooks/hooks.json, own worktree", "truncate -s 0 {W}/crates/x/hooks/hooks.json", A),
+    (".githooks/pre-commit, own worktree", "truncate -s 0 {W}/.githooks/pre-commit", A),
+    ("scripts/check-x.py, own worktree", "truncate -s 0 {W}/scripts/check-x.py", A),
+    (".githooks/pre-commit, relative", "truncate -s 0 .githooks/pre-commit", A),
+    ("hooks/*.json, final-component glob", "truncate -s 0 {W}/hooks/*.json", A),
+    ("scripts/check-*.py, final-component glob", "truncate -s 0 {W}/scripts/check-*.py", A),
+];
+
+#[test]
+#[ignore = "RED ruling 2026-11-20 own-worktree config lift: all 7 rows non-Allow at bb3ca4e39 (hooks.json / crates hooks / check-x.py ask/deny; .githooks and globs deny/deny)"]
+fn own_worktree_config_lift_is_allow() {
+    check("own-cfg-lift", OWN_WORKTREE_CONFIG_LIFT);
 }
 
 #[rustfmt::skip]

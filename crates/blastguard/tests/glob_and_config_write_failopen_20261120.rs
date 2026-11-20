@@ -10,18 +10,24 @@
 //!    class / what it would expand to, so it must get at least the verdict
 //!    of the literal spelling of a matching file. A QUOTED `'*.txt'` names
 //!    a literal file called `*.txt` and keeps literal semantics (control).
-//! 2. The command-running-config predicate misses a final-component glob in
-//!    a plugin `hooks/` dir (`truncate` / `tee` / `tee -a` / `>>`).
-//! 3. A truncating `>` onto own-worktree command-running config is Allow
-//!    while append / truncate / dd onto the same file are not. User ruling
-//!    2026-11-20: command-running config in the own worktree keeps a
-//!    non-Allow verdict, appends included; overwrite must not be looser
-//!    than append.
+//! 2. / 3. (RE-ANCHORED, user ruling 2026-11-20 — supersedes the earlier
+//!    same-day ruling "own-worktree command-running config appends → Ask"
+//!    these sections were written against): in the OWN worktree `{W}`, every
+//!    write — overwrite AND append: `>`, `>>`, `tee`, `tee -a`, `truncate`,
+//!    literal or final-component glob — onto `.githooks/*`,
+//!    `hooks/hooks.json`, `crates/*/hooks/*`, `scripts/check-*.py` is ALLOW
+//!    in both modes (the 2026-10-03 linked-worktree lift wins).
+//!    `.claude/settings*.json` in the own worktree stays Ask (main) / Deny
+//!    (subagent) for every writer. Outside the own worktree (project main
+//!    tree `{P}`, other worktree `{O}`) command-running config keeps a
+//!    non-Allow verdict.
 //!
-//! * REDs: `#[ignore = "RED fail-open: <verdict> at 40e49d3db"]`, the
-//!   measured verdict in the reason; each expects the stated verdict.
-//! * Controls (not ignored): measured at the same base, must not move.
-//!   A control is a characterization pin, not an endorsement.
+//! Hole (1) is unchanged by that ruling.
+//!
+//! * REDs: `#[ignore = "RED ...: <observed> at <rev>"]`, the measured
+//!   verdict in the reason; each expects the stated verdict.
+//! * Controls (not ignored): must not move. A control is a
+//!   characterization pin, not an endorsement.
 //!
 //! Placeholders: `{T}` dir strictly inside the fixed temp root, `{D}` the
 //! hook's `TMPDIR`, `{H}` fixture `HOME`, `{W}` own worktree (session cwd),
@@ -31,7 +37,10 @@
 //! DOES NOT PROVE: which layer produces a verdict (only the decision is
 //! asserted); verdicts with the session cwd in the main tree; globs that
 //! match nothing or match several classes; middle-component globs; the
-//! Ask/Deny REASON text.
+//! Ask/Deny REASON text; writers other than the five listed (`dd`, `cp`,
+//! `sed -i`, Write/Edit tools); symlinked config files; that the exact
+//! main-mode verdict for `.claude/settings*.json` is Ask rather than Deny
+//! (only "main non-Allow, subagent Deny" is asserted).
 
 #[path = "support/bounded.rs"]
 mod bounded;
@@ -137,16 +146,21 @@ fn fixture(tag: &str) -> Fx {
     write(&fx.tmp.join("sub").join("f.txt"), "a\n");
     let own = fx.wt("wt-own");
     write(&own.join(".claude").join("settings.local.json"), "{}\n");
-    write(&own.join("hooks").join("hooks.json"), "{}\n");
-    write(
-        &own.join("crates")
-            .join("x")
-            .join("hooks")
-            .join("hooks.json"),
-        "{}\n",
-    );
-    write(&own.join(".githooks").join("pre-commit"), "#!/bin/sh\n");
-    write(&own.join("scripts").join("check-x.py"), "pass\n");
+    // The same command-running config in the own worktree, the project main
+    // tree and the other worktree (outside-own controls need real files).
+    for tree in [own.clone(), fx.repo(), fx.wt("wt-other")] {
+        write(&tree.join("hooks").join("hooks.json"), "{}\n");
+        write(
+            &tree
+                .join("crates")
+                .join("x")
+                .join("hooks")
+                .join("hooks.json"),
+            "{}\n",
+        );
+        write(&tree.join(".githooks").join("pre-commit"), "#!/bin/sh\n");
+        write(&tree.join("scripts").join("check-x.py"), "pass\n");
+    }
     write(&fx.tmpdir().join("sub").join("f.txt"), "a\n");
     write(&fx.home().join(".cache").join("x").join("f.txt"), "a\n");
     write(&fx.home().join(".ssh").join("id_rsa"), "k\n");
@@ -224,21 +238,56 @@ fn measure(fx: &Fx, template: &str) -> (String, String, String) {
     (format!("{m}/{s}"), rm, rs)
 }
 
-/// RED body for (1): the glob must get exactly `exp` (the verdict of the
-/// literal spelling of the matching file).
-fn expect_exact(tag: &str, template: &str, exp: &str) {
+/// Body for (1): the glob must get the verdict of the literal spelling of
+/// the file it matches — both measured in the same fixture, so the property
+/// (not a frozen letter) is what is asserted. `floor` is the literal
+/// spelling's verdict measured at 40e49d3db, asserted too so that both
+/// drifting to Allow together cannot pass.
+fn expect_same_as_literal(tag: &str, glob: &str, literal: &str, floor: &str) {
     let fx = fixture(tag);
-    let (got, rm, rs) = measure(&fx, template);
+    let (got, rm, rs) = measure(&fx, glob);
+    let (lit, lm, ls) = measure(&fx, literal);
     assert_eq!(
-        got, exp,
-        "{template:?}: a final-component glob under a literal dir must get the verdict of \
-         the literal spelling of a matching file\n  main reason: {rm}\n  sub reason:  {rs}"
+        got, lit,
+        "{glob:?}: a final-component glob under a literal dir must get the verdict of \
+         the literal spelling {literal:?} of the file it matches\n  glob main: {rm}\n  \
+         glob sub:  {rs}\n  literal main: {lm}\n  literal sub:  {ls}"
+    );
+    assert_eq!(
+        lit, floor,
+        "{literal:?} (the literal spelling) moved off {floor}\n  main: {lm}\n  sub: {ls}"
     );
 }
 
-/// RED body for (2)/(3): command-running config in the own worktree keeps a
-/// non-Allow verdict in BOTH modes (user ruling 2026-11-20). Ask or Deny is
-/// accepted in each mode; only Allow fails.
+/// Body for the own-worktree lift (ruling 2026-11-20): Allow in both modes.
+fn expect_allow(tag: &str, template: &str) {
+    let fx = fixture(tag);
+    let (got, rm, rs) = measure(&fx, template);
+    assert_eq!(
+        got, A,
+        "{template:?} writes own-worktree .githooks / hooks.json / crates/*/hooks / \
+         scripts/check-*.py, which user ruling 2026-11-20 makes Allow in both modes (the \
+         2026-10-03 linked-worktree lift wins)\n  main reason: {rm}\n  sub reason:  {rs}"
+    );
+}
+
+/// Body for `.claude/settings*.json` in the own worktree (ruling 2026-11-20:
+/// stays Ask main / Deny subagent for every writer). Asserted as "main
+/// non-Allow, subagent Deny" so a stricter main Deny does not fail.
+fn expect_settings_blocked(tag: &str, template: &str) {
+    let fx = fixture(tag);
+    let c = expand(&fx, template);
+    let (m, rm) = run_as(&fx, &c, false);
+    let (s, rs) = run_as(&fx, &c, true);
+    assert!(
+        (m == "ask" || m == "deny") && s == "deny",
+        "{template:?} writes own-worktree .claude/settings*.json and must stay Ask/Deny-class \
+         (main non-Allow, subagent Deny); got {m}/{s}\n  main reason: {rm}\n  sub reason:  {rs}"
+    );
+}
+
+/// Body for command-running config OUTSIDE the own worktree (`{P}`, `{O}`):
+/// keeps a non-Allow verdict in both modes. Ask or Deny accepted.
 fn expect_non_allow(tag: &str, template: &str) {
     let fx = fixture(tag);
     let c = expand(&fx, template);
@@ -247,124 +296,186 @@ fn expect_non_allow(tag: &str, template: &str) {
     let ok = |d: &str| d == "ask" || d == "deny";
     assert!(
         ok(&m) && ok(&s),
-        "{template:?} writes own-worktree command-running config and must be non-Allow in \
-         both modes; got {m}/{s}\n  main reason: {rm}\n  sub reason:  {rs}"
+        "{template:?} writes command-running config outside the own worktree and must be \
+         non-Allow in both modes; got {m}/{s}\n  main reason: {rm}\n  sub reason:  {rs}"
     );
+}
+
+/// One `#[test]` per row, so a RED can be ignored without hiding the rest.
+macro_rules! cases {
+    ($body:ident; $($(#[$m:meta])* $name:ident: $t:literal;)*) => {
+        $(
+            $(#[$m])*
+            #[test]
+            fn $name() {
+                $body(stringify!($name), $t);
+            }
+        )*
+    };
 }
 
 // ---------------------------------------------------------------------------
 // (1) Unquoted final-component glob behind a `>` redirect.
 // ---------------------------------------------------------------------------
 
-/// Literal `echo x > {H}/docs/f.txt` is deny/deny (control below); the glob
-/// would expand to that very file.
+/// Literal `echo x > {H}/docs/f.txt` is deny/deny; the glob would expand to
+/// that very file.
 #[test]
 fn red_redirect_glob_home_docs_matches_existing_file() {
-    expect_exact("r1-home-glob", "echo x > {H}/docs/*.txt", D);
+    expect_same_as_literal(
+        "r1-home-glob",
+        "echo x > {H}/docs/*.txt",
+        "echo x > {H}/docs/f.txt",
+        D,
+    );
 }
 
 // ---------------------------------------------------------------------------
-// (2) Final-component glob onto own-worktree command-running config.
-// Literal `truncate -s0 {W}/hooks/hooks.json` is ask/deny and literal
-// `tee {W}/hooks/hooks.json` is deny/deny (controls below).
+// Own-worktree lift (user ruling 2026-11-20): every writer, literal and
+// final-component glob, onto `.githooks/*`, `hooks/hooks.json`,
+// `crates/*/hooks/*`, `scripts/check-*.py` in `{W}` is allow/allow. The
+// former (2)/(3) REDs (expected non-Allow) are re-anchored here.
 // ---------------------------------------------------------------------------
 
-#[test]
-fn red_truncate_glob_hooks_json() {
-    expect_non_allow("r2-trunc", "truncate -s0 {W}/hooks/*.json");
-}
-
-#[test]
-fn red_tee_glob_hooks_json() {
-    expect_non_allow("r2-tee", "tee {W}/hooks/*.json");
-}
-
-#[test]
-fn red_tee_append_glob_hooks_json() {
-    expect_non_allow("r2-tee-a", "tee -a {W}/hooks/*.json");
-}
-
-#[test]
-fn red_append_redirect_glob_hooks_json() {
-    expect_non_allow("r2-append", "echo x >> {W}/hooks/*.json");
-}
-
-#[test]
-fn red_truncating_redirect_glob_hooks_json() {
-    expect_non_allow("r2-redir", "echo x > {W}/hooks/*.json");
-}
-
-#[test]
-fn red_truncating_redirect_glob_crate_hooks_json() {
-    expect_non_allow("r2-crate", "echo x > {W}/crates/x/hooks/*.json");
-}
-
-/// The only `*.py` in `{W}/scripts` is `check-x.py` (command-running config).
-#[test]
-fn red_truncating_redirect_glob_scripts_check() {
-    expect_non_allow("r2-scripts", "echo x > {W}/scripts/*.py");
+cases! { expect_allow;
+    // hooks/hooks.json — literal
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_hooks_json_redirect_is_allow: "echo x > {W}/hooks/hooks.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_hooks_json_redirect_relative_is_allow: "echo x > hooks/hooks.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_hooks_json_append_is_allow: "echo x >> {W}/hooks/hooks.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
+    own_hooks_json_tee_is_allow: "tee {W}/hooks/hooks.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
+    own_hooks_json_tee_pipe_is_allow: "echo x | tee {W}/hooks/hooks.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_hooks_json_tee_append_is_allow: "tee -a {W}/hooks/hooks.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_hooks_json_truncate_is_allow: "truncate -s0 {W}/hooks/hooks.json";
+    // hooks/hooks.json — final-component glob
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
+    own_hooks_json_glob_redirect_is_allow: "echo x > {W}/hooks/*.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_hooks_json_glob_append_is_allow: "echo x >> {W}/hooks/*.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
+    own_hooks_json_glob_tee_is_allow: "tee {W}/hooks/*.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_hooks_json_glob_tee_append_is_allow: "tee -a {W}/hooks/*.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
+    own_hooks_json_glob_truncate_is_allow: "truncate -s0 {W}/hooks/*.json";
+    // crates/x/hooks/hooks.json — literal
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_crate_hooks_redirect_is_allow: "echo x > {W}/crates/x/hooks/hooks.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_crate_hooks_append_is_allow: "echo x >> {W}/crates/x/hooks/hooks.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
+    own_crate_hooks_tee_is_allow: "echo x | tee {W}/crates/x/hooks/hooks.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_crate_hooks_tee_append_is_allow: "echo x | tee -a {W}/crates/x/hooks/hooks.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_crate_hooks_truncate_is_allow: "truncate -s0 {W}/crates/x/hooks/hooks.json";
+    // crates/x/hooks/hooks.json — final-component glob
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
+    own_crate_hooks_glob_redirect_is_allow: "echo x > {W}/crates/x/hooks/*.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_crate_hooks_glob_append_is_allow: "echo x >> {W}/crates/x/hooks/*.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
+    own_crate_hooks_glob_tee_is_allow: "echo x | tee {W}/crates/x/hooks/*.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_crate_hooks_glob_tee_append_is_allow: "echo x | tee -a {W}/crates/x/hooks/*.json";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
+    own_crate_hooks_glob_truncate_is_allow: "truncate -s0 {W}/crates/x/hooks/*.json";
+    // .githooks/pre-commit — literal
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_githooks_redirect_is_allow: "echo x > {W}/.githooks/pre-commit";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_githooks_append_is_allow: "echo x >> {W}/.githooks/pre-commit";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_githooks_tee_is_allow: "echo x | tee {W}/.githooks/pre-commit";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_githooks_tee_append_is_allow: "echo x | tee -a {W}/.githooks/pre-commit";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
+    own_githooks_truncate_is_allow: "truncate -s0 {W}/.githooks/pre-commit";
+    // .githooks/pre-commit — final-component glob
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_githooks_glob_redirect_is_allow: "echo x > {W}/.githooks/pre-*";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_githooks_glob_append_is_allow: "echo x >> {W}/.githooks/pre-*";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_githooks_glob_tee_is_allow: "echo x | tee {W}/.githooks/pre-*";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_githooks_glob_tee_append_is_allow: "echo x | tee -a {W}/.githooks/pre-*";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
+    own_githooks_glob_truncate_is_allow: "truncate -s0 {W}/.githooks/pre-*";
+    // scripts/check-x.py — literal
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_check_script_redirect_is_allow: "echo x > {W}/scripts/check-x.py";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_check_script_append_is_allow: "echo x >> {W}/scripts/check-x.py";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
+    own_check_script_tee_is_allow: "echo x | tee {W}/scripts/check-x.py";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_check_script_tee_append_is_allow: "echo x | tee -a {W}/scripts/check-x.py";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_check_script_truncate_is_allow: "truncate -s0 {W}/scripts/check-x.py";
+    // scripts/check-x.py — final-component glob (the only `*.py` there)
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
+    own_check_script_glob_redirect_is_allow: "echo x > {W}/scripts/*.py";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
+    own_check_script_glob_named_redirect_is_allow: "echo x > {W}/scripts/check-*.py";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_check_script_glob_append_is_allow: "echo x >> {W}/scripts/check-*.py";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
+    own_check_script_glob_tee_is_allow: "echo x | tee {W}/scripts/check-*.py";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+    own_check_script_glob_tee_append_is_allow: "echo x | tee -a {W}/scripts/check-*.py";
+    #[ignore = "RED ruling 2026-11-20 own-worktree config lift: deny/deny at bb3ca4e39"]
+    own_check_script_glob_truncate_is_allow: "truncate -s0 {W}/scripts/check-*.py";
 }
 
 // ---------------------------------------------------------------------------
-// (3) Literal `>` / `>>` / `tee -a` onto own-worktree command-running config.
-// The same files are deny/deny under `dd of=` (s6_5 control_protected) and
-// `truncate` is ask/deny (control below); overwrite / append must not be
-// looser.
+// `.claude/settings*.json` in the own worktree: stays Ask (main) / Deny
+// (subagent) for every writer (ruling 2026-11-20).
 // ---------------------------------------------------------------------------
 
-#[test]
-fn red_redirect_hooks_json() {
-    expect_non_allow("r3-hooks", "echo x > {W}/hooks/hooks.json");
+cases! { expect_settings_blocked;
+    own_settings_local_redirect_stays_blocked: "echo x > {W}/.claude/settings.local.json";
+    own_settings_local_append_stays_blocked: "echo x >> {W}/.claude/settings.local.json";
+    own_settings_local_tee_stays_blocked: "echo x | tee {W}/.claude/settings.local.json";
+    own_settings_local_tee_append_stays_blocked: "echo x | tee -a {W}/.claude/settings.local.json";
+    own_settings_local_truncate_stays_blocked: "truncate -s0 {W}/.claude/settings.local.json";
+    own_settings_redirect_stays_blocked: "echo x > {W}/.claude/settings.json";
+    own_settings_append_stays_blocked: "echo x >> {W}/.claude/settings.json";
+    own_settings_glob_redirect_stays_blocked: "echo x > {W}/.claude/settings*.json";
+    own_settings_glob_append_stays_blocked: "echo x >> {W}/.claude/settings*.json";
+    own_settings_glob_tee_stays_blocked: "echo x | tee {W}/.claude/settings*.json";
+    own_settings_glob_tee_append_stays_blocked: "echo x | tee -a {W}/.claude/settings*.json";
+    own_settings_glob_truncate_stays_blocked: "truncate -s0 {W}/.claude/settings*.json";
 }
 
-#[test]
-fn red_redirect_hooks_json_relative() {
-    expect_non_allow("r3-hooks-rel", "echo x > hooks/hooks.json");
-}
+// ---------------------------------------------------------------------------
+// Outside the own worktree: command-running config keeps a non-Allow
+// verdict (ruling 2026-11-20).
+// ---------------------------------------------------------------------------
 
-#[test]
-fn red_redirect_crate_hooks_json() {
-    expect_non_allow("r3-crate", "echo x > {W}/crates/x/hooks/hooks.json");
-}
-
-#[test]
-fn red_redirect_scripts_check() {
-    expect_non_allow("r3-scripts", "echo x > {W}/scripts/check-x.py");
-}
-
-#[test]
-fn red_redirect_githooks_pre_commit() {
-    expect_non_allow("r3-githooks", "echo x > {W}/.githooks/pre-commit");
-}
-
-#[test]
-fn red_redirect_settings_local_json() {
-    expect_non_allow("r3-settings", "echo x > {W}/.claude/settings.local.json");
-}
-
-#[test]
-fn red_append_redirect_hooks_json() {
-    expect_non_allow("r3-app-hooks", "echo x >> {W}/hooks/hooks.json");
-}
-
-#[test]
-fn red_tee_append_hooks_json() {
-    expect_non_allow("r3-tee-a", "tee -a {W}/hooks/hooks.json");
-}
-
-#[test]
-fn red_append_redirect_crate_hooks_json() {
-    expect_non_allow("r3-app-crate", "echo x >> {W}/crates/x/hooks/hooks.json");
-}
-
-#[test]
-fn red_append_redirect_scripts_check() {
-    expect_non_allow("r3-app-scripts", "echo x >> {W}/scripts/check-x.py");
-}
-
-#[test]
-fn red_append_redirect_githooks_pre_commit() {
-    expect_non_allow("r3-app-githooks", "echo x >> {W}/.githooks/pre-commit");
+cases! { expect_non_allow;
+    project_hooks_json_redirect_non_allow: "echo x > {P}/hooks/hooks.json";
+    project_hooks_json_append_non_allow: "echo x >> {P}/hooks/hooks.json";
+    project_hooks_json_tee_append_non_allow: "echo x | tee -a {P}/hooks/hooks.json";
+    project_crate_hooks_append_non_allow: "echo x >> {P}/crates/x/hooks/hooks.json";
+    project_githooks_redirect_non_allow: "echo x > {P}/.githooks/pre-commit";
+    project_githooks_append_non_allow: "echo x >> {P}/.githooks/pre-commit";
+    project_githooks_truncate_non_allow: "truncate -s0 {P}/.githooks/pre-commit";
+    project_check_script_append_non_allow: "echo x >> {P}/scripts/check-x.py";
+    project_check_script_glob_redirect_non_allow: "echo x > {P}/scripts/check-*.py";
+    other_wt_hooks_json_redirect_non_allow: "echo x > {O}/hooks/hooks.json";
+    other_wt_hooks_json_append_non_allow: "echo x >> {O}/hooks/hooks.json";
+    other_wt_crate_hooks_tee_append_non_allow: "echo x | tee -a {O}/crates/x/hooks/hooks.json";
+    other_wt_githooks_append_non_allow: "echo x >> {O}/.githooks/pre-commit";
+    other_wt_githooks_truncate_non_allow: "truncate -s0 {O}/.githooks/pre-commit";
+    other_wt_check_script_append_non_allow: "echo x >> {O}/scripts/check-x.py";
+    other_wt_check_script_glob_append_non_allow: "echo x >> {O}/scripts/check-*.py";
 }
 
 // ---------------------------------------------------------------------------
@@ -426,15 +537,4 @@ const SCRATCH_AND_OWN: &[Pin] = &[
 #[test]
 fn control_scratch_and_own_worktree() {
     check("scratch-own", SCRATCH_AND_OWN);
-}
-
-#[rustfmt::skip]
-const LITERAL_CONFIG: &[Pin] = &[
-    ("truncate literal hooks.json", "truncate -s0 {W}/hooks/hooks.json", "ask/deny"),
-    ("tee literal hooks.json", "tee {W}/hooks/hooks.json", D),
-];
-
-#[test]
-fn control_literal_config() {
-    check("lit-config", LITERAL_CONFIG);
 }

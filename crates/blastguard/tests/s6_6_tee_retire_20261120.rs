@@ -25,25 +25,27 @@
 //!   targets, a final-component glob under a literal Scratch / OwnWorktree
 //!   dir — literal-dir glob ruling 2026-11-19) — pinned so S6-6 keeps them.
 //! * Controls (not ignored): S6 only retires — System, `$HOME` assets,
-//!   Protected, command-running config in the own worktree, Project / Other /
-//!   OtherWorktree, the temp root itself, `..`, non-Literal targets, a mix
-//!   with a non-Allow target, and an unlisted option keep the verdict
+//!   Protected, `.claude/settings*.json` in the own worktree, Project /
+//!   Other / OtherWorktree, the temp root itself, `..`, non-Literal targets,
+//!   a mix with a non-Allow target, and an unlisted option keep the verdict
 //!   MEASURED at the same base. A control is a characterization pin, not an
 //!   endorsement.
-//! * Fail-open REDs (`#[ignore = "RED fail-open: .."]`, end of file): the
-//!   legacy arm probes a final-component glob word (`{P}/*.txt`) as ONE
-//!   literal path, which does not exist, so `NothingToDestroy` makes the
-//!   truncating write Allow — although the shell hands `tee` the existing
-//!   files the glob matches. Each expects the verdict MEASURED at 5b2b3a6b8
-//!   for its expanded spelling. Not part of the retirement.
-//! * Append fail-open REDs (`#[ignore = "RED fail-open: .."]`, end of file;
-//!   user ruling 2026-11-20): `tee -a` and shell `>>` onto command-running
-//!   config in the own worktree that `protected_path_block` does not cover
-//!   (`{W}/hooks/hooks.json`, `{W}/crates/x/hooks/hooks.json`,
-//!   `{W}/scripts/check-x.py`) are allow/allow at 5b2b3a6b8 and must be
-//!   ask/deny, like the `.claude/settings.json` / `.githooks/` appends.
+//! * Own-worktree config lift (user ruling 2026-11-20, superseding the
+//!   earlier same-day ruling "own-worktree command-running config appends →
+//!   Ask"): `tee` / `tee -a` / `>>` onto `.githooks/*`, `hooks/hooks.json`,
+//!   `crates/*/hooks/*`, `scripts/check-*.py` in the OWN worktree is Allow in
+//!   both modes (the 2026-10-03 linked-worktree lift wins):
+//!   `own_worktree_config_lift_is_allow` and the `*_is_allow` tests at the
+//!   end of file. `.claude/settings*.json` stays Ask / Deny
+//!   (`control_protected`).
+//! * Fail-open REDs (end of file): the legacy arm probes a final-component
+//!   glob word (`{P}/*.txt`) as ONE literal path, which does not exist, so
+//!   `NothingToDestroy` makes the truncating write Allow — although the
+//!   shell hands `tee` the existing files the glob matches. Each asserts the
+//!   glob gets the verdict of its expanded spelling, measured side by side.
+//!   Not part of the retirement.
 //!   `-a` / `>>` onto ordinary OtherWorktree / Project / HOME files stays
-//!   Allow (same ruling; pinned in `control_placement`).
+//!   Allow (pinned in `control_placement`).
 //!
 //! Placeholders: `{T}` dir strictly inside the fixed temp root, `{D}` the
 //! hook's `TMPDIR`, `{H}` fixture `HOME`, `{W}` own worktree (session cwd),
@@ -466,27 +468,44 @@ const PROTECTED: &[Pin] = &[
     ("Protected .claude/settings.json, main tree", "echo x | tee {P}/.claude/settings.json", AD),
     ("Protected .claude/settings.json, main tree, -a", "echo x | tee -a {P}/.claude/settings.json", AD),
     ("Protected .git file of own worktree", "echo x | tee {W}/.git", D),
-    // Ruling 2026-11-20: command-running config inside the own worktree
-    // keeps today's verdict.
+    // Ruling 2026-11-20: `.claude/settings*.json` inside the own worktree
+    // stays Ask (main) / Deny (subagent) for every writer. The other
+    // command-running config rows moved to `OWN_WORKTREE_CONFIG_LIFT`.
     ("command-running config .claude/settings.json, own worktree", "echo x | tee {W}/.claude/settings.json", AD),
     ("command-running config .claude/settings.json, own worktree, -a", "echo x | tee -a {W}/.claude/settings.json", AD),
     ("command-running config .claude/settings.json, relative, -a", "echo x | tee -a .claude/settings.json", AD),
     ("command-running config .claude/settings.local.json, own worktree", "echo x | tee {W}/.claude/settings.local.json", AD),
-    ("command-running config hooks/hooks.json, own worktree", "echo x | tee {W}/hooks/hooks.json", D),
-    ("command-running config crates/x/hooks/hooks.json, own worktree", "echo x | tee {W}/crates/x/hooks/hooks.json", D),
-    ("command-running config .githooks/pre-commit, own worktree", "echo x | tee {W}/.githooks/pre-commit", AD),
-    ("command-running config .githooks/pre-commit, own worktree, -a", "echo x | tee -a {W}/.githooks/pre-commit", AD),
-    ("command-running config .githooks/pre-commit, relative", "echo x | tee .githooks/pre-commit", AD),
-    ("command-running config .githooks/pre-push, absent", "echo x | tee {W}/.githooks/pre-push", AD),
-    ("command-running config .githooks/*, glob", "echo x | tee {W}/.githooks/*", AD),
-    ("command-running config scripts/check-x.py, own worktree", "echo x | tee {W}/scripts/check-x.py", D),
     ("OwnWorktree + command-running config", "echo x | tee {W}/u.txt {W}/.claude/settings.json", AD),
-    ("OwnWorktree + command-running config, -a", "echo x | tee -a {W}/u.txt {W}/.githooks/pre-commit", AD),
 ];
 
 #[test]
 fn control_protected() {
     check("protected", PROTECTED);
+}
+
+// User ruling 2026-11-20 (supersedes the earlier same-day "own-worktree
+// command-running config appends → Ask"): in the OWN worktree every `tee` /
+// `tee -a` (literal or final-component glob) onto `.githooks/*`,
+// `hooks/hooks.json`, `crates/*/hooks/*`, `scripts/check-*.py` is Allow in
+// both modes — the 2026-10-03 linked-worktree lift wins. These rows were
+// pinned ask/deny or deny/deny in `control_protected` before the ruling.
+#[rustfmt::skip]
+const OWN_WORKTREE_CONFIG_LIFT: &[Pin] = &[
+    ("hooks/hooks.json, own worktree", "echo x | tee {W}/hooks/hooks.json", A),
+    ("crates/x/hooks/hooks.json, own worktree", "echo x | tee {W}/crates/x/hooks/hooks.json", A),
+    (".githooks/pre-commit, own worktree", "echo x | tee {W}/.githooks/pre-commit", A),
+    (".githooks/pre-commit, own worktree, -a", "echo x | tee -a {W}/.githooks/pre-commit", A),
+    (".githooks/pre-commit, relative", "echo x | tee .githooks/pre-commit", A),
+    (".githooks/pre-push, absent", "echo x | tee {W}/.githooks/pre-push", A),
+    (".githooks/*, glob", "echo x | tee {W}/.githooks/*", A),
+    ("scripts/check-x.py, own worktree", "echo x | tee {W}/scripts/check-x.py", A),
+    ("OwnWorktree + .githooks/pre-commit, -a", "echo x | tee -a {W}/u.txt {W}/.githooks/pre-commit", A),
+];
+
+#[test]
+#[ignore = "RED ruling 2026-11-20 own-worktree config lift: all 9 rows non-Allow at bb3ca4e39 (hooks.json / crates hooks / check-x.py tee deny/deny; .githooks rows ask/deny)"]
+fn own_worktree_config_lift_is_allow() {
+    check("own-cfg-lift", OWN_WORKTREE_CONFIG_LIFT);
 }
 
 #[rustfmt::skip]
@@ -558,109 +577,147 @@ fn control_unlisted_option() {
 // literal path (`{P}/*.txt` does not exist as a file), answers
 // `NothingToDestroy`, and returns Allow — but the shell expands the glob to
 // the existing files before `tee` runs, and truncates them. Measured
-// allow/allow at 5b2b3a6b8; the expanded spelling of each was measured
-// deny/deny at the same base. Each must reach its expanded spelling's
-// verdict.
+// allow/allow at 5b2b3a6b8. Each must reach its expanded spelling's verdict:
+// both are measured in the same fixture and compared (the property), and
+// the expanded spelling is also held to `floor` (its verdict as measured /
+// as the ruling requires) so that both drifting together cannot pass.
 // ---------------------------------------------------------------------------
 
-fn expect_same_as_expanded(tag: &str, template: &str, exp: &str) {
+fn expect_same_as_expanded(tag: &str, template: &str, expanded: &str, floor: &str) {
     let fx = fixture(tag);
     let (got, rm, rs) = measure(&fx, template);
+    let (exp, em, es) = measure(&fx, expanded);
     assert_eq!(
         got, exp,
-        "{template:?} is the same argv as its glob-expanded spelling and must get its \
-         verdict\n  main reason: {rm}\n  sub reason:  {rs}"
+        "{template:?} is the same argv as its glob-expanded spelling {expanded:?} and must \
+         get its verdict\n  glob main: {rm}\n  glob sub:  {rs}\n  expanded main: {em}\n  \
+         expanded sub:  {es}"
+    );
+    assert_eq!(
+        exp, floor,
+        "{expanded:?} (the expanded spelling) moved off {floor}\n  main: {em}\n  sub: {es}"
     );
 }
 
-/// Expands to `{P}/t.txt {P}/u.txt` (deny/deny).
 #[test]
 fn red_failopen_glob_project() {
-    expect_same_as_expanded("fo-proj", "echo x | tee {P}/*.txt", D);
+    expect_same_as_expanded(
+        "fo-proj",
+        "echo x | tee {P}/*.txt",
+        "echo x | tee {P}/t.txt {P}/u.txt",
+        D,
+    );
 }
 
-/// Expands to `{O}/t.txt {O}/u.txt` (deny/deny).
 #[test]
 fn red_failopen_glob_other_worktree() {
-    expect_same_as_expanded("fo-other", "echo x | tee {O}/*.txt", D);
+    expect_same_as_expanded(
+        "fo-other",
+        "echo x | tee {O}/*.txt",
+        "echo x | tee {O}/t.txt {O}/u.txt",
+        D,
+    );
 }
 
-/// Expands to `{H}/docs/f.txt` (deny/deny).
 #[test]
 fn red_failopen_glob_home_dir() {
-    expect_same_as_expanded("fo-home", "echo x | tee {H}/docs/*.txt", D);
+    expect_same_as_expanded(
+        "fo-home",
+        "echo x | tee {H}/docs/*.txt",
+        "echo x | tee {H}/docs/f.txt",
+        D,
+    );
 }
 
-/// Expands to `{W}/crates/x/hooks/hooks.json` (deny/deny), command-running
-/// config in the own worktree.
+/// Own-worktree command-running config: the expanded spelling is Allow under
+/// user ruling 2026-11-20 (was deny/deny at 5b2b3a6b8), so the glob is too.
 #[test]
-fn red_failopen_glob_own_worktree_crate_hooks() {
-    expect_same_as_expanded("fo-hooks", "echo x | tee {W}/crates/x/hooks/*.json", D);
+#[ignore = "RED ruling 2026-11-20 own-worktree config lift: glob and expanded both deny/deny at bb3ca4e39"]
+fn glob_own_worktree_crate_hooks_same_as_expanded() {
+    expect_same_as_expanded(
+        "fo-hooks",
+        "echo x | tee {W}/crates/x/hooks/*.json",
+        "echo x | tee {W}/crates/x/hooks/hooks.json",
+        A,
+    );
 }
 
-/// Expands to `{W}/scripts/check-x.py` (deny/deny), command-running config
-/// in the own worktree.
+/// As above for `scripts/check-*.py`.
 #[test]
-fn red_failopen_glob_own_worktree_check_script() {
-    expect_same_as_expanded("fo-check", "echo x | tee {W}/scripts/check-*.py", D);
+#[ignore = "RED ruling 2026-11-20 own-worktree config lift: glob and expanded both deny/deny at bb3ca4e39"]
+fn glob_own_worktree_check_script_same_as_expanded() {
+    expect_same_as_expanded(
+        "fo-check",
+        "echo x | tee {W}/scripts/check-*.py",
+        "echo x | tee {W}/scripts/check-x.py",
+        A,
+    );
 }
 
 // ---------------------------------------------------------------------------
-// FAIL-OPEN REDs (user ruling 2026-11-20 on this file's open question 1):
-// an append (`tee -a` AND shell `>>`) onto command-running config in the OWN
-// worktree that `protected_path_block` does not cover (`hooks/hooks.json`,
-// `crates/*/hooks/…`, `scripts/check-*.py`) must be Ask (main) / Deny
-// (subagent), like the `.claude/settings.json` / `.githooks/` appends pinned
-// in `control_protected`. Measured allow/allow at 5b2b3a6b8.
+// RE-ANCHORED (user ruling 2026-11-20, superseding the earlier same-day ruling
+// on this file's open question 1 that made these appends Ask/Deny): an append
+// (`tee -a` AND shell `>>`) onto `hooks/hooks.json`, `crates/*/hooks/…`,
+// `scripts/check-*.py` in the OWN worktree is Allow in both modes — the
+// 2026-10-03 linked-worktree lift wins. (They were allow/allow at 5b2b3a6b8,
+// then ask/deny-pinned as fail-open REDs.)
 // ---------------------------------------------------------------------------
 
-fn expect_ask_deny(tag: &str, template: &str) {
+fn expect_own_config_allow(tag: &str, template: &str) {
     let fx = fixture(tag);
     let (got, rm, rs) = measure(&fx, template);
     assert_eq!(
-        got, AD,
-        "{template:?} appends to command-running config in the own worktree and must be \
-         Ask (main) / Deny (subagent)\n  main reason: {rm}\n  sub reason:  {rs}"
+        got, A,
+        "{template:?} writes own-worktree command-running config (not .claude/settings*), \
+         which user ruling 2026-11-20 makes Allow in both modes\n  main reason: {rm}\n  \
+         sub reason:  {rs}"
     );
 }
 
 #[test]
-fn red_failopen_tee_append_own_hooks_json() {
-    expect_ask_deny("fo-a-hooks", "echo x | tee -a {W}/hooks/hooks.json");
+#[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+fn tee_append_own_hooks_json_is_allow() {
+    expect_own_config_allow("fo-a-hooks", "echo x | tee -a {W}/hooks/hooks.json");
 }
 
 #[test]
-fn red_failopen_tee_append_own_crate_hooks() {
-    expect_ask_deny(
+#[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+fn tee_append_own_crate_hooks_is_allow() {
+    expect_own_config_allow(
         "fo-a-crate",
         "echo x | tee -a {W}/crates/x/hooks/hooks.json",
     );
 }
 
 #[test]
-fn red_failopen_tee_append_own_check_script() {
-    expect_ask_deny("fo-a-check", "echo x | tee -a {W}/scripts/check-x.py");
+#[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+fn tee_append_own_check_script_is_allow() {
+    expect_own_config_allow("fo-a-check", "echo x | tee -a {W}/scripts/check-x.py");
 }
 
 #[test]
-fn red_failopen_tee_append_own_mixed_with_check_script() {
-    expect_ask_deny(
+#[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+fn tee_append_own_mixed_with_check_script_is_allow() {
+    expect_own_config_allow(
         "fo-a-mixed",
         "echo x | tee -a {W}/u.txt {W}/scripts/check-x.py",
     );
 }
 
 #[test]
-fn red_failopen_redirect_append_own_hooks_json() {
-    expect_ask_deny("fo-r-hooks", "echo x >> {W}/hooks/hooks.json");
+#[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+fn redirect_append_own_hooks_json_is_allow() {
+    expect_own_config_allow("fo-r-hooks", "echo x >> {W}/hooks/hooks.json");
 }
 
 #[test]
-fn red_failopen_redirect_append_own_crate_hooks() {
-    expect_ask_deny("fo-r-crate", "echo x >> {W}/crates/x/hooks/hooks.json");
+#[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+fn redirect_append_own_crate_hooks_is_allow() {
+    expect_own_config_allow("fo-r-crate", "echo x >> {W}/crates/x/hooks/hooks.json");
 }
 
 #[test]
-fn red_failopen_redirect_append_own_check_script() {
-    expect_ask_deny("fo-r-check", "echo x >> {W}/scripts/check-x.py");
+#[ignore = "RED ruling 2026-11-20 own-worktree config lift: ask/deny at bb3ca4e39"]
+fn redirect_append_own_check_script_is_allow() {
+    expect_own_config_allow("fo-r-check", "echo x >> {W}/scripts/check-x.py");
 }

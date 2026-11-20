@@ -735,47 +735,63 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
 /// only that the variable form is judged exactly like the literal spelling; the
 /// glob hazard measured above is the LITERAL form's verdict to answer, not the
 /// resolver's.
+///
+/// RE-ANCHORED (2026-11-20): the precondition used to pin
+/// `echo hi > /home/yuki/proj/*.log` as `Allow` — that frozen letter WAS the
+/// hole-(1) fail-open (a `>` onto an unquoted final-component glob judged as
+/// one absent literal path) that the literal-dir glob ruling 2026-11-19 /
+/// hole-(1) closes. Per the paragraph above, the glob hazard is the LITERAL
+/// form's verdict to answer, so the precondition now asserts the property
+/// instead: the literal glob form is not looser than the literal spelling of
+/// a file it would match (the expected placement). DOES NOT PROVE: which
+/// verdict letter the literal glob form gets (in this no-filesystem fixture
+/// the matching file is absent, so the floor is `Allow` and the precondition
+/// only rules out a glob that is LOOSER than its match).
 #[test]
-fn unresolvable_glob_suffix_is_not_resolved_to_a_literal_path() {
-    // Pin the trap first, so the test says WHY it is restrictive: if this ever
-    // stops being Allow, the glob rows below stop being fail-open probes.
-    assert_eq!(
-        scoped("echo hi > /home/yuki/proj/*.log"),
-        Decision::Allow,
-        "fixture precondition: a literal `*.log` under the project root is Allowed, \
-         which is what makes resolving a glob suffix the permissive error"
-    );
+fn unresolvable_glob_suffix_is_judged_like_its_literal_glob_spelling() {
     // User ruling 2026-11-15: 「`P=/abs; echo hi > $P/*.log` のように、解決できる変数の
     // 後ろに glob を付けた形は、literal と同じに判定する。」 The earlier assertion
     // here (the variable form must block) pinned the policy that ruling
     // replaced; the expectation is now "the same verdict as the same shape
-    // written literally". The precondition above stays: it documents what that
-    // literal verdict is.
-    for (cmd, literal) in [
+    // written literally".
+    // (variable form, literal glob form, literal spelling of a file it matches)
+    for (cmd, literal, matched) in [
         (
             "P=/home/yuki/proj; echo hi > $P/*.log",
             "echo hi > /home/yuki/proj/*.log",
+            "echo hi > /home/yuki/proj/x.log",
         ),
         (
             "P=/home/yuki/proj; echo hi > $P/?.log",
             "echo hi > /home/yuki/proj/?.log",
+            "echo hi > /home/yuki/proj/a.log",
         ),
         (
             "P=/home/yuki/proj; echo hi > $P/[ab].log",
             "echo hi > /home/yuki/proj/[ab].log",
+            "echo hi > /home/yuki/proj/a.log",
         ),
         (
             "P=/home/yuki/proj; echo hi > ${P}/*.log",
             "echo hi > /home/yuki/proj/*.log",
+            "echo hi > /home/yuki/proj/x.log",
         ),
         (
             "P=/home/yuki/proj; echo hi > \"$P\"/*.log",
             "echo hi > /home/yuki/proj/*.log",
+            "echo hi > /home/yuki/proj/x.log",
         ),
     ] {
+        let lit = scoped(literal);
+        let m = scoped(matched);
+        assert!(
+            restrictiveness(&lit) >= restrictiveness(&m),
+            "precondition: the literal glob form `{literal}` ({lit:?}) must not be looser \
+             than the literal spelling of a file it matches `{matched}` ({m:?})"
+        );
         assert_eq!(
             scoped(cmd),
-            scoped(literal),
+            lit,
             "`{cmd}` must be judged exactly like its literal spelling `{literal}` \
              (user ruling 2026-11-15)"
         );

@@ -1793,3 +1793,6 @@ mod underscore_integer_surface {
         assert_known("true 7; declare -i _; echo 5 | cat 6; true 7");
     }
 }
+
+// `analyze_with_function_definitions` (tests/function_definition_flag.rs).
+mod function_definition_flag;

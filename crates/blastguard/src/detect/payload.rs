@@ -515,6 +515,21 @@ tell whether the interpreter runs that stdin or a script file",
                 // no layer-0 Ask: `bash <<'EOF'` / `git a\` / `dd -A` / `EOF`
                 // answered Allow (measured on the deployed 0.2.702). Keep that
                 // Ask; a Deny is the interpreter pass's to return below.
+                // The same for a COMPUTED program (`determined`, backlog
+                // 40dc52c0): it reached no reader as written, so an Ask its
+                // full judgement earns — a pipe to a shell inside it (`echo
+                // 'echo rm -rf /etc | bash' | cat | bash`), a substitution it
+                // cannot read — stands instead of being dropped at layer 0.
+                if determined.is_some() {
+                    for text in &program_texts {
+                        let verdict = super::detect_bash(text, depth + 1, ctx);
+                        if verdict.is_blocking() {
+                            if let Some(deny) = acc.record(verdict) {
+                                return deny;
+                            }
+                        }
+                    }
+                }
                 if heredoc_open {
                     for joined in program_texts.iter().skip(originals) {
                         let verdict = super::detect_bash(joined, depth + 1, ctx);
@@ -1090,12 +1105,13 @@ fn parse_redirect(word: &str) -> Option<(Option<u32>, &str, &str)> {
 /// a single plain `echo` — a pipeline of `echo` / `seq` into `cat` / `sort`
 /// with no operands (`echo hi | cat`, `seq 10 | sort`), or an `echo` of a
 /// double-quoted `$( )` whose program is itself such a pipeline
-/// (`echo "$(echo hi)"`) — that output is the program, and the only pipeline
-/// is `printf '%s' 'OUTPUT' | READER` (quoted as for a list). The reading of
-/// INNER as written is not added: it would only re-ask that the program is
-/// unread (`(echo hi | cat) | bash`) or a template (`echo "$(echo hi)" |
-/// bash`), and the computed text is exactly what the reader gets, so a
-/// harmful program there (`echo 'chmod 777 /etc/hosts' | cat`) is judged —
+/// (`echo "$(echo hi)"`) — the only pipeline is `INNER | READER`, unwrapped
+/// (not `(INNER) | READER`): [`stdin_exec_verdict`] computes the same output
+/// for that pipe's upstream stages and judges it as the program, exactly as
+/// for `echo hi | cat | bash` written directly — including the full
+/// detector's Ask on the computed text (a pipe to a shell inside it, `echo
+/// 'echo rm -rf /etc | bash' | cat`), which the layer-0 program pass would
+/// drop. A harmful program (`echo 'chmod 777 /etc/hosts' | cat`) is judged —
 /// and denied — as that program. Every other INNER (another producer or
 /// filter, an option, a file operand, an undetermined word) keeps the
 /// readings above and their Ask.
@@ -1107,16 +1123,10 @@ fn procsub_inner_pipelines(
     if inner.is_empty() {
         return (Vec::new(), Vec::new());
     }
-    if let Some(out) = resolution_fixed()
-        .then(|| determined_output::pipeline_output(inner))
-        .flatten()
-        .filter(|o| o.beyond_plain_echo)
+    if resolution_fixed()
+        && determined_output::pipeline_output(inner).is_some_and(|o| o.beyond_plain_echo)
     {
-        let quoted = out.text.replace('\'', "'\"'\"'");
-        return (
-            vec![format!("printf '%s' '{quoted}' | {reader}")],
-            Vec::new(),
-        );
+        return (vec![format!("{inner} | {reader}")], Vec::new());
     }
     let Some(members) = simple_list_members(inner) else {
         return (vec![format!("({inner}) | {reader}")], Vec::new());

@@ -87,6 +87,7 @@ mod heredoc_data;
 mod high_blast;
 mod interpreter;
 mod known_allow;
+mod option_words;
 mod payload;
 mod printf_eval;
 mod protected;
@@ -1316,8 +1317,15 @@ through it, and refuses to guess"
 /// [`resolve_expanded_command_word`]) and `find_xargs::xargs_pipe_feed` (reads
 /// the stage that feeds an `xargs rm`). Nothing else here uses them.
 fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ctx<'_>) -> Decision {
-    let tokens = split_substitution_opening_assignments(seg.split_whitespace().collect());
+    let raw_tokens = split_substitution_opening_assignments(seg.split_whitespace().collect());
+    // Every rule below reads quoted option words as their unquoted twins
+    // (`'--output=/x'` is `--output='/x'`); see `option_words`.
+    let option_words = option_words::OptionWords::new(&raw_tokens);
+    let tokens = option_words.tokens();
     let mut acc = VerdictAcc::default();
+    if let Some(ask) = option_words.undetermined() {
+        let _ = acc.record(ask);
+    }
 
     // D2: a wrapper that takes a shell command string via `-c` (flock) runs that
     // string through `sh -c`. Re-analyse it exactly like a shell's own `-c`
@@ -1967,7 +1975,7 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         // Allow). See `analyze_sort` / `analyze_uniq`.
         "sort" => analyze_sort(rest, ctx),
         "uniq" => analyze_uniq(rest, ctx),
-        "sed" => analyze_sed(rest, ctx),
+        "sed" | "gsed" => analyze_sed(rest, ctx),
         "find" => analyze_find(rest, seg, depth, ctx),
         "xargs" => analyze_xargs(rest, seg, depth, ctx),
         // Both of these were location-blind: `truncate -s 0 target/log.txt`

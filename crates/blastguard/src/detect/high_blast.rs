@@ -39,7 +39,11 @@ pub(super) fn analyze_high_blast_tier(cmd: &str) -> Decision {
     // The command each segment runs with compound syntax removed, so
     // `then git push --force` is read as `git`, not as the keyword `then`.
     for view in compound_views(cmd) {
-        let tokens: Vec<&str> = view.command.split_whitespace().collect();
+        // Quoted option words read as their unquoted twins (`'--force'` is
+        // `--force`); an undetermined one is asked about by the segment pass.
+        let raw: Vec<&str> = view.command.split_whitespace().collect();
+        let option_words = super::option_words::OptionWords::new(&raw);
+        let tokens = option_words.tokens();
         if tokens.is_empty() {
             continue;
         }

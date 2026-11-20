@@ -79,6 +79,32 @@ fn setup() -> Fixture {
     run_git(&repo, &["commit", "-q", "-m", "init"]);
     let main_before = run_git(&repo, &["rev-parse", "main"]);
 
+    // Re-anchored per user ruling 2026-11-20 (spec
+    // condukt-merge-proof-contract-7768aeaf R8, round 4 Q-B): a merge naming
+    // `--run runA --task t1` now resolves the task in run state (an absent run
+    // is `merge-proof-contract(undetermined-task)`). The run holds `t1` as
+    // kind=chore, which is outside the proof contract, so these tests keep
+    // pinning only the trailer guard; every trailer assert is unchanged.
+    let dec = tmp.path().join("dec.json");
+    std::fs::write(
+        &dec,
+        r#"{"goal":"g","tasks":[{"id":"t1","title":"t","kind":"chore"}]}"#,
+    )
+    .unwrap();
+    let out = condukt(
+        &repo,
+        &home,
+        &[
+            "state",
+            "init",
+            "--run",
+            "runA",
+            "--file",
+            dec.to_str().unwrap(),
+        ],
+    );
+    assert!(out.status.success(), "state init: {out:?}");
+
     let out = condukt(
         &repo,
         &home,

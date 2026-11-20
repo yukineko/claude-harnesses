@@ -2290,40 +2290,6 @@ exit 101: bg-wt-pyopen-3510aa71/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_quoted_commit_message_redirect_prose_fp`"""
 
 [[task]]
-id = "021e6161"
-title = "blastguard FP: python3 - heredoc open(rel,'w') on an existing file in a non-git safe root is Deny while the same shell redirect is Ask"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-20 at session-8abb4dc6 24ade0b20 (main 2faec5da9 merged). Non-ignored control b_control_same_program_without_rm_text_is_not_denied (backlog_20261113_heredoc_body_fp.rs:214) fails: 'test result: FAILED. 4 passed; 1 failed; 2 ignored'. Verbatim: program without rm text: deny | the Python program calls `open` on `src/foo.rs` (judged as `: > 'src/foo.rs'`): '> 'src/foo.rs'' destroys the file's current contents and it exists, and it is not inside a git work tree — nothing holds a second copy of these bytes. Probe (scratchpad probes/nongit_overwrite.sh, temp-dir non-git proj with existing src/foo.rs): echo a > src/foo.rs / : > src/foo.rs / printf a > src/foo.rs are all ask ('truncating redirect is confined to … a safe root for this session'); the python open(p,'w') form is deny. The python reading names itself as ': > src/foo.rs' but does not get that redirect's verdict. Related but distinct: 94b93e95 (whose-tree refusal inside a condukt worktree)."
-created_at = 1795138678
-updated_at = 1795138678
-weight = 0.0
-issue_number = 1883
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1883"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261113_heredoc_body_fp b_control_same_program_without_rm_text_is_not_denied"
-rev = "24ade0b2079f02cbe1e0ceedb86a95ebdd02effc"
-observed_at = 1795138678
-detail = """
-exit 101: s_not_denied
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.86s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
-     Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-bce4e0785630c738)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261113_heredoc_body_fp`"""
-
-[[task]]
 id = "375d7394"
 title = "blastguard: read-only grep whose pattern is a destructive command name with a glob operand is Ask (main) / Deny (subagent) (false positive)"
 project = "/Users/yuki/src/harness"

@@ -279,7 +279,6 @@ fn control_post_with_queued_cwd_marks_executed() {
 
 // test-weakening-justified: new RED for an unfixed defect (2026-11-17).
 #[test]
-#[ignore = "RED: 2026-11-17 relay mark-executed matches the PostToolUse payload cwd against the queued cwd, so a verbatim main-session run of a command that cd's (post-run cwd differs) is never recorded as executed"]
 fn post_with_changed_cwd_after_cd_still_marks_executed() {
     let root = setup("after-cd");
     let cmd = cd_ask_cmd(&root.0);

@@ -33,13 +33,26 @@
 //!       But the reason claims the path is not spelled as a literal while it
 //!       is, which points to (a).
 //!
-//! Asserted (ignored, RED): the minimised shapes are not Ask/Deny in main or
-//! subagent mode. Controls (not ignored): the no-backtick twin is Allow; a
+//! Asserted (ignored, RED): for each minimised shape, for subagent in
+//! [false, true], the permissionDecision equals that of its no-backtick twin
+//! (the same command with every backtick character removed). The property is
+//! "a backtick inside a string literal does not change the verdict"; `.` itself
+//! is NOT pinned to allow. Controls (not ignored): the no-backtick twin is
+//! Allow; a
 //! program that writes `rm -rf ~` to `f` and runs it with
 //! `subprocess.run(['bash','f'])` stays Deny; a backtick text written to `f`
 //! followed by `bash f` stays not-Allow.
 //!
-//! DOES NOT PROVE: markers other than "`" (e.g. `compile` inside an
+//! Re-anchor note (2026-11-21, ruling source: main session ruling for flow
+//! batch 62e92d16): the RED assert was previously "not Ask/Deny". That pinned
+//! `. "$HOME/.cargo/env"` to allow, which contradicts the ignored
+//! `ast_effect_rules_20261117.rs::b3_dot_source_home_cargo_env_restricts`
+//! (it will become Ask/Deny once the quarantine plugin lands). Same-verdict-as-
+//! twin stays consistent either way. The twin transform is mechanical
+//! (`replace('`', "")`), so any verdict difference is caused by the backticks.
+//!
+//! DOES NOT PROVE: that `.` (or the twin) is Allow in the long run (only
+//! equality with the twin), nor markers other than "`" (e.g. `compile` inside an
 //! identifier), `python3 -c`, unquoted heredocs, or that a real marker
 //! (`exec(s)`) with a non-literal write path stays refused.
 //!
@@ -127,16 +140,27 @@ const FP_SHAPES: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: backlog 06c51772 (S5 python-parser)"]
 fn backtick_in_python_string_does_not_drop_literal_write_paths() {
-    let bad: Vec<String> = decisions(FP_SHAPES, "red")
-        .into_iter()
-        .filter(|(_, _, d, _)| d == "ask" || d == "deny")
-        .map(|(s, c, d, r)| format!("subagent={s} {c:?} => {d} ({r})"))
+    // test-weakening-justified: re-anchored assert (not-Ask/Deny -> same verdict as no-backtick twin), ruling 2026-11-21 flow batch 62e92d16; assert count unchanged.
+    let twins: Vec<String> = FP_SHAPES.iter().map(|c| c.replace('`', "")).collect();
+    let twin_refs: Vec<&str> = twins.iter().map(String::as_str).collect();
+    let shapes = decisions(FP_SHAPES, "red");
+    let twin_ds = decisions(&twin_refs, "red-twin");
+    assert_eq!(shapes.len(), twin_ds.len());
+    let bad: Vec<String> = shapes
+        .iter()
+        .zip(twin_ds.iter())
+        .filter(|(s, t)| s.2 != t.2)
+        .map(|(s, t)| {
+            format!(
+                "subagent={} shape {:?} => {} ({})\n  twin {:?} => {} ({})",
+                s.0, s.1, s.2, s.3, t.1, t.2, t.3
+            )
+        })
         .collect();
     assert!(
         bad.is_empty(),
-        "expected not-Ask/not-Deny:\n{}",
+        "expected same verdict as no-backtick twin:\n{}",
         bad.join("\n")
     );
 }

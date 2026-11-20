@@ -88710,3 +88710,341 @@ rev = "447fde5188f9084143f410bff01b1a68ca4b7dbd"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "b424eaed"
+title = "blastguard FP: backticked rm -rf ~ inside a Python string literal in a python3 heredoc program is system-harm Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "s5",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-18 at main 79b2aaec3 (blastguard 0.2.706), main session writing an Obsidian note via python3 - <<'EOF' whose string literal contained prose with `rm -rf ~` in backticks: Deny 'recursive rm (-r) can delete an entire directory tree [system harm: refused on every request, never handed back as a question]'. Trigger is the backticks: same text without backticks is allow/allow; backticked harmless text (`ls -l`) is allow. Program uses no os/subprocess/exec. S5 acceptance criterion (user ruling 15, 2026-11-17: python stays on the legacy reader until S5); peer blastguard-false-positive-reduction will pick it up with S5. Controls kept Deny/not-Allow: os.system('rm -rf ~'), os.__dict__['sys'+'tem']('rm -rf ~') (c1873b73 twin). Also seen, not pinned: same class inside python3 -I -c (string literals "rm -rf").
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261118_python_heredoc_string_literal_rm_home_fp -- --include-ignored; rev: a00c73797232c77b3405aa8882520e38fdfa3a02; observed: exit 0: -worktrees/session-ba440926/crates/progeffect)
+   Compiling blastguard v0.2.837 (/Users/yuki/src/.harness-worktrees/session-ba440926/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 25.88s
+     Running tests/backlog_20261118_python_heredoc_string_literal_rm_home_fp.rs (target/debug/deps/backlog_20261118_python_heredoc_string_literal_rm_home_fp-32a42c57a6d99eab)"""
+created_at = 1795008040
+updated_at = 1795202449
+weight = 0.0
+issue_number = 1861
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1861"
+issue_closed_at = 1795202453
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_python_heredoc_string_literal_rm_home_fp -- --include-ignored"
+rev = "d302e39f7386ee7b3e112a5be711c2e9b4c755c8"
+observed_at = 1795008040
+detail = """
+exit 101: s/session-fcf56f45/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
+     Running tests/backlog_20261118_python_heredoc_string_literal_rm_home_fp.rs (target/debug/deps/backlog_20261118_python_heredoc_string_literal_rm_home_fp-e4782d1962985dbd)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_python_heredoc_string_literal_rm_home_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261118_python_heredoc_string_literal_rm_home_fp -- --include-ignored; rev: a00c73797232c77b3405aa8882520e38fdfa3a02; observed: exit 0: -worktrees/session-ba440926/crates/progeffect)
+   Compiling blastguard v0.2.837 (/Users/yuki/src/.harness-worktrees/session-ba440926/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 25.88s
+     Running tests/backlog_20261118_python_heredoc_string_literal_rm_home_fp.rs (target/debug/deps/backlog_20261118_python_heredoc_string_literal_rm_home_fp-32a42c57a6d99eab)"""
+
+[[task]]
+id = "f281b0b1"
+title = "blastguard FP: a Python string literal starting with rm -r inside python3 -c is read as a recursive rm and denied"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "s5",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-18 (blastguard 0.2.706): a subagent's read-only python3 -I -c log filter whose string literals were the search patterns "rm -rf" / r"rm -r" was denied 'recursive rm (-r) can delete an entire directory tree'. Minimal trigger (0.2.711 debug, main=subagent): string literal content starting with rm -r… with no operand or a protected operand, also after ';' inside the literal; no backticks needed; -I and quote kind irrelevant. Allow: not at start, harmless operand, comment, 'ls -l' twin. RED asserts parity with the harmless twin. Controls stay deny: os.system('rm -rf ~'), subprocess.run(['rm','-rf','/etc']). Sibling: b424eaed (heredoc, backticks). S5 acceptance. Also seen, not pinned: shell positional arg python3 -c 'print(1)' "rm -rf" denied; a bash heredoc commit message body containing the rm text refused.
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261118_python_c_string_literal_rm_fp -- --include-ignored; rev: a00c73797232c77b3405aa8882520e38fdfa3a02; observed: exit 0: inished in 3.96s
+
+    Blocking waiting for file lock on package cache
+   Compiling blastguard v0.2.837 (/Users/yuki/src/.harness-worktrees/session-ba440926/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
+     Running tests/backlog_20261118_python_c_string_literal_rm_fp.rs (target/debug/deps/backlog_20261118_python_c_string_literal_rm_fp-d6d2c28994c31c56)"""
+created_at = 1795008755
+updated_at = 1795202459
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261118_python_c_string_literal_rm_fp -- --include-ignored"
+rev = "1b64e9203ddce1ff903c62f3867f2c9ef3708b5b"
+observed_at = 1795008755
+detail = """
+exit 101: d; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.33s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/backlog_20261118_python_c_string_literal_rm_fp.rs (target/debug/deps/backlog_20261118_python_c_string_literal_rm_fp-56b600839e4d58ff)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261118_python_c_string_literal_rm_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261118_python_c_string_literal_rm_fp -- --include-ignored; rev: a00c73797232c77b3405aa8882520e38fdfa3a02; observed: exit 0: inished in 3.96s
+
+    Blocking waiting for file lock on package cache
+   Compiling blastguard v0.2.837 (/Users/yuki/src/.harness-worktrees/session-ba440926/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
+     Running tests/backlog_20261118_python_c_string_literal_rm_fp.rs (target/debug/deps/backlog_20261118_python_c_string_literal_rm_fp-d6d2c28994c31c56)"""
+
+[[task]]
+id = "834e586c"
+title = "blastguard FP: shell text inside a Python string literal in a python3 heredoc is refused as system harm"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "s5",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-19 (blastguard 0.2.722, S4 triage subagent): python3 - <<'EOF' with body s = "exec <<< 'chmod <mode> /etc/hosts'; bash script.sh"; print(len(s)) was denied as system harm (chmod re-permissions /etc/hosts). Nothing runs chmod; the heredoc is quoted and the text is Python data. RED: crates/blastguard/tests/backlog_20261119_python_heredoc_string_literal_system_harm_fp.rs (ignored; controls os.system call and plain chmod stay Deny). Near twins f281b0b1 (python -c rm -r literal), b424eaed (heredoc backtick span).
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261119_python_heredoc_string_literal_system_harm_fp -- --ignored; rev: a00c73797232c77b3405aa8882520e38fdfa3a02; observed: exit 0: red; 2 filtered out; finished in 0.73s
+
+   Compiling blastguard v0.2.837 (/Users/yuki/src/.harness-worktrees/session-ba440926/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.79s
+     Running tests/backlog_20261119_python_heredoc_string_literal_system_harm_fp.rs (target/debug/deps/backlog_20261119_python_heredoc_string_literal_system_harm_fp-9d97050a3357bfab)"""
+created_at = 1795027786
+updated_at = 1795202463
+weight = 0.0
+issue_number = 1864
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1864"
+issue_closed_at = 1795202466
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261119_python_heredoc_string_literal_system_harm_fp -- --ignored"
+rev = "8b3fac9e54cdf8bd290b8c23fb8e55b4ae426aa7"
+observed_at = 1795027786
+detail = """
+exit 101: 261119/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.02s
+     Running tests/backlog_20261119_python_heredoc_string_literal_system_harm_fp.rs (target/debug/deps/backlog_20261119_python_heredoc_string_literal_system_harm_fp-9a684a5899ca781c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261119_python_heredoc_string_literal_system_harm_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261119_python_heredoc_string_literal_system_harm_fp -- --ignored; rev: a00c73797232c77b3405aa8882520e38fdfa3a02; observed: exit 0: red; 2 filtered out; finished in 0.73s
+
+   Compiling blastguard v0.2.837 (/Users/yuki/src/.harness-worktrees/session-ba440926/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.79s
+     Running tests/backlog_20261119_python_heredoc_string_literal_system_harm_fp.rs (target/debug/deps/backlog_20261119_python_heredoc_string_literal_system_harm_fp-9d97050a3357bfab)"""
+
+[[task]]
+id = "eddabe3d"
+title = "[bg-heredoc-script-failopen-596ef57d:R-protect] Q3: HOME ではない /Users/<n> ディレクトリ自体の移動と、**/.ssh/** 配下（.ssh ディレクトリ自体を含む）への書き込み・置換・chmod・chown は、shell・python stdin のどちらの経路でも Deny になる。複数の判定が当たる場合は最も厳しいもの（Deny > Ask > Allow）が勝つ。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-protect",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-protect から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: Q3: HOME ではない /Users/<n> ディレクトリ自体の移動と、**/.ssh/** 配下（.ssh ディレクトリ自体を含む）への書き込み・置換・chmod・chown は、shell・python stdin のどちらの経路でも Deny になる。複数の判定が当たる場合は最も厳しいもの（Deny > Ask > Allow）が勝つ。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `... --test backlog_20261120_596ef57d_requirements -- --ignored r_protect` が pass する。対象は c_mv_home, c_cp_authkeys, stdin_x_os_replace_authkeys, stdin_x_os_chmod_ssh, stdin_x_open_wb, stdin_x_open_x_mode, stdin_x_os_utime_chown の 7 件で、いずれも main/sub とも deny
+  - fixture の HOME は <base>/home（/Users/yuki ではない）のまま、assert も無変更で pass する
+
+canon:
+  - .backlog/tasks.toml 596ef57d: "Q3 protect /Users/<n>, /home/<n>, **/.ssh/**, **/.gitconfig even when not HOME (Deny)."
+  - .backlog/tasks.toml 596ef57d round 3: "(2) Q3 scope = the directory /Users/<n> or /home/<n> itself (delete, move away, chmod/chown of the dir); files under it are judged by **/.ssh/**, **/.gitconfig and the existing HOME rules."
+  - .backlog/tasks.toml 596ef57d round 3: "when several judgements apply the strictest wins: Deny > Ask > Allow (Q3/Q5 Deny always win over the allowlist Ask)"
+  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:223-242 r_protect
+
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_protect; rev: a00c73797232c77b3405aa8882520e38fdfa3a02; observed: exit 0: 
+running 1 test
+test r_protect ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 2.41s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-13b2f8c381edb5f4)"""
+created_at = 1795108511
+updated_at = 1795202472
+weight = 0.0
+issue_number = 1872
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1872"
+issue_closed_at = 1795202475
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_protect"
+rev = "eee4290d589b104b33b644dd521d993c0730b69b"
+observed_at = 1795108511
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 1.50s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-fdb863a4edef468c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_protect; rev: a00c73797232c77b3405aa8882520e38fdfa3a02; observed: exit 0: 
+running 1 test
+test r_protect ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 2.41s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-13b2f8c381edb5f4)"""
+
+[[task]]
+id = "f6716c2b"
+title = "[bg-heredoc-script-failopen-596ef57d:R-gate] Q4: プロジェクトの scripts/check-*.py の上書きは、heredoc（絶対パス・相対パス）と python stdin の open(...,'w') のどちらでも Allow にならない（裁定上は Ask）。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-gate",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-gate から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: Q4: プロジェクトの scripts/check-*.py の上書きは、heredoc（絶対パス・相対パス）と python stdin の open(...,'w') のどちらでも Allow にならない（裁定上は Ask）。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `... -- --ignored r_gate` が pass する。対象は v_gate_script_overwrite, h_overwrite_worktree_isolation, stdin_x_check_worktree_isolation_overwrite で、main/sub とも allow 以外
+  - Q4 の上書き判定は Deny ではなく Ask を返す（round 3 (4)）。ただし同じコマンドで別の Deny 判定が当たった場合は strictest-wins に従う
+
+canon:
+  - .backlog/tasks.toml 596ef57d: "Q4 gate scripts = .githooks/**, scripts/check-*.py, crates/*/hooks/**, ~/.claude/plugins/cache/**/{bin,hooks}."
+  - .backlog/tasks.toml 596ef57d round 3: "(4) Q4 gate-script overwrite -> Ask (not Deny)."
+  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:244-262 r_gate
+
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_gate; rev: a00c73797232c77b3405aa8882520e38fdfa3a02; observed: exit 0: 0 filtered out; finished in 1.17s
+
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-13b2f8c381edb5f4)"""
+created_at = 1795109176
+updated_at = 1795202478
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_gate"
+rev = "546930a554046a5a4704b5978a588068b4c0a279"
+observed_at = 1795109176
+detail = """
+exit 101: ng blastguard v0.2.751 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.87s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-9132e453e006d9a6)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_gate; rev: a00c73797232c77b3405aa8882520e38fdfa3a02; observed: exit 0: 0 filtered out; finished in 1.17s
+
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-13b2f8c381edb5f4)"""
+
+[[task]]
+id = "c3f6d88b"
+title = "[bg-heredoc-script-failopen-596ef57d:R-stdin-effect] python stdin プログラム内のプロセス起動 sink は「API 名 + 引数の効果」で判定する。allowlist 外の sink は Ask にする。allowlist 内の sink は argv を既存の shell effect/path ルールで判定し、Allow になるのはそのルールが Allow を返す場合だけにする。静的に解決できない引数は Ask にする。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-stdin-effect",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-stdin-effect から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: python stdin プログラム内のプロセス起動 sink は「API 名 + 引数の効果」で判定する。allowlist 外の sink は Ask にする。allowlist 内の sink は argv を既存の shell effect/path ルールで判定し、Allow になるのはそのルールが Allow を返す場合だけにする。静的に解決できない引数は Ask にする。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `... -- --ignored r_stdin_effect` が pass する。対象は stdin_popen_git_reset_hard, stdin_from_subprocess_import_run, stdin_p1_check_output_git_clean, stdin_p1_list_concat_cmd, stdin_multiline_call_args で、main/sub とも allow 以外
+  - control_subprocess_git_status_stdin_allow（subprocess.run(['git','status','--short'])）が pass し続ける（main/sub とも allow）
+
+canon:
+  - .backlog/tasks.toml 596ef57d round 2: "GRANULARITY = API name + argument effect: an allowlisted sink is then judged by its argv/path args through the existing shell effect/path rules, Allow only if those give Allow; unresolvable args -> Ask; non-allowlisted sink -> Ask."
+  - docs/blastguard/python-sink-set.md: "Examples from the ruling: `subprocess.run(['git','status','--short'])` is Allow; `subprocess.run(['git','reset','--hard'])` is not Allow."
+  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:264-276, 345-354
+
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_stdin_effect; rev: a00c73797232c77b3405aa8882520e38fdfa3a02; observed: exit 0: 
+running 1 test
+test r_stdin_effect ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 2.34s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-13b2f8c381edb5f4)"""
+created_at = 1795109223
+updated_at = 1795202482
+weight = 0.0
+issue_number = 1873
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1873"
+issue_closed_at = 1795202485
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_stdin_effect"
+rev = "96f5d589309a32c97ba2a255bb1af79cd606bfa2"
+observed_at = 1795109223
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 1.43s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-9132e453e006d9a6)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_stdin_effect; rev: a00c73797232c77b3405aa8882520e38fdfa3a02; observed: exit 0: 
+running 1 test
+test r_stdin_effect ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 2.34s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-13b2f8c381edb5f4)"""

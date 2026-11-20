@@ -222,10 +222,12 @@ pub(super) fn segment_closes_here_document(seg: &str, opener: &HereDocOpener) ->
     line == opener.delimiter
 }
 
-/// The BODY of the here-document opened on the first line of `cmd` — the lines
-/// strictly between the opener line and its closing delimiter line — when, and
-/// only when, `stage` (one pipe stage of `cmd`) is the stage on that first line
-/// that opens it and the shape leaves no doubt about where the body ends.
+/// The BODY of the here-document opened on the opener line of `cmd` (the
+/// first line holding `<<`, see [`opener_line`]; "first line" below means
+/// that line) — the lines strictly between the opener line and its closing
+/// delimiter line — when, and only when, `stage` (one pipe stage of `cmd`)
+/// is the stage on that line that opens it and the shape leaves no doubt
+/// about where the body ends.
 /// Otherwise `None`, and the caller keeps treating everything after the first
 /// newline as the program (the restrictive over-approximation).
 ///
@@ -265,7 +267,7 @@ pub(super) fn first_line_quoted_here_document_body<'a>(
     {
         return None;
     }
-    let (first, after_first) = cmd.split_once('\n')?;
+    let (first, after_first) = opener_line(cmd)?;
     if !quotes_balance(first) || first.ends_with('\\') || first.matches("<<").count() != 1 {
         return None;
     }
@@ -296,6 +298,28 @@ pub(super) fn first_line_quoted_here_document_body<'a>(
         offset += line.len() + 1;
     }
     None
+}
+
+/// The line of `cmd` that holds its first `<<` (textually), and the text
+/// after that line's newline — `None` unless every line BEFORE it has
+/// balanced quotes and does not end in `\`, so each starts and ends at a
+/// command boundary and none can carry a quote or a continuation into the
+/// opener line (backlog: quoted function argument read as program text,
+/// 2026-11-20 — `M=…\nf(){ python3 - "$a" <<'EOF'` opens on line 2). Lines
+/// before the opener are not the program's stdin, as the lines after the
+/// closing delimiter are not (aafeaa05); every other rule still judges them.
+fn opener_line(cmd: &str) -> Option<(&str, &str)> {
+    let mut start = 0;
+    loop {
+        let (line, rest) = cmd[start..].split_once('\n')?;
+        if line.contains("<<") {
+            return Some((line, rest));
+        }
+        if !quotes_balance(line) || line.ends_with('\\') {
+            return None;
+        }
+        start += line.len() + 1;
+    }
 }
 
 /// Which segments are here-document BODY (data the shell never executes), and

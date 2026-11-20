@@ -25,6 +25,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `detect/ast/judge/deny_targets`: the single Q3/Q4 deny-target table (user rulings 2026-11-14, design approved 2026-11-19, backlog 7275b9d9) judged over resolved write targets, rule id `ast-deny-target`; an unreadable table resolves to the restrictive side."
 
 [[spec]]
+path = "crates/blastguard/src/detect/ast/judge/dot_match.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/ast/judge/dot_match`: whether a glob on the judged line may match dot-names (bash dotglob / GLOBIGNORE, zsh GLOB_DOTS in every spelling zsh honours); On/Maybe drop the deny-target dot-name rule, read outside a line it is Maybe (fail-closed)."
+
+[[spec]]
 path = "crates/blastguard/src/relay.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `relay`: subagent Ask relay (user ruling 2026-11-14 「sub agentのAskはmainで裁定する」) — append-only per-session queue, queued only for a hardened subagent Bash Ask, mark-executed / mark-relayed / Stop block / dismiss with reason, fail-closed on unreadable or corrupt queue."

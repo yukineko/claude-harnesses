@@ -122,6 +122,50 @@ pub(crate) fn analyze(command: &str) -> Analysis {
     }
 }
 
+/// The literal-dir glob spelling ([`judge::table_b::literal_dir_glob`], user
+/// ruling 2026-11-19) of the redirect target WORD `word`, or `None` when it is
+/// not one (quoted / escaped, an expansion, a glob outside the final
+/// component, a `..`, a `.`-leading final component, or not one word). A
+/// redirect target's evaluated value is `Undetermined` for a glob and carries
+/// no [`Word`], so the word is read as the one argument of `: <word>` — the
+/// same parser and the same predicate a Table B target word is placed by
+/// (`detect/tee.rs`, backlog 2e704124).
+pub(crate) fn redirect_literal_dir_glob(word: &str) -> Option<String> {
+    let Analysis::Known(script) = analyze(&format!(": {word}")) else {
+        return None;
+    };
+    let [command] = script.commands.as_slice() else {
+        return None;
+    };
+    match command.argv.as_slice() {
+        [_, w] if command.redirects.is_empty() => judge::table_b::literal_dir_glob(w),
+        _ => None,
+    }
+}
+
+/// Run `f` (the judgement of the top-level line `line`) with the line's
+/// dot-matching answer in force (`judge::dot_match`): whether a shell glob on
+/// it may match dot-names (`shopt -s dotglob`, `setopt globdots`, …).
+pub(crate) fn with_line_dot_match<R>(line: &str, f: impl FnOnce() -> R) -> R {
+    judge::dot_match::with_line(line, f)
+}
+
+/// The deny-target Deny (`judge::deny_targets`) of a legacy redirect (`>`,
+/// or `>>` when `append`) onto the redirect target WORD `word`, when `word`
+/// is a literal-dir glob ([`redirect_literal_dir_glob`]) that may expand onto
+/// a deny-target entry; `None` otherwise (also for an Ask: the legacy rule's
+/// own command-running-config Ask covers a glob that reaches an entry only
+/// if dot-matching may be on).
+pub(crate) fn redirect_glob_deny_target(
+    word: &str,
+    append: bool,
+    scope: &crate::scope::SafeRoots,
+) -> Option<crate::model::Decision> {
+    let glob = redirect_literal_dir_glob(word)?;
+    let d = judge::deny_targets::redirect_glob_verdict(&glob, append, scope);
+    d.is_deny().then_some(d)
+}
+
 /// [`analyze`], except that a function definition is evaluated instead of
 /// being `Undetermined(Unsupported)`: its body is evaluated once with every
 /// variable, the cwd and the stdin late-bound, its commands are emitted, and

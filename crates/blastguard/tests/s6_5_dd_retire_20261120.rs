@@ -18,11 +18,15 @@
 //!   8d6b3403d (2026-11-20) and must become Allow in both modes. The
 //!   measured verdict is in each ignore reason.
 //! * Controls (not ignored): S6 only retires — raw disks, System, `$HOME`
-//!   assets, Protected, command-running config in the own worktree, Project /
-//!   Other / OtherWorktree, the temp root itself, `..`, non-Literal targets,
-//!   a mix with a non-Allow target, and `dd` without `of=` keep the verdict
-//!   MEASURED at the same base. A control is a characterization pin, not an
-//!   endorsement.
+//!   assets, Protected, `.claude/settings*.json` in the own worktree,
+//!   Project / Other / OtherWorktree, the temp root itself, `..`, non-Literal
+//!   targets, a mix with a non-Allow target, and `dd` without `of=` keep the
+//!   verdict MEASURED at the same base. A control is a characterization pin,
+//!   not an endorsement.
+//! * Own-worktree config lift (user ruling 2026-11-20, `dd of=` included per
+//!   the main session): `own_worktree_config_lift_is_allow` — `dd of=` onto
+//!   `.githooks/*`, `hooks/hooks.json`, `crates/*/hooks/*`,
+//!   `scripts/check-*.py` in the OWN worktree is Allow in both modes.
 //! * Fail-open REDs (`#[ignore = "RED fail-open: .."]`, end of file): a
 //!   quoted / escaped `of=` word is Allow today even for raw disks; they
 //!   expect the unquoted spelling's verdict. Not part of the retirement.
@@ -464,20 +468,37 @@ const PROTECTED: &[Pin] = &[
     ("Protected .git/HEAD, main tree", "dd if=/dev/zero of={P}/.git/HEAD", D),
     ("Protected .claude/settings.json, main tree", "dd if=/dev/zero of={P}/.claude/settings.json", D),
     ("Protected .git file of own worktree", "dd if=/dev/zero of={W}/.git", D),
-    // Ruling 2026-11-20: command-running config inside the own worktree
-    // keeps today's verdict.
+    // Ruling 2026-11-20: `.claude/settings*.json` inside the own worktree
+    // keeps today's verdict. The other command-running config rows moved to
+    // `OWN_WORKTREE_CONFIG_LIFT` (later same-day ruling).
     ("Protected .claude/settings.json, own worktree", "dd if=/dev/zero of={W}/.claude/settings.json", D),
     ("command-running config .claude/settings.local.json, own worktree", "dd if=/dev/zero of={W}/.claude/settings.local.json", D),
-    ("command-running config hooks/hooks.json, own worktree", "dd if=/dev/zero of={W}/hooks/hooks.json", D),
-    ("command-running config crates/x/hooks/hooks.json, own worktree", "dd if=/dev/zero of={W}/crates/x/hooks/hooks.json", D),
-    ("command-running config .githooks/pre-commit, own worktree", "dd if=/dev/zero of={W}/.githooks/pre-commit", D),
-    ("command-running config scripts/check-x.py, own worktree", "dd if=/dev/zero of={W}/scripts/check-x.py", D),
-    ("command-running config, relative, own worktree", "dd if=/dev/zero of=.githooks/pre-commit", D),
 ];
 
 #[test]
 fn control_protected() {
     check("protected", PROTECTED);
+}
+
+// User ruling 2026-11-20 (supersedes the earlier same-day "own-worktree
+// command-running config keeps today's verdict"; main-session decision: the
+// ruling covers every overwrite and append, `dd of=` included): in the OWN
+// worktree `dd of=` onto `.githooks/*`, `hooks/hooks.json`,
+// `crates/*/hooks/*`, `scripts/check-*.py` is Allow in both modes — the
+// 2026-10-03 linked-worktree lift wins. These rows were pinned deny/deny in
+// `control_protected` before the ruling.
+#[rustfmt::skip]
+const OWN_WORKTREE_CONFIG_LIFT: &[Pin] = &[
+    ("hooks/hooks.json, own worktree", "dd if=/dev/zero of={W}/hooks/hooks.json", A),
+    ("crates/x/hooks/hooks.json, own worktree", "dd if=/dev/zero of={W}/crates/x/hooks/hooks.json", A),
+    (".githooks/pre-commit, own worktree", "dd if=/dev/zero of={W}/.githooks/pre-commit", A),
+    ("scripts/check-x.py, own worktree", "dd if=/dev/zero of={W}/scripts/check-x.py", A),
+    (".githooks/pre-commit, relative, own worktree", "dd if=/dev/zero of=.githooks/pre-commit", A),
+];
+
+#[test]
+fn own_worktree_config_lift_is_allow() {
+    check("own-cfg-lift", OWN_WORKTREE_CONFIG_LIFT);
 }
 
 #[rustfmt::skip]

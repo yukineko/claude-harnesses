@@ -1518,9 +1518,15 @@ forge・condukt のスケジューラが再利用）。
   `Literal`・全 target の Table C class（`judge::classify`）が **Scratch** か **OwnWorktree**、かつどの target も
   lift 無しの述語で command-running config を名指さない（`judge::names_command_running_config`:
   `rm::new_layer::is_protected`・Q3/Q4 deny-target table の全行〈checkout lift 無し〉・任意深さの
-  `hooks/hooks.json`。値と physical landing の両方。置けなければ拒否。user ruling 2026-11-20「Deny のまま（推奨）」
-  — `classify` の linked worktree 内 Protected lift で `.claude/settings*.json`・`.githooks/`・`crates/*/hooks/`・
-  `hooks/hooks.json` が Allow にならない）ときだけ `true`。それ以外は「Known でない」で、呼び出し側は旧判定のまま
+  `hooks/hooks.json`。値と physical landing の両方。置けなければ拒否。ただし session 自身の linked worktree
+  checkout 内〈`judge::in_own_checkout`: session cwd がその checkout 内、または session cwd がどの linked checkout
+  にも無い〈main tree の session。2026-10-03 lift〉。最終成分 glob は親ディレクトリで置く〉の綴りは
+  `judge::own_checkout_spelling_names_config` で判定し、lift される 4 entry〈`.githooks/`・`hooks/hooks.json`・
+  `crates/*/hooks/`・`scripts/check-*.py`。deny-target 行の `lift_in_checkout`〉を名指さない —
+  `.claude/settings*.json` 等の protected 名と lift されない行〈home・`.ssh`・`.gitconfig`・plugin cache〉は残る。
+  user ruling 2026-11-20（同日の「Deny のまま」「own worktree 内 config への追記は Ask」をこの 4 entry について
+  置き換え。2026-10-03 lift が勝つ）。project main tree・他の worktree〈session が別 checkout にいる〉・置けない
+  綴りは全 list のまま）ときだけ `true`。それ以外は「Known でない」で、呼び出し側は旧判定のまま
   （この関数は Ask/Deny を返さない）。呼び出し側: S6-4 — `detect.rs` の旧 `truncate` arm（`true` なら Allow、
   それ以外は `shape_deny_or_confined_ask` の判定のまま。S6 は退役のみで新しい Ask/Deny は無い）、
   S6-5 — `detect.rs` の旧 `dd` arm（`true` なら Allow、それ以外は旧 `of=` 読みの Deny のまま。`dd` の B.1 行は
@@ -1537,12 +1543,51 @@ forge・condukt のスケジューラが再利用）。
   `F=<Scratch>; truncate -s 0 $F` は ask/deny、tests/s6_4_truncate_retire_20261120.rs `control_non_literal`〉。tests/s6_6_tee_retire_20261120.rs）。旧 `tee` arm 自体の fail-open 是正（0.2.814）: glob 語は
   「存在しない target」ではない〈最終成分 glob は親ディレクトリの class で置き、Scratch/OwnWorktree かつ
   command-running config でなければ Allow・それ以外は既存 target と同じ Deny・置けない glob は Ask〉。
-  `tee -a` と `>>` の own worktree 内 command-running config〈`hooks/hooks.json`・`crates/*/hooks/…`・
-  `scripts/check-*.py`。`judge::names_command_running_config`、置けなければ該当扱い〉への追記は Ask（main）/
-  Deny（subagent）（user ruling 2026-11-20）。
+  `tee -a` と `>>` の command-running config〈`judge::names_command_running_config`、置けなければ該当扱い。
+  own checkout 内では `.claude/settings*.json` 等だけ〉への追記は Ask（main）/ Deny（subagent）。own worktree 内の
+  `.githooks/*`・`hooks/hooks.json`・`crates/*/hooks/*`・`scripts/check-*.py` への上書き・追記〈`>`・`>>`・`tee`・
+  `tee -a`・`truncate`・`dd of=`、literal と最終成分 glob〉は main/subagent とも Allow（user ruling 2026-11-20、
+  0.2.821。旧層の protected lift〈`protected.rs::literal_dir_glob_in_worktree_checkout`〉と `classify` の
+  Protected lift も最終成分 glob を親ディレクトリで置く）。
+  fail-open 是正（0.2.818、backlog 2e704124）: (1) `>` の unquoted 最終成分 glob は 1 つの不在 path として probe
+  しない — `tee` と同じ置き方〈`ast::redirect_literal_dir_glob` で `: <word>` の argv 語として
+  `table_b::literal_dir_glob` に掛け、`tee.rs::redirect_glob_placement`／`allow_cell`〉で、Scratch/OwnWorktree かつ
+  command-running config でなければ従来どおり・それ以外の class は既存 target と同じ扱い〈recovery Undetermined〉・
+  置けない glob は Ask。quote／escape された `'*.txt'`・`\*.txt` は literal ファイル名のまま。(2)
+  `judge::spelling_names_command_running_config` は最終成分 glob が config 名に一致しうるなら該当扱い
+  〈`hooks` 内で `hooks.json` に一致しうる glob、または deny-target 行の直下 entry に一致しうる glob:
+  `deny_targets::may_match_child_unlifted`／`globs_may_intersect`。証明できる不一致〈literal 接頭辞・接尾辞〉以外は
+  一致扱い。ただし shell glob が `.` で始まらなければ `.` で始まる名前には一致しない — この dot-name 規則は
+  判定中の行が dot 一致を有効にしえない〈`judge::dot_match` が `Off`〉ときだけ使う（下の dotglob 是正）。
+  quote された `*` を含む literal 名も glob と区別できないので該当扱い〉。(3) `>`（rule 2）も `>>` と同じ
+  述語〈`tee.rs::redirect_names_command_running_config`。quote 除去後の名前で判定、除去できなければ該当扱い〉で
+  command-running config への上書きを Ask（main）/ Deny（subagent）にする — 上書きは追記より緩くならない
+  （どの名前が該当するかは上の own checkout 分割に従う。tests/glob_and_config_write_failopen_20261120.rs）。
   最終成分だけの literal-dir glob（user ruling 2026-11-19）は親ディレクトリで置かれる `Literal` なので
   Scratch 内なら Allow、中間成分の glob は `Unresolved` で旧判定のまま。`rm`・`rsync --delete` は引き続き
   `detect/rm/new_layer`（tests/s6_4_truncate_retire_20261120.rs）。
+  dotglob fail-open 是正（0.2.824、tests/dotglob_glob_dotname_failopen_20261120.rs）: 最終成分 glob は
+  dot 一致が有効なら `.gitconfig`・`.ssh` 等の dot-name entry に展開しうる。**literal の dot-name 綴りより緩くしない**:
+  (a) `detect/ast/judge/dot_match` が最外の行（`readings.rs::every_reading_scoped` で一度だけ）を `Off`／`On`／
+  `Maybe` に分類する。`On` = option builtin（`shopt`/`setopt`/`unsetopt`/`set`/`emulate`/`typeset`/`declare`/
+  `export`/`local`/`readonly`/`eval`）・子 shell（`bash -O`・`zsh -o`、`-c` 本文も再帰）の語、または代入名が
+  （小文字化・`_` 除去・`no` 接頭辞除去・`=` より前で）`dotglob`／`globdots`／`globignore` そのもの、
+  `options[…globdots…]`、`set`/`setopt`/`unsetopt`/`zsh` の `-…4…`／`+…4…`（zsh で `set -4`・`setopt -4`・
+  `GlOb_DoTs`・`unsetopt noglobdots`・`options[globdots]=on`、bash で `GLOBIGNORE=x` が有効化することを実測。
+  `emulate sh/ksh/csh/zsh` は無効のまま）。`Maybe` = 不定の command word、option builtin の不定語、`source`／`.`、
+  `options=(…)` 代入、行の解析が `Undetermined` で上記の名前が本文に現れる場合。行の外から読まれたら `Maybe`
+  （fail-closed）。`On`・`Maybe` では dot-name 規則を外す。(b) deny-target 表は B.1 の literal-dir glob target を
+  「親の直下で最終成分に一致しうる entry」で行ごとに照合する（`deny_targets::glob_rows`。lift は親の直下の
+  entry で置く）。dot-name 経由でしか届かない行は `On` で Deny、`Maybe` で Ask、`Off` で上げない。(c) AST が
+  word を持たない `>`／`>>` の glob target は旧層 rule 2/2b が `ast::redirect_glob_deny_target` で同じ判定を
+  引き、Deny なら Deny。行の外で（rc ファイル・同じ shell の以前の Bash 呼び出しで）有効化された dotglob は
+  見えない（hook が判定する shell は無効で起動する前提）。
+  heredoc 本文の範囲（0.2.824、tests/quoted_glob_arg_not_redirect_fp_20261120.rs）:
+  `heredoc.rs::first_line_quoted_here_document_body` は opener が 1 行目でなくてもよい — 最初の `<<` を含む行より
+  前の各行が quote 釣り合い・末尾 `\` 無しなら、その行を opener 行として本文を切り出す（`opener_line`）。
+  以前は 2 行目以降の opener では「最初の改行以降すべて」を program 本文とみなし、本文の後ろの shell 行
+  〈`mut ratchet 'a > head[k]]'` の quote された引数〉を program text として shell 読みし、0.2.818 の glob
+  redirect 判定で Deny にしていた（FP）。opener より前・閉じ行より後の行は他の全規則が通常の shell として判定する。
 - **`scope/reading`** — `SafeRoots` の配置述語に渡す operand の読み方 `Reading` と、それに依存する配置の核
   （`classify_disposable_in` / `classify_disposable_value` / `lexical_absolute_as` / `irreplaceable_home_asset_value`
   / `classify_worktree_as` / `classify_against_as`）。`Reading::Spelled` は shell TEXT（展開・再読されうる文字

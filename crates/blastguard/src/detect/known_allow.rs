@@ -26,9 +26,12 @@
 //!   predicates ([`super::ast::names_command_running_config`], stage S6-4,
 //!   user ruling 2026-11-20 「Deny のまま（推奨）」): `classify` lifts Protected
 //!   strictly inside a linked worktree checkout, so without this check an
-//!   own-worktree `.claude/settings.json`, `.githooks/…`, `crates/*/hooks/…`
-//!   or `hooks/hooks.json` would be OwnWorktree and Allow. For those the
-//!   legacy verdict stays.
+//!   own-worktree `.claude/settings.json` would be OwnWorktree and Allow.
+//!   For those the legacy verdict stays. In the session's own checkout the
+//!   predicate does not name `.githooks/…`, `crates/*/hooks/…`,
+//!   `scripts/check-*.py` or `hooks/hooks.json` (user ruling 2026-11-20,
+//!   superseding the same day's 「Deny のまま」 for those four: the
+//!   2026-10-03 linked-worktree lift wins), so those are Allow here.
 //!
 //! The tie does not read the separate argument of a listed option
 //! (`truncate -s 0`: the `0`) as an operand spelling (stage S6-4,

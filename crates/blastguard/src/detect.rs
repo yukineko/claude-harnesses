@@ -210,7 +210,7 @@ use vars::{
 };
 
 use redirect::{
-    append_target_occurrences, dequoted_redirect_word, line_append_targets, line_targets,
+    append_target_occurrences, dequoted_target_recovery, line_append_targets, line_targets,
     physical_redirect_spelling, place_redirect_target, redirect_target_candidates,
     redirect_target_is_safe, redirect_target_occurrences, redirect_target_undeterminable,
     redirect_targets, temp_disposable_redirect_target, unplaceable_redirect_ask,
@@ -876,18 +876,11 @@ primitive, not a filesystem path",
                 // axis: a gate/config file is surfaced however recoverable it is,
                 // because a silently disabled gate voids every later verdict. Only
                 // targets that cleared it reach here.
-                // Probed under the name the kernel opens, not the spelling:
-                // `a\ b`, `"a b"`, `\a` name the files `a b`, `a b`, `a`
-                // (`dequoted_redirect_word`). A word that cannot be dequoted is
-                // Undetermined, which never runs unattended.
-                let recovery = match dequoted_redirect_word(&target) {
-                    Determination::Known(name) => {
-                        crate::reversible::probe(&name, ctx.raw_base.as_deref())
-                    }
-                    Determination::Undetermined(why) => {
-                        crate::reversible::Recovery::Undetermined(why.to_string())
-                    }
-                };
+                // Probed under the name the kernel opens, not the spelling, and
+                // the LOCATION axes below ask about that same name
+                // (`dequoted_target_recovery`, backlog 021e6161).
+                let (located, recovery) =
+                    dequoted_target_recovery(&target, ctx.raw_base.as_deref());
                 // RECOVERABLE **AND MINE**. Recoverability alone used to allow, and
                 // that was a fail-open across project boundaries: any git-tracked
                 // file in ANY checkout on this machine probes as recoverable, so
@@ -935,8 +928,8 @@ whether it lands in a system directory"
                     // `Ctx::in_worktree_checkout_for_redirect`: absolute target, one plain command
                     // or an inert `&&` prefix (#1625), no symlink below the checkout.
                     crate::reversible::Recovery::RecoverableFromGit => {
-                        ctx.confined_root("redirect", &[target.as_str()]).is_some()
-                            || ctx.in_worktree_checkout_for_redirect(&target, rcmd, seg_idx)
+                        ctx.confined_root("redirect", &[located.as_str()]).is_some()
+                            || ctx.in_worktree_checkout_for_redirect(&located, rcmd, seg_idx)
                     }
                     // An existing file whose bytes git does not hold, but which
                     // sits in a fixed temp root (`/tmp`, `/private/tmp`; never
@@ -947,7 +940,7 @@ whether it lands in a system directory"
                     // and never when where it really lands could not be determined.
                     crate::reversible::Recovery::Unrecoverable(_) => {
                         landing_undetermined.is_none()
-                            && temp_disposable_redirect_target(&target, ctx)
+                            && temp_disposable_redirect_target(&located, ctx)
                     }
                     // Undetermined keeps falling through, per CLAUDE.md §3, and so
                     // does every Unrecoverable target the arm above refuses.
@@ -978,11 +971,11 @@ whether it lands in a system directory"
                 // target against the cwd its segment runs in (or refused it above),
                 // so `cd /usr && echo x > lib/f` is judged as `/usr/lib/f` and can
                 // no longer come out "confined" to the session tree.
-                if let Some(root) = ctx.confined_root("redirect", &[target.as_str()]) {
+                if let Some(root) = ctx.confined_root("redirect", &[located.as_str()]) {
                     line_level_asks.push(confined_ask(
                         "truncating redirect",
                         &root,
-                        &[target.as_str()],
+                        &[located.as_str()],
                     ));
                     continue;
                 }

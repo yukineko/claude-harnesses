@@ -87352,3 +87352,294 @@ auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はあり
    Compiling blastguard v0.2.806 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
      Running tests/backlog_20261115_python_string_literal_subprocess_chmod_data_fp.rs (target/debug/deps/backlog_20261115_python_string_literal_subprocess_chmod_data_fp-33998632c4d9f5fa)"""
+
+[[task]]
+id = "eb52d2e5"
+title = "blastguard FP: a .txt data heredoc whose body has echo hi >&$fd raises python3 probe.py from allow to Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-14 (run-20261114-161340-68728 t1 verifier, side-reds agent, main dde31f11b): python3 <wt>/probe.py <wt> alone = allow; cat > <wt>/cmds.txt <<'EOF' (body: echo hi >&$fd / probe 3<<< x) EOF then python3 <wt>/probe.py <wt> = deny in main and subagent, verbatim: "'> $fd' destroys the file's current contents and `$fd` contains a shell expansion, so blastguard cannot tell which file this names, let alone whether its contents are recoverable". Readings: (a) FP — .txt body is data (heredoc-body-by-target-language ruling); (b) intended — an unseen python script might exec the .txt. Tell apart: ruling says .txt is not judged as shell unless run as shell in the same command."""
+created_at = 1794656915
+updated_at = 1795166035
+weight = 0.0
+issue_number = 1780
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1780"
+issue_closed_at = 1795166038
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_txt_data_heredoc_python_probe -- --include-ignored"
+rev = "b7903d36f4c6501380f6ae3a95d12d6b8dae69bc"
+observed_at = 1794656915
+detail = """
+exit 101: ndukt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.05s
+     Running tests/backlog_20261114_txt_data_heredoc_python_probe.rs (target/debug/deps/backlog_20261114_txt_data_heredoc_python_probe-8821daae300377ea)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_txt_data_heredoc_python_probe`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_txt_data_heredoc_python_probe -- --include-ignored"
+exit = 0
+passed = 3
+rev = "14ba909b065b64cea550292505f6b3200c4bd9c3"
+observed_at = 1795166009
+output_digest = "sha256:ba9c78a322dc007e2218651ee5d6995eb458f7592d27b814c9019ba2b7b9a231"
+excerpt = """
+22
+   Compiling prettyplease v0.2.37
+   Compiling utf8parse v0.2.2
+   Compiling getrandom v0.4.3
+   Compiling anstyle-parse v1.0.0
+   Compiling indexmap v2.14.0
+   Compiling pest v2.9.5
+   Compiling darling_macro v0.20.11
+   Compiling unic-char-property v0.9.0
+   Compiling darling_macro v0.21.3
+   Compiling regex-automata v0.4.14
+   Compiling pest_meta v2.9.5
+   Compiling unic-ucd-version v0.9.0
+   Compiling unicode_names2 v1.3.0
+   Compiling is-macro v0.3.8
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling num-integer v0.1.47
+   Compiling errno v0.3.14
+   Compiling rustpython-parser-vendored v0.4.0
+   Compiling ahash v0.8.12
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling winnow v0.7.15
+   Compiling anstyle-query v1.1.5
+   Compiling thiserror v2.0.21
+   Compiling toml_write v0.1.2
+   Compiling bitflags v2.13.0
+   Compiling option-ext v0.2.0
+   Compiling smallvec v1.16.5
+   Compiling itoa v1.0.18
+   Compiling core-foundation-sys v0.8.7
+   Compiling colorchoice v1.0.5
+   Compiling anstyle v1.0.14
+   Compiling scopeguard v1.2.0
+   Compiling iana-time-zone v0.1.65
+   Compiling lock_api v0.4.14
+   Compiling anstream v1.0.0
+   Compiling dirs-sys v0.4.1
+   Compiling phf v0.11.3
+   Compiling rustpython-parser-core v0.4.0
+   Compiling toml_datetime v0.6.11
+   Compiling serde_spanned v0.6.9
+   Compiling num-bigint v0.4.8
+   Compiling toml_edit v0.22.27
+   Compiling digest v0.10.7
+   Compiling pest_generator v2.9.5
+   Compiling rustpython-parser v0.4.0
+   Compiling darling v0.21.3
+   Compiling darling v0.20.11
+   Compiling thiserror-impl v2.0.21
+   Compiling cpufeatures v0.2.17
+   Compiling fastrand v2.4.1
+   Compiling static_assertions v1.1.0
+   Compiling clap_lex v1.1.0
+   Compiling allocator-api2 v0.2.21
+   Compiling peg-runtime v0.8.6
+   Compiling either v1.19.0
+   Compiling foldhash v0.2.0
+   Compiling hashbrown v0.16.1
+   Compiling peg-macros v0.8.6
+   Compiling itertools v0.11.0
+   Compiling bon-macros v3.9.3
+   Compiling toml v0.8.23
+   Compiling cached_proc_macro v0.27.0
+   Compiling clap_builder v4.6.0
+   Compiling rustpython-ast v0.4.0
+   Compiling tempfile v3.27.0
+   Compiling sha2 v0.10.9
+   Compiling pest_derive v2.9.5
+   Compiling dirs v5.0.1
+   Compiling parking_lot v0.12.5
+   Compiling chrono v0.4.45
+   Compiling regex v1.12.4
+   Compiling unic-emoji-char v0.9.0
+   Compiling unic-ucd-ident v0.9.0
+   Compiling tracing-attributes v0.1.31
+   Compiling clap_derive v4.6.1
+   Compiling console v0.16.6
+   Compiling wait-timeout v0.2.1
+   Compiling tracing-core v0.1.36
+   Compiling lalrpop-util v0.20.2
+   Compiling web-time v1.1.0
+   Compiling rustc-hash v1.1.0
+   Compiling pin-project-lite v0.2.17
+   Compiling arrayvec v0.7.8
+   Compiling cached_proc_macro_types v0.1.1
+   Compiling similar v2.7.0
+   Compiling cached v0.59.0
+   Compiling utf8-chars v3.0.7
+   Compiling tracing v0.1.44
+   Compiling peg v0.8.6
+   Compiling clap v4.6.1
+   Compiling insta v1.49.0
+   Compiling harness-core v0.2.110 (/Users/yuki/src/.harness-worktrees/backlog-close-35880/crates/harness-core)
+   Compiling bstr v1.12.2
+   Compiling target-triple v1.0.1
+   Compiling winnow v1.0.4
+   Compiling indenter v0.3.4
+   Compiling globset v0.4.18
+   Compiling bon v3.9.3
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling progeffect v0.1.5 (/Users/yuki/src/.harness-worktrees/backlog-close-35880/crates/progeffect)
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling toml v1.1.3+spec-1.1.0
+   Compiling termcolor v1.4.1
+   Compiling glob v0.3.3
+   Compiling brush-parser v0.4.0
+   Compiling trybuild v1.0.118
+   Compiling overwatch v0.2.127 (/Users/yuki/src/.harness-worktrees/backlog-close-35880/crates/overwatch)
+   Compiling blastguard v0.2.813 (/Users/yuki/src/.harness-worktrees/backlog-close-35880/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.59s
+     Running tests/backlog_20261114_txt_data_heredoc_python_probe.rs (target/debug/deps/backlog_20261114_txt_data_heredoc_python_probe-ce884f5ebe73789f)
+"""
+
+[task.closure.red]
+rev = "c434e41e56cf4e4edcbdfafcb18c04622e87cc79"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "4b2e76b5"
+title = "blastguard: git apply patch creating README.md with rm -rf ~ text denied"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-16, main fa58e3698 (blastguard 0.2.672), run-20261116-143410-12142: git apply heredoc patch creating README.md whose added line is 'rm -rf ~', nothing executed, is deny in main and subagent: 'recursive rm (-r) can delete an entire directory tree'. Reading (a): false positive, patch bodies are read as shell regardless of target file type. Reading (b): intended, the module is conservative. Test asserts allow."
+created_at = 1794813626
+updated_at = 1795166050
+weight = 0.0
+issue_number = 1830
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1830"
+issue_closed_at = 1795166053
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261116_git_apply_patch_known_gaps f4_readme -- --include-ignored"
+rev = "a6e29aec99889d915c30082dc00de16d95407ded"
+observed_at = 1794813626
+detail = """
+exit 101: . 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.05s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-80ffcfc78037f570)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261116_git_apply_patch_known_gaps`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261116_git_apply_patch_known_gaps f4_readme -- --include-ignored"
+exit = 0
+passed = 1
+rev = "14ba909b065b64cea550292505f6b3200c4bd9c3"
+observed_at = 1795166047
+output_digest = "sha256:aef3b2fa04c65319d1232879ad9932ee9ce30f2ca21d9728a52c882940dba8e2"
+excerpt = """
+
+running 1 test
+test f4_readme_patch_with_rm_text_and_nothing_executed_is_allow ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.84s
+
+   Compiling blastguard v0.2.813 (/Users/yuki/src/.harness-worktrees/backlog-close-35880/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-c4fe56446e576223)
+"""
+
+[task.closure.red]
+rev = "bf046b953b4ec39fd3e39f14429a6e8bf349304d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "4551f633"
+title = "blastguard FP: python3 -c print(vars)/print(locals())/print(globals()) with harmful piped text is deny though -c never reads stdin (new with 9d0b60188)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794743394
+updated_at = 1795166055
+weight = 0.0
+issue_number = 1801
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1801"
+issue_closed_at = 1795166058
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp -- --include-ignored"
+rev = "c82d9725085e6bd5c378274f0ebad8fb810665ab"
+observed_at = 1794743394
+detail = """
+exit 101: rees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.73s
+     Running tests/backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp.rs (target/debug/deps/backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp-e57a8e5a7562487d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp -- --include-ignored"
+exit = 0
+passed = 3
+rev = "14ba909b065b64cea550292505f6b3200c4bd9c3"
+observed_at = 1795166053
+output_digest = "sha256:e21e0efe89964a81a206648a3926cab1814cdac2af3eb1babbdfb784db769ee7"
+excerpt = """
+
+running 3 tests
+test control_base_program_without_builtin_names_is_allowed ... ok
+test control_exec_of_stdin_through_builtin_alias_is_not_allowed ... ok
+test python_c_naming_vars_or_locals_without_reading_stdin_does_not_judge_piped_text ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.92s
+
+   Compiling blastguard v0.2.813 (/Users/yuki/src/.harness-worktrees/backlog-close-35880/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp.rs (target/debug/deps/backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp-8c6da47005ab05fc)
+"""
+
+[task.closure.red]
+rev = "69ef5eb3af516c968d92f87580833afab400de0d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

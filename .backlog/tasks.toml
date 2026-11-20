@@ -384,37 +384,6 @@ FAILED scripts/test_fail_open_mutation_leaves_no_artifacts_stub_invoked_20261114
 ============================== 1 failed in 0.24s ==============================="""
 
 [[task]]
-id = "eb52d2e5"
-title = "blastguard FP: a .txt data heredoc whose body has echo hi >&$fd raises python3 probe.py from allow to Deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fp",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-14 (run-20261114-161340-68728 t1 verifier, side-reds agent, main dde31f11b): python3 <wt>/probe.py <wt> alone = allow; cat > <wt>/cmds.txt <<'EOF' (body: echo hi >&$fd / probe 3<<< x) EOF then python3 <wt>/probe.py <wt> = deny in main and subagent, verbatim: "'> $fd' destroys the file's current contents and `$fd` contains a shell expansion, so blastguard cannot tell which file this names, let alone whether its contents are recoverable". Readings: (a) FP — .txt body is data (heredoc-body-by-target-language ruling); (b) intended — an unseen python script might exec the .txt. Tell apart: ruling says .txt is not judged as shell unless run as shell in the same command."""
-created_at = 1794656915
-updated_at = 1794656915
-weight = 0.0
-issue_number = 1780
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1780"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261114_txt_data_heredoc_python_probe -- --include-ignored"
-rev = "b7903d36f4c6501380f6ae3a95d12d6b8dae69bc"
-observed_at = 1794656915
-detail = """
-exit 101: ndukt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.05s
-     Running tests/backlog_20261114_txt_data_heredoc_python_probe.rs (target/debug/deps/backlog_20261114_txt_data_heredoc_python_probe-8821daae300377ea)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261114_txt_data_heredoc_python_probe`"""
-
-[[task]]
 id = "3109dbf3"
 title = "blastguard: python3 - heredoc program with rmtree only inside a plain (single-line) string literal asked/denied (no exec/eval sink)"
 project = "/Users/yuki/src/harness"
@@ -444,37 +413,6 @@ exit 101: iteral-20261115/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.98s
      Running tests/backlog_20261115_python_stdin_plain_string_names_rmtree_fp.rs (target/debug/deps/backlog_20261115_python_stdin_plain_string_names_rmtree_fp-d7b066629f23631d)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_stdin_plain_string_names_rmtree_fp`"""
-
-[[task]]
-id = "4551f633"
-title = "blastguard FP: python3 -c print(vars)/print(locals())/print(globals()) with harmful piped text is deny though -c never reads stdin (new with 9d0b60188)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1794743394
-updated_at = 1794743394
-weight = 0.0
-issue_number = 1801
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1801"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp -- --include-ignored"
-rev = "c82d9725085e6bd5c378274f0ebad8fb810665ab"
-observed_at = 1794743394
-detail = """
-exit 101: rees/session-6dcca0ad/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.73s
-     Running tests/backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp.rs (target/debug/deps/backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp-e57a8e5a7562487d)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_c_vars_locals_name_stdin_pipe_fp`"""
 
 [[task]]
 id = "8ce33823"
@@ -685,38 +623,6 @@ detail = """
 exit 1: nder='rebuild-plugins.sh') scripts/test_rollout_lock_outside_managed_cache.py::RolloutLockOutsideManagedCache::test_lock_survives_claude_code_cache_gc
 SUBFAILED(contender='prune-plugin-cache.py') scripts/test_rollout_lock_outside_managed_cache.py::RolloutLockOutsideManagedCache::test_lock_survives_claude_code_cache_gc
 ========================= 4 failed, 2 passed in 0.74s =========================="""
-
-[[task]]
-id = "4b2e76b5"
-title = "blastguard: git apply patch creating README.md with rm -rf ~ text denied"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-16, main fa58e3698 (blastguard 0.2.672), run-20261116-143410-12142: git apply heredoc patch creating README.md whose added line is 'rm -rf ~', nothing executed, is deny in main and subagent: 'recursive rm (-r) can delete an entire directory tree'. Reading (a): false positive, patch bodies are read as shell regardless of target file type. Reading (b): intended, the module is conservative. Test asserts allow."
-created_at = 1794813626
-updated_at = 1794813626
-weight = 0.0
-issue_number = 1830
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1830"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261116_git_apply_patch_known_gaps f4_readme -- --include-ignored"
-rev = "a6e29aec99889d915c30082dc00de16d95407ded"
-observed_at = 1794813626
-detail = """
-exit 101: . 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.05s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
-     Running tests/backlog_20261116_git_apply_patch_known_gaps.rs (target/debug/deps/backlog_20261116_git_apply_patch_known_gaps-80ffcfc78037f570)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261116_git_apply_patch_known_gaps`"""
 
 [[task]]
 id = "5a633271"

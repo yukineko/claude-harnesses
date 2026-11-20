@@ -88459,3 +88459,187 @@ auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はあり
    Compiling blastguard v0.2.829 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
      Running tests/backlog_20261117_python_heredoc_literal_truncate_fp.rs (target/debug/deps/backlog_20261117_python_heredoc_literal_truncate_fp-f1e9d90a039438c8)"""
+
+[[task]]
+id = "5a633271"
+title = "condukt: check-criteria drops --test <name> from done_criteria and runs the whole crate suite"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = '観測(2026-11-16, main 0be4629b0, run-20261116-164820-25374 t1): `condukt state check-criteria --run <RID> --task t1` を実行した。そのタスクの done_criteria は `cargo test -p condukt --test worktree_remove_orphan_leftover -- --include-ignored exits 0` だったが、出力 JSON の cmd は ["cargo","test","-p","condukt"] で、954 件の全テストを実行していた。--test <name> と -- --include-ignored が落ちている。期待: 名指しされた --test ターゲットだけを実行する。全スイート実行は testscope のユーザー裁定で nightly 限定。原因箇所: crates/condukt/src/verify/mechanical.rs mechanical_cmd の prose fallback (バッククォート無しの場合 cargo test [-p X] のみ再構築)。読み方は (a) 欠陥 / (b) 意図どおり（意図なら testscope 裁定と矛盾する）。RED テストは commit 0a823bb73 (branch red-ccwiden)。'
+created_at = 1794817374
+updated_at = 1795200995
+weight = 0.0
+issue_number = 1821
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1821"
+issue_closed_at = 1795200997
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261116_check_criteria_drops_test_target -- --include-ignored"
+rev = "0a823bb73e10018aaf17984b923831d292c4633b"
+observed_at = 1794817374
+detail = """
+exit 101: uki_nakayama/src/.harness-worktrees/red-ccwiden/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.52s
+     Running tests/backlog_20261116_check_criteria_drops_test_target.rs (target/debug/deps/backlog_20261116_check_criteria_drops_test_target-c3651da4c67db1b9)
+error: test failed, to rerun pass `-p condukt --test backlog_20261116_check_criteria_drops_test_target`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261116_check_criteria_drops_test_target -- --include-ignored"
+exit = 0
+passed = 2
+rev = "22486711a5ceb9f60cdfb8b775740a2b4a0536ce"
+observed_at = 1795200992
+output_digest = "sha256:dc1416c7b94e998d5e10f3e43ee5de4c579ae18ac0f549e87252bc3291887ed3"
+excerpt = """
+
+running 2 tests
+test control_fake_cargo_is_invoked ... ok
+test check_criteria_keeps_named_test_target ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.14s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/backlog_20261116_check_criteria_drops_test_target.rs (target/debug/deps/backlog_20261116_check_criteria_drops_test_target-0e1eb77be54e9c8b)
+"""
+
+[task.closure.red]
+rev = "feff2e612c96c964d5ca6abcd8710df749343479"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "b5d6ac29"
+title = "blastguard FP: quoted heredoc data line 'exec 3<<< ...; bash <&3' read by while-read/echo is Deny in subagent (bgr-3c577fb491b6)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-17 at main 963a18429 (blastguard 0.2.676): while IFS= read -r c; do echo "$c"; done <<'EOF' with body exec 3<<< 'echo hi'; bash <&3 is Deny in subagent, Ask in main; the body is data echoed, never run. Control cat <<'EOF' with the same body is allow. RED 5f42fcd25 (independent author). Readings: (a) FP: quoted heredoc fed to a non-shell reader is data; (b) intended only if while-read+eval-like consumers are treated as shells, but echo does not execute."""
+created_at = 1794864711
+updated_at = 1795200999
+weight = 0.0
+issue_number = 1838
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1838"
+issue_closed_at = 1795201001
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261116_heredoc_data_fd_reader_fp -- --include-ignored"
+rev = "5f42fcd25ef9868b2f5a24177eb5739f8db18a8a"
+observed_at = 1794864711
+detail = """
+exit 101: .677 (/Users/yuki/src/.harness-worktrees/bg-fp-bgr3c57-20261116/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.16s
+     Running tests/backlog_20261116_heredoc_data_fd_reader_fp.rs (target/debug/deps/backlog_20261116_heredoc_data_fd_reader_fp-7051546632d2bfe3)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261116_heredoc_data_fd_reader_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261116_heredoc_data_fd_reader_fp -- --include-ignored"
+exit = 0
+passed = 2
+rev = "22486711a5ceb9f60cdfb8b775740a2b4a0536ce"
+observed_at = 1795200998
+output_digest = "sha256:645bf9b7ffe97f57154902e933a670006fb8159551a04c8a05f1cb5495899001"
+excerpt = """
+
+running 2 tests
+test cat_heredoc_data ... ok
+test minimal_while_read_heredoc_data ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.81s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/backlog_20261116_heredoc_data_fd_reader_fp.rs (target/debug/deps/backlog_20261116_heredoc_data_fd_reader_fp-77c600cf49a5cf4d)
+"""
+
+[task.closure.red]
+rev = "feff2e612c96c964d5ca6abcd8710df749343479"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "648a6641"
+title = "blastguard FP: quoted heredoc body line with ; before a backtick span is judged as a command word when the heredoc is the 3rd+ statement (cat > x.rs <<'EOF')"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-17 in a peer session (relay bgr-cf29c893de79; blocks.jsonl ts 1794865460 subagent deny, 1794865551 main ask): mkdir -p d && cd d && cat > x/mod.rs <<'EOF' with Rust body line '/// Change the tree identity (a tracked edit); `restore` puts it back.' -> main ask / subagent deny 'the command word ``restore`` is an expansion whose value only exists at run time'. RED d53c6f681 (branch red/blastguard-rs-heredoc-backtick-20261117, blastguard 0.2.678). Measured on deployed 0.2.675: fires only when the heredoc is the 3rd+ statement AND a control operator (; & | &&) precedes the span on the body line; also fires for .txt target and cat to stdout. Allow: heredoc first, one preceding command, no operator before span, no backticks. Controls: no-backtick body allow; unquoted delimiter not allow. Distinct from a826bdab/d292ce6e/53a97aa3/9d347af5/234cae6f/d462444e/0bc46ca0 (none has an operator before a mid-line span with two preceding commands)."
+created_at = 1794865868
+updated_at = 1795201003
+weight = 0.0
+issue_number = 1839
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1839"
+issue_closed_at = 1795201007
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261117_rs_heredoc_doc_comment_backtick_fp -- --include-ignored"
+rev = "d53c6f6818c004dcf3ebbe91f2340c9cdd403a7b"
+observed_at = 1794865868
+detail = """
+exit 101: ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261117_rs_heredoc_doc_comment_backtick_fp.rs (target/debug/deps/backlog_20261117_rs_heredoc_doc_comment_backtick_fp-54ecc282de5d64d9)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261117_rs_heredoc_doc_comment_backtick_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261117_rs_heredoc_doc_comment_backtick_fp -- --include-ignored"
+exit = 0
+passed = 3
+rev = "22486711a5ceb9f60cdfb8b775740a2b4a0536ce"
+observed_at = 1795201002
+output_digest = "sha256:6394e7989ea7778ebd81124cb0a1ef0f6caee7300d7e0fc9356ba240e92668c8"
+excerpt = """
+
+running 3 tests
+test control_same_body_without_backticks_is_allowed ... ok
+test quoted_rs_heredoc_doc_comment_backtick_is_data ... ok
+test control_unquoted_delimiter_span_is_not_allowed ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261117_rs_heredoc_doc_comment_backtick_fp.rs (target/debug/deps/backlog_20261117_rs_heredoc_doc_comment_backtick_fp-206740fc53ab7b8a)
+"""
+
+[task.closure.red]
+rev = "feff2e612c96c964d5ca6abcd8710df749343479"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

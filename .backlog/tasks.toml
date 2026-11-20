@@ -301,13 +301,13 @@ touched_files = []
 status = "pending"
 notes = """
 Observed 2026-11-13 at main 8dedad41 and 1fd747e9 (blastguard 0.2.500), Linux WSL2. Verbatim: 114 of 653 attack cases are Allow (must be Ask or Deny); every listed case is main=allow sub=allow, e.g. shutil_move_home_away, shutil_copyfile_ssh, os_chmod_home, os_chmod_ssh, os_chown_home, os_truncate_zshrc, os_symlink_zshrc, os_link, pathlib_rename, pathlib_replace, pathlib_touch, pathlib_rmdir_home. This is a deliberately RED test added 2026-11-08 in 72d164e1 (its header says RED on main until fixed; that commit counted 125 failing entries, now 114), but no backlog entry names it, so the gap was tracked only in commit messages. Reading (a) real gate fail-open: plausible and is what the test asserts (a body written to a script file by a quoted heredoc and then run is Allow). Reading (b) Linux/fixture artefact: checked and ruled out for the fixture location: rerun with the fixture base moved off /tmp (BLASTGUARD_TEST_FIXTURE_DIR under HOME/.cache, so no path is spelled through the /tmp alias symlink) gives the identical 114-case list (diff empty). Not checked on macOS. Runtime about 50s (680s under concurrent load).
-blocked 2026-11-14 run-20261114-130020-46995: needs human rulings Q1 (python sink denylist->allowlist?), Q2 (h_heredoc_bs_quoted_cmdsub/h_heredoc_dq_delim_cmdsub quoted+not run vs .py-body-is-data ruling), Q3 (protect /Users/<n>,/home/<n>,**/.ssh/**,**/.gitconfig when not HOME?), Q4 (which paths are gate scripts), Q5 (kill -9 -1 / os.kill(-1,9): Deny or Ask). 107/653 Allow on macOS at b823ffa5. Decomp: 7 serial tasks a-g, 4 low-confidence. | RULED 2026-11-14 by user (AskUserQuestion): Q1 python sink -> allowlist (provably harmless APIs Allow, else Ask). Q2 h_heredoc_bs_quoted_cmdsub/h_heredoc_dq_delim_cmdsub are test defects (.py-body-is-data ruling wins; drop or re-anchor to Allow). Q3 protect /Users/<n>, /home/<n>, **/.ssh/**, **/.gitconfig even when not HOME (Deny). Q4 gate scripts = .githooks/**, scripts/check-*.py, crates/*/hooks/**, ~/.claude/plugins/cache/**/{bin,hooks}. Q5 kill -9 -1 / os.kill(-1,9) -> Deny. | RE-MEASURED 2026-11-19 c92d77e74: 22 of 653 Allow (12 stdin_*: stdin_popen_git_reset_hard, stdin_from_subprocess_import_run, stdin_p1_check_output_git_clean, stdin_p1_list_concat_cmd, stdin_multiline_call_args, stdin_x_os_replace_authkeys, stdin_x_os_chmod_ssh, stdin_x_open_wb, stdin_x_open_x_mode, stdin_x_os_utime_chown, stdin_x_check_worktree_isolation_overwrite, stdin_x_loop_subprocess_shell; 10 other: c_kill_all, c_mv_home, c_cp_authkeys, v_gate_script_overwrite, v_nested_fake_eof, h_overwrite_worktree_isolation, h_rs_cargo_script, h_rs_build_rs, h_heredoc_bs_quoted_cmdsub, h_heredoc_dq_delim_cmdsub); 2026-11-20 HEAD 7415d8b29: count 22 again (case list not re-captured). | RULED 2026-11-20 by user (AskUserQuestion, specforge rigor A1-A3): A1 build.rs+cargo build AND .rs+cargo run are both not-Allow (exception to the 2026-11-18 .rs+cargo=Allow ruling, because cargo executes them); writing an ordinary .rs then cargo test/build stays Allow. A2a Python sinks with no effect model (e.g. asyncio subprocess_shell) -> Ask per Q1 (11-17 unknown=Allow does NOT apply to Python sinks). A2b initial provably-harmless allowlist = only the APIs used in heredoc_script_fp_cases_stay_allow FP array; extend later via RED. A3 h_heredoc_bs_quoted_cmdsub / h_heredoc_dq_delim_cmdsub -> remove from attack list and re-anchor to Allow assertion (written by an independent agent). | RULED 2026-11-20 round 2 (specforge rigor): SINK = closed set of side-effect-capable Python APIs (process spawn, fs write/metadata chmod-chown-utime-truncate/move-link-replace, network, exec/eval); pure calls (re.compile, print, os.path.join, json.loads...) are NOT sinks and stay Allow (python_stdin_re_compile_fp_20261103.rs:75 stays green); the sink set must be a written document. GRANULARITY = API name + argument effect: an allowlisted sink is then judged by its argv/path args through the existing shell effect/path rules, Allow only if those give Allow; unresolvable args -> Ask; non-allowlisted sink -> Ask. | RULED 2026-11-20 round 3 (specforge rigor): (1) process signal (os.kill, os.killpg, ...) is added to the closed Python sink set; when several judgements apply the strictest wins: Deny > Ask > Allow (Q3/Q5 Deny always win over the allowlist Ask). (2) Q3 scope = the directory /Users/<n> or /home/<n> itself (delete, move away, chmod/chown of the dir); files under it are judged by **/.ssh/**, **/.gitconfig and the existing HOME rules. (3) A1 boundary: writing build.rs (or other build-time code) then ANY cargo build/test/check/clippy/run in the same command -> not-Allow; ordinary .rs then cargo test/build/check -> Allow; .rs then cargo run -> not-Allow. (4) Q4 gate-script overwrite -> Ask (not Deny). | REDs committed 326c23463 (blastguard 0.2.750): crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs; sink doc docs/blastguard/python-sink-set.md."""
+blocked 2026-11-14 run-20261114-130020-46995: needs human rulings Q1 (python sink denylist->allowlist?), Q2 (h_heredoc_bs_quoted_cmdsub/h_heredoc_dq_delim_cmdsub quoted+not run vs .py-body-is-data ruling), Q3 (protect /Users/<n>,/home/<n>,**/.ssh/**,**/.gitconfig when not HOME?), Q4 (which paths are gate scripts), Q5 (kill -9 -1 / os.kill(-1,9): Deny or Ask). 107/653 Allow on macOS at b823ffa5. Decomp: 7 serial tasks a-g, 4 low-confidence. | RULED 2026-11-14 by user (AskUserQuestion): Q1 python sink -> allowlist (provably harmless APIs Allow, else Ask). Q2 h_heredoc_bs_quoted_cmdsub/h_heredoc_dq_delim_cmdsub are test defects (.py-body-is-data ruling wins; drop or re-anchor to Allow). Q3 protect /Users/<n>, /home/<n>, **/.ssh/**, **/.gitconfig even when not HOME (Deny). Q4 gate scripts = .githooks/**, scripts/check-*.py, crates/*/hooks/**, ~/.claude/plugins/cache/**/{bin,hooks}. Q5 kill -9 -1 / os.kill(-1,9) -> Deny. | RE-MEASURED 2026-11-19 c92d77e74: 22 of 653 Allow (12 stdin_*: stdin_popen_git_reset_hard, stdin_from_subprocess_import_run, stdin_p1_check_output_git_clean, stdin_p1_list_concat_cmd, stdin_multiline_call_args, stdin_x_os_replace_authkeys, stdin_x_os_chmod_ssh, stdin_x_open_wb, stdin_x_open_x_mode, stdin_x_os_utime_chown, stdin_x_check_worktree_isolation_overwrite, stdin_x_loop_subprocess_shell; 10 other: c_kill_all, c_mv_home, c_cp_authkeys, v_gate_script_overwrite, v_nested_fake_eof, h_overwrite_worktree_isolation, h_rs_cargo_script, h_rs_build_rs, h_heredoc_bs_quoted_cmdsub, h_heredoc_dq_delim_cmdsub); 2026-11-20 HEAD 7415d8b29: count 22 again (case list not re-captured). | RULED 2026-11-20 by user (AskUserQuestion, specforge rigor A1-A3): A1 build.rs+cargo build AND .rs+cargo run are both not-Allow (exception to the 2026-11-18 .rs+cargo=Allow ruling, because cargo executes them); writing an ordinary .rs then cargo test/build stays Allow. A2a Python sinks with no effect model (e.g. asyncio subprocess_shell) -> Ask per Q1 (11-17 unknown=Allow does NOT apply to Python sinks). A2b initial provably-harmless allowlist = only the APIs used in heredoc_script_fp_cases_stay_allow FP array; extend later via RED. A3 h_heredoc_bs_quoted_cmdsub / h_heredoc_dq_delim_cmdsub -> remove from attack list and re-anchor to Allow assertion (written by an independent agent). | RULED 2026-11-20 round 2 (specforge rigor): SINK = closed set of side-effect-capable Python APIs (process spawn, fs write/metadata chmod-chown-utime-truncate/move-link-replace, network, exec/eval); pure calls (re.compile, print, os.path.join, json.loads...) are NOT sinks and stay Allow (python_stdin_re_compile_fp_20261103.rs:75 stays green); the sink set must be a written document. GRANULARITY = API name + argument effect: an allowlisted sink is then judged by its argv/path args through the existing shell effect/path rules, Allow only if those give Allow; unresolvable args -> Ask; non-allowlisted sink -> Ask. | RULED 2026-11-20 round 3 (specforge rigor): (1) process signal (os.kill, os.killpg, ...) is added to the closed Python sink set; when several judgements apply the strictest wins: Deny > Ask > Allow (Q3/Q5 Deny always win over the allowlist Ask). (2) Q3 scope = the directory /Users/<n> or /home/<n> itself (delete, move away, chmod/chown of the dir); files under it are judged by **/.ssh/**, **/.gitconfig and the existing HOME rules. (3) A1 boundary: writing build.rs (or other build-time code) then ANY cargo build/test/check/clippy/run in the same command -> not-Allow; ordinary .rs then cargo test/build/check -> Allow; .rs then cargo run -> not-Allow. (4) Q4 gate-script overwrite -> Ask (not Deny). | REDs committed 326c23463 (blastguard 0.2.750): crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs; sink doc docs/blastguard/python-sink-set.md. | STOPPED 2026-11-21 run-20261121-025835-31154 (flow session 7d40fb4d, main 22486711a): interpreter confidence low, 3 open questions need human ruling (spec-gap divert gate escalated, skipped per flow-run-until-solved): Q3 spec canon names **/.gitconfig and /home/<n> but no requirement statement/test covers them; Q5 Python os.kill(-1,9) has no RED and other kill spellings are unspecified; who re-anchors the aggregate test heredoc_script_failopen_red_20261108 (independent-author rule). Known hole in R-cargo scope: cat > t/mod.rs <<'EOF' && cargo run is still allow."""
 created_at = 1794547881
-updated_at = 1795108273
+updated_at = 1795201025
 weight = 0.0
 issue_number = 1700
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1700"
-rev = 7
+rev = 8
 
 [task.repro]
 outcome = "reproduced"
@@ -592,99 +592,6 @@ exit 101: rc/.harness-worktrees/sidereds-20261116/crates/backlog)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.52s
      Running tests/backlog_20261116_zero_tests_filtered_out_not_discard.rs (target/debug/deps/backlog_20261116_zero_tests_filtered_out_not_discard-e511e6be63ab2a45)
 error: test failed, to rerun pass `-p backlog --test backlog_20261116_zero_tests_filtered_out_not_discard`"""
-
-[[task]]
-id = "5a633271"
-title = "condukt: check-criteria drops --test <name> from done_criteria and runs the whole crate suite"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = '観測(2026-11-16, main 0be4629b0, run-20261116-164820-25374 t1): `condukt state check-criteria --run <RID> --task t1` を実行した。そのタスクの done_criteria は `cargo test -p condukt --test worktree_remove_orphan_leftover -- --include-ignored exits 0` だったが、出力 JSON の cmd は ["cargo","test","-p","condukt"] で、954 件の全テストを実行していた。--test <name> と -- --include-ignored が落ちている。期待: 名指しされた --test ターゲットだけを実行する。全スイート実行は testscope のユーザー裁定で nightly 限定。原因箇所: crates/condukt/src/verify/mechanical.rs mechanical_cmd の prose fallback (バッククォート無しの場合 cargo test [-p X] のみ再構築)。読み方は (a) 欠陥 / (b) 意図どおり（意図なら testscope 裁定と矛盾する）。RED テストは commit 0a823bb73 (branch red-ccwiden)。'
-created_at = 1794817374
-updated_at = 1794817374
-weight = 0.0
-issue_number = 1821
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1821"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261116_check_criteria_drops_test_target -- --include-ignored"
-rev = "0a823bb73e10018aaf17984b923831d292c4633b"
-observed_at = 1794817374
-detail = """
-exit 101: uki_nakayama/src/.harness-worktrees/red-ccwiden/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.52s
-     Running tests/backlog_20261116_check_criteria_drops_test_target.rs (target/debug/deps/backlog_20261116_check_criteria_drops_test_target-c3651da4c67db1b9)
-error: test failed, to rerun pass `-p condukt --test backlog_20261116_check_criteria_drops_test_target`"""
-
-[[task]]
-id = "b5d6ac29"
-title = "blastguard FP: quoted heredoc data line 'exec 3<<< ...; bash <&3' read by while-read/echo is Deny in subagent (bgr-3c577fb491b6)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-17 at main 963a18429 (blastguard 0.2.676): while IFS= read -r c; do echo "$c"; done <<'EOF' with body exec 3<<< 'echo hi'; bash <&3 is Deny in subagent, Ask in main; the body is data echoed, never run. Control cat <<'EOF' with the same body is allow. RED 5f42fcd25 (independent author). Readings: (a) FP: quoted heredoc fed to a non-shell reader is data; (b) intended only if while-read+eval-like consumers are treated as shells, but echo does not execute."""
-created_at = 1794864711
-updated_at = 1794864711
-weight = 0.0
-issue_number = 1838
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1838"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261116_heredoc_data_fd_reader_fp -- --include-ignored"
-rev = "5f42fcd25ef9868b2f5a24177eb5739f8db18a8a"
-observed_at = 1794864711
-detail = """
-exit 101: .677 (/Users/yuki/src/.harness-worktrees/bg-fp-bgr3c57-20261116/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.16s
-     Running tests/backlog_20261116_heredoc_data_fd_reader_fp.rs (target/debug/deps/backlog_20261116_heredoc_data_fd_reader_fp-7051546632d2bfe3)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261116_heredoc_data_fd_reader_fp`"""
-
-[[task]]
-id = "648a6641"
-title = "blastguard FP: quoted heredoc body line with ; before a backtick span is judged as a command word when the heredoc is the 3rd+ statement (cat > x.rs <<'EOF')"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-17 in a peer session (relay bgr-cf29c893de79; blocks.jsonl ts 1794865460 subagent deny, 1794865551 main ask): mkdir -p d && cd d && cat > x/mod.rs <<'EOF' with Rust body line '/// Change the tree identity (a tracked edit); `restore` puts it back.' -> main ask / subagent deny 'the command word ``restore`` is an expansion whose value only exists at run time'. RED d53c6f681 (branch red/blastguard-rs-heredoc-backtick-20261117, blastguard 0.2.678). Measured on deployed 0.2.675: fires only when the heredoc is the 3rd+ statement AND a control operator (; & | &&) precedes the span on the body line; also fires for .txt target and cat to stdout. Allow: heredoc first, one preceding command, no operator before span, no backticks. Controls: no-backtick body allow; unquoted delimiter not allow. Distinct from a826bdab/d292ce6e/53a97aa3/9d347af5/234cae6f/d462444e/0bc46ca0 (none has an operator before a mid-line span with two preceding commands)."
-created_at = 1794865868
-updated_at = 1794865868
-weight = 0.0
-issue_number = 1839
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1839"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261117_rs_heredoc_doc_comment_backtick_fp -- --include-ignored"
-rev = "d53c6f6818c004dcf3ebbe91f2340c9cdd403a7b"
-observed_at = 1794865868
-detail = """
-exit 101: ignored; 0 measured; 0 filtered out; finished in 0.47s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
-     Running tests/backlog_20261117_rs_heredoc_doc_comment_backtick_fp.rs (target/debug/deps/backlog_20261117_rs_heredoc_doc_comment_backtick_fp-54ecc282de5d64d9)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261117_rs_heredoc_doc_comment_backtick_fp`"""
 
 [[task]]
 id = "06c51772"

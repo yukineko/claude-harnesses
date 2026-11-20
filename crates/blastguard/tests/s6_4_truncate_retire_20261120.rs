@@ -16,10 +16,15 @@
 //!   Each one's measured verdict is in its ignore reason.
 //! * Controls (not ignored): the ruling says S6 only retires — System,
 //!   Protected, `$HOME` assets, Project / Other / OtherWorktree, the temp root
-//!   itself, `..`, unquoted expansions, globs, non-Literal targets, an
-//!   unlisted option, and a mix with a non-Allow target keep the verdict
-//!   MEASURED at the same base. A control is a characterization pin, not an
-//!   endorsement.
+//!   itself, `..`, unquoted expansions, a middle-component glob, non-Literal
+//!   targets, an unlisted option, and a mix with a non-Allow target keep the
+//!   verdict MEASURED at the same base (the command-running-config siblings
+//!   and the middle-component glob: measured at main 9f6cb2fea). A control is
+//!   a characterization pin, not an endorsement.
+//! * Target behaviour without an ignore (added 2026-11-20, after the
+//!   implementer removed the ignores): a `0` path component next to `-s 0`
+//!   (the tie defect), and a final-component glob under a literal Scratch dir
+//!   (literal-dir glob ruling 2026-11-19) — both Allow.
 //!
 //! Fixture (hermetic, `support/neutral_base.rs` location rule):
 //!   * `<base>/home`                             — the hook's `HOME` (has
@@ -155,6 +160,19 @@ fn fixture(tag: &str) -> Fx {
     }
     write(&repo.join("u.txt"), "a\n");
     write(&fx.tmp.join("sub").join("f.txt"), "a\n");
+    write(&fx.tmp.join("0").join("f.txt"), "a\n");
+    write(&fx.tmp.join("s0").join("f.txt"), "a\n");
+    let own = fx.wt("wt-own");
+    write(&own.join(".claude").join("settings.local.json"), "{}\n");
+    write(&own.join("hooks").join("hooks.json"), "{}\n");
+    write(
+        &own.join("crates")
+            .join("x")
+            .join("hooks")
+            .join("hooks.json"),
+        "{}\n",
+    );
+    write(&own.join(".githooks").join("pre-commit"), "#!/bin/sh\n");
     write(&fx.tmpdir().join("sub").join("f.txt"), "a\n");
     write(&fx.home().join(".cache").join("x").join("f.txt"), "a\n");
     write(&fx.home().join(".ssh").join("id_rsa"), "k\n");
@@ -251,67 +269,56 @@ fn expect_allow(tag: &str, template: &str) {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "RED S6-4: measured ask/deny (confined Ask) at 342da07b8"]
 fn red_scratch_tmp_subdir_existing_file() {
     expect_allow("r-tmp-existing", "truncate -s 0 {T}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-4: measured ask/deny (confined Ask) at 342da07b8"]
 fn red_scratch_tmp_subdir_absent_file() {
     expect_allow("r-tmp-absent", "truncate -s 0 {T}/sub/new.txt");
 }
 
 #[test]
-#[ignore = "RED S6-4: measured ask/deny (confined Ask) at 342da07b8"]
 fn red_scratch_tmp_dir_direct_child_file() {
     expect_allow("r-tmp-child", "truncate -s 0 {T}/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-4: measured ask/deny (confined Ask) at 342da07b8"]
 fn red_scratch_attached_size_value() {
     expect_allow("r-tmp-s0", "truncate -s0 {T}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-4: measured ask/deny (confined Ask) at 342da07b8"]
 fn red_scratch_long_size_equals() {
     expect_allow("r-tmp-size-eq", "truncate --size=0 {T}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-4: measured ask/deny (confined Ask) at 342da07b8"]
 fn red_scratch_long_size_separate() {
     expect_allow("r-tmp-size-sep", "truncate --size 0 {T}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-4: measured deny/deny (legacy shape Deny: quoted operand not placed) at 342da07b8"]
 fn red_scratch_single_quoted_literal() {
     expect_allow("r-tmp-sq", "truncate -s 0 '{T}/sub/f.txt'");
 }
 
 #[test]
-#[ignore = "RED S6-4: measured ask/deny (confined Ask) at 342da07b8"]
 fn red_scratch_usr_bin_spelling() {
     expect_allow("r-tmp-usrbin", "/usr/bin/truncate -s 0 {T}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-4: measured ask/deny (confined Ask) at 342da07b8"]
 fn red_scratch_two_targets() {
     expect_allow("r-tmp-two", "truncate -s 0 {T}/sub/f.txt {T}/sub/g.txt");
 }
 
 #[test]
-#[ignore = "RED S6-4: measured ask/deny (confined Ask) at 342da07b8"]
 fn red_scratch_hook_tmpdir() {
     expect_allow("r-tmpdir", "truncate -s 0 {D}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-4: measured deny/deny (legacy shape Deny) at 342da07b8"]
 fn red_scratch_home_cache() {
     expect_allow("r-cache", "truncate -s 0 {H}/.cache/x/f.txt");
 }
@@ -321,40 +328,55 @@ fn red_scratch_home_cache() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "RED S6-4: measured ask/deny (confined Ask) at 342da07b8"]
 fn red_own_worktree_absolute() {
     expect_allow("r-own-abs", "truncate -s 0 {W}/u.txt");
 }
 
 #[test]
-#[ignore = "RED S6-4: measured ask/deny (confined Ask) at 342da07b8"]
 fn red_own_worktree_absolute_subdir() {
     expect_allow("r-own-sub", "truncate -s 0 {W}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-4: measured ask/deny (confined Ask) at 342da07b8"]
 fn red_own_worktree_relative() {
     expect_allow("r-own-rel", "truncate -s 0 u.txt");
 }
 
 #[test]
-#[ignore = "RED S6-4: measured ask/deny (confined Ask) at 342da07b8"]
 fn red_own_worktree_relative_subdir() {
     expect_allow("r-own-rel-sub", "truncate -s 0 sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-4: measured ask/deny (confined Ask) at 342da07b8"]
 fn red_own_worktree_reference_file_is_a_read() {
     // `-r RFILE` reads RFILE (Table B); the only target is in OwnWorktree.
     expect_allow("r-own-ref", "truncate -r {P}/t.txt {W}/u.txt");
 }
 
 #[test]
-#[ignore = "RED S6-4: measured ask/deny (confined Ask) at 342da07b8"]
 fn red_scratch_and_own_worktree_mixed() {
     expect_allow("r-mixed", "truncate -s 0 {T}/sub/f.txt {W}/u.txt");
+}
+
+/// Pins the tie defect deterministically: a `0` path component equal to the
+/// `-s 0` size value must not break the AST tie (fixture paths are random,
+/// so this shape is not otherwise guaranteed to occur).
+#[test]
+fn red_scratch_path_component_equal_to_size_value() {
+    expect_allow("r-tmp-s0-dir", "truncate -s 0 {T}/0/f.txt");
+}
+
+#[test]
+fn red_scratch_path_component_containing_size_value() {
+    expect_allow("r-tmp-s0-name", "truncate -s 0 {T}/s0/f.txt");
+}
+
+/// User ruling 2026-11-19 (literal-dir glob, docs/specs/blastguard.md,
+/// "Table B の全行で"): a glob only in the final component under a literal
+/// dir is placed by the parent's class — here Scratch — so Allow.
+#[test]
+fn literal_dir_final_component_glob_in_scratch() {
+    expect_allow("glob-final", "truncate -s 0 {T}/sub/*.txt");
 }
 
 // ---------------------------------------------------------------------------
@@ -412,7 +434,16 @@ const PROTECTED: &[Pin] = &[
     // FLAGGED (module doc): classify lifts Protected inside a linked
     // worktree checkout; pinned as today's per the caller's instruction.
     ("Protected .git file of own worktree", "truncate -s 0 {W}/.git", D),
+    // User ruling 2026-11-20 「Deny のまま（推奨）」: command-running config
+    // inside the own worktree keeps its verdict (measured at main 9f6cb2fea).
     ("Protected .claude/settings.json, own worktree", "truncate -s 0 {W}/.claude/settings.json", D),
+    ("command-running config .claude/settings.local.json, own worktree", "truncate -s 0 {W}/.claude/settings.local.json", D),
+    // FLAGGED: hooks.json is a confined Ask (not Deny) at main 9f6cb2fea;
+    // pinned as measured. Unless it is Protected / Workflow in Table C, the
+    // new layer places it OwnWorktree and S6-4 would move it to Allow.
+    ("command-running config hooks/hooks.json, own worktree", "truncate -s 0 {W}/hooks/hooks.json", AD),
+    ("command-running config crates/x/hooks/hooks.json, own worktree", "truncate -s 0 {W}/crates/x/hooks/hooks.json", AD),
+    ("command-running config .githooks/pre-commit, own worktree", "truncate -s 0 {W}/.githooks/pre-commit", D),
 ];
 
 #[test]
@@ -451,7 +482,10 @@ const NON_LITERAL: &[Pin] = &[
     ("unquoted var, unassigned", "truncate -s 0 $F", D),
     ("quoted env expansion", "truncate -s 0 \"$TMPDIR/sub/f.txt\"", D),
     ("unquoted env expansion", "truncate -s 0 $TMPDIR/sub/f.txt", D),
-    ("glob in temp", "truncate -s 0 {T}/sub/*.txt", D),
+    // The literal-dir glob ruling (2026-11-19) keeps a glob in a NON-final
+    // component Unresolved; the final-component glob moved to
+    // `literal_dir_final_component_glob_in_scratch`.
+    ("middle-component glob in temp", "truncate -s 0 {T}/*/f.txt", D),
 ];
 
 #[test]

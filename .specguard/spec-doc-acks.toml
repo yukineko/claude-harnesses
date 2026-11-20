@@ -319,7 +319,3 @@ reason = "Split out of detect/git.rs for the file-growth cap (backlog 606a93ab):
 [[ack]]
 path = "crates/blastguard/src/detect/ast/eval/function.rs"
 reason = "Child module of detect/ast/eval.rs (17bb391cc): function definitions evaluated only under evaluate_with_function_definitions, reading the evaluator state directly. Its behaviour is part of eval.rs, which is already bound to docs/specs/blastguard.md; the submodule describes no separate behaviour."
-
-[[ack]]
-path = "crates/blastguard/src/detect/known_allow.rs"
-reason = "S6-3 (cec5ae480, parity only): generic form of detect/rm/new_layer.rs known_allow for every Table B B.1 row; not called by any verdict path yet, so it has no behaviour of its own to document. It gets a [[spec]] binding to docs/specs/blastguard.md in the S6 step that first routes a command through it (S6-4)."

@@ -1982,6 +1982,14 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         // target list is computed the same way every other rule computes one
         // (`positional_operands`, so a `-s SIZE` value is never mistaken for a
         // file), and a protected target cannot be relaxed — see `Ctx::confined`.
+        //
+        // S6-4 (user ruling 2026-11-20, S6 only retires): when the new layer
+        // is Known Allow for this `truncate` (`known_allow::known_allow`:
+        // every tied Table B target a `Literal` in Table C Scratch /
+        // OwnWorktree), this legacy reading may not raise it. Anything not
+        // Known keeps the legacy verdict exactly as before. Precedent: `rm`
+        // (`rm/new_layer.rs`).
+        "truncate" if known_allow::known_allow("truncate", rest, ctx) => Decision::Allow,
         "truncate" => shape_deny_or_confined_ask(
             ctx,
             "truncate",

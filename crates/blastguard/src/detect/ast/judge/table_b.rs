@@ -72,6 +72,52 @@ pub(in crate::detect::ast) fn extract(cmd: &SimpleCommand) -> Row {
     }
 }
 
+/// Stage S6-4 (coordinator decision (a), 2026-11-20): the indexes into
+/// `cmd.argv[1..]` of the words a listed option of `cmd`'s B.1 row took as
+/// its SEPARATE argument (`truncate -s 0`: the `0`), for the per-command tie
+/// (`ast/targets.rs`), which must not read such a word as an operand
+/// spelling. Excluded (still read as operands, the restrictive side): the
+/// `-t DIR` argument (a target of `mv` / `cp` / `install` / `ln`).
+///
+/// `None` — not determined, so the caller skips NO word and every word stays
+/// an operand spelling, as before (the restrictive side) — for a command
+/// with no row, a row whose [`parse`] fails (`Undetermined`), and the rows
+/// not parsed by one plain [`parse`] of `argv[1..]` (`sed`, whose args are
+/// rewritten first; `dd`, `find`, `xargs`).
+pub(in crate::detect::ast) fn option_argument_words(cmd: &SimpleCommand) -> Option<Vec<usize>> {
+    let Some(Value::Literal(name)) = cmd.argv.first().map(|w| &w.value) else {
+        return None;
+    };
+    let base = name.rsplit('/').next().unwrap_or(name);
+    let args = cmd.argv.get(1..).unwrap_or(&[]);
+    let o = match base {
+        "rm" => &RM,
+        "rmdir" => &RMDIR,
+        "unlink" => &NO_OPTS,
+        "mv" => &MV,
+        "cp" => &CP,
+        "install" => &INSTALL,
+        "ln" => &LN,
+        "chmod" => &CHMOD,
+        "chown" | "chgrp" => &CHOWN,
+        "tee" => &TEE,
+        "truncate" => &TRUNCATE,
+        _ => return None,
+    };
+    let p = match parse(base, args, o) {
+        Ok(p) => p,
+        // Undetermined row: which words are option arguments is not known.
+        Err(_) => return None,
+    };
+    Some(
+        p.arg_words
+            .into_iter()
+            .filter(|(opt, _)| opt != "-t")
+            .map(|(_, i)| i)
+            .collect(),
+    )
+}
+
 /// Stage S5c (user ruling 2026-11-20, same-line import shadowing): every
 /// (effect, target word value) of `cmd` that may CREATE or replace a
 /// directory entry — the [`extract`] targets whose effect does
@@ -292,6 +338,9 @@ struct Parsed {
     /// before any `=`.
     options: Vec<(String, Option<Value>)>,
     operands: Vec<Word>,
+    /// `(option, index into args)` of every word a listed option took as its
+    /// SEPARATE argument (`-s 0`, `--size 0`; not `-s0` / `--size=0`).
+    arg_words: Vec<(String, usize)>,
 }
 
 impl Parsed {
@@ -330,6 +379,7 @@ fn parse(cmd: &str, args: &[Word], o: &Opts) -> Result<Parsed, String> {
     let mut p = Parsed {
         options: Vec::new(),
         operands: Vec::new(),
+        arg_words: Vec::new(),
     };
     let mut ended = false;
     // The first option not in the list (see the end of this function).
@@ -388,6 +438,7 @@ fn parse(cmd: &str, args: &[Word], o: &Opts) -> Result<Parsed, String> {
                 None if flag || optional => None,
                 None => match args.get(i) {
                     Some(a) => {
+                        p.arg_words.push((canon.to_string(), i));
                         i += 1;
                         Some(a.value.clone())
                     }
@@ -414,6 +465,7 @@ fn parse(cmd: &str, args: &[Word], o: &Opts) -> Result<Parsed, String> {
                 let v = if rest.is_empty() {
                     match args.get(i) {
                         Some(a) => {
+                            p.arg_words.push((name.clone(), i));
                             i += 1;
                             a.value.clone()
                         }

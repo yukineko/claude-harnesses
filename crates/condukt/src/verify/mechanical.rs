@@ -1,7 +1,7 @@
 //! Mechanical-command extraction from a done_criteria string, split out of
-//! `verify.rs` (file-growth ratchet). Pure move of [`parse_argv`],
-//! [`mechanical_cmd`] and [`prose_tail_parses`]; behaviour is unchanged by the
-//! move.
+//! `verify.rs` (file-growth ratchet): [`parse_argv`], [`mechanical_cmd`],
+//! [`prose_tail_parses`] and the prose `cargo test` argv builder
+//! (`prose_cargo_test_argv`, which keeps `--test`/`-p`/`--` arguments).
 
 use super::{is_criteria_runner, prose_pytest_argv};
 
@@ -57,12 +57,13 @@ pub(super) fn parse_argv(s: &str) -> Option<Vec<String>> {
 /// [`CARGO_TEST_VALUE_FLAGS`]), any other `-`-prefixed flag, and everything
 /// after a `--` separator (`-- --include-ignored`). So prose
 /// `cargo test -p condukt --test t -- --include-ignored exits 0` yields
-/// `[cargo, test, -p, condukt, --test, t, --, --include-ignored]`. The words
-/// after the argv must be only the trailing assertion `exits 0` (or `exit 0`);
-/// any other bare word could be a test filter, so the argv cannot be cleanly
-/// separated from the prose and `None` is returned (no guessed wider or
-/// narrower command). Prose `cargo test` with no options and no trailing words
-/// yields `[cargo, test]`, as before.
+/// `[cargo, test, -p, condukt, --test, t, --, --include-ignored]`. A recognised
+/// prose assertion (`exits 0`, `passes`, `succeeds`, ...) ends the argv and the
+/// remainder is ignored; a quoted word is an explicit argument; any other bare
+/// unquoted word could be a test filter, so `None` is returned (no guessed
+/// wider or narrower command). Option values keep the `[A-Za-z0-9_-]`
+/// restriction. Prose `cargo test` with no options yields `[cargo, test]`. See
+/// `prose_cargo_test_argv` for the full grammar.
 pub fn mechanical_cmd(
     done_criteria: &str,
     mechanical_check_hint: Option<&crate::model::MechanicalCheck>,
@@ -153,54 +154,141 @@ const CARGO_TEST_VALUE_FLAGS: &[&str] = &[
     "--features",
 ];
 
-/// Trailing assertion prose that may follow a `cargo test` command without
-/// being a test filter (compared lowercase, trailing `.` stripped).
-const CARGO_TEST_TRAILING_PROSE: &[&str] = &["exits 0", "exit 0"];
+/// Split `tail` into raw shell words on whitespace outside quotes, returning
+/// each word unquoted (via shlex) together with whether it was written with any
+/// quoting/escaping. `None` on an unterminated quote or a word shlex does not
+/// reduce to exactly one token (undetermined, never guessed).
+fn split_words_with_quote_flag(tail: &str) -> Option<Vec<(String, bool)>> {
+    let mut raws: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut in_word = false;
+    let mut quote: Option<char> = None;
+    let mut chars = tail.chars();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                cur.push(c);
+                if c == '\\' && q == '"' {
+                    cur.push(chars.next()?);
+                } else if c == q {
+                    quote = None;
+                }
+            }
+            None if c.is_whitespace() => {
+                if in_word {
+                    raws.push(std::mem::take(&mut cur));
+                    in_word = false;
+                }
+            }
+            None => {
+                in_word = true;
+                cur.push(c);
+                if c == '\\' {
+                    cur.push(chars.next()?);
+                } else if c == '"' || c == '\'' {
+                    quote = Some(c);
+                }
+            }
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if in_word {
+        raws.push(cur);
+    }
+    raws.into_iter()
+        .map(|raw| {
+            let quoted = raw.contains(['"', '\'', '\\']);
+            let mut v = parse_argv(&raw)?;
+            if v.len() == 1 {
+                v.pop().map(|w| (w, quoted))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// A recognised prose assertion starting at `words` (lowercased, trailing
+/// `.,;:` stripped): `exits 0`, `exit 0`, `passes`, `pass`, `succeeds`,
+/// `succeed`. Such a phrase ends the argv; whatever follows is prose.
+fn starts_prose_verb(words: &[(String, bool)]) -> bool {
+    let w = |i: usize| {
+        words
+            .get(i)
+            .map(|(t, _)| t.trim_end_matches(['.', ',', ';', ':']).to_lowercase())
+    };
+    match w(0).as_deref() {
+        Some("passes" | "pass" | "succeeds" | "succeed") => true,
+        Some("exits" | "exit") => w(1).as_deref() == Some("0"),
+        _ => false,
+    }
+}
+
+/// True when `s` is non-empty and every char is `[A-Za-z0-9_-]` or in `extra`.
+fn all_chars(s: &str, extra: &[char]) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || extra.contains(&c))
+}
 
 /// Build the argv for a prose `cargo test` tail (text starting at `cargo test`).
 ///
-/// The tail is tokenized with [`parse_argv`]. Leading `cargo test` is kept,
-/// then cargo options are consumed: a token starting with `-` is kept as-is,
-/// and a token in [`CARGO_TEST_VALUE_FLAGS`] (before `--`) also keeps the value
-/// token that follows it. A `--` separator switches to test-binary arguments
-/// (every later `-`-prefixed token is kept verbatim). The first bare word ends
-/// the argv: the remaining words are prose, and they must be exactly one of
-/// [`CARGO_TEST_TRAILING_PROSE`] (`exits 0`). Any other remainder — a bare word
-/// that could be a test filter, or a word like `passes` the argv does not
-/// account for — returns `None`, because the argv would then be a wider or
-/// narrower command than the one written. A missing option value, or a head
-/// other than `cargo test`, also returns `None`.
+/// Words are taken left to right after `cargo test`:
+/// - an unquoted `-`-prefixed word (charset `[A-Za-z0-9_=,.:-]`) is kept; before
+///   `--`, a flag in [`CARGO_TEST_VALUE_FLAGS`] also keeps the next word, which
+///   must match `[A-Za-z0-9_-]+` (else `None`);
+/// - a `--` word is kept and switches to test-binary arguments (no more value
+///   flags);
+/// - a quoted word is an explicit argument and is kept (unquoted) verbatim;
+/// - an unquoted bare word must start a recognised prose assertion
+///   ([`starts_prose_verb`]: `exits 0`, `passes`, `succeeds`, ...); that ends the
+///   argv and the rest of the criteria is ignored (multi-claim criteria are
+///   handled by the coverage counter). Any other bare word could be a test
+///   filter or unaccounted prose, so `None` is returned: no wider or narrower
+///   command is guessed.
+///
+/// An unterminated quote, a missing/invalid option value, or a head other than
+/// `cargo test` also returns `None`.
 fn prose_cargo_test_argv(tail: &str) -> Option<Vec<String>> {
-    let tokens = parse_argv(tail)?;
-    if tokens.len() < 2
-        || !tokens[0].eq_ignore_ascii_case("cargo")
-        || !tokens[1].eq_ignore_ascii_case("test")
+    let words = split_words_with_quote_flag(tail)?;
+    if words.len() < 2
+        || !words[0].0.eq_ignore_ascii_case("cargo")
+        || !words[1].0.eq_ignore_ascii_case("test")
     {
         return None;
     }
     let mut argv = vec!["cargo".to_string(), "test".to_string()];
     let mut after_sep = false;
     let mut i = 2;
-    while let Some(t) = tokens.get(i).map(String::as_str) {
-        if !t.starts_with('-') {
-            break;
-        }
-        argv.push(t.to_string());
-        i += 1;
-        if t == "--" {
-            after_sep = true;
-        } else if !after_sep && CARGO_TEST_VALUE_FLAGS.contains(&t) {
-            argv.push(tokens.get(i)?.clone());
+    while let Some((t, quoted)) = words.get(i) {
+        if *quoted {
+            argv.push(t.clone());
             i += 1;
+        } else if t.starts_with('-') {
+            if !all_chars(t, &['=', ',', '.', ':']) {
+                return None;
+            }
+            argv.push(t.clone());
+            i += 1;
+            if t == "--" {
+                after_sep = true;
+            } else if !after_sep && CARGO_TEST_VALUE_FLAGS.contains(&t.as_str()) {
+                let (v, _) = words.get(i)?;
+                if !all_chars(v, &[]) {
+                    return None;
+                }
+                argv.push(v.clone());
+                i += 1;
+            }
+        } else if starts_prose_verb(&words[i..]) {
+            return Some(argv);
+        } else {
+            return None;
         }
     }
-    let rest = tokens[i..].join(" ");
-    let rest = rest.trim_end_matches('.').to_lowercase();
-    if rest.is_empty() || CARGO_TEST_TRAILING_PROSE.contains(&rest.as_str()) {
-        Some(argv)
-    } else {
-        None
-    }
+    Some(argv)
 }
 
 /// `found.max(semicolon_clause_count(done_criteria))`, kept here so the call
@@ -278,19 +366,39 @@ mod tests {
         );
     }
 
-    /// Fail-closed: a bare word after the argv could be a test filter (or prose
-    /// the argv does not account for), so no argv is guessed.
+    /// Fail-closed: an unquoted bare word that is not a recognised prose verb
+    /// could be a test filter, so no argv is guessed. Recognised verbs end the
+    /// argv and later prose is ignored; quoted words are arguments.
     #[test]
-    fn prose_unaccounted_word_yields_none() {
+    fn prose_unaccounted_word_yields_none_and_verbs_end_argv() {
         assert_eq!(
             mechanical_cmd("cargo test -p condukt -- foo_filter", None),
             None
         );
-        assert_eq!(mechanical_cmd("cargo test -p condukt passes", None), None);
         assert_eq!(
-            mechanical_cmd("cargo test -p condukt exits 0; no regressions", None),
+            mechanical_cmd("cargo test -p condukt foo passes", None),
             None
         );
+        assert_eq!(
+            mechanical_cmd("cargo test -p condukt passes", None),
+            argv(&["cargo", "test", "-p", "condukt"])
+        );
+        assert_eq!(
+            mechanical_cmd("cargo test -p condukt exits 0 and docs updated", None),
+            argv(&["cargo", "test", "-p", "condukt"])
+        );
+        assert_eq!(
+            mechanical_cmd(r#"cargo test -p demo -- "x" exits 0"#, None),
+            argv(&["cargo", "test", "-p", "demo", "--", "x"])
+        );
+        assert_eq!(mechanical_cmd("cargo test -p demo exits 1", None), None);
+    }
+
+    /// Option values keep the package/test-name charset.
+    #[test]
+    fn prose_option_value_charset_restricted() {
+        assert_eq!(mechanical_cmd("cargo test -p x, exits 0", None), None);
+        assert_eq!(mechanical_cmd("cargo test --test t. exits 0", None), None);
     }
 
     /// Fail-closed: a missing option value, an unterminated quote in the tail,

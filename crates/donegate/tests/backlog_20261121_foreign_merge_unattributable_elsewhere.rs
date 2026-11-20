@@ -311,7 +311,7 @@ fn assert_judged(f: &Fixture, tp: &Path) {
 /// reset to the session cwd), the path-less writer runs after `cd <linked wt>`;
 /// a subagent only reads with cwd = primary tree.
 #[test]
-#[ignore = "RED: 2026-11-21 a path-less writer run in the session's linked worktree (cd <wt> && cargo fmt) widens the PRIMARY tree's scope to another session's unfinished merge — remove when fixed"]
+#[ignore = "RED(ff46a113): 2026-11-21 a path-less writer run in the session's linked worktree (cd <wt> && cargo fmt) widens the PRIMARY tree's scope to another session's unfinished merge — remove when fixed"]
 fn red_cd_linked_worktree_writer_does_not_widen_primary_scope() {
     let f = Fixture::new();
     f.foreign_unfinished_merge();
@@ -326,7 +326,7 @@ fn red_cd_linked_worktree_writer_does_not_widen_primary_scope() {
 /// RED variant: the path-less writer's recorded line cwd is the linked
 /// worktree itself (no `cd`).
 #[test]
-#[ignore = "RED: 2026-11-21 a path-less writer whose recorded cwd is the session's linked worktree widens the PRIMARY tree's scope to another session's unfinished merge — remove when fixed"]
+#[ignore = "RED(ff46a113): 2026-11-21 a path-less writer whose recorded cwd is the session's linked worktree widens the PRIMARY tree's scope to another session's unfinished merge — remove when fixed"]
 fn red_writer_with_cwd_in_linked_worktree_does_not_widen_primary_scope() {
     let f = Fixture::new();
     f.foreign_unfinished_merge();

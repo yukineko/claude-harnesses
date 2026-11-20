@@ -150,7 +150,7 @@ fn sudo_l_u_bob_not_deny() {
 }
 
 #[test]
-#[ignore = "backlog RED: sudo perl <<< 'print 1' (benign) is ask in main but deny in subagent (perl stdin Undetermined)"]
+#[ignore = "backlog 946ac873 RED: sudo perl <<< 'print 1' (benign) is ask in main but deny in subagent (perl stdin Undetermined)"]
 fn sudo_perl_herestring_not_deny() {
     not_deny("c4", "sudo perl <<< 'print 1'");
 }

@@ -647,6 +647,15 @@ forge・condukt のスケジューラが再利用）。
   double quote 内の `\`＋改行を取り除く（single quote 内は保持）。トップレベルのコマンド語・引数の行継続は
   下の「行継続を除いた読みも判定する」で扱う（backlog 040b959b）。Python 文字列 literal 内の行継続は
   未対応（RED 06143f1b、別 backlog）。
+- **pid `-1` への `kill` は Deny（`detect/kill.rs`、rule id `kill-all`、backlog e93d3701 / spec 596ef57d Q5）**:
+  `kill -9 -1` はユーザーが signal を送れる全 process（session・editor・agent・この harness）に届くので
+  system harm として main・subagent とも Deny（Ask ではない）。発火は pid operand が literal `-1` で、
+  signal が literal の probe `0` でないときだけ。option 文法は bash の `kill` builtin に従う:
+  `-l`/`-L`/`--list`/`--table` は list mode（何も送らない）、`-s SIG`/`-n NUM`/`--signal[=]SIG`/`-sSIG`/`-nNUM`
+  は signal 指定、signal 未指定のうちの最初の `-WORD` が signal（`-1` = SIGHUP）で、その後の `-N` は pid、
+  `--` 以降と最初の非 option 語以降はすべて pid。したがって `kill -9 -1` は Deny、bare `kill -1`（SIGHUP、pid 無し）・
+  `kill -1 1234`・`kill 1234`・`kill -9 1234`・`kill -l`・`kill -0 $$` は従来どおり（Allow）。展開（`$pid`）は
+  literal `-1` ではないのでこの rule の対象外（既存の判定のまま）。
 - **stdin here-document の program text は body だけ（`detect/payload.rs` の
   `analyze_interpreter_stdin_exec`、`detect/heredoc.rs` の `first_line_quoted_here_document_body`、
   backlog aafeaa05）** — `python3 - <<'PY'` 等で stdin から program を受け取る stage の program text

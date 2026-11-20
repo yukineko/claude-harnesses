@@ -938,3 +938,8 @@ reason = "known_allow bullet 'S6-6 — 旧 tee arm (detect/tee.rs::analyze_tee)'
 path = "crates/blastguard/src/detect/payload/determined_output.rs"
 doc = "docs/specs/blastguard.md"
 reason = "Section '決定済みの producer pipeline の出力を program として読む（backlog 40dc52c0）': pipeline_output (echo/seq/cat/sort emitter-filter shapes, determined words, MAX_DEPTH/MAX_SEQ_LINES bounds) and the resolution_fixed precondition."
+
+[[spec]]
+path = "crates/blastguard/src/detect/kill.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'pid -1 への kill は Deny (detect/kill.rs, rule id kill-all)': literal pid operand -1 with a non-0 signal is Deny in main and subagent; bash kill option grammar decides signal vs pid (backlog e93d3701, spec 596ef57d Q5)."

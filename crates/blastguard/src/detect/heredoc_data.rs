@@ -21,9 +21,19 @@
 //!   never removed: its `$(…)` / backticks execute;
 //! * its command (the reader) is `cat` (no option but `-`), `tee` (only `-a` /
 //!   `--append`) or `git commit` with `-F -` / `-F-` / `--file=-` /
-//!   `--file -`, spelled bare, with every word determined. `program_source`
-//!   of the reader is `None` (not an interpreter, `eval`, `source` or
-//!   wrapper);
+//!   `--file -`, spelled bare. Every word is determined, except that
+//!   `git commit` may carry an undetermined VALUE of `--trailer` / `--author`
+//!   (the next word, or the whole `--trailer=…` / `--author=…` word) whose
+//!   text runs no command (`$X`, `${X}`; never `$( )`, backquote, `<( )`,
+//!   `>( )`). Whatever that value expands to (an UNQUOTED value may even split
+//!   into several words, e.g. extra options), the here-document is still
+//!   redirected to git's stdin only, so the body stays data; the words the
+//!   value may turn into are judged by the rest of the line (`git_stage`'s
+//!   whole-tree / unquoted-expansion rules). Any other undetermined word (a
+//!   bare `$X` operand, the word after `-F` / `--file`, `-m`, `--date`, `-c`,
+//!   `-C`, `--template`, an undetermined subcommand or command word) keeps the
+//!   body. `program_source` of the reader is `None` (not an interpreter,
+//!   `eval`, `source` or wrapper);
 //! * where `cat` / `tee` put the body is a literal data, non-shell code or
 //!   JSON / TOML / YAML file (`.md`, `.txt`, `.rs`, `.json`, `.jsonl`,
 //!   `.toml`, `.yaml`, `.yml`, …; never `.sh`,
@@ -73,7 +83,7 @@ use std::ops::Range;
 
 use super::ast::{
     self, program_source, Analysis, Context, FdTarget, ProgramSource, RedirOp, RedirTarget, Script,
-    SimpleCommand, StdinSource, Value,
+    SimpleCommand, StdinSource, Value, Word,
 };
 use super::heredoc::{
     is_data_file_target, is_non_shell_code_file_target, plain_here_document_delimiter,
@@ -349,6 +359,11 @@ fn data_reader_landing(c: &SimpleCommand) -> Option<Vec<String>> {
     if program_source(c).is_some() {
         return None;
     }
+    // `git commit` is the one reader that may hold an undetermined word: the
+    // value of `--trailer` / `--author` (see `git_commit_reads_message_from_stdin`).
+    if git_commit_reads_message_from_stdin(c) {
+        return Some(vec![".git/COMMIT_EDITMSG".to_string()]);
+    }
     // An undetermined word: not provably a data reader, so its body is kept.
     let argv = literal_argv(c).ok()?;
     let (&name, args) = argv.split_first()?;
@@ -367,20 +382,71 @@ fn data_reader_landing(c: &SimpleCommand) -> Option<Vec<String>> {
             }
             Some(names)
         }
-        "git" if args.first() == Some(&"commit") && reads_message_from_stdin(&args[1..]) => {
-            Some(vec![".git/COMMIT_EDITMSG".to_string()])
-        }
         _ => None,
     }
 }
 
-/// `git commit` options read the message from stdin (`-F -` and spellings).
-fn reads_message_from_stdin(args: &[&str]) -> bool {
-    args.iter().enumerate().any(|(i, a)| match *a {
-        "-F-" | "--file=-" => true,
-        "-F" | "--file" => args.get(i + 1) == Some(&"-"),
-        _ => false,
-    })
+/// True when `c` is `git commit` whose message is read from stdin: `-F -`,
+/// `-F-`, `--file=-` or `--file -`, spelled as literal words. Its undetermined
+/// words may only be the VALUE of `--trailer` / `--author`: the next word, or
+/// the whole `--trailer=…` / `--author=…` word, and only if its text runs no
+/// command ([`reads_no_command`]). Whatever it expands to (an unquoted value
+/// may split into several words), the here-document still reaches git's
+/// stdin only; the resulting words are judged by the rest of the line. Any
+/// other undetermined word keeps the body: a bare `$X` operand, the word after
+/// `-F` / `--file` (which must be the literal `-`), after `-m`, `--date`, `-c`,
+/// `-C` or `--template`, and an undetermined subcommand or command word.
+fn git_commit_reads_message_from_stdin(c: &SimpleCommand) -> bool {
+    let words = &c.argv;
+    if words.len() < 2
+        || literal_word(&words[0]) != Ok("git")
+        || literal_word(&words[1]) != Ok("commit")
+    {
+        return false;
+    }
+    let mut from_stdin = false;
+    let mut i = 2;
+    while let Some(w) = words.get(i) {
+        i += 1;
+        match literal_word(w) {
+            Ok("--trailer" | "--author") => match words.get(i) {
+                Some(v) if literal_word(v).is_ok() || reads_no_command(&v.raw) => i += 1,
+                _ => return false,
+            },
+            Ok("-F-" | "--file=-") => from_stdin = true,
+            Ok("-F" | "--file") => {
+                if words.get(i).map(literal_word) != Some(Ok("-")) {
+                    return false;
+                }
+                from_stdin = true;
+                i += 1;
+            }
+            Ok(_) => {}
+            Err(_) => {
+                let glued = w.raw.starts_with("--trailer=") || w.raw.starts_with("--author=");
+                if !(glued && reads_no_command(&w.raw)) {
+                    return false;
+                }
+            }
+        }
+    }
+    from_stdin
+}
+
+/// The text of a literal word; `Err` with the reason of an undetermined one
+/// (the same shape as [`literal_argv`]).
+fn literal_word(w: &Word) -> Result<&str, &str> {
+    match &w.value {
+        Value::Literal(s) => Ok(s.as_str()),
+        Value::Undetermined(why) => Err(why.as_str()),
+    }
+}
+
+/// True when the raw text of an undetermined option value runs no command: no
+/// backquote, `$(`, `<(` or `>(`. A parameter expansion (`$TASK_ID`, `${X}`)
+/// only reads a value; a command substitution or process substitution runs one.
+fn reads_no_command(raw: &str) -> bool {
+    !raw.contains('`') && ["$(", "<(", ">("].iter().all(|p| !raw.contains(p))
 }
 
 /// A literal landing file whose body is not shell: `/dev/null`, the data and

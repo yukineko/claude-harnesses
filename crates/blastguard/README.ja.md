@@ -604,6 +604,15 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   コマンドとして従来通り判定する（`<<'EOF'; rm -rf /etc` は deny）。`&`・`|&`、`$`・backtick・`\`、
 >   `cat`/`grep`/`egrep`/`fgrep`/`head`/`tail`/`wc` 以外の pipe 先や `<`/`>`/`(`/`)` を含む pipe 段が
 >   あれば従来通り本文も走査する（`git_commit_reader_before_tail`）。
+>   backlog 3ab6109f の修正以降、`git commit -F -` の `--trailer`・`--author` の値だけは
+>   未確定の語（`"Condukt-Task: $TASK_ID"`・`--author "$AUTHOR"`・`--trailer=…`）でもよく、
+>   その本文は AST 段（`heredoc_data`）が opener の `$` の扱いに関わらず全ルールから外す。
+>   値のテキストにコマンド置換（`$( )`・backtick）や `<( )`・`>( )` があれば不可（本文を残す）。
+>   それ以外の未確定語（裸の `$X` の操作数、`-F` / `--file` の後、`-m`・`--date`・`-c`・`-C`・
+>   `--template` の後、未確定のサブコマンド）があれば従来通り本文を残す。
+>   本文を外すのは heredoc 段の判定だけで、行の残り（値が分割されてできる語を含む）は従来通り
+>   `git_stage` の規則で判定する。`--trailer=$X`・`--author="$X"` のような `=` 結合の綴りは
+>   whole-tree staging 規則（option 語の中の実行時展開）で Ask になる。
 >   0.2.388 以降（backlog 0fccf1eb）、`>` / `>>` の書き込み先の語は改行をまたいで読まない
 >   （空白・タブだけを飛ばす。`src/detect/redirect.rs` の `skip_redirect_word_gap`）。行末の
 >   `>`（改行またはテキスト末尾の直前）は書き込み先を持たず、シェルでは本文データか構文エラーで

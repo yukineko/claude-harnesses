@@ -34,7 +34,8 @@
 //!   (`TooLong` / `TooDeep` / `ZshOnly` / `Parse` / `Panic`) for inputs it
 //!   rejects; for an input that parses, `Known(Script)`, or
 //!   `Undetermined(Unsupported(_))` when the script holds something whose
-//!   commands the evaluator cannot list (a function definition, `coproc`, a
+//!   commands the evaluator cannot list (a function definition — evaluated
+//!   only by [`analyze_with_function_definitions`], `coproc`, a
 //!   `$( )` inside a parameter operation or arithmetic, a subscript or
 //!   arithmetic expression that reads a value not determined by the text —
 //!   user ruling 2026-11-16, see `arith.rs` — the work budget
@@ -111,6 +112,19 @@ pub(crate) const MAX_PARSE_DEPTH: usize = 16;
 pub(crate) fn analyze(command: &str) -> Analysis {
     match parse::parse(command) {
         Ok(program) => eval::evaluate(command, &program),
+        Err(cause) => Analysis::Undetermined(cause),
+    }
+}
+
+/// [`analyze`], except that a function definition is evaluated instead of
+/// being `Undetermined(Unsupported)`: its body is evaluated once with every
+/// variable, the cwd and the stdin late-bound, its commands are emitted, and
+/// the state is opaque after it. Nothing outside `ast/` calls this yet, so
+/// every consumer still sees a function-definition line as `Unsupported`
+/// through [`analyze`].
+pub(crate) fn analyze_with_function_definitions(command: &str) -> Analysis {
+    match parse::parse(command) {
+        Ok(program) => eval::evaluate_with_function_definitions(command, &program),
         Err(cause) => Analysis::Undetermined(cause),
     }
 }
@@ -268,6 +282,13 @@ pub(crate) enum Cause {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Script {
     pub commands: Vec<SimpleCommand>,
+    /// The names of the function definitions evaluated (deduplicated). Always
+    /// empty from [`analyze`]; from [`analyze_with_function_definitions`]
+    /// only, and then holds the names whose bodies are in `commands`.
+    pub function_names: Vec<String>,
+    /// True when a function definition was evaluated. Always false from
+    /// [`analyze`].
+    pub has_function_definition: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

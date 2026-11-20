@@ -125,6 +125,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'pipe 先の shell の argv は option 文法で読む': ProgramSource and the shell/source/python/interpreter program-source readers, moved out of detect/payload.rs unchanged (file-growth cap) and used by the pipe rule (backlog de914866)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/payload/brace_feeder.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'shell へ流し込むブレースグループはメンバー出力の連結を program として読む': feeder_groups / the echo-printf member concatenation read as the stdin program, and the Ask cases for every other group shape (backlog 7eb86bb3)."
+
+[[spec]]
 path = "crates/blastguard/src/detect/payload/node_source.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'pipe 先の python/node の argv は option 文法で読む': node_program_source's value-taking / boolean / inline option tables and the Undetermined -> Ask arm (backlog f9861c4e)."

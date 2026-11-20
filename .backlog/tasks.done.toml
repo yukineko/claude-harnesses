@@ -86450,3 +86450,195 @@ rev = "6d59e12d9042d5b920de8c917686de9a3e8d1f1e"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "7eb86bb3"
+title = "blastguard FP: harmless brace-group feeder piped to bash is Ask/Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """Measured at dc9b00c7b (0.2.565) 2026-11-14 in run-20261114-075136-6996 follow-up. main/subagent: "{ echo 'echo hi'; } | bash" ask/deny; '{ echo a; echo b; } | bash' ask/deny; "echo 'echo hi' | bash" allow/allow. Two readings: (FP) group output is statically known harmless; (intended) multi-command group feeding a shell is deliberately unmodelled so Ask is fail-closed. RED asserts Allow."""
+created_at = 1794613011
+updated_at = 1795134545
+weight = 0.0
+issue_number = 1747
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1747"
+issue_closed_at = 1795134548
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_brace_group_feeder_piped_to_bash_fp -- --include-ignored"
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+observed_at = 1794613011
+detail = """
+exit 101: arness-worktrees/side-reds-075136/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/backlog_20261114_brace_group_feeder_piped_to_bash_fp.rs (target/debug/deps/backlog_20261114_brace_group_feeder_piped_to_bash_fp-0d22514ccaecfe2b)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_brace_group_feeder_piped_to_bash_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_brace_group_feeder_piped_to_bash_fp --test brace_group_feeder_adversarial_20261120"
+exit = 0
+passed = 18
+rev = "1847db6112473eaef01499e721391b49fb152e60"
+observed_at = 1795134536
+output_digest = "sha256:ad836dc3eec65036003039c57914e96ee60a91d6f8003db204b09fe9ada40955"
+excerpt = """
+
+running 2 tests
+test control_plain_harmless_feeder_piped_to_bash_is_allow ... ok
+test harmless_brace_group_feeder_piped_to_bash_is_allow ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+
+running 18 tests
+test finding2_preexisting_split_group_feeder_in_compound_is_deny ... ignored, backlog 8ec6de86: pre-existing: split brace-group feeder inside if/for is Ask, not Deny
+test finding3_preexisting_ask_class_program_through_feeder_is_not_allow ... ignored, backlog e0288820: pre-existing: Ask-class program fed to bash by an echo feeder is Allow
+test finding1_introduced_split_group_feeder_in_subshell_is_deny ... ok
+test group_feeding_a_file_reader_chain_is_not_allow ... ok
+test group_with_or_or_background_is_not_allow ... ok
+test group_with_a_redirect_is_not_allow ... ok
+test group_with_a_nested_pipe_or_group_is_not_allow ... ok
+test group_with_a_non_emitter_member_is_not_allow ... ok
+test harmful_group_to_other_shell_readers_is_deny ... ok
+test harmful_program_split_across_members_with_newline_is_deny ... ok
+test harmful_program_split_across_members_with_and_is_deny ... ok
+test group_with_an_expansion_is_not_allow ... ok
+test harmful_program_split_across_members_with_semicolon_is_deny ... ok
+test harmful_split_with_printf_escapes_is_deny ... ok
+test group_outside_the_model_in_other_shapes_is_not_allow ... ok
+test harmful_statement_beside_a_harmless_group_is_deny ... ok
+test harmful_program_in_one_member_is_deny ... ok
+test harmful_group_in_other_spellings_is_deny ... ok
+
+test result: ok. 16 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+   Compiling blastguard v0.2.773 (/Users/yuki/src/.harness-worktrees/session-3510aa71/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.08s
+     Running tests/backlog_20261114_brace_group_feeder_piped_to_bash_fp.rs (target/debug/deps/backlog_20261114_brace_group_feeder_piped_to_bash_fp-ad2ab7e10b789337)
+     Running tests/brace_group_feeder_adversarial_20261120.rs (target/debug/deps/brace_group_feeder_adversarial_20261120-da1a38fdf46f75c2)
+"""
+
+[task.closure.red]
+rev = "4d8dd9be752c569ceac8925d021a7e0648ea3fbb"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "7a5f65bd"
+title = "blastguard FP: read-only python3 -c json.load of ~/.claude/plugins/installed_plugins.json is Ask/Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Measured at dc9b00c7b (0.2.565) 2026-11-14 in run-20261114-075136-6996 follow-up; noticed when a subagent's read-only command was denied with 'a protected gate/config path — changing it changes which hooks and gates run'. main/subagent: ask/deny. Control python3 -c print(open('/tmp/x.json').read()) allow/allow. Two readings: (FP) a read is not changing the path; (intended) detect/interpreter.rs ~1308 says naming a protected path in program literals is deliberately asked on ('naming it is how it gets there'); docs/specs/blastguard.md has no ruling. RED asserts Allow.
+next --claim auto-cancel at e9da9a90a (2026-11-20, session 3510aa71): stored repro not-reproduced (exit 0, passes); user ruling 2026-11-13 not demonstrated -> close. Re-applied after the original store commit conflicted with main."""
+created_at = 1794613034
+updated_at = 1795134548
+weight = 0.0
+issue_number = 1748
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1748"
+issue_closed_at = 1795134549
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_read_of_protected_plugin_file_fp -- --include-ignored"
+rev = "2acef7628ea792a4b3f4ea772374e835317838ff"
+observed_at = 1794613034
+detail = """
+exit 101: rees/side-reds-075136/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261114_python_read_of_protected_plugin_file_fp.rs (target/debug/deps/backlog_20261114_python_read_of_protected_plugin_file_fp-0c08f20d853bc41d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_read_of_protected_plugin_file_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "next --claim auto-cancel at e9da9a90a (2026-11-20, session 3510aa71): stored repro not-reproduced (exit 0, passes); user ruling 2026-11-13 not demonstrated -> close. Re-applied after the original store commit conflicted with main."
+
+[[task]]
+id = "c9da0437"
+title = "python3 - heredoc: backtick span with / in an unrelated string literal is read as the open(...,'w') target (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+found in run-20261114-111444-69657 (2026-11-14, base b0b4ac6e3); RED by independent test author; see test module doc (both readings a/b)
+next --claim auto-cancel at e9da9a90a (2026-11-20, session 3510aa71): stored repro not-reproduced (exit 0, passes); user ruling 2026-11-13 not demonstrated -> close. Re-applied after the original store commit conflicted with main."""
+created_at = 1794626768
+updated_at = 1795134550
+weight = 0.0
+issue_number = 1753
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1753"
+issue_closed_at = 1795134551
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_heredoc_backtick_string_write_target_fp -- --include-ignored"
+rev = "aca3152a606ae2ea91e2f287ea5d4dada2f06e83"
+observed_at = 1794626768
+detail = """
+exit 101: /crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running tests/backlog_20261114_python_heredoc_backtick_string_write_target_fp.rs (target/debug/deps/backlog_20261114_python_heredoc_backtick_string_write_target_fp-f9925a4af716991a)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_heredoc_backtick_string_write_target_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "next --claim auto-cancel at e9da9a90a (2026-11-20, session 3510aa71): stored repro not-reproduced (exit 0, passes); user ruling 2026-11-13 not demonstrated -> close. Re-applied after the original store commit conflicted with main."
+
+[[task]]
+id = "9d88d739"
+title = """blastguard FP: quoted heredoc bodies judged as code (python3 - <<'EOF' with a backticked gh span is Ask; .rs append heredoc with "rm -rf ./a" literal followed by a command is Deny)"""
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "heredoc-fp",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Side finding of run-20261114-120314-34769 (flow session b3435a5e), RED committed 86d9b0dea, measured 2026-11-14. FP-A: python3 - <<'EOF' program with a `gh` span inside a Python string -> Ask, reason 'gh: no subcommand given — blastguard cannot tell what this does' (relay bgr-5dc49e87261a). FP-B: quoted heredoc appending "rm -rf ./a", to a .rs file followed by a cargo test line -> Deny 'recursive rm (-r) can delete an entire directory tree' even in main mode; without the trailing command Allow (blocks.jsonl ts=1794625871). Same class as open FP1/FP2b in backlog_20261113_fp_heredoc_rs_body_and_commit_msg_quotes.rs with different content; may share a root cause with GH #1664/#1680/#1739. RED: 2 ignored fail, 3 controls pass. Readings: (a) real FP (quoted heredoc body is data); (b) intended fail-closed for python stdin programs — distinguish: FP-A's span is inside a Python string literal, so a real parser of the target language separates it (memory: gate text vs code via parser). | User ruling 2026-11-17: the RED is correct. A quoted heredoc body is data whatever commands come before or after it; the 'OVER-BLOCKS, accepted' doc on strip_data_here_document_bodies (crates/blastguard/src/detect/heredoc.rs) and README.ja.md:584-587 are to be revised together with the fix. Widen only what REDs pin, to avoid fail-open.
+next --claim auto-cancel at e9da9a90a (2026-11-20, session 3510aa71): stored repro not-reproduced (exit 0, passes); user ruling 2026-11-13 not demonstrated -> close. Re-applied after the original store commit conflicted with main."""
+created_at = 1794626779
+updated_at = 1795134551
+weight = 0.0
+issue_number = 1758
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1758"
+issue_closed_at = 1795134552
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_quoted_heredoc_body_side_fps -- --ignored"
+rev = "7f5be37a64217094031a083db1b808e6e0ee4061"
+observed_at = 1794626779
+detail = """
+exit 101: 0 (/Users/yuki/src/.harness-worktrees/session-b3435a5e/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.67s
+     Running tests/backlog_20261114_quoted_heredoc_body_side_fps.rs (target/debug/deps/backlog_20261114_quoted_heredoc_body_side_fps-e32d5314fa6568e9)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_quoted_heredoc_body_side_fps`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "next --claim auto-cancel at e9da9a90a (2026-11-20, session 3510aa71): stored repro not-reproduced (exit 0, passes); user ruling 2026-11-13 not demonstrated -> close. Re-applied after the original store commit conflicted with main."

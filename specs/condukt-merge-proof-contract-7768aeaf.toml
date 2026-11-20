@@ -1,0 +1,164 @@
+[spec]
+id = "condukt-merge-proof-contract-7768aeaf"
+title = "condukt merge refuses fix/feature tasks without a valid tdd proof contract (7768aeaf)"
+status = "ratified"
+provenance_commit = "967ca7155bd2a27bc5a4b4addc317c359946c094"
+date = "2026-11-20"
+canon = []
+
+[spec.ratification]
+canon_commit = "967ca7155bd2a27bc5a4b4addc317c359946c094"
+date = "2026-11-20"
+reason = "Encodes backlog 7768aeaf plus user rulings 2026-11-20 rounds 1-5 (AskUserQuestion in /flow): merge-time proof contract f/g/h/i in condukt only, all GREEN slots, branch-tip commit tree minus proof dir, conduktTask resolution, resolve-merge incl. Manual clean path, fail-closed undetermined task/proof, stderr tokens"
+fingerprint = "dd6810d957f8da64"
+
+[[requirement]]
+id = "R1"
+statement = "requires_fp_oracle()==true の task について tdd proof file が 1 つも無いとき、`condukt worktree merge` は拒否し（非0終了・main 不変）、stderr に merge-proof-contract(i) を出す。"
+acceptance = [
+    "merge_of_fix_task_without_tdd_proofs_is_refused が #[ignore] の除去だけで pass する（assert は 25a27ee67 と同一）。",
+    "拒否時の stderr に `merge-proof-contract(i)` が含まれる。",
+    "拒否の前後で `git rev-parse main` が同じ。",
+    "同じ cmd の RED slot があって GREEN slot が無ければ `merge-proof-contract(missing-green)` で拒否する。RED の無い GREEN slot だけでは拒否理由にならない。",
+]
+canon = [
+    "crates/condukt/tests/backlog_20261117_merge_without_tdd_proofs.rs:254-276",
+    "crates/condukt/src/model.rs:162-169",
+    "crates/tdd/src/proof.rs:143-188",
+    "user rulings 2026-11-20 round 2, round 4 Q-D",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R2"
+statement = 'slot_files が列挙する全 GREEN slot（legacy の <task>.green.json と <task>.<16hex>.green.json）について、green.red_failed_tests の名前のうち green.tests で "pass" でないものが 1 つでもあれば merge-proof-contract(f) で拒否する。'
+acceptance = [
+    "merge_refused_when_green_passed_set_misses_a_red_failure が #[ignore] の除去だけで pass する。",
+    "独立 agent が書く分離テストを追加する（修正前に RED を観測する）。t.sh と mode.txt を commit してから real red(none)/green(lost) を記録し、非0終了・main 不変・stderr に `merge-proof-contract(f)` を assert する。",
+    "command が 2 つあり、2 つ目の GREEN slot だけが (f) に違反する場合も拒否する。",
+]
+canon = [
+    "crates/tdd/README.md:155-156",
+    "crates/tdd/README.md:180-184",
+    "crates/tdd/src/proof.rs:244-265",
+    "crates/condukt/tests/backlog_20261117_merge_without_tdd_proofs.rs:356-366",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R3"
+statement = "全 GREEN slot について、counts.determined==true かつ counts.passed==0 なら merge-proof-contract(g) で拒否する。"
+acceptance = [
+    "merge_refused_when_green_pass_count_is_zero が #[ignore] の除去だけで pass する。",
+    "独立 agent が書く分離テストを追加する（修正前に RED を観測する）。t.sh と mode.txt を commit してから real red(nocompile)/green(zero) を記録し、非0終了・main 不変・stderr に `merge-proof-contract(g)` を assert する。",
+]
+canon = [
+    "crates/tdd/README.md:151-153",
+    "crates/tdd/src/evidence.rs:375-389",
+    "crates/condukt/tests/backlog_20261117_merge_without_tdd_proofs.rs:368-377",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R4"
+statement = "全 GREEN slot について、green.tree_identity.tree が branch tip の commit tree（.tdd と設定上の proof dir を除外したもの。tdd と同じ除外）と違えば merge-proof-contract(h) で拒否する。"
+acceptance = [
+    "merge_refused_when_tree_changed_after_green が #[ignore] の除去だけで pass する。",
+    "独立 agent が書く分離テストを追加する（修正前に RED を観測する）。t.sh と mode.txt を commit し、real red(none)/green(good) を記録した後に trailer 付きの commit を足す。非0終了・main 不変・stderr に `merge-proof-contract(h)` を assert する。",
+    "GREEN の後に proof file（.tdd/）だけを commit しても (h) では拒否しない（他の条件が良ければ merge が成功する）。",
+]
+canon = [
+    "crates/tdd/src/evidence.rs:129-142",
+    "crates/tdd/src/evidence.rs:203-212",
+    "crates/tdd/README.md:141-148",
+    "crates/condukt/tests/backlog_20261117_merge_without_tdd_proofs.rs:379-402",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R5"
+statement = "判定できない入力はすべて拒否する。proof が判定不能なら merge-proof-contract(undetermined-proof)、task が判定不能なら merge-proof-contract(undetermined-task) を出す。"
+acceptance = [
+    "次の各条件は `merge-proof-contract(undetermined-proof)` で拒否する: red_failed_tests が null または欠落、counts.determined が false または counts が欠落、tree_identity または tree が null か欠落、proof が読めない・parse できない、slot_files の読み取りエラー、branch tip の tree が計算できない、worktree と archive の両方に内容の違う proof がある、proof dir が proof_dir_candidates の 1 候補に定まらない。",
+    "旧形式の手書き proof（write_valid_proofs）は拒否する。control_merge_with_valid_tdd_proofs_succeeds は、独立 agent がこの拒否を assert する control に re-anchor する。",
+    "task を名指しした（または conduktTask から解決した）merge で、run state が読めない・task が run state に無い・kind が無いときは `merge-proof-contract(undetermined-task)` で拒否する。requires_fp_oracle_only_for_fix_or_feature は green のまま。",
+]
+canon = [
+    "CLAUDE.md §3",
+    "crates/tdd/src/evidence.rs:203-237",
+    "crates/tdd/README.md:171-178",
+    "crates/condukt/src/proof_archive.rs:40-44",
+    "crates/condukt/src/proof_archive.rs:77-99",
+    "user rulings 2026-11-20 round 1, round 3 Q3, round 5 Q-F",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R6"
+statement = "proof は task worktree から読み、無ければ archive dir から読む。branch tip に commit された .tdd/ は読み元にしない。`worktree merge` では hold gate と trial merge より前に検査する。task 指定の無い merge は branch.<b>.conduktTask から task を解決する。契約の対象は kind fix/feature だけ。"
+acceptance = [
+    "契約に違反し、かつ conflict するか hold される branch は、merge-proof-contract token 付きの非0終了で拒否し、conflict や hold の記録を作らない。",
+    "--run/--task を付けない merge で、conduktTask が proof の無い fix task を指していれば `merge-proof-contract(i)` で拒否する。conduktTask の記録が無い branch は契約を検査しない。",
+    "kind=chore で proof の無い task の merge は成功する。",
+    "branch tip に commit された .tdd/ にしか proof が無い場合は merge-proof-contract(i) で拒否する。",
+    "main.rs:554-562 の doc を同じ commit で改訂する。",
+]
+canon = [
+    "crates/condukt/src/worktree.rs:1137-1158",
+    "crates/condukt/src/main.rs:554-562",
+    "crates/condukt/src/worktree.rs:833",
+    "crates/condukt/src/proof_archive.rs:40-44",
+    "crates/condukt/src/model.rs:162-169",
+    "user rulings 2026-11-20 round 3 Q1, round 5 Q-F",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R7"
+statement = "`condukt worktree resolve-merge` にも同じ契約を適用する（task は conduktTask で特定し、(h) は resolve 時点の branch tip と比べる）。Theirs では merge の前に検査する。clean に merge できる Manual では commit の直前に検査し、違反なら rollback する。Ours と marker だけの Manual は対象外。"
+acceptance = [
+    "Theirs で契約違反の branch は非0終了で merge-proof-contract(<item>) を出し、main HEAD は変わらない。",
+    "clean に merge できる Manual（worktree.rs:1633 経路）で違反があれば、非0終了・main HEAD==head_before・merge 進行中の状態が残らない。",
+    "Ours と ManualPending は契約で拒否しない。",
+    "conduktTask の記録が無い branch は契約を検査しない。",
+]
+canon = [
+    "crates/condukt/src/worktree.rs:1590-1641",
+    "crates/condukt/src/main.rs:570-579",
+    "user rulings 2026-11-20 round 3 Q2, round 4 Q-C, round 5 Q-E",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R8"
+statement = "有効な real proof を持つ merge は引き続き成功する。この契約で red になる既存テストは、裁定どおり独立 agent が re-anchor する。"
+acceptance = [
+    "control_merge_with_real_good_proofs_succeeds は tdd green の前に t.sh と mode.txt を commit するよう re-anchor し、exit 0 で pass する。",
+    "task_trailer_merge.rs で run state 無しに --run/--task を渡す成功 fixture は、kind=chore で state init してから pass する（trailer の assert は変えない）。",
+    "backlog_20261117_b2d9cb6b_retry_merge_task.rs:162 は fixture に real tdd red/green を加え、kind=fix のまま pass する。",
+    "ほかに kind=chore で re-anchor したテストは結果報告に列挙する。",
+    "cargo test -p condukt --test backlog_20261117_merge_without_tdd_proofs が、4 つの RED に #[ignore] を残さずに pass する。",
+]
+canon = [
+    "crates/condukt/tests/backlog_20261117_merge_without_tdd_proofs.rs:343-354",
+    "crates/condukt/tests/backlog_20261117_merge_without_tdd_proofs.rs:404-421",
+    "crates/condukt/tests/task_trailer_merge.rs:300-307",
+    "crates/condukt/tests/backlog_20261117_b2d9cb6b_retry_merge_task.rs:148-169",
+    "CLAUDE.md §2 (a)(b)",
+    "user rulings 2026-11-20 round 1, round 4 Q-A/Q-B",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R9"
+statement = "crates/condukt/README.md に「Merge proof contract (backlog 7768aeaf)」節を追加し、7 つの item と token・slot の集合・proof の読み元・(h) の除外・適用範囲を記述する。crates/tdd は変更しない。"
+acceptance = [
+    "`grep -n 'Merge proof contract (backlog 7768aeaf)' crates/condukt/README.md` が見出し 1 件に一致する。",
+    "merge-proof-contract(i|f|g|h|missing-green|undetermined-proof|undetermined-task) の 7 token が、その節と実装の stderr 文字列の両方に現れる。",
+    "`git diff --stat <base>..HEAD -- crates/tdd` が空。",
+]
+canon = [
+    "crates/tdd/README.md:180-184",
+    "user rulings 2026-11-20 round 1, round 4 Q-D, ruling 2026-11-20 (crates/tdd NOT in scope)",
+]
+falsifiable = true

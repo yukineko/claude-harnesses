@@ -982,12 +982,15 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
-notes = "env -S 'ls -la' gets Ask: env option -S is not modelled (Table B.5: Undetermined); test expects Allow. Observed 2026-11-20 on main a0ba7bad0 (detached worktree verify-main-q3q4), found while integrating Q3/Q4 deny-target table (7275b9d9); same failure on the integration tree. Readings: (a) real regression on main; (b) stale assert vs a later ruling or the S5 AST evaluator; distinguish by git log -S on the asserted case."
+status = "failed"
+notes = """
+env -S 'ls -la' gets Ask: env option -S is not modelled (Table B.5: Undetermined); test expects Allow. Observed 2026-11-20 on main a0ba7bad0 (detached worktree verify-main-q3q4), found while integrating Q3/Q4 deny-target table (7275b9d9); same failure on the integration tree. Readings: (a) real regression on main; (b) stale assert vs a later ruling or the S5 AST evaluator; distinguish by git log -S on the asserted case.
+fix done+verifier pass but NOT verified: run-20261121-043744-39490 envsplit, branch condukt/run-20261121-043744-39490/envsplit @696a95a19 (unmerged). Regression confirmed (c8f8dc0a3 ok -> 90bebb79e S4 b5.rs Ask). GREEN once @696a95a19: b1e6f2a7_env_split_string_b5 ok 13 passed; daf7611b 33; env_split_string_comment_collapse 4; s4_b5_layer 57. tdd green refused by testscope: 'rerun refused: tdd red --cmd cargo test -p blastguard --test b1e6f2a7_env_split_string_b5 already ran on this exact tree (696a95a19...:1dcbe1ce95dcba8e ...)' — a first tdd red attempt (checkout+red+restore in one command) was ledgered against the GREEN tree fingerprint (suspected testscope defect: fingerprint taken before the command mutates the tree). Needs human ruling: clear/correct the ledger entry, or accept the existing GREEN evidence."""
 created_at = 1795110476
-updated_at = 1795110476
+updated_at = 1795204751
+defer_until = 1795377551
 weight = 0.0
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

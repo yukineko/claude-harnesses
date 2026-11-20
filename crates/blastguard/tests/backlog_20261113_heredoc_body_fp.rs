@@ -128,8 +128,8 @@ fn fixture_git(dir: &std::path::Path, home: &Home, args: &[&str]) {
 /// Like [`setup_non_git`], but `proj` is a git work tree with `src/foo.rs`
 /// committed, so overwriting it is recoverable from git. The FP-B controls
 /// isolate the rm-text question, not the separate non-git-overwrite question
-/// (ruled Deny 2026-11-20; see the ignored
-/// `b_control_same_program_on_non_git_existing_file_is_denied`).
+/// (ruled 2026-11-20: same verdict as the shell `>` twin; see
+/// `b_control_same_program_on_non_git_existing_file_gets_the_shell_redirect_verdict`).
 fn setup(tag: &str) -> (Home, std::path::PathBuf, std::path::PathBuf) {
     let (home, cwd, proj) = setup_non_git(tag);
     fixture_git(&proj, &home, &["init", "-q", "-b", "main"]);
@@ -233,7 +233,6 @@ const RM_DOC: &str = "'/// Clean up with `rm -rf *` before running.'";
 const PLAIN_DOC: &str = "'/// Clean up before running.'";
 
 #[test]
-#[ignore = "RED: blastguard FP 2026-11-13 B — remove the ignore when fixed"]
 fn b_python_string_literal_with_rm_text_is_data_not_a_command() {
     let (home, cwd, proj) = setup("b1");
     let (cd, cr) = run_as(&fp_b_cmd(PLAIN_DOC, "true"), &proj, &home, false);
@@ -255,21 +254,28 @@ fn b_control_same_program_without_rm_text_is_not_denied() {
     assert_ne!(d, "deny", "program without rm text: {d} | {r}");
 }
 
-// Control pinning the user ruling 2026-11-20 「Deny のまま（推奨）」: the same
-// program overwriting an existing file that git does NOT hold is denied.
-// NOT OBSERVED at main ec71b087e (2026-11-20, macOS, fixture under
-// std::env::temp_dir()): measured "ask" — "truncating redirect is confined to
-// <fixture>/wt/proj — a safe root for this session" (the payload cwd is a
-// derived safe root). Ignored until the ruling and the measurement agree.
+// Control pinning the user ruling 2026-11-20 (re-asked, final): a python
+// `open(p, 'w')` overwrite of an EXISTING file outside any git work tree, in a
+// safe root, gets exactly the verdict of the shell `>` redirect on the same
+// file (confined Ask in the main session; Deny in a subagent, where nobody can
+// answer a prompt). The twin is computed here with the same setup, so the
+// property is "same as shell `>`", not a frozen literal. It must never be allow.
 #[test]
-#[ignore = "UNRESOLVED: ruled Deny, measured ask at main ec71b087e (cwd safe-root confined Ask)"]
-fn b_control_same_program_on_non_git_existing_file_is_denied() {
-    let (home, _cwd, proj) = setup_non_git("b4");
-    let (d, r) = run_as(&fp_b_cmd(PLAIN_DOC, "true"), &proj, &home, false);
-    assert_eq!(
-        d, "deny",
-        "python overwrite of an existing non-git file: {d} | {r}"
-    );
+fn b_control_same_program_on_non_git_existing_file_gets_the_shell_redirect_verdict() {
+    for subagent in [false, true] {
+        let (home, _cwd, proj) = setup_non_git(if subagent { "b4s" } else { "b4" });
+        let (td, tr) = run_as("echo x > src/foo.rs", &proj, &home, subagent);
+        let (d, r) = run_as(&fp_b_cmd(PLAIN_DOC, "true"), &proj, &home, subagent);
+        assert_eq!(
+            d, td,
+            "subagent={subagent}: python overwrite of an existing non-git file differs from \
+             the shell `>` twin (twin: {td} | {tr}): {d} | {r}"
+        );
+        assert_ne!(
+            d, "allow",
+            "subagent={subagent}: python overwrite of an existing non-git file: {d} | {r}"
+        );
+    }
 }
 
 // Control: a REAL wildcard rm after the heredoc is still denied.

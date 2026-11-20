@@ -25,8 +25,11 @@
 //!   `git commit` may carry an undetermined VALUE of `--trailer` / `--author`
 //!   (the next word, or the whole `--trailer=…` / `--author=…` word) whose
 //!   text runs no command (`$X`, `${X}`; never `$( )`, backquote, `<( )`,
-//!   `>( )`). git takes the next word as that value whatever it expands to, so
-//!   the body still reaches only git's stdin. Any other undetermined word (a
+//!   `>( )`). Whatever that value expands to (an UNQUOTED value may even split
+//!   into several words, e.g. extra options), the here-document is still
+//!   redirected to git's stdin only, so the body stays data; the words the
+//!   value may turn into are judged by the rest of the line (`git_stage`'s
+//!   whole-tree / unquoted-expansion rules). Any other undetermined word (a
 //!   bare `$X` operand, the word after `-F` / `--file`, `-m`, `--date`, `-c`,
 //!   `-C`, `--template`, an undetermined subcommand or command word) keeps the
 //!   body. `program_source` of the reader is `None` (not an interpreter,
@@ -387,8 +390,9 @@ fn data_reader_landing(c: &SimpleCommand) -> Option<Vec<String>> {
 /// `-F-`, `--file=-` or `--file -`, spelled as literal words. Its undetermined
 /// words may only be the VALUE of `--trailer` / `--author`: the next word, or
 /// the whole `--trailer=…` / `--author=…` word, and only if its text runs no
-/// command ([`reads_no_command`]). git takes the next word as that value
-/// whatever it expands to, so the body still reaches git's stdin only. Any
+/// command ([`reads_no_command`]). Whatever it expands to (an unquoted value
+/// may split into several words), the here-document still reaches git's
+/// stdin only; the resulting words are judged by the rest of the line. Any
 /// other undetermined word keeps the body: a bare `$X` operand, the word after
 /// `-F` / `--file` (which must be the literal `-`), after `-m`, `--date`, `-c`,
 /// `-C` or `--template`, and an undetermined subcommand or command word.

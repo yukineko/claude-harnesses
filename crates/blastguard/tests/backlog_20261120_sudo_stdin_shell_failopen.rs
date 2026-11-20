@@ -80,31 +80,31 @@ fn assert_not_allow(tag: &str, command: &str) {
 }
 
 #[test]
-#[ignore = "RED: blastguard fail-open 2026-11-20 sudo/doas stdin shell — remove the ignore when fixed"]
+#[ignore = "RED(e1bb5f7e): blastguard fail-open 2026-11-20 sudo/doas stdin shell — remove the ignore when fixed"]
 fn sudo_bash_stdin() {
     assert_not_allow("r1", "sudo bash < /tmp/p");
 }
 
 #[test]
-#[ignore = "RED: blastguard fail-open 2026-11-20 sudo/doas stdin shell — remove the ignore when fixed"]
+#[ignore = "RED(e1bb5f7e): blastguard fail-open 2026-11-20 sudo/doas stdin shell — remove the ignore when fixed"]
 fn bash_c_sudo_bash_stdin() {
     assert_not_allow("r2", "bash -c 'sudo bash' < /tmp/p");
 }
 
 #[test]
-#[ignore = "RED: blastguard fail-open 2026-11-20 sudo/doas stdin shell — remove the ignore when fixed"]
+#[ignore = "RED(e1bb5f7e): blastguard fail-open 2026-11-20 sudo/doas stdin shell — remove the ignore when fixed"]
 fn doas_sh_stdin() {
     assert_not_allow("r3", "doas sh < /tmp/p");
 }
 
 #[test]
-#[ignore = "RED: blastguard fail-open 2026-11-20 sudo/doas stdin shell — remove the ignore when fixed"]
+#[ignore = "RED(e1bb5f7e): blastguard fail-open 2026-11-20 sudo/doas stdin shell — remove the ignore when fixed"]
 fn sudo_s_stdin() {
     assert_not_allow("r4", "sudo -s < /tmp/p");
 }
 
 #[test]
-#[ignore = "RED: blastguard fail-open 2026-11-20 sudo/doas stdin shell — remove the ignore when fixed"]
+#[ignore = "RED(e1bb5f7e): blastguard fail-open 2026-11-20 sudo/doas stdin shell — remove the ignore when fixed"]
 fn sudo_u_root_bash_stdin() {
     assert_not_allow("r5", "sudo -u root bash < /tmp/p");
 }

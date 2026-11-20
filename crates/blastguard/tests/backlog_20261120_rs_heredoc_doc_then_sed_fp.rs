@@ -94,14 +94,14 @@ const SED: &str = "sed -i '' 's/a/b/' Cargo.toml";
 const IGNORE_MSG: &str = "RED: blastguard FP 2026-11-20 .rs heredoc body read as shell when a sed -i line follows — remove the ignore when fixed";
 
 #[test]
-#[ignore = "RED: blastguard FP 2026-11-20 .rs heredoc body read as shell when a sed -i line follows — remove the ignore when fixed"]
+#[ignore = "RED(6f299fb5): blastguard FP 2026-11-20 .rs heredoc body read as shell when a sed -i line follows — remove the ignore when fixed"]
 fn rs_heredoc_dangerous_doc_then_sed_is_allow() {
     let _ = IGNORE_MSG;
     assert_decision("r1", &format!("{HEREDOC_DANGEROUS_DOC}\n{SED}"), "allow");
 }
 
 #[test]
-#[ignore = "RED: blastguard FP 2026-11-20 .rs heredoc body read as shell when a sed -i line follows — remove the ignore when fixed"]
+#[ignore = "RED(6f299fb5): blastguard FP 2026-11-20 .rs heredoc body read as shell when a sed -i line follows — remove the ignore when fixed"]
 fn cd_prefixed_rs_heredoc_dangerous_doc_then_sed_is_allow() {
     let home = unique_home("r2");
     let proj = home.0.join("proj");

@@ -87,24 +87,25 @@ mod static_bindings;
 /// `pass` — so they no longer read its string literals as commands. A program
 /// the parser cannot read keeps its legacy readings.
 ///
-/// The OUTERMOST call (the user's line) also fixes, once, whether nothing on
-/// that line can change what the names a determined producer pipeline uses
-/// run ([`top_level_names_fixed`], backlog 40dc52c0). Every call made while it
-/// runs — the b5 / S5 `judge` re-entries on a derived text included — keeps
-/// that value; it is never recomputed from derived text.
+/// Each call also narrows whether nothing on the derivation chain so far can
+/// change what the names a determined producer pipeline uses run
+/// ([`chain_names_fixed`], backlog 40dc52c0): the OUTERMOST call (the user's
+/// line) sets it to `resolution_fixed(c)`; a re-entry on derived text (the
+/// b5 / S5 `judge` re-entries) to the enclosing value AND `resolution_fixed`
+/// of its own text, restored on return. Derived text only ever narrows it, so
+/// a middle layer that rebinds a name (`bash -c 'PATH=…; bash -c "…"'`)
+/// disables static resolution for every layer below it.
 pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision {
     struct Restore(Option<bool>);
     impl Drop for Restore {
         fn drop(&mut self) {
-            TOP_LEVEL_NAMES_FIXED.with(|t| t.set(self.0));
+            CHAIN_NAMES_FIXED.with(|t| t.set(self.0));
         }
     }
-    let outer = TOP_LEVEL_NAMES_FIXED.with(std::cell::Cell::get);
+    let outer = CHAIN_NAMES_FIXED.with(std::cell::Cell::get);
     let _restore = Restore(outer);
-    if outer.is_none() {
-        let fixed = super::payload::determined_output::resolution_fixed(c);
-        TOP_LEVEL_NAMES_FIXED.with(|t| t.set(Some(fixed)));
-    }
+    let fixed = outer.unwrap_or(true) && super::payload::determined_output::resolution_fixed(c);
+    CHAIN_NAMES_FIXED.with(|t| t.set(Some(fixed)));
     // User ruling 2026-11-19 ①: the AST evaluator holds the hook's cwd (the
     // payload cwd) as a known value, so a relative `cd` is resolved.
     super::ast::with_hook_dir(scope.session_cwd(), || every_reading_scoped(c, scope))
@@ -113,19 +114,20 @@ pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision 
 thread_local! {
     /// `Some(v)` while a Bash detection runs on this thread: `v` is
     /// [`super::payload::determined_output::resolution_fixed`] of the user's
-    /// top-level line, set by the outermost [`detect_bash_every_reading`].
-    static TOP_LEVEL_NAMES_FIXED: std::cell::Cell<Option<bool>> =
+    /// top-level line AND of every derived text [`detect_bash_every_reading`]
+    /// was re-entered on around the current call.
+    static CHAIN_NAMES_FIXED: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
 }
 
-/// Whether the user's top-level line leaves `echo` / `seq` / `cat` / `sort`
-/// unrebound (no function definition, no assignment, only allowlisted
-/// commands), as fixed by the outermost [`detect_bash_every_reading`]. Outside
-/// a Bash detection (a `Ctx` built for Write / Edit, a unit test) it is
-/// `false`: no line was read, so nothing is shown to be fixed. Read by
-/// [`super::Ctx::new`] and by the Table B.5 layer.
-pub(in crate::detect) fn top_level_names_fixed() -> bool {
-    TOP_LEVEL_NAMES_FIXED
+/// Whether the user's top-level line and every enclosing derived text leave
+/// `echo` / `seq` / `cat` / `sort` unrebound (no function definition, no
+/// assignment, only allowlisted commands), as narrowed by
+/// [`detect_bash_every_reading`]. Outside a Bash detection (a `Ctx` built for
+/// Write / Edit, a unit test) it is `false`: no line was read, so nothing is
+/// shown to be fixed. Read by [`super::Ctx::new`] and by the Table B.5 layer.
+pub(in crate::detect) fn chain_names_fixed() -> bool {
+    CHAIN_NAMES_FIXED
         .with(std::cell::Cell::get)
         .unwrap_or(false)
 }

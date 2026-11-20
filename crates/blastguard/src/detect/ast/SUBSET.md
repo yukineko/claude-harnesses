@@ -133,12 +133,15 @@ S4 rulings (user ruling 2026-11-18):
     (`bash <(echo hi | cat)`, `bash <(seq 10 | sort)`,
     `bash <(echo "$(echo hi)")`, `echo hi | cat | bash`;
     `payload/determined_output.rs`, `b5.rs::determined_delivered_program`).
-    Only when the user's top-level line AND the text being judged define no
-    function, make no assignment and run only `echo` / `seq` / `cat` /
-    `sort` and shells / interpreters (`resolution_fixed`); the top-level
-    value is fixed once per detection (`readings.rs::top_level_names_fixed`,
-    `Ctx::names_fixed`) and never recomputed from derived text, so
-    `cat(){ …; }; eval 'echo hi | cat | bash'` keeps its Ask. Any other
+    Only when the user's top-level line, every derived text on the way, AND
+    the text being judged define no function, make no assignment and run
+    only `echo` / `seq` / `cat` / `sort` and shells / interpreters
+    (`resolution_fixed`); the chain value starts from the user's line and is
+    only ever narrowed by each derived text (`readings.rs::chain_names_fixed`,
+    `Ctx::names_fixed` narrowed in `detect_bash`), never widened, so
+    `cat(){ …; }; eval 'echo hi | cat | bash'` and
+    `bash -c 'PATH=/tmp/x:$PATH; bash -c "echo hi | cat | bash"'` keep their
+    Ask. Any other
     producer or filter, option, file operand or undetermined word (an
     unquoted `$( )`, a backquote, `$N`) keeps the Undetermined.
 22. (T1) A program file that is git-tracked AND unmodified gets no B.5

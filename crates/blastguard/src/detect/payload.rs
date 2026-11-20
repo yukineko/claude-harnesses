@@ -210,10 +210,10 @@ fn stdin_exec_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     }
     // Whether nothing can change what `echo` / `seq` / `cat` / `sort` run, the
     // precondition for computing a producer pipeline's output
-    // (`determined_output`, backlog 40dc52c0): BOTH the user's top-level line
-    // (`ctx.names_fixed`, fixed once from that line, so a function or
-    // `export -f` before an `eval` / `bash -c` body is seen) AND `cmd` itself
-    // (a body may define its own function). Computed at most once.
+    // (`determined_output`, backlog 40dc52c0): the user's line and every text
+    // derived on the way here (`ctx.names_fixed`, only ever narrowed, so a
+    // function before an `eval` body or a middle `PATH=` is seen) AND `cmd`
+    // itself (a body may define its own function). Computed at most once.
     let fixed_cell = std::cell::OnceCell::new();
     let resolution_fixed =
         || *fixed_cell.get_or_init(|| ctx.names_fixed && determined_output::resolution_fixed(cmd));

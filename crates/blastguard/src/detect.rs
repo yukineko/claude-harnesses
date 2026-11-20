@@ -343,12 +343,11 @@ struct Ctx<'a> {
     /// `cd <dir> && ` that [`analyze_shell_payload`] puts before its payload: the
     /// directory a here-document's Python program runs in (`python_file_body_verdict`).
     cwd_prefix: Option<String>,
-    /// Whether the USER'S TOP-LEVEL line leaves `echo` / `seq` / `cat` / `sort`
-    /// unrebound ([`payload::determined_output::resolution_fixed`], backlog
-    /// 40dc52c0): read by [`Ctx::new`] from [`readings::top_level_names_fixed`]
-    /// (fixed once per detection from the user's line, never from the variant
-    /// or derived `command` given here), carried unchanged into every derived
-    /// context; `false` outside a Bash detection.
+    /// Whether the user's line and every text derived on the way here leave
+    /// `echo` / `seq` / `cat` / `sort` unrebound (backlog 40dc52c0): read by
+    /// [`Ctx::new`] from [`readings::chain_names_fixed`], then only NARROWED by
+    /// [`detect_bash`] with `resolution_fixed` of each text it judges, so a
+    /// middle layer that rebinds a name disables it below; `false` outside Bash.
     names_fixed: bool,
 }
 
@@ -393,7 +392,7 @@ impl<'a> Ctx<'a> {
                 .or_else(|| tied_rest.and_then(git_worktree_eligible)),
             program_text_redirects: None,
             cwd_prefix: None,
-            names_fixed: readings::top_level_names_fixed(),
+            names_fixed: readings::chain_names_fixed(),
         }
     }
 
@@ -405,8 +404,7 @@ impl<'a> Ctx<'a> {
             self.rewritten_base
                 .map(|base| format!("{}/{}", base.trim_end_matches('/'), dir))
         };
-        // Every other field (the bases, the TOP-LEVEL eligibilities,
-        // `names_fixed`, …) is carried unchanged.
+        // Every other field (the bases, the TOP-LEVEL eligibilities, …) is carried unchanged.
         Ctx {
             raw_base,
             places: self.places.after_cd(dir),
@@ -657,8 +655,9 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
             "command is too complex to analyse within the safety budget — blastguard cannot vouch for it either way",
         );
     }
-    // AST values are depth 0's only.
-    let _ast_depth = ast::targets::enter_depth(depth);
+    let _ast_depth = ast::targets::enter_depth(depth); // AST values are depth 0's only.
+    let narrowed = ctx.names_fixed_narrowed_by(cmd); // backlog 40dc52c0 (`names_fixed`)
+    let ctx = narrowed.as_ref().unwrap_or(ctx);
     // 0a. QUOTED heredoc bodies the shell parser shows are data (fed to `cat`
     // / `tee` / `git commit -F -`, landing in no file any command of the line
     // runs) are removed, and the rest is judged by every rule below; an

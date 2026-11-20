@@ -817,10 +817,10 @@ pub(super) fn literal_delivered_program(
 /// (`echo hi | cat | bash`). That computed output is the program, read by
 /// the caller as a literal body.
 ///
-/// `None` unless BOTH the user's top-level line
-/// ([`crate::detect::readings::top_level_names_fixed`], fixed once per
-/// detection, so a `b5` / S5 re-entry on derived text never recomputes it)
-/// AND `text` itself leave the modelled names unrebound
+/// `None` unless BOTH the user's top-level line and every enclosing derived
+/// text ([`crate::detect::readings::chain_names_fixed`], only ever narrowed
+/// by a `b5` / S5 re-entry on derived text, never widened) AND `text` itself
+/// leave the modelled names unrebound
 /// (`determined_output::resolution_fixed`), and unless the delivering text
 /// is exactly such a pipeline. Every other shape keeps its Undetermined.
 fn determined_delivered_program(
@@ -832,7 +832,7 @@ fn determined_delivered_program(
     k: usize,
 ) -> Option<String> {
     use crate::detect::payload::determined_output::{pipeline_output, resolution_fixed};
-    if !crate::detect::readings::top_level_names_fixed() || !resolution_fixed(text) {
+    if !crate::detect::readings::chain_names_fixed() || !resolution_fixed(text) {
         return None;
     }
     let procsub_inner = |range: &std::ops::Range<usize>| -> Option<String> {

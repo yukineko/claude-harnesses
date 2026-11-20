@@ -40,12 +40,17 @@
 //! `cat`, `sort` and `seq` are external commands (and `echo` can be a
 //! function), so the computed text is the program only if nothing on the
 //! command line changes what those names run. [`resolution_fixed`] is that
-//! precondition. Callers require it of BOTH the user's top-level line —
-//! fixed once per detection by `readings::detect_bash_every_reading` and
-//! carried as `Ctx::names_fixed` (b5 reads `readings::top_level_names_fixed`),
-//! never recomputed from derived text, so a function defined or exported
-//! before an `eval` / `bash -c` body is seen — AND the text being judged (a
-//! body may define its own function); they compute nothing otherwise.
+//! precondition. Callers require it of the user's top-level line, of EVERY
+//! derived text on the way to the one being judged, AND of that text: the
+//! chain value starts from the user's line in `readings::detect_bash_every_reading`
+//! and is only ever narrowed — by every re-entry there
+//! (`readings::chain_names_fixed`, read by b5) and by `detect_bash` for each
+//! text it judges (`Ctx::names_fixed`, [`Ctx::names_fixed_narrowed_by`]) — so
+//! a function defined or exported before an `eval` / `bash -c` body, and a
+//! MIDDLE body that rebinds a name (`bash -c 'PATH=…; bash -c "echo hi | cat
+//! | bash"'`), are seen. They compute nothing otherwise.
+//!
+//! [`Ctx::names_fixed_narrowed_by`]: crate::detect::Ctx::names_fixed_narrowed_by
 
 use super::super::ast::{self, Analysis, Value};
 use super::{evaluate_printf_stage, plain_echo_output, PrintfStage};
@@ -104,6 +109,21 @@ pub(in crate::detect) fn resolution_fixed(cmd: &str) -> bool {
             Value::Undetermined(_) => false,
         }
     })
+}
+
+impl<'a> crate::detect::Ctx<'a> {
+    /// The context for judging `cmd` when `cmd` is the first text on the
+    /// derivation chain that fails [`resolution_fixed`] (a middle `-c` /
+    /// `eval` / `$( )` body assigning `PATH`, defining a function, running
+    /// `hash` / `alias` / `enable`, …): `names_fixed` turned off, so no layer
+    /// below computes a producer's output. `None` (keep `self`) when it is
+    /// already off or `cmd` passes. Only ever narrows (backlog 40dc52c0).
+    pub(in crate::detect) fn names_fixed_narrowed_by(&self, cmd: &str) -> Option<Self> {
+        (self.names_fixed && !resolution_fixed(cmd)).then(|| crate::detect::Ctx {
+            names_fixed: false,
+            ..self.clone()
+        })
+    }
 }
 
 /// The output of `text` when it is a modelled pipeline (see the module docs);

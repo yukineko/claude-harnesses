@@ -2767,3 +2767,32 @@ exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finish
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
+
+[[task]]
+id = "796d27b6"
+title = '''blastguard: backlog_20261114_dup_target_quoted_dollar_fp red on main (bash <&'$fd' and bash <&\$fd are Ask, expected Allow)'''
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-20 by the run-20261120-071122-49691 driver via donegate after merging 8f2fe8c18 (which touched no src: version files + an all-ignored test file). main now cc0f372ac (peer merge 0.2.805). Not bisected; not run on the commit before 8f2fe8c18. Readings: (a) FP regression from a peer blastguard merge between 0.2.79x and 0.2.805; (b) intended by a newer ruling, then the asserts are frozen and need a ruling. Distinguish by bisecting the test over the blastguard merges since the test last passed."
+created_at = 1795155655
+updated_at = 1795155655
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_dup_target_quoted_dollar_fp"
+rev = "cc0f372ac2f5406626a03b2ed072866af8d70773"
+observed_at = 1795155655
+detail = """
+exit 101:  (/Users/yuki/src/.harness-worktrees/file-dup-target-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 52.25s
+     Running tests/backlog_20261114_dup_target_quoted_dollar_fp.rs (target/debug/deps/backlog_20261114_dup_target_quoted_dollar_fp-aa1e9ecd080bafd1)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_dup_target_quoted_dollar_fp`"""

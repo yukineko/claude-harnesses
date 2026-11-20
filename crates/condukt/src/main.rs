@@ -1373,7 +1373,11 @@ enum PolicyAction {
     /// `escalate` (exit 2) or `block` (exit 3), prints `{"answered":false,...}`
     /// so the caller falls through to a real AskUserQuestion / refuses. Same
     /// exit contract as `decide` (1 = invalid input: bad level or a --recommend
-    /// index with no matching --option).
+    /// index with no matching --option). With `--resolve` in an autonomous run
+    /// the exit contract is instead 0 auto / 3 deny / 4 reject / 5 cancel,
+    /// never 2 (see --resolve); invalid levels still exit 1 (they are parsed
+    /// before --resolve), but an absent/out-of-range --recommend is a cancel
+    /// (exit 5), not invalid.
     Answer {
         /// How much damage if this decision is wrong (low|medium|high).
         #[arg(long)]
@@ -1419,7 +1423,11 @@ enum PolicyAction {
         /// self-answers (`auto` is clamped to `escalate`); the human /
         /// AskUserQuestion always decides, because a thing that cannot be
         /// meaningfully tested must ask the human — §2's surviving 質疑 channel.
-        /// Takes precedence over --conflict (both clamp identically).
+        /// Takes precedence over --conflict (both clamp identically). Without
+        /// --resolve (or when the run is not autonomous) it escalates; with
+        /// --resolve in an autonomous run it is rejected instead (exit 4, see
+        /// --resolve) — it still NEVER self-answers. Under --resolve a block
+        /// verdict still wins first (deny, exit 3) before the reject.
         #[arg(long)]
         untestable: bool,
         /// Frame this as a **permission approval** — a YES/NO "may I proceed?"
@@ -1429,9 +1437,33 @@ enum PolicyAction {
         /// recommended option (journaled like any other auto). The `block` hard
         /// stop is NEVER relaxed, and the flag is INERT unless the run is
         /// autonomous, so a non-autonomous run still prompts. --untestable and
-        /// --conflict take precedence: a raising clamp always wins.
+        /// --conflict take precedence: a raising clamp always wins. Under
+        /// --resolve (autonomous) --approval has no extra effect: everything
+        /// not denied/rejected/cancelled self-answers anyway.
         #[arg(long)]
         approval: bool,
+        /// The measurement behind this decision is missing (unmeasured). Only
+        /// meaningful with --resolve in an autonomous run, where it yields
+        /// `{"answered":false,"policy":"reject"}` (exit 4) unless the verdict is
+        /// a destructive deny. Without --resolve (or non-autonomous) it is
+        /// inert.
+        #[arg(long)]
+        unmeasured: bool,
+        /// Resolve to a terminal outcome and NEVER escalate (exit 2), user
+        /// ruling 2026-11-21 「破壊はdeny,未測定はreject,autoで自答はいいが解決
+        /// できないときは別の問いかcancel, 基本はすべてAllow」. Only when the run
+        /// is autonomous (same predicate as --approval); otherwise INERT (output
+        /// and exit identical to without it). Precedence, first match wins:
+        /// the base policy blocks (risk high + reversible low, or any other
+        /// risk/reversible/confidence combination it blocks, e.g. medium/low/low
+        /// or high/medium/low) -> `deny` exit 3;
+        /// --untestable/--unmeasured -> `reject` exit 4; --conflict or no valid
+        /// --recommend option -> `cancel` exit 5 (re-pose once as a different
+        /// answerable question, else cancel the item); otherwise `auto` with the
+        /// recommended option, exit 0. Every outcome is journaled with
+        /// `"resolve":true`.
+        #[arg(long)]
+        resolve: bool,
     },
     /// Print the gate-decision audit trail (JSONL): every question whose
     /// verdict the policy resolved — `auto` (self-answered, `chosen` set),
@@ -1750,9 +1782,19 @@ enum CircuitAction {
         /// `--session` one, or a live stateless claim's) holds this many
         /// top-level `compact_boundary` system lines, the breaker trips
         /// `session_compacted` so the caller hands off to a FRESH session.
-        /// 0 is clamped to 1 (it never disables the axis).
+        /// 0 is clamped to 1 (it never disables the axis); ONLY
+        /// `--no-compaction-axis` disables it.
         #[arg(long, default_value_t = circuit::DEFAULT_MAX_COMPACTIONS)]
         max_compactions: u32,
+        /// Disable the compaction axis (user ruling 2026-11-21: for /flow the
+        /// only stop reason is the circuit breaker, so compaction must not stop
+        /// the loop). Nothing is counted, `session_compacted` never trips, and an
+        /// uncountable transcript does not trip on its own; `--max-compactions`
+        /// is then ignored. Every other axis (failure_streak, streak_unmeasured,
+        /// stall, idle_unmeasured, budget) is unchanged. stdout reports
+        /// `"compaction_axis":"disabled"` (`"enabled"` without the flag).
+        #[arg(long)]
+        no_compaction_axis: bool,
     },
 }
 
@@ -2166,6 +2208,7 @@ fn refuse_undetermined_config(cmd: &Command, err: &str) -> Result<()> {
                 streak_cap,
                 idle_ttl_secs,
                 max_compactions,
+                no_compaction_axis,
                 ..
             },
     } = cmd
@@ -2189,6 +2232,7 @@ fn refuse_undetermined_config(cmd: &Command, err: &str) -> Result<()> {
             "idle_ttl_secs": idle_ttl_secs,
             "compactions": serde_json::Value::Null,
             "max_compactions": (*max_compactions).max(1),
+            "compaction_axis": if *no_compaction_axis { "disabled" } else { "enabled" },
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
         eprintln!("condukt circuit check: {why}; tripping");
@@ -2529,6 +2573,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 budget_cap_usd,
                 session,
                 max_compactions,
+                no_compaction_axis,
             } => {
                 // The handler prints the verdict JSON + journals fail-soft and
                 // returns the exit code (0 = continue, 1 = trip). Exit directly
@@ -2543,6 +2588,7 @@ fn run_user(cmd: Command) -> Result<()> {
                     circuit::TranscriptAxes {
                         session: session.as_deref(),
                         max_compactions,
+                        compaction_axis: !no_compaction_axis,
                     },
                 );
                 std::process::exit(code);
@@ -3535,6 +3581,8 @@ fn run_policy(cfg: &Config, action: PolicyAction) -> ! {
             conflict,
             untestable,
             approval,
+            unmeasured,
+            resolve,
         } => {
             let (risk, reversible, mut confidence) =
                 parse_policy_levels(&risk, &reversible, &confidence);
@@ -3542,6 +3590,17 @@ fn run_policy(cfg: &Config, action: PolicyAction) -> ! {
             // the legacy invocation (no --title/--files/--class).
             if let Some(cal) = calibrated_confidence(&title, &files, &class) {
                 confidence = cal;
+            }
+            // `--resolve` (autonomous only; inert otherwise): a terminal
+            // outcome, never escalate. Pure decision in `policy::resolve_outcome`.
+            if resolve && policy_is_autonomous(cfg) {
+                let base = policy::decide(risk, reversible, confidence);
+                let valid = options.get(recommend).is_some();
+                let o = policy::resolve_outcome(base, untestable, unmeasured, conflict, valid);
+                let dir = journal_dir.unwrap_or_else(|| cfg.state_dir.clone());
+                std::process::exit(policy::emit_resolve(
+                    o, &question, &options, recommend, &dir,
+                ));
             }
             // An untestable decision (§2) or a merge-conflict resolution never
             // self-answers (auto→escalate), so a human always decides. A

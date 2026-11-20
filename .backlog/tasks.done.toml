@@ -88276,3 +88276,137 @@ rev = "0070f2839d5f07df92535509f455f370071d9fa0"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "7768aeaf"
+title = "condukt merge: fix task merges without tdd proofs / without GREEN covering RED / with zero passes / with tree changed after GREEN"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """User ruling 2026-11-17 (proof contract f,g,h,i). RED 25a27ee67 crates/condukt/tests/backlog_20261117_merge_without_tdd_proofs.rs (4 ignored REDs, 2 controls pass). Observed: merge exit=Some(0) stdout=merged 'run-nomerge-proofs/t1' into main. | RULED 2026-11-20 by user in /flow (session 62e92d16; specforge divert, spec id condukt-merge-proof-contract-7768aeaf, NOT yet ratified: rigor still fails after 4 rounds). Rulings verbatim: User rulings 2026-11-20 (AskUserQuestion, answering specforge rigor gaps): - Old-layout proofs (no tree_identity / tests / counts / red_failed_tests) are REFUSED by merge (fail-closed). control_merge_with_valid_tdd_proofs_succeeds is a frozen assert on a stale premise: an independent agent (not the implementer) re-anchors it to a control asserting that old-layout hand-written proofs are refused, and the "valid proofs succeed" control is carried by real tdd red/green proofs. - (h) comparison target = the branch tip's COMMIT tree (what actually lands on main), compared with green.tree_identity.tree. control_merge_with_real_good_proofs_succeeds currently records GREEN with t.sh / mode.txt untracked; an independent agent re-anchors it so the fixture commits those files before tdd green (so GREEN's tree equals the commit tree), keeping its intent "real good proofs merge". - Slots: (f), (g), (h) are required for EVERY GREEN slot of the task (every <task>.<16hex>.<kind>.json); if any slot is missing, undeterminable (red_failed_tests null, counts.determined false, tree_identity null/undetermined) or fails, merge is refused, with the reason on stderr. - Applies only to tasks with requires_fp_oracle() == true (kind fix/feature). - Document the contract in crates/condukt/README.md (section "Merge proof contract (backlog 7768aeaf)"). User rulings 2026-11-20 round 2 (AskUserQuestion, answering specforge rigor gaps; these refine and override the round-1 "Slots" line above): - Slot set = every GREEN slot slot_files() enumerates: the legacy name <task>.green.json AND the hashed names <task>.<16hex>.green.json. (The "<task>.<16hex>.<kind>.json" in round 1 was shorthand; legacy-named slots are included.) - "missing" = a RED slot (same cmd) with no corresponding GREEN slot → refuse. A GREEN slot without a RED slot is NOT by itself a refusal reason under this rule. A task with no proof files at all is refused by R1 (i). - (h) comparison: green.tree_identity.tree is compared with the branch tip's commit tree with the proof dir removed (.tdd and the configured proof dir), the same exclusion tdd applies when computing tree_identity.tree. Committing proof files therefore does not by itself cause a mismatch. - Isolation acceptance: an independent agent (not the implementer) adds tests proving each of (f), (g), (h) is effective on its own: fixtures that commit t.sh / mode.txt before recording real tdd red/green (so (h) holds and only the targeted check can refuse), and assertions on the refusal reason printed to stderr naming the violated item. These tests must be observed RED before the fix. User rulings 2026-11-20 round 3 (AskUserQuestion, merge proof contract scope): - Q1 task-less merge: when `condukt worktree merge` is run without --run/--task, the task is resolved from the branch's branch.<b>.conduktTask record and the contract is applied to it. (A branch with no conduktTask record stays a task-less merge, out of the contract, as main.rs:557 says.) Revise the main.rs:557-560 doc text in the same commit. - Q2 resolve-merge: the contract also applies to `condukt worktree resolve-merge`; (h) compares against the branch tip at resolve time (what actually lands on main). - Q3 undeterminable kind: for a merge that names (or resolves via conduktTask) a task, refuse when the task is absent from run state, when run state cannot be read, and when the task's kind is absent. This is a merge-time fail-closed rule; requires_fp_oracle()'s own semantics (absent → false) are unchanged for other callers. - Ordering: the contract check runs BEFORE the trial merge and the hold gate, so a contract-violating branch is refused non-zero (main untouched) even if it would conflict or be held. User rulings 2026-11-20 round 4 (AskUserQuestion): - Q-A: crates/condukt/tests/task_trailer_merge.rs success fixtures (all_commits_trailered_merges and the others naming --run runA --task t1 without run state, e.g. :297, :306) are re-anchored by an independent agent: the fixture runs `condukt state init` with a task of kind=chore, so the merge is outside the proof contract and the trailer property they guard is unchanged. Any other existing test that merges a named task without run state is handled the same way (kind=chore re-anchor) when it turns red, and each such re-anchor is listed in the result. - Q-B: crates/condukt/tests/backlog_20261117_b2d9cb6b_retry_merge_task.rs:162 (kind=fix, no .tdd/) is a proxy assert for retry-worktree identity resolution; an independent agent re-anchors it by adding real tdd red/green proofs to the fixture (kind stays fix). - Q-C: resolve-merge identifies the task by the branch.<b>.conduktTask record (same rule as Q1; no record → task-less, outside the contract). The contract applies only to resolve outcomes that land the branch's content on main; Manual (markers only, nothing lands) and Ours (merge -s ours, branch content does not land) are outside it. - Q-D: refusal stderr names the violated item with the token `merge-proof-contract(<item>)`, items: i, f, g, h, missing-green, undetermined-proof, undetermined-task. Documented in crates/condukt/README.md "Merge proof contract (backlog 7768aeaf)". Isolation tests assert these tokens. | OPEN (round 5, specforge rigor, unanswered): Q-E resolve-merge Manual can land a clean merge (worktree.rs:1617-1635) contradicting 'Manual outside' - choose (a) check before trial merge, (b) check before commit + rollback, (c) keep Manual out. Q-F proof source at merge/resolve-merge (worktree / archive dir / branch-tip .tdd), conflict handling between sources, multiple proof_dir candidates."""
+created_at = 1794868812
+updated_at = 1795200237
+weight = 0.0
+issue_number = 1842
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1842"
+issue_closed_at = 1795200240
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261117_merge_without_tdd_proofs -- --ignored"
+rev = "9f1ad7438b27dee634223982a612de3266f60211"
+observed_at = 1794868812
+detail = """
+exit 101: t: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 2 filtered out; finished in 2.15s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_20261117_merge_without_tdd_proofs.rs (target/debug/deps/backlog_20261117_merge_without_tdd_proofs-ca6ac8c8d696119a)
+error: test failed, to rerun pass `-p condukt --test backlog_20261117_merge_without_tdd_proofs`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261117_merge_without_tdd_proofs"
+exit = 0
+passed = 6
+rev = "9cf75ce4ebcc07d09d4ab058d69f6dcf382c37d2"
+observed_at = 1795200170
+output_digest = "sha256:1cbc7f88bd27a34ede7d918f7239f606270569ca3d97fd3fbf135989fd63b7ed"
+excerpt = """
+.8.6
+   Compiling utf8-chars v3.0.7
+   Compiling cached v0.59.0
+   Compiling rand_core v0.9.5
+   Compiling bstr v1.12.2
+   Compiling tracing v0.1.44
+   Compiling insta v1.49.0
+   Compiling indenter v0.3.4
+   Compiling globset v0.4.18
+   Compiling rand_chacha v0.9.0
+   Compiling rand_xorshift v0.4.0
+   Compiling rand v0.9.4
+   Compiling shlex v1.3.0
+   Compiling unarray v0.1.4
+   Compiling bon v3.9.3
+   Compiling proptest v1.11.0
+   Compiling overwatch v0.2.127 (/Users/yuki/src/.harness-worktrees/close-7768aeaf-71206/crates/overwatch)
+   Compiling schemaguard v0.1.28 (/Users/yuki/src/.harness-worktrees/close-7768aeaf-71206/crates/schemaguard)
+   Compiling brush-parser v0.4.0
+   Compiling progeffect v0.1.5 (/Users/yuki/src/.harness-worktrees/close-7768aeaf-71206/crates/progeffect)
+   Compiling blastguard v0.2.829 (/Users/yuki/src/.harness-worktrees/close-7768aeaf-71206/crates/blastguard)
+   Compiling riskgrade v0.1.2 (/Users/yuki/src/.harness-worktrees/close-7768aeaf-71206/crates/riskgrade)
+   Compiling condukt v0.7.456 (/Users/yuki/src/.harness-worktrees/close-7768aeaf-71206/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 47.08s
+     Running tests/backlog_20261117_merge_without_tdd_proofs.rs (target/debug/deps/backlog_20261117_merge_without_tdd_proofs-3952fecbd490daba)
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+    Blocking waiting for file lock on build directory
+    Blocking waiting for file lock on build directory
+    Blocking waiting for file lock on build directory
+    Blocking waiting for file lock on build directory
+   Compiling memchr v2.8.2
+   Compiling syn v2.0.118
+   Compiling num-traits v0.2.19
+   Compiling once_cell v1.21.4
+   Compiling tempfile v3.27.0
+   Compiling aho-corasick v1.1.4
+   Compiling serde_json v1.0.150
+   Compiling bstr v1.12.2
+   Compiling regex-automata v0.4.14
+   Compiling chrono v0.4.45
+   Compiling serde_derive v1.0.228
+   Compiling clap_derive v4.6.1
+   Compiling regex v1.12.4
+   Compiling globset v0.4.18
+   Compiling clap v4.6.1
+   Compiling serde v1.0.228
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.110 (/Users/yuki/src/.harness-worktrees/close-7768aeaf-71206/crates/harness-core)
+   Compiling overwatch v0.2.127 (/Users/yuki/src/.harness-worktrees/close-7768aeaf-71206/crates/overwatch)
+   Compiling tdd v0.1.100 (/Users/yuki/src/.harness-worktrees/close-7768aeaf-71206/crates/tdd)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.79s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.83s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.84s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.85s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.86s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.88s
+"""
+
+[task.closure.red]
+rev = "1876e90a539de5079bc8c86eb69f41de49ecde25"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

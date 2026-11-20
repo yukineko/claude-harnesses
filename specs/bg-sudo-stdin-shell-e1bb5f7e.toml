@@ -1,0 +1,82 @@
+[spec]
+id = "bg-sudo-stdin-shell-e1bb5f7e"
+title = "blastguard: sudo/doas in front of a shell reading its program from a redirected file is not Allow (e1bb5f7e)"
+status = "ratified"
+provenance_commit = "ec71b087ea229cdd89d26e2690578b0a79ebe463"
+date = "2026-11-20"
+canon = []
+
+[spec.ratification]
+canon_commit = "ec71b087ea229cdd89d26e2690578b0a79ebe463"
+date = "2026-11-20"
+reason = "Encodes backlog e1bb5f7e plus user rulings 2026-11-20 Q1-Q5 (AskUserQuestion in /flow): b5 unwrap_at only, S5 through sudo intended with prose revision, sudo -s/-i = implicit shell, != allow, base-rev regression diff"
+fingerprint = "7907f68007c0bd5b"
+
+[[requirement]]
+id = "R1"
+statement = "crates/blastguard/src/detect/ast/b5.rs の unwrap_at が sudo / doas を wrapper として unwrap する。リダイレクトされた見えないファイルから program を読むシェルは、sudo/doas の後ろにあっても（-u USER などのオプション付き、bash -c の中で外側にリダイレクトがある形も含めて）Allow にならない。"
+acceptance = [
+    "`cargo test -p blastguard --test backlog_20261120_sudo_stdin_shell_failopen` で、sudo_bash_stdin / bash_c_sudo_bash_stdin / doas_sh_stdin / sudo_s_stdin / sudo_u_root_bash_stdin の 5 件が、#[ignore] 属性を外す以外にテスト本体（assert と command 文字列）を一切変えずに pass する",
+    "それら 5 件は eb4519e0a で --ignored 実行すると 'test result: FAILED. 0 passed; 5 failed' になる（RED 証跡）",
+    "argument を取るオプション -u/-g/-C/-D/-h/-p/-r/-t/-U（SUBSET.md:331）は、その argument を飛ばしてから包まれたコマンドを判定する（`sudo -u root bash < /tmp/p` が allow にならない）",
+    "unwrap_at が扱っていない sudo/doas オプション（例: `sudo --zz-unmodelled ls`）は Unwrapped::Undetermined になり、hook の decision は allow にならない",
+    "unwrap_at の sudo/doas arm は、b5::unwrap_at を呼ぶ既存の全経路（b5.rs:411, b5.rs:1217, s5.rs:356, s5.rs:837, s5.rs:1031, s5.rs:1230）から同じ関数として使われる。words.rs / relink.rs / ast::WRAPPERS の表は変更しない（裁定 Q1）",
+]
+canon = [
+    "crates/blastguard/src/detect/ast/b5.rs:290-397 (unwrap_at: sudo/doas の arm が無く `_ => Unwrapped::NotWrapper`)",
+    "crates/blastguard/src/detect/ast/b5.rs:447-451 (family が None なら `_ => Decision::Allow`)",
+    'crates/blastguard/src/detect/ast/b5.rs:60-61 ("an option of an interpreter or of an unwrapped wrapper that is not modelled → Undetermined")',
+    'crates/blastguard/src/detect/ast/SUBSET.md:331 ("`sudo`, `doas` | options; `-u/-g/-C/-D/-h/-p/-r/-t/-U USER` take an argument")',
+    "crates/blastguard/tests/backlog_20261120_sudo_stdin_shell_failopen.rs:82-110",
+    "要望 User rulings 2026-11-20 Q1, Q4",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R2"
+statement = "コマンドを伴わない `sudo -s` / `sudo -i` は暗黙のシェルとして裸のシェルと同じに扱う（リダイレクトされた program ファイルを読むなら `bash < FILE` と同じに判定し、トップレベルで継承 stdin を読むだけなら B.5 の意見を出さない）。`sudo -e` は Unsupported（Undetermined）のまま。"
+acceptance = [
+    "`sudo -s < /tmp/p` の hook decision が allow でない（RED sudo_sf_stdin = sudo_s_stdin が pass）",
+    "`sudo -i < /tmp/p` の hook decision が allow でない",
+    "`sudo -e /tmp/x` は b5 で Unwrapped::Undetermined になり、hook decision が allow でない",
+    "ゼロ語の暗黙シェルでも、b5.rs:418-420 の `let Some(first) = cmd.argv.get(k) else { return Decision::Allow; }` に落ちて Allow になる経路が sudo -s / sudo -i に残らない",
+]
+canon = [
+    'crates/blastguard/src/detect/ast/b5.rs:35-39 ("any other program from stdin … → Undetermined, except a bare shell reading the inherited stdin at the top level, which gives no opinion")',
+    "crates/blastguard/src/detect/ast/b5.rs:418-420",
+    'crates/blastguard/src/detect/ast/SUBSET.md:331 ("`sudo -s/-i` with no command, `sudo -e` (sudoedit) → Unsupported")',
+    "要望 User rulings 2026-11-20 Q3",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R3"
+statement = "既存の control と、修正前の base rev で pass している blastguard テストは、修正後も pass し続ける（新しい fail-open も FP も生まない）。システム破壊は wrapper を通しても Deny のまま。"
+acceptance = [
+    "`cargo test -p blastguard --test backlog_20261120_sudo_stdin_shell_failopen` の ctl_bash_stdin_not_allow / ctl_sudo_bash_c_rm_etc_denied（decision == deny）/ ctl_sudo_ls_not_deny（decision != deny）がすべて pass する",
+    "修正前の base rev で `cargo test -p blastguard` を実行して pass したテストの集合が、修正後の実行で pass したテストの集合に含まれる（新規 failure 0 件）",
+    "base rev で既に red のテスト（例: scope_redirect_relaxation_boundaries_20261108、backlog 266b5ded）は比較から外し、名前を列挙して報告する",
+]
+canon = [
+    "crates/blastguard/tests/backlog_20261120_sudo_stdin_shell_failopen.rs:112-130",
+    'crates/blastguard/src/detect/ast/b5.rs:4-7 ("`max(B.5, legacy)` … it never lowers a legacy Deny or Ask")',
+    "要望 User rulings 2026-11-20 Q5",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R4"
+statement = "b5 / S5 が sudo/doas を unwrap するようになったことに合わせ、「sudo は unwrap しない／S5 の意見が無い」と書いた散文を同じコミットで実挙動に合わせて直す。"
+acceptance = [
+    """修正コミットの後、`grep -n 'sudo' crates/blastguard/src/detect/ast/SUBSET.md crates/blastguard/src/detect/ast/s5.rs crates/blastguard/src/detect/ast/b5.rs` で、b5/S5 が sudo/doas を unwrap しない・対象外とする記述が残っていない。確認する箇所: SUBSET.md:331 の `sudo -s/-i` Unsupported 記述、SUBSET.md:621 "`sudo` excluded"、SUBSET.md:644 "(`sudo`, `xargs`, …) get no S5 opinion"、SUBSET.md:663 の Known gaps 内 `sudo`、s5.rs:58 "`sudo` excluded"、s5.rs:79、s5.rs:1017 "not `sudo`"、b5.rs:15-17 の unwrap 対象列挙、b5.rs:112 の Known gaps""",
+    "SUBSET.md:331 では `sudo -e` が Unsupported のまま残り、`sudo -s/-i` はコマンド無しなら暗黙のシェル（裸のシェルと同じ判定）と書かれている",
+    "散文の修正は R1/R2 の実装変更と同じコミットに入っている（`git show --stat <fix-commit>` に b5.rs と SUBSET.md と s5.rs が並ぶ）",
+]
+canon = [
+    'CLAUDE.md §4 ("docstring / コメントで実挙動と違う「安全な話」を書く。… 実装を変えたら**同じコミットで**記述も直す。")',
+    "crates/blastguard/src/detect/ast/SUBSET.md:331, 621, 644, 663",
+    "crates/blastguard/src/detect/ast/s5.rs:58, 79, 1017",
+    "crates/blastguard/src/detect/ast/b5.rs:15-17, 112-114",
+    "要望 User rulings 2026-11-20 Q2, Q3",
+]
+falsifiable = true

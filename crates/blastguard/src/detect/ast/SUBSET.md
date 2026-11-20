@@ -116,7 +116,12 @@ S4 rulings (user ruling 2026-11-18):
     literal producers) is read like a literal stdin body: a shell body is
     judged recursively; a perl / ruby / node / python body gives no B.5
     opinion (legacy decides). A bare shell reading the inherited stdin gives
-    no B.5 opinion (the Bash tool's stdin is empty).
+    no B.5 opinion (the Bash tool's stdin is empty) — at the top level only:
+    inside a `-c PROG` body, "inherited" is the enclosing shell's stdin
+    (`bash -c 'bash' < x.sh` reads `x.sh`, backlog b838630f), judged as if
+    the shell read it directly (`File` / `Fd` / `FromCommand` /
+    `Undetermined` → Undetermined; a `Literal` → judged by the full detector
+    as `<shell> -c '<body>'`; `b5.rs::inherited_stdin`).
 22. (T1) A program file that is git-tracked AND unmodified gets no B.5
     opinion (legacy decides), for interpreter file runs and direct exec.
     Unmodified = clean in the work tree and index (`git ls-files
@@ -350,7 +355,7 @@ else the command's cwd).
 | Command | Program source | Judgement |
 |---|---|---|
 | `bash` / `sh` / `zsh` / `dash` / `ksh` `-c PROG` | `InlineLiteral` | PROG analysed and judged recursively (S4); Undetermined PROG → Undetermined |
-| same, stdin (`bash`, `-s`, `-`, `/dev/stdin`) | `Stdin(StdinSource)` | `Literal` body — and the literal output of a process substitution / previous pipe stage / a brace group `{ echo a; printf b; } |` whose members are all literal `echo` / `printf` joined by `;`, a newline or `&&` (their outputs concatenated; any other member, `||`, `&`, a redirect, a nested pipe or group stays `FromCommand`; `ast/support.rs::brace_group_stdin`) — judged recursively (S4, ruling 21); a literal piped in by a stage that is not one simple command right before the `|` (a brace group, wherever the pipeline sits: `( … )`, `if`, a loop body) is ALSO judged by the full detector as `<shell> -c '<body>'`, because the legacy layer that judges a literal body's effects may not read that group there (perl / ruby / node: Undetermined; python: S5; `b5.rs::piped_by_compound_stage`); `FromCommand` / `File` / `Fd` / `Undetermined` → Undetermined; `Inherited` → no B.5 opinion (ruling 21) |
+| same, stdin (`bash`, `-s`, `-`, `/dev/stdin`) | `Stdin(StdinSource)` | `Literal` body — and the literal output of a process substitution / previous pipe stage / a brace group `{ echo a; printf b; } |` whose members are all literal `echo` / `printf` joined by `;`, a newline or `&&` (their outputs concatenated; any other member, `||`, `&`, a redirect, a nested pipe or group stays `FromCommand`; `ast/support.rs::brace_group_stdin`) — judged recursively (S4, ruling 21); a literal piped in by a stage that is not one simple command right before the `|` (a brace group, wherever the pipeline sits: `( … )`, `if`, a loop body) is ALSO judged by the full detector as `<shell> -c '<body>'`, because the legacy layer that judges a literal body's effects may not read that group there (perl / ruby / node: Undetermined; python: S5; `b5.rs::piped_by_compound_stage`); `FromCommand` / `File` / `Fd` / `Undetermined` → Undetermined; `Inherited` → no B.5 opinion at the top level (ruling 21), inside a `-c PROG` body the enclosing shell's stdin, judged as above (`b5.rs::inherited_stdin`, backlog b838630f) |
 | same, script file (`bash x.sh`); likewise any interpreter running a program file (`python3 x.py`, `perl x.pl`, …) | `File(Value)` | **Undetermined** → Ask / Deny (ruling 10). Exception (shells and direct exec only): when an earlier command of the same script writes that file (matched by resolved path) with a determined body (`cat > x.sh <<'EOF' … EOF`) and the write and the run are joined by `&&` only, that body is judged as the program (S4, ruling 20). A git-tracked, unmodified file → no B.5 opinion (ruling 22). `-n` noexec → no B.5 opinion (ruling 24) |
 | `eval` | `Undetermined` | Undetermined (S4) |
 | direct execution of a program file (`./run.sh`, `scripts/foo.sh`, `/abs/run.sh`) | `File(Value)` | **Undetermined** → Ask / Deny (ruling 17, S4), same exceptions as the script-file row (ruling 20, ruling 22) |

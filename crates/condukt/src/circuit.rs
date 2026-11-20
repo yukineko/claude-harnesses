@@ -504,6 +504,10 @@ pub struct TranscriptAxes<'a> {
     pub session: Option<&'a str>,
     /// `--max-compactions N`; values below 1 are clamped to 1.
     pub max_compactions: u32,
+    /// `false` = `--no-compaction-axis`: the compaction axis is disabled (no
+    /// counting, never trips `session_compacted`, an uncountable count does not
+    /// trip on its own). Reported as `"compaction_axis":"disabled"`.
+    pub compaction_axis: bool,
 }
 
 impl TranscriptAxes<'_> {
@@ -513,6 +517,7 @@ impl TranscriptAxes<'_> {
         TranscriptAxes {
             session: None,
             max_compactions: DEFAULT_MAX_COMPACTIONS,
+            compaction_axis: true,
         }
     }
 }
@@ -586,6 +591,8 @@ impl TranscriptAxes<'_> {
 /// lines in that same transcript are counted ([`count_compact_boundaries`]);
 /// `compactions >= max(max_compactions, 1)` trips
 /// [`CircuitReason::SessionCompacted`], checked after every other reason.
+/// `--no-compaction-axis` disables the whole axis (nothing is counted, it never
+/// trips, `"compaction_axis":"disabled"`); every other axis is unchanged.
 /// A run measured from run state has no transcript: `compactions` is `null`.
 /// A transcript that cannot be counted (`compactions: null` plus
 /// `compactions_unknown_reason`) trips `idle_unmeasured` even with the idle axis
@@ -616,6 +623,7 @@ pub fn run_circuit_check(
     let TranscriptAxes {
         session,
         max_compactions,
+        compaction_axis,
     } = transcript;
     let max_compactions = max_compactions.max(1);
     // 1. failure-streak — load the run; an unloadable run's streak is
@@ -702,6 +710,8 @@ pub fn run_circuit_check(
     //    claims' sessions (`claim_registry`). A run measured from run state has
     //    no transcript, so the axis does not apply (`None`, reported as null).
     let compaction_sessions: Option<Vec<String>> = match idle_source {
+        // `--no-compaction-axis`: the axis is off — do not even count.
+        _ if !compaction_axis => None,
         IdleSource::SessionFlag => session_vouches_for_run(run_id, session).map(|s| vec![s]),
         IdleSource::ClaimRegistry => {
             crate::claim::stateless_live_sessions(cfg, cwd, run_id, now).ok()
@@ -771,6 +781,14 @@ pub fn run_circuit_check(
         obj.insert(
             "idle_source".to_string(),
             serde_json::json!(idle_source.as_str()),
+        );
+        obj.insert(
+            "compaction_axis".to_string(),
+            serde_json::json!(if compaction_axis {
+                "enabled"
+            } else {
+                "disabled"
+            }),
         );
         obj.insert("compactions".to_string(), serde_json::json!(compactions));
         obj.insert(

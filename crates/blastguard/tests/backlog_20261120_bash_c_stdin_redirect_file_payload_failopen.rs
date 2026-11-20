@@ -89,13 +89,11 @@ fn assert_not_allow(tag: &str, command: &str) {
 }
 
 #[test]
-#[ignore = "RED: bash -c 'bash' < /tmp/payload.sh (stdin program from unseen file) is Allow"]
 fn bash_c_bash_with_stdin_redirect_from_file_is_not_allow() {
     assert_not_allow("r1", "bash -c 'bash' < /tmp/payload.sh");
 }
 
 #[test]
-#[ignore = "RED: sh -c 'sh' < /tmp/payload.sh (stdin program from unseen file) is Allow"]
 fn sh_c_sh_with_stdin_redirect_from_file_is_not_allow() {
     assert_not_allow("r2", "sh -c 'sh' < /tmp/payload.sh");
 }

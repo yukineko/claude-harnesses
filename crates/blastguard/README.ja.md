@@ -642,6 +642,16 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   perl / ruby / node が読む場合は判定不能（ask）、python は S5 が読む
 >   （`src/detect/ast/b5.rs` の `piped_by_compound_stage` / `compound_fed_body`）。
 >   rule id も所見に応じたもの（例: `rm-recursive`）になる。
+>   0.2.782 以降（backlog b838630f）、`-c PROG` の本文の中で自分の stdin を
+>   リダイレクトせずに stdin からプログラムを読むシェル（`bash`・`bash -s`・`sh -`）は、
+>   外側のシェルの stdin を読むものとして判定する（子プロセスは stdin を継承する）。
+>   `bash -c 'bash' < /tmp/payload.sh`・`sh -c 'sh' 0< f`・`bash -c 'bash' <> f`・
+>   `env bash -c 'bash' < f`・`zsh -c 'bash -s' < f`・入れ子の `-c` は、
+>   `bash < /tmp/payload.sh` と同じく中身の見えないファイルをプログラムとして読むので
+>   判定不能（ask）。外側の stdin がリテラル（here-string・here-doc・`echo … |`）なら
+>   その本文を `<shell> -c '<本文>'` として検出器全体で判定する。外側の stdin が
+>   継承のまま（トップレベル）なら従来どおり B.5 の意見なし。`bash -c 'cat' < f`・
+>   `bash -c 'echo hi | bash' < f` は対象外（`src/detect/ast/b5.rs` の `inherited_stdin`）。
 >   0.2.481 以降（backlog 2026-11-13）、監査するプログラム本文（`-c`/`-e` の引数、
 >   `sh -c`・`eval`・`xargs` の内側、here-string・プロセス置換）は、空白で割ったトークンを
 >   空白 1 個で繋ぎ直したものではなく、**コマンド行の原文から読んだ引数そのもの**

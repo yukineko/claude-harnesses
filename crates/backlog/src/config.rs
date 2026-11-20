@@ -84,7 +84,8 @@ impl GithubMirror {
          no GitHub issue is created, closed or read.";
 
     /// `Ok(true)` = mirror, `Ok(false)` = mirror disabled, `Err` = the setting
-    /// could not be determined (the message names `github_mirror`).
+    /// could not be determined. The message names `config.toml` (unreadable or
+    /// invalid file) or `github_mirror` (present but not a bool).
     pub fn enabled(&self) -> Result<bool, String> {
         match self {
             GithubMirror::On => Ok(true),
@@ -128,17 +129,18 @@ impl GithubMirror {
         }
     }
 
-    /// Classify the contents of an existing `config.toml`. Not valid TOML is
-    /// `Invalid` (not the all-defaults `On`): the file may carry
-    /// `github_mirror = false`, which we can no longer read.
     /// For `recheck`, which may close no mirrored row at all: an undetermined
     /// setting is an error even then, so a broken config.toml never exits 0.
+    /// `Ok(())` when the mirror is on or off; `Err` names the cause.
     pub fn recheck_gate(&self) -> anyhow::Result<()> {
         self.enabled()
             .map(|_| ())
             .map_err(|why| anyhow::anyhow!("backlog recheck: GitHub mirror NOT run: {why}"))
     }
 
+    /// Classify the contents of an existing `config.toml`. Not valid TOML is
+    /// `Invalid` (not the all-defaults `On`): the file may carry
+    /// `github_mirror = false`, which we can no longer read.
     fn from_toml(path: &Path, txt: &str) -> Self {
         let table = match toml::from_str::<toml::Value>(txt) {
             Ok(toml::Value::Table(table)) => table,

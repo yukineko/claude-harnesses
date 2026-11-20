@@ -182,8 +182,8 @@ store は repo ごとに解決される (`<repo root>/.backlog/tasks.toml`)。
   （`add` / `sync` は非0で終了、`done` 等は issue を閉じずに `error:` を出して非0で終了する）。
   **`config.toml` が存在するのに読めない／TOML として不正な場合も同じ扱い（判定不能はミラーしない）:**
   既定値（ミラー ON）には倒さない。`add` / `sync` / `done` / `cancel` / `recheck` は `gh` を一切呼ばず、
-  `config.toml` の名前を含む `error:` を出して非0で終了する（`done` / `cancel` / `recheck` は
-  ローカルの状態変更を先に行うが、issue は閉じない。`add` と `sync` は副作用の前に拒否する）。
+  `config.toml` の名前を含む `error:` を出して非0で終了する。`add` / `sync` / `recheck` は副作用の前に拒否する
+  （`recheck` は行を一切触らない）。`done` / `cancel` はローカルの状態変更を先に行うが、issue は閉じず非0で終了する。
   `config.toml` が存在しない場合だけ、従来どおり全項目が既定値（ミラー ON）になる。
 
 `project` フィールド自体は残る（誰が起票したかを示し、そのラベルが推測だった場合は `list` が

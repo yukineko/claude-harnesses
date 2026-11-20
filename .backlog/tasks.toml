@@ -2734,3 +2734,31 @@ exit 101: d; 0 measured; 0 filtered out; finished in 0.73s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
      Running tests/backlog_20261120_quoted_arg_redirect_text_after_cd_fp.rs (target/debug/deps/backlog_20261120_quoted_arg_redirect_text_after_cd_fp-e8a7fb1d39e9f567)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_quoted_arg_redirect_text_after_cd_fp`"""
+
+[[task]]
+id = "cfa4e0f2"
+title = "blastguard FP: heredoc data fed to a while-read loop is judged as an fd-redirect shell line"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-20 (flow session, blastguard deployed 0.2.798; re-measured at rev bf046b953 which includes the eb52d2e5 fix): a while IFS='|' read -r loop whose quoted heredoc DATA lines hold the text of an fd redirect (echo hi, redirect to fd variable) is Denied in main and subagent with the redirect-destroys-file / shell-expansion reason (verbatim text is in the repro test). The same loop with harmless data is allow. Controls: eval of the data stays Deny, bash heredoc of the same text stays Deny. Readings: (a) FP, a heredoc fed to read is data, never executed (heredoc-body-by-target ruling); (b) intended, blastguard cannot see whether the loop body later executes the data. Tell apart: the loop body here only echoes the variables; eval/sh in the body must keep it judged. Not fixed in run-20261120-171414-35880 (eb52d2e5 fix does not cover this shape)."
+created_at = 1795163808
+updated_at = 1795163808
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_while_read_data_heredoc_fd_redirect_fp -- --include-ignored"
+rev = "7e29f1f20588611dcaa91fa3a06b69de2d02dde2"
+observed_at = 1795163808
+detail = """
+exit 101: 0-171414-35880-whileread/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.65s
+     Running tests/backlog_20261120_while_read_data_heredoc_fd_redirect_fp.rs (target/debug/deps/backlog_20261120_while_read_data_heredoc_fd_redirect_fp-f538ec355ea14847)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_while_read_data_heredoc_fd_redirect_fp`"""

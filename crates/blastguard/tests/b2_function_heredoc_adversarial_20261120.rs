@@ -460,6 +460,24 @@ not_allow_probe!(
     "f() { echo hi; }; cat <<EOF\n$(f)\nEOF"
 );
 
+/// Round 4 (0.2.788): a reader-name variant that heredoc_data alone decides.
+/// The bare `cat() { sh; }; cat <<'EOF'` shape above is also refused by
+/// another layer (it stayed GREEN with heredoc_data's refusals stubbed out),
+/// so it does not prove heredoc_data's reader-name rule. `\cat` / `'cat'`
+/// still call the function `cat` (quoting bypasses only an alias), and a
+/// `crontab -` body is not refused elsewhere: with heredoc_data's refusals
+/// stubbed out these were observed Allow in main and subagent mode.
+#[test]
+fn criterion5_reader_named_function_quoted_spelling_is_not_allow() {
+    assert_not_allow(
+        &[
+            "cat() { crontab -; }; \\cat <<'EOF'\n$(f)\nEOF",
+            "cat() { crontab -; }; 'cat' <<'EOF'\n$(f)\nEOF",
+        ],
+        "c5-reader-name-quoted",
+    );
+}
+
 // ------------- a function's output reaches a file through a compound / exec
 
 not_allow_probe!(

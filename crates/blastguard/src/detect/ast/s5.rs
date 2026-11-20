@@ -55,7 +55,7 @@
 //! # `bash -c` / `sh -c` (user ruling 2026-11-19, S5b c)
 //!
 //! The literal script of a plain `bash -c SCRIPT` / `sh -c SCRIPT` (after the
-//! wrappers `b5` unwraps; `sudo` excluded) is run through [`prepare`] itself,
+//! wrappers `b5` unwraps, `sudo` / `doas` included) is run through [`prepare`] itself,
 //! so the Python programs in it are judged exactly as if written directly;
 //! the script word is then replaced by the script's neutral text, quoted
 //! ([`shell_c_script`] lists the shapes read; any other shape keeps the
@@ -76,7 +76,7 @@
 //! # Known gaps
 //!
 //! A here-string / piped literal program is analysed but not retired;
-//! wrappers other than the ones `b5` unwraps (`sudo`, `xargs`, …) get no S5
+//! wrappers other than the ones `b5` unwraps (`xargs`, `su`, …) get no S5
 //! opinion; a `bash -c` outside [`shell_c_script`]'s shapes gets none either;
 //! a module imported by an imported module is not detected; a shadowing entry
 //! written on the same line by a program with no effect model (`git
@@ -356,7 +356,11 @@ fn python_program(
         match b5::unwrap_at(&cmd.argv, k) {
             Unwrapped::NotWrapper => break,
             // S4 judges a wrapper it cannot unwrap.
-            Unwrapped::Nothing | Unwrapped::Undetermined(_) => return Some(Found::LeftToS4),
+            // A wrapper's implicit shell (`sudo -s`) runs no inline Python:
+            // S4 judges it as a bare shell.
+            Unwrapped::Nothing | Unwrapped::Undetermined(_) | Unwrapped::ImplicitShell => {
+                return Some(Found::LeftToS4)
+            }
             Unwrapped::At(next) => k = next,
         }
     }
@@ -840,6 +844,9 @@ fn command_entry_writes(c: &SimpleCommand) -> Result<Vec<Value>, String> {
             Unwrapped::Undetermined(why) => {
                 return Err(format!("a wrapper cannot be unwrapped ({why})"))
             }
+            Unwrapped::ImplicitShell => {
+                return command_entry_writes(&b5::implicit_shell(c));
+            }
             Unwrapped::At(next) => k = next,
         }
     }
@@ -1014,7 +1021,8 @@ const ENV_CHANGERS: &[&str] = &[
 /// The `bash -c` / `sh -c` S5 reads as its script, if `cmd` is one.
 ///
 /// Only the plain shape is read: optional unwrapped wrappers (`b5`: `env`,
-/// `timeout`, `nice`, `nohup`, …; not `sudo`), the shell `bash` / `sh` bare or
+/// `timeout`, `nice`, `nohup`, `sudo`, `doas`, …; a wrapper's implicit shell
+/// `sudo -s` is not read), the shell `bash` / `sh` bare or
 /// in a system bin directory, then exactly `-c SCRIPT` with a literal script
 /// (no `$0` / positional words, no other option), nothing feeding its stdin,
 /// a cwd that is the hook's or one literal directory, and a line on which no
@@ -1033,6 +1041,10 @@ fn shell_c_script(commands: &[SimpleCommand], cmd: &SimpleCommand) -> ShellCRead
             // A wrapper that runs nothing runs no shell.
             Unwrapped::Nothing => return NotShellC,
             Unwrapped::Undetermined(why) => return LeftToLegacy(why),
+            // A wrapper's implicit shell has no `-c SCRIPT`.
+            Unwrapped::ImplicitShell => {
+                return LeftToLegacy("a wrapper's implicit shell is not `-c SCRIPT`".into())
+            }
             Unwrapped::At(next) => k = next,
         }
     }
@@ -1230,7 +1242,8 @@ fn may_run_file(c: &SimpleCommand) -> bool {
         match b5::unwrap_at(&c.argv, k) {
             Unwrapped::NotWrapper => break,
             Unwrapped::Nothing => return false,
-            Unwrapped::Undetermined(_) => return true,
+            // A shell whose program is not on the line may run any file.
+            Unwrapped::Undetermined(_) | Unwrapped::ImplicitShell => return true,
             Unwrapped::At(next) => k = next,
         }
     }

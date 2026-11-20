@@ -350,7 +350,7 @@ replaced, and a write below its destination is an `Ask`.
 | Wrapper | Skipped before the wrapped command | Notes |
 |---|---|---|
 | `env` | options `-i -u NAME -0 -C DIR`, then `NAME=V` words | `-S` (split string) → Unsupported; `-C DIR` sets the wrapped cwd |
-| `sudo`, `doas` | options; `-u/-g/-C/-D/-h/-p/-r/-t/-U USER` take an argument | `sudo -s/-i` with no command, `sudo -e` (sudoedit) → Unsupported |
+| `sudo`, `doas` | options; `-u/-g/-C/-D/-h/-p/-r/-t/-U USER` take an argument | `sudo -s/-i` with no command = an implicit shell, judged like a bare shell (B.5 `b5.rs`, user ruling 2026-11-20 Q3); `sudo -e` (sudoedit) → Unsupported |
 | `nice` (`-n N`), `ionice` (`-c -n -t`), `nohup`, `time` (`-p`), `stdbuf` (`-i -o -e`), `setsid`, `caffeinate` (`-d -i -m -s -u -t N -w PID`), `chrt`, `taskset` (mask/list arg), `timeout` (`DURATION`, `-s SIG`, `-k D`, `--foreground`, `--preserve-status`), `unbuffer`, `arch` (`-arch A`, `-x86_64`, `-arm64`), `flock` (lock file, `-c CMD` → Unsupported) | as listed | the flock lock file is created (`Truncate`-free create: no finding) |
 | `command`, `builtin` | as `eval::unwrap_wrappers` (`-p`, `--`); `command -v/-V` = lookup, no effect | |
 | `exec` | `-a NAME -c -l` | `exec` with redirects only: B.2 applies to the shell |
@@ -640,7 +640,7 @@ re-analyse to the same commands.
   text; every command of the line when the program is not top-level (a
   pipeline stage runs concurrently) or the line has a loop or a function.
 * (c) **`bash -c` / `sh -c`.** The literal script of a plain `bash -c SCRIPT`
-  / `sh -c SCRIPT` (after the `b5` wrappers; `sudo` excluded) is judged by S5
+  / `sh -c SCRIPT` (after the `b5` wrappers, `sudo` / `doas` included) is judged by S5
   exactly like the same text written directly, and its Known programs are
   retired from the outer line's legacy readings (the script word is replaced
   by its neutral text). Only this shape is read (`s5.rs::shell_c_script`):
@@ -663,7 +663,7 @@ re-analyse to the same commands.
 * A here-string / piped literal program is analysed but never retired.
 * Python nested in a `bash -c` outside the shape above, or in any other word,
   is judged by the legacy readings only.
-* Wrappers other than those `b5` unwraps (`sudo`, `xargs`, …) get no S5
+* Wrappers other than those `b5` unwraps (`xargs`, `su`, …) get no S5
   opinion.
 * Import shadowing: a module imported by an imported module, and `.pth` /
   `PYTHONPATH` / site-packages entries are not detected. Same-line (S5c): a
@@ -682,7 +682,7 @@ re-analyse to the same commands.
 | S3 status (2026-11-18) | done: ruling 12 — `$HOME` / `${HOME}` / leading `~` are the hook environment's `HOME`, in the evaluator (`eval.rs` `Env::initial`) and in the one static resolver every legacy reading sees (`readings/static_bindings.rs`), so a `$HOME` spelling is judged exactly as its absolute spelling. NOT done (at S3; `judge` is wired for B.1 since S3b, `classify` implemented but unwired since S6-2): `judge` / `classify` were still the S1 stubs at S3 and were not wired (open question raised to the user: under raise-only every Known Allow cell is inert, so wiring only adds Asks — including `Undetermined` for every unmodelled option such as `cp -p` — whose effect on commands allowed today is not measured by the block-log replay) |
 | S3b `tableb-judge` (user ruling 2026-11-18) | done: `judge` wired into the final decision (`ast/mod.rs::table_b_verdict`, folded raise-only in `detect/readings.rs::detect_bash_every_reading`) ONLY for commands with a **B.1** row (`ast/judge/table_b.rs`). For such a command an option not in its row, an undetermined word that may be an option, or a `dd` operand that is not `key=value` → `Undetermined` → Ask (main) / Deny (subagent); a target word whose value the evaluator cannot determine (unquoted glob other than a literal-dir glob, `~user`, `$( )`, unbound / positional parameter, relative path after an undetermined `cd`, `xargs` operand read from non-literal stdin) → `Unresolved` → Ask / Deny. A literal-dir glob (user ruling 2026-11-19, Table A.3) is placed by its parent directory, like a literal target there (no finding while `classify` is not wired into `judge`; the legacy layer judges it); for a non-recursive `rm` the legacy arm judges such a glob placed in the project / scratch / own worktree like the named files it expands to (`detect/rm.rs::nonrec_glob_placed`; the `/tmp` root 4-character head rule of 2026-11-05 still applies). Commands without a B.1 row, and `analyze` = `Undetermined`, are unchanged; unknown programs stay Allow; the legacy layer is not lowered (a legacy Deny / Ask, with its reason, wins). See "S3b notes" |
 | S4 `stdin-program` | Table B B.5 rows for shells: `-c` inline, stdin (`StdinSource::Literal` bodies), `eval`; the script-file row and the direct-execution row (Undetermined, and the recursive judgement of a body the same command writes — rulings 10, 17); wrapper → interpreter unwrap. `source` / `.` are NOT in S4 (ruling 16) |
-| S4 status (2026-11-18) | **landed** as the standalone B.5 layer `b5.rs` (rulings 18–21), raising the legacy verdict in `readings.rs::detect_bash_every_reading`; `judge.rs` stays unwired. Wrappers unwrapped: `env`, `nohup`, `timeout`, `nice`, `time`, `exec`, `command`. Known gaps (legacy alone judges them): other wrappers (`sudo`, `xargs`, `su`, `flock`, `find -exec`, …) and `BASH_ENV` / `ENV` assignments |
+| S4 status (2026-11-18) | **landed** as the standalone B.5 layer `b5.rs` (rulings 18–21), raising the legacy verdict in `readings.rs::detect_bash_every_reading`; `judge.rs` stays unwired. Wrappers unwrapped: `env`, `nohup`, `timeout`, `nice`, `time`, `exec`, `command`; since backlog e1bb5f7e (2026-11-20, ruling Q1) also `sudo`, `doas` (B.3 row; `-s/-i` alone = implicit shell). Known gaps (legacy alone judges them): other wrappers (`xargs`, `su`, `flock`, `find -exec`, …) and `BASH_ENV` / `ENV` assignments |
 | S5 `python-parser` | Table B B.5 python row (a real Python parser; effects × targets of the parsed program judged by Table C); legacy python readings until then (ruling 15) |
 | S5 status (2026-11-19) | **landed**: shared crate `crates/progeffect` (rustpython-parser 0.4, `default-features = false` + `num-bigint`; no malachite) reads the program; `ast/s5.rs::prepare` judges every effect with the full detector on its shell spelling and retires the legacy readings of Known programs (`readings.rs`). See "Python programs (S5)" |
 | S6 `retire-readings` | remove the string-reading fallbacks of every migrated row (`targets.rs::resolve` callers, `readings.rs` re-readings); until S6 the whole legacy layer is raise-only (ruling 14), so Table C Allow cells a legacy reading answers Ask / Deny today turn GREEN here; revisit the deferred Open questions 1–4 |

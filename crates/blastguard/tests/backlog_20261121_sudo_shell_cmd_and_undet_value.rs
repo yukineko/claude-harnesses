@@ -76,25 +76,25 @@ fn assert_deny(tag: &str, command: &str) {
 // `sudo -s 'ls -la'` were measured GREEN (Deny / not Deny) and are not kept.
 
 #[test]
-#[ignore = "RED sudo -s 'rm -rf /etc' is Ask (program file named 'rm -rf /etc'), not Deny"]
+#[ignore = "RED(8f8acf5e): sudo-s 'rm -rf /etc' is Ask (program file named 'rm -rf /etc'), not Deny"]
 fn shell_short_s_quoted_cmd_is_deny() {
     assert_deny("s1", "sudo -s 'rm -rf /etc'");
 }
 
 #[test]
-#[ignore = "RED sudo -i 'rm -rf /etc' is Ask (program file named 'rm -rf /etc'), not Deny"]
+#[ignore = "RED(8f8acf5e): sudo-i 'rm -rf /etc' is Ask (program file named 'rm -rf /etc'), not Deny"]
 fn shell_short_i_quoted_cmd_is_deny() {
     assert_deny("s2", "sudo -i 'rm -rf /etc'");
 }
 
 #[test]
-#[ignore = "RED sudo --shell 'rm -rf /etc' is Ask (program file named 'rm -rf /etc'), not Deny"]
+#[ignore = "RED(8f8acf5e): sudo--shell 'rm -rf /etc' is Ask (program file named 'rm -rf /etc'), not Deny"]
 fn shell_long_shell_quoted_cmd_is_deny() {
     assert_deny("s3", "sudo --shell 'rm -rf /etc'");
 }
 
 #[test]
-#[ignore = "RED sudo --login 'rm -rf /etc' is Ask (program file named 'rm -rf /etc'), not Deny"]
+#[ignore = "RED(8f8acf5e): sudo--login 'rm -rf /etc' is Ask (program file named 'rm -rf /etc'), not Deny"]
 fn shell_long_login_quoted_cmd_is_deny() {
     assert_deny("s4", "sudo --login 'rm -rf /etc'");
 }

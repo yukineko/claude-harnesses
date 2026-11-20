@@ -115,13 +115,11 @@ fn check(tag: &str, subagent: bool) {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 .txt data heredoc + python3 denied on redirect text — remove the ignore when fixed"]
 fn txt_data_heredoc_then_python_no_stricter_subagent() {
     check("s", true);
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 .txt data heredoc + python3 denied on redirect text — remove the ignore when fixed"]
 fn txt_data_heredoc_then_python_no_stricter_main() {
     check("m", false);
 }

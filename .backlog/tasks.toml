@@ -2837,6 +2837,8 @@ notes = "Found by the independent test author of 8cadc78f (merged 039500893, tes
 created_at = 1795179741
 updated_at = 1795179741
 weight = 0.0
+issue_number = 1901
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1901"
 rev = 0
 
 [task.repro]

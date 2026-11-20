@@ -271,7 +271,15 @@ plus `Undetermined` — and **only `Inside` may relax a verdict**.
   for one plain `git` command line (`git_worktree_eligible`), with no global
   option but `-C` (once) and a `--work-tree` naming the same checkout. A
   primary tree, a checkout subdirectory, an unresolvable or `..` spelling, a
-  compound line and every probe failure keep the verdicts above; `stash
+  compound line and every probe failure keep the verdicts above. **Narrowed
+  by user ruling 2026-11-20 (backlog 606a93ab):** the unconditional `allow`
+  applies only to the session's OWN checkout (the one containing the session
+  cwd). In any other linked checkout (another session's; also when there is no
+  session cwd) a discard is `allow` only when `git status --porcelain
+  --untracked-files=all --ignore-submodules=none` (plus `--ignored` for
+  `clean -x`/`-X`) is empty and every `git ls-files -v` entry is `H`; any
+  uncommitted change, or a probe that fails or times out, is `ask` (subagent:
+  `deny`). Cleanliness is of the whole checkout, not per pathspec; `stash
   drop` / `clear` stay `deny` (`refs/stash` is shared by every worktree of a
   repo). A recursive wildcard `rm` whose literal parent is STRICTLY inside such
   a checkout (`rm -rf <wt>/subdir/*`) is `allow` under the `/tmp`-wildcard

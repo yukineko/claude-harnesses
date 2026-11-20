@@ -304,6 +304,13 @@ directory tree` で拒否されたこと。
   （`SafeRoots::is_linked_worktree_checkout`）: worktree 置き場の直下 1 階層の実ディレクトリ
   （symlink でない）で、`.git` が `gitdir:` で始まる通常ファイル、置き場より下に symlink が無い。
   `--work-tree` は同じチェックアウトを指すときだけ可。
+  - **ユーザー裁定 2026-11-20（backlog 606a93ab）による限定**: 無条件の `allow` は
+    **自セッションの worktree**（セッション cwd を含むチェックアウト）だけ。それ以外の linked
+    チェックアウト（他セッションのもの。セッション cwd が無い場合も「他」扱い）では、
+    `git status --porcelain --untracked-files=all --ignore-submodules=none`（`clean -x`/`-X` では
+    `--ignored` も）が空で、`git ls-files -v` の全エントリが `H` のときだけ `allow`。未コミットの
+    変更がある、または probe が失敗・タイムアウトした場合は `ask`（subagent では `deny`）。
+    判定はチェックアウト全体の clean さであり、pathspec 単位ではない。
   - 行全体の条件（`git_worktree_eligible`）: 1 つの素の `git` コマンド（または
     `literal_cd_and_rest` が受理する `cd D && git …`）。区切り文字・クォート・`$`・glob・
     リダイレクト等なし、先頭語がちょうど `git`、どの語にも `..` 成分なし。`-C`（1 回まで）と

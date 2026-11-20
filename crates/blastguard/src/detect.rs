@@ -86,6 +86,7 @@ mod heredoc;
 mod heredoc_data;
 mod high_blast;
 mod interpreter;
+mod known_allow;
 mod payload;
 mod printf_eval;
 mod protected;

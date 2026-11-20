@@ -213,7 +213,6 @@ fn bodies(names: &[&str]) -> Vec<(String, String)> {
 }
 
 #[test]
-#[ignore = "RED(e93d3701): backlog 596ef57d R-kill"]
 fn r_kill() {
     // Q5: kill -9 -1 -> Deny (variants(): c_kill_all).
     let cases = vec![("c_kill_all".to_string(), "kill -9 -1".to_string())];

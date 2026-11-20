@@ -322,6 +322,10 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason == "mkfs formats a filesystem, destroying all data" {
         return "mkfs";
     }
+    // e93d3701: `detect::kill::KILL_ALL_REASON`.
+    if reason == "kill aimed at pid -1 signals every process the user owns (system harm)" {
+        return "kill-all";
+    }
     if reason == "find -delete removes every matching file" {
         return "find-delete";
     }
@@ -477,6 +481,7 @@ mod tests {
             ("Bash", json!({ "command": "chmod -R 777 ." })),
             ("Bash", json!({ "command": "chown -R root ." })),
             ("Bash", json!({ "command": "mkfs.ext4 /dev/sdb1" })),
+            ("Bash", json!({ "command": "kill -9 -1" })),
             ("Bash", json!({ "command": "find . -delete" })),
             (
                 "Bash",

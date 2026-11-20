@@ -34,7 +34,17 @@ Follow-up rulings (2026-11-17, on the S1 open questions):
    root stays **Allow** even when the session cwd is outside that checkout
    (the `scope.rs` / `rm.rs` worktree-storage Allow, user ruling 2026-09-30,
    backlog 873651b9, wins). The earlier parenthetical "(confined Ask)" was
-   wrong for that row.
+   wrong for that row. **Narrowing (user ruling 2026-11-20, backlog 606a93ab):**
+   git working-tree discards (`reset --hard`, `checkout .` / `checkout --
+   <path>` / `checkout --force`, `restore <path>` / `restore .`, `clean -f` /
+   `clean -fd`, `switch --force`, `stash -u`/`-a`) in the `git -C <wt>` and
+   `cd <wt> && git …` forms aimed at a linked worktree that does NOT contain
+   the session cwd (no session cwd counts as "not containing") are Allow only
+   when git positively reports that checkout clean; with uncommitted changes,
+   or when cleanliness cannot be observed, they are Ask (subagent Deny). The
+   own checkout keeps its Allow. Implemented in `detect/git.rs`
+   (`managed_worktree_git`, `managed_discard`, `linked_checkout_is_clean`).
+   Cleanliness is judged for the WHOLE checkout, not per pathspec.
 10. A program whose text is not in the command (`bash script.sh`) is
     Undetermined → Ask (subagent Deny): an interpreter running a file is an
     exception to "unknown program → Allow". When the same command writes that
@@ -361,8 +371,8 @@ column. The subagent column is always the main column with Ask → Deny
 | **Workflow** (`exclude::is_workflow_path`) | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny |
 | **Persistence** (`launch_agents_new_file_ask`, new file only) | — | Ask / Deny | — | Ask / Deny | Ask / Deny | — | — |
 | **Scratch** (`SafeRoots::classify_disposable` Inside: `/tmp`, `/private/tmp`, `$TMPDIR`, cache roots — ruling 8) | Allow / Allow (ruling 5) | Allow / Allow | Allow / Allow | Allow / Allow | Allow / Allow | Allow / Allow | Allow / Allow |
-| **OwnWorktree** (the checkout containing the session cwd — ruling 9; see notes) | Allow / Allow (ruling 5) | Allow / Allow | Allow / Allow | Allow / Allow | Allow / Allow | legacy (`managed_worktree_git`) | Allow / Allow |
-| **OtherWorktree** (`SafeRoots::classify_worktree` Inside, not OwnWorktree) | legacy (ruling 9 as corrected 2026-11-18: today's verdict — recursive `rm` strictly inside a worktree storage root is Allow) | legacy | legacy | legacy | legacy | legacy | legacy |
+| **OwnWorktree** (the checkout containing the session cwd — ruling 9; see notes) | Allow / Allow (ruling 5) | Allow / Allow | Allow / Allow | Allow / Allow | Allow / Allow | legacy (`managed_worktree_git` → `ManagedWt::Own`: Allow) | Allow / Allow |
+| **OtherWorktree** (`SafeRoots::classify_worktree` Inside, not OwnWorktree) | legacy (ruling 9 as corrected 2026-11-18: today's verdict — recursive `rm` strictly inside a worktree storage root is Allow); `git clean -f` (any `-d`/`-x`): see the GitDiscard cell | legacy | legacy | legacy | legacy | legacy, narrowed by user ruling 2026-11-20 (backlog 606a93ab; `managed_worktree_git` → `ManagedWt::Other`, `managed_discard`): Allow only when git positively reports the checkout clean (status + `ls-files -v`; `--ignored` too for `clean -x`/`-X`), else **Ask / Deny** — uncommitted changes, or the probe fails / times out | legacy |
 | **Project** (`SafeRoots::classify` Inside / IsRoot) | legacy (`deletion::judge_rm` recoverability; non-rec: legacy rm arm) | legacy | legacy (`chmod -R` confined Ask) | legacy | legacy (scratch-place: managed → unchanged) | legacy (`reversible`) | legacy (`git_stage`) |
 | **Other** (resolved, `Placement::Outside`) | legacy (ruling 5: unchanged Ask/Deny) | legacy | legacy | legacy | Ask / Deny (scratch-place rule) | legacy | legacy |
 | **Unresolved** | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny | Ask / Deny |

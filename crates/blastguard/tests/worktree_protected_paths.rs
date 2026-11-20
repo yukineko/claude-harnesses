@@ -680,11 +680,12 @@ fn symlinked_storage_root_stays_denied() {
 #[test]
 fn undetermined_operands_are_not_asserted_allow() {
     let f = Fixture::new("u_undetermined");
-    // `~` here expands to the FIXTURE home only if the hook expands it; the
-    // contract is only that an unplaceable operand is not turned into Allow.
+    // A bare leading `~` is the hook HOME since S3 ruling 12 (1c6651da4), so it
+    // is placeable and no longer an example here; `~user` is still not placed.
+    // The contract is only that an unplaceable operand is not turned into Allow.
     assert_not_allow(
-        "rm ~/.condukt/worktrees/run-x/.githooks/pre-commit",
-        &f.bash("rm ~/.condukt/worktrees/run-x/.githooks/pre-commit"),
+        "rm ~bgnosuchuser/.condukt/worktrees/run-x/.githooks/pre-commit",
+        &f.bash("rm ~bgnosuchuser/.condukt/worktrees/run-x/.githooks/pre-commit"),
     );
     assert_not_allow(
         "rm <wt>/.githooks/pre-*",

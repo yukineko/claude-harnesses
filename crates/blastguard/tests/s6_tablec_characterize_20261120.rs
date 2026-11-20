@@ -23,11 +23,22 @@
 //! verdict, the row is pinned once and run under both (stated on the table).
 //!
 //! A pin is NOT an endorsement: several measured cells look questionable
-//! (e.g. `git -C <other worktree> reset --hard` Allow on a dirty tree,
-//! `rm <file under $HOME>` Allow, `chmod 000` Allow outside Protected,
-//! Protected `restore` vs `checkout` disagreeing in OtherWorktree). Moving
-//! one is a ruling, not a test edit; see the S6-1 matrix for the rule each
-//! cell comes from.
+//! (e.g. `rm <file under $HOME>` Allow, `chmod 000` Allow outside Protected,
+//! Protected `restore` vs `checkout` disagreeing in a CLEAN OtherWorktree).
+//! Moving one is a ruling, not a test edit; see the S6-1 matrix for the rule
+//! each cell comes from.
+//!
+//! Moved by ruling (user ruling 2026-11-20, backlog 606a93ab): a git
+//! working-tree discard (`checkout -- <path>`, `checkout .`, `restore
+//! <path>`, `reset --hard`, `clean -f[d]`) into OtherWorktree — a linked
+//! worktree that does not hold the session cwd — is Ask (main) / Deny
+//! (subagent) when that checkout has uncommitted changes (judged for the whole
+//! checkout, so a clean path inside a dirty checkout is gated too); a CLEAN
+//! OtherWorktree keeps its measured Allow. The dirty-fixture git tables
+//! (`GIT_ROWS_DIRTY`, `PROTECTED_GIT_ROWS_DIRTY`) carry the new cells; the
+//! clean-fixture tables are unchanged measurements. Previously one table was
+//! shared by both fixtures (measured `-C <other worktree> reset --hard` Allow
+//! on a dirty tree, at blastguard 0.2.764).
 //!
 //! Fixture (hermetic, `support/neutral_base.rs` location rule):
 //!   * `<base>/home`                       — the hook's `HOME`
@@ -408,17 +419,17 @@ fn project_relative_twins() {
 // condition.
 // ---------------------------------------------------------------------------
 
-/// The `-C` spelling. Measured: the clean and the dirty fixture give the SAME
-/// verdict on every row (the `-C` global option defeats the reversible probe
-/// in Project — "the repository base is moved by a global option" — and
-/// `managed_worktree_git` allows every discard in a linked worktree), so one
-/// table is pinned in both fixtures.
+/// The `-C` spelling, CLEAN fixture. Project: the `-C` global option defeats
+/// the reversible probe ("the repository base is moved by a global option"),
+/// so Project gives the same verdict clean and dirty. OtherWorktree (a linked
+/// worktree that is not the session's own): the clean checkout keeps the
+/// `managed_worktree_git` Allow for every discard.
 #[rustfmt::skip]
-const GIT_ROWS: &[Row] = &[
+const GIT_ROWS_CLEAN: &[Row] = &[
     Row { effect: "GitDiscard", cond: "checkout -- tracked clean file", cmd: "git -C {R} checkout -- t.txt", exp: [AD, NA, A] },
-    Row { effect: "GitDiscard", cond: "checkout -- m.txt (modified when dirty)", cmd: "git -C {R} checkout -- m.txt", exp: [AD, NA, A] },
+    Row { effect: "GitDiscard", cond: "checkout -- m.txt (clean)", cmd: "git -C {R} checkout -- m.txt", exp: [AD, NA, A] },
     Row { effect: "GitDiscard", cond: "checkout . (whole tree)", cmd: "git -C {R} checkout .", exp: [D, NA, A] },
-    Row { effect: "GitDiscard", cond: "restore m.txt (modified when dirty)", cmd: "git -C {R} restore m.txt", exp: [D, NA, A] },
+    Row { effect: "GitDiscard", cond: "restore m.txt (clean)", cmd: "git -C {R} restore m.txt", exp: [D, NA, A] },
     Row { effect: "GitDiscard", cond: "restore --staged only", cmd: "git -C {R} restore --staged m.txt", exp: [A, NA, A] },
     Row { effect: "GitDiscard", cond: "reset --hard (work tree)", cmd: "git -C {R} reset --hard", exp: [D, NA, A] },
     Row { effect: "Delete rec", cond: "git clean -fd (work tree)", cmd: "git -C {R} clean -fd", exp: [AD, NA, A] },
@@ -429,16 +440,39 @@ const GIT_ROWS: &[Row] = &[
     Row { effect: "GitStage", cond: "add -A <pathspec m.txt>", cmd: "git -C {R} add -A m.txt", exp: [A, NA, A] },
 ];
 
+/// The `-C` spelling, DIRTY fixture. Project: same as clean (see above).
+/// OtherWorktree: user ruling 2026-11-20 (backlog 606a93ab) — a working-tree
+/// discard into a linked worktree that is not the session's own and has
+/// uncommitted changes is Ask (main) / Deny (subagent). Cleanliness is judged
+/// for the whole checkout, so `checkout -- t.txt` (t.txt itself clean) is
+/// gated too: restrictive, accepted by the ruling. `restore --staged` touches
+/// only the index and the GitStage rows are not discards: unchanged.
+#[rustfmt::skip]
+const GIT_ROWS_DIRTY: &[Row] = &[
+    Row { effect: "GitDiscard", cond: "checkout -- tracked clean file, checkout dirty", cmd: "git -C {R} checkout -- t.txt", exp: [AD, NA, AD] },
+    Row { effect: "GitDiscard", cond: "checkout -- m.txt (modified)", cmd: "git -C {R} checkout -- m.txt", exp: [AD, NA, AD] },
+    Row { effect: "GitDiscard", cond: "checkout . (whole tree)", cmd: "git -C {R} checkout .", exp: [D, NA, AD] },
+    Row { effect: "GitDiscard", cond: "restore m.txt (modified)", cmd: "git -C {R} restore m.txt", exp: [D, NA, AD] },
+    Row { effect: "GitDiscard", cond: "restore --staged only", cmd: "git -C {R} restore --staged m.txt", exp: [A, NA, A] },
+    Row { effect: "GitDiscard", cond: "reset --hard (work tree)", cmd: "git -C {R} reset --hard", exp: [D, NA, AD] },
+    Row { effect: "Delete rec", cond: "git clean -fd (work tree)", cmd: "git -C {R} clean -fd", exp: [AD, NA, AD] },
+    Row { effect: "Delete non-rec", cond: "git clean -f (work tree)", cmd: "git -C {R} clean -f", exp: [AD, NA, AD] },
+    Row { effect: "GitStage", cond: "add -A (work tree)", cmd: "git -C {R} add -A", exp: [AD, NA, AD] },
+    Row { effect: "GitStage", cond: "add . (work tree)", cmd: "git -C {R} add .", exp: [AD, NA, AD] },
+    Row { effect: "GitStage", cond: "add -u (work tree)", cmd: "git -C {R} add -u", exp: [AD, NA, AD] },
+    Row { effect: "GitStage", cond: "add -A <pathspec m.txt>", cmd: "git -C {R} add -A m.txt", exp: [A, NA, A] },
+];
+
 #[test]
 fn git_rows_clean_tree() {
     let fx = fixture("git-clean", false);
-    check("GitClean", &fx, GIT_ROWS);
+    check("GitClean", &fx, GIT_ROWS_CLEAN);
 }
 
 #[test]
 fn git_rows_dirty_tree() {
     let fx = fixture("git-dirty", true);
-    check("GitDirty", &fx, GIT_ROWS);
+    check("GitDirty", &fx, GIT_ROWS_DIRTY);
 }
 
 /// Project cwd spelling (no `-C`): the work tree is the session cwd. Here
@@ -477,15 +511,28 @@ fn git_cwd_rows_dirty_tree() {
 // the OtherWorktree column measures what that gives today).
 // ---------------------------------------------------------------------------
 
-/// Measured: clean and dirty give the same verdict on every row. Note the
-/// OtherWorktree column is NOT uniform: `checkout` is Deny
-/// (`protected_disarm_deny`) while `restore` of the same file is Allow
+/// CLEAN fixture. Note the OtherWorktree column is NOT uniform: `checkout` is
+/// Deny (`protected_disarm_deny`) while `restore` of the same file is Allow
 /// (`managed_worktree_git` is consulted before any protected check in the
-/// `restore` arm). Pinned as measured, not endorsed.
+/// `restore` arm, and the clean checkout keeps that Allow). Pinned as
+/// measured, not endorsed.
 #[rustfmt::skip]
-const PROTECTED_GIT_ROWS: &[Row] = &[
+const PROTECTED_GIT_ROWS_CLEAN: &[Row] = &[
     Row { effect: "GitDiscard", cond: "Protected, checkout -- .claude/settings.json", cmd: "git -C {R} checkout -- .claude/settings.json", exp: [D, NA, D] },
     Row { effect: "GitDiscard", cond: "Protected, restore .claude/settings.json", cmd: "git -C {R} restore .claude/settings.json", exp: [D, NA, A] },
+    Row { effect: "GitDiscard", cond: "Protected, checkout HEAD -- .claude/settings.json", cmd: "git -C {R} checkout HEAD -- .claude/settings.json", exp: [D, NA, D] },
+    Row { effect: "GitStage", cond: "Protected, add -A .claude/settings.json", cmd: "git -C {R} add -A .claude/settings.json", exp: [A, NA, A] },
+    Row { effect: "GitStage", cond: "Protected, add -u .claude", cmd: "git -C {R} add -u .claude", exp: [A, NA, A] },
+];
+
+/// DIRTY fixture: as clean, except OtherWorktree `restore` — user ruling
+/// 2026-11-20 (backlog 606a93ab): a discard into a linked worktree that is
+/// not the session's own and has uncommitted changes is Ask (main) / Deny
+/// (subagent). `checkout` stays Deny (`protected_disarm_deny`).
+#[rustfmt::skip]
+const PROTECTED_GIT_ROWS_DIRTY: &[Row] = &[
+    Row { effect: "GitDiscard", cond: "Protected, checkout -- .claude/settings.json", cmd: "git -C {R} checkout -- .claude/settings.json", exp: [D, NA, D] },
+    Row { effect: "GitDiscard", cond: "Protected, restore .claude/settings.json (modified)", cmd: "git -C {R} restore .claude/settings.json", exp: [D, NA, AD] },
     Row { effect: "GitDiscard", cond: "Protected, checkout HEAD -- .claude/settings.json", cmd: "git -C {R} checkout HEAD -- .claude/settings.json", exp: [D, NA, D] },
     Row { effect: "GitStage", cond: "Protected, add -A .claude/settings.json", cmd: "git -C {R} add -A .claude/settings.json", exp: [A, NA, A] },
     Row { effect: "GitStage", cond: "Protected, add -u .claude", cmd: "git -C {R} add -u .claude", exp: [A, NA, A] },
@@ -494,11 +541,11 @@ const PROTECTED_GIT_ROWS: &[Row] = &[
 #[test]
 fn protected_git_rows_clean_tree() {
     let fx = fixture("prot-clean", false);
-    check("ProtectedGitClean", &fx, PROTECTED_GIT_ROWS);
+    check("ProtectedGitClean", &fx, PROTECTED_GIT_ROWS_CLEAN);
 }
 
 #[test]
 fn protected_git_rows_dirty_tree() {
     let fx = fixture("prot-dirty", true);
-    check("ProtectedGitDirty", &fx, PROTECTED_GIT_ROWS);
+    check("ProtectedGitDirty", &fx, PROTECTED_GIT_ROWS_DIRTY);
 }

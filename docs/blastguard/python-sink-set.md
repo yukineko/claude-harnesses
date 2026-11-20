@@ -44,9 +44,17 @@ stated.
   (L284-286; renamed to `subprocess.run` / `os.system` for judging by `SPAWNER_AS`,
   L299-301)
 
-Not modelled (no effect model found at HEAD): `loop.subprocess_shell` /
-`loop.subprocess_exec` (case `stdin_x_loop_subprocess_shell`). Per A2a this must be
-Ask until an effect model exists.
+Recognised by name but not modelled: `loop.subprocess_shell` /
+`loop.subprocess_exec` (asyncio `AbstractEventLoop` methods; case
+`stdin_x_loop_subprocess_shell`, backlog 2f159843). Both names are in progeffect's
+`EXEC_NAMES` (`crates/progeffect/src/python/tables.rs:495-499`), so a call of either
+name on any receiver has no effect model and is Undetermined
+(`method_name_only`, `crates/progeffect/src/python/judge.rs:646`). The program is
+then not retired as harmless: per A2a it resolves to Ask in main mode and Deny in
+subagent mode (tests `r_python_unknown_sink` in
+`crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs` and
+`crates/blastguard/tests/python_unmodelled_loop_sink_2f159843.rs`). A mention inside
+a string literal or a comment is not a call and keeps its decision.
 
 ### 2. Filesystem write
 

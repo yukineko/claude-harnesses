@@ -2975,3 +2975,36 @@ exit 101: 2 filtered out; finished in 1.48s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
      Running tests/backlog_20261121_redirect_in_linked_worktree_whose_tree_fp.rs (target/debug/deps/backlog_20261121_redirect_in_linked_worktree_whose_tree_fp-92aba7094b7fc9da)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_redirect_in_linked_worktree_whose_tree_fp`"""
+
+[[task]]
+id = "6460fb47"
+title = "rollout: scripts/tests/canary-final-stage-gate.sh fails case C - a healthy single-stage canary exits 1"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "canary",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-20/21 by the coordinator (session 62e92d16) during run-20261120-171414-35880 / d4a135ba: bash scripts/tests/canary-final-stage-gate.sh rc=1 'FAIL: case C: a healthy single-stage canary must exit 0, got 1 (does the fix always halt?)' at base 039500893 and identically at tip 73c0f1578. Pre-existing. Readings: (a) fixture drift (e.g. missing helper/GATE crate in the temp repo); (b) real regression: the canary final-stage gate always halts. Not investigated."
+created_at = 1795193376
+updated_at = 1795193376
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/canary-final-stage-gate.sh"
+rev = "d9067574348b5abc71dd6cc71e9ddd632645dacc"
+observed_at = 1795193376
+detail = """
+exit 1:   
+    rollout: FAILED — drift remains for the targeted plugin(s) after this run
+             (see above). They are NOT current, so this script will not report success.
+    RC=1
+(exit code: 1, gate invocations: 1)
+  ok: the only stage was health-gated (1 gate invocation)
+  ok: healthy gate reported PROCEED
+FAIL: case C: a healthy single-stage canary must exit 0, got 1 (does the fix always halt?)"""

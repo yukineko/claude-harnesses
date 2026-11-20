@@ -71,7 +71,7 @@ use crate::scope::SafeRoots;
 #[cfg(test)]
 mod classify_tests;
 pub(super) mod deny_targets;
-mod table_b;
+pub(super) mod table_b;
 
 /// What a modelled command (Table B) does to one target path.
 #[allow(

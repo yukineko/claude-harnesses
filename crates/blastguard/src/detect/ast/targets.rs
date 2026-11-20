@@ -60,6 +60,8 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use super::eval::resolve_at;
+use super::judge::table_b::{extract, Row};
+use super::judge::Effect;
 use super::{analyze, Analysis, RedirTarget, Script, Value};
 
 thread_local! {
@@ -92,33 +94,59 @@ struct Index {
     /// `(byte range of the word in text, role, evaluated value)`; one entry
     /// per evaluated instance (an unrolled loop repeats a range).
     words: Vec<(Range<usize>, Role, Value)>,
-    /// Every evaluated simple command whose command word is the literal
-    /// `rm` (see [`rm_operand_values`]): its argv after the command word as
-    /// `(byte range, raw spelling, value resolved against the command's
-    /// cwd)`, one entry per evaluated instance. `None` for a command one of
-    /// whose argv words is not spelled verbatim in the text at its span.
-    rm_commands: Vec<Option<RmArgv>>,
+    /// Every evaluated simple command whose command word is the literal `X`,
+    /// `/bin/X` or `/usr/bin/X` for a name `X` with no `/` (see
+    /// [`tied_operand_values`]), one entry per evaluated instance.
+    commands: Vec<IndexedCommand>,
 }
 
-/// One `rm` command's argv after the command word: `(byte range, raw
-/// spelling, value resolved against the command's cwd)` per word.
-type RmArgv = Vec<(Range<usize>, String, Value)>;
+/// One evaluated top-level command of [`Index::commands`].
+struct IndexedCommand {
+    /// `X` of the command word `X` / `/bin/X` / `/usr/bin/X`.
+    name: String,
+    /// Its argv after the command word as `(byte range, raw spelling, value
+    /// resolved against the command's cwd)`; `None` when one of those words
+    /// is not spelled verbatim in the text at its span.
+    argv: Option<TiedArgv>,
+    /// Its Table B B.1 row (`judge::table_b::extract`): target values as
+    /// written, to be placed against [`IndexedCommand::cwd`].
+    row: Row,
+    /// The command's statically tracked cwd ([`super::SimpleCommand::cwd`]).
+    cwd: Value,
+}
 
-/// The command words read as `rm` itself (not a wrapper, not a function).
-fn is_rm_command_word(v: &Value) -> bool {
-    matches!(v, Value::Literal(w) if matches!(w.as_str(), "rm" | "/bin/rm" | "/usr/bin/rm"))
+/// One command's argv after the command word: `(byte range, raw spelling,
+/// value resolved against the command's cwd)` per word.
+type TiedArgv = Vec<(Range<usize>, String, Value)>;
+
+/// The name `X` of a command word spelled as the literal `X`, `/bin/X` or
+/// `/usr/bin/X` (`X` non-empty, no `/`). For `rm` these are exactly the
+/// three spellings the `rm` tie has always accepted. The test is on the
+/// word's value only (a wrapper such as `sudo rm` is the command `sudo`).
+fn command_name(v: &Value) -> Option<&str> {
+    let Value::Literal(w) = v else {
+        return None;
+    };
+    let name = w
+        .strip_prefix("/usr/bin/")
+        .or_else(|| w.strip_prefix("/bin/"))
+        .unwrap_or(w);
+    (!name.is_empty() && !name.contains('/')).then_some(name)
+}
+
+/// The commands [`Index::tie`] tied to a legacy token list, and the operands
+/// it hands back.
+struct Tie<'a> {
+    commands: Vec<&'a IndexedCommand>,
+    operands: Vec<TiedOperand>,
 }
 
 impl Index {
     fn build(text: &str, script: &Script) -> Index {
         let mut words = Vec::new();
-        let mut rm_commands = Vec::new();
+        let mut commands = Vec::new();
         for cmd in &script.commands {
-            if cmd
-                .argv
-                .first()
-                .is_some_and(|w| is_rm_command_word(&w.value))
-            {
+            if let Some(name) = cmd.argv.first().and_then(|w| command_name(&w.value)) {
                 let argv: Option<Vec<_>> = cmd.argv[1..]
                     .iter()
                     .map(|w| {
@@ -131,7 +159,12 @@ impl Index {
                         })
                     })
                     .collect();
-                rm_commands.push(argv);
+                commands.push(IndexedCommand {
+                    name: name.to_string(),
+                    argv,
+                    row: extract(cmd),
+                    cwd: cmd.cwd.clone(),
+                });
             }
             for w in &cmd.argv {
                 if text.get(w.span.clone()) == Some(w.raw.as_str()) {
@@ -149,13 +182,13 @@ impl Index {
         Index {
             text: text.to_string(),
             words,
-            rm_commands,
+            commands,
         }
     }
 
-    /// See [`rm_operand_values`].
-    fn rm_operands(&self, rest: &[&str]) -> Option<Vec<RmOperand>> {
-        // The AST `rm` commands spelled as `rest`: each token is the word's
+    /// See [`tied_operand_values`].
+    fn tie(&self, name: &str, rest: &[&str]) -> Option<Tie<'_>> {
+        // The AST `name` commands spelled as `rest`: each token is the word's
         // raw spelling, or — the legacy walk rewrites a relative operand
         // after a literal `cd` to its absolute path (`detect/cwd.rs`
         // `advance_cwd_and_rewrite`) — the absolute value the AST evaluator
@@ -170,34 +203,37 @@ impl Index {
                     && !w.1.starts_with('/')
                     && matches!(&w.2, Value::Literal(v) if v == r))
         };
-        let matching: Vec<&RmArgv> = self
-            .rm_commands
+        // Every `name` command must have its argv spelled verbatim (the `?`):
+        // one that is not may be the command the legacy tokens read.
+        let matching: Vec<(&IndexedCommand, &TiedArgv)> = self
+            .commands
             .iter()
-            .map(|c| c.as_ref())
+            .filter(|c| c.name == name)
+            .map(|c| c.argv.as_ref().map(|argv| (c, argv)))
             .collect::<Option<Vec<_>>>()?
             .into_iter()
-            .filter(|argv| {
+            .filter(|(_, argv)| {
                 argv.len() == rest.len() && argv.iter().zip(rest).all(|(w, r)| token_matches(w, r))
             })
             .collect();
         if matching.is_empty() {
             return None;
         }
-        let mut out: Vec<RmOperand> = Vec::new();
+        let mut out: Vec<TiedOperand> = Vec::new();
         for (i, spelling) in rest.iter().enumerate() {
             if spelling.starts_with('-') || spelling.is_empty() {
                 continue;
             }
             // Every occurrence of the operand's spelling in the text must be
-            // this operand of one of the matching `rm` commands: an
-            // occurrence anywhere else (another command's argv — `xargs rm
-            // -r a` next to `rm -r a` —, a quoted string, a heredoc body, a
-            // comment) may be the text the caller is reading, and that one
-            // was not evaluated as this `rm`'s operand. The spellings checked
-            // are the token itself and every matching command's raw word (the
+            // this operand of one of the matching commands: an occurrence
+            // anywhere else (another command's argv — `xargs rm -r a` next
+            // to `rm -r a` —, a quoted string, a heredoc body, a comment) may
+            // be the text the caller is reading, and that one was not
+            // evaluated as this command's operand. The spellings checked are
+            // the token itself and every matching command's raw word (the
             // pre-rewrite spelling of a rewritten token).
             let mut spellings: Vec<&str> = vec![spelling];
-            for argv in &matching {
+            for (_, argv) in &matching {
                 if !spellings.contains(&argv[i].1.as_str()) {
                     spellings.push(argv[i].1.as_str());
                 }
@@ -208,19 +244,22 @@ impl Index {
                         continue;
                     }
                     let range = at..at + spelled.len();
-                    if !matching.iter().any(|argv| argv[i].0 == range) {
+                    if !matching.iter().any(|(_, argv)| argv[i].0 == range) {
                         return None;
                     }
                 }
             }
-            for argv in &matching {
-                out.push(RmOperand {
+            for (_, argv) in &matching {
+                out.push(TiedOperand {
                     spelling: (*spelling).to_string(),
                     value: argv[i].2.clone(),
                 });
             }
         }
-        Some(out)
+        Some(Tie {
+            commands: matching.into_iter().map(|(c, _)| c).collect(),
+            operands: out,
+        })
     }
 
     fn lookup(&self, spelling: &str, role: Role) -> Option<Vec<String>> {
@@ -259,9 +298,9 @@ impl Index {
     }
 }
 
-/// One evaluated operand of an `rm` command ([`rm_operand_values`]).
+/// One evaluated operand of a tied command ([`tied_operand_values`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RmOperand {
+pub(crate) struct TiedOperand {
     /// The operand as spelled in the text.
     pub spelling: String,
     /// Its evaluated value: absolute after a literal `cd`, as written when
@@ -270,30 +309,72 @@ pub(crate) struct RmOperand {
     pub value: Value,
 }
 
-/// The evaluated operands of the top-level `rm` command whose argv after the
-/// command word is spelled exactly `rest` (the legacy reading's tokens), for
-/// the new-layer `rm` judgement (`detect/rm/new_layer.rs`). One entry per
-/// operand (a token not starting with `-`) per evaluated instance of every
-/// such command; values are NOT filtered — an `Undetermined` value is handed
-/// back for the caller to refuse.
+/// The evaluated operands of the top-level command `name` whose argv after
+/// the command word is spelled exactly `rest` (the legacy reading's tokens),
+/// for a new-layer judgement (`detect/rm/new_layer.rs`,
+/// `detect/known_allow.rs`). One entry per operand (a token not starting
+/// with `-`) per evaluated instance of every such command; values are NOT
+/// filtered — an `Undetermined` value is handed back for the caller to
+/// refuse.
 ///
 /// `None` (the caller keeps the legacy verdict) unless all of these hold:
 /// the index is active, `Known`, not [`suspended`], at shell depth 0; the
 /// text has at least one evaluated simple command whose command word is the
-/// literal `rm` (`/bin/rm`, `/usr/bin/rm`) and whose argv after it is spelled
-/// exactly `rest` — a token may also be the absolute value the evaluator
-/// resolved a relative word to after a literal `cd` (the legacy walk's
-/// rewrite of that operand; only a Known cwd yields an absolute value); every
-/// `rm` command in the text has its argv spelled verbatim at its spans; and
-/// every occurrence of every operand spelling in the text (the token and the
-/// matching word's raw spelling) is that operand's word of one of those `rm`
-/// commands.
-pub(crate) fn rm_operand_values(rest: &[&str]) -> Option<Vec<RmOperand>> {
+/// literal `name` (`/bin/name`, `/usr/bin/name`) and whose argv after it is
+/// spelled exactly `rest` — a token may also be the absolute value the
+/// evaluator resolved a relative word to after a literal `cd` (the legacy
+/// walk's rewrite of that operand; only a Known cwd yields an absolute
+/// value); every `name` command in the text has its argv spelled verbatim at
+/// its spans; and every occurrence of every operand spelling in the text
+/// (the token and the matching word's raw spelling) is that operand's word
+/// of one of those commands.
+pub(crate) fn tied_operand_values(name: &str, rest: &[&str]) -> Option<Vec<TiedOperand>> {
+    with_known(|index| index.tie(name, rest).map(|t| t.operands))
+}
+
+/// One Table B B.1 target of a tied command ([`tied_b1_targets`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TiedTarget {
+    pub effect: Effect,
+    /// The target word's value as written (not yet placed).
+    pub target: Value,
+    /// The cwd the command runs in ([`super::SimpleCommand::cwd`]).
+    pub cwd: Value,
+}
+
+/// Every (effect, target) pair of the Table B B.1 rows
+/// (`judge::table_b::extract`) of the commands [`tied_operand_values`] ties
+/// to `name` + `rest`, over every tied instance. `None` (not Known: the
+/// caller keeps its legacy verdict) when nothing is tied (every condition of
+/// [`tied_operand_values`]), or a tied command has no B.1 row or an
+/// undetermined one. The list may be empty (a row naming no target); what
+/// that means is the caller's to decide.
+pub(crate) fn tied_b1_targets(name: &str, rest: &[&str]) -> Option<Vec<TiedTarget>> {
+    with_known(|index| {
+        let tie = index.tie(name, rest)?;
+        let mut out = Vec::new();
+        for c in tie.commands {
+            let Row::Targets(pairs) = &c.row else {
+                return None;
+            };
+            out.extend(pairs.iter().map(|(effect, target)| TiedTarget {
+                effect: *effect,
+                target: target.clone(),
+                cwd: c.cwd.clone(),
+            }));
+        }
+        Some(out)
+    })
+}
+
+/// `f` of the active `Known` index, at shell depth 0 and not [`suspended`];
+/// `None` otherwise (the caller keeps its old verdict).
+fn with_known<R>(f: impl FnOnce(&Index) -> Option<R>) -> Option<R> {
     if SUSPENDED.with(Cell::get) || DEPTH.with(Cell::get) != 0 {
         return None;
     }
     INDEX.with(|i| match &*i.borrow() {
-        Active::Known(index) => index.rm_operands(rest),
+        Active::Known(index) => f(index),
         Active::Inactive | Active::Undetermined => None,
     })
 }

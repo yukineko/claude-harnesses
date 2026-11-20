@@ -30,7 +30,7 @@ use super::Effect;
 
 /// What [`extract`] found for one command.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum Row {
+pub(in crate::detect::ast) enum Row {
     None,
     Undetermined(String),
     Targets(Vec<(Effect, Value)>),
@@ -38,8 +38,9 @@ pub(super) enum Row {
 
 type Targets = Result<Vec<(Effect, Value)>, String>;
 
-/// The B.1 row of `cmd`, if it has one (see the module doc).
-pub(super) fn extract(cmd: &SimpleCommand) -> Row {
+/// The B.1 row of `cmd`, if it has one (see the module doc). Also read by
+/// `ast/targets.rs` (the per-command tie, stage S6-3).
+pub(in crate::detect::ast) fn extract(cmd: &SimpleCommand) -> Row {
     let Some(first) = cmd.argv.first() else {
         return Row::None;
     };

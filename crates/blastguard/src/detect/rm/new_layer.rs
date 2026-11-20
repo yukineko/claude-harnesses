@@ -12,7 +12,9 @@
 //! * every option word is one Table B models for `rm` (`-r -R -f -i -d -v`
 //!   clusters, `--recursive --force --dir --verbose`); `--` and any other
 //!   option are not modelled;
-//! * the AST evaluator ([`super::super::ast::targets::rm_operand_values`]) ties
+//! * the AST evaluator's per-command tie
+//!   ([`super::super::ast::targets::tied_operand_values`] for `rm`, the tie
+//!   `detect/known_allow.rs` reads too) ties
 //!   the legacy tokens to evaluated top-level `rm` commands (command word the
 //!   literal `rm`, argv spelled exactly as the tokens — or a token being the
 //!   absolute path the evaluator resolved a relative word to under a Known
@@ -42,7 +44,7 @@
 
 use harness_core::verdict::Determination;
 
-use super::super::ast::targets::{resolve, rm_operand_values, RmOperand, Role};
+use super::super::ast::targets::{resolve, tied_operand_values, Role, TiedOperand};
 use super::super::ast::Value;
 use super::{exclude, Ctx, Placement};
 
@@ -55,7 +57,7 @@ pub(super) fn known_allow(rest: &[&str], ctx: &Ctx<'_>) -> bool {
     {
         return false;
     }
-    let Some(operands) = rm_operand_values(rest) else {
+    let Some(operands) = tied_operand_values("rm", rest) else {
         return false;
     };
     !operands.is_empty() && operands.iter().all(|o| operand_allows(o, ctx))
@@ -107,7 +109,7 @@ pub(super) fn rsync_dest_allows(tok: &str, ctx: &Ctx<'_>) -> bool {
             .all(|v| absolute(v).is_some_and(|a| value_allows(&a, ctx)))
 }
 
-fn operand_allows(o: &RmOperand, ctx: &Ctx<'_>) -> bool {
+fn operand_allows(o: &TiedOperand, ctx: &Ctx<'_>) -> bool {
     let Value::Literal(v) = &o.value else {
         return false;
     };

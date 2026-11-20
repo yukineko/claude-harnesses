@@ -2851,3 +2851,33 @@ exit 101: ng blastguard v0.2.816 (/Users/yuki/src/.harness-worktrees/sink-file-2
     Finished `test` profile [unoptimized + debuginfo] target(s) in 29.45s
      Running tests/backlog_20261120_8cadc78f_adversarial.rs (target/debug/deps/backlog_20261120_8cadc78f_adversarial-32f4534269472e76)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_8cadc78f_adversarial`"""
+
+[[task]]
+id = "987e3708"
+title = "blastguard FP candidate: echo rm -rf ./build | bash is Deny in main and subagent (non-system relative target)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Found by the independent test author of 8cadc78f (tests ddd587ad4). Ignored RED c06_rm_build in crates/blastguard/tests/backlog_20261120_8cadc78f_adversarial.rs asserts not-Deny. Compare with the verdict of plain rm -rf ./build when fixing."
+created_at = 1795179825
+updated_at = 1795179825
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_8cadc78f_adversarial -- --ignored c06_rm_build --exact"
+rev = "a1d9b98361992dc9c8f122030b2533aef461ef13"
+observed_at = 1795179825
+detail = """
+exit 101: st result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 52 filtered out; finished in 0.63s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261120_8cadc78f_adversarial.rs (target/debug/deps/backlog_20261120_8cadc78f_adversarial-32f4534269472e76)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_8cadc78f_adversarial`"""

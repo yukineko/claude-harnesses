@@ -2496,6 +2496,8 @@ notes = "Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pr
 created_at = 1795155139
 updated_at = 1795155139
 weight = 0.0
+issue_number = 1890
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1890"
 rev = 0
 
 [task.repro]

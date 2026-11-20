@@ -51,7 +51,9 @@ Recognised by name but not modelled: `loop.subprocess_shell` /
 name on any receiver has no effect model and is Undetermined
 (`method_name_only`, `crates/progeffect/src/python/judge.rs:646`). The program is
 then not retired as harmless: per A2a it resolves to Ask in main mode and Deny in
-subagent mode (tests `r_python_unknown_sink` in
+subagent mode, or to Deny in both when the legacy string readings also see system
+harm in a literal (the named case carries `"rm -rf /usr/lib"` and is Deny/Deny)
+(tests `r_python_unknown_sink` in
 `crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs` and
 `crates/blastguard/tests/python_unmodelled_loop_sink_2f159843.rs`). A mention inside
 a string literal or a comment is not a call and keeps its decision.

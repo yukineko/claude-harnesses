@@ -2435,6 +2435,8 @@ notes = "Observed 2026-11-20 at main 2f39a1620 (0.2.784), git project cwd: cat >
 created_at = 1795139565
 updated_at = 1795139565
 weight = 0.0
+issue_number = 1886
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1886"
 rev = 0
 
 [task.repro]

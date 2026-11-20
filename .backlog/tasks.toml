@@ -846,7 +846,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "failed"
 notes = """
 specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-fakeeof から自動起票 (ratify 時).
 spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
@@ -858,11 +858,13 @@ done_criteria (spec の acceptance を逐語で。言い換えないこと):
 canon:
   - CLAUDE.md §3: "判定不能 — IO 失敗 / ロック取得失敗 / subprocess の異常終了 / パース不能 / panic / 空集合 — は `clean` ではない。必ず `block` か `ask` に解決する。"
   - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:289-298
-"""
+
+STOP RULE run-20261121-043744-39490: needs human ruling — b5.rs:207 'parse failure -> no opinion' (2026-11-18 ruling (b)) conflicts on the same Cause::Parse branch with ratified spec 'パース不能のまま Allow にしない'; scope undecided (all Parse failures vs only after heredoc close). RED observed @49f68b14f: v_nested_fake_eof main=allow sub=allow"""
 created_at = 1795109405
-updated_at = 1795109405
+updated_at = 1795204509
+defer_until = 1795377309
 weight = 0.0
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -887,7 +889,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "failed"
 notes = """
 specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-cargo から自動起票 (ratify 時).
 spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
@@ -900,11 +902,13 @@ done_criteria (spec の acceptance を逐語で。言い換えないこと):
 canon:
   - .backlog/tasks.toml 596ef57d round 3: "(3) A1 boundary: writing build.rs (or other build-time code) then ANY cargo build/test/check/clippy/run in the same command -> not-Allow; ordinary .rs then cargo test/build/check -> Allow; .rs then cargo run -> not-Allow."
   - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:300-315, 356-367
-"""
+
+STOP RULE run-20261121-043744-39490: needs human ruling — scope of 'other build-time code' undefined (Cargo.toml build=, .cargo/config included?). RED observed @49f68b14f: h_rs_build_rs main=allow sub=allow / h_rs_cargo_script main=allow sub=allow"""
 created_at = 1795109417
-updated_at = 1795109417
+updated_at = 1795204512
+defer_until = 1795377312
 weight = 0.0
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -929,7 +933,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "failed"
 notes = """
 specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-aggregate-and-controls から自動起票 (ratify 時).
 spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
@@ -945,13 +949,15 @@ canon:
   - 要望原文: "Controls: heredoc_script_fp_cases_stay_allow must stay green (no new false positive)."
   - 要望原文: "Controls that must stay green: r_q2_reanchor, control_pure_call_re_compile_allow, control_subprocess_git_status_stdin_allow, control_ordinary_rs_then_cargo_test_allow, heredoc_script_fp_cases_stay_allow, python_stdin_re_compile_fp_20261103."
   - crates/blastguard/tests/heredoc_script_failopen_red_20261108.rs:680-701
-"""
+
+cannot pass this run: depends on all 596ef57d requirements. @49f68b14f '7 of 653 attack cases are Allow': stdin_x_loop_subprocess_shell, c_kill_all (peer run-20261121-042409-20321), v_nested_fake_eof, h_rs_cargo_script, h_rs_build_rs (stopped for rulings), h_heredoc_bs_quoted_cmdsub, h_heredoc_dq_delim_cmdsub (R-q2-reanchor; who re-anchors the aggregate test is unresolved)"""
 created_at = 1795109428
-updated_at = 1795109428
+updated_at = 1795204513
+defer_until = 1795377313
 weight = 0.0
 issue_number = 1875
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1875"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

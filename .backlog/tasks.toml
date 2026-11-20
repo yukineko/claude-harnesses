@@ -2987,3 +2987,33 @@ exit 101: s/red-donegate-root-20261121/crates/donegate)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.28s
      Running tests/backlog_20261121_foreign_merge_unattributable_elsewhere.rs (target/debug/deps/backlog_20261121_foreign_merge_unattributable_elsewhere-bffeb0682058697b)
 error: test failed, to rerun pass `-p donegate --test backlog_20261121_foreign_merge_unattributable_elsewhere`"""
+
+[[task]]
+id = "8f8acf5e"
+title = "blastguard: sudo shell-mode (-s/-i/--shell/--login) + quoted command judged as program file => Ask, system harm not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Side finding of a761b38f. Measured 2026-11-21 at rev 916fea015 (blastguard 0.2.828), crates/blastguard/src/detect/ast/b5.rs unwrap_at sudo/doas arm. Observation: when shell=true (-s/-i/--shell/--login) and a command word follows, the arm returns Unwrapped::At(i) (direct argv), but sudo runs $SHELL -c 'CMD' (args joined, shell-interpreted). Result: `sudo -s 'rm -rf /etc'` (also -i, --shell, --login) => ask, reason: direct execution of the program file `rm -rf /etc`, whose text is not in the command — blastguard cannot judge what it would do (Table B.5: Undetermined). Reading (a) defect Allow: REFUTED (it is Ask). Reading (b) already restrictive: partly true, but system harm is downgraded from Deny (sudo rm -rf /etc) to Ask; per 'system harm always deny' this is a defect. Test result line: test result: FAILED. 0 passed; 4 failed. Not RED (measured GREEN, dropped): sudo -u X rm -rf /etc and sudo --user with command substitution are already Deny; control sudo -s 'ls -la' not Deny. Discarded without test: doas --version treated as runs-nothing (doas would just print usage; harmless)."
+created_at = 1795197125
+updated_at = 1795197125
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_sudo_shell_cmd_and_undet_value -- --ignored shell_"
+rev = "916fea01584db859c6385ce9a86a8ed39d5f2768"
+observed_at = 1795197125
+detail = """
+exit 101: 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261121_sudo_shell_cmd_and_undet_value.rs (target/debug/deps/backlog_20261121_sudo_shell_cmd_and_undet_value-68db974a4f669647)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_sudo_shell_cmd_and_undet_value`"""

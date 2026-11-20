@@ -110,7 +110,6 @@ fn opener(option: &str) -> String {
 // test-weakening-justified: new RED for an unfixed false positive (backlog
 // pending, 2026-11-14); the ignore is removed in the fixing commit.
 #[test]
-#[ignore = "RED: <backlog-pending> 2026-11-14 quoted git commit -F - heredoc body judged when opener has a quoted $ option value; protected path in message read as command; remove the ignore when fixed"]
 fn quoted_commit_heredoc_body_with_dollar_option_value_is_not_judged() {
     let home = unique_home("red");
     for option in [

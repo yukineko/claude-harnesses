@@ -33,7 +33,12 @@
 //!   bare `$X` operand, the word after `-F` / `--file`, `-m`, `--date`, `-c`,
 //!   `-C`, `--template`, an undetermined subcommand or command word) keeps the
 //!   body. `program_source` of the reader is `None` (not an interpreter,
-//!   `eval`, `source` or wrapper);
+//!   `eval`, `source` or wrapper). The reader may also be a COMPOUND loop
+//!   (`while IFS= read -r c; do echo "$c"; done <<'EOF'`, backlog b5d6ac29)
+//!   whose only commands are `read` and `echo` printing plain `$NAME`
+//!   operands, the heredoc being its only redirect and its output not piped
+//!   on; see [`data_loop_landing`] — any other command in the loop keeps the
+//!   body;
 //! * where `cat` / `tee` put the body is a literal data, non-shell code or
 //!   JSON / TOML / YAML file (`.md`, `.txt`, `.rs`, `.json`, `.jsonl`,
 //!   `.toml`, `.yaml`, `.yml`, …; never `.sh`,
@@ -248,7 +253,12 @@ fn data_bodies(script: &Script, text: &str) -> Option<(Vec<Range<usize>>, bool)>
             if !h.quoted || !exact || !plain_delimiter(text, &r.span) || shebang(text, h) {
                 continue;
             }
-            if let Some(paths) = data_reader_landing(c) {
+            let landing_paths = if c.argv.is_empty() {
+                data_loop_landing(script, i, c, &r.span)
+            } else {
+                data_reader_landing(c)
+            };
+            if let Some(paths) = landing_paths {
                 spans.push(h.body_span.clone());
                 landing.extend(paths);
                 readers.push(i);
@@ -515,6 +525,109 @@ fn data_reader_landing(c: &SimpleCommand) -> Option<Vec<String>> {
         }
         _ => None,
     }
+}
+
+/// A COMPOUND command (`while IFS= read -r c; do echo "$c"; done <<'EOF'`;
+/// `c` is its empty-argv redirection command) whose only commands are the
+/// builtins `read` and `echo`, so the here-document is read into a variable
+/// and printed, never run. Returns its landing (empty: its stdout is the
+/// terminal), or `None` (the body stays judged as shell) unless ALL hold,
+/// each taken from the parsed commands:
+///
+/// * the compound's only redirect is this here-document on stdin, and it is
+///   not a non-final pipe stage nor a process substitution (its output could
+///   be piped into a shell);
+/// * every other command inside the compound's span is `read` (literal `-r`
+///   and literal identifier names, an `IFS=` prefix at most) or `echo` (no
+///   redirect, no assignment), and the name is not a function the line
+///   defines. Any other command (`bash`, `eval`, `$c`, `[`, a nested
+///   compound, the command of a `$( )`, an undetermined command word) keeps
+///   the body: what the loop does with the variable cannot then be shown to
+///   be data-only;
+/// * every `echo` operand is a literal without `$`, backquote or process
+///   substitution, or exactly a plain `$NAME` / `${NAME}` (optionally
+///   double-quoted): `${c@P}`, `$((c))` or `${!c}` can evaluate the value;
+/// * at least one `read` exists, so the body is consumed by something.
+fn data_loop_landing(
+    script: &Script,
+    i: usize,
+    c: &SimpleCommand,
+    opener: &Range<usize>,
+) -> Option<Vec<String>> {
+    if !c.assignments.is_empty() {
+        return None;
+    }
+    match c.context {
+        Context::Pipeline { pos, len } if pos + 1 < len => return None,
+        Context::ProcessSubstitution => return None,
+        _ => {}
+    }
+    match c.redirects.as_slice() {
+        [r] if matches!(r.op, RedirOp::HereDoc)
+            && matches!(r.fd, None | Some(0))
+            && r.span == *opener => {}
+        _ => return None,
+    }
+    let mut reads = 0usize;
+    for (j, k) in script.commands.iter().enumerate() {
+        if j == i || k.span.start < c.span.start || k.span.end > c.span.end {
+            continue;
+        }
+        if !k.redirects.is_empty() || program_source(k).is_some() {
+            return None;
+        }
+        let Some(Value::Literal(name)) = k.argv.first().map(|w| &w.value) else {
+            return None;
+        };
+        if script.function_names.iter().any(|f| f == name) {
+            return None;
+        }
+        match name.as_str() {
+            "read" => {
+                let args_ok = k.argv.iter().skip(1).all(
+                    |w| matches!(&w.value, Value::Literal(a) if a == "-r" || is_identifier(a)),
+                );
+                if !args_ok || k.assignments.iter().any(|(n, _)| n != "IFS") {
+                    return None;
+                }
+                reads += 1;
+            }
+            "echo" => {
+                if !k.assignments.is_empty() || !k.argv.iter().skip(1).all(plain_echo_word) {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    (reads > 0).then(Vec::new)
+}
+
+fn is_identifier(s: &str) -> bool {
+    let mut cs = s.chars();
+    matches!(cs.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// An `echo` operand that only prints: not an option, and its raw text is a
+/// literal with no `$`, backquote or process substitution, or exactly a plain
+/// parameter reference `$NAME` / `${NAME}`, optionally in double quotes.
+fn plain_echo_word(w: &Word) -> bool {
+    let raw = w.raw.as_str();
+    if raw.starts_with('-') {
+        return false;
+    }
+    let inner = raw
+        .strip_prefix('"')
+        .and_then(|r| r.strip_suffix('"'))
+        .unwrap_or(raw);
+    let param = inner.strip_prefix('$').is_some_and(|n| {
+        is_identifier(n)
+            || n.strip_prefix('{')
+                .and_then(|n| n.strip_suffix('}'))
+                .is_some_and(is_identifier)
+    });
+    param || (!raw.contains(['$', '`']) && !raw.contains("<(") && !raw.contains(">("))
 }
 
 /// True when `c` is `git commit` whose message is read from stdin: `-F -`,

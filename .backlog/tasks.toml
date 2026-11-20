@@ -2399,6 +2399,8 @@ notes = "Observed 2026-11-20 at main 4c7da59ba (0.2.782): a recursive grep for t
 created_at = 1795138942
 updated_at = 1795138942
 weight = 0.0
+issue_number = 1884
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1884"
 rev = 0
 
 [task.repro]

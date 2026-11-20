@@ -125,6 +125,16 @@ fn oracle_refusal_names_the_proof_ids_it_found() {
     let home = tmp.path().join("home");
     std::fs::create_dir_all(dir.join(".tdd")).unwrap();
     std::fs::create_dir_all(&home).unwrap();
+    // Since 834ccf88 the oracle refuses to judge a task with no recorded
+    // worktree, so `dir` is made an honest git worktree top-level (clean
+    // tracked tree; `.tdd/` and the decomposition excluded) and recorded below.
+    git(&dir, &["init", "-q", "-b", "main"]);
+    git(&dir, &["config", "user.email", "t@t.t"]);
+    git(&dir, &["config", "user.name", "t"]);
+    std::fs::write(dir.join("base.txt"), "base\n").unwrap();
+    std::fs::write(dir.join(".git/info/exclude"), ".tdd/\ndec.json\n").unwrap();
+    git(&dir, &["add", "base.txt"]);
+    git(&dir, &["commit", "-q", "-m", "init"]);
     init(&dir, &home, "run-b12-ids", Some("fix"));
     for (kind, passed) in [("red", false), ("green", true)] {
         std::fs::write(
@@ -145,6 +155,8 @@ fn oracle_refusal_names_the_proof_ids_it_found() {
             "t1",
             "--status",
             "verified",
+            "--worktree",
+            dir.to_str().unwrap(),
         ],
     );
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();

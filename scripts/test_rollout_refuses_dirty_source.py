@@ -137,6 +137,9 @@ class Fixture(unittest.TestCase):
                         PLUGIN_CACHE_PROC_LIST_PROBE="echo '1 1 python3'",
                         PATH=f"{fb}{os.pathsep}{os.environ['PATH']}")
         self.env.pop("HARNESS_ROLLOUT_LOCK_HOLDER_PID", None)
+        # the rollout lock is ${XDG_STATE_HOME:-$HOME/.local/state}/claude-harnesses/
+        # rollout.lock (backlog d4a135ba): keep it under the temp HOME
+        self.env.pop("XDG_STATE_HOME", None)
         self.env.pop("FAKE_BUILD_MODE", None)
 
     def run_rollout(self, mode=None):

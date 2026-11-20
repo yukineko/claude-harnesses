@@ -281,6 +281,20 @@ scripts/rollout-plugins.sh --plugin specguard --canary             # GATE クレ
   version dir には swap 済みバイナリが残る（(4) を通過済みのビルド物）。(d) canary 経路は E2E テスト未整備。
   プロセスが死んで `.active` が残った場合は rollout が拒否し続けるので、`git status` が clean なことを
   確認してから手で消す。
+- **排他ロック（exit 6, backlog e3366b5c / ea39fbc9 / d4a135ba）**: 非 dry-run の
+  `rollout-plugins.sh`・単体の `rebuild-plugins.sh`・単体の `prune-plugin-cache.py` は、
+  固定パス `${XDG_STATE_HOME:-$HOME/.local/state}/claude-harnesses/rollout.lock`（**全 cache 共通の 1 本**、
+  `~/.claude` の外。holder pid は `./pid`）を mkdir で取る。パスの規則は 1 つで、shell 2 本の
+  `resolve_rollout_lock_dir` と `scripts/plugin_cache.py` の `rollout_lock_dir()` が同じ規則を実装する
+  （空の `XDG_STATE_HOME` は未設定扱い。state dir が絶対パスでない・HOME も無いときは拒否）。
+  以前は `$CACHE/.rollout.lock`（marketplace cache dir 直下）にあったが、Claude Code は起動時にその dir 直下の
+  未知の dir を消す（2026-11-16 に strace で観測。`scripts/test_rollout_lock_outside_managed_cache.py`）ので、
+  別セッションの起動で保持中のロックが消えうる状態だった。次はすべて exit 6・`Refusing to proceed` で拒否し、何も触らない:
+  ロックが既にある（holder が死んでいても奪わない。消し方の `rm -r` を表示）・パスが解決できない・親 dir を
+  作れない・pid を書けない・**legacy の `$CACHE/.rollout.lock` が存在する（または有無を確認できない）**。
+  legacy は新ロック取得後に確認するので、新しい側同士は排他される。移行前の tree から走る rollout は新ロックを
+  知らないため、それが legacy 確認の**後**に始まった場合は排他できない（移行期間の残存穴・明示）。
+  移動後の新パスが Claude Code の GC 対象外であることの実機再測定（Linux strace）は未実施。
 - **GATE クレートは canary 必須**: canary 無しでの反映はエラーで止まる（fleet 防御ゲートを
   無検証で入れ替えないための安全策）。`--no-canary` は明示的な例外指定としてのみ用いる。
 - **手動 `cp` は禁止**: cache の binary/asset を手で上書きするだけだと **version dir が旧名のまま残り**

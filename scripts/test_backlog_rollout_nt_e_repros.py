@@ -96,6 +96,8 @@ class Sandbox:
         self.registry.write_text(json.dumps({"version": 2, "plugins": {}}))
         self.home = self.root / "home"
         self.home.mkdir()
+        # lock location (backlog d4a135ba): $HOME/.local/state/claude-harnesses/rollout.lock
+        self.lock = self.home / ".local" / "state" / "claude-harnesses" / "rollout.lock"
 
     def stub(self, rel, body, mode=0o755):
         p = self.repo / rel
@@ -107,7 +109,7 @@ class Sandbox:
     def prelude(self, **over):
         v = {
             "REPO": self.repo, "CACHE": self.cache, "REGISTRY": self.registry,
-            "OWNER": "yukineko", "GIT_SHA": "0" * 40, "LOCK_DIR": self.cache / ".rollout.lock",
+            "OWNER": "yukineko", "GIT_SHA": "0" * 40, "LOCK_DIR": self.lock,
         }
         v.update({k: over.pop(k) for k in list(over) if k in v})
         lines = [f"{k}={sh_q(val)}" for k, val in v.items()]
@@ -295,7 +297,7 @@ class Backlog06ec3503(Base):
         r, entry = self.run_default_path(rebuild_ok=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(entry["installPath"], str(self.new))
-        self.assertFalse((self.sb.cache / ".rollout.lock").exists(), "lock not released")
+        self.assertFalse(self.sb.lock.exists(), "lock not released")
 
     def test_failed_rebuild_does_not_leave_registry_on_a_binaryless_dir(self):
         r, entry = self.run_default_path(rebuild_ok=False)

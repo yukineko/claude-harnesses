@@ -394,8 +394,8 @@ def scan(
     session whose tree was at specguard 0.2.55 pruned the 0.2.56 another
     session had just deployed and registered, and specguard went dark.
 
-    The rollout lock dir (`ROLLOUT_LOCK_NAME`) at the cache root is not a
-    plugin and is skipped by exact name, as is the version-history ledger
+    The LEGACY rollout lock dir (`ROLLOUT_LOCK_NAME`) at the cache root is not
+    a plugin and is skipped by exact name, as is the version-history ledger
     (`VERSION_HISTORY_NAME`) inside a plugin dir; any other non-plugin /
     non-version entry is still reported — including a DIRECTORY whose name is
     not a version (`_VERSION_RE`), which is never handed to the pruner. A
@@ -437,9 +437,11 @@ def scan(
 
     for pname in plugin_names:
         if pname == ROLLOUT_LOCK_NAME:
-            # rollout-plugins.sh's exclusive lock (a dir with a pid file). The
-            # pruner runs INSIDE a locked rollout, so it always sees it; it is
-            # not a plugin and holds no version dirs.
+            # The LEGACY location of rollout-plugins.sh's exclusive lock (a dir
+            # with a pid file). The lock now lives outside the cache
+            # (rollout_lock_dir(), backlog d4a135ba), but a rollout from a tree
+            # that predates the move still creates it here; it is not a plugin
+            # and holds no version dirs.
             continue
         pdir = os.path.join(cache_root, pname)
         if not os.path.isdir(pdir):
@@ -576,7 +578,75 @@ def scan(
     return stale, problems
 
 
+# The LEGACY rollout lock name: `<cache>/.rollout.lock`. The lock no longer
+# lives there (backlog d4a135ba — Claude Code garbage-collects unknown dirs
+# directly under the marketplace cache dir at startup, so a lock there could
+# vanish mid-rollout). The name is kept because (a) scan() still skips such a
+# dir by exact name, and (b) every contender still REFUSES while a legacy lock
+# exists, so a rollout from a tree that predates the move is never silently
+# run alongside one that has it.
 ROLLOUT_LOCK_NAME = ".rollout.lock"
+
+# Where the rollout lock lives now, relative to the state dir (see
+# rollout_lock_dir()).
+ROLLOUT_LOCK_SUBPATH = ("claude-harnesses", "rollout.lock")
+
+
+class RolloutLockPathUndetermined(ValueError):
+    """The rollout lock path cannot be resolved from the environment."""
+
+
+def rollout_lock_dir(environ=None):
+    """The ONE rollout mutual-exclusion lock dir for every cache:
+
+        ${XDG_STATE_HOME:-$HOME/.local/state}/claude-harnesses/rollout.lock
+
+    The same rule is written in bash in rollout-plugins.sh
+    (resolve_rollout_lock_dir) and rebuild-plugins.sh
+    (resolve_rollout_lock_dir); prune-plugin-cache.py calls this function.
+    Keep all three identical — a contender that resolves a different path does
+    not exclude the others at all.
+
+    As in the shell `${VAR:-default}` form, an EMPTY XDG_STATE_HOME counts as
+    unset. A state dir that is not absolute (a relative XDG_STATE_HOME, or no
+    HOME / a relative HOME with XDG_STATE_HOME unset) would make the lock path
+    depend on the cwd, which silently splits the mutual exclusion; that raises
+    RolloutLockPathUndetermined and the caller refuses (CLAUDE.md §3) instead of
+    falling back to some other path.
+    """
+    env = os.environ if environ is None else environ
+    state = env.get("XDG_STATE_HOME") or ""
+    if not state:
+        home = env.get("HOME") or ""
+        if not home:
+            raise RolloutLockPathUndetermined(
+                "neither XDG_STATE_HOME nor HOME is set, so the rollout lock path is unknown"
+            )
+        state = home + "/.local/state"
+    if not state.startswith("/"):
+        raise RolloutLockPathUndetermined(
+            f"state dir {state!r} (from XDG_STATE_HOME / HOME) is not an absolute path, "
+            "so the rollout lock path is unknown"
+        )
+    return state + "/" + "/".join(ROLLOUT_LOCK_SUBPATH)
+
+
+def legacy_rollout_lock_present(cache_root):
+    """Whether the LEGACY lock `<cache_root>/.rollout.lock` exists.
+
+    True = something is at that name (dir, file or link — any of them refuses);
+    False = provably nothing (ENOENT / ENOTDIR: a path component is missing or
+    is not a dir, so nothing can be at that name); None = could not look (any
+    other OSError, e.g. EACCES) — the caller refuses on None, never treating
+    "could not look" as "absent".
+    """
+    try:
+        os.lstat(os.path.join(cache_root, ROLLOUT_LOCK_NAME))
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return None
+    return True
 
 
 def default_registry_path():

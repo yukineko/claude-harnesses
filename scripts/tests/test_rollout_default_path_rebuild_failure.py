@@ -111,7 +111,9 @@ class Sandbox:
     def run(self, *args):
         env = dict(os.environ, HOME=str(self.home), CLAUDE_PLUGIN_CACHE=str(self.cache),
                    CLAUDE_PLUGIN_REGISTRY=str(self.registry))
-        for k in ("OVERWATCH_BIN", "OVERWATCH_CANARY_SINCE"):
+        # XDG_STATE_HOME: the rollout lock is ${XDG_STATE_HOME:-$HOME/.local/state}/
+        # claude-harnesses/rollout.lock (backlog d4a135ba); keep it under the temp HOME
+        for k in ("OVERWATCH_BIN", "OVERWATCH_CANARY_SINCE", "XDG_STATE_HOME"):
             env.pop(k, None)
         return subprocess.run([BASH, str(self.repo / "scripts" / "rollout-plugins.sh"), *args],
                               capture_output=True, text=True, env=env, cwd=str(self.repo),
@@ -142,7 +144,7 @@ class DefaultPathRebuildFailure(unittest.TestCase):
         return f"rc={r.returncode}\n--- stdout ---\n{r.stdout[-3000:]}\n--- stderr ---\n{r.stderr[-3000:]}"
 
     def assert_lock_released(self, r):
-        self.assertFalse((self.sb.cache / ".rollout.lock").exists(),
+        self.assertFalse((self.sb.home / ".local" / "state" / "claude-harnesses" / "rollout.lock").exists(),
                          "the rollout lock was left behind\n" + self.out(r))
 
     # (1) control ------------------------------------------------------------

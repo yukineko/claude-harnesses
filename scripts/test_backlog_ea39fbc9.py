@@ -54,10 +54,14 @@ class Fixture:
                         # the real sessions on this machine
                         PLUGIN_CACHE_PROC_LIST_PROBE="echo '1 1 python3'")
         (self.root / "home").mkdir()
+        # lock location (backlog d4a135ba): ${XDG_STATE_HOME:-$HOME/.local/state}/
+        # claude-harnesses/rollout.lock; XDG_STATE_HOME is dropped so it is under the temp HOME.
+        self.env.pop("XDG_STATE_HOME", None)
+        self.lock = self.root / "home" / ".local" / "state" / "claude-harnesses" / "rollout.lock"
 
     def hold_lock(self):
-        lock = self.cache / ".rollout.lock"
-        lock.mkdir()
+        lock = self.lock
+        lock.mkdir(parents=True)
         (lock / "pid").write_text(f"{os.getpid()}\n")
 
     def prune(self):

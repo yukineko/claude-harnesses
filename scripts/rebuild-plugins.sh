@@ -93,9 +93,17 @@ in_only() {
 CACHE="${CLAUDE_PLUGIN_CACHE:-$HOME/.claude/plugins/cache/yukineko}"
 
 # --- honour the rollout lock (backlog ea39fbc9, lock from e3366b5c) ---------
-# rollout-plugins.sh holds "$CACHE/.rollout.lock" (holder pid in ./pid) across
-# read-registry -> copy -> repoint -> prune. A standalone rebuild used to ignore
-# it and swap cache binaries in the middle of another session's rollout. Now:
+# rollout-plugins.sh holds the rollout lock (holder pid in ./pid) across
+# read-registry -> copy -> repoint -> prune. The lock is the fixed dir
+#     ${XDG_STATE_HOME:-$HOME/.local/state}/claude-harnesses/rollout.lock
+# (one lock for every cache, outside ~/.claude — backlog d4a135ba; it used to be
+# "$CACHE/.rollout.lock", inside the dir Claude Code garbage-collects at
+# startup). resolve_rollout_lock_dir is the same rule as in rollout-plugins.sh
+# and plugin_cache.rollout_lock_dir; an unresolvable path refuses. A LEGACY
+# "$CACHE/.rollout.lock" that exists (or whose presence cannot be checked) also
+# refuses, checked after the new lock is held (see rollout-plugins.sh, WHERE).
+# A standalone rebuild used to ignore the lock and swap cache binaries in the
+# middle of another session's rollout. Now:
 #   - run BY the holding rollout: accepted only if HARNESS_ROLLOUT_LOCK_HOLDER_PID
 #     equals the pid recorded in the lock AND that pid is an ancestor of this
 #     process. A bare env var is not a key (see rollout-plugins.sh).
@@ -106,7 +114,27 @@ CACHE="${CLAUDE_PLUGIN_CACHE:-$HOME/.claude/plugins/cache/yukineko}"
 # all of it happens BEFORE cargo is invoked or the cache is written.
 # --dry-run builds and copies nothing, so like rollout --dry-run it neither
 # takes nor needs the lock.
-ROLLOUT_LOCK_DIR="$CACHE/.rollout.lock"
+# The ONE rule for the lock path (same text in rollout-plugins.sh; Python twin:
+# plugin_cache.rollout_lock_dir). An empty XDG_STATE_HOME counts as unset.
+# Prints the path, or returns 1 with the reason on stderr.
+resolve_rollout_lock_dir() {
+  local state="${XDG_STATE_HOME:-}"
+  if [ -z "$state" ]; then
+    if [ -z "${HOME:-}" ]; then
+      echo "neither XDG_STATE_HOME nor HOME is set, so the rollout lock path is unknown" >&2
+      return 1
+    fi
+    state="$HOME/.local/state"
+  fi
+  case "$state" in
+    /*) ;;
+    *) echo "state dir '$state' (from XDG_STATE_HOME / HOME) is not an absolute path, so the rollout lock path is unknown" >&2
+       return 1 ;;
+  esac
+  printf '%s\n' "$state/claude-harnesses/rollout.lock"
+}
+ROLLOUT_LOCK_DIR=""
+LEGACY_ROLLOUT_LOCK_DIR="$CACHE/.rollout.lock"
 rebuild_lock_held=0
 # 0 = $1 is an ancestor of this process, 1 = it is not, 2 = cannot tell.
 pid_is_ancestor() {
@@ -123,11 +151,12 @@ pid_is_ancestor() {
   done
   return 2
 }
+# rollout_lock_state [<lock dir>] (default: $ROLLOUT_LOCK_DIR). Diagnostic only.
 rollout_lock_state() {
-  local holder=""
-  holder="$(cat "$ROLLOUT_LOCK_DIR/pid" 2>/dev/null || true)"
+  local dir="${1:-$ROLLOUT_LOCK_DIR}" holder=""
+  holder="$(cat "$dir/pid" 2>/dev/null || true)"
   if [ -z "$holder" ] || ! [[ "$holder" =~ ^[0-9]+$ ]]; then
-    echo "holder pid unknown (no readable $ROLLOUT_LOCK_DIR/pid)"
+    echo "holder pid unknown (no readable $dir/pid)"
   elif kill -0 "$holder" 2>/dev/null; then
     echo "held by live pid $holder"
   elif ps -p "$holder" >/dev/null 2>&1; then
@@ -136,14 +165,33 @@ rollout_lock_state() {
     echo "STALE? holder pid $holder is not running"
   fi
 }
+# refuse_rollout_lock <message> [<lock dir to name in the rm -r hint>]
+# (no 2nd arg: $ROLLOUT_LOCK_DIR; an empty 2nd arg, or an unresolved
+# $ROLLOUT_LOCK_DIR: no hint, because no lock dir is involved).
 refuse_rollout_lock() {
+  local rm_target="$ROLLOUT_LOCK_DIR"
+  if [ "$#" -ge 2 ]; then rm_target="$2"; fi
   echo "ERROR: rebuild: $1" >&2
   echo "       Refusing to proceed: nothing was built and nothing in the cache was touched." >&2
   echo "       A rebuild during a rollout swaps binaries between its copy and its registry" >&2
-  echo "       repoint (backlog ea39fbc9 / e3366b5c). If you have confirmed no rollout is" >&2
-  echo "       running, remove the lock by hand:" >&2
-  echo "         rm -r \"$ROLLOUT_LOCK_DIR\"" >&2
+  if [ -n "$rm_target" ]; then
+    echo "       repoint (backlog ea39fbc9 / e3366b5c). If you have confirmed no rollout is" >&2
+    echo "       running, remove the lock by hand:" >&2
+    echo "         rm -r \"$rm_target\"" >&2
+  else
+    echo "       repoint (backlog ea39fbc9 / e3366b5c)." >&2
+  fi
   exit 6
+}
+# Refuse while a legacy "$CACHE/.rollout.lock" exists or its presence cannot
+# be checked ("no entry" counts as absent only when $CACHE is a searchable dir).
+refuse_if_legacy_rollout_lock() {
+  if [ -e "$LEGACY_ROLLOUT_LOCK_DIR" ] || [ -L "$LEGACY_ROLLOUT_LOCK_DIR" ]; then
+    refuse_rollout_lock "a legacy rollout lock exists at $LEGACY_ROLLOUT_LOCK_DIR — $(rollout_lock_state "$LEGACY_ROLLOUT_LOCK_DIR")." "$LEGACY_ROLLOUT_LOCK_DIR"
+  fi
+  if ! { [ -d "$CACHE" ] && [ -x "$CACHE" ]; }; then
+    refuse_rollout_lock "could not check for a legacy rollout lock at $LEGACY_ROLLOUT_LOCK_DIR ($CACHE is not a searchable dir)."
+  fi
 }
 release_rebuild_lock() {
   if [ "$rebuild_lock_held" = 1 ]; then
@@ -163,6 +211,10 @@ if [ "$dry" = 0 ]; then
     echo "set CLAUDE_PLUGIN_CACHE to the correct root and retry." >&2
     exit 1
   fi
+  if ! ROLLOUT_LOCK_DIR="$(resolve_rollout_lock_dir)"; then
+    ROLLOUT_LOCK_DIR=""
+    refuse_rollout_lock "the rollout lock path is unknown, so cannot tell whether a rollout is running."
+  fi
   if [ -n "${HARNESS_ROLLOUT_LOCK_HOLDER_PID:-}" ]; then
     lock_owner="$(cat "$ROLLOUT_LOCK_DIR/pid" 2>/dev/null || true)"
     if [ ! -d "$ROLLOUT_LOCK_DIR" ]; then
@@ -173,10 +225,13 @@ if [ "$dry" = 0 ]; then
     fi
     anc=0; pid_is_ancestor "$lock_owner" || anc=$?
     case "$anc" in
-      0) echo "rollout lock: running under holder pid $lock_owner (ancestor of this process)" ;;
+      0) refuse_if_legacy_rollout_lock
+         echo "rollout lock: running under holder pid $lock_owner (ancestor of this process)" ;;
       1) refuse_rollout_lock "$ROLLOUT_LOCK_DIR is held by pid $lock_owner, which is not an ancestor of this process." ;;
       *) refuse_rollout_lock "could not determine whether lock holder pid $lock_owner is an ancestor of this process (ps failed)." ;;
     esac
+  elif ! mkdir -p "$(dirname "$ROLLOUT_LOCK_DIR")"; then
+    refuse_rollout_lock "could not create the lock's parent dir $(dirname "$ROLLOUT_LOCK_DIR"), so cannot tell whether a rollout is running." ""
   elif mkdir "$ROLLOUT_LOCK_DIR" 2>/dev/null; then
     rebuild_lock_held=1
     trap release_rebuild_lock EXIT
@@ -185,6 +240,8 @@ if [ "$dry" = 0 ]; then
     if ! echo "$$" > "$ROLLOUT_LOCK_DIR/pid"; then
       refuse_rollout_lock "took $ROLLOUT_LOCK_DIR but could not record the pid in it."
     fi
+    # The EXIT trap releases the lock just taken if this refuses.
+    refuse_if_legacy_rollout_lock
   elif [ -d "$ROLLOUT_LOCK_DIR" ]; then
     refuse_rollout_lock "a rollout holds $ROLLOUT_LOCK_DIR — $(rollout_lock_state)."
   else

@@ -86,6 +86,7 @@ mod heredoc;
 mod heredoc_data;
 mod high_blast;
 mod interpreter;
+mod kill;
 mod known_allow;
 mod option_words;
 mod payload;
@@ -2158,6 +2159,12 @@ analyse — it cannot tell what this would do, so it refuses to guess"
             if other.starts_with("mkfs") {
                 Decision::deny("mkfs formats a filesystem, destroying all data")
             } else if let Some(reason) = irreversible_device_verb(other, rest) {
+                Decision::deny(reason)
+            } else if let Some(reason) = (other == "kill")
+                .then(|| kill::kill_all_processes(rest))
+                .flatten()
+            {
+                // e93d3701: `kill … -1` signals every process; see `kill.rs`.
                 Decision::deny(reason)
             } else {
                 // Round 2: this arm WAS `Decision::Allow`, i.e. every verb

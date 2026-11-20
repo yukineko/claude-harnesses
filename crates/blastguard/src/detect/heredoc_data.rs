@@ -56,9 +56,10 @@
 //!   a `PATH` word (`export PATH`) keeps every body;
 //! * no other command names a landing path with a literal word — the file
 //!   (by name, case-insensitively), a directory above it, `.` / `..` — unless
-//!   it is a bare `cd` or a read-only tool on
-//!   `heredoc::INERT_LATER_COMMANDS` (`rustc x.rs`, `chmod +x x.rs`,
-//!   `rg --pre sh . src`, an unknown word keep every body). Bare
+//!   it is a bare `cd`, a bare `mkdir` (it only creates directories; backlog
+//!   648a6641) or a read-only tool on `heredoc::INERT_LATER_COMMANDS`
+//!   (`rustc x.rs`, `chmod +x x.rs`, `rg --pre sh . src`, an unknown word keep
+//!   every body). Bare
 //!   `cargo test` / `cargo build` (no `--config` / `-Z`) is not running the
 //!   written file whatever it names (user ruling 2026-11-18, B-4). An
 //!   undetermined argument (`git add $X`) may or may not name one: the body
@@ -351,11 +352,15 @@ enum Naming {
     Names,
 }
 
-/// Commands that only change directory or read / list / print, spelled bare
-/// (`heredoc::INERT_LATER_COMMANDS`, plus `cd`): they may name a landing file
-/// or its directory without running it.
+/// Commands that only change directory, create directories, or read / list /
+/// print, spelled bare (`heredoc::INERT_LATER_COMMANDS`, plus `cd` and
+/// `mkdir`): they may name a landing file or its directory without running
+/// it. `mkdir` (backlog 648a6641) only creates directories, and no option or
+/// operand of it runs a program, so `mkdir -p d/t && cd d && cat > t/mod.rs
+/// <<'EOF'` names the directory above the landing file without being able to
+/// run it.
 fn reads_only(word: &str) -> bool {
-    word == "cd" || INERT_LATER_COMMANDS.contains(&word)
+    word == "cd" || word == "mkdir" || INERT_LATER_COMMANDS.contains(&word)
 }
 
 /// User ruling 2026-11-18 (B-4): `cargo test` / `cargo build` after writing a

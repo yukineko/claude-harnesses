@@ -11,6 +11,8 @@ import subprocess
 import sys
 import time
 
+MISSING = object()  # a list-tasks row without the key at all
+
 
 def out(line):
     try:
@@ -61,6 +63,10 @@ class Watch:
         self.watched = {}         # run_id -> {task_id: {"status": str, "since": float}}
         self.baseline = set()     # run ids present at the first poll of a fresh watch
         self.baselined = False
+        # run ownership: post-baseline runs not owned by --session are never watched.
+        # In-memory only (not persisted): after a re-arm they are classified again.
+        self.foreign = set()      # runs owned by a different, named session: silent
+        self.unowned = set()      # runs whose owner is undetermined: one WATCH-UNOWNED each
         self.no_write = False     # set when an existing watch-state could not be read
         self.dirty = False
         self.wstate = a.watch_state or os.path.join(
@@ -177,7 +183,9 @@ class Watch:
             self.error(("ws-save", str(e)), "watch-state: %s: write failed: %s" % (p, e))
 
     def list_tasks(self):
-        """Return list of (run, task, status), or raise ValueError(reason)."""
+        """Return list of (run, task, status, owner_session, terminal_label), or raise
+        ValueError(reason). owner_session / terminal_label are passed through raw (any
+        JSON value, or MISSING when the key is absent) and classified by the caller."""
         exe = os.environ.get("FLOW_WATCH_CONDUKT") or "condukt"
         if not os.path.isdir(self.a.project):
             raise ValueError("--project %s is not a directory" % self.a.project)
@@ -206,7 +214,8 @@ class Watch:
             if (not isinstance(r, dict) or not all(isinstance(r.get(k), str)
                                                    for k in ("run_id", "task_id", "status"))):
                 raise ValueError("row without string run_id/task_id/status: %.200r" % (r,))
-            res.append((r["run_id"], r["task_id"], r["status"]))
+            res.append((r["run_id"], r["task_id"], r["status"],
+                        r.get("owner_session", MISSING), r.get("terminal_label", MISSING)))
         return res
 
     def poll_state(self, now):
@@ -215,9 +224,12 @@ class Watch:
         except ValueError as e:
             self.error(("lt", str(e)), "condukt list-tasks: %s" % e)
             return  # a failed poll changes nothing; never read as "no tasks"
-        by_run = {}
-        for run, task, status in rows:
+        by_run, owners, labels = {}, {}, {}
+        for run, task, status, owner, label in rows:
             by_run.setdefault(run, []).append((task, status))
+            owners.setdefault(run, []).append(owner)
+            if isinstance(label, str):
+                labels.setdefault(run, label)
         if not self.baselined:
             for run in by_run:
                 if run not in self.watched:
@@ -225,10 +237,22 @@ class Watch:
             self.baselined = True
             self.dirty = True
         else:
-            for run in by_run:
-                if run not in self.baseline and run not in self.watched:
+            for run in sorted(by_run):
+                if (run in self.baseline or run in self.watched
+                        or run in self.foreign or run in self.unowned):
+                    continue
+                kind = self.ownership(owners[run])
+                if kind == "own":
                     self.watched[run] = {}
                     self.dirty = True
+                elif kind == "foreign":
+                    self.foreign.add(run)
+                else:
+                    self.unowned.add(run)
+                    out("WATCH-UNOWNED %s label=%s" % (run, labels.get(run, "unknown")))
+        # foreign / unowned runs that left the listing are forgotten
+        self.foreign &= set(by_run)
+        self.unowned &= set(by_run)
         # baseline entries that left the listing are pruned
         gone = {r for r in self.baseline if r not in by_run}
         if gone:
@@ -265,6 +289,20 @@ class Watch:
                     self.stall_at[(run, t)] = now
                     out("TASK-STALL %s %s status=running idle=%ds" % (run, t, int(idle)))
         self.save_watch_state()
+
+    def ownership(self, owners):
+        """Classify a run from the owner_session of each of its rows:
+        "own"     - every row names --session;
+        "foreign" - every row names the same session (a non-blank string) other than --session;
+        "unowned" - anything else: null, missing, not a string, blank, or rows that
+                    disagree. Undetermined is surfaced (WATCH-UNOWNED), never dropped."""
+        if not owners or not all(isinstance(o, str) and o.strip() for o in owners):
+            return "unowned"
+        if all(o == self.a.session for o in owners):
+            return "own"
+        if len(set(owners)) == 1:
+            return "foreign"
+        return "unowned"
 
     # ---- heartbeat
     def heartbeat(self):

@@ -29,6 +29,7 @@ pub(super) fn record_fixture_run_state(cfg: &Config, repo: &Path, identity: &str
         }],
         paused: false,
         terminal_label: None,
+        owner_session: None,
         recorded_at: None,
         recorded_episodes: Vec::new(),
     };

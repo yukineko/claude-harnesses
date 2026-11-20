@@ -341,6 +341,15 @@ pub struct RunState {
     /// and in cross-run conflict reports.
     #[serde(default)]
     pub terminal_label: Option<String>,
+    /// The Claude Code session that created this run, recorded verbatim from
+    /// `$CLAUDE_CODE_SESSION_ID` at `state init` time. `None` (serialized as an
+    /// explicit JSON `null`) means the owner is UNDETERMINED — the env was unset
+    /// or empty — never "nobody"; no substitute value (pid, label, ...) is
+    /// fabricated. Consumers that filter runs by owner (flow-watch) must surface
+    /// a `null`-owned run instead of dropping it. `#[serde(default)]` keeps run
+    /// JSON written before this field existed loadable (as `None`).
+    #[serde(default)]
+    pub owner_session: Option<String>,
     /// Unix timestamp (seconds) when this run's outcomes were recorded to
     /// fugu-router. `None` = not yet recorded. Set once `record-run` emits the
     /// episodes so repeated (idempotent) hook firings never double-record.
@@ -2426,6 +2435,8 @@ pub fn gate_reasons(cfg: &Config, cwd: &Path, run: &RunState) -> Vec<String> {
 
 mod record;
 pub use record::{records_for_run, role_args, RecordSpec};
+mod cancellable;
+pub use cancellable::list_cancellable_tasks;
 
 /// Pure core of [`resolve_agent_cost`]: given the raw `gauge subagents --json`
 /// output (`[{agent_id, agent_type, description, cost_usd, turns}, ...]`),
@@ -2854,63 +2865,6 @@ pub struct ConflictReport {
     pub similar_goal_runs: Vec<SimilarGoalEntry>,
 }
 
-/// A non-terminal task eligible for cancellation, with its run context.
-/// Returned by `list_cancellable_tasks` for the skill's AskUserQuestion list.
-#[derive(Debug, Serialize)]
-pub struct CancellableTask {
-    pub run_id: String,
-    pub goal: String,
-    pub terminal_label: Option<String>,
-    pub is_paused: bool,
-    pub task_id: String,
-    /// From the decomposition sidecar; falls back to task_id when unavailable.
-    pub task_title: String,
-    pub status: String,
-}
-
-/// All non-terminal tasks across open runs that can be cancelled.
-/// Loads decomposition sidecars to include task titles.
-pub fn list_cancellable_tasks(cfg: &Config, cwd: &Path) -> Result<Vec<CancellableTask>> {
-    let mut result = Vec::new();
-    for run in open_runs(cfg, cwd)? {
-        let titles: std::collections::HashMap<String, String> =
-            if let Ok(raw) = load_decomposition(cfg, cwd, &run.run_id) {
-                if let Ok(dec) = serde_json::from_str::<crate::model::Decomposition>(&raw) {
-                    dec.tasks
-                        .iter()
-                        .map(|t| (t.id.clone(), t.title.clone()))
-                        .collect()
-                } else {
-                    Default::default()
-                }
-            } else {
-                Default::default()
-            };
-
-        for task in &run.tasks {
-            if !matches!(
-                task.status,
-                Status::Pending | Status::Running | Status::Done
-            ) {
-                continue;
-            }
-            result.push(CancellableTask {
-                run_id: run.run_id.clone(),
-                goal: run.goal.clone(),
-                terminal_label: run.terminal_label.clone(),
-                is_paused: run.paused,
-                task_id: task.id.clone(),
-                task_title: titles
-                    .get(&task.id)
-                    .cloned()
-                    .unwrap_or_else(|| task.id.clone()),
-                status: format!("{:?}", task.status).to_lowercase(),
-            });
-        }
-    }
-    Ok(result)
-}
-
 /// Check whether the incoming decomposition's touched_files overlap with any
 /// currently open run for this project, and whether any open run has a similar goal.
 ///
@@ -3068,6 +3022,7 @@ mod tests {
             ],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -3134,6 +3089,7 @@ mod tests {
             ],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -3261,6 +3217,7 @@ mod tests {
             tasks,
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -3365,6 +3322,7 @@ mod tests {
             tasks: vec![t],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -3424,6 +3382,7 @@ mod tests {
             }],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -3454,6 +3413,7 @@ mod tests {
             ],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -3504,6 +3464,7 @@ mod tests {
             }],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -3605,6 +3566,7 @@ mod tests {
             }],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -3784,6 +3746,7 @@ mod tests {
             }],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -3837,6 +3800,7 @@ mod tests {
             }],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -3888,6 +3852,7 @@ mod tests {
             tasks: vec![],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -3938,6 +3903,7 @@ mod tests {
             }],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -3974,6 +3940,7 @@ mod tests {
             tasks: vec![],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         }
@@ -4071,6 +4038,7 @@ mod tests {
             }],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -4212,6 +4180,7 @@ mod tests {
             }],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -4253,6 +4222,7 @@ mod tests {
             }],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -4300,6 +4270,7 @@ mod tests {
             tasks,
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         }
@@ -5650,6 +5621,7 @@ mod tests {
             }],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -5691,6 +5663,7 @@ mod tests {
             }],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };

@@ -209,6 +209,7 @@ Monitor: command = ${CLAUDE_PLUGIN_ROOT}/bin/flow-watch --session "$CLAUDE_CODE_
   - `TASK-STALL <run_id> <task> status=… idle=…s` → その run / task（state・worktree のログ・担当 driver agent）を調べ、今すぐ unblock せよ。task 完了通知を待ってはならない。
   - `STATE <run_id> <task>=<status> …` → 完了した項目を sink へ書き戻せ（Step 3-3）。
   - `STATE <run_id> finished` → その run は condukt の一覧から消えた（全 task が終端 / run が閉じた）。結果を確認して sink へ書き戻し、後始末（worktree・branch の merge と削除）を進めよ。この行は 1 度しか出ない。
+  - `WATCH-UNOWNED <run_id> label=<terminal_label>` → 武装後に現れた run だが所有セッション（condukt の `owner_session`）が判定不能（null・欠落・不正）。自分の run か調べ、自分のものなら次の再武装で `--run <run_id>` を足して監視せよ。他セッションの run と確かめられたら触らない。run ごとに 1 度だけ出る（再武装後は再度出うる）。別セッションと記録された run については何も出ない。
   - `HEARTBEAT-FAILED <which> rc=…` / `WATCH-ERROR …` → 行を逐語で報告し、原因を直せ。黙って流してはならない。
 
 ### Step 3 — 実行ループを回すこと

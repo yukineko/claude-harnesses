@@ -180,7 +180,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: schedules parallel and serial task batches by file-conflict analysis, manages git worktrees, tracks run state and gates completion.",
-      "version": "0.7.461",
+      "version": "0.7.463",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -429,7 +429,7 @@
     {
       "name": "flow",
       "description": "Backlog-draining loop skill for Claude Code that picks tasks from sources such as compass, backlog and hypothesis and hands them to condukt until the queue is empty, plus a Stop hook (flow stop-gate) that keeps a registered driver running while work remains; only the condukt circuit breaker stops it.",
-      "version": "0.2.41",
+      "version": "0.2.42",
       "category": "orchestration",
       "keywords": [
         "flow",

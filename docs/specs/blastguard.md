@@ -667,6 +667,16 @@ forge・condukt のスケジューラが再利用）。
   `Undetermined`（未知の option）は pipe/here-document 供給時に Ask を記録したうえで program も判定する。
   code interpreter は従来の `stage_has_program_operand` のまま。回帰テスト:
   `crates/blastguard/tests/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args.rs`。
+- **shell へ流し込むブレースグループはメンバー出力の連結を program として読む（`detect/payload/brace_feeder.rs`、
+  `detect/ast/support.rs` の `brace_group_stdin`、`detect/ast/b5.rs` の `piped_by_compound_stage`、backlog 7eb86bb3）** —
+  `{ echo …; printf …; } | bash` のメンバーが全て素の `echo` か静的に評価できる `printf` で、区切りが
+  `;`・改行・`&&` だけのとき、メンバー出力の連結（と各メンバーのリテラル・`printf` の方言ごとの読み）を
+  stdin program として判定する。それ以外のメンバー（`cat f` 等）・引用なしの展開・リダイレクト・入れ子の
+  pipe/グループ・`||`・`&` を含むグループは Ask のまま。グループがサブシェル `( … )`・`if`・ループ本体の
+  中にあるとき、Table B.5 層はパイプ前段が単一の単純コマンドでないリテラル stdin を
+  `<shell> -c '<本文>'` として検出器全体で判定する（raise-only）。回帰テスト:
+  `crates/blastguard/tests/backlog_20261114_brace_group_feeder_piped_to_bash_fp.rs`、
+  `crates/blastguard/tests/brace_group_feeder_adversarial_20261120.rs`。
 - **pipe 先の python/node の argv も option 文法で読む（`detect/payload.rs` の pipe 規則、
   `detect/payload/program_source.rs` の `python_program_source`、`detect/payload/node_source.rs` の
   `node_program_source`、backlog f9861c4e、blastguard 0.2.569）** — `python3 -X dev` / `-W ignore`、

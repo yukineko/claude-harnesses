@@ -26,7 +26,12 @@
 //!   commands are all `echo` / `printf` literal producers (user ruling
 //!   2026-11-18 (a)): a shell body is analysed by this layer recursively;
 //!   a python / perl / ruby / node body gives no B.5 opinion (the legacy
-//!   program-text reading judges it);
+//!   program-text reading judges it). Except a literal stdin piped in by a
+//!   compound stage — a brace group of `echo` / `printf` members, wherever
+//!   the pipeline sits (`( … )`, `if`, a loop body) — which the legacy layer
+//!   may not read: a shell body there is ALSO judged by the full detector as
+//!   `<shell> -c '<body>'`, python is left to S5, and perl / ruby / node are
+//!   Undetermined (`piped_by_compound_stage`, `compound_fed_body`);
 //! * any other program from stdin or a process substitution (`bash < x.sh`,
 //!   a pipe from a non-literal producer, an fd, `<(cat f)`) → Undetermined,
 //!   except a bare shell reading the inherited stdin, which gives no opinion
@@ -131,18 +136,20 @@ pub(crate) const SYSTEM_BIN_DIRS: &[&str] = &[
 ];
 
 /// Nesting cap of `-c` / stdin recursion inside this layer and of the
-/// written-body judgements; deeper → Undetermined.
+/// full-detector body judgements (written-then-run bodies and bodies piped in
+/// by a compound stage); deeper → Undetermined.
 const MAX_DEPTH: usize = 8;
 
 thread_local! {
-    /// How many written-body judgements (`judge` calls) are active.
+    /// How many full-detector body judgements (`judge` calls) are active.
     static JUDGE_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
 /// What the layer needs from its caller.
 pub(crate) struct Probes<'a> {
     /// The full detector for a command text (used only for written-then-run
-    /// bodies).
+    /// bodies and for literal bodies piped in by a compound stage,
+    /// [`compound_fed_body`]).
     pub judge: &'a dyn Fn(&str) -> Decision,
     /// The session's location model: the hook's cwd and the path resolver
     /// the tracked-and-unmodified probe ([`git_tracked_clean`]) needs.
@@ -461,6 +468,9 @@ fn classify(
         (_, ProgramSource::Undetermined(r)) => undetermined(format_args!("`{base}`: {r}")),
         (Family::Shell, ProgramSource::InlineLiteral(prog)) => layer(&prog, depth + 1, judge),
         (fam, ProgramSource::Stdin(StdinSource::Literal(body))) => {
+            if piped_by_compound_stage(text, commands, idx, cmd) {
+                return compound_fed_body(fam, base, &body, depth, judge);
+            }
             literal_body(fam, &body, depth, judge)
         }
         // The Bash tool's stdin is empty: a bare shell reading the inherited
@@ -510,6 +520,97 @@ fn literal_body(fam: Family, body: &str, depth: usize, judge: &Probes<'_>) -> De
     match fam {
         Family::Shell => layer(body, depth + 1, judge),
         Family::Python | Family::PerlLike | Family::Node => Decision::Allow,
+    }
+}
+
+/// Whether the literal stdin of `commands[idx]` (`cmd`) was piped in by a
+/// stage that is NOT one simple producer written right before the `|` — in
+/// practice a brace group `{ echo a; printf b; } |` whose members' outputs
+/// the evaluator concatenated (`support::brace_group_stdin`).
+///
+/// Why it matters (backlog 7eb86bb3 follow-up, finding 1 of
+/// `tests/brace_group_feeder_adversarial_20261120.rs`): [`literal_body`]
+/// gives a literal shell body only this layer's B.5 reading and leaves its
+/// EFFECTS (`rm -rf /etc`) to the legacy layer, which is sound only when the
+/// legacy layer reads the same text. It reads a plain `echo X | bash`
+/// anywhere, but it recognises a brace-group feeder only in the shapes
+/// `payload/brace_feeder.rs` models — not inside `( … )`, `if` or a loop
+/// body — and there it read the last member alone (`( { printf 'rm -rf /e';
+/// printf 'tc'; } | bash )` was Allow). So whenever the producer is not that
+/// plain shape, the body is judged by the full detector here
+/// ([`compound_fed_body`]); this is raise-only, so over-matching only
+/// re-judges a text the legacy layer may already have judged.
+///
+/// `false` when `cmd` has a stdin redirection of its own (that redirection,
+/// not the pipe, delivered the literal) or is not a later pipeline stage.
+/// Anything that cannot be placed as the plain shape is `true` (the
+/// restrictive side): the command before `cmd` missing, in another stage,
+/// or separated from it by anything but `|`.
+fn piped_by_compound_stage(
+    text: &str,
+    commands: &[SimpleCommand],
+    idx: usize,
+    cmd: &SimpleCommand,
+) -> bool {
+    let own_stdin = cmd.redirects.iter().any(|r| {
+        matches!(r.fd, None | Some(0))
+            && matches!(
+                r.op,
+                RedirOp::In
+                    | RedirOp::InOut
+                    | RedirOp::DupIn
+                    | RedirOp::HereDoc
+                    | RedirOp::HereString
+            )
+    });
+    if own_stdin {
+        return false;
+    }
+    let Context::Pipeline { pos, len } = cmd.context else {
+        return false;
+    };
+    if pos == 0 {
+        return false;
+    }
+    let Some(prev) = idx.checked_sub(1).and_then(|j| commands.get(j)) else {
+        return true;
+    };
+    if prev.context != (Context::Pipeline { pos: pos - 1, len }) {
+        return true;
+    }
+    text.get(prev.span.end..cmd.span.start).map(str::trim) != Some("|")
+}
+
+/// A literal program piped in by a compound stage
+/// ([`piped_by_compound_stage`]): a shell body is judged by the full
+/// detector as `<shell> -c '<body>'` (which includes this layer's reading of
+/// it), so its effects are judged wherever the pipeline sits. A python body
+/// is read by stage S5 from the same AST literal (no B.5 opinion, as in
+/// [`literal_body`]). A perl / ruby / node body is Undetermined: this layer
+/// does not read those programs and the legacy reading may not see this text.
+fn compound_fed_body(
+    fam: Family,
+    base: &str,
+    body: &str,
+    depth: usize,
+    judge: &Probes<'_>,
+) -> Decision {
+    match fam {
+        Family::Shell => {
+            let mut acc = VerdictAcc::default();
+            if let Some(deny) = acc.record(layer(body, depth + 1, judge)) {
+                return deny;
+            }
+            if let Some(deny) = acc.record(judge_body(body, Runner::Shell(base), judge)) {
+                return deny;
+            }
+            acc.finish()
+        }
+        Family::Python => Decision::Allow,
+        Family::PerlLike | Family::Node => undetermined(format_args!(
+            "`{base}` reads its program from a compound pipeline stage (a brace group's \
+             output), which this layer does not read for `{base}`"
+        )),
     }
 }
 
@@ -892,7 +993,7 @@ fn judge_body(body: &str, runner: Runner<'_>, judge: &Probes<'_>) -> Decision {
     };
     let active = JUDGE_DEPTH.with(Cell::get);
     if active >= MAX_DEPTH {
-        return undetermined("written-then-run bodies are nested too deeply");
+        return undetermined("bodies judged as programs are nested too deeply");
     }
     JUDGE_DEPTH.with(|d| d.set(active + 1));
     let quoted = format!("'{}'", body.replace('\'', "'\\''"));

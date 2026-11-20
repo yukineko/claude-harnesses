@@ -91,7 +91,6 @@ fn not_allowed(cmds: &[&str], tag: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 harmless brace-group feeder piped to bash is Ask/Deny (FP) — remove the ignore when fixed"]
 fn harmless_brace_group_feeder_piped_to_bash_is_allow() {
     let bad = not_allowed(
         &["{ echo 'echo hi'; } | bash", "{ echo a; echo b; } | bash"],

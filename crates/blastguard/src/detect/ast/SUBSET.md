@@ -3,7 +3,9 @@
 Task S1 `subset-spec` (2026-11-17). Specification only: the frozen types are in
 `judge.rs` (`Effect`, `PathClass`, `Finding`, `Judgement`, `PathCtx`, `judge`,
 `classify`); nothing here is wired into `detect` yet and no verdict changes in S1.
-(Since S3b, `judge` is wired for the B.1 rows only — see the Stage map.)
+(Since S3b, `judge` is wired for the B.1 rows only; since S6-2, `classify`
+answers the real Table C class but has no caller outside its tests — see the
+Stage map.)
 
 ## Binding user rulings (2026-11-17)
 
@@ -234,8 +236,9 @@ Common rules for every row:
   (`MAX_CWD_CANDIDATES` in `eval/cwd.rs`; `Cwd::OneOf`,
   `SimpleCommand::cwd_candidates`),
   the command is judged once per candidate cwd and the most restrictive
-  verdict stands; it is Allow only when every candidate is Allow. Until
-  `classify` lands, "judged at a candidate" means: the whole detector
+  verdict stands; it is Allow only when every candidate is Allow. While
+  `classify` is not wired into `judge` (S6-2 implemented it, unwired),
+  "judged at a candidate" means: the whole detector
   (legacy layer + this judge) on the synthetic text `<argv>` (the hook's cwd)
   or `cd <dir> && <argv>` (a known directory), so the existing predicates
   place the operand exactly as for a literal spelling there
@@ -337,7 +340,7 @@ else the command's cwd).
 | Command | Program source | Judgement |
 |---|---|---|
 | `bash` / `sh` / `zsh` / `dash` / `ksh` `-c PROG` | `InlineLiteral` | PROG analysed and judged recursively (S4); Undetermined PROG → Undetermined |
-| same, stdin (`bash`, `-s`, `-`, `/dev/stdin`) | `Stdin(StdinSource)` | `Literal` body — and the literal output of a process substitution / previous pipe stage — judged recursively (S4, ruling 21); `FromCommand` / `File` / `Fd` / `Undetermined` → Undetermined; `Inherited` → no B.5 opinion (ruling 21) |
+| same, stdin (`bash`, `-s`, `-`, `/dev/stdin`) | `Stdin(StdinSource)` | `Literal` body — and the literal output of a process substitution / previous pipe stage / a brace group `{ echo a; printf b; } |` whose members are all literal `echo` / `printf` joined by `;`, a newline or `&&` (their outputs concatenated; any other member, `||`, `&`, a redirect, a nested pipe or group stays `FromCommand`; `ast/support.rs::brace_group_stdin`) — judged recursively (S4, ruling 21); a literal piped in by a stage that is not one simple command right before the `|` (a brace group, wherever the pipeline sits: `( … )`, `if`, a loop body) is ALSO judged by the full detector as `<shell> -c '<body>'`, because the legacy layer that judges a literal body's effects may not read that group there (perl / ruby / node: Undetermined; python: S5; `b5.rs::piped_by_compound_stage`); `FromCommand` / `File` / `Fd` / `Undetermined` → Undetermined; `Inherited` → no B.5 opinion (ruling 21) |
 | same, script file (`bash x.sh`); likewise any interpreter running a program file (`python3 x.py`, `perl x.pl`, …) | `File(Value)` | **Undetermined** → Ask / Deny (ruling 10). Exception (shells and direct exec only): when an earlier command of the same script writes that file (matched by resolved path) with a determined body (`cat > x.sh <<'EOF' … EOF`) and the write and the run are joined by `&&` only, that body is judged as the program (S4, ruling 20). A git-tracked, unmodified file → no B.5 opinion (ruling 22). `-n` noexec → no B.5 opinion (ruling 24) |
 | `eval` | `Undetermined` | Undetermined (S4) |
 | direct execution of a program file (`./run.sh`, `scripts/foo.sh`, `/abs/run.sh`) | `File(Value)` | **Undetermined** → Ask / Deny (ruling 17, S4), same exceptions as the script-file row (ruling 20, ruling 22) |
@@ -496,7 +499,7 @@ Each effect is judged by the FULL detector on the shell command that has
 exactly that effect (prefixed with `cd 'DIR' && ` when the command's cwd is a
 literal directory; a `OneOf` / undetermined cwd with any effect →
 Undetermined). One rule table, no drift: this is the `judge_candidates`
-precedent while `classify` is the S1 stub.
+precedent while `classify` is not wired into `judge`.
 
 | Python call (after import / alias resolution) | Effect | Judged as |
 |---|---|---|
@@ -639,13 +642,14 @@ re-analyse to the same commands.
 | S1 `subset-spec` | this document; frozen types in `judge.rs` (stubs, not wired) |
 | S2 `red-tests` | an independent author (not the S3 implementer; CLAUDE.md §2(a)) writes a RED test for each Table B row and each Table C cell that is not `legacy`, each observed failing against the S1 stub before S3 makes it GREEN |
 | S3 `path-cutover` | Table A enforcement for judged commands; Table B B.1 (all rows except `perl -i` which is already Undetermined), B.2, B.3, B.4; Table C (all rows); `classify` from the existing predicates; wire `judge` into `detect` with the "Undetermined handling" layer |
-| S3 status (2026-11-18) | done: ruling 12 — `$HOME` / `${HOME}` / leading `~` are the hook environment's `HOME`, in the evaluator (`eval.rs` `Env::initial`) and in the one static resolver every legacy reading sees (`readings/static_bindings.rs`), so a `$HOME` spelling is judged exactly as its absolute spelling. NOT done (at S3; `judge` is wired for B.1 since S3b, `classify` is still the stub): `judge` / `classify` are still the S1 stubs and are not wired (open question raised to the user: under raise-only every Known Allow cell is inert, so wiring only adds Asks — including `Undetermined` for every unmodelled option such as `cp -p` — whose effect on commands allowed today is not measured by the block-log replay) |
-| S3b `tableb-judge` (user ruling 2026-11-18) | done: `judge` wired into the final decision (`ast/mod.rs::table_b_verdict`, folded raise-only in `detect/readings.rs::detect_bash_every_reading`) ONLY for commands with a **B.1** row (`ast/judge/table_b.rs`). For such a command an option not in its row, an undetermined word that may be an option, or a `dd` operand that is not `key=value` → `Undetermined` → Ask (main) / Deny (subagent); a target word whose value the evaluator cannot determine (unquoted glob other than a literal-dir glob, `~user`, `$( )`, unbound / positional parameter, relative path after an undetermined `cd`, `xargs` operand read from non-literal stdin) → `Unresolved` → Ask / Deny. A literal-dir glob (user ruling 2026-11-19, Table A.3) is placed by its parent directory, like a literal target there (no finding while `classify` is the stub; the legacy layer judges it); for a non-recursive `rm` the legacy arm judges such a glob placed in the project / scratch / own worktree like the named files it expands to (`detect/rm.rs::nonrec_glob_placed`; the `/tmp` root 4-character head rule of 2026-11-05 still applies). Commands without a B.1 row, and `analyze` = `Undetermined`, are unchanged; unknown programs stay Allow; the legacy layer is not lowered (a legacy Deny / Ask, with its reason, wins). See "S3b notes" |
+| S3 status (2026-11-18) | done: ruling 12 — `$HOME` / `${HOME}` / leading `~` are the hook environment's `HOME`, in the evaluator (`eval.rs` `Env::initial`) and in the one static resolver every legacy reading sees (`readings/static_bindings.rs`), so a `$HOME` spelling is judged exactly as its absolute spelling. NOT done (at S3; `judge` is wired for B.1 since S3b, `classify` implemented but unwired since S6-2): `judge` / `classify` were still the S1 stubs at S3 and were not wired (open question raised to the user: under raise-only every Known Allow cell is inert, so wiring only adds Asks — including `Undetermined` for every unmodelled option such as `cp -p` — whose effect on commands allowed today is not measured by the block-log replay) |
+| S3b `tableb-judge` (user ruling 2026-11-18) | done: `judge` wired into the final decision (`ast/mod.rs::table_b_verdict`, folded raise-only in `detect/readings.rs::detect_bash_every_reading`) ONLY for commands with a **B.1** row (`ast/judge/table_b.rs`). For such a command an option not in its row, an undetermined word that may be an option, or a `dd` operand that is not `key=value` → `Undetermined` → Ask (main) / Deny (subagent); a target word whose value the evaluator cannot determine (unquoted glob other than a literal-dir glob, `~user`, `$( )`, unbound / positional parameter, relative path after an undetermined `cd`, `xargs` operand read from non-literal stdin) → `Unresolved` → Ask / Deny. A literal-dir glob (user ruling 2026-11-19, Table A.3) is placed by its parent directory, like a literal target there (no finding while `classify` is not wired into `judge`; the legacy layer judges it); for a non-recursive `rm` the legacy arm judges such a glob placed in the project / scratch / own worktree like the named files it expands to (`detect/rm.rs::nonrec_glob_placed`; the `/tmp` root 4-character head rule of 2026-11-05 still applies). Commands without a B.1 row, and `analyze` = `Undetermined`, are unchanged; unknown programs stay Allow; the legacy layer is not lowered (a legacy Deny / Ask, with its reason, wins). See "S3b notes" |
 | S4 `stdin-program` | Table B B.5 rows for shells: `-c` inline, stdin (`StdinSource::Literal` bodies), `eval`; the script-file row and the direct-execution row (Undetermined, and the recursive judgement of a body the same command writes — rulings 10, 17); wrapper → interpreter unwrap. `source` / `.` are NOT in S4 (ruling 16) |
 | S4 status (2026-11-18) | **landed** as the standalone B.5 layer `b5.rs` (rulings 18–21), raising the legacy verdict in `readings.rs::detect_bash_every_reading`; `judge.rs` stays unwired. Wrappers unwrapped: `env`, `nohup`, `timeout`, `nice`, `time`, `exec`, `command`. Known gaps (legacy alone judges them): other wrappers (`sudo`, `xargs`, `su`, `flock`, `find -exec`, …) and `BASH_ENV` / `ENV` assignments |
 | S5 `python-parser` | Table B B.5 python row (a real Python parser; effects × targets of the parsed program judged by Table C); legacy python readings until then (ruling 15) |
 | S5 status (2026-11-19) | **landed**: shared crate `crates/progeffect` (rustpython-parser 0.4, `default-features = false` + `num-bigint`; no malachite) reads the program; `ast/s5.rs::prepare` judges every effect with the full detector on its shell spelling and retires the legacy readings of Known programs (`readings.rs`). See "Python programs (S5)" |
 | S6 `retire-readings` | remove the string-reading fallbacks of every migrated row (`targets.rs::resolve` callers, `readings.rs` re-readings); until S6 the whole legacy layer is raise-only (ruling 14), so Table C Allow cells a legacy reading answers Ask / Deny today turn GREEN here; revisit the deferred Open questions 1–4 |
+| S6-2 status (2026-11-20) | `judge::classify` answers the Table C class from the existing predicates (`rm/new_layer.rs` `home_harm` / `system_spellings` / `is_protected` / `own_worktree`, `Ctx::confined_root`, `protected::{real_system_path_block, physical_landing, launch_agents_new_file_ask}`, `harm_mark::is_raw_disk`, the `SafeRoots` value readings) in the `PathClass` precedence; `..`, an undetermined target / cwd and an `Undetermined` predicate → `Unresolved`, except the two worktree predicates, whose `Undetermined` falls through (never less restrictive: `OwnWorktree` is an Allow cell, the rest are `legacy`). NOT wired: no caller outside `judge/classify_tests.rs`; `judge` still gives a placed target no finding and no verdict changes (user ruling 2026-11-20) |
 | quarantine plugin (separate) | `source` / `.` → Ask (main) / Deny (subagent), introduced together with the script-quarantine plugin (ruling 16) |
 
 ### S3b notes (2026-11-18)
@@ -653,7 +657,8 @@ re-analyse to the same commands.
 * NOT wired in S3b (verdict unchanged, legacy only): B.2 redirects, B.3
   wrappers (`sudo rm …`, `command rm …`), B.4 git, B.5 interpreters, the
   "undetermined command word → Undetermined" rule, and every Table C cell of
-  a target whose value IS determined — `classify` is still the S1 stub, so a
+  a target whose value IS determined — `classify` was the S1 stub at S3b and,
+  though S6-2 implemented it, is still not called by `judge`, so a
   placed target gets no finding and the raise-only legacy layer alone judges
   it (S3b `Judgement::Allow` = "nothing undetermined found"). Exception (user
   ruling 2026-11-18): a relative target whose cwd is one of a finite set is

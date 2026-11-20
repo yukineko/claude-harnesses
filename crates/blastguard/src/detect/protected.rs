@@ -457,15 +457,29 @@ blastguard cannot tell whether it lands in a system directory, so it refuses to 
 /// The one case where these verbs DO go through the final component: when it
 /// is (or is a symlink to) an existing DIRECTORY, the entry lands INSIDE it
 /// (`mv x d` creates `d/x`). Then the followed directory is returned, so a
-/// `d -> /etc` is judged as `/etc` (this also judges `-T`/`-n` spellings, which
-/// replace `d` instead, by the directory — the restrictive side).
+/// `d -> /etc` is judged as `/etc`.
+///
+/// `no_deref` is the caller's parsed no-dereference flag (BSD/GNU `ln -n`,
+/// `ln -h`, GNU `ln -T` / `--no-dereference` / `--no-target-directory`, BSD
+/// `mv -h`, GNU `mv -T` / `--no-target-directory`, GNU `install
+/// --no-target-directory`; user ruling 2026-11-20, backlog cfb98cd5). With it
+/// a symlink at the final component is NOT followed even when it leads to a
+/// directory: the verb replaces the link itself (`ln -sfn NEW current` with
+/// `current -> /usr/local/bin` rewrites `current`, it creates nothing in
+/// `/usr/local/bin`), so the entry under its physical parent is returned. A
+/// real directory at the final component is returned as itself either way
+/// (BSD `-h` lands inside it; GNU `-T` refuses to overwrite it).
 ///
 /// A spelling whose last component is not a plain name (a trailing `/`, `.`,
 /// `..`) names a directory and is resolved by [`physical_landing`] unchanged.
 /// `None`/`Undetermined` follow [`physical_landing`]'s contract; an `lstat` /
 /// `stat` of the entry that fails with anything but "does not exist" is
 /// `Undetermined` (CLAUDE.md §3).
-pub(super) fn entry_landing(target: &str, base: Option<&str>) -> Option<Determination<String>> {
+pub(super) fn entry_landing(
+    target: &str,
+    base: Option<&str>,
+    no_deref: bool,
+) -> Option<Determination<String>> {
     // A bare name's parent is the cwd (`base`).
     let (parent, name) = target.rsplit_once('/').unwrap_or((".", target));
     if name.is_empty() || name == "." || name == ".." {
@@ -491,7 +505,11 @@ pub(super) fn entry_landing(target: &str, base: Option<&str>) -> Option<Determin
             )))
         }
     }
-    // A symlink at the destination: replaced, unless it leads to a directory.
+    // A symlink at the destination: replaced, unless it leads to a directory
+    // and no no-dereference flag was given.
+    if no_deref {
+        return Some(Determination::Known(entry));
+    }
     let followed = match physical_landing(&entry, None)? {
         Determination::Known(real) => real,
         undetermined => return Some(undetermined),
@@ -510,17 +528,19 @@ pub(super) fn entry_landing(target: &str, base: Option<&str>) -> Option<Determin
 /// `install` / `ln` destination, backlog cfb98cd5): the same lexical
 /// [`system_path_block`] on the spelling, then the system-directory rule on
 /// the entry the verb really creates ([`entry_landing`] — final symlink
-/// replaced, not followed, unless it leads to a directory). Unresolvable is
-/// Ask, never Allow (CLAUDE.md §3).
+/// replaced, not followed, unless it leads to a directory and `no_deref` is
+/// false). Unresolvable is Ask, never Allow (CLAUDE.md §3).
 pub(super) fn system_entry_landing_block(
     ctx: &Ctx<'_>,
     action: &str,
     path: &str,
+    no_deref: bool,
 ) -> Option<Decision> {
     if let Some(deny) = system_path_block(action, path, ctx) {
         return Some(deny);
     }
-    match landing_system_block(action, entry_landing(path, ctx.raw_base.as_deref()), ctx) {
+    let landing = entry_landing(path, ctx.raw_base.as_deref(), no_deref);
+    match landing_system_block(action, landing, ctx) {
         Ok(verdict) => verdict,
         Err(why) => Some(Decision::ask(format!(
             "{action} target ({path}) could not be resolved through its symlinks ({why}) — \

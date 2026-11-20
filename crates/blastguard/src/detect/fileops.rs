@@ -570,6 +570,39 @@ struct CopyArgs<'a> {
     /// `--target-directory=DIR` is `(j, 19)`. Lets a caller rewrite the value in
     /// place (the relink layer substitutes the real landing for it).
     target_at: Option<(usize, usize)>,
+    /// A no-dereference flag of the verb was given ([`is_no_deref_option`]):
+    /// a symlink at the destination operand is replaced, never entered, even
+    /// when it leads to a directory (user ruling 2026-11-20, backlog cfb98cd5).
+    no_deref: bool,
+}
+
+/// True when the short letter `short` or the resolved long name `long` is a
+/// no-dereference flag of `cmd`: it tells the verb not to follow a final
+/// destination symlink to a directory, i.e. to REPLACE the link instead of
+/// landing inside the directory it points to (user ruling 2026-11-20, backlog
+/// cfb98cd5).
+///
+/// Modelled from `man ln` / `man mv` / `man install` (macOS, BSD) and the GNU
+/// spellings already in [`copy_option_table`]:
+///   * `ln`: `-h`, `-n` (BSD and GNU), `-T`, `--no-dereference`,
+///     `--no-target-directory` (GNU; BSD ln rejects them and writes nothing);
+///   * `mv`: `-h` (BSD), `-T`, `--no-target-directory` (GNU). `mv -n` is
+///     no-clobber, NOT no-dereference;
+///   * `install`: `--no-target-directory` only. Short `-T` is GNU's
+///     no-target-directory but BSD's `-T tags` (mtree tags, a value option),
+///     so it is NOT taken as no-dereference — the restrictive side;
+///   * `cp`: none — cp writes THROUGH the destination link, it never replaces
+///     it, so its `--no-dereference` (source side) does not apply.
+fn is_no_deref_option(cmd: &str, short: Option<char>, long: Option<&str>) -> bool {
+    match cmd {
+        "ln" => {
+            matches!(short, Some('h' | 'n' | 'T'))
+                || matches!(long, Some("--no-dereference" | "--no-target-directory"))
+        }
+        "mv" => matches!(short, Some('h' | 'T')) || long == Some("--no-target-directory"),
+        "install" => long == Some("--no-target-directory"),
+        _ => false,
+    }
 }
 
 /// Parse `rest` the way getopt does for `cmd` (backlog ef7c9fbe rework: the
@@ -587,6 +620,7 @@ fn parse_copy_args<'a>(cmd: &str, rest: &[&'a str]) -> Result<CopyArgs<'a>, Stri
     let mut operands = Vec::new();
     let mut target_dir: Option<String> = None;
     let mut target_at: Option<(usize, usize)> = None;
+    let mut no_deref = false;
     let mut set_target = |v: String, at: (usize, usize)| -> Result<(), String> {
         if target_dir.replace(v).is_some() {
             return Err(format!("`{cmd}` is given more than one target directory"));
@@ -647,6 +681,7 @@ fn parse_copy_args<'a>(cmd: &str, rest: &[&'a str]) -> Result<CopyArgs<'a>, Stri
                     None => return Err(format!("`{cmd}` option `{}` has no value", resolved.0)),
                 },
             };
+            no_deref |= is_no_deref_option(cmd, None, Some(resolved.0));
             if resolved.0 == "--target-directory" {
                 let (v, at) = value.unwrap_or_else(|| (String::new(), (i - 1, t.len())));
                 set_target(v, at)?;
@@ -678,12 +713,14 @@ fn parse_copy_args<'a>(cmd: &str, rest: &[&'a str]) -> Result<CopyArgs<'a>, Stri
             if !bool_short.contains(c) {
                 return Err(format!("unrecognised `{cmd}` option `-{c}`"));
             }
+            no_deref |= is_no_deref_option(cmd, Some(c), None);
         }
     }
     Ok(CopyArgs {
         operands,
         target_dir,
         target_at,
+        no_deref,
     })
 }
 
@@ -758,10 +795,13 @@ fn legacy_copy_args<'a>(rest: &[&'a str]) -> CopyArgs<'a> {
         Some((d, at)) => (Some(d), Some(at)),
         None => (None, None),
     };
+    // The heuristic never claims a no-dereference flag: following the final
+    // link is the restrictive side.
     CopyArgs {
         operands,
         target_dir,
         target_at,
+        no_deref: false,
     }
 }
 
@@ -1017,7 +1057,7 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
             if let Some(block) = protected_landing_block(ctx, &action, &landing) {
                 return block;
             }
-            if let Some(deny) = dest_system_block(ctx, cmd, &action, &landing) {
+            if let Some(deny) = dest_system_block(ctx, cmd, &action, &landing, false) {
                 return deny;
             }
         }
@@ -1045,7 +1085,7 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
         }
         for src in sources {
             let landed = format!("{base}/{}", basename(src));
-            if let Some(deny) = dest_system_block(ctx, cmd, &action, &landed) {
+            if let Some(deny) = dest_system_block(ctx, cmd, &action, &landed, false) {
                 return deny;
             }
         }
@@ -1053,9 +1093,12 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
     }
 
     match operands.last() {
+        // The single-destination form is the only one a no-dereference flag
+        // changes here: the directory forms above keep following (the
+        // restrictive side).
         Some(dest) => protected_path_block(ctx, &action, dest)
             .or_else(|| protected_glob_deny(&action, dest))
-            .or_else(|| dest_system_block(ctx, cmd, &action, dest))
+            .or_else(|| dest_system_block(ctx, cmd, &action, dest, args.no_deref))
             .unwrap_or(Decision::Allow),
         // One operand or none: nothing is being written over (`cp a` is an
         // error, `mv -t DIR` with no source does nothing).
@@ -1073,11 +1116,23 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
 /// followed link for them denied `ln -sf /opt/homebrew/bin/python3
 /// venv/bin/python` over an existing `venv/bin/python -> /opt/homebrew/...`
 /// (a false positive introduced with backlog cfb98cd5's physical landing).
-fn dest_system_block(ctx: &Ctx<'_>, cmd: &str, action: &str, dest: &str) -> Option<Decision> {
+///
+/// `no_deref` is [`CopyArgs::no_deref`] for the single-destination form
+/// (`false` elsewhere): with it a final symlink to a directory is replaced,
+/// not entered (`ln -sfn NEW current`, `mv -h x current`; user ruling
+/// 2026-11-20). Without it, landing inside a directory symlink is still judged
+/// inside. Ignored for `cp`, which writes through the link.
+fn dest_system_block(
+    ctx: &Ctx<'_>,
+    cmd: &str,
+    action: &str,
+    dest: &str,
+    no_deref: bool,
+) -> Option<Decision> {
     if cmd == "cp" {
         system_landing_block(ctx, action, dest)
     } else {
-        system_entry_landing_block(ctx, action, dest)
+        system_entry_landing_block(ctx, action, dest, no_deref)
     }
 }
 

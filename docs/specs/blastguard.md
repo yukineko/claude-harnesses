@@ -444,8 +444,9 @@ forge・condukt のスケジューラが再利用）。
   再度開いた元の綴りのまま残す（`'--command=rm` → `--command='rm`。値を dequote すると arm 側の quote 処理で
   二重に外れる）。operand（`-` で始まらない語）・前の語の途中の token（`-m "use '-f' here"`）・unquoted の option は
   バイト列を変えない。option 名が literal に決まらない語（quote 内の展開 `"-$x"`、未対応の ANSI-C escape
-  `$'\x2di'`、dash の後の escape された空白）は **Ask**（判定不能は制限側）。先頭が展開の語（`"$OPT"`）は
-  unquoted の `$OPT` と同じく従来どおり。**RESIDUAL**: 名前の途中から始まる quote（`--out'put'=`・`-'i'`）と
+  `$'\x2di'`、`-x` の後の escape された空白）は **Ask**（判定不能は制限側）。先頭が展開の語（`"$OPT"`）は
+  unquoted の `$OPT` と同じく従来どおり。単独の `-` と「`-` + 空白」で始まる語（`'- markdown の箇条書き'`）は
+  option 名ではないのでバイト列を変えない（2026-11-20 測定 FP: `printf '%s\n' '- … rm -rf …' >> f` が Ask になった）。**RESIDUAL**: 名前の途中から始まる quote（`--out'put'=`・`-'i'`）と
   変数経由の option は対象外。
 - **rm 以外のシステムファイル変更コマンドも system-harm Deny（backlog 3c750df2）** — `detect/system_paths.rs` の
   `system_mutation_verdict` が `analyze_command_at` の per-command arm より先に 1 箇所で判定する。対象は

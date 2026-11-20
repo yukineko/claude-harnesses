@@ -45,11 +45,20 @@
 //! whose option name cannot be reduced to one literal — an expansion inside
 //! the quoted name (`"-$x"`), an ANSI-C escape this module does not decode
 //! (`$'\x2di'`; the control escapes `\n` `\t` … decode to a non-dash and are
-//! read), an escaped word separator after a dash — could be any option, so
+//! read), an escaped word separator after `-x` — could be any option, so
 //! [`OptionWords::undetermined`] carries an Ask that the segment analysis
 //! records; it is never read as "no option". A word whose first character is
 //! an expansion (`"$OPT"`) is NOT in this class: its unquoted twin `$OPT`
-//! reads the same, and both are left to the arms exactly as before.
+//! reads the same, and both are left to the arms exactly as before. Nor is a
+//! lone dash or a dash followed by a blank (`'- a markdown bullet'`): it names
+//! no option and keeps its bytes.
+//!
+//! KNOWN SIDE EFFECT: a multi-word quoted argument that starts with an option
+//! name (`'-v some text'`) is rewritten to `-v'` + `some text'`; readers that
+//! recognise a quoted string only by its LEADING quote then read the later
+//! words as words. Observed effect: an extra Ask (the `'- …'` bullet FP
+//! above, before the lone-dash exclusion); that it can never LOWER a
+//! verdict is not proven.
 //!
 //! DOES NOT COVER: quoting that starts after the first character of the name
 //! (`--out'put'=…`, `-'i'`) — the token is left as it is (its raw spelling
@@ -195,7 +204,7 @@ fn scan_name(tok: &str) -> NameScan {
                         // the next token, so this token is not the whole name.
                         // A lone `\` (the `\;` of `find -exec`, cut at the
                         // `;`) starts no option.
-                        if !s.name.is_empty() {
+                        if !s.name.is_empty() && s.name != "-" {
                             s.undetermined = Some("an escaped blank splits the word");
                         }
                         None
@@ -288,6 +297,13 @@ fn option_word(tok: &str) -> OptionWord<'_> {
     // character could not be decoded at all (`$'\x2d…'`).
     let could_be_option = scan.name.starts_with('-') || scan.name.is_empty();
     if !scan.quoted || !could_be_option {
+        return OptionWord::Same;
+    }
+    // A lone dash, or a dash followed by a blank (`'- a markdown bullet'`
+    // reaches here as the token `'-`), names no option: keep the bytes, so
+    // the readers that recognise a quoted string by its leading quote still
+    // see one (2026-11-20 measured FP: `printf '%s\n' '- … rm -rf …' >> f`).
+    if scan.name == "-" {
         return OptionWord::Same;
     }
     let undetermined = |why: &str| {

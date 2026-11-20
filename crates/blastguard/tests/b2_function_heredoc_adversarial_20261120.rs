@@ -300,7 +300,6 @@ fn function_emitting_a_quoted_body_to_a_runner_is_not_allow() {
 /// Deny (subagent) on 7606a6b61 (0.2.780) and Allow in BOTH modes on 1d365a961
 /// (0.2.781) — a fail-open introduced by the fix.
 #[test]
-#[ignore = "backlog-candidate b2-fail-open: f(){ cat <<'EOF' body; }; f > p.awk; awk -f p.awk is Allow on 0.2.781 (Ask/Deny on 0.2.780)"]
 fn function_output_redirected_then_run_by_a_non_interpreter_is_not_allow() {
     assert_not_allow(
         &[

@@ -89415,3 +89415,154 @@ rev = "69bea7a6d6ef6a65dbb7c3414b37c3a1e219309a"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "e93d3701"
+title = "[bg-heredoc-script-failopen-596ef57d:R-kill] Q5: shell の `kill -9 -1`（ケース c_kill_all）は、main・subagent の両モードで Deny になる。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-kill",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-kill から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: Q5: shell の `kill -9 -1`（ケース c_kill_all）は、main・subagent の両モードで Deny になる。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_kill` が pass する（#[ignore] を外すだけで、assert は無変更。check は Need::Deny = main == "deny" && sub == "deny"）
+  - HEAD（326c23463 系）では同じテストが FAILED になる（RED を観測済み: "test result: FAILED. 0 passed; 7 failed" @ acdfd56cb）
+
+canon:
+  - .backlog/tasks.toml 596ef57d: "Q5 kill -9 -1 / os.kill(-1,9) -> Deny."
+  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:215-221 r_kill
+"""
+created_at = 1795108483
+updated_at = 1795205299
+weight = 0.0
+issue_number = 1871
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1871"
+issue_closed_at = 1795205304
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_kill"
+rev = "eee4290d589b104b33b644dd521d993c0730b69b"
+observed_at = 1795108483
+detail = """
+exit 101: result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.92s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-fdb863a4edef468c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --include-ignored r_kill"
+exit = 0
+passed = 1
+rev = "4d59fdd99e311c4eb4116c2874b0cfa041792171"
+observed_at = 1795205288
+output_digest = "sha256:e7124b19de4c4cdb1549991b3f6617d3c4b180765c1ebe6190bde68aa94dc6ad"
+excerpt = """
+
+running 1 test
+test r_kill ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.96s
+
+   Compiling harness-core v0.2.112 (/Users/yuki/src/.harness-worktrees/session-ba440926/crates/harness-core)
+   Compiling progeffect v0.1.7 (/Users/yuki/src/.harness-worktrees/session-ba440926/crates/progeffect)
+   Compiling overwatch v0.2.127 (/Users/yuki/src/.harness-worktrees/session-ba440926/crates/overwatch)
+   Compiling blastguard v0.2.840 (/Users/yuki/src/.harness-worktrees/session-ba440926/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.78s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-6994c5d5225ce2e8)
+"""
+
+[task.closure.red]
+rev = "8def619efbb9cf532665288e5a1dc04e35fbf0ad"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "2f159843"
+title = "[bg-heredoc-script-failopen-596ef57d:R-python-unknown-sink] A2a: 効果モデルを持たない python sink（例: asyncio の loop.subprocess_shell）は Ask になる。python sink には「unknown program = Allow」を適用しない。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-python-unknown-sink",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-python-unknown-sink から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: A2a: 効果モデルを持たない python sink（例: asyncio の loop.subprocess_shell）は Ask になる。python sink には「unknown program = Allow」を適用しない。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `... -- --ignored r_python_unknown_sink` が pass する。対象は stdin_x_loop_subprocess_shell で、main/sub とも allow 以外
+
+canon:
+  - .backlog/tasks.toml 596ef57d: "A2a Python sinks with no effect model (e.g. asyncio subprocess_shell) -> Ask per Q1 (11-17 unknown=Allow does NOT apply to Python sinks)."
+  - docs/blastguard/python-sink-set.md: "Not modelled (no effect model found at HEAD): `loop.subprocess_shell` / `loop.subprocess_exec` (case `stdin_x_loop_subprocess_shell`). Per A2a this must be Ask until an effect model exists."
+  - crates/blastguard/tests/backlog_20261120_596ef57d_requirements.rs:278-287
+"""
+created_at = 1795109370
+updated_at = 1795205306
+weight = 0.0
+issue_number = 1874
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1874"
+issue_closed_at = 1795205308
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_python_unknown_sink"
+rev = "9b61378da7e7bf0289e88b4cd89dd151d0485db4"
+observed_at = 1795109370
+detail = """
+exit 101: ng blastguard v0.2.754 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.38s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-b404579e77650688)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_596ef57d_requirements`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --include-ignored r_python_unknown_sink"
+exit = 0
+passed = 1
+rev = "4d59fdd99e311c4eb4116c2874b0cfa041792171"
+observed_at = 1795205304
+output_digest = "sha256:b2fe1df34bce9e35d78a2cea1284f658b9ff58aef28165ffd8e893fee7e6840a"
+excerpt = """
+
+running 1 test
+test r_python_unknown_sink ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.81s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-6994c5d5225ce2e8)
+"""
+
+[task.closure.red]
+rev = "8def619efbb9cf532665288e5a1dc04e35fbf0ad"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

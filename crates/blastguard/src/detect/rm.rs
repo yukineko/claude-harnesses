@@ -1838,3 +1838,79 @@ fn tmp_glob_operand_allowed(ctx: &Ctx<'_>, operand: &str, base: Option<&str>) ->
         Determination::Known(Placement::Outside { .. }) | Determination::Undetermined(_) => false,
     }
 }
+
+/// The `of=` operands of a `dd` argument list, read as the words the shell
+/// hands `dd` (fail-open p0, 2026-11-20): the segment tokens still carry their
+/// quoting, so `'of=/dev/sda'`, `"of=/dev/disk2"` and `\of=/dev/sda` — each
+/// exactly the argv word `of=/dev/sda` — missed a raw `starts_with("of=")`
+/// test and were Allow. Each word goes through the same quote removal and
+/// brace expansion as an `rm` operand ([`rm_operand_words`] /
+/// [`expand_operand_with`]), so `{of,if}=/dev/sda` is seen too.
+pub(super) struct DdOfOperands {
+    /// The quote-removed values of every `of=` word, in order.
+    pub(super) targets: Vec<String>,
+    /// A word whose value the text does not determine (an expansion,
+    /// unbalanced quoting, a brace list past the expansion bound) whose
+    /// literal start is compatible with `of=` (`$X`, `o$X`, `of=$F`): it may
+    /// be an `of=` operand, so the caller treats the command as writing to an
+    /// unknown target (restrictive side), never as `dd` without `of=`.
+    pub(super) undetermined: bool,
+}
+
+impl DdOfOperands {
+    /// True when `dd` (may) write through `of=`: a known `of=` word, or an
+    /// undetermined word that could be one.
+    pub(super) fn writes(&self) -> bool {
+        self.undetermined || !self.targets.is_empty()
+    }
+}
+
+/// The `dd` arm of `detect.rs`'s command-word match.
+///
+/// Stage S6-5 (user ruling 2026-11-20): retired where the new layer is Known
+/// Allow — every Table B `dd` target (`of=F`; `if=` is a read) a Literal in
+/// Scratch / OwnWorktree, none naming command-running config
+/// ([`super::known_allow::known_allow`]). Precedent: S6-4 `truncate`.
+/// Anything else keeps the legacy `of=` reading: Deny when [`dd_of_operands`]
+/// sees an `of=` word — read from the shell-unquoted words, not the raw
+/// tokens (`'of=/dev/sda'` is the argv word `of=/dev/sda`; fail-open p0,
+/// 2026-11-20) — or a word that may expand to one (a write to an unknown
+/// target); Allow otherwise.
+pub(super) fn analyze_dd(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+    if super::known_allow::known_allow("dd", rest, ctx) {
+        Decision::Allow
+    } else if dd_of_operands(rest, ctx.scope.home_real()).writes() {
+        Decision::deny("dd with of= writes raw bytes over a device/file")
+    } else {
+        Decision::Allow
+    }
+}
+
+/// See [`DdOfOperands`]. `home` is the session's home (for `~`/`$HOME`).
+pub(super) fn dd_of_operands(rest: &[&str], home: Option<&str>) -> DdOfOperands {
+    let mut out = DdOfOperands {
+        targets: Vec::new(),
+        undetermined: false,
+    };
+    for word in rm_operand_words(rest) {
+        match expand_operand_with(&word, home, None) {
+            OperandSpelling::Paths(paths) => out.targets.extend(
+                paths
+                    .iter()
+                    .filter_map(|p| p.strip_prefix("of="))
+                    .map(str::to_string),
+            ),
+            OperandSpelling::Unresolvable(_) => {
+                // The literal text before the first expansion / brace: the
+                // word can only become `of=…` when that start is compatible.
+                let cut = word.find(['$', '`', '{']).unwrap_or(word.len());
+                let lead = &word[..cut];
+                let lit = super::words::first_shell_word(lead).unwrap_or_else(|| lead.to_string());
+                if "of=".starts_with(lit.as_str()) || lit.starts_with("of=") {
+                    out.undetermined = true;
+                }
+            }
+        }
+    }
+    out
+}

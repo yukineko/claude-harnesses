@@ -2694,3 +2694,39 @@ exit 101: pe-task-regression-20261120/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 7.56s
      Running tests/backlog_20261120_quoted_heredoc_group_backtick_flag_fp.rs (target/debug/deps/backlog_20261120_quoted_heredoc_group_backtick_flag_fp-6e839261438dfc74)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_quoted_heredoc_group_backtick_flag_fp`"""
+
+[[task]]
+id = "a761b38f"
+title = "blastguard FP regression from e1bb5f7e (2a86103a9): sudo --user root ls -la is Ask (long-form sudo options not modelled; pinned d3_benign_long_form_wrapper_invocations_stay_allowed red on main)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-20 by main-session full blastguard comparison (user ruling: run tests needed for proof). base 58b598ccf: ok=3949 failed=59; fix c4d93886b: ok=4072 failed=60. The only test ok on base and failing on fix: detect::tests::d3_benign_long_form_wrapper_invocations_stay_allowed (crates/blastguard/src/detect/tests.rs:1411): expected allow: sudo --user root ls -la; left: Ask("`sudo` option `--user` is not modelled — blastguard cannot judge what it would do (Table B.5: Undetermined)"). Cause: e1bb5f7e b5.rs unwrap_at sudo/doas arm models -u/-g/... but not long forms (--user/--group/...). Violates spec bg-sudo-stdin-shell-e1bb5f7e R3 (no new failure vs base). Driver's targeted regression set missed this --lib test."""
+created_at = 1795172153
+updated_at = 1795172153
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --lib d3_benign_long_form_wrapper_invocations_stay_allowed"
+rev = "c4d93886b9371866bcbf87077e82d3ed64fcf87e"
+observed_at = 1795172153
+detail = """
+exit 101: ace
+
+
+failures:
+    detect::tests::d3_benign_long_form_wrapper_invocations_stay_allowed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 709 filtered out; finished in 0.04s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-6827ff3134ba9626)
+error: test failed, to rerun pass `-p blastguard --lib`"""

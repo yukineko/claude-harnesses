@@ -384,69 +384,6 @@ FAILED scripts/test_fail_open_mutation_leaves_no_artifacts_stub_invoked_20261114
 ============================== 1 failed in 0.24s ==============================="""
 
 [[task]]
-id = "4c15fa35"
-title = "blastguard: python3 - heredoc program with rmtree only inside a triple-quoted string literal denied as destructive call"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-14 at main 9bab9873e (blastguard 0.2.594 built from that rev; RED committed eb8811f70, 0.2.595). First seen in run-20261114-163341-69351, task worktree run-20261114-163341-69351-b793fddc (blocks.jsonl, installed 0.2.588, actor=subagent, rule interpreter-destructive-call): program rewrote scripts/check-fail-open-mutation.py via p.write_text(s), rmtree only inside r'''...''' text; verbatim reason \"`python3 - <<'EOF'` takes its program from stdin, and it runs `rmtree`, which deletes files or directories outright\" (it calls no rmtree). Minimised reason: '... a quoted string in its program spells `rmtree`, which deletes files or directories outright if that string is run as code; blastguard cannot show it is not'. Splits (main): plain 'shutil.rmtree(x)' literal ask (27795e6e downgrade, not asserted); '''...''' print deny; r'''...''' write_text deny; same with copy allow; real shutil.rmtree call deny. Judged FP under user ruling 2026-11-08 (text vs code via a real parser): quoted delimiter, no sink. Suspected (UNVERIFIED): layer-0 substring scan in crates/blastguard/src/detect/interpreter.rs ~1165 whose only downgrade is heuristic inert_literal_bodies (detect/interpreter/inert_literal.rs ~123) returning None on any ''' or \"\"\"; the Python lexer (python_semantics.rs lex) is not consulted. The verbatim 'it runs' wording comes from the strip_hash_comments(payload, true) quote toggler (detect/interpreter/comments.rs:29), cause UNVERIFIED. Controls green: real rmtree call, call after a triple literal, exec of a literal are not Allow."
-created_at = 1794654144
-updated_at = 1794654144
-weight = 0.0
-issue_number = 1778
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1778"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp -- --ignored python_stdin_triple_quoted_rmtree_text_is_not_a_call"
-rev = "eb8811f703a54920bf6db2621db0b07e0eaf89be"
-observed_at = 1794654144
-detail = """
-exit 101: d out; finished in 0.44s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
-     Running tests/backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp.rs (target/debug/deps/backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp-7b85eef629c6ed87)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp`"""
-
-[[task]]
-id = "762f38bd"
-title = "blastguard FP: python3 - heredoc that only writes a file whose string literal holds chmod 777 /etc/hosts is system-harm Deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fp",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-14 (run-20261114-161340-68728, t3 worker + side-reds agent, main dde31f11b): the exact recovered t3 spec-edit command (python3 - <<'PY' reading docs/specs/blastguard.md, str.replace with triple-quoted literals, open(p,'w').write) is Deny in main: verbatim reason '`chmod` re-permissions `/etc/hosts` ... [system harm: refused on every request, never handed back as a question]'. Minimised single-line forms are NOT denied (same verdict as echo hi), so trigger not localised. Controls (subprocess.run/os.system/os.chmod on /etc/hosts) stay Deny. Readings: (a) FP — harm text is Python string data written to a file; (b) intended over-approximation. Tell apart: localise which part of the full program flips the verdict."
-created_at = 1794656868
-updated_at = 1794656868
-weight = 0.0
-issue_number = 1779
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1779"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261114_py_heredoc_harm_string_literal -- --include-ignored"
-rev = "b7903d36f4c6501380f6ae3a95d12d6b8dae69bc"
-observed_at = 1794656868
-detail = """
-exit 101: kt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.80s
-     Running tests/backlog_20261114_py_heredoc_harm_string_literal.rs (target/debug/deps/backlog_20261114_py_heredoc_harm_string_literal-3cfcc4cc8634a2c8)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261114_py_heredoc_harm_string_literal`"""
-
-[[task]]
 id = "eb52d2e5"
 title = "blastguard FP: a .txt data heredoc whose body has echo hi >&$fd raises python3 probe.py from allow to Deny"
 project = "/Users/yuki/src/harness"
@@ -476,33 +413,6 @@ exit 101: ndukt/worktrees/run-20261114-161340-68728-side-reds/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.05s
      Running tests/backlog_20261114_txt_data_heredoc_python_probe.rs (target/debug/deps/backlog_20261114_txt_data_heredoc_python_probe-8821daae300377ea)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_txt_data_heredoc_python_probe`"""
-
-[[task]]
-id = "4270601a"
-title = "blastguard: quoted heredoc body of python3 - (<<'EOF') judged as shell redirect, Denied in both main and subagent (FP)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-15 in a subagent (main at 72cb90009): 'cd <tests dir> && python3 - <<'EOF' ... EOF' whose Python body held Rust doc text in a raw string was denied with: '> ' destroys the file's current contents and `` is a relative path and blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable. RED cf3e7a684 (independent author), measured 2026-11-15 with main at e889149e7: f0 (cd scratch && python3 - <<'EOF' with a raw string containing '`check_rerun` -> `tree_identity(cwd)`', '`cd <task worktree> && cargo test --test' / '<out of scope>` is allowed', open('out.rs','w').write(header); EOF; cd .. && ls scratch): left: ("deny", "deny") with the verbatim reason above (Deny, not Ask, even in main). Narrowing control f1 (python3 - body with only '-> `tree_identity(cwd)`') = allow/allow, so that token alone is not the trigger. Control c1 (cd scratch && echo x > `printf %s "$T"`, a real shell redirect) = deny both modes: "'> `printf' destroys the file's current contents and ``printf` contains a shell expansion ...". Readings: (a) defect - a quoted heredoc fed to python3 - is Python source the shell never parses, so '>' in it is not a redirect; (b) intended - interpreter-bound body judged conservatively. Tell apart: the reason uses shell redirect semantics with an empty target on text only Python reads; (b) would need a Python-level reason (the open(...,'w') target out.rs is a literal relative path in scratch). Suspected trigger (unproven): the angle-bracket text '<task worktree> &&' / '<out of scope>' inside the body being tokenized as shell. Related: a826bdab (quoted heredoc JSON backtick). Fix must keep c1 non-Allow. DOES NOT PROVE: exact trigger token; node/ruby stdin. Seen again 2026-11-20 at main 0.2.802 (subagent, relay bgr-5591c3dbe0ce, cwd a linked worktree): python3 - with a quoted heredoc whose Python string held Rust comment text containing a backtick-quoted greater-than sign was denied with the reason that the heredoc body fed to a code interpreter contains a redirect-shaped token whose target holds a shell expansion. Same class; the edit was redone with the Edit tool."""
-created_at = 1794733637
-updated_at = 1795155408
-weight = 0.0
-issue_number = 1797
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1797"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261115_python_stdin_heredoc_backtick_redirect_fp -- --ignored f0_recovered_shape_is_allow_in_subagent_and_main"
-rev = "cf3e7a684c35c5abb71891d7e54b5503021fd04c"
-observed_at = 1794733637
-detail = """
-exit 101: -empty-worktree/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.88s
-     Running tests/backlog_20261115_python_stdin_heredoc_backtick_redirect_fp.rs (target/debug/deps/backlog_20261115_python_stdin_heredoc_backtick_redirect_fp-1edf72d723701cc4)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_stdin_heredoc_backtick_redirect_fp`"""
 
 [[task]]
 id = "3109dbf3"
@@ -596,37 +506,6 @@ exit 101: -worktrees/session-6dcca0ad/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.04s
      Running tests/backlog_20261115_python_c_vars_call_inline_eval_ask_fp.rs (target/debug/deps/backlog_20261115_python_c_vars_call_inline_eval_ask_fp-8afe83282daea963)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_c_vars_call_inline_eval_ask_fp`"""
-
-[[task]]
-id = "72d1a972"
-title = "blastguard FP: Python string literal holding subprocess.run('chmod 777 /etc/hosts', ...) is denied as system harm though only data"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1794743461
-updated_at = 1794743461
-weight = 0.0
-issue_number = 1803
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1803"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261115_python_string_literal_subprocess_chmod_data_fp -- --include-ignored"
-rev = "c82d9725085e6bd5c378274f0ebad8fb810665ab"
-observed_at = 1794743461
-detail = """
-exit 101: /crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
-     Running tests/backlog_20261115_python_string_literal_subprocess_chmod_data_fp.rs (target/debug/deps/backlog_20261115_python_string_literal_subprocess_chmod_data_fp-d9104b1b6d256d13)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_string_literal_subprocess_chmod_data_fp`"""
 
 [[task]]
 id = "c7cc67c1"

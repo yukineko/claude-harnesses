@@ -2397,6 +2397,8 @@ notes = "Observed 2026-11-20 at session-8abb4dc6 24ade0b20 (main 2faec5da9 merge
 created_at = 1795138678
 updated_at = 1795138678
 weight = 0.0
+issue_number = 1883
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1883"
 rev = 0
 
 [task.repro]

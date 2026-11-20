@@ -25,10 +25,12 @@ What these tests do NOT prove:
 """
 import json
 import os
+import queue
 import shutil
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 
@@ -204,15 +206,42 @@ class TestState(Base):
 
     def test_state_emitted_on_change(self):
         self.write_run("run-b", [("t1", "running")])
-        proc = subprocess.Popen(self.args(max_secs=4), env=self.env(),
+        proc = subprocess.Popen(self.args(max_secs=6), env=self.env(),
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        lines = queue.Queue()
+
+        def pump():
+            for l in proc.stdout:
+                lines.put(l.rstrip("\n"))
+            lines.put(None)
+
+        threading.Thread(target=pump, daemon=True).start()
+        seen = []
         try:
-            time.sleep(1.2)
+            # Deterministic: rewrite only after the startup STATE line is observed,
+            # so the watcher can never see the run already terminal at first poll.
+            deadline = time.time() + 20
+            started = False
+            while time.time() < deadline and not started:
+                try:
+                    l = lines.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+                if l is None:
+                    break
+                seen.append(l)
+                started = l.startswith("STATE run-b ") and "t1=running" in l
+            self.assertTrue(started, "startup STATE run-b with t1=running never appeared; saw %r" % (seen,))
             self.write_run("run-b", [("t1", "done")])
-            out, _ = proc.communicate(timeout=30)
+            while True:
+                l = lines.get(timeout=30)
+                if l is None:
+                    break
+                seen.append(l)
         finally:
             if proc.poll() is None:
                 proc.kill()
+        out = "\n".join(seen)
         sts = [l for l in out.splitlines() if l.startswith("STATE run-b ")]
         self.assertGreaterEqual(len(sts), 2, "startup STATE plus a STATE when the status vector changes")
         self.assertIn("t1=done", sts[-1], "the change line carries the new status")

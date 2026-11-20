@@ -819,6 +819,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow"
+version = "0.2.37"
+dependencies = [
+ "harness-core",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

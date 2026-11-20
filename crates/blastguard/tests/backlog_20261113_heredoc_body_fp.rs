@@ -23,6 +23,8 @@
 
 #[path = "support/bounded.rs"]
 mod bounded;
+#[path = "support/git_env.rs"]
+mod git_env;
 
 use std::process::{Command, Stdio};
 
@@ -87,13 +89,52 @@ fn run_as(command: &str, cwd: &std::path::Path, home: &Home, subagent: bool) -> 
     )
 }
 
-/// A cwd containing `proj/src/foo.rs`. Returns (home, cwd, proj dir).
-fn setup(tag: &str) -> (Home, std::path::PathBuf, std::path::PathBuf) {
+/// A cwd containing `proj/src/foo.rs`, where `proj` is NOT a git work tree.
+/// Returns (home, cwd, proj dir).
+fn setup_non_git(tag: &str) -> (Home, std::path::PathBuf, std::path::PathBuf) {
     let home = unique_home(tag);
     let cwd = home.0.join("wt");
     let proj = cwd.join("proj");
     std::fs::create_dir_all(proj.join("src")).unwrap();
     std::fs::write(proj.join("src/foo.rs"), "// MARK\nfn main() {}\n").unwrap();
+    (home, cwd, proj)
+}
+
+/// Run one fixture `git` command in `dir` (repo discovery pinned to `dir`,
+/// no global/system config, identity via `-c`).
+fn fixture_git(dir: &std::path::Path, home: &Home, args: &[&str]) {
+    let mut cmd = git_env::pinned(dir);
+    cmd.args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+        .args([
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+        ])
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("HOME", &home.0);
+    let out =
+        bounded::run_bounded_stdin(&mut cmd, bounded::ChildStdin::Null, bounded::TOOL_DEADLINE);
+    assert!(
+        out.status.success(),
+        "fixture git {args:?} in {} failed: {}",
+        dir.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Like [`setup_non_git`], but `proj` is a git work tree with `src/foo.rs`
+/// committed, so overwriting it is recoverable from git. The FP-B controls
+/// isolate the rm-text question, not the separate non-git-overwrite question
+/// (ruled Deny 2026-11-20; see the ignored
+/// `b_control_same_program_on_non_git_existing_file_is_denied`).
+fn setup(tag: &str) -> (Home, std::path::PathBuf, std::path::PathBuf) {
+    let (home, cwd, proj) = setup_non_git(tag);
+    fixture_git(&proj, &home, &["init", "-q", "-b", "main"]);
+    fixture_git(&proj, &home, &["add", "src/foo.rs"]);
+    fixture_git(&proj, &home, &["commit", "-q", "-m", "init"]);
     (home, cwd, proj)
 }
 
@@ -212,6 +253,23 @@ fn b_control_same_program_without_rm_text_is_not_denied() {
     let (home, _cwd, proj) = setup("b2");
     let (d, r) = run_as(&fp_b_cmd(PLAIN_DOC, "true"), &proj, &home, false);
     assert_ne!(d, "deny", "program without rm text: {d} | {r}");
+}
+
+// Control pinning the user ruling 2026-11-20 「Deny のまま（推奨）」: the same
+// program overwriting an existing file that git does NOT hold is denied.
+// NOT OBSERVED at main ec71b087e (2026-11-20, macOS, fixture under
+// std::env::temp_dir()): measured "ask" — "truncating redirect is confined to
+// <fixture>/wt/proj — a safe root for this session" (the payload cwd is a
+// derived safe root). Ignored until the ruling and the measurement agree.
+#[test]
+#[ignore = "UNRESOLVED: ruled Deny, measured ask at main ec71b087e (cwd safe-root confined Ask)"]
+fn b_control_same_program_on_non_git_existing_file_is_denied() {
+    let (home, _cwd, proj) = setup_non_git("b4");
+    let (d, r) = run_as(&fp_b_cmd(PLAIN_DOC, "true"), &proj, &home, false);
+    assert_eq!(
+        d, "deny",
+        "python overwrite of an existing non-git file: {d} | {r}"
+    );
 }
 
 // Control: a REAL wildcard rm after the heredoc is still denied.

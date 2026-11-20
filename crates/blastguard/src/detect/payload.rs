@@ -530,6 +530,32 @@ tell whether the interpreter runs that stdin or a script file",
                         }
                     }
                 }
+                // Backlog 8cadc78f: a single plain `echo` upstream stage is
+                // excluded from `determined` (its quoted literals are read
+                // instead), so an UNQUOTED one — `echo rm -rf /etc | bash` —
+                // offered no program text at all: only the empty-program Ask,
+                // and one layer down (`echo 'echo rm -rf /etc | bash' | bash`)
+                // `interpreter_program_verdict` drops a layer-0 Ask, so the
+                // line was Allow. Its output is determined by the command text
+                // (`plain_echo_output`: every word static, no escape), so
+                // judge that output as the shell program it is, keeping a
+                // Deny or Ask. An ADDED reading: the literal reading and its
+                // empty-program Ask below are unchanged, and it is taken only
+                // when nothing on the line rebinds the modelled names
+                // (`resolution_fixed`, as for `determined`).
+                if determined.is_none() && i > 0 && !heredoc_open && feeder.is_none() {
+                    if let Some(text) = plain_echo_output(&statement[i - 1])
+                        .filter(|t| !t.trim().is_empty())
+                        .filter(|_| resolution_fixed())
+                    {
+                        let verdict = super::detect_bash(&text, depth + 1, ctx);
+                        if verdict.is_blocking() {
+                            if let Some(deny) = acc.record(verdict) {
+                                return deny;
+                            }
+                        }
+                    }
+                }
                 if heredoc_open {
                     for joined in program_texts.iter().skip(originals) {
                         let verdict = super::detect_bash(joined, depth + 1, ctx);

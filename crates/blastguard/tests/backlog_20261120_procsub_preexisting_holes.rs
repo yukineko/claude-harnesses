@@ -101,7 +101,6 @@ fn expect_not_allow(cmd: &str, tag: &str) {
 // ------------------------------------------------ (A) Allow holes
 
 #[test]
-#[ignore = "backlog 8cadc78f: RED: echo of a program containing an inner echo-to-bash feeder is Allow (inner feeder not re-judged), system harm"]
 fn echo_of_inner_echo_to_bash_feeder_is_deny() {
     expect_deny("echo 'echo rm -rf /etc | bash' | bash", "a-chain");
 }

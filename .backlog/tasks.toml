@@ -3004,6 +3004,8 @@ notes = "Side finding of a761b38f. Measured 2026-11-21 at rev 916fea015 (blastgu
 created_at = 1795197125
 updated_at = 1795197125
 weight = 0.0
+issue_number = 1907
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1907"
 rev = 0
 
 [task.repro]

@@ -556,6 +556,13 @@ const PRINT_ONLY_ATTRIBUTES: &[&str] = &[
 /// reader's stdout is not redirected, piped or captured
 /// ([`super::super::heredoc::python_stdin_here_document`]'s shape).
 pub(in crate::detect) fn python_program_only_prints(program: &str) -> bool {
+    only_prints_admitting(program, &[])
+}
+
+/// [`python_program_only_prints`], with the exact bare names `admitted` (a
+/// whole Name token, not after a `.`) let through as well. The caller owns
+/// what those names may do: this only says every OTHER token is print-only.
+fn only_prints_admitting(program: &str, admitted: &[&str]) -> bool {
     let program = &*python_newlines(program);
     if code_view(program).is_none() {
         return false;
@@ -567,12 +574,15 @@ pub(in crate::detect) fn python_program_only_prints(program: &str) -> bool {
         sem::Tok::Nl => true,
         sem::Tok::Punct(c) => "()[]{},:.=+-*/%<>!&|^~".contains(*c),
         sem::Tok::Name { text, .. } => {
+            let after_dot = k > 0 && toks[k - 1] == sem::Tok::Punct('.');
+            if !after_dot && admitted.contains(&text.as_str()) {
+                return true;
+            }
             if text.contains("__") {
                 return false;
             }
             let mut parts = text.split('.');
             let head = parts.next().unwrap_or("");
-            let after_dot = k > 0 && toks[k - 1] == sem::Tok::Punct('.');
             let head_ok = if after_dot {
                 PRINT_ONLY_ATTRIBUTES.contains(&head)
             } else {
@@ -608,8 +618,84 @@ const STDIN_EXEC_BUILTINS: &[&str] = &["exec", "eval", "compile", "breakpoint", 
 /// `getattr(o, s)(…)`). The namespace accessors `globals` / `locals` / `vars`
 /// are on it too: bound to a name (`g = globals; g()["exec"](input())`) they
 /// reach `exec` without the call `exec(` ever appearing (backlog 0154ed31).
-/// Judged restrictively: undetermined ⇒ stdin executes. A CLOSED list.
+/// A reference counts as a reach — the head of a dotted name too
+/// (`__builtins__.exec`) — unless [`dynamic_names_only_printed`] proves every
+/// reference is a bare argument of the builtin `print` in a program with no
+/// stdin reader (backlog 20261115: `python3 -c 'print(vars)'` never runs its
+/// stdin). Judged restrictively: undetermined ⇒ stdin executes. A CLOSED list.
 const STDIN_DYNAMIC_NAMES: &[&str] = &["getattr", "__builtins__", "globals", "locals", "vars"];
+
+/// Sinks a [`STDIN_DYNAMIC_NAMES`] reference may be handed to without counting
+/// as a reach: the builtin only writes the value's text to stdout and returns
+/// `None`. A CLOSED list.
+const PRINT_ONLY_SINKS: &[&str] = &["print"];
+
+/// Whether every [`STDIN_DYNAMIC_NAMES`] reference in `program` is inert, so
+/// the program cannot reach an executor through one. ALL of, read with the
+/// Python lexer ([`sem::lex`]):
+///   * (b) the program, those names aside, passes the print-only allowlist
+///     ([`only_prints_admitting`]): no `input`, `sys`, `open`, `os`,
+///     `fileinput`, import or f-string, so it has no stdin reader at all and
+///     no other dynamic reach (an allowlist, not a list of readers);
+///   * no [`PRINT_ONLY_SINKS`] name is rebound: each is followed by `(` (so
+///     not `print = repr`, `for print in …`, `print, = …`);
+///   * (a) each reference is a whole argument of a sink call
+///     ([`printed_argument`]): `print(vars)`, `print(1, globals(), 2)`. A
+///     subscript, attribute, argument-carrying call, alias, keyword or
+///     starred argument, nesting in another bracket, or any other shape is not.
+///
+/// Anything else is `false` (undetermined ⇒ the caller counts a reach).
+fn dynamic_names_only_printed(program: &str, toks: &[sem::Tok]) -> bool {
+    if !only_prints_admitting(program, STDIN_DYNAMIC_NAMES) {
+        return false;
+    }
+    toks.iter().enumerate().all(|(k, t)| match t {
+        sem::Tok::Name { text, .. } if PRINT_ONLY_SINKS.contains(&text.as_str()) => {
+            toks.get(k + 1) == Some(&sem::Tok::Punct('('))
+        }
+        sem::Tok::Name { text, .. } if STDIN_DYNAMIC_NAMES.contains(&text.as_str()) => {
+            printed_argument(toks, k)
+        }
+        _ => true,
+    })
+}
+
+/// Whether the Name at `toks[k]` is, alone or called with no argument
+/// (`vars()`), one whole comma-separated argument of a bare
+/// [`PRINT_ONLY_SINKS`] call: the token before it is `(` or `,`, the token
+/// after it (or after its `()`) is `,` or `)`, and the innermost open bracket
+/// enclosing it is the `(` of a sink call (not after a `.`).
+fn printed_argument(toks: &[sem::Tok], k: usize) -> bool {
+    let punct = |i: usize, c: char| toks.get(i) == Some(&sem::Tok::Punct(c));
+    if k == 0 || !(punct(k - 1, '(') || punct(k - 1, ',')) {
+        return false;
+    }
+    let mut after = k + 1;
+    if punct(after, '(') && punct(after + 1, ')') {
+        after += 2;
+    }
+    if !(punct(after, ',') || punct(after, ')')) {
+        return false;
+    }
+    let mut depth = 0usize;
+    for i in (0..k).rev() {
+        match &toks[i] {
+            sem::Tok::Punct(')' | ']' | '}') => depth += 1,
+            sem::Tok::Punct(c @ ('(' | '[' | '{')) => {
+                if depth > 0 {
+                    depth -= 1;
+                    continue;
+                }
+                let sink = i > 0
+                    && matches!(&toks[i - 1], sem::Tok::Name { text, .. }
+                        if PRINT_ONLY_SINKS.contains(&text.as_str()));
+                return *c == '(' && sink && !(i > 1 && punct(i - 2, '.'));
+            }
+            _ => {}
+        }
+    }
+    false
+}
 
 /// Whether a literal `python -c` program may run its stdin as a Python
 /// program (an interactive console, a debugger, or `exec`/`eval`/`compile`
@@ -626,7 +712,10 @@ const STDIN_DYNAMIC_NAMES: &[&str] = &["getattr", "__builtins__", "globals", "lo
 ///   * a bare-name call to a [`STDIN_EXEC_BUILTINS`] builtin (`exec(`, `eval(`,
 ///     `compile(` as a builtin rather than `re.compile`, `breakpoint(`,
 ///     `__import__(`);
-///   * a reference to a [`STDIN_DYNAMIC_NAMES`] dynamic-execution reach.
+///   * a reference to a [`STDIN_DYNAMIC_NAMES`] dynamic-execution reach (the
+///     head of a dotted name included), unless [`dynamic_names_only_printed`]
+///     shows every such reference is only printed by a program that has no
+///     stdin reader (`print(vars)`, `print(globals())`); undetermined ⇒ `true`.
 ///
 /// LIMIT (CLAUDE.md §4): detection is by static reference. A program that
 /// reaches an executor through a path these closed lists do not name — a name
@@ -664,22 +753,28 @@ pub(in crate::detect) fn python_program_enters_stdin_console(program: &str) -> b
         return true;
     }
     let toks = sem::lex(program);
-    toks.iter().enumerate().any(|(k, t)| {
+    let mut dynamic = false;
+    for (k, t) in toks.iter().enumerate() {
         let sem::Tok::Name { text, .. } = t else {
-            return false;
+            continue;
         };
         // The lexer folds dotted access (`re.compile`) into one Name whose
         // text holds the `.`, and a method on a call result (`f().exec(…)`)
-        // has a leading `.` token: neither is a bare builtin.
-        if text.contains('.') || (k > 0 && toks[k - 1] == sem::Tok::Punct('.')) {
-            return false;
+        // has a leading `.` token: neither is a bare builtin. The head of a
+        // dotted name is still a bare reference (`__builtins__.exec`).
+        if k > 0 && toks[k - 1] == sem::Tok::Punct('.') {
+            continue;
         }
-        if STDIN_DYNAMIC_NAMES.contains(&text.as_str()) {
+        if STDIN_DYNAMIC_NAMES.contains(&text.split('.').next().unwrap_or("")) {
+            dynamic = true;
+        } else if !text.contains('.')
+            && STDIN_EXEC_BUILTINS.contains(&text.as_str())
+            && toks.get(k + 1) == Some(&sem::Tok::Punct('('))
+        {
             return true;
         }
-        STDIN_EXEC_BUILTINS.contains(&text.as_str())
-            && toks.get(k + 1) == Some(&sem::Tok::Punct('('))
-    })
+    }
+    dynamic && !dynamic_names_only_printed(program, &toks)
 }
 
 /// Programs, beyond the code interpreters and shells, that run text on their

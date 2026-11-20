@@ -117,7 +117,6 @@ fn piped(prog: &str) -> String {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-15 python3 -c 'print(vars)' / print(locals()) / print(globals()) never read stdin but the harmful echo'd text is judged as the program (deny/deny) — remove when fixed"]
 fn python_c_naming_vars_or_locals_without_reading_stdin_does_not_judge_piped_text() {
     for prog in ["print(vars)", "print(locals())", "print(globals())"] {
         let home = unique_home("fp");

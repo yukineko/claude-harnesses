@@ -154,3 +154,73 @@ mod read_only_open_tests {
         assert!(!literal_is_read_only_open(A, "print(1)"));
     }
 }
+
+mod stdin_dynamic_name_tests {
+    use super::super::python_program_enters_stdin_console as enters;
+
+    /// Backlog 20261115 vars/locals FP: a namespace accessor that is only ever
+    /// printed, in a program that has no stdin reader, does not run stdin.
+    #[test]
+    fn printed_namespace_accessor_without_stdin_reader_is_not_a_reach() {
+        for p in [
+            "print(vars)",
+            "print(locals())",
+            "print(globals())",
+            "print(1, vars(), 2)",
+            "print(getattr)",
+            "print( vars )\n",
+        ] {
+            assert!(!enters(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn dynamic_reach_to_exec_stays_a_reach() {
+        for p in [
+            "print(vars()[\"exec\"](input()))",
+            "getattr(__builtins__,\"exec\")(input())",
+            "__builtins__.exec(input())",
+            "globals()[\"__builtins__\"].exec(input())",
+            "print(globals()[\"__builtins__\"])",
+            "x=globals()[\"__builtins__\"]",
+            "f=print; g=globals; f(g()[\"exec\"](input()))",
+            "g=globals; g()[\"exec\"](input())",
+            "v=vars; v()[\"exec\"](input())",
+            "l=locals; l()[\"exec\"](input())",
+            "exec(input())",
+            "print(vars().get(\"exec\"))",
+            "print(vars(), file=x)",
+            "print(sep=vars)",
+            "print(*vars())",
+            "print((vars))",
+            "print([globals()])",
+            "print(vars(x))",
+            "print(1)(vars)",
+            "x.print(vars)",
+        ] {
+            assert!(enters(p), "{p}");
+        }
+    }
+
+    /// Clause (b): the same printed accessor in a program that has any stdin
+    /// reader, or anything outside the print-only allowlist, stays a reach.
+    #[test]
+    fn printed_accessor_with_a_reader_or_unclassified_code_stays_a_reach() {
+        for p in [
+            "print(vars); input()",
+            "import sys; print(vars); sys.stdin.read()",
+            "print(globals()); open(0).read()",
+            "print(globals()); open('/dev/stdin')",
+            "import os; print(vars); os.read(0, 9)",
+            "import fileinput; print(vars)",
+            "import json; print(vars)",
+            "print(f'{vars}', vars)",
+            "print = repr; print(vars)",
+            "print, = repr,; print(vars)",
+            "for print in [repr]: print(vars)",
+            "print(vars); x = 1",
+        ] {
+            assert!(enters(p), "{p}");
+        }
+    }
+}

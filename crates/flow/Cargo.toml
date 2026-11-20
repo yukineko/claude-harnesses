@@ -1,0 +1,20 @@
+[package]
+name = "flow"
+version = "0.2.37"
+edition = "2021"
+description = "flow plugin: Stop hook (`flow stop-gate`) that keeps a registered /flow driver session running while backlog work remains."
+license = "MIT"
+
+[[bin]]
+name = "flow"
+path = "src/main.rs"
+
+[dependencies]
+harness-core = { path = "../harness-core" }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -140,7 +140,6 @@ const FP_SHAPES: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: backlog 06c51772 (S5 python-parser)"]
 fn backtick_in_python_string_does_not_drop_literal_write_paths() {
     // test-weakening-justified: re-anchored assert (not-Ask/Deny -> same verdict as no-backtick twin), ruling 2026-11-21 flow batch 62e92d16; assert count unchanged.
     let twins: Vec<String> = FP_SHAPES.iter().map(|c| c.replace('`', "")).collect();

@@ -28,10 +28,27 @@ pub enum FsOp {
     RemoveDir { path: String },
     /// The file's content is replaced (also: created, or modified in place —
     /// an `r+` open is read as this, the more restrictive reading). Spelled
-    /// `: > P`.
-    Truncate { path: String },
+    /// `: > P`. `content`: see [`FsOp::Append`].
+    Truncate {
+        path: String,
+        content: Option<String>,
+    },
     /// Bytes are added at the end. Spelled `: >> P`.
-    Append { path: String },
+    ///
+    /// `content` (here and in [`FsOp::Truncate`]) is the whole text this one
+    /// call writes, when the program text determines it. Only two shapes
+    /// carry it: `open(P, M).write(C)` (an `open`-like call the reading
+    /// models, `M` a literal mode holding `w`, `x` or `a`, `.write` called
+    /// directly on that call with one positional `C` and no keyword) and
+    /// `Path(P).write_text(C)` / `.write_bytes(C)` (one positional `C`, no
+    /// keyword), where `C` is a string, or UTF-8 bytes, value the reading
+    /// resolves. Every other write (a handle written later, an `r+` open,
+    /// `os.open`, a `C` it does not resolve) has `None`: the text is NOT
+    /// read, which a host must treat as unknown text, never as empty.
+    Append {
+        path: String,
+        content: Option<String>,
+    },
     /// The mode changes. Spelled `chmod MODE -- P` (octal).
     Chmod { path: String, mode: u32 },
     /// The owner / group changes. Spelled `chown OWNER -- P`.
@@ -104,8 +121,8 @@ impl Effect {
         match op {
             FsOp::Delete { path, .. }
             | FsOp::RemoveDir { path }
-            | FsOp::Truncate { path }
-            | FsOp::Append { path }
+            | FsOp::Truncate { path, .. }
+            | FsOp::Append { path, .. }
             | FsOp::Chmod { path, .. }
             | FsOp::Chown { path, .. }
             | FsOp::MakeDir { path }
@@ -146,8 +163,8 @@ impl FsOp {
                 format!("rm {flags}-- {}", sq(path)?)
             }
             FsOp::RemoveDir { path } => format!("rmdir -- {}", sq(path)?),
-            FsOp::Truncate { path } => format!(": > {}", sq(path)?),
-            FsOp::Append { path } => format!(": >> {}", sq(path)?),
+            FsOp::Truncate { path, .. } => format!(": > {}", sq(path)?),
+            FsOp::Append { path, .. } => format!(": >> {}", sq(path)?),
             FsOp::Chmod { path, mode } => format!("chmod {mode:o} -- {}", sq(path)?),
             FsOp::Chown { path, owner } => format!("chown {} -- {}", sq(owner)?, sq(path)?),
             FsOp::Move { from, to } => format!("mv -- {} {}", sq(from)?, sq(to)?),

@@ -48,7 +48,11 @@
 //! * it has an effect (or an output redirect) AND another command on the
 //!   line may run a file (an interpreter / shell, `source` / `.` / `eval`, a
 //!   path as command word, an undetermined command word, a wrapper running
-//!   one): the legacy write-then-run readings keep judging the line;
+//!   one): the legacy write-then-run readings keep judging the line (the
+//!   files a quoted `python3 - <<'PY'` program writes are, for a Known
+//!   program, taken from these same parser effects, not from the legacy
+//!   token / substring-marker reading — `interpreter/python_written_files.rs`,
+//!   backlog 06c51772);
 //! * the neutral text does not analyse to the same commands with `pass` as
 //!   the program.
 //!

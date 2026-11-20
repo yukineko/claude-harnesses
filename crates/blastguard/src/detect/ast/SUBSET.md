@@ -350,7 +350,7 @@ replaced, and a write below its destination is an `Ask`.
 | Wrapper | Skipped before the wrapped command | Notes |
 |---|---|---|
 | `env` | options `-i -u NAME -0 -C DIR`, then `NAME=V` words | `-S` (split string) → Unsupported; `-C DIR` sets the wrapped cwd |
-| `sudo`, `doas` | options; `-u/-g/-C/-D/-h/-p/-r/-t/-U USER` take an argument | `sudo -s/-i` with no command = an implicit shell, judged like a bare shell (B.5 `b5.rs`, user ruling 2026-11-20 Q3); `sudo -e` (sudoedit) → Unsupported |
+| `sudo`, `doas` | options; `-u/-g/-C/-D/-h/-p/-r/-t/-U USER` take an argument | `sudo -s/-i` with no command = an implicit shell, judged like a bare shell (B.5 `b5.rs`, user ruling 2026-11-20 Q3); a literal stdin program (here-string, here-document) of a shell behind the wrapper is also judged by the full detector as `<shell> -c '<body>'`; `-l/--list`, `-v/--validate`, `-K/--remove-timestamp`, `-V/--version` alone run nothing, with a command word after them → Unsupported; `sudo -e` (sudoedit) → Unsupported |
 | `nice` (`-n N`), `ionice` (`-c -n -t`), `nohup`, `time` (`-p`), `stdbuf` (`-i -o -e`), `setsid`, `caffeinate` (`-d -i -m -s -u -t N -w PID`), `chrt`, `taskset` (mask/list arg), `timeout` (`DURATION`, `-s SIG`, `-k D`, `--foreground`, `--preserve-status`), `unbuffer`, `arch` (`-arch A`, `-x86_64`, `-arm64`), `flock` (lock file, `-c CMD` → Unsupported) | as listed | the flock lock file is created (`Truncate`-free create: no finding) |
 | `command`, `builtin` | as `eval::unwrap_wrappers` (`-p`, `--`); `command -v/-V` = lookup, no effect | |
 | `exec` | `-a NAME -c -l` | `exec` with redirects only: B.2 applies to the shell |

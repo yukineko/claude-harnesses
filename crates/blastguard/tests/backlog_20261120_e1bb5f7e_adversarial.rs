@@ -179,7 +179,6 @@ fn sudo_sudo_bash() {
 }
 
 #[test]
-#[ignore = "backlog RED: sudo -i <<< 'rm -rf /etc' is Allow in main and subagent (here-string stdin to implicit shell not judged)"]
 fn sudo_i_herestring_harm() {
     not_allow("f11", "sudo -i <<< 'rm -rf /etc'");
 }
@@ -279,7 +278,6 @@ fn ctl_sudo_u_root_ls() {
 }
 
 #[test]
-#[ignore = "backlog RED: sudo -l (unmodelled option) is ask in main and deny in subagent; base treated sudo as non-wrapper (allow) - new FP"]
 fn ctl_sudo_l() {
     not_deny("c3", "sudo -l");
 }
@@ -290,7 +288,6 @@ fn ctl_sudo_k() {
 }
 
 #[test]
-#[ignore = "backlog RED: sudo -v (unmodelled option) is ask in main and deny in subagent; base treated sudo as non-wrapper (allow) - new FP"]
 fn ctl_sudo_v() {
     not_deny("c5", "sudo -v");
 }

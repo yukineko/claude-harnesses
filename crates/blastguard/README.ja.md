@@ -613,6 +613,13 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   本文を外すのは heredoc 段の判定だけで、行の残り（値が分割されてできる語を含む）は従来通り
 >   `git_stage` の規則で判定する。`--trailer=$X`・`--author="$X"` のような `=` 結合の綴りは
 >   whole-tree staging 規則（option 語の中の実行時展開）で Ask になる。
+>   シェル関数を定義する行（`f() { echo hi; }; cat <<'EOF'` …、backlog e79485cb）も AST 段
+>   （`heredoc_data`、`analyze_with_function_definitions`）が判定する。引用付き本文は、
+>   読み手が本物の `cat`/`tee`/`git` で、行のどこも書き込み先ファイルを後で実行しない間だけ
+>   外す。定義した関数名が読み手の語と同じ、関数 body を含むどのコマンドも
+>   `eval`・`source`・`.`・`sh -c`・インタプリタ等（program source）を持つ、`alias`・`hash`・
+>   `enable`・`shopt`・`setopt`・`PATH` がある、body が書き込み先のパスを名指しする、
+>   関数の呼び出しが pipe/リダイレクトの stdin を持つ、のいずれかなら本文を残す。
 >   0.2.388 以降（backlog 0fccf1eb）、`>` / `>>` の書き込み先の語は改行をまたいで読まない
 >   （空白・タブだけを飛ばす。`src/detect/redirect.rs` の `skip_redirect_word_gap`）。行末の
 >   `>`（改行またはテキスト末尾の直前）は書き込み先を持たず、シェルでは本文データか構文エラーで

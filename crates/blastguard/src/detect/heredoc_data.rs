@@ -69,6 +69,20 @@
 //!   newline only (a CR, NBSP, zero-width or look-alike character is where
 //!   the parser and the executing shell may disagree).
 //!
+//! A line that defines shell functions (`f() { echo hi; }; cat <<'EOF' …`) is
+//! parsed with `ast::analyze_with_function_definitions` (backlog e79485cb):
+//! the body commands of the functions are judged by the same conditions, and
+//! a quoted body is removed only while the reader is the real `cat` / `tee` /
+//! `git` and nothing on the line later runs the landing file. Every body is
+//! kept when a defined function name equals the reader word, when any command
+//! (function bodies included) has a program source (`eval`, `source`, `.`,
+//! `sh -c`, an interpreter, a wrapper) or fails the checks above
+//! (`alias`, `hash`, `enable`, `shopt`, `setopt`, `PATH`, a landing path
+//! named), when a call of a defined function has a piped or redirected stdin,
+//! or when a call of a defined function names a landing path (a function is
+//! not the inert tool of the same name). A quoted body is never expanded, so
+//! `$(f)` in it is text, not a call of `f`.
+//!
 //! A command longer than `ast::MAX_PARSE_BYTES` is not parsed whole (ruling
 //! 2026-11-16). There the one quoted heredoc to a non-shell code file that
 //! `heredoc::quoted_code_file_here_document_parts` splits off is removed only
@@ -132,7 +146,11 @@ fn removed_bodies(cmd: &str) -> Option<(String, bool)> {
     if cmd.len() > ast::MAX_PARSE_BYTES {
         return over_cap_view(cmd);
     }
-    let Analysis::Known(script) = ast::analyze(cmd) else {
+    // The one consumer of the function-definition-aware entry point (backlog
+    // e79485cb): a line that defines shell functions is Known here, with the
+    // body commands emitted, and `data_bodies` keeps every body unless the
+    // function rules hold.
+    let Analysis::Known(script) = ast::analyze_with_function_definitions(cmd) else {
         return None;
     };
     let (spans, unsure) = data_bodies(&script, cmd)?;
@@ -218,13 +236,16 @@ fn data_bodies(script: &Script, text: &str) -> Option<(Vec<Range<usize>>, bool)>
     if spans.is_empty() {
         return None;
     }
+    if script.has_function_definition && !functions_harmless(script, &readers) {
+        return None;
+    }
     let mut unsure = false;
     for (i, c) in script.commands.iter().enumerate() {
         if !runs_no_landing_file(script, i, c, &landing) {
             return None;
         }
         if !readers.contains(&i) {
-            match names_landing_path(c, &landing) {
+            match names_landing_path(c, &landing, &script.function_names) {
                 Naming::Clear => {}
                 Naming::Undetermined => unsure = true,
                 Naming::Names => return None,
@@ -232,6 +253,56 @@ fn data_bodies(script: &Script, text: &str) -> Option<(Vec<Range<usize>>, bool)>
         }
     }
     Some((spans, unsure))
+}
+
+/// The extra conditions when the line defines shell functions (backlog
+/// e79485cb). The body commands of every function are in `script.commands`, so
+/// the per-command checks of [`data_bodies`] already cover them; this adds
+/// what only a function can do. `false` keeps every body when:
+///
+/// * a defined function name equals a reader word (`cat() { sh; }; cat <<'EOF'`
+///   runs the function, not the real reader);
+/// * any command of the line, function bodies included, has a
+///   `program_source` (`eval`, `source`, `.`, `sh -c`, an interpreter, a
+///   wrapper): it can run the landing file or redefine a command;
+/// * a call of a defined function reads a redirected or piped stdin (its body
+///   could pass that to something that runs it).
+///
+/// `alias` / `hash` / `enable` / `shopt` / `setopt` / `PATH` are refused for
+/// every command by `runs_no_landing_file`, and a landing path named by a body
+/// command by [`names_landing_path`].
+fn functions_harmless(script: &Script, readers: &[usize]) -> bool {
+    let defined = |c: &SimpleCommand| {
+        matches!(c.argv.first().map(|w| &w.value),
+            Some(Value::Literal(h)) if script.function_names.contains(h))
+    };
+    for (i, c) in script.commands.iter().enumerate() {
+        if readers.contains(&i) && defined(c) {
+            return false;
+        }
+        if program_source(c).is_some() {
+            return false;
+        }
+        if defined(c) {
+            if matches!(c.context, Context::Pipeline { pos, .. } if pos > 0) {
+                return false;
+            }
+            let stdin_redirected = c.redirects.iter().any(|r| {
+                matches!(
+                    r.op,
+                    RedirOp::In
+                        | RedirOp::InOut
+                        | RedirOp::DupIn
+                        | RedirOp::HereDoc
+                        | RedirOp::HereString
+                )
+            });
+            if stdin_redirected {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Whether a command names a landing path ([`names_landing_path`]).
@@ -272,7 +343,7 @@ fn cargo_test_or_build(c: &SimpleCommand) -> bool {
 /// or only reads it ([`reads_only`]). A command not known to only read what it
 /// names may run it (`rustc x.rs`, `chmod +x x.rs`, `rg --pre sh . src`). An
 /// undetermined or empty command word is [`Naming::Names`].
-fn names_landing_path(c: &SimpleCommand, landing: &[String]) -> Naming {
+fn names_landing_path(c: &SimpleCommand, landing: &[String], functions: &[String]) -> Naming {
     let Some(Value::Literal(head)) = c.argv.first().map(|w| &w.value) else {
         return if c.argv.is_empty() {
             Naming::Clear
@@ -282,7 +353,13 @@ fn names_landing_path(c: &SimpleCommand, landing: &[String]) -> Naming {
     };
     // No body lands in a file (terminal, `/dev/null`, a `$( )` word): there is
     // nothing for any word to name.
-    if landing.is_empty() || reads_only(head) || cargo_test_or_build(c) {
+    if landing.is_empty() {
+        return Naming::Clear;
+    }
+    // A defined function is not the inert tool of the same name: its body
+    // decides what it does with its arguments (`ls() { xargs "$@"; }`).
+    let shadowed = functions.iter().any(|f| f == head);
+    if !shadowed && (reads_only(head) || cargo_test_or_build(c)) {
         return Naming::Clear;
     }
     let lower: Vec<String> = landing.iter().map(|l| l.to_ascii_lowercase()).collect();

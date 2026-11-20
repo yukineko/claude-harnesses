@@ -601,7 +601,11 @@ pub(super) fn program_body_segments_fed_to(cmd: &str, reader: impl Fn(&str) -> b
 /// OVER-BLOCKS, accepted: anything after the close (`…EOF` then
 /// `git add notes.md`) or before the opener (`X=1`) makes the body judged as
 /// code, so a body that merely mentions a destructive command is denied or
-/// asked there. That is the restrictive direction.
+/// asked there. That is the restrictive direction. A line that DEFINES shell
+/// functions (`f() { echo hi; }; cat <<'EOF' …`) is not covered by this
+/// function at all: `heredoc_data` (backlog e79485cb) removes its quoted body
+/// when the reader is the real `cat` / `tee` / `git` and nothing on the line
+/// later runs the landing file, and keeps it otherwise.
 ///
 /// RESIDUALS, not covered:
 ///   * a data file written here can be executed by a LATER, separate tool

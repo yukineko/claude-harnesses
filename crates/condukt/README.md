@@ -173,6 +173,47 @@ effectively a deny there. Whether an `ask` resolves the same way inside a
 subagent has **not yet been measured** for testscope; that measurement is the
 remaining part of R10 and is recorded here once taken.
 
+### Merge proof contract (backlog 7768aeaf)
+
+`condukt worktree merge` and `condukt worktree resolve-merge` refuse to land a
+task whose decomposition `kind` is `fix` or `feature` unless its real `tdd`
+RED/GREEN proofs satisfy the items below (spec
+`specs/condukt-merge-proof-contract-7768aeaf.toml`). A refusal exits non-zero,
+leaves the default branch untouched, and names every violated item on stderr by
+its token:
+
+| token | refused when |
+|---|---|
+| `merge-proof-contract(i)` | the task has no proof file (`*.red.json` / `*.green.json`) at all |
+| `merge-proof-contract(missing-green)` | a RED slot's `cmd` is recorded by no GREEN slot (a GREEN slot without a RED one is not a refusal) |
+| `merge-proof-contract(f)` | on some GREEN slot, a name in `red_failed_tests` is not `"pass"` in `tests` |
+| `merge-proof-contract(g)` | on some GREEN slot, `counts.determined` is true and `counts.passed` is 0 |
+| `merge-proof-contract(h)` | on some GREEN slot, `tree_identity.tree` differs from the branch tip's commit tree with `.tdd` and tdd's effective proof dir removed |
+| `merge-proof-contract(undetermined-proof)` | a proof input cannot be judged: `red_failed_tests`, `tests`, `counts`, `tree_identity` or its `tree` missing / null, `counts.determined` false, a `cmd` missing, an unreadable or unparsable proof, a proof dir that cannot be listed, a tip tree that cannot be computed, worktree and archive copies with different content, proofs in more than one of the worktree's `proof_dir_candidates`, a proof dir that cannot be placed. Old-layout hand-written proofs (no per-test fields) are refused here |
+| `merge-proof-contract(undetermined-task)` | the task is named or resolved, but its run state cannot be read (including a run that does not exist), the task is not in it, or its decomposition entry or `kind` cannot be read |
+
+- **Slot set**: every slot tdd's `slot_files` enumerates — the legacy
+  `<task>.<kind>.json` and every `<task>.<16 hex>.<kind>.json`. f, g and h are
+  judged on **every** GREEN slot.
+- **Proof source**: the proof dirs of the worktree that has the branch checked
+  out; when none of them holds a proof of the task, the proof archive
+  (`<run dir>/<run>.tdd-proofs/<task>/.tdd`, written before a worktree
+  teardown). A `.tdd/` committed at the branch tip is **never** a proof source.
+- **(h) exclusion**: the tip tree is the tip commit's tree with `.tdd` and tdd's
+  effective proof dir (relative to the worktree, or the repo when the worktree
+  is gone) removed — the same paths tdd leaves out of `tree_identity.tree` — so
+  committing only proof files after `tdd green` does not trip (h). Not
+  reproduced: tdd builds its tree with `git add -A`, which skips a committed
+  file that matches `.gitignore`; such a file makes (h) refuse.
+- **Scope**: the task is the `--run/--task` pair of `worktree merge`, else
+  `branch.<b>.conduktTask` (`resolve-merge` uses only the record). A branch with
+  neither is task-less and not checked; a `kind` other than fix/feature is not
+  checked. `worktree merge` checks before the hold gate and the trial merge, so
+  a refused branch leaves no hold or conflict record. `resolve-merge` checks
+  Theirs before merging and a cleanly mergeable Manual right before its commit
+  (a violation is rolled back: no commit, no merge in progress); Ours and a
+  Manual that leaves conflict markers are not checked.
+
 ## Install
 
 ### Plugin (recommended)

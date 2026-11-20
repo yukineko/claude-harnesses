@@ -81,7 +81,7 @@
     {
       "name": "blastguard",
       "description": "PreToolUse hook that denies or asks before project-destroying Bash commands and file operations, as a single self-contained Rust binary.",
-      "version": "0.2.833",
+      "version": "0.2.834",
       "category": "security",
       "keywords": [
         "hooks",
@@ -180,7 +180,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: schedules parallel and serial task batches by file-conflict analysis, manages git worktrees, tracks run state and gates completion.",
-      "version": "0.7.457",
+      "version": "0.7.458",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -428,8 +428,8 @@
     },
     {
       "name": "flow",
-      "description": "Backlog-draining loop skill for Claude Code that picks tasks from sources such as compass, backlog and hypothesis and hands them to condukt for execution, without locking the whole queue.",
-      "version": "0.2.39",
+      "description": "Backlog-draining loop skill for Claude Code that picks tasks from sources such as compass, backlog and hypothesis and hands them to condukt until the queue is empty, plus a Stop hook (flow stop-gate) that keeps a registered driver running while work remains; only the condukt circuit breaker stops it.",
+      "version": "0.2.41",
       "category": "orchestration",
       "keywords": [
         "flow",

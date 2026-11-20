@@ -16,8 +16,9 @@
 //! and a human ruling is needed to keep or drop it.
 //!
 //! Controls: (1) `state check-oracle` reports the proof-less task as invalid
-//! (so the fixture task really requires the oracle); (2) with valid proofs the
-//! same merge succeeds.
+//! (so the fixture task really requires the oracle); (2) with real good tdd
+//! proofs the same merge succeeds; (3) hand-written old-layout proofs are
+//! refused (re-anchored per user ruling 2026-11-20, see the controls below).
 //!
 //! DOES NOT PROVE: which layer should refuse (merge vs a pre-merge command);
 //! proof validity beyond what `tdd oracle` accepts; behaviour for non
@@ -252,7 +253,6 @@ fn merge(f: &Fx) -> Output {
 }
 
 #[test]
-#[ignore = "RED worktree merge lands a fix task that has no tdd proofs"]
 fn merge_of_fix_task_without_tdd_proofs_is_refused() {
     let f = setup();
     assert!(!f.wt.join(".tdd").exists(), "fixture: no proofs");
@@ -340,11 +340,70 @@ fn assert_refused(f: &Fx, why: &str) {
     );
 }
 
+/// `SCRIPT` with complete libtest `test result:` lines (passed; failed;
+/// ignored), so tdd records `counts.determined: true`. `SCRIPT`'s none/good/
+/// lost lines omit `ignored`, which tdd's parser requires, so their GREEN
+/// counts are undetermined (crates/tdd/src/evidence.rs parse_result_line).
+const SCRIPT_COUNTED: &str = "mode=none; [ -f mode.txt ] && mode=$(cat mode.txt)
+case $mode in
+  none) echo 'test m::a ... ok'; echo 'test m::b ... FAILED'; echo 'test result: FAILED. 1 passed; 1 failed; 0 ignored'; exit 1;;
+  good) echo 'test m::a ... ok'; echo 'test m::b ... ok'; echo 'test result: ok. 2 passed; 0 failed; 0 ignored'; exit 0;;
+esac
+";
+
+/// Like [`record_real_proofs`], but `t.sh` and `mode.txt` are committed (with
+/// the trailer) before each phase, so GREEN's `tree_identity.tree` is the
+/// branch tip's tree.
+fn record_real_proofs_committed(f: &Fx, red_mode: &str, green_mode: &str) {
+    let cmd = "sh t.sh";
+    let commit = |msg: &str| {
+        git(&f.wt, &["add", "t.sh", "mode.txt"]);
+        git(
+            &f.wt,
+            &[
+                "commit",
+                "-q",
+                "-m",
+                msg,
+                "--trailer",
+                &format!("Condukt-Task: {RUN}/t1"),
+            ],
+        );
+    };
+    std::fs::write(f.wt.join("t.sh"), SCRIPT_COUNTED).unwrap();
+    std::fs::write(f.wt.join("mode.txt"), red_mode).unwrap();
+    commit("add test");
+    tdd_in(f, &["red", "--task", "t1", "--cmd", cmd]);
+    std::fs::write(f.wt.join("mode.txt"), green_mode).unwrap();
+    commit("make it pass");
+    tdd_in(f, &["green", "--task", "t1", "--cmd", cmd]);
+}
+
 /// Control: real proofs, green passes everything red failed, same tree.
+///
+/// Re-anchored per user ruling 2026-11-20 (spec
+/// condukt-merge-proof-contract-7768aeaf R8, round 4 Q-A/Q-B): the merge now
+/// compares GREEN's tree with the branch tip's commit tree (h) and refuses
+/// undetermined counts, so the fixture commits `t.sh` and `mode.txt` before
+/// `tdd green` and prints complete `test result:` lines. Intent unchanged:
+/// real good proofs merge.
 #[test]
 fn control_merge_with_real_good_proofs_succeeds() {
     let f = setup();
-    record_real_proofs(&f, "none", "good");
+    record_real_proofs_committed(&f, "none", "good");
+    let green: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(f.wt.join(".tdd/t1.green.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        green["tree_identity"]["tree"].as_str(),
+        Some(git(&f.repo, &["rev-parse", &format!("{}^{{tree}}", f.branch)]).as_str()),
+        "control precondition: GREEN was taken on the branch tip tree: {green}"
+    );
+    assert_eq!(
+        green["counts"]["determined"].as_bool(),
+        Some(true),
+        "control precondition: GREEN counts are determined: {green}"
+    );
     let out = merge(&f);
     assert!(
         out.status.success(),
@@ -354,7 +413,6 @@ fn control_merge_with_real_good_proofs_succeeds() {
 }
 
 #[test]
-#[ignore = "RED merge ignores that a test failed at RED is absent from GREEN's passed set (f)"]
 fn merge_refused_when_green_passed_set_misses_a_red_failure() {
     let f = setup();
     record_real_proofs(&f, "none", "lost");
@@ -366,7 +424,6 @@ fn merge_refused_when_green_passed_set_misses_a_red_failure() {
 }
 
 #[test]
-#[ignore = "RED merge ignores a GREEN proof with zero passed tests (g)"]
 fn merge_refused_when_green_pass_count_is_zero() {
     let f = setup();
     record_real_proofs(&f, "nocompile", "zero");
@@ -377,7 +434,6 @@ fn merge_refused_when_green_pass_count_is_zero() {
 }
 
 #[test]
-#[ignore = "RED merge ignores that GREEN was taken on a different tree than the one merged (h)"]
 fn merge_refused_when_tree_changed_after_green() {
     let f = setup();
     record_real_proofs(&f, "none", "good");
@@ -401,21 +457,37 @@ fn merge_refused_when_tree_changed_after_green() {
     );
 }
 
-/// Control: same fixture with valid proofs merges.
+/// Control: old-layout hand-written proofs are refused.
+///
+/// Re-anchored per user ruling 2026-11-20 (spec
+/// condukt-merge-proof-contract-7768aeaf R5, round 1): was
+/// `control_merge_with_valid_tdd_proofs_succeeds`, asserting that these
+/// hand-written proofs merge. They satisfy `tdd oracle` (precondition kept),
+/// but carry no `red_failed_tests` / `counts` / `tree_identity`, so the merge
+/// contract cannot judge them and must refuse (`undetermined-proof`). The
+/// "valid proofs merge" intent now lives in
+/// `control_merge_with_real_good_proofs_succeeds` (real tdd output).
 #[test]
-fn control_merge_with_valid_tdd_proofs_succeeds() {
+fn control_merge_with_old_layout_hand_written_proofs_is_refused() {
     let f = setup();
     write_valid_proofs(&f.wt);
     let v = check_oracle(&f);
     assert_eq!(
         v.get("valid_fp_oracle").and_then(|x| x.as_bool()),
         Some(true),
-        "control precondition: proofs form a valid oracle: {v}"
+        "control precondition: the hand-written proofs satisfy the F->P oracle: {v}"
     );
+    let before = git(&f.repo, &["rev-parse", "main"]);
     let out = merge(&f);
+    let after = git(&f.repo, &["rev-parse", "main"]);
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
-        out.status.success(),
-        "control: merge with valid proofs must succeed; stderr={}",
-        String::from_utf8_lossy(&out.stderr)
+        !out.status.success()
+            && after == before
+            && stderr.contains("merge-proof-contract(undetermined-proof)"),
+        "old-layout hand-written proofs must be refused with \
+         merge-proof-contract(undetermined-proof) and leave main untouched; \
+         exit={:?} main {before} -> {after}; stderr={stderr}",
+        out.status.code()
     );
 }

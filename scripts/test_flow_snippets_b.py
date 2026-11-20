@@ -369,7 +369,16 @@ class TestCarveSentinel(unittest.TestCase):
         ap = sb.run(["compass", "apply", "--answer", json.dumps(ans)], linked)
         self.assertEqual(ap.returncode, 0, ap.stderr)
         self.assertEqual(json.loads(ap.stdout)["status"], "sentinel")
-        skill_has("`sentinel` に落ちた場合は")
+        # re-anchored 2026-11-21 (tC): 「`sentinel` に落ちた場合は … ループを終えること（Step 4 へ）」
+        # (a carve the human walked away from stops the loop) -> ruling 2026-11-21 (only the
+        # circuit breaker stops /flow): a carve that cannot finish does not stop the loop — the
+        # item is cancelled/left with the reason and the loop continues. So no SKILL line may tie
+        # `sentinel` to a stop, unless it is the explicit negation (止めない / 止まらない).
+        stop_words = ("停止", "止め", "ループを終え", "Step 4")
+        bad = [l for l in skill_text().splitlines()
+               if "sentinel" in l and any(w in l for w in stop_words)
+               and not any(n in l for n in ("止めない", "止まらない"))]
+        self.assertEqual(bad, [], "SKILL.md still stops the loop on a carve `sentinel`")
 
     def test_claim_carve_sentinel_no_defer_stays_open(self):
         sb, _primary, linked = compass_fixture(self, charter=False)
@@ -949,12 +958,6 @@ def _section(text, start_pat, level_prefix):
     raise AssertionError(f"SKILL.md has no section matching {start_pat!r}")
 
 
-def _first_bash_block(section):
-    m = re.search(r"```bash\n(.*?)```", section, re.S)
-    assert m, "section has no fenced bash block"
-    return m.group(1)
-
-
 class TestBudgetCheck(unittest.TestCase):
     """The 3-1 budget pre-check: `budgetguard check`, exit 0 only = proceed."""
 
@@ -973,10 +976,17 @@ class TestBudgetCheck(unittest.TestCase):
         return p
 
     def _cmd(self):
-        block = _first_bash_block(_section(skill_text(), r"^#### 3-1\. ", "#### "))
-        lines = [re.sub(r"\s{2,}#.*$", "", l).strip() for l in block.splitlines()]
+        # re-anchored 2026-11-21 (tC): `budgetguard check` is the FIRST bash block of 3-1 and its
+        # nonzero exit sends the loop to Step 4 -> ruling 2026-11-21 (budget over/undetermined is no
+        # longer an early exit; budget is information / batch-width only) and 3-1 now opens with a
+        # fenced `backlog sync`, so every 3-1 fence is searched. The exit-code tests below pin what
+        # the width decision reads (exit 0 + pressure), not an exit path.
+        sec = _section(skill_text(), r"^#### 3-1\. ", "#### ")
+        blocks = re.findall(r"```bash\n(.*?)```", sec, re.S)
+        self.assertTrue(blocks, "3-1 has no fenced bash block")
+        lines = [re.sub(r"\s{2,}#.*$", "", l).strip() for b in blocks for l in b.splitlines()]
         cmds = [l for l in lines if l.startswith("budgetguard check")]
-        self.assertEqual(len(cmds), 1, f"3-1 bash block lacks `budgetguard check`: {block!r}")
+        self.assertEqual(len(cmds), 1, f"3-1 fences hold {len(cmds)} `budgetguard check` lines: {blocks!r}")
         return cmds[0]
 
     def _run(self, config=None, ledger=None, with_binary=True):
@@ -1035,7 +1045,9 @@ class TestBudgetCheck(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r)
 
     def test_claim_budget_missing_binary_is_nonzero(self):
-        # Not in PATH => the shell reports 127; "exit 0 以外 -> Step 4" must catch it.
+        # Not in PATH => the shell reports 127. re-anchored 2026-11-21 (tC): "exit 0 以外 -> Step 4"
+        # -> budget is information / batch-width only: a missing binary is "not exit 0", i.e. the
+        # budget is undetermined, so it must never read as "within, no pressure" (full batch width).
         r = self._run(self.CFG, self._today_ledger(1.0), with_binary=False)
         self.assertNotEqual(r.returncode, 0, r)
 

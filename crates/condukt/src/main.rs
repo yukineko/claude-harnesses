@@ -556,8 +556,12 @@ enum WtAction {
         /// must then carry `Condukt-Task: <run>/<task>` (a recorded
         /// `branch.<b>.conduktTask` must agree with the pair), and on success
         /// `merge_completed_at` is stamped on that task (set-once). Omit both
-        /// for a merge with no task association: no trailer check, even when a
-        /// `conduktTask` record exists. Giving only one of the two refuses
+        /// and no trailer check runs, even when a `conduktTask` record exists;
+        /// the merge proof contract (backlog 7768aeaf, README "Merge proof
+        /// contract") still resolves the task from that record. Only a branch
+        /// with neither the pair nor a record is task-less (no contract check).
+        /// A fix/feature task is refused (`merge-proof-contract(<item>)`)
+        /// without valid real tdd proofs. Giving only one of the two refuses
         /// (`merge-task-undetermined`). condukt's own merges always name the
         /// task.
         #[arg(long)]
@@ -573,6 +577,8 @@ enum WtAction {
     /// Theirs→`merge -X theirs`, Manual→materialize markers for a human to finish.
     /// The `Condukt-Task` trailer guard applies only when the held merge named
     /// a task (the hold's `task_named`); a hold without that flag applies it.
+    /// Theirs and a clean Manual enforce the merge proof contract (task from
+    /// `conduktTask`); a violating clean Manual is rolled back.
     ResolveMerge {
         #[arg(long)]
         id: String,

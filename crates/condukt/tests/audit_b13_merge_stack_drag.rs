@@ -56,6 +56,38 @@ fn condukt(dir: &Path, home: &Path, args: &[&str]) -> Output {
         .expect("condukt")
 }
 
+/// Run state for `run` holding `task` at kind=chore.
+///
+/// Re-anchored per user ruling 2026-11-20 round 4 Q-A (backlog 7768aeaf,
+/// spec condukt-merge-proof-contract-7768aeaf R5/R6): a merge of a branch
+/// with a `conduktTask` record now reads the task's kind from run state, and
+/// an absent run is `merge-proof-contract(undetermined-task)`. kind=chore is
+/// outside the proof contract; the property this file guards is unchanged.
+fn init_chore_run(repo: &Path, home: &Path, run: &str, task: &str) {
+    let dec = home.join(format!("{run}.chore-decomposition.json"));
+    std::fs::write(
+        &dec,
+        format!(r#"{{"goal":"g","tasks":[{{"id":"{task}","title":"t","kind":"chore"}}]}}"#),
+    )
+    .unwrap();
+    let out = condukt(
+        repo,
+        home,
+        &[
+            "state",
+            "init",
+            "--run",
+            run,
+            "--file",
+            dec.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "fixture: state init {run} (kind=chore): {out:?}"
+    );
+}
+
 fn commit(dir: &Path, file: &str, trailer: Option<&str>) -> String {
     std::fs::write(dir.join(file), format!("{file}\n")).unwrap();
     git(dir, &["add", file]);
@@ -89,6 +121,7 @@ fn scenario(tmp: &Path, stacked: bool) -> (PathBuf, String, String, Output) {
         git(&repo, &["checkout", "-q", "-b", "feat"]);
         feature = commit(&repo, "feat.txt", None);
     }
+    init_chore_run(&repo, &home, "runB", "t1");
     let out = condukt(
         &repo,
         &home,

@@ -147,9 +147,14 @@ fn runtime_overlap_hold_from_live_run_with_zero_claims_still_blocks_merge() {
     let fx = Fixture::new("holdliveness");
     // t3 stays pending, so the run-state is non-terminal (the run is live).
     // No task is ever set `running`, so the run never holds any claim.
+    // t2 (the merged task) is kind=chore: re-anchored per user ruling
+    // 2026-11-20 round 4 Q-A (backlog 7768aeaf) — a named merge now reads the
+    // task's kind, and a task with no kind is
+    // `merge-proof-contract(undetermined-task)`; chore is outside the proof
+    // contract, so the hold-liveness property is unchanged.
     let decomp = r#"{"goal":"g","tasks":[
         {"id":"t1","title":"A","touched_files":["a1.rs"],"deps":[],"class":"parallel","done_criteria":"done"},
-        {"id":"t2","title":"B","touched_files":["b1.rs"],"deps":[],"class":"parallel","done_criteria":"done"},
+        {"id":"t2","title":"B","kind":"chore","touched_files":["b1.rs"],"deps":[],"class":"parallel","done_criteria":"done"},
         {"id":"t3","title":"C","touched_files":["c1.rs"],"deps":[],"class":"parallel","done_criteria":"done"}
     ]}"#;
     let rid = fx.init_run(decomp);

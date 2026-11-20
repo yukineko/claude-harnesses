@@ -720,38 +720,6 @@ exit 101: .680 (/Users/yuki/src/.harness-worktrees/red-py-marker-fp-20261117/cra
 error: test failed, to rerun pass `-p blastguard --test backlog_20261117_python_heredoc_marker_fp`"""
 
 [[task]]
-id = "7768aeaf"
-title = "condukt merge: fix task merges without tdd proofs / without GREEN covering RED / with zero passes / with tree changed after GREEN"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "fail-open",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = """User ruling 2026-11-17 (proof contract f,g,h,i). RED 25a27ee67 crates/condukt/tests/backlog_20261117_merge_without_tdd_proofs.rs (4 ignored REDs, 2 controls pass). Observed: merge exit=Some(0) stdout=merged 'run-nomerge-proofs/t1' into main. | RULED 2026-11-20 by user in /flow (session 62e92d16; specforge divert, spec id condukt-merge-proof-contract-7768aeaf, NOT yet ratified: rigor still fails after 4 rounds). Rulings verbatim: User rulings 2026-11-20 (AskUserQuestion, answering specforge rigor gaps): - Old-layout proofs (no tree_identity / tests / counts / red_failed_tests) are REFUSED by merge (fail-closed). control_merge_with_valid_tdd_proofs_succeeds is a frozen assert on a stale premise: an independent agent (not the implementer) re-anchors it to a control asserting that old-layout hand-written proofs are refused, and the "valid proofs succeed" control is carried by real tdd red/green proofs. - (h) comparison target = the branch tip's COMMIT tree (what actually lands on main), compared with green.tree_identity.tree. control_merge_with_real_good_proofs_succeeds currently records GREEN with t.sh / mode.txt untracked; an independent agent re-anchors it so the fixture commits those files before tdd green (so GREEN's tree equals the commit tree), keeping its intent "real good proofs merge". - Slots: (f), (g), (h) are required for EVERY GREEN slot of the task (every <task>.<16hex>.<kind>.json); if any slot is missing, undeterminable (red_failed_tests null, counts.determined false, tree_identity null/undetermined) or fails, merge is refused, with the reason on stderr. - Applies only to tasks with requires_fp_oracle() == true (kind fix/feature). - Document the contract in crates/condukt/README.md (section "Merge proof contract (backlog 7768aeaf)"). User rulings 2026-11-20 round 2 (AskUserQuestion, answering specforge rigor gaps; these refine and override the round-1 "Slots" line above): - Slot set = every GREEN slot slot_files() enumerates: the legacy name <task>.green.json AND the hashed names <task>.<16hex>.green.json. (The "<task>.<16hex>.<kind>.json" in round 1 was shorthand; legacy-named slots are included.) - "missing" = a RED slot (same cmd) with no corresponding GREEN slot → refuse. A GREEN slot without a RED slot is NOT by itself a refusal reason under this rule. A task with no proof files at all is refused by R1 (i). - (h) comparison: green.tree_identity.tree is compared with the branch tip's commit tree with the proof dir removed (.tdd and the configured proof dir), the same exclusion tdd applies when computing tree_identity.tree. Committing proof files therefore does not by itself cause a mismatch. - Isolation acceptance: an independent agent (not the implementer) adds tests proving each of (f), (g), (h) is effective on its own: fixtures that commit t.sh / mode.txt before recording real tdd red/green (so (h) holds and only the targeted check can refuse), and assertions on the refusal reason printed to stderr naming the violated item. These tests must be observed RED before the fix. User rulings 2026-11-20 round 3 (AskUserQuestion, merge proof contract scope): - Q1 task-less merge: when `condukt worktree merge` is run without --run/--task, the task is resolved from the branch's branch.<b>.conduktTask record and the contract is applied to it. (A branch with no conduktTask record stays a task-less merge, out of the contract, as main.rs:557 says.) Revise the main.rs:557-560 doc text in the same commit. - Q2 resolve-merge: the contract also applies to `condukt worktree resolve-merge`; (h) compares against the branch tip at resolve time (what actually lands on main). - Q3 undeterminable kind: for a merge that names (or resolves via conduktTask) a task, refuse when the task is absent from run state, when run state cannot be read, and when the task's kind is absent. This is a merge-time fail-closed rule; requires_fp_oracle()'s own semantics (absent → false) are unchanged for other callers. - Ordering: the contract check runs BEFORE the trial merge and the hold gate, so a contract-violating branch is refused non-zero (main untouched) even if it would conflict or be held. User rulings 2026-11-20 round 4 (AskUserQuestion): - Q-A: crates/condukt/tests/task_trailer_merge.rs success fixtures (all_commits_trailered_merges and the others naming --run runA --task t1 without run state, e.g. :297, :306) are re-anchored by an independent agent: the fixture runs `condukt state init` with a task of kind=chore, so the merge is outside the proof contract and the trailer property they guard is unchanged. Any other existing test that merges a named task without run state is handled the same way (kind=chore re-anchor) when it turns red, and each such re-anchor is listed in the result. - Q-B: crates/condukt/tests/backlog_20261117_b2d9cb6b_retry_merge_task.rs:162 (kind=fix, no .tdd/) is a proxy assert for retry-worktree identity resolution; an independent agent re-anchors it by adding real tdd red/green proofs to the fixture (kind stays fix). - Q-C: resolve-merge identifies the task by the branch.<b>.conduktTask record (same rule as Q1; no record → task-less, outside the contract). The contract applies only to resolve outcomes that land the branch's content on main; Manual (markers only, nothing lands) and Ours (merge -s ours, branch content does not land) are outside it. - Q-D: refusal stderr names the violated item with the token `merge-proof-contract(<item>)`, items: i, f, g, h, missing-green, undetermined-proof, undetermined-task. Documented in crates/condukt/README.md "Merge proof contract (backlog 7768aeaf)". Isolation tests assert these tokens. | OPEN (round 5, specforge rigor, unanswered): Q-E resolve-merge Manual can land a clean merge (worktree.rs:1617-1635) contradicting 'Manual outside' - choose (a) check before trial merge, (b) check before commit + rollback, (c) keep Manual out. Q-F proof source at merge/resolve-merge (worktree / archive dir / branch-tip .tdd), conflict handling between sources, multiple proof_dir candidates."""
-created_at = 1794868812
-updated_at = 1795161623
-weight = 0.0
-issue_number = 1842
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1842"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261117_merge_without_tdd_proofs -- --ignored"
-rev = "9f1ad7438b27dee634223982a612de3266f60211"
-observed_at = 1794868812
-detail = """
-exit 101: t: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 2 filtered out; finished in 2.15s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
-     Running tests/backlog_20261117_merge_without_tdd_proofs.rs (target/debug/deps/backlog_20261117_merge_without_tdd_proofs-ca6ac8c8d696119a)
-error: test failed, to rerun pass `-p condukt --test backlog_20261117_merge_without_tdd_proofs`"""
-
-[[task]]
 id = "2d2ef773"
 title = "blastguard FP: python3 - heredoc whose Python body only rewrites ignore-label strings (containing the word 'truncate') is Denied as shell truncate ('truncate can shrink a file to zero bytes')"
 project = "/Users/yuki/src/harness"
@@ -3019,3 +2987,108 @@ exit 101: 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
      Running tests/backlog_20261121_sudo_shell_cmd_and_undet_value.rs (target/debug/deps/backlog_20261121_sudo_shell_cmd_and_undet_value-68db974a4f669647)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_sudo_shell_cmd_and_undet_value`"""
+
+[[task]]
+id = "fa5d751c"
+title = "flow prose tests: test_claim_gap_route_gap_keys sees extra key discovery_dedup in compass gap output (stale key set vs compass)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "compass",
+    "prose-test",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-21 at main feff2e612 (also at condukt tC worktree 56394216c): FAIL test_claim_gap_route_gap_keys, scripts/test_flow_snippets_b.py:320 assertEqual(set(json.loads(r.stdout)), self.GAP_KEYS) -> AssertionError: Items in the first set but not the second: 'discovery_dedup'. Readings: (a) compass gap legitimately gained discovery_dedup and the test's GAP_KEYS (and the SKILL.md claim it backs) is stale; (b) compass leaks a key it should not emit. Tell apart: git log -S discovery_dedup -- crates/compass and whether docs/SKILL describe it."
+created_at = 1795197703
+updated_at = 1795197703
+weight = 0.0
+issue_number = 1908
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1908"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_flow_snippets_b.py::TestGapRoute::test_claim_gap_route_gap_keys"
+rev = "feff2e612c96c964d5ca6abcd8710df749343479"
+observed_at = 1795197703
+detail = """
+exit 1: AP_KEYS)
+E       AssertionError: Items in the first set but not the second:
+E       'discovery_dedup'
+
+scripts/test_flow_snippets_b.py:320: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_flow_snippets_b.py::TestGapRoute::test_claim_gap_route_gap_keys
+============================== 1 failed in 0.84s ==============================="""
+
+[[task]]
+id = "1523e3ab"
+title = "flow prose tests: test_claim_compass_outcome finds .compass/outcomes.json written in the PRIMARY tree (expected refused there)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "compass",
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-21 at main feff2e612 (also at tC 56394216c): FAIL test_claim_compass_outcome, scripts/test_flow_snippets_b.py:879 assertFalse((primary / '.compass' / 'outcomes.json').exists()) -> AssertionError: True is not false. SKILL.md claims compass outcome store writes are refused in the main (primary) working tree. Readings: (a) compass outcome no longer refuses primary-tree writes (fail-open vs CLAUDE.md §8); (b) the fixture/test premise is stale (e.g. file pre-created by another step). Tell apart: run compass outcome in a fresh primary checkout fixture and check exit code + file existence."
+created_at = 1795197851
+updated_at = 1795197851
+weight = 0.0
+issue_number = 1909
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1909"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_flow_snippets_b.py::TestCompassOutcome::test_claim_compass_outcome"
+rev = "feff2e612c96c964d5ca6abcd8710df749343479"
+observed_at = 1795197851
+detail = """
+exit 1: False((primary / ".compass" / "outcomes.json").exists())
+E       AssertionError: True is not false
+
+scripts/test_flow_snippets_b.py:870: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_flow_snippets_b.py::TestCompassOutcome::test_claim_compass_outcome
+============================== 1 failed in 1.08s ==============================="""
+
+[[task]]
+id = "76e1bb3f"
+title = "test_rebuild_current_version_only: fixture lacks askrelay (new GATE crate) so check-plugin-rollout reports UNVERIFIABLE PLUGIN and exits 3"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "deploy-verify",
+    "test-fixture",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-21 at main 99b2bff81 (and at fix/rollout-selfcontained-script): FAIL test_old_bytes_in_live_held_superseded_dir_pass, line 285 AssertionError: 3 != 0 : checker demanded a superseded dir match the build; err='UNVERIFIABLE PLUGIN (1 problem(s)) ... askrelay: GATE crate has no readable plugin.json under crates/ (deleted, renamed, or corrupted).' Readings: (a) test fixture is stale: it builds a fake crates/ without askrelay, which became a GATE crate (gate list in check-plugin-rollout/GATE_CRATES); fixture must include every GATE crate or derive the list; (b) the checker should not require GATE crates absent from the fixture repo. Tell apart: whether check-plugin-rollout takes the GATE list from the repo under test or a hard-coded list."
+created_at = 1795199570
+updated_at = 1795199570
+weight = 0.0
+issue_number = 1910
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1910"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_rebuild_current_version_only.py::CheckerAcceptsFrozenSuperseded::test_old_bytes_in_live_held_superseded_dir_pass"
+rev = "99b2bff819c79155c90a42068c4c5bdbd715136e"
+observed_at = 1795199570
+detail = """
+exit 1: enabledPlugins edit can fix this class.
+
+scripts/test_rebuild_current_version_only.py:285: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_rebuild_current_version_only.py::CheckerAcceptsFrozenSuperseded::test_old_bytes_in_live_held_superseded_dir_pass
+============================== 1 failed in 0.37s ==============================="""

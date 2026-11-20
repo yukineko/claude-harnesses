@@ -222,7 +222,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.833"
+version = "0.2.834"
 dependencies = [
  "brush-parser",
  "globset",
@@ -444,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.457"
+version = "0.7.458"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -820,7 +820,7 @@ dependencies = [
 
 [[package]]
 name = "flow"
-version = "0.2.39"
+version = "0.2.41"
 dependencies = [
  "harness-core",
  "serde_json",

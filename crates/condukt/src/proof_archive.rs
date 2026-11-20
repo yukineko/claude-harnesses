@@ -255,10 +255,48 @@ fn proof_files_in(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
+/// Every directory tdd could have written `root`'s proofs to — each of
+/// [`proof_dir_candidates`] placed against `root` (an absolute candidate is
+/// taken as is, wherever it lies), deduplicated, in candidate order — plus the
+/// `root`-relative path of tdd's EFFECTIVE proof dir (the last candidate) when
+/// it lies inside `root`, which is the path tdd excludes from a proof's
+/// `tree_identity.tree` besides `.tdd` (the merge proof contract's (h)).
+/// `Err` = a config could not be read or a candidate is a relative path that
+/// cannot be placed (`..` etc., see `proof_dir_inside`).
+pub fn proof_dir_locations(root: &Path) -> Result<(Vec<PathBuf>, Option<String>)> {
+    let candidates = proof_dir_candidates(root)?;
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut effective_rel = None;
+    for (i, d) in candidates.iter().enumerate() {
+        let p = Path::new(d);
+        let dir = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            proof_dir_inside(root, d)?.unwrap_or_else(|| root.join(p))
+        };
+        if i + 1 == candidates.len() {
+            effective_rel = dir.strip_prefix(root).ok().and_then(|rel| {
+                let parts: Vec<String> = rel
+                    .components()
+                    .filter_map(|c| match c {
+                        std::path::Component::Normal(s) => Some(s.to_string_lossy().to_string()),
+                        _ => None,
+                    })
+                    .collect();
+                (!parts.is_empty()).then(|| parts.join("/"))
+            });
+        }
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    Ok((dirs, effective_rel))
+}
+
 /// The dirs inside archive `arch` the copies are written to: every proof dir
 /// tdd could resolve with `arch` as its cwd (so `tdd oracle` run there finds
 /// them), or `.tdd` when none of those lies inside `arch`.
-fn archive_proof_dirs(arch: &Path) -> Result<Vec<PathBuf>> {
+pub fn archive_proof_dirs(arch: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     for d in proof_dir_candidates(arch)? {
         if let Some(p) = proof_dir_inside(arch, &d)? {

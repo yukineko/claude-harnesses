@@ -573,18 +573,17 @@ class TestRunOwnership(Base):
                              % (run, mine))
 
     def test_run_flag_watches_unowned_run(self):
+        # Regression guard for the fix (GREEN at base by design): the unowned
+        # rule must not override an explicit --run pin. That OTHER unowned runs
+        # stay unwatched is (c)'s job, not asserted here.
         w = self.watch(extra=["--run", "run-pinned"], task_stall_secs=1)
         self.wait_listed(1, "the baseline poll")
-        self.set_list([("run-pinned", "t1", "running", OMIT, "pid-444"),
-                       ("run-pinned2", "t1", "running", None, "pid-555")])
+        self.set_list([("run-pinned", "t1", "running", OMIT, "pid-444")])
         line = w.wait_for(lambda l: l.startswith("STATE run-pinned "),
                           "STATE for an unowned run explicitly named with --run")
         self.assertIn("t1=running", line, "STATE lists the pinned run's tasks")
         w.wait_for(lambda l: l.startswith("TASK-STALL run-pinned t1 "),
                    "TASK-STALL for the pinned unowned run")
-        self.assertFalse(any(l.startswith("STATE run-pinned2 ") or l.startswith("TASK-STALL run-pinned2 ")
-                             for l in w.lines),
-                         "--run pins only the named run; the other unowned run stays unwatched")
 
 
 class TestListTasksFailures(Base):

@@ -609,6 +609,22 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   や破壊的なシェル行を含めば `deny`、保護パスを名指しすれば `ask`、
 >   `python3 -c "print(1)"` のような無害なものは allow（0.2.59）。stdin からプログラムを
 >   読む形（`… | python3 -`、`python3 /dev/stdin`、here-doc）は判定を拒否する。
+>   backlog 7eb86bb3 の修正以降、リーダーへ流し込む**ブレースグループ**
+>   （`{ echo 'echo hi'; } | bash`、`{ echo a; echo b; } | bash`）は、メンバーが全て
+>   素の `echo` か静的に評価できる `printf` で、区切りが `;`・改行・`&&` だけのとき、
+>   メンバー出力の連結をプログラムとして読む（連結・各メンバーのリテラル・`printf`
+>   の方言ごとの読みを全て判定するので、有害な文字列は従来どおり deny）。`cat f`・
+>   引用なしの展開・リダイレクト・入れ子のパイプ/グループ・`||`・`&` を含むものは
+>   従来どおり ask（`src/detect/payload/brace_feeder.rs`、`src/detect/ast/support.rs`
+>   の `brace_group_stdin`）。
+>   同じ修正で、そのグループがサブシェル `( … )` や `if`・ループ本体の中にあっても
+>   連結したプログラムを判定する: パイプ前段が「`|` 直前の単一の単純コマンド」では
+>   ないリテラル stdin（＝ブレースグループの出力）をシェルが読むとき、Table B.5 層が
+>   本文を `<shell> -c '<本文>'` として検出器全体で判定する（以前は B.5 層が効果の判定を
+>   旧層に任せ、旧層はその位置のグループを読めず最後のメンバーだけを読んでいたため、
+>   `( { printf 'rm -rf /e'; printf 'tc'; } | bash )` が allow になっていた）。同じ形で
+>   perl / ruby / node が読む場合は判定不能（ask）、python は S5 が読む
+>   （`src/detect/ast/b5.rs` の `piped_by_compound_stage` / `compound_fed_body`）。
 >   rule id も所見に応じたもの（例: `rm-recursive`）になる。
 >   0.2.481 以降（backlog 2026-11-13）、監査するプログラム本文（`-c`/`-e` の引数、
 >   `sh -c`・`eval`・`xargs` の内側、here-string・プロセス置換）は、空白で割ったトークンを

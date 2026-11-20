@@ -108,8 +108,8 @@
 //! the declaration builtins (`declaration`) in the child module `eval/decl.rs`.
 
 use super::support::{
-    apply_stdin, conv_fd, decode_ansi_c, normalise_abs, parse_fd_target, parse_heredoc_contained,
-    piped_stdin, set_is_harmless, unescape_backquote,
+    apply_stdin, brace_group_stdin, conv_fd, decode_ansi_c, normalise_abs, parse_fd_target,
+    parse_heredoc_contained, piped_stdin, set_is_harmless, unescape_backquote,
 };
 use super::{
     arith, has_subst, parse, Analysis, Cause, Context, FdTarget, HereDoc, Quoting, RedirOp,
@@ -743,9 +743,16 @@ impl Ev {
                 for (pos, c) in stages.iter().enumerate() {
                     let mut st = env.clone();
                     st.stdin = stdin;
+                    let before = self.out.len();
                     let (_, produced) =
                         self.command(text, c, st, &Context::Pipeline { pos, len })?;
-                    stdin = piped_stdin(produced.as_ref());
+                    stdin = match c {
+                        // A brace group feeds what its members print, in order.
+                        ast::Command::Compound(ast::CompoundCommand::BraceGroup(b), None) => {
+                            brace_group_stdin(b, self.out.get(before..).unwrap_or(&[]))
+                        }
+                        _ => piped_stdin(produced.as_ref()),
+                    };
                 }
                 Outcome::same(env)
             }

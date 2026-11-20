@@ -237,6 +237,47 @@ pub(super) fn piped_stdin(stage: Option<&SimpleCommand>) -> StdinSource {
     out.map_or(StdinSource::FromCommand, StdinSource::Literal)
 }
 
+/// What a pipeline stage that is a brace group `{ …; }` (no redirection)
+/// feeds the next stage: the concatenation of its members' [`piped_stdin`]
+/// literals, only when EVERY member is a single simple command (no pipe,
+/// `!`, `time`, group, loop …) and the members are joined by `;`, a newline or
+/// `&&` (not `||`, not `&`). `members` is what the evaluator emitted while
+/// evaluating the group, in order; it must hold exactly one command per member
+/// (an expansion that runs a command, `echo $(date)`, adds more, and a dry
+/// loop pass adds none), otherwise the output is `FromCommand`, never a guess.
+pub(super) fn brace_group_stdin(
+    group: &ast::BraceGroupCommand,
+    members: &[SimpleCommand],
+) -> StdinSource {
+    let mut count = 0;
+    let mut single = |p: &ast::Pipeline| -> bool {
+        count += 1;
+        p.timed.is_none() && !p.bang && matches!(p.seq.as_slice(), [ast::Command::Simple(_)])
+    };
+    for ast::CompoundListItem(and_or, sep) in &group.list.0 {
+        let joined = matches!(sep, ast::SeparatorOperator::Sequence)
+            && single(&and_or.first)
+            && and_or
+                .additional
+                .iter()
+                .all(|a| matches!(a, ast::AndOr::And(p) if single(p)));
+        if !joined {
+            return StdinSource::FromCommand;
+        }
+    }
+    if count == 0 || members.len() != count {
+        return StdinSource::FromCommand;
+    }
+    let mut out = String::new();
+    for m in members {
+        match piped_stdin(Some(m)) {
+            StdinSource::Literal(t) => out.push_str(&t),
+            _ => return StdinSource::FromCommand,
+        }
+    }
+    StdinSource::Literal(out)
+}
+
 fn printf_simple(fmt: &str) -> Option<String> {
     let mut out = String::new();
     let mut it = fmt.chars();

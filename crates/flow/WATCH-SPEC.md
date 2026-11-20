@@ -25,12 +25,8 @@ Environment `FLOW_WATCH_CONDUKT` / `FLOW_WATCH_BACKLOG` override the `condukt` /
   `executed` / `dismissed` row. Emitted once per id, including rows already pending at startup.
 - `RELAY-STALL <id> age=<secs>s` — a still-unadjudicated relay older (by its `ts`) than
   `--relay-stall-secs`; re-emitted at most once per `--relay-stall-secs`.
-- `STATE <run_id> <task>=<status> ...` — emitted when a run file's task-status vector changes (and once
-  at startup for runs with any task not in a terminal status). Run files = `run-*.json` in the condukt
-  state dir(s) whose `tasks` is a list of objects with `id`/`status`.
-- `TASK-STALL <run_id> <task> status=<status> idle=<secs>s` — a task in `running` whose run file mtime
-  AND the run's journal (`<run_id>.journal.jsonl`, if present) mtime are both older than
-  `--task-stall-secs`; re-emitted at most once per `--task-stall-secs`.
+- `STATE <run_id> <task>=<status> ...` — see "Run tracking (v2)" below.
+- `TASK-STALL <run_id> <task> status=running idle=<secs>s` — see "Run tracking (v2)" below.
 - `HEARTBEAT ok` is NOT printed (silence on success). On failure: `HEARTBEAT-FAILED <which> rc=<rc>`
   where which ∈ {condukt, backlog}. Heartbeats run at start and every `--heartbeat-secs`:
   `condukt state heartbeat --run flow-<SESSION>` and
@@ -60,3 +56,42 @@ Waiting for a background-agent notification is not a substitute for these events
 
 flow 0.2.34 → 0.2.35 in `crates/flow/.claude-plugin/plugin.json` and the `flow` entry of
 `.claude-plugin/marketplace.json` (flow has no Cargo.toml).
+
+## Run tracking (v2, 2026-11-21) — supersedes v1's run-file globbing
+
+Observed on the first live arm of v1 (flow 0.2.36): globbing `~/.condukt/state/*/run-*.json` read 9082
+state dirs of every project, treated per-run siblings (`run-<id>.decomposition.json`,
+`run-<id>.checkpoints.json`) as run files (spurious `WATCH-ERROR … task entry without id/status`),
+emitted `STATE` for months-old all-`verified` runs (`verified` was not in the terminal set) and
+`TASK-STALL` for abandoned runs of other sessions (`idle=9393790s`). v2 replaces the source and the
+scoping:
+
+- **Source = condukt itself.** Every `--state-secs`, run `condukt state list-tasks` with cwd =
+  `--project` (executable overridable by `FLOW_WATCH_CONDUKT`). Its stdout is a JSON array of objects
+  with `run_id`, `task_id`, `status` (only non-terminal tasks of open runs; condukt's own project
+  scoping and terminal semantics). flow-watch no longer reads condukt state files or globs state dirs;
+  `--condukt-state` is removed (passing it is a bad argument, exit 2).
+  A non-zero exit, a missing executable (rc=127), non-JSON stdout, or a row without string
+  `run_id`/`task_id`/`status` → `WATCH-ERROR condukt list-tasks: <reason>` (once per distinct reason),
+  and that poll changes nothing (no STATE, no stall bookkeeping) — it is never read as "no tasks".
+- **Watched runs.** Runs present in the FIRST successful poll of a fresh watch are the baseline and are
+  NOT watched (they belong to other drivers or predate this one): no STATE / TASK-STALL for them.
+  A run_id that first appears in a later poll becomes watched. `--run <run_id>` (repeatable) adds a run
+  to the watched set explicitly, baseline or not.
+- **Persistence across re-arm.** The watched set and, per watched task, its last status and the time
+  that status was first observed are stored in `--watch-state` (default
+  `${XDG_STATE_HOME:-$HOME/.local/state}/claude-harnesses/flow-watch/<SESSION>.json`; parent dirs are
+  created). On start an existing file is loaded, so a re-armed watch keeps watching the runs the
+  previous arm watched (they are not baselined away). A file that exists but cannot be read or parsed →
+  `WATCH-ERROR watch-state: <reason>`, start with an empty watched set, and do not overwrite that file
+  (never silently discard it). A failed write → `WATCH-ERROR watch-state: <reason>` (once per reason).
+  The file is written after every poll that changes it.
+- **STATE `<run_id> <task>=<status> ...`** — for a watched run, whenever its set of listed
+  (task_id, status) pairs changes, print all of its currently listed tasks. When a watched run
+  disappears from the listing entirely (all its tasks terminal / run closed), print
+  `STATE <run_id> finished` once and drop it from the watched set.
+- **TASK-STALL** — a watched task whose listed status is `running` and has stayed unchanged, as observed
+  by flow-watch (persisted first-seen time), for at least `--task-stall-secs`; `idle` = now − first-seen.
+  Re-emitted at most once per `--task-stall-secs`.
+
+Version: flow → 0.2.37.

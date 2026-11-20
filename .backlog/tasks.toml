@@ -2730,3 +2730,32 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 709 filtered out
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
      Running unittests src/lib.rs (target/debug/deps/blastguard-6827ff3134ba9626)
 error: test failed, to rerun pass `-p blastguard --lib`"""
+
+[[task]]
+id = "2bcfd471"
+title = "deny-no-verify.py FP: quoted heredoc body with an apostrophe plus a 'git' substring and '-n' is refused as unparseable gate-bypass (shlex does not model heredocs)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "false-positive",
+    "gate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-20: main-session byte-for-byte re-run of relay bgr-a866a4fd1397 (writing a condukt test file via cat <<'EOF' ... task's ... EOF) refused verbatim: 'Refused: this command could not be parsed, and it carries a gate-bypass marker. The shell quoting does not close, so whether this is git commit --no-verify cannot be determined.' Mechanism (independent author, source reading + RED): shlex has no heredoc model so the apostrophe in a quoted heredoc body never closes; looks_like_bypass fires on substring git (git_env / git( helper) plus -n of sed/grep. RED 51aa53acb scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py (strict xfail; --runxfail: 2 failed, 2 passed). Distinct from pinned test_gate_bypass.py::test_DEFECT_looks_like_bypass_is_noisy_on_untokenizable_input: here a real shell lexes the input fine."
+created_at = 1795172228
+updated_at = 1795172228
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py"
+rev = "51aa53acbad1cfb38b11f2fa8865f0c1bb056d8e"
+observed_at = 1795172228
+detail = """
+exit 1: nfo ============================
+FAILED scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py::QuotedHeredocApostrophe::test_minimal_quoted_heredoc_apostrophe_is_allowed
+FAILED scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py::QuotedHeredocApostrophe::test_observed_command_is_allowed
+========================= 2 failed, 2 passed in 0.21s =========================="""

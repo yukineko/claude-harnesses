@@ -113,9 +113,11 @@ fn decomposition_json(task_id: &str, kind: Option<&str>, repro: Option<&str>) ->
 /// reads (`passed`, and `cmd` — the same on both sides, since `tdd oracle`
 /// only accepts a Fail→Pass of one and the same command) — under `<dir>/.tdd/`, `tdd`'s default `proof_dir`. This
 /// is exactly the directory `tdd oracle` will read from when `condukt`
-/// shells out to it with `current_dir(run_dir)`, and `run_dir` defaults to
-/// the task's `condukt state set` invocation cwd when no worktree is
-/// recorded — i.e. `dir` itself.
+/// shells out to it with `current_dir(run_dir)`, and `run_dir` is the task's
+/// recorded worktree — the fixtures record `dir` itself via
+/// `state set --worktree`. With no recorded worktree (and no archived proof)
+/// condukt refuses to judge the oracle rather than read the caller's cwd
+/// (834ccf88), so `dir` must be recorded as the worktree.
 fn write_proof(dir: &Path, task: &str, kind: &str, passed: bool) {
     let proof_dir = dir.join(".tdd");
     std::fs::create_dir_all(&proof_dir).expect("create proof dir");

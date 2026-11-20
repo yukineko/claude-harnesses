@@ -923,3 +923,8 @@ reason = "SUBSET.md 'Python programs (S5)' effect table and 'Undetermined' list:
 path = "crates/progeffect/src/python/tables.rs"
 doc = "docs/specs/blastguard.md"
 reason = "SUBSET.md 'Python programs (S5)' 'Undetermined': the closed name tables (stdlib, safe modules, read-only calls, dangerous builtins, harmless dunders, exec / fs-method / file-writer names, plain subprocess keywords), each with its restrictive default."
+
+[[spec]]
+path = "crates/blastguard/src/detect/tee.rs"
+doc = "docs/specs/blastguard.md"
+reason = "known_allow bullet 'S6-6 — 旧 tee arm (detect/tee.rs::analyze_tee)': the legacy tee reading moved out of detect.rs; known_allow true → Allow, else the legacy verdict; a glob word is not counted as an absent target, and own-worktree command-running config appends are Ask (fail-open fixes 2026-11-20)."

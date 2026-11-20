@@ -11,11 +11,23 @@ use super::ast::{
     PathClass, PathCtx, Value,
 };
 use super::rm::has_unquoted_glob;
-use super::words::first_shell_word;
+use super::words::{first_shell_word, is_bare_redirect_op, is_redirect_token};
 use super::{positional_operands, protected_path_block, system_path_block, Ctx, Decision};
 
 /// See the module doc and the comments inline.
+///
+/// Stage S6-6 (user ruling 2026-11-20, S6 only retires): when the new layer
+/// is Known Allow for this `tee` ([`super::known_allow::known_allow`]: every
+/// tied Table B `tee` target — every operand, `Truncate`, or `Append` with
+/// `-a`; options `-a` / `--append`, `-i` / `--ignore-interrupts`, `-p`, also
+/// bundled (`-ai`, `-ap`); any other option leaves the row Undetermined — a
+/// `Literal` in Table C Scratch / OwnWorktree, none naming command-running
+/// config), this legacy reading may not raise it. Anything not Known keeps
+/// the legacy verdict below exactly. Precedent: S6-4 `truncate`, S6-5 `dd`.
 pub(super) fn analyze_tee(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+    if super::known_allow::known_allow("tee", &without_redirections(rest), ctx) {
+        return Decision::Allow;
+    }
     // Round 3, MIRROR GAP. Rule 2b in `detect_bash` already settled
     // that for a PROTECTED target the append/truncate distinction is
     // irrelevant — one appended line adds a hook entry or an
@@ -124,6 +136,30 @@ by that directory), so it cannot tell which files tee would truncate and refuses
         )),
         None => Decision::Allow,
     }
+}
+
+/// `rest` without the redirections the legacy tokens still carry
+/// (`tee F > /dev/null`: `>` and `/dev/null`): a bare operator
+/// ([`is_bare_redirect_op`]) and the token after it, and every other token
+/// with a `<` / `>` ([`is_redirect_token`]: `2>&1`, `>/dev/null`). The AST
+/// argv has no redirections, so only this list can tie. A quoted operand
+/// that contains `>` is dropped too, and then the lengths differ and nothing
+/// ties (not Known: the legacy verdict). The redirection itself is judged by
+/// the redirect rules, not here.
+fn without_redirections<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+    let mut out = Vec::with_capacity(rest.len());
+    let mut skip_next = false;
+    for t in rest {
+        if std::mem::take(&mut skip_next) {
+            continue;
+        }
+        if is_bare_redirect_op(t) {
+            skip_next = true;
+        } else if !is_redirect_token(t) {
+            out.push(*t);
+        }
+    }
+    out
 }
 
 fn truncate_deny() -> Decision {

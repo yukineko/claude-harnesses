@@ -98,6 +98,11 @@ struct Index {
     /// `/bin/X` or `/usr/bin/X` for a name `X` with no `/` (see
     /// [`tied_operand_values`]), one entry per evaluated instance.
     commands: Vec<IndexedCommand>,
+    /// `(byte range, literal value)` of every assignment value word
+    /// (`F=<word>`, prefix or assignment-only) spelled verbatim at its span
+    /// whose evaluated value is a `Literal` equal to that spelling (stage
+    /// S6-6): the source a legacy `$F` rewrite copies, see [`Index::tie`].
+    assignment_values: Vec<(Range<usize>, String)>,
 }
 
 /// One evaluated top-level command of [`Index::commands`].
@@ -151,7 +156,15 @@ impl Index {
     fn build(text: &str, script: &Script) -> Index {
         let mut words = Vec::new();
         let mut commands = Vec::new();
+        let mut assignment_values = Vec::new();
         for cmd in &script.commands {
+            for (_, w) in &cmd.assignments {
+                if let Value::Literal(v) = &w.value {
+                    if text.get(w.span.clone()) == Some(w.raw.as_str()) && *v == w.raw {
+                        assignment_values.push((w.span.clone(), v.clone()));
+                    }
+                }
+            }
             if let Some(name) = cmd.argv.first().and_then(|w| command_name(&w.value)) {
                 let argv: Option<Vec<_>> = cmd.argv[1..]
                     .iter()
@@ -190,6 +203,7 @@ impl Index {
             text: text.to_string(),
             words,
             commands,
+            assignment_values,
         }
     }
 
@@ -256,13 +270,42 @@ impl Index {
                     spellings.push(argv[i].1.as_str());
                 }
             }
+            //
+            // Stage S6-6: one more occurrence is not a second reading — the
+            // whole value word of an assignment (`F=<spelled>`, unquoted, a
+            // Literal equal to its spelling) when each matching command's
+            // operand evaluated to exactly that Literal. The text analysed
+            // here is the line after the legacy walk substituted a same-line
+            // literal assignment into `$F` / `"$F"` (`detect/vars.rs`;
+            // measured: `F=/t/f; tee "$F"` reaches the index as
+            // `F=/t/f; tee /t/f`), so the assigned value is spelled twice;
+            // the assignment word is data, not a command operand, and no
+            // other command's reading of it can be this command's argv.
+            //
+            // `tee` ONLY (S6-6 retires `tee` alone): for the other rows the
+            // same shape keeps its pinned legacy verdict
+            // (`F=<Scratch>; truncate -s 0 $F` ask/deny,
+            // tests/s6_4_truncate_retire_20261120.rs `control_non_literal`)
+            // until a ruling extends it.
+            let assigned_here = |range: &Range<usize>, spelled: &str| {
+                name == "tee"
+                    && self
+                        .assignment_values
+                        .iter()
+                        .any(|(r, v)| r == range && v == spelled)
+                    && matching
+                        .iter()
+                        .all(|(_, argv)| matches!(&argv[i].2, Value::Literal(v) if v == spelled))
+            };
             for spelled in spellings.iter().filter(|s| !s.is_empty()) {
                 for (at, _) in self.text.char_indices() {
                     if !self.text.get(at..).is_some_and(|t| t.starts_with(spelled)) {
                         continue;
                     }
                     let range = at..at + spelled.len();
-                    if !matching.iter().any(|(_, argv)| argv[i].0 == range) {
+                    if !matching.iter().any(|(_, argv)| argv[i].0 == range)
+                        && !assigned_here(&range, spelled)
+                    {
                         return None;
                     }
                 }
@@ -348,7 +391,9 @@ pub(crate) struct TiedOperand {
 /// its spans; and every occurrence of every operand spelling (option
 /// arguments excluded, as above) in the text
 /// (the token and the matching word's raw spelling) is that operand's word
-/// of one of those commands.
+/// of one of those commands — or, for `name == "tee"` only (stage S6-6), the
+/// whole unquoted value word of an assignment whose Literal value is that
+/// spelling, when every such operand evaluated to that same Literal.
 pub(crate) fn tied_operand_values(name: &str, rest: &[&str]) -> Option<Vec<TiedOperand>> {
     with_known(|index| index.tie(name, rest).map(|t| t.operands))
 }

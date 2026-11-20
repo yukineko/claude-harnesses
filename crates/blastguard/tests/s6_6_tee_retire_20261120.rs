@@ -267,37 +267,31 @@ fn expect_allow(tag: &str, template: &str) {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_scratch_printf_pipe() {
     expect_allow("r-printf", "printf x | tee {T}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_scratch_no_pipe() {
     expect_allow("r-nopipe", "tee {T}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_scratch_two_targets() {
     expect_allow("r-two", "echo x | tee {T}/sub/f.txt {T}/sub/g.txt");
 }
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_scratch_ignore_interrupts_short() {
     expect_allow("r-i", "echo x | tee -i {T}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_scratch_ignore_interrupts_long() {
     expect_allow("r-ii", "echo x | tee --ignore-interrupts {T}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_scratch_p() {
     expect_allow("r-p", "echo x | tee -p {T}/sub/f.txt");
 }
@@ -305,49 +299,41 @@ fn red_scratch_p() {
 /// Bundled `-ai`: append mode, but the legacy arm only recognises the exact
 /// token `-a`, so it reads this as a truncating write.
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_scratch_bundled_ai() {
     expect_allow("r-ai", "echo x | tee -ai {T}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_scratch_bundled_ap() {
     expect_allow("r-ap", "echo x | tee -ap {T}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_scratch_usr_bin_tee() {
     expect_allow("r-usrbin", "echo x | /usr/bin/tee {T}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_scratch_stdout_to_dev_null() {
     expect_allow("r-devnull", "echo x | tee {T}/sub/f.txt > /dev/null");
 }
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_scratch_double_dash() {
     expect_allow("r-dd", "echo x | tee -- {T}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_scratch_single_quoted() {
     expect_allow("r-sq", "echo x | tee '{T}/sub/f.txt'");
 }
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_scratch_hook_tmpdir() {
     expect_allow("r-tmpdir", "echo x | tee {D}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_scratch_home_cache() {
     expect_allow("r-cache", "echo x | tee {H}/.cache/x/f.txt");
 }
@@ -355,7 +341,6 @@ fn red_scratch_home_cache() {
 /// A path component equal to a word elsewhere on the line (`echo 0`) must
 /// not break the AST tie.
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_scratch_path_component_zero_with_echo_zero() {
     expect_allow("r-dir0", "echo 0 | tee {T}/0/f.txt");
 }
@@ -363,13 +348,11 @@ fn red_scratch_path_component_zero_with_echo_zero() {
 /// Standing user ruling (blastguard-must-resolve-statically): a same-line
 /// literal assignment resolves `$F` to a Literal in Scratch.
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_scratch_var_assigned_quoted() {
     expect_allow("r-var-q", "F={T}/sub/f.txt; echo y | tee \"$F\"");
 }
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_scratch_var_assigned_unquoted() {
     expect_allow("r-var-u", "F={T}/sub/f.txt; echo y | tee $F");
 }
@@ -379,25 +362,21 @@ fn red_scratch_var_assigned_unquoted() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_own_worktree_absolute() {
     expect_allow("r-own-abs", "echo x | tee {W}/u.txt");
 }
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_own_worktree_relative() {
     expect_allow("r-own-rel", "echo x | tee u.txt");
 }
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_own_worktree_relative_dot_subdir() {
     expect_allow("r-own-rel-sub", "echo x | tee ./sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-6: deny/deny at 5b2b3a6b8"]
 fn red_own_worktree_and_scratch() {
     expect_allow("r-own-scratch", "echo x | tee {W}/u.txt {T}/sub/f.txt");
 }

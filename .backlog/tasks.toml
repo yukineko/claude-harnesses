@@ -2900,6 +2900,8 @@ notes = "Found by the independent test author of e1bb5f7e round 2 (e6143fe87). I
 created_at = 1795179845
 updated_at = 1795179845
 weight = 0.0
+issue_number = 1903
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1903"
 rev = 0
 
 [task.repro]

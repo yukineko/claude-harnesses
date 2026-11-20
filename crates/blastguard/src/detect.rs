@@ -133,8 +133,8 @@ use git::{analyze_git, git_subcommand_index, git_worktree_eligible};
 use find_xargs::{analyze_find, analyze_xargs, xargs_command_start, xargs_reads_arg_file};
 
 use rm::{
-    analyze_rm, checkout_exempt_eligible, deletion_rm_eligible, literal_cd_and_rest,
-    worktree_rm_eligible, DeletionEligibility,
+    analyze_rm, checkout_exempt_eligible, deletion_rm_eligible, has_unquoted_glob,
+    literal_cd_and_rest, worktree_rm_eligible, DeletionEligibility,
 };
 
 use fileops::{
@@ -828,6 +828,12 @@ primitive, not a filesystem path",
             if let Some(deny) = protected_path_block_at(ctx, "redirect", &target, &physical) {
                 return deny;
             }
+            // Command-running config the lifted protected axis does not stop:
+            // never looser than `>>` (rule 2b; user ruling 2026-11-20, 2e704124).
+            if tee::redirect_names_command_running_config(&target, ctx) {
+                let ask = tee::command_running_config_write_ask(">", "overwrites", &target);
+                line_level_asks.push(ask);
+            }
             // Relinked earlier on the line: judge where it really lands (relink.rs).
             let landing =
                 relink::redirect_landing(ctx, ">", rcmd, seg_idx, &seg_cwds, target, physical);
@@ -882,6 +888,22 @@ primitive, not a filesystem path",
                 // (`dequoted_target_recovery`, backlog 021e6161).
                 let (located, recovery) =
                     dequoted_target_recovery(&target, ctx.raw_base.as_deref());
+                // An unquoted glob is not one absent path: placed by its parent
+                // (literal-dir glob ruling 2026-11-19, as `tee`; 2e704124).
+                let recovery = if !has_unquoted_glob(&target) {
+                    recovery
+                } else {
+                    match tee::redirect_glob_placement(&target, ctx) {
+                        tee::GlobPlacement::AllowCell => recovery,
+                        tee::GlobPlacement::Legacy => crate::reversible::Recovery::Undetermined(
+                            format!("`{target}` is a glob that may expand to an existing file"),
+                        ),
+                        tee::GlobPlacement::Unresolved => {
+                            line_level_asks.push(tee::unplaceable_glob_ask(">", &target));
+                            continue;
+                        }
+                    }
+                };
                 // RECOVERABLE **AND MINE**. Recoverability alone used to allow, and
                 // that was a fail-open across project boundaries: any git-tracked
                 // file in ANY checkout on this machine probes as recoverable, so
@@ -1070,7 +1092,7 @@ does not parse that body, but blastguard cannot show the program does not use it
             // ...and command-running config the protected list does not cover
             // (`hooks/hooks.json`, `crates/*/hooks/…`, `scripts/check-*.py`;
             // user ruling 2026-11-20, the `tee -a` twin is in `tee.rs`).
-            if tee::append_redirect_names_command_running_config(&target, ctx) {
+            if tee::redirect_names_command_running_config(&target, ctx) {
                 line_level_asks.push(tee::command_running_config_append_ask(">>", &target));
             }
             let landing =

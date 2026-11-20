@@ -1540,6 +1540,18 @@ forge・condukt のスケジューラが再利用）。
   `tee -a` と `>>` の own worktree 内 command-running config〈`hooks/hooks.json`・`crates/*/hooks/…`・
   `scripts/check-*.py`。`judge::names_command_running_config`、置けなければ該当扱い〉への追記は Ask（main）/
   Deny（subagent）（user ruling 2026-11-20）。
+  fail-open 是正（0.2.818、backlog 2e704124）: (1) `>` の unquoted 最終成分 glob は 1 つの不在 path として probe
+  しない — `tee` と同じ置き方〈`ast::redirect_literal_dir_glob` で `: <word>` の argv 語として
+  `table_b::literal_dir_glob` に掛け、`tee.rs::redirect_glob_placement`／`allow_cell`〉で、Scratch/OwnWorktree かつ
+  command-running config でなければ従来どおり・それ以外の class は既存 target と同じ扱い〈recovery Undetermined〉・
+  置けない glob は Ask。quote／escape された `'*.txt'`・`\*.txt` は literal ファイル名のまま。(2)
+  `judge::spelling_names_command_running_config` は最終成分 glob が config 名に一致しうるなら該当扱い
+  〈`hooks` 内で `hooks.json` に一致しうる glob、または deny-target 行の直下 entry に一致しうる glob:
+  `deny_targets::may_match_child_unlifted`／`globs_may_intersect`。証明できる不一致〈literal 接頭辞・接尾辞〉以外は
+  一致扱い。quote された `*` を含む literal 名も glob と区別できないので該当扱い〉。(3) `>`（rule 2）も `>>` と同じ
+  述語〈`tee.rs::redirect_names_command_running_config`。quote 除去後の名前で判定、除去できなければ該当扱い〉で
+  command-running config への上書きを Ask（main）/ Deny（subagent）にする — 上書きは追記より緩くならない
+  （user ruling 2026-11-20。tests/glob_and_config_write_failopen_20261120.rs）。
   最終成分だけの literal-dir glob（user ruling 2026-11-19）は親ディレクトリで置かれる `Literal` なので
   Scratch 内なら Allow、中間成分の glob は `Unresolved` で旧判定のまま。`rm`・`rsync --delete` は引き続き
   `detect/rm/new_layer`（tests/s6_4_truncate_retire_20261120.rs）。

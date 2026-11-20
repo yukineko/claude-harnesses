@@ -577,13 +577,33 @@ pub(crate) fn names_command_running_config(target: &Value, cwd: &Value, ctx: &Pa
 /// reading whose relative target has no known base (`detect/tee.rs`), the
 /// same lexical judgement `protected::protected_path_lexical_block` makes
 /// of such a spelling.
+///
+/// A FINAL-COMPONENT GLOB (`{W}/hooks/*.json`, `scripts/*.py`; backlog
+/// 2e704124) names whatever it can expand to, so it counts as naming
+/// command-running configuration when it COULD match a name the predicates
+/// name in that directory (fail-closed): the hook-wiring name `hooks.json`
+/// in a `hooks` directory, or a deny-target row's entry directly in it
+/// ([`deny_targets::may_match_child_unlifted`]). `is_protected` already
+/// judges a glob by its literal prefix (`protected::protected_glob_deny`). A
+/// literal file whose name holds `*` (`'*.json'`, quoted) is a value this
+/// predicate cannot tell from the glob, and is judged as the glob (the
+/// restrictive side).
 pub(crate) fn spelling_names_command_running_config(p: &str, ctx: &PathCtx) -> bool {
     use crate::detect::rm::new_layer;
     let l = p.to_lowercase();
     let hook_wiring = l == "hooks/hooks.json" || l.ends_with("/hooks/hooks.json");
+    let glob_child = match l.rsplit_once('/') {
+        Some((parent, last)) if last.contains(['*', '?', '[']) => {
+            let dir = parent.rsplit('/').next().unwrap_or(parent);
+            (dir == "hooks" && deny_targets::globs_may_intersect(last, "hooks.json"))
+                || deny_targets::may_match_child_unlifted(parent, last, ctx.scope.session_cwd())
+        }
+        _ => false,
+    };
     new_layer::is_protected(p)
         || deny_targets::matches_any_row_unlifted(p, ctx.scope.session_cwd())
         || hook_wiring
+        || glob_child
 }
 
 /// `target` as an absolute path value with no `..` component, or why not.

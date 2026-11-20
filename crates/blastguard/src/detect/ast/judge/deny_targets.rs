@@ -410,6 +410,76 @@ pub(crate) fn matches_any_row_unlifted(path: &str, session_cwd: Option<&str>) ->
     spelled.iter().any(|s| table.set.is_match(s))
 }
 
+/// True when a file directly in the directory `parent` whose name matches
+/// the final-component glob `last` COULD match a row of the table, lift not
+/// applied (backlog 2e704124, for `judge::names_command_running_config`):
+/// for some pattern `<pp>/<pl>`, a spelling of `parent` ([`spellings`])
+/// matches `<pp>` and `last` may intersect `<pl>` ([`globs_may_intersect`];
+/// `**` intersects every name), or `parent` itself matches a pattern ending
+/// in `/**`. Over-approximates (fail-closed): a pattern or a spelling that
+/// does not compile, or a table that cannot be loaded, is `true`.
+pub(crate) fn may_match_child_unlifted(
+    parent: &str,
+    last: &str,
+    session_cwd: Option<&str>,
+) -> bool {
+    if !matches!(compiled(), Determination::Known(_)) {
+        return true;
+    }
+    let (spelled, _) = spellings(if parent.is_empty() { "/" } else { parent }, session_cwd);
+    for pat in TABLE.iter().flat_map(|e| e.patterns.iter()) {
+        let Some((pp, pl)) = pat.rsplit_once('/') else {
+            return true;
+        };
+        let pp = if pp.is_empty() { "/" } else { pp };
+        let matcher = |g: &str| {
+            GlobBuilder::new(g)
+                .case_insensitive(true)
+                .literal_separator(true)
+                .build()
+                .map(|g| g.compile_matcher())
+        };
+        let (Ok(dir), Ok(whole)) = (matcher(pp), matcher(pat)) else {
+            return true;
+        };
+        let child = pl == "**" || globs_may_intersect(last, pl);
+        if spelled
+            .iter()
+            .any(|s| (child && dir.is_match(s)) || (pl == "**" && whole.is_match(s)))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when some file name may match both of the final-component globs `a`
+/// and `b` (`*`, `?`, `[…]`; case-insensitive). Exact when either has no
+/// metacharacter (the other is matched against it); otherwise only a
+/// literal prefix or suffix that cannot agree proves them disjoint, and
+/// anything else is `true` (fail-closed). A glob that does not compile is
+/// `true`.
+pub(crate) fn globs_may_intersect(a: &str, b: &str) -> bool {
+    const META: [char; 3] = ['*', '?', '['];
+    let (a, b) = (a.to_lowercase(), b.to_lowercase());
+    let matches = |glob: &str, name: &str| {
+        GlobBuilder::new(glob)
+            .literal_separator(true)
+            .build()
+            .map_or(true, |g| g.compile_matcher().is_match(name))
+    };
+    if !b.contains(META) {
+        return matches(&a, &b);
+    }
+    if !a.contains(META) {
+        return matches(&b, &a);
+    }
+    let prefix = |s: &str| s[..s.find(META).unwrap_or(s.len())].to_string();
+    let suffix = |s: &str| s[s.rfind(['*', '?', '[', ']']).map_or(0, |i| i + 1)..].to_string();
+    let (pa, pb, sa, sb) = (prefix(&a), prefix(&b), suffix(&a), suffix(&b));
+    (pa.starts_with(&pb) || pb.starts_with(&pa)) && (sa.ends_with(&sb) || sb.ends_with(&sa))
+}
+
 /// True when `abs` is strictly inside a linked worktree checkout.
 fn in_linked_checkout(scope: &SafeRoots, abs: Option<&str>) -> bool {
     let Some(abs) = abs else { return false };

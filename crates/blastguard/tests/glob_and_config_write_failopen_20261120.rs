@@ -259,7 +259,6 @@ fn expect_non_allow(tag: &str, template: &str) {
 /// Literal `echo x > {H}/docs/f.txt` is deny/deny (control below); the glob
 /// would expand to that very file.
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_redirect_glob_home_docs_matches_existing_file() {
     expect_exact("r1-home-glob", "echo x > {H}/docs/*.txt", D);
 }
@@ -271,44 +270,37 @@ fn red_redirect_glob_home_docs_matches_existing_file() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_truncate_glob_hooks_json() {
     expect_non_allow("r2-trunc", "truncate -s0 {W}/hooks/*.json");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_tee_glob_hooks_json() {
     expect_non_allow("r2-tee", "tee {W}/hooks/*.json");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_tee_append_glob_hooks_json() {
     expect_non_allow("r2-tee-a", "tee -a {W}/hooks/*.json");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_append_redirect_glob_hooks_json() {
     expect_non_allow("r2-append", "echo x >> {W}/hooks/*.json");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_truncating_redirect_glob_hooks_json() {
     expect_non_allow("r2-redir", "echo x > {W}/hooks/*.json");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_truncating_redirect_glob_crate_hooks_json() {
     expect_non_allow("r2-crate", "echo x > {W}/crates/x/hooks/*.json");
 }
 
 /// The only `*.py` in `{W}/scripts` is `check-x.py` (command-running config).
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_truncating_redirect_glob_scripts_check() {
     expect_non_allow("r2-scripts", "echo x > {W}/scripts/*.py");
 }
@@ -321,67 +313,56 @@ fn red_truncating_redirect_glob_scripts_check() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_redirect_hooks_json() {
     expect_non_allow("r3-hooks", "echo x > {W}/hooks/hooks.json");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_redirect_hooks_json_relative() {
     expect_non_allow("r3-hooks-rel", "echo x > hooks/hooks.json");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_redirect_crate_hooks_json() {
     expect_non_allow("r3-crate", "echo x > {W}/crates/x/hooks/hooks.json");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_redirect_scripts_check() {
     expect_non_allow("r3-scripts", "echo x > {W}/scripts/check-x.py");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_redirect_githooks_pre_commit() {
     expect_non_allow("r3-githooks", "echo x > {W}/.githooks/pre-commit");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_redirect_settings_local_json() {
     expect_non_allow("r3-settings", "echo x > {W}/.claude/settings.local.json");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_append_redirect_hooks_json() {
     expect_non_allow("r3-app-hooks", "echo x >> {W}/hooks/hooks.json");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_tee_append_hooks_json() {
     expect_non_allow("r3-tee-a", "tee -a {W}/hooks/hooks.json");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_append_redirect_crate_hooks_json() {
     expect_non_allow("r3-app-crate", "echo x >> {W}/crates/x/hooks/hooks.json");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_append_redirect_scripts_check() {
     expect_non_allow("r3-app-scripts", "echo x >> {W}/scripts/check-x.py");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 40e49d3db"]
 fn red_append_redirect_githooks_pre_commit() {
     expect_non_allow("r3-app-githooks", "echo x >> {W}/.githooks/pre-commit");
 }

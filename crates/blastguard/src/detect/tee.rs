@@ -129,13 +129,19 @@ pub(super) fn analyze_tee(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         }
     }
     match unresolved {
-        Some(word) => Decision::ask(format!(
-            "tee target `{word}` is a glob the shell expands to the files it matches, and \
-blastguard cannot place it (only a final-component glob under a literal directory is placed, \
-by that directory), so it cannot tell which files tee would truncate and refuses to guess"
-        )),
+        Some(word) => unplaceable_glob_ask("tee", &word),
         None => Decision::Allow,
     }
+}
+
+/// The Ask for a truncating `what` (`tee`, `>`) whose target `word` is a
+/// glob [`GlobPlacement::Unresolved`].
+pub(super) fn unplaceable_glob_ask(what: &str, word: &str) -> Decision {
+    Decision::ask(format!(
+        "{what} target `{word}` is a glob the shell expands to the files it matches, and \
+blastguard cannot place it (only a final-component glob under a literal directory is placed, \
+by that directory), so it cannot tell which files {what} would truncate and refuses to guess"
+    ))
 }
 
 /// `rest` without the redirections the legacy tokens still carry
@@ -166,9 +172,9 @@ fn truncate_deny() -> Decision {
     Decision::deny("tee without -a/--append truncates and overwrites its target file(s)")
 }
 
-/// How the new layer places one `tee` target word that has an unquoted
-/// glob metacharacter.
-enum GlobPlacement {
+/// How the new layer places one `tee` (or `>` redirect) target word that
+/// has an unquoted glob metacharacter.
+pub(super) enum GlobPlacement {
     /// A final-component glob under a literal directory
     /// (`judge::table_b::literal_dir_glob`, user ruling 2026-11-19) whose
     /// Table C class is Scratch / OwnWorktree, not naming command-running
@@ -188,18 +194,13 @@ fn glob_placement(rest: &[&str], word: &str, ctx: &Ctx<'_>) -> GlobPlacement {
     let Some(tied) = tied_b1_targets("tee", rest) else {
         return GlobPlacement::Unresolved;
     };
-    let pctx = path_ctx(ctx);
     let mut placed = false;
     for t in tied
         .iter()
         .filter(|t| matches!(&t.target, Value::Literal(v) if v == word))
     {
         placed = true;
-        let cell = matches!(
-            classify(t.effect, &t.target, &t.cwd, &pctx),
-            PathClass::Scratch | PathClass::OwnWorktree
-        ) && !names_command_running_config(&t.target, &t.cwd, &pctx);
-        if !cell {
+        if !allow_cell(t.effect, &t.target, &t.cwd, ctx) {
             return GlobPlacement::Legacy;
         }
     }
@@ -208,6 +209,38 @@ fn glob_placement(rest: &[&str], word: &str, ctx: &Ctx<'_>) -> GlobPlacement {
     } else {
         GlobPlacement::Unresolved
     }
+}
+
+/// [`GlobPlacement`] of a `>` redirect target `word` with an unquoted glob
+/// metacharacter (backlog 2e704124). A redirect target carries no AST
+/// [`super::ast`] `Word`, so the word is placed by the same literal-dir
+/// glob predicate through [`super::ast::redirect_literal_dir_glob`]; the
+/// cell is the one a `tee` glob is judged by ([`allow_cell`], `Truncate`).
+pub(super) fn redirect_glob_placement(word: &str, ctx: &Ctx<'_>) -> GlobPlacement {
+    let Some(glob) = super::ast::redirect_literal_dir_glob(word) else {
+        return GlobPlacement::Unresolved;
+    };
+    if allow_cell(
+        Effect::Truncate,
+        &Value::Literal(glob),
+        &legacy_cwd(ctx),
+        ctx,
+    ) {
+        GlobPlacement::AllowCell
+    } else {
+        GlobPlacement::Legacy
+    }
+}
+
+/// A Table C Scratch / OwnWorktree target that does not name command-running
+/// config ([`names_command_running_config`]): the cell a glob keeps its
+/// absent-probe Allow in.
+fn allow_cell(effect: Effect, target: &Value, cwd: &Value, ctx: &Ctx<'_>) -> bool {
+    let pctx = path_ctx(ctx);
+    matches!(
+        classify(effect, target, cwd, &pctx),
+        PathClass::Scratch | PathClass::OwnWorktree
+    ) && !names_command_running_config(target, cwd, &pctx)
 }
 
 /// The first `tee -a` target that names command-running configuration
@@ -239,11 +272,20 @@ fn append_command_running_config(
     })
 }
 
-/// `true` when the placed append-redirect target `path` names
-/// command-running configuration ([`names_command_running_config`]); for
-/// rule 2b in `detect_bash` (`>>` / `&>>`, user ruling 2026-11-20).
-pub(super) fn append_redirect_names_command_running_config(path: &str, ctx: &Ctx<'_>) -> bool {
-    appends_onto_config(&Value::Literal(path.to_string()), &legacy_cwd(ctx), ctx)
+/// `true` when the placed redirect target `path` names command-running
+/// configuration ([`names_command_running_config`]); for rule 2 (`>`) and
+/// rule 2b (`>>` / `&>>`) in `detect_bash` (user ruling 2026-11-20: such
+/// config in the own worktree is Ask / Deny, appends included, and an
+/// overwrite is never looser than an append; backlog 2e704124). Judged on
+/// the name the kernel opens ([`super::redirect::dequoted_redirect_word`]);
+/// a word that cannot be dequoted counts as naming it (fail-closed).
+pub(super) fn redirect_names_command_running_config(path: &str, ctx: &Ctx<'_>) -> bool {
+    match super::redirect::dequoted_redirect_word(path) {
+        harness_core::verdict::Determination::Known(name) => {
+            appends_onto_config(&Value::Literal(name), &legacy_cwd(ctx), ctx)
+        }
+        harness_core::verdict::Determination::Undetermined(_) => true,
+    }
 }
 
 /// [`names_command_running_config`] (fail-closed: unplaceable is `true`),
@@ -278,9 +320,15 @@ fn legacy_cwd(ctx: &Ctx<'_>) -> Value {
 /// The Ask for an append onto command-running configuration (`what`: the
 /// spelling, `tee -a` or `>>`).
 pub(super) fn command_running_config_append_ask(what: &str, target: &str) -> Decision {
+    command_running_config_write_ask(what, "appends to", target)
+}
+
+/// [`command_running_config_append_ask`] for any write (`verb`: `appends to`,
+/// `overwrites`).
+pub(super) fn command_running_config_write_ask(what: &str, verb: &str, target: &str) -> Decision {
     Decision::ask(format!(
-        "{what} appends to {target}, which names command-running configuration (a hook wiring \
-file, a plugin hook, a gate script) or cannot be placed and so may name it — one appended line \
+        "{what} {verb} {target}, which names command-running configuration (a hook wiring \
+file, a plugin hook, a gate script) or cannot be placed and so may name it — one written line \
 adds a hook entry or a gate command, so blastguard cannot tell from the tool call whether this \
 strengthens or disarms it, and refuses to guess (user ruling 2026-11-20)"
     ))

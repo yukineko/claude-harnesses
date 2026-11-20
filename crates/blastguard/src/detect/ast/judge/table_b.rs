@@ -522,7 +522,7 @@ fn target_value(w: &Word) -> Value {
 /// * the final component has a glob metacharacter and does not start with
 ///   `.` (`.*` may match `.` and `..` — older bash — i.e. the parent itself
 ///   and ITS parent).
-pub(super) fn literal_dir_glob(w: &Word) -> Option<String> {
+pub(in crate::detect::ast) fn literal_dir_glob(w: &Word) -> Option<String> {
     const GLOB: [char; 4] = ['*', '?', '[', ']'];
     if w.quoting != Quoting::Unquoted || !matches!(w.value, Value::Undetermined(_)) {
         return None;

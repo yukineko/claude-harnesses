@@ -158,7 +158,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.145"
+version = "0.3.150"
 dependencies = [
  "anyhow",
  "clap",
@@ -222,7 +222,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.834"
+version = "0.2.837"
 dependencies = [
  "brush-parser",
  "globset",
@@ -444,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.459"
+version = "0.7.462"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -1561,7 +1561,7 @@ dependencies = [
 
 [[package]]
 name = "progeffect"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "rustpython-parser",
 ]

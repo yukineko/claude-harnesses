@@ -1,7 +1,40 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use harness_core::config::{base_dir, expand_tilde};
 use serde::Deserialize;
+
+/// Set once a close was refused because the mirror setting is undetermined
+/// (see [`GithubMirror::allows_inline_close`]). `main` reads it after the
+/// command's local work is done and exits non-zero, so a `done` / `cancel` /
+/// `recheck` whose mirror was refused is never reported as a clean success.
+static UNDETERMINED_CLOSE_REFUSED: AtomicBool = AtomicBool::new(false);
+
+/// True when this process refused a GitHub mirror action because the
+/// `github_mirror` setting could not be determined (`Invalid`).
+pub fn undetermined_close_refused() -> bool {
+    UNDETERMINED_CLOSE_REFUSED.load(Ordering::SeqCst)
+}
+
+/// Mark this process as having refused the GitHub mirror on an undetermined
+/// setting, so `main` exits non-zero once the local work is finished.
+pub fn record_undetermined_refusal() {
+    UNDETERMINED_CLOSE_REFUSED.store(true, Ordering::SeqCst);
+}
+
+/// `Err` when a mirror close was refused on an undetermined setting during this
+/// run (`main` turns it into a non-zero exit after the local work is finished).
+/// The refusal's `error:` line is already on stderr.
+pub fn undetermined_refusal_result() -> anyhow::Result<()> {
+    if undetermined_close_refused() {
+        anyhow::bail!(
+            "the GitHub mirror was not run because the github_mirror setting in config.toml \
+             could not be determined (see the error above); local state changes were kept and \
+             no GitHub issue was closed."
+        );
+    }
+    Ok(())
+}
 
 pub struct Config {
     pub enabled: bool,
@@ -27,14 +60,20 @@ pub struct Config {
 /// Read separately from [`FileConfig`] (as a raw `toml::Value`) so that a bad
 /// `github_mirror` does not make the whole file unparseable — that path drops
 /// every key to its default and would turn the mirror back ON silently.
+///
+/// A `config.toml` that EXISTS but cannot be read, or is not valid TOML, is
+/// `Invalid` too: the operator wrote a file that may say `github_mirror = false`,
+/// and whether `gh` may run is undetermined (CLAUDE.md §3). Only an ABSENT
+/// `config.toml` is the all-defaults `On` path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GithubMirror {
-    /// Key absent, `github_mirror = true`, or `config.toml` unreadable / not
-    /// valid TOML (the pre-existing all-defaults path, unchanged).
+    /// `config.toml` absent, or the key absent, or `github_mirror = true`.
     On,
     /// `github_mirror = false`: no `gh` call is made for the mirror.
     Off,
-    /// Present but not a bool; carries the diagnostic naming the key.
+    /// Undetermined: a present but non-bool `github_mirror`, a `config.toml`
+    /// that exists but cannot be read, or one that is not valid TOML. Carries
+    /// a diagnostic naming `config.toml` (and `github_mirror` where relevant).
     Invalid(String),
 }
 
@@ -45,7 +84,8 @@ impl GithubMirror {
          no GitHub issue is created, closed or read.";
 
     /// `Ok(true)` = mirror, `Ok(false)` = mirror disabled, `Err` = the setting
-    /// could not be determined (the message names `github_mirror`).
+    /// could not be determined. The message names `config.toml` (unreadable or
+    /// invalid file) or `github_mirror` (present but not a bool).
     pub fn enabled(&self) -> Result<bool, String> {
         match self {
             GithubMirror::On => Ok(true),
@@ -65,10 +105,12 @@ impl GithubMirror {
 
     /// For the inline close after `done` / `cancel` / `recheck`
     /// (`mirror_close_for`): `true` = go ahead and close. Otherwise prints why
-    /// no `gh` runs — the disabled line, or an `error:` naming the key for a
-    /// non-bool value — and returns `false`. Either way the task keeps
-    /// `issue_closed_at` unset, exactly like a failed close; the local state
-    /// change has already been committed by the caller.
+    /// no `gh` runs — the disabled line, or an `error:` naming `config.toml`
+    /// (or the key) for an undetermined setting — and returns `false`. Either
+    /// way the task keeps `issue_closed_at` unset, exactly like a failed close;
+    /// the local state change has already been committed by the caller. An
+    /// undetermined refusal also marks the process (see
+    /// [`undetermined_close_refused`]) so the command exits non-zero.
     pub fn allows_inline_close(&self, id: &str) -> bool {
         match self.enabled() {
             Ok(true) => true,
@@ -80,17 +122,45 @@ impl GithubMirror {
                 false
             }
             Err(why) => {
+                record_undetermined_refusal();
                 eprintln!("error: issue of {id} NOT closed: {why}");
                 false
             }
         }
     }
 
+    /// For `recheck`, which may close no mirrored row at all: an undetermined
+    /// setting is an error even then, so a broken config.toml never exits 0.
+    /// `Ok(())` when the mirror is on or off; `Err` names the cause.
+    pub fn recheck_gate(&self) -> anyhow::Result<()> {
+        self.enabled()
+            .map(|_| ())
+            .map_err(|why| anyhow::anyhow!("backlog recheck: GitHub mirror NOT run: {why}"))
+    }
+
+    /// Classify the contents of an existing `config.toml`. Not valid TOML is
+    /// `Invalid` (not the all-defaults `On`): the file may carry
+    /// `github_mirror = false`, which we can no longer read.
     fn from_toml(path: &Path, txt: &str) -> Self {
-        // Not valid TOML: the existing behaviour (all defaults, mirror ON)
-        // is kept as it was.
-        let Ok(toml::Value::Table(table)) = toml::from_str::<toml::Value>(txt) else {
-            return GithubMirror::On;
+        let table = match toml::from_str::<toml::Value>(txt) {
+            Ok(toml::Value::Table(table)) => table,
+            Ok(_) => {
+                return GithubMirror::Invalid(format!(
+                    "{} is not a TOML table, so its github_mirror setting cannot be read; \
+                     whether the GitHub issue mirror may run cannot be determined, so it does \
+                     not run. Fix config.toml, or remove it to use the defaults.",
+                    path.display()
+                ))
+            }
+            Err(e) => {
+                return GithubMirror::Invalid(format!(
+                    "{} is not valid TOML ({}); its github_mirror setting cannot be read, so \
+                     whether the GitHub issue mirror may run cannot be determined, and it does \
+                     not run. Fix config.toml, or remove it to use the defaults.",
+                    path.display(),
+                    e.message()
+                ))
+            }
         };
         match table.get("github_mirror") {
             None | Some(toml::Value::Boolean(true)) => GithubMirror::On,
@@ -114,6 +184,18 @@ struct FileConfig {
 }
 
 impl Config {
+    /// [`Config::load`] for the caller's command. `recheck` may close no
+    /// mirrored row at all, so the refusal in `mirror_close_for` never fires for
+    /// it: an undetermined mirror setting is refused here, before any work, as
+    /// an error. Other commands keep their own gates (`require` / the close).
+    pub fn load_checked(recheck: bool) -> anyhow::Result<Self> {
+        let cfg = Self::load();
+        if recheck {
+            cfg.github_mirror.recheck_gate()?;
+        }
+        Ok(cfg)
+    }
+
     pub fn load() -> Self {
         let base = base_dir("backlog");
         let mut cfg = Config {
@@ -124,19 +206,33 @@ impl Config {
             github_mirror: GithubMirror::On,
         };
         let path = base.join("config.toml");
-        if let Ok(txt) = std::fs::read_to_string(&path) {
-            cfg.github_mirror = GithubMirror::from_toml(&path, &txt);
-            if let Ok(fc) = toml::from_str::<FileConfig>(&txt) {
-                if let Some(v) = fc.enabled {
-                    cfg.enabled = v;
+        match std::fs::read_to_string(&path) {
+            Ok(txt) => {
+                cfg.github_mirror = GithubMirror::from_toml(&path, &txt);
+                if let Ok(fc) = toml::from_str::<FileConfig>(&txt) {
+                    if let Some(v) = fc.enabled {
+                        cfg.enabled = v;
+                    }
+                    if let Some(v) = fc.store_dir {
+                        cfg.store_dir = expand_tilde(&v);
+                        cfg.store_dir_pinned = true;
+                    }
+                    if let Some(v) = fc.inject_limit {
+                        cfg.inject_limit = v;
+                    }
                 }
-                if let Some(v) = fc.store_dir {
-                    cfg.store_dir = expand_tilde(&v);
-                    cfg.store_dir_pinned = true;
-                }
-                if let Some(v) = fc.inject_limit {
-                    cfg.inject_limit = v;
-                }
+            }
+            // Absent: the all-defaults path, unchanged.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            // Present but unreadable (EISDIR, EACCES, …): whether the mirror
+            // may run is undetermined, so it does not run (CLAUDE.md §3).
+            Err(e) => {
+                cfg.github_mirror = GithubMirror::Invalid(format!(
+                    "{} exists but cannot be read ({e}); whether the GitHub issue mirror may \
+                     run cannot be determined, so it does not run. Fix config.toml, or remove \
+                     it to use the defaults.",
+                    path.display()
+                ));
             }
         }
         cfg

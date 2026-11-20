@@ -1,11 +1,32 @@
-//! The file writes of a Python program, read from its tokens, for the
-//! write-then-run check of `echo_script_file` (backlog 245a4c5f): a
-//! `python3 - <<'PY'` program that writes `t_test.sh` followed in the same
-//! command by `sh t_test.sh` was Allow, while the `cat > t_test.sh <<'EOF'`
-//! twin was Deny.
+//! The file writes of a Python program, for the write-then-run check of
+//! `echo_script_file` (backlog 245a4c5f): a `python3 - <<'PY'` program that
+//! writes `t_test.sh` followed in the same command by `sh t_test.sh` was
+//! Allow, while the `cat > t_test.sh <<'EOF'` twin was Deny.
 //!
-//! A program that does not tokenise as Python, or that holds a
-//! dynamic-execution or process marker
+//! # Known programs: the parser's effects (S5, backlog 06c51772)
+//!
+//! The program is first read by the parser (`progeffect::python::analyze`).
+//! When that reading is Known, the writes are its effects and nothing else
+//! (`ast_writes`): every effect that `writes_file` — `Truncate` / `Append`
+//! on their path, `Touch` / `Resize` on their path, `Move` / `Copy` on their
+//! destination, `Link` on the link — is one write on that literal path. Its
+//! text is the effect's `content` for a `Truncate` / `Append` that carries
+//! one (the `open(P, M).write(C)` / `Path(P).write_text(C)` shapes
+//! progeffect resolves); every other write's text is NOT read (`content` is
+//! `Err`), which the caller turns into an Ask when the file may be run. A
+//! Known program with an effect that runs another program (`subprocess.run`,
+//! `os.system`) adds one write whose path and text are both unknown: what
+//! that program writes is not read. Text vs code is the parser's: a string
+//! literal holding a backtick, `exec` or `subprocess` is data and changes
+//! nothing (the substring markers below are not consulted for a Known
+//! program).
+//!
+//! # Undetermined programs: the legacy token reading (restrictive)
+//!
+//! When the parser's reading is Undetermined (a parse error, `exec` /
+//! `eval`, a non-literal path, an alias it does not follow, …) the tokens
+//! are read as below, unchanged. A program that does not tokenise as
+//! Python, or that holds a dynamic-execution or process marker
 //! (`inert_literal::has_dynamic_code_execution`: `exec`, `eval`,
 //! `subprocess`, `os.system`, …), is reported as one write whose path and
 //! text are both unknown. Otherwise its tokens are read.
@@ -65,16 +86,16 @@ pub(in crate::detect) struct PythonWrite {
     /// Whether the write appends to the file rather than replacing it.
     pub(in crate::detect) append: bool,
     /// The call, as named in a reason.
-    pub(in crate::detect) call: &'static str,
+    pub(in crate::detect) call: String,
 }
 
 impl PythonWrite {
-    fn unread(path: Option<String>, call: &'static str, why: &str) -> PythonWrite {
+    fn unread(path: Option<String>, call: &str, why: &str) -> PythonWrite {
         PythonWrite {
             path,
             content: Err(why.to_string()),
             append: false,
-            call,
+            call: call.to_string(),
         }
     }
 }
@@ -82,8 +103,70 @@ impl PythonWrite {
 const NOT_ONE_LITERAL: &str =
     "the Python program writes it with a call or a text that is not one plain string literal";
 
+const NOT_READ_BY_PARSER: &str =
+    "the Python program writes it with a call or a text whose value blastguard's Python parser \
+does not read";
+
 /// The writes of `program`, in source order; see the module documentation.
+///
+/// `sys.argv` is given as one undetermined word: a write whose path comes
+/// from `sys.argv` makes the parser's reading Undetermined, and the legacy
+/// token reading (which does not read that path either) answers.
 pub(in crate::detect) fn python_program_writes(program: &str) -> Vec<PythonWrite> {
+    match progeffect::python::analyze(program, &[None]) {
+        progeffect::Analysis::Known(effects) => ast_writes(&effects),
+        progeffect::Analysis::Undetermined(_) => token_writes(program),
+    }
+}
+
+/// The writes of a program whose parser reading is Known: one per effect
+/// that writes a file, plus one unknown write when the program runs another
+/// program. See the module documentation.
+fn ast_writes(effects: &[progeffect::Effect]) -> Vec<PythonWrite> {
+    use progeffect::{Effect, FsOp};
+    let mut out = Vec::new();
+    let mut runs: Option<&str> = None;
+    for e in effects {
+        let op = match e {
+            Effect::Fs { op, .. } => op,
+            Effect::Shell { .. } | Effect::Exec { .. } => {
+                runs.get_or_insert(e.call());
+                continue;
+            }
+        };
+        let (path, content, append) = match op {
+            FsOp::Truncate { path, content } => (path, content.clone(), false),
+            FsOp::Append { path, content } => (path, content.clone(), true),
+            FsOp::Touch { path } | FsOp::Resize { path, .. } => (path, None, false),
+            FsOp::Move { to, .. } | FsOp::Copy { to, .. } => (to, None, false),
+            FsOp::Link { link, .. } => (link, None, false),
+            FsOp::Delete { .. }
+            | FsOp::RemoveDir { .. }
+            | FsOp::Chmod { .. }
+            | FsOp::Chown { .. }
+            | FsOp::MakeDir { .. } => continue,
+        };
+        out.push(PythonWrite {
+            path: Some(path.clone()),
+            content: content.ok_or_else(|| NOT_READ_BY_PARSER.to_string()),
+            append,
+            call: e.call().to_string(),
+        });
+    }
+    if let Some(call) = runs {
+        out.push(PythonWrite::unread(
+            None,
+            call,
+            "the Python program runs another program, and blastguard does not read what that \
+program writes",
+        ));
+    }
+    out
+}
+
+/// The legacy token reading, for a program the parser does not read; see
+/// the module documentation.
+fn token_writes(program: &str) -> Vec<PythonWrite> {
     let program = python_newlines(program);
     if !python_program_tokenises(&program) {
         return vec![PythonWrite::unread(
@@ -148,7 +231,7 @@ pub(in crate::detect) fn python_program_writes(program: &str) -> Vec<PythonWrite
                                 .map(str::to_string)
                                 .ok_or_else(|| NOT_ONE_LITERAL.to_string()),
                             append: m.contains('a'),
-                            call: "open",
+                            call: "open".to_string(),
                         });
                     }
                     // `r+` (an in-place update), any other literal mode, or
@@ -183,11 +266,7 @@ pub(in crate::detect) fn python_program_writes(program: &str) -> Vec<PythonWrite
                         .map(str::to_string)
                         .ok_or_else(|| NOT_ONE_LITERAL.to_string()),
                     append: false,
-                    call: if last == "write_text" {
-                        "write_text"
-                    } else {
-                        "write_bytes"
-                    },
+                    call: last.to_string(),
                 });
             }
             _ => {

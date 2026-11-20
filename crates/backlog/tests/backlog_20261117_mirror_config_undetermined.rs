@@ -289,7 +289,6 @@ fn assert_undetermined_refuses(case: &str, e: &Env, id: &str, out: &(i32, String
 
 // test-weakening-justified: new RED for an unfixed defect (2026-11-17).
 #[test]
-#[ignore = "RED: 2026-11-17 invalid-TOML config.toml turns the GitHub mirror ON (done runs gh issue close) — remove when fixed"]
 fn red_done_with_invalid_toml_config_runs_no_gh_and_reports_error() {
     let (e, id) = setup_with_mirrored_row("badtoml");
     // The operator meant to turn the mirror OFF, but the file is broken.
@@ -300,7 +299,6 @@ fn red_done_with_invalid_toml_config_runs_no_gh_and_reports_error() {
 
 // test-weakening-justified: new RED for an unfixed defect (2026-11-17).
 #[test]
-#[ignore = "RED: 2026-11-17 unreadable config.toml turns the GitHub mirror ON (done runs gh issue close) — remove when fixed"]
 fn red_done_with_unreadable_config_runs_no_gh_and_reports_error() {
     let (e, id) = setup_with_mirrored_row("unreadable");
     // A directory where the file should be: read_to_string fails (EISDIR)

@@ -608,7 +608,13 @@ substitution, inside another command's word / redirect / here-document body,
 or is a non-last pipeline stage; has an effect (or an output redirect) while
 another command on the line may run a file (write-then-run stays with the
 legacy readings — and the harness-5b-owned written-file reading,
-dc27f669 / bf90fa9d, is untouched); is a `-c` program that runs a command
+dc27f669 / bf90fa9d, is untouched; the files a quoted `python3 - <<'PY'`
+program writes, which that write-then-run reading judges, come for a Known
+program from the parser's effects — `Truncate` / `Append` with the text
+progeffect resolves for `open(P, M).write(C)` / `Path(P).write_text(C)`,
+any other write's text not read, a run of another program an unknown
+write — and only an Undetermined program keeps the legacy token reading
+with its substring markers, backlog 06c51772); is a `-c` program that runs a command
 while the line feeds Python's stdin; or when the neutral text does not
 re-analyse to the same commands.
 

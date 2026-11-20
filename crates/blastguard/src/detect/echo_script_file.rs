@@ -352,9 +352,12 @@ type PythonWrittenFiles = (Vec<WrittenFile>, Vec<Vec<String>>, Vec<(usize, usize
 /// ([`super::heredoc::python_stdin_here_document`], `python3 - <<'PY'`)
 /// writes, as [`super::interpreter::python_program_writes`] reads them
 /// (backlog 245a4c5f: `open("t.sh","w").write("chmod 777 /etc/hosts\n")` in
-/// that body followed by `sh t.sh` was Allow). A path that is not an exact
-/// literal is an `Opaque` target (see the module documentation for what may
-/// run one).
+/// that body followed by `sh t.sh` was Allow): the effects of the Python
+/// parser (`progeffect`) when its reading is Known, the legacy token
+/// reading otherwise (backlog 06c51772). A write whose path is not known (a
+/// legacy reading of a program it does not read, or a Known program that
+/// runs another program) is an `Opaque` target (see the module
+/// documentation for what may run one).
 ///
 /// Their runs are looked for in the statements of the command WITHOUT the
 /// body, so a body line (where the write call names the file) is not read as
@@ -384,7 +387,7 @@ fn python_heredoc_files(cmd: &str) -> Option<PythonWrittenFiles> {
             target,
             append: w.append,
         };
-        record_write(&mut files, write, &vec![w.content], w.call);
+        record_write(&mut files, write, &vec![w.content], &w.call);
     }
     let statements = split_statements_into_pipe_stages(&parts.without_body);
     let reader = statements.iter().enumerate().find_map(|(s, stages)| {

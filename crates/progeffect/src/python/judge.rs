@@ -29,6 +29,12 @@ pub(super) struct Judge<'a> {
     /// that is a whole positional `print` argument ([`Judge::display_args`]);
     /// every other reference to one of them stays Undetermined.
     inert_ns: Vec<TextRange>,
+    /// For each call `X(...)` seen as the receiver of `X(...).write(C)` (one
+    /// positional `C`, no keyword, see [`Judge::note_direct_write`]): that
+    /// call's range and `C`'s resolved text (`None` when not resolved). The
+    /// outer `.write` call is visited before its receiver, so an `open`-like
+    /// receiver finds its written text here ([`Judge::open_like`]).
+    direct_writes: Vec<(TextRange, Option<String>)>,
 }
 
 impl<'a> Judge<'a> {
@@ -38,7 +44,33 @@ impl<'a> Judge<'a> {
             effects: Vec::new(),
             failure: None,
             inert_ns: Vec::new(),
+            direct_writes: Vec::new(),
         }
+    }
+
+    /// `X(...).write(C)`: records `C`'s text for the call `X(...)` (see
+    /// [`Judge::direct_writes`]). Any other shape records nothing, so a file
+    /// opened by a call not written this way has no read content.
+    fn note_direct_write(&mut self, c: &ExprCall) {
+        let Expr::Attribute(a) = c.func.as_ref() else {
+            return;
+        };
+        let Expr::Call(inner) = a.value.as_ref() else {
+            return;
+        };
+        if a.attr.as_str() != "write" {
+            return;
+        }
+        let text = single_operand(c).and_then(|x| self.cx.string(x));
+        self.direct_writes.push((inner.range, text));
+    }
+
+    /// The text `X(...).write(C)` writes through the call `c` = `X(...)`.
+    fn direct_write_text(&self, c: &ExprCall) -> Option<String> {
+        self.direct_writes
+            .iter()
+            .find(|(r, _)| *r == c.range)
+            .and_then(|(_, t)| t.clone())
     }
 
     /// User rulings 2026-11-19: a namespace builtin (`globals()`, `locals()`,
@@ -224,12 +256,36 @@ fn has_keyword(c: &ExprCall, name: &str) -> bool {
         .any(|k| k.arg.as_ref().is_some_and(|a| a.as_str() == name))
 }
 
-/// The effect a literal `open` mode has: `None` for a read.
-fn mode_effect(mode: &str, path: String) -> Option<FsOp> {
+/// The one positional operand of `c` (not `*x`), when it has no other
+/// operand and no keyword.
+fn single_operand(c: &ExprCall) -> Option<&Expr> {
+    match (c.args.as_slice(), c.keywords.is_empty()) {
+        ([x], true) if !matches!(x, Expr::Starred(_)) => Some(x),
+        _ => None,
+    }
+}
+
+/// The effect a literal `open` mode has: `None` for a read. `written` is the
+/// text the one direct `.write(C)` on the open call writes; it is kept only
+/// when the mode appends or starts from an empty file (`w` / `x`), so the
+/// text is the file's whole new content or exactly what is added — an `r+`
+/// update keeps `None`.
+fn mode_effect(mode: &str, path: String, written: Option<String>) -> Option<FsOp> {
     if mode.contains('a') {
-        Some(FsOp::Append { path })
-    } else if mode.contains(['w', 'x', '+']) {
-        Some(FsOp::Truncate { path })
+        Some(FsOp::Append {
+            path,
+            content: written,
+        })
+    } else if mode.contains(['w', 'x']) {
+        Some(FsOp::Truncate {
+            path,
+            content: written,
+        })
+    } else if mode.contains('+') {
+        Some(FsOp::Truncate {
+            path,
+            content: None,
+        })
     } else {
         None
     }
@@ -303,7 +359,7 @@ impl Judge<'_> {
                 }
             },
         };
-        if mode_effect(&mode, String::new()).is_none() {
+        if mode_effect(&mode, String::new(), None).is_none() {
             return;
         }
         // A file descriptor (`open(1, 'w')`) was opened elsewhere, where it
@@ -312,7 +368,7 @@ impl Judge<'_> {
             return;
         }
         if let Some(p) = self.path_operand(call, path) {
-            if let Some(op) = mode_effect(&mode, p) {
+            if let Some(op) = mode_effect(&mode, p, self.direct_write_text(c)) {
                 self.push(call, op);
             }
         }
@@ -451,7 +507,10 @@ impl Judge<'_> {
                     self.cx.qual(f).as_deref() == Some("os.O_RDONLY") || int(f) == Some(0)
                 });
                 if !read_only {
-                    self.one_path(q, c, |path| FsOp::Truncate { path });
+                    self.one_path(q, c, |path| FsOp::Truncate {
+                        path,
+                        content: None,
+                    });
                 }
             }
             "os.fdopen" => {}
@@ -601,7 +660,7 @@ impl Judge<'_> {
             let literal_modes = c.args.iter().filter_map(|a| self.cx.string(a));
             let writes = literal_modes
                 .chain(mode.and_then(|m| self.cx.string(m)))
-                .any(|m| m.len() <= 3 && mode_effect(&m, String::new()).is_some());
+                .any(|m| m.len() <= 3 && mode_effect(&m, String::new(), None).is_some());
             if writes || mode.is_some_and(|m| self.cx.string(m).is_none()) {
                 self.undetermined(format!("`{shown}` may open a file for writing"));
             }
@@ -653,7 +712,10 @@ impl Judge<'_> {
             return;
         };
         let op = match attr {
-            "write_text" | "write_bytes" => FsOp::Truncate { path: p },
+            "write_text" | "write_bytes" => FsOp::Truncate {
+                path: p,
+                content: single_operand(c).and_then(|x| self.cx.string(x)),
+            },
             "unlink" => FsOp::Delete {
                 path: p,
                 recursive: false,
@@ -713,6 +775,7 @@ impl Visit for Judge<'_> {
         // Before the callee and arguments are walked (the walker calls this
         // hook first), so `name_head` sees the inert marks.
         self.display_args(c);
+        self.note_direct_write(c);
         match c.func.as_ref() {
             Expr::Name(n) => match self.cx.b.resolve(n.id.as_str()) {
                 Resolved::Module(q) => {

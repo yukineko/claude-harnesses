@@ -113,9 +113,11 @@ fn decomposition_json(task_id: &str, kind: Option<&str>, repro: Option<&str>) ->
 /// reads (`passed`, and `cmd` — the same on both sides, since `tdd oracle`
 /// only accepts a Fail→Pass of one and the same command) — under `<dir>/.tdd/`, `tdd`'s default `proof_dir`. This
 /// is exactly the directory `tdd oracle` will read from when `condukt`
-/// shells out to it with `current_dir(run_dir)`, and `run_dir` defaults to
-/// the task's `condukt state set` invocation cwd when no worktree is
-/// recorded — i.e. `dir` itself.
+/// shells out to it with `current_dir(run_dir)`, and `run_dir` is the task's
+/// recorded worktree — the fixtures record `dir` itself via
+/// `state set --worktree`. With no recorded worktree (and no archived proof)
+/// condukt refuses to judge the oracle rather than read the caller's cwd
+/// (834ccf88), so `dir` must be recorded as the worktree.
 fn write_proof(dir: &Path, task: &str, kind: &str, passed: bool) {
     let proof_dir = dir.join(".tdd");
     std::fs::create_dir_all(&proof_dir).expect("create proof dir");
@@ -160,6 +162,37 @@ fn init_run(
     );
 }
 
+/// Make `dir` an honest git worktree top-level (one commit, clean tracked
+/// tree) so it can be recorded as the task's worktree. Since 834ccf88 the
+/// oracle refuses to judge a task with no recorded worktree and no archived
+/// proof, so the fixture must record the tree that holds the `.tdd` proofs.
+/// `.tdd/` and the decomposition are untracked/excluded, as in a real task
+/// worktree.
+fn make_git_worktree(dir: &Path) {
+    let git = |args: &[&str]| {
+        let out = harness_core::git_env::scrub(&mut Command::new("git"))
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .expect("git");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "t@t.t"]);
+    git(&["config", "user.name", "t"]);
+    std::fs::write(dir.join("base.txt"), "base\n").expect("write base.txt");
+    std::fs::write(dir.join(".git/info/exclude"), ".tdd/\ndecomposition.json\n")
+        .expect("write exclude");
+    git(&["add", "base.txt"]);
+    git(&["commit", "-q", "-m", "init"]);
+}
+
 #[test]
 fn fix_task_with_valid_fail_to_pass_oracle_is_verified() {
     let dir = unique_dir("accept");
@@ -178,6 +211,7 @@ fn fix_task_with_valid_fail_to_pass_oracle_is_verified() {
 
     // A genuine Fail→Pass transition: the test failed before the fix (RED)
     // and passes after it (GREEN).
+    make_git_worktree(&dir);
     write_proof(&dir, "task1", "red", false);
     write_proof(&dir, "task1", "green", true);
 
@@ -194,6 +228,8 @@ fn fix_task_with_valid_fail_to_pass_oracle_is_verified() {
             "task1",
             "--status",
             "verified",
+            "--worktree",
+            dir.to_str().unwrap(),
         ],
     );
     assert_eq!(
@@ -224,6 +260,7 @@ fn fix_task_without_valid_fail_to_pass_oracle_is_refused() {
 
     // Fail→Fail: the test failed at RED and STILL fails at GREEN — no proof
     // the fix worked. This must be a genuine, non-fallback reject.
+    make_git_worktree(&dir);
     write_proof(&dir, "task1", "red", false);
     write_proof(&dir, "task1", "green", false);
 
@@ -240,6 +277,8 @@ fn fix_task_without_valid_fail_to_pass_oracle_is_refused() {
             "task1",
             "--status",
             "verified",
+            "--worktree",
+            dir.to_str().unwrap(),
         ],
     );
     assert_ne!(

@@ -125,8 +125,19 @@ fn ctl_bash_c_nested_bash_c_echo() {
     assert_allow("k3", "bash -c 'bash -c \"echo hi\"' < /tmp/f");
 }
 #[test]
-fn ctl_bash_c_echo_pipe_bash() {
-    assert_allow("k4", "bash -c 'echo hi | bash' < /tmp/f");
+fn ctl_bash_c_echo_pipe_bash_no_worse_than_top_level() {
+    let wrapped = "bash -c 'echo hi | bash' < /tmp/f";
+    let top = "echo hi | bash";
+    let (dw, rw) = run_as(wrapped, &unique_home("k4w"), false);
+    let (dt, rt) = run_as(top, &unique_home("k4t"), false);
+    assert_eq!(
+        dw, dt,
+        "{wrapped:?} got decision={dw} reason={rw}, but {top:?} got decision={dt} reason={rt}; the -c form must be no worse than top level"
+    );
+    assert!(
+        !rw.contains("/tmp/f"),
+        "{wrapped:?} (decision={dw}) blames the redirected file although the inner shell reads a pipe; reason={rw}"
+    );
 }
 #[test]
 fn ctl_sh_c_wc_stdin_file() {

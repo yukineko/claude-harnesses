@@ -319,3 +319,7 @@ reason = "Split out of detect/git.rs for the file-growth cap (backlog 606a93ab):
 [[ack]]
 path = "crates/blastguard/src/detect/ast/eval/function.rs"
 reason = "Child module of detect/ast/eval.rs (17bb391cc): function definitions evaluated only under evaluate_with_function_definitions, reading the evaluator state directly. Its behaviour is part of eval.rs, which is already bound to docs/specs/blastguard.md; the submodule describes no separate behaviour."
+
+[[ack]]
+path = "crates/blastguard/src/detect/payload/determined_output.rs"
+reason = "Added by 208f18ed7 / 8aabb19cd (backlog 40dc52c0): computes the program text of a producer pipeline whose every stage is modelled, so a fully determined procsub/stdin program is judged instead of Asked. docs/specs/blastguard.md has no section for it yet (searched 2026-11-20); its contract is in the module doc. Acked to unblock main's push; a spec section is owed."

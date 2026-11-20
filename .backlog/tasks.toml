@@ -2382,3 +2382,34 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
      Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-bce4e0785630c738)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_heredoc_body_fp`"""
+
+[[task]]
+id = "375d7394"
+title = "blastguard: read-only grep whose pattern is a destructive command name with a glob operand is Ask (main) / Deny (subagent) (false positive)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-20 at main 4c7da59ba (0.2.782): a recursive grep for the word truncate over a glob of blastguard detect sources is Ask in main and Deny in a subagent, reason: grep is not a recognised command and what follows parses as a destructive command line. The same pipeline with a non-verb pattern is Allow; the same pattern on a plain file operand (no glob) is Allow. RED: crates/blastguard/tests/grep_pattern_word_fp_20261120.rs, 5 ignored tests, commit 334756efd. Suspected (code reading only): the unknown-verb tail rule in detect.rs re-parses the words after grep from the pattern word. Seen live: blocked two subagents (relays bgr-fe17e59c4838, bgr-0ed547297960)."
+created_at = 1795138942
+updated_at = 1795138942
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test grep_pattern_word_fp_20261120 -- --ignored"
+rev = "334756efdd1c41642fa6c1425587f334e30dae9e"
+observed_at = 1795138942
+detail = """
+exit 101: t; finished in 0.93s
+
+   Compiling blastguard v0.2.783 (/Users/yuki/src/.harness-worktrees/bg-s3b-glob/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.68s
+     Running tests/grep_pattern_word_fp_20261120.rs (target/debug/deps/grep_pattern_word_fp_20261120-6dd5e48caac18a93)
+error: test failed, to rerun pass `-p blastguard --test grep_pattern_word_fp_20261120`"""

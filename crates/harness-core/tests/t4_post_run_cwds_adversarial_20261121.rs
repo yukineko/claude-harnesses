@@ -10,6 +10,8 @@
 //! Written by a test author who did not write the implementation. Each test
 //! asserts only what the contract states.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use harness_core::relay::{mark_executed, post_run_cwds, queue};
 use std::path::{Path, PathBuf};
 
@@ -147,25 +149,25 @@ fn fixture(name: &str) -> (tempfile::TempDir, PathBuf) {
     let d = tempfile::Builder::new()
         .prefix(&format!("t4-pcwd-{name}-"))
         .tempdir()
-        .unwrap();
+        .expect("create tempdir");
     // Session transcript `<d>/t/s.jsonl` with subagent `a1`.
     let main = d.path().join("t").join("s.jsonl");
     let sub = d.path().join("t").join("s").join("subagents");
-    std::fs::create_dir_all(&sub).unwrap();
-    std::fs::write(&main, "{}\n").unwrap();
-    std::fs::write(sub.join("agent-a1.jsonl"), "{}\n").unwrap();
+    std::fs::create_dir_all(&sub).expect("create subagents dir");
+    std::fs::write(&main, "{}\n").expect("write transcript");
+    std::fs::write(sub.join("agent-a1.jsonl"), "{}\n").expect("write subagent transcript");
     (d, main)
 }
 
 fn run(dir: &Path, t: &Path, cwd: &str, cmd: &str) -> Option<String> {
-    mark_executed(dir, "s", Some(t), cwd, cmd, Some(0)).unwrap()
+    mark_executed(dir, "s", Some(t), cwd, cmd, Some(0)).expect("mark_executed io")
 }
 
 #[test]
 fn mark_executed_marks_matching_command_at_post_cd_cwd() {
     let (d, t) = fixture("pos");
     let cmd = "cd sub && make";
-    let id = queue(d.path(), "s", Some("a1"), Q, cmd, "r").unwrap();
+    let id = queue(d.path(), "s", Some("a1"), Q, cmd, "r").expect("queue row");
     assert_eq!(run(d.path(), &t, "/q/w/sub", cmd), Some(id));
 }
 
@@ -173,7 +175,7 @@ fn mark_executed_marks_matching_command_at_post_cd_cwd() {
 fn mark_executed_does_not_mark_a_different_command_at_the_post_cd_cwd() {
     let (d, t) = fixture("othercmd");
     let cmd = "cd sub && make";
-    queue(d.path(), "s", Some("a1"), Q, cmd, "r").unwrap();
+    queue(d.path(), "s", Some("a1"), Q, cmd, "r").expect("queue row");
     assert_eq!(run(d.path(), &t, "/q/w/sub", "cd sub && make clean"), None);
     assert_eq!(run(d.path(), &t, "/q/w/sub", "make"), None);
 }
@@ -182,7 +184,7 @@ fn mark_executed_does_not_mark_a_different_command_at_the_post_cd_cwd() {
 fn mark_executed_does_not_mark_an_unrelated_cwd() {
     let (d, t) = fixture("unrelated");
     let cmd = "cd sub && make";
-    queue(d.path(), "s", Some("a1"), Q, cmd, "r").unwrap();
+    queue(d.path(), "s", Some("a1"), Q, cmd, "r").expect("queue row");
     assert_eq!(run(d.path(), &t, "/some/random/dir", cmd), None);
 }
 
@@ -190,7 +192,7 @@ fn mark_executed_does_not_mark_an_unrelated_cwd() {
 fn mark_executed_does_not_mark_the_expansion_of_a_non_literal_cd() {
     let (d, t) = fixture("nonlit");
     let cmd = "cd $HOME && make";
-    queue(d.path(), "s", Some("a1"), Q, cmd, "r").unwrap();
+    queue(d.path(), "s", Some("a1"), Q, cmd, "r").expect("queue row");
     let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/nobody".to_string());
     assert_eq!(run(d.path(), &t, &home, cmd), None);
     assert_eq!(run(d.path(), &t, "/anything", cmd), None);
@@ -200,7 +202,7 @@ fn mark_executed_does_not_mark_the_expansion_of_a_non_literal_cd() {
 fn mark_executed_does_not_mark_a_literal_cd_after_a_non_literal_one() {
     let (d, t) = fixture("afternonlit");
     let cmd = "cd $X && cd sub && make";
-    queue(d.path(), "s", Some("a1"), Q, cmd, "r").unwrap();
+    queue(d.path(), "s", Some("a1"), Q, cmd, "r").expect("queue row");
     assert_eq!(run(d.path(), &t, "/q/w/sub", cmd), None);
 }
 
@@ -208,6 +210,6 @@ fn mark_executed_does_not_mark_a_literal_cd_after_a_non_literal_one() {
 fn mark_executed_still_marks_the_unchanged_queued_cwd() {
     let (d, t) = fixture("queuedcwd");
     let cmd = "cd $X && make";
-    let id = queue(d.path(), "s", Some("a1"), Q, cmd, "r").unwrap();
+    let id = queue(d.path(), "s", Some("a1"), Q, cmd, "r").expect("queue row");
     assert_eq!(run(d.path(), &t, Q, cmd), Some(id));
 }

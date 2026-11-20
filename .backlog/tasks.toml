@@ -2820,3 +2820,32 @@ exit 1: ero_and_restores_old_entry
 FAILED scripts/tests/test_rollout_default_path_rebuild_failure.py::DefaultPathRebuildFailure::test_failed_rebuild_removes_entry_created_by_this_run
 FAILED scripts/tests/test_rollout_default_path_rebuild_failure.py::DefaultPathRebuildFailure::test_failed_rebuild_restores_every_repointed_entry
 ============================== 4 failed in 0.95s ==============================="""
+
+[[task]]
+id = "68b1a9dc"
+title = '''blastguard fail-open: echo-feeder variants of rm -rf /etc piped to a shell are only Ask in main (Deny in subagent): env bash, backslash-escaped words, $X var, >/dev/stdout, \; , /bin/echo, and each nested in echo '…' | bash'''
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Found by the independent test author of 8cadc78f (merged 039500893, tests ddd587ad4). system-harm-always-deny: Ask is weaker than the required Deny. 12 ignored REDs in crates/blastguard/tests/backlog_20261120_8cadc78f_adversarial.rs: p07_env_bash p15_backslash_space p17_var p18_redirect_stdout p33_escaped_semicolon p37_abs_echo n01..n06 (nested)."
+created_at = 1795179741
+updated_at = 1795179741
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_8cadc78f_adversarial -- --ignored p07_ p15_ p17_ p18_ p33_ p37_ n01_ n02_ n03_ n04_ n05_ n06_"
+rev = "a1d9b98361992dc9c8f122030b2533aef461ef13"
+observed_at = 1795179741
+detail = """
+exit 101: ng blastguard v0.2.816 (/Users/yuki/src/.harness-worktrees/sink-file-20261120/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 29.45s
+     Running tests/backlog_20261120_8cadc78f_adversarial.rs (target/debug/deps/backlog_20261120_8cadc78f_adversarial-32f4534269472e76)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_8cadc78f_adversarial`"""

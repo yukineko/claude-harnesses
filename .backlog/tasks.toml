@@ -3010,3 +3010,36 @@ exit 1:
   ok: the only stage was health-gated (1 gate invocation)
   ok: healthy gate reported PROCEED
 FAIL: case C: a healthy single-stage canary must exit 0, got 1 (does the fix always halt?)"""
+
+[[task]]
+id = "1564a3fc"
+title = "rollout: scripts/tests/canary-gate-eval-failclosed.sh fails - explicit override does not proceed to completion (exit 1, expected 0)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "canary",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-20/21 by the coordinator (session 62e92d16) during run-20261120-171414-35880 / d4a135ba: bash scripts/tests/canary-gate-eval-failclosed.sh rc=1 'FAIL: expected exit 0 (explicit override proceeds to completion), got 1' at base 039500893 and identically at tip 73c0f1578. Pre-existing. Readings: (a) fixture drift; (b) real regression: the explicit canary override no longer proceeds. Not investigated."
+created_at = 1795193442
+updated_at = 1795193442
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/canary-gate-eval-failclosed.sh"
+rev = "9f289f8fd3355aad87e32fa8211dd07c81b73d75"
+observed_at = 1795193442
+detail = """
+exit 1:  settings file)
+    OK: every @yukineko plugin key on this machine maps to a crate under crates/ (3 registry entr(y/ies) inspected)
+    
+    rollout: FAILED — drift remains for the targeted plugin(s) after this run
+             (see above). They are NOT current, so this script will not report success.
+    RC=1
+(exit code: 1)
+FAIL: expected exit 0 (explicit override proceeds to completion), got 1"""

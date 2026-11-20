@@ -2665,3 +2665,32 @@ exit 101: ss-worktrees/red-testscope-task-regression-20261120/crates/condukt)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.76s
      Running tests/backlog_20261120_testscope_task_crate_regression.rs (target/debug/deps/backlog_20261120_testscope_task_crate_regression-945a00b1985801be)
 error: test failed, to rerun pass `-p condukt --test backlog_20261120_testscope_task_crate_regression`"""
+
+[[task]]
+id = "9236d343"
+title = "blastguard: quoted heredoc body backtick text (`--lib`/`--doc` in a doc comment) judged as a run-time command word expansion when sed lines with backticked patterns follow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "RED crates/blastguard/tests/backlog_20261120_quoted_heredoc_group_backtick_flag_fp.rs + fixture tests/fixtures/backlog_20261120_quoted_heredoc_group_backtick_flag_fp.cmd (branch red-testscope-task-regression-20261120, 690fe8e01). Observed 2026-11-20 subagent deny, relay bgr-a866a4fd1397. At HEAD main=ask, subagent=deny. Without the 3 sed lines: allow. Minimal trigger not isolated (small shapes all allow)."
+created_at = 1795171754
+updated_at = 1795171754
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_quoted_heredoc_group_backtick_flag_fp -- --ignored"
+rev = "690fe8e015d4d075aab6e762dfc97ab710c5368b"
+observed_at = 1795171754
+detail = """
+exit 101: pe-task-regression-20261120/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.56s
+     Running tests/backlog_20261120_quoted_heredoc_group_backtick_flag_fp.rs (target/debug/deps/backlog_20261120_quoted_heredoc_group_backtick_flag_fp-6e839261438dfc74)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_quoted_heredoc_group_backtick_flag_fp`"""

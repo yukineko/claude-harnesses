@@ -227,6 +227,120 @@ pub fn decide_approval(risk: Level, reversibility: Level, confidence: Level) -> 
     }
 }
 
+/// Outcome of `condukt policy answer --resolve` (autonomous mode only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolveOutcome {
+    /// Destructive (`decide` = Block): refuse. Exit 3.
+    Deny,
+    /// Unmeasured / untestable: reject, never a self-answer. Exit 4.
+    Reject,
+    /// Cannot be resolved (conflict, or no valid recommended option): the caller
+    /// may re-pose once as a different answerable question, else cancel the
+    /// item. Exit 5.
+    Cancel,
+    /// Everything else: self-answer with the recommended option. Exit 0.
+    Auto,
+}
+
+/// Pure decision for `--resolve` (user ruling 2026-11-21: 「破壊はdeny,未測定は
+/// reject,autoで自答はいいが解決できないときは別の問いかcancel, 基本はすべて
+/// Allow」). Never escalates. Precedence, first match wins:
+/// (a) `base` (the plain [`decide`] verdict) is `Block` -> `Deny`;
+/// (b) `untestable` or `unmeasured` -> `Reject`;
+/// (c) `conflict`, or no valid recommended option -> `Cancel`;
+/// (d) otherwise `Auto`.
+pub fn resolve_outcome(
+    base: Decision,
+    untestable: bool,
+    unmeasured: bool,
+    conflict: bool,
+    has_valid_recommend: bool,
+) -> ResolveOutcome {
+    if base == Decision::Block {
+        ResolveOutcome::Deny
+    } else if untestable || unmeasured {
+        ResolveOutcome::Reject
+    } else if conflict || !has_valid_recommend {
+        ResolveOutcome::Cancel
+    } else {
+        ResolveOutcome::Auto
+    }
+}
+
+/// Journal a `--resolve` outcome (row carries `"resolve":true`), print its
+/// stdout JSON and return the process exit code (0 auto / 3 deny / 4 reject /
+/// 5 cancel). Never 2.
+pub fn emit_resolve(
+    outcome: ResolveOutcome,
+    question: &str,
+    options: &[String],
+    recommend: usize,
+    dir: &std::path::Path,
+) -> i32 {
+    let (name, chosen, code) = match outcome {
+        ResolveOutcome::Deny => ("deny", String::new(), 3),
+        ResolveOutcome::Reject => ("reject", String::new(), 4),
+        ResolveOutcome::Cancel => ("cancel", String::new(), 5),
+        ResolveOutcome::Auto => (
+            "auto",
+            options.get(recommend).cloned().unwrap_or_default(),
+            0,
+        ),
+    };
+    let entry = crate::gatelog::GateDecision {
+        question: question.to_string(),
+        options: options.to_vec(),
+        recommend_index: recommend,
+        chosen: chosen.clone(),
+        policy: name.to_string(),
+        created_at: crate::state::now_secs(),
+    };
+    let mut row = serde_json::to_value(&entry).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(obj) = row.as_object_mut() {
+        obj.insert("resolve".to_string(), serde_json::Value::Bool(true));
+        obj.entry("policy").or_insert(serde_json::json!(name));
+    }
+    harness_core::append::append_line_reporting(
+        &crate::gatelog::decisions_path(dir),
+        &row.to_string(),
+        "gate-decisions",
+    );
+    if code == 0 {
+        let chosen_json = serde_json::to_string(&chosen).unwrap_or_else(|_| "\"\"".to_string());
+        println!(
+            "{{\"answered\":true,\"policy\":\"auto\",\"chosen\":{chosen_json},\"recommend_index\":{recommend}}}"
+        );
+    } else {
+        println!("{{\"answered\":false,\"policy\":\"{name}\",\"resolve\":true}}");
+    }
+    code
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::*;
+
+    #[test]
+    fn precedence_is_deny_reject_cancel_auto() {
+        use ResolveOutcome::*;
+        let b = Decision::Block;
+        let e = Decision::Escalate;
+        assert_eq!(resolve_outcome(b, true, true, true, false), Deny);
+        assert_eq!(resolve_outcome(e, true, false, true, false), Reject);
+        assert_eq!(resolve_outcome(e, false, true, true, true), Reject);
+        assert_eq!(resolve_outcome(e, false, false, true, true), Cancel);
+        assert_eq!(
+            resolve_outcome(Decision::Auto, false, false, false, false),
+            Cancel
+        );
+        assert_eq!(resolve_outcome(e, false, false, false, true), Auto);
+        assert_eq!(
+            resolve_outcome(Decision::Auto, false, false, false, true),
+            Auto
+        );
+    }
+}
+
 #[cfg(test)]
 mod proptests {
     //! Property-based floor for [`decide`]: monotonicity and the irreversible

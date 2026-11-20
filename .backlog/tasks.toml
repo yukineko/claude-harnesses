@@ -2992,6 +2992,8 @@ notes = "Observed 2026-11-20/21 by the coordinator (session 62e92d16) during run
 created_at = 1795193376
 updated_at = 1795193376
 weight = 0.0
+issue_number = 1904
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1904"
 rev = 0
 
 [task.repro]

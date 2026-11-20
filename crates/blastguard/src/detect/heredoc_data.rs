@@ -80,7 +80,11 @@
 //! (`alias`, `hash`, `enable`, `shopt`, `setopt`, `PATH`, a landing path
 //! named), when a call of a defined function has a piped or redirected stdin,
 //! or when a call of a defined function names a landing path (a function is
-//! not the inert tool of the same name). A quoted body is never expanded, so
+//! not the inert tool of the same name). A body inside a function reaches
+//! wherever the CALL sends its stdout: the file a call redirects to (`f >
+//! notes.md`) is a landing path, and a call whose stdout is piped on or
+//! redirected to a file that is not a literal data / code file (`f > p.awk`,
+//! `f > Makefile`) keeps every body. A quoted body is never expanded, so
 //! `$(f)` in it is text, not a call of `f`.
 //!
 //! A command longer than `ast::MAX_PARSE_BYTES` is not parsed whole (ruling
@@ -236,8 +240,22 @@ fn data_bodies(script: &Script, text: &str) -> Option<(Vec<Range<usize>>, bool)>
     if spans.is_empty() {
         return None;
     }
-    if script.has_function_definition && !functions_harmless(script, &readers) {
-        return None;
+    if script.has_function_definition {
+        if !functions_harmless(script, &readers) {
+            return None;
+        }
+        // A quoted body inside a function body reaches wherever the CALL sends
+        // its stdout (the reader's own stdout is the function's, usually the
+        // terminal, so `landing` above is empty for it). Where a call's stdout
+        // goes is a landing path of the body; a call whose stdout cannot be
+        // resolved to a data / code file, the terminal or `/dev/null` (a pipe
+        // to the next stage, `> p.awk`, `> Makefile`, a dup of a file) keeps
+        // every body.
+        for c in &script.commands {
+            if is_defined_call(script, c) {
+                landing.extend(stdout_landing(c)?);
+            }
+        }
     }
     let mut unsure = false;
     for (i, c) in script.commands.iter().enumerate() {
@@ -266,16 +284,19 @@ fn data_bodies(script: &Script, text: &str) -> Option<(Vec<Range<usize>>, bool)>
 ///   `program_source` (`eval`, `source`, `.`, `sh -c`, an interpreter, a
 ///   wrapper): it can run the landing file or redefine a command;
 /// * a call of a defined function reads a redirected or piped stdin (its body
-///   could pass that to something that runs it).
+///   could pass that to something that runs it);
+/// * a call's stdout goes somewhere other than the terminal, `/dev/null` or a
+///   literal data / code file (checked in [`data_bodies`] with
+///   `stdout_landing`): a body inside the function lands where the call sends
+///   its stdout, and a file such as `p.awk` / `Makefile`, or a pipe, could be
+///   run by a later command. A literal data / code file the call writes to is
+///   a landing path.
 ///
 /// `alias` / `hash` / `enable` / `shopt` / `setopt` / `PATH` are refused for
 /// every command by `runs_no_landing_file`, and a landing path named by a body
 /// command by [`names_landing_path`].
 fn functions_harmless(script: &Script, readers: &[usize]) -> bool {
-    let defined = |c: &SimpleCommand| {
-        matches!(c.argv.first().map(|w| &w.value),
-            Some(Value::Literal(h)) if script.function_names.contains(h))
-    };
+    let defined = |c: &SimpleCommand| is_defined_call(script, c);
     for (i, c) in script.commands.iter().enumerate() {
         if readers.contains(&i) && defined(c) {
             return false;
@@ -303,6 +324,13 @@ fn functions_harmless(script: &Script, readers: &[usize]) -> bool {
         }
     }
     true
+}
+
+/// True when the command word of `c` is a literal name of a function the line
+/// defines (a call of that function).
+fn is_defined_call(script: &Script, c: &SimpleCommand) -> bool {
+    matches!(c.argv.first().map(|w| &w.value),
+        Some(Value::Literal(h)) if script.function_names.contains(h))
 }
 
 /// Whether a command names a landing path ([`names_landing_path`]).

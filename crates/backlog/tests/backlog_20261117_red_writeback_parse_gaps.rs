@@ -82,7 +82,6 @@ fn control_plain_repro_tags_single_red() {
 }
 
 #[test]
-#[ignore = "RED(9a1a5129): a value of a flag missing from VALUE_FLAGS (--lockfile-path ci.lock) is read as a test-name filter, so the single RED is refused"]
 fn unknown_value_flag_value_is_not_a_filter() {
     let (c, e, b, id) = run_case("f3-misreject", REPRO_LOCKFILE, ONE);
     assert!(
@@ -92,7 +91,6 @@ fn unknown_value_flag_value_is_not_a_filter() {
 }
 
 #[test]
-#[ignore = "RED(9a1a5129): a value of a flag missing from VALUE_FLAGS is read as a filter and selects an unrelated RED (red_b) although the repro names no test"]
 fn unknown_value_flag_value_does_not_pick_wrong_test() {
     let body = "#[test]\n#[ignore = \"RED: a\"]\nfn red_a() { panic!(); }\n#[test]\n#[ignore = \"RED: b\"]\nfn red_b() { panic!(); }\n";
     let (c, e, b, id) = run_case(

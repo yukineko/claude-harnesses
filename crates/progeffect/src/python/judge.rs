@@ -25,8 +25,9 @@ pub(super) struct Judge<'a> {
     pub failure: Option<String>,
     /// Ranges of the `globals` / `locals` / `vars` / `compile` callee names
     /// whose call result is only displayed or discarded (see
-    /// [`Judge::inert_result`]); every other reference to one of them stays
-    /// Undetermined.
+    /// [`Judge::inert_result`]), and of a bare `globals` / `locals` / `vars`
+    /// that is a whole positional `print` argument ([`Judge::display_args`]);
+    /// every other reference to one of them stays Undetermined.
     inert_ns: Vec<TextRange>,
 }
 
@@ -90,6 +91,14 @@ impl<'a> Judge<'a> {
 
     /// The positional arguments of a call of the unbound builtin `print`
     /// are inert positions (they are only displayed).
+    ///
+    /// Besides the call shapes of [`Judge::inert_result`], an argument that is
+    /// the bare unbound [`NAMESPACE_BUILTINS`] name itself (`print(vars)`,
+    /// backlog 20261115) is inert: printing the builtin function object calls
+    /// nothing and fetches nothing. Only a whole positional argument matches —
+    /// a starred (`print(*vars)`), keyword (`print(sep=vars)`), nested
+    /// (`print((vars, 1))`), attribute (`print(vars.x)`) or bound use stays
+    /// Undetermined in `name_head`.
     fn display_args(&mut self, c: &ExprCall) {
         let Expr::Name(f) = c.func.as_ref() else {
             return;
@@ -98,6 +107,16 @@ impl<'a> Judge<'a> {
             return;
         }
         for a in &c.args {
+            if let Expr::Name(n) = a {
+                let id = n.id.as_str();
+                if NAMESPACE_BUILTINS.contains(&id)
+                    && matches!(n.ctx, ExprContext::Load)
+                    && matches!(self.cx.b.resolve(id), Resolved::Unbound)
+                {
+                    self.inert_ns.push(n.range);
+                }
+                continue;
+            }
             self.inert_result(a);
         }
     }
@@ -743,9 +762,10 @@ impl Visit for Judge<'_> {
         let id = n.id.as_str();
         if (NAMESPACE_BUILTINS.contains(&id) || id == "compile") && self.inert_ns.contains(&n.range)
         {
-            // Inert (see `inert_result`): the call's result is only
-            // displayed or discarded, so nothing fetched from the namespace
-            // is called and no compiled code is run.
+            // Inert (see `inert_result` / `display_args`): the call's result,
+            // or the bare builtin itself, is only displayed or discarded, so
+            // nothing fetched from the namespace is called and no compiled
+            // code is run.
         } else if DANGEROUS_BUILTINS.contains(&id) {
             self.undetermined(format!(
                 "the program uses `{id}`, which runs code or reaches objects by a computed name"
@@ -810,6 +830,58 @@ impl Visit for Judge<'_> {
     fn subscript_store(&mut self, s: &ExprSubscript) {
         if let Some(q) = self.cx.qual(&s.value) {
             self.undetermined(format!("the program assigns into `{q}`"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod printed_namespace_tests {
+    use crate::python::analyze;
+    use crate::Analysis;
+
+    fn known_empty(src: &str) -> bool {
+        matches!(analyze(src, &[]), Analysis::Known(e) if e.is_empty())
+    }
+
+    /// Backlog 20261115: the bare builtin, or its no-arg call, only printed.
+    #[test]
+    fn bare_or_called_namespace_builtin_printed_is_inert() {
+        for src in [
+            "print(vars)",
+            "print(locals())",
+            "print(globals())",
+            "print(1, vars, 2)",
+        ] {
+            assert!(known_empty(src), "{src}");
+        }
+    }
+
+    #[test]
+    fn other_uses_of_a_namespace_builtin_stay_undetermined() {
+        for src in [
+            "print(vars()[\"exec\"](input()))",
+            "print(*vars)",
+            "print(sep=vars)",
+            "print((vars, 1))",
+            "print([globals])",
+            "print(vars.x)",
+            "g = vars\nprint(g)",
+            "print = repr\nprint(vars)",
+            "vars = 1\nprint(vars)",
+            "f = print\nf(vars)",
+            "repr(vars)",
+            "vars",
+            "getattr(__builtins__, \"exec\")(input())",
+            "__builtins__.exec(input())",
+            "globals()[\"__builtins__\"].exec(input())",
+            "f=print; g=globals; f(g()[\"exec\"](input()))",
+            "print(getattr)",
+            "print(__builtins__)",
+        ] {
+            assert!(
+                matches!(analyze(src, &[]), Analysis::Undetermined(_)),
+                "{src}"
+            );
         }
     }
 }

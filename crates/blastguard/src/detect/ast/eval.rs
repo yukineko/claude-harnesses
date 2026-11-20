@@ -50,9 +50,15 @@
 //!   `$((..))`, `let`, `[[ a -eq b ]]` unless both operands are literal
 //!   integers, a builtin's name operand `a[i]` with a non-digit `i`, e.g.
 //!   `read 'a[x=8]'`) makes every tracked variable `Undetermined`.
-//! * Function definitions and `coproc` make the whole analysis
-//!   `Undetermined(Unsupported)` (their bodies run at a time this evaluator
-//!   does not model), as does a `$( )` / backquote inside a parameter
+//! * A function definition makes the whole analysis `Undetermined(Unsupported)`
+//!   under `evaluate`. Under `evaluate_with_function_definitions` (`function.rs`)
+//!   its body is evaluated once with every variable, the cwd and the stdin
+//!   `Undetermined` (its call time is not known), its commands are emitted, and
+//!   the state after the definition is opaque. A redirection on the body and a
+//!   non-literal name are `Unsupported`. A literal assignment in the body may
+//!   come out `Unsupported`, and `HOME` in the body is `Undetermined`.
+//!   `coproc` always makes the whole analysis `Undetermined(Unsupported)`, as
+//!   does a `$( )` / backquote inside a parameter
 //!   operation, an arithmetic expression or a subscript (also a builtin's
 //!   quoted name operand, `read 'a[$(c)]'`; `${` too there): the commands it
 //!   runs would be invisible.
@@ -125,6 +131,7 @@ use words::{finish, param};
 
 mod cwd;
 mod decl;
+mod function;
 mod words;
 
 pub(super) use cwd::hook_dir;
@@ -146,25 +153,45 @@ const MAX_UNROLL: usize = 256;
 /// Dry passes over a loop body before every variable is made `Undetermined`.
 const MAX_FIXPOINT: usize = 4;
 
-/// Evaluate a parsed program.
+/// Evaluate a parsed program. A function definition is `Undetermined(Unsupported)`.
 pub(super) fn evaluate(command: &str, program: &ast::Program) -> Analysis {
-    match catch_unwind(AssertUnwindSafe(|| run(command, program))) {
+    evaluate_with(command, program, false)
+}
+
+/// Evaluate a parsed program, evaluating function definitions (see
+/// `eval/function.rs`). Only `analyze_with_function_definitions` calls this.
+pub(super) fn evaluate_with_function_definitions(
+    command: &str,
+    program: &ast::Program,
+) -> Analysis {
+    evaluate_with(command, program, true)
+}
+
+fn evaluate_with(command: &str, program: &ast::Program, function_defs: bool) -> Analysis {
+    match catch_unwind(AssertUnwindSafe(|| run(command, program, function_defs))) {
         Ok(Ok(script)) => Analysis::Known(script),
         Ok(Err(cause)) => Analysis::Undetermined(cause),
         Err(_) => Analysis::Undetermined(Cause::Panic),
     }
 }
 
-fn run(command: &str, program: &ast::Program) -> Result<Script, Cause> {
+fn run(command: &str, program: &ast::Program, function_defs: bool) -> Result<Script, Cause> {
     let text = Text::new(command, Origin::root(command.len()));
     let mut ev = Ev {
         out: Vec::new(),
         emit: true,
         work: 0,
         accums: Vec::new(),
+        function_defs,
+        function_names: Vec::new(),
+        has_function_definition: false,
     };
     ev.program(&text, program, Env::initial(), &Context::TopLevel)?;
-    Ok(Script { commands: ev.out })
+    Ok(Script {
+        commands: ev.out,
+        function_names: ev.function_names,
+        has_function_definition: ev.has_function_definition,
+    })
 }
 
 // ---------------------------------------------------------------- spans
@@ -647,6 +674,13 @@ struct Ev {
     /// One slot per enclosing loop: the join of the states at `break` /
     /// `continue`.
     accums: Vec<Option<Env>>,
+    /// Whether a function definition is evaluated (`function.rs`) instead of
+    /// being `Unsupported`.
+    function_defs: bool,
+    /// Names of the function definitions evaluated in emit mode, deduplicated.
+    function_names: Vec<String>,
+    /// Set when a function definition was evaluated in emit mode.
+    has_function_definition: bool,
 }
 
 impl Ev {
@@ -788,9 +822,15 @@ impl Ev {
                 e.forget("_", "after a compound command");
                 Ok((Outcome::same(e), None))
             }
-            ast::Command::Function(_) => Err(Cause::Unsupported(
-                "function definition: its body is not evaluated".into(),
-            )),
+            ast::Command::Function(f) => {
+                if !self.function_defs {
+                    return Err(Cause::Unsupported(
+                        "function definition: its body is not evaluated".into(),
+                    ));
+                }
+                let e = self.function_def(text, f, env, ctx)?;
+                Ok((Outcome::same(e), None))
+            }
             ast::Command::ExtendedTest(t, redirs) => {
                 let span = text.global(Some(&t.loc));
                 let mut e =

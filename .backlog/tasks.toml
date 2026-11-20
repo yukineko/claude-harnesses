@@ -2883,3 +2883,32 @@ exit 101: st result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 52 filte
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running tests/backlog_20261120_8cadc78f_adversarial.rs (target/debug/deps/backlog_20261120_8cadc78f_adversarial-32f4534269472e76)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_8cadc78f_adversarial`"""
+
+[[task]]
+id = "946ac873"
+title = "blastguard: sudo perl <<< 'print 1' (benign) is Ask in main but Deny in subagent; RED expects not-Deny (may be a test-expectation issue under the perl stdin Undetermined parity)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Found by the independent test author of e1bb5f7e round 2 (e6143fe87). Ignored RED sudo_perl_herestring_not_deny in crates/blastguard/tests/backlog_20261120_e1bb5f7e_adversarial_r2.rs. Driver noted Ask(main)/Deny(subagent) is the standard parity for an Undetermined perl stdin program, so the fix may be to re-anchor the test rather than change blastguard; decide with the perl ruling."
+created_at = 1795179845
+updated_at = 1795179845
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_e1bb5f7e_adversarial_r2 -- --ignored sudo_perl_herestring_not_deny --exact"
+rev = "a1d9b98361992dc9c8f122030b2533aef461ef13"
+observed_at = 1795179845
+detail = """
+exit 101: guard v0.2.816 (/Users/yuki/src/.harness-worktrees/sink-file-20261120/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/backlog_20261120_e1bb5f7e_adversarial_r2.rs (target/debug/deps/backlog_20261120_e1bb5f7e_adversarial_r2-7eceff4e109601ca)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_e1bb5f7e_adversarial_r2`"""

@@ -87878,3 +87878,65 @@ rev = "eb4519e0ae97cfe3cb72c634964184c8e2254dc0"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "d4a135ba"
+title = "rollout lock (.rollout.lock) を Claude Code が起動時に GC する plugin cache dir の外へ移す"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "lock",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Measured 2026-11-16 (strace of claude -p): Claude Code threads unlink <cache>/yukineko/<unknown-dir>/pid then rmdir the dir at every startup, in its .orphaned_at cleanup pass; autoUpdate=false at the time; plain files survive. Real incident same day: rollout-plugins.sh --plugin blastguard --canary lost its lock mid-run (prune exit 6, 'no longer names this process ... file says '''), lock dir gone afterwards -> mutual exclusion of rollout/rebuild/prune (e3366b5c, ea39fbc9) silently void whenever any session starts. RED test 93f0fcf8 (non-implementer): simulated GC; control passes. Test does NOT prove a new location is outside every Claude-managed path (only the marketplace dir is simulated) — pick a location Claude Code does not manage and re-measure with the strace probe. Related: autoUpdate set false on this machine same day (launcher-only cache dirs, cf. 4d54cd6d)."
+created_at = 1794790471
+updated_at = 1795193642
+weight = 0.0
+issue_number = 1816
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1816"
+issue_closed_at = 1795193645
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_rollout_lock_outside_managed_cache.py"
+rev = "93f0fcf8f8f61a1393a405c61f6e83a1aeebf4c2"
+observed_at = 1794790471
+detail = """
+exit 1: nder='rebuild-plugins.sh') scripts/test_rollout_lock_outside_managed_cache.py::RolloutLockOutsideManagedCache::test_lock_survives_claude_code_cache_gc
+SUBFAILED(contender='prune-plugin-cache.py') scripts/test_rollout_lock_outside_managed_cache.py::RolloutLockOutsideManagedCache::test_lock_survives_claude_code_cache_gc
+========================= 4 failed, 2 passed in 0.74s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_rollout_lock_outside_managed_cache.py scripts/test_rollout_lock_path_outside_claude_home.py"
+exit = 0
+passed = 11
+rev = "81b4a0fd9150bc50a0a05f6c9588d26e79b91053"
+observed_at = 1795193634
+output_digest = "sha256:6570a4059ec49a46385aa19c43f143adb20d79fa078a67a7fa6a40efc262e72a"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/backlog-close2
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 11 items
+
+scripts/test_rollout_lock_outside_managed_cache.py ...                   [ 27%]
+scripts/test_rollout_lock_path_outside_claude_home.py ........           [100%]
+
+============================== 11 passed in 6.41s ==============================
+"""
+
+[task.closure.red]
+rev = "cb9531a0dd7189ba60211fd33dd70ff4e7fd524f"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

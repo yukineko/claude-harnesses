@@ -158,7 +158,6 @@ fn assert_refused_and_untouched(fx: &Fx, out: &Output, dir: &Path, marker: &Path
 
 /// N1: a tracked subdirectory of the primary repo is not a worktree.
 #[test]
-#[ignore = "RED: 2026-11-21 4503c90d replan - observed at base 49f68b14f: `worktree remove --path <repo subdir>` exits 1 but quarantine-moves the subdir to <repo>.quarantine/subdir-<secs> (git worktree remove --force exit 128 'is not a working tree' -> fail_forced_removal). Existing fail-closed defect, RED not control"]
 fn n1_remove_primary_repo_subdir_is_refused() {
     let fx = Fx::new();
     let dir = fx.repo.join("subdir");

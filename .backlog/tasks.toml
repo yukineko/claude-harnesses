@@ -2636,3 +2636,32 @@ exit 101:  Compiling trybuild v1.0.118
     Finished `test` profile [unoptimized + debuginfo] target(s) in 22.79s
      Running tests/heredoc_data_body_verify.rs (target/debug/deps/heredoc_data_body_verify-7e4f0bdf8803f9f5)
 error: test failed, to rerun pass `-p blastguard --test heredoc_data_body_verify`"""
+
+[[task]]
+id = "6f653d96"
+title = "testscope: refuses regression tests of the task's own crate inside a condukt task worktree (cannot prove a fix leaves pinned asserts unchanged)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "testscope",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "RED crates/condukt/tests/backlog_20261120_testscope_task_crate_regression.rs (branch red-testscope-task-regression-20261120, b679bfe2a). Refusal at crates/condukt/src/testscope.rs check_task_scope (TASK_SCOPE_REASON :1218, deny :1412). User ruling 2026-11-20: 証明ができないというのであれば、それを証明するためのテストを実施できないのはtestscopeの不具合. The pinned assert testscope_enforcement_20261114.rs c_unrelated_existing_test_in_task_worktree_is_denied contradicts the ruling; the fix owner re-anchors it per the ruling (left untouched by the RED author). Controls keep full suite denied and untouched-crate tests denied."
+created_at = 1795171422
+updated_at = 1795171422
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261120_testscope_task_crate_regression -- --ignored"
+rev = "b679bfe2a4088400f7e7079294ac60c5de953dfc"
+observed_at = 1795171422
+detail = """
+exit 101: ss-worktrees/red-testscope-task-regression-20261120/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.76s
+     Running tests/backlog_20261120_testscope_task_crate_regression.rs (target/debug/deps/backlog_20261120_testscope_task_crate_regression-945a00b1985801be)
+error: test failed, to rerun pass `-p condukt --test backlog_20261120_testscope_task_crate_regression`"""

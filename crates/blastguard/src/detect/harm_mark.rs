@@ -65,11 +65,9 @@ fn mark_system_harm(tokens: &[&str], idx: usize, ctx: &Ctx<'_>, decision: Decisi
         "chown" | "chgrp" if has_short(rest, 'R') || rest.contains(&"--recursive") => {
             owned(chown_owner_and_targets(rest).1)
         }
-        "dd" => rest
-            .iter()
-            .filter_map(|t| t.strip_prefix("of="))
-            .map(str::to_string)
-            .collect(),
+        // Quote-removed `of=` values (fail-open p0, 2026-11-20); an
+        // undetermined word adds no target (not marked, the Deny stands).
+        "dd" => super::rm::dd_of_operands(rest, ctx.scope.home_real()).targets,
         "osascript" if reason.contains("`osascript` tells ") => quoted_paths(&rest.join(" ")),
         _ => return decision,
     };

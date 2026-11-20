@@ -2003,13 +2003,8 @@ analyse — it cannot tell what this would do, so it refuses to guess"
             ),
             "shred destroys file contents irreversibly",
         ),
-        "dd" => {
-            if rest.iter().any(|t| t.starts_with("of=")) {
-                Decision::deny("dd with of= writes raw bytes over a device/file")
-            } else {
-                Decision::Allow
-            }
-        }
+        // S6-5 Known Allow, else the legacy `of=` reading (see `analyze_dd`).
+        "dd" => rm::analyze_dd(rest, ctx),
         "chmod" => {
             if has_short(rest, 'R') || rest.contains(&"--recursive") {
                 // `chmod -R 755 target` and `chmod -R 000 /usr` were one

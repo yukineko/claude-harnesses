@@ -167,7 +167,6 @@ fn f3_variable_git_word() {
 }
 
 #[test]
-#[ignore = "RED: git apply heredoc patch creating README.md with added text `rm -rf ~` and nothing executed is deny at HEAD (recursive rm); reading (a) false positive: patch bodies are read as shell whatever the target file type; reading (b) intended: the module is conservative"]
 fn f4_readme_patch_with_rm_text_and_nothing_executed_is_allow() {
     // Reading (a): false positive, patch bodies are read as shell regardless of
     // the target file type. Reading (b): intended, the module is conservative.

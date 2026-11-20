@@ -691,8 +691,10 @@ fn detect_bash_whole(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // patch's added files, and a later command can run them. The body's `+`
     // (and context) prefix hides its commands from every rule above, so a
     // shell view (one `+`/space prefix removed from each body line the module
-    // recognises) is judged too, Deny over Ask over Allow. Only the shapes
-    // listed in the `git_apply_patch` module doc are refused (Ask); the KNOWN
+    // recognises) is judged too, Deny over Ask over Allow. A section writing a
+    // data / non-shell-code file keeps its lines as written when nothing can
+    // run or names it; any undetermined header keeps the body stripped (module
+    // doc). Only the shapes listed in the module doc are refused (Ask); the KNOWN
     // GAPS listed there (`|&`, subshell/group readers, a pipe continued on the
     // next line, `<<-` TAB-indented bodies, a heredoc of another command on
     // the reader's line, named patch files, non-plain `git`) are NOT judged by

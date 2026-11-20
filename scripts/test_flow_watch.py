@@ -1,24 +1,34 @@
 #!/usr/bin/env python3
-"""Tests for `crates/flow/bin/flow-watch` (spec: crates/flow/WATCH-SPEC.md).
+"""Tests for `crates/flow/bin/flow-watch` (spec: crates/flow/WATCH-SPEC.md,
+including "Run tracking (v2, 2026-11-21)").
 
 Written by an independent test author (not the implementer), RED first.
 
 Each test runs the real launcher as a subprocess in a temp dir with fake
-`condukt` / `backlog` executables (FLOW_WATCH_CONDUKT / FLOW_WATCH_BACKLOG),
-small --poll-secs/--max-secs values, and reads the stdout event lines.
+`condukt` / `backlog` executables (FLOW_WATCH_CONDUKT / FLOW_WATCH_BACKLOG).
+The fake `condukt` answers `state list-tasks` from a JSON file the test
+rewrites atomically (and an rc file), and `state heartbeat` from an rc file.
+Tests wait for observable events (a stdout line, a fake-condukt log line, a
+file's content) under a deadline instead of fixed sleeps.
 
 What these tests do NOT prove:
-  * Timing under load: ages/idle are driven by fabricated `ts` / os.utime, and
-    waits are a few seconds; a loaded machine can only delay, not reorder, but
-    the tests do not measure the real poll cadence or the 600s/1700s defaults.
-  * Default-path behaviour (~/.blastguard/relay/<SESSION>.jsonl and
-    ~/.condukt/state/*/) -- every test passes explicit paths.
-  * Which run-file statuses are "terminal" beyond `done`; only `running` and
-    `pending`(non-terminal) vs `done`(terminal) are exercised.
-  * Real `condukt` / `backlog` argument validity: the fake logs argv, and the
-    tests only check the documented subcommand words appear.
-  * Exact wording of WATCH-ERROR reasons (only the `WATCH-ERROR ` prefix and a
-    mention of the offending file/line).
+  * Real `condukt state list-tasks` behaviour: its project scoping, its
+    terminal-status semantics and its real output shape are taken from the
+    spec, not observed; only the fake is exercised.
+  * Timing under load / the real defaults (5s poll, 60s state, 600s heartbeat,
+    1200s stall, 1700s max): all intervals here are 0.2-3 seconds.
+  * Default paths (~/.blastguard/relay/<SESSION>.jsonl and the default
+    --watch-state under XDG_STATE_HOME); every test passes explicit paths and
+    isolates HOME/XDG_STATE_HOME to a temp dir.
+  * STATE ordering/format beyond `STATE <run> <task>=<status> ...` and
+    `STATE <run> finished`; exact WATCH-ERROR reason wording (only the
+    `WATCH-ERROR condukt list-tasks` / `WATCH-ERROR watch-state` prefixes).
+  * That a watch-state write *failure* produces WATCH-ERROR (the spec says it
+    does; no test injects a write failure), nor TASK-STALL re-emission rate.
+  * Terminal-status vocabulary: runs leave the watched set only by disappearing
+    from the listing, which is all the spec defines.
+  * Crash-safety of the state file (partial writes), SIGTERM handling, or
+    concurrent watchers sharing one --watch-state.
   * Monitor-tool integration, SKILL.md wording, the version bump, or the
     git-index exec bit of the launcher.
   * Multi-session isolation, very large queues, or concurrent writers.
@@ -26,6 +36,7 @@ What these tests do NOT prove:
 import json
 import os
 import queue
+import re
 import shutil
 import stat
 import subprocess
@@ -37,6 +48,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FLOW_WATCH = os.path.join(ROOT, "crates", "flow", "bin", "flow-watch")
 SESSION = "sess-test"
+DEADLINE = 20
 
 
 def _fake(path, rc, log):
@@ -45,21 +57,136 @@ def _fake(path, rc, log):
     os.chmod(path, 0o755)
 
 
+def _fake_condukt(path, log, listfile, listrc, hbrc):
+    with open(path, "w") as f:
+        f.write(
+            '#!/bin/sh\n'
+            'echo "$@" >> "%(log)s"\n'
+            'case "$1 $2" in\n'
+            '"state list-tasks")\n'
+            '  out=$(cat "%(lf)s")\n'
+            '  rc=$(cat "%(lrc)s" 2>/dev/null || echo 0)\n'
+            '  echo "CWD=$(pwd -P)" >> "%(log)s"\n'
+            '  echo "LISTED" >> "%(log)s"\n'
+            '  printf "%%s\\n" "$out"\n'
+            '  exit "$rc" ;;\n'
+            '"state heartbeat")\n'
+            '  exit "$(cat "%(hrc)s" 2>/dev/null || echo 0)" ;;\n'
+            'esac\n'
+            'exit 0\n' % {"log": log, "lf": listfile, "lrc": listrc, "hrc": hbrc})
+    os.chmod(path, 0o755)
+
+
+def _atomic_write(path, text):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+class Watcher:
+    """A running flow-watch whose stdout is consumed line by line."""
+
+    def __init__(self, test, args, env):
+        self.test = test
+        self.lines = []
+        self._q = queue.Queue()
+        self.eof = False
+        self.proc = subprocess.Popen(args, env=env, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, text=True)
+        threading.Thread(target=self._pump, daemon=True).start()
+        test.addCleanup(self.close)
+
+    def _pump(self):
+        for l in self.proc.stdout:
+            self._q.put(l.rstrip("\n"))
+        self._q.put(None)
+
+    def _drain(self, timeout):
+        try:
+            l = self._q.get(timeout=timeout)
+        except queue.Empty:
+            return False
+        if l is None:
+            self.eof = True
+        else:
+            self.lines.append(l)
+        return True
+
+    def wait_for(self, pred, what, timeout=DEADLINE):
+        """Return the first stdout line (from the start) satisfying pred."""
+        end = time.time() + timeout
+        i = 0
+        while True:
+            while i < len(self.lines):
+                if pred(self.lines[i]):
+                    return self.lines[i]
+                i += 1
+            if self.eof or time.time() > end:
+                self.test.fail("never observed %s; stdout so far: %r" % (what, self.lines))
+            self._drain(0.2)
+
+    def settle(self, seconds):
+        """Consume stdout for a bounded time (used only after an event-driven sync)."""
+        end = time.time() + seconds
+        while time.time() < end and not self.eof:
+            self._drain(0.1)
+
+    def close(self):
+        if self.proc.poll() is None:
+            self.proc.kill()
+        self.proc.wait()
+        for s in (self.proc.stdout, self.proc.stderr):
+            try:
+                s.close()
+            except Exception:
+                pass
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="flowwatch-")
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.queue = os.path.join(self.tmp, "relay.jsonl")
-        self.state = os.path.join(self.tmp, "state")
-        os.makedirs(self.state)
+        self.wstate = os.path.join(self.tmp, "wstate", "watch.json")
         self.project = os.path.join(self.tmp, "proj")
         os.makedirs(self.project)
         self.clog = os.path.join(self.tmp, "condukt.log")
         self.blog = os.path.join(self.tmp, "backlog.log")
         self.condukt = os.path.join(self.tmp, "condukt")
         self.backlog = os.path.join(self.tmp, "backlog")
-        _fake(self.condukt, 0, self.clog)
+        self.listfile = os.path.join(self.tmp, "list.json")
+        self.listrc = os.path.join(self.tmp, "list.rc")
+        self.hbrc = os.path.join(self.tmp, "hb.rc")
+        self.set_list([])
+        _fake_condukt(self.condukt, self.clog, self.listfile, self.listrc, self.hbrc)
         _fake(self.backlog, 0, self.blog)
+
+    # -- fake condukt controls
+    def set_list(self, rows):
+        """rows: iterable of (run_id, task_id, status)."""
+        _atomic_write(self.listfile, json.dumps(
+            [{"run_id": r, "task_id": t, "status": s} for r, t, s in rows]))
+
+    def set_list_raw(self, text):
+        _atomic_write(self.listfile, text)
+
+    def set_list_rc(self, rc):
+        _atomic_write(self.listrc, str(rc))
+
+    def listed(self):
+        try:
+            return open(self.clog).read().splitlines().count("LISTED")
+        except FileNotFoundError:
+            return 0
+
+    def wait_listed(self, n, what="fake condukt list-tasks polls"):
+        """Block until the fake condukt has answered at least n list-tasks calls."""
+        end = time.time() + DEADLINE
+        while self.listed() < n:
+            if time.time() > end:
+                self.fail("timed out waiting for %s (have %d, want %d)" % (what, self.listed(), n))
+            time.sleep(0.05)
 
     # -- helpers
     def write_queue(self, rows, raw_lines=None):
@@ -79,20 +206,22 @@ class Base(unittest.TestCase):
                 "session_id": SESSION, "agent_id": agent, "cwd": cwd,
                 "command": "ls", "reason": "r"}
 
-    def args(self, **kw):
+    def args(self, extra=(), **kw):
         a = [FLOW_WATCH, "--session", SESSION, "--project", self.project,
-             "--relay-queue", self.queue, "--condukt-state", self.state,
+             "--relay-queue", self.queue, "--watch-state", self.wstate,
              "--poll-secs", "0.2", "--state-secs", "0.3", "--heartbeat-secs", "600",
              "--relay-stall-secs", "120", "--task-stall-secs", "1200",
              "--max-secs", "3"]
         for k, v in kw.items():
             a[a.index("--" + k.replace("_", "-")) + 1] = str(v)
-        return a
+        return a + list(extra)
 
     def env(self, **extra):
         e = dict(os.environ)
         e["FLOW_WATCH_CONDUKT"] = self.condukt
         e["FLOW_WATCH_BACKLOG"] = self.backlog
+        e["HOME"] = self.tmp
+        e["XDG_STATE_HOME"] = os.path.join(self.tmp, "xdg")
         e.update(extra)
         return e
 
@@ -101,14 +230,9 @@ class Base(unittest.TestCase):
                            capture_output=True, text=True, timeout=timeout)
         return p, [l for l in p.stdout.splitlines() if l.strip()]
 
-    def write_run(self, run_id, tasks, age=0):
-        path = os.path.join(self.state, "%s.json" % run_id)
-        with open(path, "w") as f:
-            json.dump({"run_id": run_id, "tasks": [{"id": i, "status": s} for i, s in tasks]}, f)
-        if age:
-            t = time.time() - age
-            os.utime(path, (t, t))
-        return path
+    def watch(self, extra=(), env=None, **kw):
+        kw.setdefault("max_secs", 60)
+        return Watcher(self, self.args(extra=extra, **kw), env or self.env())
 
 
 class TestRelay(Base):
@@ -122,16 +246,12 @@ class TestRelay(Base):
 
     def test_new_row_appended_while_running_emits_relay(self):
         self.write_queue([])
-        proc = subprocess.Popen(self.args(max_secs=4), env=self.env(),
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        try:
-            time.sleep(1.0)
-            self.append_queue(self.queued("bgr-late", agent="ag2", cwd="/w/z"))
-            out, _ = proc.communicate(timeout=30)
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-        self.assertIn("RELAY bgr-late agent=ag2 cwd=/w/z", out.splitlines(),
+        w = self.watch()
+        self.wait_listed(1, "the watcher's first poll")
+        self.append_queue(self.queued("bgr-late", agent="ag2", cwd="/w/z"))
+        w.wait_for(lambda l: l == "RELAY bgr-late agent=ag2 cwd=/w/z",
+                   "RELAY for a queued row appended after startup (polling must pick it up)")
+        self.assertIn("RELAY bgr-late agent=ag2 cwd=/w/z", w.lines,
                       "a queued row appended after startup must be picked up by polling")
 
     def test_executed_and_dismissed_ids_are_not_relayed(self):
@@ -189,108 +309,220 @@ class TestRelay(Base):
                         "an existing but unreadable queue file is an error, not 'no relays'")
 
 
-class TestState(Base):
-    def test_state_at_startup_for_nonterminal_run(self):
-        self.write_run("run-a", [("t1", "running"), ("t2", "pending")])
-        _, lines = self.run_watch()
-        st = [l for l in lines if l.startswith("STATE run-a ")]
-        self.assertTrue(st, "a run with a non-terminal task is reported once at startup")
-        self.assertIn("t1=running", st[0], "STATE lists task=status pairs")
-        self.assertIn("t2=pending", st[0], "STATE lists every task")
+class TestRunTracking(Base):
+    def test_baseline_run_is_not_watched(self):
+        self.set_list([("run-old", "t1", "running")])
+        w = self.watch()
+        self.wait_listed(1, "the first (baseline) poll")
+        self.set_list([("run-new", "t1", "running"), ("run-old", "t1", "pending")])
+        w.wait_for(lambda l: l.startswith("STATE run-new "),
+                   "STATE for run-new, which first appeared after the baseline poll")
+        self.set_list([("run-new", "t1", "pending"), ("run-old", "t1", "verifying")])
+        w.wait_for(lambda l: l.startswith("STATE run-new ") and "t1=pending" in l,
+                   "STATE for run-new's later change (same poll also changed run-old)")
+        self.assertFalse(any("run-old" in l for l in w.lines),
+                         "runs present in the first successful poll are baseline and must produce no STATE/TASK-STALL")
 
-    def test_no_startup_state_for_all_terminal_run(self):
-        self.write_run("run-done", [("t1", "done")])
-        _, lines = self.run_watch()
-        self.assertFalse(any(l.startswith("STATE run-done") for l in lines),
-                         "runs whose tasks are all terminal are not reported at startup")
+    def test_run_flag_watches_a_baseline_run(self):
+        self.set_list([("run-old", "t1", "running"), ("run-other", "t9", "running")])
+        w = self.watch(extra=["--run", "run-old"])
+        line = w.wait_for(lambda l: l.startswith("STATE run-old "),
+                          "STATE for a baseline run explicitly named with --run")
+        self.assertIn("t1=running", line, "STATE lists the run's tasks as task=status")
+        w.settle(1.0)
+        self.assertFalse(any("run-other" in l for l in w.lines),
+                         "--run adds only the named run; other baseline runs stay unwatched")
 
-    def test_state_emitted_on_change(self):
-        self.write_run("run-b", [("t1", "running")])
-        proc = subprocess.Popen(self.args(max_secs=6), env=self.env(),
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        lines = queue.Queue()
+    def test_later_run_state_on_change_and_not_repeated(self):
+        w = self.watch()
+        self.wait_listed(1, "the baseline poll")
+        self.set_list([("run-n", "t1", "running"), ("run-n", "t2", "pending")])
+        line = w.wait_for(lambda l: l.startswith("STATE run-n "), "STATE for a run that appeared later")
+        self.assertIn("t1=running", line, "STATE lists every currently listed task (t1)")
+        self.assertIn("t2=pending", line, "STATE lists every currently listed task (t2)")
+        self.set_list([("run-n", "t1", "running"), ("run-n", "t2", "verifying")])
+        w.wait_for(lambda l: l.startswith("STATE run-n ") and "t2=verifying" in l,
+                   "STATE when a watched run's (task,status) set changes")
+        n = self.listed()
+        self.wait_listed(n + 3, "three further unchanged polls")
+        w.settle(0.5)
+        states = [l for l in w.lines if l.startswith("STATE run-n ")]
+        self.assertEqual(len(states), 2,
+                         "STATE is emitted only when the set changes, not on every poll; got %r" % (states,))
 
-        def pump():
-            for l in proc.stdout:
-                lines.put(l.rstrip("\n"))
-            lines.put(None)
+    def test_finished_once_when_run_disappears(self):
+        w = self.watch()
+        self.wait_listed(1, "the baseline poll")
+        self.set_list([("run-f", "t1", "running")])
+        w.wait_for(lambda l: l.startswith("STATE run-f t1="), "STATE for the new run")
+        self.set_list([])
+        w.wait_for(lambda l: l == "STATE run-f finished",
+                   "'STATE run-f finished' when a watched run vanishes from the listing")
+        n = self.listed()
+        self.wait_listed(n + 3, "three polls after the run finished")
+        w.settle(0.5)
+        self.assertEqual(sum(1 for l in w.lines if l == "STATE run-f finished"), 1,
+                         "finished is printed once and the run is dropped from the watched set")
 
-        threading.Thread(target=pump, daemon=True).start()
-        seen = []
-        try:
-            # Deterministic: rewrite only after the startup STATE line is observed,
-            # so the watcher can never see the run already terminal at first poll.
-            deadline = time.time() + 20
-            started = False
-            while time.time() < deadline and not started:
-                try:
-                    l = lines.get(timeout=0.2)
-                except queue.Empty:
-                    continue
-                if l is None:
+    def test_task_stall_after_unchanged_status(self):
+        self.set_list([("run-old", "t1", "running")])
+        w = self.watch(task_stall_secs=1)
+        self.wait_listed(1, "the baseline poll")
+        self.set_list([("run-s", "t1", "running"), ("run-s", "t2", "pending"),
+                       ("run-old", "t1", "running")])
+        line = w.wait_for(lambda l: l.startswith("TASK-STALL "),
+                          "TASK-STALL after a running task's status stayed unchanged >= --task-stall-secs")
+        self.assertRegex(line, r"^TASK-STALL run-s t1 status=running idle=\d+s$",
+                         "TASK-STALL matches the grammar and names the running task of the watched run")
+        self.assertGreaterEqual(int(re.search(r"idle=(\d+)s", line).group(1)), 1,
+                                "idle is now minus first-seen and is at least --task-stall-secs")
+        w.settle(0.5)
+        self.assertFalse(any(l.startswith("TASK-STALL") and ("run-old" in l or " t2 " in l) for l in w.lines),
+                         "no TASK-STALL for a baseline run, nor for a watched task that is not `running`")
+
+    def test_status_change_resets_stall_clock(self):
+        w = self.watch(task_stall_secs=3)
+        self.wait_listed(1, "the baseline poll")
+        self.set_list([("run-c", "t1", "running")])
+        w.wait_for(lambda l: l.startswith("STATE run-c "), "STATE for the new run")
+        t0 = time.time()
+        # flip the status repeatedly: the status is never unchanged for 3s
+        flip = 0
+        while time.time() - t0 < 4.5:
+            flip += 1
+            self.set_list([("run-c", "t1", "running" if flip % 2 else "verifying")])
+            time.sleep(0.5)
+        w.settle(0.3)
+        self.assertFalse(any(l.startswith("TASK-STALL") for l in w.lines),
+                         "a status that keeps changing is progress; TASK-STALL needs the SAME status for >= --task-stall-secs")
+
+    def test_watched_set_persists_across_restart(self):
+        w1 = self.watch()
+        self.wait_listed(1, "the baseline poll")
+        self.set_list([("run-p", "t1", "running")])
+        w1.wait_for(lambda l: l.startswith("STATE run-p "), "first process's STATE for the new run")
+        end = time.time() + DEADLINE
+        while True:
+            try:
+                if "run-p" in open(self.wstate).read():
                     break
-                seen.append(l)
-                started = l.startswith("STATE run-b ") and "t1=running" in l
-            self.assertTrue(started, "startup STATE run-b with t1=running never appeared; saw %r" % (seen,))
-            self.write_run("run-b", [("t1", "done")])
-            while True:
-                l = lines.get(timeout=30)
-                if l is None:
-                    break
-                seen.append(l)
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-        out = "\n".join(seen)
-        sts = [l for l in out.splitlines() if l.startswith("STATE run-b ")]
-        self.assertGreaterEqual(len(sts), 2, "startup STATE plus a STATE when the status vector changes")
-        self.assertIn("t1=done", sts[-1], "the change line carries the new status")
+            except FileNotFoundError:
+                pass
+            if time.time() > end:
+                self.fail("--watch-state never recorded run-p (file at %s)" % self.wstate)
+            time.sleep(0.05)
+        w1.close()
+        # status changes while no watcher is running
+        self.set_list([("run-p", "t1", "verifying")])
+        w2 = self.watch()
+        line = w2.wait_for(lambda l: l.startswith("STATE run-p "),
+                           "second process (same --watch-state) still reports the run the first one watched")
+        self.assertIn("t1=verifying", line, "the re-armed watch reports the changed status")
+        # absent control: a fresh --watch-state baselines the run away
+        other = os.path.join(self.tmp, "other-wstate.json")
+        n = self.listed()
+        w3 = self.watch(watch_state=other)
+        self.wait_listed(n + 2, "the control process's polls")
+        w3.settle(0.5)
+        self.assertFalse(any(l.startswith("STATE run-p") for l in w3.lines),
+                         "control: without the persisted file the same run is baseline and silent")
 
-    def test_unchanged_state_not_repeated(self):
-        self.write_run("run-c", [("t1", "running")])
-        _, lines = self.run_watch()
-        self.assertEqual(sum(1 for l in lines if l.startswith("STATE run-c ")), 1,
-                         "STATE is emitted only on change, not every --state-secs")
+    def test_corrupt_watch_state_is_error_and_untouched(self):
+        os.makedirs(os.path.dirname(self.wstate))
+        with open(self.wstate, "w") as f:
+            f.write("{garbage not json")
+        before = open(self.wstate, "rb").read()
+        w = self.watch()
+        w.wait_for(lambda l: l.startswith("WATCH-ERROR watch-state"),
+                   "WATCH-ERROR watch-state for a corrupt --watch-state file")
+        self.wait_listed(1, "the first poll")
+        self.set_list([("run-z", "t1", "running")])
+        w.wait_for(lambda l: l.startswith("STATE run-z "),
+                   "watching continues with an empty set (a later run is still tracked)")
+        w.settle(0.5)
+        self.assertEqual(open(self.wstate, "rb").read(), before,
+                         "a file that could not be parsed is never overwritten, even after a poll changed the watched set")
 
-    def test_unreadable_run_file_is_watch_error(self):
-        with open(os.path.join(self.state, "run-bad.json"), "w") as f:
-            f.write("{garbage")
-        _, lines = self.run_watch()
-        self.assertTrue(any(l.startswith("WATCH-ERROR ") for l in lines),
-                        "an unparsable run file must be surfaced, not skipped silently")
+    @unittest.skipIf(os.geteuid() == 0, "root can read mode-000 files")
+    def test_unreadable_watch_state_is_error_and_untouched(self):
+        os.makedirs(os.path.dirname(self.wstate))
+        with open(self.wstate, "w") as f:
+            f.write('{"watched": {}}')
+        before = open(self.wstate, "rb").read()
+        os.chmod(self.wstate, 0)
+        self.addCleanup(os.chmod, self.wstate, 0o644)
+        w = self.watch()
+        w.wait_for(lambda l: l.startswith("WATCH-ERROR watch-state"),
+                   "WATCH-ERROR watch-state for an existing but unreadable --watch-state file")
+        self.wait_listed(1, "the first poll")
+        self.set_list([("run-z", "t1", "running")])
+        w.wait_for(lambda l: l.startswith("STATE run-z "), "watching continues after the error")
+        w.settle(0.5)
+        w.close()
+        os.chmod(self.wstate, 0o644)
+        self.assertEqual(open(self.wstate, "rb").read(), before,
+                         "an unreadable state file is left unmodified (never silently discarded)")
+
+    def test_list_tasks_runs_with_project_as_cwd(self):
+        self.run_watch()
+        cwds = [l for l in open(self.clog).read().splitlines() if l.startswith("CWD=")]
+        self.assertTrue(cwds, "the watcher must call `condukt state list-tasks`")
+        self.assertEqual(set(cwds), {"CWD=" + os.path.realpath(self.project)},
+                         "list-tasks runs with cwd = --project (condukt scopes by project)")
 
 
-class TestTaskStall(Base):
-    def test_stall_when_run_file_and_journal_old(self):
-        p = self.write_run("run-s", [("t1", "running")], age=3000)
-        j = os.path.join(self.state, "run-s.journal.jsonl")
-        open(j, "w").write("{}\n")
-        t = time.time() - 3000
-        os.utime(j, (t, t))
-        _, lines = self.run_watch()
-        st = [l for l in lines if l.startswith("TASK-STALL ")]
-        self.assertEqual(len(st), 1, "exactly one TASK-STALL for the idle running task within the window")
-        self.assertRegex(st[0], r"^TASK-STALL run-s t1 status=running idle=\d+s$",
-                         "TASK-STALL matches the documented grammar")
+class TestListTasksFailures(Base):
+    """A failed list-tasks poll is a WATCH-ERROR and changes nothing - never 'no tasks'."""
 
-    def test_no_stall_when_journal_fresh(self):
-        self.write_run("run-j", [("t1", "running")], age=3000)
-        open(os.path.join(self.state, "run-j.journal.jsonl"), "w").write("{}\n")  # fresh mtime
-        _, lines = self.run_watch()
-        self.assertFalse(any(l.startswith("TASK-STALL") for l in lines),
-                         "stall requires BOTH run file and journal to be old; a fresh journal means progress")
+    def _expect_error_no_state(self, w, what):
+        w.wait_for(lambda l: l.startswith("WATCH-ERROR condukt list-tasks"),
+                   "WATCH-ERROR condukt list-tasks for " + what)
+        n = self.listed()
+        if n:
+            self.wait_listed(n + 2, "polls after the error")
+        w.settle(0.5)
+        self.assertFalse(any(l.startswith("STATE") for l in w.lines),
+                         "no STATE may be produced from a failed list-tasks poll (%s); got %r" % (what, w.lines))
+        self.assertEqual(sum(1 for l in w.lines if l.startswith("WATCH-ERROR condukt list-tasks")), 1,
+                         "the same reason is reported once, not on every poll (%s)" % what)
 
-    def test_no_stall_when_run_file_fresh(self):
-        self.write_run("run-f", [("t1", "running")])
-        _, lines = self.run_watch()
-        self.assertFalse(any(l.startswith("TASK-STALL") for l in lines),
-                         "a recently modified run file is not stalled")
+    def test_nonzero_rc_even_with_valid_json(self):
+        self.set_list([("run-x", "t1", "running")])
+        self.set_list_rc(3)
+        w = self.watch(extra=["--run", "run-x"])
+        self._expect_error_no_state(w, "a non-zero exit (stdout looked valid)")
 
-    def test_no_stall_for_non_running_task(self):
-        self.write_run("run-p", [("t1", "pending")], age=3000)
-        _, lines = self.run_watch()
-        self.assertFalse(any(l.startswith("TASK-STALL") for l in lines),
-                         "only tasks in `running` can stall")
+    def test_missing_executable(self):
+        env = self.env(FLOW_WATCH_CONDUKT=os.path.join(self.tmp, "nope-condukt"))
+        w = self.watch(extra=["--run", "run-x"], env=env)
+        self._expect_error_no_state(w, "a missing executable (rc=127)")
+
+    def test_non_json_stdout(self):
+        self.set_list_raw("this is not json")
+        w = self.watch(extra=["--run", "run-x"])
+        self._expect_error_no_state(w, "non-JSON stdout")
+
+    def test_row_missing_fields(self):
+        self.set_list_raw(json.dumps([{"run_id": "run-x", "task_id": "t1"}]))
+        w = self.watch(extra=["--run", "run-x"])
+        self._expect_error_no_state(w, "a row without a string status")
+
+    def test_failed_poll_is_not_read_as_empty(self):
+        self.set_list([("run-x", "t1", "running")])
+        w = self.watch(extra=["--run", "run-x"])
+        w.wait_for(lambda l: l.startswith("STATE run-x t1=running"), "STATE from a good poll")
+        self.set_list_raw("garbage")
+        w.wait_for(lambda l: l.startswith("WATCH-ERROR condukt list-tasks"), "the failed poll's error")
+        n = self.listed()
+        self.wait_listed(n + 3, "polls while the listing is broken")
+        self.set_list([("run-x", "t1", "running")])
+        n = self.listed()
+        self.wait_listed(n + 3, "polls after recovery")
+        w.settle(0.5)
+        self.assertFalse(any(l == "STATE run-x finished" for l in w.lines),
+                         "a failed poll must not make a watched run look finished (error is not an empty listing)")
+        self.assertEqual(sum(1 for l in w.lines if l.startswith("STATE run-x t1=running")), 1,
+                         "recovery to the same status is not a change")
 
 
 class TestHeartbeat(Base):
@@ -306,7 +538,7 @@ class TestHeartbeat(Base):
                       "backlog heartbeat runs at start with the documented arguments")
 
     def test_failing_condukt_heartbeat(self):
-        _fake(self.condukt, 3, self.clog)
+        _atomic_write(self.hbrc, "3")
         _, lines = self.run_watch()
         self.assertIn("HEARTBEAT-FAILED condukt rc=3", lines,
                       "a non-zero heartbeat exit is reported with its rc")
@@ -333,7 +565,7 @@ class TestHeartbeat(Base):
 
     def test_heartbeat_repeats_on_interval(self):
         self.run_watch(self.args(heartbeat_secs=1, max_secs=3))
-        n = len(open(self.clog).read().splitlines())
+        n = sum(1 for l in open(self.clog).read().splitlines() if l.startswith("state heartbeat"))
         self.assertGreaterEqual(n, 2, "heartbeat runs at start and again every --heartbeat-secs")
 
 
@@ -354,6 +586,14 @@ class TestLifecycle(Base):
             self.assertEqual(p.returncode, 2, "bad args %r must exit 2" % (bad,))
             self.assertTrue(p.stderr.strip(), "usage goes to stderr for %r" % (bad,))
             self.assertEqual(p.stdout.strip(), "", "no event lines on stdout for bad args %r" % (bad,))
+
+    def test_condukt_state_option_is_removed(self):
+        p = subprocess.run(self.args(extra=["--condukt-state", self.tmp]), env=self.env(),
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 2,
+                         "--condukt-state was removed in v2; passing it is a bad argument (exit 2)")
+        self.assertTrue(p.stderr.strip(), "usage goes to stderr")
+        self.assertEqual(p.stdout.strip(), "", "no event lines on stdout for the removed option")
 
     def test_launcher_exists_and_executable(self):
         self.assertTrue(os.path.isfile(FLOW_WATCH), "crates/flow/bin/flow-watch must exist")

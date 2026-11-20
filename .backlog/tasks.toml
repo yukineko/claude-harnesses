@@ -2656,6 +2656,8 @@ notes = "system harm reaches Ask, rule requires Deny (memory system-harm-always-
 created_at = 1795155325
 updated_at = 1795155325
 weight = 0.0
+issue_number = 1895
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1895"
 rev = 0
 
 [task.repro]

@@ -275,7 +275,6 @@ fn r_stdin_effect() {
 }
 
 #[test]
-#[ignore = "RED(2f159843): backlog 596ef57d R-python-unknown-sink"]
 fn r_python_unknown_sink() {
     // A2a: a sink with no effect model (asyncio subprocess_shell) -> Ask, not Allow.
     check(

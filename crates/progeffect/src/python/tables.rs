@@ -492,6 +492,11 @@ pub(super) const EXEC_NAMES: &[&str] = &[
     "Popen",
     "create_subprocess_exec",
     "create_subprocess_shell",
+    // asyncio `AbstractEventLoop.subprocess_shell` / `subprocess_exec`: no
+    // effect model, so any call of these names is Undetermined (backlog
+    // 2f159843).
+    "subprocess_shell",
+    "subprocess_exec",
     "spawn",
 ];
 

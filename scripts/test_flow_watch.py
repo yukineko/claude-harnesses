@@ -48,6 +48,8 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FLOW_WATCH = os.path.join(ROOT, "crates", "flow", "bin", "flow-watch")
 SESSION = "sess-test"
+OTHER_SESSION = "sess-other"
+OMIT = object()  # set_list: leave owner_session out of the row entirely
 DEADLINE = 20
 
 
@@ -164,9 +166,24 @@ class Base(unittest.TestCase):
 
     # -- fake condukt controls
     def set_list(self, rows):
-        """rows: iterable of (run_id, task_id, status)."""
-        _atomic_write(self.listfile, json.dumps(
-            [{"run_id": r, "task_id": t, "status": s} for r, t, s in rows]))
+        """rows: iterable of (run_id, task_id, status[, owner_session[, terminal_label]]).
+
+        owner_session defaults to SESSION (the watching session), so tests that
+        predate run ownership keep exercising runs this session owns. Pass OMIT
+        to leave the key out of the row; None is written as JSON null.
+        terminal_label is written only when given.
+        """
+        out = []
+        for row in rows:
+            r, t, s = row[:3]
+            owner = row[3] if len(row) > 3 else SESSION
+            d = {"run_id": r, "task_id": t, "status": s}
+            if owner is not OMIT:
+                d["owner_session"] = owner
+            if len(row) > 4:
+                d["terminal_label"] = row[4]
+            out.append(d)
+        _atomic_write(self.listfile, json.dumps(out))
 
     def set_list_raw(self, text):
         _atomic_write(self.listfile, text)
@@ -469,6 +486,105 @@ class TestRunTracking(Base):
         self.assertTrue(cwds, "the watcher must call `condukt state list-tasks`")
         self.assertEqual(set(cwds), {"CWD=" + os.path.realpath(self.project)},
                          "list-tasks runs with cwd = --project (condukt scopes by project)")
+
+
+class TestRunOwnership(Base):
+    """Run ownership (main-session ruling 2026-11-21, after the live observation in
+    session 62e92d16 of STATE events for another session's parallel run
+    run-20261121-040142-44869). condukt records `owner_session` per run and
+    `state list-tasks` exposes it on every row. For a run that first appears
+    after the baseline poll:
+      * owner_session == --session            -> watched as before;
+      * a different non-null owner_session    -> no STATE / TASK-STALL;
+      * null / missing / unreadable owner     -> exactly one
+        `WATCH-UNOWNED <run_id> label=<terminal_label>` per run, no STATE /
+        TASK-STALL (an explicit unknown marker, never a silent drop);
+      * a run named with --run is watched even when unowned.
+
+    Not proven here: WATCH-UNOWNED for baseline runs (not ruled; every test
+    keeps the baseline empty), the label rendering when terminal_label is
+    missing/null, rows of one run that disagree on owner_session, and the
+    persistence of the WATCH-UNOWNED "once" across a re-arm.
+    """
+
+    def _sync_on_own_run(self, w, rows):
+        """Publish rows plus an own-session run 'run-mine', and wait until the
+        watcher has demonstrably processed that poll (STATE run-mine), then a
+        few more polls so any event for the other rows would have appeared."""
+        self.set_list(list(rows) + [("run-mine", "t1", "running")])
+        w.wait_for(lambda l: l.startswith("STATE run-mine "),
+                   "STATE for the watcher's own run in the same poll (sync point)")
+        n = self.listed()
+        self.wait_listed(n + 4, "four further polls")
+        w.settle(0.5)
+
+    def test_other_session_run_emits_no_events(self):
+        w = self.watch(task_stall_secs=1)
+        self.wait_listed(1, "the baseline poll")
+        self._sync_on_own_run(w, [("run-x", "t1", "running", OTHER_SESSION, "pid-44869"),
+                                  ("run-x", "t2", "running", OTHER_SESSION, "pid-44869")])
+        self.set_list([("run-x", "t1", "running", OTHER_SESSION, "pid-44869"),
+                       ("run-x", "t2", "done", OTHER_SESSION, "pid-44869"),
+                       ("run-mine", "t1", "verifying")])
+        w.wait_for(lambda l: l.startswith("STATE run-mine ") and "t1=verifying" in l,
+                   "STATE for the own run's change (second sync point)")
+        n = self.listed()
+        self.wait_listed(n + 3, "three further polls")
+        w.settle(0.5)
+        self.assertEqual([l for l in w.lines if "run-x" in l], [],
+                         "a run owned by a DIFFERENT session must produce no STATE / TASK-STALL "
+                         "(nor any other line) in this session's watcher")
+
+    def test_same_session_run_is_watched(self):
+        w = self.watch(task_stall_secs=1)
+        self.wait_listed(1, "the baseline poll")
+        self.set_list([("run-own", "t1", "running", SESSION, "session-x")])
+        line = w.wait_for(lambda l: l.startswith("STATE run-own "),
+                          "STATE for a later run owned by --session")
+        self.assertIn("t1=running", line, "STATE lists the owned run's tasks")
+        w.wait_for(lambda l: l.startswith("TASK-STALL run-own t1 "),
+                   "TASK-STALL for the owned run's unchanged running task")
+        self.assertFalse(any(l.startswith("WATCH-UNOWNED") for l in w.lines),
+                         "an owned run is not unowned")
+
+    def test_unowned_run_emits_one_watch_unowned_and_no_state(self):
+        w = self.watch(task_stall_secs=1)
+        self.wait_listed(1, "the baseline poll")
+        unowned = [
+            ("run-miss", "t1", "running", OMIT, "pid-111"),   # key missing
+            ("run-miss", "t2", "pending", OMIT, "pid-111"),
+            ("run-null", "t1", "running", None, "pid-222"),   # explicit null
+            ("run-bad", "t1", "running", 42, "pid-333"),      # unreadable (not a string)
+        ]
+        self._sync_on_own_run(w, unowned)
+        # a status change of the unowned runs must not turn into STATE either
+        changed = [(r, t, "verifying" if s == "running" else s, o, lb) for r, t, s, o, lb in unowned]
+        self.set_list(changed + [("run-mine", "t1", "verifying")])
+        w.wait_for(lambda l: l.startswith("STATE run-mine ") and "t1=verifying" in l,
+                   "STATE for the own run's change (second sync point)")
+        n = self.listed()
+        self.wait_listed(n + 3, "three further polls")
+        w.settle(0.5)
+        for run, label in (("run-miss", "pid-111"), ("run-null", "pid-222"), ("run-bad", "pid-333")):
+            mine = [l for l in w.lines if run in l]
+            self.assertEqual(mine, ["WATCH-UNOWNED %s label=%s" % (run, label)],
+                             "an undetermined owner (%s) yields exactly one WATCH-UNOWNED line for the "
+                             "run (not per task, not per poll) and no STATE / TASK-STALL; got %r"
+                             % (run, mine))
+
+    def test_run_flag_watches_unowned_run(self):
+        w = self.watch(extra=["--run", "run-pinned"], task_stall_secs=1)
+        self.wait_listed(1, "the baseline poll")
+        self.set_list([("run-pinned", "t1", "running", OMIT, "pid-444"),
+                       ("run-pinned2", "t1", "running", None, "pid-555")])
+        line = w.wait_for(lambda l: l.startswith("STATE run-pinned "),
+                          "STATE for an unowned run explicitly named with --run")
+        self.assertIn("t1=running", line, "STATE lists the pinned run's tasks")
+        w.wait_for(lambda l: l.startswith("TASK-STALL run-pinned t1 "),
+                   "TASK-STALL for the pinned unowned run")
+        self.assertFalse(any(l.startswith("STATE run-pinned2 ") or l.startswith("TASK-STALL run-pinned2 ")
+                             for l in w.lines),
+                         "--run pins only the named run; the other unowned run stays unwatched")
 
 
 class TestListTasksFailures(Base):

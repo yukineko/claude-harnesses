@@ -36,12 +36,14 @@
 //!   truncating write Allow — although the shell hands `tee` the existing
 //!   files the glob matches. Each expects the verdict MEASURED at 5b2b3a6b8
 //!   for its expanded spelling. Not part of the retirement.
-//! * Not pinned (reported to the caller instead): `tee -a` onto
-//!   command-running config that `protected_path_block` does not cover
+//! * Append fail-open REDs (`#[ignore = "RED fail-open: .."]`, end of file;
+//!   user ruling 2026-11-20): `tee -a` and shell `>>` onto command-running
+//!   config in the own worktree that `protected_path_block` does not cover
 //!   (`{W}/hooks/hooks.json`, `{W}/crates/x/hooks/hooks.json`,
-//!   `{W}/scripts/check-x.py`) is allow/allow at 5b2b3a6b8 (as is `>>` onto
-//!   them); whether that legacy Allow is the verdict to keep is a ruling
-//!   question.
+//!   `{W}/scripts/check-x.py`) are allow/allow at 5b2b3a6b8 and must be
+//!   ask/deny, like the `.claude/settings.json` / `.githooks/` appends.
+//!   `-a` / `>>` onto ordinary OtherWorktree / Project / HOME files stays
+//!   Allow (same ruling; pinned in `control_placement`).
 //!
 //! Placeholders: `{T}` dir strictly inside the fixed temp root, `{D}` the
 //! hook's `TMPDIR`, `{H}` fixture `HOME`, `{W}` own worktree (session cwd),
@@ -627,4 +629,71 @@ fn red_failopen_glob_own_worktree_crate_hooks() {
 #[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
 fn red_failopen_glob_own_worktree_check_script() {
     expect_same_as_expanded("fo-check", "echo x | tee {W}/scripts/check-*.py", D);
+}
+
+// ---------------------------------------------------------------------------
+// FAIL-OPEN REDs (user ruling 2026-11-20 on this file's open question 1):
+// an append (`tee -a` AND shell `>>`) onto command-running config in the OWN
+// worktree that `protected_path_block` does not cover (`hooks/hooks.json`,
+// `crates/*/hooks/…`, `scripts/check-*.py`) must be Ask (main) / Deny
+// (subagent), like the `.claude/settings.json` / `.githooks/` appends pinned
+// in `control_protected`. Measured allow/allow at 5b2b3a6b8.
+// ---------------------------------------------------------------------------
+
+fn expect_ask_deny(tag: &str, template: &str) {
+    let fx = fixture(tag);
+    let (got, rm, rs) = measure(&fx, template);
+    assert_eq!(
+        got, AD,
+        "{template:?} appends to command-running config in the own worktree and must be \
+         Ask (main) / Deny (subagent)\n  main reason: {rm}\n  sub reason:  {rs}"
+    );
+}
+
+#[test]
+#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
+fn red_failopen_tee_append_own_hooks_json() {
+    expect_ask_deny("fo-a-hooks", "echo x | tee -a {W}/hooks/hooks.json");
+}
+
+#[test]
+#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
+fn red_failopen_tee_append_own_crate_hooks() {
+    expect_ask_deny(
+        "fo-a-crate",
+        "echo x | tee -a {W}/crates/x/hooks/hooks.json",
+    );
+}
+
+#[test]
+#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
+fn red_failopen_tee_append_own_check_script() {
+    expect_ask_deny("fo-a-check", "echo x | tee -a {W}/scripts/check-x.py");
+}
+
+#[test]
+#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
+fn red_failopen_tee_append_own_mixed_with_check_script() {
+    expect_ask_deny(
+        "fo-a-mixed",
+        "echo x | tee -a {W}/u.txt {W}/scripts/check-x.py",
+    );
+}
+
+#[test]
+#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
+fn red_failopen_redirect_append_own_hooks_json() {
+    expect_ask_deny("fo-r-hooks", "echo x >> {W}/hooks/hooks.json");
+}
+
+#[test]
+#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
+fn red_failopen_redirect_append_own_crate_hooks() {
+    expect_ask_deny("fo-r-crate", "echo x >> {W}/crates/x/hooks/hooks.json");
+}
+
+#[test]
+#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
+fn red_failopen_redirect_append_own_check_script() {
+    expect_ask_deny("fo-r-check", "echo x >> {W}/scripts/check-x.py");
 }

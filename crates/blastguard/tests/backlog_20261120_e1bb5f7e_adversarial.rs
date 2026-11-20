@@ -184,13 +184,11 @@ fn sudo_i_herestring_harm() {
 }
 
 #[test]
-#[ignore = "backlog RED: piping a harm string into sudo bash is ask in main (deny only in subagent), not Deny"]
 fn pipe_harm_into_sudo_bash_deny() {
     is_deny("f12", "echo rm -rf /etc | sudo bash");
 }
 
 #[test]
-#[ignore = "backlog RED: piping a harm string into sudo -s is ask in main (deny only in subagent), not Deny"]
 fn pipe_harm_into_sudo_s_deny() {
     is_deny("f13", "echo rm -rf /etc | sudo -s");
 }

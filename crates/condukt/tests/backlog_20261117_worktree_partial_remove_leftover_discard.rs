@@ -220,7 +220,6 @@ fn control_discard_of_intact_worktree_succeeds() {
 
 // test-weakening-justified: new RED for an unfixed defect (2026-11-17).
 #[test]
-#[ignore = "RED: 2026-11-17 condukt worktree discard leaves a part-way-removed worktree dir (no .git, tracked residue, ignored target/) in place; it is neither quarantine-moved nor discarded, so a human rm is required"]
 fn discard_does_not_leave_part_way_removed_dir_in_place() {
     let fx = Fx::new();
     let wt = fx.worktree();

@@ -3099,14 +3099,16 @@ mod worktree_remove_tests {
 /// (CLAUDE.md §3). The only force permitted without a capture is the case where
 /// the worktree is PROVABLY clean — `wt_reconcile::dirtiness() == Known(false)`,
 /// meaning git declined for some unrelated reason (lock contention, an admin-dir
-/// problem) and there is nothing to lose. `Known(true)` and `Undetermined` both
-/// REFUSE: `remove` returns `Err` carrying the preservation's own reason
-/// verbatim and leaves the directory — and the work it could not save — on
-/// disk. For a garbage collector the restrictive side is DO NOT DELETE.
+/// problem) and there is nothing to lose. `Known(true)` REFUSES; so does
+/// `Undetermined`, unless `quarantine` observes positive evidence of a part-way
+/// removal (no `.git`, under `worktree_base`, git lists it only `prunable`):
+/// then it is renamed into the quarantine (nothing deleted) and `Ok` returned.
+/// A refusal returns `Err` carrying the preservation's own reason verbatim and
+/// leaves the directory — and the work it could not save — on disk.
 ///
-/// A forced removal that fails part-way leaves no unregistered orphan in place:
-/// the leftover is quarantine-moved (see `quarantine`) and `remove` returns `Err`
-/// naming where it went.
+/// A forced removal that fails part-way is quarantine-moved only when it was a
+/// registered worktree under `worktree_base` before the force (`quarantine`);
+/// `remove` returns `Err` naming where it went, or why it was left in place.
 ///
 /// If the branch cannot be deleted because it is not fully merged, a warning is
 /// printed to stderr and the function still returns `Ok(())`. The caller is
@@ -3140,7 +3142,7 @@ pub fn remove(repo: &Path, path: &Path, branch: Option<&str>) -> Result<Option<S
 /// The worktree-directory half shared by [`remove`] and [`discard`]: a plain
 /// `git worktree remove`, and on git's refusal a `--force` retry authorized
 /// ONLY by a verified [`crate::wt_reconcile::preserve`] capture or a provably
-/// clean tree (see [`remove`] for the full contract). One body for both
+/// clean tree, or an evidenced part-way removal's quarantine (see [`remove`]). One body for both
 /// callers so a fix cannot land on one mirror only (backlog 4be23458).
 fn remove_worktree_preserving(repo: &Path, path: &Path) -> Result<()> {
     let path_str = path.to_string_lossy().to_string();
@@ -3167,18 +3169,14 @@ fn remove_worktree_preserving(repo: &Path, path: &Path) -> Result<()> {
                      work (or discard it deliberately) and remove it again.",
                     path.display()
                 ),
-                // Cannot even tell whether there is anything to lose.
-                Determination::Undetermined(undecided) => bail!(
-                    "refusing to remove worktree {}: git declined to remove it, its content \
-                     could not be preserved ({why}), and whether it holds uncommitted work \
-                     could not be determined ({undecided}). The directory is left in place.",
-                    path.display()
-                ),
+                // Cannot tell whether there is anything to lose: refuse, unless
+                // positive evidence shows a part-way removal (backlog 4503c90d).
+                Determination::Undetermined(undecided) => {
+                    return quarantine::resolve_undetermined(repo, path, &why, &undecided)
+                }
             }
         }
-        if let Err(e) = git(repo, &["worktree", "remove", "--force", &path_str]) {
-            return Err(quarantine::fail_forced_removal(repo, path, e));
-        }
+        quarantine::force_remove(repo, path)?;
     }
     Ok(())
 }
@@ -3198,7 +3196,7 @@ fn remove_worktree_preserving(repo: &Path, path: &Path) -> Result<()> {
 /// refusal is answered by preserving the work to `refs/preserved/<name>`
 /// first, and when that capture fails on a dirty or undeterminable tree the
 /// discard REFUSES (directory and branch left in place) rather than forcing
-/// (backlog 4be23458).
+/// (backlog 4be23458); an evidenced part-way removal is quarantine-moved instead.
 ///
 /// If the worktree dir is already gone we `worktree prune` first so the stale
 /// admin entry does not make `branch -D` refuse ("checked out").

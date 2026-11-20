@@ -34,11 +34,18 @@
 //!   Undetermined (`piped_by_compound_stage`, `compound_fed_body`);
 //! * any other program from stdin or a process substitution (`bash < x.sh`,
 //!   a pipe from a non-literal producer, an fd, `<(cat f)`) → Undetermined,
-//!   except a bare shell reading the inherited stdin, which gives no opinion
-//!   (the Bash tool's stdin is empty; user ruling 2026-11-18 (b));
+//!   except a bare shell reading the inherited stdin at the top level, which
+//!   gives no opinion (the Bash tool's stdin is empty; user ruling 2026-11-18
+//!   (b));
 //! * a shell `-c PROG` with a literal PROG: PROG analysed by this layer
 //!   recursively (the legacy layer judges its effects); an undetermined PROG
-//!   → Undetermined;
+//!   → Undetermined. Inside PROG a command that does not redirect its own
+//!   stdin inherits the `-c` shell's stdin (`inherited_stdin`), so a shell
+//!   there reading its program from stdin reads THAT (backlog b838630f):
+//!   `bash -c 'bash' < x.sh` / `0<` / `<>` (a file whose text is not on the
+//!   line), an fd, or a non-literal pipe → Undetermined; a literal (`<<<`,
+//!   here-document, `echo … |`) → judged by the full detector as
+//!   `<shell> -c '<body>'`;
 //! * python: a program file and `-m` → Undetermined (S5 reads inline
 //!   programs only); `-c` and a literal stdin program give no B.5 opinion —
 //!   stage S5 (`s5.rs`) parses and judges them; any other stdin →
@@ -163,7 +170,7 @@ pub(crate) fn raise(legacy: Decision, command: &str, judge: &Probes<'_>) -> Deci
     if legacy.is_deny() {
         return legacy;
     }
-    match layer(command, 0, judge) {
+    match layer(command, 0, judge, &StdinSource::Inherited) {
         d @ Decision::Deny(_) => d,
         d @ Decision::Ask(_) if matches!(legacy, Decision::Allow) => d,
         _ => legacy,
@@ -177,7 +184,13 @@ fn undetermined(reason: impl std::fmt::Display) -> Decision {
 }
 
 /// This layer's opinion of `text` (`Allow` = no objection).
-fn layer(text: &str, depth: usize, judge: &Probes<'_>) -> Decision {
+///
+/// `inherited` is what a command of `text` that does not redirect its own
+/// stdin reads as stdin: [`StdinSource::Inherited`] (the Bash tool's empty
+/// stdin) for the top-level line, and for a `-c PROG` body the stdin of the
+/// shell running it (`bash -c 'bash' < x.sh`: the inner `bash` reads
+/// `x.sh`), see [`inherited_stdin`].
+fn layer(text: &str, depth: usize, judge: &Probes<'_>, inherited: &StdinSource) -> Decision {
     if depth > MAX_DEPTH {
         return undetermined("the program is nested too deeply");
     }
@@ -188,7 +201,7 @@ fn layer(text: &str, depth: usize, judge: &Probes<'_>) -> Decision {
     };
     let mut acc = VerdictAcc::default();
     for (i, cmd) in script.commands.iter().enumerate() {
-        let v = classify(text, &script.commands, i, cmd, depth, judge);
+        let v = classify(text, &script.commands, i, cmd, depth, judge, inherited);
         if let Some(deny) = acc.record(v) {
             return deny;
         }
@@ -391,6 +404,7 @@ fn classify(
     cmd: &SimpleCommand,
     depth: usize,
     judge: &Probes<'_>,
+    inherited: &StdinSource,
 ) -> Decision {
     let mut k = 0;
     loop {
@@ -466,16 +480,28 @@ fn classify(
     }
     match (fam, source) {
         (_, ProgramSource::Undetermined(r)) => undetermined(format_args!("`{base}`: {r}")),
-        (Family::Shell, ProgramSource::InlineLiteral(prog)) => layer(&prog, depth + 1, judge),
+        (Family::Shell, ProgramSource::InlineLiteral(prog)) => {
+            layer(&prog, depth + 1, judge, inherited_stdin(cmd, inherited))
+        }
         (fam, ProgramSource::Stdin(StdinSource::Literal(body))) => {
             if piped_by_compound_stage(text, commands, idx, cmd) {
                 return compound_fed_body(fam, base, &body, depth, judge);
             }
             literal_body(fam, &body, depth, judge)
         }
-        // The Bash tool's stdin is empty: a bare shell reading the inherited
-        // stdin gets no B.5 opinion (user ruling 2026-11-18 (b)).
-        (Family::Shell, ProgramSource::Stdin(StdinSource::Inherited)) => Decision::Allow,
+        // A shell reading the stdin it inherits reads `inherited`. At the top
+        // level that is the Bash tool's stdin, which is empty: no B.5 opinion
+        // (user ruling 2026-11-18 (b)). Inside a `-c PROG` body it is the
+        // stdin of the enclosing shell (backlog b838630f: `bash -c 'bash' <
+        // x.sh` runs `x.sh`), judged as if this shell read it directly.
+        (Family::Shell, ProgramSource::Stdin(StdinSource::Inherited)) => match inherited {
+            StdinSource::Inherited => Decision::Allow,
+            StdinSource::Literal(body) => compound_fed_body(fam, base, body, depth, judge),
+            src => undetermined(format_args!(
+                "`{base}` reads its program from the stdin of the enclosing `-c` shell, {}",
+                stdin_phrase(src)
+            )),
+        },
         (Family::Python, ProgramSource::InlineLiteral(_)) => Decision::Allow,
         (_, ProgramSource::InlineLiteral(_)) => {
             undetermined(format_args!("`{base}` runs an inline program"))
@@ -511,14 +537,34 @@ fn classify(
     }
 }
 
+/// What a command inside the `-c PROG` body of `cmd` reads as stdin when it
+/// does not redirect its own: `cmd`'s stdin (a redirect, a pipe, a
+/// here-document), or — when `cmd` itself inherits — what `cmd` inherits
+/// (`inherited`), so the outer redirect reaches through nested `-c` bodies
+/// (`bash -c 'bash -c "bash"' < x.sh`). A redirect inside PROG replaces it as
+/// usual (the evaluator applies PROG's own redirects to `cmd.stdin` of the
+/// inner commands).
+fn inherited_stdin<'a>(cmd: &'a SimpleCommand, inherited: &'a StdinSource) -> &'a StdinSource {
+    match cmd.stdin {
+        StdinSource::Inherited => inherited,
+        ref own => own,
+    }
+}
+
 /// A literal program body: a shell body is read by this layer recursively;
 /// any other interpreter's body gives no B.5 opinion (python: stage S5,
 /// `s5.rs`, judges it; perl /
 /// ruby / node: the legacy program-text reading decides, user ruling
 /// 2026-11-18 (a)).
+///
+/// The body is read with [`StdinSource::Inherited`] as its `inherited`
+/// stdin, as at the top level. Its commands really inherit the unread
+/// remainder of that same literal (`printf 'bash\necho x' | bash`: the inner
+/// `bash` reads `echo x`); this layer does not split the literal, but every
+/// line of it is already a command of `body` and is judged as one here.
 fn literal_body(fam: Family, body: &str, depth: usize, judge: &Probes<'_>) -> Decision {
     match fam {
-        Family::Shell => layer(body, depth + 1, judge),
+        Family::Shell => layer(body, depth + 1, judge, &StdinSource::Inherited),
         Family::Python | Family::PerlLike | Family::Node => Decision::Allow,
     }
 }
@@ -598,7 +644,7 @@ fn compound_fed_body(
     match fam {
         Family::Shell => {
             let mut acc = VerdictAcc::default();
-            if let Some(deny) = acc.record(layer(body, depth + 1, judge)) {
+            if let Some(deny) = acc.record(layer(body, depth + 1, judge, &StdinSource::Inherited)) {
                 return deny;
             }
             if let Some(deny) = acc.record(judge_body(body, Runner::Shell(base), judge)) {

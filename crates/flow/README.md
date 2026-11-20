@@ -1,7 +1,9 @@
+# flow
+
 ```
 SOURCE（課題の供給）                          EXECUTOR（解決手段の実行）
   compass     … 次の右サイズの一手             ─┐
-  backlog     … 確定済みキュー                  ├─▶  condukt（fugu-router がモデル選択）─▶ verify
+  backlog     … 確定済みキュー（+ GitHub issues mirror）├─▶  condukt（fugu-router がモデル選択）─▶ verify
   hypothesis  … PDO 仮説の build / measure      │
   prompt      … ユーザー直の課題文             ─┘
 
@@ -9,58 +11,73 @@ SOURCE（課題の供給）                          EXECUTOR（解決手段の�
 計測して validate/reject する（出荷 ≠ 検証 ＝ build ≠ validate）。
 ```
 
+## Never-stop contract (user rulings 2026-11-21)
+
+The verbatim rulings live in `skills/flow/SKILL.md` (section 「止まらないこと」); in short:
+
+- **No argument**: every cycle starts with `backlog sync --apply` (reconcile the store with its GitHub
+  issues mirror), then picks with `backlog next --claim`. The loop runs until the queue yields no work
+  (backlog pending, measurable hypotheses, a compass move).
+- **With an argument**: the given task is claimed (`condukt state claim-task --stateless` with a hashkey
+  derived from the statement) and pursued until it is solved and verified (condukt completion gate +
+  verification). An argument that asks to drain the backlog loops until the backlog is empty.
+- **The only stop reason is a `condukt circuit check` trip** (always called with
+  `--no-compaction-axis`). Budget pressure / over / undetermined only narrows the batch width to N=1;
+  compaction is not a stop; human-judgment waits are gone.
+- **Human gates**: in autonomous mode every gate goes through `condukt policy answer --resolve`, which
+  resolves to exactly one of **auto** (exit 0, adopt the recommended `chosen`), **deny** (exit 3,
+  destructive: refuse that action), **reject** (exit 4, unmeasured/untestable: not accepted as done),
+  **cancel** (exit 5, unresolvable: re-pose once as a different question, else cancel/fail the item).
+  None of them ends the loop. Non-autonomous runs keep the old `AskUserQuestion` fallback.
+
 It does **not** lock the whole queue: several sessions may run `/flow` on the same project at once.
 Exclusion is per task — `backlog next --claim` (pick and reserve in one critical section) plus `condukt state claim-task` — and each session registers itself non-exclusively with `backlog driver register`.
 
-早期脱出・エラー時も、driver 登録の解除を飛ばしてはならない。
-盲目実行をしない。
+The full procedure is `skills/flow/SKILL.md`:
 
 ```
-0. 引数分岐 — 課題文があれば source 選択を飛ばして condukt に直行（1 件だけ実行）
+0. 引数分岐 — 課題文があれば claim して、その課題が解決・検証を通るまで condukt で進める
+     （「backlog を消化せよ」型の引数は通常ループで backlog が空になるまで）
 0.5. 自律ゲート — `condukt state autonomy-check`。自律モードなら各 human gate を
-     `condukt policy answer`（risk×reversible×confidence の graded 判定）に通す（下記参照）
-1. compass は先に引かない — 引数なしの /flow は backlog 優先（2026-09-23 裁定）。
-     compass は 3-1 の backlog が一手も出さなかったときのフォールバック
-2. driver 登録（非排他）— `backlog driver register`。キュー全体はロックしない。
-     他セッションの driver が居ても見送らない。誰かが明示的に `backlog lock acquire` した
-     排他ロックが生きている場合だけ尊重する
-3. 実行ループ — ピック（`backlog next --claim` で選択と予約を同一クリティカルセクションで行い、
-       claim-skip ゲート）→ spec-gap ゲート → 着手前に claim（`condukt state claim-task`、TOCTOU ガード）
-       → overwatch anchor 登録（overwatch begin）→ /condukt → 検証 → sink
-       ピック順: measure step（awaiting-measurement の仮説を計測して validate/reject で閉じる）
-                 → `backlog`（主経路。複数 ready 課題は順列でなく 1 condukt run に束ね、並列/直列は
-                    condukt の schedule.rs に委譲＝非衝突は並列・衝突/危険は自動で直列。sink は item ごと）
-                 → backlog が空のときだけ `compass gap`（charter が陳腐ならその場で彫り直す）
-                 （open 仮説はユーザーが明示指示したときだけ。自動ループでは残課題として報告のみ）
-       成功 sink: backlog done
-                 / compass は `compass outcome` で measuring_stick 判定（前進/不変/後退）を記録
-                 / hypothesis は出荷で awaiting-measurement、計測後に validate/reject（証拠必須）
-                 / fugu-router に record
-                 / いずれも claim を release、ループ中は heartbeat で claim を live に保つ
-       失敗: backlog fail --reason …、スキップして次へ
-4. 終了 — source が尽きる/予算超過/中断で `backlog driver unregister`（例外的に lock acquire した
-     場合のみ lock release）+ `overwatch end` + サマリ報告 + pivot-check
+     `condukt policy answer --resolve`（auto / deny / reject / cancel）に通す
+1. compass は先に引かない — backlog 優先。compass は backlog が一手も出さなかったときのフォールバック
+2. driver 登録（非排他）— `backlog driver register`。キュー全体はロックしない
+2.5. flow-watch を Monitor で武装（停滞検知）
+3. 実行ループ — `backlog sync --apply` → budgetguard（情報。バッチ幅だけ） → ピック（`backlog next --claim`）
+       → spec-gap ゲート → claim → overwatch begin → /condukt → 検証 → sink（done / fail）→ release
+       → heartbeat → `condukt circuit check --no-compaction-axis`（trip だけが停止）
+4. 終了 — キューが空 / 引数の課題が解決 / circuit trip で `backlog driver unregister`
+     + `overwatch end` + サマリ報告 + pivot-check（`--resolve`、推奨＝継続）
 ```
 
-The autonomy check and the gate routing are specified in `skills/flow/SKILL.md` Step 0.5.
+## Layout — a Rust crate with a Stop hook
 
-On an **auto** verdict (exit 0), `condukt policy answer` self-answers the recommended option and logs it to
-`gate-decisions.jsonl` (auditable via `condukt policy answers`).
-Do **not** ask the user on an auto verdict.
+flow is no longer skill-only. It is a workspace crate whose binary serves the Stop hook:
 
-**flow has no hook. `/flow` runs when, and only when, you invoke it.**
+```
+.claude-plugin/plugin.json     # plugin manifest
+Cargo.toml / src/              # the `flow` binary (src/stop_gate.rs, decide.rs, probes.rs)
+bin/flow                       # POSIX launcher → bin/flow-<os>-<arch>
+bin/flow-watch                 # stall watcher run under Monitor (Step 2.5)
+hooks/hooks.json               # Stop → ${CLAUDE_PLUGIN_ROOT}/bin/flow stop-gate
+skills/flow/SKILL.md           # the /flow skill (drives the source→executor loop)
+```
 
- Through 0.2.6 a `flow propose` SessionStart hook injected an L2
-propose-then-confirm directive every session the backlog had pending items: *"before
-starting other work, ask the user with a single AskUserQuestion whether to start
-`/flow`."* **It was retired on the user's instruction (2026-08-20)**, together with
-autoflow's two paths that said the same thing — its SessionStart "バックログに N 件…
-/flow で開始しますか？" and its Stop-hook arm that blocked every single turn with
-"/backlog を実行してください".
+### `flow stop-gate` (Stop hook)
 
-flow is a **skills-only plugin**: no binary, no launcher, no hook, not a Cargo crate.
+- Blocks the stop of a **live registered driver** session while `backlog next` has work or the
+  session holds `flow-<SESSION>` claims — unless `condukt circuit check --no-compaction-axis` trips.
+- Undeterminable (registry / backlog / claims / circuit unobservable) → blocks once, then a visible
+  allow on the next consecutive undetermined stop of the same session. A panic of the gate body
+  blocks (fail-closed, `harness_core::gate::run::run_guarded`).
+- Sessions that are not registered drivers are **never** blocked: the hook does not propose `/flow`.
+- Step 4's `backlog driver unregister` ends it — the skill unregisters only when the queue is empty,
+  the circuit tripped, or the argument task is solved.
 
-The plugin bundles the `/flow` skill and nothing else.
+**flow still never proposes itself.** Through 0.2.6 a `flow propose` SessionStart hook injected an L2
+propose-then-confirm directive; it was retired on the user's instruction (2026-08-20), together with
+autoflow's two paths that said the same thing. The Stop hook above acts only on sessions that ran
+`/flow` and registered as a driver.
 
 ```text
 # in Claude Code:
@@ -68,21 +85,12 @@ The plugin bundles the `/flow` skill and nothing else.
 /plugin install flow@yukineko
 ```
 
-```
-.claude-plugin/plugin.json     # plugin manifest
-skills/flow/SKILL.md           # the /flow skill (drives the source→executor loop)
-```
-
- Through 0.2.6 it also shipped `hooks/hooks.json`, `bin/flow` (a POSIX launcher),
-`bin/flow-<os>-<arch>`, `src/main.rs` and `Cargo.toml`, all of which existed to serve
-`flow propose` and went with it.
-
-Not a Cargo crate, so `cargo` is not involved in shipping it. The `/flow` skill's
-queue-driving contract is pinned as text by
-`crates/integration-tests/tests/flow_skill_queue_contract.rs`:
+## Tests
 
 ```sh
-cargo test -p integration-tests --test flow_skill_queue_contract
+cargo test -p flow --test stop_gate        # the Stop hook's behaviour
+cargo test -p flow --test skill_contract   # the SKILL/README prose contract (rulings 2026-11-21)
+cargo test -p integration-tests --test flow_skill_queue_contract   # no whole-queue lock, no pick via `backlog list`
 ```
 
 MIT

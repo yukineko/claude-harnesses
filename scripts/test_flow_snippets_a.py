@@ -181,24 +181,38 @@ class T(unittest.TestCase):
         self.addCleanup(self.sb.cleanup)
 
     # ------------------------------------------------------------------ layout
-    def test_claim_layout_no_cargo_no_bin_no_hooks(self):
+    def test_claim_layout_crate_with_cargo_bin_hooks(self):
+        # re-anchored 2026-11-21 (tC): skill-only plugin (no Cargo.toml/src/bin/hooks) ->
+        # flow is a Rust crate shipping the `flow stop-gate` Stop hook (bin/flow + hooks/hooks.json)
+        # that keeps a live /flow driver running while work remains (ruling 2026-11-21).
         names = {p.name for p in CRATE.iterdir()}
-        for forbidden in ("Cargo.toml", "src", "bin", "hooks", "Cargo.lock", "target"):
+        for required in ("Cargo.toml", "src", "bin", "hooks", ".claude-plugin", "skills"):
+            self.assertIn(required, names, f"crates/flow must contain {required}")
+        for forbidden in ("Cargo.lock", "target"):  # workspace member: lock/target live at the root
             self.assertNotIn(forbidden, names, f"crates/flow must not contain {forbidden}")
-        self.assertIn(".claude-plugin", names)
-        self.assertIn("skills", names)
-        # tracked files: exactly the manifest, the skill, and the READMEs
-        tracked = subprocess.run(["git", "ls-files", "crates/flow"], cwd=ROOT, capture_output=True,
-                                 text=True, check=True).stdout.split()
-        self.assertEqual(sorted(tracked), sorted([
-            "crates/flow/.claude-plugin/plugin.json", "crates/flow/README.ja.md",
-            "crates/flow/README.md", "crates/flow/skills/flow/SKILL.md"]))
+        tracked = set(subprocess.run(["git", "ls-files", "crates/flow"], cwd=ROOT, capture_output=True,
+                                     text=True, check=True).stdout.split())
+        required_tracked = {
+            "crates/flow/.claude-plugin/plugin.json", "crates/flow/Cargo.toml",
+            "crates/flow/README.ja.md", "crates/flow/README.md", "crates/flow/skills/flow/SKILL.md",
+            "crates/flow/hooks/hooks.json", "crates/flow/bin/flow", "crates/flow/src/main.rs"}
+        self.assertEqual(required_tracked - tracked, set(), f"untracked layout files; tracked={sorted(tracked)}")
+        self.assertFalse([t for t in tracked if t.endswith("Cargo.lock") or "/target/" in t], tracked)
 
-    def test_claim_layout_plugin_json_valid_name_flow_no_hooks(self):
+    def test_claim_layout_plugin_json_valid_name_flow_and_stop_gate_hook(self):
+        # re-anchored 2026-11-21 (tC): plugin ships no hooks -> plugin ships exactly the
+        # `${CLAUDE_PLUGIN_ROOT}/bin/flow stop-gate` Stop hook (and no SessionStart: still no proposing).
         pj = json.loads((CRATE / ".claude-plugin" / "plugin.json").read_text())
         self.assertEqual(pj["name"], "flow")
-        self.assertNotIn("hooks", pj)
-        self.assertFalse((CRATE / "hooks").exists())
+        hj = json.loads((CRATE / "hooks" / "hooks.json").read_text())
+        self.assertNotIn("SessionStart", hj.get("hooks", {}))
+        stop_cmds = [h.get("command", "") for e in hj["hooks"].get("Stop", []) for h in e.get("hooks", [])]
+        self.assertIn("${CLAUDE_PLUGIN_ROOT}/bin/flow stop-gate", stop_cmds)
+        launcher = CRATE / "bin" / "flow"
+        self.assertTrue(launcher.is_file())
+        mode = subprocess.run(["git", "ls-files", "-s", "crates/flow/bin/flow"], cwd=ROOT,
+                              capture_output=True, text=True, check=True).stdout.split()[0]
+        self.assertEqual(mode, "100755", "bin/flow launcher must be executable in the git index")
 
     def test_claim_layout_only_skill_is_flow(self):
         skills = sorted(p.name for p in (CRATE / "skills").iterdir())
@@ -209,18 +223,19 @@ class T(unittest.TestCase):
         self.assertFalse((CRATE / "agents").exists())
         self.assertFalse((CRATE / "commands").exists())
 
-    def test_claim_layout_not_a_workspace_member(self):
+    def test_claim_layout_is_a_workspace_member(self):
+        # re-anchored 2026-11-21 (tC): crates/flow excluded from the workspace (not a crate) ->
+        # crates/flow is a workspace member package named "flow" (it builds the stop-gate binary).
         root_toml = ROOT_CARGO.read_text()
         m = re.search(r"^exclude\s*=\s*\[(.*?)\]", root_toml, re.S | re.M)
-        self.assertTrue(m)
-        self.assertIn('"crates/flow"', m.group(1))
+        if m:
+            self.assertNotIn('"crates/flow"', m.group(1))
         r = subprocess.run([_cargo(), "metadata", "--format-version", "1", "--no-deps"], cwd=ROOT,
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        manifests = [p["manifest_path"] for p in json.loads(r.stdout)["packages"]]
-        self.assertFalse([m for m in manifests if "/crates/flow/" in m], manifests)
-        pkgs = [p["name"] for p in json.loads(r.stdout)["packages"]]
-        self.assertNotIn("flow", pkgs)
+        pkgs = {p["name"]: p["manifest_path"] for p in json.loads(r.stdout)["packages"]}
+        self.assertIn("flow", pkgs)
+        self.assertTrue(pkgs["flow"].endswith("/crates/flow/Cargo.toml"), pkgs["flow"])
 
     # ----------------------------------------------------------------- license
     def test_claim_license_mit(self):
@@ -237,6 +252,9 @@ class T(unittest.TestCase):
 
     # -------------------------------------------------------------- no_propose
     def test_claim_no_propose_no_hook_runs_flow(self):
+        # re-anchored 2026-11-21 (tC): no hook runs a `flow` binary at all -> the only hook that
+        # runs `flow` is the flow crate's own Stop hook `bin/flow stop-gate` (tB); no other event
+        # (notably SessionStart, the retired proposal path) and no other crate runs it.
         hits = []
         for hj in sorted(CRATES_ROOT.glob("*/hooks/hooks.json")):
             d = json.loads(hj.read_text())
@@ -245,9 +263,9 @@ class T(unittest.TestCase):
                     for h in e.get("hooks", []):
                         cmd = h.get("command", "")
                         if re.search(r"(^|/|\s)flow(\s|$)", cmd):
-                            hits.append((str(hj), ev, cmd))
-        self.assertEqual(hits, [], "a hook runs the retired `flow` binary")
-        self.assertFalse((CRATE / "hooks").exists())
+                            hits.append((str(hj.relative_to(CRATES_ROOT)), ev, cmd))
+        self.assertEqual(hits, [("flow/hooks/hooks.json", "Stop", "${CLAUDE_PLUGIN_ROOT}/bin/flow stop-gate")],
+                         "only flow's own Stop hook may run the `flow` binary")
 
     def test_claim_no_propose_autoflow_has_no_sessionstart_and_no_proposal_strings(self):
         hj = json.loads((ROOT / "crates" / "autoflow" / "hooks" / "hooks.json").read_text())
@@ -316,8 +334,11 @@ class T(unittest.TestCase):
         t = skill_text()
         self.assertIn("`$ARGUMENTS` に課題文があれば Step 3（その課題文で condukt 実行）へ直行せよ", t)
         self.assertIn("`/condukt` は `Task` ツールで非同期起動すること", t)
-        self.assertIn("`AskUserQuestion`「続行 / 中止」", t)
-        self.assertIn("この carve 中の `AskUserQuestion` を省いてはならない", t)
+        # re-anchored 2026-11-21 (tC): the circuit-trip "続行 / 中止" fallback Ask and the mandatory
+        # carve-time AskUserQuestion were human-judgment waits -> ruling 2026-11-21 removes human
+        # waits (every gate goes through `condukt policy answer --resolve`; only the circuit stops).
+        # The old phrases are no longer required; the carve must not be pinned as a forced Ask.
+        self.assertNotIn("この carve 中の `AskUserQuestion` を省いてはならない", t)
 
     @staticmethod
     def _invoked_binaries():
@@ -375,76 +396,110 @@ class T(unittest.TestCase):
         self.assertEqual(claimed, r.returncode)
 
     # ------------------------------------------------------------ policy_table
-    TABLE_ROWS = {
-        "lock": "排他ロック競合", "resume": "resume 選択", "deploy": "deploy/push",
-        "phase3": "condukt Phase 3", "pivot": "pivot-check", "worker": "worker が blocked",
-        "divert": "spec-gap divert", "conflict": "merge conflict", "untestable": "測れない決定",
-        "charter": "charter 彫り直し", "circuit": "循環ブレーカー",
-    }
+    # re-anchored 2026-11-21 (tC): the Step 0.5 verdict table (per-row auto/escalate, `--approval`
+    # column, judgment rows left to a human) -> ruling 2026-11-21 「破壊はdeny,未測定はreject,
+    # autoで自答はいいが解決できないときは別の問いかcancel, 基本はすべてAllow」: every gate is a
+    # fenced `condukt policy answer ... --resolve` whose autonomous outcome is one of
+    # auto(0)/deny(3)/reject(4)/cancel(5), never escalate(2). The tests below no longer parse the
+    # table (its layout is not the contract); they run the fenced commands themselves.
+    RESOLVE_EXIT = {0: "auto", 3: "deny", 4: "reject", 5: "cancel"}
+    LEVELS = ("low", "medium", "high")
 
-    @classmethod
-    def table(cls):
-        lines = skill_text().splitlines()
-        i = next(k for k, l in enumerate(lines) if l.startswith("| human gate |"))
-        header = [c.strip() for c in lines[i].strip().strip("|").split("|")]
-        self_cols = {h: n for n, h in enumerate(header)}
-        rows = {}
-        for l in lines[i + 2:]:
-            if not l.startswith("|"):
-                break
-            cells = [c.strip().replace("*", "").replace("`", "") for c in l.strip().strip("|").split("|")]
-            for key, needle in cls.TABLE_ROWS.items():
-                if needle in cells[0]:
-                    rows[key] = cells
-        return header, rows
-
-    def _answer(self, risk, rev, conf, *flags, recommend="0", opts=("A", "B")):
+    def _answer(self, risk, rev, conf, *flags, recommend="0", opts=("A", "B"), autonomous=True):
         args = ["--risk", risk, "--reversible", rev, "--confidence", conf, "--question", "q"]
         for o in opts:
             args += ["--option", o]
         args += ["--recommend", recommend, *flags]
-        return policy(self.sb, *args)
+        return policy(self.sb, *args, autonomous=autonomous)
 
-    def test_claim_policy_table_rows_verdicts(self):
-        header, rows = self.table()
-        for key in ("lock", "resume", "deploy", "pivot", "worker", "divert"):
-            cells = rows[key]
-            risk, rev, conf = cells[2], cells[3], cells[4]
-            approval = "--approval" if "付ける" in cells[5] and "付けない" not in cells[5] else None
-            expect_auto = "auto" in cells[6] and "escalate" not in cells[6]
-            r = self._answer(risk, rev, conf, *( [approval] if approval else []))
-            want = 0 if expect_auto else 2
-            self.assertEqual(r.returncode, want, f"{key} {cells}: {r.stdout}")
-            self.assertEqual(json.loads(r.stdout)["policy"], "auto" if expect_auto else "escalate", key)
-        # table says lock/resume/deploy take the flag and the judgment rows do not
-        for key in ("lock", "resume", "deploy"):
-            self.assertIn("付ける", rows[key][5])
-        for key in ("pivot", "worker", "divert"):
-            self.assertIn("付けない", rows[key][5])
+    @staticmethod
+    def _fenced_policy_invocations():
+        """argv (after `condukt policy answer`) of every fenced bash invocation, with `\\`
+        continuations joined, a trailing `  # comment` and shell plumbing (`2>/dev/null`, `)`)
+        dropped. Placeholder levels like `<low|medium|high>` are kept as-is for the caller."""
+        import shlex
+        out = []
+        for lang, body, _ in fences(skill_text()):
+            joined = re.sub(r"\\\n\s*", " ", body)
+            for line in joined.splitlines():
+                line = re.sub(r"\s{2,}#.*$", "", line)
+                i = line.find("condukt policy answer")
+                if i < 0 or line.lstrip().startswith("#"):
+                    continue
+                rest = line[i + len("condukt policy answer"):]
+                rest = re.sub(r"\s*2>\s*/dev/null", "", rest)
+                rest = re.sub(r"\)\s*;?\s*$", "", rest.strip())
+                # `<既定 index>`-style placeholders contain spaces: keep each as ONE token
+                rest = re.sub(r"<[^<>\"]*>", lambda m: m.group(0).replace(" ", "_"), rest)
+                out.append(shlex.split(rest))
+        return out
 
-    def test_claim_policy_table_phase3_every_combination_auto_with_approval(self):
-        header, rows = self.table()
-        cells = rows["phase3"]
-        self.assertEqual(cells[3], "high")  # reversible column
-        self.assertIn("付ける", cells[5])
+    def _concretize(self, argv):
+        """Expand placeholder levels to every concrete level; fill a placeholder --recommend with 0."""
+        argv = list(argv)
+        for k, tok in enumerate(argv):
+            if k > 0 and argv[k - 1] == "--recommend" and tok.startswith("<"):
+                argv[k] = "0"
+        slots = [k for k, tok in enumerate(argv)
+                 if k > 0 and argv[k - 1] in ("--risk", "--reversible", "--confidence") and tok.startswith("<")]
+        combos = [[]]
+        for _ in slots:
+            combos = [c + [lv] for c in combos for lv in self.LEVELS]
+        for c in combos:
+            a = list(argv)
+            for k, lv in zip(slots, c):
+                a[k] = lv
+            yield a
+
+    def test_claim_policy_every_fenced_gate_resolves_and_never_escalates_when_autonomous(self):
+        invs = self._fenced_policy_invocations()
+        self.assertTrue(invs, "SKILL.md has no fenced `condukt policy answer`")
         bad = []
-        for risk in ("low", "medium", "high"):
-            for conf in ("low", "medium", "high"):
-                r = self._answer(risk, "high", conf, "--approval")
-                if r.returncode != 0:
-                    bad.append((risk, conf, r.returncode, r.stdout))
+        for argv in invs:
+            self.assertIn("--resolve", argv, argv)
+            for a in self._concretize(argv):
+                r = policy(self.sb, *a)
+                want = self.RESOLVE_EXIT.get(r.returncode)
+                try:
+                    got = json.loads(r.stdout).get("policy")
+                except ValueError:
+                    got = None
+                if want is None or got != want:
+                    bad.append((a, r.returncode, r.stdout, r.stderr))
+        self.assertEqual(bad, [], "a fenced gate escalated (exit 2) or mis-reported its outcome")
+
+    def test_claim_policy_resolve_reversible_high_always_self_answers(self):
+        # was: phase3_every_combination_auto_with_approval (premise: `--approval` clamps to auto).
+        # Under --resolve no `--approval` is needed: nothing with reversible=high is destructive.
+        bad = []
+        for risk in self.LEVELS:
+            for conf in self.LEVELS:
+                for flags in ([], ["--approval"]):
+                    r = self._answer(risk, "high", conf, "--resolve", *flags)
+                    if r.returncode != 0 or json.loads(r.stdout)["policy"] != "auto":
+                        bad.append((risk, conf, flags, r.returncode, r.stdout))
         self.assertEqual(bad, [])
 
-    def test_claim_policy_table_conflict_and_untestable_escalate_even_with_approval(self):
-        header, rows = self.table()
-        self.assertEqual(rows["conflict"][5], "--conflict")
-        self.assertEqual(rows["untestable"][5], "--untestable")
-        for flag in ("--conflict", "--untestable"):
-            ok = self._answer("low", "high", "high", "--approval", flag)
-            self.assertEqual(ok.returncode, 2, f"{flag}: {ok.stdout}")
-            self.assertEqual(json.loads(ok.stdout), {"answered": False, "policy": "escalate"})
-            ctl = self._answer("low", "high", "high", "--approval")
-            self.assertEqual(ctl.returncode, 0)  # control: without the clamp flag it would be auto
+    def test_claim_policy_resolve_conflict_cancels_untestable_rejects_even_with_approval(self):
+        # was: conflict_and_untestable_escalate_even_with_approval -> under --resolve (autonomous)
+        # conflict = cannot be resolved -> cancel(5); untestable = unmeasured -> reject(4); neither
+        # ever self-answers, with or without --approval.
+        for flag, code, name in (("--conflict", 5, "cancel"), ("--untestable", 4, "reject"),
+                                 ("--unmeasured", 4, "reject")):
+            for extra in ([], ["--approval"]):
+                r = self._answer("low", "high", "high", "--resolve", flag, *extra)
+                self.assertEqual(r.returncode, code, f"{flag} {extra}: {r.stdout}")
+                self.assertEqual(json.loads(r.stdout), {"answered": False, "policy": name, "resolve": True})
+        ctl = self._answer("low", "high", "high", "--resolve")
+        self.assertEqual(ctl.returncode, 0)  # control: without the flag it self-answers
+        # --resolve is inert when not autonomous: the legacy escalate (2) is kept for a human
+        r = self._answer("low", "high", "high", "--resolve", "--conflict", autonomous=False)
+        self.assertEqual(r.returncode, 2, r.stdout)
+
+    def test_claim_policy_resolve_destructive_is_deny(self):
+        r = self._answer("high", "low", "high", "--resolve")
+        self.assertEqual(r.returncode, 3, r.stdout)
+        self.assertEqual(json.loads(r.stdout)["policy"], "deny")
 
     def test_claim_policy_table_block_is_never_relaxed_by_approval(self):
         for flag in ([], ["--approval"]):
@@ -457,27 +512,22 @@ class T(unittest.TestCase):
         r = self._answer("low", "high", "high", "--approval", recommend="1", opts=("stand down", "force"))
         self.assertEqual(json.loads(r.stdout)["chosen"], "force")
 
-    def test_claim_policy_table_charter_recarve_is_never_self_answered(self):
-        header, rows = self.table()
-        cells = rows["charter"]
-        self.assertIn("判断要求", cells[1])
-        self.assertIn("付けない", cells[5])
-        self.assertNotIn("付ける", cells[5])
-        self.assertIn("人に聞く（自答しない）", cells[6])
+    def test_claim_policy_charter_recarve_self_answers_under_resolve(self):
+        # re-anchored 2026-11-21 (tC): charter re-carve questions are never self-answered (a human
+        # must answer; "人に聞く（自答しない）") -> ruling 2026-11-21 「autoで自答はいい」: the carve
+        # question goes through --resolve like every gate and self-answers with the recommended
+        # option (it is reversible, not destructive), so /flow does not wait on a human here.
         extra = os.environ.get("FLOW_A_CHARTER_EXTRA", "").split()  # RED hook only
-        # the carve question is a judgment gate: lowest confidence at medium/high risk, reversible
-        # (observed: low-risk/high-reversible/low-confidence would auto, so it is not used here)
         for risk in ("medium", "high"):
-            r = self._answer(risk, "high", "low", *extra)
-            self.assertEqual(r.returncode, 2, f"risk={risk}: {r.stdout}")
-            self.assertEqual(json.loads(r.stdout), {"answered": False, "policy": "escalate"})
-        # control: --approval is exactly what would self-answer it
-        ctl = self._answer("medium", "high", "low", "--approval")
-        self.assertEqual(ctl.returncode, 0)
-        # the prose forbids both the flag and self-answering for the carve
+            r = self._answer(risk, "high", "low", "--resolve", *extra, recommend="1", opts=("A", "B"))
+            self.assertEqual(r.returncode, 0, f"risk={risk}: {r.stdout}")
+            self.assertEqual(json.loads(r.stdout)["chosen"], "B")
+        # control: the same question WITHOUT --resolve is the old escalate (exit 2) — --resolve is
+        # exactly what removes the human wait
+        ctl = self._answer("medium", "high", "low")
+        self.assertEqual(ctl.returncode, 2, ctl.stdout)
         t = skill_text()
-        self.assertIn("charter 彫り直しの問いを自答してはならない", t)
-        self.assertIn("charter を彫る問いは「どちらを選ぶべきか」を", t)
+        self.assertNotIn("charter 彫り直しの問いを自答してはならない", t)
 
     def test_claim_policy_table_circuit_trip_exits_nonzero(self):
         sb = self.sb
@@ -505,46 +555,63 @@ class T(unittest.TestCase):
             self.assertEqual(with_flag.returncode, 0, with_flag.stdout)
             self.assertTrue(json.loads(with_flag.stdout)["answered"])
 
-    def test_claim_judgment_divert_command_as_written_escalates_and_is_journaled(self):
-        block = fence_with("specforge へ divert して spec を起こす", lang="bash")
-        self.assertNotIn("--approval", block)
-        self.assertRegex(block, r"--risk medium --reversible high --confidence low")
+    def test_claim_judgment_divert_command_as_written_resolves_and_is_journaled(self):
+        # re-anchored 2026-11-21 (tC): the spec-gap divert gate escalates to a human (exit 2) ->
+        # ruling 2026-11-21: it is a fenced `condukt policy answer --resolve` that, autonomous,
+        # self-answers with its recommended option (exit 0) and journals the row with resolve:true.
+        block = next((b for l, b, _ in fences(skill_text())
+                      if l == "bash" and "condukt policy answer" in b and "specforge" in b), None)
+        self.assertIsNotNone(block, "no fenced bash policy-answer block for the specforge divert gate")
+        self.assertIn("--resolve", block)
+        rec_m = re.search(r"--recommend (\d+)", block)
+        self.assertIsNotNone(rec_m, block)
+        opts = re.findall(r'--option "([^"]+)"', block)
+        want = opts[int(rec_m.group(1))]
         sb = self.sb
         r = sb.sh(block, HARNESS_AUTONOMOUS="1")
-        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
-        self.assertEqual(json.loads(r.stdout), {"answered": False, "policy": "escalate"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual((out["policy"], out["chosen"]), ("auto", want))
         journals = list(sb.home.glob(".condukt/state/gate-decisions.jsonl"))
         self.assertEqual(len(journals), 1, list(sb.home.rglob("*.jsonl")))
-        rec = json.loads(journals[0].read_text().strip().splitlines()[-1])
-        self.assertEqual(rec["policy"], "escalate")
-        self.assertIn("正典が無い", rec["question"])
-        self.assertEqual(rec["recommend_index"], 0)
-        self.assertEqual(rec["chosen"], "")
-        # control: the same text with --approval spliced in would self-answer (erase the question)
-        ctl = sb.sh(block.replace("condukt policy answer", "condukt policy answer --approval", 1),
-                    HARNESS_AUTONOMOUS="1")
-        self.assertEqual(ctl.returncode, 0, ctl.stdout)
+        row = json.loads(journals[0].read_text().strip().splitlines()[-1])
+        self.assertEqual((row["policy"], row.get("resolve"), row["chosen"]), ("auto", True, want))
+        self.assertIn("正典", row["question"])
+        # control: the same block with --resolve removed is the old human wait (escalate, exit 2)
+        ctl = sb.sh(block.replace(" --resolve", ""), HARNESS_AUTONOMOUS="1")
+        self.assertEqual(ctl.returncode, 2, ctl.stdout)
 
     @staticmethod
     def _pivot_command():
+        # re-anchored 2026-11-21 (tC): exact prose 「既定 verdict は escalate」 + inline command ->
+        # locate the pivot gate by its `--question "pivot…"` wherever it is (fenced or inline),
+        # with the nearest preceding risk triple; the old "既定 verdict" capture is gone.
         t = strip_test_tags(skill_text())
-        m = re.search(r"pivot` なら Step 0\.5.*?（`--risk (\w+) --reversible (\w+) --confidence (\w+)`、既定 verdict は (\w+)、\s*"
-                      r"`--question \"([^\"]+)\" --option \"([^\"]+)\" --option \"([^\"]+)\" --recommend (\d)`）",
-                      t, re.S)
+        sep = r"[\s`、\\]*"
+        m = re.search(r'--question "([^"]*pivot[^"]*)"' + sep + r'--option "([^"]+)"' + sep +
+                      r'--option "([^"]+)"' + sep + r"--recommend (\d)", t)
         assert m, "pivot gate command not found in SKILL.md"
-        return m.groups()
+        lo = max(0, m.start() - 600)
+        triples = list(re.finditer(r"--risk (\w+) --reversible (\w+) --confidence (\w+)", t[lo:m.start()]))
+        assert triples, "pivot gate has no --risk/--reversible/--confidence before its --question"
+        tri = triples[-1]
+        window = t[lo + tri.start():m.end()]
+        return tri.groups() + m.groups() + (window,)
 
-    def test_claim_judgment_pivot_gate_no_approval_escalates_and_recommends_continue(self):
-        risk, rev, conf, verdict, q, o0, o1, rec = self._pivot_command()
-        self.assertEqual((risk, rev, conf, verdict, rec), ("medium", "high", "low", "escalate", "1"))
-        self.assertEqual(o1, "継続")
+    def test_claim_judgment_pivot_gate_resolves_and_recommends_continue(self):
+        # re-anchored 2026-11-21 (tC): pivot escalates to a human (judgment, no --approval) ->
+        # ruling 2026-11-21: the pivot gate goes through --resolve, self-answers, and its
+        # recommended option is 継続 (the loop does not stop on a pivot signal).
+        risk, rev, conf, q, o0, o1, rec, window = self._pivot_command()
+        self.assertIn("--resolve", window, f"pivot gate lacks --resolve: {window!r}")
+        self.assertEqual([o0, o1][int(rec)], "継続")
         args = ["--risk", risk, "--reversible", rev, "--confidence", conf, "--question", q,
                 "--option", o0, "--option", o1, "--recommend", rec]
-        r = policy(self.sb, *args)
-        self.assertEqual(r.returncode, 2, r.stdout)
-        ctl = policy(self.sb, *args, "--approval")
-        self.assertEqual(ctl.returncode, 0)
-        self.assertEqual(json.loads(ctl.stdout)["chosen"], "継続")  # recommend 1 == 継続
+        r = policy(self.sb, *args, "--resolve")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(json.loads(r.stdout)["chosen"], "継続")
+        ctl = policy(self.sb, *args)  # control: without --resolve it is the old human wait
+        self.assertEqual(ctl.returncode, 2, ctl.stdout)
 
     # ------------------------------------------------------ max_parallel_default
     def test_claim_max_parallel_default_is_four_when_unset(self):
@@ -772,6 +839,22 @@ class T(unittest.TestCase):
         tr = d / "SIDLE.jsonl"
         tr.write_text("{}\n")
         return tr
+
+    def test_claim_circuit_skill_command_never_trips_on_compaction(self):
+        # re-anchored 2026-11-21 (tC): circuit trips `session_compacted` after --max-compactions
+        # (the compaction handoff stop) -> ruling 2026-11-21 removes the compaction stop: the SKILL's
+        # own command carries --no-compaction-axis, so a heavily compacted fresh transcript continues.
+        cmd = self._circuit_cmd()
+        self.assertIn("--no-compaction-axis", cmd)
+        tr = self._fresh_session()
+        tr.write_text("{}\n" + '{"type":"system","subtype":"compact_boundary"}\n' * 5)
+        r = self.sb.sh(cmd, CLAUDE_CODE_SESSION_ID="SIDLE")
+        v = json.loads(r.stdout)
+        self.assertEqual((r.returncode, v["verdict"]), (0, "continue"), v)
+        # control: the same command with the axis ON trips session_compacted on this transcript
+        on = self.sb.sh(cmd.replace("--no-compaction-axis", ""), CLAUDE_CODE_SESSION_ID="SIDLE")
+        self.assertEqual((on.returncode, json.loads(on.stdout).get("reason")), (1, "session_compacted"),
+                         on.stdout)
 
     def test_claim_circuit_defaults_idle_ttl_1800_boundary(self):
         cmd = self._circuit_cmd()

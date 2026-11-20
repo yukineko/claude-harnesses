@@ -24,12 +24,23 @@
 //! tracked file, an untracked file and an untracked subdir with content.
 //!
 //! The hook runs with `HOME=<base>/home`, payload cwd = `CLAUDE_PROJECT_DIR` =
-//! the primary tree, `TMPDIR` / `BLASTGUARD_ASK` / `CLAUDE_CODE_SESSION_ID`
+//! the primary tree (except the `target_*_in_own_*` git twins, whose payload
+//! cwd is the target worktree), `TMPDIR` / `BLASTGUARD_ASK` / `CLAUDE_CODE_SESSION_ID`
 //! removed, so Allow is exactly empty stdout and Ask is a non-empty ask JSON.
 //! Every control pins the exact non-Allow verdict it gets.
 //!
 //! The base is [`neutral_base::neutral_base`] (see that module) so the fixture
 //! location itself cannot decide the verdict.
+//!
+//! Narrowed by user ruling 2026-11-20 (backlog 606a93ab): a git discard
+//! (`restore` / `reset --hard` / `clean -fd`) into a linked worktree that is
+//! NOT the session's own (payload cwd not inside it) and that has uncommitted
+//! changes is Ask (main) / Deny (subagent), not Allow. The git targets are
+//! therefore pinned twice: `other_session_dirty_*` (cwd = primary tree; the
+//! dirty worktree is another session's -> Ask/Deny) and `target_*_in_own_*`
+//! (payload cwd = the target worktree itself -> still Allow, main and
+//! subagent). The `rm -rf` targets are not git discards and keep the payload
+//! cwd = primary tree.
 
 #[path = "support/fixed_tmp.rs"]
 mod fixed_tmp;
@@ -169,14 +180,24 @@ impl Fixture {
 
     /// Hook stdout for a Bash `command` (cwd = CLAUDE_PROJECT_DIR = primary).
     fn bash(&self, command: &str) -> String {
-        let payload = serde_json::json!({
+        self.bash_as(command, &self.repo, false)
+    }
+
+    /// Hook stdout for a Bash `command` with payload cwd `cwd`
+    /// (`CLAUDE_PROJECT_DIR` stays the primary tree); `subagent` adds an
+    /// `agent_id` to the payload.
+    fn bash_as(&self, command: &str, cwd: &Path, subagent: bool) -> String {
+        let mut p = serde_json::json!({
             "session_id": "managed-place-destructive-allow",
             "hook_event_name": "PreToolUse",
-            "cwd": self.repo.display().to_string(),
+            "cwd": cwd.display().to_string(),
             "tool_name": "Bash",
             "tool_input": { "command": command },
-        })
-        .to_string();
+        });
+        if subagent {
+            p["agent_id"] = serde_json::json!("test-subagent");
+        }
+        let payload = p.to_string();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_blastguard"));
         git_env::scrub(&mut cmd)
             .stdin(Stdio::piped())
@@ -260,26 +281,53 @@ impl Drop for TmpPlace {
 
 // ---- target helpers --------------------------------------------------------
 
-fn restore_in(root: Root, name: &str) -> (String, String) {
+/// Where the session cwd sits relative to the target worktree.
+#[derive(Clone, Copy)]
+enum Session {
+    /// cwd = primary tree: the target linked worktree is ANOTHER session's.
+    OtherSession,
+    /// cwd = the target linked worktree itself: it is the session's OWN.
+    OwnSession,
+}
+
+/// `(case, main stdout, subagent stdout)` for `git -C <wt> <op>`.
+fn git_in(root: Root, session: Session, name: &str, op: &str) -> (String, String, String) {
     let f = Fixture::new(name);
     let wt = f.wt(root);
-    let case = format!("git -C {} restore {DIRTY_FILE}", wt.display());
-    let out = f.bash(&case);
-    (case, out)
+    let case = format!("git -C {} {op}", wt.display());
+    let cwd = match session {
+        Session::OtherSession => f.repo.clone(),
+        Session::OwnSession => wt.to_path_buf(),
+    };
+    let main = f.bash_as(&case, &cwd, false);
+    let sub = f.bash_as(&case, &cwd, true);
+    (case, main, sub)
 }
 
-fn reset_hard_in(root: Root, name: &str) -> (String, String) {
-    let f = Fixture::new(name);
-    let case = format!("git -C {} reset --hard", f.wt(root).display());
-    let out = f.bash(&case);
-    (case, out)
+/// Phrase every Ask/Deny for a git discard into another session's dirty
+/// linked worktree carries (backlog 606a93ab, `other_worktree_discard`).
+const OTHER_WT_REASON: &str = "a linked worktree that is not this session's";
+
+/// User ruling 2026-11-20 (backlog 606a93ab): a git discard into ANOTHER
+/// session's linked worktree that holds uncommitted changes is Ask in the
+/// main session and Deny in a subagent, and the reason names the cause.
+#[track_caller]
+fn assert_other_dirty_gated(case: &str, main: &str, sub: &str) {
+    assert_verdict(&format!("{case} (main)"), main, "ask");
+    assert_verdict(&format!("{case} (subagent)"), sub, "deny");
+    for (mode, out) in [("main", main), ("subagent", sub)] {
+        assert!(
+            out.contains(OTHER_WT_REASON) && out.contains("uncommitted changes"),
+            "{case} ({mode}): reason must name the other session's dirty worktree; got {out}"
+        );
+    }
 }
 
-fn clean_fd_in(root: Root, name: &str) -> (String, String) {
-    let f = Fixture::new(name);
-    let case = format!("git -C {} clean -fd", f.wt(root).display());
-    let out = f.bash(&case);
-    (case, out)
+/// The session's own linked worktree keeps the 2026-11-07 Allow.
+#[track_caller]
+fn assert_own_allow(case: &str, main: &str, sub: &str) {
+    assert_allow(&format!("{case} (main)"), main);
+    assert_allow(&format!("{case} (subagent)"), sub);
 }
 
 fn rm_subdir_in(root: Root, name: &str) -> (String, String) {
@@ -296,42 +344,146 @@ fn rm_subdir_wildcard_in(root: Root, name: &str) -> (String, String) {
     (case, out)
 }
 
+// ---- git discard into ANOTHER session's dirty worktree: Ask / Deny -----------
+//
+// Re-anchored by user ruling 2026-11-20 (backlog 606a93ab). These six were
+// `target_*_in_*_worktree_allow` under the 2026-11-07 ruling with payload cwd
+// = the primary tree, i.e. the target worktree was NOT the session's own and
+// it is dirty (`dirty_up`). The new ruling gates exactly that case; the
+// 2026-11-07 Allow is kept for the session's OWN worktree (twins below).
+
+#[test]
+fn other_session_dirty_restore_in_condukt_worktree_ask_deny() {
+    let (case, main, sub) = git_in(
+        Root::Condukt,
+        Session::OtherSession,
+        "t_restore_condukt",
+        &format!("restore {DIRTY_FILE}"),
+    );
+    assert_other_dirty_gated(&case, &main, &sub);
+}
+
+#[test]
+fn other_session_dirty_restore_in_harness_worktree_ask_deny() {
+    let (case, main, sub) = git_in(
+        Root::Harness,
+        Session::OtherSession,
+        "t_restore_hw",
+        &format!("restore {DIRTY_FILE}"),
+    );
+    assert_other_dirty_gated(&case, &main, &sub);
+}
+
+#[test]
+fn other_session_dirty_reset_hard_in_condukt_worktree_ask_deny() {
+    let (case, main, sub) = git_in(
+        Root::Condukt,
+        Session::OtherSession,
+        "t_reset_condukt",
+        "reset --hard",
+    );
+    assert_other_dirty_gated(&case, &main, &sub);
+}
+
+#[test]
+fn other_session_dirty_reset_hard_in_harness_worktree_ask_deny() {
+    let (case, main, sub) = git_in(
+        Root::Harness,
+        Session::OtherSession,
+        "t_reset_hw",
+        "reset --hard",
+    );
+    assert_other_dirty_gated(&case, &main, &sub);
+}
+
+#[test]
+fn other_session_dirty_clean_fd_in_condukt_worktree_ask_deny() {
+    let (case, main, sub) = git_in(
+        Root::Condukt,
+        Session::OtherSession,
+        "t_clean_condukt",
+        "clean -fd",
+    );
+    assert_other_dirty_gated(&case, &main, &sub);
+}
+
+#[test]
+fn other_session_dirty_clean_fd_in_harness_worktree_ask_deny() {
+    let (case, main, sub) = git_in(
+        Root::Harness,
+        Session::OtherSession,
+        "t_clean_hw",
+        "clean -fd",
+    );
+    assert_other_dirty_gated(&case, &main, &sub);
+}
+
 // ---- TARGETS: must be Allow --------------------------------------------------
 
 #[test]
-fn target_restore_in_condukt_worktree_allow() {
-    let (case, out) = restore_in(Root::Condukt, "t_restore_condukt");
-    assert_allow(&case, &out);
+fn target_restore_in_own_condukt_worktree_allow() {
+    let (case, main, sub) = git_in(
+        Root::Condukt,
+        Session::OwnSession,
+        "t_restore_own_condukt",
+        &format!("restore {DIRTY_FILE}"),
+    );
+    assert_own_allow(&case, &main, &sub);
 }
 
 #[test]
-fn target_restore_in_harness_worktree_allow() {
-    let (case, out) = restore_in(Root::Harness, "t_restore_hw");
-    assert_allow(&case, &out);
+fn target_restore_in_own_harness_worktree_allow() {
+    let (case, main, sub) = git_in(
+        Root::Harness,
+        Session::OwnSession,
+        "t_restore_own_hw",
+        &format!("restore {DIRTY_FILE}"),
+    );
+    assert_own_allow(&case, &main, &sub);
 }
 
 #[test]
-fn target_reset_hard_in_condukt_worktree_allow() {
-    let (case, out) = reset_hard_in(Root::Condukt, "t_reset_condukt");
-    assert_allow(&case, &out);
+fn target_reset_hard_in_own_condukt_worktree_allow() {
+    let (case, main, sub) = git_in(
+        Root::Condukt,
+        Session::OwnSession,
+        "t_reset_own_condukt",
+        "reset --hard",
+    );
+    assert_own_allow(&case, &main, &sub);
 }
 
 #[test]
-fn target_reset_hard_in_harness_worktree_allow() {
-    let (case, out) = reset_hard_in(Root::Harness, "t_reset_hw");
-    assert_allow(&case, &out);
+fn target_reset_hard_in_own_harness_worktree_allow() {
+    let (case, main, sub) = git_in(
+        Root::Harness,
+        Session::OwnSession,
+        "t_reset_own_hw",
+        "reset --hard",
+    );
+    assert_own_allow(&case, &main, &sub);
 }
 
 #[test]
-fn target_clean_fd_in_condukt_worktree_allow() {
-    let (case, out) = clean_fd_in(Root::Condukt, "t_clean_condukt");
-    assert_allow(&case, &out);
+fn target_clean_fd_in_own_condukt_worktree_allow() {
+    let (case, main, sub) = git_in(
+        Root::Condukt,
+        Session::OwnSession,
+        "t_clean_own_condukt",
+        "clean -fd",
+    );
+    assert_own_allow(&case, &main, &sub);
 }
 
 #[test]
-fn target_clean_fd_in_harness_worktree_allow() {
-    let (case, out) = clean_fd_in(Root::Harness, "t_clean_hw");
-    assert_allow(&case, &out);
+fn target_clean_fd_in_own_harness_worktree_allow() {
+    let (case, main, sub) = git_in(
+        Root::Harness,
+        Session::OwnSession,
+        "t_clean_own_hw",
+        "clean -fd",
+    );
+    assert_own_allow(&case, &main, &sub);
 }
 
 #[test]
@@ -476,7 +628,9 @@ fn control_rm_rf_private_tmp_root_itself_not_allow() {
 }
 
 /// `<hw>/wt/../../repo/subdir` lexically starts in the harness worktree but
-/// lands in the primary tree.
+/// lands in the primary tree. Since `..` rm operands are resolved physically
+/// (dbf39487f) it gets the same Deny as the direct spelling
+/// (`control_rm_rf_primary_tree_subdir_not_allow`): untracked content there.
 #[test]
 fn control_rm_rf_dotdot_from_harness_worktree_into_primary_not_allow() {
     let f = Fixture::new("c_rm_dotdot_hw");
@@ -488,7 +642,7 @@ fn control_rm_rf_dotdot_from_harness_worktree_into_primary_not_allow() {
     );
     let case = format!("rm -rf {}", op.display());
     let out = f.bash(&case);
-    assert_verdict(&case, &out, "ask");
+    assert_verdict(&case, &out, "deny");
 }
 
 /// `$HOME/.condukt/worktrees/RUN-t2/../../../../src/repo/subdir` lands in the
@@ -504,7 +658,7 @@ fn control_rm_rf_dotdot_from_condukt_worktree_into_primary_not_allow() {
     );
     let case = format!("rm -rf {}", op.display());
     let out = f.bash(&case);
-    assert_verdict(&case, &out, "ask");
+    assert_verdict(&case, &out, "deny");
 }
 
 /// `git -C <hw>/wt/../../repo restore` targets the primary tree.

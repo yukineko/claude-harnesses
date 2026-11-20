@@ -89350,3 +89350,68 @@ rev = "a8acabfab077945728dfe7532db31862e912da11"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "be745685"
+title = "blastguard relay: main's verbatim run of a cd-ing relay command is never marked executed (PostToolUse cwd != queued cwd)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "relay",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-16 session df7c968f: relay bgr-26ea8713935e run verbatim by main in the queued cwd (exit 0), yet queue held only 'queued' and Stop re-listed it as 'not executed in the main session' (false pending; forces a dismiss). The command cd's; relay::mark_executed requires exact string equality of queued cwd and the PostToolUse payload cwd (post-run dir). Readings: (a) defect; (b) intended exact match, cd-ing relay commands can only be dismissed. Real Claude Code PostToolUse cwd after cd not observed directly. RED 69bea7a6d."
+created_at = 1794876820
+updated_at = 1795204844
+weight = 0.0
+issue_number = 1850
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1850"
+issue_closed_at = 1795204847
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261117_relay_executed_cwd_after_cd -- --include-ignored"
+rev = "e7ee58321a1eae346b077e8e0a410c063fb5300b"
+observed_at = 1794876820
+detail = """
+exit 101: iroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.25s
+     Running tests/backlog_20261117_relay_executed_cwd_after_cd.rs (target/debug/deps/backlog_20261117_relay_executed_cwd_after_cd-d9029a4080df0ce1)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261117_relay_executed_cwd_after_cd`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261117_relay_executed_cwd_after_cd"
+exit = 0
+passed = 2
+rev = "f379b3e03d6ec13a8476d6fba71c86585d4a90c0"
+observed_at = 1795204827
+output_digest = "sha256:76a89511a245c6fbd344603d72e0ed394a6a7b013a90d5ab760d7b8210ca3a2f"
+excerpt = """
+
+running 2 tests
+test control_post_with_queued_cwd_marks_executed ... ok
+test post_with_changed_cwd_after_cd_still_marks_executed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.72s
+
+   Compiling harness-core v0.2.112 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/harness-core)
+   Compiling overwatch v0.2.127 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/overwatch)
+   Compiling blastguard v0.2.839 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.40s
+     Running tests/backlog_20261117_relay_executed_cwd_after_cd.rs (target/debug/deps/backlog_20261117_relay_executed_cwd_after_cd-f230d4d1efc9e296)
+"""
+
+[task.closure.red]
+rev = "69bea7a6d6ef6a65dbb7c3414b37c3a1e219309a"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

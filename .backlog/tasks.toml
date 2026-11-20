@@ -594,38 +594,6 @@ exit 101: rc/.harness-worktrees/sidereds-20261116/crates/backlog)
 error: test failed, to rerun pass `-p backlog --test backlog_20261116_zero_tests_filtered_out_not_discard`"""
 
 [[task]]
-id = "be745685"
-title = "blastguard relay: main's verbatim run of a cd-ing relay command is never marked executed (PostToolUse cwd != queued cwd)"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "relay",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-16 session df7c968f: relay bgr-26ea8713935e run verbatim by main in the queued cwd (exit 0), yet queue held only 'queued' and Stop re-listed it as 'not executed in the main session' (false pending; forces a dismiss). The command cd's; relay::mark_executed requires exact string equality of queued cwd and the PostToolUse payload cwd (post-run dir). Readings: (a) defect; (b) intended exact match, cd-ing relay commands can only be dismissed. Real Claude Code PostToolUse cwd after cd not observed directly. RED 69bea7a6d."
-created_at = 1794876820
-updated_at = 1794876820
-weight = 0.0
-issue_number = 1850
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1850"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261117_relay_executed_cwd_after_cd -- --include-ignored"
-rev = "e7ee58321a1eae346b077e8e0a410c063fb5300b"
-observed_at = 1794876820
-detail = """
-exit 101: iroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.25s
-     Running tests/backlog_20261117_relay_executed_cwd_after_cd.rs (target/debug/deps/backlog_20261117_relay_executed_cwd_after_cd-d9029a4080df0ce1)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261117_relay_executed_cwd_after_cd`"""
-
-[[task]]
 id = "410e9514"
 title = "backlog test done_closes_issue_inline.rs fails with Author identity unknown since add lands the row via git commit-tree"
 project = "/home/hiroyuki_nakayama/src/harness"

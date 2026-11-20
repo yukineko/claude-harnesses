@@ -69,7 +69,10 @@ fn decide(tag: &str, command: &str) -> (String, String) {
 
 fn assert_deny(tag: &str, command: &str) {
     let (d, r) = decide(tag, command);
-    assert_eq!(d, "deny", "{command:?} must be deny, got decision={d} reason={r}");
+    assert_eq!(
+        d, "deny",
+        "{command:?} must be deny, got decision={d} reason={r}"
+    );
 }
 
 // Observation (2) (undetermined value after -u/--user) and the benign control

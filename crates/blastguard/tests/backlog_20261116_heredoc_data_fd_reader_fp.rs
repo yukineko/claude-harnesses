@@ -95,7 +95,6 @@ fn check(tag: &str, cmd: &str) {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-16 heredoc data line judged as an fd reader (bgr-3c577fb491b6) — remove when fixed"]
 fn minimal_while_read_heredoc_data() {
     check("min", MINIMAL);
 }

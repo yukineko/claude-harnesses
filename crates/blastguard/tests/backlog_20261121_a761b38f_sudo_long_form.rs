@@ -79,12 +79,18 @@ fn decide(tag: &str, command: &str) -> (String, String) {
 
 fn assert_allow(tag: &str, command: &str) {
     let (d, r) = decide(tag, command);
-    assert_eq!(d, "allow", "{command:?} must be allow, got decision={d} reason={r}");
+    assert_eq!(
+        d, "allow",
+        "{command:?} must be allow, got decision={d} reason={r}"
+    );
 }
 
 fn assert_deny(tag: &str, command: &str) {
     let (d, r) = decide(tag, command);
-    assert_eq!(d, "deny", "{command:?} must be deny, got decision={d} reason={r}");
+    assert_eq!(
+        d, "deny",
+        "{command:?} must be deny, got decision={d} reason={r}"
+    );
 }
 
 fn assert_not_allow(tag: &str, command: &str) {
@@ -182,13 +188,21 @@ fn b_user_equals_rm_etc_denied() {
 
 #[test]
 fn b_login_herestring_matches_short() {
-    assert_same_as("b3", "sudo --login <<< 'rm -rf /etc'", "sudo -i <<< 'rm -rf /etc'");
+    assert_same_as(
+        "b3",
+        "sudo --login <<< 'rm -rf /etc'",
+        "sudo -i <<< 'rm -rf /etc'",
+    );
     assert_not_allow("b3n", "sudo --login <<< 'rm -rf /etc'");
 }
 
 #[test]
 fn b_shell_herestring_matches_short() {
-    assert_same_as("b4", "sudo --shell <<< 'rm -rf /etc'", "sudo -s <<< 'rm -rf /etc'");
+    assert_same_as(
+        "b4",
+        "sudo --shell <<< 'rm -rf /etc'",
+        "sudo -s <<< 'rm -rf /etc'",
+    );
     assert_not_allow("b4n", "sudo --shell <<< 'rm -rf /etc'");
 }
 

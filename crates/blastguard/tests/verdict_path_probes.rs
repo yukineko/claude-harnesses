@@ -265,11 +265,28 @@ fn chmod_chown_mirror_is_closed_with_ask() {
         "chmod disarm rule regressed: {chmod:?}"
     );
 
+    // OVERTURNED FOR `.githooks/` (user ruling 2026-11-14). The Ask argument
+    // above predates the Q3/Q4 deny-target table: a gate script in `.githooks/`
+    // is a Q4 target, and SUBSET.md "Every write effect includes chmod / chown /
+    // chgrp" makes re-owning it a refused metadata write (e4792c15d). For these
+    // targets the answer is no longer "unknown, ask" but a ruled Deny.
     for cmd in [
         "chown nobody .githooks/pre-commit",
         "chown :staff .githooks/pre-commit",
-        "chown yuki .claude/settings.json",
         "chgrp staff .githooks/pre-commit",
+    ] {
+        let d = bash(cmd);
+        assert!(
+            d.is_deny(),
+            "re-owning a Q4 gate script in .githooks/ must be DENY \
+             (Q3/Q4 deny-target table, user ruling 2026-11-14): {cmd:?} -> {d:?}"
+        );
+    }
+
+    // `.claude/...` is not on the Q3/Q4 table; it keeps the Ask the doc above
+    // argues for (measured on main b0711616e: all three are Ask).
+    for cmd in [
+        "chown yuki .claude/settings.json",
         // The container: `.claude` is not itself a protected path but holds
         // them, the same distinction `protected_tree_deny` draws for `rm`.
         "chown nobody .claude",

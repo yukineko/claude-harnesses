@@ -236,7 +236,22 @@ fn g2_unlink_rmdir_mv_system_paths_are_deny() {
 
 #[test]
 fn g3_rm_operand_spellings_are_deny() {
-    Fixture::new("g3").assert_all_deny(
+    let f = Fixture::new("g3");
+    // `~` / `$HOME` resolve to the hook's HOME, i.e. this fixture's `home`
+    // (1c6651da4), and `..` is resolved physically (dbf39487f). A fixed
+    // `../../` therefore no longer reaches `/` from `<base>/.../g3/home`; the
+    // climb is computed from the home's physical depth so the spelling really
+    // names `/etc/passwd`, keeping the property "rm of a system file is Deny".
+    let depth = std::fs::canonicalize(&f.home)
+        .expect("canonicalize fixture home")
+        .components()
+        .filter(|c| matches!(c, std::path::Component::Normal(_)))
+        .count();
+    assert!(depth > 0, "fixture home must not be `/`");
+    let up = "../".repeat(depth);
+    let tilde = format!("rm -f ~/{up}etc/passwd");
+    let dollar_home = format!("rm -f $HOME/{up}etc/passwd");
+    f.assert_all_deny(
         "g3 rm operands",
         &[
             r##"rm "/etc/passwd""##,
@@ -247,8 +262,8 @@ fn g3_rm_operand_spellings_are_deny() {
             "rm $'/etc/passwd'",
             "rm /etc/{passwd,hosts}",
             "rm /etc/pass{w,x}d",
-            "rm -f ~/../../etc/passwd",
-            "rm -f $HOME/../../etc/passwd",
+            &tilde,
+            &dollar_home,
             "X=/etc/passwd; rm $X",
             "rm $(echo /etc/passwd)",
             "echo /etc/passwd | xargs rm",

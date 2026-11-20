@@ -9,6 +9,7 @@ use super::{
     xargs_reads_arg_file, xargs_shell, Ctx, Decision, PythonReader, Stop, VerdictAcc,
 };
 
+mod brace_feeder;
 mod compound_readers;
 mod echo_output;
 mod exec_fds;
@@ -16,11 +17,15 @@ mod node_source;
 mod procsub_split;
 mod program_source;
 mod program_word;
+mod stdin_operand;
 #[cfg(test)]
 mod word_boundary_tests;
 
 pub(super) use program_word::inline_eval_program_word;
+pub(super) use stdin_operand::interpreter_stdin_operand;
+use stdin_operand::stage_stdin_operand;
 
+use brace_feeder::group_feeder_texts;
 use echo_output::{plain_echo_output, quote_bare_echo_words};
 use exec_fds::{exec_opened_fds, ExecFd};
 use node_source::{is_node_head, node_program_source};
@@ -124,13 +129,31 @@ segments, so it cannot tell which command inside a group or loop reads a program
         .iter()
         .zip(&views)
         .any(|(s, v)| v.command.trim() != s.text.trim() || !v.data.trim().is_empty());
-    if !changed {
+    // A brace group feeding a reader whose members all have static output
+    // (`{ echo a; echo b; } | bash`, see `brace_feeder`) flattens to ONE stage
+    // emitting its whole output, not to `echo a ; echo b | bash`, which pipes
+    // only its last member and so reads a program that is not the reader's.
+    let seg_texts: Vec<&str> = segs.iter().map(|s| s.text.as_str()).collect();
+    let mut skip = vec![false; segs.len()];
+    let mut emitter: Vec<Option<String>> = vec![None; segs.len()];
+    for group in brace_feeder::feeder_groups(cmd, &seg_texts) {
+        if let Some(text) = group.concatenated.first().filter(|t| !t.trim().is_empty()) {
+            skip[group.open..group.close]
+                .iter_mut()
+                .for_each(|s| *s = true);
+            emitter[group.close] = Some(format!("printf '%s' '{}'", text.replace('\'', "'\"'\"'")));
+        }
+    }
+    if !changed && emitter.iter().all(Option::is_none) {
         return Ok(None);
     }
     let mut out = String::new();
     let mut pending: Option<&str> = None;
-    for (seg, view) in segs.iter().zip(&views) {
-        let command = view.command.trim();
+    for (k, (seg, view)) in segs.iter().zip(&views).enumerate() {
+        if skip[k] {
+            continue;
+        }
+        let command = emitter[k].as_deref().unwrap_or_else(|| view.command.trim());
         if !command.is_empty() {
             if let Some(sep) = pending.take() {
                 out.push_str(sep);
@@ -250,8 +273,12 @@ fn stdin_exec_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
             return deny;
         }
     }
-    for statement in statements {
+    // The programs a brace group feeding a reader emits, per statement; see
+    // `brace_feeder`.
+    let feeders = group_feeder_texts(cmd, &statements);
+    for (s, statement) in statements.into_iter().enumerate() {
         for (i, stage) in statement.iter().enumerate() {
+            let feeder: Option<&[String]> = if i == 1 { feeders[s].as_deref() } else { None };
             // The here-string mirror (`bash <<< 'rm -rf ~'`), judged before
             // and independently of the stdin-program rule below, which it can
             // only add to. See `shell_here_string_verdict`.
@@ -356,7 +383,7 @@ whether the sourced file is that stdin",
             // the program arrives — judged before the program-file test, since
             // `osascript -l JavaScript <<'E'` reads `JavaScript` as one.
             if normalized_command(tokens[idx]) == "osascript" && (i > 0 || heredoc_open) {
-                let texts = stdin_program_texts(cmd, stage, &statement, i, heredoc_open);
+                let texts = stdin_program_texts(cmd, stage, &statement, i, heredoc_open, feeder);
                 if let Some(deny) = super::interpreter::osascript_program_delete(&texts) {
                     return deny;
                 }
@@ -425,7 +452,7 @@ tell whether the interpreter runs that stdin or a script file",
                 stage_has_program_operand(rest)
             };
             let takes_stdin_program = source_reader
-                || interpreter_stdin_operand(rest).is_some()
+                || stage_stdin_operand(&tokens, idx).is_some()
                 || (!has_program_file && (i > 0 || heredoc_open));
             if !takes_stdin_program {
                 continue;
@@ -442,7 +469,8 @@ tell whether the interpreter runs that stdin or a script file",
             // unrelated statement become the finding: `rmdir olddir; echo hi |
             // python3` was denied for "runs `rmdir`" when the program was `hi`.
             // A reason must name what was observed about THIS program.
-            let mut program_texts = stdin_program_texts(cmd, stage, &statement, i, heredoc_open);
+            let mut program_texts =
+                stdin_program_texts(cmd, stage, &statement, i, heredoc_open, feeder);
             let shape = format!("`{}` takes its program from stdin", stage.trim());
             // A shell removes its program's line continuations before it
             // splits words: judge that reading too (backlog 040b959b).
@@ -543,7 +571,7 @@ evaluated statically ({why}) — its output is the program, so blastguard cannot
                 // allowed, while `cat f | sh` (no literal at all) asked.
                 // Recorded after the literal verdict so a Deny found in a
                 // literal still wins.
-                if !stage_emits_only_its_arguments(&statement[i - 1]) {
+                if feeder.is_none() && !stage_emits_only_its_arguments(&statement[i - 1]) {
                     if let Some(deny) = acc.record(Decision::ask(format!(
                         "{shape}, and the stage piping into it (`{}`) is not a literal emitter \
 (`echo` / `printf`) — what it emits can include text from a file or from stdin, which is not on \
@@ -1209,6 +1237,7 @@ fn stdin_program_texts(
     statement: &[String],
     i: usize,
     heredoc_open: bool,
+    feeder: Option<&[String]>,
 ) -> Vec<String> {
     let mut program_texts: Vec<String> = Vec::new();
     if heredoc_open {
@@ -1226,7 +1255,16 @@ fn stdin_program_texts(
             program_texts.push(body.to_string());
         }
     }
-    if i > 0 {
+    if let Some(texts) = feeder.filter(|_| i > 0) {
+        // Piped in from a brace group whose members all have static output:
+        // the upstream stage is its closing `}`, so the program is what the
+        // group emits (`group_feeder_texts`), not that stage's own words.
+        for text in texts {
+            if !program_texts.contains(text) {
+                program_texts.push(text.clone());
+            }
+        }
+    } else if i > 0 {
         // Piped in: the program is whatever the upstream stage of THIS
         // statement emits, which is readable when it emits a literal.
         // A backtick there is a command SUBSTITUTION, not a quote: the
@@ -1281,6 +1319,14 @@ fn with_nul_readings(mut texts: Vec<String>) -> Vec<String> {
 /// those two, so an ambiguous chain resolves to "not a literal emitter" (the
 /// restrictive side). A stage that is not a simple command (`(cat f)`,
 /// `{ cat f; }`) has no such head and is likewise not a literal emitter.
+///
+/// The one compound that is NOT judged here: a brace group whose members are
+/// all plain `echo` / evaluable `printf` joined by `;`, a newline or `&&`
+/// (`{ echo a; echo b; } | bash`). Its upstream stage is the closing `}`, which
+/// this function reports as not an emitter, so the caller skips this check
+/// when [`brace_feeder::group_feeder_texts`] computed the group's output and
+/// judges that output (the concatenation, each member's literals and printf
+/// readings) as the program instead. Every other group keeps the Ask.
 fn stage_emits_only_its_arguments(stage: &str) -> bool {
     let tokens: Vec<&str> = stage.split_whitespace().collect();
     let heads = wrapped_command_heads(&tokens);
@@ -1488,17 +1534,6 @@ proves nothing about what it does"
     // to run a here-string blastguard could not clear, so it carries
     // `RECOMMEND_NO`. A Deny returned above is unaffected.
     recommend_against(acc.finish())
-}
-
-pub(super) fn interpreter_stdin_operand<'a>(rest: &[&'a str]) -> Option<&'a str> {
-    rest.iter()
-        .find(|t| {
-            matches!(
-                **t,
-                "-" | "/dev/stdin" | "/dev/fd/0" | "/proc/self/fd/0" | "/dev/tty"
-            )
-        })
-        .copied()
 }
 
 /// Strip one layer of matching surrounding quotes from a reconstructed

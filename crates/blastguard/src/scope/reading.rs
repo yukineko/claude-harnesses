@@ -228,6 +228,23 @@ is not decided by where it is spelled"
         self.classify_against_as(&self.worktree_roots, operand, cwd, reading)
     }
 
+    /// [`SafeRoots::classify_worktree`] of an absolute path VALUE
+    /// ([`Reading::Value`]); identical otherwise.
+    pub(crate) fn classify_worktree_value(&self, path: &str) -> Determination<Placement> {
+        self.classify_worktree_as(path, None, Reading::Value)
+    }
+
+    /// [`SafeRoots::classify`] of an absolute path VALUE ([`Reading::Value`]);
+    /// identical otherwise (no model → `Undetermined`).
+    pub(crate) fn classify_value(&self, path: &str) -> Determination<Placement> {
+        if self.roots.is_empty() {
+            return Determination::undetermined(
+                "blastguard has no safe-root model for this session (no project dir / cwd)",
+            );
+        }
+        self.classify_against_as(&self.roots, path, None, Reading::Value)
+    }
+
     pub(super) fn classify_against(
         &self,
         roots: &[String],

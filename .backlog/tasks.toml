@@ -3090,3 +3090,35 @@ scripts/test_flow_snippets_b.py:870: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_flow_snippets_b.py::TestCompassOutcome::test_claim_compass_outcome
 ============================== 1 failed in 1.08s ==============================="""
+
+[[task]]
+id = "76e1bb3f"
+title = "test_rebuild_current_version_only: fixture lacks askrelay (new GATE crate) so check-plugin-rollout reports UNVERIFIABLE PLUGIN and exits 3"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "deploy-verify",
+    "test-fixture",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-21 at main 99b2bff81 (and at fix/rollout-selfcontained-script): FAIL test_old_bytes_in_live_held_superseded_dir_pass, line 285 AssertionError: 3 != 0 : checker demanded a superseded dir match the build; err='UNVERIFIABLE PLUGIN (1 problem(s)) ... askrelay: GATE crate has no readable plugin.json under crates/ (deleted, renamed, or corrupted).' Readings: (a) test fixture is stale: it builds a fake crates/ without askrelay, which became a GATE crate (gate list in check-plugin-rollout/GATE_CRATES); fixture must include every GATE crate or derive the list; (b) the checker should not require GATE crates absent from the fixture repo. Tell apart: whether check-plugin-rollout takes the GATE list from the repo under test or a hard-coded list."
+created_at = 1795199570
+updated_at = 1795199570
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_rebuild_current_version_only.py::CheckerAcceptsFrozenSuperseded::test_old_bytes_in_live_held_superseded_dir_pass"
+rev = "99b2bff819c79155c90a42068c4c5bdbd715136e"
+observed_at = 1795199570
+detail = """
+exit 1: enabledPlugins edit can fix this class.
+
+scripts/test_rebuild_current_version_only.py:285: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_rebuild_current_version_only.py::CheckerAcceptsFrozenSuperseded::test_old_bytes_in_live_held_superseded_dir_pass
+============================== 1 failed in 0.37s ==============================="""

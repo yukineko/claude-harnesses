@@ -154,11 +154,13 @@ Monitor: command = ${CLAUDE_PLUGIN_ROOT}/bin/flow-watch --session "$CLAUDE_CODE_
          timeout_ms = 1800000
 ```
 
-- Monitor は 30 分で切れる。`EXPIRED re-arm` の行、または Monitor の期限切れ通知が来たら、同じコマンドでただちに再武装せよ。
+- 監視対象の run は condukt 自身（`condukt state list-tasks`、cwd = `--project`）から取る。武装時点で既に走っていた他 driver の run は baseline として無視され、武装後に現れた run だけが監視対象になる。自分が起こした既存 run を明示的に監視したいときだけ `--run <run_id>` を足せ（繰り返し可）。`--condukt-state` は廃止されており渡すと exit 2 になる。
+- Monitor は 30 分で切れる。`EXPIRED re-arm` の行、または Monitor の期限切れ通知が来たら、**同じ `--session` のまま**ただちに再武装せよ。既定の `--watch-state`（`${XDG_STATE_HOME:-$HOME/.local/state}/claude-harnesses/flow-watch/<SESSION>.json`）に監視対象が永続化されるので、再武装しても監視中の run は baseline に落ちない。`--watch-state` を変えたり消したりすると監視対象を失う。
 - 各イベント（stdout の 1 行 = 1 イベント）には、その場で次のとおり反応すること:
   - `RELAY <id> agent=… cwd=…` / `RELAY-STALL <id> age=…s` → relay された command を一字一句そのまま main セッションで今すぐ実行し、結果を `SendMessage` で該当 agent に返せ。実行できないなら理由を添えて `askrelay dismiss` せよ。
   - `TASK-STALL <run_id> <task> status=… idle=…s` → その run / task（state・worktree のログ・担当 driver agent）を調べ、今すぐ unblock せよ。task 完了通知を待ってはならない。
   - `STATE <run_id> <task>=<status> …` → 完了した項目を sink へ書き戻せ（Step 3-3）。
+  - `STATE <run_id> finished` → その run は condukt の一覧から消えた（全 task が終端 / run が閉じた）。結果を確認して sink へ書き戻し、後始末（worktree・branch の merge と削除）を進めよ。この行は 1 度しか出ない。
   - `HEARTBEAT-FAILED <which> rc=…` / `WATCH-ERROR …` → 行を逐語で報告し、原因を直せ。黙って流してはならない。
 
 ### Step 3 — 実行ループを回すこと

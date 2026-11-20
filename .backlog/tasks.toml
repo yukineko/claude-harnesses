@@ -2766,3 +2766,35 @@ exit 101:  (/Users/yuki/src/.harness-worktrees/file-dup-target-red/crates/blastg
     Finished `test` profile [unoptimized + debuginfo] target(s) in 52.25s
      Running tests/backlog_20261114_dup_target_quoted_dollar_fp.rs (target/debug/deps/backlog_20261114_dup_target_quoted_dollar_fp-aa1e9ecd080bafd1)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_dup_target_quoted_dollar_fp`"""
+
+[[task]]
+id = "879c5424"
+title = 'blastguard: pinned Allow controls env echo "ls" | sh and command printf "ls" | sh are not Allow (file_content_piped_to_shell_twins red on main)'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-20 at main 5b2b3a6b8 (detached checkout, run-20261120-170138-92681 t8cad integration check) and at t8cad fix 95d7bac92: tests env_wrapped_echo_literal_into_sh_pinned and command_wrapped_printf_literal_into_sh_pinned panicked at crates/blastguard/tests/file_content_piped_to_shell_twins.rs:73:5 (assert_allow), 'test result: FAILED. 14 passed; 2 failed'. Pre-existing (not caused by 8cadc78f fix). Reading (a) FP regression: the pins say these must be Allow. Reading (b) a later ruling made wrapped feeders not-Allow and the pins are stale; distinguish by git log -S on the pins vs later rulings."
+created_at = 1795162227
+updated_at = 1795162227
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test file_content_piped_to_shell_twins"
+rev = "5b2b3a6b877f75d570aaa80014998ab69a4feb97"
+observed_at = 1795162227
+detail = """
+exit 101: h_pinned
+
+test result: FAILED. 14 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/file_content_piped_to_shell_twins.rs (target/debug/deps/file_content_piped_to_shell_twins-6d950b571ae3330a)
+error: test failed, to rerun pass `-p blastguard --test file_content_piped_to_shell_twins`"""

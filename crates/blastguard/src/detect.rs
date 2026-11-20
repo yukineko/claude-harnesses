@@ -2010,16 +2010,8 @@ analyse — it cannot tell what this would do, so it refuses to guess"
             ),
             "shred destroys file contents irreversibly",
         ),
-        "dd" => {
-            // The shell-unquoted words, not the raw tokens: `'of=/dev/sda'`
-            // is the argv word `of=/dev/sda` (fail-open p0, 2026-11-20). A
-            // word that may expand to `of=…` is a write to an unknown target.
-            if rm::dd_of_operands(rest, ctx.scope.home_real()).writes() {
-                Decision::deny("dd with of= writes raw bytes over a device/file")
-            } else {
-                Decision::Allow
-            }
-        }
+        // S6-5 Known Allow, else the legacy `of=` reading (see `analyze_dd`).
+        "dd" => rm::analyze_dd(rest, ctx),
         "chmod" => {
             if has_short(rest, 'R') || rest.contains(&"--recursive") {
                 // `chmod -R 755 target` and `chmod -R 000 /usr` were one

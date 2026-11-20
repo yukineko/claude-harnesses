@@ -709,7 +709,15 @@ fn dd(args: &[Word]) -> Targets {
                 None => return Err(format!("`dd` operand `{s}` is not `key=value`")),
             },
             Value::Undetermined(r) => match kv_key(&w.raw) {
-                Some("of") => of.push(Value::Undetermined(r.clone())),
+                // Literal-dir glob ruling 2026-11-19 ("Table B の全行で"):
+                // `of=DIR/*.txt` is placed by `DIR` like any other row's
+                // final-component glob ([`literal_dir_glob`] on the whole
+                // word, then the `of=` stripped).
+                Some("of") => of.push(
+                    literal_dir_glob(w)
+                        .and_then(|s| s.strip_prefix("of=").map(str::to_string))
+                        .map_or_else(|| Value::Undetermined(r.clone()), Value::Literal),
+                ),
                 Some(_) => {}
                 None => {
                     return Err(format!(

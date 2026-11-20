@@ -1865,6 +1865,27 @@ impl DdOfOperands {
     }
 }
 
+/// The `dd` arm of `detect.rs`'s command-word match.
+///
+/// Stage S6-5 (user ruling 2026-11-20): retired where the new layer is Known
+/// Allow — every Table B `dd` target (`of=F`; `if=` is a read) a Literal in
+/// Scratch / OwnWorktree, none naming command-running config
+/// ([`super::known_allow::known_allow`]). Precedent: S6-4 `truncate`.
+/// Anything else keeps the legacy `of=` reading: Deny when [`dd_of_operands`]
+/// sees an `of=` word — read from the shell-unquoted words, not the raw
+/// tokens (`'of=/dev/sda'` is the argv word `of=/dev/sda`; fail-open p0,
+/// 2026-11-20) — or a word that may expand to one (a write to an unknown
+/// target); Allow otherwise.
+pub(super) fn analyze_dd(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+    if super::known_allow::known_allow("dd", rest, ctx) {
+        Decision::Allow
+    } else if dd_of_operands(rest, ctx.scope.home_real()).writes() {
+        Decision::deny("dd with of= writes raw bytes over a device/file")
+    } else {
+        Decision::Allow
+    }
+}
+
 /// See [`DdOfOperands`]. `home` is the session's home (for `~`/`$HOME`).
 pub(super) fn dd_of_operands(rest: &[&str], home: Option<&str>) -> DdOfOperands {
     let mut out = DdOfOperands {

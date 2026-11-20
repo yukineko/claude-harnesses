@@ -251,13 +251,11 @@ fn expect_allow(tag: &str, template: &str) {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_of_only_existing() {
     expect_allow("r-of-only", "dd of={T}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_absent_file() {
     expect_allow(
         "r-absent",
@@ -266,19 +264,16 @@ fn red_scratch_absent_file() {
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_temp_dir_direct_child() {
     expect_allow("r-child", "dd if=/dev/zero of={T}/f.bin bs=512 count=1");
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_if_scratch_to_scratch() {
     expect_allow("r-if-scratch", "dd if={T}/sub/f.txt of={T}/sub/g.txt");
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_conv_notrunc() {
     expect_allow(
         "r-notrunc",
@@ -287,7 +282,6 @@ fn red_scratch_conv_notrunc() {
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_status_none() {
     expect_allow(
         "r-status",
@@ -296,13 +290,11 @@ fn red_scratch_status_none() {
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_of_first_then_options() {
     expect_allow("r-of-first", "dd of={T}/sub/f.txt if=/dev/zero count=0");
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_bin_dd_spelling() {
     expect_allow(
         "r-bin",
@@ -319,19 +311,16 @@ fn scratch_whole_word_single_quoted() {
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_value_single_quoted() {
     expect_allow("r-sq-val", "dd if=/dev/zero of='{T}/sub/f.txt' count=0");
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_hook_tmpdir() {
     expect_allow("r-tmpdir", "dd if=/dev/zero of={D}/sub/f.txt bs=1 count=0");
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_home_cache() {
     expect_allow(
         "r-cache",
@@ -343,25 +332,21 @@ fn red_scratch_home_cache() {
 /// `count=0`) must not break the AST tie (fixture paths are random, so the
 /// shape is not otherwise guaranteed).
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_path_component_zero_with_count_zero() {
     expect_allow("r-dir0", "dd if=/dev/zero of={T}/0/f.txt bs=1 count=0");
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_path_component_one_with_bs_one() {
     expect_allow("r-dir1", "dd if=/dev/zero of={T}/1/f.txt bs=1 count=1");
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_file_named_one_with_bs_one() {
     expect_allow("r-file1", "dd if=/dev/zero of={T}/sub/1 bs=1 count=1");
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_path_component_s0() {
     expect_allow("r-s0", "dd if=/dev/zero of={T}/s0/f.txt bs=1 count=0");
 }
@@ -369,13 +354,11 @@ fn red_scratch_path_component_s0() {
 /// `if=` is a read (Table B); a System source does not make the write
 /// non-Scratch.
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_if_system_file_is_a_read() {
     expect_allow("r-if-sys", "dd if=/etc/hosts of={T}/sub/f.txt");
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_if_project_file_is_a_read() {
     expect_allow("r-if-proj", "dd if={P}/t.txt of={T}/sub/f.txt");
 }
@@ -383,7 +366,6 @@ fn red_scratch_if_project_file_is_a_read() {
 /// Literal-dir glob ruling 2026-11-19: a final-component glob under a
 /// literal Scratch dir is placed by the parent's class.
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_scratch_final_component_glob() {
     expect_allow("r-glob", "dd if=/dev/zero of={T}/sub/*.txt count=0");
 }
@@ -393,13 +375,11 @@ fn red_scratch_final_component_glob() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_own_worktree_absolute() {
     expect_allow("r-own-abs", "dd if=/dev/zero of={W}/u.txt bs=1 count=0");
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_own_worktree_absolute_new_file() {
     expect_allow(
         "r-own-new",
@@ -408,13 +388,11 @@ fn red_own_worktree_absolute_new_file() {
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_own_worktree_relative() {
     expect_allow("r-own-rel", "dd if=/dev/zero of=u.txt bs=1 count=0");
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_own_worktree_relative_dot_subdir() {
     expect_allow(
         "r-own-rel-sub",
@@ -423,7 +401,6 @@ fn red_own_worktree_relative_dot_subdir() {
 }
 
 #[test]
-#[ignore = "RED S6-5: deny/deny at 8d6b3403d"]
 fn red_own_worktree_copy_from_project() {
     expect_allow(
         "r-own-cp",
@@ -531,7 +508,10 @@ fn control_dotdot() {
 
 #[rustfmt::skip]
 const NON_LITERAL: &[Pin] = &[
-    ("unquoted var, assigned to a temp literal", "F={T}/sub/f.txt; dd if=/dev/zero of=$F", D),
+    // Resolves statically to System (ruling blastguard-must-resolve-statically):
+    // must stay non-Allow. NOT measured by the test author (coordinator
+    // instruction: no cargo run); the implementer's run is its first measurement.
+    ("unquoted var, assigned to a System literal", "F=/etc/hosts; dd if=/dev/zero of=$F", D),
     ("unquoted var, unassigned", "dd if=/dev/zero of=$F", D),
     ("quoted env expansion", "dd if=/dev/zero of=\"$TMPDIR/sub/f.txt\"", D),
     ("unquoted env expansion", "dd if=/dev/zero of=$TMPDIR/sub/f.txt", D),
@@ -542,6 +522,15 @@ const NON_LITERAL: &[Pin] = &[
 #[test]
 fn control_non_literal() {
     check("nonlit", NON_LITERAL);
+}
+
+/// Standing user ruling (blastguard-must-resolve-statically: "text-determined
+/// values are resolved and judged"): a same-line literal assignment resolves
+/// `$F` to a Literal in Scratch, so S6-5 Allow is the ruled verdict. Was pinned
+/// deny/deny in `control_non_literal` at 8d6b3403d.
+#[test]
+fn scratch_var_assigned_to_temp_literal_is_resolved() {
+    expect_allow("var-assigned", "F={T}/sub/f.txt; dd if=/dev/zero of=$F");
 }
 
 #[rustfmt::skip]

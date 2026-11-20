@@ -323,37 +323,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; 
 error: test failed, to rerun pass `-p blastguard --test heredoc_script_failopen_red_20261108`"""
 
 [[task]]
-id = "32b414d2"
-title = "blastguard: zsh -c / bash -c with literal program containing 'echo - foo' is refused as a stdin program"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-14 (subagent refusal: program is taken from stdin and is not on the command line); reproduced on 0.2.540 worktree build: ask/deny (main/subagent) for zsh -c 'echo - foo', bash -c 'echo - foo', and the longer multi-echo shapes. Allow for zsh -c 'echo hi', 'echo -- x', 'echo -nE a', 'echo -x y'; zsh -c 'chmod 777 /etc/hosts' is Deny. Trigger is the lone dash operand. RED commit 0ab93794 on branch test/bg-red-pipe-reader-and-py-argv."
-created_at = 1794604359
-updated_at = 1794604359
-weight = 0.0
-issue_number = 1756
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1756"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261114_zsh_c_literal_echo_dash_fp -- --include-ignored"
-rev = "0ab93794b711e8c74d0dfaed9183824ac6493d90"
-observed_at = 1794604359
-detail = """
-exit 101: s/yuki/src/.harness-worktrees/bg-red-pipe-reader-and-py-argv/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.52s
-     Running tests/backlog_20261114_zsh_c_literal_echo_dash_fp.rs (target/debug/deps/backlog_20261114_zsh_c_literal_echo_dash_fp-5e83884faa4461ec)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261114_zsh_c_literal_echo_dash_fp`"""
-
-[[task]]
 id = "7eb86bb3"
 title = "blastguard FP: harmless brace-group feeder piped to bash is Ask/Deny"
 project = "/Users/yuki/src/harness"

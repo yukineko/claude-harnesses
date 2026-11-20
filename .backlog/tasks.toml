@@ -2465,6 +2465,8 @@ notes = "Observed on main f670f7bd9 (0.2.802): Allow in main and subagent. Found
 created_at = 1795155105
 updated_at = 1795155105
 weight = 0.0
+issue_number = 1889
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1889"
 rev = 0
 
 [task.repro]

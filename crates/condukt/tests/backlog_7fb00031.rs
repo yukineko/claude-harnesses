@@ -60,6 +60,40 @@ fn run_git(dir: &Path, args: &[&str]) {
     );
 }
 
+/// Run state for `run` holding `task` at kind=chore.
+///
+/// Re-anchored per user ruling 2026-11-20 round 4 Q-A (backlog 7768aeaf,
+/// spec condukt-merge-proof-contract-7768aeaf R5/R6): a merge of a branch
+/// with a `conduktTask` record now reads the task's kind from run state, and
+/// an absent run is `merge-proof-contract(undetermined-task)`. kind=chore is
+/// outside the proof contract; the property this file guards is unchanged.
+fn init_chore_run(repo: &Path, home: &Path, run: &str, task: &str) {
+    let dec = home.join(format!("{run}.chore-decomposition.json"));
+    std::fs::write(
+        &dec,
+        format!(r#"{{"goal":"g","tasks":[{{"id":"{task}","title":"t","kind":"chore"}}]}}"#),
+    )
+    .unwrap();
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
+        .args([
+            "state",
+            "init",
+            "--run",
+            run,
+            "--file",
+            dec.to_str().unwrap(),
+        ])
+        .current_dir(repo)
+        .env("HOME", home)
+        .env_remove("CONDUKT_DISABLE")
+        .output()
+        .expect("spawn condukt state init");
+    assert!(
+        out.status.success(),
+        "fixture: state init {run} (kind=chore): {out:?}"
+    );
+}
+
 #[test]
 fn unrecorded_conflict_is_not_reported_as_recorded() {
     let tmp = tempfile::tempdir().unwrap();
@@ -108,6 +142,7 @@ fn unrecorded_conflict_is_not_reported_as_recorded() {
     std::fs::write(&ledger, "").unwrap();
     std::fs::set_permissions(&ledger, std::fs::Permissions::from_mode(0o444)).unwrap();
 
+    init_chore_run(&repo, &home, "r", "t");
     let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args(["worktree", "merge", "--branch", "feat"])
         .current_dir(&repo)
@@ -170,6 +205,7 @@ fn refused_trial_without_merge_state_is_still_recorded_conflict() {
     run_git(&repo, &["commit", "-q", "-am", "ours"]);
     std::fs::write(repo.join("g.txt"), "untracked\n").unwrap();
 
+    init_chore_run(&repo, &home, "r", "t");
     let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args(["worktree", "merge", "--branch", "feat"])
         .current_dir(&repo)

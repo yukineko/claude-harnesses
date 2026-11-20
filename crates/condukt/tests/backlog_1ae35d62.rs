@@ -28,6 +28,40 @@ fn real_git() -> PathBuf {
     panic!("no git on PATH: fixture is void");
 }
 
+/// Run state for `run` holding `task` at kind=chore.
+///
+/// Re-anchored per user ruling 2026-11-20 round 4 Q-A (backlog 7768aeaf,
+/// spec condukt-merge-proof-contract-7768aeaf R5/R6): a merge of a branch
+/// with a `conduktTask` record now reads the task's kind from run state, and
+/// an absent run is `merge-proof-contract(undetermined-task)`. kind=chore is
+/// outside the proof contract; the property this file guards is unchanged.
+fn init_chore_run(repo: &Path, home: &Path, run: &str, task: &str) {
+    let dec = home.join(format!("{run}.chore-decomposition.json"));
+    std::fs::write(
+        &dec,
+        format!(r#"{{"goal":"g","tasks":[{{"id":"{task}","title":"t","kind":"chore"}}]}}"#),
+    )
+    .unwrap();
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
+        .args([
+            "state",
+            "init",
+            "--run",
+            run,
+            "--file",
+            dec.to_str().unwrap(),
+        ])
+        .current_dir(repo)
+        .env("HOME", home)
+        .env_remove("CONDUKT_DISABLE")
+        .output()
+        .expect("spawn condukt state init");
+    assert!(
+        out.status.success(),
+        "fixture: state init {run} (kind=chore): {out:?}"
+    );
+}
+
 struct Fx {
     base: PathBuf,
     repo: PathBuf,
@@ -82,6 +116,7 @@ impl Fx {
         // ...and the task identity it records, which every landed commit must
         // carry as a `Condukt-Task:` trailer.
         git(&repo, &["config", "branch.feat.conduktTask", "r/t"]);
+        init_chore_run(&repo, &home, "r", "t");
         git(&repo, &["checkout", "-q", "-b", "feat"]);
         std::fs::write(repo.join("b.txt"), "b\n").unwrap();
         git(&repo, &["add", "."]);

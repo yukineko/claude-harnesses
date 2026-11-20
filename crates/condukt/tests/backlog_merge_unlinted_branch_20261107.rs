@@ -120,9 +120,39 @@ impl Fixture {
             .expect("spawn condukt")
     }
 
+    /// Run state for `run` holding `task` at kind=chore.
+    ///
+    /// Re-anchored per user ruling 2026-11-20 round 4 Q-A (backlog 7768aeaf,
+    /// spec condukt-merge-proof-contract-7768aeaf R5/R6): a merge of a branch
+    /// with a `conduktTask` record now reads the task's kind from run state,
+    /// and an absent run is `merge-proof-contract(undetermined-task)`.
+    /// kind=chore is outside the proof contract; the property this file
+    /// guards is unchanged.
+    fn init_chore_run(&self, run: &str, task: &str) {
+        let dec = self.home.join(format!("{run}.chore-decomposition.json"));
+        std::fs::write(
+            &dec,
+            format!(r#"{{"goal":"g","tasks":[{{"id":"{task}","title":"t","kind":"chore"}}]}}"#),
+        )
+        .unwrap();
+        let out = self.condukt(&[
+            "state",
+            "init",
+            "--run",
+            run,
+            "--file",
+            dec.to_str().unwrap(),
+        ]);
+        assert!(
+            out.status.success(),
+            "fixture: state init {run} (kind=chore): {out:?}"
+        );
+    }
+
     /// `condukt worktree create`, write `lib` into the task worktree, commit it
     /// with the recorded `Condukt-Task` trailer. Returns (worktree, branch).
     fn task_branch(&self, topic: &str, lib: &str) -> (PathBuf, String) {
+        self.init_chore_run("run-unlinted", topic);
         let out = self.condukt(&[
             "worktree",
             "create",

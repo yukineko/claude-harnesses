@@ -73,6 +73,33 @@ fn skill_conflict_step_yields_a_mergeable_branch() {
             .output()
             .unwrap()
     };
+    // Re-anchored per user ruling 2026-11-20 round 4 Q-A (backlog 7768aeaf,
+    // spec condukt-merge-proof-contract-7768aeaf R5/R6): a merge of a branch
+    // with a `conduktTask` record now reads the task's kind from run state,
+    // and an absent run is `merge-proof-contract(undetermined-task)`. Run
+    // `runA` holds `t1` at kind=chore (outside the proof contract); the
+    // property this test guards is unchanged.
+    let dec = home.join("runA.chore-decomposition.json");
+    std::fs::write(
+        &dec,
+        r#"{"goal":"g","tasks":[{"id":"t1","title":"t","kind":"chore"}]}"#,
+    )
+    .unwrap();
+    let out = condukt(
+        &[
+            "state",
+            "init",
+            "--run",
+            "runA",
+            "--file",
+            dec.to_str().unwrap(),
+        ],
+        &repo,
+    );
+    assert!(
+        out.status.success(),
+        "fixture: state init runA (kind=chore): {out:?}"
+    );
     let out = condukt(
         &[
             "worktree", "create", "--run", "runA", "--topic", "t1", "--branch", "t1",

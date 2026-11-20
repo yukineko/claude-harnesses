@@ -78,6 +78,26 @@ impl Fixture {
         p
     }
 
+    /// [`Self::init_run`] with the task at kind=chore.
+    ///
+    /// Re-anchored per user ruling 2026-11-20 round 4 Q-A (backlog 7768aeaf):
+    /// a named merge now reads the task's kind, and a task with no kind is
+    /// `merge-proof-contract(undetermined-task)`; chore is outside the proof
+    /// contract, so the merge-phase stamping property is unchanged.
+    fn init_chore_run(&self, run: &str, task_id: &str, file: &str) {
+        let p = self.repo.join(format!("{run}-dec.json"));
+        let json = format!(
+            r#"{{"goal":"g","tasks":[{{"id":"{task_id}","title":"edit {file}","kind":"chore","touched_files":["{file}"],"deps":[],"class":"parallel","done_criteria":"d"}}]}}"#
+        );
+        std::fs::write(&p, json).unwrap();
+        let out = self.condukt(&["state", "init", "--run", run, "--file", p.to_str().unwrap()]);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "state init must succeed: {out:?}"
+        );
+    }
+
     fn init_run(&self, run: &str, task_id: &str, file: &str) {
         let dec = self.write_decomp(&format!("{run}-dec.json"), task_id, file);
         let out = self.condukt(&[
@@ -251,7 +271,7 @@ fn phase_verdict_transition_stamps_verifier_end() {
 #[test]
 fn phase_successful_merge_stamps_merge_completed() {
     let fx = Fixture::new("merge");
-    fx.init_run("runM", "t1", "src/d.rs");
+    fx.init_chore_run("runM", "t1", "src/d.rs");
 
     // Build a mergeable branch off main.
     // `worktree merge` refuses a branch with no recorded creation base

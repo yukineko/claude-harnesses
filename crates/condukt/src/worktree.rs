@@ -1731,6 +1731,7 @@ mod worktree_remove_tests {
         // Like `create_namespaced`: the task identity `merge` demands as a
         // `Condukt-Task:` trailer on every landed commit.
         record_task_identity(repo, branch, FIXTURE_TASK).unwrap();
+        fixture_run_state_tests::record_fixture_run_state(&test_cfg(repo), repo, FIXTURE_TASK);
     }
 
     /// The `<run>/<task>` identity fixture task branches are recorded under.
@@ -2121,6 +2122,7 @@ mod worktree_remove_tests {
             git(&wt, &["add", "."]).unwrap();
             commit_task(&wt, "task");
             let cfg = test_cfg(&repo);
+            fixture_run_state_tests::record_fixture_run_state(&cfg, &repo, FIXTURE_TASK);
             // Legacy `create` (no run) records no task identity, so the merge
             // names it explicitly.
             assert_eq!(
@@ -4985,6 +4987,7 @@ mod inherited_git_dir_tests {
     }
 }
 
+mod fixture_run_state_tests;
 /// One test per scrubbed production spawn site in this file. Each parent test
 /// builds repo A (the target) and repo B (the inherited-`GIT_DIR` decoy) with
 /// distinguishable content, re-execs this test binary with `GIT_DIR=<B>/.git`

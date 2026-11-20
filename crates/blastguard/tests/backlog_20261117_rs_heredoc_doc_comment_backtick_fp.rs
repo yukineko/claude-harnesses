@@ -118,7 +118,6 @@ fn command(delim: &str, line: &str) -> String {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-17 quoted heredoc .rs body line with `;` before a backtick span is judged as a command word when the heredoc is the 3rd statement — remove when fixed"]
 fn quoted_rs_heredoc_doc_comment_backtick_is_data() {
     let home = unique_home("fp");
     let cmd = command("'EOF'", BT_LINE);

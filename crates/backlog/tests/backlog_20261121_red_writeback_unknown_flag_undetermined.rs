@@ -109,3 +109,28 @@ fn unknown_flag_without_equals_is_refused_as_undetermined() {
         "unknown flag arity guessed: exit {c}, stderr={e}\nbody=\n{b}"
     );
 }
+
+/// Control: `--timings=html` is a real cargo option with an inline value
+/// (single word, determined arity); must not be refused, single RED tagged.
+#[test]
+fn control_real_cargo_inline_value_timings_tags_single_red() {
+    let (c, e, b, id) = run_case(
+        "c-timings",
+        "cargo test -p x --test red_one --timings=html -- --include-ignored",
+        SOURCE_ONE,
+    );
+    assert_eq!(c, 0, "{e}");
+    assert!(b.contains(&format!("RED({id})")), "{b}");
+}
+
+/// Control: repeated `-vv` is valid cargo (verbosity count); must not be refused.
+#[test]
+fn control_real_cargo_repeated_verbose_tags_single_red() {
+    let (c, e, b, id) = run_case(
+        "c-vv",
+        "cargo test -p x --test red_one -vv -- --include-ignored",
+        SOURCE_ONE,
+    );
+    assert_eq!(c, 0, "{e}");
+    assert!(b.contains(&format!("RED({id})")), "{b}");
+}

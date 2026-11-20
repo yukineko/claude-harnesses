@@ -2011,7 +2011,10 @@ analyse — it cannot tell what this would do, so it refuses to guess"
             "shred destroys file contents irreversibly",
         ),
         "dd" => {
-            if rest.iter().any(|t| t.starts_with("of=")) {
+            // The shell-unquoted words, not the raw tokens: `'of=/dev/sda'`
+            // is the argv word `of=/dev/sda` (fail-open p0, 2026-11-20). A
+            // word that may expand to `of=…` is a write to an unknown target.
+            if rm::dd_of_operands(rest, ctx.scope.home_real()).writes() {
                 Decision::deny("dd with of= writes raw bytes over a device/file")
             } else {
                 Decision::Allow

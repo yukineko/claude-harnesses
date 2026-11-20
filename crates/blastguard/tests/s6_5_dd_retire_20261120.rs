@@ -578,31 +578,26 @@ fn expect_same_as_unquoted(tag: &str, template: &str, exp: &str) {
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 8d6b3403d (quoted of= misses legacy dd arm)"]
 fn red_failopen_single_quoted_of_raw_disk() {
     expect_same_as_unquoted("fo-sda", "dd if=/dev/zero 'of=/dev/sda'", D);
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 8d6b3403d (quoted of= misses legacy dd arm)"]
 fn red_failopen_double_quoted_of_raw_disk() {
     expect_same_as_unquoted("fo-disk2", "dd if=/dev/zero \"of=/dev/disk2\"", D);
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 8d6b3403d (escaped of= misses legacy dd arm)"]
 fn red_failopen_backslash_escaped_of_raw_disk() {
     expect_same_as_unquoted("fo-bs", "dd if=/dev/zero \\of=/dev/sda", D);
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 8d6b3403d (quoted of= misses legacy dd arm)"]
 fn red_failopen_single_quoted_of_system() {
     expect_same_as_unquoted("fo-etc", "dd if=/dev/zero 'of=/etc/hosts'", D);
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 8d6b3403d (quoted of= misses legacy dd arm)"]
 fn red_failopen_single_quoted_of_own_worktree_settings() {
     expect_same_as_unquoted(
         "fo-settings",
@@ -612,7 +607,6 @@ fn red_failopen_single_quoted_of_own_worktree_settings() {
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 8d6b3403d (quoted of= misses legacy dd arm)"]
 fn red_failopen_single_quoted_of_project() {
     expect_same_as_unquoted("fo-proj", "dd if=/dev/zero 'of={P}/u.txt'", D);
 }

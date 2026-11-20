@@ -3019,3 +3019,74 @@ exit 101: 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
      Running tests/backlog_20261121_sudo_shell_cmd_and_undet_value.rs (target/debug/deps/backlog_20261121_sudo_shell_cmd_and_undet_value-68db974a4f669647)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_sudo_shell_cmd_and_undet_value`"""
+
+[[task]]
+id = "fa5d751c"
+title = "flow prose tests: test_claim_gap_route_gap_keys sees extra key discovery_dedup in compass gap output (stale key set vs compass)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "compass",
+    "prose-test",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-21 at main feff2e612 (also at condukt tC worktree 56394216c): FAIL test_claim_gap_route_gap_keys, scripts/test_flow_snippets_b.py:320 assertEqual(set(json.loads(r.stdout)), self.GAP_KEYS) -> AssertionError: Items in the first set but not the second: 'discovery_dedup'. Readings: (a) compass gap legitimately gained discovery_dedup and the test's GAP_KEYS (and the SKILL.md claim it backs) is stale; (b) compass leaks a key it should not emit. Tell apart: git log -S discovery_dedup -- crates/compass and whether docs/SKILL describe it."
+created_at = 1795197703
+updated_at = 1795197703
+weight = 0.0
+issue_number = 1908
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1908"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_flow_snippets_b.py::TestGapRoute::test_claim_gap_route_gap_keys"
+rev = "feff2e612c96c964d5ca6abcd8710df749343479"
+observed_at = 1795197703
+detail = """
+exit 1: AP_KEYS)
+E       AssertionError: Items in the first set but not the second:
+E       'discovery_dedup'
+
+scripts/test_flow_snippets_b.py:320: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_flow_snippets_b.py::TestGapRoute::test_claim_gap_route_gap_keys
+============================== 1 failed in 0.84s ==============================="""
+
+[[task]]
+id = "1523e3ab"
+title = "flow prose tests: test_claim_compass_outcome finds .compass/outcomes.json written in the PRIMARY tree (expected refused there)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "compass",
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-21 at main feff2e612 (also at tC 56394216c): FAIL test_claim_compass_outcome, scripts/test_flow_snippets_b.py:879 assertFalse((primary / '.compass' / 'outcomes.json').exists()) -> AssertionError: True is not false. SKILL.md claims compass outcome store writes are refused in the main (primary) working tree. Readings: (a) compass outcome no longer refuses primary-tree writes (fail-open vs CLAUDE.md §8); (b) the fixture/test premise is stale (e.g. file pre-created by another step). Tell apart: run compass outcome in a fresh primary checkout fixture and check exit code + file existence."
+created_at = 1795197851
+updated_at = 1795197851
+weight = 0.0
+issue_number = 1909
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1909"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_flow_snippets_b.py::TestCompassOutcome::test_claim_compass_outcome"
+rev = "feff2e612c96c964d5ca6abcd8710df749343479"
+observed_at = 1795197851
+detail = """
+exit 1: False((primary / ".compass" / "outcomes.json").exists())
+E       AssertionError: True is not false
+
+scripts/test_flow_snippets_b.py:870: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_flow_snippets_b.py::TestCompassOutcome::test_claim_compass_outcome
+============================== 1 failed in 1.08s ==============================="""

@@ -345,7 +345,6 @@ fn control_subprocess_rm_rf_root_without_cd_is_deny() {
 /// Control: body really spawns a destructive process, in the (a) shape
 /// (`cd <wt> && python3 - <<'EOF'` … `EOF` + cargo fmt).
 #[test]
-#[ignore = "RED fail-open (system harm): `cd <dir> && python3 - <<'EOF'` with subprocess.run([rm,-rf,/]) is Allow; the same body without the cd head is Deny"]
 fn control_subprocess_rm_rf_root_is_deny() {
     let fx = fixture("ctl2");
     deny_both(&fx, &cmd(&fx, RM_ROOT, Some(FMT)));
@@ -354,7 +353,6 @@ fn control_subprocess_rm_rf_root_is_deny() {
 // test-weakening-justified: new RED for an observed fail-open (2026-11-20)
 /// Same fail-open, minimal: `cd <wt> && python3 - <<'EOF'` + body, no suffix.
 #[test]
-#[ignore = "RED fail-open (system harm): `cd <dir> && python3 - <<'EOF'` with subprocess.run([rm,-rf,/]) is Allow; the same body without the cd head is Deny"]
 fn control_cd_then_subprocess_rm_rf_root_is_deny() {
     let fx = fixture("ctl2b");
     deny_both(&fx, &cmd(&fx, RM_ROOT, None));

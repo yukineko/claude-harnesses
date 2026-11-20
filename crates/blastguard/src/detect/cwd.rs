@@ -132,11 +132,30 @@ pub(super) fn is_relative_operand(tok: &str) -> bool {
 /// replaced by one space: a quoted `-c` program keeps its newlines (backlog
 /// 2026-11-13 — the single-space re-join made `cd /x && python3 -c "import os
 /// # x<NL>os.chmod('/etc/…',0)"` one commented-out line, and it was Allowed).
-pub(super) fn rewrite_relative_operands(seg: &str, dir: &str) -> String {
+///
+/// QUOTED / ESCAPED operands (2026-11-20, tests/py_rewrite_rs_file_fp_20261120.rs
+/// ctl2/ctl2b): whether a token is an option, an absolute path or a relative
+/// one is decided on the word the SHELL passes to the verb — the token after
+/// quote removal ([`operand_word_value`]) — never on its raw spelling. Read
+/// raw, `'-rf'` and `'/'` (which is what the Python judge spells
+/// `subprocess.run(["rm", "-rf", "/"])` as) were both "relative": `cd /tmp &&
+/// 'rm' '-rf' '/'` was rewritten to `'rm' /tmp/-rf /tmp//`, a non-recursive
+/// rm of `/tmp/`, and Allowed, while the same text with no `cd` is Deny.
+/// A quoted option is left as written; a quoted absolute path is left as
+/// written (judged as typed, exactly as with no `cd`); a quoted relative
+/// path is rewritten to the single-quoted joined path. A quoted token whose
+/// word cannot be determined (an unclosed quote — a quoted word holding a
+/// space is split here — a glob, a parse failure) is left as written and
+/// reported, and the caller asks.
+///
+/// Answers the rewritten segment and the first target token whose quoted /
+/// escaped spelling could not be reduced to one literal word.
+pub(super) fn rewrite_relative_operands(seg: &str, dir: &str) -> (String, Option<String>) {
     let tokens: Vec<&str> = seg.split_whitespace().collect();
     let Some((head_tok, rest)) = tokens.split_first() else {
-        return seg.to_string();
+        return (seg.to_string(), None);
     };
+    let mut undetermined: Option<String> = None;
     let head = normalized_command(strip_edge_parens(head_tok));
     let targets = verb_targets(&head, rest);
     let mut out = String::from(*head_tok);
@@ -152,15 +171,54 @@ pub(super) fn rewrite_relative_operands(seg: &str, dir: &str) -> String {
         tail = tail[gap..].get(t.len()..).unwrap_or("");
         if targets.contains(t) {
             let clean = strip_edge_parens(t);
-            if !clean.is_empty() && is_relative_operand(clean) && !has_unresolvable_expansion(clean)
-            {
-                out.push_str(&exclude::normalize(&format!("{dir}/{clean}")));
-                continue;
+            if !clean.is_empty() && !has_unresolvable_expansion(clean) {
+                match operand_word_value(clean) {
+                    OperandWord::Plain if is_relative_operand(clean) => {
+                        out.push_str(&exclude::normalize(&format!("{dir}/{clean}")));
+                        continue;
+                    }
+                    OperandWord::Plain => {}
+                    OperandWord::Quoted(value)
+                        if !value.starts_with('-') && is_relative_operand(&value) =>
+                    {
+                        let joined = exclude::normalize(&format!("{dir}/{value}"));
+                        out.push_str(&format!("'{}'", joined.replace('\'', "'\\''")));
+                        continue;
+                    }
+                    OperandWord::Quoted(_) => {}
+                    OperandWord::Undetermined => {
+                        undetermined.get_or_insert_with(|| clean.to_string());
+                    }
+                }
             }
         }
         out.push_str(t);
     }
-    out
+    (out, undetermined)
+}
+
+/// What the shell makes of one raw operand token, for
+/// [`rewrite_relative_operands`].
+enum OperandWord {
+    /// No quote or backslash: the shell passes the token as written.
+    Plain,
+    /// Quoted / escaped, and its quote removal is this one literal word.
+    Quoted(String),
+    /// Quoted / escaped, and no single literal word could be determined.
+    Undetermined,
+}
+
+/// The word the shell passes for `tok` after quote removal, by the AST
+/// parser's dequoting ([`super::redirect::dequoted_redirect_word`]), never a
+/// string rewrite.
+fn operand_word_value(tok: &str) -> OperandWord {
+    if !tok.contains(['\\', '\'', '"']) {
+        return OperandWord::Plain;
+    }
+    match super::redirect::dequoted_redirect_word(tok) {
+        harness_core::verdict::Determination::Known(value) => OperandWord::Quoted(value),
+        harness_core::verdict::Determination::Undetermined(_) => OperandWord::Undetermined,
+    }
 }
 
 /// Resolve a `cd`/`pushd` target token (or an `ln -s` source) to the
@@ -300,7 +358,17 @@ pub(super) fn advance_cwd_and_rewrite(
     }
 
     match cwd {
-        CwdState::Known(dir) => (rewrite_relative_operands(seg, dir), None, cwd.clone()),
+        CwdState::Known(dir) => {
+            let (rewritten, undetermined) = rewrite_relative_operands(seg, dir);
+            let ask = undetermined.map(|tok| {
+                Decision::ask(format!(
+                    "`{head}` names the quoted / escaped operand `{tok}` after a `cd` — blastguard \
+could not remove its quoting to one literal word, so it cannot tell whether that operand is an \
+option, an absolute path or a path inside the directory the `cd` entered, and refuses to guess"
+                ))
+            });
+            (rewritten, ask, cwd.clone())
+        }
         CwdState::Unknown => {
             let targets = verb_targets(head, rest);
             if targets

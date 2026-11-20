@@ -191,7 +191,7 @@ pub(super) fn expand_operand_with(
 /// `[`) that is unquoted and unescaped, i.e. one the shell expands. `"*.tmp"`
 /// is the one file named `*.tmp`; `*.tmp` and `"a"*` are patterns. Unbalanced
 /// quoting answers true (restrictive).
-pub(super) fn has_unquoted_glob(word: &str) -> bool {
+pub(in crate::detect) fn has_unquoted_glob(word: &str) -> bool {
     let chars: Vec<char> = word.chars().collect();
     unquoted_mask(&chars).map_or(true, |mask| {
         chars

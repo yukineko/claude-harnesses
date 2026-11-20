@@ -1527,7 +1527,19 @@ forge・condukt のスケジューラが再利用）。
   `of=F` の `F` が target・`if=` は read・`k=v` 語は丸ごと 1 語なので path 中の `0`/`1` が tie を壊さない。
   `of=DIR/*.txt` の最終成分 glob も literal-dir glob として `DIR` で置く。同一行の literal 代入 `F=…; dd of=$F`
   は評価器が `Literal` に解決し、その値で判定する〈Scratch なら Allow、`/etc/hosts` なら Deny〉。
-  tests/s6_5_dd_retire_20261120.rs）。
+  tests/s6_5_dd_retire_20261120.rs）、
+  S6-6 — 旧 `tee` arm（`detect/tee.rs::analyze_tee`。`true` なら Allow、それ以外は旧判定のまま。`tee` の B.1 行は
+  全 operand が target・`-a` で `Append`・それ以外は `Truncate`。option は `-a`/`--append`・`-i`/`--ignore-interrupts`・
+  `-p` のみ〈`-ai`・`-ap` の cluster も可〉、それ以外の option は行が `Undetermined` で Known でない。旧 token に残る
+  redirect〈`tee F > /dev/null` の `>`・`/dev/null`〉は除いて対応付ける。同一行の literal 代入 `F=…; tee "$F"` は
+  旧層が `$F` を値に置換した行が index されるので、代入の値語〈unquoted・値＝綴り〉にある同じ綴りは operand の
+  別読みとみなさない〈`targets.rs::Index::tie`。`tee` 行のみ。他の行の同じ形は旧判定のまま —
+  `F=<Scratch>; truncate -s 0 $F` は ask/deny、tests/s6_4_truncate_retire_20261120.rs `control_non_literal`〉。tests/s6_6_tee_retire_20261120.rs）。旧 `tee` arm 自体の fail-open 是正（0.2.814）: glob 語は
+  「存在しない target」ではない〈最終成分 glob は親ディレクトリの class で置き、Scratch/OwnWorktree かつ
+  command-running config でなければ Allow・それ以外は既存 target と同じ Deny・置けない glob は Ask〉。
+  `tee -a` と `>>` の own worktree 内 command-running config〈`hooks/hooks.json`・`crates/*/hooks/…`・
+  `scripts/check-*.py`。`judge::names_command_running_config`、置けなければ該当扱い〉への追記は Ask（main）/
+  Deny（subagent）（user ruling 2026-11-20）。
   最終成分だけの literal-dir glob（user ruling 2026-11-19）は親ディレクトリで置かれる `Literal` なので
   Scratch 内なら Allow、中間成分の glob は `Unresolved` で旧判定のまま。`rm`・`rsync --delete` は引き続き
   `detect/rm/new_layer`（tests/s6_4_truncate_retire_20261120.rs）。

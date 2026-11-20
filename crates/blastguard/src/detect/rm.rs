@@ -8,9 +8,9 @@ use super::{
 
 pub(super) mod new_layer;
 mod operand_words;
+pub(super) use operand_words::has_unquoted_glob;
 use operand_words::{
-    expand_operand_with, has_unquoted_glob, place_literal, rm_operand_words, OperandSpelling,
-    Placed, VarLookup,
+    expand_operand_with, place_literal, rm_operand_words, OperandSpelling, Placed, VarLookup,
 };
 
 /// The protected-path Deny for an operand of a non-wildcard `rm` that carries

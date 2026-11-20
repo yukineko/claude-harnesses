@@ -102,6 +102,7 @@ mod shell_lex;
 mod sinks;
 mod substitution;
 mod system_paths;
+mod tee;
 mod vars;
 mod verdict_acc;
 mod words;
@@ -1065,6 +1066,12 @@ does not parse that body, but blastguard cannot show the program does not use it
             if let Some(deny) = protected_path_block_at(ctx, "append redirect", &target, &physical)
             {
                 return deny;
+            }
+            // ...and command-running config the protected list does not cover
+            // (`hooks/hooks.json`, `crates/*/hooks/…`, `scripts/check-*.py`;
+            // user ruling 2026-11-20, the `tee -a` twin is in `tee.rs`).
+            if tee::append_redirect_names_command_running_config(&target, ctx) {
+                line_level_asks.push(tee::command_running_config_append_ask(">>", &target));
             }
             let landing =
                 relink::redirect_landing(ctx, ">>", rcmd, seg_idx, &seg_cwds, target, physical);
@@ -2109,76 +2116,8 @@ analyse — it cannot tell what this would do, so it refuses to guess"
                     .unwrap_or(Decision::Allow)
             }
         }
-        // CA-blastguard-009: `tee FILE` (no -a/--append) truncates/overwrites
-        // FILE identically to a `>` redirect. Append-mode tee is safe and
-        // stays Allow.
-        "tee" => {
-            // Round 3, MIRROR GAP. Rule 2b in `detect_bash` already settled
-            // that for a PROTECTED target the append/truncate distinction is
-            // irrelevant — one appended line adds a hook entry or an
-            // `exit 0` — and denies `>>` onto one. `tee -a` is the same
-            // operation spelled differently and never got the same treatment,
-            // so the append arm below handed it an unconditional Allow.
-            // Classifying the target FIRST is what makes the two spellings
-            // agree.
-            let targets = positional_operands(rest, &[]);
-            // Axis order is rule 2's, and for rule 2's reasons.
-            //
-            // PROTECTED first: a gate/config file is surfaced however
-            // recoverable it is, because a silently disabled gate voids every
-            // later verdict.
-            if let Some(deny) = targets
-                .iter()
-                .find_map(|t| protected_path_block(ctx, "tee target", t))
-            {
-                return deny;
-            }
-            // SYSTEM DIRECTORY next, and BEFORE recoverability — the probe
-            // answers `NothingToDestroy` for a path that does not exist yet,
-            // which is the correct answer to the question it was asked and the
-            // wrong question for `/etc/sudoers.d/evil`, a file that destroys
-            // nothing by being created and grants root.
-            if let Some(deny) = targets
-                .iter()
-                .find_map(|t| system_path_block("tee target", t, ctx))
-            {
-                return deny;
-            }
-            if rest.iter().any(|t| *t == "-a" || *t == "--append") {
-                return Decision::Allow;
-            }
-            // MIRROR GAP, round 4. Rule 2 in `detect_bash` stopped asserting
-            // that a truncating write destroys bytes without first asking
-            // whether any bytes are there (operator ruling 2026-09-09). `tee`
-            // is the same operation spelled as a command and kept the flat
-            // Deny, whose reason — "truncates and overwrites its target
-            // file(s)" — was a claim about files NOTHING in the crate had
-            // looked at. That is the §4 divergence between the reason a human
-            // reads and the finding actually made, and it was this crate's
-            // most-recurring false positive (overwatch signature
-            // `blastguard:tee-truncate`, 94 occurrences across 21 sessions).
-            //
-            // Only the strongest, least contestable half of rule 2's recovery
-            // ruling is taken here: `NothingToDestroy` — an ABSENT target, for
-            // which there are no prior bytes for the write to destroy, and
-            // which is true in any tree. `RecoverableFromGit` is deliberately
-            // NOT honoured: rule 2 pairs it with a confinement test that needs
-            // the whole LINE (`line_changes_cwd_before`) to rule out
-            // `cd /usr && …`, and this arm is handed tokens only. Undetermined
-            // and Unrecoverable keep denying, per CLAUDE.md §3 — so this can
-            // only move an absent target from Deny to Allow, never the reverse.
-            let all_absent = !targets.is_empty()
-                && targets.iter().all(|t| {
-                    matches!(
-                        crate::reversible::probe(t, ctx.raw_base.as_deref()),
-                        crate::reversible::Recovery::NothingToDestroy
-                    )
-                });
-            if all_absent {
-                return Decision::Allow;
-            }
-            Decision::deny("tee without -a/--append truncates and overwrites its target file(s)")
-        }
+        // CA-blastguard-009 (`tee FILE` truncates like `>`): see `tee.rs`.
+        "tee" => tee::analyze_tee(rest, ctx),
         // CA-blastguard-006: a bare top-level command-interpreter invocation
         // (`python3 -c "…"`, no `find` wrapper) can run an arbitrary
         // destructive command, just like the same payload wrapped in

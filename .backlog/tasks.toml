@@ -2735,3 +2735,33 @@ exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finish
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
+
+[[task]]
+id = "d766b5fe"
+title = "blastguard: eval of a determined harmful command substitution through cat is Ask, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn eval_of_determined_harmful_subst_through_cat_is_deny"
+created_at = 1795155385
+updated_at = 1795155385
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored eval_of_determined_harmful_subst_through_cat_is_deny --exact"
+rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
+observed_at = 1795155385
+detail = """
+exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.61s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""

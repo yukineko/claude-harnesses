@@ -62,7 +62,8 @@
 //! `subset-spec`, user rulings 2026-11-17). Stage S3b (user ruling
 //! 2026-11-18) wires it into `detect` through [`table_b_verdict`] for the
 //! Table B B.1 commands only (undetermined option / unresolved target → Ask);
-//! `classify` is still a stub (see `judge.rs`).
+//! `classify` answers the Table C class since S6-2 but is not wired (see
+//! `judge.rs`).
 
 // `targets`, `table_b_verdict` and `b5` (which reads `program_source` /
 // `StdinSource`) are the callers so far; the rest of the contract (e.g.

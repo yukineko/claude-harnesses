@@ -1641,35 +1641,6 @@ exit 101: 261119/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261119_python_heredoc_string_literal_system_harm_fp`"""
 
 [[task]]
-id = "cfb98cd5"
-title = "blastguard: cp into /etc via .. segments (loop value or plain) is Allow"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-19 (0.2.738, main 5a27f8ecd) and re-observed 2026-11-20 on 0.2.744 (branch red/bg-dotdot-loop-redirect-20261120, feacfbc14). cwd=HOME/wt/a/b/c/d, '..' chain reaching /: 'for f in ../..(to /)../etc; do cp a $f/hosts; done' and plain 'cp a ../..(to /)../etc/hosts' are Allow at every '..' count 11..14 (fixture canonical depth 12). Controls deny: redirect via same '..' loop value / plain, 'for f in /etc; do cp a $f/hosts', cd / form. The originally reported loop REDIRECT Allow is NOT reproduced (10 '..' did not reach /etc from a deeper cwd; fixture issue). Readings: (a) real defect: cp destination not resolved against cwd before system-dir check while redirect targets are; (b) intended: cp judged only when absolute. Distinguishing: absolute cp form denies and system harm is Deny through any spelling => (a). Not probed: mv/tee/install/dd of=, subagent verdict."
-created_at = 1795103126
-updated_at = 1795103126
-weight = 0.0
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_dotdot_loop_value_system_write -- --ignored"
-rev = "feacfbc1412254974358ecf0d7c090e2d168a084"
-observed_at = 1795103126
-detail = """
-exit 101: ness-worktrees/red-dotdot-loop-redirect-20261120/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.07s
-     Running tests/backlog_20261120_dotdot_loop_value_system_write.rs (target/debug/deps/backlog_20261120_dotdot_loop_value_system_write-dee0d3a72796bdd5)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_dotdot_loop_value_system_write`"""
-
-[[task]]
 id = "e93d3701"
 title = "[bg-heredoc-script-failopen-596ef57d:R-kill] Q5: shell の `kill -9 -1`（ケース c_kill_all）は、main・subagent の両モードで Deny になる。"
 project = "/Users/yuki/src/harness"

@@ -86281,3 +86281,67 @@ rev = "c8b03c22d1de7455e3851ae24032cf63491b31da"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "cfb98cd5"
+title = "blastguard: cp into /etc via .. segments (loop value or plain) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-19 (0.2.738, main 5a27f8ecd) and re-observed 2026-11-20 on 0.2.744 (branch red/bg-dotdot-loop-redirect-20261120, feacfbc14). cwd=HOME/wt/a/b/c/d, '..' chain reaching /: 'for f in ../..(to /)../etc; do cp a $f/hosts; done' and plain 'cp a ../..(to /)../etc/hosts' are Allow at every '..' count 11..14 (fixture canonical depth 12). Controls deny: redirect via same '..' loop value / plain, 'for f in /etc; do cp a $f/hosts', cd / form. The originally reported loop REDIRECT Allow is NOT reproduced (10 '..' did not reach /etc from a deeper cwd; fixture issue). Readings: (a) real defect: cp destination not resolved against cwd before system-dir check while redirect targets are; (b) intended: cp judged only when absolute. Distinguishing: absolute cp form denies and system harm is Deny through any spelling => (a). Not probed: mv/tee/install/dd of=, subagent verdict."
+created_at = 1795103126
+updated_at = 1795134812
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_dotdot_loop_value_system_write -- --ignored"
+rev = "feacfbc1412254974358ecf0d7c090e2d168a084"
+observed_at = 1795103126
+detail = """
+exit 101: ness-worktrees/red-dotdot-loop-redirect-20261120/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.07s
+     Running tests/backlog_20261120_dotdot_loop_value_system_write.rs (target/debug/deps/backlog_20261120_dotdot_loop_value_system_write-dee0d3a72796bdd5)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_dotdot_loop_value_system_write`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261120_dotdot_loop_value_system_write -- --include-ignored"
+exit = 0
+passed = 8
+rev = "a9da497e759f901f4bf8e9df02c3b338d7464ff2"
+observed_at = 1795134811
+output_digest = "sha256:cb6bdcb312ba541a77a72103b70f619f6f92d8b0325388375b5d43681355de9d"
+excerpt = """
+
+running 8 tests
+test control_dotdot_redirect_no_loop_is_denied ... ok
+test dotdot_loop_value_cp_into_etc_is_denied ... ok
+test control_cd_root_relative_loop_value_redirect_is_denied ... ok
+test control_dotdot_loop_value_redirect_is_denied ... ok
+test control_absolute_loop_value_cp_is_denied ... ok
+test dotdot_cp_into_etc_no_loop_is_denied ... ok
+test control_loop_dotdot_value_inside_tree_is_not_denied ... ok
+test control_absolute_loop_value_redirect_is_denied ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/backlog_20261120_dotdot_loop_value_system_write.rs (target/debug/deps/backlog_20261120_dotdot_loop_value_system_write-453760b1d7d2a381)
+"""
+
+[task.closure.red]
+rev = "c8b03c22d1de7455e3851ae24032cf63491b31da"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -1717,3 +1717,35 @@ path/target を埋め込む。例: `"Write would replace {path} with empty conte
 `tests/backlog_20261118_python_heredoc_string_literal_rm_home_fp.rs`・`tests/backlog_20261118_python_c_string_literal_rm_fp.rs`・
 `tests/backlog_20261118_python_c_argv_system_write_not_deny.rs`・`tests/backlog_20261116_python_dict_lookup_system_group_pipe.rs`・
 `tests/ast_effect_rules_20261117.rs`（c1873b73 の形）・`tests/backlog_20261116_python_os_system_literal_spelling_bypass.rs`。
+
+## 決定済みの producer pipeline の出力を program として読む（backlog 40dc52c0）
+
+実装: `detect/payload/determined_output.rs`（契約の全文は module doc）。呼び出し側は
+`detect/payload.rs`（procsub / stdin の program 読み）、`detect/readings.rs`（`detect_bash_every_reading` の
+chain 値）、`detect/ast/b5.rs`。
+
+- 目的: `bash <(echo hi | cat)`・`bash <(seq 10 | sort)`・`bash <(echo "$(echo hi)")`・`echo hi | cat | bash`
+  のように、shell に渡る program がコマンド行だけで決まる形を、Ask にせず program として判定する。従来の読みは
+  `echo` / `printf` 1 段の literal しか読まなかった。
+- 計算するのは、brush-parser が単一の pipeline（simple command だけ。list・`&&`/`||`・`&`・`!`・`time`・
+  subshell・group・関数・redirect・代入・process substitution を含まない）と読む text で、先頭が emitter、
+  後続がすべて filter の形だけ:
+  - `echo`: operand がすべて決定済みの word で、`-` で始まらず backslash を含まない。
+  - `seq LAST` / `seq FIRST LAST` / `seq FIRST INCR LAST`: 符号なし 10 進 literal（先頭 0 なし、9 桁以下、
+    `INCR` > 0）、出力は `MAX_SEQ_LINES`（1000）行以下。
+  - `cat`: operand も option も無い（stdin をそのまま流す）。
+  - `sort`: operand も option も無く、入力の行順がどの locale でも同じ（全行が数字だけ、または全行が同じ）。
+    それ以外は collation に依存するので決定済みではない。
+  - 決定済みの word: plain な unquoted text、single-quoted text、または text と `$( )`（その program 自体が
+    この形の pipeline、`MAX_DEPTH` = 3 段まで）だけから成る double-quoted 列。unquoted の `$( )`・backquote・
+    parameter・escape・tilde・`$'…'`・`$"…"` は決定済みではない。
+- それ以外の形は計算しない（`None`）。呼び出し側は従来の読みと Ask を保つ。計算結果を使うのは
+  `beyond_plain_echo`（filter・`seq`・command substitution を使った）のときだけで、従来の読みが扱う形の判定は
+  変えない。
+- 前提条件 `resolution_fixed`: `echo`/`seq`/`cat`/`sort` が別物に差し替わりえないこと。AST 層で `Known`、関数定義
+  なし、どの command にも代入（`PATH=…` を含む）が無く、command word が modelled な名前か program を読む
+  shell / interpreter のどれか、を満たすときだけ true。それ以外の command（`alias`・`hash`・`enable`・`export`・
+  `cd` など、無害なものも含む）があれば false（許可リスト方式。未知の差し替え手段を通さない）。
+  利用者の行・途中の派生 text すべて・判定対象の text の全部に要求し、chain 値は狭める方向にしか変わらない
+  （`readings::chain_names_fixed`、`Ctx::names_fixed_narrowed_by`）。false なら何も計算しない。
+- 判定不能は制限側: parse 不能・panic（`catch_unwind`）・上限超過はすべて `None` で、従来の Ask に戻る。

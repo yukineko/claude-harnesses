@@ -933,3 +933,8 @@ reason = "SUBSET.md 'Python programs (S5)' 'Undetermined': the closed name table
 path = "crates/blastguard/src/detect/tee.rs"
 doc = "docs/specs/blastguard.md"
 reason = "known_allow bullet 'S6-6 — 旧 tee arm (detect/tee.rs::analyze_tee)': the legacy tee reading moved out of detect.rs; known_allow true → Allow, else the legacy verdict; a glob word is not counted as an absent target, and own-worktree command-running config appends are Ask (fail-open fixes 2026-11-20)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/payload/determined_output.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Section '決定済みの producer pipeline の出力を program として読む（backlog 40dc52c0）': pipeline_output (echo/seq/cat/sort emitter-filter shapes, determined words, MAX_DEPTH/MAX_SEQ_LINES bounds) and the resolution_fixed precondition."

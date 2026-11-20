@@ -3037,6 +3037,8 @@ notes = "Observed 2026-11-21 at main feff2e612 (also at condukt tC worktree 5639
 created_at = 1795197703
 updated_at = 1795197703
 weight = 0.0
+issue_number = 1908
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1908"
 rev = 0
 
 [task.repro]

@@ -2705,3 +2705,32 @@ exit 101: side-reds/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.74s
      Running tests/backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp.rs (target/debug/deps/backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp-76f31d9e9a2f73b2)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp`"""
+
+[[task]]
+id = "3c96b536"
+title = "blastguard FP: quoted-argument redirect text after unresolvable cd refused as relative redirect"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-20 (subagent, blastguard 0.2.809): cd <dir> && backlog add --title ... --notes ... 2>&1 | tail -30; git ... was refused: redirect-after-unresolvable-cd reason naming the quoted text. The exact command is the OBSERVED const in the repro test. Measured at rev 0b4348ae4 on 2026-11-20: same command with the quoted redirect text removed = allow; with it = deny (subagent) / ask (main). The one-line reduction does not reproduce. Readings: (a) FP, text inside a quoted argument is not a redirect; (b) intended, blastguard cannot tell whether the callee reparses the argument. Tell apart: control without the text is allow."
+created_at = 1795163770
+updated_at = 1795163770
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_quoted_arg_redirect_text_after_cd_fp -- --include-ignored"
+rev = "7e29f1f20588611dcaa91fa3a06b69de2d02dde2"
+observed_at = 1795163770
+detail = """
+exit 101: d; 0 measured; 0 filtered out; finished in 0.73s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/backlog_20261120_quoted_arg_redirect_text_after_cd_fp.rs (target/debug/deps/backlog_20261120_quoted_arg_redirect_text_after_cd_fp-e8a7fb1d39e9f567)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_quoted_arg_redirect_text_after_cd_fp`"""

@@ -2914,3 +2914,34 @@ exit 101: guard v0.2.816 (/Users/yuki/src/.harness-worktrees/sink-file-20261120/
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
      Running tests/backlog_20261120_e1bb5f7e_adversarial_r2.rs (target/debug/deps/backlog_20261120_e1bb5f7e_adversarial_r2-7eceff4e109601ca)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_e1bb5f7e_adversarial_r2`"""
+
+[[task]]
+id = "4075177c"
+title = "rollout: test_rebuild_current_version_only CheckerAcceptsFrozenSuperseded test_old_bytes_in_live_held_superseded_dir_pass fails - checker reports askrelay GATE crate has no readable plugin.json"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "test-fixture",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-20/21 by the coordinator (session 62e92d16) during run-20261120-171414-35880 / d4a135ba: fails at base 039500893 ('1 failed, 7 passed, 2 subtests passed in 5.87s') and identically at the d4a135ba tip 73c0f1578: 'AssertionError: 3 != 0 : checker demanded a superseded dir match the build', err 'UNVERIFIABLE PLUGIN (1 problem(s)) ... - askrelay: GATE crate has no readable plugin.json under crates/ (deleted, renamed, or corrupted)'. Pre-existing, not a d4a135ba regression. Readings: (a) fixture drift - the test's temp crates/ lacks askrelay, which became a GATE crate; (b) the checker wrongly requires every GATE crate in a fixture. Not investigated."
+created_at = 1795193216
+updated_at = 1795193216
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_rebuild_current_version_only.py -k test_old_bytes_in_live_held_superseded_dir_pass"
+rev = "1973dc5dd9fed931d73aba8c5b0ba9a43c54a52c"
+observed_at = 1795193216
+detail = """
+exit 1: enabledPlugins edit can fix this class.
+
+scripts/test_rebuild_current_version_only.py:281: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_rebuild_current_version_only.py::CheckerAcceptsFrozenSuperseded::test_old_bytes_in_live_held_superseded_dir_pass
+======================= 1 failed, 7 deselected in 0.75s ========================"""

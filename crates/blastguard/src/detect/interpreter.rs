@@ -1139,6 +1139,16 @@ struct Mentions {
 /// [`Ctx::program_text_redirects`] set; it is used ONLY for the shell pass
 /// over each program-text layer, so every other check judges exactly as before
 /// the R2 ruling.
+///
+/// `payloads` is what the caller READ as the program. For a stdin program
+/// whose producer pipeline's output is determined (`echo hi | cat | bash`,
+/// `bash <(seq 10 | sort)`, `bash <(echo "$(echo hi)")`, backlog 40dc52c0),
+/// the caller passes that computed output, not the producer's literals, so
+/// the empty-program Ask ("not on the command line") and the
+/// shell-expansion Ask ("contains a shell expansion") below no longer fire
+/// for those shapes; they still fire for every other producer
+/// (`cat f | bash`, `echo $(ls) | bash`), and a harmful computed program is
+/// judged — and denied — here like any literal one.
 fn interpreter_program_verdict(
     shape: &str,
     payloads: &[String],

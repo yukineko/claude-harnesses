@@ -343,6 +343,13 @@ struct Ctx<'a> {
     /// `cd <dir> && ` that [`analyze_shell_payload`] puts before its payload: the
     /// directory a here-document's Python program runs in (`python_file_body_verdict`).
     cwd_prefix: Option<String>,
+    /// Whether the USER'S TOP-LEVEL line leaves `echo` / `seq` / `cat` / `sort`
+    /// unrebound ([`payload::determined_output::resolution_fixed`], backlog
+    /// 40dc52c0): read by [`Ctx::new`] from [`readings::top_level_names_fixed`]
+    /// (fixed once per detection from the user's line, never from the variant
+    /// or derived `command` given here), carried unchanged into every derived
+    /// context; `false` outside a Bash detection.
+    names_fixed: bool,
 }
 
 /// Marker every Ask produced under the user's 2026-10-14 rulings R1/R2 carries
@@ -386,6 +393,7 @@ impl<'a> Ctx<'a> {
                 .or_else(|| tied_rest.and_then(git_worktree_eligible)),
             program_text_redirects: None,
             cwd_prefix: None,
+            names_fixed: readings::top_level_names_fixed(),
         }
     }
 
@@ -397,17 +405,12 @@ impl<'a> Ctx<'a> {
             self.rewritten_base
                 .map(|base| format!("{}/{}", base.trim_end_matches('/'), dir))
         };
+        // Every other field (the bases, the TOP-LEVEL eligibilities,
+        // `names_fixed`, …) is carried unchanged.
         Ctx {
-            scope: self.scope,
-            rewritten_base: self.rewritten_base,
             raw_base,
             places: self.places.after_cd(dir),
-            worktree_rm_eligible: self.worktree_rm_eligible,
-            deletion_rm_eligible: self.deletion_rm_eligible,
-            checkout_exempt_eligible: self.checkout_exempt_eligible,
-            git_eligible_rest: self.git_eligible_rest.clone(),
-            program_text_redirects: self.program_text_redirects,
-            cwd_prefix: self.cwd_prefix.clone(),
+            ..self.clone()
         }
     }
 
@@ -416,17 +419,12 @@ impl<'a> Ctx<'a> {
     /// Absolute operands are unaffected — their placement never depended on a
     /// base.
     fn after_unknown_cd(&self) -> Ctx<'a> {
+        // Every other field is carried unchanged.
         Ctx {
-            scope: self.scope,
             rewritten_base: None,
             raw_base: None,
             places: scratch_place::PlaceBases::unknown(),
-            worktree_rm_eligible: self.worktree_rm_eligible,
-            deletion_rm_eligible: self.deletion_rm_eligible,
-            checkout_exempt_eligible: self.checkout_exempt_eligible,
-            git_eligible_rest: self.git_eligible_rest.clone(),
-            program_text_redirects: self.program_text_redirects,
-            cwd_prefix: self.cwd_prefix.clone(),
+            ..self.clone()
         }
     }
 

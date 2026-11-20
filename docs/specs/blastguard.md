@@ -120,7 +120,7 @@ forge・condukt のスケジューラが再利用）。
   timeout・probe 無し）も Deny（tests/backlog_git_restore_content_in_commit_fp_20261107.rs）。
   file mode の差は content とみなさない、
   `find`（`analyze_find`: `-delete`、`-exec`/`-execdir` の直後が shell または `rm`）、
-  `truncate`/`shred`/`dd of=`/`mkfs*`、再帰 `chmod`/`chown`（`-R`/`--recursive`）、
+  `truncate`（S6-4 以降、`detect/known_allow` が Known Allow のときは Allow。下記「module 責務」）/`shred`/`dd of=`/`mkfs*`、再帰 `chmod`/`chown`（`-R`/`--recursive`）、
   `sort`/`uniq`（read-only ではない: `sort -o <保護パス>`／`uniq <in> <保護パス>` は出力ファイルを
   truncate するので deny。純粋な読取・非保護 output は allow — `analyze_sort`/`analyze_uniq`）。
 - **managed な使い捨て場所での working-tree 破棄の Allow（ユーザー裁定 2026-11-07、blastguard 0.2.287）** —
@@ -1494,6 +1494,22 @@ forge・condukt のスケジューラが再利用）。
   destination を `rm -rf` の operand として判定する — `new_layer::rsync_dest_allows`（literal 語か評価器が解決
   した展開の全パスが Scratch / OwnWorktree）なら Allow、それ以外は `rm -r -f <dest>` と同じ判定（理由に rsync の
   形を前置）。delete flag 無し・remote destination・list mode はこの rule では Allow（他の rsync rule は残る）。
+- **`detect/known_allow`** — `detect/rm/new_layer` の `known_allow` を Table B の全 B.1 行に一般化した新層の
+  「Known Allow」（S6-3 で追加、S6-4 で初めて配線）。`known_allow(cmd, rest, ctx)` は、評価器が `cmd` + 旧 token を
+  評価済み top-level コマンドに対応付け（`ast/targets.rs::tied_b1_targets`。行に listed な option が別語として
+  取った引数〈`truncate -s 0` の `0`〉は operand の綴りとして扱わない — `table_b::option_argument_words`、
+  `-t DIR` は target なので除外）、対応付いた全コマンドに target のある B.1 行があり、target が 1 つ以上・全 target 値が
+  `Literal`・全 target の Table C class（`judge::classify`）が **Scratch** か **OwnWorktree**、かつどの target も
+  lift 無しの述語で command-running config を名指さない（`judge::names_command_running_config`:
+  `rm::new_layer::is_protected`・Q3/Q4 deny-target table の全行〈checkout lift 無し〉・任意深さの
+  `hooks/hooks.json`。値と physical landing の両方。置けなければ拒否。user ruling 2026-11-20「Deny のまま（推奨）」
+  — `classify` の linked worktree 内 Protected lift で `.claude/settings*.json`・`.githooks/`・`crates/*/hooks/`・
+  `hooks/hooks.json` が Allow にならない）ときだけ `true`。それ以外は「Known でない」で、呼び出し側は旧判定のまま
+  （この関数は Ask/Deny を返さない）。呼び出し側: S6-4 — `detect.rs` の旧 `truncate` arm（`true` なら Allow、
+  それ以外は `shape_deny_or_confined_ask` の判定のまま。S6 は退役のみで新しい Ask/Deny は無い）。
+  最終成分だけの literal-dir glob（user ruling 2026-11-19）は親ディレクトリで置かれる `Literal` なので
+  Scratch 内なら Allow、中間成分の glob は `Unresolved` で旧判定のまま。`rm`・`rsync --delete` は引き続き
+  `detect/rm/new_layer`（tests/s6_4_truncate_retire_20261120.rs）。
 - **`scope/reading`** — `SafeRoots` の配置述語に渡す operand の読み方 `Reading` と、それに依存する配置の核
   （`classify_disposable_in` / `classify_disposable_value` / `lexical_absolute_as` / `irreplaceable_home_asset_value`
   / `classify_worktree_as` / `classify_against_as`）。`Reading::Spelled` は shell TEXT（展開・再読されうる文字

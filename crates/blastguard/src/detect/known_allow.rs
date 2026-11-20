@@ -21,22 +21,31 @@
 //! * every target's Table C class ([`super::ast::classify`], S6-2; a
 //!   relative value is placed against [`crate::scope::SafeRoots::session_cwd`])
 //!   is **Scratch** or **OwnWorktree** — the two Table C cells stated as
-//!   Allow. Every other class, `Unresolved` included, is `false`.
+//!   Allow. Every other class, `Unresolved` included, is `false`;
+//! * no target names command-running configuration by the UNLIFTED
+//!   predicates ([`super::ast::names_command_running_config`], stage S6-4,
+//!   user ruling 2026-11-20 「Deny のまま（推奨）」): `classify` lifts Protected
+//!   strictly inside a linked worktree checkout, so without this check an
+//!   own-worktree `.claude/settings.json`, `.githooks/…`, `crates/*/hooks/…`
+//!   or `hooks/hooks.json` would be OwnWorktree and Allow. For those the
+//!   legacy verdict stays.
 //!
-//! NOT wired in S6-3: no detector calls it yet, so it changes no verdict.
+//! The tie does not read the separate argument of a listed option
+//! (`truncate -s 0`: the `0`) as an operand spelling (stage S6-4,
+//! `judge::table_b::option_argument_words`).
+//!
+//! Callers (each a retirement step; a `false` keeps that arm's legacy
+//! verdict): S6-4 — the legacy `truncate` arm in `detect.rs`
+//! (`known_allow("truncate", rest, ctx)` → Allow).
 //! `rm` and `rsync --delete` keep `rm/new_layer.rs` (their own option gate
 //! and their own Scratch / OwnWorktree predicate; see SUBSET.md "S6-3
 //! status" for why the predicate is not this one yet).
 
 use super::ast::targets::tied_b1_targets;
-use super::ast::{classify, PathClass, PathCtx, Value};
+use super::ast::{classify, names_command_running_config, PathClass, PathCtx, Value};
 use super::Ctx;
 
 /// See the module doc.
-#[allow(
-    dead_code,
-    reason = "S6-3: parity only (user ruling 2026-11-20); routed by the S6-4.. retirement steps"
-)]
 pub(super) fn known_allow(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> bool {
     let Some(targets) = tied_b1_targets(cmd, rest) else {
         return false;
@@ -53,5 +62,6 @@ pub(super) fn known_allow(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> bool {
                     classify(t.effect, &t.target, &t.cwd, &pctx),
                     PathClass::Scratch | PathClass::OwnWorktree
                 )
+                && !names_command_running_config(&t.target, &t.cwd, &pctx)
         })
 }

@@ -397,6 +397,19 @@ fn spellings(path: &str, session_cwd: Option<&str>) -> (Vec<String>, Option<Stri
     (v, absolute)
 }
 
+/// True when `path` (as [`verdict`] spells it) matches ANY row of the table
+/// with the worktree lift NOT applied, whatever the effect — or the table
+/// cannot be loaded (fail-closed). For `judge::names_command_running_config`
+/// (stage S6-4, user ruling 2026-11-20 「Deny のまま（推奨）」); it raises
+/// nothing itself.
+pub(crate) fn matches_any_row_unlifted(path: &str, session_cwd: Option<&str>) -> bool {
+    let Determination::Known(table) = compiled() else {
+        return true;
+    };
+    let (spelled, _) = spellings(path, session_cwd);
+    spelled.iter().any(|s| table.set.is_match(s))
+}
+
 /// True when `abs` is strictly inside a linked worktree checkout.
 fn in_linked_checkout(scope: &SafeRoots, abs: Option<&str>) -> bool {
     let Some(abs) = abs else { return false };

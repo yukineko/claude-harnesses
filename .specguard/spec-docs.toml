@@ -850,6 +850,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `detect/rm/new_layer`: known_allow retiring the legacy rm reading only for Known Scratch/OwnWorktree Table C cells (ruling 2026-11-18 'ruling 14 replaced per rule'), and rsync_dest_allows for the rsync --delete Delete row."
 
 [[spec]]
+path = "crates/blastguard/src/detect/known_allow.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'module 責務' bullet `detect/known_allow`: the generic new-layer Known Allow (tie by tied_b1_targets with option arguments not read as operands, every target Literal and Table C Scratch/OwnWorktree, no target naming command-running config by the unlifted predicates, ruling 2026-11-20 'Deny のまま（推奨）'), first routed by S6-4 for the legacy truncate arm."
+
+[[spec]]
 path = "crates/blastguard/src/scope/reading.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `scope/reading`: Reading::Spelled vs Reading::Value operand reading and the placement core that depends on it, split out of scope.rs (file-growth cap)."

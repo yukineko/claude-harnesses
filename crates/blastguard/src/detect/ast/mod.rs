@@ -84,8 +84,9 @@ pub(super) mod targets;
 mod tests;
 
 pub(super) use eval::with_hook_dir;
-/// The Table C classifier, for `detect/known_allow.rs` (stage S6-3).
-pub(super) use judge::{classify, PathClass, PathCtx};
+/// The Table C classifier, for `detect/known_allow.rs` (stage S6-3), and its
+/// unlifted command-running-config refusal (stage S6-4).
+pub(super) use judge::{classify, names_command_running_config, PathClass, PathCtx};
 
 use std::ops::Range;
 

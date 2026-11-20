@@ -60,7 +60,7 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use super::eval::resolve_at;
-use super::judge::table_b::{extract, Row};
+use super::judge::table_b::{extract, option_argument_words, Row};
 use super::judge::Effect;
 use super::{analyze, Analysis, RedirTarget, Script, Value};
 
@@ -111,6 +111,12 @@ struct IndexedCommand {
     /// Its Table B B.1 row (`judge::table_b::extract`): target values as
     /// written, to be placed against [`IndexedCommand::cwd`].
     row: Row,
+    /// Indexes into [`IndexedCommand::argv`] of the words a listed option of
+    /// the B.1 row took as its separate argument
+    /// (`judge::table_b::option_argument_words`, stage S6-4): not operand
+    /// spellings, so [`Index::tie`] does not require them to tie. `None` (not
+    /// determined): no word is skipped.
+    option_args: Option<Vec<usize>>,
     /// The command's statically tracked cwd ([`super::SimpleCommand::cwd`]).
     cwd: Value,
 }
@@ -163,6 +169,7 @@ impl Index {
                     name: name.to_string(),
                     argv,
                     row: extract(cmd),
+                    option_args: option_argument_words(cmd),
                     cwd: cmd.cwd.clone(),
                 });
             }
@@ -222,6 +229,17 @@ impl Index {
         let mut out: Vec<TiedOperand> = Vec::new();
         for (i, spelling) in rest.iter().enumerate() {
             if spelling.starts_with('-') || spelling.is_empty() {
+                continue;
+            }
+            // Stage S6-4: the separate argument of a listed option (`-s 0`)
+            // is not an operand spelling — `0` inside a path elsewhere in
+            // the text is not a second reading of it. Skipped only when
+            // EVERY matching command's B.1 parse took it as such (they all
+            // spell `rest`, so they agree unless a row is undetermined).
+            if matching
+                .iter()
+                .all(|(c, _)| c.option_args.as_ref().is_some_and(|a| a.contains(&i)))
+            {
                 continue;
             }
             // Every occurrence of the operand's spelling in the text must be
@@ -313,7 +331,9 @@ pub(crate) struct TiedOperand {
 /// the command word is spelled exactly `rest` (the legacy reading's tokens),
 /// for a new-layer judgement (`detect/rm/new_layer.rs`,
 /// `detect/known_allow.rs`). One entry per operand (a token not starting
-/// with `-`) per evaluated instance of every such command; values are NOT
+/// with `-` and not the separate argument of a listed option of the
+/// command's B.1 row, `judge::table_b::option_argument_words`; `rm` has no
+/// such option) per evaluated instance of every such command; values are NOT
 /// filtered — an `Undetermined` value is handed back for the caller to
 /// refuse.
 ///
@@ -325,7 +345,8 @@ pub(crate) struct TiedOperand {
 /// evaluator resolved a relative word to after a literal `cd` (the legacy
 /// walk's rewrite of that operand; only a Known cwd yields an absolute
 /// value); every `name` command in the text has its argv spelled verbatim at
-/// its spans; and every occurrence of every operand spelling in the text
+/// its spans; and every occurrence of every operand spelling (option
+/// arguments excluded, as above) in the text
 /// (the token and the matching word's raw spelling) is that operand's word
 /// of one of those commands.
 pub(crate) fn tied_operand_values(name: &str, rest: &[&str]) -> Option<Vec<TiedOperand>> {

@@ -297,8 +297,14 @@ fn h6_truncate_through_relinked_dir() {
 
 // Main decisions: k1 allow, k2 allow, k3 ask, k4 allow, k5 allow, k6 allow,
 // k7 ask. A control that was allow on main is asserted allow here.
+// k7 re-anchored 2026-11-20 (blastguard 0.2.786, S6-4, user rulings
+// 2026-11-20): S6 retires the legacy string reading per rule, and a truncate
+// of a Known target in OwnWorktree is Allow. The fixture cwd is the session's
+// own linked worktree, so `src/a.rs` is a Known OwnWorktree target and the
+// expected decision is now allow. The relink property (h6, truncate through a
+// relinked dir) is unchanged and still asserted deny.
 const MAIN_K3: &str = "ask";
-const MAIN_K7: &str = "ask";
+const MAIN_K7: &str = "allow";
 
 /// Deletes only the freshly created link (rm does not follow it). Main: allow.
 #[test]
@@ -331,7 +337,8 @@ fn k4_git_mv_then_rm_other_file() {
 }
 
 /// In-tree truncate with no relink: the relink fix must not turn it into a
-/// system-harm deny. Main: ask.
+/// system-harm deny. Main 517a4951: ask; since S6-4 (OwnWorktree Known
+/// target): allow.
 #[test]
 fn k7_in_tree_truncate_without_relink_keeps_main_decision() {
     expect_same_as_main("k7", "truncate -s0 src/a.rs", MAIN_K7);

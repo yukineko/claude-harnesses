@@ -486,9 +486,11 @@ fn spell(v: &str) -> Option<String> {
 /// command's [`super::SimpleCommand::cwd`]; a relative target with no `cd`
 /// applying is placed against [`PathCtx::hook_cwd`].
 ///
-/// NOT wired: no caller outside the tests uses it, so it changes no verdict
-/// ([`judge`] still gives a placed target no finding; user ruling 2026-11-20,
-/// S6 only retires readings).
+/// Not a finding source: [`judge`] still gives a placed target no finding
+/// (user ruling 2026-11-20, S6 only retires readings). Its one verdict
+/// caller is `detect/known_allow.rs` (stage S6-4: the legacy `truncate`
+/// arm), which only lowers that legacy reading to Allow on Scratch /
+/// OwnWorktree and additionally refuses [`names_command_running_config`].
 ///
 /// The target is first placed as an absolute path value: an `Undetermined`
 /// target or cwd ([`super::eval::resolve_at`]), a relative path with no
@@ -527,15 +529,54 @@ fn spell(v: &str) -> Option<String> {
 /// through; this is never less restrictive, because `OwnWorktree` is an Allow
 /// cell while `OtherWorktree`, `Project` and `Other` are all `legacy` cells,
 /// and the fall-through still ends at the safe-root predicate.
-#[allow(
-    dead_code,
-    reason = "S6-2: implemented but not wired into judge findings (user ruling 2026-11-20: S6 only retires)"
-)]
 pub(crate) fn classify(effect: Effect, target: &Value, cwd: &Value, ctx: &PathCtx) -> PathClass {
     match place(target, cwd, ctx).and_then(|path| class_of(effect, &path, ctx.scope)) {
         Ok(class) => class,
         Err(why) => PathClass::Unresolved(why),
     }
+}
+
+/// Stage S6-4 (user ruling 2026-11-20 「Deny のまま（推奨）」): `true` when the
+/// target names command-running configuration by a predicate WITHOUT the
+/// linked-worktree Protected lift [`classify`] applies — so a caller that
+/// retires a legacy reading on a [`classify`] Allow class must keep the
+/// legacy verdict for it. [`classify`] itself is unchanged. Each of these
+/// is checked on the placed value and on its `protected::physical_landing`:
+///
+/// * `rm::new_layer::is_protected` (`exclude::is_protected_path` /
+///   `holds_protected_paths` / `touches_protected`, a protected glob, a
+///   `.git` component: `.claude/settings*.json`, `.claude/hooks.json`,
+///   `.githooks/`, `.git/…`);
+/// * any row of the Q3/Q4 deny-target table, lift not applied
+///   (`deny_targets::matches_any_row_unlifted`: `crates/*/hooks/`,
+///   `scripts/check-*.py`, `.githooks/`, …);
+/// * a plugin hook-wiring file `hooks/hooks.json` at any depth (a plugin
+///   root's `hooks/hooks.json` matches neither predicate above), matched
+///   case-insensitively.
+///
+/// Fail-closed: a target that cannot be placed, or whose landing cannot be
+/// resolved, is `true`.
+pub(crate) fn names_command_running_config(target: &Value, cwd: &Value, ctx: &PathCtx) -> bool {
+    use crate::detect::protected;
+    use crate::detect::rm::new_layer;
+    use harness_core::verdict::Determination;
+
+    let Ok(path) = place(target, cwd, ctx) else {
+        return true;
+    };
+    let landing = match protected::physical_landing(&path, None) {
+        Some(Determination::Known(real)) => real,
+        Some(Determination::Undetermined(_)) | None => return true,
+    };
+    let hook_wiring = |p: &str| {
+        let l = p.to_lowercase();
+        l == "hooks/hooks.json" || l.ends_with("/hooks/hooks.json")
+    };
+    [path.as_str(), landing.as_str()].iter().any(|p| {
+        new_layer::is_protected(p)
+            || deny_targets::matches_any_row_unlifted(p, ctx.scope.session_cwd())
+            || hook_wiring(p)
+    })
 }
 
 /// `target` as an absolute path value with no `..` component, or why not.

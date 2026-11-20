@@ -14,7 +14,15 @@
 //! `Known` script, every simple command (including those in `$( )`,
 //! pipelines and background jobs) is classified, after unwrapping `env`
 //! (also `env -i`, `NAME=V` operands), `nohup`, `timeout`, `nice`, `time`,
-//! `exec` and `command`:
+//! `exec`, `command`, `sudo` and `doas` (backlog e1bb5f7e, user ruling
+//! 2026-11-20 Q1: options `-u/-g/-C/-D/-h/-p/-r/-t/-U` skip their argument,
+//! `-E -H -n -S -k -A -P` are flags, then `NAME=V` operands; `-s` / `-i`
+//! with no command is an implicit shell judged like a bare shell with the
+//! wrapper's redirects (ruling Q3); `-l -v -K -V` (and their long names)
+//! alone run nothing, with a command word after them → Undetermined; `-e`
+//! and any other option → Undetermined. A literal stdin program of a shell
+//! reached through `sudo` / `doas` is also judged by the full detector as
+//! `<shell> -c '<body>'` (`privileged_literal_body`)):
 //!
 //! * an interpreter (bash / sh / zsh / dash / ksh / python* / perl / ruby /
 //!   node) running a program FILE → Undetermined (rulings 10, 2026-11-18 #2);
@@ -109,8 +117,8 @@
 //!
 //! # Known gaps (not decided here; the legacy layer alone judges them)
 //!
-//! Wrappers other than the ones unwrapped above (`sudo`, `xargs`, `su`,
-//! `flock`, `find -exec`, …) and the programs they run; `BASH_ENV` / `ENV`
+//! Wrappers other than the ones unwrapped above (`xargs`, `su`, `flock`,
+//! `find -exec`, …) and the programs they run; `BASH_ENV` / `ENV`
 //! assignments.
 
 use std::cell::Cell;
@@ -282,6 +290,11 @@ pub(super) enum Unwrapped {
     Nothing,
     /// A wrapper option not modelled.
     Undetermined(String),
+    /// The wrapper runs a shell of its own with no command (`sudo -s`,
+    /// `sudo -i`, `doas -s`): judged like a bare shell with the wrapper's
+    /// redirects ([`implicit_shell`]); in `classify` a literal stdin body of
+    /// it is also judged by the full detector (`privileged_literal_body`).
+    ImplicitShell,
     /// `argv[k]` is not an unwrapped wrapper.
     NotWrapper,
 }
@@ -392,7 +405,97 @@ pub(super) fn unwrap_at(argv: &[Word], k: usize) -> Unwrapped {
                 _ => return Unwrapped::At(i),
             }
         },
+        // SUBSET.md Table B.3 `sudo`, `doas` row (user ruling 2026-11-20 Q1, Q3).
+        "sudo" | "doas" => {
+            let mut shell = false;
+            // A mode that runs no command (`sudo -l`, `-v`, `-K`, `-V`).
+            let mut no_exec = false;
+            loop {
+                match word(i) {
+                    Some(Err(_)) => {
+                        return Unwrapped::Undetermined(format!(
+                            "a `{base}` operand is undetermined"
+                        ))
+                    }
+                    Some(Ok("--")) => {
+                        i += 1;
+                        break;
+                    }
+                    Some(Ok("-u" | "-g" | "-C" | "-D" | "-h" | "-p" | "-r" | "-t" | "-U")) => {
+                        i += 2
+                    }
+                    Some(Ok(w))
+                        if w.len() > 2
+                            && ["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U"]
+                                .iter()
+                                .any(|o| w.starts_with(o)) =>
+                    {
+                        i += 1
+                    }
+                    Some(Ok("-s" | "-i")) => {
+                        shell = true;
+                        i += 1
+                    }
+                    Some(Ok("-E" | "-H" | "-n" | "-S" | "-k" | "-A" | "-P")) => i += 1,
+                    Some(Ok(
+                        "-l" | "--list" | "-v" | "--validate" | "-K" | "--remove-timestamp" | "-V"
+                        | "--version",
+                    )) => {
+                        no_exec = true;
+                        i += 1
+                    }
+                    Some(Ok("-e")) => {
+                        return Unwrapped::Undetermined(format!(
+                            "`{base} -e` (sudoedit) is not modelled"
+                        ))
+                    }
+                    Some(Ok(w)) if w.starts_with('-') => return undet(w),
+                    _ => break,
+                }
+            }
+            if no_exec {
+                // Alone it runs nothing. A word after it (`sudo -l rm`) is not
+                // modelled: Undetermined rather than assuming it is not run.
+                return match word(i) {
+                    None => Unwrapped::Nothing,
+                    Some(_) => Unwrapped::Undetermined(format!(
+                        "`{base}` with a list / validate / version option and a command is \
+                         not modelled"
+                    )),
+                };
+            }
+            // `NAME=VALUE` operands before the command set its environment.
+            loop {
+                match word(i) {
+                    Some(Err(_)) => {
+                        return Unwrapped::Undetermined(format!(
+                            "a `{base}` operand is undetermined"
+                        ))
+                    }
+                    Some(Ok(w)) if w.contains('=') => i += 1,
+                    Some(Ok(_)) => return Unwrapped::At(i),
+                    None if shell => return Unwrapped::ImplicitShell,
+                    // `sudo` / `doas` without a command prints its usage.
+                    None => return Unwrapped::Nothing,
+                }
+            }
+        }
         _ => Unwrapped::NotWrapper,
+    }
+}
+
+/// `cmd` as the bare shell an [`Unwrapped::ImplicitShell`] wrapper runs: the
+/// argv is `sh` alone, the redirects (its stdin) stay the wrapper's.
+pub(super) fn implicit_shell(cmd: &SimpleCommand) -> SimpleCommand {
+    let span = cmd.argv.first().map_or(0..0, |w| w.span.clone());
+    SimpleCommand {
+        argv: vec![Word {
+            raw: "sh".into(),
+            value: Value::Literal("sh".into()),
+            quoting: super::Quoting::Unquoted,
+            span,
+        }],
+        ..cmd.clone()
     }
 }
 
@@ -407,12 +510,29 @@ fn classify(
     inherited: &StdinSource,
 ) -> Decision {
     let mut k = 0;
+    // Reached through `sudo` / `doas` (see `privileged_literal_body`).
+    let mut privileged = false;
+    let mut implicit: Option<SimpleCommand> = None;
+    let mut cmd = cmd;
     loop {
         match unwrap_at(&cmd.argv, k) {
             Unwrapped::NotWrapper => break,
             Unwrapped::Nothing => return Decision::Allow,
             Unwrapped::Undetermined(r) => return undetermined(r),
-            Unwrapped::At(next) => k = next,
+            Unwrapped::ImplicitShell => {
+                privileged = true;
+                cmd = implicit.insert(implicit_shell(cmd));
+                k = 0;
+                break;
+            }
+            Unwrapped::At(next) => {
+                privileged |= cmd
+                    .argv
+                    .get(k)
+                    .and_then(|w| literal(w).ok())
+                    .is_some_and(|n| matches!(basename(n), "sudo" | "doas"));
+                k = next;
+            }
         }
     }
     let Some(first) = cmd.argv.get(k) else {
@@ -492,6 +612,9 @@ fn classify(
         (fam, ProgramSource::Stdin(StdinSource::Literal(body))) => {
             if piped_by_compound_stage(text, commands, idx, cmd) {
                 return compound_fed_body(fam, base, &body, depth, judge);
+            }
+            if privileged {
+                return privileged_literal_body(fam, base, &body, depth, judge);
             }
             literal_body(fam, &body, depth, judge)
         }
@@ -662,6 +785,31 @@ fn compound_fed_body(
         Family::PerlLike | Family::Node => undetermined(format_args!(
             "`{base}` reads its program from a compound pipeline stage (a brace group's \
              output), which this layer does not read for `{base}`"
+        )),
+    }
+}
+
+/// A literal stdin program (here-string, here-document) of an interpreter
+/// reached through `sudo` / `doas`, including their implicit shell (`sudo -i
+/// <<< 'rm -rf /etc'`, backlog e1bb5f7e adversarial finding). [`literal_body`]
+/// leaves a shell body's EFFECTS to the legacy layer, which reads `bash <<<
+/// X` but not the same body behind the wrapper (observed: `sudo -i <<< 'rm -rf
+/// /etc'` was Allow), so a shell body is also judged by the full detector as
+/// `<shell> -c '<body>'`, exactly like the unwrapped shell's `-c`. Python is
+/// left to S5 (which unwraps the same wrappers through [`unwrap_at`]);
+/// perl / ruby / node are Undetermined.
+fn privileged_literal_body(
+    fam: Family,
+    base: &str,
+    body: &str,
+    depth: usize,
+    judge: &Probes<'_>,
+) -> Decision {
+    match fam {
+        Family::Shell | Family::Python => compound_fed_body(fam, base, body, depth, judge),
+        Family::PerlLike | Family::Node => undetermined(format_args!(
+            "`{base}` behind `sudo` / `doas` reads a literal program this layer does not read \
+             for `{base}`"
         )),
     }
 }
@@ -1338,7 +1486,8 @@ impl Target<'_> {
             match unwrap_at(&c.argv, k) {
                 Unwrapped::NotWrapper => break,
                 Unwrapped::Nothing => return false,
-                Unwrapped::Undetermined(_) => return true,
+                // A shell whose program is not on the line may write anything.
+                Unwrapped::Undetermined(_) | Unwrapped::ImplicitShell => return true,
                 Unwrapped::At(next) => k = next,
             }
         }

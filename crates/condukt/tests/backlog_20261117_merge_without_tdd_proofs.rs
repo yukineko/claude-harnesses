@@ -253,7 +253,6 @@ fn merge(f: &Fx) -> Output {
 }
 
 #[test]
-#[ignore = "RED worktree merge lands a fix task that has no tdd proofs"]
 fn merge_of_fix_task_without_tdd_proofs_is_refused() {
     let f = setup();
     assert!(!f.wt.join(".tdd").exists(), "fixture: no proofs");
@@ -414,7 +413,6 @@ fn control_merge_with_real_good_proofs_succeeds() {
 }
 
 #[test]
-#[ignore = "RED merge ignores that a test failed at RED is absent from GREEN's passed set (f)"]
 fn merge_refused_when_green_passed_set_misses_a_red_failure() {
     let f = setup();
     record_real_proofs(&f, "none", "lost");
@@ -426,7 +424,6 @@ fn merge_refused_when_green_passed_set_misses_a_red_failure() {
 }
 
 #[test]
-#[ignore = "RED merge ignores a GREEN proof with zero passed tests (g)"]
 fn merge_refused_when_green_pass_count_is_zero() {
     let f = setup();
     record_real_proofs(&f, "nocompile", "zero");
@@ -437,7 +434,6 @@ fn merge_refused_when_green_pass_count_is_zero() {
 }
 
 #[test]
-#[ignore = "RED merge ignores that GREEN was taken on a different tree than the one merged (h)"]
 fn merge_refused_when_tree_changed_after_green() {
     let f = setup();
     record_real_proofs(&f, "none", "good");

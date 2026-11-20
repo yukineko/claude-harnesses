@@ -16,11 +16,13 @@ use crate::lock;
 
 mod dirty_tracked;
 mod merge_gate;
+mod merge_proof;
 mod merge_recovery;
 mod quarantine;
 mod retry_task;
 pub use dirty_tracked::refuse_uncommitted_task_worktree;
 use merge_gate::{ensure_base_on_default_branch, ensure_commits_carry_task_trailer, TrailerGuard};
+use merge_proof::worktree_for_branch;
 use merge_recovery::{abort_state_phrase, abort_trial_merge, run_merge_recovering_timeout};
 pub use retry_task::{create_namespaced_for_task, resolve_retry_topic};
 
@@ -1057,6 +1059,8 @@ fn git_diff_range(repo: &Path, from: &str, to: &str) -> String {
 /// actually on the default branch first (verify -> act).
 ///
 /// Gate (design 625aa170):
+/// 0. **Merge proof contract** (backlog 7768aeaf, `merge_proof`): a fix/feature
+///    task's tdd proofs are judged first; a violation is an `Err`, nothing recorded.
 /// 1. **Pre-merge hold (decision A)**: if a mid-flight runtime overlap has HELD
 ///    this branch for review, skip the merge and return [`MergeOutcome::Held`].
 /// 2. **Trial merge (no-commit)**: on a real 3-way conflict, CAPTURE a
@@ -1133,6 +1137,11 @@ pub fn merge(
     // it, so a commit added to the branch after this point is not merged.
     let guard = TrailerGuard::for_merge(cli_task);
     let tip = ensure_commits_carry_task_trailer(repo, branch, default_branch, &base, guard)?;
+
+    // ── Merge proof contract (backlog 7768aeaf; `merge_proof`) ──────────────
+    // Before the hold gate and the trial merge: a violating branch is refused
+    // with its token and leaves no hold / conflict record.
+    merge_proof::enforce(cfg, repo, branch, default_branch, &tip, cli_task)?;
 
     // ── Pre-merge hold gate (decision A) ─────────────────────────────────────
     // A detected mid-flight actual-diff overlap HOLDS this branch for review.
@@ -1281,28 +1290,6 @@ pub fn merge(
 struct PendingStoreDiff {
     worktree: PathBuf,
     patch: tempfile::NamedTempFile,
-}
-
-/// The directory of the worktree that has `branch` checked out, found via
-/// `git worktree list --porcelain`. `None` when no worktree has it.
-fn worktree_for_branch(repo: &Path, branch: &str) -> Result<Option<PathBuf>> {
-    let want = if branch.starts_with("refs/") {
-        branch.to_string()
-    } else {
-        format!("refs/heads/{branch}")
-    };
-    let listing = git(repo, &["worktree", "list", "--porcelain"])?;
-    let mut cur: Option<PathBuf> = None;
-    for line in listing.lines() {
-        if let Some(p) = line.strip_prefix("worktree ") {
-            cur = Some(PathBuf::from(p));
-        } else if let Some(b) = line.strip_prefix("branch ") {
-            if b == want {
-                return Ok(cur);
-            }
-        }
-    }
-    Ok(None)
 }
 
 /// Capture the uncommitted `.backlog/` diff of `branch`'s worktree (user
@@ -1523,6 +1510,7 @@ pub enum ResolveOutcome {
 ///   conflicting hunks).
 /// - **Manual** → materialize the merge with conflict markers and stop
 ///   ([`ResolveOutcome::ManualPending`]); a human/worker resolves + commits.
+///   Theirs and a clean Manual are refused on a merge proof contract violation.
 ///
 /// Requires a resolution to exist first (written by `overwatch
 /// resolve-merge-conflict`) — recording the resolution is ALSO what clears the
@@ -1571,6 +1559,11 @@ pub fn resolve_merge(cfg: &Config, repo: &Path, conflict_id: &str) -> Result<Res
     let base = ensure_base_on_default_branch(repo, branch, default_branch)?;
     let guard = TrailerGuard::for_resolve(entry.task_named);
     let tip = ensure_commits_carry_task_trailer(repo, branch, default_branch, &base, guard)?;
+    // Merge proof contract (backlog 7768aeaf), task from `conduktTask` only:
+    // Theirs is checked here, before merging; Manual below, before its commit.
+    if resolution.choice == ResolveChoice::Theirs {
+        merge_proof::enforce(cfg, repo, branch, default_branch, &tip, None)?;
+    }
 
     git(repo, &["checkout", default_branch])
         .with_context(|| format!("could not checkout {default_branch} before resolve-merge"))?;
@@ -1618,6 +1611,10 @@ pub fn resolve_merge(cfg: &Config, repo: &Path, conflict_id: &str) -> Result<Res
             // already resolved it on the branch), commit and report Reconciled;
             // otherwise leave the markers in place for a human/worker to finish.
             // A timed-out merge is an `Err` (rolled back), never `ManualPending`.
+            // A contract violation commits nothing (`manual_with_violation`).
+            if let Some(r) = merge_proof::refusal(cfg, repo, branch, default_branch, &tip, None) {
+                return merge_proof::manual_with_violation(repo, &msg, &tip, r);
+            }
             let args = ["merge", "--no-edit", "-m", &msg, &tip];
             let what = format!("manual-resolution merge of {branch} into {default_branch}");
             let out =

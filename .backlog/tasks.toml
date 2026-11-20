@@ -2418,3 +2418,33 @@ exit 101: LED. 0 passed; 5 failed; 0 ignored; 0 measured; 3 filtered out; finish
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
      Running tests/backlog_20261120_sudo_stdin_shell_failopen.rs (target/debug/deps/backlog_20261120_sudo_stdin_shell_failopen-cfd3181816a89bfc)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_sudo_stdin_shell_failopen`"""
+
+[[task]]
+id = "6f299fb5"
+title = "blastguard FP: .rs heredoc body is read as shell when a sed -i line follows (doc comment with destructive text → Ask)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-20 at main 2f39a1620 (0.2.784), git project cwd: cat > tests/a.rs <<'EOF' / //! deny :: sudo bash -c 'rm -rf /etc' / fn main() {} / EOF / sed -i '' 's/a/b/' Cargo.toml → ask, reason '`//!` is not a command blastguard recognises …'. Same heredoc alone or followed by grep → allow; plain doc + sed -i → allow. Contradicts ruling 2026-11-08/11-18 (.rs body is data; benign surrounding shapes must not make it code). Hit by a subagent writing a RED test (relay bgr-001cb063f9f7). RED eb4519e0a (independent author): --ignored 'test result: FAILED. 0 passed; 2 failed'."
+created_at = 1795139565
+updated_at = 1795139565
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_rs_heredoc_doc_then_sed_fp -- --ignored"
+rev = "82fb53ddf31ec58cc8c5b7994d5df7c708b2bd4b"
+observed_at = 1795139565
+detail = """
+exit 101: . 0 passed; 2 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.69s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running tests/backlog_20261120_rs_heredoc_doc_then_sed_fp.rs (target/debug/deps/backlog_20261120_rs_heredoc_doc_then_sed_fp-d03500483a2bdf22)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_rs_heredoc_doc_then_sed_fp`"""

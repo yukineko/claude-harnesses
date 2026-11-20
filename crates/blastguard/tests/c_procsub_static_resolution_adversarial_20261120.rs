@@ -756,3 +756,145 @@ case!(
     "not Allow",
     "echo hi | cat | bash -c 'cat | bash'"
 );
+
+// ------------------------------------- middle -c body rebinding names
+// A MIDDLE `-c` body (not the top-level line, not the innermost text) that
+// rebinds names before an inner computed program must not be Allow.
+case!(
+    mid_path_assign_cd_sh,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'cd /tmp/x; PATH=.:$PATH; sh -c "echo hi | cat | sh"'"#
+);
+case!(
+    mid_path_prefix_bash,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'PATH=/tmp/x:$PATH bash -c "echo hi | cat | bash"'"#
+);
+case!(
+    mid_path_assign_seq_sort,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'PATH=/tmp/x:$PATH; bash -c "seq 3 | sort | bash"'"#
+);
+case!(
+    mid_path_assign_sh_sh,
+    not_allow,
+    "not Allow",
+    r#"sh -c 'PATH=/tmp/x:$PATH; sh -c "echo hi | cat | sh"'"#
+);
+case!(
+    mid_export_path,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'export PATH=/tmp/x:$PATH; bash -c "echo hi | cat | bash"'"#
+);
+case!(
+    mid_hash_p,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'hash -p /tmp/evil cat; bash -c "echo hi | cat | bash"'"#
+);
+case!(
+    mid_path_assign_trailing_true,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'PATH=/tmp/x:$PATH; bash -c "echo hi | cat | bash"; true'"#
+);
+case!(
+    mid_eval_layer_path,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'PATH=/tmp/x:$PATH; eval "echo hi | cat | bash"'"#
+);
+case!(
+    mid_eval_outer_then_bash_c,
+    not_allow,
+    "not Allow",
+    r#"eval 'PATH=/tmp/x:$PATH; bash -c "echo hi | cat | bash"'"#
+);
+case!(
+    mid_three_levels_path,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'bash -c "PATH=/tmp/x:$PATH; sh -c \"echo hi | cat | sh\""'"#
+);
+case!(
+    mid_three_levels_path_in_middle,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'sh -c "PATH=/tmp/x:$PATH; bash -c \"echo hi | cat | bash\""'"#
+);
+case!(
+    mid_function_cat,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'cat(){ echo "chmod 777 /etc/hosts"; }; bash -c "echo hi | cat | bash"'"#
+);
+case!(
+    mid_function_cat_export_f,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'cat(){ echo "chmod 777 /etc/hosts"; }; export -f cat; bash -c "echo hi | cat | bash"'"#
+);
+case!(
+    mid_alias_cat,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'shopt -s expand_aliases; alias cat="echo chmod 777 /etc/hosts #"; bash -c "echo hi | cat | bash"'"#
+);
+case!(
+    mid_enable_n_echo,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'enable -n echo; bash -c "echo hi | cat | bash"'"#
+);
+case!(
+    mid_ifs,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'IFS=/; bash -c "echo hi | cat | bash"'"#
+);
+case!(
+    mid_bash_env,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'export BASH_ENV=/tmp/evil.sh; bash -c "echo hi | cat | bash"'"#
+);
+case!(
+    mid_env_path_prefix,
+    not_allow,
+    "not Allow",
+    r#"env PATH=/tmp/x:$PATH bash -c "echo hi | cat | bash""#
+);
+case!(
+    mid_env_path_middle_layer,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'env PATH=/tmp/x:$PATH bash -c "echo hi | cat | bash"'"#
+);
+case!(
+    mid_cmdsubst_path,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'x="$(PATH=/tmp/x:$PATH; bash -c "echo hi | cat | bash")"'"#
+);
+case!(
+    mid_procsub_target_path,
+    not_allow,
+    "not Allow",
+    r#"bash -c 'PATH=/tmp/x:$PATH; bash -c "bash <(echo hi | cat)"'"#
+);
+case!(
+    mid_xargs_path,
+    not_allow,
+    "not Allow",
+    r#"echo x | xargs -I{} bash -c 'PATH=/tmp/x:$PATH; bash -c "echo hi | cat | bash"'"#
+);
+case!(
+    mid_python_path,
+    not_allow,
+    "not Allow",
+    r#"python3 -c "import os; os.system('PATH=/tmp/x:\$PATH; bash -c \"echo hi | cat | bash\"')""#
+);

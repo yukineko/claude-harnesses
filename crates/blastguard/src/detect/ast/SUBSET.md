@@ -169,7 +169,7 @@ script is still `Known`: the word's `Value` is `Undetermined` and feeds Table C 
 | `ForClause` (literal list ≤ 256 unrolled; else body once, var Undetermined) | supported |
 | `Arithmetic` `(( ))`, `ArithmeticForClause`, `let` | supported only when every name read is bound to a literal on the line (`arith.rs`); else `Unsupported` |
 | `Command::ExtendedTest` `[[ ]]` | supported (operands evaluated; arithmetic operators as above) |
-| `Command::Function` (definition) | **Unsupported** |
+| `Command::Function` (definition) | **Unsupported** under `analyze` (every existing consumer, unchanged). Under `analyze_with_function_definitions` (`eval/function.rs`, task b1-ast-function-definition-flag) it is **parsed**: the name must be a literal and the body is evaluated once, late-bound (every variable, cwd and stdin Undetermined), its commands are emitted for judgment, the name is recorded in `Script::function_names`, and the state is opaque after the definition. A redirection on the body or a non-literal name is Unsupported, and so is any unsupported construct in the body. Two points are fail-closed by design: a literal assignment in the body may come out Unsupported, and `HOME` in the body is Undetermined. The flagged `Known` script is for `heredoc_data` only, through `analyze_with_function_definitions`; no caller uses it yet. Every other consumer still treats a function-definition line as Unsupported. Opening another consumer needs its own RED |
 | `CompoundCommand::Coprocess` | **Unsupported** |
 | work budget (`MAX_WORK` 100 000) / `MAX_COMMANDS` (10 000) exceeded | **Unsupported** |
 

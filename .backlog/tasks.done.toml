@@ -87107,3 +87107,64 @@ rev = "a79ba3702fe6cf5376ea45d791394f253d7ceb65"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "40dc52c0"
+title = 'blastguard tests: egress_exec_closure anti-vacuity controls fail (bash <(echo "$(echo hi)") and bash <(echo hi | cat) are Ask, expected Allow)'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. Observed by the t1 worker on base 56084c672 and on the t1 tree (identical): command_substitution_recursion_anti_vacuity_controls_stay_allow - left Ask ('`bash` takes its program from stdin, and that program contains a shell expansion (`$(echo hi)`) ...'); process_substitution_recursion_anti_vacuity_controls_stay_allow - left Ask ('... that program is not on the command line ...'). Readings: (a) the controls are stale after a later tightening (assert proxy); (b) a real FP. Tell apart: frozen-assert rule - check the hedge in the assert message."
+created_at = 1794634406
+updated_at = 1795161016
+weight = 0.0
+issue_number = 1769
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1769"
+issue_closed_at = 1795161018
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test egress_exec_closure"
+rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
+observed_at = 1794634406
+detail = """
+exit 101:  0 filtered out; finished in 0.46s
+
+   Compiling blastguard v0.2.588 (/Users/yuki/.condukt/worktrees/run-20261114-125811-45041-integ/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/egress_exec_closure.rs (target/debug/deps/egress_exec_closure-be7dc7ee5ca00e48)
+error: test failed, to rerun pass `-p blastguard --test egress_exec_closure`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test egress_exec_closure process_substitution_recursion_anti_vacuity_controls_stay_allow"
+exit = 0
+passed = 1
+rev = "7fd4d4688df818be62523847497b15510596804e"
+observed_at = 1795161015
+output_digest = "sha256:65a39333e7127cc730f09883a2316ccfcaf71d41de4773d72f17c25a126a37f1"
+excerpt = """
+
+running 1 test
+test process_substitution_recursion_anti_vacuity_controls_stay_allow ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 40 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/egress_exec_closure.rs (target/debug/deps/egress_exec_closure-60de8073c10edd19)
+"""
+
+[task.closure.red]
+rev = "16aa6417ab05171bd24f1c8d141e21ff85254134"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

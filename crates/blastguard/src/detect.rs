@@ -87,6 +87,7 @@ mod heredoc_data;
 mod high_blast;
 mod interpreter;
 mod known_allow;
+mod option_words;
 mod payload;
 mod printf_eval;
 mod protected;
@@ -343,6 +344,12 @@ struct Ctx<'a> {
     /// `cd <dir> && ` that [`analyze_shell_payload`] puts before its payload: the
     /// directory a here-document's Python program runs in (`python_file_body_verdict`).
     cwd_prefix: Option<String>,
+    /// Whether the user's line and every text derived on the way here leave
+    /// `echo` / `seq` / `cat` / `sort` unrebound (backlog 40dc52c0): read by
+    /// [`Ctx::new`] from [`readings::chain_names_fixed`], then only NARROWED by
+    /// [`detect_bash`] with `resolution_fixed` of each text it judges, so a
+    /// middle layer that rebinds a name disables it below; `false` outside Bash.
+    names_fixed: bool,
 }
 
 /// Marker every Ask produced under the user's 2026-10-14 rulings R1/R2 carries
@@ -386,6 +393,7 @@ impl<'a> Ctx<'a> {
                 .or_else(|| tied_rest.and_then(git_worktree_eligible)),
             program_text_redirects: None,
             cwd_prefix: None,
+            names_fixed: readings::chain_names_fixed(),
         }
     }
 
@@ -397,17 +405,11 @@ impl<'a> Ctx<'a> {
             self.rewritten_base
                 .map(|base| format!("{}/{}", base.trim_end_matches('/'), dir))
         };
+        // Every other field (the bases, the TOP-LEVEL eligibilities, …) is carried unchanged.
         Ctx {
-            scope: self.scope,
-            rewritten_base: self.rewritten_base,
             raw_base,
             places: self.places.after_cd(dir),
-            worktree_rm_eligible: self.worktree_rm_eligible,
-            deletion_rm_eligible: self.deletion_rm_eligible,
-            checkout_exempt_eligible: self.checkout_exempt_eligible,
-            git_eligible_rest: self.git_eligible_rest.clone(),
-            program_text_redirects: self.program_text_redirects,
-            cwd_prefix: self.cwd_prefix.clone(),
+            ..self.clone()
         }
     }
 
@@ -416,17 +418,12 @@ impl<'a> Ctx<'a> {
     /// Absolute operands are unaffected — their placement never depended on a
     /// base.
     fn after_unknown_cd(&self) -> Ctx<'a> {
+        // Every other field is carried unchanged.
         Ctx {
-            scope: self.scope,
             rewritten_base: None,
             raw_base: None,
             places: scratch_place::PlaceBases::unknown(),
-            worktree_rm_eligible: self.worktree_rm_eligible,
-            deletion_rm_eligible: self.deletion_rm_eligible,
-            checkout_exempt_eligible: self.checkout_exempt_eligible,
-            git_eligible_rest: self.git_eligible_rest.clone(),
-            program_text_redirects: self.program_text_redirects,
-            cwd_prefix: self.cwd_prefix.clone(),
+            ..self.clone()
         }
     }
 
@@ -659,8 +656,9 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
             "command is too complex to analyse within the safety budget — blastguard cannot vouch for it either way",
         );
     }
-    // AST values are depth 0's only.
-    let _ast_depth = ast::targets::enter_depth(depth);
+    let _ast_depth = ast::targets::enter_depth(depth); // AST values are depth 0's only.
+    let narrowed = ctx.names_fixed_narrowed_by(cmd); // backlog 40dc52c0 (`names_fixed`)
+    let ctx = narrowed.as_ref().unwrap_or(ctx);
     // 0a. QUOTED heredoc bodies the shell parser shows are data (fed to `cat`
     // / `tee` / `git commit -F -`, landing in no file any command of the line
     // runs) are removed, and the rest is judged by every rule below; an
@@ -1316,8 +1314,15 @@ through it, and refuses to guess"
 /// [`resolve_expanded_command_word`]) and `find_xargs::xargs_pipe_feed` (reads
 /// the stage that feeds an `xargs rm`). Nothing else here uses them.
 fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ctx<'_>) -> Decision {
-    let tokens = split_substitution_opening_assignments(seg.split_whitespace().collect());
+    let raw_tokens = split_substitution_opening_assignments(seg.split_whitespace().collect());
+    // Every rule below reads quoted option words as their unquoted twins
+    // (`'--output=/x'` is `--output='/x'`); see `option_words`.
+    let option_words = option_words::OptionWords::new(&raw_tokens);
+    let tokens = option_words.tokens();
     let mut acc = VerdictAcc::default();
+    if let Some(ask) = option_words.undetermined() {
+        let _ = acc.record(ask);
+    }
 
     // D2: a wrapper that takes a shell command string via `-c` (flock) runs that
     // string through `sh -c`. Re-analyse it exactly like a shell's own `-c`
@@ -1967,7 +1972,7 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         // Allow). See `analyze_sort` / `analyze_uniq`.
         "sort" => analyze_sort(rest, ctx),
         "uniq" => analyze_uniq(rest, ctx),
-        "sed" => analyze_sed(rest, ctx),
+        "sed" | "gsed" => analyze_sed(rest, ctx),
         "find" => analyze_find(rest, seg, depth, ctx),
         "xargs" => analyze_xargs(rest, seg, depth, ctx),
         // Both of these were location-blind: `truncate -s 0 target/log.txt`

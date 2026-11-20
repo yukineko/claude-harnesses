@@ -278,8 +278,14 @@ pub(super) fn analyze_pipe_egress(cmd: &str) -> Decision {
     let mut acc = VerdictAcc::default();
     for statement in split_statements_into_pipe_stages(cmd) {
         for pair in statement.windows(2) {
-            let up_tokens: Vec<&str> = pair[0].split_whitespace().collect();
-            let down_tokens: Vec<&str> = pair[1].split_whitespace().collect();
+            // Quoted option words read as their unquoted twins (`'-d'` is
+            // `-d`); an undetermined one is asked about by the segment pass.
+            let up_raw: Vec<&str> = pair[0].split_whitespace().collect();
+            let down_raw: Vec<&str> = pair[1].split_whitespace().collect();
+            let up_words = super::option_words::OptionWords::new(&up_raw);
+            let down_words = super::option_words::OptionWords::new(&down_raw);
+            let up_tokens = up_words.tokens();
+            let down_tokens = down_words.tokens();
             if up_tokens.is_empty() || down_tokens.is_empty() {
                 continue;
             }

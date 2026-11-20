@@ -855,6 +855,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `detect/known_allow`: the generic new-layer Known Allow (tie by tied_b1_targets with option arguments not read as operands, every target Literal and Table C Scratch/OwnWorktree, no target naming command-running config by the unlifted predicates, ruling 2026-11-20 'Deny のまま（推奨）'), first routed by S6-4 for the legacy truncate arm."
 
 [[spec]]
+path = "crates/blastguard/src/detect/option_words.rs"
+doc = "docs/specs/blastguard.md"
+reason = "bullet 'quote された option 語は unquoted の綴りとして読む（raw-token quoted-option fail-open, 2026-11-20, critical）': OptionWords dequotes the option name of a leading token whose dequoted text starts with a dash, keeps the value in its original quoting, leaves operands, lone dashes and dash-plus-blank words untouched, and answers Ask when the name cannot be made literal; RESIDUAL partial quoting and options built from variables."
+
+[[spec]]
 path = "crates/blastguard/src/scope/reading.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `scope/reading`: Reading::Spelled vs Reading::Value operand reading and the placement core that depends on it, split out of scope.rs (file-growth cap)."

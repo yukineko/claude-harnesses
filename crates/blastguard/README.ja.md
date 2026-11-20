@@ -665,6 +665,27 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   その本文を `<shell> -c '<本文>'` として検出器全体で判定する。外側の stdin が
 >   継承のまま（トップレベル）なら従来どおり B.5 の意見なし。`bash -c 'cat' < f`・
 >   `bash -c 'echo hi | bash' < f` は対象外（`src/detect/ast/b5.rs` の `inherited_stdin`）。
+>   0.2.792 以降（backlog 40dc52c0、ユーザー裁定 2026-11-20 option A）、出力がコマンド行
+>   だけで決まる**生成パイプライン**をプログラムとして読む: 先頭が `echo`（決定できる語のみ・
+>   オプションなし・バックスラッシュなし）か `seq`（符号なし10進リテラル 1〜3 個）で、後段が
+>   オペランドもオプションもない `cat` / `sort` の 1 本のパイプライン（`sort` は全行が数字のみ
+>   か全行同一のときだけ。それ以外はロケールで順序が変わるので判定不能のまま）。二重引用符内の
+>   `$( )` は、中身が同じ形なら出力（末尾改行を除く）に置き換える。`bash <(echo hi | cat)`・
+>   `bash <(seq 10 | sort)`・`bash <(echo "$(echo hi)")`・`echo hi | cat | bash` は計算した
+>   本文を判定して allow、`bash <(echo 'chmod 777 /etc/hosts' | cat)` は deny。前提は
+>   「ユーザーのトップレベル行」「そこから判定中のテキストに至るまでのすべての派生テキスト」
+>   「判定中のテキスト」のどれもが関数定義・代入を含まず、
+>   `echo` / `seq` / `cat` / `sort` とシェル・インタプリタ以外のコマンドを含まないこと
+>   （`src/detect/payload/determined_output.rs` の `resolution_fixed`）。この値は利用者の行から
+>   始め、派生テキスト（b5 / S5 の再入、`eval`・`bash -c` の本文、`$( )`、xargs、Python の
+>   `system()`）ごとに**狭める方向にだけ**更新し、広げない（`src/detect/readings.rs` の
+>   `chain_names_fixed`、`detect_bash` で狭める `Ctx::names_fixed`）。そのため
+>   `cat(){ echo 'chmod 777 /etc/hosts'; }; eval 'echo hi | cat | bash'` や、0.2.797 以降は
+>   中間の本文で名前を束縛し直す `bash -c 'PATH=/tmp/x:$PATH; bash -c "echo hi | cat | bash"'`
+>   （`hash -p`・関数・`export -f`・`alias`・`enable -n`・`IFS=` も同様）は ask のまま。
+>   それ以外の生成元・フィルタ・オプション・ファイルオペランド・決定できない語（引用なしの
+>   `$( )`、バッククォート、`$N`）は従来どおり ask（`src/detect/ast/b5.rs` の
+>   `determined_delivered_program`）。
 >   0.2.481 以降（backlog 2026-11-13）、監査するプログラム本文（`-c`/`-e` の引数、
 >   `sh -c`・`eval`・`xargs` の内側、here-string・プロセス置換）は、空白で割ったトークンを
 >   空白 1 個で繋ぎ直したものではなく、**コマンド行の原文から読んだ引数そのもの**

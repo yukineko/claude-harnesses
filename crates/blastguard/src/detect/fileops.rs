@@ -72,7 +72,7 @@ pub(super) fn dotgit_link_deny(action: &str, operand: &str) -> Option<Decision> 
 /// short flag `sort` spells with the letter `o`, so its presence in a short-flag
 /// cluster unambiguously means "output", and it consumes a value (attached after
 /// the `o`, else the next token).
-fn sort_output_file<'a>(rest: &[&'a str]) -> Option<&'a str> {
+pub(super) fn sort_output_file<'a>(rest: &[&'a str]) -> Option<&'a str> {
     let mut i = 0;
     while i < rest.len() {
         let t = rest[i];

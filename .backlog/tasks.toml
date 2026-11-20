@@ -323,38 +323,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; 
 error: test failed, to rerun pass `-p blastguard --test heredoc_script_failopen_red_20261108`"""
 
 [[task]]
-id = "40dc52c0"
-title = 'blastguard tests: egress_exec_closure anti-vacuity controls fail (bash <(echo "$(echo hi)") and bash <(echo hi | cat) are Ask, expected Allow)'
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-14 during run-20261114-125811-45041 (base b823ffa57, blastguard 0.2.578-0.2.582 task worktrees); RED written by an independent test author on branch side/run-20261114-125811-45041 and integrated at 0.2.588. Observed by the t1 worker on base 56084c672 and on the t1 tree (identical): command_substitution_recursion_anti_vacuity_controls_stay_allow - left Ask ('`bash` takes its program from stdin, and that program contains a shell expansion (`$(echo hi)`) ...'); process_substitution_recursion_anti_vacuity_controls_stay_allow - left Ask ('... that program is not on the command line ...'). Readings: (a) the controls are stale after a later tightening (assert proxy); (b) a real FP. Tell apart: frozen-assert rule - check the hedge in the assert message."
-created_at = 1794634406
-updated_at = 1794634406
-weight = 0.0
-issue_number = 1769
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1769"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test egress_exec_closure"
-rev = "956af9b6437ebca9199feb973fff53d2a23842ff"
-observed_at = 1794634406
-detail = """
-exit 101:  0 filtered out; finished in 0.46s
-
-   Compiling blastguard v0.2.588 (/Users/yuki/.condukt/worktrees/run-20261114-125811-45041-integ/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
-     Running tests/egress_exec_closure.rs (target/debug/deps/egress_exec_closure-be7dc7ee5ca00e48)
-error: test failed, to rerun pass `-p blastguard --test egress_exec_closure`"""
-
-[[task]]
 id = "3764e463"
 title = "blastguard FP: python3 -c の文字列リテラル内 '>> `y`' を run-time append redirect と誤読して ask"
 project = "/Users/yuki/src/harness"
@@ -517,13 +485,13 @@ project_unresolved = false
 tags = ["p1"]
 touched_files = []
 status = "pending"
-notes = """Observed 2026-11-15 in a subagent (main at 72cb90009): 'cd <tests dir> && python3 - <<'EOF' ... EOF' whose Python body held Rust doc text in a raw string was denied with: '> ' destroys the file's current contents and `` is a relative path and blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable. RED cf3e7a684 (independent author), measured 2026-11-15 with main at e889149e7: f0 (cd scratch && python3 - <<'EOF' with a raw string containing '`check_rerun` -> `tree_identity(cwd)`', '`cd <task worktree> && cargo test --test' / '<out of scope>` is allowed', open('out.rs','w').write(header); EOF; cd .. && ls scratch): left: ("deny", "deny") with the verbatim reason above (Deny, not Ask, even in main). Narrowing control f1 (python3 - body with only '-> `tree_identity(cwd)`') = allow/allow, so that token alone is not the trigger. Control c1 (cd scratch && echo x > `printf %s "$T"`, a real shell redirect) = deny both modes: "'> `printf' destroys the file's current contents and ``printf` contains a shell expansion ...". Readings: (a) defect - a quoted heredoc fed to python3 - is Python source the shell never parses, so '>' in it is not a redirect; (b) intended - interpreter-bound body judged conservatively. Tell apart: the reason uses shell redirect semantics with an empty target on text only Python reads; (b) would need a Python-level reason (the open(...,'w') target out.rs is a literal relative path in scratch). Suspected trigger (unproven): the angle-bracket text '<task worktree> &&' / '<out of scope>' inside the body being tokenized as shell. Related: a826bdab (quoted heredoc JSON backtick). Fix must keep c1 non-Allow. DOES NOT PROVE: exact trigger token; node/ruby stdin."""
+notes = """Observed 2026-11-15 in a subagent (main at 72cb90009): 'cd <tests dir> && python3 - <<'EOF' ... EOF' whose Python body held Rust doc text in a raw string was denied with: '> ' destroys the file's current contents and `` is a relative path and blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable. RED cf3e7a684 (independent author), measured 2026-11-15 with main at e889149e7: f0 (cd scratch && python3 - <<'EOF' with a raw string containing '`check_rerun` -> `tree_identity(cwd)`', '`cd <task worktree> && cargo test --test' / '<out of scope>` is allowed', open('out.rs','w').write(header); EOF; cd .. && ls scratch): left: ("deny", "deny") with the verbatim reason above (Deny, not Ask, even in main). Narrowing control f1 (python3 - body with only '-> `tree_identity(cwd)`') = allow/allow, so that token alone is not the trigger. Control c1 (cd scratch && echo x > `printf %s "$T"`, a real shell redirect) = deny both modes: "'> `printf' destroys the file's current contents and ``printf` contains a shell expansion ...". Readings: (a) defect - a quoted heredoc fed to python3 - is Python source the shell never parses, so '>' in it is not a redirect; (b) intended - interpreter-bound body judged conservatively. Tell apart: the reason uses shell redirect semantics with an empty target on text only Python reads; (b) would need a Python-level reason (the open(...,'w') target out.rs is a literal relative path in scratch). Suspected trigger (unproven): the angle-bracket text '<task worktree> &&' / '<out of scope>' inside the body being tokenized as shell. Related: a826bdab (quoted heredoc JSON backtick). Fix must keep c1 non-Allow. DOES NOT PROVE: exact trigger token; node/ruby stdin. Seen again 2026-11-20 at main 0.2.802 (subagent, relay bgr-5591c3dbe0ce, cwd a linked worktree): python3 - with a quoted heredoc whose Python string held Rust comment text containing a backtick-quoted greater-than sign was denied with the reason that the heredoc body fed to a code interpreter contains a redirect-shaped token whose target holds a shell expansion. Same class; the edit was redone with the Edit tool."""
 created_at = 1794733637
-updated_at = 1794733637
+updated_at = 1795155408
 weight = 0.0
 issue_number = 1797
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1797"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -2448,3 +2416,353 @@ exit 101: )
     Finished `test` profile [unoptimized + debuginfo] target(s) in 38.70s
      Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-51fa4ea0dfc65b12)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_heredoc_body_fp`"""
+
+[[task]]
+id = "8cadc78f"
+title = "blastguard: echo of a program containing an inner echo-to-bash feeder is Allow (echo 'echo rm -rf /etc | bash' | bash; system harm)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed on main f670f7bd9 (0.2.802): Allow in main and subagent. Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also Allow on 16aa6417a). RED: crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs::echo_of_inner_echo_to_bash_feeder_is_deny (commit 0a843a18e, branch red/c-procsub-preexisting-holes-20261120)."
+created_at = 1795155105
+updated_at = 1795155105
+weight = 0.0
+issue_number = 1889
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1889"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored echo_of_inner_echo_to_bash_feeder_is_deny --exact"
+rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
+observed_at = 1795155105
+detail = """
+exit 101: uki/.condukt/worktrees/red-c-procsub-preexisting-holes-20261120/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.53s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
+
+[[task]]
+id = "cffe54c4"
+title = "blastguard: shopt -s expand_aliases + alias echo on the same line is Allow in bash <(echo hi)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802). RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn alias_echo_then_procsub_is_not_allow; Allow main+sub."
+created_at = 1795155139
+updated_at = 1795155139
+weight = 0.0
+issue_number = 1890
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1890"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored alias_echo_then_procsub_is_not_allow --exact"
+rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
+observed_at = 1795155139
+detail = """
+exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.70s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
+
+[[task]]
+id = "1e9da081"
+title = "blastguard: echo shadowed by an exported function then bash -c 'bash <(echo hi)' is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802). RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn export_f_echo_then_bash_c_procsub_is_not_allow; Allow main+sub."
+created_at = 1795155178
+updated_at = 1795155178
+weight = 0.0
+issue_number = 1891
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1891"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored export_f_echo_then_bash_c_procsub_is_not_allow --exact"
+rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
+observed_at = 1795155178
+detail = """
+exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.64s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
+
+[[task]]
+id = "f06ecb05"
+title = "blastguard: printf shadowed by a function on the same line is Allow in bash <(printf hi)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802). RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn printf_shadowed_by_function_then_procsub_is_not_allow; Allow main+sub."
+created_at = 1795155199
+updated_at = 1795155199
+weight = 0.0
+issue_number = 1892
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1892"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored printf_shadowed_by_function_then_procsub_is_not_allow --exact"
+rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
+observed_at = 1795155199
+detail = """
+exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.59s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
+
+[[task]]
+id = "c0a0ddea"
+title = "blastguard: echo -e hex-escaped harmful program piped through cat to bash is Ask, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn echo_e_hex_escape_through_cat_to_bash_is_deny"
+created_at = 1795155284
+updated_at = 1795155284
+weight = 0.0
+issue_number = 1893
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1893"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored echo_e_hex_escape_through_cat_to_bash_is_deny --exact"
+rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
+observed_at = 1795155284
+detail = """
+exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.59s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
+
+[[task]]
+id = "11b0b4da"
+title = "blastguard: echo -e newline-split harmful program in a procsub is Ask, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn echo_e_newline_split_in_procsub_is_deny"
+created_at = 1795155305
+updated_at = 1795155305
+weight = 0.0
+issue_number = 1894
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1894"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored echo_e_newline_split_in_procsub_is_deny --exact"
+rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
+observed_at = 1795155305
+detail = """
+exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.60s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
+
+[[task]]
+id = "c7f288b7"
+title = "blastguard: quote-split harmful echo argument in a procsub is Ask, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn echo_quote_split_argument_in_procsub_is_deny"
+created_at = 1795155325
+updated_at = 1795155325
+weight = 0.0
+issue_number = 1895
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1895"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored echo_quote_split_argument_in_procsub_is_deny --exact"
+rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
+observed_at = 1795155325
+detail = """
+exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.61s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
+
+[[task]]
+id = "dd5c4fe9"
+title = "blastguard: harmful program built from three determined substs in a procsub is Ask, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn three_determined_substs_in_procsub_is_deny"
+created_at = 1795155345
+updated_at = 1795155345
+weight = 0.0
+issue_number = 1896
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1896"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored three_determined_substs_in_procsub_is_deny --exact"
+rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
+observed_at = 1795155345
+detail = """
+exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.60s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
+
+[[task]]
+id = "28019c35"
+title = "blastguard: bash -c of a determined harmful command substitution is Ask, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn bash_c_of_determined_harmful_subst_is_deny"
+created_at = 1795155365
+updated_at = 1795155365
+weight = 0.0
+issue_number = 1897
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1897"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored bash_c_of_determined_harmful_subst_is_deny --exact"
+rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
+observed_at = 1795155365
+detail = """
+exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.61s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
+
+[[task]]
+id = "d766b5fe"
+title = "blastguard: eval of a determined harmful command substitution through cat is Ask, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn eval_of_determined_harmful_subst_through_cat_is_deny"
+created_at = 1795155385
+updated_at = 1795155385
+weight = 0.0
+issue_number = 1898
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1898"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored eval_of_determined_harmful_subst_through_cat_is_deny --exact"
+rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
+observed_at = 1795155385
+detail = """
+exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.61s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
+
+[[task]]
+id = "796d27b6"
+title = '''blastguard: backlog_20261114_dup_target_quoted_dollar_fp red on main (bash <&'$fd' and bash <&\$fd are Ask, expected Allow)'''
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-20 by the run-20261120-071122-49691 driver via donegate after merging 8f2fe8c18 (which touched no src: version files + an all-ignored test file). main now cc0f372ac (peer merge 0.2.805). Not bisected; not run on the commit before 8f2fe8c18. Readings: (a) FP regression from a peer blastguard merge between 0.2.79x and 0.2.805; (b) intended by a newer ruling, then the asserts are frozen and need a ruling. Distinguish by bisecting the test over the blastguard merges since the test last passed."
+created_at = 1795155655
+updated_at = 1795155655
+weight = 0.0
+issue_number = 1899
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1899"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_dup_target_quoted_dollar_fp"
+rev = "cc0f372ac2f5406626a03b2ed072866af8d70773"
+observed_at = 1795155655
+detail = """
+exit 101:  (/Users/yuki/src/.harness-worktrees/file-dup-target-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 52.25s
+     Running tests/backlog_20261114_dup_target_quoted_dollar_fp.rs (target/debug/deps/backlog_20261114_dup_target_quoted_dollar_fp-aa1e9ecd080bafd1)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_dup_target_quoted_dollar_fp`"""

@@ -23,6 +23,8 @@
 
 #[path = "support/bounded.rs"]
 mod bounded;
+#[path = "support/git_env.rs"]
+mod git_env;
 
 use std::process::{Command, Stdio};
 
@@ -87,13 +89,52 @@ fn run_as(command: &str, cwd: &std::path::Path, home: &Home, subagent: bool) -> 
     )
 }
 
-/// A cwd containing `proj/src/foo.rs`. Returns (home, cwd, proj dir).
-fn setup(tag: &str) -> (Home, std::path::PathBuf, std::path::PathBuf) {
+/// A cwd containing `proj/src/foo.rs`, where `proj` is NOT a git work tree.
+/// Returns (home, cwd, proj dir).
+fn setup_non_git(tag: &str) -> (Home, std::path::PathBuf, std::path::PathBuf) {
     let home = unique_home(tag);
     let cwd = home.0.join("wt");
     let proj = cwd.join("proj");
     std::fs::create_dir_all(proj.join("src")).unwrap();
     std::fs::write(proj.join("src/foo.rs"), "// MARK\nfn main() {}\n").unwrap();
+    (home, cwd, proj)
+}
+
+/// Run one fixture `git` command in `dir` (repo discovery pinned to `dir`,
+/// no global/system config, identity via `-c`).
+fn fixture_git(dir: &std::path::Path, home: &Home, args: &[&str]) {
+    let mut cmd = git_env::pinned(dir);
+    cmd.args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+        .args([
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+        ])
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("HOME", &home.0);
+    let out =
+        bounded::run_bounded_stdin(&mut cmd, bounded::ChildStdin::Null, bounded::TOOL_DEADLINE);
+    assert!(
+        out.status.success(),
+        "fixture git {args:?} in {} failed: {}",
+        dir.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Like [`setup_non_git`], but `proj` is a git work tree with `src/foo.rs`
+/// committed, so overwriting it is recoverable from git. The FP-B controls
+/// isolate the rm-text question, not the separate non-git-overwrite question
+/// (ruled 2026-11-20: same verdict as the shell `>` twin; see
+/// `b_control_same_program_on_non_git_existing_file_gets_the_shell_redirect_verdict`).
+fn setup(tag: &str) -> (Home, std::path::PathBuf, std::path::PathBuf) {
+    let (home, cwd, proj) = setup_non_git(tag);
+    fixture_git(&proj, &home, &["init", "-q", "-b", "main"]);
+    fixture_git(&proj, &home, &["add", "src/foo.rs"]);
+    fixture_git(&proj, &home, &["commit", "-q", "-m", "init"]);
     (home, cwd, proj)
 }
 
@@ -192,7 +233,6 @@ const RM_DOC: &str = "'/// Clean up with `rm -rf *` before running.'";
 const PLAIN_DOC: &str = "'/// Clean up before running.'";
 
 #[test]
-#[ignore = "RED: blastguard FP 2026-11-13 B — remove the ignore when fixed"]
 fn b_python_string_literal_with_rm_text_is_data_not_a_command() {
     let (home, cwd, proj) = setup("b1");
     let (cd, cr) = run_as(&fp_b_cmd(PLAIN_DOC, "true"), &proj, &home, false);
@@ -212,6 +252,30 @@ fn b_control_same_program_without_rm_text_is_not_denied() {
     let (home, _cwd, proj) = setup("b2");
     let (d, r) = run_as(&fp_b_cmd(PLAIN_DOC, "true"), &proj, &home, false);
     assert_ne!(d, "deny", "program without rm text: {d} | {r}");
+}
+
+// Control pinning the user ruling 2026-11-20 (re-asked, final): a python
+// `open(p, 'w')` overwrite of an EXISTING file outside any git work tree, in a
+// safe root, gets exactly the verdict of the shell `>` redirect on the same
+// file (confined Ask in the main session; Deny in a subagent, where nobody can
+// answer a prompt). The twin is computed here with the same setup, so the
+// property is "same as shell `>`", not a frozen literal. It must never be allow.
+#[test]
+fn b_control_same_program_on_non_git_existing_file_gets_the_shell_redirect_verdict() {
+    for subagent in [false, true] {
+        let (home, _cwd, proj) = setup_non_git(if subagent { "b4s" } else { "b4" });
+        let (td, tr) = run_as("echo x > src/foo.rs", &proj, &home, subagent);
+        let (d, r) = run_as(&fp_b_cmd(PLAIN_DOC, "true"), &proj, &home, subagent);
+        assert_eq!(
+            d, td,
+            "subagent={subagent}: python overwrite of an existing non-git file differs from \
+             the shell `>` twin (twin: {td} | {tr}): {d} | {r}"
+        );
+        assert_ne!(
+            d, "allow",
+            "subagent={subagent}: python overwrite of an existing non-git file: {d} | {r}"
+        );
+    }
 }
 
 // Control: a REAL wildcard rm after the heredoc is still denied.

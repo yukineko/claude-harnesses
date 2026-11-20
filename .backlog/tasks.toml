@@ -2386,3 +2386,35 @@ exit 101: t; finished in 0.93s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.68s
      Running tests/grep_pattern_word_fp_20261120.rs (target/debug/deps/grep_pattern_word_fp_20261120-6dd5e48caac18a93)
 error: test failed, to rerun pass `-p blastguard --test grep_pattern_word_fp_20261120`"""
+
+[[task]]
+id = "e1bb5f7e"
+title = "blastguard fail-open: sudo/doas in front of a shell that reads its program from a redirected file is Allow (bare bash < FILE is Ask)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-20 at main 2f39a1620 (blastguard 0.2.784): allow for sudo bash < /tmp/p, bash -c 'sudo bash' < /tmp/p, doas sh < /tmp/p, sudo -s < /tmp/p, sudo -u root bash < /tmp/p; control bash < /tmp/p is ask; sudo bash -c 'rm -rf /etc' is deny. RED eb4519e0a (independent sonnet author): --ignored run 'test result: FAILED. 0 passed; 5 failed'. Verifier code reading (unverified): b5.rs unwrap_at (~L277) has no sudo/doas arm, so family() is None and classify returns Allow."
+created_at = 1795139512
+updated_at = 1795139512
+weight = 0.0
+issue_number = 1885
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1885"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_sudo_stdin_shell_failopen -- --ignored"
+rev = "eb4519e0ae97cfe3cb72c634964184c8e2254dc0"
+observed_at = 1795139512
+detail = """
+exit 101: LED. 0 passed; 5 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.62s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261120_sudo_stdin_shell_failopen.rs (target/debug/deps/backlog_20261120_sudo_stdin_shell_failopen-cfd3181816a89bfc)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_sudo_stdin_shell_failopen`"""

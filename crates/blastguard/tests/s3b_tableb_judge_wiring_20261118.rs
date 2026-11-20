@@ -242,11 +242,26 @@ fn a_chmod_unlisted_option_restricts() {
     restrict("achm", "chmod -h 644 /tmp/bg-s3b-sentinel-chmod");
 }
 
-/// B.1 `rm` + A.3 "unquoted glob → value Undetermined" → Table C
-/// Unresolved x Delete.
+/// B.1 `rm` + an unquoted glob the evaluator cannot place → Table C
+/// Unresolved x Delete. Re-anchored: this used `rm /tmp/bg-s3b-sentinel-glob-*`
+/// (glob only in the final component under a literal dir), which user ruling
+/// 2026-11-19 ("literal-dir glob", docs/specs/blastguard.md, ab5967c24) now
+/// places by the parent's Table C class (see the sibling below). The glob in
+/// a NON-final component stays `Unresolved` → Ask under that ruling (pinned
+/// not-Allow by `literal_dir_glob_ruling_20261119.rs::deny_glob_in_middle_component`,
+/// `rm -rf /tmp/*/x`).
 #[test]
 fn a_rm_unquoted_glob_operand_restricts() {
-    restrict("armglob", "rm /tmp/bg-s3b-sentinel-glob-*");
+    restrict("armglob", "rm /tmp/bg-s3b-sentinel-glob-*/x");
+}
+
+/// User ruling 2026-11-19 ("literal-dir glob", docs/specs/blastguard.md,
+/// ab5967c24): an unquoted glob only in the final component under the
+/// literal dir `/tmp`, with a long literal head, is placed by `/tmp` →
+/// Scratch x Delete(non-rec) → Allow.
+#[test]
+fn a_rm_final_component_glob_under_tmp_allows_per_ruling() {
+    allow("armglobok", "rm /tmp/bg-s3b-sentinel-glob-*");
 }
 
 /// B.1 `mv` destination + A.3 positional parameter → Unresolved x Truncate.

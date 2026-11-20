@@ -2076,38 +2076,6 @@ exit 101: t; finished in 0.93s
 error: test failed, to rerun pass `-p blastguard --test grep_pattern_word_fp_20261120`"""
 
 [[task]]
-id = "e1bb5f7e"
-title = "blastguard fail-open: sudo/doas in front of a shell that reads its program from a redirected file is Allow (bare bash < FILE is Ask)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-20 at main 2f39a1620 (blastguard 0.2.784): allow for sudo bash < /tmp/p, bash -c 'sudo bash' < /tmp/p, doas sh < /tmp/p, sudo -s < /tmp/p, sudo -u root bash < /tmp/p; control bash < /tmp/p is ask; sudo bash -c 'rm -rf /etc' is deny. RED eb4519e0a (independent sonnet author): --ignored run 'test result: FAILED. 0 passed; 5 failed'. Verifier code reading (unverified): b5.rs unwrap_at (~L277) has no sudo/doas arm, so family() is None and classify returns Allow. | RULED 2026-11-20 by user in /flow (session 62e92d16): spec specs/bg-sudo-stdin-shell-e1bb5f7e.toml ratified (commit 98672175f): b5 unwrap_at only; S5 through sudo intended (revise SUBSET.md:621/644, s5.rs:79); sudo -s/-i with no command = implicit shell (revise SUBSET.md:331), sudo -e stays Unsupported; acceptance != allow; regression = base-rev diff (zero new failures). Spec requirements R1-R4 carry no repro_test (ratify exit 12), so nothing was queued from the spec; this row's RED covers R1."
-created_at = 1795139512
-updated_at = 1795161623
-weight = 0.0
-issue_number = 1885
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1885"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_sudo_stdin_shell_failopen -- --ignored"
-rev = "eb4519e0ae97cfe3cb72c634964184c8e2254dc0"
-observed_at = 1795139512
-detail = """
-exit 101: LED. 0 passed; 5 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.62s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
-     Running tests/backlog_20261120_sudo_stdin_shell_failopen.rs (target/debug/deps/backlog_20261120_sudo_stdin_shell_failopen-cfd3181816a89bfc)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_sudo_stdin_shell_failopen`"""
-
-[[task]]
 id = "6f299fb5"
 title = "blastguard FP: .rs heredoc body is read as shell when a sed -i line follows (doc comment with destructive text → Ask)"
 project = "/Users/yuki/src/harness"
@@ -2201,37 +2169,6 @@ exit 101: )
     Finished `test` profile [unoptimized + debuginfo] target(s) in 38.70s
      Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-51fa4ea0dfc65b12)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261113_heredoc_body_fp`"""
-
-[[task]]
-id = "8cadc78f"
-title = "blastguard: echo of a program containing an inner echo-to-bash feeder is Allow (echo 'echo rm -rf /etc | bash' | bash; system harm)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "Observed on main f670f7bd9 (0.2.802): Allow in main and subagent. Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also Allow on 16aa6417a). RED: crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs::echo_of_inner_echo_to_bash_feeder_is_deny (commit 0a843a18e, branch red/c-procsub-preexisting-holes-20261120)."
-created_at = 1795155105
-updated_at = 1795155105
-weight = 0.0
-issue_number = 1889
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1889"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored echo_of_inner_echo_to_bash_feeder_is_deny --exact"
-rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
-observed_at = 1795155105
-detail = """
-exit 101: uki/.condukt/worktrees/red-c-procsub-preexisting-holes-20261120/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.53s
-     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
 
 [[task]]
 id = "cffe54c4"

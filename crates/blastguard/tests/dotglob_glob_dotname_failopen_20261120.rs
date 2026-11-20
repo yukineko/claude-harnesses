@@ -285,7 +285,6 @@ macro_rules! reds {
     ($($name:ident: $g:literal => $l:literal;)*) => {
         $(
             #[test]
-            #[ignore = "RED dotglob glob reaches a dot-name deny-target: allow/allow at 4377a0816"]
             fn $name() {
                 expect_not_looser(stringify!($name), $g, $l);
             }

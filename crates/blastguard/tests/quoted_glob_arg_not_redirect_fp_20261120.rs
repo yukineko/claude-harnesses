@@ -263,7 +263,6 @@ mut thresh 'if jac >= THRESHOLD:' 'if jac >= 0.5:'
 mut fence 'if stripped.startswith("```"):' 'if False:'"#;
 
 #[test]
-#[ignore = "RED quoted-glob-arg FP: corpus 1174 head[k]]=deny/deny vs headk=ask/deny at f61fb9a6b"]
 fn red_corpus_1174_exact() {
     expect_quoted_gt_is_data("corpus1174", CORPUS_1174);
 }
@@ -276,7 +275,6 @@ fn red_corpus_1174_exact() {
 const MINIMAL: &str = "M={H}/m\nmut(){ name=$1; old=$2; python3 - \"$old\" \"$M/$name.py\" <<'EOF'\nimport sys\nEOF\n}\nmut ratchet 'a > @ARG@'";
 
 #[test]
-#[ignore = "RED quoted-glob-arg FP: minimal head[k]]=deny/deny vs headk=allow/allow at f61fb9a6b"]
 fn red_minimal_function_quoted_arg() {
     expect_quoted_gt_is_data("minimal", MINIMAL);
 }

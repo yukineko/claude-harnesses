@@ -476,10 +476,19 @@ no second table.
   panic → Ask (main) / Deny (subagent). Otherwise the layer has no opinion
   (`Allow`, folded `Deny > Ask > Allow`), so it never lowers another layer's
   verdict.
+* A B.1 literal-dir glob target (`<dir>/<glob>`, final component only) is
+  also matched row by row against the entries directly in `<dir>` its
+  final component may match (`glob_rows`; the lift is placed by such an
+  entry). A row reached only through a dot-name (`*` onto `.gitconfig`)
+  counts only when the line may switch dot-matching on
+  (`judge/dot_match.rs`: `On` → Deny, `Maybe` → Ask, `Off` → not raised).
+  A `>` / `>>` onto such a glob carries no word here; the legacy redirect
+  rule asks the same question (`ast::redirect_glob_deny_target`).
 * Not judged by this layer (the legacy layers still judge them): an
   `Undetermined` redirect target, an unmodelled wrapper (`sudo`,
-  `env`, …), `analyze` = `Undetermined`, a glob that might expand to a row
-  (`/x/.ss*`; matched as spelled), the symlink-resolved landing, and a
+  `env`, …), `analyze` = `Undetermined`, a glob that is not a literal-dir
+  glob (`/x/.ss*`, a middle-component glob; matched as spelled), the
+  symlink-resolved landing, and a
   recursive delete of an ancestor of a row other than the row directories
   themselves (`rm -rf <repo>/scripts`).
 

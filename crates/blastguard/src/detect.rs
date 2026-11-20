@@ -828,6 +828,9 @@ primitive, not a filesystem path",
             if let Some(deny) = protected_path_block_at(ctx, "redirect", &target, &physical) {
                 return deny;
             }
+            if let Some(deny) = ast::redirect_glob_deny_target(&target, false, ctx.scope) {
+                return deny;
+            }
             // Command-running config the lifted protected axis does not stop
             // (own checkout: settings only, ruling 2026-11-20): never looser
             // than `>>` (rule 2b; 2e704124).
@@ -1088,6 +1091,9 @@ does not parse that body, but blastguard cannot show the program does not use it
             };
             if let Some(deny) = protected_path_block_at(ctx, "append redirect", &target, &physical)
             {
+                return deny;
+            }
+            if let Some(deny) = ast::redirect_glob_deny_target(&target, true, ctx.scope) {
                 return deny;
             }
             // ...and command-running config the lifted protected axis does not

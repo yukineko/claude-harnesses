@@ -1557,15 +1557,37 @@ forge・condukt のスケジューラが再利用）。
   `judge::spelling_names_command_running_config` は最終成分 glob が config 名に一致しうるなら該当扱い
   〈`hooks` 内で `hooks.json` に一致しうる glob、または deny-target 行の直下 entry に一致しうる glob:
   `deny_targets::may_match_child_unlifted`／`globs_may_intersect`。証明できる不一致〈literal 接頭辞・接尾辞〉以外は
-  一致扱い。ただし shell glob が `.` で始まらなければ `.` で始まる名前には一致しない〈bash の `dotglob`・zsh の
-  `GLOB_DOTS` 無し。行でそれを有効にする形は見ていない — 既知の限界〉。quote された `*` を含む literal 名も glob と
-  区別できないので該当扱い〉。(3) `>`（rule 2）も `>>` と同じ
+  一致扱い。ただし shell glob が `.` で始まらなければ `.` で始まる名前には一致しない — この dot-name 規則は
+  判定中の行が dot 一致を有効にしえない〈`judge::dot_match` が `Off`〉ときだけ使う（下の dotglob 是正）。
+  quote された `*` を含む literal 名も glob と区別できないので該当扱い〉。(3) `>`（rule 2）も `>>` と同じ
   述語〈`tee.rs::redirect_names_command_running_config`。quote 除去後の名前で判定、除去できなければ該当扱い〉で
   command-running config への上書きを Ask（main）/ Deny（subagent）にする — 上書きは追記より緩くならない
   （どの名前が該当するかは上の own checkout 分割に従う。tests/glob_and_config_write_failopen_20261120.rs）。
   最終成分だけの literal-dir glob（user ruling 2026-11-19）は親ディレクトリで置かれる `Literal` なので
   Scratch 内なら Allow、中間成分の glob は `Unresolved` で旧判定のまま。`rm`・`rsync --delete` は引き続き
   `detect/rm/new_layer`（tests/s6_4_truncate_retire_20261120.rs）。
+  dotglob fail-open 是正（0.2.824、tests/dotglob_glob_dotname_failopen_20261120.rs）: 最終成分 glob は
+  dot 一致が有効なら `.gitconfig`・`.ssh` 等の dot-name entry に展開しうる。**literal の dot-name 綴りより緩くしない**:
+  (a) `detect/ast/judge/dot_match` が最外の行（`readings.rs::every_reading_scoped` で一度だけ）を `Off`／`On`／
+  `Maybe` に分類する。`On` = option builtin（`shopt`/`setopt`/`unsetopt`/`set`/`emulate`/`typeset`/`declare`/
+  `export`/`local`/`readonly`/`eval`）・子 shell（`bash -O`・`zsh -o`、`-c` 本文も再帰）の語、または代入名が
+  （小文字化・`_` 除去・`no` 接頭辞除去・`=` より前で）`dotglob`／`globdots`／`globignore` そのもの、
+  `options[…globdots…]`、`set`/`setopt`/`unsetopt`/`zsh` の `-…4…`／`+…4…`（zsh で `set -4`・`setopt -4`・
+  `GlOb_DoTs`・`unsetopt noglobdots`・`options[globdots]=on`、bash で `GLOBIGNORE=x` が有効化することを実測。
+  `emulate sh/ksh/csh/zsh` は無効のまま）。`Maybe` = 不定の command word、option builtin の不定語、`source`／`.`、
+  `options=(…)` 代入、行の解析が `Undetermined` で上記の名前が本文に現れる場合。行の外から読まれたら `Maybe`
+  （fail-closed）。`On`・`Maybe` では dot-name 規則を外す。(b) deny-target 表は B.1 の literal-dir glob target を
+  「親の直下で最終成分に一致しうる entry」で行ごとに照合する（`deny_targets::glob_rows`。lift は親の直下の
+  entry で置く）。dot-name 経由でしか届かない行は `On` で Deny、`Maybe` で Ask、`Off` で上げない。(c) AST が
+  word を持たない `>`／`>>` の glob target は旧層 rule 2/2b が `ast::redirect_glob_deny_target` で同じ判定を
+  引き、Deny なら Deny。行の外で（rc ファイル・同じ shell の以前の Bash 呼び出しで）有効化された dotglob は
+  見えない（hook が判定する shell は無効で起動する前提）。
+  heredoc 本文の範囲（0.2.824、tests/quoted_glob_arg_not_redirect_fp_20261120.rs）:
+  `heredoc.rs::first_line_quoted_here_document_body` は opener が 1 行目でなくてもよい — 最初の `<<` を含む行より
+  前の各行が quote 釣り合い・末尾 `\` 無しなら、その行を opener 行として本文を切り出す（`opener_line`）。
+  以前は 2 行目以降の opener では「最初の改行以降すべて」を program 本文とみなし、本文の後ろの shell 行
+  〈`mut ratchet 'a > head[k]]'` の quote された引数〉を program text として shell 読みし、0.2.818 の glob
+  redirect 判定で Deny にしていた（FP）。opener より前・閉じ行より後の行は他の全規則が通常の shell として判定する。
 - **`scope/reading`** — `SafeRoots` の配置述語に渡す operand の読み方 `Reading` と、それに依存する配置の核
   （`classify_disposable_in` / `classify_disposable_value` / `lexical_absolute_as` / `irreplaceable_home_asset_value`
   / `classify_worktree_as` / `classify_against_as`）。`Reading::Spelled` は shell TEXT（展開・再読されうる文字

@@ -143,6 +143,29 @@ pub(crate) fn redirect_literal_dir_glob(word: &str) -> Option<String> {
     }
 }
 
+/// Run `f` (the judgement of the top-level line `line`) with the line's
+/// dot-matching answer in force (`judge::dot_match`): whether a shell glob on
+/// it may match dot-names (`shopt -s dotglob`, `setopt globdots`, …).
+pub(crate) fn with_line_dot_match<R>(line: &str, f: impl FnOnce() -> R) -> R {
+    judge::dot_match::with_line(line, f)
+}
+
+/// The deny-target Deny (`judge::deny_targets`) of a legacy redirect (`>`,
+/// or `>>` when `append`) onto the redirect target WORD `word`, when `word`
+/// is a literal-dir glob ([`redirect_literal_dir_glob`]) that may expand onto
+/// a deny-target entry; `None` otherwise (also for an Ask: the legacy rule's
+/// own command-running-config Ask covers a glob that reaches an entry only
+/// if dot-matching may be on).
+pub(crate) fn redirect_glob_deny_target(
+    word: &str,
+    append: bool,
+    scope: &crate::scope::SafeRoots,
+) -> Option<crate::model::Decision> {
+    let glob = redirect_literal_dir_glob(word)?;
+    let d = judge::deny_targets::redirect_glob_verdict(&glob, append, scope);
+    d.is_deny().then_some(d)
+}
+
 /// [`analyze`], except that a function definition is evaluated instead of
 /// being `Undetermined(Unsupported)`: its body is evaluated once with every
 /// variable, the cwd and the stdin late-bound, its commands are emitted, and

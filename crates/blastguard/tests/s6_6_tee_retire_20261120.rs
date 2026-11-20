@@ -596,21 +596,18 @@ fn expect_same_as_expanded(tag: &str, template: &str, exp: &str) {
 
 /// Expands to `{P}/t.txt {P}/u.txt` (deny/deny).
 #[test]
-#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
 fn red_failopen_glob_project() {
     expect_same_as_expanded("fo-proj", "echo x | tee {P}/*.txt", D);
 }
 
 /// Expands to `{O}/t.txt {O}/u.txt` (deny/deny).
 #[test]
-#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
 fn red_failopen_glob_other_worktree() {
     expect_same_as_expanded("fo-other", "echo x | tee {O}/*.txt", D);
 }
 
 /// Expands to `{H}/docs/f.txt` (deny/deny).
 #[test]
-#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
 fn red_failopen_glob_home_dir() {
     expect_same_as_expanded("fo-home", "echo x | tee {H}/docs/*.txt", D);
 }
@@ -618,7 +615,6 @@ fn red_failopen_glob_home_dir() {
 /// Expands to `{W}/crates/x/hooks/hooks.json` (deny/deny), command-running
 /// config in the own worktree.
 #[test]
-#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
 fn red_failopen_glob_own_worktree_crate_hooks() {
     expect_same_as_expanded("fo-hooks", "echo x | tee {W}/crates/x/hooks/*.json", D);
 }
@@ -626,7 +622,6 @@ fn red_failopen_glob_own_worktree_crate_hooks() {
 /// Expands to `{W}/scripts/check-x.py` (deny/deny), command-running config
 /// in the own worktree.
 #[test]
-#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
 fn red_failopen_glob_own_worktree_check_script() {
     expect_same_as_expanded("fo-check", "echo x | tee {W}/scripts/check-*.py", D);
 }
@@ -651,13 +646,11 @@ fn expect_ask_deny(tag: &str, template: &str) {
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
 fn red_failopen_tee_append_own_hooks_json() {
     expect_ask_deny("fo-a-hooks", "echo x | tee -a {W}/hooks/hooks.json");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
 fn red_failopen_tee_append_own_crate_hooks() {
     expect_ask_deny(
         "fo-a-crate",
@@ -666,13 +659,11 @@ fn red_failopen_tee_append_own_crate_hooks() {
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
 fn red_failopen_tee_append_own_check_script() {
     expect_ask_deny("fo-a-check", "echo x | tee -a {W}/scripts/check-x.py");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
 fn red_failopen_tee_append_own_mixed_with_check_script() {
     expect_ask_deny(
         "fo-a-mixed",
@@ -681,19 +672,16 @@ fn red_failopen_tee_append_own_mixed_with_check_script() {
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
 fn red_failopen_redirect_append_own_hooks_json() {
     expect_ask_deny("fo-r-hooks", "echo x >> {W}/hooks/hooks.json");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
 fn red_failopen_redirect_append_own_crate_hooks() {
     expect_ask_deny("fo-r-crate", "echo x >> {W}/crates/x/hooks/hooks.json");
 }
 
 #[test]
-#[ignore = "RED fail-open: allow/allow at 5b2b3a6b8"]
 fn red_failopen_redirect_append_own_check_script() {
     expect_ask_deny("fo-r-check", "echo x >> {W}/scripts/check-x.py");
 }

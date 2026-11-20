@@ -88643,3 +88643,70 @@ rev = "feff2e612c96c964d5ca6abcd8710df749343479"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "06c51772"
+title = """blastguard FP: python3 - heredoc with a backtick inside a plain string literal drops its literal write paths (dynamic-marker substring), then a later '. "$HOME/.cargo/env"' is read as running the written file"""
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "false-positive",
+    "s5-python-parser",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-17 as relay bgr-be0f4d8da498 (subagent a1147bafb9f7b24fb, worktree fix-b2d9cb6b): python3 - <<'EOF' that only reads/writes literal 'worktree.rs' and 'worktree/retry_task.rs' (imports re/textwrap; no exec/eval/subprocess/os.system) with Rust doc text containing backticks in string literals, followed by '. "$HOME/.cargo/env" && cargo fmt ...' -> main ask / subagent deny. Verbatim reason: '`the Python program` writes `a path the Python program does not spell as a literal`, and another part of this command may run that file, so the written text is judged as the shell script it is; the Python program holds a dynamic-execution or process marker (`exec`, `eval`, `subprocess`, `os.system`, …), so blastguard does not read what it writes, so blastguard cannot see the program the file will hold'. Chain: inert_literal::DYNAMIC_EXECUTION_MARKERS contains the backtick and has_dynamic_code_execution is a whole-program lowercase substring match -> python_written_files::python_program_writes returns one write with path None (literal paths dropped) -> echo_script_file::python_heredoc_files makes it Opaque, which any pipeline holding a '.' word 'runs'. Not a duplicate of c9da0437 (backtick span misread AS the open target, 'contains a shell expansion' reason), 4270601a (body read as shell redirect) or 9d88d739 (gh span / rm literal). RED 01d64675d (blastguard 0.2.680): minimal 's = "`x`"; open("a.rs","w").write(s)' + '. "$HOME/.cargo/env"' = ask/deny; controls green: no-backtick twin allow, subprocess.run(['bash','f']) of written 'rm -rf ~' deny, backtick text written to f then 'bash f' not allow. Per user ruling fixed structurally in S5 (Python parser), not by a one-off patch."""
+created_at = 1794867735
+updated_at = 1795202232
+weight = 0.0
+issue_number = 1840
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1840"
+issue_closed_at = 1795202235
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261117_python_heredoc_marker_fp -- --include-ignored backtick_in_python_string_does_not_drop_literal_write_paths"
+rev = "01d64675d3ab4bd70fb8e5d21a40575abb16adf2"
+observed_at = 1794867735
+detail = """
+exit 101: .680 (/Users/yuki/src/.harness-worktrees/red-py-marker-fp-20261117/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.73s
+     Running tests/backlog_20261117_python_heredoc_marker_fp.rs (target/debug/deps/backlog_20261117_python_heredoc_marker_fp-fa709c95f374dc83)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261117_python_heredoc_marker_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261117_python_heredoc_marker_fp"
+exit = 0
+passed = 4
+rev = "30ac94f2c404986892cd90276e0f138a286a2be2"
+observed_at = 1795202224
+output_digest = "sha256:cfcc597036a92bc0b15195778aa91c63223723aefb46dbe37cb121123a40111e"
+excerpt = """
+
+running 4 tests
+test control_no_backtick_twin_is_allow ... ok
+test control_subprocess_run_of_written_harmful_file_stays_deny ... ok
+test control_backtick_text_written_then_run_by_bash_is_not_allow ... ok
+test backtick_in_python_string_does_not_drop_literal_write_paths ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.13s
+
+   Compiling progeffect v0.1.6 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/progeffect)
+   Compiling blastguard v0.2.837 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.35s
+     Running tests/backlog_20261117_python_heredoc_marker_fp.rs (target/debug/deps/backlog_20261117_python_heredoc_marker_fp-c9ff50968b0b66b3)
+"""
+
+[task.closure.red]
+rev = "447fde5188f9084143f410bff01b1a68ca4b7dbd"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

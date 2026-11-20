@@ -366,7 +366,22 @@ pub(super) fn real_system_path_block(
     target: &str,
     ctx: &Ctx,
 ) -> Result<Option<Decision>, String> {
-    match physical_landing(target, ctx.raw_base.as_deref()) {
+    landing_system_block(
+        action,
+        physical_landing(target, ctx.raw_base.as_deref()),
+        ctx,
+    )
+}
+
+/// [`system_path_block`] on an already-resolved landing (from
+/// [`physical_landing`] or [`entry_landing`]); the `Ok`/`Err` contract of
+/// [`real_system_path_block`].
+fn landing_system_block(
+    action: &str,
+    landing: Option<Determination<String>>,
+    ctx: &Ctx,
+) -> Result<Option<Decision>, String> {
+    match landing {
         None => Ok(None),
         // macOS: the writable data volume is mounted at `/` through firmlinks,
         // and some of its symlinks (`/home -> /System/Volumes/Data/home`)
@@ -382,6 +397,155 @@ pub(super) fn real_system_path_block(
             Ok(system_path_block(action, &rooted, ctx))
         }
         Some(Determination::Undetermined(u)) => Err(u.to_string()),
+    }
+}
+
+/// The system-directory axis for every WRITE-THROUGH write whose destination
+/// is a path: the file tools (Write / Edit / MultiEdit / NotebookEdit, user
+/// ruling 2026-11-01), the `cp` destination and the directory a `cp` / `mv` /
+/// `install` / `ln` lands its sources in ([`super::fileops`], backlog
+/// cfb98cd5). The entry a destination-REPLACING `mv` / `install` / `ln`
+/// creates is judged by [`system_entry_landing_block`] instead, which does not
+/// follow a symlink it replaces. The same rule, reason and directory
+/// set as a Bash redirect — [`system_path_block`] on the path as written, then
+/// [`real_system_path_block`] on the path the kernel really writes, so a
+/// dangling file symlink, a chain of them, or a directory symlink into `/etc`
+/// is the same Deny as the direct spelling. The `confined_root` exemption in
+/// [`system_path_block`] applies unchanged (a project checked out under `/opt`).
+///
+/// The second step is also what places a RELATIVE destination: the lexical
+/// [`system_path_block`] does not judge a relative path at all, and
+/// [`real_system_path_block`] resolves it against `ctx.raw_base` (the cwd its
+/// segment runs in), applying `..` to the real directories — exactly as it
+/// does for a redirect target. Without it a `cp` whose destination climbs to
+/// `/etc` through `..` from a deep cwd was Allow while the redirect onto the
+/// same path was Deny (backlog cfb98cd5). A relative path with no known base
+/// is not placed by this function (`Ok(None)` from [`real_system_path_block`]);
+/// the caller's own rules for such an operand stand.
+///
+/// When the landing cannot be resolved (a symlink loop, an `lstat`/`read_link`
+/// error other than "does not exist") the answer is Ask, never Allow: "could
+/// not resolve" is not "not a system directory" (CLAUDE.md §3).
+pub(super) fn system_landing_block(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
+    if let Some(deny) = system_path_block(action, path, ctx) {
+        return Some(deny);
+    }
+    match real_system_path_block(action, path, ctx) {
+        Ok(verdict) => verdict,
+        Err(why) => Some(Decision::ask(format!(
+            "{action} target ({path}) could not be resolved through its symlinks ({why}) — \
+blastguard cannot tell whether it lands in a system directory, so it refuses to guess"
+        ))),
+    }
+}
+
+/// The directory entry a destination-REPLACING writer (`mv`, `install`,
+/// `ln -f`) really creates for `target`: the PARENT resolved physically (every
+/// ancestor symlink followed, `..` applied to the real directories, relative
+/// spellings placed against `base`) with the final name appended UNFOLLOWED.
+///
+/// These verbs do not write through a symlink that already sits at the
+/// destination — `rename(2)` (mv), unlink-then-create (install, both GNU and
+/// BSD) and `ln -f`'s unlink-then-`symlink(2)` replace the LINK itself, so
+/// `mv x venv/bin/python` with `python -> /opt/homebrew/bin/python3` writes
+/// `venv/bin/python`, not `/opt/homebrew/bin/python3`. Following the final
+/// link there, as [`physical_landing`] does for write-through writers (`cp`, a
+/// redirect, the Write/Edit tools), judged the wrong file (a Deny false
+/// positive). `ln` without `-f` onto an existing non-directory fails and
+/// writes nothing, so the same model never under-judges it.
+///
+/// The one case where these verbs DO go through the final component: when it
+/// is (or is a symlink to) an existing DIRECTORY, the entry lands INSIDE it
+/// (`mv x d` creates `d/x`). Then the followed directory is returned, so a
+/// `d -> /etc` is judged as `/etc`.
+///
+/// `no_deref` is the caller's parsed no-dereference flag (BSD/GNU `ln -n`,
+/// `ln -h`, GNU `ln -T` / `--no-dereference` / `--no-target-directory`, BSD
+/// `mv -h`, GNU `mv -T` / `--no-target-directory`, GNU `install
+/// --no-target-directory`; user ruling 2026-11-20, backlog cfb98cd5). With it
+/// a symlink at the final component is NOT followed even when it leads to a
+/// directory: the verb replaces the link itself (`ln -sfn NEW current` with
+/// `current -> /usr/local/bin` rewrites `current`, it creates nothing in
+/// `/usr/local/bin`), so the entry under its physical parent is returned. A
+/// real directory at the final component is returned as itself either way
+/// (BSD `-h` lands inside it; GNU `-T` refuses to overwrite it).
+///
+/// A spelling whose last component is not a plain name (a trailing `/`, `.`,
+/// `..`) names a directory and is resolved by [`physical_landing`] unchanged.
+/// `None`/`Undetermined` follow [`physical_landing`]'s contract; an `lstat` /
+/// `stat` of the entry that fails with anything but "does not exist" is
+/// `Undetermined` (CLAUDE.md §3).
+pub(super) fn entry_landing(
+    target: &str,
+    base: Option<&str>,
+    no_deref: bool,
+) -> Option<Determination<String>> {
+    // A bare name's parent is the cwd (`base`).
+    let (parent, name) = target.rsplit_once('/').unwrap_or((".", target));
+    if name.is_empty() || name == "." || name == ".." {
+        return physical_landing(target, base);
+    }
+    let parent = if parent.is_empty() { "/" } else { parent };
+    let parent_real = match physical_landing(parent, base)? {
+        Determination::Known(p) => p,
+        undetermined => return Some(undetermined),
+    };
+    let entry = format!("{}/{name}", parent_real.trim_end_matches('/'));
+    match std::fs::symlink_metadata(&entry) {
+        Ok(m) if m.file_type().is_symlink() => {}
+        // Absent (created here), a plain file (replaced), or a real directory
+        // (landed inside — judged by the directory itself).
+        Ok(_) => return Some(Determination::Known(entry)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Some(Determination::Known(entry))
+        }
+        Err(e) => {
+            return Some(Determination::undetermined(format!(
+                "`{entry}` could not be inspected ({e})"
+            )))
+        }
+    }
+    // A symlink at the destination: replaced, unless it leads to a directory
+    // and no no-dereference flag was given.
+    if no_deref {
+        return Some(Determination::Known(entry));
+    }
+    let followed = match physical_landing(&entry, None)? {
+        Determination::Known(real) => real,
+        undetermined => return Some(undetermined),
+    };
+    match std::fs::metadata(&followed) {
+        Ok(m) if m.is_dir() => Some(Determination::Known(followed)),
+        Ok(_) => Some(Determination::Known(entry)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(Determination::Known(entry)),
+        Err(e) => Some(Determination::undetermined(format!(
+            "`{followed}` (the target of the symlink `{entry}`) could not be inspected ({e})"
+        ))),
+    }
+}
+
+/// [`system_landing_block`] for a destination-REPLACING writer (`mv` /
+/// `install` / `ln` destination, backlog cfb98cd5): the same lexical
+/// [`system_path_block`] on the spelling, then the system-directory rule on
+/// the entry the verb really creates ([`entry_landing`] — final symlink
+/// replaced, not followed, unless it leads to a directory and `no_deref` is
+/// false). Unresolvable is Ask, never Allow (CLAUDE.md §3).
+pub(super) fn system_entry_landing_block(
+    ctx: &Ctx<'_>,
+    action: &str,
+    path: &str,
+    no_deref: bool,
+) -> Option<Decision> {
+    if let Some(deny) = system_path_block(action, path, ctx) {
+        return Some(deny);
+    }
+    let landing = entry_landing(path, ctx.raw_base.as_deref(), no_deref);
+    match landing_system_block(action, landing, ctx) {
+        Ok(verdict) => verdict,
+        Err(why) => Some(Decision::ask(format!(
+            "{action} target ({path}) could not be resolved through its symlinks ({why}) — \
+blastguard cannot tell whether it lands in a system directory, so it refuses to guess"
+        ))),
     }
 }
 

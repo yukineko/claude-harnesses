@@ -2840,6 +2840,7 @@ mod tests {
             }],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -3107,6 +3108,7 @@ mod tests {
                 .collect(),
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -3981,6 +3983,7 @@ mod backlog_cf58e2fc {
             ],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };

@@ -257,6 +257,7 @@ mod tests {
                 .collect(),
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };

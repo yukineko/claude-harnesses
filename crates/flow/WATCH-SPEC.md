@@ -27,6 +27,8 @@ Environment `FLOW_WATCH_CONDUKT` / `FLOW_WATCH_BACKLOG` override the `condukt` /
   `--relay-stall-secs`; re-emitted at most once per `--relay-stall-secs`.
 - `STATE <run_id> <task>=<status> ...` — see "Run tracking (v2)" below.
 - `TASK-STALL <run_id> <task> status=running idle=<secs>s` — see "Run tracking (v2)" below.
+- `WATCH-UNOWNED <run_id> label=<terminal_label>` — a new run whose owner session is undetermined;
+  see "Run ownership" under "Run tracking (v2)" below.
 - `HEARTBEAT ok` is NOT printed (silence on success). On failure: `HEARTBEAT-FAILED <which> rc=<rc>`
   where which ∈ {condukt, backlog}. Heartbeats run at start and every `--heartbeat-secs`:
   `condukt state heartbeat --run flow-<SESSION>` and
@@ -76,8 +78,29 @@ scoping:
   and that poll changes nothing (no STATE, no stall bookkeeping) — it is never read as "no tasks".
 - **Watched runs.** Runs present in the FIRST successful poll of a fresh watch are the baseline and are
   NOT watched (they belong to other drivers or predate this one): no STATE / TASK-STALL for them.
-  A run_id that first appears in a later poll becomes watched. `--run <run_id>` (repeatable) adds a run
-  to the watched set explicitly, baseline or not.
+  A run_id that first appears in a later poll becomes watched **only when it is owned by `--session`**
+  (see "Run ownership" below). `--run <run_id>` (repeatable) adds a run to the watched set explicitly,
+  baseline or not, and regardless of its owner.
+- **Run ownership (2026-11-21).** Observed: STATE events in one session for
+  `run-20261121-040142-44869`, a parallel run of a different session (its only run-level identity was
+  `terminal_label=pid-44869`, which names no session). condukt `state init` now records
+  `owner_session` (`$CLAUDE_CODE_SESSION_ID`, or explicit `null` when unset/empty) and `state
+  list-tasks` repeats it on every row. For a run first listed after the baseline, from the
+  `owner_session` of all its rows:
+  - every row equals `--session` → watched as before;
+  - every row names the same other non-blank string → nothing is emitted for that run (not this
+    session's to drive);
+  - anything else — `null`, key missing (e.g. an older condukt), not a string, blank, or rows that
+    disagree → the owner is undetermined: exactly one `WATCH-UNOWNED <run_id> label=<terminal_label>`
+    per run (`label=unknown` when no row has a string `terminal_label`), and no STATE / TASK-STALL for
+    it. An unowned run is **surfaced, not dropped**: the driver must look at it and decide
+    (`--run <run_id>` on the next arm watches it).
+  The foreign / unowned classification is in memory only: it is forgotten when the run leaves the
+  listing, and a re-armed watch classifies such a run again (so WATCH-UNOWNED can repeat once per arm).
+  Baseline runs are not classified (unchanged: never watched, no WATCH-UNOWNED).
+- **The watcher output is advisory.** flow-watch blocks nothing and authorises nothing; its events are
+  prompts for the driver to act. Silence for a run means "not this session's to watch", never "that
+  run is fine".
 - **Persistence across re-arm.** The watched set and, per watched task, its last status and the time
   that status was first observed are stored in `--watch-state` (default
   `${XDG_STATE_HOME:-$HOME/.local/state}/claude-harnesses/flow-watch/<SESSION>.json`; parent dirs are

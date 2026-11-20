@@ -41,6 +41,7 @@ mod review_brief;
 mod review_order;
 mod review_worthiness;
 mod run_cap;
+mod run_identity;
 mod run_policy;
 mod runtime_conflict;
 mod schedule;
@@ -4361,7 +4362,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
             let run_id = run.unwrap_or_else(default_run_id);
             state::ensure_init_does_not_shadow_legacy(cfg, cwd, &run_id)?;
-            let resolved_label = label.or_else(resolve_label);
+            let resolved_label = label.or_else(run_identity::resolve_label);
             let tasks = dec
                 .tasks
                 .iter()
@@ -4377,6 +4378,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 tasks,
                 paused: false,
                 terminal_label: resolved_label,
+                owner_session: run_identity::resolve_owner_session(),
                 recorded_at: None,
                 recorded_episodes: Vec::new(),
             };
@@ -6669,18 +6671,6 @@ fn default_run_id() -> String {
     )
 }
 
-/// Auto-detect a terminal label: try `tty` output first, fall back to `pid-<PID>`.
-fn resolve_label() -> Option<String> {
-    let tty = std::process::Command::new("tty").output().ok()?;
-    if tty.status.success() {
-        let name = String::from_utf8_lossy(&tty.stdout).trim().to_string();
-        if !name.is_empty() && name != "not a tty" {
-            return Some(name);
-        }
-    }
-    Some(format!("pid-{}", std::process::id()))
-}
-
 /// Validate raw LLM JSON against a named schemaguard schema BEFORE deserialize.
 /// On violations, return a deterministic, structured error enumerating them
 /// (so the caller re-asks rather than blindly executing / cryptically failing).
@@ -6992,6 +6982,7 @@ mod state_set_tests {
             }],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         }

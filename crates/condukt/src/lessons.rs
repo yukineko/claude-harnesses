@@ -156,6 +156,7 @@ mod tests {
             ],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -231,6 +232,7 @@ mod tests {
             )],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };
@@ -290,6 +292,7 @@ mod tests {
             tasks: vec![task("t1", Status::Verified, None)],
             paused: false,
             terminal_label: None,
+            owner_session: None,
             recorded_at: None,
             recorded_episodes: Vec::new(),
         };

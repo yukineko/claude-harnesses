@@ -1404,12 +1404,18 @@ TASKS_JSON=$(condukt state list-tasks)
   "run_id": "run-20260625-...",
   "goal": "...",
   "terminal_label": "/dev/pts/1",
+  "owner_session": "8c1f…",
   "is_paused": true,
   "task_id": "t1",
   "task_title": "タスクのタイトル",
   "status": "pending"
 }]
 ```
+
+`owner_session` は run の state JSON に `state init` 時点で記録された所有セッション
+（`$CLAUDE_CODE_SESSION_ID` そのまま。読んだ側のセッションではない）。env が未設定・空なら
+明示的な `null`＝所有者判定不能であり、pid 等の代用値は作らない。フィールドが無い旧 run JSON も
+`null` として読まれる。
 
 空配列 (`[]`) の場合は「キャンセル可能なタスクがありません」と伝えてフローを終了する。
 

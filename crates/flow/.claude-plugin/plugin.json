@@ -1,7 +1,7 @@
 {
   "name": "flow",
-  "version": "0.2.39",
-  "description": "Backlog-draining loop skill for Claude Code that picks tasks from sources such as compass, backlog and hypothesis and hands them to condukt for execution, without locking the whole queue.",
+  "version": "0.2.40",
+  "description": "Backlog-draining loop skill for Claude Code that picks tasks from sources such as compass, backlog and hypothesis and hands them to condukt until the queue is empty, plus a Stop hook (flow stop-gate) that keeps a registered driver running while work remains; only the condukt circuit breaker stops it.",
   "author": {
     "name": "yukineko"
   },

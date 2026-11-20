@@ -286,3 +286,53 @@ fn control_stale_and_missing_fixtures_trip_without_flag() {
     assert_eq!(code, 1, "{v}");
     assert_eq!(v["reason"], "stall", "{v}");
 }
+
+// --- follow-up: uncountable compactions on an idle-measurable transcript ----
+//
+// From circuit.rs: `count_compact_boundaries` silently skips unparseable lines
+// (a garbage line does NOT make the count uncountable); the only route to an
+// Undetermined compaction count with a located transcript is a failed
+// `std::fs::read`. chmod 000 makes the read fail while the mtime (stat) stays
+// measurable, so the idle axis is Known — same fixture as
+// circuit_session_compacted_e2e.rs::unreadable_transcript_trips_even_with_idle_axis_off.
+
+#[cfg(unix)]
+fn make_unreadable(p: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o000)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn control_uncountable_compactions_trip_without_flag() {
+    let fx = Fixture::new("ctl-uncountable");
+    let t = fx.write_transcript(&[USER]);
+    make_unreadable(&t);
+    let (code, v) = fx.circuit(&[]);
+    assert_eq!(
+        code, 1,
+        "uncountable compactions must trip without the flag: {v}"
+    );
+    assert_eq!(v["verdict"], "trip", "{v}");
+    assert!(v["compactions_unknown_reason"].is_string(), "{v}");
+    assert!(
+        v["idle_secs"].is_i64(),
+        "apparatus: idle must be measured: {v}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn flag_uncountable_compactions_continue() {
+    let fx = Fixture::new("flag-uncountable");
+    let t = fx.write_transcript(&[USER]);
+    make_unreadable(&t);
+    let (code, v) = fx.circuit(&[FLAG]);
+    assert_eq!(
+        code, 0,
+        "a disabled axis must not trip on an uncountable count: {v}"
+    );
+    assert_eq!(v["verdict"], "continue", "{v}");
+    assert_eq!(v["compaction_axis"], "disabled", "{v}");
+    assert!(v["idle_secs"].is_i64(), "idle axis still measured: {v}");
+}

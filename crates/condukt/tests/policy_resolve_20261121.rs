@@ -6,8 +6,11 @@
 //!   「破壊はdeny,未測定はreject,autoで自答はいいが解決できないときは別の問いかcancel, 基本はすべてAllow」
 //!
 //! In AUTONOMOUS mode with `--resolve` the command NEVER exits 2 (escalate):
-//! - destructive (`--risk high --reversible low`, any confidence, even with
-//!   `--approval`)          -> exit 3, `"policy":"deny"`, `"answered":false`
+//! - destructive = every verdict the base policy (`condukt policy decide`)
+//!   resolves to `block` — this includes, but is not limited to,
+//!   `--risk high --reversible low` at any confidence (the score rule also
+//!   blocks e.g. `medium/low/low` and `high/medium/low`); even with
+//!   `--approval`          -> exit 3, `"policy":"deny"`, `"answered":false`
 //! - `--untestable` / `--unmeasured` (not destructive) -> exit 4, `"policy":"reject"`
 //! - `--conflict`           -> exit 5, `"policy":"cancel"`
 //! - everything else        -> exit 0, `"policy":"auto"`, the recommended option
@@ -143,7 +146,11 @@ fn assert_reject(r: &Run) {
 }
 
 fn assert_cancel(r: &Run) {
-    assert_eq!(r.code, 5, "conflict must cancel (exit 5): {}", r.stdout);
+    assert_eq!(
+        r.code, 5,
+        "unresolvable (conflict / no valid recommended option) must cancel (exit 5): {}",
+        r.stdout
+    );
     let v = json(r);
     assert_eq!(v["policy"], "cancel", "{}", r.stdout);
     assert_ne!(
@@ -370,4 +377,223 @@ fn without_resolve_autonomous_escalate_case_still_exits_2() {
     );
     assert_eq!(json(&r)["policy"], "escalate", "{}", r.stdout);
     assert_eq!(json(&r)["answered"], false, "{}", r.stdout);
+}
+
+// --- follow-up (verifier round): deny = every base `block` verdict ----------
+
+/// `condukt policy answer` with caller-supplied tail args (no fixed options),
+/// HOME/cwd/journal sandboxed to `dir`, explicit autonomy.
+fn answer_raw(dir: &Path, autonomous: bool, tail: &[&str]) -> Run {
+    let mut cmd = Command::new(bin());
+    harness_core::git_env::scrub(&mut cmd);
+    cmd.args([
+        "policy",
+        "answer",
+        "--question",
+        "Which way?",
+        "--journal-dir",
+    ])
+    .arg(dir)
+    .args(tail)
+    .current_dir(dir)
+    .env("HOME", dir)
+    .env("CONDUKT_AUTONOMOUS", if autonomous { "1" } else { "0" })
+    .env_remove("CLAUDE_CODE_SESSION_ID");
+    let out = cmd.output().expect("spawn condukt");
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let json = serde_json::from_str(&stdout).ok();
+    Run {
+        code: out.status.code().expect("exit code"),
+        stdout: format!(
+            "{stdout} | stderr={}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        json,
+    }
+}
+
+/// Raw journal text; `None` when the file does not exist.
+fn journal_text(dir: &Path) -> Option<String> {
+    std::fs::read_to_string(dir.join("gate-decisions.jsonl")).ok()
+}
+
+#[test]
+fn resolve_denies_score_block_medium_low_low() {
+    // Not the high+low hard stop: the score rule maps (medium, low, low) to
+    // block, and --resolve denies every base block.
+    let (r, _d) = auto_resolve("medium", "low", "low", "0", &[]);
+    assert_deny(&r);
+    let (r, _d) = auto_resolve("medium", "low", "low", "0", &["--approval"]);
+    assert_deny(&r);
+}
+
+#[test]
+fn resolve_denies_score_block_high_medium_low() {
+    let (r, _d) = auto_resolve("high", "medium", "low", "0", &[]);
+    assert_deny(&r);
+    let (r, _d) = auto_resolve("high", "medium", "low", "0", &["--approval"]);
+    assert_deny(&r);
+}
+
+#[test]
+fn resolve_deny_is_journaled_with_resolve_true() {
+    for (risk, rev, conf) in [
+        ("high", "low", "high"),
+        ("medium", "low", "low"),
+        ("high", "medium", "low"),
+    ] {
+        let (r, d) = auto_resolve(risk, rev, conf, "0", &[]);
+        assert_deny(&r);
+        let rows = journal_rows(d.path());
+        assert_eq!(rows.len(), 1, "exactly one row: {rows:?}");
+        assert_eq!(rows[0]["resolve"], true, "{}", rows[0]);
+        assert_eq!(rows[0]["policy"], "deny", "{}", rows[0]);
+        assert_eq!(rows[0]["chosen"], "", "a deny chooses nothing: {}", rows[0]);
+    }
+}
+
+#[test]
+fn resolve_cancel_is_journaled_with_resolve_true() {
+    let (r, d) = auto_resolve("medium", "high", "low", "1", &["--conflict"]);
+    assert_cancel(&r);
+    let rows = journal_rows(d.path());
+    assert_eq!(rows.len(), 1, "exactly one row: {rows:?}");
+    assert_eq!(rows[0]["resolve"], true, "{}", rows[0]);
+    assert_eq!(rows[0]["policy"], "cancel", "{}", rows[0]);
+    assert_eq!(
+        rows[0]["chosen"], "",
+        "a cancel chooses nothing: {}",
+        rows[0]
+    );
+}
+
+// Observed contract (read from main.rs: the --resolve branch runs BEFORE the
+// legacy `Invalid` exit 1, with `valid = options.get(recommend).is_some()`):
+// with --resolve in autonomous mode, "no valid recommended option" is NOT
+// rejected as invalid input (exit 1) — it resolves to cancel (exit 5) and is
+// journaled. It never self-answers with an empty/bogus choice.
+
+#[test]
+fn resolve_without_any_option_cancels_and_journals() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = answer_raw(
+        dir.path(),
+        true,
+        &[
+            "--risk",
+            "low",
+            "--reversible",
+            "high",
+            "--confidence",
+            "high",
+            "--resolve",
+        ],
+    );
+    assert_cancel(&r);
+    assert_eq!(json(&r)["answered"], false, "{}", r.stdout);
+    let rows = journal_rows(dir.path());
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["policy"], "cancel", "{}", rows[0]);
+    assert_eq!(rows[0]["resolve"], true, "{}", rows[0]);
+}
+
+#[test]
+fn resolve_out_of_range_recommend_cancels_not_invalid() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = answer_raw(
+        dir.path(),
+        true,
+        &[
+            "--risk",
+            "low",
+            "--reversible",
+            "high",
+            "--confidence",
+            "high",
+            "--option",
+            "A",
+            "--recommend",
+            "9",
+            "--resolve",
+        ],
+    );
+    assert_cancel(&r);
+    assert_eq!(json(&r)["answered"], false, "{}", r.stdout);
+    let rows = journal_rows(dir.path());
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["policy"], "cancel", "{}", rows[0]);
+    assert_eq!(rows[0]["chosen"], "", "{}", rows[0]);
+}
+
+#[test]
+fn without_resolve_out_of_range_recommend_is_still_invalid_exit_1() {
+    // Control: the legacy path keeps rejecting the malformed invocation and
+    // journals nothing.
+    let dir = tempfile::tempdir().unwrap();
+    let r = answer_raw(
+        dir.path(),
+        true,
+        &[
+            "--risk",
+            "low",
+            "--reversible",
+            "high",
+            "--confidence",
+            "high",
+            "--option",
+            "A",
+            "--recommend",
+            "9",
+        ],
+    );
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    assert!(
+        journal_text(dir.path()).is_none(),
+        "invalid input is not journaled"
+    );
+}
+
+#[test]
+fn resolve_non_autonomous_writes_no_extra_journal_line() {
+    // Inert means inert on disk too: the --resolve run's journal must hold
+    // exactly what the no-flag run writes (same rows modulo created_at, and no
+    // `resolve` key).
+    let cases: &[(&str, &str, &str, &[&str])] = &[
+        ("medium", "high", "low", &[]),
+        ("low", "high", "high", &[]),
+        ("high", "low", "high", &[]),
+        ("low", "high", "high", &["--untestable"]),
+        ("low", "high", "high", &["--conflict"]),
+    ];
+    let strip = |t: Option<String>| -> Vec<serde_json::Value> {
+        t.unwrap_or_default()
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                let mut v: serde_json::Value = serde_json::from_str(l).unwrap();
+                v.as_object_mut().unwrap().remove("created_at");
+                v
+            })
+            .collect()
+    };
+    for (risk, rev, conf, flags) in cases {
+        let plain_dir = tempfile::tempdir().unwrap();
+        let flag_dir = tempfile::tempdir().unwrap();
+        let _ = answer(plain_dir.path(), risk, rev, conf, "1", false, flags);
+        let mut with_flags = vec!["--resolve"];
+        with_flags.extend_from_slice(flags);
+        let _ = answer(flag_dir.path(), risk, rev, conf, "1", false, &with_flags);
+        let plain = strip(journal_text(plain_dir.path()));
+        let with = strip(journal_text(flag_dir.path()));
+        assert!(!plain.is_empty(), "apparatus: the no-flag run journals");
+        assert_eq!(
+            with, plain,
+            "non-autonomous --resolve journal must equal the no-flag journal \
+             ({risk}/{rev}/{conf} {flags:?})"
+        );
+        assert!(
+            with.iter().all(|row| row.get("resolve").is_none()),
+            "an inert --resolve must not write a resolve row: {with:?}"
+        );
+    }
 }

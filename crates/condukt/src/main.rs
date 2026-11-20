@@ -1375,7 +1375,9 @@ enum PolicyAction {
     /// exit contract as `decide` (1 = invalid input: bad level or a --recommend
     /// index with no matching --option). With `--resolve` in an autonomous run
     /// the exit contract is instead 0 auto / 3 deny / 4 reject / 5 cancel,
-    /// never 2 (see --resolve).
+    /// never 2 (see --resolve); invalid levels still exit 1 (they are parsed
+    /// before --resolve), but an absent/out-of-range --recommend is a cancel
+    /// (exit 5), not invalid.
     Answer {
         /// How much damage if this decision is wrong (low|medium|high).
         #[arg(long)]
@@ -1424,7 +1426,8 @@ enum PolicyAction {
         /// Takes precedence over --conflict (both clamp identically). Without
         /// --resolve (or when the run is not autonomous) it escalates; with
         /// --resolve in an autonomous run it is rejected instead (exit 4, see
-        /// --resolve) — it still NEVER self-answers.
+        /// --resolve) — it still NEVER self-answers. Under --resolve a block
+        /// verdict still wins first (deny, exit 3) before the reject.
         #[arg(long)]
         untestable: bool,
         /// Frame this as a **permission approval** — a YES/NO "may I proceed?"
@@ -1451,7 +1454,9 @@ enum PolicyAction {
         /// できないときは別の問いかcancel, 基本はすべてAllow」. Only when the run
         /// is autonomous (same predicate as --approval); otherwise INERT (output
         /// and exit identical to without it). Precedence, first match wins:
-        /// destructive (risk high + reversible low) -> `deny` exit 3;
+        /// the base policy blocks (risk high + reversible low, or any other
+        /// risk/reversible/confidence combination it blocks, e.g. medium/low/low
+        /// or high/medium/low) -> `deny` exit 3;
         /// --untestable/--unmeasured -> `reject` exit 4; --conflict or no valid
         /// --recommend option -> `cancel` exit 5 (re-pose once as a different
         /// answerable question, else cancel the item); otherwise `auto` with the

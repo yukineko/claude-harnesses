@@ -302,6 +302,9 @@ class DAppendFailureRollsBack(unittest.TestCase):
                 led.write_text(pre[n])
         env = dict(os.environ)
         env.update(HOME=str(home), CLAUDE_PLUGIN_CACHE=str(cache),
+                   # Override any ambient XDG_STATE_HOME: the rollout lock lives
+                   # under it (backlog d4a135ba); never take the REAL lock.
+                   XDG_STATE_HOME=str(home / ".local" / "state"),
                    CLAUDE_PLUGIN_REGISTRY=str(reg),
                    CLAUDE_SETTINGS_JSON=str(home / "settings.json"),
                    PLUGIN_CACHE_PROC_LIST_PROBE="echo '1 1 python3'")
@@ -354,6 +357,9 @@ class DAppendFailureRollsBack(unittest.TestCase):
             (cache / "tracekit" / LEDGER).mkdir()
             env = dict(os.environ)
             env.update(HOME=str(home), CLAUDE_PLUGIN_CACHE=str(cache),
+                       # Override any ambient XDG_STATE_HOME: the rollout lock lives
+                       # under it (backlog d4a135ba); never take the REAL lock.
+                       XDG_STATE_HOME=str(home / ".local" / "state"),
                        CLAUDE_PLUGIN_REGISTRY=str(reg),
                        CLAUDE_SETTINGS_JSON=str(home / "settings.json"),
                        PLUGIN_CACHE_PROC_LIST_PROBE="echo '1 1 python3'")

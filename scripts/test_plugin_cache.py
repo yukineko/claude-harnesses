@@ -598,6 +598,9 @@ class PrunerRemoval(unittest.TestCase):
             "CLAUDE_SETTINGS_JSON": settings,
             # Same reason as CLAUDE_SETTINGS_JSON: never read the live registry.
             "CLAUDE_PLUGIN_REGISTRY": str(Path(repo) / "no-such-registry.json"),
+            # A non-dry prune takes the rollout lock under
+            # ${XDG_STATE_HOME:-$HOME/.local/state} (backlog d4a135ba): never the REAL one.
+            "XDG_STATE_HOME": str(Path(repo) / "xdg-state"),
         }
         with mock.patch.dict(os.environ, env):
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -755,6 +758,9 @@ def _run_prune_main(repo, cache, settings=None, extra=()):
         "CLAUDE_SETTINGS_JSON": settings,
         # Same reason: never read the user's live installed_plugins.json.
         "CLAUDE_PLUGIN_REGISTRY": str(Path(repo) / "no-such-registry.json"),
+        # A non-dry prune takes the rollout lock under
+        # ${XDG_STATE_HOME:-$HOME/.local/state} (backlog d4a135ba): never the REAL one.
+        "XDG_STATE_HOME": str(Path(repo) / "xdg-state"),
     }
     with mock.patch.dict(os.environ, env):
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):

@@ -86,6 +86,11 @@ TD_UNSTRIPPED="$TARGET_ROOT/strip-test-unstripped"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/rebuild-stripped.XXXXXX")"
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
+# The rollout lock rebuild-plugins.sh takes is
+# ${XDG_STATE_HOME:-$HOME/.local/state}/claude-harnesses/rollout.lock (backlog
+# d4a135ba), no longer inside the temp cache: point it into $TMP so this
+# standalone test neither takes the real lock nor is refused by a real rollout.
+export XDG_STATE_HOME="$TMP/xdg-state"
 
 # defined-symbol count; prints "ERR" if nm fails (never a plausible number)
 defined_syms() {

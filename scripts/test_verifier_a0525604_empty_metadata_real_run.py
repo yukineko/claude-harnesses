@@ -60,7 +60,10 @@ class EmptyMetadataRealRun(unittest.TestCase):
             (b / n).write_text("#!/bin/sh\n")
             hb = b / (n + "-" + self.suf); hb.write_bytes(("OLD-" + n + "\n").encode()); hb.chmod(0o755)
         self.env = dict(os.environ, PATH=str(shim) + ":" + os.environ["PATH"], CARGO_TARGET_CAP_MB="0",
-                        CLAUDE_PLUGIN_CACHE=str(self.cache))
+                        CLAUDE_PLUGIN_CACHE=str(self.cache),
+                        # The rollout lock lives under ${XDG_STATE_HOME:-$HOME/.local/state}
+                        # (backlog d4a135ba): sandbox it, never the REAL lock.
+                        XDG_STATE_HOME=str(self.tmp / "state"))
 
     def test_empty_metadata_real_run_does_not_deploy_stale_guess(self):
         p = subprocess.run(["bash", str(self.repo / "scripts" / "rebuild-plugins.sh"), "--no-clean"],

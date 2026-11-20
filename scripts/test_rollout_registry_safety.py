@@ -32,6 +32,9 @@ ROLLOUT = HERE / "rollout-plugins.sh"
 
 def _env(home, cache, registry, **extra):
     env = dict(os.environ)
+    # the rollout lock is ${XDG_STATE_HOME:-$HOME/.local/state}/claude-harnesses/
+    # rollout.lock (backlog d4a135ba): drop XDG_STATE_HOME so it is under the temp HOME
+    env.pop("XDG_STATE_HOME", None)
     env.update(
         HOME=str(home),
         CLAUDE_PLUGIN_CACHE=str(cache),
@@ -227,7 +230,8 @@ class CanaryHaltLeavesNoDarkEntry(unittest.TestCase):
 
 class ConcurrentRolloutIsExcluded(unittest.TestCase):
     """e3366b5c (second half): two rollouts must not run at once. The script
-    takes an exclusive mkdir lock at "$CLAUDE_PLUGIN_CACHE/.rollout.lock" and
+    takes an exclusive mkdir lock at
+    "${XDG_STATE_HOME:-$HOME/.local/state}/claude-harnesses/rollout.lock" and
     fails closed (non-zero, before touching registry/cache) on contention,
     including a STALE lock (holder pid dead): never stolen silently."""
 
@@ -255,9 +259,13 @@ class ConcurrentRolloutIsExcluded(unittest.TestCase):
         return sorted(str(p.relative_to(cache)) for p in cache.rglob("*")
                       if ".rollout.lock" not in p.parts)
 
-    def _make_lock(self, cache, pid):
-        lock = cache / ".rollout.lock"
-        lock.mkdir()
+    @staticmethod
+    def _lock_path(home):
+        return home / ".local" / "state" / "claude-harnesses" / "rollout.lock"
+
+    def _make_lock(self, home, pid):
+        lock = self._lock_path(home)
+        lock.mkdir(parents=True)
         (lock / "pid").write_text(f"{pid}\n")
         return lock
 
@@ -266,7 +274,7 @@ class ConcurrentRolloutIsExcluded(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0, f"rollout ran despite held lock\n{log}")
         self.assertEqual(reg.read_bytes(), before_reg, "registry modified under a held lock")
         self.assertEqual(self._listing(cache), before_list, "cache modified under a held lock")
-        self.assertIn(".rollout.lock", r.stderr, f"stderr does not name the lock\n{log}")
+        self.assertIn(str(lock), r.stderr, f"stderr does not name the lock\n{log}")
         self.assertTrue(lock.is_dir(), "another session's lock was removed/stolen")
         return log
 
@@ -274,7 +282,7 @@ class ConcurrentRolloutIsExcluded(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp, home, cache, reg = self._sandbox(t)
             pid = os.getpid()  # a live process
-            lock = self._make_lock(cache, pid)
+            lock = self._make_lock(home, pid)
             before_reg, before_list = reg.read_bytes(), self._listing(cache)
             r = self._run(home, cache, reg)
             log = self._assert_refused(r, reg, before_reg, cache, before_list, lock, pid)
@@ -285,7 +293,7 @@ class ConcurrentRolloutIsExcluded(unittest.TestCase):
             tmp, home, cache, reg = self._sandbox(t)
             dead = subprocess.Popen([sys.executable, "-c", "pass"])
             dead.wait()  # reaped: pid is dead
-            lock = self._make_lock(cache, dead.pid)
+            lock = self._make_lock(home, dead.pid)
             before_reg, before_list = reg.read_bytes(), self._listing(cache)
             r = self._run(home, cache, reg)
             log = self._assert_refused(r, reg, before_reg, cache, before_list, lock, dead.pid)
@@ -298,9 +306,9 @@ class ConcurrentRolloutIsExcluded(unittest.TestCase):
             tmp, home, cache, reg = self._sandbox(t)
             r = self._run(home, cache, reg)
             log = r.stdout + r.stderr
-            self.assertNotIn(".rollout.lock", log, f"refused with no lock present\n{log}")
+            self.assertNotIn("rollout.lock", log, f"refused with no lock present\n{log}")
             self.assertIn(f"copied {self.PLUGIN} ->", log, f"rollout did not proceed\n{log}")
-            self.assertFalse((cache / ".rollout.lock").exists(), "lock left behind after run")
+            self.assertFalse(self._lock_path(home).exists(), "lock left behind after run")
 
 
 if __name__ == "__main__":

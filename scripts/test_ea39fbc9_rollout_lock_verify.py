@@ -72,7 +72,11 @@ class Fx:
                         PLUGIN_CACHE_PROC_LIST_PROBE="echo '1 1 python3'",
                         PATH=f"{fakebin}{os.pathsep}{os.environ['PATH']}")
         self.env.pop(ENV_VAR, None)
-        self.lock = self.cache / ".rollout.lock"
+        # lock location (backlog d4a135ba): ${XDG_STATE_HOME:-$HOME/.local/state}/
+        # claude-harnesses/rollout.lock; XDG_STATE_HOME is dropped so it is under the temp HOME.
+        self.env.pop("XDG_STATE_HOME", None)
+        self.lock = self.root / "home" / ".local" / "state" / "claude-harnesses" / "rollout.lock"
+        self.lock.parent.mkdir(parents=True)
 
     def cleanup(self):
         shutil.rmtree(self.root, True)
@@ -287,6 +291,9 @@ class RolloutE2E(unittest.TestCase):
                         PLUGIN_CACHE_PROC_LIST_PROBE="echo '1 1 python3'",
                         PATH=f"{fb}{os.pathsep}{os.environ['PATH']}")
         self.env.pop(ENV_VAR, None)
+        # lock location (backlog d4a135ba), under the temp HOME
+        self.env.pop("XDG_STATE_HOME", None)
+        self.lock = self.root / "home" / ".local" / "state" / "claude-harnesses" / "rollout.lock"
 
     def run_rollout(self, *args):
         return subprocess.run(["bash", str(self.repo / "scripts" / "rollout-plugins.sh"), *args],
@@ -298,7 +305,7 @@ class RolloutE2E(unittest.TestCase):
         self.assertIn(">>> scripts/rebuild-plugins.sh", out, "E2E did not reach the rebuild child (UNVERIFIED)\n" + out)
         self.assertNotIn("ERROR: rebuild:", out)
         self.assertIn("rollout lock: running under holder pid", out)
-        self.assertFalse((self.cache / ".rollout.lock").exists(), "rollout left its lock\n" + out)
+        self.assertFalse(self.lock.exists(), "rollout left its lock\n" + out)
 
     def test_prune_child_is_not_refused_by_its_own_rollouts_lock(self):
         r = self.run_rollout("--no-rebuild", "--no-sync")
@@ -307,7 +314,7 @@ class RolloutE2E(unittest.TestCase):
         self.assertNotIn("ERROR: prune:", out)
         self.assertNotIn("prune: exited 6", out)
         self.assertIn("rollout lock: running under holder pid", out)
-        self.assertFalse((self.cache / ".rollout.lock").exists(), "rollout left its lock\n" + out)
+        self.assertFalse(self.lock.exists(), "rollout left its lock\n" + out)
 
     def test_standalone_rebuild_refuses_while_a_real_rollout_holds_the_lock(self):
         # a real rollout holder: hold the lock via a sleeping process that owns it
@@ -315,8 +322,8 @@ class RolloutE2E(unittest.TestCase):
         self.addCleanup(holder.kill)
         self.addCleanup(holder.wait)
         (self.cache).mkdir(parents=True, exist_ok=True)
-        (self.cache / ".rollout.lock").mkdir()
-        (self.cache / ".rollout.lock" / "pid").write_text(f"{holder.pid}\n")
+        self.lock.mkdir(parents=True)
+        (self.lock / "pid").write_text(f"{holder.pid}\n")
         r = self.run_rollout()  # a second rollout must refuse at ITS acquire, before any child
         self.assertEqual(r.returncode, 6, r.stdout + r.stderr)
         self.assertNotIn(">>> scripts/rebuild-plugins.sh", r.stdout)

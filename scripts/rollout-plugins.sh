@@ -127,10 +127,13 @@
 #                           then target/{release,debug}/overwatch)
 #
 # SAFETY
-#   - Exclusive: a non-dry-run takes the mkdir lock "$CACHE/.rollout.lock"
-#     before reading the registry and releases it on exit. A held lock (live
-#     OR dead holder) makes the run exit 6 before anything is touched; a stale
-#     lock is never stolen — the message prints the `rm -r` to remove it.
+#   - Exclusive: a non-dry-run takes the mkdir lock
+#     "${XDG_STATE_HOME:-$HOME/.local/state}/claude-harnesses/rollout.lock"
+#     (one lock for every cache, outside ~/.claude) before reading the
+#     registry and releases it on exit. A held lock (live OR dead holder), a
+#     legacy "$CACHE/.rollout.lock", or any "cannot tell" makes the run exit 6
+#     before anything is touched; a stale lock is never stolen — the message
+#     prints the `rm -r` to remove it.
 #   - Committed source only (backlog ff8cebd0): a non-dry-run refuses (exit 9)
 #     to deploy unless the build inputs (crates/, Cargo.toml, Cargo.lock,
 #     .cargo/) are exactly HEAD and no fail-open mutation is in flight, checked
@@ -328,8 +331,22 @@ echo
 # the repo, so worktree isolation does not separate two sessions' rollouts.
 # Measured 2026-09-07: two concurrent rollouts from trees at different versions
 # pruned each other's freshly registered dirs and specguard/blastguard went
-# dark. A mkdir lock at "$CACHE/.rollout.lock" (holder pid in ./pid) makes the
-# whole read-registry -> copy -> repoint -> prune sequence exclusive.
+# dark. A mkdir lock (holder pid in ./pid) makes the whole
+# read-registry -> copy -> repoint -> prune sequence exclusive.
+#
+# WHERE (backlog d4a135ba, user ruling 2026-11-20): the lock is the fixed dir
+#     ${XDG_STATE_HOME:-$HOME/.local/state}/claude-harnesses/rollout.lock
+# — one lock for every cache. It used to be "$CACHE/.rollout.lock", inside the
+# marketplace cache dir, which Claude Code itself garbage-collects at startup
+# (unknown dirs directly under it are removed; see
+# scripts/test_rollout_lock_outside_managed_cache.py), so a starting session
+# could delete a held lock mid-rollout. The path rule is resolve_rollout_lock_dir
+# below, identical in rebuild-plugins.sh and plugin_cache.rollout_lock_dir
+# (used by prune-plugin-cache.py); a path that cannot be resolved (no HOME, or
+# a non-absolute state dir) refuses. A LEGACY "$CACHE/.rollout.lock" that exists
+# (or whose presence cannot be checked) also refuses, checked after the new lock
+# is taken: a rollout from a tree that predates the move does not know the new
+# lock, so this is what keeps a new-location run from starting during it.
 #
 # Contention fails CLOSED before the registry or the cache is touched, and a
 # lock whose holder pid is dead is NOT stolen: "the holder is dead" is a guess
@@ -341,7 +358,61 @@ echo
 # rebuild-plugins.sh and prune-plugin-cache.py honour the same lock when run
 # standalone (backlog ea39fbc9); see HARNESS_ROLLOUT_LOCK_HOLDER_PID below for
 # how they recognise being run BY the holder.
-LOCK_DIR="$CACHE/.rollout.lock"
+# The ONE rule for the lock path (same text in rebuild-plugins.sh; Python twin:
+# plugin_cache.rollout_lock_dir). An empty XDG_STATE_HOME counts as unset.
+# Prints the path, or returns 1 with the reason on stderr.
+resolve_rollout_lock_dir() {
+  local state="${XDG_STATE_HOME:-}"
+  if [ -z "$state" ]; then
+    if [ -z "${HOME:-}" ]; then
+      echo "neither XDG_STATE_HOME nor HOME is set, so the rollout lock path is unknown" >&2
+      return 1
+    fi
+    state="$HOME/.local/state"
+  fi
+  case "$state" in
+    /*) ;;
+    *) echo "state dir '$state' (from XDG_STATE_HOME / HOME) is not an absolute path, so the rollout lock path is unknown" >&2
+       return 1 ;;
+  esac
+  printf '%s\n' "$state/claude-harnesses/rollout.lock"
+}
+# Diagnostic only — a held lock is refused whatever this says.
+rollout_lock_state() {
+  local dir="$1" holder=""
+  holder="$(cat "$dir/pid" 2>/dev/null || true)"
+  if [ -z "$holder" ] || ! [[ "$holder" =~ ^[0-9]+$ ]]; then
+    echo "holder pid unknown (no readable $dir/pid)"
+  elif kill -0 "$holder" 2>/dev/null; then
+    echo "held by live pid $holder"
+  elif ps -p "$holder" >/dev/null 2>&1; then
+    # kill -0 fails with EPERM for another user's live process; ps still sees it.
+    echo "held by live pid $holder (another user)"
+  else
+    echo "STALE? holder pid $holder is not running"
+  fi
+}
+# refuse_rollout_lock <message> [<lock dir to name in the rm -r hint>]
+refuse_rollout_lock() {
+  echo "ERROR: rollout: $1" >&2
+  echo "       Refusing to proceed: nothing in the registry or the cache was touched." >&2
+  echo "       Two concurrent rollouts prune each other's deployments (backlog e3366b5c)." >&2
+  if [ -n "${2:-}" ]; then
+    echo "       If you have confirmed no rollout is running, remove the lock by hand:" >&2
+    echo "         rm -r \"$2\"" >&2
+  fi
+  exit 6
+}
+# 0 = no legacy "$CACHE/.rollout.lock", 1 = one exists, 2 = cannot tell. "No
+# entry" only counts as absent when $CACHE is a dir this process can search;
+# otherwise [ -e ] answering false could mean "not allowed to look".
+legacy_rollout_lock_check() {
+  local legacy="$CACHE/.rollout.lock"
+  if [ -e "$legacy" ] || [ -L "$legacy" ]; then return 1; fi
+  if [ -d "$CACHE" ] && [ -x "$CACHE" ]; then return 0; fi
+  return 2
+}
+LOCK_DIR=""
 lock_held=0
 release_rollout_lock() {
   if [ "$lock_held" = 1 ]; then
@@ -372,9 +443,16 @@ on_rollout_exit() {
   release_rollout_lock
 }
 acquire_rollout_lock() {
+  if [ -z "$LOCK_DIR" ]; then
+    refuse_rollout_lock "the rollout lock path is unknown, so cannot tell whether a rollout is running."
+  fi
   if ! mkdir -p "$CACHE"; then
-    echo "rollout: cannot create plugin cache $CACHE, so cannot take $LOCK_DIR — refusing to proceed" >&2
-    exit 6
+    refuse_rollout_lock "cannot create plugin cache $CACHE, so cannot check for a legacy lock at $CACHE/.rollout.lock."
+  fi
+  local lock_parent
+  lock_parent="$(dirname "$LOCK_DIR")"
+  if ! mkdir -p "$lock_parent"; then
+    refuse_rollout_lock "cannot create the lock's parent dir $lock_parent, so cannot take $LOCK_DIR."
   fi
   if mkdir "$LOCK_DIR" 2>/dev/null; then
     lock_held=1
@@ -382,9 +460,17 @@ acquire_rollout_lock() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
     if ! echo "$$" > "$LOCK_DIR/pid"; then
-      echo "rollout: took $LOCK_DIR but could not record the pid in it — refusing to proceed" >&2
-      exit 6
+      refuse_rollout_lock "took $LOCK_DIR but could not record the pid in it."
     fi
+    # Legacy lock: checked while holding the new one (see WHERE above). The
+    # EXIT trap releases the new lock on refusal.
+    local legacy_rc=0
+    legacy_rollout_lock_check || legacy_rc=$?
+    case "$legacy_rc" in
+      0) ;;
+      1) refuse_rollout_lock "a legacy rollout lock exists at $CACHE/.rollout.lock — $(rollout_lock_state "$CACHE/.rollout.lock")." "$CACHE/.rollout.lock" ;;
+      *) refuse_rollout_lock "could not check for a legacy rollout lock at $CACHE/.rollout.lock ($CACHE is not a searchable dir)." ;;
+    esac
     # Reentrancy for the children this rollout runs under its own lock
     # (rebuild-plugins.sh, prune-plugin-cache.py — backlog ea39fbc9). Run
     # standalone they refuse while the lock exists; they accept it only when
@@ -396,26 +482,14 @@ acquire_rollout_lock() {
     export HARNESS_ROLLOUT_LOCK_HOLDER_PID="$$"
     return 0
   fi
-  local holder="" state
-  holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
-  if [ -z "$holder" ] || ! [[ "$holder" =~ ^[0-9]+$ ]]; then
-    state="holder pid unknown (no readable $LOCK_DIR/pid)"
-  elif kill -0 "$holder" 2>/dev/null; then
-    state="held by live pid $holder"
-  elif ps -p "$holder" >/dev/null 2>&1; then
-    # kill -0 fails with EPERM for another user's live process; ps still sees it.
-    state="held by live pid $holder (another user)"
-  else
-    state="STALE? holder pid $holder is not running"
+  if [ -d "$LOCK_DIR" ]; then
+    refuse_rollout_lock "another rollout holds $LOCK_DIR — $(rollout_lock_state "$LOCK_DIR")." "$LOCK_DIR"
   fi
-  echo "ERROR: another rollout holds $LOCK_DIR — $state." >&2
-  echo "       Refusing to proceed: nothing in the registry or the cache was touched." >&2
-  echo "       Two concurrent rollouts prune each other's deployments (backlog e3366b5c)." >&2
-  echo "       If you have confirmed no rollout is running, remove the lock by hand:" >&2
-  echo "         rm -r \"$LOCK_DIR\"" >&2
-  exit 6
+  refuse_rollout_lock "could not create $LOCK_DIR, so cannot tell whether a rollout is running."
 }
 if [ "$dry" != 1 ]; then
+  # `|| LOCK_DIR=""`: an unresolvable path is refused by acquire_rollout_lock.
+  LOCK_DIR="$(resolve_rollout_lock_dir)" || LOCK_DIR=""
   acquire_rollout_lock
 fi
 

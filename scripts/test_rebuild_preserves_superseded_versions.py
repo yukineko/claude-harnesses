@@ -97,6 +97,10 @@ class RebuildSuperseded(unittest.TestCase):
             PATH=f"{shim}:{env['PATH']}",
             FAKE_TARGET=str(target),
             CLAUDE_PLUGIN_CACHE=str(self.cache),
+            # The rollout lock lives under ${XDG_STATE_HOME:-$HOME/.local/state}
+            # (backlog d4a135ba): sandbox it so the non-dry run never takes the
+            # REAL lock.
+            XDG_STATE_HOME=str(self.tmp / "state"),
             CARGO_TARGET_CAP_MB="0",
         )
         self.proc = subprocess.run(

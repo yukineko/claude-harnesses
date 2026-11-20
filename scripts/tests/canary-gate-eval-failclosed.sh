@@ -101,7 +101,7 @@ seed_sandbox
 OUT="$(
   set +e
   OVERWATCH_BIN="$STUB" CLAUDE_PLUGIN_CACHE="$TEST_CACHE" CLAUDE_PLUGIN_REGISTRY="$TEST_REGISTRY" \
-  HOME="$TEST_HOME" OVERWATCH_CANARY_SINCE=1 \
+  HOME="$TEST_HOME" XDG_STATE_HOME="$TEST_HOME/.local/state" OVERWATCH_CANARY_SINCE=1 \
   bash "$SCRIPT" --plugin "$PLUGIN_A" --plugin "$PLUGIN_B" --plugin "$PLUGIN_C" \
     --canary --canary-stage-size 2 --canary-threshold 0 --no-rebuild --no-sync 2>&1
   echo "RC=$?"
@@ -142,7 +142,7 @@ OUT2="$(
   set +e
   ROLLOUT_GATE_EVAL_FAILSOFT=1 \
   OVERWATCH_BIN="$STUB" CLAUDE_PLUGIN_CACHE="$TEST_CACHE" CLAUDE_PLUGIN_REGISTRY="$TEST_REGISTRY" \
-  HOME="$TEST_HOME" OVERWATCH_CANARY_SINCE=1 \
+  HOME="$TEST_HOME" XDG_STATE_HOME="$TEST_HOME/.local/state" OVERWATCH_CANARY_SINCE=1 \
   bash "$SCRIPT" --plugin "$PLUGIN_A" --plugin "$PLUGIN_B" --plugin "$PLUGIN_C" \
     --canary --canary-stage-size 2 --canary-threshold 0 --no-rebuild --no-sync 2>&1
   echo "RC=$?"
@@ -178,7 +178,7 @@ seed_sandbox
 OUT3="$(
   set +e
   OVERWATCH_BIN="$STUB3" CLAUDE_PLUGIN_CACHE="$TEST_CACHE" CLAUDE_PLUGIN_REGISTRY="$TEST_REGISTRY" \
-  HOME="$TEST_HOME" OVERWATCH_CANARY_SINCE=1 \
+  HOME="$TEST_HOME" XDG_STATE_HOME="$TEST_HOME/.local/state" OVERWATCH_CANARY_SINCE=1 \
   bash "$SCRIPT" --plugin "$PLUGIN_A" --plugin "$PLUGIN_B" --plugin "$PLUGIN_C" \
     --canary --canary-stage-size 2 --canary-threshold 0 --no-rebuild --no-sync 2>&1
   echo "RC=$?"

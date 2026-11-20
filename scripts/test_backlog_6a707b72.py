@@ -46,6 +46,9 @@ class FilteredRolloutLeavesOthersAlone(unittest.TestCase):
             env = dict(os.environ)
             env.update(
                 HOME=str(home),
+                # Override any ambient XDG_STATE_HOME: the rollout lock lives under
+                # it (backlog d4a135ba), and a test must never take the REAL lock.
+                XDG_STATE_HOME=str(home / ".local" / "state"),
                 CLAUDE_PLUGIN_CACHE=str(cache),
                 CLAUDE_PLUGIN_REGISTRY=str(reg),
                 CLAUDE_SETTINGS_JSON=str(home / "settings.json"),

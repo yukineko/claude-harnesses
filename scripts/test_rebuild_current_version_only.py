@@ -127,6 +127,10 @@ class Fixture:
                 (vd / "hooks" / "hooks.json").write_text(f'{{"stale":"{v}"}}\n')
                 (vd / ".deployed-from.json").write_text(OLD_MANIFEST)
         self.env["CLAUDE_PLUGIN_CACHE"] = str(self.cache)
+        # The rollout lock lives under ${XDG_STATE_HOME:-$HOME/.local/state}, not
+        # the cache (backlog d4a135ba): sandbox it too, or the non-dry run takes
+        # the REAL lock.
+        self.env["XDG_STATE_HOME"] = str(self.tmp / "state")
 
     def snapshot(self, name, ver):
         vd = self.cache / name / ver

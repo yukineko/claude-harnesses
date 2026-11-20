@@ -90,24 +90,39 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import plugin_cache  # noqa: E402
 
 # --- the rollout lock (backlog ea39fbc9, lock from e3366b5c) ----------------
-# rollout-plugins.sh holds "<cache>/.rollout.lock" (holder pid in ./pid) across
-# read-registry -> copy -> repoint -> prune. A standalone prune used to ignore it
-# and could delete dirs between another session's copy and its registry repoint.
+# rollout-plugins.sh holds the rollout lock (holder pid in ./pid) across
+# read-registry -> copy -> repoint -> prune. The lock is the fixed dir
+#     ${XDG_STATE_HOME:-$HOME/.local/state}/claude-harnesses/rollout.lock
+# (plugin_cache.rollout_lock_dir — one lock for every cache, outside ~/.claude:
+# backlog d4a135ba; it used to be "<cache>/.rollout.lock", inside the dir Claude
+# Code garbage-collects at startup).
+# A standalone prune used to ignore it and could delete dirs between another
+# session's copy and its registry repoint.
 # This mirrors rollout's acquire_rollout_lock: mkdir; a held lock is never
 # stolen (not even when its holder pid looks dead); every "cannot tell"
-# (unreadable pid, mkdir failure other than "already held", ps failure)
-# refuses. Run BY the holding rollout, it is accepted only if
+# (unresolvable lock path, state dir not creatable, unreadable pid, mkdir
+# failure other than "already held", pid not recordable, ps failure) refuses.
+# A LEGACY "<cache>/.rollout.lock" (LOCK_NAME) that exists — or whose presence
+# cannot be checked — also refuses, so a rollout from a tree that predates the
+# move is never run alongside this one.
+# Run BY the holding rollout, it is accepted only if
 # HARNESS_ROLLOUT_LOCK_HOLDER_PID equals the pid recorded in the lock AND that
 # pid is an ancestor of this process — a bare env var is not a key.
 # --dry-run deletes nothing, so like rollout --dry-run it neither takes nor
 # needs the lock.
-LOCK_NAME = ".rollout.lock"
+LOCK_NAME = plugin_cache.ROLLOUT_LOCK_NAME  # the LEGACY in-cache name
 HOLDER_ENV = "HARNESS_ROLLOUT_LOCK_HOLDER_PID"
 LOCK_REFUSED_EXIT = 6
 
 
 class LockRefused(Exception):
-    pass
+    """`rm_path`: the lock dir the refusal message tells the operator to remove
+    by hand, or None when no lock dir is involved (e.g. the path could not be
+    resolved)."""
+
+    def __init__(self, msg, rm_path=None):
+        super().__init__(msg)
+        self.rm_path = rm_path
 
 
 def _read_holder(lock_dir):
@@ -158,31 +173,50 @@ def _pid_is_ancestor(target):
 def acquire_rollout_lock(cache_root):
     """Return the lock dir if this process took the lock (the caller must
     release it), or None if this process runs under the rollout that holds it.
-    Raise LockRefused in every other case."""
-    lock_dir = os.path.join(cache_root, LOCK_NAME)
+    Raise LockRefused in every other case.
+
+    `cache_root` is only consulted for the LEGACY lock (`<cache_root>/LOCK_NAME`);
+    the lock itself is plugin_cache.rollout_lock_dir()."""
+    try:
+        lock_dir = plugin_cache.rollout_lock_dir()
+    except plugin_cache.RolloutLockPathUndetermined as exc:
+        raise LockRefused(f"{exc}, so cannot tell whether a rollout is running.")
     env_holder = os.environ.get(HOLDER_ENV)
     if env_holder:
         if not os.path.isdir(lock_dir):
             raise LockRefused(f"{HOLDER_ENV}={env_holder} is set but {lock_dir} does not exist.")
         holder = _read_holder(lock_dir)
         if holder is None or holder != env_holder:
-            raise LockRefused(f"{lock_dir} is {_lock_state(lock_dir)}, not by {HOLDER_ENV}={env_holder}.")
+            raise LockRefused(
+                f"{lock_dir} is {_lock_state(lock_dir)}, not by {HOLDER_ENV}={env_holder}.",
+                rm_path=lock_dir,
+            )
         anc = _pid_is_ancestor(int(holder))
         if anc is None:
             raise LockRefused(
                 f"could not determine whether lock holder pid {holder} is an ancestor "
-                "of this process (ps failed)."
+                "of this process (ps failed).",
+                rm_path=lock_dir,
             )
         if not anc:
             raise LockRefused(
-                f"{lock_dir} is held by pid {holder}, which is not an ancestor of this process."
+                f"{lock_dir} is held by pid {holder}, which is not an ancestor of this process.",
+                rm_path=lock_dir,
             )
+        _refuse_if_legacy_lock(cache_root)
         print(f"rollout lock: running under holder pid {holder} (ancestor of this process)")
         return None
     try:
+        os.makedirs(os.path.dirname(lock_dir), exist_ok=True)
+    except OSError as exc:
+        raise LockRefused(
+            f"could not create the lock's parent dir {os.path.dirname(lock_dir)} ({exc}), "
+            "so cannot tell whether a rollout is running."
+        )
+    try:
         os.mkdir(lock_dir)
     except FileExistsError:
-        raise LockRefused(f"a rollout holds {lock_dir} — {_lock_state(lock_dir)}.")
+        raise LockRefused(f"a rollout holds {lock_dir} — {_lock_state(lock_dir)}.", rm_path=lock_dir)
     except OSError as exc:
         raise LockRefused(
             f"could not create {lock_dir} ({exc}), so cannot tell whether a rollout is running."
@@ -193,7 +227,33 @@ def acquire_rollout_lock(cache_root):
     except OSError as exc:
         release_rollout_lock(lock_dir, force=True)
         raise LockRefused(f"took {lock_dir} but could not record the pid in it ({exc}).")
+    try:
+        _refuse_if_legacy_lock(cache_root)
+    except LockRefused:
+        release_rollout_lock(lock_dir)
+        raise
     return lock_dir
+
+
+def _refuse_if_legacy_lock(cache_root):
+    """Refuse while a LEGACY `<cache_root>/.rollout.lock` exists, or when its
+    presence cannot be checked. Checked AFTER this process holds (or runs under)
+    the new lock, so a new-location contender cannot start between the check
+    and the take. A pre-move rollout does not know the new lock and can still
+    start after this check — the transition cannot exclude that; this check
+    excludes the reverse order."""
+    legacy = os.path.join(cache_root, LOCK_NAME)
+    present = plugin_cache.legacy_rollout_lock_present(cache_root)
+    if present is None:
+        raise LockRefused(
+            f"could not check for a legacy rollout lock at {legacy}, "
+            "so cannot tell whether a pre-move rollout is running."
+        )
+    if present:
+        raise LockRefused(
+            f"a legacy rollout lock exists at {legacy} — {_lock_state(legacy)}.",
+            rm_path=legacy,
+        )
 
 
 def release_rollout_lock(lock_dir, force=False):
@@ -219,9 +279,12 @@ def _refuse(lock_dir, why):
     print(f"ERROR: prune: {why}", file=sys.stderr)
     print("       Refusing to proceed: nothing in the cache was touched.", file=sys.stderr)
     print("       A prune during a rollout deletes dirs between its copy and its registry", file=sys.stderr)
-    print("       repoint (backlog ea39fbc9 / e3366b5c). If you have confirmed no rollout is", file=sys.stderr)
-    print("       running, remove the lock by hand:", file=sys.stderr)
-    print(f'         rm -r "{lock_dir}"', file=sys.stderr)
+    if lock_dir:
+        print("       repoint (backlog ea39fbc9 / e3366b5c). If you have confirmed no rollout is", file=sys.stderr)
+        print("       running, remove the lock by hand:", file=sys.stderr)
+        print(f'         rm -r "{lock_dir}"', file=sys.stderr)
+    else:
+        print("       repoint (backlog ea39fbc9 / e3366b5c).", file=sys.stderr)
     return LOCK_REFUSED_EXIT
 
 
@@ -244,7 +307,7 @@ def main(argv=None):
     try:
         held = acquire_rollout_lock(cache_root)
     except LockRefused as exc:
-        return _refuse(os.path.join(cache_root, LOCK_NAME), str(exc))
+        return _refuse(exc.rm_path, str(exc))
     if held is None:
         return _prune(args, cache_root)
 

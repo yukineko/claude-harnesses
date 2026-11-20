@@ -86817,3 +86817,63 @@ rev = "09dae966edc75cb2934e9fdf490872bc29f4259f"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "b838630f"
+title = "blastguard: bash -c 'bash' < FILE (inner shell reads program from unseen redirected stdin) is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = '''Observed 2026-11-20 at session-8abb4dc6 a97081f60 (blastguard 0.2.773; same result at base c8b03c22d via an independent probe): `bash -c 'bash' < /tmp/payload.sh` and `sh -c 'sh' < /tmp/payload.sh` get decision=allow. Verbatim: "\"bash -c 'bash' < /tmp/payload.sh\" must be ask/deny, got decision=allow reason=". Controls not-allow: piped `curl x | bash -c 'bash'` forms and plain `bash < /tmp/payload.sh`. Readings: (a) real defect: the inner bash reads its program from the inherited stdin, which is the redirected unseen file, so the program is undetermined -> Ask; (b) intended: the redirect applies to an outer shell whose program is a literal. Distinguishing: the inner program inherits stdin (plain `bash < FILE` is already not-allow) => (a). RED: cargo test -p blastguard --test backlog_20261120_bash_c_stdin_redirect_file_payload_failopen -- --include-ignored -> "test result: FAILED. 2 passed; 2 failed".'''
+created_at = 1795133462
+updated_at = 1795139152
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_bash_c_stdin_redirect_file_payload_failopen -- --ignored"
+rev = "a97081f60e47e4e19109b9a52d7320c081c8b5c0"
+observed_at = 1795133462
+detail = """
+exit 101: -8abb4dc6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.77s
+     Running tests/backlog_20261120_bash_c_stdin_redirect_file_payload_failopen.rs (target/debug/deps/backlog_20261120_bash_c_stdin_redirect_file_payload_failopen-d73e2796b599c9e1)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_bash_c_stdin_redirect_file_payload_failopen`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261120_bash_c_stdin_redirect_file_payload_failopen"
+exit = 0
+passed = 4
+rev = "2f39a1620a2fc0a3de12f8949d48c7ed88e0b72d"
+observed_at = 1795139151
+output_digest = "sha256:e3189006956517a50e6f2163066ab5b94b87c9099fd6be6295a7adec5b3079a2"
+excerpt = """
+
+running 4 tests
+test sh_c_sh_with_stdin_redirect_from_file_is_not_allow ... ok
+test control_piped_bash_c_bash_is_not_allow ... ok
+test bash_c_bash_with_stdin_redirect_from_file_is_not_allow ... ok
+test control_plain_bash_stdin_redirect_is_not_allow ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/backlog_20261120_bash_c_stdin_redirect_file_payload_failopen.rs (target/debug/deps/backlog_20261120_bash_c_stdin_redirect_file_payload_failopen-b6792b6426605569)
+"""
+
+[task.closure.red]
+rev = "7be301ea337497fbd611f228990ee417ea8fd20f"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

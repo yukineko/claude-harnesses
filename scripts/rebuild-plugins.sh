@@ -267,7 +267,12 @@ fi
 #     (CLAUDE.md §3), so it aborts here, before anything is built or copied.
 #     Pinned by BacklogA0525604EmptyMetadataIsNotGreen in
 #     scripts/test_backlog_audit_b1_0.py.
-TARGET_DIR="$(cargo metadata --no-deps --format-version=1 | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
+#
+# The full JSON is kept in CARGO_METADATA_JSON because the self-contained-bins
+# check in the seed pass reads its bin targets too (workspace_bin_targets). A
+# failing `cargo metadata` still aborts this assignment under `set -e`.
+CARGO_METADATA_JSON="$(cargo metadata --no-deps --format-version=1)"
+TARGET_DIR="$(printf '%s\n' "$CARGO_METADATA_JSON" | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
 if [ -z "$TARGET_DIR" ]; then
   echo "ERROR: cargo metadata succeeded but reported no \"target_directory\"." >&2
   echo "  Cannot determine where cargo writes release artifacts, so nothing can be" >&2
@@ -672,6 +677,89 @@ for binfile in "$CACHE"/*/*/bin/*-"$SUF$EXT"; do
 done
 shopt -u nullglob
 
+# --- self-contained executables (not launchers) ------------------------------
+# A plugin's bin/ normally holds only LAUNCHERS: POSIX-sh dispatchers that exec
+# a per-host Rust binary bin/<name>-<os>-<arch>, which the seed pass below has to
+# place from $REL/<name>. flow also ships bin/flow-watch, a self-contained
+# `#!/usr/bin/env python3` script that execs nothing and has no compiled
+# counterpart, so "seed $REL/flow-watch" can never succeed for it (observed
+# 2026-11-21: rollout of flow 0.2.40 aborted with "could not seed a host binary
+# into a FRESH version dir for: flow/0.2.40:flow-watch").
+#
+# The classification is DECLARED, never inferred, and the default is the
+# restrictive one: an entry is a self-contained executable only if it is listed
+# in crates/<crate>/self-contained-bins AND is not a workspace bin target per
+# cargo metadata. Everything else is a launcher and still needs its artifact, so
+# an unknown or misnamed bin/ entry stays the same ERROR it always was — it is
+# never skipped because "it does not look like a launcher" (CLAUDE.md §3).
+# A self-contained entry is shipped exactly as rollout copied it from the crate
+# (this pass does not touch its bytes).
+#
+# Every "cannot tell" is an ERROR (non-zero exit), never a silent skip:
+#   - the declaration exists but is unreadable, or has a line that is not a
+#     plain basename;
+#   - a name is declared while cargo metadata yields no "packages" array, so
+#     whether it collides with a bin target cannot be checked;
+#   - a declared name IS a workspace bin target (a contradiction: a launcher
+#     declared self-contained would ship with no binary — dark);
+#   - a declared name is absent from, non-executable in, or empty in the fresh
+#     version dir (its consumer execs it directly, so 0644/empty is dark).
+# In each case the affected names fall back to being treated as launchers, so
+# the seed_missing ERROR fires for them as well.
+# Pinned by scripts/test_rebuild_self_contained_bins.py.
+sc_problems=""
+
+# Prints the declared names of declaration file $1, one per line. Returns 1
+# (with the reason on stderr) when the file cannot be read or a line is not a
+# plain basename. An absent file is "nothing declared": prints nothing, rc 0.
+read_self_contained_decl() {
+  local decl="$1" line
+  if [ ! -e "$decl" ] && [ ! -L "$decl" ]; then
+    return 0
+  fi
+  if [ ! -f "$decl" ] || [ ! -r "$decl" ]; then
+    echo "$decl is not a readable regular file" >&2
+    return 1
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"   # strip leading whitespace
+    line="${line%"${line##*[![:space:]]}"}"   # strip trailing whitespace
+    case "$line" in
+      ''|'#'*) continue ;;
+    esac
+    if ! printf '%s\n' "$line" | grep -Eq '^[a-z0-9][a-z0-9._-]*$'; then
+      echo "$decl: '$line' is not a plain basename" >&2
+      return 1
+    fi
+    printf '%s\n' "$line"
+  done < "$decl" || { echo "$decl could not be read" >&2; return 1; }
+}
+
+# Prints every workspace bin target name in the cargo metadata captured above.
+# Non-zero when that cannot be determined (unparsable JSON, no "packages" array,
+# a malformed entry -> traceback); callers treat non-zero as undetermined.
+workspace_bin_targets() {
+  printf '%s' "$CARGO_METADATA_JSON" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError as e:
+    sys.exit(f"cargo metadata is not parsable JSON ({e})")
+pk = d.get("packages") if isinstance(d, dict) else None
+if not isinstance(pk, list):
+    sys.exit("cargo metadata has no \"packages\" array")
+for p in pk:
+    for t in p["targets"]:
+        if "bin" in t["kind"]:
+            print(t["name"])
+'
+}
+
+# Is $1 a line of the newline-separated list $2?
+name_in_list() {
+  printf '%s\n' "$2" | grep -Fxq -- "$1"
+}
+
 # --- seed host binary into a FRESH current-version dir ---------------------
 # A version-bumped rollout (scripts/rollout-plugins.sh) rsyncs crates/<name>/
 # into a brand-new cache/<plugin>/<newver>/ that ships only the launcher +
@@ -693,6 +781,41 @@ for i in "${!plugin_names[@]}"; do
   [ -n "$ver" ] || continue
   bindir="$CACHE/$pname/$ver/bin"
   [ -d "$bindir" ] || continue          # current version not rolled out to cache yet
+  # Declared self-contained executables of this plugin (see the block above).
+  # Any problem empties sc_names, so those entries are judged as launchers.
+  sc_names=""
+  if ! cdir="$(cratedir_for "$pname")"; then
+    cdir=""
+  fi
+  if [ -n "$cdir" ]; then
+    if ! sc_names="$(read_self_contained_decl "$cdir/self-contained-bins" 2>&1)"; then
+      sc_problems="$sc_problems
+  $pname: $sc_names"
+      sc_names=""
+    fi
+  fi
+  if [ -n "$sc_names" ]; then
+    if ! sc_targets="$(workspace_bin_targets 2>&1)"; then
+      sc_problems="$sc_problems
+  $pname: cannot tell whether declared self-contained bin(s) $(printf '%s ' $sc_names)are workspace bin targets: $sc_targets"
+      sc_names=""
+    else
+      sc_kept=""
+      for n in $sc_names; do
+        if name_in_list "$n" "$sc_targets"; then
+          sc_problems="$sc_problems
+  $pname: '$n' is declared in $cdir/self-contained-bins but is a workspace bin target (a launcher) — contradictory declaration"
+        elif [ ! -e "$bindir/$n" ]; then
+          sc_problems="$sc_problems
+  $pname: '$n' is declared in $cdir/self-contained-bins but $bindir/$n does not exist"
+        else
+          sc_kept="$sc_kept$n
+"
+        fi
+      done
+      sc_names="$sc_kept"
+    fi
+  fi
   # launcher = a bin/ entry with no -<os>-<arch> platform suffix. A plugin may
   # ship SEVERAL: specguard ships `specguard` (the hook) and `specforge` (the
   # source-side spec loop, specs/spec-loop.toml R4/R5). Each needs its OWN host
@@ -710,6 +833,17 @@ for i in "${!plugin_names[@]}"; do
       *-darwin-arm64|*-darwin-x86_64|*-linux-x86_64|*-linux-arm64|*-windows-x86_64.exe|*-windows-arm64.exe)
         continue ;;
     esac
+    if [ -n "$sc_names" ] && name_in_list "$binname" "$sc_names"; then
+      # Declared self-contained (validated above): needs no host binary, shipped
+      # as copied. Its consumer execs it directly, so it must be runnable.
+      if [ -x "$f" ] && [ -s "$f" ] && [ -f "$f" ]; then
+        echo "cache  self-contained $binname shipped as-is, no host binary needed (fresh version dir $pname/$ver)"
+      else
+        sc_problems="$sc_problems
+  $pname/$ver: declared self-contained $f is not an executable, non-empty file (dark: its consumer cannot exec it)"
+      fi
+      continue
+    fi
     hostbin="$bindir/$binname-$SUF$EXT"
     # `-e` is NOT the predicate the consumer applies. The launcher requires the
     # file to be EXECUTABLE and non-empty (crates/tdd/bin/tdd:52-55 — `if [ -x
@@ -818,6 +952,17 @@ if [ -n "$seed_missing" ]; then
   echo "  plugin execs NOTHING while looking correctly deployed (dark, not red)." >&2
   echo "  Check that the launcher name matches a workspace bin target, and that" >&2
   echo "  the release build actually wrote to: $REL" >&2
+  echo "  A bin/ entry that is a self-contained script (no compiled binary) must be" >&2
+  echo "  listed in crates/<crate>/self-contained-bins; nothing is inferred." >&2
+  rc=1
+fi
+# A self-contained-bins declaration that could not be honoured. Each affected
+# name was judged as a launcher instead (so it may also appear above), but the
+# declaration problem itself is reported so its cause is named (CLAUDE.md §3).
+if [ -n "$sc_problems" ]; then
+  echo "ERROR: self-contained-bins declaration problem(s):$sc_problems" >&2
+  echo "  A declared name must be a plain basename that is NOT a workspace bin" >&2
+  echo "  target and is an executable, non-empty file in the deployed bin/." >&2
   rc=1
 fi
 # An artifact not observed to be stripped was deployed NOWHERE. Exiting 0 would

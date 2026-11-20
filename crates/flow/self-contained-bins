@@ -1,0 +1,6 @@
+# Self-contained executables under bin/ that are NOT launchers: they are run
+# directly and have no compiled per-platform binary, so the rollout seed pass
+# (scripts/rebuild-plugins.sh) ships them as-is instead of demanding
+# target/release/<name>. One basename per line; `#` comments and blank lines are
+# ignored. Anything in bin/ not listed here is treated as a launcher.
+flow-watch

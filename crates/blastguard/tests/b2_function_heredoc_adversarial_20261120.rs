@@ -410,3 +410,184 @@ fn system_harm_outside_the_body_on_a_function_line_is_deny() {
         "harm-outside",
     );
 }
+
+// ======================================================= round 2 (0.2.785)
+//
+// Added by the same independent author after c5d617a02 (0.2.784: a defined
+// function's call stdout redirect is a landing path). One command per test fn,
+// so a fail-open found here can be un-ignored on its own.
+//
+// DOES NOT PROVE (round 2): that the probes cover every way a function's
+// output reaches a file; only the shapes listed were run.
+//
+// Observed 2026-11-20 by this author, once per tree: every round-2 test passes
+// on 7606a6b61 (0.2.780). On c5d617a02 (0.2.784) the ten `#[ignore]`d below
+// were Allow in BOTH main and subagent mode (fail-open); the rest passed.
+
+/// One `#[test]` per command, asserting not Allow in main and subagent mode.
+macro_rules! not_allow_probe {
+    ($(#[$m:meta])* $name:ident, $cmd:expr) => {
+        $(#[$m])*
+        #[test]
+        fn $name() {
+            assert_not_allow(&[$cmd], stringify!($name));
+        }
+    };
+}
+
+// ------------------------------------- done_criteria (5): exact commands
+
+#[test]
+fn criterion5_cat_function_running_sh_with_harm_body_is_deny() {
+    assert_deny(
+        &["cat() { sh; }; cat <<'EOF'\nrm -rf /etc\nEOF"],
+        "c5-cat-sh",
+    );
+}
+
+not_allow_probe!(
+    criterion5_function_running_landing_file_is_not_allow,
+    "f() { sh a.txt; }; cat <<'EOF' > a.txt\nrm -rf /etc\nEOF"
+);
+
+not_allow_probe!(
+    criterion5_function_body_eval_is_not_allow,
+    "f() { eval x; }; cat <<'EOF'\nrm -rf /etc\nEOF"
+);
+
+not_allow_probe!(
+    criterion5_unquoted_heredoc_expands_function_call_is_not_allow,
+    "f() { echo hi; }; cat <<EOF\n$(f)\nEOF"
+);
+
+// ------------- a function's output reaches a file through a compound / exec
+
+not_allow_probe!(
+    brace_group_redirect_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; { f; } > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    brace_group_append_with_other_member_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; { echo; f; } >> p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    subshell_redirect_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; (f) > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    command_substitution_echoed_to_file_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; echo \"$(f)\" > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    command_substitution_assigned_then_written_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; x=$(f); printf '%s\\n' \"$x\" > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    exec_stdout_redirect_then_call_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; exec > p.awk; f; awk -f p.awk"
+);
+
+not_allow_probe!(
+    exec_fd_redirect_then_call_to_fd_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; exec 3> p.awk; f >&3; awk -f p.awk"
+);
+
+not_allow_probe!(
+    if_redirect_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; if true; then f; fi > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    for_loop_redirect_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; for i in 1; do f; done > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    while_loop_redirect_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; while true; do f; break; done > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    case_redirect_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; case x in x) f;; esac > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    pipe_to_tee_file_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; f | tee p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    pipe_to_cat_redirect_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; f | cat > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    pipe_to_dd_of_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; f | dd of=p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    nested_call_redirect_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; g() { f; }; g > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    redefinition_after_a_call_then_append_then_awk_f,
+    "f() { :; }; f > p.awk; f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; f >> p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    call_redirect_explicit_fd1_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; f 1> p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    call_redirect_ampersand_gt_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; f &> p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    call_redirect_clobber_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; f >| p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    call_background_redirect_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; f > p.awk & wait; awk -f p.awk"
+);
+
+not_allow_probe!(
+    call_into_process_substitution_writer_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; f > >(cat > p.awk); awk -f p.awk"
+);
+
+not_allow_probe!(
+    awk_program_from_process_substitution,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; awk -f <(f)"
+);
+
+not_allow_probe!(
+    awk_program_from_dev_stdin_pipe,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; f | awk -f /dev/stdin"
+);
+
+not_allow_probe!(
+    awk_program_from_command_substitution_word,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; awk \"$(f)\""
+);
+
+not_allow_probe!(
+    inner_reader_redirect_to_awk_file_then_awk_f,
+    "f() { cat <<'EOF' > p.awk\nBEGIN{system(\"$(f)\")}\nEOF\n}; f; awk -f p.awk"
+);
+
+not_allow_probe!(
+    redirect_on_function_definition_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n} > p.awk; f; awk -f p.awk"
+);

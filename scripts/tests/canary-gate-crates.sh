@@ -69,6 +69,7 @@ run_rollout() {
     OVERWATCH_BIN="$OW" \
     CLAUDE_PLUGIN_CACHE="$TEST_CACHE" \
     CLAUDE_PLUGIN_REGISTRY="$TEST_REGISTRY" \
+    XDG_STATE_HOME="$TMP/state" \
     bash "$SCRIPT" "$@" 2>&1
   )"
   RC=$?

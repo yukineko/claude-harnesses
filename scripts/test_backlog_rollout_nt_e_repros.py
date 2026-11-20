@@ -127,7 +127,10 @@ class Sandbox:
 
     def run(self, body, argv0=None):
         env = dict(os.environ, HOME=str(self.home), CLAUDE_PLUGIN_CACHE=str(self.cache),
-                   CLAUDE_PLUGIN_REGISTRY=str(self.registry))
+                   CLAUDE_PLUGIN_REGISTRY=str(self.registry),
+                   # Override any ambient XDG_STATE_HOME: the rollout lock lives
+                   # under it (backlog d4a135ba); never take the REAL lock.
+                   XDG_STATE_HOME=str(self.home / ".local" / "state"))
         args = [BASH, "-c", "set -euo pipefail\n" + body]
         if argv0:
             args.append(str(argv0))

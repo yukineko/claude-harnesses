@@ -203,6 +203,7 @@ OUT="$(
   CLAUDE_PLUGIN_CACHE="$TEST_CACHE" \
   CLAUDE_PLUGIN_REGISTRY="$TEST_REGISTRY" \
   HOME="$TEST_HOME" \
+  XDG_STATE_HOME="$TEST_HOME/.local/state" \
   OVERWATCH_CANARY_SINCE=1 \
   bash "$SCRIPT" --plugin "$PLUGIN_A" --plugin "$PLUGIN_B" --plugin "$PLUGIN_C" \
     --canary --canary-stage-size 2 --canary-threshold 0 --no-rebuild --no-sync 2>&1

@@ -102,7 +102,10 @@ class Fixture:
             b.write_bytes(f"OLD-{name}\n".encode())
             b.chmod(0o755)
         self.env = dict(os.environ, PATH=f"{shim}:{os.environ['PATH']}", FAKE_TARGET=str(self.target),
-                        CARGO_TARGET_CAP_MB="0", CLAUDE_PLUGIN_CACHE=str(self.cache))
+                        CARGO_TARGET_CAP_MB="0", CLAUDE_PLUGIN_CACHE=str(self.cache),
+                        # The rollout lock lives under ${XDG_STATE_HOME:-$HOME/.local/state}
+                        # (backlog d4a135ba): sandbox it, never the REAL lock.
+                        XDG_STATE_HOME=str(self.tmp / "state"))
 
     def hostbin(self, name):
         return (self.cache / name / PLUGINS[name] / "bin" / f"{name}-{self.suf}").read_bytes()

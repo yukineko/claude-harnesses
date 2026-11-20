@@ -28,7 +28,7 @@ printf '%s\n' '{"version":1,"plugins":{}}' | tee "$TMP/installed_plugins.json" >
 run_case() { # name, extra args...
   local name="$1"; shift
   local out rc=0
-  out="$(cd "$S" && HOME="$TMP/home" \
+  out="$(cd "$S" && HOME="$TMP/home" XDG_STATE_HOME="$TMP/home/.local/state" \
     CLAUDE_PLUGIN_CACHE="$TMP/cache/yukineko" \
     CLAUDE_PLUGIN_REGISTRY="$TMP/installed_plugins.json" \
     bash scripts/rollout-plugins.sh --no-canary --no-rebuild --no-sync "$@" 2>&1)" || rc=$?

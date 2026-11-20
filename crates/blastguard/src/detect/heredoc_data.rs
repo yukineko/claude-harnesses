@@ -33,7 +33,17 @@
 //!   bare `$X` operand, the word after `-F` / `--file`, `-m`, `--date`, `-c`,
 //!   `-C`, `--template`, an undetermined subcommand or command word) keeps the
 //!   body. `program_source` of the reader is `None` (not an interpreter,
-//!   `eval`, `source` or wrapper);
+//!   `eval`, `source` or wrapper). The reader may also be a COMPOUND loop
+//!   (`while IFS= read -r c; do echo "$c"; done <<'EOF'`, backlog b5d6ac29)
+//!   whose only commands are `read` and `echo` printing plain `$NAME`
+//!   operands into plain lower-case non-special variables, the heredoc being
+//!   its only redirect, at the top level or the last pipe stage, on a line
+//!   with no `set` / `trap` / `exec` / `declare` / `source` … and no
+//!   assignment to a special variable (`PS4`); see [`data_loop_landing`] —
+//!   any other command in the loop or such state change on the line keeps
+//!   the body. For every reader, a compound command that encloses it and
+//!   redirects its output (`{ cat <<'EOF'; } > x.sh`) is where the body lands
+//!   too ([`enclosing_landing`]): a non-data target keeps the body;
 //! * where `cat` / `tee` put the body is a literal data, non-shell code or
 //!   JSON / TOML / YAML file (`.md`, `.txt`, `.rs`, `.json`, `.jsonl`,
 //!   `.toml`, `.yaml`, `.yml`, …; never `.sh`,
@@ -56,9 +66,10 @@
 //!   a `PATH` word (`export PATH`) keeps every body;
 //! * no other command names a landing path with a literal word — the file
 //!   (by name, case-insensitively), a directory above it, `.` / `..` — unless
-//!   it is a bare `cd` or a read-only tool on
-//!   `heredoc::INERT_LATER_COMMANDS` (`rustc x.rs`, `chmod +x x.rs`,
-//!   `rg --pre sh . src`, an unknown word keep every body). Bare
+//!   it is a bare `cd`, a bare `mkdir` (it only creates directories; backlog
+//!   648a6641) or a read-only tool on `heredoc::INERT_LATER_COMMANDS`
+//!   (`rustc x.rs`, `chmod +x x.rs`, `rg --pre sh . src`, an unknown word keep
+//!   every body). Bare
 //!   `cargo test` / `cargo build` (no `--config` / `-Z`) is not running the
 //!   written file whatever it names (user ruling 2026-11-18, B-4). An
 //!   undetermined argument (`git add $X`) may or may not name one: the body
@@ -248,7 +259,18 @@ fn data_bodies(script: &Script, text: &str) -> Option<(Vec<Range<usize>>, bool)>
             if !h.quoted || !exact || !plain_delimiter(text, &r.span) || shebang(text, h) {
                 continue;
             }
-            if let Some(paths) = data_reader_landing(c) {
+            let landing_paths = if c.argv.is_empty() {
+                data_loop_landing(script, i, c, &r.span)
+            } else {
+                data_reader_landing(c)
+            };
+            // An enclosing compound's redirects (`{ cat <<'EOF'; } > x.sh`)
+            // are where the reader's output lands too.
+            let landing_paths = landing_paths.and_then(|mut paths| {
+                paths.extend(enclosing_landing(script, i, c)?);
+                Some(paths)
+            });
+            if let Some(paths) = landing_paths {
                 spans.push(h.body_span.clone());
                 landing.extend(paths);
                 readers.push(i);
@@ -351,11 +373,15 @@ enum Naming {
     Names,
 }
 
-/// Commands that only change directory or read / list / print, spelled bare
-/// (`heredoc::INERT_LATER_COMMANDS`, plus `cd`): they may name a landing file
-/// or its directory without running it.
+/// Commands that only change directory, create directories, or read / list /
+/// print, spelled bare (`heredoc::INERT_LATER_COMMANDS`, plus `cd` and
+/// `mkdir`): they may name a landing file or its directory without running
+/// it. `mkdir` (backlog 648a6641) only creates directories, and no option or
+/// operand of it runs a program, so `mkdir -p d/t && cd d && cat > t/mod.rs
+/// <<'EOF'` names the directory above the landing file without being able to
+/// run it.
 fn reads_only(word: &str) -> bool {
-    word == "cd" || INERT_LATER_COMMANDS.contains(&word)
+    word == "cd" || word == "mkdir" || INERT_LATER_COMMANDS.contains(&word)
 }
 
 /// User ruling 2026-11-18 (B-4): `cargo test` / `cargo build` after writing a
@@ -515,6 +541,291 @@ fn data_reader_landing(c: &SimpleCommand) -> Option<Vec<String>> {
         }
         _ => None,
     }
+}
+
+/// A COMPOUND command (`while IFS= read -r c; do echo "$c"; done <<'EOF'`;
+/// `c` is its empty-argv redirection command) whose only commands are the
+/// builtins `read` and `echo`, so the here-document is read into a variable
+/// and printed. Returns its landing (empty: its OWN stdout is not redirected;
+/// where an enclosing compound sends it is [`enclosing_landing`]'s, applied
+/// by [`data_bodies`] to every reader), or `None` (the body stays judged as
+/// shell) unless ALL hold, each taken from the parsed commands:
+///
+/// * the compound has no assignment and its only redirect is this
+///   here-document on stdin, and its context is the top level or the LAST
+///   stage of a pipeline. A non-final pipe stage or a process substitution
+///   could feed a shell; a `$( )` hands the output to another word; inside a
+///   subshell the parser records only `Subshell`, so whether the subshell is
+///   piped on (`( loop ) | bash`) is not known from the command — all keep
+///   the body;
+/// * every other command inside the compound's span is `read` (literal `-r`
+///   and literal [`inert_variable`] names, an `IFS=` prefix at most) or
+///   `echo` (no redirect, no assignment), and the name is not a function the
+///   line defines. Any other emitted command (`bash`, `eval`, `$c`, `[`, the
+///   command of a `$( )`, a redirected nested compound, an assignment-only
+///   command, an undetermined command word) keeps the body: what the loop
+///   does with the variable cannot then be shown to be data-only. A nested
+///   compound WITHOUT a redirect emits no command of its own and is not
+///   refused here: `if` / `while` conditions and subshell members are
+///   emitted commands and meet the rule above; `[[ ]]` and `(( ))` are
+///   evaluated by `ast::analyze`, which refuses to produce a `Known` script
+///   at all when arithmetic would evaluate a run-time value such as the read
+///   variable (`arith::check_value` / `check_text`: an `Undetermined` value
+///   is an error), so `(( c ))` or `[[ $c -eq 1 ]]` never reaches this step;
+///   `[[ -n $c ]]` and `(( 1 ))` do, and evaluate nothing from the body;
+/// * every `echo` operand is a literal without `$`, backquote or process
+///   substitution, or exactly a plain `$NAME` / `${NAME}` (optionally
+///   double-quoted): `${c@P}`, `$((c))` or `${!c}` can evaluate the value;
+/// * at least one `read` exists, so the body is consumed by something;
+/// * no command of the whole line (function bodies included) can make the
+///   shell itself evaluate a read value or reroute the loop's output: every
+///   command word is literal and not on [`SHELL_STATE_CHANGERS`] (`set -x`
+///   expands `PS4` when tracing, `trap … DEBUG` runs code before every
+///   command, `exec > >(bash)` reroutes stdout, `declare -n` / `-i` make a
+///   read assign elsewhere or evaluate arithmetic, …), has no
+///   `program_source` (`source` / `.` / `eval` / an interpreter could do the
+///   same), and every assignment, anywhere on the line, is to an
+///   [`inert_variable`] name (not `PS4`, `BASH_ENV`, `IFS`, …; the `IFS=`
+///   prefix of a `read` in the loop excepted).
+///
+/// RESIDUAL: shell state inherited from outside the line (an xtrace or trap
+/// already set in the Bash tool's shell) is not in the text and is not seen.
+fn data_loop_landing(
+    script: &Script,
+    i: usize,
+    c: &SimpleCommand,
+    opener: &Range<usize>,
+) -> Option<Vec<String>> {
+    if !c.assignments.is_empty() {
+        return None;
+    }
+    match c.context {
+        Context::TopLevel => {}
+        Context::Pipeline { pos, len } if pos + 1 == len => {}
+        _ => return None,
+    }
+    match c.redirects.as_slice() {
+        [r] if matches!(r.op, RedirOp::HereDoc)
+            && matches!(r.fd, None | Some(0))
+            && r.span == *opener => {}
+        _ => return None,
+    }
+    let mut reads = 0usize;
+    for (j, k) in script.commands.iter().enumerate() {
+        let in_loop = j != i && k.span.start >= c.span.start && k.span.end <= c.span.end;
+        if !in_loop {
+            if !line_command_inert(k) {
+                return None;
+            }
+            continue;
+        }
+        if !k.redirects.is_empty() || program_source(k).is_some() {
+            return None;
+        }
+        let Some(Value::Literal(name)) = k.argv.first().map(|w| &w.value) else {
+            return None;
+        };
+        if script.function_names.iter().any(|f| f == name) {
+            return None;
+        }
+        match name.as_str() {
+            "read" => {
+                let args_ok = k.argv.iter().skip(1).all(
+                    |w| matches!(&w.value, Value::Literal(a) if a == "-r" || inert_variable(a)),
+                );
+                if !args_ok || k.assignments.iter().any(|(n, _)| n != "IFS") {
+                    return None;
+                }
+                reads += 1;
+            }
+            "echo" => {
+                if !k.assignments.is_empty() || !k.argv.iter().skip(1).all(plain_echo_word) {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    (reads > 0).then(Vec::new)
+}
+
+/// Builtins that change how the shell itself expands, traces, traps, routes
+/// output or assigns variables for the REST of the line (bash and zsh). Any
+/// of them anywhere on the line keeps the body of a `read` loop
+/// ([`data_loop_landing`]).
+const SHELL_STATE_CHANGERS: &[&str] = &[
+    "set",
+    "trap",
+    "shopt",
+    "setopt",
+    "unsetopt",
+    "emulate",
+    "alias",
+    "unalias",
+    "enable",
+    "disable",
+    "builtin",
+    "command",
+    "exec",
+    "declare",
+    "typeset",
+    "local",
+    "export",
+    "readonly",
+    "integer",
+    "float",
+    "zmodload",
+    "autoload",
+    "functions",
+    "bindkey",
+    "zle",
+];
+
+/// True when `k`, a command of the line outside the loop, cannot change the
+/// shell's state in a way that makes it evaluate a read value or reroute the
+/// loop's output (see [`data_loop_landing`]). An empty-argv command (a
+/// compound's redirects; an assignment-only command) has only its
+/// assignments checked: where a compound sends its output is judged by
+/// [`enclosing_landing`].
+fn line_command_inert(k: &SimpleCommand) -> bool {
+    if !k.assignments.iter().all(|(n, _)| inert_variable(n)) {
+        return false;
+    }
+    let Some(first) = k.argv.first() else {
+        return true;
+    };
+    let Value::Literal(word) = &first.value else {
+        return false;
+    };
+    !SHELL_STATE_CHANGERS.contains(&word.as_str()) && program_source(k).is_none()
+}
+
+/// Lower-case parameters with a special meaning in zsh (`zshparam(1)`, the
+/// `zsh/parameter`, `zsh/mapfile`, `zsh/system`, `zsh/terminfo` modules).
+/// Assigning one changes the shell (`path` is `PATH`, `mapfile` writes files,
+/// `precmd_functions` names functions to run). Every special parameter of
+/// bash is upper-case or punctuation, which [`inert_variable`] refuses.
+const ZSH_LOWER_SPECIALS: &[&str] = &[
+    "argv",
+    "status",
+    "pipestatus",
+    "path",
+    "fpath",
+    "cdpath",
+    "manpath",
+    "mailpath",
+    "module_path",
+    "psvar",
+    "prompt",
+    "histchars",
+    "signals",
+    "watch",
+    "options",
+    "parameters",
+    "commands",
+    "functions",
+    "functions_source",
+    "aliases",
+    "galiases",
+    "saliases",
+    "builtins",
+    "dis_aliases",
+    "dis_builtins",
+    "dis_functions",
+    "dis_galiases",
+    "dis_reswords",
+    "dis_saliases",
+    "jobstates",
+    "jobtexts",
+    "jobdirs",
+    "nameddirs",
+    "userdirs",
+    "usergroups",
+    "reswords",
+    "modules",
+    "dirstack",
+    "history",
+    "historywords",
+    "widgets",
+    "keymaps",
+    "terminfo",
+    "termcap",
+    "errnos",
+    "sysparams",
+    "funcstack",
+    "funcfiletrace",
+    "funcsourcetrace",
+    "functrace",
+    "mapfile",
+    "epochtime",
+    "epochrealtime",
+    "patchars",
+    "dis_patchars",
+];
+
+/// A variable name that is a plain lower-case identifier (`[a-z_][a-z0-9_]*`)
+/// with no special meaning to bash or zsh: not `_`, not on
+/// [`ZSH_LOWER_SPECIALS`], not a zsh hook array (`*_functions`) or `zsh_*`
+/// parameter. An allowlist: an upper-case name (`PS4`, `IFS`, `BASH_ENV`,
+/// `PROMPT_COMMAND`, `SHELLOPTS`, …) is refused whatever it is.
+fn inert_variable(s: &str) -> bool {
+    let mut cs = s.chars();
+    matches!(cs.next(), Some(c) if c.is_ascii_lowercase() || c == '_')
+        && cs.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && s != "_"
+        && !ZSH_LOWER_SPECIALS.contains(&s)
+        && !s.ends_with("_functions")
+        && !s.starts_with("zsh_")
+}
+
+/// The landing of the output of the reader `c` (command `i` of `script`)
+/// through every COMPOUND command that encloses it (`{ …; } > f`,
+/// `( … ) > f`, `done > f`: an empty-argv command whose span contains the
+/// reader's), by [`stdout_landing`] of each: their literal data / code files,
+/// or `None` when one sends the output to anything else (`} > x.sh`, a
+/// non-final pipe stage, a process substitution, an undetermined target).
+/// A compound's own redirects are not the reader's, so without this a body
+/// printed to an enclosing `> x.sh` would count as printed to the terminal.
+fn enclosing_landing(script: &Script, i: usize, c: &SimpleCommand) -> Option<Vec<String>> {
+    let mut names = Vec::new();
+    for (j, k) in script.commands.iter().enumerate() {
+        let encloses = j != i
+            && k.argv.is_empty()
+            && !k.redirects.is_empty()
+            && k.span.start <= c.span.start
+            && k.span.end >= c.span.end;
+        if encloses {
+            names.extend(stdout_landing(k)?);
+        }
+    }
+    Some(names)
+}
+
+fn is_identifier(s: &str) -> bool {
+    let mut cs = s.chars();
+    matches!(cs.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// An `echo` operand that only prints: not an option, and its raw text is a
+/// literal with no `$`, backquote or process substitution, or exactly a plain
+/// parameter reference `$NAME` / `${NAME}`, optionally in double quotes.
+fn plain_echo_word(w: &Word) -> bool {
+    let raw = w.raw.as_str();
+    if raw.starts_with('-') {
+        return false;
+    }
+    let inner = raw
+        .strip_prefix('"')
+        .and_then(|r| r.strip_suffix('"'))
+        .unwrap_or(raw);
+    let param = inner.strip_prefix('$').is_some_and(|n| {
+        is_identifier(n)
+            || n.strip_prefix('{')
+                .and_then(|n| n.strip_suffix('}'))
+                .is_some_and(is_identifier)
+    });
+    param || (!raw.contains(['$', '`']) && !raw.contains("<(") && !raw.contains(">("))
 }
 
 /// True when `c` is `git commit` whose message is read from stdin: `-F -`,

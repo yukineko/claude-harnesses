@@ -2677,3 +2677,31 @@ test result: FAILED. 14 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out;
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
      Running tests/file_content_piped_to_shell_twins.rs (target/debug/deps/file_content_piped_to_shell_twins-6d950b571ae3330a)
 error: test failed, to rerun pass `-p blastguard --test file_content_piped_to_shell_twins`"""
+
+[[task]]
+id = "61b6ba67"
+title = "blastguard FP: subagent denied (S5 Undetermined) for mkdir -p scratchpad && cd scratchpad && python3 - <<EOF (import json,re)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-20 (rev c434e41e5 area, deployed ~0.2.8xx). Command run by a SUBAGENT with cwd /Users/yuki/src/harness: mkdir -p D && cd D && python3 - <<'EOF' (import json,re; open(<json file>); json.dump(d,open('decomposition-4items.json','w'))) EOF; condukt validate --file decomposition-4items.json; echo validate=$?  where D=/private/tmp/claude-502/-Users-yuki-src-harness/62e92d16-0aef-402b-ad58-39425ad07ded/scratchpad. Verbatim deny reason: the Python program imports json, re, and a command before it on the line writes into the directory it runs in (D, as D) an entry whose name is not read here, which may replace one of them - blastguard cannot judge what the Python program would do (S5: Undetermined). Same command byte-for-byte was ALLOWED in the main session, DENIED in the subagent. Harness measurement (worktree of c434e41e5): main = Ask with the same S5 reason, subagent = Deny (Ask hardened); the real main Allow was likely the user approving the prompt (not verified). Reading (a) FP: mkdir -p D creates D itself (entry in D's parent), not an entry inside D that could shadow json.py/re.py; D is the session scratchpad. Reading (b) intended: mkdir -p on existing D is a no-op and blastguard cannot tell whether D pre-existed with planted modules. Tell apart: a fix that allows a session-managed scratchpad D must still keep control_planted_json_py_then_python_stdin_stays_non_allow (printf x > json.py into D then python3 -) non-allow. Test: crates/blastguard/tests/backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp.rs (commit d2ba57b82 on side/run-20261120-171414-35880-reds)."
+created_at = 1795163111
+updated_at = 1795163111
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp -- --include-ignored"
+rev = "d2ba57b82cb435571747e2ebe8eeec0668c6714f"
+observed_at = 1795163111
+detail = """
+exit 101: side-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.74s
+     Running tests/backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp.rs (target/debug/deps/backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp-76f31d9e9a2f73b2)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp`"""

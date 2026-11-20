@@ -29,12 +29,13 @@
 //! `allow < ask < deny`. The variant tests compare live against the
 //! unquoted spelling measured in the same run (not against the pin).
 //!
-//! * `#[ignore = "RED fail-open: .."]`: variants MEASURED less strict than
-//!   the unquoted spelling at 8d6b3403d; the measured verdicts are in the
-//!   ignore reason.
-//! * Not ignored: controls, and variants that already match (or are
-//!   stricter). At 8d6b3403d EVERY quoted / escaped variant measured was
-//!   less strict, so every variant test is ignored.
+//! * At 8d6b3403d EVERY quoted / escaped variant (and the unquoted `sort -o`
+//!   / `gsed -i` spellings below) measured less strict and was committed as
+//!   an ignored RED (55 of them, the measured verdicts in each ignore
+//!   reason). The fix (`src/detect/option_words.rs`: quoted option words are
+//!   read as their unquoted twins; `sort -o` and `gsed -i` judged by the
+//!   system-path rules) turned all 55 GREEN, and the ignores were removed in
+//!   the same commit.
 //! * `sort -o/--output` and `gsed -i/--in-place` onto a System file are
 //!   Allow even UNQUOTED at 8d6b3403d (while `sed -i` onto `/etc/hosts` is
 //!   deny/deny), so those spellings are held to deny/deny directly (system
@@ -271,43 +272,36 @@ fn reference_sed_short_in_place_system_target_is_deny() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm): measured allow/allow at 8d6b3403d"]
 fn sort_output_eq_unquoted_system_target() {
     expect("sort-c", "sort --output=/etc/passwd x", "deny/deny");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm): measured allow/allow at 8d6b3403d"]
 fn sort_output_separate_unquoted_system_target() {
     expect("sort-sep", "sort --output /etc/passwd x", "deny/deny");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm): measured allow/allow at 8d6b3403d"]
 fn sort_short_o_unquoted_system_target() {
     expect("sort-o", "sort -o /etc/passwd x", "deny/deny");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm): measured allow/allow at 8d6b3403d"]
 fn sort_output_single_quoted() {
     expect("sort-sq", "sort '--output=/etc/passwd' x", "deny/deny");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm): measured allow/allow at 8d6b3403d"]
 fn sort_output_double_quoted() {
     expect("sort-dq", "sort \"--output=/etc/passwd\" x", "deny/deny");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm): measured allow/allow at 8d6b3403d"]
 fn sort_output_escaped() {
     expect("sort-esc", "sort \\--output=/etc/passwd x", "deny/deny");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm): measured allow/allow at 8d6b3403d"]
 fn sort_short_o_single_quoted() {
     expect("sort-o-sq", "sort '-o' /etc/passwd x", "deny/deny");
 }
@@ -325,19 +319,16 @@ fn control_cp_target_directory() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn cp_target_directory_single_quoted() {
     same_or_stricter("cp-sq", CP, "cp '--target-directory=/etc' x");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn cp_target_directory_double_quoted() {
     same_or_stricter("cp-dq", CP, "cp \"--target-directory=/etc\" x");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn cp_target_directory_escaped() {
     same_or_stricter("cp-esc", CP, "cp \\--target-directory=/etc x");
 }
@@ -348,19 +339,16 @@ fn control_mv_target_directory() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn mv_target_directory_single_quoted() {
     same_or_stricter("mv-sq", MV, "mv '--target-directory=/etc' x");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn mv_target_directory_double_quoted() {
     same_or_stricter("mv-dq", MV, "mv \"--target-directory=/etc\" x");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn mv_target_directory_escaped() {
     same_or_stricter("mv-esc", MV, "mv \\--target-directory=/etc x");
 }
@@ -379,19 +367,16 @@ fn control_sed_in_place_eq() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn sed_in_place_eq_single_quoted() {
     same_or_stricter("sed-sq", SED_EQ, "sed '--in-place=' -e d /etc/hosts");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn sed_in_place_eq_double_quoted() {
     same_or_stricter("sed-dq", SED_EQ, "sed \"--in-place=\" -e d /etc/hosts");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn sed_in_place_eq_escaped() {
     same_or_stricter("sed-esc", SED_EQ, "sed \\--in-place= -e d /etc/hosts");
 }
@@ -402,25 +387,21 @@ fn control_sed_in_place_bare() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn sed_in_place_bare_single_quoted() {
     same_or_stricter("sedb-sq", SED_BARE, "sed '--in-place' -e d /etc/hosts");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn sed_in_place_bare_double_quoted() {
     same_or_stricter("sedb-dq", SED_BARE, "sed \"--in-place\" -e d /etc/hosts");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn sed_in_place_bare_escaped() {
     same_or_stricter("sedb-esc", SED_BARE, "sed \\--in-place -e d /etc/hosts");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn sed_short_in_place_single_quoted() {
     same_or_stricter(
         "sedi-sq",
@@ -430,7 +411,6 @@ fn sed_short_in_place_single_quoted() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured ask/deny vs unquoted deny/deny at 8d6b3403d"]
 fn perl_short_in_place_single_quoted() {
     same_or_stricter(
         "perli-sq",
@@ -444,25 +424,21 @@ fn perl_short_in_place_single_quoted() {
 // harm) like the sort section.
 
 #[test]
-#[ignore = "RED fail-open (system harm): measured allow/allow at 8d6b3403d"]
 fn gsed_in_place_eq_unquoted_system_target() {
     expect("gsed-c", GSED_EQ, "deny/deny");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm): measured allow/allow at 8d6b3403d"]
 fn gsed_short_in_place_unquoted_system_target() {
     expect("gsed-i", "gsed -i -e d /etc/hosts", "deny/deny");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm): measured allow/allow at 8d6b3403d"]
 fn gsed_in_place_eq_single_quoted() {
     expect("gsed-sq", "gsed '--in-place=' -e d /etc/hosts", "deny/deny");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm): measured allow/allow at 8d6b3403d"]
 fn gsed_in_place_eq_double_quoted() {
     expect(
         "gsed-dq",
@@ -472,7 +448,6 @@ fn gsed_in_place_eq_double_quoted() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm): measured allow/allow at 8d6b3403d"]
 fn gsed_in_place_eq_escaped() {
     expect(
         "gsed-esc",
@@ -495,19 +470,16 @@ fn control_git_push_force() {
 }
 
 #[test]
-#[ignore = "RED fail-open: measured allow/allow vs unquoted ask/deny at 8d6b3403d"]
 fn git_push_force_single_quoted() {
     same_or_stricter("pushf-sq", PUSH_F, "git push '--force' origin main");
 }
 
 #[test]
-#[ignore = "RED fail-open: measured allow/allow vs unquoted ask/deny at 8d6b3403d"]
 fn git_push_force_double_quoted() {
     same_or_stricter("pushf-dq", PUSH_F, "git push \"--force\" origin main");
 }
 
 #[test]
-#[ignore = "RED fail-open: measured allow/allow vs unquoted ask/deny at 8d6b3403d"]
 fn git_push_force_escaped() {
     same_or_stricter("pushf-esc", PUSH_F, "git push \\--force origin main");
 }
@@ -518,7 +490,6 @@ fn control_git_push_force_with_lease() {
 }
 
 #[test]
-#[ignore = "RED fail-open: measured allow/allow vs unquoted ask/deny at 8d6b3403d"]
 fn git_push_force_with_lease_single_quoted() {
     same_or_stricter(
         "pushl-sq",
@@ -528,7 +499,6 @@ fn git_push_force_with_lease_single_quoted() {
 }
 
 #[test]
-#[ignore = "RED fail-open: measured allow/allow vs unquoted ask/deny at 8d6b3403d"]
 fn git_push_force_with_lease_double_quoted() {
     same_or_stricter(
         "pushl-dq",
@@ -538,7 +508,6 @@ fn git_push_force_with_lease_double_quoted() {
 }
 
 #[test]
-#[ignore = "RED fail-open: measured allow/allow vs unquoted ask/deny at 8d6b3403d"]
 fn git_push_force_with_lease_escaped() {
     same_or_stricter(
         "pushl-esc",
@@ -553,7 +522,6 @@ fn control_git_push_force_with_lease_eq() {
 }
 
 #[test]
-#[ignore = "RED fail-open: measured allow/allow vs unquoted ask/deny at 8d6b3403d"]
 fn git_push_force_with_lease_eq_single_quoted() {
     same_or_stricter(
         "pushle-sq",
@@ -563,7 +531,6 @@ fn git_push_force_with_lease_eq_single_quoted() {
 }
 
 #[test]
-#[ignore = "RED fail-open: measured allow/allow vs unquoted ask/deny at 8d6b3403d"]
 fn git_push_force_with_lease_eq_double_quoted() {
     same_or_stricter(
         "pushle-dq",
@@ -573,7 +540,6 @@ fn git_push_force_with_lease_eq_double_quoted() {
 }
 
 #[test]
-#[ignore = "RED fail-open: measured allow/allow vs unquoted ask/deny at 8d6b3403d"]
 fn git_push_force_with_lease_eq_escaped() {
     same_or_stricter(
         "pushle-esc",
@@ -595,7 +561,6 @@ fn control_node_eval() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured ask/deny vs unquoted deny/deny at 8d6b3403d"]
 fn node_eval_single_quoted() {
     same_or_stricter(
         "neval-sq",
@@ -605,7 +570,6 @@ fn node_eval_single_quoted() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured ask/deny vs unquoted deny/deny at 8d6b3403d"]
 fn node_eval_double_quoted() {
     same_or_stricter(
         "neval-dq",
@@ -615,7 +579,6 @@ fn node_eval_double_quoted() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured ask/deny vs unquoted deny/deny at 8d6b3403d"]
 fn node_eval_escaped() {
     same_or_stricter(
         "neval-esc",
@@ -630,7 +593,6 @@ fn control_node_print() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured ask/deny vs unquoted deny/deny at 8d6b3403d"]
 fn node_print_single_quoted() {
     same_or_stricter(
         "nprint-sq",
@@ -640,7 +602,6 @@ fn node_print_single_quoted() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured ask/deny vs unquoted deny/deny at 8d6b3403d"]
 fn node_print_double_quoted() {
     same_or_stricter(
         "nprint-dq",
@@ -650,7 +611,6 @@ fn node_print_double_quoted() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured ask/deny vs unquoted deny/deny at 8d6b3403d"]
 fn node_print_escaped() {
     same_or_stricter(
         "nprint-esc",
@@ -671,19 +631,16 @@ fn control_flock_command() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn flock_command_single_quoted() {
     same_or_stricter("flock-sq", FLOCK, "flock '--command=rm -rf /' /tmp/l");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn flock_command_double_quoted() {
     same_or_stricter("flock-dq", FLOCK, "flock \"--command=rm -rf /\" /tmp/l");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn flock_command_escaped() {
     same_or_stricter("flock-esc", FLOCK, "flock \\--command='rm -rf /' /tmp/l");
 }
@@ -701,7 +658,6 @@ fn control_base64_decode_long() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured ask/deny vs unquoted deny/deny at 8d6b3403d"]
 fn base64_decode_long_single_quoted() {
     same_or_stricter(
         "b64l-sq",
@@ -711,7 +667,6 @@ fn base64_decode_long_single_quoted() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured ask/deny vs unquoted deny/deny at 8d6b3403d"]
 fn base64_decode_long_double_quoted() {
     same_or_stricter(
         "b64l-dq",
@@ -721,7 +676,6 @@ fn base64_decode_long_double_quoted() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured ask/deny vs unquoted deny/deny at 8d6b3403d"]
 fn base64_decode_long_escaped() {
     same_or_stricter(
         "b64l-esc",
@@ -736,13 +690,11 @@ fn control_base64_decode_short() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured ask/deny vs unquoted deny/deny at 8d6b3403d"]
 fn base64_decode_short_single_quoted() {
     same_or_stricter("b64s-sq", B64_SHORT, "echo cm0gLXJmIC8K | base64 '-d' | sh");
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured ask/deny vs unquoted deny/deny at 8d6b3403d"]
 fn base64_decode_short_double_quoted() {
     same_or_stricter(
         "b64s-dq",
@@ -752,7 +704,6 @@ fn base64_decode_short_double_quoted() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured ask/deny vs unquoted deny/deny at 8d6b3403d"]
 fn base64_decode_short_escaped() {
     same_or_stricter(
         "b64s-esc",
@@ -767,13 +718,11 @@ fn base64_decode_short_escaped() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn cp_short_t_single_quoted() {
     same_or_stricter("cpt-sq", "cp -t /etc x", "cp '-t' /etc x");
 }
 
 #[test]
-#[ignore = "RED fail-open: measured allow/allow vs unquoted ask/deny at 8d6b3403d"]
 fn git_push_short_f_single_quoted() {
     same_or_stricter(
         "pushsf-sq",
@@ -783,7 +732,6 @@ fn git_push_short_f_single_quoted() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured ask/deny vs unquoted deny/deny at 8d6b3403d"]
 fn node_short_e_single_quoted() {
     same_or_stricter(
         "nodee-sq",
@@ -793,7 +741,6 @@ fn node_short_e_single_quoted() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn flock_short_c_single_quoted() {
     same_or_stricter(
         "flockc-sq",
@@ -803,7 +750,6 @@ fn flock_short_c_single_quoted() {
 }
 
 #[test]
-#[ignore = "RED fail-open (system harm) measured allow/allow vs unquoted deny/deny at 8d6b3403d"]
 fn flock_lockfile_first_command_single_quoted() {
     same_or_stricter(
         "flockl-sq",

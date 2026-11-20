@@ -433,10 +433,25 @@ forge・condukt のスケジューラが再利用）。
     (the c4 test must be written by a non-implementer).
 
   回帰テスト: `crates/blastguard/tests/function_body_late_binding_fail_open_20261113.rs`。
+- **quote された option 語は unquoted の綴りとして読む（raw-token quoted-option fail-open, 2026-11-20, critical）** —
+  legacy arm は空白分割した raw token を `starts_with("--output=")`・`== "-i"` 等で照合していたため、
+  `sort '--output=/etc/passwd' x`・`sed \--in-place -e d /etc/hosts`・`git push "--force" origin main`・
+  `flock '--command=rm -rf /' /tmp/l`・`base64 '-d' | sh` 等が Allow だった（`tests/raw_token_quoted_option_20261120.rs`
+  の 55 RED）。arm ごとの patch ではなく、arm に渡す token 列を作る 3 箇所（`analyze_segment`・high-blast tier・
+  pipe-egress の stage）で `detect/option_words.rs` の `OptionWords` を通す: shell word の先頭 token で、
+  quote 除去後の文字が `-` で始まるものは、option 名（最初の `=` まで、無ければ語全体）を AST parser の dequote
+  （`redirect::dequoted_redirect_word`）と同じ結果に dequote し、値（`=` 以降）は `=` の時点で開いていた quote で
+  再度開いた元の綴りのまま残す（`'--command=rm` → `--command='rm`。値を dequote すると arm 側の quote 処理で
+  二重に外れる）。operand（`-` で始まらない語）・前の語の途中の token（`-m "use '-f' here"`）・unquoted の option は
+  バイト列を変えない。option 名が literal に決まらない語（quote 内の展開 `"-$x"`、未対応の ANSI-C escape
+  `$'\x2di'`、dash の後の escape された空白）は **Ask**（判定不能は制限側）。先頭が展開の語（`"$OPT"`）は
+  unquoted の `$OPT` と同じく従来どおり。**RESIDUAL**: 名前の途中から始まる quote（`--out'put'=`・`-'i'`）と
+  変数経由の option は対象外。
 - **rm 以外のシステムファイル変更コマンドも system-harm Deny（backlog 3c750df2）** — `detect/system_paths.rs` の
   `system_mutation_verdict` が `analyze_command_at` の per-command arm より先に 1 箇所で判定する。対象は
-  `unlink`/`rmdir` の operand、`mv` の source（`-t` 時は全 operand）、`sed -i`/`--in-place` の入力ファイル
+  `unlink`/`rmdir` の operand、`mv` の source（`-t` 時は全 operand）、`sed -i`/`--in-place`（`gsed` も同じ）の入力ファイル
   （`-e`/`-f` が無いときの先頭 operand は script として除外。BSD `-i ''` の空 suffix はファイルではない）、
+  `sort -o`/`--output` の出力ファイル（2026-11-20 raw-token fix: unquoted の `sort -o /etc/passwd x` も Allow だった）、
   `perl -i` の入力ファイル（`-e` が無いときの script ファイルは除外）、`chmod`/`chown`/`chgrp` の target、
   `rsync` の `--del*` 時の destination と `--remove-source-files` 時の source。これらが
   `scope::is_inside_system_dir`（rm と同じ判定。字句の絶対パスと親 symlink 解決の両方、wildcard/brace は

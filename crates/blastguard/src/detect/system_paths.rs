@@ -77,7 +77,17 @@ pub(super) fn system_mutation_verdict(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -
 fn is_mutator(cmd: &str) -> bool {
     matches!(
         cmd,
-        "unlink" | "rmdir" | "mv" | "sed" | "perl" | "chmod" | "chown" | "chgrp" | "rsync"
+        "unlink"
+            | "rmdir"
+            | "mv"
+            | "sed"
+            | "gsed"
+            | "perl"
+            | "chmod"
+            | "chown"
+            | "chgrp"
+            | "rsync"
+            | "sort"
     )
 }
 
@@ -202,7 +212,11 @@ fn mutated_files<'a>(cmd: &str, words: &[&'a str]) -> Option<(&'static str, Vec<
             };
             Some(("moves away", sources))
         }
-        "sed" => sed_in_place_files(words).map(|f| ("rewrites in place", f)),
+        // `gsed` is GNU sed under its Homebrew name: the same `-i` rewrite.
+        "sed" | "gsed" => sed_in_place_files(words).map(|f| ("rewrites in place", f)),
+        // `sort -o FILE` truncates and rewrites FILE (raw-token fail-open
+        // 2026-11-20: `sort -o /etc/passwd x` was Allow).
+        "sort" => super::fileops::sort_output_file(words).map(|f| ("overwrites", vec![f])),
         "perl" => perl_in_place_files(words).map(|f| ("rewrites in place", f)),
         "chmod" => Some(("re-permissions", chmod_mode_and_targets(words).1)),
         "chown" | "chgrp" => Some(("re-owns", chown_owner_and_targets(words).1)),

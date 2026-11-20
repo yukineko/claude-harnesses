@@ -587,6 +587,13 @@ pub(super) fn program_body_segments_fed_to(cmd: &str, reader: impl Fn(&str) -> b
 ///     delimiter word, so `<<'EOF'\r` is closed only by a line `EOF\r`, while
 ///     [`here_document_openers`] ends the word at it.
 ///
+/// The `$` / backtick refusal above is this shape rule's own, and it still
+/// holds here. A `git commit -F -` body whose opener carries an undetermined
+/// `--trailer` / `--author` value (`--trailer "Condukt-Task: $TASK_ID"`,
+/// backlog 3ab6109f) is removed by the AST step instead
+/// (`heredoc_data::without_data_heredoc_bodies`, which runs before every string
+/// step), not by this function; this function keeps such a body in the text.
+///
 /// What is kept when the body is removed: the opener line and the closing
 /// delimiter line, plus the permitted lines around them. So the opener's
 /// redirect targets are still judged, with the `cd` in force.

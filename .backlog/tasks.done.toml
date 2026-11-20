@@ -88410,3 +88410,52 @@ rev = "1876e90a539de5079bc8c86eb69f41de49ecde25"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "2d2ef773"
+title = "blastguard FP: python3 - heredoc whose Python body only rewrites ignore-label strings (containing the word 'truncate') is Denied as shell truncate ('truncate can shrink a file to zero bytes')"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fp",
+    "false-positive",
+    "s5-python-parser",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = '''
+Observed 2026-11-17 in worktree bg-s2-red-20261117 (commit 10625a33c): the exact refused command is pinned verbatim as REFUSED in crates/blastguard/tests/backlog_20261117_python_heredoc_literal_truncate_fp.rs; hook answered decision=deny reason='truncate can shrink a file to zero bytes'. No shell word runs truncate; the only 'truncate' words are inside Python string literals of a quoted heredoc fed to python3 on stdin. Minimal shape python3 - <<'EOF' print("truncate -s 0 /tmp/x") EOF is ALREADY Allow (control in the same file), so the trigger is something else in the body (not isolated; candidates: the 'Truncate truncate (' words, the open(p, "w") write, the multi-line quoted strings with literal \n). Relation to 06c51772: same family (python heredoc body read by shell-string readings; both tagged s5-python-parser), but a different symptom (06c51772 = dropped literal write paths + later '. $HOME/.cargo/env' read as running the written file; this = a shell truncate reading inside Python literals). Root identity not verified; treat as related, possibly separate. Ruling 15 (2026-11-17): python keeps legacy readings until S5, so the fix is either in the legacy reading now (FP not tolerated) or S5.
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261117_python_heredoc_literal_truncate_fp -- --ignored python_heredoc_label_rewrite_is_not_denied_as_truncate; rev: 51acfda247a2cd45c88dfa801138376923d4b8df; observed: exit 0: ; 0 ignored; 0 measured; 1 filtered out; finished in 0.72s
+
+   Compiling blastguard v0.2.829 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/backlog_20261117_python_heredoc_literal_truncate_fp.rs (target/debug/deps/backlog_20261117_python_heredoc_literal_truncate_fp-f1e9d90a039438c8)'''
+created_at = 1794869988
+updated_at = 1795200413
+weight = 0.0
+issue_number = 1846
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1846"
+issue_closed_at = 1795200415
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261117_python_heredoc_literal_truncate_fp -- --ignored python_heredoc_label_rewrite_is_not_denied_as_truncate"
+rev = "10625a33c40d05376da7158c1275dd06bde92622"
+observed_at = 1794869988
+detail = """
+exit 101: arness-worktrees/bg-s2-red-20261117/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.56s
+     Running tests/backlog_20261117_python_heredoc_literal_truncate_fp.rs (target/debug/deps/backlog_20261117_python_heredoc_literal_truncate_fp-460b6f19ab159f08)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261117_python_heredoc_literal_truncate_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261117_python_heredoc_literal_truncate_fp -- --ignored python_heredoc_label_rewrite_is_not_denied_as_truncate; rev: 51acfda247a2cd45c88dfa801138376923d4b8df; observed: exit 0: ; 0 ignored; 0 measured; 1 filtered out; finished in 0.72s
+
+   Compiling blastguard v0.2.829 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/backlog_20261117_python_heredoc_literal_truncate_fp.rs (target/debug/deps/backlog_20261117_python_heredoc_literal_truncate_fp-f1e9d90a039438c8)"""

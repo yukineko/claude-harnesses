@@ -11,6 +11,7 @@ use super::{
 
 mod brace_feeder;
 mod compound_readers;
+pub(super) mod determined_output;
 mod echo_output;
 mod exec_fds;
 mod node_source;
@@ -26,6 +27,7 @@ pub(super) use stdin_operand::interpreter_stdin_operand;
 use stdin_operand::stage_stdin_operand;
 
 use brace_feeder::group_feeder_texts;
+use determined_output::{concatenated_outputs, simple_list_members};
 use echo_output::{plain_echo_output, quote_bare_echo_words};
 use exec_fds::{exec_opened_fds, ExecFd};
 use node_source::{is_node_head, node_program_source};
@@ -206,10 +208,19 @@ fn stdin_exec_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     if let Some(deny) = acc.record(tracking.verdict) {
         return deny;
     }
+    // Whether nothing can change what `echo` / `seq` / `cat` / `sort` run, the
+    // precondition for computing a producer pipeline's output
+    // (`determined_output`, backlog 40dc52c0): the user's line and every text
+    // derived on the way here (`ctx.names_fixed`, only ever narrowed, so a
+    // function before an `eval` body or a middle `PATH=` is seen) AND `cmd`
+    // itself (a body may define its own function). Computed at most once.
+    let fixed_cell = std::cell::OnceCell::new();
+    let resolution_fixed =
+        || *fixed_cell.get_or_init(|| ctx.names_fixed && determined_output::resolution_fixed(cmd));
     let stages = procsub_stages(cmd);
     let exec_fds = exec_opened_fds(&stages);
     for stage in &stages {
-        let procsubs = procsub_programs(stage, &exec_fds, &tracking.resolved);
+        let procsubs = procsub_programs(stage, &exec_fds, &tracking.resolved, &resolution_fixed);
         for synthetic in &procsubs.pipelines {
             if let Some(deny) = acc.record(analyze_interpreter_stdin_exec(synthetic, depth, ctx)) {
                 return deny;
@@ -469,8 +480,25 @@ tell whether the interpreter runs that stdin or a script file",
             // unrelated statement become the finding: `rmdir olddir; echo hi |
             // python3` was denied for "runs `rmdir`" when the program was `hi`.
             // A reason must name what was observed about THIS program.
-            let mut program_texts =
-                stdin_program_texts(cmd, stage, &statement, i, heredoc_open, feeder);
+            //
+            // When the upstream stages of THIS statement are a producer
+            // pipeline whose output `determined_output` computes beyond a
+            // single plain `echo` (`echo hi | cat | bash`, `seq 10 | sort |
+            // bash`, `echo "$(echo hi)" | bash`, backlog 40dc52c0), that
+            // output IS the program: it replaces the literal reading (which
+            // read `cat` as no text and `$(echo hi)` as a template), and the
+            // upstream-stage Asks below, which exist because that output was
+            // unknown, do not apply. Only with nothing on the line rebinding
+            // the modelled names (`resolution_fixed`), and never for a
+            // here-document or a brace-group feeder.
+            let determined = (i > 0 && !heredoc_open && feeder.is_none() && resolution_fixed())
+                .then(|| determined_output::pipeline_output(&statement[..i].join(" | ")))
+                .flatten()
+                .filter(|o| o.beyond_plain_echo);
+            let mut program_texts = match &determined {
+                Some(out) => with_nul_readings(vec![out.text.clone()]),
+                None => stdin_program_texts(cmd, stage, &statement, i, heredoc_open, feeder),
+            };
             let shape = format!("`{}` takes its program from stdin", stage.trim());
             // A shell removes its program's line continuations before it
             // splits words: judge that reading too (backlog 040b959b).
@@ -487,6 +515,21 @@ tell whether the interpreter runs that stdin or a script file",
                 // no layer-0 Ask: `bash <<'EOF'` / `git a\` / `dd -A` / `EOF`
                 // answered Allow (measured on the deployed 0.2.702). Keep that
                 // Ask; a Deny is the interpreter pass's to return below.
+                // The same for a COMPUTED program (`determined`, backlog
+                // 40dc52c0): it reached no reader as written, so an Ask its
+                // full judgement earns — a pipe to a shell inside it (`echo
+                // 'echo rm -rf /etc | bash' | cat | bash`), a substitution it
+                // cannot read — stands instead of being dropped at layer 0.
+                if determined.is_some() {
+                    for text in &program_texts {
+                        let verdict = super::detect_bash(text, depth + 1, ctx);
+                        if verdict.is_blocking() {
+                            if let Some(deny) = acc.record(verdict) {
+                                return deny;
+                            }
+                        }
+                    }
+                }
                 if heredoc_open {
                     for joined in program_texts.iter().skip(originals) {
                         let verdict = super::detect_bash(joined, depth + 1, ctx);
@@ -540,8 +583,9 @@ tell whether the interpreter runs that stdin or a script file",
             // whose substitution sits inside the literal, asked. The output of
             // that expansion is part of the program and is not on the command
             // line. Recorded after the literal verdict so a Deny found there
-            // still wins.
-            if i > 0 {
+            // still wins. Not when the upstream output was computed
+            // (`determined` above): then nothing of the program is unknown.
+            if i > 0 && determined.is_none() {
                 if let Some(word) =
                     unquoted_expansion(&backticks_as_dollar_paren(&statement[i - 1]))
                 {
@@ -791,12 +835,21 @@ struct ProcsubPrograms {
 /// It is read so for every reader, not only zsh (bash does not parse a word
 /// starting `=(`; reading it as a substitution there only adds a judgement).
 ///
+/// Each substitution that is the program is read by
+/// [`procsub_inner_pipelines`]. `resolution_fixed` says whether nothing on the
+/// whole command line can change what the names `determined_output` models
+/// run ([`determined_output::resolution_fixed`] over the line as written); only
+/// then may a substitution's output be computed (`bash <(echo hi | cat)`,
+/// backlog 40dc52c0).
+///
 /// Every pipeline holds only the TEXT of a substitution (one nesting level
-/// down), so the recursion through [`analyze_interpreter_stdin_exec`] ends.
+/// down), or that text's computed output, so the recursion through
+/// [`analyze_interpreter_stdin_exec`] ends.
 fn procsub_programs(
     stage: &str,
     exec_fds: &[(u32, ExecFd)],
     resolved_here_text: &[u32],
+    resolution_fixed: &dyn Fn() -> bool,
 ) -> ProcsubPrograms {
     let mut out = ProcsubPrograms::default();
     let words = super::quote_aware_words(stage);
@@ -984,7 +1037,7 @@ program `{reader}` runs",
         );
     }
     for inner in inners {
-        let (pipelines, undetermined) = procsub_inner_pipelines(inner, reader);
+        let (pipelines, undetermined) = procsub_inner_pipelines(inner, reader, resolution_fixed);
         out.pipelines.extend(pipelines);
         out.undetermined.extend(undetermined);
     }
@@ -1046,9 +1099,34 @@ fn parse_redirect(word: &str) -> Option<(Option<u32>, &str, &str)> {
 /// * Anything else (a pipe, `||`, `&`, a subshell): `(INNER) | READER`, which
 ///   is not a literal emitter, so the pipe rule asks (any literal inside is
 ///   still judged).
-fn procsub_inner_pipelines(inner: &str, reader: &str) -> (Vec<String>, Vec<String>) {
+///
+/// Before those readings (backlog 40dc52c0): when `resolution_fixed()` holds
+/// and [`determined_output::pipeline_output`] computes INNER's output beyond
+/// a single plain `echo` — a pipeline of `echo` / `seq` into `cat` / `sort`
+/// with no operands (`echo hi | cat`, `seq 10 | sort`), or an `echo` of a
+/// double-quoted `$( )` whose program is itself such a pipeline
+/// (`echo "$(echo hi)"`) — the only pipeline is `INNER | READER`, unwrapped
+/// (not `(INNER) | READER`): [`stdin_exec_verdict`] computes the same output
+/// for that pipe's upstream stages and judges it as the program, exactly as
+/// for `echo hi | cat | bash` written directly — including the full
+/// detector's Ask on the computed text (a pipe to a shell inside it, `echo
+/// 'echo rm -rf /etc | bash' | cat`), which the layer-0 program pass would
+/// drop. A harmful program (`echo 'chmod 777 /etc/hosts' | cat`) is judged —
+/// and denied — as that program. Every other INNER (another producer or
+/// filter, an option, a file operand, an undetermined word) keeps the
+/// readings above and their Ask.
+fn procsub_inner_pipelines(
+    inner: &str,
+    reader: &str,
+    resolution_fixed: &dyn Fn() -> bool,
+) -> (Vec<String>, Vec<String>) {
     if inner.is_empty() {
         return (Vec::new(), Vec::new());
+    }
+    if resolution_fixed()
+        && determined_output::pipeline_output(inner).is_some_and(|o| o.beyond_plain_echo)
+    {
+        return (vec![format!("{inner} | {reader}")], Vec::new());
     }
     let Some(members) = simple_list_members(inner) else {
         return (vec![format!("({inner}) | {reader}")], Vec::new());
@@ -1081,100 +1159,6 @@ program, so blastguard cannot read it"
         )),
     }
     (pipelines, undetermined)
-}
-
-/// The members of `inner` when it is a list of commands joined only by `;`,
-/// `&&` or newlines outside quotes, each without a pipe, `||`, `&` or a
-/// parenthesis (`None` otherwise). Empty members are dropped.
-fn simple_list_members(inner: &str) -> Option<Vec<String>> {
-    let chars: Vec<char> = inner.chars().collect();
-    let mut members = Vec::new();
-    let mut cur = String::new();
-    let (mut in_s, mut in_d) = (false, false);
-    let mut k = 0;
-    while k < chars.len() {
-        let c = chars[k];
-        if c == '\\' && !in_s {
-            cur.push(c);
-            if let Some(&n) = chars.get(k + 1) {
-                cur.push(n);
-            }
-            k += 2;
-            continue;
-        }
-        if c == '\'' && !in_d {
-            in_s = !in_s;
-        } else if c == '"' && !in_s {
-            in_d = !in_d;
-        } else if !in_s && !in_d {
-            if c == ';' || c == '\n' || (c == '&' && chars.get(k + 1) == Some(&'&')) {
-                members.push(std::mem::take(&mut cur));
-                k += if c == '&' { 2 } else { 1 };
-                continue;
-            }
-            if matches!(c, '|' | '&' | '(' | ')') {
-                return None;
-            }
-        }
-        cur.push(c);
-        k += 1;
-    }
-    if in_s || in_d {
-        return None;
-    }
-    members.push(cur);
-    let members: Vec<String> = members
-        .into_iter()
-        .map(|m| m.trim().to_string())
-        .filter(|m| !m.is_empty())
-        .collect();
-    if members.is_empty() {
-        None
-    } else {
-        Some(members)
-    }
-}
-
-/// Every reading of what the list `members` writes to stdout, in order, when
-/// each member is a plain `echo` ([`plain_echo_output`]) or a `printf` whose
-/// output [`evaluate_printf_stage`] determines (one reading per combination of
-/// its dialect outputs, at most 16). Otherwise `Err` naming why the output is
-/// undetermined (the caller's Ask).
-fn concatenated_outputs(members: &[String]) -> Result<Vec<String>, String> {
-    const MAX_READINGS: usize = 16;
-    let mut readings = vec![String::new()];
-    for member in members {
-        let outputs = match plain_echo_output(member) {
-            Some(text) => vec![text],
-            None => match evaluate_printf_stage(member) {
-                PrintfStage::Outputs(texts) => texts,
-                PrintfStage::Undetermined(why) => {
-                    return Err(format!("the printf `{member}` cannot be evaluated ({why})"))
-                }
-                PrintfStage::NotPrintf => {
-                    return Err(format!(
-                        "`{member}` is not a plain `echo` or a `printf` whose output is static"
-                    ))
-                }
-            },
-        };
-        let mut next = Vec::new();
-        for prefix in &readings {
-            for text in &outputs {
-                let joined = format!("{prefix}{text}");
-                if !next.contains(&joined) {
-                    next.push(joined);
-                }
-            }
-        }
-        if next.len() > MAX_READINGS {
-            return Err(format!(
-                "it has more than {MAX_READINGS} printf dialect readings"
-            ));
-        }
-        readings = next;
-    }
-    Ok(readings)
 }
 
 /// True when `head` is `python`, `python3` or `python3.N`.

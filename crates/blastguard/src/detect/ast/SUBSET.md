@@ -122,6 +122,28 @@ S4 rulings (user ruling 2026-11-18):
     the shell read it directly (`File` / `Fd` / `FromCommand` /
     `Undetermined` → Undetermined; a `Literal` → judged by the full detector
     as `<shell> -c '<body>'`; `b5.rs::inherited_stdin`).
+    Backlog 40dc52c0 (user ruling 2026-11-20, option A): content a
+    determined producer PIPELINE delivers is read the same way — one
+    pipeline whose first stage is `echo` with determined words (no option,
+    no backslash) or `seq` with 1–3 unsigned decimal literals, and whose
+    later stages are `cat` / `sort` with no operand and no option (`sort`
+    only over lines that are all digits or all equal, the orders every
+    locale agrees on); a double-quoted `$( )` whose program is itself such a
+    pipeline is its output with trailing newlines removed
+    (`bash <(echo hi | cat)`, `bash <(seq 10 | sort)`,
+    `bash <(echo "$(echo hi)")`, `echo hi | cat | bash`;
+    `payload/determined_output.rs`, `b5.rs::determined_delivered_program`).
+    Only when the user's top-level line, every derived text on the way, AND
+    the text being judged define no function, make no assignment and run
+    only `echo` / `seq` / `cat` / `sort` and shells / interpreters
+    (`resolution_fixed`); the chain value starts from the user's line and is
+    only ever narrowed by each derived text (`readings.rs::chain_names_fixed`,
+    `Ctx::names_fixed` narrowed in `detect_bash`), never widened, so
+    `cat(){ …; }; eval 'echo hi | cat | bash'` and
+    `bash -c 'PATH=/tmp/x:$PATH; bash -c "echo hi | cat | bash"'` keep their
+    Ask. Any other
+    producer or filter, option, file operand or undetermined word (an
+    unquoted `$( )`, a backquote, `$N`) keeps the Undetermined.
 22. (T1) A program file that is git-tracked AND unmodified gets no B.5
     opinion (legacy decides), for interpreter file runs and direct exec.
     Unmodified = clean in the work tree and index (`git ls-files
@@ -355,7 +377,7 @@ else the command's cwd).
 | Command | Program source | Judgement |
 |---|---|---|
 | `bash` / `sh` / `zsh` / `dash` / `ksh` `-c PROG` | `InlineLiteral` | PROG analysed and judged recursively (S4); Undetermined PROG → Undetermined |
-| same, stdin (`bash`, `-s`, `-`, `/dev/stdin`) | `Stdin(StdinSource)` | `Literal` body — and the literal output of a process substitution / previous pipe stage / a brace group `{ echo a; printf b; } |` whose members are all literal `echo` / `printf` joined by `;`, a newline or `&&` (their outputs concatenated; any other member, `||`, `&`, a redirect, a nested pipe or group stays `FromCommand`; `ast/support.rs::brace_group_stdin`) — judged recursively (S4, ruling 21); a literal piped in by a stage that is not one simple command right before the `|` (a brace group, wherever the pipeline sits: `( … )`, `if`, a loop body) is ALSO judged by the full detector as `<shell> -c '<body>'`, because the legacy layer that judges a literal body's effects may not read that group there (perl / ruby / node: Undetermined; python: S5; `b5.rs::piped_by_compound_stage`); `FromCommand` / `File` / `Fd` / `Undetermined` → Undetermined; `Inherited` → no B.5 opinion at the top level (ruling 21), inside a `-c PROG` body the enclosing shell's stdin, judged as above (`b5.rs::inherited_stdin`, backlog b838630f) |
+| same, stdin (`bash`, `-s`, `-`, `/dev/stdin`) | `Stdin(StdinSource)` | `Literal` body — and the literal output of a process substitution / previous pipe stage / a brace group `{ echo a; printf b; } |` whose members are all literal `echo` / `printf` joined by `;`, a newline or `&&` (their outputs concatenated; any other member, `||`, `&`, a redirect, a nested pipe or group stays `FromCommand`; `ast/support.rs::brace_group_stdin`), or the computed output of a determined producer pipeline (`echo` / `seq` into `cat` / `sort`, a double-quoted `$( )` of one; ruling 21, backlog 40dc52c0, `b5.rs::determined_delivered_program`) — judged recursively (S4, ruling 21); a literal piped in by a stage that is not one simple command right before the `|` (a brace group, wherever the pipeline sits: `( … )`, `if`, a loop body) is ALSO judged by the full detector as `<shell> -c '<body>'`, because the legacy layer that judges a literal body's effects may not read that group there (perl / ruby / node: Undetermined; python: S5; `b5.rs::piped_by_compound_stage`); `FromCommand` / `File` / `Fd` / `Undetermined` → Undetermined; `Inherited` → no B.5 opinion at the top level (ruling 21), inside a `-c PROG` body the enclosing shell's stdin, judged as above (`b5.rs::inherited_stdin`, backlog b838630f) |
 | same, script file (`bash x.sh`); likewise any interpreter running a program file (`python3 x.py`, `perl x.pl`, …) | `File(Value)` | **Undetermined** → Ask / Deny (ruling 10). Exception (shells and direct exec only): when an earlier command of the same script writes that file (matched by resolved path) with a determined body (`cat > x.sh <<'EOF' … EOF`) and the write and the run are joined by `&&` only, that body is judged as the program (S4, ruling 20). A git-tracked, unmodified file → no B.5 opinion (ruling 22). `-n` noexec → no B.5 opinion (ruling 24) |
 | `eval` | `Undetermined` | Undetermined (S4) |
 | direct execution of a program file (`./run.sh`, `scripts/foo.sh`, `/abs/run.sh`) | `File(Value)` | **Undetermined** → Ask / Deny (ruling 17, S4), same exceptions as the script-file row (ruling 20, ruling 22) |

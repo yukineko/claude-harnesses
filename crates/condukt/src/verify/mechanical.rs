@@ -51,6 +51,18 @@ pub(super) fn parse_argv(s: &str) -> Option<Vec<String>> {
 /// also makes the tail unparseable and yields `None` (LLM verifier required).
 /// Known gap: a quote opened BEFORE the runner mention (`FOO="1 cargo test`)
 /// is not seen, because only the tail is tokenized.
+///
+/// The prose `cargo test` arm keeps the cargo options written in the tail:
+/// `-p X` / `--package X`, `--test X` (and the other value options in
+/// [`CARGO_TEST_VALUE_FLAGS`]), any other `-`-prefixed flag, and everything
+/// after a `--` separator (`-- --include-ignored`). So prose
+/// `cargo test -p condukt --test t -- --include-ignored exits 0` yields
+/// `[cargo, test, -p, condukt, --test, t, --, --include-ignored]`. The words
+/// after the argv must be only the trailing assertion `exits 0` (or `exit 0`);
+/// any other bare word could be a test filter, so the argv cannot be cleanly
+/// separated from the prose and `None` is returned (no guessed wider or
+/// narrower command). Prose `cargo test` with no options and no trailing words
+/// yields `[cargo, test]`, as before.
 pub fn mechanical_cmd(
     done_criteria: &str,
     mechanical_check_hint: Option<&crate::model::MechanicalCheck>,
@@ -88,17 +100,11 @@ pub fn mechanical_cmd(
     let lower = done_criteria.to_lowercase();
     let tail_parses = |needle: &str| prose_tail_parses(done_criteria, needle);
     if lower.contains("cargo test") {
-        if !tail_parses("cargo test") {
-            return None;
-        }
-        let mut cmd = vec!["cargo".to_string(), "test".to_string()];
-        if let Ok(re2) = regex::Regex::new(r"-p\s+([A-Za-z0-9_-]+)") {
-            if let Some(c) = re2.captures(done_criteria).and_then(|c| c.get(1)) {
-                cmd.push("-p".to_string());
-                cmd.push(c.as_str().to_string());
-            }
-        }
-        return Some(cmd);
+        // The cargo arm builds its argv from the tail itself (see
+        // `prose_cargo_test_argv`); `None` when the tail cannot be cleanly split
+        // into cargo argv and trailing prose.
+        let tail = prose_tail(done_criteria, "cargo test")?;
+        return prose_cargo_test_argv(tail);
     }
     if lower.contains("npm test") {
         if !tail_parses("npm test") {
@@ -121,17 +127,79 @@ pub fn mechanical_cmd(
     None
 }
 
+/// The criteria text from the FIRST case-insensitive occurrence of `needle` to
+/// the end. `None` when `needle` cannot be located or the regex is unavailable.
+fn prose_tail<'a>(done_criteria: &'a str, needle: &str) -> Option<&'a str> {
+    let re = regex::Regex::new(&format!("(?i){}", regex::escape(needle))).ok()?;
+    re.find(done_criteria).map(|m| &done_criteria[m.start()..])
+}
+
 /// True when the criteria text from the FIRST case-insensitive occurrence of
 /// `needle` to the end tokenizes with [`parse_argv`]. `false` when it does not
 /// (unterminated quote) and also when `needle` cannot be located or the regex
 /// is unavailable: undetermined resolves restricted (no prose command).
 fn prose_tail_parses(done_criteria: &str, needle: &str) -> bool {
-    let Ok(re) = regex::Regex::new(&format!("(?i){}", regex::escape(needle))) else {
-        return false;
-    };
-    match re.find(done_criteria) {
-        Some(m) => parse_argv(&done_criteria[m.start()..]).is_some(),
-        None => false,
+    prose_tail(done_criteria, needle).is_some_and(|tail| parse_argv(tail).is_some())
+}
+
+/// Options of `cargo test` that take a value as the next token (before `--`).
+const CARGO_TEST_VALUE_FLAGS: &[&str] = &[
+    "-p",
+    "--package",
+    "--test",
+    "--bin",
+    "--example",
+    "--exclude",
+    "--features",
+];
+
+/// Trailing assertion prose that may follow a `cargo test` command without
+/// being a test filter (compared lowercase, trailing `.` stripped).
+const CARGO_TEST_TRAILING_PROSE: &[&str] = &["exits 0", "exit 0"];
+
+/// Build the argv for a prose `cargo test` tail (text starting at `cargo test`).
+///
+/// The tail is tokenized with [`parse_argv`]. Leading `cargo test` is kept,
+/// then cargo options are consumed: a token starting with `-` is kept as-is,
+/// and a token in [`CARGO_TEST_VALUE_FLAGS`] (before `--`) also keeps the value
+/// token that follows it. A `--` separator switches to test-binary arguments
+/// (every later `-`-prefixed token is kept verbatim). The first bare word ends
+/// the argv: the remaining words are prose, and they must be exactly one of
+/// [`CARGO_TEST_TRAILING_PROSE`] (`exits 0`). Any other remainder — a bare word
+/// that could be a test filter, or a word like `passes` the argv does not
+/// account for — returns `None`, because the argv would then be a wider or
+/// narrower command than the one written. A missing option value, or a head
+/// other than `cargo test`, also returns `None`.
+fn prose_cargo_test_argv(tail: &str) -> Option<Vec<String>> {
+    let tokens = parse_argv(tail)?;
+    if tokens.len() < 2
+        || !tokens[0].eq_ignore_ascii_case("cargo")
+        || !tokens[1].eq_ignore_ascii_case("test")
+    {
+        return None;
+    }
+    let mut argv = vec!["cargo".to_string(), "test".to_string()];
+    let mut after_sep = false;
+    let mut i = 2;
+    while let Some(t) = tokens.get(i).map(String::as_str) {
+        if !t.starts_with('-') {
+            break;
+        }
+        argv.push(t.to_string());
+        i += 1;
+        if t == "--" {
+            after_sep = true;
+        } else if !after_sep && CARGO_TEST_VALUE_FLAGS.contains(&t) {
+            argv.push(tokens.get(i)?.clone());
+            i += 1;
+        }
+    }
+    let rest = tokens[i..].join(" ");
+    let rest = rest.trim_end_matches('.').to_lowercase();
+    if rest.is_empty() || CARGO_TEST_TRAILING_PROSE.contains(&rest.as_str()) {
+        Some(argv)
+    } else {
+        None
     }
 }
 
@@ -162,4 +230,78 @@ pub(super) fn semicolon_clause_count(done_criteria: &str) -> usize {
         .split([';', '；'])
         .filter(|c| c.chars().any(char::is_alphanumeric))
         .count()
+}
+
+// NOTE: the prose `cargo test` cases below were written by the implementer of
+// the backlog fix (5a633271), NOT by an independent verifier, so they are
+// non-independent evidence. The independent RED repro is the integration test
+// `backlog_20261116_check_criteria_drops_test_target`.
+#[cfg(test)]
+mod tests {
+    use super::mechanical_cmd;
+
+    fn argv(v: &[&str]) -> Option<Vec<String>> {
+        Some(v.iter().map(|s| s.to_string()).collect())
+    }
+
+    /// Prose `cargo test` keeps `--test <name>` and the `--`-separated
+    /// test-binary flags; the trailing assertion `exits 0` is not an argv word.
+    #[test]
+    fn prose_keeps_test_target_and_trailing_flags() {
+        let dc = "cargo test -p condukt --test worktree_remove_orphan_leftover -- --include-ignored exits 0";
+        assert_eq!(
+            mechanical_cmd(dc, None),
+            argv(&[
+                "cargo",
+                "test",
+                "-p",
+                "condukt",
+                "--test",
+                "worktree_remove_orphan_leftover",
+                "--",
+                "--include-ignored",
+            ])
+        );
+    }
+
+    /// A trailing assertion without any filter option still yields the bare
+    /// runner argv (prose `exits 0` dropped, not passed as a filter).
+    #[test]
+    fn prose_trailing_exits_is_not_a_filter() {
+        assert_eq!(
+            mechanical_cmd("cargo test -p condukt exits 0.", None),
+            argv(&["cargo", "test", "-p", "condukt"])
+        );
+        assert_eq!(
+            mechanical_cmd("cargo test exit 0", None),
+            argv(&["cargo", "test"])
+        );
+    }
+
+    /// Fail-closed: a bare word after the argv could be a test filter (or prose
+    /// the argv does not account for), so no argv is guessed.
+    #[test]
+    fn prose_unaccounted_word_yields_none() {
+        assert_eq!(
+            mechanical_cmd("cargo test -p condukt -- foo_filter", None),
+            None
+        );
+        assert_eq!(mechanical_cmd("cargo test -p condukt passes", None), None);
+        assert_eq!(
+            mechanical_cmd("cargo test -p condukt exits 0; no regressions", None),
+            None
+        );
+    }
+
+    /// Fail-closed: a missing option value, an unterminated quote in the tail,
+    /// or a head that is not `cargo test` yields no argv.
+    #[test]
+    fn prose_malformed_tail_yields_none() {
+        assert_eq!(mechanical_cmd("cargo test -p", None), None);
+        assert_eq!(
+            mechanical_cmd(r#"cargo test -p x -- "never exits 0"#, None),
+            None
+        );
+        assert_eq!(mechanical_cmd("cargo testing -p x exits 0", None), None);
+    }
 }

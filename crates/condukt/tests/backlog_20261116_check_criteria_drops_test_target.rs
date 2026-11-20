@@ -201,7 +201,6 @@ fn control_fake_cargo_is_invoked() {
 }
 
 #[test]
-#[ignore = "backlog row: check-criteria drops `--test <name>` and `-- --include-ignored` from prose done_criteria and runs the whole crate suite (verify/mechanical.rs prose fallback)"]
 fn check_criteria_keeps_named_test_target() {
     let fx = Fx::new("red");
     let run = fx.run_with();

@@ -175,9 +175,23 @@ fn relaxed_wildcard_rm_whose_literal_prefix_is_confined() {
     // The glob itself is never resolved (this crate does not expand shell
     // constructs); what is resolved is the literal directory prefix it can only
     // ever expand INSIDE.
-    for cmd in ["rm -rf target/*", "rm target/*.o", "rm -f /tmp/foo/*"] {
+    for cmd in ["rm -rf target/*", "rm -f /tmp/foo/*"] {
         assert_confined_ask(cmd, scoped(cmd));
     }
+
+    // literal-dir glob (user ruling 2026-11-19, docs/specs/blastguard.md
+    // 「literal-dir glob（ユーザー裁定 2026-11-19）」): a NON-recursive `rm` whose
+    // wildcard sits only in the final component under a literal project
+    // directory is judged by the named-file arm (`detect/rm.rs::
+    // nonrec_glob_placed`, ab5967c24), so it is an Allow rather than a
+    // confined Ask. The recursive `rm -rf target/*` above is not that shape.
+    let cmd = "rm target/*.o";
+    assert_eq!(
+        scoped(cmd),
+        Decision::Allow,
+        "`{cmd}`: non-recursive final-component glob under a project dir is \
+         Allow per the literal-dir glob ruling (2026-11-19)"
+    );
 }
 
 #[test]

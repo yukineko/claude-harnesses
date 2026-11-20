@@ -2550,3 +2550,31 @@ scripts/test_rebuild_current_version_only.py:285: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_rebuild_current_version_only.py::CheckerAcceptsFrozenSuperseded::test_old_bytes_in_live_held_superseded_dir_pass
 ============================== 1 failed in 0.37s ==============================="""
+
+[[task]]
+id = "8eff1e81"
+title = "tdd green records GREEN for a run that executed zero tests (0 passed / 0 failed)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "fail-open",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-21 in condukt run run-20261121-042409-20321 task t1 with tdd 0.1.100 (/Users/yuki/.claude/plugins/cache/yukineko/tdd/0.1.100/bin/tdd): `tdd green --task t1 --cmd 'cargo test -p blastguard --test backlog_20261120_596ef57d_requirements -- --ignored r_kill'` was run after the test's #[ignore] had been removed, so cargo ran zero tests (`running 0 tests ... test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out`). tdd still printed 'GREEN recorded', recorded counts {passed: 0, failed: 0} with tests {}, and `tdd oracle` / `condukt state check-oracle` then reported transition fail_to_pass, valid_fp_oracle true. A GREEN that executed zero tests proves nothing (CLAUDE.md §2(b), §3 'empty set is not clean'): it should be refused / undetermined, not recorded as GREEN. RED repro: crates/tdd/tests/backlog_20261121_green_zero_tests_recorded.rs (merged in f8f2298ba, tdd 0.1.101); at tdd 0.1.100 it fails with exit Some(0), green proofs ["t1.green.json"], stdout '🟢 GREEN recorded for `t1` — tests pass after RED.'. Does not cover non-libtest runners or the oracle side."""
+created_at = 1795204326
+updated_at = 1795204326
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261121_green_zero_tests_recorded -- --ignored green_refuses_a_run_that_executed_zero_tests"
+rev = "f8f2298ba0dbd694837d42cb52bb9b847ab20847"
+observed_at = 1795204326
+detail = """
+exit 101: ompiling tdd v0.1.101 (/Users/yuki/.condukt/worktrees/backlog-tdd-green-zero/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.96s
+     Running tests/backlog_20261121_green_zero_tests_recorded.rs (target/debug/deps/backlog_20261121_green_zero_tests_recorded-c882c87cddc337d2)
+error: test failed, to rerun pass `-p tdd --test backlog_20261121_green_zero_tests_recorded`"""

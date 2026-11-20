@@ -2730,36 +2730,6 @@ FAILED scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py::Quo
 ========================= 2 failed, 2 passed in 0.21s =========================="""
 
 [[task]]
-id = "2e704124"
-title = "blastguard allows shell redirects onto final-component globs and writes onto own-worktree command-running config"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "Measured at main 40e49d3db on 2026-11-20 by an independent test author. A truncating redirect onto an unquoted final-component glob under a plain HOME dir is allowed in both modes while the literal spelling of the matching existing file is denied in both modes. Final-component globs onto a plugin hooks dir (truncate, tee, tee append, append redirect, truncating redirect) and onto the scripts dir are allowed in both modes, while literal truncate onto the same hooks file is ask in main and deny in subagent. Literal truncating and appending redirects and tee append onto own-worktree command-running config (plugin hooks json, crate hooks json, check scripts, githooks pre-commit, settings local json) are allowed in both modes; user ruling 2026-11-20 says such config keeps a non-Allow verdict, appends included. 19 ignored REDs plus 3 control tables in crates/blastguard/tests/glob_and_config_write_failopen_20261120.rs on branch red/bg-glob-config-failopen-20261120 (commit b17328281). Not filed: redirect onto the other worktree or the project main tree is allowed for both the glob and the literal spelling, so it is not a glob gap."
-created_at = 1795173836
-updated_at = 1795173836
-weight = 0.0
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test glob_and_config_write_failopen_20261120 -- --ignored"
-rev = "b173282817199d6647e5441256f201b6a286b987"
-observed_at = 1795173836
-detail = """
-exit 101: ult: FAILED. 0 passed; 19 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.79s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
-     Running tests/glob_and_config_write_failopen_20261120.rs (target/debug/deps/glob_and_config_write_failopen_20261120-8ae6bf4a389c2fee)
-error: test failed, to rerun pass `-p blastguard --test glob_and_config_write_failopen_20261120`"""
-
-[[task]]
 id = "bb8e22e5"
 title = "rollout: test_rollout_default_path_rebuild_failure.py fails 4/4 - fixture repo lacks scripts/rollout_source_guard.py (can't open file)"
 project = "/Users/yuki/src/harness"

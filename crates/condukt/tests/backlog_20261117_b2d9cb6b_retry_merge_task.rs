@@ -53,6 +53,71 @@ fn ok(out: &Output, what: &str) {
     );
 }
 
+/// The real `tdd` binary next to this test's profile dir (built on demand).
+/// The mock `tdd` on condukt's PATH is left as it was.
+fn real_tdd() -> std::path::PathBuf {
+    let exe = std::env::current_exe().expect("current_exe");
+    let profile_dir = exe
+        .parent()
+        .and_then(Path::parent)
+        .expect("profile dir")
+        .to_path_buf();
+    let bin_path = profile_dir.join("tdd");
+    if !bin_path.exists() {
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let mut cmd = Command::new(&cargo);
+        cmd.args(["build", "-p", "tdd", "--bin", "tdd"]);
+        if profile_dir.file_name().and_then(|s| s.to_str()) == Some("release") {
+            cmd.arg("--release");
+        }
+        assert!(cmd.status().expect("cargo build -p tdd").success());
+    }
+    assert!(bin_path.exists(), "no tdd at {}", bin_path.display());
+    bin_path
+}
+
+const SCRIPT: &str = "mode=none; [ -f mode.txt ] && mode=$(cat mode.txt)
+case $mode in
+  none) echo 'test m::a ... ok'; echo 'test m::b ... FAILED'; echo 'test result: FAILED. 1 passed; 1 failed; 0 ignored'; exit 1;;
+  good) echo 'test m::a ... ok'; echo 'test m::b ... ok'; echo 'test result: ok. 2 passed; 0 failed; 0 ignored'; exit 0;;
+esac
+";
+
+/// Real `tdd red` (mode none) then `tdd green` (mode good) for `task` in
+/// `wt`, committing `t.sh` / `mode.txt` with `Condukt-Task: <identity>`
+/// before each phase.
+fn record_real_proofs(wt: &Path, home: &Path, task: &str, identity: &str) {
+    let tdd = |phase: &str| {
+        let out = harness_core::git_env::scrub(&mut Command::new(real_tdd()))
+            .args([phase, "--task", task, "--cmd", "sh t.sh"])
+            .current_dir(wt)
+            .env("HOME", home)
+            .env("CLAUDE_CODE_SESSION_ID", "sess-b2d9cb6b-merge-20261117")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .expect("spawn tdd");
+        assert!(
+            out.status.success(),
+            "tdd {phase}: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    let trailer = format!("Condukt-Task: {identity}");
+    let commit = |msg: &str| {
+        run_git(wt, &["add", "t.sh", "mode.txt"]);
+        run_git(wt, &["commit", "-q", "-m", msg, "--trailer", &trailer]);
+    };
+    std::fs::write(wt.join("t.sh"), SCRIPT).unwrap();
+    std::fs::write(wt.join("mode.txt"), "none").unwrap();
+    commit("add test");
+    tdd("red");
+    std::fs::write(wt.join("mode.txt"), "good").unwrap();
+    commit("make it pass");
+    tdd("green");
+}
+
 #[test]
 fn retry_worktree_merge_with_resolved_task_identity() {
     let tmp = tempfile::tempdir().unwrap();
@@ -140,6 +205,14 @@ fn retry_worktree_merge_with_resolved_task_identity() {
             "Condukt-Task: runX/task123",
         ],
     );
+
+    // Re-anchored per user ruling 2026-11-20 (spec
+    // condukt-merge-proof-contract-7768aeaf R8, round 4 Q-B): task123 is a
+    // `fix` task, so the merge now requires real tdd proofs (proof contract
+    // 7768aeaf). Record a real RED -> GREEN with the files tdd runs on
+    // committed before GREEN, so GREEN's tree is the branch tip's tree. The
+    // kind stays `fix`; the merge assert below is unchanged.
+    record_real_proofs(Path::new(&wt), &home, "task123", "runX/task123");
 
     // The fix: worktree merge --run runX --task task123 --branch condukt/runX/task123-r1 should succeed
     // (before the fix, it would fail with merge-task-mismatch because the recorded

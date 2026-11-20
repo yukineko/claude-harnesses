@@ -137,7 +137,10 @@ fn control_body_executes_data_stays_non_allow() {
     let cmd = "while read -r l; do eval \"$l\"; done <<'EOF'\nrm -rf /etc\nEOF\n";
     let (d, r) = run_as(cmd, &home, true);
     eprintln!("MEASURED eval-body={d} ({r})");
-    assert_ne!(d, "allow", "eval of heredoc data must stay non-allow; reason={r}");
+    assert_ne!(
+        d, "allow",
+        "eval of heredoc data must stay non-allow; reason={r}"
+    );
 }
 
 #[test]

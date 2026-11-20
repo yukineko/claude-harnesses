@@ -146,5 +146,8 @@ fn control_real_relative_redirect_after_unresolvable_cd_stays_non_allow() {
     let home = unique_home("r");
     let (d, r) = run_as(r#"cd "$X" && echo hi > out.txt"#, &home, true);
     eprintln!("MEASURED real-redirect={d} ({r})");
-    assert_ne!(d, "allow", "real unresolved relative redirect must stay non-allow; reason={r}");
+    assert_ne!(
+        d, "allow",
+        "real unresolved relative redirect must stay non-allow; reason={r}"
+    );
 }

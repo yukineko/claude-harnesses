@@ -36,7 +36,8 @@
 //!
 //! Callers (each a retirement step; a `false` keeps that arm's legacy
 //! verdict): S6-4 — the legacy `truncate` arm in `detect.rs`
-//! (`known_allow("truncate", rest, ctx)` → Allow).
+//! (`known_allow("truncate", rest, ctx)` → Allow); S6-5 — the legacy `dd`
+//! arm (`rm::analyze_dd`); S6-6 — the legacy `tee` arm (`tee::analyze_tee`).
 //! `rm` and `rsync --delete` keep `rm/new_layer.rs` (their own option gate
 //! and their own Scratch / OwnWorktree predicate; see SUBSET.md "S6-3
 //! status" for why the predicate is not this one yet).

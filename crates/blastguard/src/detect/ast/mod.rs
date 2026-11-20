@@ -85,8 +85,13 @@ mod tests;
 
 pub(super) use eval::with_hook_dir;
 /// The Table C classifier, for `detect/known_allow.rs` (stage S6-3), and its
-/// unlifted command-running-config refusal (stage S6-4).
-pub(super) use judge::{classify, names_command_running_config, PathClass, PathCtx};
+/// unlifted command-running-config refusal (stage S6-4); `Effect` for the
+/// legacy `tee` arm's append check (`detect/tee.rs`), which also judges a
+/// relative spelling with no known base lexically.
+pub(super) use judge::{
+    classify, names_command_running_config, spelling_names_command_running_config, Effect,
+    PathClass, PathCtx,
+};
 
 use std::ops::Range;
 

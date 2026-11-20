@@ -558,7 +558,6 @@ pub(crate) fn classify(effect: Effect, target: &Value, cwd: &Value, ctx: &PathCt
 /// resolved, is `true`.
 pub(crate) fn names_command_running_config(target: &Value, cwd: &Value, ctx: &PathCtx) -> bool {
     use crate::detect::protected;
-    use crate::detect::rm::new_layer;
     use harness_core::verdict::Determination;
 
     let Ok(path) = place(target, cwd, ctx) else {
@@ -568,15 +567,23 @@ pub(crate) fn names_command_running_config(target: &Value, cwd: &Value, ctx: &Pa
         Some(Determination::Known(real)) => real,
         Some(Determination::Undetermined(_)) | None => return true,
     };
-    let hook_wiring = |p: &str| {
-        let l = p.to_lowercase();
-        l == "hooks/hooks.json" || l.ends_with("/hooks/hooks.json")
-    };
-    [path.as_str(), landing.as_str()].iter().any(|p| {
-        new_layer::is_protected(p)
-            || deny_targets::matches_any_row_unlifted(p, ctx.scope.session_cwd())
-            || hook_wiring(p)
-    })
+    [path.as_str(), landing.as_str()]
+        .iter()
+        .any(|p| spelling_names_command_running_config(p, ctx))
+}
+
+/// The three predicates of [`names_command_running_config`] on one path
+/// spelling as written — no placement, no symlink landing. For a legacy
+/// reading whose relative target has no known base (`detect/tee.rs`), the
+/// same lexical judgement `protected::protected_path_lexical_block` makes
+/// of such a spelling.
+pub(crate) fn spelling_names_command_running_config(p: &str, ctx: &PathCtx) -> bool {
+    use crate::detect::rm::new_layer;
+    let l = p.to_lowercase();
+    let hook_wiring = l == "hooks/hooks.json" || l.ends_with("/hooks/hooks.json");
+    new_layer::is_protected(p)
+        || deny_targets::matches_any_row_unlifted(p, ctx.scope.session_cwd())
+        || hook_wiring
 }
 
 /// `target` as an absolute path value with no `..` component, or why not.

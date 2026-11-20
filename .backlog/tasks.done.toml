@@ -87940,3 +87940,167 @@ rev = "cb9531a0dd7189ba60211fd33dd70ff4e7fd524f"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "2e704124"
+title = "blastguard allows shell redirects onto final-component globs and writes onto own-worktree command-running config"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Measured at main 40e49d3db on 2026-11-20 by an independent test author. A truncating redirect onto an unquoted final-component glob under a plain HOME dir is allowed in both modes while the literal spelling of the matching existing file is denied in both modes. Final-component globs onto a plugin hooks dir (truncate, tee, tee append, append redirect, truncating redirect) and onto the scripts dir are allowed in both modes, while literal truncate onto the same hooks file is ask in main and deny in subagent. Literal truncating and appending redirects and tee append onto own-worktree command-running config (plugin hooks json, crate hooks json, check scripts, githooks pre-commit, settings local json) are allowed in both modes; user ruling 2026-11-20 says such config keeps a non-Allow verdict, appends included. 19 ignored REDs plus 3 control tables in crates/blastguard/tests/glob_and_config_write_failopen_20261120.rs on branch red/bg-glob-config-failopen-20261120 (commit b17328281). Not filed: redirect onto the other worktree or the project main tree is allowed for both the glob and the literal spelling, so it is not a glob gap."
+created_at = 1795173836
+updated_at = 1795196402
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test glob_and_config_write_failopen_20261120 -- --ignored"
+rev = "b173282817199d6647e5441256f201b6a286b987"
+observed_at = 1795173836
+detail = """
+exit 101: ult: FAILED. 0 passed; 19 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.79s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/glob_and_config_write_failopen_20261120.rs (target/debug/deps/glob_and_config_write_failopen_20261120-8ae6bf4a389c2fee)
+error: test failed, to rerun pass `-p blastguard --test glob_and_config_write_failopen_20261120`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test glob_and_config_write_failopen_20261120"
+exit = 0
+passed = 74
+rev = "2e61f6301133d1eda747b11fba6b3b40b56998e6"
+observed_at = 1795196335
+output_digest = "sha256:29ca8ac570f2d58bba39e72d990d633dac748e3a78d477b1fcf74872b38cebb4"
+excerpt = """
+ling block-buffer v0.10.4
+   Compiling serde_derive v1.0.228
+   Compiling is-macro v0.3.8
+   Compiling phf_generator v0.11.3
+   Compiling phf_codegen v0.11.3
+   Compiling regex-automata v0.4.14
+   Compiling unicode_names2_generator v1.3.0
+   Compiling psm v0.1.31
+   Compiling crypto-common v0.1.7
+   Compiling unic-char-property v0.9.0
+   Compiling darling_macro v0.20.11
+   Compiling darling_macro v0.21.3
+   Compiling unicode_names2 v1.3.0
+   Compiling anstyle-parse v1.0.0
+   Compiling unic-ucd-version v0.9.0
+   Compiling pest v2.9.5
+   Compiling num-integer v0.1.47
+   Compiling errno v0.3.14
+   Compiling rustpython-parser-vendored v0.4.0
+   Compiling ahash v0.8.12
+   Compiling winnow v0.7.15
+   Compiling toml_write v0.1.2
+   Compiling anstyle-query v1.1.5
+   Compiling scopeguard v1.2.0
+   Compiling option-ext v0.2.0
+   Compiling core-foundation-sys v0.8.7
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling itoa v1.0.18
+   Compiling anstyle v1.0.14
+   Compiling bitflags v2.13.0
+   Compiling thiserror v2.0.21
+   Compiling smallvec v1.16.5
+   Compiling colorchoice v1.0.5
+   Compiling anstream v1.0.0
+   Compiling iana-time-zone v0.1.65
+   Compiling dirs-sys v0.4.1
+   Compiling lock_api v0.4.14
+   Compiling rustpython-parser-core v0.4.0
+   Compiling phf v0.11.3
+   Compiling num-bigint v0.4.8
+   Compiling pest_meta v2.9.5
+   Compiling rustpython-parser v0.4.0
+   Compiling toml_datetime v0.6.11
+   Compiling serde_spanned v0.6.9
+   Compiling darling v0.21.3
+   Compiling darling v0.20.11
+   Compiling digest v0.10.7
+   Compiling thiserror-impl v2.0.21
+   Compiling toml_edit v0.22.27
+   Compiling cpufeatures v0.2.17
+   Compiling pest_generator v2.9.5
+   Compiling peg-runtime v0.8.6
+   Compiling static_assertions v1.1.0
+   Compiling either v1.19.0
+   Compiling fastrand v2.4.1
+   Compiling foldhash v0.2.0
+   Compiling allocator-api2 v0.2.21
+   Compiling clap_lex v1.1.0
+   Compiling bon-macros v3.9.3
+   Compiling tempfile v3.27.0
+   Compiling pest_derive v2.9.5
+   Compiling clap_builder v4.6.0
+   Compiling hashbrown v0.16.1
+   Compiling rustpython-ast v0.4.0
+   Compiling itertools v0.11.0
+   Compiling peg-macros v0.8.6
+   Compiling cached_proc_macro v0.27.0
+   Compiling sha2 v0.10.9
+   Compiling parking_lot v0.12.5
+   Compiling dirs v5.0.1
+   Compiling chrono v0.4.45
+   Compiling regex v1.12.4
+   Compiling unic-emoji-char v0.9.0
+   Compiling unic-ucd-ident v0.9.0
+   Compiling tracing-attributes v0.1.31
+   Compiling clap_derive v4.6.1
+   Compiling console v0.16.6
+   Compiling toml v0.8.23
+   Compiling wait-timeout v0.2.1
+   Compiling tracing-core v0.1.36
+   Compiling rustc-hash v1.1.0
+   Compiling web-time v1.1.0
+   Compiling lalrpop-util v0.20.2
+   Compiling pin-project-lite v0.2.17
+   Compiling similar v2.7.0
+   Compiling cached_proc_macro_types v0.1.1
+   Compiling arrayvec v0.7.8
+   Compiling cached v0.59.0
+   Compiling tracing v0.1.44
+   Compiling utf8-chars v3.0.7
+   Compiling peg v0.8.6
+   Compiling clap v4.6.1
+   Compiling harness-core v0.2.110 (/Users/yuki/src/.harness-worktrees/bg-close-2e70/crates/harness-core)
+   Compiling bstr v1.12.2
+   Compiling insta v1.49.0
+   Compiling target-triple v1.0.1
+   Compiling indenter v0.3.4
+   Compiling winnow v1.0.4
+   Compiling globset v0.4.18
+   Compiling bon v3.9.3
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling termcolor v1.4.1
+   Compiling glob v0.3.3
+   Compiling toml v1.1.3+spec-1.1.0
+   Compiling trybuild v1.0.118
+   Compiling brush-parser v0.4.0
+   Compiling progeffect v0.1.5 (/Users/yuki/src/.harness-worktrees/bg-close-2e70/crates/progeffect)
+   Compiling overwatch v0.2.127 (/Users/yuki/src/.harness-worktrees/bg-close-2e70/crates/overwatch)
+   Compiling blastguard v0.2.825 (/Users/yuki/src/.harness-worktrees/bg-close-2e70/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 59.01s
+     Running tests/glob_and_config_write_failopen_20261120.rs (target/debug/deps/glob_and_config_write_failopen_20261120-045651af5ec3fdf9)
+"""
+
+[task.closure.red]
+rev = "b173282817199d6647e5441256f201b6a286b987"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

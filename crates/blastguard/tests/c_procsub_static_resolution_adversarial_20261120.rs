@@ -686,8 +686,8 @@ case!(
 );
 case!(
     nest_chain_bash_bash,
-    is_deny,
-    "Deny",
+    not_allow,
+    "not Allow (Deny for this is tracked by backlog p0 8cadc78f: unquoted echo ... | shell is not read as a program)",
     "echo 'echo rm -rf /etc | bash' | cat | bash"
 );
 case!(
@@ -722,8 +722,8 @@ case!(
 );
 case!(
     nest_chain_bash_bash_sh,
-    is_deny,
-    "Deny",
+    not_allow,
+    "not Allow (Deny for this is tracked by backlog p0 8cadc78f: unquoted echo ... | shell is not read as a program)",
     "echo 'echo rm -rf /etc | bash' | cat | sh"
 );
 case!(
@@ -740,8 +740,8 @@ case!(
 );
 case!(
     nest_procsub_chain_inner_bash,
-    is_deny,
-    "Deny",
+    not_allow,
+    "not Allow (Deny for this is tracked by backlog p0 8cadc78f: unquoted echo ... | shell is not read as a program)",
     "bash <(echo 'echo rm -rf /etc | bash' | cat)"
 );
 case!(

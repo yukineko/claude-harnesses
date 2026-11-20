@@ -83,6 +83,8 @@ pub(super) mod targets;
 mod tests;
 
 pub(super) use eval::with_hook_dir;
+/// The Table C classifier, for `detect/known_allow.rs` (stage S6-3).
+pub(super) use judge::{classify, PathClass, PathCtx};
 
 use std::ops::Range;
 

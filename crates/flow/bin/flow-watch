@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""flow-watch: deterministic anti-stall watcher for /flow (spec: crates/flow/WATCH-SPEC.md).
+
+Every stdout line is an event the driver must act on. Silence means "nothing to do";
+anything unreadable/unparsable is reported as WATCH-ERROR, never skipped (fail-closed).
+"""
+import argparse
+import glob
+import json
+import os
+import subprocess
+import sys
+import time
+
+TERMINAL = {"done", "failed", "abandoned", "skipped", "cancelled", "canceled",
+            "merged", "rejected", "complete", "completed"}
+
+
+def out(line):
+    try:
+        sys.stdout.write(line.replace("\n", " ") + "\n")
+        sys.stdout.flush()
+    except (BrokenPipeError, ValueError):
+        os._exit(0)
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        sys.stderr.write("flow-watch: error: %s\n" % message)
+        sys.exit(2)
+
+
+def parse_args():
+    p = Parser(prog="flow-watch")
+    p.add_argument("--session", required=True)
+    p.add_argument("--project", required=True)
+    p.add_argument("--relay-queue")
+    p.add_argument("--condukt-state")
+    p.add_argument("--poll-secs", type=float, default=5)
+    p.add_argument("--state-secs", type=float, default=60)
+    p.add_argument("--heartbeat-secs", type=float, default=600)
+    p.add_argument("--relay-stall-secs", type=float, default=120)
+    p.add_argument("--task-stall-secs", type=float, default=1200)
+    p.add_argument("--max-secs", type=float, default=1700)
+    a = p.parse_args()
+    for n in ("poll_secs", "state_secs", "heartbeat_secs", "relay_stall_secs",
+              "task_stall_secs", "max_secs"):
+        if getattr(a, n) <= 0:
+            p.error("--%s must be > 0" % n.replace("_", "-"))
+    return a
+
+
+class Watch:
+    def __init__(self, a):
+        self.a = a
+        self.queue = a.relay_queue or os.path.expanduser(
+            "~/.blastguard/relay/%s.jsonl" % a.session)
+        self.relayed = set()
+        self.relay_stall_at = {}
+        self.errors = set()
+        self.state_seen = {}      # path -> status vector (tuple)
+        self.stall_at = {}        # (run, task) -> time
+
+    def error(self, key, text):
+        if key in self.errors:
+            return
+        self.errors.add(key)
+        out("WATCH-ERROR %s" % text)
+
+    # ---- relay
+    def poll_relay(self, now):
+        q = self.queue
+        if not os.path.lexists(q):
+            return  # no relays yet
+        try:
+            with open(q, "r", encoding="utf-8", errors="replace") as f:
+                raw = f.read()
+        except OSError as e:
+            self.error(("q", str(e)), "relay queue %s: unreadable: %s" % (q, e))
+            return
+        queued, adjudicated = {}, set()
+        for n, line in enumerate(raw.splitlines(), 1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+                if not isinstance(row, dict):
+                    raise ValueError("row is not an object")
+            except ValueError as e:
+                self.error(("ql", n, line), "relay queue %s line %d: unparsable: %s" % (q, n, e))
+                continue
+            ev, rid = row.get("event"), row.get("id")
+            if ev in ("queued", "executed", "dismissed") and not isinstance(rid, str):
+                self.error(("qi", n, line), "relay queue %s line %d: %s row without string id" % (q, n, ev))
+                continue
+            if ev == "queued":
+                queued.setdefault(rid, row)
+            elif ev in ("executed", "dismissed"):
+                adjudicated.add(rid)
+        for rid, row in queued.items():
+            if rid in adjudicated:
+                continue
+            if rid not in self.relayed:
+                self.relayed.add(rid)
+                out("RELAY %s agent=%s cwd=%s" % (rid, row.get("agent_id", ""), row.get("cwd", "")))
+            ts = row.get("ts")
+            if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+                self.error(("qts", rid), "relay queue %s id %s: missing/invalid ts, cannot age" % (q, rid))
+                continue
+            age = now - ts
+            if age >= self.a.relay_stall_secs:
+                last = self.relay_stall_at.get(rid)
+                if last is None or now - last >= self.a.relay_stall_secs:
+                    self.relay_stall_at[rid] = now
+                    out("RELAY-STALL %s age=%ds" % (rid, int(age)))
+
+    # ---- condukt state
+    def state_dirs(self):
+        if self.a.condukt_state:
+            return [self.a.condukt_state]
+        return sorted(glob.glob(os.path.expanduser("~/.condukt/state/*/")))
+
+    def poll_state(self, now):
+        for d in self.state_dirs():
+            try:
+                names = sorted(os.listdir(d))
+            except OSError as e:
+                self.error(("sd", d, str(e)), "condukt state dir %s: unreadable: %s" % (d, e))
+                continue
+            for name in names:
+                if name.startswith("run-") and name.endswith(".json"):
+                    self.poll_run(d, name, now)
+
+    def poll_run(self, d, name, now):
+        path = os.path.join(d, name)
+        run = name[:-5]
+        try:
+            mt = os.stat(path).st_mtime
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            tasks = data.get("tasks") if isinstance(data, dict) else None
+            if not isinstance(tasks, list):
+                raise ValueError("`tasks` is not a list")
+            vec = []
+            for t in tasks:
+                if not isinstance(t, dict) or "id" not in t or "status" not in t:
+                    raise ValueError("task entry without id/status")
+                vec.append((str(t["id"]), str(t["status"])))
+            vec = tuple(vec)
+        except (OSError, ValueError) as e:
+            self.error(("r", path, str(e)), "run file %s: unreadable: %s" % (path, e))
+            return
+        nonterminal = any(s not in TERMINAL for _, s in vec)
+        prev = self.state_seen.get(path)
+        if prev != vec:
+            self.state_seen[path] = vec
+            if prev is not None or nonterminal:
+                out("STATE %s %s" % (run, " ".join("%s=%s" % x for x in vec)))
+        running = [t for t, s in vec if s == "running"]
+        if not running:
+            return
+        latest = mt
+        jp = os.path.join(d, run + ".journal.jsonl")
+        if os.path.lexists(jp):
+            try:
+                latest = max(latest, os.stat(jp).st_mtime)
+            except OSError as e:
+                self.error(("j", jp, str(e)), "journal %s: unreadable: %s" % (jp, e))
+                return
+        idle = now - latest
+        if idle < self.a.task_stall_secs:
+            return
+        for t in running:
+            last = self.stall_at.get((run, t))
+            if last is None or now - last >= self.a.task_stall_secs:
+                self.stall_at[(run, t)] = now
+                out("TASK-STALL %s %s status=running idle=%ds" % (run, t, int(idle)))
+
+    # ---- heartbeat
+    def heartbeat(self):
+        a = self.a
+        cmds = (
+            ("condukt", os.environ.get("FLOW_WATCH_CONDUKT") or "condukt",
+             ["state", "heartbeat", "--run", "flow-%s" % a.session]),
+            ("backlog", os.environ.get("FLOW_WATCH_BACKLOG") or "backlog",
+             ["driver", "heartbeat", "--session-id", a.session, "--project", a.project]),
+        )
+        for which, exe, args in cmds:
+            try:
+                rc = subprocess.run([exe] + args, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    timeout=60).returncode
+            except FileNotFoundError:
+                rc = 127
+            except PermissionError:
+                rc = 126
+            except subprocess.TimeoutExpired:
+                rc = 124
+            except OSError:
+                rc = 126
+            if rc != 0:
+                out("HEARTBEAT-FAILED %s rc=%d" % (which, rc))
+
+    def guarded(self, fn, label, *args):
+        try:
+            fn(*args)
+        except Exception as e:  # fail-closed: a crash in one stage is visible, never silent
+            self.error((label, repr(e)), "%s: internal error: %r" % (label, e))
+
+    def run(self):
+        a = self.a
+        start = time.time()
+        next_state = next_hb = start
+        while True:
+            now = time.time()
+            if now - start >= a.max_secs:
+                break
+            if now >= next_hb:
+                self.guarded(self.heartbeat, "heartbeat")
+                next_hb = time.time() + a.heartbeat_secs
+            self.guarded(self.poll_relay, "relay", now)
+            if now >= next_state:
+                self.guarded(self.poll_state, "state", now)
+                next_state = now + a.state_secs
+            time.sleep(max(0.0, min(a.poll_secs, start + a.max_secs - time.time())))
+        out("EXPIRED re-arm")
+
+
+def main():
+    a = parse_args()
+    Watch(a).run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

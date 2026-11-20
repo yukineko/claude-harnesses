@@ -143,6 +143,24 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
 - `backlog lock status` が `undetermined`（registry を読めなかった）を返したら「driver 不在」とは読まない。安全側に倒し、理由を報告して見送ること。
 - stale な driver 登録は次の `register` が自動で reap する（TTL 1800 秒・heartbeat 基準）。TTL 超過の排他ロックは進捗の停止が確認できたときだけ reap され、確認できなければ `--force` だけが奪取する。
 
+### Step 2.5 — flow-watch を Monitor で武装すること（停滞検知は機構で持つ）
+
+「止まっていました」と後から報告するのは許されない。
+停滞の検知を LLM の記憶に頼ってはならない。決定論的な `flow-watch` を Monitor で常駐させ、出力の各行を即座に処理せよ。
+background agent の完了通知を待つことは、これらのイベント処理の代わりにならない。
+
+```
+Monitor: command = ${CLAUDE_PLUGIN_ROOT}/bin/flow-watch --session "$CLAUDE_CODE_SESSION_ID" --project "$PWD"
+         timeout_ms = 1800000
+```
+
+- Monitor は 30 分で切れる。`EXPIRED re-arm` の行、または Monitor の期限切れ通知が来たら、同じコマンドでただちに再武装せよ。
+- 各イベント（stdout の 1 行 = 1 イベント）には、その場で次のとおり反応すること:
+  - `RELAY <id> agent=… cwd=…` / `RELAY-STALL <id> age=…s` → relay された command を一字一句そのまま main セッションで今すぐ実行し、結果を `SendMessage` で該当 agent に返せ。実行できないなら理由を添えて `askrelay dismiss` せよ。
+  - `TASK-STALL <run_id> <task> status=… idle=…s` → その run / task（state・worktree のログ・担当 driver agent）を調べ、今すぐ unblock せよ。task 完了通知を待ってはならない。
+  - `STATE <run_id> <task>=<status> …` → 完了した項目を sink へ書き戻せ（Step 3-3）。
+  - `HEARTBEAT-FAILED <which> rc=…` / `WATCH-ERROR …` → 行を逐語で報告し、原因を直せ。黙って流してはならない。
+
 ### Step 3 — 実行ループを回すこと
 
 「source が尽きる / 予算超過 / ユーザー中断」まで以下を繰り返すこと。
@@ -457,6 +475,8 @@ nonzero（trip）なら人にも policy にも聞かず即 Step 4 へ進むこ�
 ### Step 4 — driver 登録を解除してサマリを報告すること
 
 早期脱出時も driver 登録の解除を飛ばしてはならない。
+
+先に Step 2.5 で武装した flow-watch の Monitor を `TaskStop` で止めること（止め忘れると解除後も heartbeat を打ち続ける）。
 
 source が尽きた / ユーザー中断 / 予算超過のいずれかで、次の解除を実行すること。ここでも cwd = このセッションの linked worktree にすること。main の作業ツリーでは `backlog` / `compass` の store 書き込みが拒否される:
 

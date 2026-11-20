@@ -89089,3 +89089,188 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; fin
 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
      Running tests/backlog_20261120_596ef57d_requirements.rs (target/debug/deps/backlog_20261120_596ef57d_requirements-13b2f8c381edb5f4)"""
+
+[[task]]
+id = "a70f2389"
+title = "backlog: unreadable or invalid-TOML config.toml silently turns the GitHub mirror ON (done runs gh issue close)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-17 at cd09054b1, RED bd74f5c40. With ~/.backlog/config.toml present but invalid TOML (even github_mirror = false plus a broken line) or unreadable (EISDIR), backlog done runs gh issue close, exits 0, prints nothing about config. Config::load ignores read errors; GithubMirror::from_toml returns On when parsing fails. Expected per CLAUDE.md section 3 (IO/parse failure is not clean): no gh call and an error line naming config.toml. README.ja.md and the GithubMirror::On doc state the fall-open on purpose, so the fix also changes those docs (top-level section 3 outranks the README). Only done is driven; add/sync/cancel/recheck share Config::load. | User ruling 2026-11-17: CLAUDE.md section 3 wins over README. Unreadable or invalid config.toml must not call gh and must print an error naming config.toml; README.ja.md and the GithubMirror::On doc change in the same fix."
+created_at = 1794887637
+updated_at = 1795202659
+weight = 0.0
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261117_mirror_config_undetermined -- --include-ignored"
+rev = "8358077eb972490b4979ba3ecab651d33c0786f4"
+observed_at = 1794887637
+detail = """
+exit 101: 4 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.01s
+     Running tests/backlog_20261117_mirror_config_undetermined.rs (target/debug/deps/backlog_20261117_mirror_config_undetermined-57c17f6f35038ac8)
+error: test failed, to rerun pass `-p backlog --test backlog_20261117_mirror_config_undetermined`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261117_mirror_config_undetermined -- --include-ignored"
+exit = 0
+passed = 4
+rev = "8def619efbb9cf532665288e5a1dc04e35fbf0ad"
+observed_at = 1795202650
+output_digest = "sha256:0281a8750ec7a703db6b189375a97819601bbefe2cd78ee09777e8b6a1121c28"
+excerpt = """
+
+running 4 tests
+test control_done_with_non_bool_value_runs_no_gh_and_errors ... ok
+test red_done_with_unreadable_config_runs_no_gh_and_reports_error ... ok
+test control_done_without_config_closes_issue_inline ... ok
+test red_done_with_invalid_toml_config_runs_no_gh_and_reports_error ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.01s
+
+   Compiling backlog v0.3.150 (/Users/yuki/src/.harness-worktrees/session-7d40fb4d/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.07s
+     Running tests/backlog_20261117_mirror_config_undetermined.rs (target/debug/deps/backlog_20261117_mirror_config_undetermined-08c3421238c7c456)
+"""
+
+[task.closure.red]
+rev = "644e221899d7071129c47943bda9359ce5ef412d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "9a1a5129"
+title = "backlog red_writeback: value of a cargo flag missing from VALUE_FLAGS is read as a test-name filter (wrong test tagged)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-17 at 1331e475d (backlog 0.3.138), t3 re-verifier low finding, RED by independent agent: cargo test --lockfile-path red_b (real cargo flag, not in VALUE_FLAGS) makes red_b a filter and tags red_b with RED(id) although the repro selects nothing by that name; with --lockfile-path ci.lock add exits 1 (no test selected). Expected: flag values are not filters. Sibling RED unknown_value_flag_value_is_not_a_filter. RED 4ccf146bf."
+created_at = 1794892394
+updated_at = 1795202662
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261117_red_writeback_parse_gaps -- --include-ignored unknown_value_flag_value_does_not_pick_wrong_test"
+rev = "fbfa66aa2ce2451c19d763ca2b46fd4261e0d550"
+observed_at = 1794892394
+detail = """
+exit 101: 0.3.139 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.88s
+     Running tests/backlog_20261117_red_writeback_parse_gaps.rs (target/debug/deps/backlog_20261117_red_writeback_parse_gaps-9cfa35356fb8d143)
+error: test failed, to rerun pass `-p backlog --test backlog_20261117_red_writeback_parse_gaps`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261117_red_writeback_parse_gaps -- --include-ignored unknown_value_flag_value_does_not_pick_wrong_test"
+exit = 0
+passed = 1
+rev = "8def619efbb9cf532665288e5a1dc04e35fbf0ad"
+observed_at = 1795202660
+output_digest = "sha256:d5dafeb50a75f8867d370505d83b889d56a20c3fb4f76cde799502490ec0cb14"
+excerpt = """
+
+running 1 test
+test unknown_value_flag_value_does_not_pick_wrong_test ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 1.15s
+
+   Compiling backlog v0.3.150 (/Users/yuki/src/.harness-worktrees/session-7d40fb4d/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/backlog_20261117_red_writeback_parse_gaps.rs (target/debug/deps/backlog_20261117_red_writeback_parse_gaps-0cfa2f3aa56f35fc)
+"""
+
+[task.closure.red]
+rev = "644e221899d7071129c47943bda9359ce5ef412d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "b400219d"
+title = "condukt: fp_oracle_e2e (2) and audit_b12 oracle_refusal tests fail on main: verify refuses with 'no recorded worktree and no archived tdd proof' before the oracle runs"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "test-red",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-18 at main 74e23c6fe (condukt 0.7.448) by main and by the t1 verifier (verify-t1r-base). fp_oracle_e2e: fix_task_with_valid_fail_to_pass_oracle_is_verified (:199) and fix_task_without_valid_fail_to_pass_oracle_is_refused (:253) fail; audit_b12_oracle_ids_and_teardown: oracle_refusal_names_the_proof_ids_it_found (:156) fails. Verbatim stderr: 'condukt: refusing to verify task t1: task t1 in run run-b12-ids has no recorded worktree and no archived tdd proof in .../run-b12-ids.tdd-proofs/t1; cannot determine which tree to judge the F→P oracle in'. Readings: (a) the fixtures predate the no-worktree refusal and never record a worktree, so the tests no longer reach the oracle (test drift); (b) the refusal regressed the oracle path. Distinguish by checking whether the fixtures call state set --worktree before verified."
+created_at = 1794963680
+updated_at = 1795202679
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test audit_b12_oracle_ids_and_teardown"
+rev = "74e23c6fe3aabe85750ee59d021dc639ba6f8355"
+observed_at = 1794963680
+detail = """
+exit 101: ids_it_found
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running tests/audit_b12_oracle_ids_and_teardown.rs (target/debug/deps/audit_b12_oracle_ids_and_teardown-ac213ffa702b7908)
+error: test failed, to rerun pass `-p condukt --test audit_b12_oracle_ids_and_teardown`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test audit_b12_oracle_ids_and_teardown"
+exit = 0
+passed = 3
+rev = "8def619efbb9cf532665288e5a1dc04e35fbf0ad"
+observed_at = 1795202663
+output_digest = "sha256:d3828d3f0896cdee90431ec932a5c7800c6cf6aa03fddf3c6f364a7c2cd188d5"
+excerpt = """
+
+running 3 tests
+test worktree_remove_refuses_while_the_task_is_unverified ... ok
+test worktree_remove_of_a_verified_task_proceeds ... ok
+test oracle_refusal_names_the_proof_ids_it_found ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.84s
+
+   Compiling progeffect v0.1.6 (/Users/yuki/src/.harness-worktrees/session-7d40fb4d/crates/progeffect)
+   Compiling blastguard v0.2.837 (/Users/yuki/src/.harness-worktrees/session-7d40fb4d/crates/blastguard)
+   Compiling riskgrade v0.1.2 (/Users/yuki/src/.harness-worktrees/session-7d40fb4d/crates/riskgrade)
+   Compiling condukt v0.7.461 (/Users/yuki/src/.harness-worktrees/session-7d40fb4d/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.51s
+     Running tests/audit_b12_oracle_ids_and_teardown.rs (target/debug/deps/audit_b12_oracle_ids_and_teardown-9982f2cb0239c33a)
+"""
+
+[task.closure.red]
+rev = "644e221899d7071129c47943bda9359ce5ef412d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -18,7 +18,10 @@
 //!   `globals()` / `locals()` / `vars(x)` / `compile(...)` call whose result
 //!   is only displayed or discarded: a positional `print` argument or an
 //!   expression statement, optionally subscripted — a discarded `compile`
-//!   runs nothing whatever it compiles); any dunder
+//!   runs nothing whatever it compiles — and a bare unbound `globals` /
+//!   `locals` / `vars` name that is itself a whole positional argument of the
+//!   unbound builtin `print`, e.g. `print(vars)`; a starred, keyword, nested,
+//!   attribute or aliased use of the bare name stays Undetermined); any dunder
 //!   attribute other than `__name__` / `__doc__` / `__file__` /
 //!   `__version__` / `__qualname__` (so `os.__dict__[…]` is Undetermined);
 //!   `sys.modules`; an effect-capable function or module used as a value

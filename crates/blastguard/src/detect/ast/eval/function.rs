@@ -42,8 +42,10 @@ impl Ev {
         // The body, once, in a state where nothing is known.
         let mut body = Env::initial();
         body.make_opaque("function body: runs when the function is called");
+        let first = self.out.len();
         self.compound(text, &f.body.0, body, ctx)?;
         if self.emit {
+            self.function_body_ranges.push(first..self.out.len());
             self.has_function_definition = true;
             if !self.function_names.contains(&name) {
                 self.function_names.push(name);

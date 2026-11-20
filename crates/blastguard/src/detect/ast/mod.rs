@@ -287,6 +287,11 @@ pub(crate) struct Script {
     /// True when a function definition was evaluated. Always false from
     /// [`analyze`].
     pub has_function_definition: bool,
+    /// For each function definition evaluated in emit mode, the half-open
+    /// index range into `commands` of the commands of its body (nested
+    /// definitions included). Always empty from [`analyze`]. A command whose
+    /// index is in none of them is not in a function body.
+    pub function_body_ranges: Vec<Range<usize>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

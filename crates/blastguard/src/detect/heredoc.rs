@@ -604,8 +604,9 @@ pub(super) fn program_body_segments_fed_to(cmd: &str, reader: impl Fn(&str) -> b
 /// asked there. That is the restrictive direction. A line that DEFINES shell
 /// functions (`f() { echo hi; }; cat <<'EOF' …`) is not covered by this
 /// function at all: `heredoc_data` (backlog e79485cb) removes its quoted body
-/// when the reader is the real `cat` / `tee` / `git` and nothing on the line
-/// later runs the landing file, and keeps it otherwise.
+/// when the reader is outside every function body, is the real `cat` / `tee`
+/// / `git` and nothing on the line later runs the landing file, and keeps it
+/// otherwise (a quoted heredoc inside a function body is never data).
 ///
 /// RESIDUALS, not covered:
 ///   * a data file written here can be executed by a LATER, separate tool

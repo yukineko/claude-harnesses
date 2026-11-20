@@ -620,10 +620,12 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   `eval`・`source`・`.`・`sh -c`・インタプリタ等（program source）を持つ、`alias`・`hash`・
 >   `enable`・`shopt`・`setopt`・`PATH` がある、body が書き込み先のパスを名指しする、
 >   関数の呼び出しが pipe/リダイレクトの stdin を持つ、のいずれかなら本文を残す。
->   関数 body 内の本文は、その関数の「呼び出し」が stdout を送る先に着地する: 呼び出しが
->   リダイレクトする data/コードファイル（`f > notes.md`）は書き込み先として扱い、呼び出しの
->   stdout が pipe で次段へ渡る、またはリテラルの data/コードファイルでないファイルへ
->   リダイレクトされる（`f > p.awk`、`f > Makefile`）なら、後で実行され得るので本文を残す。
+>   関数 body の「内側」にある引用付き heredoc は決して data として外さない（ユーザー裁定 (a)、
+>   2026-11-20）: その読み手の stdout は関数の stdout で、呼び出しが送る先（`f > p.awk` の後の
+>   `awk -f p.awk`、pipe、`awk "$(f)"`）は本文からは決まらないため、本文は 0.2.780 と同じく
+>   そのまま判定される（`ast::Script::function_body_ranges` が body 内のコマンドを示す）。
+>   外し得るのは、どの関数 body の外にある引用付き heredoc だけ（元の FP の形:
+>   `f() { echo hi; }; cat <<'EOF'` の本文に `$(f)`）。
 >   0.2.388 以降（backlog 0fccf1eb）、`>` / `>>` の書き込み先の語は改行をまたいで読まない
 >   （空白・タブだけを飛ばす。`src/detect/redirect.rs` の `skip_redirect_word_gap`）。行末の
 >   `>`（改行またはテキスト末尾の直前）は書き込み先を持たず、シェルでは本文データか構文エラーで

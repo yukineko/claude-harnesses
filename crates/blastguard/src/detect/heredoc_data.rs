@@ -80,12 +80,13 @@
 //! (`alias`, `hash`, `enable`, `shopt`, `setopt`, `PATH`, a landing path
 //! named), when a call of a defined function has a piped or redirected stdin,
 //! or when a call of a defined function names a landing path (a function is
-//! not the inert tool of the same name). A body inside a function reaches
-//! wherever the CALL sends its stdout: the file a call redirects to (`f >
-//! notes.md`) is a landing path, and a call whose stdout is piped on or
-//! redirected to a file that is not a literal data / code file (`f > p.awk`,
-//! `f > Makefile`) keeps every body. A quoted body is never expanded, so
-//! `$(f)` in it is text, not a call of `f`.
+//! not the inert tool of the same name). A quoted heredoc INSIDE a function
+//! body is never data (user ruling (a), 2026-11-20): its reader's stdout is
+//! the function's, which a call can send to a file run later (`f > p.awk`), a
+//! pipe or a `$(f)`, so the body stays judged exactly as without this step
+//! (`ast::Script::function_body_ranges` says which commands are in a function
+//! body). Only a quoted heredoc outside every function body can be removed. A
+//! quoted body is never expanded, so `$(f)` in it is text, not a call of `f`.
 //!
 //! A command longer than `ast::MAX_PARSE_BYTES` is not parsed whole (ruling
 //! 2026-11-16). There the one quoted heredoc to a non-shell code file that
@@ -222,6 +223,13 @@ fn data_bodies(script: &Script, text: &str) -> Option<(Vec<Range<usize>>, bool)>
     let mut landing: Vec<String> = Vec::new();
     let mut readers: Vec<usize> = Vec::new();
     for (i, c) in script.commands.iter().enumerate() {
+        // Ruling (a), 2026-11-20: a quoted heredoc INSIDE a function body is
+        // never data. Its reader's stdout is the function's, which the call
+        // sends anywhere (a file run later, a pipe, `$(f)` into `awk`), so its
+        // body stays in the judged text exactly as without this step.
+        if script.function_body_ranges.iter().any(|r| r.contains(&i)) {
+            continue;
+        }
         for r in &c.redirects {
             let RedirTarget::HereDoc(h) = &r.target else {
                 continue;
@@ -240,22 +248,8 @@ fn data_bodies(script: &Script, text: &str) -> Option<(Vec<Range<usize>>, bool)>
     if spans.is_empty() {
         return None;
     }
-    if script.has_function_definition {
-        if !functions_harmless(script, &readers) {
-            return None;
-        }
-        // A quoted body inside a function body reaches wherever the CALL sends
-        // its stdout (the reader's own stdout is the function's, usually the
-        // terminal, so `landing` above is empty for it). Where a call's stdout
-        // goes is a landing path of the body; a call whose stdout cannot be
-        // resolved to a data / code file, the terminal or `/dev/null` (a pipe
-        // to the next stage, `> p.awk`, `> Makefile`, a dup of a file) keeps
-        // every body.
-        for c in &script.commands {
-            if is_defined_call(script, c) {
-                landing.extend(stdout_landing(c)?);
-            }
-        }
+    if script.has_function_definition && !functions_harmless(script, &readers) {
+        return None;
     }
     let mut unsure = false;
     for (i, c) in script.commands.iter().enumerate() {
@@ -284,13 +278,11 @@ fn data_bodies(script: &Script, text: &str) -> Option<(Vec<Range<usize>>, bool)>
 ///   `program_source` (`eval`, `source`, `.`, `sh -c`, an interpreter, a
 ///   wrapper): it can run the landing file or redefine a command;
 /// * a call of a defined function reads a redirected or piped stdin (its body
-///   could pass that to something that runs it);
-/// * a call's stdout goes somewhere other than the terminal, `/dev/null` or a
-///   literal data / code file (checked in [`data_bodies`] with
-///   `stdout_landing`): a body inside the function lands where the call sends
-///   its stdout, and a file such as `p.awk` / `Makefile`, or a pipe, could be
-///   run by a later command. A literal data / code file the call writes to is
-///   a landing path.
+///   could pass that to something that runs it).
+///
+/// A heredoc inside a function body is skipped before this by [`data_bodies`]
+/// (never data, ruling (a)), so where a call sends its stdout does not matter
+/// for a body that is removed: that reader is outside every function body.
 ///
 /// `alias` / `hash` / `enable` / `shopt` / `setopt` / `PATH` are refused for
 /// every command by `runs_no_landing_file`, and a landing path named by a body

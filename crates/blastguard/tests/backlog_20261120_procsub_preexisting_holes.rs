@@ -101,13 +101,13 @@ fn expect_not_allow(cmd: &str, tag: &str) {
 // ------------------------------------------------ (A) Allow holes
 
 #[test]
-#[ignore = "backlog RED: echo of a program containing an inner echo-to-bash feeder is Allow (inner feeder not re-judged), system harm"]
+#[ignore = "backlog 8cadc78f: RED: echo of a program containing an inner echo-to-bash feeder is Allow (inner feeder not re-judged), system harm"]
 fn echo_of_inner_echo_to_bash_feeder_is_deny() {
     expect_deny("echo 'echo rm -rf /etc | bash' | bash", "a-chain");
 }
 
 #[test]
-#[ignore = "backlog RED: expand_aliases plus alias echo on the same line is Allow in bash <(echo hi)"]
+#[ignore = "backlog cffe54c4: RED: expand_aliases plus alias echo on the same line is Allow in bash <(echo hi)"]
 fn alias_echo_then_procsub_is_not_allow() {
     expect_not_allow(
         "shopt -s expand_aliases; alias echo='echo chmod 777 /etc/hosts #'; bash <(echo hi)",
@@ -116,7 +116,7 @@ fn alias_echo_then_procsub_is_not_allow() {
 }
 
 #[test]
-#[ignore = "backlog RED: echo shadowed by an exported function, then bash -c 'bash <(echo hi)', is Allow"]
+#[ignore = "backlog 1e9da081: RED: echo shadowed by an exported function, then bash -c 'bash <(echo hi)', is Allow"]
 fn export_f_echo_then_bash_c_procsub_is_not_allow() {
     expect_not_allow(
         "echo(){ echo 'chmod 777 /etc/hosts'; }; export -f echo; bash -c 'bash <(echo hi)'",
@@ -125,7 +125,7 @@ fn export_f_echo_then_bash_c_procsub_is_not_allow() {
 }
 
 #[test]
-#[ignore = "backlog RED: printf shadowed by a function on the same line is Allow in bash <(printf hi)"]
+#[ignore = "backlog f06ecb05: RED: printf shadowed by a function on the same line is Allow in bash <(printf hi)"]
 fn printf_shadowed_by_function_then_procsub_is_not_allow() {
     expect_not_allow(
         "printf(){ echo 'chmod 777 /etc/hosts'; }; bash <(printf hi)",
@@ -136,25 +136,25 @@ fn printf_shadowed_by_function_then_procsub_is_not_allow() {
 // --------------------------------------- (B) system harm Ask, not Deny
 
 #[test]
-#[ignore = "backlog RED: echo -e hex-escaped harmful program piped through cat to bash is Ask, not Deny"]
+#[ignore = "backlog c0a0ddea: RED: echo -e hex-escaped harmful program piped through cat to bash is Ask, not Deny"]
 fn echo_e_hex_escape_through_cat_to_bash_is_deny() {
     expect_deny(r#"echo -e 'rm -rf /\x65tc' | cat | bash"#, "b-hex");
 }
 
 #[test]
-#[ignore = "backlog RED: echo -e newline-split harmful program in a procsub is Ask, not Deny"]
+#[ignore = "backlog 11b0b4da: RED: echo -e newline-split harmful program in a procsub is Ask, not Deny"]
 fn echo_e_newline_split_in_procsub_is_deny() {
     expect_deny(r#"bash <(echo -e 'echo hi\nrm -rf /etc')"#, "b-nl");
 }
 
 #[test]
-#[ignore = "backlog RED: quote-split harmful echo argument in a procsub is Ask, not Deny"]
+#[ignore = "backlog c7f288b7: RED: quote-split harmful echo argument in a procsub is Ask, not Deny"]
 fn echo_quote_split_argument_in_procsub_is_deny() {
     expect_deny(r#"bash <(echo rm -rf /e""tc)"#, "b-quote");
 }
 
 #[test]
-#[ignore = "backlog RED: harmful program built from three determined substs in a procsub is Ask, not Deny"]
+#[ignore = "backlog dd5c4fe9: RED: harmful program built from three determined substs in a procsub is Ask, not Deny"]
 fn three_determined_substs_in_procsub_is_deny() {
     expect_deny(
         r#"bash <(echo "$(echo rm) $(echo -rf) $(echo /etc)")"#,
@@ -163,13 +163,13 @@ fn three_determined_substs_in_procsub_is_deny() {
 }
 
 #[test]
-#[ignore = "backlog RED: bash -c of a determined harmful subst is Ask, not Deny"]
+#[ignore = "backlog 28019c35: RED: bash -c of a determined harmful subst is Ask, not Deny"]
 fn bash_c_of_determined_harmful_subst_is_deny() {
     expect_deny(r#"bash -c "$(echo 'rm -rf /etc')""#, "b-bashc");
 }
 
 #[test]
-#[ignore = "backlog RED: eval of a determined harmful subst through cat is Ask, not Deny"]
+#[ignore = "backlog d766b5fe: RED: eval of a determined harmful subst through cat is Ask, not Deny"]
 fn eval_of_determined_harmful_subst_through_cat_is_deny() {
     expect_deny(r#"eval "$(echo 'rm -rf /etc' | cat)""#, "b-eval");
 }

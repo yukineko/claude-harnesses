@@ -22,7 +22,9 @@
 //!   relay-execution path is added to any verdict.
 //! * 「gateもconduktも絶対に勝手に他のworktreeを参照してはならない」 — nothing here
 //!   reads, stats or runs anything in the subagent's `cwd`. That `cwd` is stored
-//!   and compared as an opaque string only.
+//!   and compared as a string only; [`mark_executed`] additionally joins it
+//!   with the literal `cd` targets of the command ([`post_run_cwds`]), as a
+//!   string, without touching the filesystem.
 //!
 //! # The procedure this module enforces
 //!
@@ -496,10 +498,21 @@ pub fn transcript_of(payload_transcript_path: &str) -> Option<PathBuf> {
 
 /// PostToolUse(Failure) on Bash in the MAIN session: mark the oldest
 /// unexecuted, undismissed, **Verified** ([`provenance`] against
-/// `transcript`) entry whose `command` and `cwd` are byte-identical to this
-/// call's. Returns the id marked, if any. A Refuted or Undetermined row is
-/// never marked, so it can never become resolved this way. The `cwd` is
-/// compared as a string and never resolved.
+/// `transcript`) entry whose `command` is byte-identical to this call's and
+/// whose cwd is accepted: the payload `cwd` (the shell's cwd AFTER the
+/// command ran) is byte-identical to the entry's queued `cwd`, or to one of
+/// the targets [`post_run_cwds`] resolves for the entry (backlog be745685: a
+/// relayed command that `cd`s ends in another directory, so its post-run cwd
+/// never equals the queued one). Returns the id marked, if any. A Refuted or
+/// Undetermined row is never marked, so it can never become resolved this
+/// way. The cd targets are resolved as strings only (join plus `.`/`..`
+/// folding); nothing is stat'ed or canonicalised, and a `cd` the resolver
+/// does not fully understand contributes no accepted cwd (the restrictive
+/// side: the entry stays pending).
+///
+/// Known widening: an absolute `cd` target is accepted whatever directory the
+/// run actually started in, so a run of the same string that started
+/// elsewhere and ended in that absolute target is marked too.
 pub fn mark_executed(
     dir: &Path,
     session: &str,
@@ -515,7 +528,7 @@ pub fn mark_executed(
         e.executed.is_none()
             && !e.is_dismissed()
             && e.command == command
-            && e.cwd == cwd
+            && (e.cwd == cwd || post_run_cwds(&e.cwd, command).iter().any(|c| c == cwd))
             && provenance(e, session, &agents) == Provenance::Verified
     }) else {
         return Ok(None);
@@ -531,11 +544,383 @@ pub fn mark_executed(
     Ok(Some(hit.id.clone()))
 }
 
+/// The directories a run of `command` that started in `queued_cwd` may end in
+/// because of a literal `cd`, in command order (backlog be745685). The queued
+/// cwd itself is NOT in the list; [`mark_executed`] accepts it separately.
+///
+/// Rule (coordinator ruling (i) for be745685):
+///
+/// * Only a top-level `cd` with exactly one literal operand counts. Its
+///   target is resolved against the cwd at that point of the command, which
+///   starts as `queued_cwd`; an absolute target replaces it. `.` and `..`
+///   are folded lexically, the way a logical (`-L`) `cd` does; nothing is
+///   stat'ed, canonicalised or looked up in `CDPATH`.
+/// * The first `cd` (or other cwd-changing construct) the resolver does not
+///   fully understand ends the list: it contributes nothing, and neither does
+///   any later `cd`, because the base is unknown from there on. That covers a
+///   non-literal operand (`$`, a backtick, `~`, a glob or brace character, a
+///   backslash), an option or a missing operand, a `cd` inside a compound
+///   command, pipeline, background job, subshell or command substitution, a
+///   prefix assignment, a redirection on the `cd`, a non-literal command word
+///   (it could be `cd`), and `pushd`/`popd`/`eval`/`source`/`.`/`builtin`/
+///   `command`/`exec`/`alias`/`trap`/`exit`/`return`.
+/// * The splitter is conservative: quoting it does not fully understand
+///   (`$'…'`, `$"…"`, `${…}`, `$(…)`, backquotes, here-documents, process
+///   substitution, an unterminated quote, `case`, `{ …; }`, `function`)
+///   ends the list too, and the simple command it was in contributes
+///   nothing. A `#` that starts a word ends the command text (a comment).
+///
+/// An empty list is the restrictive answer: only the queued cwd is accepted.
+pub fn post_run_cwds(queued_cwd: &str, command: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let tokens = cd_split(command);
+    let mut base: Option<String> = queued_cwd.starts_with('/').then(|| fold_path(queued_cwd));
+    let mut depth: usize = 0;
+    let mut i = 0;
+    let mut prev_op = CdOp::Seq;
+    while i < tokens.len() {
+        // One simple command: words (redirection targets dropped) up to the
+        // next operator.
+        let mut words: Vec<&CdWord> = Vec::new();
+        let mut redirected = false;
+        let mut next_op = CdOp::Seq;
+        while i < tokens.len() {
+            match &tokens[i] {
+                CdTok::Word(w) => words.push(w),
+                CdTok::Redir => {
+                    redirected = true;
+                    // The redirection's target word is not a command word.
+                    if matches!(tokens.get(i + 1), Some(CdTok::Word(_))) {
+                        i += 1;
+                    }
+                }
+                CdTok::Op(op) => {
+                    next_op = *op;
+                    i += 1;
+                    break;
+                }
+            }
+            i += 1;
+        }
+        let this_prev = prev_op;
+        prev_op = next_op;
+        let mut k = 0;
+        let mut assigned = false;
+        while words.get(k).is_some_and(|w| is_assignment(&w.raw)) {
+            assigned = true;
+            k += 1;
+        }
+        // Reserved words in command position.
+        while let Some(w) = words.get(k) {
+            match w.raw.as_str() {
+                "if" | "while" | "until" => {
+                    depth += 1;
+                    k += 1;
+                }
+                "for" | "select" => {
+                    depth += 1;
+                    // The rest (`x in a b`) is not a command.
+                    k = words.len();
+                }
+                "fi" | "done" => {
+                    let Some(d) = depth.checked_sub(1) else {
+                        return out;
+                    };
+                    depth = d;
+                    k += 1;
+                }
+                "then" | "do" | "else" | "elif" | "!" | "time" => k += 1,
+                "case" | "esac" | "{" | "}" | "function" | "in" | ";;" => return out,
+                _ => break,
+            }
+        }
+        let Some(cmd) = words.get(k) else { continue };
+        let Some(name) = cmd.lit.as_deref() else {
+            // A non-literal command word could expand to `cd`.
+            return out;
+        };
+        match name {
+            "pushd" | "popd" | "eval" | "source" | "." | "builtin" | "command" | "exec"
+            | "alias" | "trap" | "exit" | "return" => return out,
+            "cd" => {}
+            _ => continue,
+        }
+        let piped = |op: CdOp| matches!(op, CdOp::Pipe | CdOp::Amp);
+        let args = &words[k + 1..];
+        if depth > 0 || assigned || redirected || piped(this_prev) || piped(next_op) {
+            return out;
+        }
+        let [target] = args else { return out };
+        let Some(t) = target.lit.as_deref() else {
+            return out;
+        };
+        if t.is_empty() || t.starts_with('-') {
+            return out;
+        }
+        let next = if t.starts_with('/') {
+            fold_path(t)
+        } else {
+            let Some(b) = base.as_deref() else {
+                return out;
+            };
+            fold_path(&format!("{b}/{t}"))
+        };
+        out.push(next.clone());
+        base = Some(next);
+    }
+    out
+}
+
+/// Fold `.`/`..`/empty components of an absolute path lexically.
+fn fold_path(p: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for c in p.split('/') {
+        match c {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            c => parts.push(c),
+        }
+    }
+    format!("/{}", parts.join("/"))
+}
+
+fn is_assignment(raw: &str) -> bool {
+    let Some((name, _)) = raw.split_once('=') else {
+        return false;
+    };
+    let mut cs = name.chars();
+    cs.next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CdOp {
+    /// `;`, newline, `&&`, `||`: the next command runs in this shell.
+    Seq,
+    /// `|` or `|&`.
+    Pipe,
+    /// `&` (background).
+    Amp,
+}
+
+#[derive(Debug)]
+struct CdWord {
+    /// The word as written.
+    raw: String,
+    /// The word's value when it is fully literal; `None` when it contains an
+    /// expansion, glob, tilde, brace or backslash.
+    lit: Option<String>,
+}
+
+#[derive(Debug)]
+enum CdTok {
+    Word(CdWord),
+    Redir,
+    Op(CdOp),
+}
+
+/// The conservative splitter behind [`post_run_cwds`]. On a construct it does
+/// not fully understand it stops and drops the unterminated simple command it
+/// was in, so the result only ever holds simple commands it read completely.
+fn cd_split(s: &str) -> Vec<CdTok> {
+    let cs: Vec<char> = s.chars().collect();
+    let mut toks: Vec<CdTok> = Vec::new();
+    let mut i = 0;
+    let mut raw = String::new();
+    let mut val = String::new();
+    let mut literal = true;
+    let mut in_word = false;
+    // Truncate to the last operator: the command in progress is incomplete.
+    let stop = |mut toks: Vec<CdTok>| {
+        while toks.last().is_some_and(|t| !matches!(t, CdTok::Op(_))) {
+            toks.pop();
+        }
+        toks
+    };
+    macro_rules! flush {
+        () => {
+            if in_word {
+                toks.push(CdTok::Word(CdWord {
+                    raw: std::mem::take(&mut raw),
+                    lit: literal.then(|| std::mem::take(&mut val)),
+                }));
+                val.clear();
+                literal = true;
+                in_word = false;
+            }
+        };
+    }
+    while i < cs.len() {
+        let c = cs[i];
+        let next = cs.get(i + 1).copied();
+        match c {
+            ' ' | '\t' => {
+                flush!();
+                i += 1;
+            }
+            '\n' | ';' => {
+                flush!();
+                if c == ';' && next == Some(';') {
+                    return stop(toks);
+                }
+                toks.push(CdTok::Op(CdOp::Seq));
+                i += 1;
+            }
+            '&' => {
+                flush!();
+                match next {
+                    Some('&') => {
+                        toks.push(CdTok::Op(CdOp::Seq));
+                        i += 2;
+                    }
+                    Some('>') => {
+                        toks.push(CdTok::Redir);
+                        i += 2;
+                        if cs.get(i) == Some(&'>') {
+                            i += 1;
+                        }
+                    }
+                    _ => {
+                        toks.push(CdTok::Op(CdOp::Amp));
+                        i += 1;
+                    }
+                }
+            }
+            '|' => {
+                flush!();
+                match next {
+                    Some('|') => {
+                        toks.push(CdTok::Op(CdOp::Seq));
+                        i += 2;
+                    }
+                    Some('&') => {
+                        toks.push(CdTok::Op(CdOp::Pipe));
+                        i += 2;
+                    }
+                    _ => {
+                        toks.push(CdTok::Op(CdOp::Pipe));
+                        i += 1;
+                    }
+                }
+            }
+            '<' | '>' => {
+                flush!();
+                if next == Some('(') || (c == '<' && next == Some('<')) {
+                    return stop(toks);
+                }
+                toks.push(CdTok::Redir);
+                i += 1;
+                while matches!(cs.get(i), Some('>' | '&' | '|')) {
+                    i += 1;
+                }
+            }
+            '(' | ')' | '`' => return stop(toks),
+            '#' if !in_word => {
+                // A comment runs to the end of the line.
+                while i < cs.len() && cs[i] != '\n' {
+                    i += 1;
+                }
+            }
+            '\'' => {
+                in_word = true;
+                raw.push(c);
+                i += 1;
+                loop {
+                    let Some(&q) = cs.get(i) else {
+                        return stop(toks);
+                    };
+                    raw.push(q);
+                    i += 1;
+                    if q == '\'' {
+                        break;
+                    }
+                    val.push(q);
+                }
+            }
+            '"' => {
+                in_word = true;
+                raw.push(c);
+                i += 1;
+                loop {
+                    let Some(&q) = cs.get(i) else {
+                        return stop(toks);
+                    };
+                    raw.push(q);
+                    i += 1;
+                    match q {
+                        '"' => break,
+                        '`' => return stop(toks),
+                        '$' => {
+                            if matches!(cs.get(i), Some('(' | '{')) {
+                                return stop(toks);
+                            }
+                            literal = false;
+                        }
+                        '\\' => {
+                            literal = false;
+                            let Some(&e) = cs.get(i) else {
+                                return stop(toks);
+                            };
+                            raw.push(e);
+                            i += 1;
+                        }
+                        q => val.push(q),
+                    }
+                }
+            }
+            '$' => {
+                if matches!(next, Some('(' | '{' | '\'' | '"')) {
+                    return stop(toks);
+                }
+                in_word = true;
+                literal = false;
+                raw.push(c);
+                i += 1;
+            }
+            '\\' => {
+                in_word = true;
+                literal = false;
+                raw.push(c);
+                i += 1;
+                let Some(&e) = cs.get(i) else {
+                    return stop(toks);
+                };
+                raw.push(e);
+                i += 1;
+            }
+            c => {
+                if matches!(c, '*' | '?' | '[' | ']' | '~' | '{' | '}' | '!') {
+                    literal = false;
+                }
+                in_word = true;
+                raw.push(c);
+                val.push(c);
+                i += 1;
+            }
+        }
+    }
+    if in_word {
+        toks.push(CdTok::Word(CdWord {
+            raw,
+            lit: literal.then_some(val),
+        }));
+    }
+    toks
+}
+
 /// PreToolUse in the MAIN session that printed a `Deny` for a Bash call:
 /// record a `denied` outcome on the oldest unexecuted, undismissed entry whose
-/// `command` and `cwd` are byte-identical to this call's (the same match as
-/// [`mark_executed`]; the `cwd` is compared as a string and never resolved).
-/// Returns the id recorded, if any.
+/// `command` and `cwd` are byte-identical to this call's. Returns the id
+/// recorded, if any.
+///
+/// Unlike [`mark_executed`], the `cwd` is compared only with the queued
+/// `cwd`, as a string, and never resolved: the PreToolUse payload carries the
+/// cwd the command STARTS in, and a denied command never ran, so it never
+/// moved the shell. The `cd` targets of [`post_run_cwds`] are not accepted
+/// here.
 ///
 /// Fail-closed: an unreadable or corrupt queue is `Err` and nothing is
 /// written, so an undetermined match never records an outcome. A `denied`
@@ -898,6 +1283,60 @@ mod tests {
         assert_eq!(exit_code_of(&v), Some(127));
         let v = serde_json::json!({"tool_response": {"stdout": ""}});
         assert_eq!(exit_code_of(&v), None);
+    }
+
+    // Implementer-written (backlog be745685); not an independent oracle.
+    #[test]
+    fn post_run_cwds_resolves_literal_cds_in_sequence_and_stops_at_unknown() {
+        assert_eq!(
+            post_run_cwds("/q", "cd a && cd ../b/./c; echo x > f"),
+            vec!["/q/a".to_string(), "/q/b/c".to_string()]
+        );
+        assert_eq!(
+            post_run_cwds(
+                "/q",
+                r#"cd /w && for f in a b; do git checkout -- "$f"; done; cd /z; echo x > /o/f"#
+            ),
+            vec!["/w".to_string(), "/z".to_string()]
+        );
+        // A non-literal cd ends the list; later cds contribute nothing.
+        assert_eq!(post_run_cwds("/q", "cd a; cd $X; cd /z"), vec!["/q/a"]);
+        assert!(post_run_cwds("/q", "cd ~/x; cd /z").is_empty());
+        assert!(post_run_cwds("/q", "cd \"$(pwd)\"; cd /z").is_empty());
+        assert!(post_run_cwds("/q", "cd a*; cd /z").is_empty());
+        assert!(post_run_cwds("/q", "(cd /z)").is_empty());
+        assert!(post_run_cwds("/q", "cd /z | cat").is_empty());
+        assert!(post_run_cwds("/q", "if true; then cd /z; fi").is_empty());
+        assert!(post_run_cwds("/q", "X=1 cd /z").is_empty());
+        assert!(post_run_cwds("/q", "cd /z 2>/dev/null").is_empty());
+        assert!(post_run_cwds("/q", "cd -P /z").is_empty());
+        assert!(post_run_cwds("/q", "cd").is_empty());
+        assert!(post_run_cwds("/q", "$C /z").is_empty());
+        assert!(post_run_cwds("/q", "cd /z'").is_empty());
+        // Relative without an absolute queued base resolves nothing.
+        assert!(post_run_cwds("rel", "cd a").is_empty());
+        assert_eq!(post_run_cwds("rel", "cd '/a b'"), vec!["/a b"]);
+    }
+
+    #[test]
+    fn mark_executed_accepts_post_cd_cwd_only_for_the_queued_command() {
+        let d = tmp("aftercd");
+        let t = transcript(&d, &["a1"]);
+        let t = Some(t.as_path());
+        let cmd = "cd sub && make";
+        let id = queue(&d, "s", Some("a1"), "/w", cmd, "r").unwrap();
+        assert_eq!(
+            mark_executed(&d, "s", t, "/elsewhere", cmd, Some(0)).unwrap(),
+            None
+        );
+        assert_eq!(
+            mark_executed(&d, "s", t, "/w/sub", "make", Some(0)).unwrap(),
+            None
+        );
+        assert_eq!(
+            mark_executed(&d, "s", t, "/w/sub", cmd, Some(0)).unwrap(),
+            Some(id)
+        );
     }
 
     #[test]

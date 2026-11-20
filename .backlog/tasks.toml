@@ -2467,6 +2467,8 @@ notes = "Observed 2026-11-20 at main c09b34cd7 (0.2.784): with cwd = the session
 created_at = 1795139962
 updated_at = 1795139962
 weight = 0.0
+issue_number = 1887
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1887"
 rev = 0
 
 [task.repro]

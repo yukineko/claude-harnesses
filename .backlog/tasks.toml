@@ -3039,6 +3039,8 @@ Both readings: (a) real attribution defect — a writer whose effective cwd is a
 created_at = 1795196054
 updated_at = 1795196054
 weight = 0.0
+issue_number = 1906
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1906"
 rev = 0
 
 [task.repro]

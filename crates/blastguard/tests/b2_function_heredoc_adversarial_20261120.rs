@@ -591,3 +591,149 @@ not_allow_probe!(
     redirect_on_function_definition_then_awk_f,
     "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n} > p.awk; f; awk -f p.awk"
 );
+
+// ======================================================= round 3 (0.2.787)
+//
+// Added by the same independent author after f32f48624 (0.2.786, ruling (a):
+// a quoted heredoc INSIDE a function body is never data). Probes whether the
+// "inside a function body" test (`ast::Script::function_body_ranges`) covers
+// every way bash puts a heredoc inside a function, and whether the parser and
+// bash agree on where a body ends. Every body is `$(f)` / `$(x)` or an awk
+// program calling `system("$(f)")`, so a removed body shows as Allow.
+//
+// DOES NOT PROVE (round 3): that brush-parser and bash agree on every
+// function-body boundary — only the spellings below were run. Observed
+// 2026-11-20 by this author: all pass on 7606a6b61 (0.2.780) and f32f48624
+// (0.2.786). In a scratch tree at f32f48624 with heredoc_data's refusals
+// stubbed out (ruling (a) skip, functions_harmless, runs_no_landing_file,
+// names_landing_path, quoted/exact check), only the awk-f / `$( )` probes
+// went RED (they see heredoc_data); the crontab / sh pipe, `command` /
+// `builtin cat`, `tee`, subshell-body and dead-branch probes stayed GREEN —
+// another layer decides them, so they do not prove ruling (a) by themselves.
+
+// ------------------------------------------- parser / bash disagreement
+
+// In bash `echo }` does not close the body (`}` is an argument): the heredoc
+// below is INSIDE `f`. A parser that closes the body at that `}` would see a
+// top-level reader.
+not_allow_probe!(
+    echo_brace_does_not_close_body_then_crontab,
+    "f() { echo }; cat <<'EOF'\n$(x)\nEOF\n}; f | crontab -"
+);
+
+not_allow_probe!(
+    echo_brace_does_not_close_body_then_sh,
+    "f() { echo }; cat <<'EOF'\n$(x)\nEOF\n}; f | sh"
+);
+
+not_allow_probe!(
+    echo_brace_does_not_close_body_then_awk_f,
+    "f() { echo }; cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; f > p.awk; awk -f p.awk"
+);
+
+// `EOF }` is not the delimiter line (the delimiter must be alone on its line).
+not_allow_probe!(
+    delimiter_with_trailing_brace_is_not_the_close_then_awk_f,
+    "f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF }\nEOF\n}; f > p.awk; awk -f p.awk"
+);
+
+// ------------------------------------ other ways a heredoc is in a function
+
+not_allow_probe!(
+    heredoc_in_nested_function_then_awk_f,
+    "f() { g() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; }; f; g > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    heredoc_in_nested_function_piped_to_crontab,
+    "f() { g() { cat <<'EOF'\n$(x)\nEOF\n}; }; f; g | crontab -"
+);
+
+not_allow_probe!(
+    heredoc_in_function_keyword_body_then_awk_f,
+    "function f { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; f > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    heredoc_in_function_keyword_parens_body_piped_to_crontab,
+    "function f() { cat <<'EOF'\n$(x)\nEOF\n}; f | crontab -"
+);
+
+not_allow_probe!(
+    heredoc_in_subshell_function_body_then_awk_f,
+    "f() ( cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n); f > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    heredoc_in_subshell_function_body_piped_to_crontab,
+    "f() ( cat <<'EOF'\n$(x)\nEOF\n); f | crontab -"
+);
+
+not_allow_probe!(
+    heredoc_in_function_body_inside_brace_group_then_awk_f,
+    "f() { { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; }; f > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    heredoc_in_function_body_inside_if_then_awk_f,
+    "f() { if true; then cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\nfi; }; f > p.awk; awk -f p.awk"
+);
+
+// -------------------------------- definitions in loops / $( ) / branches
+
+not_allow_probe!(
+    definition_inside_for_loop_then_awk_f,
+    "for i in 1; do f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; done; f > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    definition_inside_while_loop_piped_to_crontab,
+    "while true; do f() { cat <<'EOF'\n$(x)\nEOF\n}; break; done; f | crontab -"
+);
+
+not_allow_probe!(
+    definition_inside_command_substitution_then_awk_f,
+    "x=$(f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; f); echo \"$x\" > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    definition_inside_command_substitution_as_awk_program,
+    "awk \"$(f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; f)\""
+);
+
+not_allow_probe!(
+    definition_in_live_else_branch_then_awk_f,
+    "if false; then g() { :; }; else f() { cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; fi; f > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    definition_after_and_and_piped_to_crontab,
+    "true && f() { cat <<'EOF'\n$(x)\nEOF\n}; f | crontab -"
+);
+
+not_allow_probe!(
+    definition_in_dead_branch_shadowing_reader_name,
+    "if false; then cat() { :; }; fi; cat() { crontab -; }; cat <<'EOF'\n$(x)\nEOF"
+);
+
+// ------------------------------------ builtin / command cat inside a body
+
+not_allow_probe!(
+    command_cat_inside_body_then_awk_f,
+    "f() { command cat <<'EOF'\nBEGIN{system(\"$(f)\")}\nEOF\n}; f > p.awk; awk -f p.awk"
+);
+
+not_allow_probe!(
+    builtin_cat_inside_body_piped_to_sh,
+    "f() { builtin cat <<'EOF'\n$(x)\nEOF\n}; f | sh"
+);
+
+not_allow_probe!(
+    command_cat_inside_body_piped_to_crontab,
+    "f() { command cat <<'EOF'\n$(x)\nEOF\n}; f | crontab -"
+);
+
+not_allow_probe!(
+    tee_inside_body_piped_to_crontab,
+    "f() { tee /dev/null <<'EOF'\n$(x)\nEOF\n}; f | crontab -"
+);

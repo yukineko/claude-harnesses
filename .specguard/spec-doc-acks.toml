@@ -303,3 +303,7 @@ reason = "Pure move: procsub_stages relocated byte-identically out of payload.rs
 [[ack]]
 path = "crates/blastguard/src/detect/payload/word_boundary_tests.rs"
 reason = "Unit-test submodule (classified impl by the path heuristic) pinning dash_c_payloads word-boundary candidates (task ab2097c5): the /bin/sh -c twins of tests/wait_bang_argument_fp_20261114.rs and the candidate set itself. The behaviour it pins belongs to payload.rs, which is already bound to docs/specs/blastguard.md; the test module itself describes no separate behaviour."
+
+[[ack]]
+path = "crates/blastguard/src/detect/ast/judge/classify_tests.rs"
+reason = "Unit-test submodule (classified impl by the path heuristic) pinning judge::classify Table C classes (S6-2, 2026-11-20). The behaviour it pins belongs to judge.rs (PathClass docs, SUBSET.md Table C), which is already described by docs/specs/blastguard.md; the test module itself describes no separate behaviour."

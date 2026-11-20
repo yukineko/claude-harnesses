@@ -334,6 +334,34 @@ pub(super) fn redirect_target_undeterminable(target: &str, base: Option<&str>) -
     }
 }
 
+/// The name a truncating-redirect `target` hands the kernel
+/// ([`dequoted_redirect_word`]) and that file's recoverability, probed under
+/// that name against `base`.
+///
+/// The returned name is also what the redirect arm's LOCATION axes (whose
+/// tree, fixed temp root, safe-root confinement) judge (backlog 021e6161):
+/// asked about the spelling, `'src/foo.rs'` placed nowhere, so a quoted target
+/// inside this session's tree — every S5 Python effect is spelt with quotes
+/// (`: > 'src/foo.rs'`) — skipped the confined Ask its unquoted twin gets and
+/// reached the irreversibility Deny. A word that cannot be dequoted keeps its
+/// spelling as the name (the location axes judge it exactly as before) and
+/// its recoverability is `Undetermined`, which never runs unattended.
+pub(super) fn dequoted_target_recovery(
+    target: &str,
+    base: Option<&str>,
+) -> (String, crate::reversible::Recovery) {
+    match dequoted_redirect_word(target) {
+        Determination::Known(name) => {
+            let recovery = crate::reversible::probe(&name, base);
+            (name, recovery)
+        }
+        Determination::Undetermined(why) => (
+            target.to_string(),
+            crate::reversible::Recovery::Undetermined(why.to_string()),
+        ),
+    }
+}
+
 /// The file name a redirect WORD hands the kernel: the word with one level of
 /// shell quoting removed (`a\ b` -> `a b`, `"a b"` -> `a b`, `\a` -> `a`,
 /// `out\).txt` -> `out).txt`). The existence / recoverability probe must ask

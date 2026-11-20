@@ -106,7 +106,6 @@ fn unallowed(cmds: &[&str], tag: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-14 $(f) inside a quoted <<'EOF' body (literal data) is Ask/Deny when f is defined — remove the ignore when fixed"]
 fn function_substitution_text_in_quoted_heredoc_body_is_allow() {
     let cmds = ["f() { echo hi; }; cat <<'EOF'\n$(f)\nEOF"];
     let bad = unallowed(&cmds, "red");

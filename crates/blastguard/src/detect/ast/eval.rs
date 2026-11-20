@@ -185,12 +185,14 @@ fn run(command: &str, program: &ast::Program, function_defs: bool) -> Result<Scr
         function_defs,
         function_names: Vec::new(),
         has_function_definition: false,
+        function_body_ranges: Vec::new(),
     };
     ev.program(&text, program, Env::initial(), &Context::TopLevel)?;
     Ok(Script {
         commands: ev.out,
         function_names: ev.function_names,
         has_function_definition: ev.has_function_definition,
+        function_body_ranges: ev.function_body_ranges,
     })
 }
 
@@ -681,6 +683,9 @@ struct Ev {
     function_names: Vec<String>,
     /// Set when a function definition was evaluated in emit mode.
     has_function_definition: bool,
+    /// Index ranges into `out` of the commands of each function body
+    /// (emit mode only).
+    function_body_ranges: Vec<std::ops::Range<usize>>,
 }
 
 impl Ev {

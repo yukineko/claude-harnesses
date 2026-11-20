@@ -120,7 +120,7 @@ forge・condukt のスケジューラが再利用）。
   timeout・probe 無し）も Deny（tests/backlog_git_restore_content_in_commit_fp_20261107.rs）。
   file mode の差は content とみなさない、
   `find`（`analyze_find`: `-delete`、`-exec`/`-execdir` の直後が shell または `rm`）、
-  `truncate`（S6-4 以降、`detect/known_allow` が Known Allow のときは Allow。下記「module 責務」）/`shred`/`dd of=`/`mkfs*`、再帰 `chmod`/`chown`（`-R`/`--recursive`）、
+  `truncate`（S6-4 以降、`detect/known_allow` が Known Allow のときは Allow。下記「module 責務」）/`shred`/`dd of=`（S6-5 以降、同じく Known Allow なら Allow。`of=` は shell の quote 除去後の語で読む — `'of=/dev/sda'`・`\of=…` も `of=`、`of=` になりうる不定語〈`$X`・`of=$F`〉も `of=` 扱い〈`rm::dd_of_operands`、0.2.792〉）/`mkfs*`、再帰 `chmod`/`chown`（`-R`/`--recursive`）、
   `sort`/`uniq`（read-only ではない: `sort -o <保護パス>`／`uniq <in> <保護パス>` は出力ファイルを
   truncate するので deny。純粋な読取・非保護 output は allow — `analyze_sort`/`analyze_uniq`）。
 - **managed な使い捨て場所での working-tree 破棄の Allow（ユーザー裁定 2026-11-07、blastguard 0.2.287）** —
@@ -1506,7 +1506,12 @@ forge・condukt のスケジューラが再利用）。
   — `classify` の linked worktree 内 Protected lift で `.claude/settings*.json`・`.githooks/`・`crates/*/hooks/`・
   `hooks/hooks.json` が Allow にならない）ときだけ `true`。それ以外は「Known でない」で、呼び出し側は旧判定のまま
   （この関数は Ask/Deny を返さない）。呼び出し側: S6-4 — `detect.rs` の旧 `truncate` arm（`true` なら Allow、
-  それ以外は `shape_deny_or_confined_ask` の判定のまま。S6 は退役のみで新しい Ask/Deny は無い）。
+  それ以外は `shape_deny_or_confined_ask` の判定のまま。S6 は退役のみで新しい Ask/Deny は無い）、
+  S6-5 — `detect.rs` の旧 `dd` arm（`true` なら Allow、それ以外は旧 `of=` 読みの Deny のまま。`dd` の B.1 行は
+  `of=F` の `F` が target・`if=` は read・`k=v` 語は丸ごと 1 語なので path 中の `0`/`1` が tie を壊さない。
+  `of=DIR/*.txt` の最終成分 glob も literal-dir glob として `DIR` で置く。同一行の literal 代入 `F=…; dd of=$F`
+  は評価器が `Literal` に解決し、その値で判定する〈Scratch なら Allow、`/etc/hosts` なら Deny〉。
+  tests/s6_5_dd_retire_20261120.rs）。
   最終成分だけの literal-dir glob（user ruling 2026-11-19）は親ディレクトリで置かれる `Literal` なので
   Scratch 内なら Allow、中間成分の glob は `Unresolved` で旧判定のまま。`rm`・`rsync --delete` は引き続き
   `detect/rm/new_layer`（tests/s6_4_truncate_retire_20261120.rs）。

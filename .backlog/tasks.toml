@@ -2784,6 +2784,8 @@ notes = "Observed 2026-11-20 by the run-20261120-071122-49691 driver via donegat
 created_at = 1795155655
 updated_at = 1795155655
 weight = 0.0
+issue_number = 1899
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1899"
 rev = 0
 
 [task.repro]

@@ -89274,3 +89274,79 @@ rev = "644e221899d7071129c47943bda9359ce5ef412d"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "4503c90d"
+title = "condukt: part-way-removed worktree (no .git, tracked/ignored files left) survives discard/remove/cleanup; not quarantine-moved"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-16..17 run-20261116-164820-25374 (condukt 0.7.435, worktree_base on WSL drvfs /mnt/c): t1 leftover (target/ + tdd.toml, no .git) refused by worktree remove (git symbolic-ref HEAD exited 128) and kept by cleanup (no resolvable .git); t2 discard refused 'git declined to remove it, its content could not be preserved (... seeding the temp index from HEAD) ... The directory is left in place.' Both needed a human rm. c96e756a quarantine only runs when the --force retry fails; Undetermined branch of remove_worktree_preserving bails. Readings: (a) defect, quarantine-move deletes nothing so it is fail-closed-compatible; (b) intended fail-closed refusal. RED 078435a0d."
+created_at = 1794876375
+updated_at = 1795204338
+weight = 0.0
+issue_number = 1849
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1849"
+issue_closed_at = 1795204340
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261117_worktree_partial_remove_leftover_discard -- --include-ignored"
+rev = "69bea7a6d6ef6a65dbb7c3414b37c3a1e219309a"
+observed_at = 1794876375
+detail = """
+exit 101: ktrees/session-df7c968f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.88s
+     Running tests/backlog_20261117_worktree_partial_remove_leftover_discard.rs (target/debug/deps/backlog_20261117_worktree_partial_remove_leftover_discard-f3558f15bad2719c)
+error: test failed, to rerun pass `-p condukt --test backlog_20261117_worktree_partial_remove_leftover_discard`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261117_worktree_partial_remove_leftover_discard --test t3_quarantine_negative_controls_20261121"
+exit = 0
+passed = 7
+rev = "7bc1bab2e02b76a4b8a5e7ab3d6a9393a74a985a"
+observed_at = 1795204290
+output_digest = "sha256:2ffccb5fb3176dd18fe756af8a97166566964699675fd38dacba4e1f2296785a"
+excerpt = """
+
+running 2 tests
+test control_discard_of_intact_worktree_succeeds ... ok
+test discard_does_not_leave_part_way_removed_dir_in_place ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.97s
+
+
+running 5 tests
+test n2b_remove_plain_dir_under_base_is_refused ... ok
+test n2a_remove_plain_dir_outside_base_is_refused ... ok
+test n1_remove_primary_repo_subdir_is_refused ... ok
+test n2c_discard_task_pointing_at_plain_dir_is_refused ... ok
+test n3_intact_worktree_via_symlink_alias_is_not_quarantined ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.94s
+
+   Compiling progeffect v0.1.6 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/progeffect)
+   Compiling blastguard v0.2.838 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+   Compiling riskgrade v0.1.2 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/riskgrade)
+   Compiling condukt v0.7.464 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 42.56s
+     Running tests/backlog_20261117_worktree_partial_remove_leftover_discard.rs (target/debug/deps/backlog_20261117_worktree_partial_remove_leftover_discard-2028a8a4a1acd122)
+     Running tests/t3_quarantine_negative_controls_20261121.rs (target/debug/deps/t3_quarantine_negative_controls_20261121-42b0e510d601c6e2)
+"""
+
+[task.closure.red]
+rev = "a8acabfab077945728dfe7532db31862e912da11"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

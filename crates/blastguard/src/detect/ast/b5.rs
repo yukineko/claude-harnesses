@@ -406,6 +406,7 @@ pub(super) fn unwrap_at(argv: &[Word], k: usize) -> Unwrapped {
             }
         },
         // SUBSET.md Table B.3 `sudo`, `doas` row (user ruling 2026-11-20 Q1, Q3).
+        // sudo(8) long options are modelled by `sudo_long` (sudo only).
         "sudo" | "doas" => {
             let mut shell = false;
             // A mode that runs no command (`sudo -l`, `-v`, `-K`, `-V`).
@@ -449,6 +450,26 @@ pub(super) fn unwrap_at(argv: &[Word], k: usize) -> Unwrapped {
                             "`{base} -e` (sudoedit) is not modelled"
                         ))
                     }
+                    // sudo(8) long options (backlog a761b38f). `doas` has none:
+                    // its long options fall through to `undet` below.
+                    Some(Ok(w)) if base == "sudo" && w.starts_with("--") => match sudo_long(w) {
+                        SudoLong::Value => i += 2,
+                        SudoLong::InlineValue | SudoLong::Flag => i += 1,
+                        SudoLong::Shell => {
+                            shell = true;
+                            i += 1
+                        }
+                        SudoLong::NoExec => {
+                            no_exec = true;
+                            i += 1
+                        }
+                        SudoLong::Edit => {
+                            return Unwrapped::Undetermined(format!(
+                                "`{base} --edit` (sudoedit) is not modelled"
+                            ))
+                        }
+                        SudoLong::Unknown => return undet(w),
+                    },
                     Some(Ok(w)) if w.starts_with('-') => return undet(w),
                     _ => break,
                 }
@@ -481,6 +502,68 @@ pub(super) fn unwrap_at(argv: &[Word], k: usize) -> Unwrapped {
             }
         }
         _ => Unwrapped::NotWrapper,
+    }
+}
+
+/// How `unwrap_at` treats one sudo(8) long option (backlog a761b38f).
+enum SudoLong {
+    /// `--opt VALUE`: the next word is the option's argument.
+    Value,
+    /// `--opt=VALUE` (or `--preserve-env=list`): the argument is inline.
+    InlineValue,
+    /// A flag with no argument.
+    Flag,
+    /// `--login` / `--shell`: as `-i` / `-s`.
+    Shell,
+    /// A mode that runs no command (`--list`, `--validate`, ...).
+    NoExec,
+    /// `--edit` (sudoedit): not modelled, like `-e`.
+    Edit,
+    /// Any other long option: not modelled (Undetermined).
+    Unknown,
+}
+
+/// Classify a sudo(8) long option `w` (starting with `--`, not `--` itself).
+/// Only the options listed here are modelled; anything else is
+/// [`SudoLong::Unknown`], which the caller resolves to Undetermined.
+fn sudo_long(w: &str) -> SudoLong {
+    // Long options taking a value: `-u -g -C -D -h(host) -p -r -t -U`.
+    const VALUE: [&str; 9] = [
+        "--user",
+        "--group",
+        "--close-from",
+        "--chdir",
+        "--host",
+        "--prompt",
+        "--role",
+        "--type",
+        "--other-user",
+    ];
+    // `-E -H -n -S -k -A -P -b`.
+    const FLAG: [&str; 8] = [
+        "--preserve-env",
+        "--set-home",
+        "--non-interactive",
+        "--stdin",
+        "--reset-timestamp",
+        "--askpass",
+        "--preserve-groups",
+        "--background",
+    ];
+    if let Some((name, _)) = w.split_once('=') {
+        return if VALUE.contains(&name) || name == "--preserve-env" {
+            SudoLong::InlineValue
+        } else {
+            SudoLong::Unknown
+        };
+    }
+    match w {
+        _ if VALUE.contains(&w) => SudoLong::Value,
+        _ if FLAG.contains(&w) => SudoLong::Flag,
+        "--login" | "--shell" => SudoLong::Shell,
+        "--list" | "--validate" | "--remove-timestamp" | "--version" | "--help" => SudoLong::NoExec,
+        "--edit" => SudoLong::Edit,
+        _ => SudoLong::Unknown,
     }
 }
 

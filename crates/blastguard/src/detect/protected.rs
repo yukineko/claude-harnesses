@@ -116,7 +116,10 @@ fn protected_verdict(ctx: &Ctx<'_>, action: &str, shown: &str, judged: &str) -> 
 configuration requires an explicit user request"
         )));
     }
-    if exclude::is_protected_path(judged) && !ctx.in_worktree_checkout(judged) {
+    if exclude::is_protected_path(judged)
+        && !ctx.in_worktree_checkout(judged)
+        && !literal_dir_glob_in_worktree_checkout(ctx, judged)
+    {
         Some(Decision::ask(format!(
             "{action} targets a protected gate/config path ({shown}) — it controls which hooks, \
 gates or policies run, and blastguard cannot tell from the tool call whether this strengthens \
@@ -124,6 +127,24 @@ or disarms it, so it refuses to guess"
         )))
     } else {
         None
+    }
+}
+
+/// The linked-worktree lift ([`Ctx::in_worktree_checkout`], user ruling
+/// 2026-10-03) for a final-component glob under a literal directory
+/// (`super::ast::redirect_literal_dir_glob`, user ruling 2026-11-19): such a
+/// glob can only expand to entries directly in its parent, so it is lifted
+/// exactly when that parent is strictly inside a linked worktree checkout
+/// (`<wt>/.githooks/pre-*`; user ruling 2026-11-20, backlog 2e704124). A
+/// glob directly in the checkout root, or one that is not a literal-dir glob,
+/// is not lifted.
+fn literal_dir_glob_in_worktree_checkout(ctx: &Ctx<'_>, judged: &str) -> bool {
+    let Some(glob) = super::ast::redirect_literal_dir_glob(judged) else {
+        return false;
+    };
+    match glob.rsplit_once('/') {
+        Some((parent, _)) if !parent.is_empty() => ctx.in_worktree_checkout(parent),
+        _ => false,
     }
 }
 

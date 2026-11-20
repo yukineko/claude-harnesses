@@ -133,6 +133,13 @@ pub(in crate::detect) fn chain_names_fixed() -> bool {
 }
 
 fn every_reading_scoped(c: &str, scope: &SafeRoots) -> Decision {
+    // Whether a glob on this line may match dot-names (`shopt -s dotglob`,
+    // `setopt globdots`, …) is read once, from the outermost line, for every
+    // layer and nested reading below (`ast::judge::dot_match`).
+    super::ast::with_line_dot_match(c, || every_reading_on_line(c, scope))
+}
+
+fn every_reading_on_line(c: &str, scope: &SafeRoots) -> Decision {
     // Backlog 3a950c6c / 5ef2d51f: every reading below — and every rule inside
     // each — judges the text with the line's own literal bindings already
     // resolved (`W=/x; sed -i … $W/f` is judged as `sed -i … /x/f`). One

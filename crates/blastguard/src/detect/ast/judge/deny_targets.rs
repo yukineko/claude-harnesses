@@ -51,8 +51,12 @@
 //! which row an `Undetermined` target value names (it is an Ask, above), an
 //! `Undetermined` redirect target (B.2 is the legacy layer's), a
 //! command under an unmodelled wrapper (`sudo`, `env`, `command`, …), a
-//! command line whose analysis is `Undetermined`, a glob whose expansion
-//! might name an entry (`/x/.ss*`; the spelling is matched as written), the
+//! command line whose analysis is `Undetermined`, a glob that is not a
+//! literal-dir glob (`/x/.ss*`, a middle-component glob; the spelling is
+//! matched as written — a literal-dir glob B.1 target is ALSO matched by the
+//! entries it may expand onto, [`glob_rows`], with the dot-name rule of
+//! [`globs_may_intersect`] dropped when the line may switch dot-matching on,
+//! `super::dot_match`), the
 //! symlink-resolved landing of a target, and a recursive delete of an
 //! ANCESTOR of an entry other than the entry directories themselves
 //! (`rm -rf <repo>/scripts`).
@@ -63,6 +67,7 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use harness_core::verdict::Determination;
 
 use super::super::{RedirOp, RedirTarget, Script, SimpleCommand, Value};
+use super::dot_match::{self, DotMatch};
 use super::{table_b, Effect};
 use crate::model::Decision;
 use crate::scope::{Placement, SafeRoots};
@@ -285,10 +290,12 @@ fn redirect_effect(op: RedirOp) -> Option<Effect> {
     }
 }
 
-/// One write target: its effect, its resolved literal path, and whether it is
+/// One write target: its effect, its resolved literal path, whether it is
 /// the operand of a `chmod` that only adds exec bits
-/// ([`chmod_adds_exec_only`]).
-type Target = (Effect, String, bool);
+/// ([`chmod_adds_exec_only`]), and whether it is a final-component glob
+/// under a literal directory (`table_b::literal_dir_glob`), judged by the
+/// entries it may expand to ([`glob_rows`]).
+type Target = (Effect, String, bool, bool);
 
 /// True when `c` is `chmod MODE [--] FILE…` whose MODE only ADDS exec bits
 /// (user ruling 2026-11-20 「書込み Deny・exec 付与は許可」): every word is a
@@ -348,16 +355,32 @@ fn mode_adds_exec_only(mode: &str) -> bool {
 fn write_targets(c: &SimpleCommand, undetermined: &mut Vec<String>) -> Vec<Target> {
     let mut out = Vec::new();
     let exec_only = chmod_adds_exec_only(c);
+    // The spellings `table_b` hands back for literal-dir globs (`of=` stripped
+    // for `dd`); a written value equal to one is a glob target.
+    let globs: Vec<String> = c
+        .argv
+        .iter()
+        .skip(1)
+        .filter_map(table_b::literal_dir_glob)
+        .flat_map(|g| {
+            let of = g.strip_prefix("of=").map(str::to_string);
+            std::iter::once(g).chain(of)
+        })
+        .collect();
+    let is_glob = |v: &Value| matches!(v, Value::Literal(w) if globs.contains(w));
     if let table_b::Row::Targets(t) = table_b::extract(c) {
         for (effect, value) in t {
             let exec_only = exec_only && effect == Effect::Metadata;
             let written = value.clone();
+            let glob = is_glob(&written);
             match (super::super::eval::resolve_at(&c.cwd, value), written) {
-                (Value::Literal(p), _) => out.push((effect, p, exec_only)),
+                (Value::Literal(p), _) => out.push((effect, p, exec_only, glob)),
                 // A relative path whose cwd is not one known directory: the
                 // table's `**/` rows place it anywhere, so its spelling is
                 // still matched (Table B asks about the placement itself).
-                (Value::Undetermined(_), Value::Literal(p)) => out.push((effect, p, exec_only)),
+                (Value::Undetermined(_), Value::Literal(p)) => {
+                    out.push((effect, p, exec_only, glob));
+                }
                 (Value::Undetermined(why), Value::Undetermined(_)) => {
                     undetermined.push(format!("{effect:?} target cannot be placed: {why}"));
                 }
@@ -368,7 +391,7 @@ fn write_targets(c: &SimpleCommand, undetermined: &mut Vec<String>) -> Vec<Targe
         if let (Some(effect), RedirTarget::Path(Value::Literal(p))) =
             (redirect_effect(r.op), &r.target)
         {
-            out.push((effect, p.clone(), false));
+            out.push((effect, p.clone(), false, false));
         }
     }
     out
@@ -403,11 +426,170 @@ fn spellings(path: &str, session_cwd: Option<&str>) -> (Vec<String>, Option<Stri
 /// (stage S6-4, user ruling 2026-11-20 「Deny のまま（推奨）」); it raises
 /// nothing itself.
 pub(crate) fn matches_any_row_unlifted(path: &str, session_cwd: Option<&str>) -> bool {
+    matches_rows(path, session_cwd, Rows::All)
+}
+
+/// Which rows of the table a predicate consults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Rows {
+    /// Every row.
+    All,
+    /// Only the rows NOT lifted inside a linked worktree checkout
+    /// (`lift_in_checkout == false`: home, `.ssh`, `.gitconfig`, the plugin
+    /// cache). User ruling 2026-11-20: in the own worktree the lifted gate
+    /// entries (`.githooks`, `scripts/check-*.py`, `crates/*/hooks`) are the
+    /// checkout's own files.
+    NotLiftedInCheckout,
+    /// Only the rows lifted inside a linked worktree checkout.
+    LiftedInCheckout,
+}
+
+impl Rows {
+    fn has(self, e: &Entry) -> bool {
+        match self {
+            Rows::All => true,
+            Rows::NotLiftedInCheckout => !e.lift_in_checkout,
+            Rows::LiftedInCheckout => e.lift_in_checkout,
+        }
+    }
+}
+
+/// True when `path` matches a row in `rows`. A table that cannot be loaded
+/// is `true` for every selection except [`Rows::LiftedInCheckout`], where
+/// `false` is the restrictive answer (nothing is lifted).
+pub(crate) fn matches_rows(path: &str, session_cwd: Option<&str>, rows: Rows) -> bool {
     let Determination::Known(table) = compiled() else {
-        return true;
+        return rows != Rows::LiftedInCheckout;
     };
     let (spelled, _) = spellings(path, session_cwd);
-    spelled.iter().any(|s| table.set.is_match(s))
+    spelled.iter().any(|s| {
+        table
+            .set
+            .matches(s)
+            .into_iter()
+            .any(|i| table.row_of.get(i).is_some_and(|&r| rows.has(&TABLE[r])))
+    })
+}
+
+/// True when a file directly in the directory `parent` whose name matches
+/// the final-component glob `last` COULD match a row of the table, lift not
+/// applied (backlog 2e704124, for `judge::names_command_running_config`):
+/// for some pattern `<pp>/<pl>`, a spelling of `parent` ([`spellings`])
+/// matches `<pp>` and `last` may intersect `<pl>` ([`globs_may_intersect`];
+/// `**` intersects every name), or `parent` itself matches a pattern ending
+/// in `/**`. Only the rows in `rows` are consulted. Over-approximates
+/// (fail-closed): a pattern or a spelling that does not compile, or a table
+/// that cannot be loaded, is `true`.
+pub(crate) fn may_match_child_unlifted(
+    parent: &str,
+    last: &str,
+    session_cwd: Option<&str>,
+    rows: Rows,
+) -> bool {
+    if !matches!(compiled(), Determination::Known(_)) {
+        return true;
+    }
+    let (spelled, _) = spellings(if parent.is_empty() { "/" } else { parent }, session_cwd);
+    let dots = dot_match::current() != DotMatch::Off;
+    TABLE
+        .iter()
+        .filter(|e| rows.has(e))
+        .any(|e| row_may_match_child(e, &spelled, last, dots))
+}
+
+/// True when a file directly in a directory spelled `spelled` whose name
+/// matches the final-component glob `last` COULD match a pattern of `e`
+/// (see [`may_match_child_unlifted`]); `dots` drops the dot-name rule of
+/// [`glob_names_may_intersect`]. A pattern that does not compile is `true`.
+fn row_may_match_child(e: &Entry, spelled: &[String], last: &str, dots: bool) -> bool {
+    let matcher = |g: &str| {
+        GlobBuilder::new(g)
+            .case_insensitive(true)
+            .literal_separator(true)
+            .build()
+            .map(|g| g.compile_matcher())
+    };
+    e.patterns.iter().any(|pat| {
+        let Some((pp, pl)) = pat.rsplit_once('/') else {
+            return true;
+        };
+        let pp = if pp.is_empty() { "/" } else { pp };
+        let (Ok(dir), Ok(whole)) = (matcher(pp), matcher(pat)) else {
+            return true;
+        };
+        let child = pl == "**" || glob_names_may_intersect(last, pl, dots);
+        spelled
+            .iter()
+            .any(|s| (child && dir.is_match(s)) || (pl == "**" && whole.is_match(s)))
+    })
+}
+
+/// The rows the final-component glob `path` (`<parent>/<last>`; a bare
+/// glob's parent is the cwd) may expand onto, each with `true` when it is
+/// reached only through a dot-name (the shell must have dot-matching on),
+/// and the absolute spelling of a would-be entry directly in `<parent>`,
+/// which the worktree lift is placed by, if any.
+fn glob_rows(path: &str, session_cwd: Option<&str>) -> (Vec<(usize, bool)>, Option<String>) {
+    let (parent, last) = match path.rsplit_once('/') {
+        Some(("", l)) => ("/", l),
+        Some((p, l)) => (p, l),
+        None => (".", path),
+    };
+    let (spelled, absolute) = spellings(parent, session_cwd);
+    let rows = TABLE
+        .iter()
+        .enumerate()
+        .filter_map(|(r, e)| {
+            if row_may_match_child(e, &spelled, last, false) {
+                Some((r, false))
+            } else {
+                row_may_match_child(e, &spelled, last, true).then_some((r, true))
+            }
+        })
+        .collect();
+    (rows, absolute.map(|a| format!("{a}/x")))
+}
+
+/// True when some file name may match both of the final-component globs `a`
+/// and `b` (`*`, `?`, `[…]`; case-insensitive). Exact when either has no
+/// metacharacter (the other is matched against it); otherwise only a
+/// literal prefix or suffix that cannot agree proves them disjoint, and
+/// anything else is `true` (fail-closed). A glob that does not compile is
+/// `true`.
+///
+/// `a` is the SHELL glob: the shell's filename expansion matches a name
+/// starting with `.` only through a literal leading `.` in the pattern (bash
+/// without `dotglob`, zsh without `GLOB_DOTS`), so an `a` that does not
+/// start with `.` cannot match a `b` that does (`*` vs `.ssh`) — applied
+/// only when the line being judged cannot switch dot-matching on
+/// ([`dot_match::current`] is `Off`; `On` and `Maybe` drop the rule).
+pub(crate) fn globs_may_intersect(a: &str, b: &str) -> bool {
+    glob_names_may_intersect(a, b, dot_match::current() != DotMatch::Off)
+}
+
+/// [`globs_may_intersect`] with the dot-name rule dropped when `dots`.
+fn glob_names_may_intersect(a: &str, b: &str, dots: bool) -> bool {
+    const META: [char; 3] = ['*', '?', '['];
+    let (a, b) = (a.to_lowercase(), b.to_lowercase());
+    if !dots && !a.starts_with('.') && b.starts_with('.') {
+        return false;
+    }
+    let matches = |glob: &str, name: &str| {
+        GlobBuilder::new(glob)
+            .literal_separator(true)
+            .build()
+            .map_or(true, |g| g.compile_matcher().is_match(name))
+    };
+    if !b.contains(META) {
+        return matches(&a, &b);
+    }
+    if !a.contains(META) {
+        return matches(&b, &a);
+    }
+    let prefix = |s: &str| s[..s.find(META).unwrap_or(s.len())].to_string();
+    let suffix = |s: &str| s[s.rfind(['*', '?', '[', ']']).map_or(0, |i| i + 1)..].to_string();
+    let (pa, pb, sa, sb) = (prefix(&a), prefix(&b), suffix(&a), suffix(&b));
+    (pa.starts_with(&pb) || pb.starts_with(&pa)) && (sa.ends_with(&sb) || sb.ends_with(&sa))
 }
 
 /// True when `abs` is strictly inside a linked worktree checkout.
@@ -426,6 +608,27 @@ pub(crate) fn verdict(script: &Script, scope: &SafeRoots) -> Decision {
     for c in &script.commands {
         targets.extend(write_targets(c, &mut undetermined));
     }
+    judge_targets(&targets, undetermined, scope)
+}
+
+/// The [`verdict`] of the legacy layer's redirect onto the literal-dir glob
+/// spelling `glob` (`>`: `append == false`; `>>`: `true`). The AST layer
+/// does not see such a redirect: its value is `Undetermined` and carries no
+/// word (see the module doc), so the legacy redirect rule asks here.
+pub(crate) fn redirect_glob_verdict(glob: &str, append: bool, scope: &SafeRoots) -> Decision {
+    let effect = if append {
+        Effect::Append
+    } else {
+        Effect::Truncate
+    };
+    judge_targets(
+        &[(effect, glob.to_string(), false, true)],
+        Vec::new(),
+        scope,
+    )
+}
+
+fn judge_targets(targets: &[Target], mut undetermined: Vec<String>, scope: &SafeRoots) -> Decision {
     if targets.is_empty() && undetermined.is_empty() {
         return Decision::Allow;
     }
@@ -439,32 +642,49 @@ pub(crate) fn verdict(script: &Script, scope: &SafeRoots) -> Decision {
         }
     };
     let mut reasons = Vec::new();
-    for (effect, path, exec_only) in &targets {
+    for &(effect, ref path, exec_only, glob) in targets {
         let (spelled, absolute) = spellings(path, scope.session_cwd());
-        let mut rows: Vec<usize> = spelled
+        let mut rows: Vec<(usize, bool)> = spelled
             .iter()
             .flat_map(|s| table.set.matches(s))
-            .map(|i| table.row_of[i])
+            .map(|i| (table.row_of[i], false))
             .collect();
+        let mut lift_at = absolute;
+        if glob {
+            let (g, at) = glob_rows(path, scope.session_cwd());
+            rows.extend(g);
+            lift_at = at;
+        }
         rows.sort_unstable();
-        rows.dedup();
-        for row in rows {
+        rows.dedup_by_key(|r| r.0);
+        for (row, via_dot) in rows {
             let e = &TABLE[row];
-            if !denies(e.effects, *effect) {
+            if !denies(e.effects, effect)
+                || (exec_only && e.exec_add_allowed)
+                || (e.lift_in_checkout && in_linked_checkout(scope, lift_at.as_deref()))
+            {
                 continue;
             }
-            if *exec_only && e.exec_add_allowed {
-                continue;
+            match (via_dot, dot_match::current()) {
+                (true, DotMatch::Off) => {}
+                (true, DotMatch::Maybe) => undetermined.push(format!(
+                    "{effect:?} target `{path}` is a glob that expands onto {} when the shell \
+                     matches dot-names, and this line runs text that may switch that on",
+                    e.what
+                )),
+                _ => reasons.push(format!(
+                    "{effect:?} of `{path}`{}: {} {DENY_TARGET} ({}); writing, moving, \
+                     replacing, chmod-ing (other than only adding exec bits to a Q4 gate \
+                     script), deleting or relinking it is refused, reading it is not",
+                    if glob {
+                        ", a glob that may expand onto it,"
+                    } else {
+                        ""
+                    },
+                    e.what,
+                    e.ruling
+                )),
             }
-            if e.lift_in_checkout && in_linked_checkout(scope, absolute.as_deref()) {
-                continue;
-            }
-            reasons.push(format!(
-                "{effect:?} of `{path}`: {} {DENY_TARGET} ({}); writing, moving, replacing, \
-                 chmod-ing (other than only adding exec bits to a Q4 gate script), deleting \
-                 or relinking it is refused, reading it is not",
-                e.what, e.ruling
-            ));
         }
     }
     if !reasons.is_empty() {

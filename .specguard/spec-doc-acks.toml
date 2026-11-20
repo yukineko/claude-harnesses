@@ -315,3 +315,7 @@ reason = "Split out of payload.rs for the file-growth cap (backlog 32b414d2, f43
 [[ack]]
 path = "crates/blastguard/src/detect/git/other_worktree.rs"
 reason = "Split out of detect/git.rs for the file-growth cap (backlog 606a93ab): the own/other linked-worktree discard decision used by git.rs discard arms. Its behaviour is git.rs worktree discard handling, described in docs/specs/blastguard.md and SUBSET.md Table C OtherWorktree GitDiscard; the submodule describes no separate behaviour."
+
+[[ack]]
+path = "crates/blastguard/src/detect/ast/eval/function.rs"
+reason = "Child module of detect/ast/eval.rs (17bb391cc): function definitions evaluated only under evaluate_with_function_definitions, reading the evaluator state directly. Its behaviour is part of eval.rs, which is already bound to docs/specs/blastguard.md; the submodule describes no separate behaviour."

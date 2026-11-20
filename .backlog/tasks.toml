@@ -3073,6 +3073,8 @@ notes = "Observed 2026-11-21 at main feff2e612 (also at tC 56394216c): FAIL test
 created_at = 1795197851
 updated_at = 1795197851
 weight = 0.0
+issue_number = 1909
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1909"
 rev = 0
 
 [task.repro]

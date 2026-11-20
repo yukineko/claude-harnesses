@@ -62,7 +62,10 @@ pub(super) fn parse_argv(s: &str) -> Option<Vec<String>> {
 /// remainder is ignored; a quoted word is an explicit argument; any other bare
 /// unquoted word could be a test filter, so `None` is returned (no guessed
 /// wider or narrower command). Option values keep the `[A-Za-z0-9_-]`
-/// restriction. Prose `cargo test` with no options yields `[cargo, test]`. See
+/// restriction. Prose `cargo test` with no options yields `[cargo, test]` only
+/// when nothing or a recognised assertion follows (`cargo test exits 0`); a
+/// punctuated runner word or any other bare word (`Run cargo test.`,
+/// `cargo test and lint`) yields `None`, like every unaccounted word. See
 /// `prose_cargo_test_argv` for the full grammar.
 pub fn mechanical_cmd(
     done_criteria: &str,

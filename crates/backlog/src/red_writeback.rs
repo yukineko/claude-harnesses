@@ -29,7 +29,13 @@
 //! - Every other failure to write back — a `cargo test` repro with no
 //!   `--test`, several `--test`s, no/several matching files, an unreadable or
 //!   unwritable file, no id-less `#[ignore = "RED` attribute, a refused
-//!   selection above — is NOT success: an `error:` line on stderr and exit 1.
+//!   selection above, a `cargo test` option whose arity cannot be determined
+//!   (a flag in neither the value nor the no-value table for its level, without
+//!   `=`, see [`CARGO_VALUE_FLAGS`] and [`LIBTEST_VALUE_FLAGS`]; a value flag
+//!   with no value word) — is NOT success: an `error:` line on stderr and exit 1.
+//!   Determined forms: `--flag=value` (inline value); an optional-value flag
+//!   (`--timings`, libtest `--report-time`/`--ensure-time`) bare (no value) or
+//!   `=` (inline value); combined/repeated known short no-value flags (`-vv`).
 //!   The row is already filed and is NOT rolled back; the message says so, so
 //!   the caller does not re-add.
 //! - Idempotent: when the target (the filter-selected attribute, or with no
@@ -92,7 +98,9 @@ fn write_back(repro: &str, id: &str) -> Result<Done, String> {
             cmd.runner.label()
         )));
     }
-    let args = CargoArgs::parse(&cmd.argv);
+    // An undetermined option is an error, never "no filter": the write-back is refused.
+    let args = CargoArgs::parse(&cmd.argv)
+        .map_err(|e| format!("the repro {repro:?}: {e}; no RED test was tagged"))?;
     let name = match args.tests.as_slice() {
         [one] => one.clone(),
         [] => {
@@ -130,56 +138,234 @@ struct CargoArgs {
     filters: Vec<String>,
 }
 
-/// Options of `cargo test` / libtest that take a separate value word.
-const VALUE_FLAGS: &[&str] = &[
+/// `cargo test` options (before `--`) that take a separate value word, from
+/// `cargo help test` (cargo 1.97.1) plus `--lockfile-path` (a real cargo CLI
+/// option, hidden from that help, see the cargo CHANGELOG).
+const CARGO_VALUE_FLAGS: &[&str] = &[
     "-p",
     "--package",
+    "--exclude",
     "--test",
     "--bin",
     "--example",
     "--bench",
-    "--features",
     "-F",
+    "--features",
     "--target",
-    "--target-dir",
-    "--manifest-path",
-    "-j",
-    "--jobs",
     "--profile",
+    "--target-dir",
     "--color",
     "--message-format",
-    "--exclude",
-    "-Z",
+    "--manifest-path",
     "--config",
-    "--skip",
-    "--test-threads",
-    "--format",
-    "--logfile",
-    "--report-time",
-    "--shuffle-seed",
+    "-C",
+    "-Z",
+    "-j",
+    "--jobs",
+    "--lockfile-path",
 ];
 
+/// `cargo test` options (before `--`) whose value is optional and given only in
+/// the `=` form (`--timings` / `--timings=html`). The bare form has no value.
+const CARGO_OPTIONAL_VALUE_FLAGS: &[&str] = &["--timings"];
+
+/// `cargo test` options (before `--`) that take no value.
+const CARGO_NO_VALUE_FLAGS: &[&str] = &[
+    "--no-run",
+    "--no-fail-fast",
+    "--workspace",
+    "--all",
+    "--lib",
+    "--bins",
+    "--tests",
+    "--benches",
+    "--examples",
+    "--all-targets",
+    "--doc",
+    "--all-features",
+    "--no-default-features",
+    "-r",
+    "--release",
+    "-v",
+    "--verbose",
+    "-q",
+    "--quiet",
+    "--ignore-rust-version",
+    "--locked",
+    "--offline",
+    "--frozen",
+    "--keep-going",
+    "--future-incompat-report",
+    "-h",
+    "--help",
+];
+
+/// libtest options (after `--`) that take a separate value word.
+const LIBTEST_VALUE_FLAGS: &[&str] = &[
+    "--test-threads",
+    "--skip",
+    "--color",
+    "--format",
+    "--logfile",
+    "--shuffle-seed",
+    "-Z",
+];
+
+/// libtest options (after `--`) whose value is optional and given only in the
+/// `=` form (`--report-time` / `--report-time=TIMES`). The bare form has no value.
+const LIBTEST_OPTIONAL_VALUE_FLAGS: &[&str] = &["--report-time", "--ensure-time"];
+
+/// libtest options (after `--`) that take no value.
+const LIBTEST_NO_VALUE_FLAGS: &[&str] = &[
+    "--include-ignored",
+    "--ignored",
+    "--exact",
+    "--exclude-should-panic",
+    "--nocapture",
+    "--show-output",
+    "--list",
+    "--force-run-in-process",
+    "--shuffle",
+    "--test",
+    "--bench",
+    "-q",
+    "--quiet",
+    "-h",
+    "--help",
+];
+
+/// Single-letter cargo options (before `--`) that take no value; combinable and
+/// repeatable (`-v`, `-vv`, `-rv`).
+const CARGO_SHORT_NO_VALUE: &[char] = &['v', 'q', 'r', 'h'];
+
+/// Single-letter libtest options (after `--`) that take no value; combinable
+/// and repeatable (`-q`, `-qq`).
+const LIBTEST_SHORT_NO_VALUE: &[char] = &['q', 'h'];
+
+/// How many value words one flag word consumes, as far as the word itself
+/// shows it.
+#[derive(Debug, PartialEq, Eq)]
+enum Arity {
+    /// No value; the flag stands alone.
+    NoValue,
+    /// The value is the next word.
+    NextWord,
+    /// The value is inside this word (`--flag=value`, `-Zvalue`).
+    Inline(String),
+}
+
+/// The arity of one option word, or an error when it cannot be determined.
+/// A flag not in the table for its level (cargo before `--`, libtest after) is
+/// undetermined: its next word might be a value or a test-name filter, and
+/// guessing either way can tag the wrong test.
+fn flag_arity(w: &str, libtest: bool) -> Result<(String, Arity), String> {
+    let (value_flags, optional_flags, no_value_flags, short_no_value) = if libtest {
+        (
+            LIBTEST_VALUE_FLAGS,
+            LIBTEST_OPTIONAL_VALUE_FLAGS,
+            LIBTEST_NO_VALUE_FLAGS,
+            LIBTEST_SHORT_NO_VALUE,
+        )
+    } else {
+        (
+            CARGO_VALUE_FLAGS,
+            CARGO_OPTIONAL_VALUE_FLAGS,
+            CARGO_NO_VALUE_FLAGS,
+            CARGO_SHORT_NO_VALUE,
+        )
+    };
+    let level = if libtest {
+        "libtest (after `--`)"
+    } else {
+        "cargo test (before `--`)"
+    };
+    if w.starts_with("--") {
+        if let Some((flag, value)) = w.split_once('=') {
+            // `--flag=value` has a determined arity: the value is inline. Only a
+            // flag that never takes a value is refused here.
+            if no_value_flags.contains(&flag) {
+                return Err(format!("`{flag}` takes no value, but `{w}` gives one"));
+            }
+            return Ok((flag.to_string(), Arity::Inline(value.to_string())));
+        }
+        if value_flags.contains(&w) {
+            return Ok((w.to_string(), Arity::NextWord));
+        }
+        if no_value_flags.contains(&w) || optional_flags.contains(&w) {
+            return Ok((w.to_string(), Arity::NoValue));
+        }
+        return Err(format!(
+            "`{w}` is not a known {level} option, so whether its next word is a value or a test \
+             filter cannot be determined"
+        ));
+    }
+    // Short options: `-p`, `-pVALUE`, `-Z`, `-Zvalue`. `-x=` is not modelled.
+    if w.contains('=') {
+        return Err(format!("short option `{w}` with `=` cannot be determined"));
+    }
+    // A combination of known no-value short flags (`-v`, `-vv`, `-qv`) is a
+    // repeat/combination of flags that never take a value.
+    if w.len() > 1 && w[1..].chars().all(|c| short_no_value.contains(&c)) {
+        return Ok((w.to_string(), Arity::NoValue));
+    }
+    // `w.get(..2)` (not `w[..2]`): a non-ASCII word must not panic on a char boundary.
+    if let Some(short) = w
+        .get(..2)
+        .filter(|p| w.len() > 2 && value_flags.contains(p))
+    {
+        return Ok((short.to_string(), Arity::Inline(w[2..].to_string())));
+    }
+    if value_flags.contains(&w) {
+        return Ok((w.to_string(), Arity::NextWord));
+    }
+    if no_value_flags.contains(&w) {
+        return Ok((w.to_string(), Arity::NoValue));
+    }
+    Err(format!(
+        "`{w}` is not a known {level} option, so whether its next word is a value or a test \
+         filter cannot be determined"
+    ))
+}
+
 impl CargoArgs {
-    fn parse(argv: &[String]) -> CargoArgs {
+    /// Parse the `cargo test` argv. An option whose arity cannot be determined
+    /// (an unknown flag, a value flag with no value word) is an `Err`: a caller
+    /// must refuse the write-back, never read it as "no filter".
+    fn parse(argv: &[String]) -> Result<CargoArgs, String> {
         let mut out = CargoArgs::default();
         let mut words = argv.iter().skip(2); // `cargo test`
+        let mut libtest = false;
         while let Some(w) = words.next() {
-            let (flag, inline) = match w.split_once('=') {
-                Some((f, v)) if f.starts_with('-') => (f, Some(v.to_string())),
-                _ => (w.as_str(), None),
-            };
-            if VALUE_FLAGS.contains(&flag) {
-                let value = inline.or_else(|| words.next().cloned());
-                match (flag, value) {
-                    ("--test", Some(v)) => out.tests.push(v),
-                    ("-p" | "--package", Some(v)) => out.package = Some(v),
-                    _ => {}
+            if w == "--" {
+                if libtest {
+                    return Err("a second `--` in the repro's argv cannot be determined".into());
                 }
-            } else if !w.starts_with('-') {
+                libtest = true;
+                continue;
+            }
+            if !w.starts_with('-') {
                 out.filters.push(w.clone());
+                continue;
+            }
+            let (flag, arity) = flag_arity(w, libtest)?;
+            let value = match arity {
+                Arity::NoValue => continue,
+                Arity::Inline(v) => v,
+                Arity::NextWord => match words.next() {
+                    Some(v) if v != "--" => v.clone(),
+                    _ => return Err(format!("`{flag}` is given no value word")),
+                },
+            };
+            if libtest {
+                continue; // libtest values are never a target or a package
+            }
+            match flag.as_str() {
+                "--test" => out.tests.push(value),
+                "-p" | "--package" => out.package = Some(value),
+                _ => {}
             }
         }
-        out
+        Ok(out)
     }
 }
 

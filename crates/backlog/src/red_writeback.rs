@@ -30,9 +30,12 @@
 //!   `--test`, several `--test`s, no/several matching files, an unreadable or
 //!   unwritable file, no id-less `#[ignore = "RED` attribute, a refused
 //!   selection above, a `cargo test` option whose arity cannot be determined
-//!   (an unknown flag not in the value/no-value tables, see [`CARGO_VALUE_FLAGS`]
-//!   and [`LIBTEST_VALUE_FLAGS`]; a value flag with no value word) — is NOT
-//!   success: an `error:` line on stderr and exit 1.
+//!   (a flag in neither the value nor the no-value table for its level, without
+//!   `=`, see [`CARGO_VALUE_FLAGS`] and [`LIBTEST_VALUE_FLAGS`]; a value flag
+//!   with no value word) — is NOT success: an `error:` line on stderr and exit 1.
+//!   Determined forms: `--flag=value` (inline value); an optional-value flag
+//!   (`--timings`, libtest `--report-time`/`--ensure-time`) bare (no value) or
+//!   `=` (inline value); combined/repeated known short no-value flags (`-vv`).
 //!   The row is already filed and is NOT rolled back; the message says so, so
 //!   the caller does not re-add.
 //! - Idempotent: when the target (the filter-selected attribute, or with no
@@ -162,8 +165,11 @@ const CARGO_VALUE_FLAGS: &[&str] = &[
     "--lockfile-path",
 ];
 
-/// `cargo test` options (before `--`) that take no value. `--timings` takes an
-/// optional value only in the `=` form, so its bare form has no value.
+/// `cargo test` options (before `--`) whose value is optional and given only in
+/// the `=` form (`--timings` / `--timings=html`). The bare form has no value.
+const CARGO_OPTIONAL_VALUE_FLAGS: &[&str] = &["--timings"];
+
+/// `cargo test` options (before `--`) that take no value.
 const CARGO_NO_VALUE_FLAGS: &[&str] = &[
     "--no-run",
     "--no-fail-fast",
@@ -180,7 +186,6 @@ const CARGO_NO_VALUE_FLAGS: &[&str] = &[
     "--no-default-features",
     "-r",
     "--release",
-    "--timings",
     "-v",
     "--verbose",
     "-q",
@@ -206,8 +211,11 @@ const LIBTEST_VALUE_FLAGS: &[&str] = &[
     "-Z",
 ];
 
-/// libtest options (after `--`) that take no value. `--report-time` and
-/// `--ensure-time` take an optional value only in the `=` form.
+/// libtest options (after `--`) whose value is optional and given only in the
+/// `=` form (`--report-time` / `--report-time=TIMES`). The bare form has no value.
+const LIBTEST_OPTIONAL_VALUE_FLAGS: &[&str] = &["--report-time", "--ensure-time"];
+
+/// libtest options (after `--`) that take no value.
 const LIBTEST_NO_VALUE_FLAGS: &[&str] = &[
     "--include-ignored",
     "--ignored",
@@ -218,8 +226,6 @@ const LIBTEST_NO_VALUE_FLAGS: &[&str] = &[
     "--list",
     "--force-run-in-process",
     "--shuffle",
-    "--report-time",
-    "--ensure-time",
     "--test",
     "--bench",
     "-q",
@@ -227,6 +233,14 @@ const LIBTEST_NO_VALUE_FLAGS: &[&str] = &[
     "-h",
     "--help",
 ];
+
+/// Single-letter cargo options (before `--`) that take no value; combinable and
+/// repeatable (`-v`, `-vv`, `-rv`).
+const CARGO_SHORT_NO_VALUE: &[char] = &['v', 'q', 'r', 'h'];
+
+/// Single-letter libtest options (after `--`) that take no value; combinable
+/// and repeatable (`-q`, `-qq`).
+const LIBTEST_SHORT_NO_VALUE: &[char] = &['q', 'h'];
 
 /// How many value words one flag word consumes, as far as the word itself
 /// shows it.
@@ -245,10 +259,20 @@ enum Arity {
 /// undetermined: its next word might be a value or a test-name filter, and
 /// guessing either way can tag the wrong test.
 fn flag_arity(w: &str, libtest: bool) -> Result<(String, Arity), String> {
-    let (value_flags, no_value_flags) = if libtest {
-        (LIBTEST_VALUE_FLAGS, LIBTEST_NO_VALUE_FLAGS)
+    let (value_flags, optional_flags, no_value_flags, short_no_value) = if libtest {
+        (
+            LIBTEST_VALUE_FLAGS,
+            LIBTEST_OPTIONAL_VALUE_FLAGS,
+            LIBTEST_NO_VALUE_FLAGS,
+            LIBTEST_SHORT_NO_VALUE,
+        )
     } else {
-        (CARGO_VALUE_FLAGS, CARGO_NO_VALUE_FLAGS)
+        (
+            CARGO_VALUE_FLAGS,
+            CARGO_OPTIONAL_VALUE_FLAGS,
+            CARGO_NO_VALUE_FLAGS,
+            CARGO_SHORT_NO_VALUE,
+        )
     };
     let level = if libtest {
         "libtest (after `--`)"
@@ -257,7 +281,8 @@ fn flag_arity(w: &str, libtest: bool) -> Result<(String, Arity), String> {
     };
     if w.starts_with("--") {
         if let Some((flag, value)) = w.split_once('=') {
-            // `--flag=value` has a determined arity: the value is inline.
+            // `--flag=value` has a determined arity: the value is inline. Only a
+            // flag that never takes a value is refused here.
             if no_value_flags.contains(&flag) {
                 return Err(format!("`{flag}` takes no value, but `{w}` gives one"));
             }
@@ -266,7 +291,7 @@ fn flag_arity(w: &str, libtest: bool) -> Result<(String, Arity), String> {
         if value_flags.contains(&w) {
             return Ok((w.to_string(), Arity::NextWord));
         }
-        if no_value_flags.contains(&w) {
+        if no_value_flags.contains(&w) || optional_flags.contains(&w) {
             return Ok((w.to_string(), Arity::NoValue));
         }
         return Err(format!(
@@ -277,6 +302,11 @@ fn flag_arity(w: &str, libtest: bool) -> Result<(String, Arity), String> {
     // Short options: `-p`, `-pVALUE`, `-Z`, `-Zvalue`. `-x=` is not modelled.
     if w.contains('=') {
         return Err(format!("short option `{w}` with `=` cannot be determined"));
+    }
+    // A combination of known no-value short flags (`-v`, `-vv`, `-qv`) is a
+    // repeat/combination of flags that never take a value.
+    if w.len() > 1 && w[1..].chars().all(|c| short_no_value.contains(&c)) {
+        return Ok((w.to_string(), Arity::NoValue));
     }
     // `w.get(..2)` (not `w[..2]`): a non-ASCII word must not panic on a char boundary.
     if let Some(short) = w

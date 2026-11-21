@@ -317,9 +317,9 @@ command really reaches"
 /// whole line per segment made long `;`-chains quadratic (backlog 3c1a3f35:
 /// the 300-unit budget input spent ~80% of its time here).
 pub(super) fn line_names_relink_verb(line: &str) -> bool {
-    // Also a verb glued to substitution / escape punctuation (`"$(ln`,
-    // `!ln`): nested.rs reads those commands (backlog 00c6c2b8).
-    plain_words(line).into_iter().any(is_relink_word) || nested::names_relink_loosely(line)
+    // Also a line whose substitutions / escapes may run a relinker:
+    // nested.rs reads those commands (backlog 00c6c2b8).
+    plain_words(line).into_iter().any(is_relink_word) || nested::may_run_nested(line)
 }
 
 /// The physical path `word` (an operand of segment `seg_idx`, run in `cwd`)

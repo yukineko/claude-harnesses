@@ -821,9 +821,12 @@ forge・condukt のスケジューラが再利用）。
   （escape 本文の中の escape も深さ 4 まで）。`echo "$(ln -s /etc/x d)"; echo y > d/hosts` は
   `/private/etc/x/hosts` の system directory Deny。segment 自身の word scan がこれらの語だけを見て
   model しない relink 語扱いしていた場合（`` echo `ln …` ``・`bash -c 'ln …'`）はその扱いを外す。
-  判定不能 — AST が segment を列挙できず relink 語が substitution/escape の中にしか無い・escape 本文が
-  決まらない（`bash -c "$X"`、wrapper 越しの interpreter）・`:!` 以外で relink 語を含む ex command・
-  本文に `%`/`#`/`!` を含む `:!`・深さ超過 — は model しない relinker として扱う（上の Ask 条件）。
+  どの verb を走らせるかは AST の値だけで読む（`l\n` は `ln`）。文面での前段判定は「substitution 開始記号も
+  escape を起こしうる語（shell・vi 系・wrapper・展開を含む語）も無い segment は AST を作らない」だけ。
+  判定不能 — substitution か escape を起こしうる語を含む segment を AST が列挙できない・escape 本文が
+  決まらない（`bash -c "$X"`、command word が展開、wrapper 越しの interpreter）・`:!` でも既知の無害な
+  ex command（`q`/`wq`/`set …`/行番号/検索 等）でもない ex command・本文に `%`/`#`/`!` を含む `:!`・
+  深さ超過 — は model しない relinker として扱う（上の Ask 条件）。
   **RESIDUAL**: relink 語も target も文面に現れない
   command による relink（archive 展開・build script・tracked symlink の `git checkout`）は model しない。
 - **同じ行で relink された command operand も実際の着地点で判定する（tests/relink_shapes_20261111.rs の

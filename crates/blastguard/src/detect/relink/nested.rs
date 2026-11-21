@@ -11,15 +11,21 @@
 //! modelled exactly like a top-level one. An escape body is parsed and read
 //! the same way, recursively ([`MAX_DEPTH`]).
 //!
-//! Undetermined (CLAUDE.md §3): when the AST cannot list the segment's
-//! commands, an escape's body cannot be determined (`bash -c "$X"`, a vim ex
-//! command that is not a plain `:!` escape but names a relinking verb, a
-//! wrapper that may run an interpreter), or the depth cap is hit, the segment
+//! Which verbs a command names is read only from the AST's values (`l\n`
+//! is `ln`), never from the text: the one text test, [`may_run_nested`],
+//! only skips segments that hold no substitution and no escape-capable word.
+//!
+//! Undetermined (CLAUDE.md §3): when the AST cannot list the commands of a
+//! segment that holds a substitution or an escape-capable word, an escape's
+//! body cannot be determined (`bash -c "$X"`, an undetermined command word, a
+//! vim ex command that is neither a plain `:!` escape nor a known inert
+//! command, a wrapper that may run an interpreter), or the depth cap is hit,
+//! the segment
 //! is reported [`Nested::undetermined`]; the caller treats it as an
 //! unmodelled relinker (an `Ask`), never as relinking nothing.
 
 use super::super::ast::{self, Analysis, CwdCandidates, ProgramSource, SimpleCommand, Value};
-use super::super::CwdState;
+use super::super::{normalized_command, CwdState};
 use super::{is_relink_word, plain_words};
 
 /// Escape bodies inside escape bodies are followed this deep; deeper is
@@ -54,13 +60,35 @@ pub(super) struct Nested {
     pub(super) undetermined: bool,
 }
 
-/// True when `text` names a relinking verb anywhere, also glued to shell
-/// punctuation (`"$(ln`, `` `ln ``, `!ln`). A cheap pre-filter: no AST is
-/// built for a segment that names none.
-pub(super) fn names_relink_loosely(text: &str) -> bool {
-    text.split(|c: char| c.is_whitespace() || "$()`!'\";|&<>{}=\\".contains(c))
-        .any(is_relink_word)
+/// Whether `text` may run a command other than its segments' own command
+/// words: it holds a substitution opener (`$(`, backquote, `<(`, `>(`), or
+/// a word that may name an escape-capable program (a shell, a vi-family
+/// editor, a wrapper, or a word with an expansion that may name any of
+/// them). Every command this module lists needs one of these in the text,
+/// so a `false` here means [`collect`] would find nothing: it is a sound
+/// over-approximation that only saves building an AST, never a reading of
+/// which verbs the text names (the AST reads those, `l\n` included).
+pub(super) fn may_run_nested(text: &str) -> bool {
+    has_subst(text) || plain_words(text).into_iter().any(escape_capable_word)
 }
+
+/// A word that may be the command word of an escape [`escapes`] reads, or
+/// of a wrapper that may run one.
+fn escape_capable_word(word: &str) -> bool {
+    if word.contains('$') {
+        return true;
+    }
+    let name = normalized_command(word);
+    is_shell(&name)
+        || is_vi(&name)
+        || WRAPPERS.split_whitespace().any(|w| w == name)
+        || is_relink_word(word)
+}
+
+/// Commands that run another command named in their operands (as
+/// `ast::prog::WRAPPERS`).
+const WRAPPERS: &str = "env sudo doas su xargs exec command builtin nohup nice ionice \
+    timeout time stdbuf chrt taskset setsid caffeinate arch unbuffer flock";
 
 /// The commands segment `command` (run in `cwd`) runs before its own
 /// command word does. `with_escapes`: also read the escape body of the
@@ -68,16 +96,19 @@ pub(super) fn names_relink_loosely(text: &str) -> bool {
 /// whose redirections are opened before its command runs).
 pub(super) fn collect(command: &str, cwd: &CwdState, with_escapes: bool) -> Nested {
     let mut out = Nested::default();
-    if !names_relink_loosely(command) {
+    if !may_run_nested(command) {
         return out;
     }
     let script = match ast::analyze(command) {
         Analysis::Known(script) => script,
         Analysis::Undetermined(_) => {
-            // The word scan already reads every relink verb it can see as a
-            // plain word; only one hidden from it (inside a substitution or
-            // an escape) is undetermined here.
-            out.undetermined = !plain_words(command).into_iter().any(is_relink_word);
+            // The commands of its substitutions / escapes cannot be listed.
+            // A segment with neither (only a plain relink word, e.g. a loop
+            // fragment `do ln -s … d`) is read by the word scan alone.
+            out.undetermined = has_subst(command)
+                || plain_words(command)
+                    .into_iter()
+                    .any(|w| escape_capable_word(w) && !is_relink_word(w));
             return out;
         }
     };
@@ -289,13 +320,56 @@ fn ex_command(arg: &str) -> Ex {
         }
         return Ex::Shell(body.to_string());
     }
-    // Any other ex command that names a relinking verb (`:r !ln`, `:call
-    // system('ln …')`, a `|` chain) is not read here.
-    if names_relink_loosely(s) {
-        Ex::Undetermined
-    } else {
+    // Only ex commands known to run nothing are inert; any other (`:r !ln`,
+    // `:call system(…)`, `:normal`, a `|` chain, …) is not read here.
+    if ex_known_inert(s) {
         Ex::Inert
+    } else {
+        Ex::Undetermined
     }
+}
+
+/// An ex command known to run no shell command: quitting / writing without
+/// a `!` filter, an option or display setting, a line number or a plain
+/// search. Anything else is undetermined.
+fn ex_known_inert(s: &str) -> bool {
+    let s = s.trim();
+    if s.contains(['|', '!', '`']) {
+        return false;
+    }
+    if s.is_empty() || s.chars().all(|c| c.is_ascii_digit()) || s.starts_with(['/', '?']) {
+        return true;
+    }
+    let (word, rest) = s.split_once(char::is_whitespace).unwrap_or((s, ""));
+    let no_arg = [
+        "q",
+        "qa",
+        "qall",
+        "quit",
+        "wq",
+        "wqa",
+        "wqall",
+        "x",
+        "xa",
+        "xit",
+        "w",
+        "write",
+        "noh",
+        "nohlsearch",
+    ];
+    let with_arg = [
+        "set",
+        "se",
+        "setl",
+        "setlocal",
+        "syntax",
+        "syn",
+        "filetype",
+        "colorscheme",
+        "colo",
+    ];
+    (no_arg.contains(&word) && rest.trim().is_empty())
+        || (with_arg.contains(&word) && !rest.contains(['=', '&', '$']))
 }
 
 /// Add the commands of `c`'s escape body (run in `seg`'s cwd at `depth`).
@@ -339,9 +413,6 @@ fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, out: &mut Nested) {
 
 /// Every command of the shell program `body`, run in `cwd`.
 fn body_commands(body: &str, cwd: &CwdState, depth: usize, out: &mut Nested) {
-    if !names_relink_loosely(body) {
-        return;
-    }
     if depth >= MAX_DEPTH {
         out.undetermined = true;
         return;

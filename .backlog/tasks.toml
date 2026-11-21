@@ -1584,33 +1584,6 @@ RED B: the commit stages a foo source change WITHOUT a bump (the bump is unstage
     OK: no changed plugin left un-bumped vs HEAD (1 plugins scanned, plus the shared crate(s) harness-core, riskgrade, progeffect)"""
 
 [[task]]
-id = "e1e8c632"
-title = "flow stop-gate: counts a task claimed by another live session's condukt run as this driver's remaining work, so the stop is blocked forever"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-21 (main 11c04144d, session eff985d3, a live registered /flow driver): backlog next --claim handed task 1564a3fc (hashkey c7a1bd84c0391373); condukt state is-claimed --hashkey c7a1bd84c0391373 exit 0 {"claimed": true, "holder_run": "flow-62e92d16-0aef-402b-ad58-39425ad07ded"}, so per SKILL Step 3 (a) claim-skip gate the session skipped it and ran backlog unclaim 1564a3fc. Afterwards every Stop was blocked verbatim: 'flow stop-gate: this session is a live /flow driver for /Users/yuki/src/.harness-worktrees/session-eff985d3 and work remains: pending backlog task 1564a3fc "rollout: ..." ... this stop is BLOCKED'. The loop can never satisfy it. Code: crates/flow/src/decide.rs decide_project treats any backlog next result as work_known (pending.is_some()); crates/flow/src/probes.rs never calls condukt state is-claimed (stub calls.log shows only driver status / next / state claims / circuit check). RED (commit e7940ca74, crates/flow/tests/backlog_20261121_stop_gate_counts_other_session_claimed_task.rs) fails with stdout {"decision":"block","reason":"... work remains: pending backlog task 1564a3fc ..."}; control control_stop_is_blocked_when_pending_task_is_unclaimed (is-claimed exit 1 "claimed": false) passes (still blocks). Readings: (a) defect: the work-remains probe should apply the same condukt is-claimed filter as the skill's claim-skip gate (an item claimed by another live session's run is not this session's work); (b) intended: the hook deliberately counts any pending backlog row fail-closed (decide.rs ruling 2026-11-21: only the circuit breaker stops a driver with work remaining; SKILL Stop-hook section says it blocks while backlog next returns work) -- then the skill (skip the item) and the hook (block on it) contradict each other and a human must rule which side changes. Telling apart: SKILL Stop-hook section literally keys on 'backlog next returns work' and does not mention claim-skip; neither doc addresses another-session-claimed items, so the contradiction is real under both readings. DOES NOT PROVE: which hashkey a fix must query (stub answers every is-claimed call alike); behaviour with multiple pending tasks of which only some are claimed elsewhere (backlog next returns only the first)."""
-created_at = 1795265054
-updated_at = 1795265054
-weight = 0.0
-issue_number = 1956
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1956"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p flow --test backlog_20261121_stop_gate_counts_other_session_claimed_task -- --ignored stop_is_allowed_when_only_pending_task_is_claimed_by_another_session"
-rev = "e7940ca74f69434c5da41194c7c6e61bcd9aec24"
-observed_at = 1795265054
-detail = """
-exit 101: /red-stopgate-claimed/crates/flow)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
-     Running tests/backlog_20261121_stop_gate_counts_other_session_claimed_task.rs (target/debug/deps/backlog_20261121_stop_gate_counts_other_session_claimed_task-4b80e990b8d0e9ee)
-error: test failed, to rerun pass `-p flow --test backlog_20261121_stop_gate_counts_other_session_claimed_task`"""
-
-[[task]]
 id = "c512596e"
 title = "blastguard FP: `local P=...` inside a function body is Deny while the literal function is Allow (bash and zsh both bind)"
 project = "/Users/yuki/src/harness"

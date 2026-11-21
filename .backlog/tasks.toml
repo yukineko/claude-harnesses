@@ -2387,6 +2387,8 @@ notes = "Refiled 2026-11-21: f1b5acd3/b07f2020 were closed done by d44c49876 but
 created_at = 1795223225
 updated_at = 1795223225
 weight = 0.0
+issue_number = 1935
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1935"
 rev = 0
 
 [task.repro]

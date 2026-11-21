@@ -218,7 +218,10 @@ seed_sandbox
 # the real source (version, harness-core version, HEAD, host suffix) so it cannot
 # drift: the files below are exactly what rebuild-plugins.sh + an enabled plugin
 # would leave behind. copy_plugin_dir protects a pre-existing bin/<stem>-<suffix>
-# and .deployed-from.json across the copy.
+# and .deployed-from.json across the copy. Because the version dir is pre-created
+# here, plan() would set needs_copy=0 (copy only when the target dir is absent),
+# leaving the deployed tree unmirrored; --force on the case-C rollout makes it
+# recopy the source over the staged dir (needs_copy = force or no target dir).
 case "$(uname -s | tr '[:upper:]' '[:lower:]')" in
   darwin) HOST_OS=darwin ;; linux) HOST_OS=linux ;; *) HOST_OS=unknown ;;
 esac
@@ -246,7 +249,7 @@ OUT_C="$(
   GATE_FAIL_FROM_CALL=0 \
   OVERWATCH_BIN="$STUB" CLAUDE_PLUGIN_CACHE="$TEST_CACHE" CLAUDE_PLUGIN_REGISTRY="$TEST_REGISTRY" \
   HOME="$TEST_HOME" XDG_STATE_HOME="$TEST_HOME/.local/state" OVERWATCH_CANARY_SINCE=1 \
-  bash "$SCRIPT" --plugin "$PLUGIN_A" \
+  bash "$SCRIPT" --plugin "$PLUGIN_A" --force \
     --canary --canary-stage-size 1 --canary-threshold 0 --no-rebuild --no-sync 2>&1
   echo "RC=$?"
 )"

@@ -433,7 +433,10 @@ fn python_program(
             let (body, site) = match src {
                 StdinSource::Literal(body) => (body.clone(), heredoc_site(cmd, body)),
                 _ => (
-                    b5::literal_delivered_program(text, commands, idx, cmd, &source, k)?,
+                    // `false`: S5 has no top-level line to check PATH and
+                    // functions against, so a bare wrapper keeps its
+                    // restrictive reading here (the pre-existing one).
+                    b5::literal_delivered_program(text, commands, idx, cmd, &source, k, false)?,
                     None,
                 ),
             };

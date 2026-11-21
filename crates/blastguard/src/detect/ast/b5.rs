@@ -34,7 +34,11 @@
 //!   commands are all `echo` / `printf` literal producers (user ruling
 //!   2026-11-18 (a)); a BARE `env CMD` / `command CMD` (no option, no
 //!   `NAME=V`) is read as `CMD`, so `env echo "ls" | sh` is the program `ls`
-//!   too. A shell body is analysed by this layer recursively;
+//!   too, but only when the top-level line resolves the wrapper as written
+//!   ([`bare_wrappers_resolve_as_written`]: no function named `env` /
+//!   `command` / `echo` / `printf`, no `PATH` set anywhere on the line,
+//!   bodies included through [`Probes::wrappers_bare`]). A shell body is
+//!   analysed by this layer recursively;
 //!   a python / perl / ruby / node body gives no B.5 opinion (the legacy
 //!   program-text reading judges it). Except a literal stdin piped in by a
 //!   compound stage — a brace group of `echo` / `printf` members, wherever
@@ -136,8 +140,8 @@
 use std::cell::Cell;
 
 use super::{
-    analyze, program_source, Analysis, Context, ProgramSource, RedirOp, RedirTarget, SimpleCommand,
-    StdinSource, Value, Word,
+    analyze, analyze_with_function_definitions, program_source, Analysis, Context, ProgramSource,
+    RedirOp, RedirTarget, SimpleCommand, StdinSource, Value, Word,
 };
 use crate::detect::VerdictAcc;
 use crate::model::Decision;
@@ -181,6 +185,30 @@ pub(crate) struct Probes<'a> {
     /// The session's location model: the hook's cwd and the path resolver
     /// the tracked-and-unmodified probe ([`git_tracked_clean`]) needs.
     pub scope: &'a crate::scope::SafeRoots,
+    /// [`bare_wrappers_resolve_as_written`] of the TOP-LEVEL line this layer
+    /// judges. Carried into every `-c` / stdin body so an outer `export PATH=…`
+    /// or a shadowing function reaches a body's producer too. `false` (the
+    /// restrictive reading) unless the caller computed it.
+    pub wrappers_bare: bool,
+}
+
+/// Whether a bare exec wrapper in front of a literal producer may be read as
+/// the producer it runs (see [`producer_output`]), judged on the line's AST
+/// with function definitions evaluated. `false` when the line does not
+/// evaluate (no answer, so the restrictive reading); when a function named
+/// `env`, `command`, `echo` or `printf` is defined (the wrapper, or the
+/// command it runs, is not the one the text names); or when any command on the
+/// line sets `PATH` (a prefix or assignment-only `PATH=…`, or an `export` /
+/// `declare` / `env` operand), since `env` resolves its command through `PATH`.
+pub(in crate::detect) fn bare_wrappers_resolve_as_written(text: &str) -> bool {
+    let Analysis::Known(script) = analyze_with_function_definitions(text) else {
+        return false;
+    };
+    let shadowed = script
+        .function_names
+        .iter()
+        .any(|n| matches!(n.as_str(), "env" | "command" | "echo" | "printf"));
+    !shadowed && !sets_var_where(&script.commands, |n, _| n == "PATH")
 }
 
 /// `max(B.5, legacy)` (`Deny > Ask > Allow`). A legacy Deny is returned
@@ -696,7 +724,11 @@ fn classify(
     };
     // A program delivered as literal text by a process substitution or a
     // pipe (user ruling 2026-11-18 (a)) is read like a literal stdin body.
-    if let Some(body) = literal_delivered_program(text, commands, idx, cmd, &source, k) {
+    // A bare wrapper reads as its producer only when the top-level line and
+    // this text resolve it as written (see `bare_wrappers_resolve_as_written`).
+    let wrappers_ok = judge.wrappers_bare && bare_wrappers_resolve_as_written(text);
+    if let Some(body) = literal_delivered_program(text, commands, idx, cmd, &source, k, wrappers_ok)
+    {
         return literal_body(fam, &body, depth, judge);
     }
     // A program a determined producer PIPELINE delivers (`bash <(echo hi |
@@ -927,17 +959,18 @@ fn privileged_literal_body(
 /// format without `%` (`\n` the only escape), or `printf '%s' X` /
 /// `printf '%s\n' X` with a backslash-free `X`. A BARE `env` or `command`
 /// in front of one of those (see [`bare_wrapped_command`]) produces the same
-/// text: `env echo "ls"` and `command printf "ls"` print what `echo "ls"` and
-/// `printf "ls"` print. `None` for anything else, or with a redirect or an
-/// assignment.
-fn producer_output(c: &SimpleCommand) -> Option<String> {
+/// text when `wrappers_ok` (the line resolves the wrapper as written, see
+/// [`bare_wrappers_resolve_as_written`]): `env echo "ls"` and
+/// `command printf "ls"` print what `echo "ls"` and `printf "ls"` print.
+/// `None` for anything else, or with a redirect or an assignment.
+fn producer_output(c: &SimpleCommand, wrappers_ok: bool) -> Option<String> {
     if !c.redirects.is_empty() || !c.assignments.is_empty() {
         return None;
     }
     let Ok(argv) = literals(&c.argv) else {
         return None; // not a literal producer: the caller stays Undetermined
     };
-    producer_argv_output(bare_wrapped_command(&argv)?)
+    producer_argv_output(bare_wrapped_command(&argv, wrappers_ok)?)
 }
 
 /// The command a bare exec wrapper runs, read from the parsed argv words.
@@ -945,13 +978,15 @@ fn producer_output(c: &SimpleCommand) -> Option<String> {
 /// `-S`, `--`, …) nor a `NAME=V` operand; `command CMD …` is bare when the
 /// word after `command` is not an option (`-p`, `-v`, `-V`). For any other
 /// argv the argv itself is returned. `None` when a wrapper has no word after
-/// it or is not bare, so the caller stays Undetermined. A wrapper is not
-/// unwrapped twice: `env command echo` is not a producer.
-fn bare_wrapped_command<'a, 'b>(argv: &'b [&'a str]) -> Option<&'b [&'a str]> {
+/// it or is not bare, so the caller stays Undetermined, and always when
+/// `allowed` is false (the line does not resolve the wrapper as written, see
+/// [`bare_wrappers_resolve_as_written`]). A wrapper is not unwrapped twice:
+/// `env command echo` is not a producer.
+fn bare_wrapped_command<'a, 'b>(argv: &'b [&'a str], allowed: bool) -> Option<&'b [&'a str]> {
     match argv.split_first() {
         Some((&("env" | "command"), rest)) => {
             let first = rest.first()?;
-            (!first.starts_with('-') && !first.contains('=')).then_some(rest)
+            (allowed && !first.starts_with('-') && !first.contains('=')).then_some(rest)
         }
         _ => Some(argv),
     }
@@ -985,6 +1020,7 @@ fn procsub_content(
     text: &str,
     commands: &[SimpleCommand],
     range: &std::ops::Range<usize>,
+    wrappers_ok: bool,
 ) -> Option<String> {
     let open = range.start.checked_add(2)?;
     let close = range.end.checked_sub(1)?;
@@ -1012,7 +1048,7 @@ fn procsub_content(
         if !sep_ok {
             return None;
         }
-        out.push_str(&producer_output(c)?);
+        out.push_str(&producer_output(c, wrappers_ok)?);
         pos = c.span.end;
     }
     let tail = text.get(pos..close)?;
@@ -1031,6 +1067,7 @@ pub(super) fn literal_delivered_program(
     cmd: &SimpleCommand,
     source: &ProgramSource,
     k: usize,
+    wrappers_ok: bool,
 ) -> Option<String> {
     match source {
         // `bash <(…)`: the first non-option operand is the substitution.
@@ -1043,7 +1080,7 @@ pub(super) fn literal_delivered_program(
             if !w.raw.starts_with("<(") {
                 return None;
             }
-            procsub_content(text, commands, &w.span)
+            procsub_content(text, commands, &w.span, wrappers_ok)
         }
         ProgramSource::Stdin(StdinSource::Literal(_)) => None,
         ProgramSource::Stdin(_) => {
@@ -1068,7 +1105,12 @@ pub(super) fn literal_delivered_program(
                     return None;
                 }
                 let at = text.get(r.span.clone())?.find("<(")?;
-                return procsub_content(text, commands, &(r.span.start + at..r.span.end));
+                return procsub_content(
+                    text,
+                    commands,
+                    &(r.span.start + at..r.span.end),
+                    wrappers_ok,
+                );
             }
             if !ins.is_empty() {
                 return None;
@@ -1084,7 +1126,7 @@ pub(super) fn literal_delivered_program(
             if text.get(prev.span.end..cmd.span.start)?.trim() != "|" {
                 return None;
             }
-            producer_output(prev)
+            producer_output(prev, wrappers_ok)
         }
         _ => None,
     }

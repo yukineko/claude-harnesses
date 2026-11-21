@@ -184,6 +184,7 @@ fn every_reading_on_line(c: &str, scope: &SafeRoots) -> Decision {
         &super::ast::b5::Probes {
             judge: &judge,
             scope,
+            wrappers_bare: super::ast::b5::bare_wrappers_resolve_as_written(c),
         },
     )
 }

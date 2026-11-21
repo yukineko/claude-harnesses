@@ -140,3 +140,51 @@ fn command_echo_quoted_rm_procsub_bash_denied() {
 fn env_printf_quoted_rm_into_sh_denied() {
     assert_deny("env_printf_rm_sh", "env printf '%s' 'rm -rf /etc' | sh");
 }
+
+// Verifier-independent probes (written by the integrator, not the
+// implementer). `env CMD` resolves CMD through PATH, unlike the builtin echo,
+// so a PATH rewrite earlier on the line makes the producer unknown.
+#[test]
+fn path_rewrite_then_env_echo_into_sh_not_allow() {
+    assert_deny_or_ask(
+        "path_env_echo",
+        r#"export PATH=/tmp/evil; env echo "ls" | sh"#,
+    );
+}
+
+#[test]
+fn path_assign_then_env_echo_into_sh_not_allow() {
+    assert_deny_or_ask(
+        "path_assign_env_echo",
+        r#"PATH=/tmp/evil; env echo "ls" | sh"#,
+    );
+}
+
+// The wrapper itself redefined as a function on the same line.
+#[test]
+fn env_function_shadow_into_sh_not_allow() {
+    assert_deny_or_ask(
+        "env_fn_shadow",
+        r#"env(){ printf 'rm -rf /tmp/x'; }; env echo "ls" | sh"#,
+    );
+}
+
+#[test]
+fn command_function_shadow_into_sh_not_allow() {
+    assert_deny_or_ask(
+        "command_fn_shadow",
+        r#"command(){ printf 'rm -rf /tmp/x'; }; command printf "ls" | sh"#,
+    );
+}
+
+// `--` ends options; the word after the wrapper starts with `-`, so it stays
+// restrictive.
+#[test]
+fn env_double_dash_echo_into_sh_not_allow() {
+    assert_deny_or_ask("env_dd", r#"env -- echo "ls" | sh"#);
+}
+
+#[test]
+fn env_echo_unquoted_var_into_sh_not_allow() {
+    assert_deny_or_ask("env_echo_var", r#"env echo $X | sh"#);
+}

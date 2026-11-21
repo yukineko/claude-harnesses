@@ -3,9 +3,9 @@ use super::{
     backtick_body_as_run, command_candidates, first_line_quoted_here_document_body,
     first_shell_word, here_document_delimiter_is_quoted, here_string_spans,
     interpreter_code_verdict, is_assignment, is_bare_redirect_op, is_code_interpreter,
-    is_exec_wrapper, is_foreign_shell, is_redirect_token, is_shell, is_short_flag,
-    normalized_command, opens_here_document, quoted_string_literals, recommend_against,
-    scan_balanced, split_statements_into_pipe_stages, wrapped_command_heads, xargs_command_start,
+    is_foreign_shell, is_redirect_token, is_shell, is_short_flag, normalized_command,
+    opens_here_document, quoted_string_literals, recommend_against, scan_balanced,
+    split_statements_into_pipe_stages, wrapped_command_heads, xargs_command_start,
     xargs_reads_arg_file, xargs_shell, Ctx, Decision, PythonReader, Stop, VerdictAcc,
 };
 
@@ -19,6 +19,8 @@ mod procsub_split;
 mod program_source;
 mod program_word;
 mod stdin_operand;
+mod upstream_stage;
+use upstream_stage::stage_emits_only_its_arguments;
 #[cfg(test)]
 mod word_boundary_tests;
 
@@ -650,6 +652,16 @@ the command line, so blastguard cannot read the program",
                     ))) {
                         return deny;
                     }
+                }
+                // An exec wrapper in front of the upstream emitter (`env echo`):
+                // an Ask unless the line resolves it as written (`upstream_stage`).
+                if let Some(deny) = acc.record(upstream_stage::unresolved_wrapper_ask(
+                    &shape,
+                    &statement[i - 1],
+                    cmd,
+                    feeder.is_none(),
+                )) {
+                    return deny;
                 }
             }
         }
@@ -1321,34 +1333,6 @@ fn with_nul_readings(mut texts: Vec<String>) -> Vec<String> {
         }
     }
     texts
-}
-
-/// True when `stage` emits only text spelled in its own arguments: its
-/// command, behind any exec-wrapper chain, is `echo` or `printf`. Every head
-/// candidate [`wrapped_command_heads`] yields must be a wrapper or one of
-/// those two, so an ambiguous chain resolves to "not a literal emitter" (the
-/// restrictive side). A stage that is not a simple command (`(cat f)`,
-/// `{ cat f; }`) has no such head and is likewise not a literal emitter.
-///
-/// The one compound that is NOT judged here: a brace group whose members are
-/// all plain `echo` / evaluable `printf` joined by `;`, a newline or `&&`
-/// (`{ echo a; echo b; } | bash`). Its upstream stage is the closing `}`, which
-/// this function reports as not an emitter, so the caller skips this check
-/// when [`brace_feeder::group_feeder_texts`] computed the group's output and
-/// judges that output (the concatenation, each member's literals and printf
-/// readings) as the program instead. Every other group keeps the Ask.
-fn stage_emits_only_its_arguments(stage: &str) -> bool {
-    let tokens: Vec<&str> = stage.split_whitespace().collect();
-    let heads = wrapped_command_heads(&tokens);
-    let Some(&last) = heads.last() else {
-        return false;
-    };
-    let is_emitter =
-        |idx: usize| matches!(normalized_command(tokens[idx]).as_str(), "echo" | "printf");
-    is_emitter(last)
-        && heads
-            .iter()
-            .all(|&idx| is_emitter(idx) || is_exec_wrapper(&normalized_command(tokens[idx])))
 }
 
 /// The first shell expansion in `stage` that sits OUTSIDE every quote — a

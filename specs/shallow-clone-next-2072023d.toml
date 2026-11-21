@@ -1,0 +1,61 @@
+[spec]
+id = "shallow-clone-next-2072023d"
+title = "backlog next: shallow clone では拒否する"
+status = "ratified"
+provenance_commit = "57ddf003c72378d1a80e8813883442581642e923"
+date = "2026-11-22"
+canon = []
+
+[spec.ratification]
+canon_commit = "57ddf003c72378d1a80e8813883442581642e923"
+date = "2026-11-22"
+reason = "推奨案を採る: shallow を検出したら shallow/truncated を名指しして next を拒否 (判定不能は制限側)"
+fingerprint = "73ebe50299d12573"
+
+[[requirement]]
+id = "R1"
+statement = "repo store を持つ shallow clone（`git rev-parse --is-shallow-repository` が true）で `backlog next`（--claim なし）を実行すると、修正済みかどうかを判定できないので候補を払い出さず、非0で終了して stdout+stderr に shallow または truncated（大文字小文字は問わない）を含める。"
+acceptance = [
+    "`cargo test -p backlog --test backlog_20261113_k4_shallow_clone_fix -- --ignored next_in_shallow_clone_does_not_dispatch_fixed_task` の #[ignore] を外し、assert は一切変えずに実行すると pass する",
+    "上のテストの fixture（`(backlog X)` の fix commit の後に別 commit を積み、`--depth 1` で clone したもの）で `backlog next` の終了コードは 0 以外になり、stdout に X の id が出ず、stdout+stderr を小文字化した文字列に `shallow` か `truncated` が含まれる",
+    "実装前の base（#[ignore] を外しただけの状態）でこのテストが fail すること（RED）を先に観測し、記録してある",
+]
+canon = [
+    "要望本文: 「shallow (履歴が切れている) と検出したら、メッセージに shallow / truncated を含めて next を拒否する (非0終了)」",
+    'crates/backlog/tests/backlog_20261113_k4_shallow_clone_fix.rs:6-7 「A truncated history is an undetermined answer to "did the fix land", not "nothing landed".」',
+    'crates/backlog/tests/backlog_20261113_k4_shallow_clone_fix.rs:144-147 `low.contains("shallow") || low.contains("truncated")`',
+    "CLAUDE.md §3 「判定不能 ... は `clean` ではない。必ず `block` か `ask` に解決する。」",
+    "crates/backlog/src/main.rs:1186-1187 「`main` reports as a non-zero exit with a stderr diagnostic」",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R2"
+statement = "shallow かどうかの判定自体が失敗したとき（判定用の git subprocess が異常終了する、または出力を `true`/`false` と解釈できないとき）は、`backlog next` は候補を払い出さず、非0で終了して拒否する。"
+acceptance = [
+    "shallow 判定に使う git 呼び出しだけを失敗させる fixture（例: PATH の先頭に置いた git wrapper が `rev-parse --is-shallow-repository` のときだけ非0で終了し、それ以外は本物の git に委譲する）で `backlog next` を実行すると、終了コードは 0 以外になり、stdout に pending タスクの id が一つも出ない",
+    "同じ wrapper で `--is-shallow-repository` に exit 0 を返しつつ `true`/`false` 以外の文字列を出力させた場合も、終了コードは 0 以外になり、stdout に pending タスクの id が出ない",
+    "このテストは実装者とは別の Agent が書き、実装前の base で fail すること（RED）を観測してある",
+]
+canon = [
+    "要望本文: 「shallow 判定が自体できない (git 失敗) 場合も払い出さず拒否する。」",
+    "CLAUDE.md §3 「subprocess は `stdout` だけでなく必ず終了ステータスを判定に使う。落ちたチェッカは合格したチェッカではない。」",
+    "CLAUDE.md §3 「判定不能 — IO 失敗 / ロック取得失敗 / subprocess の異常終了 / パース不能 / panic / 空集合 — は `clean` ではない。」",
+    'crates/backlog/src/evidence.rs:306-308 「Everything else -- no repo, a corrupt or undeterminable ref, timeout, abnormal exit -- is `Err`: an unanswered question is not "nothing is fixed", and the caller refuses」',
+]
+falsifiable = true
+
+[[requirement]]
+id = "R3"
+statement = "full clone（`--is-shallow-repository` が false）での `backlog next` の挙動は変えない。ancestor に `(backlog X)` の fix commit がある X は飛ばし、次の未修正タスク Y を exit 0 で払い出す。"
+acceptance = [
+    "`cargo test -p backlog --test backlog_20261113_k4_shallow_clone_fix control_full_clone_with_copied_store_skips_fixed_task` が assert を変えずに pass する（終了コード 0、stdout に Y の id があり、X の id は無い）",
+    "`cargo test -p backlog` のうち `next` の既存テストで、変更前に pass していたものが変更後も pass する（変更前後の pass/fail の一覧を比べて、pass→fail が 0 件）",
+]
+canon = [
+    "要望本文: 「full clone の挙動は変えない。」",
+    "要望本文: 「対照: full clone では Y を払い出す。」",
+    "crates/backlog/tests/backlog_20261113_k4_shallow_clone_fix.rs:121-125 「control: full clone must hand out Y」",
+    "crates/backlog/src/claim_recheck.rs:233-235 「a candidate whose fix already landed is skipped with a stderr notice and the next candidate is considered.」",
+]
+falsifiable = true

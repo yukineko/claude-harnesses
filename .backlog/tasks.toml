@@ -1931,3 +1931,35 @@ exit 1:
     禁忌: a touched plugin must never keep the same version.
 RED B: the commit stages a foo source change WITHOUT a bump (the bump is unstaged), yet the gate passed; rc=0
     OK: no changed plugin left un-bumped vs HEAD (1 plugins scanned, plus the shared crate(s) harness-core, riskgrade, progeffect)"""
+
+[[task]]
+id = "e195255a"
+title = "flow docs: condukt circuit check invocations lack --run/--session (observed run trips idle_unmeasured / errors on missing --run)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "flow",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-21: 'condukt circuit check --no-compaction-axis' errored 'the following required arguments were not provided: --run <RUN>'; with --run but no --session after claims released it tripped reason=idle_unmeasured idle_source=claim_registry ('run state could not be loaded'). Reproduced: same run with --session S measures idle_source=session_flag. README.md:48/69, README.ja.md:41/62 spell the invocation without --run/--session. condukt contract (circuit.rs run_circuit_check doc, backlog 04c3ca6f) intends --session; whether condukt should also measure from release_log released_at without --session is an open ruling (not part of this item)."
+created_at = 1795263336
+updated_at = 1795263336
+weight = 0.0
+issue_number = 1953
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1953"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p flow --test skill_contract d_every_documented_circuit_check_invocation_carries_run_and_session"
+rev = "591a30b0fbaee3fedb5b831b03fce6f1e78e74a2"
+observed_at = 1795263336
+detail = """
+exit 101: . 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+   Compiling flow v0.2.45 (/Users/yuki/src/.harness-worktrees/fix-circuit-idle/crates/flow)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.85s
+     Running tests/skill_contract.rs (target/debug/deps/skill_contract-aace31140c998fec)
+error: test failed, to rerun pass `-p flow --test skill_contract`"""

@@ -639,6 +639,24 @@ pub struct SafeRoots {
     /// The model only the scratch-place rule consults; `None` = `self`. See
     /// `detect/scratch_place.rs` (GitHub #1637).
     pub(crate) managed_places: Option<std::sync::Arc<SafeRoots>>,
+    /// Set ONLY by the hook binary, and only for a session it observed as a
+    /// live registered `/flow` driver ([`crate::flow_driver`]); `None` (the
+    /// default, and always for [`SafeRoots::none`]) trusts no program file.
+    /// Consulted only by the Table B.5 layer through
+    /// [`SafeRoots::driver_trusts_program`].
+    driver_programs: Option<DriverPrograms>,
+}
+
+/// The program files a live `/flow` driver session may run without a B.5
+/// objection (user ruling 2026-11-21, 「またaskされてたけど、これもallowに」):
+/// files in this session's scratchpad and binaries under its own worktree's
+/// `target/`.
+#[derive(Debug, Clone)]
+struct DriverPrograms {
+    /// The payload session id; names the scratchpad directory.
+    session_id: String,
+    /// `<own worktree>/target`, canonical, when it exists as a real directory.
+    worktree_target: Option<String>,
 }
 
 impl SafeRoots {
@@ -665,6 +683,7 @@ impl SafeRoots {
             git_restore_probe: None,
             checkout_probe: None,
             managed_places: None,
+            driver_programs: None,
         }
     }
 
@@ -774,6 +793,7 @@ impl SafeRoots {
             git_restore_probe: None,
             checkout_probe: resolver.map(|_| is_linked_checkout as CheckoutProbe),
             managed_places: None,
+            driver_programs: None,
         }
     }
 
@@ -811,6 +831,91 @@ impl SafeRoots {
     pub fn with_git_restore_probe(mut self, p: crate::reversible::GitRestoreProbe) -> Self {
         self.git_restore_probe = Some(p);
         self
+    }
+
+    /// Mark this model as belonging to a session the hook binary observed as a
+    /// live registered `/flow` driver ([`crate::flow_driver`]). `worktree_root`
+    /// is the session's own working tree (the repo root of the payload cwd);
+    /// its `target/` is trusted only when it resolves (with this model's
+    /// resolver) to an existing real directory. Only the binary calls this;
+    /// without it [`SafeRoots::driver_trusts_program`] is always `false`.
+    #[must_use]
+    pub fn with_driver_programs(mut self, session_id: &str, worktree_root: Option<&str>) -> Self {
+        if session_id.is_empty() || session_id.contains('/') {
+            return self;
+        }
+        let worktree_target = worktree_root
+            .filter(|r| r.starts_with('/'))
+            .map(|r| format!("{}/target", r.trim_end_matches('/')))
+            .and_then(|t| resolve_with(&t, self.resolver))
+            .filter(|t| is_real_dir(t) && t != "/");
+        self.driver_programs = Some(DriverPrograms {
+            session_id: session_id.to_string(),
+            worktree_target,
+        });
+        self
+    }
+
+    /// Is `real` (a CANONICAL path, symlinks already resolved) a program file
+    /// a live `/flow` driver session may run without a Table B.5 objection?
+    ///
+    /// True only when this model was built with
+    /// [`SafeRoots::with_driver_programs`] and `real` is strictly inside
+    ///
+    /// * the session scratchpad `/private/tmp/claude-<uid>/<one component>/
+    ///   <session id>/scratchpad/` (or `/tmp/…` where `/tmp` is not a symlink),
+    ///   where `claude-<uid>` is a real directory OWNED by `<uid>` — the
+    ///   `<cwd slug>` component is not recomputed (its spelling is Claude
+    ///   Code's, not observable here), the session id is the payload's; or
+    /// * `<own worktree>/target/`.
+    ///
+    /// Anything else, including any IO failure, is `false`.
+    pub(crate) fn driver_trusts_program(&self, real: &str) -> bool {
+        let Some(d) = &self.driver_programs else {
+            return false;
+        };
+        if let Some(t) = &d.worktree_target {
+            if real
+                .strip_prefix(t.as_str())
+                .is_some_and(|rest| rest.len() > 1 && rest.starts_with('/'))
+            {
+                return true;
+            }
+        }
+        for tmp in ["/private/tmp", "/tmp"] {
+            let Some(rest) = real.strip_prefix(tmp).and_then(|r| r.strip_prefix('/')) else {
+                continue;
+            };
+            let comps: Vec<&str> = rest.split('/').collect();
+            let [owner, slug, sid, pad, tail @ ..] = comps.as_slice() else {
+                continue;
+            };
+            let Some(uid) = owner
+                .strip_prefix("claude-")
+                .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|n| n.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            if slug.is_empty()
+                || matches!(*slug, "." | "..")
+                || *sid != d.session_id
+                || *pad != "scratchpad"
+                || tail.is_empty()
+                || tail
+                    .iter()
+                    .any(|c| c.is_empty() || matches!(*c, "." | ".."))
+            {
+                continue;
+            }
+            use std::os::unix::fs::MetadataExt;
+            let owner_dir = format!("{tmp}/{owner}");
+            match std::fs::symlink_metadata(&owner_dir) {
+                Ok(m) if m.file_type().is_dir() && m.uid() == uid => return true,
+                Ok(_) | Err(_) => continue,
+            }
+        }
+        false
     }
 
     /// The canonical home directory, if known.

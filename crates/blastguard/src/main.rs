@@ -348,22 +348,71 @@ fn run() {
             // via `.ok()`, so the two cases are indistinguishable downstream —
             // which is why they are separated HERE, at the only point that
             // still has the raw bytes.
+            // No session id can be read from an unparseable payload, so the
+            // `/flow` driver mapping cannot apply (`driver = false`).
             emit(
                 Decision::ask(UNREADABLE_PAYLOAD),
                 None,
                 &raw,
                 subagent,
                 agent_id.as_deref(),
+                false,
             );
             return;
         }
     };
 
-    let decision = analyse(&input);
+    // User ruling 2026-11-21 (「非破壊はAllow、他はDeny」): a live registered
+    // `/flow` driver session never gets an `ask`. Only an OBSERVED live
+    // registration counts; no / stale / another session's registration, and
+    // an undetermined read, leave every verdict unchanged.
+    let driver = flow_driver_session(&input);
+
+    let decision = analyse(&input, driver);
     let decision = consult_memory(&input, decision);
 
-    emit(decision, Some(&input), &raw, subagent, agent_id.as_deref());
+    emit(
+        decision,
+        Some(&input),
+        &raw,
+        subagent,
+        agent_id.as_deref(),
+        driver,
+    );
 }
+
+/// Is this call made by a session that is a LIVE registered `/flow` driver
+/// (`backlog driver register`, read by [`blastguard::flow_driver`])? Keyed on
+/// the payload's `session_id` and `cwd` only — the values the hook input
+/// observably carries (a subagent's payload carries its parent session's id).
+/// `false` unless the registry was read and the registration observed live:
+/// an undetermined read is never a driver (CLAUDE.md §3), because driver mode
+/// can turn an `Ask` into an `Allow`.
+fn flow_driver_session(input: &HookInput) -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64);
+    let Ok(now) = now else {
+        return false;
+    };
+    let base = harness_core::config::base_dir("backlog");
+    matches!(
+        blastguard::flow_driver::live_driver(
+            &base,
+            std::path::Path::new(input.cwd.trim()),
+            &input.session_id,
+            now,
+        ),
+        harness_core::verdict::Determination::Known(true)
+    )
+}
+
+/// The prefix of a driver session's `Ask` turned `Deny` (user ruling
+/// 2026-11-21). The original ask reason follows it verbatim.
+const FLOW_DRIVER_DENY: &str = "blastguard: this session is a registered /flow driver, which never \
+gets a permission prompt (user ruling 2026-11-21 「非破壊はAllow、他はDeny」), and this call is not \
+statically safe, so it is denied instead of asked. The exact command is in the blastguard block log. \
+Do not retry it another way; record it and move on.\n\n";
 
 /// The raw stdin of the verdict path, kept so a PANIC on that path (blocked
 /// with exit 2 by [`run_verdict_guarded`]) can still be recorded in the block
@@ -521,6 +570,7 @@ fn emit(
     raw: &str,
     subagent: bool,
     agent_id: Option<&str>,
+    driver: bool,
 ) {
     // How the printed decision is reached is recorded in the block log
     // (`harness_core::blocklog`): an `Ask` that is printed as a `Deny` must not
@@ -550,6 +600,43 @@ fn emit(
             harden_for_subagent(decision),
             input,
             "subagent",
+            annotation.as_deref(),
+            BlockSource { raw, kind },
+        );
+        return;
+    }
+
+    // User ruling 2026-11-21 (「非破壊はAllow、他はDeny」): a live registered
+    // `/flow` driver session never gets an `ask`. The statically safe cases
+    // were already answered `Allow` by the analysis (`analyse` gives a driver
+    // session's model its scratchpad and own `target/`); every `Ask` that is
+    // left is denied with its original reason, and the block log records the
+    // exact command (raw payload) with kind `ask-hardened-to-deny`. A `Deny`
+    // stays a `Deny`: the repeat-deny downgrade is skipped here, because it
+    // would hand the driver an `Ask`.
+    if driver {
+        let kind = if was_ask {
+            blocklog::DecisionKind::AskHardenedToDeny
+        } else {
+            blocklog::DecisionKind::Deny
+        };
+        let decision = match decision {
+            Decision::Ask(reason) => Decision::Deny(format!("{FLOW_DRIVER_DENY}{reason}")),
+            other => other,
+        };
+        let annotation = match &decision {
+            Decision::Deny(reason) => relay_denial_annotation(reason, input),
+            _ => None,
+        };
+        let actor = if interactive::ask_available() {
+            "interactive"
+        } else {
+            "headless"
+        };
+        emit_line_annotated(
+            decision,
+            input,
+            actor,
             annotation.as_deref(),
             BlockSource { raw, kind },
         );
@@ -817,7 +904,7 @@ fn repeat_fingerprint(input: &HookInput, reason: &str) -> String {
 /// detector holds no cross-call mutable state that a half-finished analysis
 /// could leave inconsistent — the per-command analysis budget is re-seeded at
 /// entry to `detect`, not carried between calls.
-fn analyse(input: &HookInput) -> Decision {
+fn analyse(input: &HookInput, driver: bool) -> Decision {
     let tool = input.tool_name.clone();
     let tool_input = input.tool_input.clone();
     // Built OUTSIDE the barrier deliberately: it touches the filesystem
@@ -827,6 +914,17 @@ fn analyse(input: &HookInput) -> Decision {
     // `Option`/`Result` resolved to the restrictive side — and if it somehow
     // did, `run_verdict_guarded`'s outer barrier blocks the call (exit 2).
     let scope = safe_roots(input);
+    // A live `/flow` driver session (user ruling 2026-11-21) trusts the
+    // program files in its own scratchpad and under its own worktree's
+    // `target/` (Table B.5); the worktree is the repo root of the payload cwd.
+    let scope = if driver {
+        let root = real_path(input.cwd.trim())
+            .and_then(|c| blastguard::flow_driver::repo_root(std::path::Path::new(&c)))
+            .and_then(|r| r.to_str().map(str::to_string));
+        scope.with_driver_programs(&input.session_id, root.as_deref())
+    } else {
+        scope
+    };
     let result =
         std::panic::catch_unwind(move || detect::detect_scoped(&tool, tool_input.as_ref(), &scope));
     match result {

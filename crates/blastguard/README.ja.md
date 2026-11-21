@@ -74,6 +74,19 @@ headless でも `ask` として出力される。触るのは `Deny` だけで `
 台帳は `harness_core::repeat`（`~/.claude/harness-state/repeat/<CLAUDE_CODE_SESSION_ID>/`）で、
 session id 未設定や台帳の IO 失敗では deny のまま。
 
+**登録済み `/flow` driver セッションには `ask` を出さない**（2026-11-21 ユーザー裁定
+「非破壊はAllow、他はDeny」、同日の補足「またaskされてたけど、これもallowに」）。payload の
+`session_id` が backlog の driver registry（`~/.backlog/drivers/<project slug>/<fnv1a64(session)>.driver`、
+heartbeat が 1800 秒以内。`src/flow_driver.rs` が読む。project は payload `cwd` の正規化した
+main tree）に live 登録されているとき、Table B.5 層は session scratchpad
+（`/private/tmp/claude-<uid>/<slug>/<session id>/scratchpad/`）内、または自 worktree の
+`target/` 配下の通常ファイルをトップレベルで実行するものに意見を出さず（同じ行に
+そのファイルへ書き得るものが無く、system bin だけの `PATH` 以外の注入変数が無いこと）、
+それでも残る `Ask` は元の理由付きで `deny` として出す（block log の kind は
+`ask-hardened-to-deny`、payload をそのまま記録）。上の 2 度目 deny の ask 化はそこでは
+行わないので `deny` は `deny` のまま。登録が無い・stale・別セッションのもの・registry が
+読めない場合は判定を変えない。パースできない payload は session id が読めないので対象外。
+
 介入が実際に何を防いだかは `blastguard retro` で事後検証できる（本 README 末尾の
 「事後検証」節を参照）。
 

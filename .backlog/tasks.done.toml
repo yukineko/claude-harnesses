@@ -92017,6 +92017,132 @@ executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
 
 [[task]]
+id = "bdc30aa7"
+title = "condukt testscope: a tdd red run on a tree the same Bash call mutated is keyed on the pre-call tree, so tdd green on that tree is refused (F->P oracle unrecordable)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "tdd",
+    "testscope",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed run-20261121-114321-94421 t3: Bash call 'git checkout 9ef69638f -- <impl files> && ... tdd red --task t3 --cmd "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes"' ran RED on the reverted tree, but PreToolUse keyed it on the pre-call tree 4406711018eb...:1dcbe1ce95dcba8e (crates/condukt/src/testscope/rerun.rs check_rerun: tree_identity(dir) is measured before the call runs) and testscope-confirm promoted it unchanged (rerun.rs confirm). After restoring, tdd green on that tree was denied: 'rerun refused: `tdd red --cmd cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes` already ran on this exact tree (4406711018eb...:1dcbe1ce95dcba8e ...)'. A gate refusing a proof test is a gate bug."""
+created_at = 1795263695
+updated_at = 1795264115
+weight = 0.0
+issue_number = 1954
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1954"
+issue_closed_at = 1795264117
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261121_testscope_red_on_mutated_tree_blocks_green"
+rev = "64c82d351a6532c91820d092710bacda611d4e80"
+observed_at = 1795263695
+detail = """
+exit 101: x-testscope-oracle/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.16s
+     Running tests/backlog_20261121_testscope_red_on_mutated_tree_blocks_green.rs (target/debug/deps/backlog_20261121_testscope_red_on_mutated_tree_blocks_green-205eaa7393defd47)
+error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_red_on_mutated_tree_blocks_green`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261121_testscope_red_on_mutated_tree_blocks_green"
+exit = 0
+passed = 3
+rev = "e13e2fd57b050803637767f136dc0c62c05b6cd5"
+observed_at = 1795264113
+output_digest = "sha256:0fa9f8e9a3acd14a42ecbda7e706124e846dba362abe102b4eac15c272cc421c"
+excerpt = """
+
+running 3 tests
+test control_bare_rerun_same_tree_is_denied ... ok
+test control_plain_same_tree_red_then_green_is_denied ... ok
+test red_tdd_green_not_denied_after_red_that_mutated_tree_in_same_call ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.45s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261121_testscope_red_on_mutated_tree_blocks_green.rs (target/debug/deps/backlog_20261121_testscope_red_on_mutated_tree_blocks_green-834b8fa6861a907d)
+"""
+
+[task.closure.red]
+rev = "743bd0ac269fecce7cfd5fb7392ce70d2a0abb7b"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "9ad3c063"
+title = "condukt worktree create from an unlisted linked worktree of a listed repo registers no workspace trust for the new worktree"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "tdd",
+    "trust",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed run-20261121-114321-94421: t3 was created with cwd in linked worktree /Users/yuki/src/.harness-worktrees/run4-integ (not in ~/.harness/trust.toml) and was not registered, while t1/t2 created from main were. crates/condukt/src/main.rs run_worktree takes repo = worktree::toplevel(cwd); crates/condukt/src/worktree.rs create gates registration on trust::is_listed(&repo_canon) = the linked worktree, silently skipping. scripts/session-worktree-init.py documents the rule as 'exactly when the main tree is itself listed — the rule condukt's worktree::create applies' (docstring vs behaviour contradiction)."
+created_at = 1795263852
+updated_at = 1795264126
+weight = 0.0
+issue_number = 1955
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1955"
+issue_closed_at = 1795264128
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261121_worktree_create_from_linked_worktree_trust"
+rev = "64c82d351a6532c91820d092710bacda611d4e80"
+observed_at = 1795263852
+detail = """
+exit 101: x-testscope-oracle/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/backlog_20261121_worktree_create_from_linked_worktree_trust.rs (target/debug/deps/backlog_20261121_worktree_create_from_linked_worktree_trust-e10c9f140ed58c6e)
+error: test failed, to rerun pass `-p condukt --test backlog_20261121_worktree_create_from_linked_worktree_trust`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261121_worktree_create_from_linked_worktree_trust"
+exit = 0
+passed = 3
+rev = "e13e2fd57b050803637767f136dc0c62c05b6cd5"
+observed_at = 1795264124
+output_digest = "sha256:e623b2f866e75ce6efb64993edf0d3212a472719c87e8b676d9c8b3e16a6f855"
+excerpt = """
+
+running 3 tests
+test control_create_from_main_tree_of_listed_repo_lists_new_worktree ... ok
+test create_from_linked_worktree_of_listed_repo_lists_new_worktree ... ok
+test control_unlisted_repo_never_lists_new_worktree ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.54s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261121_worktree_create_from_linked_worktree_trust.rs (target/debug/deps/backlog_20261121_worktree_create_from_linked_worktree_trust-19cf37f52ee6ceed)
+"""
+
+[task.closure.red]
+rev = "743bd0ac269fecce7cfd5fb7392ce70d2a0abb7b"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
 id = "69f396c2"
 title = "askrelay mark-relayed/mark-executed with operator args read stdin (hang on open pipe) and exit 0 marking nothing"
 project = "/Users/yuki/src/harness"

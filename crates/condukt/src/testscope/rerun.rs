@@ -460,13 +460,18 @@ pub enum Confirmed {
     /// No pending row carried the call's id; an `unmatched` row was appended
     /// (only when the caller asked for it).
     Unmatched,
+    /// The tree of at least one key changed during the call: those keys stay
+    /// pending (a same-tree rerun asks) and their post-call tree is recorded
+    /// pending as well; any unchanged key is promoted (backlog bdc30aa7).
+    TreeMoved,
 }
 
 /// Promote every pending row of the call `id` to confirmed: append `confirm
 /// <id>` to `ledger.v2.tsv`, then the old 3-column row of each key to
 /// `ledger.tsv` (so an older cached binary also refuses the rerun). With no
 /// pending row for `id` (or an empty `id`) append an `unmatched` row for
-/// `raw_command` / `cwd` instead. `Err` means the confirmation (or a part of
+/// `raw_command` / `cwd` instead. A key whose tree the call itself changed is
+/// not promoted (see [`Confirmed::TreeMoved`]). `Err` means the confirmation (or a part of
 /// it) was not recorded; the rows then stay pending, which asks on a rerun.
 pub fn confirm(
     ledger: &Path,
@@ -498,9 +503,49 @@ pub fn confirm(
         .map_err(|e| format!("cannot append to {}: {e}", v2p.display()))?;
         return Ok(Confirmed::Unmatched);
     }
-    append_lines(&v2p, &[V2Row::Confirm { id: id.to_string() }.line()])
-        .map_err(|e| format!("cannot append to {}: {e}", v2p.display()))?;
-    let legacy: Vec<String> = keys.iter().map(|k| k.line()).collect();
+    // A key whose tree is no longer the one PreToolUse measured was changed by
+    // the call itself (`git checkout <rev> -- f && tdd red ...`), so the test
+    // may have run on another tree: it is not promoted (stays pending = asks),
+    // and the post-call tree gets a pending row too (backlog bdc30aa7). A tree
+    // that cannot be re-read keeps the old promotion (the restricted side).
+    let (mut stable, mut moved) = (Vec::new(), Vec::new());
+    for k in keys {
+        match tree_identity(Path::new(&k.top)) {
+            Ok((top, tree)) if top == k.top && tree != k.tree => moved.push(LedgerKey {
+                top,
+                tree,
+                cmd: k.cmd.clone(),
+            }),
+            _ => stable.push(k),
+        }
+    }
+    let confirm_id = if moved.is_empty() {
+        id.to_string()
+    } else {
+        format!("{id}#stable")
+    };
+    let pending = |rid: &str, k: &LedgerKey| {
+        V2Row::Pending {
+            id: rid.to_string(),
+            key: k.clone(),
+            raw: raw_command.to_string(),
+            cwd: cwd.to_string_lossy().into_owned(),
+        }
+        .line()
+    };
+    let mut rows: Vec<String> = Vec::new();
+    if !moved.is_empty() {
+        rows.extend(stable.iter().map(|k| pending(&confirm_id, k)));
+        rows.extend(moved.iter().map(|k| pending(&format!("{id}#post"), k)));
+    }
+    if !stable.is_empty() {
+        rows.push(V2Row::Confirm { id: confirm_id }.line());
+    }
+    append_lines(&v2p, &rows).map_err(|e| format!("cannot append to {}: {e}", v2p.display()))?;
+    if stable.is_empty() {
+        return Ok(Confirmed::TreeMoved);
+    }
+    let legacy: Vec<String> = stable.iter().map(|k| k.line()).collect();
     append_lines(ledger, &legacy).map_err(|e| {
         format!(
             "the confirmation is in {} but the legacy row could not be appended to {}: {e}",
@@ -508,7 +553,11 @@ pub fn confirm(
             ledger.display()
         )
     })?;
-    Ok(Confirmed::Promoted)
+    Ok(if moved.is_empty() {
+        Confirmed::Promoted
+    } else {
+        Confirmed::TreeMoved
+    })
 }
 
 /// Mark the call `id` as not having run: append `invalidate <id>`. The caller

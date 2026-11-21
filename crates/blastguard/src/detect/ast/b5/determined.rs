@@ -119,15 +119,20 @@ pub(super) fn determined_dash_c_program(
     verdict.is_deny().then_some(verdict)
 }
 
-/// The Deny of the code `eval W` runs (`args` = exactly `[W]`) when `W` is a
-/// word whose value `substituted_word_value` computes from its `$( )`
-/// substitutions (`eval "$(echo 'rm -rf /etc' | cat)"`, backlog d766b5fe):
-/// that value is judged by the full detector as `bash -c '<value>'`
-/// ([`judge_body`]).
+/// The Deny of the code `eval W…` runs (`args` = the operands after `eval`;
+/// one leading `--` is dropped, as bash's `eval` does) when at least one
+/// operand is a word whose value `substituted_word_value` computes from its
+/// `$( )` substitutions (`eval "$(echo 'rm -rf /etc' | cat)"`, backlog
+/// d766b5fe; `eval "$(…)" x` / `eval -- "$(…)"`, backlog bf40851f): the
+/// operands' values — literal ones as they are, computed ones as computed —
+/// joined by single spaces, as `eval` joins them, are judged by the full
+/// detector as `bash -c '<value>'` ([`judge_body`]). One operand whose value
+/// is not computed keeps today's Undetermined.
 ///
 /// The precondition is [`determined_dash_c_program`]'s with one widening:
 /// `text` — and only `text`, the enclosing chain is read strictly — may hold
-/// ONE bare `eval`, this one (`chain_names_fixed_but_one_eval` /
+/// ONE `eval` (bare, or as `command [-p] [--] eval` / `builtin [--] eval`),
+/// this one (`chain_names_fixed_but_one_eval` /
 /// `resolution_fixed_but_one_eval`), since `W`'s substitutions run before it.
 /// A function, alias, assignment, any other unlisted command or a second
 /// `eval` on the line keeps today's Undetermined. Raise-only: an Ask or Allow
@@ -140,16 +145,48 @@ pub(super) fn determined_eval_program(
     use crate::detect::payload::determined_output::{
         resolution_fixed_but_one_eval, substituted_word_value,
     };
-    let [word] = args else {
-        return None;
+    let operands = match args.split_first() {
+        Some((first, rest)) if literal(first).is_ok_and(|f| f == "--") => rest,
+        _ => args,
     };
-    if !matches!(word.value, Value::Undetermined(_))
+    if operands.is_empty()
+        || !operands
+            .iter()
+            .any(|w| matches!(w.value, Value::Undetermined(_)))
         || !crate::detect::readings::chain_names_fixed_but_one_eval()
         || !resolution_fixed_but_one_eval(text)
     {
         return None;
     }
-    let program = substituted_word_value(&word.raw)?;
+    let values = operands
+        .iter()
+        .map(|w| match &w.value {
+            Value::Literal(s) => Some(s.clone()),
+            Value::Undetermined(_) => substituted_word_value(&w.raw),
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let program = values.join(" ");
     let verdict = judge_body(&program, Runner::Shell("bash"), judge);
     verdict.is_deny().then_some(verdict)
+}
+
+/// The Deny of `builtin [--] eval W…`, which runs `eval W…` (backlog
+/// bf40851f): [`determined_eval_program`] on the operands after `eval`.
+/// `None` for every other `builtin` shape and whenever that reading is
+/// `None`; the caller then keeps the no-opinion Allow `builtin` had before
+/// (the legacy verdict stands), so nothing is loosened.
+pub(super) fn determined_builtin_eval(
+    text: &str,
+    args: &[Word],
+    judge: &Probes<'_>,
+) -> Option<Decision> {
+    let rest = match args.split_first() {
+        Some((dd, rest)) if literal(dd).is_ok_and(|w| w == "--") => rest,
+        _ => args,
+    };
+    let (head, operands) = rest.split_first()?;
+    if !literal(head).is_ok_and(|w| w == "eval") || operands.is_empty() {
+        return None;
+    }
+    determined_eval_program(text, operands, judge)
 }

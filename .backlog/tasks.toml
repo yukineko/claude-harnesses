@@ -1695,6 +1695,8 @@ notes = "Observed 2026-11-22 at main 56c4f1697/8c4d6baca by the t3 verifier of r
 created_at = 1795278015
 updated_at = 1795278015
 weight = 0.0
+issue_number = 1964
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1964"
 rev = 0
 
 [task.repro]

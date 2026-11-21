@@ -1890,3 +1890,35 @@ exit 101: mpiling backlog v0.3.153 (/Users/yuki/src/.harness-worktrees/sidefind-
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.21s
      Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-48f55df2b4fe919f)
 error: test failed, to rerun pass `-p backlog --test backlog_20261113_no_deferral_auto_close`"""
+
+[[task]]
+id = "669b28ea"
+title = "condukt testscope: a cargo global option with a separate value (cargo --color always test / --config k=v test) skips the full-suite deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "testscope",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-21 on main 0209adc6d (sidefind2-eaa077f4 worktree); named by the independent t1 verifier of condukt run run-20261121-225214-62742 (static reading of crates/condukt/src/testscope.rs judge_cargo global-flag skip: while args.get(i).is_some_and(|a| a.starts_with('+') || a.starts_with('-')) { i += 1; } skips the flag token only, so the value of --color always / --config k=v becomes the subcommand and the command is judged Other). RED: 'cargo --color always test: expected a deny, stdout not JSON (EOF while parsing a value at line 1 column 0): ""' (allowed); control cargo --color=always test is denied. cargo 1.97.1 accepts both spellings (cargo --color always --version prints the version). Readings: (a) fail-open: full-suite deny bypassed; (b) intended: none found. Not covered: -C dir / -Z flag / --manifest-path."""
+created_at = 1795273189
+updated_at = 1795273189
+weight = 0.0
+issue_number = 1961
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1961"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261121_testscope_global_flag_value_bypass -- --ignored"
+rev = "92ed6ee05a4f3fad0c8ce888163869a06fea1f02"
+observed_at = 1795273189
+detail = """
+exit 101: yuki/.condukt/worktrees/sidefind2-eaa077f4/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.37s
+     Running tests/backlog_20261121_testscope_global_flag_value_bypass.rs (target/debug/deps/backlog_20261121_testscope_global_flag_value_bypass-82579559e9e0dd48)
+error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_global_flag_value_bypass`"""

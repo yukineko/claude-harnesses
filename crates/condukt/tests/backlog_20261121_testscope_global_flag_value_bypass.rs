@@ -124,7 +124,7 @@ fn assert_deny(res: &(Option<i32>, String), what: &str) {
 }
 
 #[test]
-#[ignore = "backlog RED: cargo global option with a separate value before `test` skips the full-suite deny"]
+#[ignore = "RED(669b28ea): cargo global option with a separate value before `test` skips the full-suite deny"]
 fn global_option_value_before_test_is_still_denied() {
     for cmd in [
         "cargo --color always test",
@@ -138,7 +138,7 @@ fn global_option_value_before_test_is_still_denied() {
 }
 
 #[test]
-#[ignore = "backlog RED: control for the global-option-value testscope bypass"]
+#[ignore = "RED(669b28ea): control for the global-option-value testscope bypass"]
 fn control_equals_spelling_is_denied() {
     let env = Env::new();
     let r = repo();

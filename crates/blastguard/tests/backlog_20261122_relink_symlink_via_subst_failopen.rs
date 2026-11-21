@@ -7,6 +7,7 @@
 //!   - a `$(...)` command substitution inside an argument (echo / jq),
 //!   - a backtick substitution,
 //!   - a `bash -c '...'` body.
+//!
 //! The write lands under `/etc` (`/etc/bg-sentinel/hosts`), so by user ruling
 //! (memory `system-harm-always-deny`: harmful targets are Deny through any
 //! wrapper) the only acceptable verdict is exactly Deny — not Ask, not Allow.

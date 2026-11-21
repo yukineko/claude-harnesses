@@ -97,7 +97,7 @@ fn expect(cmd: &str, tag: &str, want_allow: bool) {
 }
 
 #[test]
-#[ignore = "RED: empty ACK_PAGER= prefix drops ack's read-only exemption (FP)"]
+#[ignore = "RED(dd9d3e31): empty ACK_PAGER= prefix drops ack's read-only exemption (FP)"]
 fn empty_ack_pager_prefix_protected_operand_is_allow() {
     expect("ACK_PAGER= ack pat .githooks/pre-commit", "empty", true);
 }

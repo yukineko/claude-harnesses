@@ -1924,3 +1924,34 @@ exit 101: lastguard v0.2.895 (/Users/yuki/src/.harness-worktrees/sidefind-eaa077
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.41s
      Running tests/backlog_20261121_ag_ack_pager_protected.rs (target/debug/deps/backlog_20261121_ag_ack_pager_protected-3bbbf17d44371ea0)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_ag_ack_pager_protected`"""
+
+[[task]]
+id = "7b30a4ed"
+title = "backlog: no_deferral_auto_close g fixtures fail at add setup (id write-back refused for repro without --test), so the 0-ignored zero-tests auto-cancel pin is not exercised"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-21 on main a44f2ce07 (main tree, cargo test -p backlog --test backlog_20261113_no_deferral_auto_close) by condukt run run-20261121-223122-81816 (t2 base check): 'g_cargo_zero_tests_at_head_is_auto_cancelled ... FAILED' and 'g_control_cargo_compile_failure_at_head_refuses_claim ... FAILED', both panicking at crates/backlog/tests/backlog_20261113_no_deferral_auto_close.rs:61:5 in the fixture add setup; worker-observed message: 'error: backlog add: b223fba7 IS filed, but the id was NOT written back into the RED test: the repro "cargo test -p x" names no --test <file>...' (add exit 1, fixture expects 0). Other 12 tests pass. Effect: no executed test pins the '0 passed; 0 failed; 0 ignored' NotDemonstrated auto-cancel path (f20d620c fix relied on code reading). Readings: (a) regression - add's id write-back now refuses repros without --test and the fixture (or add) must be fixed so g reaches next --claim; (b) intended - stricter add, fixture stale; re-anchor fixture to a --test repro. Tell apart: git log -S 'names no' crates/backlog/src for when the write-back refusal landed and whether g was green before it. DOES NOT PROVE: which side is correct."""
+created_at = 1795268999
+updated_at = 1795268999
+weight = 0.0
+issue_number = 1960
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1960"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close g_cargo_zero_tests_at_head_is_auto_cancelled"
+rev = "712b08cbaa6cd6db67a3ee79d2fb261742ee15ca"
+observed_at = 1795268999
+detail = """
+exit 101: mpiling backlog v0.3.153 (/Users/yuki/src/.harness-worktrees/sidefind-eaa077f4/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.21s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-48f55df2b4fe919f)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_no_deferral_auto_close`"""

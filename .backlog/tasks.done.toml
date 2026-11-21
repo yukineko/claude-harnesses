@@ -92262,3 +92262,61 @@ rev = "a69aa0612d321e919bd498e93e0fe2089c3aac1b"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "76e1bb3f"
+title = "test_rebuild_current_version_only: fixture lacks askrelay (new GATE crate) so check-plugin-rollout reports UNVERIFIABLE PLUGIN and exits 3"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "deploy-verify",
+    "test-fixture",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-21 at main 99b2bff81 (and at fix/rollout-selfcontained-script): FAIL test_old_bytes_in_live_held_superseded_dir_pass, line 285 AssertionError: 3 != 0 : checker demanded a superseded dir match the build; err='UNVERIFIABLE PLUGIN (1 problem(s)) ... askrelay: GATE crate has no readable plugin.json under crates/ (deleted, renamed, or corrupted).' Readings: (a) test fixture is stale: it builds a fake crates/ without askrelay, which became a GATE crate (gate list in check-plugin-rollout/GATE_CRATES); fixture must include every GATE crate or derive the list; (b) the checker should not require GATE crates absent from the fixture repo. Tell apart: whether check-plugin-rollout takes the GATE list from the repo under test or a hard-coded list.
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: python3 -m pytest scripts/test_rebuild_current_version_only.py::CheckerAcceptsFrozenSuperseded::test_old_bytes_in_live_held_superseded_dir_pass; rev: 6f56c83f81c29b27c0bcb32166755da8834f324c; observed: exit 0: ======== test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-62e92d16
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_rebuild_current_version_only.py .                           [100%]
+
+============================== 1 passed in 0.15s ==============================="""
+created_at = 1795199570
+updated_at = 1795264336
+weight = 0.0
+issue_number = 1910
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1910"
+issue_closed_at = 1795264339
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_rebuild_current_version_only.py::CheckerAcceptsFrozenSuperseded::test_old_bytes_in_live_held_superseded_dir_pass"
+rev = "99b2bff819c79155c90a42068c4c5bdbd715136e"
+observed_at = 1795199570
+detail = """
+exit 1: enabledPlugins edit can fix this class.
+
+scripts/test_rebuild_current_version_only.py:285: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_rebuild_current_version_only.py::CheckerAcceptsFrozenSuperseded::test_old_bytes_in_live_held_superseded_dir_pass
+============================== 1 failed in 0.37s ==============================="""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: python3 -m pytest scripts/test_rebuild_current_version_only.py::CheckerAcceptsFrozenSuperseded::test_old_bytes_in_live_held_superseded_dir_pass; rev: 6f56c83f81c29b27c0bcb32166755da8834f324c; observed: exit 0: ======== test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-62e92d16
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_rebuild_current_version_only.py .                           [100%]
+
+============================== 1 passed in 0.15s ==============================="""

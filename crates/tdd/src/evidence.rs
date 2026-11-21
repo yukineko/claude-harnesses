@@ -272,6 +272,19 @@ impl T {
     }
 }
 
+/// libtest's `running 1 test` / `running 5 tests` header (line start).
+fn is_running_line(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix("running ") else {
+        return false;
+    };
+    let Some((n, word)) = rest.split_once(' ') else {
+        return false;
+    };
+    !n.is_empty()
+        && n.bytes().all(|b| b.is_ascii_digit())
+        && matches!(word.trim(), "test" | "tests")
+}
+
 fn parse_test_line(line: &str) -> Option<(String, T)> {
     let rest = line.strip_prefix("test ")?;
     let (name, status) = rest.split_once(" ... ")?;
@@ -343,6 +356,12 @@ pub fn parse_test_log(log: &Path) -> (Value, Value) {
     let mut tests: BTreeMap<String, T> = BTreeMap::new();
     let (mut p, mut f, mut i, mut results) = (0u64, 0u64, 0u64, 0u64);
     let mut buf = Vec::new();
+    // libtest framing: per-test result lines count only inside a
+    // `running N test(s)` block and before that block's `failures:` section
+    // (captured output there may embed nested `test x ... FAILED` lines).
+    // A log with no `running` line at all is unframed: keep the conservative
+    // line scan (every matching line counts).
+    let (mut framed, mut in_block, mut in_failures) = (false, false, false);
     loop {
         buf.clear();
         match reader.read_until(b'\n', &mut buf) {
@@ -361,7 +380,20 @@ pub fn parse_test_log(log: &Path) -> (Value, Value) {
         }
         let line = String::from_utf8_lossy(&buf);
         let line = line.trim_end_matches(['\n', '\r']);
-        if let Some((name, t)) = parse_test_line(line) {
+        if is_running_line(line) {
+            if !in_failures {
+                framed = true;
+                in_block = true;
+            }
+            continue;
+        }
+        if line == "failures:" && in_block {
+            in_failures = true;
+            continue;
+        }
+        let accept = !framed || (in_block && !in_failures);
+        let parsed = if accept { parse_test_line(line) } else { None };
+        if let Some((name, t)) = parsed {
             tests
                 .entry(name)
                 .and_modify(|old| {
@@ -375,6 +407,8 @@ pub fn parse_test_log(log: &Path) -> (Value, Value) {
             f = f.saturating_add(b);
             i = i.saturating_add(c);
             results += 1;
+            in_block = false;
+            in_failures = false;
         }
     }
     let tests: serde_json::Map<String, Value> = tests

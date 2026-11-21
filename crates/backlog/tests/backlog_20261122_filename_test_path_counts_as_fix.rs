@@ -59,7 +59,7 @@ fn assert_claim_hands_out_x_after_test_only_commit(tag: &str, test_path: &str, b
 }
 
 #[test]
-#[ignore = "RED: a filename-identified test file (scripts/test_*.py) counts as a product change"]
+#[ignore = "RED(45ea34e7): a filename-identified test file (scripts/test_*.py) counts as a product change"]
 fn python_test_file_by_filename_is_not_a_fix() {
     assert_claim_hands_out_x_after_test_only_commit(
         "fname-test-py",
@@ -69,7 +69,7 @@ fn python_test_file_by_filename_is_not_a_fix() {
 }
 
 #[test]
-#[ignore = "RED: a filename-identified test file (src/*_test.rs) counts as a product change"]
+#[ignore = "RED(45ea34e7): a filename-identified test file (src/*_test.rs) counts as a product change"]
 fn rust_test_file_by_filename_is_not_a_fix() {
     assert_claim_hands_out_x_after_test_only_commit(
         "fname-test-rs",

@@ -1,4 +1,4 @@
-use super::segment::segment_spans;
+use super::segment::{quote_escape_byte_pair, segment_spans};
 use super::{
     has_glob_meta, has_unresolvable_expansion, here_document_layout, is_relative_operand,
     is_shell_identifier, line_changes_cwd_before, referenced_variable_name,
@@ -901,6 +901,12 @@ pub(super) fn redirect_targets(seg: &str) -> Vec<String> {
             i += 1;
             continue;
         }
+        // An escaped quote/backslash (`\"`, `\\`) is one literal character
+        // and changes no quote state (backlog bfbb50ac).
+        if quote_escape_byte_pair(bytes, i, in_s, in_d) {
+            i += 2;
+            continue;
+        }
         if c == b'>' && !in_s && !in_d {
             let prev = if i > 0 { bytes[i - 1] } else { 0 };
             let next = *bytes.get(i + 1).unwrap_or(&0);
@@ -1019,6 +1025,11 @@ pub(super) fn append_redirect_targets(seg: &str) -> Vec<String> {
         if c == b'"' && !in_s {
             in_d = !in_d;
             i += 1;
+            continue;
+        }
+        // Same escape rule as `redirect_targets` (backlog bfbb50ac).
+        if quote_escape_byte_pair(bytes, i, in_s, in_d) {
+            i += 2;
             continue;
         }
         if c == b'>' && !in_s && !in_d && bytes.get(i + 1) == Some(&b'>') {

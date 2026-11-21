@@ -274,12 +274,39 @@ pub(super) fn quote_escape_pair(
         return None;
     }
     let next = *chars.get(i + 1)?;
-    let escapes = if in_d {
+    backslash_escapes_quote_state(next, in_d).then(|| &chars[i..i + 2])
+}
+
+/// The escape set shared by [`quote_escape_pair`] and
+/// [`quote_escape_byte_pair`]: true when a backslash (outside single quotes)
+/// followed by `next` is an escape that would otherwise change quote state.
+/// Inside double quotes any other `\x` (`\|`, `\&`, `\'`) is a literal
+/// backslash and escapes nothing.
+fn backslash_escapes_quote_state(next: char, in_d: bool) -> bool {
+    if in_d {
         matches!(next, '"' | '\\' | '`')
     } else {
         matches!(next, '\'' | '"' | '\\' | '`')
-    };
-    escapes.then(|| &chars[i..i + 2])
+    }
+}
+
+/// Byte-level mirror of [`quote_escape_pair`] for the scanners that walk
+/// `seg.as_bytes()` (the redirect-target readers in `redirect.rs`): true when
+/// the backslash at `bytes[i]` and the byte after it form an escape pair the
+/// shell reads as one literal character. Every character in the escape set is
+/// ASCII, so a multi-byte UTF-8 sequence after the backslash never matches
+/// and skipping the pair never lands inside a character.
+///
+/// Backlog bfbb50ac: `redirect_targets` toggled `"` with no escape handling,
+/// so `echo "x \\\" y > z"` (one double-quoted word) closed its quote at the
+/// escaped `\"` and read the quoted `>` as a truncating redirect onto `z"`.
+pub(super) fn quote_escape_byte_pair(bytes: &[u8], i: usize, in_s: bool, in_d: bool) -> bool {
+    if in_s || bytes.get(i) != Some(&b'\\') {
+        return false;
+    }
+    bytes
+        .get(i + 1)
+        .is_some_and(|&next| next.is_ascii() && backslash_escapes_quote_state(next as char, in_d))
 }
 
 /// Quote-aware split of a command line into individual simple-command segments

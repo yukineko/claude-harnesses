@@ -9,6 +9,7 @@ use super::{
 
 pub(super) mod new_layer;
 mod operand_words;
+mod prefix_inert;
 pub(super) use operand_words::has_unquoted_glob;
 use operand_words::{
     expand_operand_with, place_literal, rm_operand_words, OperandSpelling, Placed, VarLookup,
@@ -1059,6 +1060,7 @@ const PREFIX_INERT_VERBS: &[&str] = &["cp", "echo", "printf", "true", "pwd", "ls
 ///   * only `NAME=value` words, no quote, `$`, glob, and no `NAME` that can
 ///     change how a later command runs ([`shell_behaviour_variable`]: `PATH`,
 ///     `IFS`, `LD_*`, any name already in the environment, …);
+///   * `mkdir` with only the `-p` option, plain operands (no `$`, glob, quote);
 ///   * a [`PREFIX_INERT_VERBS`] command with no quote and no `>`. For `cp`,
 ///     every `$NAME` must name a value assigned by an earlier prefix segment
 ///     and, after substituting it, no word may start with `-` or carry a glob.
@@ -1077,7 +1079,13 @@ pub(super) fn write_prefix_cannot_relink(line: &str, idx: usize) -> bool {
     let mut assigned: Vec<(String, String)> = Vec::new();
     for (k, seg) in segs[..=idx].iter().enumerate() {
         let text = seg.text.as_str();
-        if text.contains(['`', '(', ')', '{', '}', '<', '\\', '&', '\n', '\r']) {
+        // The write segment may end in a quoted here-document opener.
+        let checked = if k == idx {
+            prefix_inert::strip_quoted_heredoc_opener(text)
+        } else {
+            text
+        };
+        if checked.contains(['`', '(', ')', '{', '}', '<', '\\', '&', '\n', '\r']) {
             return false;
         }
         if k == idx {
@@ -1116,6 +1124,10 @@ pub(super) fn write_prefix_cannot_relink(line: &str, idx: usize) -> bool {
                 }
                 assigned.retain(|(n, _)| n != name);
                 assigned.push((name.to_string(), value.to_string()));
+            }
+        } else if head == "mkdir" {
+            if !prefix_inert::mkdir_is_inert(&words[1..]) {
+                return false;
             }
         } else if !PREFIX_INERT_VERBS.contains(&head) {
             return false;

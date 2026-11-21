@@ -172,7 +172,6 @@ fn cat_redirect(dir: &Path) -> String {
 /// RED: observed shape, relative `>` target after `cd` into a registered
 /// linked worktree of the session's repo.
 #[test]
-#[ignore = "backlog (see .backlog): shell > redirect after cd into a linked worktree under .harness-worktrees, session = primary checkout, gets the whose-tree Deny (FP)"]
 fn cd_then_cat_redirect_into_linked_worktree_is_not_whose_tree_deny() {
     let fx = Fx::new("cd");
     let cmd = cat_redirect(&fx.wt);

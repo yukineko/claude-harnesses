@@ -1024,3 +1024,88 @@ fn c_mixed_allowed_and_untouched_crate_tests_is_denied() {
         "allowed --test new_untracked of x plus --test y_t of untouched crate y",
     );
 }
+
+// ── C'': fail-opens of the changed-crate branch (skeptic review of 1a0381494) ──
+//
+// Skeptic finding (1), as relayed: "Clustered short flags hide a package:
+// `cargo test -qp blastguard -p <changed-crate> --test <t>` — package_specs does
+// not see `-qp blastguard`, so only the changed crate is checked and the command
+// is allowed, while cargo selects blastguard too."
+// Premise observed (cargo 1.97.1, 2026-11-21) in a scratch package `probe`:
+//   `cargo test -qp nosuchzz --test aa`  -> "error: package ID specification
+//     `nosuchzz` did not match any packages" (exit 101)
+//   `cargo test -qpnosuchzz --test aa`   -> same error, exit 101
+//   `cargo pkgid -vp condukt`            -> resolves condukt, exit 0
+// i.e. cargo parses `-qp <spec>`, `-qp<spec>` and `-vp <spec>` as `-q/-v -p <spec>`.
+//
+// Skeptic finding (2), as relayed: "`cargo test -p <changed-crate> --test '*'`
+// is allowed by the new branch, but cargo expands the glob to every
+// integration test of the crate (≈ `--tests`, which testscope denies as a full
+// suite)."
+// Premise observed: cargo-test(1) man page, Target Selection: "Note that
+// --bin, --example, --test and --bench flags also support common Unix glob
+// patterns like *, ? and []." and in the scratch package
+// `cargo test -p probe --test '*'` ran both tests/aa.rs and tests/bb.rs.
+//
+// Expected (CLAUDE.md §3): both shapes are refused — a `--test` value that is
+// not a plain test name, or a short-flag cluster that may carry `p`, does not
+// reach allow.
+//
+// DOES NOT PROVE: which fix shape is used (parse clusters vs refuse them); other
+// short flags cargo might cluster with `p` beyond `-q`/`-v`; `--bin`/`--example`
+// globs (already denied as Kind selectors outside reproduction_tests); that a
+// glob named in reproduction_tests is handled any particular way.
+
+#[test]
+fn c_clustered_qp_untouched_crate_beside_changed_crate_is_denied() {
+    let fx = crates_fixture();
+    assert_deny(
+        &hook(&fx.env, "s", "cargo test -qp y -p x --test old_t", &fx.wt),
+        "`-qp y` selects untouched crate y beside changed crate x",
+    );
+}
+
+#[test]
+fn c_clustered_qp_attached_untouched_crate_beside_changed_crate_is_denied() {
+    let fx = crates_fixture();
+    assert_deny(
+        &hook(&fx.env, "s", "cargo test -qpy -p x --test old_t", &fx.wt),
+        "`-qpy` selects untouched crate y beside changed crate x",
+    );
+}
+
+#[test]
+fn c_clustered_vp_untouched_crate_beside_changed_crate_is_denied() {
+    let fx = crates_fixture();
+    assert_deny(
+        &hook(&fx.env, "s", "cargo test -vp y -p x --test old_t", &fx.wt),
+        "`-vp y` selects untouched crate y beside changed crate x",
+    );
+}
+
+#[test]
+fn c_test_star_glob_of_changed_crate_is_denied() {
+    let fx = crates_fixture();
+    assert_deny(
+        &hook(&fx.env, "s", "cargo test -p x --test '*'", &fx.wt),
+        "`--test '*'` expands to every integration test of crate x",
+    );
+}
+
+#[test]
+fn c_test_eq_question_glob_of_changed_crate_is_denied() {
+    let fx = crates_fixture();
+    assert_deny(
+        &hook(&fx.env, "s", "cargo test -p x '--test=old_?'", &fx.wt),
+        "`--test=old_?` is a glob, not a plain test name",
+    );
+}
+
+#[test]
+fn c_test_bracket_glob_of_changed_crate_is_denied() {
+    let fx = crates_fixture();
+    assert_deny(
+        &hook(&fx.env, "s", "cargo test -p x --test '[or]*'", &fx.wt),
+        "`--test '[or]*'` is a glob matching old_t and repro_t",
+    );
+}

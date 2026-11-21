@@ -133,7 +133,6 @@ fn printf_shadowed_by_function_then_procsub_is_not_allow() {
 // --------------------------------------- (B) system harm Ask, not Deny
 
 #[test]
-#[ignore = "backlog c0a0ddea: RED: echo -e hex-escaped harmful program piped through cat to bash is Ask, not Deny"]
 fn echo_e_hex_escape_through_cat_to_bash_is_deny() {
     expect_deny(r#"echo -e 'rm -rf /\x65tc' | cat | bash"#, "b-hex");
 }

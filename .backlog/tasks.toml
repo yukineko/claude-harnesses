@@ -1113,38 +1113,6 @@ exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finish
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
 
 [[task]]
-id = "c0a0ddea"
-title = "blastguard: echo -e hex-escaped harmful program piped through cat to bash is Ask, not Deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn echo_e_hex_escape_through_cat_to_bash_is_deny"
-created_at = 1795155284
-updated_at = 1795155284
-weight = 0.0
-issue_number = 1893
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1893"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored echo_e_hex_escape_through_cat_to_bash_is_deny --exact"
-rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
-observed_at = 1795155284
-detail = """
-exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.59s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
-     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
-
-[[task]]
 id = "11b0b4da"
 title = "blastguard: echo -e newline-split harmful program in a procsub is Ask, not Deny"
 project = "/Users/yuki/src/harness"
@@ -1171,38 +1139,6 @@ rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
 observed_at = 1795155305
 detail = """
 exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.60s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
-     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
-
-[[task]]
-id = "c7f288b7"
-title = "blastguard: quote-split harmful echo argument in a procsub is Ask, not Deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn echo_quote_split_argument_in_procsub_is_deny"
-created_at = 1795155325
-updated_at = 1795155325
-weight = 0.0
-issue_number = 1895
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1895"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored echo_quote_split_argument_in_procsub_is_deny --exact"
-rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
-observed_at = 1795155325
-detail = """
-exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.61s
 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
@@ -2181,3 +2117,36 @@ exit 101: LED. 0 passed; 3 failed; 0 ignored; 0 measured; 1 filtered out; finish
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
      Running tests/backlog_20261121_quoted_heredoc_body_gt_fp.rs (target/debug/deps/backlog_20261121_quoted_heredoc_body_gt_fp-45bf214babb824b4)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_quoted_heredoc_body_gt_fp`"""
+
+[[task]]
+id = "1f037eb5"
+title = "blastguard: rg --pre CMD with a protected operand is Allow (rg executes CMD on each searched file)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-21 at main 81a91a05f (session worktree, blastguard 0.2.864): 'rg --pre sh pat .githooks/pre-commit' and 'rg --pre=sh pat .githooks/pre-commit' both return allow in main and subagent mode (expected not Allow). Cause: rg/ag/ack are in READ_ONLY_COMMANDS so unknown_verb_protected_ask (crates/blastguard/src/detect/readonly.rs:184) allows them; rg --pre CMD runs CMD FILE per searched file. Readings: (a) defect: --pre is an exec flag, rg is not data-only with it, Allow is a fail-open; (b) intended if the protected-operand rule guards writes only. rg --help documents --pre as running a command, so (a) unless policy permits executing protected files. Related: 375d7394 control rg --pre rm -rf /etc already not Allow."
+created_at = 1795227480
+updated_at = 1795227480
+weight = 0.0
+issue_number = 1941
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1941"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_rg_pre_protected"
+rev = "cf2a9e86903484b4286fd7a7b98f05144799e63b"
+observed_at = 1795227480
+detail = """
+exit 101: 76s
+
+   Compiling blastguard v0.2.865 (/Users/yuki/src/.harness-worktrees/session-c1b3e891/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.73s
+     Running tests/backlog_20261121_rg_pre_protected.rs (target/debug/deps/backlog_20261121_rg_pre_protected-00e2bb410307acaa)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_rg_pre_protected`"""

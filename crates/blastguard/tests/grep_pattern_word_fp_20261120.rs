@@ -285,9 +285,6 @@ fn minimal_grep_plain_word_twin_is_allow() {
 fn control_exec_capable_option_heads_not_allow() {
     not_allow_all(
         "execopt",
-        &[
-            "bat --pager rm -rf /etc",
-            "rg --pre rm -rf /etc x",
-        ],
+        &["bat --pager rm -rf /etc", "rg --pre rm -rf /etc x"],
     );
 }

@@ -1,0 +1,79 @@
+[spec]
+id = "stale-open-runs-27393d5c"
+title = "condukt: stale open run を mark する"
+status = "ratified"
+provenance_commit = "57ddf003c72378d1a80e8813883442581642e923"
+date = "2026-11-22"
+canon = []
+
+[spec.ratification]
+canon_commit = "57ddf003c72378d1a80e8813883442581642e923"
+date = "2026-11-22"
+reason = "推奨案を採る: 隠さず mark、判定不能は live 扱いで残す (fail-closed)、判定は state::open_runs"
+fingerprint = "d7d1839b11aa7968"
+
+[[requirement]]
+id = "R1"
+statement = "state::open_runs の側（state モジュール）に stale 判定を置く。run の経過時間は tasks[].updated_at の最大値と run-state ファイルの mtime の両方から求め、両方が観測できて、どちらも閾値より古いときだけ stale とする。"
+acceptance = [
+    "全 task の updated_at が now-60日、ファイル mtime も now-60日の非終端 run は stale と判定される（state モジュールの unit test で観測）",
+    "updated_at が now-60日でも、ファイル mtime が now（heartbeat で書き直された状態）の run は stale と判定されない",
+    "ファイル mtime が now-60日でも、いずれかの task の updated_at が now の run は stale と判定されない",
+    "全 task の updated_at が None の run は、mtime が古くても stale と判定されない（欠落は live 扱い）",
+    "mtime が読めない（または UNIX_EPOCH より前）の run は stale と判定されない（判定不能は live 扱い）",
+    "updated_at か mtime が now より未来（clock skew）の run は stale と判定されない",
+    "判定は bool への unwrap_or で潰さず、判定不能を live と区別できる形（例: harness_core::verdict::Determination かそれに準じる三値）で表す。少なくとも、判定不能な入力が stale=true にならないことを unit test で観測する",
+]
+canon = [
+    "crates/condukt/src/state.rs:627-638 (open_runs)",
+    "crates/condukt/src/claim.rs:836-840 (mtime tracks LIVENESS, updated_at tracks progress)",
+    "CLAUDE.md §3 判定不能は必ず制限側に解決する",
+    "要望: 判定不能 (タイムスタンプ読めない・欠落) は live 扱いで残す / 経過時間は tasks[].updated_at と file mtime から求める",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R2"
+statement = "stale の閾値を名前付き定数として 1 箇所で定義する。値は 0 より大きく 60 日以下にし、境界をテストで固定する。"
+acceptance = [
+    "condukt クレート内に stale 閾値（秒）の名前付き定数が 1 つだけあり、判定ロジックはそれだけを参照する（grep で数値リテラルの重複が無いことを確認）",
+    "定数の値は 0 < T <= 60*24*60*60",
+    "経過が T を超えた run は stale、T 未満の run は stale でないことを、境界の両側の値で unit test が固定する",
+]
+canon = [
+    "crates/condukt/tests/backlog_scout_20261112_f4_stale_open_runs.rs:29 (const SIXTY_DAYS)",
+    "要望: 閾値は定数として明示し、テストが観測する 60 日の run が stale になる値にする (具体値は実装者が決め、テストで固定する)",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R3"
+statement = "condukt state list は stale な run を隠さずに出し、その行に stale の印を付ける。stale でない run の行の書式は変えない。main.rs は state 側の判定を表示するだけにする。"
+acceptance = [
+    "cargo test -p condukt --test backlog_scout_20261112_f4_stale_open_runs は、#[ignore] を外しただけ（assert は無変更）で pass する。その前に修正前の rev で RED を観測しておく",
+    'stale と判定された run の行は `{run_id}\t` で始まり、小文字化すると `stale` を含む（一覧から消えない）',
+    'stale でない run の行は、変更前の書式 `{run_id}\t{done}/{total}\t{goal}{paused_tag}{label_tag}` とバイト単位で一致する',
+    "main.rs の StateAction::List 分岐は updated_at・mtime・閾値を直接読まず、state モジュールが返す判定だけで印を付ける（コードレビューで観測できる）",
+    "stale に追加の条件を付けたことで state list の終了コードは変わらない（stale run があっても exit 0）",
+]
+canon = [
+    "crates/condukt/src/main.rs:5284-5296 (StateAction::List)",
+    "crates/condukt/tests/backlog_scout_20261112_f4_stale_open_runs.rs:184-199",
+    "要望: 隠さず stale と mark する / main.rs の一覧は表示のみ",
+]
+falsifiable = true
+
+[[requirement]]
+id = "R4"
+statement = "stale の印を付けても、open_runs が返す run の集合は変えない。他の消費者（SessionStart restore hook・statusline・status・claim liveness）の扱う run は減らさない。"
+acceptance = [
+    "60日前の非終端 run と新しい非終端 run が両方あるとき、open_runs（またはその置き換え）が返す run の数は 2 で、変更前と同じ",
+    "claim::liveness::run_liveness は、60日前で claim の無い非終端 run に対して変更前と同じく RunLiveness::Live を返す（stale でも Dead にしない）",
+    "既存の condukt テスト（hooks/restore・statusline・status・claim/liveness に関するもの）が変更後も pass する。対象を絞ったテスト実行で確認する",
+]
+canon = [
+    "crates/condukt/src/state.rs:627-629 (Used by the SessionStart hook and `state list`)",
+    'crates/condukt/src/claim/liveness.rs:53-61 ("No claims" is not "dead")',
+    "要望: 隠すと、タイムスタンプが読めない live run が一覧から消えうる (fail-open)",
+]
+falsifiable = true

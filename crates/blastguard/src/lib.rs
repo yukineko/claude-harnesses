@@ -29,11 +29,17 @@
 //! it, and it can only ever downgrade an `Ask` to an `Allow` — so a library
 //! consumer that never builds a `Store` gets exactly the gate it got before this
 //! module existed.
+//!
+//! [`flow_driver`] reads the backlog driver registry (filesystem I/O, paths
+//! passed in by the binary) so the hook can apply the `/flow` driver ruling
+//! (never `ask` in a registered driver session); a library consumer that never
+//! calls it gets the gate unchanged.
 
 pub mod approve;
 pub mod deletion;
 pub mod detect;
 pub mod exclude;
+pub mod flow_driver;
 pub mod hookio;
 pub mod interactive;
 pub mod model;

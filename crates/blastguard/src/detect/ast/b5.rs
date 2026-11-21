@@ -86,6 +86,16 @@
 //!   `LD_*` / `DYLD_*` variable anywhere on the line withholds it. Without a
 //!   session cwd and resolver (every library consumer) git is never asked
 //!   and the file run stays Undetermined.
+//! * **`/flow` driver session (user ruling 2026-11-21).** Only when the hook
+//!   binary observed the session as a live registered `/flow` driver
+//!   ([`crate::flow_driver`], [`crate::scope::SafeRoots::with_driver_programs`]):
+//!   an interpreter file run or a direct execution, top-level, whose program
+//!   file is a regular file inside the session scratchpad or under the own
+//!   worktree's `target/` ([`driver_trusted`]) gets no B.5 opinion, with the
+//!   same "no other part of the line may write it" rule as T1; an injecting
+//!   variable withholds it except a literal `PATH` of system bin directories
+//!   only. Every other undetermined case stays `Ask` here and the driver
+//!   session turns it into a `Deny`.
 //! * **T3 — noexec.** A shell whose options before the operand are only
 //!   `-n` clusters (with `x` / `v` / `e` / `u`) gets no B.5 opinion;
 //!   `-ni`, `-n -c BODY` (BODY judged as if run) and `x.sh -n` (a script
@@ -641,6 +651,12 @@ fn classify(
         if depth == 0 && tracked_unmodified(text, commands, idx, &target, judge.scope) {
             return Decision::Allow;
         }
+        // User ruling 2026-11-21: a live `/flow` driver session's own
+        // scratchpad script / own-worktree `target/` binary gets no B.5
+        // opinion (the legacy verdict stands).
+        if depth == 0 && driver_trusted(text, commands, idx, &target, judge.scope) {
+            return Decision::Allow;
+        }
         return undetermined(format_args!(
             "direct execution of the program file `{name}`, whose text is not in the command"
         ));
@@ -735,6 +751,13 @@ fn classify(
             if depth == 0
                 && file_operand_first(fam, args)
                 && tracked_unmodified(text, commands, idx, &path, judge.scope)
+            {
+                return Decision::Allow;
+            }
+            // User ruling 2026-11-21 (live `/flow` driver session).
+            if depth == 0
+                && file_operand_first(fam, args)
+                && driver_trusted(text, commands, idx, &path, judge.scope)
             {
                 return Decision::Allow;
             }
@@ -1608,8 +1631,14 @@ impl Target<'_> {
 /// assignment, `env NAME=V`, `export NAME=V`, an assignment-only command), or
 /// a declarer has an undetermined operand.
 pub(super) fn sets_injecting_var(commands: &[SimpleCommand]) -> bool {
+    sets_var_where(commands, |n, _| injects(n))
+}
+
+/// [`sets_injecting_var`] with `bad(name, literal value)` deciding which
+/// assignment counts (`None` value = not a literal).
+fn sets_var_where(commands: &[SimpleCommand], bad: impl Fn(&str, Option<&str>) -> bool) -> bool {
     commands.iter().any(|c| {
-        if c.assignments.iter().any(|(n, _)| injects(n)) {
+        if c.assignments.iter().any(|(n, v)| bad(n, literal(v).ok())) {
             return true;
         }
         let mut declarer = false;
@@ -1621,11 +1650,96 @@ pub(super) fn sets_injecting_var(commands: &[SimpleCommand]) -> bool {
                 }
                 declarer
                     && s.split_once('=')
-                        .is_some_and(|(n, _)| injects(n.trim_start_matches('-')))
+                        .is_some_and(|(n, v)| bad(n.trim_start_matches('-'), Some(v)))
             }
             Err(_) => declarer,
         })
     })
+}
+
+/// For [`driver_trusted`]: an injecting variable other than a literal `PATH`
+/// made only of [`SYSTEM_BIN_DIRS`] (`env -i PATH=/usr/bin:/bin …`), which
+/// cannot make a command word resolve outside the system binaries.
+fn injects_beyond_system_path(name: &str, value: Option<&str>) -> bool {
+    if name == "PATH" {
+        return !value.is_some_and(|v| v.split(':').all(|d| SYSTEM_BIN_DIRS.contains(&d)));
+    }
+    injects(name)
+}
+
+/// Could any part of the line other than the run itself write the program
+/// file `target` (the run's own redirects count)? The rule of
+/// [`tracked_unmodified`]: commands after the run in the text are skipped only
+/// when the run is top-level and the line has no loop or function.
+fn line_may_write(
+    text: &str,
+    commands: &[SimpleCommand],
+    run_cmd: &SimpleCommand,
+    run: usize,
+    target: &Target<'_>,
+) -> bool {
+    let all = run_cmd.context != Context::TopLevel || has_loop_or_function(text);
+    commands.iter().enumerate().any(|(j, c)| {
+        let relevant = j == run || all || c.span.start < run_cmd.span.end;
+        relevant && target.may_write(c, j == run)
+    })
+}
+
+/// User ruling 2026-11-21 (「非破壊はAllow、他はDeny」, refined
+/// 「またaskされてたけど、これもallowに」): in a session the hook observed as a
+/// live registered `/flow` driver, the program file `path` run by
+/// `commands[run]` gets no B.5 opinion when it is a regular file whose real
+/// path [`crate::scope::SafeRoots::driver_trusts_program`] accepts (the
+/// session scratchpad, the own worktree's `target/`), no other part of the
+/// line may write it ([`line_may_write`]) and no injecting variable is set
+/// on the line except a system-only `PATH` ([`injects_beyond_system_path`]).
+/// Anything undecidable is `false` (the Ask stands, and the driver session
+/// turns it into a Deny).
+fn driver_trusted(
+    text: &str,
+    commands: &[SimpleCommand],
+    run: usize,
+    path: &Value,
+    scope: &crate::scope::SafeRoots,
+) -> bool {
+    let Value::Literal(p) = path else {
+        return false;
+    };
+    let Some(run_cmd) = commands.get(run) else {
+        return false;
+    };
+    let Some(hook_cwd) = scope.session_cwd() else {
+        return false;
+    };
+    if sets_var_where(commands, injects_beyond_system_path) {
+        return false;
+    }
+    let harness_core::verdict::Determination::Known(lex) =
+        scope.lexical_absolute(p, Some(hook_cwd))
+    else {
+        return false;
+    };
+    let Some(real) = scope.resolve(&lex) else {
+        return false;
+    };
+    match std::fs::symlink_metadata(&real) {
+        Ok(m) if m.file_type().is_file() => {}
+        Ok(_) | Err(_) => return false,
+    }
+    if !scope.driver_trusts_program(&real) {
+        return false;
+    }
+    let target = Target {
+        base: basename(&lex),
+        lex: lex.clone(),
+        real: real.clone(),
+        hook_cwd,
+        scope,
+    };
+    if target.base.is_empty() {
+        return false;
+    }
+    !line_may_write(text, commands, run_cmd, run, &target)
 }
 
 /// The line has a loop or a function, so a command written AFTER the run in
@@ -1683,12 +1797,8 @@ fn tracked_unmodified(
     if target.base.is_empty() {
         return false;
     }
-    let all = run_cmd.context != Context::TopLevel || has_loop_or_function(text);
-    for (j, c) in commands.iter().enumerate() {
-        let relevant = j == run || all || c.span.start < run_cmd.span.end;
-        if relevant && target.may_write(c, j == run) {
-            return false;
-        }
+    if line_may_write(text, commands, run_cmd, run, &target) {
+        return false;
     }
     git_tracked_clean(scope, hook_cwd, &real)
 }

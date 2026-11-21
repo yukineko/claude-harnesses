@@ -65,6 +65,7 @@ key=""
 case "$tool:$1:$2" in
   backlog:driver:status) key=driver_status ;;
   condukt:state:claims) key=claims ;;
+  condukt:state:is-claimed) key=is_claimed ;;
   condukt:circuit:check) key=circuit ;;
 esac
 if [ -z "$key" ] && [ "$tool:$1" = "backlog:next" ]; then key=next; fi
@@ -210,6 +211,43 @@ impl Fixture {
         self.set("next", &format!("{out}\n"), 0);
     }
 
+    /// A pending task whose `backlog next` JSON has no `hashkey`.
+    fn next_task_no_hashkey(&self) {
+        let out = json!({
+            "id": TASK_ID,
+            "title": TASK_TITLE,
+            "status": "pending",
+            "priority": 1,
+        });
+        self.set("next", &format!("{out}\n"), 0);
+    }
+
+    /// Stub answer for `condukt state is-claimed`.
+    fn is_claimed(&self, out: &str, code: i32) {
+        self.set("is_claimed", out, code);
+    }
+
+    /// is-claimed: not claimed (exit 1, `"claimed": false`).
+    fn is_claimed_unclaimed(&self) {
+        self.is_claimed("{\"claimed\": false}\n", 1);
+    }
+
+    /// is-claimed: held by `holder` (exit 0, `"claimed": true`).
+    fn is_claimed_by(&self, holder: &str) {
+        let out = json!({"claimed": true, "holder_run": holder});
+        self.is_claimed(&format!("{out}\n"), 0);
+    }
+
+    /// Live driver, pending task WITH hashkey, everything determinable except
+    /// the is-claimed answer, which the caller sets.
+    fn live_with_task_claim_unset(&self) {
+        self.register(SESSION);
+        self.status_live(SESSION);
+        self.next_task();
+        self.claims_empty();
+        self.circuit_continue();
+    }
+
     fn next_none(&self) {
         self.set("next", "no pending tasks\n", 0);
     }
@@ -238,11 +276,9 @@ impl Fixture {
 
     /// Fully determinable state with remaining work (case 3).
     fn live_with_task(&self) {
-        self.register(SESSION);
-        self.status_live(SESSION);
-        self.next_task();
-        self.claims_empty();
-        self.circuit_continue();
+        self.live_with_task_claim_unset();
+        // The task is nobody else's: is-claimed says unclaimed, so it is work.
+        self.is_claimed_unclaimed();
     }
 
     fn run(&self, stop_hook_active: bool) -> Outcome {
@@ -495,6 +531,130 @@ fn circuit_check_is_invoked_with_flow_run_session_and_no_compaction_axis() {
     }
 }
 
+// ─── backlog e1e8c632: pending task claimed by another run ──────────────────
+//
+// Only `condukt state is-claimed --hashkey H` exit 0 + "claimed": true + a
+// non-empty holder_run != flow-<SESSION> excludes the pending task. Every
+// other answer must block.
+
+/// Live driver, pending task, is-claimed answered as given; must block.
+fn assert_claim_answer_blocks(out: &str, code: i32) {
+    let f = Fixture::new();
+    f.live_with_task_claim_unset();
+    f.is_claimed(out, code);
+    let o = f.run(false);
+    o.assert_block();
+    assert!(
+        f.calls().contains("is-claimed"),
+        "is-claimed must have been consulted; calls:\n{}",
+        f.calls()
+    );
+}
+
+#[test]
+fn pending_task_claimed_by_other_run_allows() {
+    let f = Fixture::new();
+    f.live_with_task_claim_unset();
+    f.is_claimed_by("run-20261121-000000-1");
+    f.run(false).assert_allow();
+}
+
+#[test]
+fn is_claimed_is_called_with_the_pending_tasks_hashkey() {
+    let f = Fixture::new();
+    f.live_with_task_claim_unset();
+    f.is_claimed_by("run-20261121-000000-1");
+    f.run(false).assert_allow();
+    let calls = f.calls();
+    let hk = format!("hk-{TASK_ID}");
+    let found = calls
+        .lines()
+        .map(|l| l.split('\t').collect::<Vec<_>>())
+        .filter(|c| {
+            c.first() == Some(&"condukt")
+                && c.get(2) == Some(&"state")
+                && c.get(3) == Some(&"is-claimed")
+        })
+        .any(|c| {
+            let args = &c[2..];
+            args.windows(2).any(|w| w[0] == "--hashkey" && w[1] == hk)
+                || args.iter().any(|a| *a == format!("--hashkey={hk}"))
+        });
+    assert!(
+        found,
+        "condukt state is-claimed --hashkey {hk} must be called; calls:\n{calls}"
+    );
+}
+
+#[test]
+fn pending_task_without_hashkey_blocks() {
+    let f = Fixture::new();
+    f.live_with_task_claim_unset();
+    f.next_task_no_hashkey();
+    // Even a "claimed by other" answer must not exclude a task that cannot be
+    // looked up by hashkey.
+    f.is_claimed_by("run-20261121-000000-1");
+    f.run(false).assert_block();
+}
+
+#[test]
+fn pending_task_unclaimed_blocks() {
+    assert_claim_answer_blocks("{\"claimed\": false}\n", 1);
+}
+
+#[test]
+fn pending_task_claimed_by_own_flow_run_blocks() {
+    let out = json!({"claimed": true, "holder_run": format!("flow-{SESSION}")});
+    assert_claim_answer_blocks(&format!("{out}\n"), 0);
+}
+
+#[test]
+fn is_claimed_exit_2_blocks() {
+    let out = json!({"claimed": true, "holder_run": "run-other"});
+    assert_claim_answer_blocks(&format!("{out}\n"), 2);
+}
+
+#[test]
+fn is_claimed_exit_3_blocks() {
+    let out = json!({"claimed": true, "holder_run": "run-other"});
+    assert_claim_answer_blocks(&format!("{out}\n"), 3);
+}
+
+#[test]
+fn is_claimed_exit0_holder_null_blocks() {
+    assert_claim_answer_blocks("{\"claimed\": true, \"holder_run\": null}\n", 0);
+}
+
+#[test]
+fn is_claimed_exit0_holder_missing_blocks() {
+    assert_claim_answer_blocks("{\"claimed\": true}\n", 0);
+}
+
+#[test]
+fn is_claimed_exit0_holder_empty_blocks() {
+    assert_claim_answer_blocks("{\"claimed\": true, \"holder_run\": \"\"}\n", 0);
+}
+
+#[test]
+fn is_claimed_exit0_claimed_false_blocks() {
+    assert_claim_answer_blocks("{\"claimed\": false, \"holder_run\": \"run-other\"}\n", 0);
+}
+
+#[test]
+fn is_claimed_exit1_claimed_true_blocks() {
+    assert_claim_answer_blocks("{\"claimed\": true, \"holder_run\": \"run-other\"}\n", 1);
+}
+
+#[test]
+fn is_claimed_garbage_stdout_blocks() {
+    assert_claim_answer_blocks("{not json at all\n", 0);
+}
+
+#[test]
+fn is_claimed_empty_stdout_blocks() {
+    assert_claim_answer_blocks("", 0);
+}
+
 // ─── 4, 5: claims ───────────────────────────────────────────────────────────
 
 #[test]
@@ -692,6 +852,8 @@ fn determined_outcome_resets_bounded_undetermined_state() {
     // Now everything is determinable and work exists: re-entry must BLOCK,
     // not take the bounded allow left over from the undetermined stop.
     f.next_task();
+    // Determined, not merely undetermined-by-absence: the task is unclaimed.
+    f.is_claimed_unclaimed();
     let determined = f.run(true);
     determined.assert_block();
     assert!(

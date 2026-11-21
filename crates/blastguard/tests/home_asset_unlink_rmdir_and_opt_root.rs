@@ -11,25 +11,39 @@
 //!
 //! Every Deny test is paired with an Allow control on the same code path, so a
 //! pass cannot be "everything is denied".
+//!
+//! Fixture note (user ruling 12, 2026-11-17, SUBSET.md): `~` / `$HOME` /
+//! `${HOME}` resolve to the hook process env HOME. Production builds
+//! `SafeRoots` home from that same HOME (`main.rs` `safe_roots`), so this
+//! fixture takes HOME from the process env instead of a hard-coded
+//! `/home/yuki` (which diverged from the process HOME and made `~/.gnupg`
+//! not an asset of the fixture home). Assertions are unchanged.
 
 use blastguard::detect;
 use blastguard::model::Decision;
 use blastguard::scope::SafeRoots;
 use serde_json::json;
 
-const HOME: &str = "/home/yuki";
-const PROJECT: &str = "/home/yuki/proj";
 const OPT_PROJECT: &str = "/opt/myproj";
+
+fn home() -> String {
+    std::env::var("HOME").expect("HOME must be set: production safe_roots builds home from it")
+}
+
+fn project_dir() -> String {
+    format!("{}/proj", home())
+}
 
 fn identity(p: &str) -> Option<String> {
     Some(p.to_string())
 }
 
 fn roots(project: &str) -> SafeRoots {
+    let home = home();
     SafeRoots::new(
         Some(project),
         Some(project),
-        Some(HOME),
+        Some(home.as_str()),
         None,
         Some(identity),
     )
@@ -49,13 +63,14 @@ fn is_deny(d: &Decision) -> bool {
 /// tests below prove nothing about the twin.
 #[test]
 fn control_rm_home_assets_are_deny() {
+    let h = home();
     for cmd in [
-        "rm /home/yuki/.ssh/id_rsa",
-        "rm ~/.ssh/id_rsa",
-        "rm /home/yuki/.zshrc",
-        "rm $HOME/.gitconfig",
+        format!("rm {h}/.ssh/id_rsa"),
+        "rm ~/.ssh/id_rsa".to_string(),
+        format!("rm {h}/.zshrc"),
+        "rm $HOME/.gitconfig".to_string(),
     ] {
-        let d = scoped(PROJECT, cmd);
+        let d = scoped(&project_dir(), &cmd);
         assert!(is_deny(&d), "control: `{cmd}` must be Deny; got {d:?}");
     }
 }
@@ -63,12 +78,13 @@ fn control_rm_home_assets_are_deny() {
 /// Control: ordinary non-asset targets stay Allow on the unlink/rmdir path.
 #[test]
 fn control_unlink_rmdir_ordinary_targets_are_allow() {
+    let h = home();
     for cmd in [
-        "unlink /home/yuki/proj/scratch.txt",
-        "rmdir /home/yuki/proj/emptydir",
-        "unlink /home/yuki/notes.txt",
+        format!("unlink {h}/proj/scratch.txt"),
+        format!("rmdir {h}/proj/emptydir"),
+        format!("unlink {h}/notes.txt"),
     ] {
-        let d = scoped(PROJECT, cmd);
+        let d = scoped(&project_dir(), &cmd);
         assert!(
             matches!(d, Decision::Allow),
             "control: `{cmd}` must stay Allow; got {d:?}"
@@ -78,15 +94,16 @@ fn control_unlink_rmdir_ordinary_targets_are_allow() {
 
 #[test]
 fn unlink_home_asset_is_deny() {
+    let h = home();
     for cmd in [
-        "unlink /home/yuki/.ssh/id_rsa",
-        "unlink ~/.ssh/id_rsa",
-        "unlink $HOME/.ssh/id_rsa",
-        "unlink ${HOME}/.gnupg/pubring.kbx",
-        "unlink /home/yuki/.zshrc",
-        "unlink ~/.gitconfig",
+        format!("unlink {h}/.ssh/id_rsa"),
+        "unlink ~/.ssh/id_rsa".to_string(),
+        "unlink $HOME/.ssh/id_rsa".to_string(),
+        "unlink ${HOME}/.gnupg/pubring.kbx".to_string(),
+        format!("unlink {h}/.zshrc"),
+        "unlink ~/.gitconfig".to_string(),
     ] {
-        let d = scoped(PROJECT, cmd);
+        let d = scoped(&project_dir(), &cmd);
         assert!(
             is_deny(&d),
             "`{cmd}` deletes an irreplaceable home asset and must be Deny like `rm`; got {d:?}"
@@ -96,14 +113,15 @@ fn unlink_home_asset_is_deny() {
 
 #[test]
 fn rmdir_home_asset_dir_is_deny() {
+    let h = home();
     for cmd in [
-        "rmdir /home/yuki/.ssh",
-        "rmdir ~/.gnupg",
-        "rmdir $HOME/.ssh/keys",
-        "rmdir ~/.config",
-        "rmdir /home/yuki/.cache",
+        format!("rmdir {h}/.ssh"),
+        "rmdir ~/.gnupg".to_string(),
+        "rmdir $HOME/.ssh/keys".to_string(),
+        "rmdir ~/.config".to_string(),
+        format!("rmdir {h}/.cache"),
     ] {
-        let d = scoped(PROJECT, cmd);
+        let d = scoped(&project_dir(), &cmd);
         assert!(
             is_deny(&d),
             "`{cmd}` removes an irreplaceable home asset dir and must be Deny; got {d:?}"
@@ -153,14 +171,15 @@ fn opt_sibling_write_is_still_system_dir_deny() {
 /// the exemption comes from the session's root, not from the path text.
 #[test]
 fn opt_write_without_session_root_is_deny() {
+    let project = project_dir();
     for cmd in [
         "echo x > /opt/myproj/out.txt",
         "cp a.txt /opt/myproj/ok.txt",
     ] {
-        let d = scoped(PROJECT, cmd);
+        let d = scoped(&project, cmd);
         assert!(
             is_deny(&d),
-            "`{cmd}` with project at {PROJECT} must be Deny; got {d:?}"
+            "`{cmd}` with project at {project} must be Deny; got {d:?}"
         );
     }
 }

@@ -116,6 +116,20 @@ fn is_read_only_command(cmd: &str) -> bool {
     READ_ONLY_COMMANDS.contains(&cmd)
 }
 
+/// True when `cmd` is a read-only command whose words after the head are DATA
+/// (a pattern, paths, text), never a command line the program runs. The
+/// unknown-head tail rule (`unknown_wrapper_ask`) must not re-read them: with
+/// `grep -rn truncate <glob>` the pattern word `truncate` was taken for the
+/// start of a `truncate` command line and the whole command was refused.
+///
+/// The three search tools with an EXECUTION flag are excluded, because for them
+/// the words after the head can be a program: `rg --pre <prog>` runs its
+/// argument as a preprocessor, `ag --pager` and `ack --pager` run theirs as a
+/// pager. Those keep the tail rule, so `rg --pre rm …` still asks.
+pub(super) fn argv_is_data_only(cmd: &str) -> bool {
+    is_read_only_command(cmd) && !matches!(cmd, "rg" | "ag" | "ack")
+}
+
 /// Verdict for a command this module has NO rule for, when one of its operands
 /// names (or contains) a protected gate/hook/policy path.
 ///

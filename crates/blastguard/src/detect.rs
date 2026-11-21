@@ -144,7 +144,7 @@ use fileops::{
     home_asset_deny, mode_removes_exec, mode_removes_read, positional_operands,
 };
 
-use readonly::{is_recognized_command, unknown_verb_protected_ask};
+use readonly::{argv_is_data_only, is_recognized_command, unknown_verb_protected_ask};
 
 use protected::{
     glob_literal_prefix, protected_disarm_deny, protected_glob_deny, protected_landing_block,
@@ -1502,7 +1502,10 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
 ///
 /// Narrowness, which is the whole difficulty here:
 ///   * the head must be UNRECOGNISED — every rule arm and every known wrapper
-///     has already had its say above, and a Deny from there outranks this;
+///     has already had its say above, and a Deny from there outranks this.
+///     A read-only head (`grep`, `echo`, `cat`, …; see
+///     `readonly::argv_is_data_only`) is not an unknown head for this purpose:
+///     its operands are data, so it never asks;
 ///   * only ONE tail is examined: the first token after the head that is not a
 ///     flag, not empty, and not the opening fragment of a quoted STRING
 ///     (`opens_unclosed_quote`, so `mytool -x 'rm -rf' file` reads `'rm` as the
@@ -1661,6 +1664,12 @@ fn unknown_wrapper_ask(
         }
     }
     if is_recognized_command(&normalized_command(tokens[idx])) {
+        return Decision::Allow;
+    }
+    // A read-only head never runs its operands, so there is no command line
+    // behind it to examine: `grep -rn truncate <glob>` has `truncate` as its
+    // PATTERN, not as a command. See `readonly::argv_is_data_only`.
+    if argv_is_data_only(&normalized_command(tokens[idx])) {
         return Decision::Allow;
     }
     // First plausible command-line start behind the unknown head. Redirect

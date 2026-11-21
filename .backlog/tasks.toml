@@ -362,39 +362,6 @@ exit 101: rc/.harness-worktrees/sidereds-20261116/crates/backlog)
 error: test failed, to rerun pass `-p backlog --test backlog_20261116_zero_tests_filtered_out_not_discard`"""
 
 [[task]]
-id = "410e9514"
-title = "backlog test done_closes_issue_inline.rs fails with Author identity unknown since add lands the row via git commit-tree"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "test-fixture",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-17 at cd09054b1. bl() runs the binary with env_clear and HOME set to an empty tempdir and passes no GIT_AUTHOR_* or GIT_COMMITTER_*; since 18f91ae7b add runs git commit-tree in land_row_on_main, which exits 128 (Author identity unknown), so both tests die at the add assertion before the inline-close path they pin. Fixture defect, not a binary defect: add GIT_AUTHOR_NAME/EMAIL, GIT_COMMITTER_NAME/EMAIL and GIT_CONFIG_GLOBAL/SYSTEM=/dev/null like github_mirror_disabled_close_20261117.rs. While red, mirror_close_for inline close has no working end-to-end test here. Update 2026-11-20 (macOS host): the original test passes here only because git auto-detects an identity from the login name and the .local hostname. Host-independent RED: crates/backlog/tests/backlog_20261120_done_inline_close_no_git_identity.rs, function no_detectable_identity_add_then_done_closes_inline (ignored). It runs the same add then done scenario in the bl() env shape plus an empty XDG_CONFIG_HOME, GIT_CONFIG_NOSYSTEM=1 and useConfigOnly in the isolated global config; a probe confirms git var GIT_AUTHOR_IDENT fails there. Observed: add exits 1, commit-tree exited 128 with Author identity unknown, auto-detection is disabled. The sibling auto_detected_identity variant passes on this host. Repro: cargo test -p backlog --test backlog_20261120_done_inline_close_no_git_identity -- --ignored. Open question for the fix: fixture identity env (as the notes propose) versus the binary supplying an identity for its own bookkeeping commits; the new test pins the binary behaviour, so a fixture-only fix leaves it RED."
-created_at = 1794887649
-updated_at = 1795111321
-weight = 0.0
-issue_number = 1911
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1911"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test done_closes_issue_inline"
-rev = "8358077eb972490b4979ba3ecab651d33c0786f4"
-observed_at = 1794887649
-detail = """
-exit 101: ered out; finished in 0.20s
-
-   Compiling backlog v0.3.134 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.95s
-     Running tests/done_closes_issue_inline.rs (target/debug/deps/done_closes_issue_inline-e1737e45ff03d3d8)
-error: test failed, to rerun pass `-p backlog --test done_closes_issue_inline`"""
-
-[[task]]
 id = "39772e9f"
 title = "donegate: a subagent's cd other-worktree && relative-path write is attributed to the parent session's root, so the parent's checks run and block"
 project = "/home/hiroyuki_nakayama/src/harness"

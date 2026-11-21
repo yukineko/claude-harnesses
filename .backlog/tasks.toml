@@ -326,14 +326,17 @@ tags = [
     "p2",
 ]
 touched_files = []
-status = "pending"
-notes = """Observed 2026-11-15 at a8e92b562, worktree c 03a066401, and acf8a59bd: pytest -q scripts/test_backlog_audit_b1_0.py fails with "['test_gate_severity_probe_b.py', 'test_precommit_timing_b.py', 'test_stop_verify_worktree_foreign_writer_20261115.py'] : 06a9d33f: these suites run ZERO tests and exit 0 when invoked directly" (06a9d33f is done = regression). Facts: test_gate_severity_probe_b.py:229 and test_precommit_timing_b.py:147 DO have 'if __name__ == "__main__": raise SystemExit(pytest.main([__file__]))' (pytest-by-design: pytest.mark.xfail RED suites) so they are not zero-test; the audit AST check (_has_main_guard_calling_unittest_main) only accepts unittest.main => reading (b) audit check too narrow for those two. test_stop_verify_worktree_foreign_writer_20261115.py has NO __main__ guard at all (pytest fixtures + xfail) => reading (a) real regression, direct run runs zero tests. Precedent: 16b69d09 (same defect, closed f2p). Fix: add guard to the third file; decide for the two: accept pytest.main in the audit or switch to unittest.main."""
+status = "failed"
+notes = """
+Observed 2026-11-15 at a8e92b562, worktree c 03a066401, and acf8a59bd: pytest -q scripts/test_backlog_audit_b1_0.py fails with "['test_gate_severity_probe_b.py', 'test_precommit_timing_b.py', 'test_stop_verify_worktree_foreign_writer_20261115.py'] : 06a9d33f: these suites run ZERO tests and exit 0 when invoked directly" (06a9d33f is done = regression). Facts: test_gate_severity_probe_b.py:229 and test_precommit_timing_b.py:147 DO have 'if __name__ == "__main__": raise SystemExit(pytest.main([__file__]))' (pytest-by-design: pytest.mark.xfail RED suites) so they are not zero-test; the audit AST check (_has_main_guard_calling_unittest_main) only accepts unittest.main => reading (b) audit check too narrow for those two. test_stop_verify_worktree_foreign_writer_20261115.py has NO __main__ guard at all (pytest fixtures + xfail) => reading (a) real regression, direct run runs zero tests. Precedent: 16b69d09 (same defect, closed f2p). Fix: add guard to the third file; decide for the two: accept pytest.main in the audit or switch to unittest.main.
+flow driver 62e92d16 cannot observe RED: repro 'python3 -m pytest ...' is denied in driver sessions and subagents (python -m: Table B.5 Undetermined). Needs a non-driver session."""
 created_at = 1794746822
-updated_at = 1794746822
+updated_at = 1795292955
+defer_until = 1795465755
 weight = 0.0
 issue_number = 1826
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1826"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

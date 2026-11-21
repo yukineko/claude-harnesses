@@ -1475,9 +1475,11 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
     if let Some(deny) = acc.record(rm::known_path_harm(&tokens, seg, line, seg_idx, ctx)) {
         return deny;
     }
-    // D3: analyse EVERY candidate command-word position; deny if ANY is
-    // destructive. See `command_candidates`.
+    // D3: every candidate command word; deny if ANY is destructive (`command_candidates`).
     for idx in command_candidates(&tokens) {
+        if let Some(deny) = acc.record(readonly::ack_exported_ask(&tokens, idx, line, seg_idx)) {
+            return deny; // a700901f: an earlier segment set ACK_PAGER
+        }
         if let Some(deny) = acc.record(harm_mark::analyze_command_at(
             &tokens,
             idx,
@@ -2194,10 +2196,8 @@ analyse — it cannot tell what this would do, so it refuses to guess"
                 // e93d3701: `kill … -1` signals every process; see `kill.rs`.
                 Decision::deny(reason)
             } else {
-                // Round 2: this arm WAS `Decision::Allow`, i.e. every verb
-                // without a rule reached every protected path unclassified.
-                // See `unknown_verb_protected_ask`. `tokens[..idx]` carries
-                // the env-assignment prefix (`ACK_PAGER=sh ack …`, ba09708a).
+                // Round 2: was `Allow`; see `unknown_verb_protected_ask`.
+                // `tokens[..idx]` = env prefix (`ACK_PAGER=sh ack`, ba09708a).
                 unknown_verb_protected_ask_after(other, &tokens[..idx], rest)
             }
         }

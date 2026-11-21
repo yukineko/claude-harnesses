@@ -114,7 +114,7 @@ FIXTURE_PLUGINS = {
     # what makes it the right stand-in for "a plugin somebody parked". Nothing
     # in this file asserts that the crate exists.
     "taintguard": "0.1.2",   # non-gate (fixture identity, see above)
-    "overwatch": "5.0.1",    # GATE
+    "overwatch": "5.0.1", "askrelay": "0.1.0",  # GATE x2 (checker demands every GATE crate)
     "condukt": "3.0.0",      # non-gate
     "benchkit": "0.1.0",     # non-gate (the kind users disable on purpose)
 }

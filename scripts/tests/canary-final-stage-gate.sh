@@ -36,7 +36,8 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT="$REPO/scripts/rollout-plugins.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
-pass() { echo "  ok: $*"; }
+PASSED=0
+pass() { PASSED=$((PASSED + 1)); echo "  ok: $*"; }
 
 # --- locate / build the REAL overwatch binary (used for the non-gate subcmds) -
 OW=""
@@ -277,3 +278,4 @@ echo
 echo "PASS: the canary health gate runs for EVERY stage including the last (or"
 echo "      only) one; rc=3 rolls that stage back and halts with exit 4, while a"
 echo "      healthy single-stage canary still proceeds to run_rebuild_and_sync."
+echo "$PASSED passed"

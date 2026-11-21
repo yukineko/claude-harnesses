@@ -1918,6 +1918,8 @@ notes = """Observed 2026-11-22 at main rev 6ae161ee7 (static reading) after cond
 created_at = 1795282413
 updated_at = 1795282413
 weight = 0.0
+issue_number = 1973
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1973"
 rev = 0
 
 [task.repro]

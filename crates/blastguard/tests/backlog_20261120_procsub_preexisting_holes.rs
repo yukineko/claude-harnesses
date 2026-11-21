@@ -159,7 +159,6 @@ fn three_determined_substs_in_procsub_is_deny() {
 }
 
 #[test]
-#[ignore = "backlog 28019c35: RED: bash -c of a determined harmful subst is Ask, not Deny"]
 fn bash_c_of_determined_harmful_subst_is_deny() {
     expect_deny(r#"bash -c "$(echo 'rm -rf /etc')""#, "b-bashc");
 }

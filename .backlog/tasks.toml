@@ -1949,6 +1949,8 @@ notes = """Observed run-20261121-114321-94421 t3: Bash call 'git checkout 9ef696
 created_at = 1795263695
 updated_at = 1795263695
 weight = 0.0
+issue_number = 1954
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1954"
 rev = 0
 
 [task.repro]

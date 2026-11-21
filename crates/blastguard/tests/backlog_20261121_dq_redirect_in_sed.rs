@@ -68,7 +68,7 @@ fn decide(command: &str, home: &Home, subagent: bool) -> (String, String) {
 }
 
 #[test]
-#[ignore = "RED: > inside double-quoted sed arg after backslash-quote read as redirect"]
+#[ignore = "RED(bfbb50ac): > inside double-quoted sed arg after backslash-quote read as redirect"]
 fn sed_i_with_gt_amp_in_double_quotes_is_not_a_redirect_refusal() {
     let home = unique_home("verbatim");
     let cmd = r#"cd crates/x && sed -i "s|if matches!(op, \"<&\" \| \">&\") && target.contains('\$') {|if matches!(op, \"<\&\" \| \">\&\") \&\& target.contains('\$') \&\& decode_literal_word(target).is_err() {|" src/detect/payload/exec_fds.rs && sed -n 1009p src/detect/payload/exec_fds.rs"#;

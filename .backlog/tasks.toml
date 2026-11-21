@@ -1847,6 +1847,8 @@ notes = """Observed 2026-11-21 on main a44f2ce07 (main tree, cargo test -p backl
 created_at = 1795268999
 updated_at = 1795268999
 weight = 0.0
+issue_number = 1960
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1960"
 rev = 0
 
 [task.repro]

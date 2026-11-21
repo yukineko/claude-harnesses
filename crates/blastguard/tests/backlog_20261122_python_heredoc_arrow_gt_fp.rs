@@ -225,7 +225,7 @@ fn verbatim_setup(tag: &str) -> (Home, std::path::PathBuf, std::path::PathBuf) {
 }
 
 #[test]
-#[ignore = "RED: verbatim worker command (python heredoc with => return text) refused as a relative redirect"]
+#[ignore = "RED(30136835): verbatim worker command (python heredoc with => return text) refused as a relative redirect"]
 fn verbatim_worker_command_reason_does_not_quote_python_text_as_redirect() {
     let mut bad = Vec::new();
     for subagent in [false, true] {

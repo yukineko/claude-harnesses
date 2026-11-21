@@ -90787,3 +90787,75 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; fini
    Compiling blastguard v0.2.860 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
      Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-1bd464d0da9d25f7)"""
+
+[[task]]
+id = "375d7394"
+title = "blastguard: read-only grep whose pattern is a destructive command name with a glob operand is Ask (main) / Deny (subagent) (false positive)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-20 at main 4c7da59ba (0.2.782): a recursive grep for the word truncate over a glob of blastguard detect sources is Ask in main and Deny in a subagent, reason: grep is not a recognised command and what follows parses as a destructive command line. The same pipeline with a non-verb pattern is Allow; the same pattern on a plain file operand (no glob) is Allow. RED: crates/blastguard/tests/grep_pattern_word_fp_20261120.rs, 5 ignored tests, commit 334756efd. Suspected (code reading only): the unknown-verb tail rule in detect.rs re-parses the words after grep from the pattern word. Seen live: blocked two subagents (relays bgr-fe17e59c4838, bgr-0ed547297960)."
+created_at = 1795138942
+updated_at = 1795225651
+weight = 0.0
+issue_number = 1884
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1884"
+issue_closed_at = 1795225654
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test grep_pattern_word_fp_20261120 -- --ignored"
+rev = "334756efdd1c41642fa6c1425587f334e30dae9e"
+observed_at = 1795138942
+detail = """
+exit 101: t; finished in 0.93s
+
+   Compiling blastguard v0.2.783 (/Users/yuki/src/.harness-worktrees/bg-s3b-glob/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.68s
+     Running tests/grep_pattern_word_fp_20261120.rs (target/debug/deps/grep_pattern_word_fp_20261120-6dd5e48caac18a93)
+error: test failed, to rerun pass `-p blastguard --test grep_pattern_word_fp_20261120`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test grep_pattern_word_fp_20261120"
+exit = 0
+passed = 10
+rev = "913cca340f92b7c7934fd3cac1f05e3959a7fab4"
+observed_at = 1795225634
+output_digest = "sha256:9af299dee5df5f386011e816dc929c2eedb7989f7940f9d78d308b352caf9a8e"
+excerpt = """
+
+running 10 tests
+test grep_v_slashes_pattern_alone_is_allow ... ok
+test full_reported_command_is_allow ... ok
+test bare_grep_truncate_is_allow ... ok
+test cd_prefix_is_allow ... ok
+test minimal_grep_plain_word_twin_is_allow ... ok
+test grep_truncate_piped_grep_v_is_allow ... ok
+test control_exec_capable_option_heads_not_allow ... ok
+test worktree_add_prefix_is_allow ... ok
+test minimal_grep_truncate_word_is_allow ... ok
+test control_destructive_shapes_not_allow ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+
+   Compiling blastguard v0.2.863 (/Users/yuki/src/.harness-worktrees/session-c1b3e891/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.91s
+     Running tests/grep_pattern_word_fp_20261120.rs (target/debug/deps/grep_pattern_word_fp_20261120-48420a92baa95a92)
+"""
+
+[task.closure.red]
+rev = "334756efdd1c41642fa6c1425587f334e30dae9e"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

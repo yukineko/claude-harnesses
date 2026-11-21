@@ -964,17 +964,14 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "failed"
-notes = """
-system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn three_determined_substs_in_procsub_is_deny
-needs human ruling (batch #6, 2026-11-21): which leading-dash echo operands may be treated as literal output (proposal: contains a char outside n/e/E; -n/-e/-E/-ne/-/-- stay undetermined)"""
+status = "pending"
+notes = "system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn three_determined_substs_in_procsub_is_deny"
 created_at = 1795155345
-updated_at = 1795240962
-defer_until = 1795413762
+updated_at = 1795155345
 weight = 0.0
 issue_number = 1896
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1896"
-rev = 1
+rev = 0
 
 [task.repro]
 outcome = "reproduced"
@@ -1128,10 +1125,10 @@ touched_files = []
 status = "failed"
 notes = '''
 Observed 2026-11-20 during run-20261120-171414-35880 (condukt driver, session 62e92d16): cargo test -p blastguard --test heredoc_data_body_verify -> 'test result: FAILED. 5 passed; 1 failed' at both c434e41e5 (pre-run base) and the merged tree 14ba909b0; failing test contract_executing_bodies_and_real_lines_stay_judged, row python3 <<'EOF'\nrm -rf /usr/lib\nEOF -> allow. Not caused by this run (red at base). Tagged fail-open provisionally. Readings: (a) fail-open: a python stdin body naming system-harm text must not be Allow; (b) the row's premise is stale (body is not valid Python, S5 judges it inert) and the assert needs re-anchoring by an independent agent. Tell apart: does a later ruling make python stdin bodies judged by progeffect S5 rather than as shell? Not investigated.
-needs human ruling (batch #5): python3 heredoc body 'rm -rf /usr/lib' is valid inert Python (BinOp, no call); deny anyway per system-harm rule, or re-anchor the contract row to allow'''
+needs user ruling (frozen assert, unhedged): row python3 <<'EOF' rm -rf /usr/lib EOF expects not-Allow, but the body is not valid Python (syntax error, nothing executes; S5/progeffect reads python bodies as Python, not shell, per ruling heredoc-body-by-target-language). Options: (a) keep the contract: an unparsable python stdin body is Undetermined -> Ask/Deny; (b) re-anchor the row to an executing Python body (e.g. import os; os.system('rm -rf /usr/lib')) and accept Allow for a syntax-error body. Observed RED at c434e41e5/14ba909b0 (2026-11-20).'''
 created_at = 1795166100
-updated_at = 1795240963
-defer_until = 1795413763
+updated_at = 1795240806
+defer_until = 1795413606
 weight = 0.0
 issue_number = 1926
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1926"
@@ -1160,17 +1157,14 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "failed"
-notes = """
-Observed 2026-11-20: main-session byte-for-byte re-run of relay bgr-a866a4fd1397 (writing a condukt test file via cat <<'EOF' ... task's ... EOF) refused verbatim: 'Refused: this command could not be parsed, and it carries a gate-bypass marker. The shell quoting does not close, so whether this is git commit --no-verify cannot be determined.' Mechanism (independent author, source reading + RED): shlex has no heredoc model so the apostrophe in a quoted heredoc body never closes; looks_like_bypass fires on substring git (git_env / git( helper) plus -n of sed/grep. RED 51aa53acb scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py (strict xfail; --runxfail: 2 failed, 2 passed). Distinct from pinned test_gate_bypass.py::test_DEFECT_looks_like_bypass_is_noisy_on_untokenizable_input: here a real shell lexes the input fine.
-needs human ruling (batch #6): A (quoted heredoc body = data; flips pinned test_DEFECT_a_heredoc_body_quoting_the_command_is_refused) vs B (per-line lexing); if A, A1 allowlist vs A2; parser = hand POSIX lexer vs delegate to blastguard brush-parser"""
+status = "pending"
+notes = "Observed 2026-11-20: main-session byte-for-byte re-run of relay bgr-a866a4fd1397 (writing a condukt test file via cat <<'EOF' ... task's ... EOF) refused verbatim: 'Refused: this command could not be parsed, and it carries a gate-bypass marker. The shell quoting does not close, so whether this is git commit --no-verify cannot be determined.' Mechanism (independent author, source reading + RED): shlex has no heredoc model so the apostrophe in a quoted heredoc body never closes; looks_like_bypass fires on substring git (git_env / git( helper) plus -n of sed/grep. RED 51aa53acb scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py (strict xfail; --runxfail: 2 failed, 2 passed). Distinct from pinned test_gate_bypass.py::test_DEFECT_looks_like_bypass_is_noisy_on_untokenizable_input: here a real shell lexes the input fine."
 created_at = 1795172228
-updated_at = 1795240962
-defer_until = 1795413762
+updated_at = 1795172228
 weight = 0.0
 issue_number = 1929
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1929"
-rev = 1
+rev = 0
 
 [task.repro]
 outcome = "reproduced"
@@ -2025,30 +2019,3 @@ exit 101:  passed; 4 failed; 0 ignored; 0 measured; 3 filtered out; finished in 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
      Running tests/backlog_20261121_determined_subst_shape_gaps.rs (target/debug/deps/backlog_20261121_determined_subst_shape_gaps-d7955e60fa7f6135)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_determined_subst_shape_gaps`"""
-
-[[task]]
-id = "a330c1a3"
-title = "condukt testscope: refused wrapper (tdd red exit 1 before cargo ran) is recorded as a confirmed run; identical rerun denied as already ran"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = """Observation (2026-11-21, main 484608e14): in scratch checkout .../scratchpad/base (detached 53b3e0c63, not yet tdd trusted), Bash command 'cd <literal path> && . "$HOME/.cargo/env" && git log --oneline -1 && tdd red --task t1 --author X --cmd "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes alias_echo_then_procsub_is_not_allow -- --include-ignored" ...' was allowed; tdd red refused before running anything (Remedy: run tdd trust in this root ..., exit 1, no .tdd/ written). Next command 'tdd trust && ... tdd red ... --cmd <same cargo test>' was refused by PreToolUse testscope: 'rerun refused: cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes alias_echo_then_procsub_is_not_allow -- --include-ignored already ran on this exact tree (53b3e0c63...:194b51fbe979a9ae at .../scratchpad/base); running the same test twice is forbidden (user ruling 2026-11-07). Change the code first, or move on'. The test never executed. Readings: (a) defect: a refused wrapper is not a run; (b) intended: Post cannot observe whether the inner command ran. How to tell: crates/condukt/src/testscope/rerun.rs confirm_post (called from testscope_hook.rs run_testscope_confirm) confirms the pending row on any Post event incl. PostToolUseFailure, ignoring exit status/error text, once parse_tests finds a test command in the string; the RED drives Pre -> PostToolUseFailure(error 'Exit code 1 Remedy: run tdd trust') -> identical Pre and observes deny. Fix must decide how to detect a refused wrapper (reading a is suggested by code; b not ruled out). Separate observed FP: blastguard blocked a python3 write into a freshly git-worktree-added tree: 'the Python program calls open on tests/backlog_20261121_testscope_refused_wrapper_counts_as_run.rs (judged as : > ...): > .../red-testscope-refused-run-20261121/crates/condukt/... destroys the file current contents and it is inside a git work tree, but not one of this session trees (neither inside its safe roots nor a recognised worktree checkout), so git being able to restore it does not make the overwrite this session to make'"""
-created_at = 1795240898
-updated_at = 1795240898
-weight = 0.0
-issue_number = 1946
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1946"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261121_testscope_refused_wrapper_counts_as_run -- --ignored"
-rev = "747888cc1f3f5a989f8c071b68e2c9a4fb01a3fe"
-observed_at = 1795240898
-detail = """
-exit 101: tscope-refused-run-20261121/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.21s
-     Running tests/backlog_20261121_testscope_refused_wrapper_counts_as_run.rs (target/debug/deps/backlog_20261121_testscope_refused_wrapper_counts_as_run-edcd3f3d9c7ac4dc)
-error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_refused_wrapper_counts_as_run`"""

@@ -127,7 +127,6 @@ fn cd_prefix_then_heredoc_append_is_allowed() {
 }
 
 #[test]
-#[ignore = "RED(1f705907): 2026-11-21 quoted-heredoc body text with `> .driver`` is judged as a truncating redirect with expansion target (blocked) — remove when fixed"]
 fn heredoc_append_then_git_commit_is_allowed() {
     let home = unique_home("mingt");
     let (d, r) = run_main(MINIMAL_GT, &home);

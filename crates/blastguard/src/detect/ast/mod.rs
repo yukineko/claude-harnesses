@@ -449,6 +449,16 @@ pub(crate) struct Redirect {
     pub op: RedirOp,
     pub target: RedirTarget,
     pub span: Range<usize>,
+    /// For a [`RedirTarget::Path`] target: the target word's value as
+    /// written, BEFORE it was placed against the tracked cwd
+    /// ([`SimpleCommand::cwd`]) — `Literal` text, or `Undetermined` with its
+    /// reason when the word itself is; `None` when the target is not a path.
+    /// After an undetermined `cd` a relative literal target is
+    /// `Path(Undetermined)` (it names no determinable file), but its own text
+    /// — and so its file NAME and extension — is still known; this keeps that
+    /// text for readers that only need the name (`heredoc_data`: is the body
+    /// landing in a data file). It never says WHERE the file is.
+    pub written: Option<Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1631,10 +1631,12 @@ impl Ev {
                     ast::IoFileRedirectKind::DuplicateInput => RedirOp::DupIn,
                     ast::IoFileRedirectKind::DuplicateOutput => RedirOp::DupOut,
                 };
+                let mut written = None;
                 let (target, span) = match target {
                     ast::IoFileRedirectTarget::Filename(w) => {
                         let ew = self.word(text, w, Mode::Field, env)?;
                         let span = redir_span(text, w, fd);
+                        written = Some(ew.value.clone());
                         (RedirTarget::Path(resolve(&env.cwd, ew.value)), span)
                     }
                     ast::IoFileRedirectTarget::Fd(n) => {
@@ -1661,6 +1663,7 @@ impl Ev {
                                 // `>&word` with no fd number is `&>word`.
                                 None if op == RedirOp::DupOut && fd.is_none() => {
                                     op = RedirOp::OutErr;
+                                    written = Some(Value::Literal(s.clone()));
                                     RedirTarget::Path(resolve(&env.cwd, Value::Literal(s)))
                                 }
                                 None => RedirTarget::Fd(FdTarget::Undetermined(format!(
@@ -1676,6 +1679,7 @@ impl Ev {
                     op,
                     target,
                     span,
+                    written,
                 })
             }
             ast::IoRedirect::HereDocument(fd, h) => {
@@ -1705,6 +1709,7 @@ impl Ev {
                         body_span,
                     }),
                     span: redir_span(text, &h.here_end, fd),
+                    written: None,
                 })
             }
             ast::IoRedirect::HereString(fd, w) => {
@@ -1715,6 +1720,7 @@ impl Ev {
                     op: RedirOp::HereString,
                     target: RedirTarget::HereString(ew.value),
                     span: redir_span(text, w, fd),
+                    written: None,
                 })
             }
             ast::IoRedirect::OutputAndError(w, append) => {
@@ -1726,6 +1732,7 @@ impl Ev {
                     } else {
                         RedirOp::OutErr
                     },
+                    written: Some(ew.value.clone()),
                     target: RedirTarget::Path(resolve(&env.cwd, ew.value)),
                     span: redir_span(text, w, None),
                 })

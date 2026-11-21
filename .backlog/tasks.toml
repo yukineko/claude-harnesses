@@ -2167,6 +2167,8 @@ notes = '''Observed 2026-11-21 (blastguard 0.2.864 installed): a worker's comman
 created_at = 1795227944
 updated_at = 1795227944
 weight = 0.0
+issue_number = 1942
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1942"
 rev = 0
 
 [task.repro]

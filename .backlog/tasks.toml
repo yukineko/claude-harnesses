@@ -2029,6 +2029,8 @@ notes = """Observation (2026-11-21, main 484608e14): in scratch checkout .../scr
 created_at = 1795240898
 updated_at = 1795240898
 weight = 0.0
+issue_number = 1946
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1946"
 rev = 0
 
 [task.repro]

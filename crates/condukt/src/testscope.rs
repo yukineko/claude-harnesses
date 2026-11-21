@@ -38,11 +38,21 @@
 //!    recorded worktree, each `--test <name>` must appear as `--test <name>`
 //!    in that task's `reproduction_tests` or be a `tests/<name>.rs` the
 //!    worktree added or changed against `default_branch` (`<base>...HEAD`,
-//!    uncommitted, untracked); `--lib`/`--doc`/`--bin`/`--example`/`--bench`
-//!    only when `reproduction_tests` names the same selector. Outside every
-//!    recorded task worktree this rule does not apply. A cwd owned by several
-//!    tasks, any run-state file that cannot be read or parsed, an unreadable
-//!    decomposition or a failing git is denied.
+//!    uncommitted, untracked), or (user ruling 2026-11-20, backlog 6f653d96:
+//!    a fix must be able to prove it leaves the crate's pinned asserts
+//!    unchanged) be an existing test of a crate the worktree changed: every
+//!    `-p`/`--package` of that command names a package owning a path in the
+//!    same three-source diff, the owner being the nearest `Cargo.toml` with a
+//!    `[package]` at or above the path. A command with no `-p`, a spec that is
+//!    not a plain name, a `-p` of a crate the worktree did not change, or a
+//!    changed path no manifest owns admits nothing through this branch; a
+//!    manifest that exists but cannot be read or parsed denies.
+//!    `--lib`/`--doc`/`--bin`/`--example`/`--bench` only when
+//!    `reproduction_tests` names the same selector. Outside every recorded
+//!    task worktree this rule does not apply. A cwd owned by several tasks,
+//!    any run-state file that cannot be read or parsed, an unreadable
+//!    decomposition or a failing git is denied. Rules 1 and 3 still apply to
+//!    every command this rule admits.
 //!
 //! The hook also writes a per-session marker ([`write_session_marker`]) that
 //! `condukt state set --status running` requires, so a session that never
@@ -1215,10 +1225,122 @@ fn worktree_changed_tests(wt: &Path, base: &str) -> Result<Vec<String>, String> 
     Ok(out)
 }
 
+/// The packages owning the paths the worktree at `wt` added, changed or
+/// deleted against `base` (the same three sources as
+/// [`worktree_changed_tests`], read with `-z`). A path is owned by the package
+/// of the nearest `Cargo.toml` with a `[package]` table at or above the path's
+/// directory, within the worktree's top level; a path with no such manifest
+/// (a root `Cargo.lock`, `docs/…`, a virtual-workspace-only path) adds no
+/// package — it never widens the set. A failing git, or a manifest that
+/// exists but cannot be read or parsed, or whose `[package].name` is not a
+/// string, is an `Err` (undetermined; the caller denies).
+fn worktree_changed_packages(wt: &Path, base: &str) -> Result<Vec<String>, String> {
+    let top = PathBuf::from(
+        git_stdout(wt, &["rev-parse", "--show-toplevel"])?
+            .trim()
+            .to_string(),
+    );
+    let range = format!("{base}...HEAD");
+    let mut raw = String::new();
+    for args in [
+        &["diff", "--name-only", "-z", &range][..],
+        &["diff", "--name-only", "-z", "HEAD"][..],
+        &["ls-files", "--others", "--exclude-standard", "-z"][..],
+    ] {
+        raw.push_str(&git_stdout(&top, args)?);
+        raw.push('\0');
+    }
+    // dir -> package named by `dir/Cargo.toml` (None: no manifest there, or a
+    // manifest without `[package]`).
+    let mut seen: std::collections::HashMap<PathBuf, Option<String>> =
+        std::collections::HashMap::new();
+    let mut out: Vec<String> = Vec::new();
+    for rel in raw.split('\0').filter(|s| !s.is_empty()) {
+        let mut dir = match top.join(rel).parent() {
+            Some(d) => d.to_path_buf(),
+            None => continue,
+        };
+        while dir.starts_with(&top) {
+            let pkg = match seen.get(&dir) {
+                Some(p) => p.clone(),
+                None => {
+                    let p = manifest_package_name(&dir.join("Cargo.toml"))?;
+                    seen.insert(dir.clone(), p.clone());
+                    p
+                }
+            };
+            if let Some(name) = pkg {
+                if !out.contains(&name) {
+                    out.push(name);
+                }
+                break;
+            }
+            if dir == top || !dir.pop() {
+                break;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The `[package].name` of the manifest at `path`. `Ok(None)` when no file
+/// exists there (an observed absence) or the manifest has no `[package]`
+/// table (a virtual workspace root); `Err` when it exists but cannot be read
+/// or parsed, or its name is not a string.
+fn manifest_package_name(path: &Path) -> Result<Option<String>, String> {
+    let txt = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("cannot read manifest {}: {e}", path.display())),
+    };
+    let v: toml::Value = toml::from_str(&txt)
+        .map_err(|e| format!("unparseable manifest {}: {e}", path.display()))?;
+    match v.get("package") {
+        None => Ok(None),
+        Some(p) => match p.get("name").and_then(toml::Value::as_str) {
+            Some(n) => Ok(Some(n.to_string())),
+            None => Err(format!(
+                "manifest {} has a [package] table without a string name",
+                path.display()
+            )),
+        },
+    }
+}
+
+/// The package specs of `-p <spec>` / `-p<spec>` / `--package <spec>` /
+/// `--package=<spec>` among `words` (options before `--` only). `Err` for a
+/// `-p` with no value.
+fn package_specs(words: &[String]) -> Result<Vec<String>, String> {
+    let opts: Vec<&String> = words.iter().take_while(|a| a.as_str() != "--").collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(a) = opts.get(i) {
+        let a = a.as_str();
+        if a == "-p" || a == "--package" {
+            match opts.get(i + 1).filter(|v| !v.starts_with('-')) {
+                Some(v) => {
+                    out.push(v.to_string());
+                    i += 1;
+                }
+                None => return Err(format!("`{a}` names no package")),
+            }
+        } else if let Some(v) = a.strip_prefix("--package=") {
+            out.push(v.to_string());
+        } else if let Some(v) = a.strip_prefix("-p").filter(|v| !v.is_empty()) {
+            out.push(v.strip_prefix('=').unwrap_or(v).to_string());
+        }
+        i += 1;
+    }
+    Ok(out)
+}
+
 const TASK_SCOPE_REASON: &str = "inside a condukt task worktree only the task's own tests may \
-     run: a `--test <name>` named in the task's reproduction_tests, or a tests/<name>.rs this \
-     worktree added or changed; `--lib`/`--bin`/`--doc` only when reproduction_tests names that \
-     selector (user ruling 2026-11-14)";
+     run: a `--test <name>` named in the task's reproduction_tests, a tests/<name>.rs this \
+     worktree added or changed, or a `--test <name>` whose command names, with `-p`, only \
+     packages that own a path this worktree changed against its base (no `-p`, a package spec \
+     that is not a plain name, or an unreadable diff or manifest is refused); \
+     `--lib`/`--bin`/`--doc` only when reproduction_tests names that selector (user rulings \
+     2026-11-14 and 2026-11-20)";
 
 /// `state::all_runs` for a GATE: the same dirs and the same canonical-first
 /// precedence, but any run-state file that cannot be read or parsed (and any
@@ -1263,9 +1385,12 @@ fn all_runs_strict(
 }
 
 /// Rule C: when `cwd` is inside a run task's recorded worktree, every selector
-/// of every test command must be in that task's scope. Outside every recorded
-/// task worktree this allows. Undetermined (config / run state / decomposition
-/// / git unreadable, cwd owned by several tasks) denies.
+/// of every test command must be in that task's scope (reproduction_tests, a
+/// test file the worktree changed, or a `--test` whose `-p` packages are all
+/// crates the worktree changed — see [`worktree_changed_packages`]). Outside
+/// every recorded task worktree this allows. Undetermined (config / run state
+/// / decomposition / git / manifest unreadable, cwd owned by several tasks)
+/// denies.
 fn check_task_scope(tests: &[Words], cwd: &Path) -> Decision {
     let undetermined = |why: String| {
         Decision::Deny(format!(
@@ -1377,9 +1502,14 @@ fn check_task_scope(tests: &[Words], cwd: &Path) -> Decision {
     };
     let wt = PathBuf::from(task.worktree.clone().unwrap_or_default());
     let mut changed: Option<Vec<String>> = None;
+    let mut changed_pkgs: Option<Vec<String>> = None;
     for words in tests {
         let sels = match selectors(words) {
             Ok(s) => s,
+            Err(e) => return undetermined(format!("`{}`: {e}", words.join(" "))),
+        };
+        let pkgs = match package_specs(words) {
+            Ok(p) => p,
             Err(e) => return undetermined(format!("`{}`: {e}", words.join(" "))),
         };
         for sel in sels {
@@ -1399,7 +1529,38 @@ fn check_task_scope(tests: &[Words], cwd: &Path) -> Decision {
                             }
                         }
                     }
-                    changed.as_ref().is_some_and(|c| c.contains(name))
+                    if changed.as_ref().is_some_and(|c| c.contains(name)) {
+                        true
+                    } else if pkgs.is_empty() {
+                        // No `-p`: which package(s) cargo selects depends on
+                        // the cwd and on default-members, so whether the
+                        // test belongs to a changed crate is undetermined.
+                        false
+                    } else {
+                        if changed_pkgs.is_none() {
+                            match worktree_changed_packages(&wt, &cfg.default_branch) {
+                                Ok(c) => changed_pkgs = Some(c),
+                                Err(e) => {
+                                    return undetermined(format!(
+                                        "which crates worktree {} changed is unknown: {e}",
+                                        wt.display()
+                                    ))
+                                }
+                            }
+                        }
+                        // Every selected package must be a changed crate (a
+                        // `--test` applies to each `-p`); a spec that is not
+                        // a plain package name (glob, `name@ver`, URL) is not
+                        // resolved here and so admits nothing.
+                        let plain = |s: &str| {
+                            !s.is_empty()
+                                && s.chars()
+                                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                        };
+                        changed_pkgs.as_ref().is_some_and(|c| {
+                            pkgs.iter().all(|p| plain(p) && c.iter().any(|n| n == p))
+                        })
+                    }
                 }
                 Selector::Kind(..) => false,
             };

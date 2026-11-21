@@ -1608,3 +1608,32 @@ exit 101:  riskgrade v0.1.2 (/Users/yuki/src/.harness-worktrees/filing-tagsmain/
     Finished `test` profile [unoptimized + debuginfo] target(s) in 38.08s
      Running unittests src/main.rs (target/debug/deps/condukt-47505c94f996ff2a)
 error: test failed, to rerun pass `-p condukt --bin condukt`"""
+
+[[task]]
+id = "92f4a28d"
+title = "blastguard fail-open: write after ln/cp/mv over sourced file, python os.symlink, builtin/command . herestring is Allow (dot/source relink holes)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = """Observed at c33bde6fd (blastguard 0.2.927), test merged in 622d4a072. All => allow: (1) ln -sf /dev/stdin ~/.cargo/env; . "$HOME/.cargo/env"; echo x > d/out.txt (2) exec 0<<< 'ln -s /etc/bg-sentinel d/out.txt'; . "$HOME/.cargo/env"; echo x > d/out.txt [fixture env file does not read stdin] (3) cp evil.sh ~/.cargo/env; . "$HOME/.cargo/env"; echo x > d/out.txt (3b) mv evil.sh ~/.cargo/env; same (4) python3 -c 'import os; os.symlink("/etc/bg-sentinel","d")'; echo x > d/out.txt (5c) builtin . /dev/stdin <<< 'ln -s /etc/bg-sentinel d'; echo x > d/out.txt (5d) command . /dev/stdin <<< same. NOT Allow already (dropped): exec 0<<< + . /dev/stdin; . <(echo ...); . -p <(echo ...); source <(echo ...)."""
+created_at = 1795295253
+updated_at = 1795295253
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261122_relink_dot_source_holes -- --ignored"
+rev = "622d4a07218eba708a796f6e5e33f79866e36cd1"
+observed_at = 1795295253
+detail = """
+exit 101: .929 (/Users/yuki/src/.harness-worktrees/backlog-relink-dot-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 25.21s
+     Running tests/backlog_20261122_relink_dot_source_holes.rs (target/debug/deps/backlog_20261122_relink_dot_source_holes-1e6b1c986e73feeb)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261122_relink_dot_source_holes`"""

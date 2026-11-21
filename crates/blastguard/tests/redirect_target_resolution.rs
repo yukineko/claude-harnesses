@@ -304,7 +304,9 @@ fn resolved_system_directory_target_is_still_denied_by_name() {
 /// SUPERSEDED for `export` (user ruling 2026-11-15: 「`export X=lit` は「解決して
 /// 判定」する。`X=lit` と同じく解決し、literal と同じに判定する。」): the export row
 /// is no longer refused; it is pinned below the loop as "judged like the literal
-/// spelling". The brace-group row above is unchanged.
+/// spelling". The brace-group row is likewise superseded (2026-11-21), as are
+/// the `local`/`declare` rows: all three now sit in pair-equality asserts below
+/// the loop, not in the table.
 #[test]
 fn unresolvable_shapes_keep_the_unresolved_verdict() {
     let mut violations: Vec<String> = Vec::new();
@@ -332,18 +334,6 @@ fn unresolvable_shapes_keep_the_unresolved_verdict() {
         (
             "( P=/home/yuki/proj/ok.log ); echo hi > \"$P\"",
             "an explicit subshell's assignment does not reach the parent shell",
-        ),
-        (
-            "{ P=/home/yuki/proj/ok.log; }; echo hi > \"$P\"",
-            "a brace group DOES reach the parent shell; refusing it is the safe error",
-        ),
-        (
-            "local P=/home/yuki/proj/ok.log; echo hi > \"$P\"",
-            "`local` is a builtin, not an assignment list",
-        ),
-        (
-            "declare P=/home/yuki/proj/ok.log; echo hi > \"$P\"",
-            "`declare` is a builtin, not an assignment list",
         ),
         (
             "P=(/home/yuki/proj/ok.log); echo hi > \"$P\"",
@@ -451,6 +441,31 @@ fn unresolvable_shapes_keep_the_unresolved_verdict() {
         scoped("echo hi > /home/yuki/proj/ok.log"),
         "`export P=…; echo hi > \"$P\"` must be judged like its literal spelling (user ruling 2026-11-15)"
     );
+    // RE-ANCHORED 2026-11-21: `{ P=…; }`, `local P=…` and `declare P=…` were rows
+    // of the table above ("brace group refused", "`local`/`declare` is a builtin,
+    // not an assignment list"). This file's own criterion is that a row belongs in
+    // unresolvable_* only when the shell would NOT use the readable value (or
+    // reading it is a guess); for these three the shell DOES use it. Measured
+    // 2026-11-21 on zsh 5.9 (the Bash tool's own layer, user ruling 2026-11-18):
+    //   zsh -c 'local P=x; echo "zsh[$P]"'                  -> zsh[x]
+    //   zsh -c '{ P=y; }; declare Q=z; echo "zsh[$P][$Q]"'  -> zsh[y][z]
+    // bash agrees for `{ }` and `declare` (bash[y][z]); the only difference is a
+    // top-level `local` (bash: "local: can only be used in a function"). User
+    // rulings 2026-11-14/15: text-determined values are resolved statically and
+    // judged like the literal spelling; the S5 AST evaluator (1c6ef97ad
+    // 2026-11-16, detect/ast/eval.rs DECL_BUILTINS) resolves them. Same shape as
+    // the export pair above.
+    for cmd in [
+        "{ P=/home/yuki/proj/ok.log; }; echo hi > \"$P\"",
+        "local P=/home/yuki/proj/ok.log; echo hi > \"$P\"",
+        "declare P=/home/yuki/proj/ok.log; echo hi > \"$P\"",
+    ] {
+        assert_eq!(
+            scoped(cmd),
+            scoped("echo hi > /home/yuki/proj/ok.log"),
+            "`{cmd}` must be judged like its literal spelling (zsh measured 2026-11-21; user rulings 2026-11-14/15)"
+        );
+    }
 }
 
 // ----------------------------------------------------------------- decoy ----

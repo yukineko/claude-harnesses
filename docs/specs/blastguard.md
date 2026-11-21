@@ -1759,6 +1759,44 @@ chain 値）、`detect/ast/b5.rs`。
   （`readings::chain_names_fixed`、`Ctx::names_fixed_narrowed_by`）。false なら何も計算しない。
 - 判定不能は制限側: parse 不能・panic（`catch_unwind`）・上限超過はすべて `None` で、従来の Ask に戻る。
 
+## stdin / process substitution の program 読みで `echo` / `printf` が shell 関数でありうるときは Ask（backlog 1e9da081 / f06ecb05）
+
+実装: `detect/payload/function_shadow.rs`（契約の全文は module doc）。呼び出し側は
+`detect/payload.rs`（`analyze_interpreter_stdin_exec` の stdin program 読み。`shadowed_emitter_ask`）、
+`detect/readings.rs`（`detect_bash_every_reading` の chain 値 `CHAIN_FUNCTIONS` / `chain_functions`）、
+`detect.rs`（`Ctx.functions` の初期値と、`detect_bash` が判定する text ごとの `Ctx::functions_widened_by`）。
+
+- 問題: `echo 'x' | bash` や `bash <(echo x)` の読みは、上流 stage の quoted literal を program 全体とみなす。
+  これは `echo` / `printf` が自分の引数しか出力しない（`echo_output::stage_emits_only_its_arguments`）ことに
+  依存する。同じ名前の shell 関数が定義されていると、その名前は関数本体を実行し、出力は引数ではない。
+  `printf(){ echo 'chmod 777 /etc/hosts'; }; bash <(printf hi)` と
+  `echo(){ echo 'chmod 777 /etc/hosts'; }; export -f echo; bash -c 'bash <(echo hi)'` は、判定した program が
+  `hi` になり Allow だった。
+- 関数名の読み取り（`defined_functions`）:
+  - text が関数定義の形を含まない（`function` という文字列も、空白類〈space・tab・newline・CR〉だけを挟んだ
+    `(` … `)` も無い）ときは定義なし（`Known` の空集合）。bash / zsh の定義構文は `NAME ( )` と `function`
+    キーワードだけである。
+  - 定義の形を含み、かつ zsh の `functions`（`dis_functions` を含む）parameter を名指ししうる出現 —
+    `functions` の直後が英数字・`_`・`/`・`.`・`-` 以外（`[`・`=`・`+`・`:`・`}`・空白・quote・演算子・
+    text 末尾）— があれば `Undetermined`。`functions[echo]='…'` などの代入は関数を定義するが読み取らないため。
+    bare word の `functions` も `Undetermined`（制限側）。
+  - それ以外は AST 層の `analyze_with_function_definitions` で読み、`Known` なら `Script::function_names`、
+    `Undetermined`（名前が literal でない、評価できない構文を含む等）なら `Undetermined`。
+  - `Undetermined` はどの名前も関数でありうる（`may_shadow` が true）と扱い、和集合では吸収する。
+- chain 値: 利用者の行と、判定対象に至る途中の派生 text すべての定義の和集合。`detect_bash_every_reading` が
+  再入ごとに広げて戻り時に復元し、`detect_bash` も判定する text 自身の定義で広げる。広がる方向にしか
+  変わらない。定義の位置（reader の前か後か）や `export -f` の有無は問わない（過大近似。
+  `echo(){ :; }; bash -c 'echo hi | bash'` も Ask）。
+- 判定（`shadowed_emitter_ask`）: 上流 stage が `stage_emits_only_its_arguments` を満たすとき、その stage の
+  command head すべて（emitter と前置の exec-wrapper。`env` という関数も対象）のうち chain 値で関数でありうる
+  名前があれば Ask。brace group の `echo` / `printf` member から program を読んだ場合（group feeder）は
+  `echo` と `printf` を調べる。Ask 理由は「`{name}` in the stage piping into it may be a shell function defined on
+  this command line (or on a line enclosing it)」。literal の判定の後に記録するので、literal 内の Deny が優先する。
+- 対象外（定義が見えないので何も足さない）: source されたファイルや startup file で定義される関数、hook 自身の
+  環境から継承される関数、どちらの形も literal に綴らない text の `eval`（`eval $'echo\x28\x29 …'`）。
+- テスト: `crates/blastguard/tests/verify_1e9da081_function_shadow_controls_20261121.rs`、
+  `crates/blastguard/tests/backlog_20261121_functions_substring_feeder_fp.rs`。
+
 ## 登録済み `/flow` driver セッションでは `ask` を出さない — ユーザー裁定 2026-11-21（backlog 4ef3a9e2）
 
 裁定（逐語）: 「非破壊はAllow、他はDeny」、同日の補足「またaskされてたけど、これもallowに」。

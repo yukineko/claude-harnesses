@@ -948,3 +948,8 @@ reason = "'振る舞い' bullet 'pid -1 への kill は Deny (detect/kill.rs, ru
 path = "crates/blastguard/src/flow_driver.rs"
 doc = "docs/specs/blastguard.md"
 reason = "Section '登録済み /flow driver セッションでは ask を出さない — ユーザー裁定 2026-11-21（backlog 4ef3a9e2）': driver registry read (fnv1a64 slugs, 1800s liveness, Known(true) only), B.5 scratchpad/target trust, Ask hardened to Deny with block-log record."
+
+[[spec]]
+path = "crates/blastguard/src/detect/payload/function_shadow.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Section 'stdin / process substitution の program 読みで echo / printf が shell 関数でありうるときは Ask（backlog 1e9da081 / f06ecb05）': defined_functions (definition-shape gate, zsh `functions` parameter → Undetermined, AST function_names), the chain union widened by readings/detect_bash, and shadowed_emitter_ask over the emitter stage's command heads (group feeder: echo / printf)."

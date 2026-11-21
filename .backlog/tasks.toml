@@ -1944,6 +1944,8 @@ notes = "crates/askrelay/src/main.rs:40-41 dispatch mark-* straight to hook::run
 created_at = 1795263266
 updated_at = 1795263266
 weight = 0.0
+issue_number = 1952
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1952"
 rev = 0
 
 [task.repro]

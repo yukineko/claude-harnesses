@@ -69,6 +69,7 @@
 | schemaguard | manual | source→executor 境界で LLM 構造化出力を宣言 schema 検証し 1 回 re-ask するゲート |
 | scout | manual | 5レンズ並列監査で施策を生成し backlog へ積んで /flow へ渡す SOURCE |
 | session-insights | always-on | セッション単位でツール/ターン/ファイル/サイズ・カテゴリを集計、Obsidian 記録も可 |
+| session-master | always-on | 同じ git common dir のセッション群で 1 つを master に選び、push・rollout・main への merge・relay の裁定を master に限る。member の Bash は PreToolUse で Deny して master の queue に積み（直列処理・results で返送）、member 同士の SendMessage は Deny。判定不能は Deny |
 | ship | event-scoped | commit・merge・push・plugin-update の出荷儀式を促す（未出荷状態を検出・subscription-native） |
 | sitecraft | always-on | サイト試作ハーネス。目的から設計判断を全部ユーザーに決めさせて記録し（decide）、dev server 管理・壊れたページ／セキュリティ検査と Stop gate で完成を止める |
 | specguard | always-on | 仕様↔実装の整合を監査する read-only ハーネス（subscription-native）＋ polarity synonym guard の段階的 ratification ＋ spec-map ストア |

@@ -93,6 +93,7 @@ fn heartbeat_only(session: Option<&str>, cwd: Option<&Path>) {
 enum Role {
     Master,
     Member { id: String, master: String },
+    MemberControl { master: String },
 }
 
 fn bash(payload: &Value, session: Option<&str>, cwd: Option<&Path>) -> GateOut {
@@ -109,7 +110,7 @@ fn bash(payload: &Value, session: Option<&str>, cwd: Option<&Path>) -> GateOut {
         Some(c) => c.to_path_buf(),
         None => PathBuf::from("/nonexistent-session-master-cwd"),
     };
-    let (op_name, kind) = match detect::classify(command, &cwd_for_detect).require() {
+    let (op_name, kind) = match detect::classify(command, &cwd_for_detect, session).require() {
         Required::Determined(None) => {
             heartbeat_only(session, cwd);
             return GateOut::Allow;
@@ -120,6 +121,8 @@ fn bash(payload: &Value, session: Option<&str>, cwd: Option<&Path>) -> GateOut {
             "other".to_string(),
         ),
     };
+    // A control call is not queued: the master has nothing to run for it.
+    let enqueue = kind != Op::Control.kind();
     let (Some(me), Some(c)) = (session, cwd) else {
         return GateOut::Deny(format!(
             "session-master gate: {op_name} を検出したが、payload に session_id / cwd が無く役割を判定できない（判定不能）ので Deny。queue にも積めていない。"
@@ -131,6 +134,10 @@ fn bash(payload: &Value, session: Option<&str>, cwd: Option<&Path>) -> GateOut {
         st.elect(ctx.now, ctx.ttl);
         if st.is_master(me) {
             Role::Master
+        } else if !enqueue {
+            Role::MemberControl {
+                master: st.master_label(),
+            }
         } else {
             let q = st.enqueue(me, &kind, command, &cwd_s, None, ctx.now);
             Role::Member {
@@ -141,6 +148,11 @@ fn bash(payload: &Value, session: Option<&str>, cwd: Option<&Path>) -> GateOut {
     });
     match tx {
         Ok(Role::Master) => GateOut::Allow,
+        Ok(Role::MemberControl { master }) => GateOut::Deny(format!(
+            "session-master: このセッション ({me}) は member。{op_name} は master だけが行える（または別セッションを名乗る）\
+             session-master の呼び出しなので Deny した。queue には積んでいない。master: {master}。\
+             member が使えるのは自分の session での register / heartbeat / leave / name / role / status / request / results。"
+        )),
         Ok(Role::Member { id, master }) => GateOut::Deny(format!(
             "session-master: このセッション ({me}) は member。{op_name} は master 専用操作なので Deny した。\
              master: {master}。依頼を master の queue に積んだ（item id {id}）。master が直列に処理し、\
@@ -158,6 +170,7 @@ fn op_label(op: Op) -> &'static str {
         Op::Push => "push (git push)",
         Op::Rollout => "rollout (scripts/rollout-plugins.sh)",
         Op::Merge => "main への merge",
+        Op::Control => "session-master の master 専用 / 他セッション名義の CLI 呼び出し",
     }
 }
 

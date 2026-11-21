@@ -25,6 +25,10 @@
   `sh -c`・`eval`・shell に渡る heredoc・関数本体・複合コマンドを再帰で読む（深さ上限 8）。
   main への merge は対象 worktree の `HEAD` が `SESSION_MASTER_MAIN_BRANCHES`（既定 `main`）の
   ブランチを指すときだけ。`condukt worktree merge` / `gh pr merge` は常に merge 扱い。
+  `git send-pack` / `git http-push` は push 扱い、`ssh host <command>` のリモートコマンドも再帰で読む。
+  git の subcommand 位置が非 literal（`git $X`・`git "$@"`）なら、文字列に push 等が無くても判定不能。
+  member の `session-master` 呼び出しのうち、master 専用 subcommand・他人の `--session`・
+  `CLAUDE_CODE_SESSION_ID` の代入を伴うものは Deny（queue には積まない。暫定の扱い 6 を参照）。
 - **SendMessage**（`src/relay.rs`）: master からは allow。`main` 宛て（subagent → 自 session）は allow。
   宛先が登録済みセッションの name / id（8 文字以上の prefix 可）なら、それが master のときだけ allow、
   member なら Deny。自 session の transcript に現れる subagent（agentId / Agent・Task tool_use の name）
@@ -101,3 +105,12 @@ exit: 0 = ok（role は master）、1 = 拒否（member / in_progress でない�
    自セッションの subagent と確かめられないときは Deny。
 4. master の queue が残っていても Stop は block せず、systemMessage で知らせるだけ。
 5. GATE_CRATES には登録しない。
+6. **限界**: この gate は Claude Code の PreToolUse を通る呼び出しに掛かる**協調的な制御**であり、
+   認証ではない。`session-master` CLI は `--session` / `CLAUDE_CODE_SESSION_ID` の値をそのまま
+   自分の id として信じるので、gate を通らない経路（人間の端末、hook を無効にした session、
+   gate が読めない形で実行されたプログラムの中など）から CLI を直接呼べば、他セッション
+   （master を含む）の id を詐称して `next` / `complete` / `leave` 等を実行できる。
+   gate 側は member の Bash で、master 専用 subcommand（`next` / `complete` / `gate` / `hook`）、
+   自分以外の `--session`、`CLAUDE_CODE_SESSION_ID` の代入を含む `session-master` 呼び出し
+   （絶対パス・wrapper・`bash -c` 経由を含む）を Deny する（queue には積まない）が、
+   CLI 単体での id 詐称そのものは防げない。

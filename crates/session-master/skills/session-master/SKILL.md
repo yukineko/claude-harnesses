@@ -59,4 +59,6 @@ session-master name <NAME>
 
 panic barrier の選び方、askrelay を変えないこと、宛先名の登録と未確認宛先の Deny、
 Stop を block しないこと、GATE_CRATES 未登録 — の 5 点は **暫定**。
+また gate は協調的な制御で、CLI を gate の外から直接呼ぶ id 詐称は防げない（限界）。
+member は `next` / `complete` や他人の `--session` を Bash で呼ばない（Deny される）。
 正典は `crates/session-master/README.ja.md` の「暫定の扱い」節（ここには写さない）。

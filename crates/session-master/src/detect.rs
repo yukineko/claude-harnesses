@@ -39,6 +39,11 @@ pub enum Op {
     Push,
     Rollout,
     Merge,
+    /// A `session-master` CLI call that acts as the master or as another
+    /// session (`next` / `complete` / `gate` / `hook`, a `--session` naming
+    /// someone else, or a `CLAUDE_CODE_SESSION_ID` assignment). Not queued:
+    /// there is nothing for the master to run on the member's behalf.
+    Control,
 }
 
 impl Op {
@@ -47,23 +52,45 @@ impl Op {
             Op::Push => "push",
             Op::Rollout => "rollout",
             Op::Merge => "merge",
+            Op::Control => "control",
         }
     }
+}
+
+/// `session-master` subcommands only the master (or Claude Code itself, for
+/// `gate` / `hook`) may run.
+pub const CONTROL_SUBCOMMANDS: [&str; 4] = ["next", "complete", "gate", "hook"];
+
+/// The env var the `session-master` CLI reads its identity from.
+const SESSION_ENV: &str = "CLAUDE_CODE_SESSION_ID";
+
+/// One `session-master` invocation seen in the program.
+struct SmCall {
+    /// `None`: the subcommand is not a literal.
+    sub: Option<String>,
+    /// `--session` values (`None` entry: not a literal).
+    sessions: Vec<Option<String>>,
 }
 
 pub fn suspicious(text: &str) -> bool {
     SUSPICIOUS.iter().any(|s| text.contains(s))
 }
 
-/// Classify `command`, run from `cwd`.
-pub fn classify(command: &str, cwd: &Path) -> Determination<Option<Op>> {
+/// Classify `command`, run from `cwd` by session `caller` (`None`: unknown,
+/// so any `--session` in a `session-master` call counts as someone else).
+pub fn classify(command: &str, cwd: &Path, caller: Option<&str>) -> Determination<Option<Op>> {
     let cmd = command.to_string();
     let dir = cwd.to_path_buf();
     let mains = config::main_branches();
+    let me = caller.map(str::to_string);
     let spawned = std::thread::Builder::new()
         .name("session-master-detect".to_string())
         .stack_size(STACK_BYTES)
-        .spawn(move || catch_unwind(AssertUnwindSafe(|| analyze(&cmd, &dir, &mains))));
+        .spawn(move || {
+            catch_unwind(AssertUnwindSafe(|| {
+                analyze(&cmd, &dir, &mains, me.as_deref())
+            }))
+        });
     let outcome = match spawned {
         Ok(handle) => match handle.join() {
             Ok(Ok(o)) => o,
@@ -86,17 +113,40 @@ pub(crate) enum Outcome {
     Undetermined(String),
 }
 
-pub(crate) fn analyze(command: &str, cwd: &Path, mains: &[String]) -> Outcome {
+pub(crate) fn analyze(
+    command: &str,
+    cwd: &Path,
+    mains: &[String],
+    caller: Option<&str>,
+) -> Outcome {
     let mut w = Walker {
         cwd: cwd.to_path_buf(),
         found: None,
         undet: None,
         has_cd: false,
         merges: Vec::new(),
+        sm_calls: Vec::new(),
+        sets_session_env: false,
     };
     w.program(command, 0);
     if let Some(op) = w.found {
         return Outcome::Found(op);
+    }
+    for call in std::mem::take(&mut w.sm_calls) {
+        let control_sub = match &call.sub {
+            Some(s) => CONTROL_SUBCOMMANDS.contains(&s.as_str()),
+            // A subcommand we cannot read may be any of them.
+            None => true,
+        };
+        let other_session = call.sessions.iter().any(|s| match (s, caller) {
+            (Some(v), Some(me)) => v != me,
+            // Non-literal value, or the caller is unknown: cannot show it is
+            // the caller's own id.
+            _ => true,
+        });
+        if control_sub || other_session || w.sets_session_env {
+            return Outcome::Found(Op::Control);
+        }
     }
     for m in std::mem::take(&mut w.merges) {
         if w.has_cd {
@@ -145,6 +195,12 @@ struct Walker {
     has_cd: bool,
     /// Pending `git merge/pull` targets (`Err` = a `-C` that is not literal).
     merges: Vec<Result<PathBuf, String>>,
+    /// `session-master` CLI calls (judged after the whole program is read).
+    sm_calls: Vec<SmCall>,
+    /// Somewhere in the program `CLAUDE_CODE_SESSION_ID` is assigned (prefix
+    /// assignment, `env`, `export`, ...): a `session-master` call may then run
+    /// under another session's identity.
+    sets_session_env: bool,
 }
 
 fn opts() -> brush_parser::ParserOptions {
@@ -520,6 +576,9 @@ impl Walker {
                 ast::CommandPrefixOrSuffixItem::Word(w) => words.push(w),
                 ast::CommandPrefixOrSuffixItem::AssignmentWord(_, w) => {
                     if is_prefix {
+                        if w.value.starts_with(SESSION_ENV) {
+                            self.sets_session_env = true;
+                        }
                         self.scan_word(&w.value, depth);
                     } else {
                         words.push(w);
@@ -536,6 +595,11 @@ impl Walker {
             }
         }
         for w in &words {
+            // `env X=..`, `export X=..`, `declare X=..`: restrictive textual
+            // check, it only matters when a `session-master` call exists.
+            if w.value.contains(&format!("{SESSION_ENV}=")) {
+                self.sets_session_env = true;
+            }
             self.scan_word(&w.value, depth);
         }
         let argv: Vec<Arg> = words
@@ -670,6 +734,8 @@ impl Walker {
             "gh" if positionals(args, &["-R", "--repo"]).starts_with(&["pr", "merge"]) => {
                 self.found(Op::Merge)
             }
+            "ssh" => self.ssh(args, depth),
+            n if n.starts_with("session-master") => self.sm_call(args),
             // A literal program that is none of the above cannot itself be
             // push / rollout / merge, whatever its (possibly non-literal) args.
             _ => {}
@@ -724,12 +790,62 @@ impl Walker {
         Some(j)
     }
 
+    /// `ssh [opts] host [command...]`: the remote command is a nested program
+    /// (`ssh host git push` pushes from the remote side).
+    fn ssh(&mut self, args: &[Arg], depth: usize) {
+        const WITH_ARG: [&str; 19] = [
+            "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l", "-m", "-O", "-o",
+            "-p", "-Q", "-R", "-S", "-W",
+        ];
+        let mut j = skip_opts(args, 0, &WITH_ARG);
+        if args.get(j).is_none() {
+            return;
+        }
+        j += 1; // host
+        let remote = &args[j.min(args.len())..];
+        if remote.is_empty() {
+            return;
+        }
+        let mut parts = Vec::new();
+        for a in remote {
+            match &a.lit {
+                Some(s) => parts.push(s.clone()),
+                None => {
+                    self.suspect_args(remote, "ssh のリモートコマンドが literal でない");
+                    return;
+                }
+            }
+        }
+        self.program(&parts.join(" "), depth + 1);
+    }
+
+    /// Record a `session-master` CLI call (judged in [`analyze`]).
+    fn sm_call(&mut self, args: &[Arg]) {
+        let sub = match args.first() {
+            Some(a) => a.lit.clone(),
+            None => Some(String::new()),
+        };
+        let mut sessions = Vec::new();
+        for (k, a) in args.iter().enumerate() {
+            if a.lit.as_deref() == Some("--session") {
+                sessions.push(args.get(k + 1).and_then(|v| v.lit.clone()));
+            }
+        }
+        self.sm_calls.push(SmCall { sub, sessions });
+    }
+
     fn git(&mut self, args: &[Arg], via_xargs: bool, src: &str) {
         let mut j = 0usize;
         let mut dir: Result<PathBuf, String> = Ok(self.cwd.clone());
         while let Some(a) = args.get(j) {
             let Some(s) = a.lit.as_deref() else {
-                self.suspect_args(args, "git の subcommand / option が literal でない");
+                // The program is git, so a non-literal word here may expand
+                // to `push` / `merge` (`X=push; git $X`, `git "$@"`) even
+                // when no such text is visible: undetermined, unconditionally.
+                self.set_undet(format!(
+                    "git の subcommand / option {:?} が literal でない",
+                    a.raw
+                ));
                 return;
             };
             match s {
@@ -761,12 +877,12 @@ impl Walker {
         }
         let Some(sub) = args.get(j).and_then(|a| a.lit.as_deref()) else {
             if via_xargs {
-                self.suspect(src, "xargs から git の subcommand が渡る");
+                self.set_undet(format!("xargs から git の subcommand が渡る: {src}"));
             }
             return;
         };
         match sub {
-            "push" => self.found(Op::Push),
+            "push" | "send-pack" | "http-push" => self.found(Op::Push),
             "merge" | "pull" => self.merges.push(dir),
             "checkout" | "switch" => self.has_cd = true,
             _ => {}
@@ -885,6 +1001,7 @@ mod tests {
             cmd,
             Path::new("/nonexistent-dir-for-test"),
             &["main".to_string()],
+            Some("B"),
         )
     }
 

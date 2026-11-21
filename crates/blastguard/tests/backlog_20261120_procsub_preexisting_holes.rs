@@ -106,7 +106,6 @@ fn echo_of_inner_echo_to_bash_feeder_is_deny() {
 }
 
 #[test]
-#[ignore = "backlog cffe54c4: RED: expand_aliases plus alias echo on the same line is Allow in bash <(echo hi)"]
 fn alias_echo_then_procsub_is_not_allow() {
     expect_not_allow(
         "shopt -s expand_aliases; alias echo='echo chmod 777 /etc/hosts #'; bash <(echo hi)",

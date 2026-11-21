@@ -1172,9 +1172,14 @@ fn selectors(words: &[String]) -> Result<Vec<Selector>, String> {
     Ok(out)
 }
 
-/// Every selector named anywhere in a task's `reproduction_tests` text.
+/// A selector with the `-p` specs of the command naming it (`None`: the specs
+/// could not be parsed, so which package it belongs to is undetermined).
+type ScopedSelector = (Selector, Option<Vec<String>>);
+
+/// Every selector named anywhere in a task's `reproduction_tests` text, with
+/// the `-p` specs of the command that names it.
 /// Unparseable text is `Err` (what it allows is undetermined).
-fn reproduction_selectors(text: &str) -> Result<Vec<Selector>, String> {
+fn reproduction_selectors(text: &str) -> Result<Vec<ScopedSelector>, String> {
     let stripped = strip_heredoc_bodies(text);
     let segs = split_segments(&stripped)
         .ok_or_else(|| "reproduction_tests has an unbalanced quote".to_string())?;
@@ -1182,7 +1187,10 @@ fn reproduction_selectors(text: &str) -> Result<Vec<Selector>, String> {
     for seg in segs {
         let words = shlex::split(&seg)
             .ok_or_else(|| format!("reproduction_tests: cannot tokenize `{seg}`"))?;
-        out.extend(selectors(&words)?);
+        let pkgs = package_specs(&words).ok();
+        for sel in selectors(&words)? {
+            out.push((sel, pkgs.clone()));
+        }
     }
     Ok(out)
 }
@@ -1234,6 +1242,80 @@ fn worktree_changed_tests(wt: &Path, base: &str) -> Result<Vec<String>, String> 
                     out.push(stem.to_string());
                 }
             }
+        }
+    }
+    Ok(out)
+}
+
+/// The `(tests/<name>.rs stem, owning package)` pairs the worktree at `wt`
+/// added or changed (same three sources as [`worktree_changed_tests`]). The
+/// owner is the package of the nearest `Cargo.toml` with a `[package]` table at
+/// or above the file's directory within the worktree's top level; with no such
+/// manifest, the name of the crate directory (the parent of `tests/`). A
+/// failing git or an unreadable manifest is `Err`.
+fn worktree_changed_test_owners(
+    wt: &Path,
+    base: &str,
+) -> Result<Vec<(String, Option<String>)>, String> {
+    let top = PathBuf::from(
+        git_stdout(wt, &["rev-parse", "--show-toplevel"])?
+            .trim()
+            .to_string(),
+    );
+    let range = format!("{base}...HEAD");
+    let mut raw = String::new();
+    for args in [
+        &["diff", "--name-only", "-z", &range][..],
+        &["diff", "--name-only", "-z", "HEAD"][..],
+        &["ls-files", "--others", "--exclude-standard", "-z"][..],
+    ] {
+        raw.push_str(&git_stdout(&top, args)?);
+        raw.push('\0');
+    }
+    let mut out: Vec<(String, Option<String>)> = Vec::new();
+    for rel in raw.split('\0').filter(|s| !s.is_empty()) {
+        let p = Path::new(rel);
+        let in_tests = p
+            .parent()
+            .and_then(|d| d.file_name())
+            .and_then(|n| n.to_str())
+            == Some("tests");
+        if !in_tests || p.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let mut owner = None;
+        let mut dir = top.join(rel).parent().map(Path::to_path_buf);
+        while let Some(d) = dir {
+            if !d.starts_with(&top) {
+                break;
+            }
+            if let Some(name) = manifest_package_name(&d.join("Cargo.toml"))? {
+                owner = Some(name);
+                break;
+            }
+            dir = if d == top {
+                None
+            } else {
+                d.parent().map(Path::to_path_buf)
+            };
+        }
+        // No manifest owns the file (a repo without Cargo.toml, as in the
+        // backlog fixture): the crate directory (the parent of `tests/`) names
+        // the owner, as `crates/<p>/` does for `-p <p>`.
+        if owner.is_none() {
+            owner = p
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::file_name)
+                .and_then(|n| n.to_str())
+                .map(str::to_string);
+        }
+        let pair = (stem.to_string(), owner);
+        if !out.contains(&pair) {
+            out.push(pair);
         }
     }
     Ok(out)
@@ -1564,6 +1646,7 @@ fn check_task_scope(tests: &[Words], cwd: &Path) -> Decision {
     };
     let wt = PathBuf::from(task.worktree.clone().unwrap_or_default());
     let mut changed: Option<Vec<String>> = None;
+    let mut changed_owners: Option<Vec<(String, Option<String>)>> = None;
     let mut changed_pkgs: Option<Vec<String>> = None;
     for words in tests {
         let sels = match selectors(words) {
@@ -1578,7 +1661,20 @@ fn check_task_scope(tests: &[Words], cwd: &Path) -> Decision {
             // test of the crate; no branch admits it, reproduction_tests
             // included.
             let glob = matches!(&sel, Selector::Test(n) if !is_plain_name(n));
-            if !glob && repro.contains(&sel) {
+            // The reproduction_tests route compares the name AND the package: a
+            // command with `-p` is admitted only by an entry whose own `-p`
+            // covers every spec (an entry with no `-p` names the test by name
+            // alone, as before). A command whose `-p` cannot be parsed is not
+            // admitted here; it falls to the arms below, which refuse it.
+            let repro_admits = repro.iter().any(|(s, entry_pkgs)| {
+                *s == sel
+                    && match (&pkgs, entry_pkgs) {
+                        (Ok(c), _) if c.is_empty() => true,
+                        (Ok(c), Some(e)) => e.is_empty() || c.iter().all(|p| e.contains(p)),
+                        _ => false,
+                    }
+            });
+            if !glob && repro_admits {
                 continue;
             }
             let allowed = match &sel {
@@ -1595,7 +1691,36 @@ fn check_task_scope(tests: &[Words], cwd: &Path) -> Decision {
                             }
                         }
                     }
-                    if changed.as_ref().is_some_and(|c| c.contains(name)) {
+                    let name_changed = changed.as_ref().is_some_and(|c| c.contains(name));
+                    // With `-p`, the changed file must belong to that package:
+                    // the stem alone does not identify one test file.
+                    let owned = match (&pkgs, name_changed) {
+                        (Ok(p), true) if !p.is_empty() => {
+                            if changed_owners.is_none() {
+                                match worktree_changed_test_owners(&wt, &cfg.default_branch) {
+                                    Ok(o) => changed_owners = Some(o),
+                                    Err(e) => {
+                                        return undetermined(format!(
+                                            "which crates' tests worktree {} changed is \
+                                             unknown: {e}",
+                                            wt.display()
+                                        ))
+                                    }
+                                }
+                            }
+                            p.iter().all(|spec| {
+                                is_plain_name(spec)
+                                    && changed_owners.as_ref().is_some_and(|o| {
+                                        o.iter().any(|(st, ow)| {
+                                            st == name && ow.as_deref() == Some(spec.as_str())
+                                        })
+                                    })
+                            })
+                        }
+                        (Ok(_), true) => true,
+                        _ => false,
+                    };
+                    if owned {
                         true
                     } else if let Err(e) = &pkgs {
                         return undetermined(format!("`{}`: {e}", words.join(" ")));

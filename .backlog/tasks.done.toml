@@ -89566,3 +89566,75 @@ rev = "8def619efbb9cf532665288e5a1dc04e35fbf0ad"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "84e81101"
+title = "blastguard test RED: rsync x .githooks/pre-commit judged Allow (p0 control)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "test-red",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "p0_unknown_verb_false_positives.rs:31: control must be Deny or Ask, got Allow for: rsync x .githooks/pre-commit. Observed 2026-11-20 on main a0ba7bad0 (detached worktree verify-main-q3q4), found while integrating Q3/Q4 deny-target table (7275b9d9); same failure on the integration tree. Readings: (a) real regression on main; (b) stale assert vs a later ruling or the S5 AST evaluator; distinguish by git log -S on the asserted case."
+created_at = 1795110557
+updated_at = 1795221872
+weight = 0.0
+issue_number = 1916
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1916"
+issue_closed_at = 1795221875
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test p0_unknown_verb_false_positives control_rsync_into_protected_path_not_allowed"
+rev = "4c286f7b61e70f4a56ccb658a200c3c4085bdf1a"
+observed_at = 1795110557
+detail = """
+exit 101:  in 0.02s
+
+   Compiling blastguard v0.2.761 (/Users/yuki/src/.harness-worktrees/session-179495ba/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running tests/p0_unknown_verb_false_positives.rs (target/debug/deps/p0_unknown_verb_false_positives-642e4cc61f4aae2b)
+error: test failed, to rerun pass `-p blastguard --test p0_unknown_verb_false_positives`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test p0_unknown_verb_false_positives"
+exit = 0
+passed = 10
+rev = "554107e122e5d1ea1c20f48a006c0917b3082cab"
+observed_at = 1795221869
+output_digest = "sha256:d763697ccd2887d3840aef196f5aefcf622b924f392b6dc6502d1f30f67ded7f"
+excerpt = """
+
+running 10 tests
+test fp_for_loop_only_reads_protected_path ... ok
+test fp_for_loop_over_plain_words_with_protected_path_in_list ... ok
+test control_ed_on_protected_path_not_allowed ... ok
+test control_sponge_on_protected_path_not_allowed ... ok
+test control_gzip_on_protected_path_not_allowed ... ok
+test fp_backlog_show_dot_git ... ok
+test control_rsync_into_protected_path_not_allowed ... ok
+test fp_backlog_add_title_mentions_protected_path ... ok
+test control_patch_on_protected_path_not_allowed ... ok
+test fp_multiline_quoted_notes_mention_protected_path ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/p0_unknown_verb_false_positives.rs (target/debug/deps/p0_unknown_verb_false_positives-62e16aacb02c6824)
+"""
+
+[task.closure.red]
+rev = "366eab917b03a1dbd80350486ae6a74924aabbb5"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

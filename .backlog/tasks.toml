@@ -956,40 +956,6 @@ exit 101: ompiling blastguard v0.2.761 (/Users/yuki/src/.harness-worktrees/sessi
 error: test failed, to rerun pass `-p blastguard --test home_asset_unlink_rmdir_and_opt_root`"""
 
 [[task]]
-id = "84e81101"
-title = "blastguard test RED: rsync x .githooks/pre-commit judged Allow (p0 control)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "test-red",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "p0_unknown_verb_false_positives.rs:31: control must be Deny or Ask, got Allow for: rsync x .githooks/pre-commit. Observed 2026-11-20 on main a0ba7bad0 (detached worktree verify-main-q3q4), found while integrating Q3/Q4 deny-target table (7275b9d9); same failure on the integration tree. Readings: (a) real regression on main; (b) stale assert vs a later ruling or the S5 AST evaluator; distinguish by git log -S on the asserted case."
-created_at = 1795110557
-updated_at = 1795110557
-weight = 0.0
-issue_number = 1916
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1916"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test p0_unknown_verb_false_positives control_rsync_into_protected_path_not_allowed"
-rev = "4c286f7b61e70f4a56ccb658a200c3c4085bdf1a"
-observed_at = 1795110557
-detail = """
-exit 101:  in 0.02s
-
-   Compiling blastguard v0.2.761 (/Users/yuki/src/.harness-worktrees/session-179495ba/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
-     Running tests/p0_unknown_verb_false_positives.rs (target/debug/deps/p0_unknown_verb_false_positives-642e4cc61f4aae2b)
-error: test failed, to rerun pass `-p blastguard --test p0_unknown_verb_false_positives`"""
-
-[[task]]
 id = "1c71c598"
 title = "blastguard test RED: quoted_heredoc_python_gt exact observed command denied"
 project = "/Users/yuki/src/harness"

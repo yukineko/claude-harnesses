@@ -752,14 +752,86 @@ fn is_assignment(w: &str) -> bool {
     }
 }
 
+/// What a token before the cargo subcommand turned out to be.
+enum CargoGlobal {
+    /// A global option (with any value it carries) spanning this many tokens.
+    Skip(usize),
+    /// An option that is not in cargo's global option list, so whether it
+    /// takes a separate value — and therefore which token is the subcommand —
+    /// cannot be determined.
+    Unknown,
+}
+
+/// Classify one token before the cargo subcommand. The lists are cargo
+/// 1.97.1's `cargo --help` "Options:" section: value-taking `--explain <CODE>`,
+/// `--color <WHEN>`, `--config <KEY=VALUE|PATH>`, `-C <DIRECTORY>`,
+/// `-Z <FLAG>`; value-less `-V/--version`, `--list`, `-v/--verbose`,
+/// `-q/--quiet`, `--locked`, `--offline`, `--frozen`, `-h/--help`.
+/// `--opt=value` and an attached short value (`-Zflag`, `-Cdir`) are one token;
+/// short flags may be clustered (`-vv`, `-vZflag`, `-vC dir`).
+fn cargo_global(tok: &str, has_next: bool) -> CargoGlobal {
+    const LONG_VALUE: &[&str] = &["explain", "color", "config"];
+    const LONG_FLAG: &[&str] = &[
+        "version", "list", "verbose", "quiet", "locked", "offline", "frozen", "help",
+    ];
+    if tok.starts_with('+') {
+        return CargoGlobal::Skip(1);
+    }
+    if let Some(long) = tok.strip_prefix("--") {
+        let (name, inline) = match long.split_once('=') {
+            Some((n, _)) => (n, true),
+            None => (long, false),
+        };
+        if LONG_VALUE.contains(&name) {
+            // A missing separate value means cargo errors out; nothing runs
+            // either way, and the loop then finds no subcommand.
+            return CargoGlobal::Skip(if inline || !has_next { 1 } else { 2 });
+        }
+        if LONG_FLAG.contains(&name) && !inline {
+            return CargoGlobal::Skip(1);
+        }
+        return CargoGlobal::Unknown;
+    }
+    let Some(shorts) = tok.strip_prefix('-') else {
+        return CargoGlobal::Unknown;
+    };
+    if shorts.is_empty() {
+        return CargoGlobal::Unknown;
+    }
+    for (pos, c) in shorts.char_indices() {
+        match c {
+            'V' | 'v' | 'q' | 'h' => continue,
+            'C' | 'Z' => {
+                let attached = pos + c.len_utf8() < shorts.len();
+                return CargoGlobal::Skip(if attached || !has_next { 1 } else { 2 });
+            }
+            _ => return CargoGlobal::Unknown,
+        }
+    }
+    CargoGlobal::Skip(1)
+}
+
 fn judge_cargo(args: &[String], dir: &Dir) -> Judged {
     let mut i = 0;
-    // `cargo +toolchain …` and global flags before the subcommand.
-    while args
+    // `cargo +toolchain …` and global options before the subcommand. Options
+    // that take a separate value (`--color always`, `--config k=v`, `-C dir`,
+    // `-Z flag`) consume it, so the value is not mistaken for the subcommand.
+    // An option outside cargo's global list leaves the subcommand position
+    // undetermined, which is denied rather than allowed.
+    while let Some(a) = args
         .get(i)
-        .is_some_and(|a| a.starts_with('+') || a.starts_with('-'))
+        .filter(|a| a.starts_with('+') || a.starts_with('-'))
     {
-        i += 1;
+        match cargo_global(a, i + 1 < args.len()) {
+            CargoGlobal::Skip(n) => i += n,
+            CargoGlobal::Unknown => {
+                return Judged::Deny(format!(
+                    "`cargo {}`: `{a}` is not a known cargo global option, so whether it \
+                     takes a value and which token is the subcommand cannot be determined",
+                    args.join(" ")
+                ));
+            }
+        }
     }
     let rest: &[String] = match args.get(i).map(String::as_str) {
         Some("test") | Some("t") => &args[i + 1..],

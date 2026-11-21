@@ -123,7 +123,6 @@ fn control_short_main_is_denied() {
 }
 
 #[test]
-#[ignore = "RED(643e641f): a full-ref spelling of main (refs/heads/main) skips the main-merge deny"]
 fn full_ref_spelling_of_main_is_still_denied() {
     for c in [
         "git merge refs/heads/main",

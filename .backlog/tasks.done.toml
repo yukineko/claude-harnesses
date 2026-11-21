@@ -91611,3 +91611,65 @@ auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はあり
    Compiling blastguard v0.2.878 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.30s
      Running tests/backlog_20261120_quoted_commit_message_redirect_prose_fp.rs (target/debug/deps/backlog_20261120_quoted_commit_message_redirect_prose_fp-ee3134075779db5a)"""
+
+[[task]]
+id = "cffe54c4"
+title = "blastguard: shopt -s expand_aliases + alias echo on the same line is Allow in bash <(echo hi)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802). RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn alias_echo_then_procsub_is_not_allow; Allow main+sub."
+created_at = 1795155139
+updated_at = 1795240728
+weight = 0.0
+issue_number = 1890
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1890"
+issue_closed_at = 1795240731
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored alias_echo_then_procsub_is_not_allow --exact"
+rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
+observed_at = 1795155139
+detail = """
+exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.70s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes alias_echo_then_procsub_is_not_allow"
+exit = 0
+passed = 1
+rev = "5aab83139c9f97ffb70524b09894b6a6f6470f75"
+observed_at = 1795240713
+output_digest = "sha256:35b91f0c2c559f80ecc55d0d2d8bf7e6fd6f11728736b97bcd54b9691989fd1e"
+excerpt = """
+
+running 1 test
+test alias_echo_then_procsub_is_not_allow ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.81s
+
+   Compiling blastguard v0.2.881 (/Users/yuki/src/.harness-worktrees/session-c1b3e891/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.85s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-107d54ef51c9d429)
+"""
+
+[task.closure.red]
+rev = "53b3e0c63a47da45eaaa403222149637bfc3e6e5"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

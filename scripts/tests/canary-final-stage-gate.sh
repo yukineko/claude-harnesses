@@ -208,6 +208,39 @@ pass "did NOT reach run_rebuild_and_sync after the final-stage rollback halt"
 echo
 echo ">>> case C (anti-vacuity): single-stage canary, HEALTHY gate (rc=0) — expect PROCEED, exit 0, rebuild reached"
 seed_sandbox
+
+# A healthy canary that COMPLETES reaches verify_rollout_complete, which runs the
+# real scripts/check-plugin-rollout.py scoped to the plugin. Under --no-rebuild
+# nothing builds the host binary or writes its provenance, and the temp HOME has
+# no settings.json, so the checker (correctly) reports "no <host> binary deployed"
+# and "no settings to check enabledPlugins against" and the run exits 1. Cases A
+# and B halt before that point, so only C needs the fixture. It is derived from
+# the real source (version, harness-core version, HEAD, host suffix) so it cannot
+# drift: the files below are exactly what rebuild-plugins.sh + an enabled plugin
+# would leave behind. copy_plugin_dir protects a pre-existing bin/<stem>-<suffix>
+# and .deployed-from.json across the copy.
+case "$(uname -s | tr '[:upper:]' '[:lower:]')" in
+  darwin) HOST_OS=darwin ;; linux) HOST_OS=linux ;; *) HOST_OS=unknown ;;
+esac
+case "$(uname -m | tr '[:upper:]' '[:lower:]')" in
+  x86_64|amd64) HOST_ARCH=x86_64 ;; aarch64|arm64) HOST_ARCH=arm64 ;; *) HOST_ARCH=unknown ;;
+esac
+cargo_version() { # <Cargo.toml>
+  awk '/^\[package\]/{p=1;next} /^\[/{p=0} p && $1=="version" {gsub(/"/,"",$3); print $3; exit}' "$1"
+}
+SRC_VER_A="$(cargo_version "$REPO/crates/$PLUGIN_A/Cargo.toml")"
+CORE_VER="$(cargo_version "$REPO/crates/harness-core/Cargo.toml")"
+HEAD_SHA="$(git -C "$REPO" rev-parse HEAD)"
+[ -n "$SRC_VER_A" ] && [ -n "$CORE_VER" ] && [ -n "$HEAD_SHA" ] \
+  || fail "case C fixture: could not read plugin/core version or HEAD from the real source"
+DEPLOY_A="$TEST_CACHE/$PLUGIN_A/$SRC_VER_A"
+mkdir -p "$DEPLOY_A/bin"
+printf '#!/bin/sh\nexit 0\n' >"$DEPLOY_A/bin/$PLUGIN_A-$HOST_OS-$HOST_ARCH"
+chmod +x "$DEPLOY_A/bin/$PLUGIN_A-$HOST_OS-$HOST_ARCH"
+printf '{"plugin":"%s","commit":"%s","dirty":false,"harness_core_version":"%s","deployed_at":1}\n' \
+  "$PLUGIN_A" "$HEAD_SHA" "$CORE_VER" >"$DEPLOY_A/.deployed-from.json"
+mkdir -p "$TEST_HOME/.claude"
+printf '{"enabledPlugins":{"%s@yukineko":true}}\n' "$PLUGIN_A" >"$TEST_HOME/.claude/settings.json"
 OUT_C="$(
   set +e
   GATE_FAIL_FROM_CALL=0 \

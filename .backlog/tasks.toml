@@ -2026,3 +2026,34 @@ exit 101: tscope-refused-run-20261121/crates/condukt)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.21s
      Running tests/backlog_20261121_testscope_refused_wrapper_counts_as_run.rs (target/debug/deps/backlog_20261121_testscope_refused_wrapper_counts_as_run-edcd3f3d9c7ac4dc)
 error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_refused_wrapper_counts_as_run`"""
+
+[[task]]
+id = "d1d85c66"
+title = "scripts/check-version-bumped.py pre-commit mode judges the working tree, not the index (FP on unstaged edits, fail-open on unstaged bump)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "fail-open",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Pre-commit mode (no --head): _range() makes the diff 'git diff --name-only HEAD' (working tree vs HEAD, includes unstaged edits) and the current version is read from the working-tree plugin.json. Two readings recorded in the script header: (1) defect - a pre-commit gate should judge the commit (the index) like the --staged scanners (user ruling 2026-11-08 'the scanner checks only this commit's range'); (2) intended - the gate header documents 'pre-commit: working tree vs last commit'. Script asserts reading (1). Case A (false positive): only an UNSTAGED edit touches plugin foo, commit stages an unrelated file -> gate blocks (should pass). Case B (fail-open): STAGED src change to foo with the bump left UNSTAGED -> gate passes (should block). Controls C (staged change+staged bump -> 0) and D (staged change, no bump -> 1) hold. Observed in main session 2026-11-21: controls C/D ok, RED A and RED B, exit=1. Origin: condukt run run-20261121-114054-75519 (unstaged rustfmt edits listed as changed files)."
+created_at = 1795242395
+updated_at = 1795242395
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/backlog-20261121-version-bumped-judges-unstaged.sh"
+rev = "bcc9a0b64f063f99508dbde319ffb93555bb8659"
+observed_at = 1795242395
+detail = """
+exit 1:  
+    Fix: bump this plugin's version (>= micro) in Cargo.toml + plugin.json + marketplace.json.
+    禁忌: a touched plugin must never keep the same version.
+RED B: the commit stages a foo source change WITHOUT a bump (the bump is unstaged), yet the gate passed; rc=0
+    OK: no changed plugin left un-bumped vs HEAD (1 plugins scanned, plus the shared crate(s) harness-core, riskgrade, progeffect)"""

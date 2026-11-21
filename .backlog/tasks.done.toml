@@ -92784,3 +92784,190 @@ rev = "58e6f79eccc0edaec48b224f3112082c47f3578f"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "c9cc4933"
+title = "condukt: testscope denies cargo test --help / -h as a full-suite run"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = 'Observed 2026-11-21 in condukt run run-20261121-114054-75519, task worktree run-20261121-114054-75519-ts6f65 (main cc8738957): `cargo test --help` was denied with "`cargo test --help` names no test target, so it builds and runs the whole suite: full suite is nightly-only…". --help builds and runs nothing. judge_cargo (crates/condukt/src/testscope.rs) treats any cargo test without a target selector as full-suite. RED: crates/condukt/tests/backlog_20261121_testscope_help_flag_fp.rs (cargo test --help and -h must be allowed; control: bare cargo test still denied, passes).'
+created_at = 1795237689
+updated_at = 1795275703
+weight = 0.0
+issue_number = 1943
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1943"
+issue_closed_at = 1795275706
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261121_testscope_help_flag_fp -- --ignored"
+rev = "141432cd3b55fcc49a155f79aa6d2b34532782f8"
+observed_at = 1795237689
+detail = """
+exit 101:    Compiling condukt v0.7.465 (/Users/yuki/src/.harness-worktrees/bekken-75519/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.19s
+     Running tests/backlog_20261121_testscope_help_flag_fp.rs (target/debug/deps/backlog_20261121_testscope_help_flag_fp-ecc3f8a6004a9d6c)
+error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_help_flag_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261121_testscope_help_flag_fp"
+exit = 0
+passed = 2
+rev = "117e22093229d81d1c6dc0984233622ac6045089"
+observed_at = 1795275701
+output_digest = "sha256:557b9b12371c5660d46363ecad2fdc811a3cf2653cf444c8a851e155fbc480bf"
+excerpt = """
+
+running 2 tests
+test control_bare_cargo_test_is_still_denied ... ok
+test cargo_test_help_is_not_denied ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.36s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running tests/backlog_20261121_testscope_help_flag_fp.rs (target/debug/deps/backlog_20261121_testscope_help_flag_fp-d0d88452d70b58f3)
+"""
+
+[task.closure.red]
+rev = "969621f6682966ee19c966a29f4f972cfa494175"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "c602d32e"
+title = "blastguard: bash -ec / -x -c / -c -- of a determined harmful command substitution is Ask, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """System harm reaches Ask; rule requires Deny (memory system-harm-always-deny). Named by the independent t2 verifier of run-20261121-114321-94421 (2026-11-21); observed RED on main 617c6facb and on the integration tip d400dfde3 (main 9ddad1fc8): bash -ec / bash -x -c / bash -c -- "$(echo 'rm -rf /etc')" => subagent=false => ask. Cause (verifier): b5 determined_dash_c_program (ast/b5/determined.rs) requires args[0] == -c exactly. RED: crates/blastguard/tests/backlog_20261121_determined_subst_shape_gaps.rs dash_c_shape_* (#[ignore])."""
+created_at = 1795238025
+updated_at = 1795275710
+weight = 0.0
+issue_number = 1948
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1948"
+issue_closed_at = 1795275713
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_determined_subst_shape_gaps -- --ignored dash_c_shape_"
+rev = "fc1c63b606c5cee0701fefb1162007f74ae70f97"
+observed_at = 1795238025
+detail = """
+exit 101: .877 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
+     Running tests/backlog_20261121_determined_subst_shape_gaps.rs (target/debug/deps/backlog_20261121_determined_subst_shape_gaps-d7955e60fa7f6135)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_determined_subst_shape_gaps`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261121_determined_subst_shape_gaps dash_c_shape_"
+exit = 0
+passed = 3
+rev = "117e22093229d81d1c6dc0984233622ac6045089"
+observed_at = 1795275707
+output_digest = "sha256:79cd76aec90ff04f190f62bbf5099f2554b915ca01794f2ada154522b9be3688"
+excerpt = """
+
+running 3 tests
+test dash_c_shape_flag_before_c_is_deny ... ok
+test dash_c_shape_double_dash_is_deny ... ok
+test dash_c_shape_bundled_ec_is_deny ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 2.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/backlog_20261121_determined_subst_shape_gaps.rs (target/debug/deps/backlog_20261121_determined_subst_shape_gaps-2ba7e1e94a052934)
+"""
+
+[task.closure.red]
+rev = "969621f6682966ee19c966a29f4f972cfa494175"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "bf40851f"
+title = "blastguard: eval W x / eval -- / builtin eval / command eval of a determined harmful command substitution is Ask, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """System harm reaches Ask; rule requires Deny (memory system-harm-always-deny). Named by the independent t3 verifier of run-20261121-114321-94421 (2026-11-21); observed RED on main 617c6facb and on the integration tip d400dfde3 (main 9ddad1fc8): eval "$(echo 'rm -rf /etc' | cat)" x / eval -- ... / builtin eval ... / command eval ... => subagent=false => ask. Cause (verifier): b5 determined_eval_program (ast/b5/determined.rs) takes only args == [W] with a bare eval head; resolution_fixed_but_one_eval allowlists only bare eval. RED: crates/blastguard/tests/backlog_20261121_determined_subst_shape_gaps.rs eval_shape_* (#[ignore])."""
+created_at = 1795238116
+updated_at = 1795275715
+weight = 0.0
+issue_number = 1949
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1949"
+issue_closed_at = 1795275718
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_determined_subst_shape_gaps -- --ignored eval_shape_"
+rev = "fc1c63b606c5cee0701fefb1162007f74ae70f97"
+observed_at = 1795238116
+detail = """
+exit 101:  passed; 4 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running tests/backlog_20261121_determined_subst_shape_gaps.rs (target/debug/deps/backlog_20261121_determined_subst_shape_gaps-d7955e60fa7f6135)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_determined_subst_shape_gaps`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261121_determined_subst_shape_gaps eval_shape_"
+exit = 0
+passed = 4
+rev = "117e22093229d81d1c6dc0984233622ac6045089"
+observed_at = 1795275714
+output_digest = "sha256:16b134f45ce94efa6b3572fa30ab6ab10daba376d91f8cb96499198660176c01"
+excerpt = """
+
+running 4 tests
+test eval_shape_double_dash_is_deny ... ok
+test eval_shape_builtin_prefix_is_deny ... ok
+test eval_shape_command_prefix_is_deny ... ok
+test eval_shape_second_operand_is_deny ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.68s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261121_determined_subst_shape_gaps.rs (target/debug/deps/backlog_20261121_determined_subst_shape_gaps-2ba7e1e94a052934)
+"""
+
+[task.closure.red]
+rev = "969621f6682966ee19c966a29f4f972cfa494175"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

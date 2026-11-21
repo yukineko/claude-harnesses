@@ -1524,37 +1524,6 @@ exit 101: d out; finished in 0.05s
 error: test failed, to rerun pass `-p blastguard --test inline_eval_mirror_closure`"""
 
 [[task]]
-id = "c9cc4933"
-title = "condukt: testscope denies cargo test --help / -h as a full-suite run"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = 'Observed 2026-11-21 in condukt run run-20261121-114054-75519, task worktree run-20261121-114054-75519-ts6f65 (main cc8738957): `cargo test --help` was denied with "`cargo test --help` names no test target, so it builds and runs the whole suite: full suite is nightly-only…". --help builds and runs nothing. judge_cargo (crates/condukt/src/testscope.rs) treats any cargo test without a target selector as full-suite. RED: crates/condukt/tests/backlog_20261121_testscope_help_flag_fp.rs (cargo test --help and -h must be allowed; control: bare cargo test still denied, passes).'
-created_at = 1795237689
-updated_at = 1795237689
-weight = 0.0
-issue_number = 1943
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1943"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261121_testscope_help_flag_fp -- --ignored"
-rev = "141432cd3b55fcc49a155f79aa6d2b34532782f8"
-observed_at = 1795237689
-detail = """
-exit 101:    Compiling condukt v0.7.465 (/Users/yuki/src/.harness-worktrees/bekken-75519/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.19s
-     Running tests/backlog_20261121_testscope_help_flag_fp.rs (target/debug/deps/backlog_20261121_testscope_help_flag_fp-ecc3f8a6004a9d6c)
-error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_help_flag_fp`"""
-
-[[task]]
 id = "32956a19"
 title = "condukt: testscope task scope ignores -p, so cargo test -p <other crate> --test <name> is allowed"
 project = "/Users/yuki/src/harness"
@@ -1584,69 +1553,6 @@ exit 101: src/.harness-worktrees/bekken-75519/crates/condukt)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 12.21s
      Running tests/backlog_20261121_testscope_task_scope_ignores_package.rs (target/debug/deps/backlog_20261121_testscope_task_scope_ignores_package-daacb59af5149afd)
 error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_task_scope_ignores_package`"""
-
-[[task]]
-id = "c602d32e"
-title = "blastguard: bash -ec / -x -c / -c -- of a determined harmful command substitution is Ask, not Deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """System harm reaches Ask; rule requires Deny (memory system-harm-always-deny). Named by the independent t2 verifier of run-20261121-114321-94421 (2026-11-21); observed RED on main 617c6facb and on the integration tip d400dfde3 (main 9ddad1fc8): bash -ec / bash -x -c / bash -c -- "$(echo 'rm -rf /etc')" => subagent=false => ask. Cause (verifier): b5 determined_dash_c_program (ast/b5/determined.rs) requires args[0] == -c exactly. RED: crates/blastguard/tests/backlog_20261121_determined_subst_shape_gaps.rs dash_c_shape_* (#[ignore])."""
-created_at = 1795238025
-updated_at = 1795238025
-weight = 0.0
-issue_number = 1948
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1948"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261121_determined_subst_shape_gaps -- --ignored dash_c_shape_"
-rev = "fc1c63b606c5cee0701fefb1162007f74ae70f97"
-observed_at = 1795238025
-detail = """
-exit 101: .877 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
-     Running tests/backlog_20261121_determined_subst_shape_gaps.rs (target/debug/deps/backlog_20261121_determined_subst_shape_gaps-d7955e60fa7f6135)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261121_determined_subst_shape_gaps`"""
-
-[[task]]
-id = "bf40851f"
-title = "blastguard: eval W x / eval -- / builtin eval / command eval of a determined harmful command substitution is Ask, not Deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """System harm reaches Ask; rule requires Deny (memory system-harm-always-deny). Named by the independent t3 verifier of run-20261121-114321-94421 (2026-11-21); observed RED on main 617c6facb and on the integration tip d400dfde3 (main 9ddad1fc8): eval "$(echo 'rm -rf /etc' | cat)" x / eval -- ... / builtin eval ... / command eval ... => subagent=false => ask. Cause (verifier): b5 determined_eval_program (ast/b5/determined.rs) takes only args == [W] with a bare eval head; resolution_fixed_but_one_eval allowlists only bare eval. RED: crates/blastguard/tests/backlog_20261121_determined_subst_shape_gaps.rs eval_shape_* (#[ignore])."""
-created_at = 1795238116
-updated_at = 1795238116
-weight = 0.0
-issue_number = 1949
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1949"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261121_determined_subst_shape_gaps -- --ignored eval_shape_"
-rev = "fc1c63b606c5cee0701fefb1162007f74ae70f97"
-observed_at = 1795238116
-detail = """
-exit 101:  passed; 4 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.00s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
-     Running tests/backlog_20261121_determined_subst_shape_gaps.rs (target/debug/deps/backlog_20261121_determined_subst_shape_gaps-d7955e60fa7f6135)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261121_determined_subst_shape_gaps`"""
 
 [[task]]
 id = "a330c1a3"

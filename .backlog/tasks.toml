@@ -1179,40 +1179,6 @@ exit 101:  (/Users/yuki/src/.harness-worktrees/file-dup-target-red/crates/blastg
 error: test failed, to rerun pass `-p blastguard --test backlog_20261114_dup_target_quoted_dollar_fp`"""
 
 [[task]]
-id = "879c5424"
-title = 'blastguard: pinned Allow controls env echo "ls" | sh and command printf "ls" | sh are not Allow (file_content_piped_to_shell_twins red on main)'
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-20 at main 5b2b3a6b8 (detached checkout, run-20261120-170138-92681 t8cad integration check) and at t8cad fix 95d7bac92: tests env_wrapped_echo_literal_into_sh_pinned and command_wrapped_printf_literal_into_sh_pinned panicked at crates/blastguard/tests/file_content_piped_to_shell_twins.rs:73:5 (assert_allow), 'test result: FAILED. 14 passed; 2 failed'. Pre-existing (not caused by 8cadc78f fix). Reading (a) FP regression: the pins say these must be Allow. Reading (b) a later ruling made wrapped feeders not-Allow and the pins are stale; distinguish by git log -S on the pins vs later rulings."
-created_at = 1795162227
-updated_at = 1795162227
-weight = 0.0
-issue_number = 1922
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1922"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test file_content_piped_to_shell_twins"
-rev = "5b2b3a6b877f75d570aaa80014998ab69a4feb97"
-observed_at = 1795162227
-detail = """
-exit 101: h_pinned
-
-test result: FAILED. 14 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
-     Running tests/file_content_piped_to_shell_twins.rs (target/debug/deps/file_content_piped_to_shell_twins-6d950b571ae3330a)
-error: test failed, to rerun pass `-p blastguard --test file_content_piped_to_shell_twins`"""
-
-[[task]]
 id = "61b6ba67"
 title = "blastguard FP: subagent denied (S5 Undetermined) for mkdir -p scratchpad && cd scratchpad && python3 - <<EOF (import json,re)"
 project = "/Users/yuki/src/harness"
@@ -2148,3 +2114,34 @@ exit 101: d out; finished in 0.05s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.73s
      Running tests/inline_eval_mirror_closure.rs (target/debug/deps/inline_eval_mirror_closure-a90cc072d1285a1b)
 error: test failed, to rerun pass `-p blastguard --test inline_eval_mirror_closure`"""
+
+[[task]]
+id = "c9cc4933"
+title = "condukt: testscope denies cargo test --help / -h as a full-suite run"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = 'Observed 2026-11-21 in condukt run run-20261121-114054-75519, task worktree run-20261121-114054-75519-ts6f65 (main cc8738957): `cargo test --help` was denied with "`cargo test --help` names no test target, so it builds and runs the whole suite: full suite is nightly-only…". --help builds and runs nothing. judge_cargo (crates/condukt/src/testscope.rs) treats any cargo test without a target selector as full-suite. RED: crates/condukt/tests/backlog_20261121_testscope_help_flag_fp.rs (cargo test --help and -h must be allowed; control: bare cargo test still denied, passes).'
+created_at = 1795237689
+updated_at = 1795237689
+weight = 0.0
+issue_number = 1943
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1943"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261121_testscope_help_flag_fp -- --ignored"
+rev = "141432cd3b55fcc49a155f79aa6d2b34532782f8"
+observed_at = 1795237689
+detail = """
+exit 101:    Compiling condukt v0.7.465 (/Users/yuki/src/.harness-worktrees/bekken-75519/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.19s
+     Running tests/backlog_20261121_testscope_help_flag_fp.rs (target/debug/deps/backlog_20261121_testscope_help_flag_fp-ecc3f8a6004a9d6c)
+error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_help_flag_fp`"""

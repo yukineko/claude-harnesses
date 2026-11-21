@@ -1797,6 +1797,20 @@ chain 値）、`detect/ast/b5.rs`。
 - テスト: `crates/blastguard/tests/verify_1e9da081_function_shadow_controls_20261121.rs`、
   `crates/blastguard/tests/backlog_20261121_functions_substring_feeder_fp.rs`。
 
+## shell / interpreter へ pipe する前段の exec wrapper（`env echo` / `command printf`）は 1 本の pipeline のときだけ外して読む（backlog 879c5424）
+
+- `env` / `command` は PATH や関数が与えるものを実行するので、前段 `env echo "ls" | sh` の literal が program だと
+  言えるのは、その行の書かれ方がそれを決めるときだけである。
+- 外して読む条件（`detect/readings.rs` の `bare_wrappers_as_written`）: 最上位の行（`-c` / stdin 本体ではない）であり、
+  かつ行全体が、先頭 stage が bare な `env` / `command` である `|` だけの pipeline 1 本
+  （`ast::b5::bare_wrapper_pipeline`）であること。他の文・複合コマンド・prefix 代入があれば外さない。
+- 外さないとき、`detect/payload/upstream_stage.rs` の `unresolved_wrapper_ask` が **Ask**（subagent では hardened Deny）を
+  足す。raise-only であり、system harm の Deny 等、他の規則の判定を下げない。前段に wrapper が無い・
+  brace group の feeder（別規則）・`-c` / stdin 本体では何も足さない。
+- PATH 書き換え・関数上書きの手段を個別に列挙して塞ぐ方式は採らない（構造で決める）。
+- テスト: `crates/blastguard/tests/exec_wrapper_producer_controls.rs`、
+  `crates/blastguard/tests/file_content_piped_to_shell_twins.rs`。
+
 ## 登録済み `/flow` driver セッションでは `ask` を出さない — ユーザー裁定 2026-11-21（backlog 4ef3a9e2）
 
 裁定（逐語）: 「非破壊はAllow、他はDeny」、同日の補足「またaskされてたけど、これもallowに」。

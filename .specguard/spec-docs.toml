@@ -953,3 +953,8 @@ reason = "Section '登録済み /flow driver セッションでは ask を出さ
 path = "crates/blastguard/src/detect/payload/function_shadow.rs"
 doc = "docs/specs/blastguard.md"
 reason = "Section 'stdin / process substitution の program 読みで echo / printf が shell 関数でありうるときは Ask（backlog 1e9da081 / f06ecb05）': defined_functions (definition-shape gate, zsh `functions` parameter → Undetermined, AST function_names), the chain union widened by readings/detect_bash, and shadowed_emitter_ask over the emitter stage's command heads (group feeder: echo / printf)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/payload/upstream_stage.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Section 'shell / interpreter へ pipe する前段の exec wrapper（`env echo` / `command printf`）は 1 本の pipeline のときだけ外して読む（backlog 879c5424）': unresolved_wrapper_ask is the raise-only Ask when bare_wrappers_as_written does not hold."

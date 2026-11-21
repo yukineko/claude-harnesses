@@ -1920,6 +1920,8 @@ notes = "Measured 2026-11-21 on main cc8738957 (predates run run-20261121-114054
 created_at = 1795237923
 updated_at = 1795237923
 weight = 0.0
+issue_number = 1947
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1947"
 rev = 0
 
 [task.repro]
@@ -1949,6 +1951,8 @@ notes = """System harm reaches Ask; rule requires Deny (memory system-harm-alway
 created_at = 1795238025
 updated_at = 1795238025
 weight = 0.0
+issue_number = 1948
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1948"
 rev = 0
 
 [task.repro]
@@ -1978,6 +1982,8 @@ notes = """System harm reaches Ask; rule requires Deny (memory system-harm-alway
 created_at = 1795238116
 updated_at = 1795238116
 weight = 0.0
+issue_number = 1949
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1949"
 rev = 0
 
 [task.repro]

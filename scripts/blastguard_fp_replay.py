@@ -67,10 +67,13 @@ under ``harness_core::config::home()``. Each run gets a fresh temp dir, and:
 WHAT STILL DIFFERS FROM THE ORIGINAL CALL (the replay is an APPROXIMATION):
   * the filesystem: files, worktrees and git state the original call saw may
     be gone or changed (a still-existing cwd is not the same tree);
-  * ``CLAUDE_PROJECT_DIR`` is not logged; it is approximated as the main
-    worktree root of ``cwd`` (``git rev-parse --git-common-dir``), falling back
-    to ``cwd`` (noted in ``replay_notes``), or forced with ``--project-dir``;
-  * ``TMPDIR`` is inherited from this process, not the original hook's env;
+  * ``CLAUDE_PROJECT_DIR`` is logged in a record's ``env`` since blastguard
+    0.2.926 (older records have no ``env``), but this script does NOT read it
+    yet: it is approximated as the main worktree root of ``cwd``
+    (``git rev-parse --git-common-dir``), falling back to ``cwd`` (noted in
+    ``replay_notes``), or forced with ``--project-dir``;
+  * ``TMPDIR`` is likewise logged in ``env`` since 0.2.926 but not read here;
+    it is inherited from this process, not the original hook's env;
   * approval memory and the repeat-deny ledger start empty, so a logged
     decision reached through "approved before" or "2nd identical request ->
     ask" is not reproduced (``original_decision`` vs ``decision`` in the log

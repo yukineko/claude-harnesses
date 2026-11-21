@@ -18,7 +18,29 @@
 //! command byte-exact (Bash) or the full `tool_input` (file tools), the cwd,
 //! the session and agent ids, the decision and how it was reached, the
 //! detector's original verdict (`original_decision`), the reason
-//! the agent saw, and the rule id. An `Allow` writes nothing.
+//! the agent saw, the rule id, and the process environment the verdict read
+//! (`env`, see below). An `Allow` writes nothing.
+//!
+//! # The verdict's environment (`env`, since blastguard 0.2.926)
+//!
+//! The hook verdict is not a function of the payload alone: blastguard reads
+//! [`VERDICT_ENV_VARS`] (`CLAUDE_PROJECT_DIR`, `TMPDIR`) from its own process
+//! env (`safe_roots` in blastguard's `main.rs`, `process_place_model` in
+//! `detect/scratch_place.rs`), and they decide which places are managed. So
+//! every record carries `env`, an object with exactly those keys, read from
+//! the recording process's env at write time (the same process that judged):
+//!
+//! * a JSON string: the variable was set, value byte-exact (empty included);
+//! * `null`: the variable was unset. Never a guessed or default value;
+//! * `{"not_unicode_lossy": "<lossy>"}`: set but not valid UTF-8 (the verdict
+//!   reads it with `std::env::var(..).ok()`, i.e. as unset); the lossy text is
+//!   for a human, not a replayable value.
+//!
+//! `env` is an additive field: `v` stays 2. A record written before blastguard
+//! 0.2.926 has no `env` field; there its absence means "not recorded", never
+//! "unset". Readers that ignore unknown fields (the replay script reads
+//! records with `dict.get`) read records with and without `env` alike.
+//! `HOME` and other env inputs are NOT recorded here.
 //!
 //! # Why not (only) the overwatch violation ledger
 //!
@@ -64,7 +86,14 @@ pub const FILE_NAME: &str = "blocks.jsonl";
 
 /// Record schema version. 2 added `original_decision`; a v1 record has no
 /// such field, and its absence there means "not recorded", never "deny".
+/// `env` (the [`VERDICT_ENV_VARS`] the verdict read) was added to v2 as an
+/// additive field without a version bump (blastguard 0.2.926); a record
+/// without it was written before that, and the absence means "not
+/// recorded", never "unset".
 pub const VERSION: u64 = 2;
+
+/// The process env variables the hook verdict reads, recorded in `env`.
+pub const VERDICT_ENV_VARS: [&str; 2] = ["CLAUDE_PROJECT_DIR", "TMPDIR"];
 
 /// Above this many bytes of compact `tool_input` JSON the copy is dropped
 /// (`tool_input: null`, `tool_input_capped: true`). The hash, the length,
@@ -175,12 +204,40 @@ fn str_field(v: Option<&Value>, key: &str) -> Value {
     }
 }
 
-/// Build the record for one block from the RAW stdin payload.
+/// The `env` object for [`VERDICT_ENV_VARS`], each looked up with `get`
+/// (see the module doc for the three value shapes). Unset is `null`.
+pub fn verdict_env_from(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> Value {
+    let mut m = serde_json::Map::new();
+    for name in VERDICT_ENV_VARS {
+        let v = match get(name) {
+            None => Value::Null,
+            Some(os) => match os.into_string() {
+                Ok(s) => Value::String(s),
+                Err(os) => json!({ "not_unicode_lossy": os.to_string_lossy() }),
+            },
+        };
+        m.insert(name.to_string(), v);
+    }
+    Value::Object(m)
+}
+
+/// The `env` object read from this process's environment.
+pub fn verdict_env() -> Value {
+    verdict_env_from(|name| std::env::var_os(name))
+}
+
+/// Build the record for one block from the RAW stdin payload, with `env`
+/// read from this process's environment ([`verdict_env`]).
 ///
 /// `parsed` says whether blastguard could read the payload as a hook input;
 /// when it could not, the raw stdin is kept verbatim in `raw_payload` (it is
 /// the only description of the blocked call there is).
 pub fn record(raw: &str, parsed: bool, block: &Block<'_>, ts: u64) -> Value {
+    record_with_env(raw, parsed, block, ts, verdict_env())
+}
+
+/// [`record`] with the `env` object given by the caller.
+pub fn record_with_env(raw: &str, parsed: bool, block: &Block<'_>, ts: u64, env: Value) -> Value {
     let payload: Option<Value> = serde_json::from_str::<Value>(raw.trim())
         .ok()
         .filter(Value::is_object);
@@ -231,6 +288,7 @@ pub fn record(raw: &str, parsed: bool, block: &Block<'_>, ts: u64) -> Value {
         "system_harm": block.system_harm,
         "reason": block.reason,
         "rule_id": block.rule_id,
+        "env": env,
     });
     if !parsed {
         if let Some(o) = rec.as_object_mut() {

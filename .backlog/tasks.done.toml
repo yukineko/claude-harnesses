@@ -93840,3 +93840,70 @@ rev = "7806f67341a37814ce0d2acebb1619164bdabb81"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "00c6c2b8"
+title = "blastguard relink: symlink created by ln inside $(...)/backticks/bash -c/vim -c '!' escape is not a relink, so a later write through it into /etc is Allow/Ask, not Deny (system-harm fail-open)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """Reported by the verifier of backlog 3de4729f (present at base f9bb4b9aa); RED observed 2026-11-22 at main e3baca954 tree, RED commit 64d3d0ecf: 6 failed / 2 passed. vim -c 'silent !ln -s /etc/bg-sentinel d' -c q; echo x > d/hosts -> allow; echo "$(ln -s /etc/bg-sentinel d)"; echo x > d/hosts -> allow; jq . "$(ln ...)" -> allow; true $(ln ...) && echo x > d/hosts -> allow; echo `ln ...` and bash -c 'ln ...' -> ask (unmodelled relinker). Fix: relink.rs must read commands the AST shows run inside substitutions / interpreter escapes as relinkers."""
+created_at = 1795279570
+updated_at = 1795288018
+weight = 0.0
+issue_number = 1968
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1968"
+issue_closed_at = 1795288023
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261122_relink_symlink_via_subst_failopen"
+rev = "64d3d0ecf63ca8cc2ef9b644b37d1b0a36530678"
+observed_at = 1795279570
+detail = """
+exit 101: /worktrees/run-20261122-014030-65651-t1/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.33s
+     Running tests/backlog_20261122_relink_symlink_via_subst_failopen.rs (target/debug/deps/backlog_20261122_relink_symlink_via_subst_failopen-8fef54456ae738fa)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261122_relink_symlink_via_subst_failopen`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261122_relink_symlink_via_subst_failopen"
+exit = 0
+passed = 8
+rev = "6d879c0a3091aea6da6a0438af5e3a9bb8a39865"
+observed_at = 1795288016
+output_digest = "sha256:ab0870f0b3bc9752985d3bb3db504055a205275ee34105b4b250d140550f51ba"
+excerpt = """
+
+running 8 tests
+test control_spelled_system_write_is_deny ... ok
+test bash_c_symlink_then_write_is_deny ... ok
+test jq_arg_dollar_paren_symlink_then_write_is_deny ... ok
+test echo_dollar_paren_symlink_then_write_is_deny ... ok
+test control_relative_write_without_relink_is_not_deny ... ok
+test vim_shell_escape_symlink_then_write_is_deny ... ok
+test echo_backtick_symlink_then_write_is_deny ... ok
+test unquoted_dollar_paren_symlink_and_write_joined_by_and_is_deny ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/backlog_20261122_relink_symlink_via_subst_failopen.rs (target/debug/deps/backlog_20261122_relink_symlink_via_subst_failopen-bec974bd3c10cfb0)
+"""
+
+[task.closure.red]
+rev = "62e6f74eab4ad2263a4380c4ca9d94cda1be1faa"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

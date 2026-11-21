@@ -829,9 +829,9 @@ forge・condukt のスケジューラが再利用）。
   深さ超過 — は model しない relinker として扱う（上の Ask 条件）。
   ただし展開の command word は、行全体の AST 評価（`ast::targets::resolve`）が値を証明していればその値を
   literal として読む（`P=/x/p.sh; …; $P a` は `p.sh` の直接実行で、この行に escape 本文は無い。
-  `B=bash && $B -c '…'` は本文を読む）。証明されない展開だけが判定不能。`.`/`source`（file の本文を読む。
-  `bash x.sh` と同じく行の文面ではない）と shell 以外の interpreter（`python3 -c` 等。shell escape ではなく、
-  relink 語を含めば従来どおり word scan が model しない relinker と読む）はここでは読まない
+  `B=bash && $B -c '…'` は本文を読む）。証明されない展開だけが判定不能。literal な通常 file を operand に取る
+  `.`/`source`（`bash x.sh` と同じく本文は行の文面ではない）はここでは読まない。operand が `/dev/stdin`・
+  `/dev/fd/N`・`/proc/…`・`-`・`<(…)`・展開・無しのときは行の文面を走らせうるので判定不能のまま
   （625d16af8 の回帰: `. "$HOME/.cargo/env" && sed -i … f` と loop 内の `$P` 実行が relink の Ask になっていた。
   tests/ast_eval_fp_targets_20261115.rs の sanity_line_172 / fp_line_195）。
   **RESIDUAL**: relink 語も target も文面に現れない

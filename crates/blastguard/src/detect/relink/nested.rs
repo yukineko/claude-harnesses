@@ -29,10 +29,10 @@
 //! `$P` through the top-level index ([`targets::resolve`]) and judges each
 //! proven value as if it were spelled (a direct exec of `p.sh` runs no
 //! escape on this line; `B=bash && $B -c '…'` reads the body). `.` /
-//! `source` run a file's text, and a non-shell interpreter (`python3 -c`)
-//! runs no shell escape: like `bash x.sh`, nothing of theirs is read here
-//! (the word scan still reads them as unmodelled relinkers when they name a
-//! relinking verb). Regression 625d16af8: both were read as undetermined, so
+//! `source` of a plain literal file run that file's text, which is not on
+//! the line: like `bash x.sh`, nothing is read; any other operand
+//! (`/dev/stdin <<< '…'`, `<(…)`, an expansion) stays undetermined.
+//! Regression 625d16af8: both were read as undetermined, so
 //! `. "$HOME/.cargo/env" && sed -i … f` and a `$P` exec in a loop became
 //! relink Asks.
 
@@ -449,16 +449,38 @@ fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, out: &mut Nested) {
         }
         return;
     }
-    // A wrapper that may run an interpreter (`sudo bash -c …`), or `eval`,
-    // whose operands are shell text on the line this does not read. Not
-    // `.` / `source`: they run a FILE's text, which is not on the line (like
-    // `bash x.sh` above), and not a non-shell interpreter (`python3 -c`,
-    // `perl -e`): its program is not a shell escape; the word scan
-    // (`super::parse`) reads those as unmodelled relinkers when they name a
-    // relinking verb, as before.
-    let may_wrap = base == "eval" || WRAPPERS.split_whitespace().any(|w| w == base);
-    if may_wrap && matches!(ast::program_source(c), Some(ProgramSource::Undetermined(_))) {
+    // `. FILE` / `source FILE` with a plain literal file runs that file's
+    // text, which is not on the line: nothing to read, like `bash x.sh`
+    // above. Any other operand (`/dev/stdin <<< '…'`, `<(…)`, an
+    // expansion, none) may run text from the line: undetermined below.
+    if matches!(base, "." | "source") && sources_plain_file(c) {
+        return;
+    }
+    // A wrapper that may run an interpreter (`sudo bash -c …`), `eval`, a
+    // `.` / `source` not of a plain file, an interpreter whose program is
+    // not determined.
+    if matches!(ast::program_source(c), Some(ProgramSource::Undetermined(_))) {
         out.undetermined = true;
+    }
+}
+
+/// `c` (a `.` / `source`) reads a plain file named literally: its first
+/// operand is a literal, non-empty path that holds no substitution and is
+/// not a device / process-fd path (`/dev/stdin`, `/dev/fd/N`, `/proc/…`)
+/// or `-`.
+fn sources_plain_file(c: &SimpleCommand) -> bool {
+    let Some(w) = c.argv.get(1) else {
+        return false;
+    };
+    match &w.value {
+        Value::Literal(p) => {
+            !p.is_empty()
+                && p != "-"
+                && !has_subst(&w.raw)
+                && !p.starts_with("/dev/")
+                && !p.starts_with("/proc/")
+        }
+        Value::Undetermined(_) => false,
     }
 }
 

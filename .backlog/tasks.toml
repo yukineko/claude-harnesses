@@ -1667,3 +1667,28 @@ exit 101: out; finished in 1.00s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.81s
      Running tests/subagent_heredoc_fp_20261108.rs (target/debug/deps/subagent_heredoc_fp_20261108-d8fe7fa4b6090c55)
 error: test failed, to rerun pass `-p blastguard --test subagent_heredoc_fp_20261108`"""
+
+[[task]]
+id = "11eb1a1e"
+title = "condukt testscope: 'git merge --into-name main x' denied; merge text-value skip list is exact-match"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """Measured 2026-11-22 main 950c8cdce. text_value_opts("merge") = [-m,--message,-F,--file] exact; the separated value of --into-name is judged as a commit operand. 'git merge --mess main' deliberately NOT asserted (no commit operand; upstream may be main)."""
+created_at = 1795293450
+updated_at = 1795293450
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test testscope_merge_text_value_opts_20261122 allow_merge_into_name"
+rev = "fb9f41580647d9c9969d8a94babd63969c0b33bd"
+observed_at = 1795293450
+detail = """
+exit 101: piling condukt v0.7.497 (/Users/yuki/src/.harness-worktrees/filing-run87637/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.53s
+     Running tests/testscope_merge_text_value_opts_20261122.rs (target/debug/deps/testscope_merge_text_value_opts_20261122-c282b29d8f1d3149)
+error: test failed, to rerun pass `-p condukt --test testscope_merge_text_value_opts_20261122`"""

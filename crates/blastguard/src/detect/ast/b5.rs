@@ -32,7 +32,13 @@
 //!   output of a process substitution (`bash <(echo hi)`, `bash < <(echo
 //!   hi)`) or of the previous pipe stage (`printf '%s' x | node`) whose
 //!   commands are all `echo` / `printf` literal producers (user ruling
-//!   2026-11-18 (a)): a shell body is analysed by this layer recursively;
+//!   2026-11-18 (a)); a BARE `env CMD` / `command CMD` (no option, no
+//!   `NAME=V`) is read as `CMD`, so `env echo "ls" | sh` is the program `ls`
+//!   too, but only when the whole top-level line is that one pipeline
+//!   ([`bare_wrapper_pipeline`]: no other statement, separator, background
+//!   `&`, compound command or substitution, and not inside a body). Any other
+//!   line keeps the producer Undetermined. A shell body is analysed by this
+//!   layer recursively;
 //!   a python / perl / ruby / node body gives no B.5 opinion (the legacy
 //!   program-text reading judges it). Except a literal stdin piped in by a
 //!   compound stage — a brace group of `echo` / `printf` members, wherever
@@ -142,6 +148,11 @@ use super::{
 use crate::detect::VerdictAcc;
 use crate::model::Decision;
 
+mod determined;
+use determined::{
+    determined_dash_c_program, determined_delivered_program, determined_eval_program,
+};
+
 /// Directories whose binaries are judged by basename like the bare command
 /// (ruling 2026-11-18 #3). Only the exact directory counts, not a
 /// subdirectory of it.
@@ -181,6 +192,52 @@ pub(crate) struct Probes<'a> {
     /// The session's location model: the hook's cwd and the path resolver
     /// the tracked-and-unmodified probe ([`git_tracked_clean`]) needs.
     pub scope: &'a crate::scope::SafeRoots,
+    /// Whether the caller judges the user's top-level line AND that line is one
+    /// bare-wrapper pipeline ([`bare_wrapper_pipeline`]); see
+    /// `readings::bare_wrappers_as_written`. Read only at depth 0 (the line
+    /// itself, not a `-c` / stdin body). `false` unless the caller computed it.
+    pub wrappers_bare: bool,
+}
+
+/// Whether `text` is exactly one pipeline and nothing else, judged on its AST
+/// (`analyze`): every command is a stage of one pipeline, in order
+/// (`Context::Pipeline { pos, len }`), the stages are joined by `|` alone, and
+/// the pipeline spans the whole text. A leading or trailing statement, a
+/// separator (`;`, `&&`, `||`, newline), a background `&`, a compound command
+/// or a substitution puts a command outside the stages, so it is `false`. Also
+/// `false` when the text does not evaluate (no answer, so the restrictive
+/// reading). Only a top-level line is read through this (see [`Probes`]).
+pub(in crate::detect) fn bare_wrapper_pipeline(text: &str) -> bool {
+    let Analysis::Known(script) = analyze(text) else {
+        return false;
+    };
+    let stages = &script.commands;
+    let Some(first) = stages.first() else {
+        return false;
+    };
+    let Context::Pipeline { len, .. } = first.context else {
+        return false;
+    };
+    if len < 2 || stages.len() != len {
+        return false;
+    }
+    let lead = text.len() - text.trim_start().len();
+    if stages[0].span.start != lead {
+        return false;
+    }
+    let mut prev_end = None;
+    for (pos, c) in stages.iter().enumerate() {
+        if c.context != (Context::Pipeline { pos, len }) {
+            return false;
+        }
+        if let Some(end) = prev_end {
+            if text.get(end..c.span.start).map(str::trim) != Some("|") {
+                return false;
+            }
+        }
+        prev_end = Some(c.span.end);
+    }
+    prev_end == Some(lead + text.trim().len())
 }
 
 /// `max(B.5, legacy)` (`Deny > Ask > Allow`). A legacy Deny is returned
@@ -697,7 +754,13 @@ fn classify(
     };
     // A program delivered as literal text by a process substitution or a
     // pipe (user ruling 2026-11-18 (a)) is read like a literal stdin body.
-    if let Some(body) = literal_delivered_program(text, commands, idx, cmd, &source, k) {
+    // A bare wrapper reads as its producer only when the top-level line and
+    // the top-level line is one bare-wrapper pipeline (`Probes::wrappers_bare`,
+    // set by the caller from `readings::bare_wrappers_as_written`), and this is
+    // that line, not a body (depth 0).
+    let wrappers_ok = judge.wrappers_bare && depth == 0;
+    if let Some(body) = literal_delivered_program(text, commands, idx, cmd, &source, k, wrappers_ok)
+    {
         return literal_body(fam, &body, depth, judge);
     }
     // A program a determined producer PIPELINE delivers (`bash <(echo hi |
@@ -932,17 +995,45 @@ fn privileged_literal_body(
 /// The text a simple command prints when it is a literal producer: `echo`
 /// with literal operands (no option, no backslash), `printf` with a literal
 /// format without `%` (`\n` the only escape), or `printf '%s' X` /
-/// `printf '%s\n' X` with a backslash-free `X`. `None` for anything else,
-/// or with a redirect or an assignment.
-fn producer_output(c: &SimpleCommand) -> Option<String> {
+/// `printf '%s\n' X` with a backslash-free `X`. A BARE `env` or `command`
+/// in front of one of those (see [`bare_wrapped_command`]) produces the same
+/// text when `wrappers_ok` (the top-level line is one bare-wrapper pipeline,
+/// see [`bare_wrapper_pipeline`]): `env echo "ls"` and
+/// `command printf "ls"` print what `echo "ls"` and `printf "ls"` print.
+/// `None` for anything else, or with a redirect or an assignment.
+fn producer_output(c: &SimpleCommand, wrappers_ok: bool) -> Option<String> {
     if !c.redirects.is_empty() || !c.assignments.is_empty() {
         return None;
     }
     let Ok(argv) = literals(&c.argv) else {
         return None; // not a literal producer: the caller stays Undetermined
     };
+    producer_argv_output(bare_wrapped_command(&argv, wrappers_ok)?)
+}
+
+/// The command a bare exec wrapper runs, read from the parsed argv words.
+/// `env CMD …` is bare when the word after `env` is neither an option (`-i`,
+/// `-S`, `--`, …) nor a `NAME=V` operand; `command CMD …` is bare when the
+/// word after `command` is not an option (`-p`, `-v`, `-V`). For any other
+/// argv the argv itself is returned. `None` when a wrapper has no word after
+/// it or is not bare, so the caller stays Undetermined, and always when
+/// `allowed` is false (the top-level line is not one bare-wrapper pipeline,
+/// see [`bare_wrapper_pipeline`]). A wrapper is not unwrapped twice:
+/// `env command echo` is not a producer.
+fn bare_wrapped_command<'a, 'b>(argv: &'b [&'a str], allowed: bool) -> Option<&'b [&'a str]> {
+    match argv.split_first() {
+        Some((&("env" | "command"), rest)) => {
+            let first = rest.first()?;
+            (allowed && !first.starts_with('-') && !first.contains('=')).then_some(rest)
+        }
+        _ => Some(argv),
+    }
+}
+
+/// [`producer_output`] of an argv whose wrappers (if any) are already removed.
+fn producer_argv_output(argv: &[&str]) -> Option<String> {
     let only_newline_escapes = |f: &str| !f.replace("\\n", "").contains('\\');
-    match argv.as_slice() {
+    match argv {
         ["echo", rest @ ..] => {
             if rest.first().is_some_and(|a| a.starts_with('-'))
                 || rest.iter().any(|a| a.contains('\\'))
@@ -967,6 +1058,7 @@ fn procsub_content(
     text: &str,
     commands: &[SimpleCommand],
     range: &std::ops::Range<usize>,
+    wrappers_ok: bool,
 ) -> Option<String> {
     let open = range.start.checked_add(2)?;
     let close = range.end.checked_sub(1)?;
@@ -994,7 +1086,7 @@ fn procsub_content(
         if !sep_ok {
             return None;
         }
-        out.push_str(&producer_output(c)?);
+        out.push_str(&producer_output(c, wrappers_ok)?);
         pos = c.span.end;
     }
     let tail = text.get(pos..close)?;
@@ -1013,6 +1105,7 @@ pub(super) fn literal_delivered_program(
     cmd: &SimpleCommand,
     source: &ProgramSource,
     k: usize,
+    wrappers_ok: bool,
 ) -> Option<String> {
     match source {
         // `bash <(…)`: the first non-option operand is the substitution.
@@ -1025,7 +1118,7 @@ pub(super) fn literal_delivered_program(
             if !w.raw.starts_with("<(") {
                 return None;
             }
-            procsub_content(text, commands, &w.span)
+            procsub_content(text, commands, &w.span, wrappers_ok)
         }
         ProgramSource::Stdin(StdinSource::Literal(_)) => None,
         ProgramSource::Stdin(_) => {
@@ -1050,7 +1143,12 @@ pub(super) fn literal_delivered_program(
                     return None;
                 }
                 let at = text.get(r.span.clone())?.find("<(")?;
-                return procsub_content(text, commands, &(r.span.start + at..r.span.end));
+                return procsub_content(
+                    text,
+                    commands,
+                    &(r.span.start + at..r.span.end),
+                    wrappers_ok,
+                );
             }
             if !ins.is_empty() {
                 return None;
@@ -1066,157 +1164,10 @@ pub(super) fn literal_delivered_program(
             if text.get(prev.span.end..cmd.span.start)?.trim() != "|" {
                 return None;
             }
-            producer_output(prev)
+            producer_output(prev, wrappers_ok)
         }
         _ => None,
     }
-}
-
-/// The program `cmd` (argv from `k`) reads when [`literal_delivered_program`]
-/// found no literal producer but the delivering text is a producer pipeline
-/// whose output `payload/determined_output.rs` computes beyond a single plain
-/// `echo` (backlog 40dc52c0): the process substitution operand `<(…)`, the
-/// only stdin redirect `< <(…)`, or the pipeline stages before `cmd`
-/// (`echo hi | cat | bash`). That computed output is the program, read by
-/// the caller as a literal body.
-///
-/// `None` unless BOTH the user's top-level line and every enclosing derived
-/// text ([`crate::detect::readings::chain_names_fixed`], only ever narrowed
-/// by a `b5` / S5 re-entry on derived text, never widened) AND `text` itself
-/// leave the modelled names unrebound
-/// (`determined_output::resolution_fixed`), and unless the delivering text
-/// is exactly such a pipeline. Every other shape keeps its Undetermined.
-fn determined_delivered_program(
-    text: &str,
-    commands: &[SimpleCommand],
-    idx: usize,
-    cmd: &SimpleCommand,
-    source: &ProgramSource,
-    k: usize,
-) -> Option<String> {
-    use crate::detect::payload::determined_output::{pipeline_output, resolution_fixed};
-    if !crate::detect::readings::chain_names_fixed() || !resolution_fixed(text) {
-        return None;
-    }
-    let procsub_inner = |range: &std::ops::Range<usize>| -> Option<String> {
-        let open = range.start.checked_add(2)?;
-        let close = range.end.checked_sub(1)?;
-        if text.get(range.start..open)? != "<(" || text.get(close..range.end)? != ")" {
-            return None;
-        }
-        Some(text.get(open..close)?.to_string())
-    };
-    let delivering = match source {
-        ProgramSource::Undetermined(_) | ProgramSource::File(Value::Undetermined(_)) => {
-            let w = cmd
-                .argv
-                .get(k + 1..)?
-                .iter()
-                .find(|w| !literal(w).is_ok_and(|s| s.starts_with('-')))?;
-            procsub_inner(&w.span)?
-        }
-        ProgramSource::Stdin(StdinSource::Literal(_)) => return None,
-        ProgramSource::Stdin(_) => {
-            let ins: Vec<_> = cmd
-                .redirects
-                .iter()
-                .filter(|r| {
-                    matches!(r.fd, None | Some(0))
-                        && matches!(
-                            r.op,
-                            RedirOp::In
-                                | RedirOp::InOut
-                                | RedirOp::DupIn
-                                | RedirOp::HereDoc
-                                | RedirOp::HereString
-                        )
-                })
-                .collect();
-            match ins.as_slice() {
-                [r] if r.op == RedirOp::In && r.target == RedirTarget::ProcessSubstitution => {
-                    let at = text.get(r.span.clone())?.find("<(")?;
-                    procsub_inner(&(r.span.start + at..r.span.end))?
-                }
-                [] => upstream_stages(text, commands, idx, cmd)?,
-                _ => return None,
-            }
-        }
-        _ => return None,
-    };
-    pipeline_output(&delivering)
-        .filter(|o| o.beyond_plain_echo)
-        .map(|o| o.text)
-}
-
-/// The Deny of the program a shell runs as `-c W` (`args` = `-c W …`, exactly
-/// the flag `-c` first) when its source is Undetermined only because `W` is
-/// a word whose value `determined_output::substituted_word_value` computes
-/// from its `$( )` substitutions (backlog 28019c35): that value is judged by
-/// the full detector as the `-c` program ([`judge_body`], depth-bounded).
-///
-/// `None` — the caller keeps today's verdict — when the shape differs, when
-/// the user's line, an enclosing derived text, or `text` may rebind the
-/// modelled names (`chain_names_fixed` / `resolution_fixed`, as for
-/// [`determined_delivered_program`]; a function named `echo` on the chain
-/// fails them), or when the judged program is not a Deny: an Ask or Allow on
-/// the computed text never replaces today's Undetermined, so nothing is
-/// loosened. `eval W` reuses `substituted_word_value` the same way
-/// ([`determined_eval_program`]).
-fn determined_dash_c_program(
-    text: &str,
-    fam: Family,
-    base: &str,
-    args: &[Word],
-    source: &ProgramSource,
-    judge: &Probes<'_>,
-) -> Option<Decision> {
-    use crate::detect::payload::determined_output::{resolution_fixed, substituted_word_value};
-    if fam != Family::Shell || !matches!(source, ProgramSource::Undetermined(_)) {
-        return None;
-    }
-    let [flag, word, ..] = args else {
-        return None;
-    };
-    if !literal(flag).is_ok_and(|f| f == "-c") || !matches!(word.value, Value::Undetermined(_)) {
-        return None;
-    }
-    if !crate::detect::readings::chain_names_fixed() || !resolution_fixed(text) {
-        return None;
-    }
-    let program = substituted_word_value(&word.raw)?;
-    let verdict = judge_body(&program, Runner::Shell(base), judge);
-    verdict.is_deny().then_some(verdict)
-}
-
-/// The Deny of the code `eval W` runs (`args` = exactly `[W]`) when `W` is a
-/// word whose value `substituted_word_value` computes from its `$( )`
-/// substitutions (`eval "$(echo 'rm -rf /etc' | cat)"`, backlog d766b5fe):
-/// that value is judged by the full detector as `bash -c '<value>'`
-/// ([`judge_body`]).
-///
-/// The precondition is [`determined_dash_c_program`]'s with one widening:
-/// `text` — and only `text`, the enclosing chain is read strictly — may hold
-/// ONE bare `eval`, this one (`chain_names_fixed_but_one_eval` /
-/// `resolution_fixed_but_one_eval`), since `W`'s substitutions run before it.
-/// A function, alias, assignment, any other unlisted command or a second
-/// `eval` on the line keeps today's Undetermined. Raise-only: an Ask or Allow
-/// on the computed code is not taken.
-fn determined_eval_program(text: &str, args: &[Word], judge: &Probes<'_>) -> Option<Decision> {
-    use crate::detect::payload::determined_output::{
-        resolution_fixed_but_one_eval, substituted_word_value,
-    };
-    let [word] = args else {
-        return None;
-    };
-    if !matches!(word.value, Value::Undetermined(_))
-        || !crate::detect::readings::chain_names_fixed_but_one_eval()
-        || !resolution_fixed_but_one_eval(text)
-    {
-        return None;
-    }
-    let program = substituted_word_value(&word.raw)?;
-    let verdict = judge_body(&program, Runner::Shell("bash"), judge);
-    verdict.is_deny().then_some(verdict)
 }
 
 /// The text of the pipeline stages before `cmd` (`commands[idx]`, a later

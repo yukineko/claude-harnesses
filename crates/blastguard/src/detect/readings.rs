@@ -97,16 +97,20 @@ mod static_bindings;
 /// a middle layer that rebinds a name (`bash -c 'PATH=…; bash -c "…"'`)
 /// disables static resolution for every layer below it.
 pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision {
-    struct Restore(Option<bool>, Option<bool>);
+    struct Restore(Option<bool>, Option<bool>, bool);
     impl Drop for Restore {
         fn drop(&mut self) {
             CHAIN_NAMES_FIXED.with(|t| t.set(self.0));
             CHAIN_NAMES_FIXED_BUT_ONE_EVAL.with(|t| t.set(self.1));
+            TOP_LEVEL_LINE.with(|t| t.set(self.2));
         }
     }
     let outer = CHAIN_NAMES_FIXED.with(std::cell::Cell::get);
     let outer_but_one_eval = CHAIN_NAMES_FIXED_BUT_ONE_EVAL.with(std::cell::Cell::get);
-    let _restore = Restore(outer, outer_but_one_eval);
+    // Only the outermost detection judges the user's line; every re-entry
+    // (a `-c` / stdin body, a derived text) is a body.
+    let top_before = TOP_LEVEL_LINE.with(|t| t.replace(outer.is_none()));
+    let _restore = Restore(outer, outer_but_one_eval, top_before);
     let enclosing = outer.unwrap_or(true);
     let fixed = enclosing && super::payload::determined_output::resolution_fixed(c);
     CHAIN_NAMES_FIXED.with(|t| t.set(Some(fixed)));
@@ -156,6 +160,9 @@ thread_local! {
     /// [`detect_bash_every_reading`] was re-entered on around the current call.
     static CHAIN_FUNCTIONS: std::cell::RefCell<Option<Functions>> =
         const { std::cell::RefCell::new(None) };
+    /// True while the OUTERMOST Bash detection runs (the user's line). False
+    /// outside a detection and inside every re-entry (a body).
+    static TOP_LEVEL_LINE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The shell functions the user's top-level line and every enclosing derived
@@ -171,6 +178,16 @@ pub(in crate::detect) fn chain_functions() -> Functions {
     CHAIN_FUNCTIONS
         .with(|t| t.borrow().clone())
         .unwrap_or_else(Functions::none)
+}
+
+/// Whether a bare exec wrapper on `c` may be read as the producer it runs
+/// (`b5::producer_output`, and the legacy stdin reading's Ask in
+/// `payload/upstream_stage.rs`): `c` is the user's top-level line
+/// ([`TOP_LEVEL_LINE`]) and that line is one bare-wrapper pipeline
+/// ([`super::ast::b5::bare_wrapper_pipeline`]). Outside a detection, or in a
+/// body, it is `false` (the restrictive reading).
+pub(in crate::detect) fn bare_wrappers_as_written(c: &str) -> bool {
+    TOP_LEVEL_LINE.with(std::cell::Cell::get) && super::ast::b5::bare_wrapper_pipeline(c)
 }
 
 /// Whether the user's top-level line and every enclosing derived text leave
@@ -247,6 +264,7 @@ fn every_reading_on_line(c: &str, scope: &SafeRoots) -> Decision {
         &super::ast::b5::Probes {
             judge: &judge,
             scope,
+            wrappers_bare: bare_wrappers_as_written(c),
         },
     )
 }

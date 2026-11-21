@@ -14,6 +14,7 @@ mod compound_readers;
 pub(super) mod determined_output;
 mod echo_output;
 mod exec_fds;
+pub(super) mod function_shadow;
 mod node_source;
 mod procsub_split;
 mod program_source;
@@ -28,7 +29,7 @@ use stdin_operand::stage_stdin_operand;
 
 use brace_feeder::group_feeder_texts;
 use determined_output::{concatenated_outputs, simple_list_members};
-use echo_output::{plain_echo_output, quote_bare_echo_words};
+use echo_output::{plain_echo_output, quote_bare_echo_words, stage_emits_only_its_arguments};
 use exec_fds::{exec_opened_fds, ExecFd};
 use node_source::{is_node_head, node_program_source};
 use procsub_split::procsub_stages;
@@ -650,6 +651,13 @@ the command line, so blastguard cannot read the program",
                     ))) {
                         return deny;
                     }
+                }
+                // Not while `echo` / `printf` may be a shell function on the
+                // chain (backlogs 1e9da081 / f06ecb05); see `function_shadow`.
+                let upstream = (statement[i - 1].as_str(), feeder.is_some());
+                let shadow = function_shadow::shadowed_emitter_ask(&shape, upstream, ctx);
+                if let Some(deny) = shadow.and_then(|ask| acc.record(ask)) {
+                    return deny;
                 }
             }
         }
@@ -1321,34 +1329,6 @@ fn with_nul_readings(mut texts: Vec<String>) -> Vec<String> {
         }
     }
     texts
-}
-
-/// True when `stage` emits only text spelled in its own arguments: its
-/// command, behind any exec-wrapper chain, is `echo` or `printf`. Every head
-/// candidate [`wrapped_command_heads`] yields must be a wrapper or one of
-/// those two, so an ambiguous chain resolves to "not a literal emitter" (the
-/// restrictive side). A stage that is not a simple command (`(cat f)`,
-/// `{ cat f; }`) has no such head and is likewise not a literal emitter.
-///
-/// The one compound that is NOT judged here: a brace group whose members are
-/// all plain `echo` / evaluable `printf` joined by `;`, a newline or `&&`
-/// (`{ echo a; echo b; } | bash`). Its upstream stage is the closing `}`, which
-/// this function reports as not an emitter, so the caller skips this check
-/// when [`brace_feeder::group_feeder_texts`] computed the group's output and
-/// judges that output (the concatenation, each member's literals and printf
-/// readings) as the program instead. Every other group keeps the Ask.
-fn stage_emits_only_its_arguments(stage: &str) -> bool {
-    let tokens: Vec<&str> = stage.split_whitespace().collect();
-    let heads = wrapped_command_heads(&tokens);
-    let Some(&last) = heads.last() else {
-        return false;
-    };
-    let is_emitter =
-        |idx: usize| matches!(normalized_command(tokens[idx]).as_str(), "echo" | "printf");
-    is_emitter(last)
-        && heads
-            .iter()
-            .all(|&idx| is_emitter(idx) || is_exec_wrapper(&normalized_command(tokens[idx])))
 }
 
 /// The first shell expansion in `stage` that sits OUTSIDE every quote — a

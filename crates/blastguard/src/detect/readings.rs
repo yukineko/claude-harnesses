@@ -1,5 +1,6 @@
 use super::ast::targets;
 use super::function_calls::{function_call_reading, FUNCTION_CALL_UNDETERMINED};
+use super::payload::function_shadow::Functions;
 use super::shell_lex::{
     bash32_lexed_reading, line_continuation_reading, shell_lexed_reading, Bash32Lexed, ShellLexed,
 };
@@ -106,6 +107,23 @@ pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision 
     let _restore = Restore(outer);
     let fixed = outer.unwrap_or(true) && super::payload::determined_output::resolution_fixed(c);
     CHAIN_NAMES_FIXED.with(|t| t.set(Some(fixed)));
+    // The shell functions the chain may define (backlogs 1e9da081 /
+    // f06ecb05): the enclosing value WIDENED by `c`'s own definitions,
+    // restored on return like `CHAIN_NAMES_FIXED`.
+    struct RestoreFunctions(Option<Functions>);
+    impl Drop for RestoreFunctions {
+        fn drop(&mut self) {
+            let prev = self.0.take();
+            CHAIN_FUNCTIONS.with(|t| *t.borrow_mut() = prev);
+        }
+    }
+    let outer_functions = CHAIN_FUNCTIONS.with(|t| t.borrow().clone());
+    let own = super::payload::function_shadow::defined_functions(c);
+    let chain = outer_functions
+        .as_ref()
+        .map_or_else(|| own.clone(), |o| o.union(&own));
+    let _restore_functions = RestoreFunctions(outer_functions);
+    CHAIN_FUNCTIONS.with(|t| *t.borrow_mut() = Some(chain));
     // User ruling 2026-11-19 ①: the AST evaluator holds the hook's cwd (the
     // payload cwd) as a known value, so a relative `cd` is resolved.
     super::ast::with_hook_dir(scope.session_cwd(), || every_reading_scoped(c, scope))
@@ -118,6 +136,27 @@ thread_local! {
     /// was re-entered on around the current call.
     static CHAIN_NAMES_FIXED: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
+    /// `Some(f)` while a Bash detection runs on this thread: `f` is the union
+    /// of [`super::payload::function_shadow::defined_functions`] of the
+    /// user's top-level line and of every derived text
+    /// [`detect_bash_every_reading`] was re-entered on around the current call.
+    static CHAIN_FUNCTIONS: std::cell::RefCell<Option<Functions>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The shell functions the user's top-level line and every enclosing derived
+/// text may define, as widened by [`detect_bash_every_reading`] (backlogs
+/// 1e9da081 / f06ecb05). Read by [`super::Ctx::new`].
+///
+/// Outside a Bash detection (a `Ctx` built for Write / Edit, a unit test)
+/// there is no enclosing line, so none: that is the observed state, not a
+/// default. The text such a `Ctx` judges still reaches the stdin-program
+/// reader only through `detect_bash`, which adds that text's own definitions
+/// ([`super::Ctx::functions_widened_by`]).
+pub(in crate::detect) fn chain_functions() -> Functions {
+    CHAIN_FUNCTIONS
+        .with(|t| t.borrow().clone())
+        .unwrap_or_else(Functions::none)
 }
 
 /// Whether the user's top-level line and every enclosing derived text leave

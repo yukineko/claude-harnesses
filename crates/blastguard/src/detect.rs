@@ -352,6 +352,15 @@ struct Ctx<'a> {
     /// [`detect_bash`] with `resolution_fixed` of each text it judges, so a
     /// middle layer that rebinds a name disables it below; `false` outside Bash.
     names_fixed: bool,
+    /// The shell functions the user's line and every text derived on the way
+    /// here may define (backlogs 1e9da081 / f06ecb05): read by [`Ctx::new`]
+    /// from [`readings::chain_functions`], then only WIDENED by
+    /// [`detect_bash`] with the definitions of each text it judges, so a
+    /// function defined (and exported) before a `bash -c` body is seen inside
+    /// it. The stdin-program reader refuses to take an `echo` / `printf`
+    /// stage's literals as its whole program when that name may be one; see
+    /// [`payload::function_shadow`].
+    functions: payload::function_shadow::Functions,
 }
 
 /// Marker every Ask produced under the user's 2026-10-14 rulings R1/R2 carries
@@ -396,6 +405,7 @@ impl<'a> Ctx<'a> {
             program_text_redirects: None,
             cwd_prefix: None,
             names_fixed: readings::chain_names_fixed(),
+            functions: readings::chain_functions(),
         }
     }
 
@@ -661,6 +671,8 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let _ast_depth = ast::targets::enter_depth(depth); // AST values are depth 0's only.
     let narrowed = ctx.names_fixed_narrowed_by(cmd); // backlog 40dc52c0 (`names_fixed`)
     let ctx = narrowed.as_ref().unwrap_or(ctx);
+    let widened = ctx.functions_widened_by(cmd); // backlogs 1e9da081 / f06ecb05
+    let ctx = widened.as_ref().unwrap_or(ctx);
     // 0a. QUOTED heredoc bodies the shell parser shows are data (fed to `cat`
     // / `tee` / `git commit -F -`, landing in no file any command of the line
     // runs) are removed, and the rest is judged by every rule below; an

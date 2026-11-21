@@ -67,8 +67,11 @@ pub(super) enum Step {
     Judge(String, String),
     /// A verdict already reached on the real landing (a protected path).
     Decided(Decision),
-    /// The landing could not be determined: record this `Ask`, move on.
-    Ask(Decision),
+    /// The landing could not be determined: record this `Ask`, then judge the
+    /// spelled `(target, physical)` pair with the usual axes. The Ask does not
+    /// stand in for them: a system-path Deny on the spelled target outranks it
+    /// (`Deny > Ask > Allow`, memory `system-harm-always-deny`).
+    Ask(Decision, String, String),
 }
 
 /// The redirect `target` (already placed by `place_redirect_target`, with
@@ -102,10 +105,14 @@ pub(super) fn redirect_landing(
             Some(d) => Step::Decided(d),
             None => Step::Judge(real.clone(), real),
         },
-        Err(why) => Step::Ask(Decision::ask(format!(
-            "'{op} {target}': {why}, so blastguard cannot tell which file the write really \
+        Err(why) => Step::Ask(
+            Decision::ask(format!(
+                "'{op} {target}': {why}, so blastguard cannot tell which file the write really \
 lands on"
-        ))),
+            )),
+            target,
+            physical,
+        ),
     }
 }
 

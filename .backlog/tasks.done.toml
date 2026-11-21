@@ -94689,3 +94689,70 @@ rev = "419a2e3d139e171375cdcd245a52738a8d2dd0f9"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "7e6f6ac5"
+title = "condukt testscope: cd forms not at the head of a simple command ({ cd X; }, if cd X; then, time cd X, builtin cd X) are not modelled, so the test is keyed on the payload cwd tree (rerun-ledger dodge)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-15 at fix/testscope-cwd-20261115 76909ce81 (condukt 0.7.420) by an independent test author on a verifier's static suspicion. After `cd X && cargo test -p foo --test bar` from P, each of `{ cd X; } && cargo test ...`, `if cd X; then cargo test ...; fi`, `time cd X && cargo test ...`, `builtin cd X && cargo test ...` from P (X unchanged) is ALLOWED: (Some(0), ""). Mechanism (testscope.rs judge_pieces): only a segment whose first word (after assignments/command) is cd/pushd/popd moves dir; a leading {, if, then, time, builtin hides the cd, so the test is attributed to the payload cwd. Violates the user ruling (2026-11-15) that the fingerprint comes only from the tree the test runs in. Controls GREEN: `bash -c 'cd X && ...'` denied, `cd X; cargo ...` denied. A3 assumes bash runs `time cd X` in the current shell (not verified). Fix must be fail-closed (unrecognised cd word -> undetermined) without false positives on non-cd uses."""
+created_at = 1794748773
+updated_at = 1795293865
+weight = 0.0
+issue_number = 1807
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1807"
+issue_closed_at = 1795293868
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261115_testscope_verifier_suspicions -- --ignored"
+rev = "caa2ae0b6990d5230c80b11896fc8946da0bdaeb"
+observed_at = 1794748773
+detail = """
+exit 101: ssed; 4 failed; 0 ignored; 0 measured; 4 filtered out; finished in 1.14s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261115_testscope_verifier_suspicions.rs (target/debug/deps/backlog_20261115_testscope_verifier_suspicions-c2916ab2cf2e0ae4)
+error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_verifier_suspicions`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261115_testscope_verifier_suspicions"
+exit = 0
+passed = 8
+rev = "e4740446d3bea8d5618892154c4714410ec31348"
+observed_at = 1795293862
+output_digest = "sha256:1f10b5b99aec2debe542eb3be729d42d40739b748834fb10e64be1af5034463f"
+excerpt = """
+
+running 8 tests
+test a2_if_cd_then_cargo_is_denied ... ok
+test a1_brace_group_cd_is_denied ... ok
+test a4_builtin_cd_is_denied ... ok
+test a3_time_cd_is_denied ... ok
+test a6_cd_semicolon_cargo_is_denied ... ok
+test b_control_subdir_cd_same_tree_without_untracked_is_denied ... ok
+test a5_bash_c_cd_is_denied ... ok
+test b_subdir_cd_same_tree_with_untracked_top_file_is_denied ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.82s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running tests/backlog_20261115_testscope_verifier_suspicions.rs (target/debug/deps/backlog_20261115_testscope_verifier_suspicions-25abfcf0ee8834af)
+"""
+
+[task.closure.red]
+rev = "1e8663dea3ce0d5ee394c5fc305cde2c4c3d1810"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

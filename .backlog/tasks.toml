@@ -325,37 +325,6 @@ FAILED scripts/test_backlog_audit_b1_0.py::Backlog06a9d33fDirectInvocationRunsTe
 1 failed, 10 deselected in 0.36s"""
 
 [[task]]
-id = "7e6f6ac5"
-title = "condukt testscope: cd forms not at the head of a simple command ({ cd X; }, if cd X; then, time cd X, builtin cd X) are not modelled, so the test is keyed on the payload cwd tree (rerun-ledger dodge)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-15 at fix/testscope-cwd-20261115 76909ce81 (condukt 0.7.420) by an independent test author on a verifier's static suspicion. After `cd X && cargo test -p foo --test bar` from P, each of `{ cd X; } && cargo test ...`, `if cd X; then cargo test ...; fi`, `time cd X && cargo test ...`, `builtin cd X && cargo test ...` from P (X unchanged) is ALLOWED: (Some(0), ""). Mechanism (testscope.rs judge_pieces): only a segment whose first word (after assignments/command) is cd/pushd/popd moves dir; a leading {, if, then, time, builtin hides the cd, so the test is attributed to the payload cwd. Violates the user ruling (2026-11-15) that the fingerprint comes only from the tree the test runs in. Controls GREEN: `bash -c 'cd X && ...'` denied, `cd X; cargo ...` denied. A3 assumes bash runs `time cd X` in the current shell (not verified). Fix must be fail-closed (unrecognised cd word -> undetermined) without false positives on non-cd uses."""
-created_at = 1794748773
-updated_at = 1794748773
-weight = 0.0
-issue_number = 1807
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1807"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261115_testscope_verifier_suspicions -- --ignored"
-rev = "caa2ae0b6990d5230c80b11896fc8946da0bdaeb"
-observed_at = 1794748773
-detail = """
-exit 101: ssed; 4 failed; 0 ignored; 0 measured; 4 filtered out; finished in 1.14s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
-     Running tests/backlog_20261115_testscope_verifier_suspicions.rs (target/debug/deps/backlog_20261115_testscope_verifier_suspicions-c2916ab2cf2e0ae4)
-error: test failed, to rerun pass `-p condukt --test backlog_20261115_testscope_verifier_suspicions`"""
-
-[[task]]
 id = "7fc71b27"
 title = "backlog next --claim: a repro run that executed ZERO tests because the named test is now filtered out (fix removed #[ignore]) is auto-cancelled with closure reason discard"
 project = "/Users/yuki/src/harness"

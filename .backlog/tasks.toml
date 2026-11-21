@@ -1259,14 +1259,17 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
-notes = "Observed 2026-11-20/21 by the coordinator (session 62e92d16) during run-20261120-171414-35880 / d4a135ba: bash scripts/tests/canary-gate-eval-failclosed.sh rc=1 'FAIL: expected exit 0 (explicit override proceeds to completion), got 1' at base 039500893 and identically at tip 73c0f1578. Pre-existing. Readings: (a) fixture drift; (b) real regression: the explicit canary override no longer proceeds. Not investigated."
+status = "failed"
+notes = """
+Observed 2026-11-20/21 by the coordinator (session 62e92d16) during run-20261120-171414-35880 / d4a135ba: bash scripts/tests/canary-gate-eval-failclosed.sh rc=1 'FAIL: expected exit 0 (explicit override proceeds to completion), got 1' at base 039500893 and identically at tip 73c0f1578. Pre-existing. Readings: (a) fixture drift; (b) real regression: the explicit canary override no longer proceeds. Not investigated.
+needs ruling: fake deployed state in Part 2 fixture vs change expectation to exit 1 (RED confirmed on main 2026-11-21)"""
 created_at = 1795193442
-updated_at = 1795193442
+updated_at = 1795264295
+defer_until = 1795437095
 weight = 0.0
 issue_number = 1905
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1905"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -1295,7 +1298,7 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
+status = "failed"
 notes = """
 Observed 2026-11-21 (session ba440926, donegate Stop hook, cwd /Users/yuki/src/harness, verbatim excerpt): "🚦 donegate: 2 required check(s) failed ... ✗ lint-changed (exit 1) $ scripts/lint-changed-crates.sh error: key with no value, expected `=` --> crates/blastguard/Cargo.toml:6:9 ... 6 | <<<<<<< HEAD ... lint-changed-crates: scope was the changed crates only (blastguard) ... ✗ test-changed ... test-changed-crates: FAILED for blastguard". Logs: ~/.donegate/state/records/ba440926-aa85-4f93-a5e1-9566434e2c12/1795195397488-a1-lint-changed.log, ...1795195397490-a1-test-changed.log. The blastguard conflict (UU crates/blastguard/Cargo.toml etc., MERGE_HEAD) was ANOTHER session's unfinished merge in the main tree. ba440926 never edited the main tree; with cwd=main it ran only read-only commands plus path-less writers, most after `cd <other dir>` (e.g. `cd /Users/yuki/src/.harness-worktrees/session-ba440926 && backlog driver register ...`, `cd ~/.claude/projects/-Users-yuki-src-harness/memory/ && python3 - <<'EOF' ...`), and some with no cd (`python3 scripts/check-prose-tests.py ...`, `askrelay dismiss ...`). CLAUDE.md §8: 帰属のバグ.
 
@@ -1303,13 +1306,15 @@ Path (rev 644ff8dbc): (1) main.rs::gate_run judges root = hook cwd always; rootc
 
 RED: crates/donegate/tests/backlog_20261121_foreign_merge_unattributable_elsewhere.rs, committed 2eefb224e. Fixture: primary repo + linked worktree; foreign real merge conflict (UU, MERGE_HEAD) in the primary tree; Stop cwd = primary. red_cd_linked_worktree_writer_does_not_widen_primary_scope (`git status` @primary, `cd <wt> && cargo fmt` @primary, sidechain `git log` @primary) and red_writer_with_cwd_in_linked_worktree_does_not_widen_primary_scope (`cargo fmt` with line cwd = wt) both FAIL: decision="block", check marker written, stderr "scope NOT narrowed ... checking all 1 changed file(s) in .../main". Controls GREEN: read-only parent+subagent cwd in primary is NOT judged (so a read-only/subagent cwd alone is not the path); own Edit in primary IS judged; `cd <primary> && cargo fmt` keeps full scope.
 
-Both readings: (a) real attribution defect — a writer whose effective cwd is another worktree cannot have produced the primary tree's dirt; it must not widen that root's scope. (b) intended fail-closed — a path-less writer may write any path (python3 - can open absolute paths), so any such call anywhere in the session keeps the full scope (CLAUDE.md §3). How to tell apart: the REDs use `cargo fmt`, whose writes are confined to its cwd's cargo workspace; under (b) they must block, under (a) they must not — a ruling on whether the effective cwd may bound a path-less writer decides it. DOES NOT PROVE that a cwd-aware rule alone clears the observed block: ba440926 also has path-less writers with line cwd = main and no cd (python3 scripts/check-prose-tests.py, askrelay dismiss), which keep the full scope under both readings; the alternative fix shape (judge the cwd only when the session wrote there, i.e. wrote_in_cwd as a gate) is a separate design call."""
+Both readings: (a) real attribution defect — a writer whose effective cwd is another worktree cannot have produced the primary tree's dirt; it must not widen that root's scope. (b) intended fail-closed — a path-less writer may write any path (python3 - can open absolute paths), so any such call anywhere in the session keeps the full scope (CLAUDE.md §3). How to tell apart: the REDs use `cargo fmt`, whose writes are confined to its cwd's cargo workspace; under (b) they must block, under (a) they must not — a ruling on whether the effective cwd may bound a path-less writer decides it. DOES NOT PROVE that a cwd-aware rule alone clears the observed block: ba440926 also has path-less writers with line cwd = main and no cd (python3 scripts/check-prose-tests.py, askrelay dismiss), which keep the full scope under both readings; the alternative fix shape (judge the cwd only when the session wrote there, i.e. wrote_in_cwd as a gate) is a separate design call.
+needs ruling: may path-less writer scope be bounded by effective cwd; which writers (cargo fmt only vs python3 -)"""
 created_at = 1795196054
-updated_at = 1795196054
+updated_at = 1795264296
+defer_until = 1795437096
 weight = 0.0
 issue_number = 1906
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1906"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -1333,14 +1338,17 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
-notes = "Side finding of a761b38f. Measured 2026-11-21 at rev 916fea015 (blastguard 0.2.828), crates/blastguard/src/detect/ast/b5.rs unwrap_at sudo/doas arm. Observation: when shell=true (-s/-i/--shell/--login) and a command word follows, the arm returns Unwrapped::At(i) (direct argv), but sudo runs $SHELL -c 'CMD' (args joined, shell-interpreted). Result: `sudo -s 'rm -rf /etc'` (also -i, --shell, --login) => ask, reason: direct execution of the program file `rm -rf /etc`, whose text is not in the command — blastguard cannot judge what it would do (Table B.5: Undetermined). Reading (a) defect Allow: REFUTED (it is Ask). Reading (b) already restrictive: partly true, but system harm is downgraded from Deny (sudo rm -rf /etc) to Ask; per 'system harm always deny' this is a defect. Test result line: test result: FAILED. 0 passed; 4 failed. Not RED (measured GREEN, dropped): sudo -u X rm -rf /etc and sudo --user with command substitution are already Deny; control sudo -s 'ls -la' not Deny. Discarded without test: doas --version treated as runs-nothing (doas would just print usage; harmless)."
+status = "failed"
+notes = """
+Side finding of a761b38f. Measured 2026-11-21 at rev 916fea015 (blastguard 0.2.828), crates/blastguard/src/detect/ast/b5.rs unwrap_at sudo/doas arm. Observation: when shell=true (-s/-i/--shell/--login) and a command word follows, the arm returns Unwrapped::At(i) (direct argv), but sudo runs $SHELL -c 'CMD' (args joined, shell-interpreted). Result: `sudo -s 'rm -rf /etc'` (also -i, --shell, --login) => ask, reason: direct execution of the program file `rm -rf /etc`, whose text is not in the command — blastguard cannot judge what it would do (Table B.5: Undetermined). Reading (a) defect Allow: REFUTED (it is Ask). Reading (b) already restrictive: partly true, but system harm is downgraded from Deny (sudo rm -rf /etc) to Ask; per 'system harm always deny' this is a defect. Test result line: test result: FAILED. 0 passed; 4 failed. Not RED (measured GREEN, dropped): sudo -u X rm -rf /etc and sudo --user with command substitution are already Deny; control sudo -s 'ls -la' not Deny. Discarded without test: doas --version treated as runs-nothing (doas would just print usage; harmless).
+needs ruling: man sudo escapes args so sudo -s 'rm -rf /etc' execs one program named 'rm -rf /etc'; (a) won't-do vs (b) max(Ask, joined-body verdict). impl 74875ad9b unmerged in run-20261121-204623-52524-t1"""
 created_at = 1795197125
-updated_at = 1795197125
+updated_at = 1795264296
+defer_until = 1795437096
 weight = 0.0
 issue_number = 1907
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1907"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

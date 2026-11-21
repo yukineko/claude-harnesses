@@ -310,8 +310,9 @@ class TestGapRoute(unittest.TestCase):
 
     # progress_excerpt was removed by user ruling 2026-10-27 (progress.md is no
     # longer a gap input); it is pinned ABSENT below.
+    # discovery_dedup added by user ruling 2026-11-21 (backlog fa5d751c).
     GAP_KEYS = {"dod", "recent_activity", "measuring_stick",
-                "last_outcome", "opportunities"}
+                "last_outcome", "opportunities", "discovery_dedup"}
 
     def test_claim_gap_route_gap_keys(self):
         sb, _primary, linked = compass_fixture(self)
@@ -875,11 +876,16 @@ class TestCompassOutcome(unittest.TestCase):
         gap = json.loads(sb.run(skill_cmd("compass gap"), linked).stdout)
         self.assertEqual(gap["last_outcome"]["verdict"], "forward")
         self.assertEqual(gap["last_outcome"]["evidence"], ["12 tests pass"])
-        # and, as everywhere, the store write is refused from the primary checkout
-        self.assertFalse((primary / ".compass" / "outcomes.json").exists())
+        # Ruling 2026-10-24: linked-worktree writes land in the primary store, so
+        # the store exists after the linked write. Running from the primary
+        # checkout is refused (non-zero, with a reason) and leaves the store untouched.
+        store = primary / ".compass" / "outcomes.json"
+        self.assertTrue(store.exists(), "linked write must land in the primary store")
+        before = store.read_bytes()
         pr = sb.run(base_cmd, primary)
         self.assertNotEqual(pr.returncode, 0)
-        self.assertFalse((primary / ".compass" / "outcomes.json").exists())
+        self.assertTrue(pr.stderr.strip(), "refusal must carry a reason")
+        self.assertEqual(store.read_bytes(), before, "refused run must not modify the store")
 
 
 class TestLockRelease(unittest.TestCase):

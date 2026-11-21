@@ -92320,3 +92320,134 @@ collected 1 item
 scripts/test_rebuild_current_version_only.py .                           [100%]
 
 ============================== 1 passed in 0.15s ==============================="""
+
+[[task]]
+id = "fa5d751c"
+title = "flow prose tests: test_claim_gap_route_gap_keys sees extra key discovery_dedup in compass gap output (stale key set vs compass)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "compass",
+    "prose-test",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-21 at main feff2e612 (also at condukt tC worktree 56394216c): FAIL test_claim_gap_route_gap_keys, scripts/test_flow_snippets_b.py:320 assertEqual(set(json.loads(r.stdout)), self.GAP_KEYS) -> AssertionError: Items in the first set but not the second: 'discovery_dedup'. Readings: (a) compass gap legitimately gained discovery_dedup and the test's GAP_KEYS (and the SKILL.md claim it backs) is stale; (b) compass leaks a key it should not emit. Tell apart: git log -S discovery_dedup -- crates/compass and whether docs/SKILL describe it."
+created_at = 1795197703
+updated_at = 1795265969
+weight = 0.0
+issue_number = 1908
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1908"
+issue_closed_at = 1795265972
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_flow_snippets_b.py::TestGapRoute::test_claim_gap_route_gap_keys"
+rev = "feff2e612c96c964d5ca6abcd8710df749343479"
+observed_at = 1795197703
+detail = """
+exit 1: AP_KEYS)
+E       AssertionError: Items in the first set but not the second:
+E       'discovery_dedup'
+
+scripts/test_flow_snippets_b.py:320: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_flow_snippets_b.py::TestGapRoute::test_claim_gap_route_gap_keys
+============================== 1 failed in 0.84s ==============================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_flow_snippets_b.py::TestGapRoute::test_claim_gap_route_gap_keys scripts/test_flow_snippets_b.py::TestCompassOutcome::test_claim_compass_outcome"
+exit = 0
+passed = 2
+rev = "382b10028dcea03f8dbc2a4834172d7dc49eb8ca"
+observed_at = 1795265965
+output_digest = "sha256:fc49bc799a96230e0e6e0028bb43a670971cd9d2202f2337afe90c4691a6a504"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-62e92d16
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_flow_snippets_b.py ..                                       [100%]
+
+============================== 2 passed in 2.42s ===============================
+"""
+
+[task.closure.red]
+rev = "599a3a68fee877c5a2cdce2da87d9a76cc50d30d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "1523e3ab"
+title = "flow prose tests: test_claim_compass_outcome finds .compass/outcomes.json written in the PRIMARY tree (expected refused there)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "compass",
+    "worktree-hygiene",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-21 at main feff2e612 (also at tC 56394216c): FAIL test_claim_compass_outcome, scripts/test_flow_snippets_b.py:879 assertFalse((primary / '.compass' / 'outcomes.json').exists()) -> AssertionError: True is not false. SKILL.md claims compass outcome store writes are refused in the main (primary) working tree. Readings: (a) compass outcome no longer refuses primary-tree writes (fail-open vs CLAUDE.md §8); (b) the fixture/test premise is stale (e.g. file pre-created by another step). Tell apart: run compass outcome in a fresh primary checkout fixture and check exit code + file existence."
+created_at = 1795197851
+updated_at = 1795265975
+weight = 0.0
+issue_number = 1909
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1909"
+issue_closed_at = 1795265977
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_flow_snippets_b.py::TestCompassOutcome::test_claim_compass_outcome"
+rev = "feff2e612c96c964d5ca6abcd8710df749343479"
+observed_at = 1795197851
+detail = """
+exit 1: False((primary / ".compass" / "outcomes.json").exists())
+E       AssertionError: True is not false
+
+scripts/test_flow_snippets_b.py:870: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_flow_snippets_b.py::TestCompassOutcome::test_claim_compass_outcome
+============================== 1 failed in 1.08s ==============================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_flow_snippets_b.py::TestGapRoute::test_claim_gap_route_gap_keys scripts/test_flow_snippets_b.py::TestCompassOutcome::test_claim_compass_outcome"
+exit = 0
+passed = 2
+rev = "382b10028dcea03f8dbc2a4834172d7dc49eb8ca"
+observed_at = 1795265973
+output_digest = "sha256:2fa7cfa61eb4de2e9c545207f46e57380dffa7e145ce4fba7a66b954eb554f76"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-62e92d16
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_flow_snippets_b.py ..                                       [100%]
+
+============================== 2 passed in 1.31s ===============================
+"""
+
+[task.closure.red]
+rev = "599a3a68fee877c5a2cdce2da87d9a76cc50d30d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -91862,3 +91862,67 @@ rev = "1e8df93e6eb48413195c2f83239e9e559c055849"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "1b23e133"
+title = "blastguard FP: shell > redirect into a registered linked worktree of the session repo (~/src/.harness-worktrees) is Deny (whose-tree refusal)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-21 in main session (project dir = primary checkout). Command: cd /Users/yuki/src/.harness-worktrees/flow-watch-20261120 && mkdir -p crates/flow/bin && cat > crates/flow/bin/flow-watch <<'EOF' ...python... EOF. Denial verbatim: "'> /Users/yuki/src/.harness-worktrees/flow-watch-20261120/crates/flow/bin/flow-watch' destroys the file's current contents and it is inside a git work tree, but not one of this session's trees (neither inside its safe roots nor a recognised worktree checkout), so git being able to restore it does not make the overwrite this session's to make". Measured: cd + relative redirect reproduces; absolute-path redirect without cd is NOT denied (green guard). Distinct from 94b93e95. Test: crates/blastguard/tests/backlog_20261121_redirect_in_linked_worktree_whose_tree_fp.rs"""
+created_at = 1795193342
+updated_at = 1795243760
+weight = 0.0
+issue_number = 1931
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1931"
+issue_closed_at = 1795243762
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_redirect_in_linked_worktree_whose_tree_fp -- --ignored"
+rev = "40cc2c9c4b1321237a84a12da3dc8516556e44e4"
+observed_at = 1795193342
+detail = """
+exit 101: 2 filtered out; finished in 1.48s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running tests/backlog_20261121_redirect_in_linked_worktree_whose_tree_fp.rs (target/debug/deps/backlog_20261121_redirect_in_linked_worktree_whose_tree_fp-92aba7094b7fc9da)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_redirect_in_linked_worktree_whose_tree_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261121_redirect_in_linked_worktree_whose_tree_fp"
+exit = 0
+passed = 3
+rev = "aee56dfdc9b6577147739c57b62a09d41214d48e"
+observed_at = 1795243747
+output_digest = "sha256:10ae6cb7785311b401a9febe871d6baa44c4cfd40d314ecd34317e5f25b82853"
+excerpt = """
+
+running 3 tests
+test control_redirect_into_unrelated_git_repo_stays_deny ... ok
+test cd_then_cat_redirect_into_linked_worktree_is_not_whose_tree_deny ... ok
+test absolute_redirect_into_linked_worktree_is_not_whose_tree_deny ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+
+   Compiling blastguard v0.2.888 (/Users/yuki/src/.harness-worktrees/session-c1b3e891/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.57s
+     Running tests/backlog_20261121_redirect_in_linked_worktree_whose_tree_fp.rs (target/debug/deps/backlog_20261121_redirect_in_linked_worktree_whose_tree_fp-abb0f38637f6c55b)
+"""
+
+[task.closure.red]
+rev = "6472dffda269e5e3b636172ae5399f769ba5b1d5"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -1835,3 +1835,35 @@ exit 101: /worktrees/run-20261122-014030-65651-t1/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.33s
      Running tests/backlog_20261122_relink_symlink_via_subst_failopen.rs (target/debug/deps/backlog_20261122_relink_symlink_via_subst_failopen-8fef54456ae738fa)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261122_relink_symlink_via_subst_failopen`"""
+
+[[task]]
+id = "d3f5d7a8"
+title = "condukt testscope: a git global option with a separate value (git --work-tree . pull / --git-dir .git pull) skips the main-merge deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "testscope",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-22 on main e3baca954 (session-eaa077f4 worktree); named by the independent t2 verifier of condukt run run-20261122-012059-29884 (static reading of crates/condukt/src/testscope.rs judge_git: '-C'/'-c' skip 2 tokens, every other '-...' token skips 1, so the value of --work-tree <path> / --git-dir <path> / --namespace <name> becomes the subcommand and the command is judged Other). RED verbatim: 'git --work-tree . pull: expected a deny, stdout not JSON (EOF while parsing a value at line 1 column 0): ""' (allowed inside a condukt worktree); control 'git --work-tree=. pull' is denied. git 2.50.1 accepts the separate-value spelling (git --work-tree . status exits 0). Same shape as the cargo bug fixed for 669b28ea (merged 2026-11-22, condukt 0.7.484). Readings: (a) fail-open: main-merge deny bypassed; (b) intended: none found. Not covered: --exec-path, --super-prefix, --config-env, git merge main / git rebase origin/main spellings."""
+created_at = 1795279817
+updated_at = 1795279817
+weight = 0.0
+issue_number = 1969
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1969"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261122_testscope_git_global_option_value_bypass -- --ignored"
+rev = "8b1556fa42384610827ddc4888eca62bc45eb630"
+observed_at = 1795279817
+detail = """
+exit 101: ktrees/session-eaa077f4/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.41s
+     Running tests/backlog_20261122_testscope_git_global_option_value_bypass.rs (target/debug/deps/backlog_20261122_testscope_git_global_option_value_bypass-ac63d2dde2ebe4e3)
+error: test failed, to rerun pass `-p condukt --test backlog_20261122_testscope_git_global_option_value_bypass`"""

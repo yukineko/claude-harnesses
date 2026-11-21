@@ -129,7 +129,7 @@ fn control_equals_spelling_is_denied() {
 }
 
 #[test]
-#[ignore = "RED: git global option with a separate value skips the main-merge deny"]
+#[ignore = "RED(d3f5d7a8): git global option with a separate value skips the main-merge deny"]
 fn git_global_option_value_before_pull_is_still_denied() {
     for c in [
         "git --work-tree . pull",

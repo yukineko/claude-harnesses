@@ -1882,6 +1882,8 @@ notes = """Observed live 2026-11-21 at main 382b10028: backlog next --claim re-r
 created_at = 1795266440
 updated_at = 1795266440
 weight = 0.0
+issue_number = 1957
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1957"
 rev = 0
 
 [task.repro]

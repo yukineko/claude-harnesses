@@ -81,7 +81,7 @@
     {
       "name": "blastguard",
       "description": "PreToolUse hook that denies or asks before project-destroying Bash commands and file operations, as a single self-contained Rust binary.",
-      "version": "0.2.910",
+      "version": "0.2.917",
       "category": "security",
       "keywords": [
         "hooks",
@@ -106,7 +106,7 @@
     {
       "name": "backlog",
       "description": "Cross-project task queue for Claude Code with cycle-type tags, a SessionStart hook that injects pending work, and subcommands to add, list, claim and finish tasks.",
-      "version": "0.3.158",
+      "version": "0.3.160",
       "category": "workflow",
       "keywords": [
         "backlog",
@@ -180,7 +180,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: schedules parallel and serial task batches by file-conflict analysis, manages git worktrees, tracks run state and gates completion.",
-      "version": "0.7.487",
+      "version": "0.7.489",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -727,7 +727,7 @@
     {
       "name": "tdd",
       "description": "Test-first gate for Claude Code: on Stop it blocks when implementation lines were added with no test visible in the uncommitted changes, and red/green/verify subcommands record RED before GREEN.",
-      "version": "0.1.109",
+      "version": "0.1.111",
       "category": "quality",
       "keywords": [
         "tdd",

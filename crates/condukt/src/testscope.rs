@@ -38,7 +38,18 @@
 //!    recorded worktree, each `--test <name>` must appear as `--test <name>`
 //!    in that task's `reproduction_tests` or be a `tests/<name>.rs` the
 //!    worktree added or changed against `default_branch` (`<base>...HEAD`,
-//!    uncommitted, untracked), or (user ruling 2026-11-20, backlog 6f653d96:
+//!    uncommitted, untracked) — on both of these routes a command with `-p`
+//!    must also match the package (backlog 32956a19: the stem alone does not
+//!    identify one test file when two crates hold a `tests/<name>.rs`): a
+//!    reproduction_tests entry admits it only if the entry has no `-p` or its
+//!    `-p` covers every spec of the command, and a changed `tests/<name>.rs`
+//!    only if every spec is a plain name owning a changed file of that stem
+//!    (owner: the nearest `Cargo.toml` with a `[package]` at or above the
+//!    file; with no manifest, the crate directory holding `tests/`; with
+//!    neither — a top-level `tests/` and no manifest — the owner is
+//!    undetermined and the stem alone admits it, exactly the name-only rule
+//!    that held before the `-p` check, so this is never looser than it) — or
+//!    (user ruling 2026-11-20, backlog 6f653d96:
 //!    a fix must be able to prove it leaves the crate's pinned asserts
 //!    unchanged) be an existing test of a crate the worktree changed: every
 //!    `-p`/`--package` of that command names a package owning a path in the
@@ -1251,7 +1262,9 @@ fn worktree_changed_tests(wt: &Path, base: &str) -> Result<Vec<String>, String> 
 /// added or changed (same three sources as [`worktree_changed_tests`]). The
 /// owner is the package of the nearest `Cargo.toml` with a `[package]` table at
 /// or above the file's directory within the worktree's top level; with no such
-/// manifest, the name of the crate directory (the parent of `tests/`). A
+/// manifest, the name of the crate directory (the parent of `tests/`) when
+/// `tests/` is not at the top level; otherwise `None` (undetermined: nothing
+/// names a crate, and [`check_task_scope`] falls back to the stem alone). A
 /// failing git or an unreadable manifest is `Err`.
 fn worktree_changed_test_owners(
     wt: &Path,
@@ -1304,7 +1317,9 @@ fn worktree_changed_test_owners(
         }
         // No manifest owns the file (a repo without Cargo.toml, as in the
         // backlog fixture): the crate directory (the parent of `tests/`) names
-        // the owner, as `crates/<p>/` does for `-p <p>`.
+        // the owner, as `crates/<p>/` does for `-p <p>`. A top-level `tests/`
+        // has no such directory (its parent is "", whose `file_name` is
+        // None), so the owner stays undetermined.
         if owner.is_none() {
             owner = p
                 .parent()
@@ -1478,8 +1493,9 @@ fn is_plain_name(name: &str) -> bool {
 }
 
 const TASK_SCOPE_REASON: &str = "inside a condukt task worktree only the task's own tests may \
-     run: a `--test <name>` named in the task's reproduction_tests, a tests/<name>.rs this \
-     worktree added or changed, or a `--test <name>` whose command names, with `-p` (also \
+     run: a `--test <name>` named in the task's reproduction_tests (with `-p`, by an entry \
+     whose own `-p` covers it or that has none), a tests/<name>.rs this worktree added or \
+     changed (with `-p`, one owned by every named package), or a `--test <name>` whose command names, with `-p` (also \
      inside short-flag clusters such as `-qp`), only packages that own a path this worktree \
      changed against its base (no `-p`, a package spec that is not a plain name, a short-flag \
      cluster that is not modelled, or an unreadable diff or manifest is refused); `<name>` \
@@ -1653,8 +1669,9 @@ fn check_task_scope(tests: &[Words], cwd: &Path) -> Decision {
             Ok(s) => s,
             Err(e) => return undetermined(format!("`{}`: {e}", words.join(" "))),
         };
-        // Parsed only when the changed-crate branch needs it, so a cluster we
-        // do not model does not refuse a test the other branches admit.
+        // `Err` (a cluster we do not model): the command's package is
+        // undetermined, so only a reproduction_tests entry without `-p` (which
+        // names the test by name alone) admits it; every other branch refuses.
         let pkgs = package_specs(words);
         for sel in sels {
             // A `--test` glob (`*`, `?`, `[]`) may select every integration
@@ -1663,14 +1680,18 @@ fn check_task_scope(tests: &[Words], cwd: &Path) -> Decision {
             let glob = matches!(&sel, Selector::Test(n) if !is_plain_name(n));
             // The reproduction_tests route compares the name AND the package: a
             // command with `-p` is admitted only by an entry whose own `-p`
-            // covers every spec (an entry with no `-p` names the test by name
-            // alone, as before). A command whose `-p` cannot be parsed is not
+            // covers every spec. An entry with no `-p` names the test by name
+            // alone, and a command with no `-p` is judged by name alone, as
+            // before (which package cargo then picks depends on the cwd; not
+            // modelled). A command whose `-p` cannot be parsed, against an
+            // entry with `-p` (or whose own `-p` cannot be parsed), is not
             // admitted here; it falls to the arms below, which refuse it.
             let repro_admits = repro.iter().any(|(s, entry_pkgs)| {
                 *s == sel
                     && match (&pkgs, entry_pkgs) {
+                        (_, Some(e)) if e.is_empty() => true,
                         (Ok(c), _) if c.is_empty() => true,
-                        (Ok(c), Some(e)) => e.is_empty() || c.iter().all(|p| e.contains(p)),
+                        (Ok(c), Some(e)) => c.iter().all(|p| e.contains(p)),
                         _ => false,
                     }
             });
@@ -1693,7 +1714,11 @@ fn check_task_scope(tests: &[Words], cwd: &Path) -> Decision {
                     }
                     let name_changed = changed.as_ref().is_some_and(|c| c.contains(name));
                     // With `-p`, the changed file must belong to that package:
-                    // the stem alone does not identify one test file.
+                    // the stem alone does not identify one test file. A changed
+                    // file whose owner is undetermined (`None`: no manifest and
+                    // no crate directory) is admitted by the stem alone, the
+                    // name-only rule that held before this check — never looser
+                    // than it. An unparseable `-p` admits nothing here.
                     let owned = match (&pkgs, name_changed) {
                         (Ok(p), true) if !p.is_empty() => {
                             if changed_owners.is_none() {
@@ -1712,7 +1737,7 @@ fn check_task_scope(tests: &[Words], cwd: &Path) -> Decision {
                                 is_plain_name(spec)
                                     && changed_owners.as_ref().is_some_and(|o| {
                                         o.iter().any(|(st, ow)| {
-                                            st == name && ow.as_deref() == Some(spec.as_str())
+                                            st == name && ow.as_deref().is_none_or(|ow| ow == spec)
                                         })
                                     })
                             })

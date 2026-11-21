@@ -1804,3 +1804,34 @@ exit 101: ss-worktrees/session-62e92d16/crates/condukt)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 15.24s
      Running tests/backlog_20261122_testscope_rerun_key_ignores_target_dir.rs (target/debug/deps/backlog_20261122_testscope_rerun_key_ignores_target_dir-171570d11706b89c)
 error: test failed, to rerun pass `-p condukt --test backlog_20261122_testscope_rerun_key_ignores_target_dir`"""
+
+[[task]]
+id = "00c6c2b8"
+title = "blastguard relink: symlink created by ln inside $(...)/backticks/bash -c/vim -c '!' escape is not a relink, so a later write through it into /etc is Allow/Ask, not Deny (system-harm fail-open)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = """Reported by the verifier of backlog 3de4729f (present at base f9bb4b9aa); RED observed 2026-11-22 at main e3baca954 tree, RED commit 64d3d0ecf: 6 failed / 2 passed. vim -c 'silent !ln -s /etc/bg-sentinel d' -c q; echo x > d/hosts -> allow; echo "$(ln -s /etc/bg-sentinel d)"; echo x > d/hosts -> allow; jq . "$(ln ...)" -> allow; true $(ln ...) && echo x > d/hosts -> allow; echo `ln ...` and bash -c 'ln ...' -> ask (unmodelled relinker). Fix: relink.rs must read commands the AST shows run inside substitutions / interpreter escapes as relinkers."""
+created_at = 1795279570
+updated_at = 1795279570
+weight = 0.0
+issue_number = 1968
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1968"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261122_relink_symlink_via_subst_failopen"
+rev = "64d3d0ecf63ca8cc2ef9b644b37d1b0a36530678"
+observed_at = 1795279570
+detail = """
+exit 101: /worktrees/run-20261122-014030-65651-t1/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.33s
+     Running tests/backlog_20261122_relink_symlink_via_subst_failopen.rs (target/debug/deps/backlog_20261122_relink_symlink_via_subst_failopen-8fef54456ae738fa)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261122_relink_symlink_via_subst_failopen`"""

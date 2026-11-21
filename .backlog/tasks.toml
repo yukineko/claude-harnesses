@@ -890,40 +890,6 @@ exit 101: 5ba/crates/progeffect)
 error: test failed, to rerun pass `-p blastguard --test daf7611b_executor_behaviour`"""
 
 [[task]]
-id = "84e81101"
-title = "blastguard test RED: rsync x .githooks/pre-commit judged Allow (p0 control)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "test-red",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "p0_unknown_verb_false_positives.rs:31: control must be Deny or Ask, got Allow for: rsync x .githooks/pre-commit. Observed 2026-11-20 on main a0ba7bad0 (detached worktree verify-main-q3q4), found while integrating Q3/Q4 deny-target table (7275b9d9); same failure on the integration tree. Readings: (a) real regression on main; (b) stale assert vs a later ruling or the S5 AST evaluator; distinguish by git log -S on the asserted case."
-created_at = 1795110557
-updated_at = 1795110557
-weight = 0.0
-issue_number = 1916
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1916"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test p0_unknown_verb_false_positives control_rsync_into_protected_path_not_allowed"
-rev = "4c286f7b61e70f4a56ccb658a200c3c4085bdf1a"
-observed_at = 1795110557
-detail = """
-exit 101:  in 0.02s
-
-   Compiling blastguard v0.2.761 (/Users/yuki/src/.harness-worktrees/session-179495ba/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
-     Running tests/p0_unknown_verb_false_positives.rs (target/debug/deps/p0_unknown_verb_false_positives-642e4cc61f4aae2b)
-error: test failed, to rerun pass `-p blastguard --test p0_unknown_verb_false_positives`"""
-
-[[task]]
 id = "1c71c598"
 title = "blastguard test RED: quoted_heredoc_python_gt exact observed command denied"
 project = "/Users/yuki/src/harness"
@@ -2474,3 +2440,33 @@ exit 101: d; 0 filtered out; finished in 0.78s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
      Running tests/backlog_20261121_relink_unmodelled_ask_masks_system_write.rs (target/debug/deps/backlog_20261121_relink_unmodelled_ask_masks_system_write-36191178c1302f24)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_relink_unmodelled_ask_masks_system_write`"""
+
+[[task]]
+id = "3de4729f"
+title = "blastguard FP: 'rsync' inside a quoted jq filter / git commit message makes an unmodelled relinker and Asks a literal redirect target"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-21 (main 366eab917, session c1b3e891, ~/.blastguard/blocks/blocks.jsonl). Reasons verbatim: (1) "'> …/scratchpad/vh.json': `jq '.tasks[0].title=\"fix rsync\" | …' decomp.routed.json` may create or rename an entry on this path and is not modelled, so blastguard cannot tell which file the write really lands on" (2) "'> /Users/yuki/.condukt/worktrees/run-20261121-091940-12305-t1/crates/blastguard/tests/rsync_protected_destination_20261121.rs': `git commit -qm \"blastguard: RED tests for rsync protected destination\" --trailer \"Condukt-Task: $TASK_ID\"` may create or rename an entry on this path and is not modelled". Mechanism (read from src/detect/relink.rs parse/is_relink_word/mentions): the WORD rsync inside a quoted argument (jq filter string, commit message) makes the segment Parsed::Unmodelled; mentions() then fires on any glob metachar ([0]) or unresolvable expansion ($TASK_ID) anywhere in the command, regardless of the target; a later segment counts whenever any segment holds the bare word 'done' (here a comment in the heredoc body). RED at 62c62ad5e (2026-11-21): all 3 jq shapes and both commit shapes Ask with the same reason; controls pass (ditto src vh.json in a loop stays Ask; heredoc-to-/etc/hosts + commit stays Deny). Readings: (a) FP — jq <filter> <file> and git commit -m <msg> --trailer <t> (no pathspec) cannot create/rename the target; their rsync is data, not an argv word naming a path or a relinking program. (b) intended — unmodelled command naming a relink verb is undetermined → Ask. How to tell: whether the unmodelled command's argv can NAME the target path (an operand equal/resolving to it, or a glob/expansion in an OPERAND position); here the glob/expansion sits inside a jq filter string / --trailer value, so (a). Related fail-open filed separately (same relink path masks an /etc/hosts Deny).'''
+created_at = 1795221713
+updated_at = 1795221713
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_unmodelled_cmd_redirect_target_fp"
+rev = "52ab15a5ce35b4e6606bc494553d494eca382bd1"
+observed_at = 1795221713
+detail = """
+exit 101:  0 ignored; 0 measured; 0 filtered out; finished in 1.18s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
+     Running tests/backlog_20261121_unmodelled_cmd_redirect_target_fp.rs (target/debug/deps/backlog_20261121_unmodelled_cmd_redirect_target_fp-43b5b64bb56ac973)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_unmodelled_cmd_redirect_target_fp`"""

@@ -427,10 +427,26 @@ fn parse_marker_log(log: &str) -> Vec<MarkerCommit> {
     out
 }
 
-/// Whether `path` is a test path: a directory component `tests` or `test`
-/// (the same rule [`parse_test_cmd`] uses for committed test scripts).
+/// Whether `path` is a test path (backlog 45ea34e7 extends the 363ad7da rule
+/// with filename conventions). Two shapes count:
+///
+/// - a directory component `tests` or `test` (the same rule
+///   [`parse_test_cmd`] uses for committed test scripts), e.g.
+///   `tests/a.sh`, `scripts/tests/b.py`;
+/// - a FILENAME in a common test-file convention: `test_*.py`, `*_test.py`,
+///   `*_test.rs`, `*_test.go`, `*.test.ts` / `*.test.js`, `*.spec.ts` /
+///   `*.spec.js` (see [`is_test_filename`]), e.g. `scripts/test_alpha.py`,
+///   `src/alpha_test.rs`.
+///
+/// The filename rule is narrow: the prefix/suffix must be followed by a
+/// non-empty stem, and only the listed extensions match. Product files such
+/// as `src/contest.rs`, `src/testing_utils.rs`, `scripts/latest.py` and
+/// `src/test_utils.rs` are NOT test paths. Misreading a product file as a
+/// test is the opposite fail direction: a real fix would be ignored and its
+/// task handed out again.
 fn is_test_path(path: &str) -> bool {
-    Path::new(path)
+    let p = Path::new(path);
+    let in_test_dir = p
         .parent()
         .map(|d| {
             d.components().any(|c| {
@@ -438,7 +454,32 @@ fn is_test_path(path: &str) -> bool {
                 s == "tests" || s == "test"
             })
         })
-        .unwrap_or(false)
+        .unwrap_or(false);
+    if in_test_dir {
+        return true;
+    }
+    p.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(is_test_filename)
+}
+
+/// Filename suffixes of the `*_<x>` / `*.<x>` test conventions (the stem in
+/// front of the suffix must be non-empty). The `test_*.py` prefix convention
+/// is checked separately in [`is_test_filename`].
+const TEST_FILENAME_SUFFIXES: &[&str] = &[
+    "_test.py", "_test.rs", "_test.go", ".test.ts", ".test.js", ".spec.ts", ".spec.js",
+];
+
+/// Whether a bare file name follows a test-file convention (see
+/// [`is_test_path`]). `test_.py` (empty stem) and `latest.py` are not.
+fn is_test_filename(name: &str) -> bool {
+    if name.starts_with("test_") && name.ends_with(".py") && name.len() > "test_.py".len() {
+        return true;
+    }
+    TEST_FILENAME_SUFFIXES.iter().any(|suffix| {
+        name.strip_suffix(suffix)
+            .is_some_and(|stem| !stem.is_empty())
+    })
 }
 
 /// Version metadata a RED-filing commit bumps alongside its test

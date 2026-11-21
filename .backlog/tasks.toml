@@ -2370,3 +2370,34 @@ exit 101:  0 ignored; 0 measured; 0 filtered out; finished in 1.18s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
      Running tests/backlog_20261121_unmodelled_cmd_redirect_target_fp.rs (target/debug/deps/backlog_20261121_unmodelled_cmd_redirect_target_fp-43b5b64bb56ac973)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_unmodelled_cmd_redirect_target_fp`"""
+
+[[task]]
+id = "0aa37c22"
+title = "blastguard RED: redirect_target_resolution unresolvable_shapes_keep_the_unresolved_verdict (refile after revert b86b44076)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Refiled 2026-11-21: f1b5acd3/b07f2020 were closed done by d44c49876 but their re-anchor merge 0258dfe2f was reverted (b86b44076) pending a human ruling. RED at main 765a57454. Readings: (a) frozen assert — S5 resolves local/declare/{ }/P= values (zsh measured: local sets value), re-anchor to literal pair-equality (commits 91e0d6d91 b23ef959b a7d42da05 c1238d4ba); (b) bash reading: top-level local fails so resolving is a fail-open. Ruling needed: shell model bash vs zsh for local/declare/{ }, and whether literal '> /x.log' Allow is right."
+created_at = 1795223225
+updated_at = 1795223225
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test redirect_target_resolution unresolvable_shapes_keep_the_unresolved_verdict"
+rev = "d7b772888da2ef104a1aab3f5ec83b441bc0efa5"
+observed_at = 1795223225
+detail = """
+exit 101:  out; finished in 1.75s
+
+   Compiling blastguard v0.2.855 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.79s
+     Running tests/redirect_target_resolution.rs (target/debug/deps/redirect_target_resolution-173ca9c96ae0d3f2)
+error: test failed, to rerun pass `-p blastguard --test redirect_target_resolution`"""

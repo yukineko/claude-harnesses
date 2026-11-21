@@ -1178,37 +1178,6 @@ FAILED scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py::Quo
 ========================= 2 failed, 2 passed in 0.21s =========================="""
 
 [[task]]
-id = "bb8e22e5"
-title = "rollout: test_rollout_default_path_rebuild_failure.py fails 4/4 - fixture repo lacks scripts/rollout_source_guard.py (can't open file)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "rollout",
-    "test-fixture",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-20 by the coordinator (session 62e92d16) during run-20261120-171414-35880 / d4a135ba: python3 -m pytest scripts/tests/test_rollout_default_path_rebuild_failure.py -> '4 failed in 0.86s' at base 039500893 in a detached worktree, each with "can't open file .../repo/scripts/rollout_source_guard.py". The fixture copies rollout-plugins.sh into a temp repo but not rollout_source_guard.py, which rollout-plugins.sh now invokes. Pre-existing, not a d4a135ba regression. Reading: fixture drift (fix = copy the guard, or the whole helper set, into the temp repo) vs. rollout should not depend on a sibling script; not investigated."""
-created_at = 1795179612
-updated_at = 1795179612
-weight = 0.0
-issue_number = 1900
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1900"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/tests/test_rollout_default_path_rebuild_failure.py"
-rev = "82895f368da47d1be0ea55d88e1cc65fc6afcdff"
-observed_at = 1795179612
-detail = """
-exit 1: ero_and_restores_old_entry
-FAILED scripts/tests/test_rollout_default_path_rebuild_failure.py::DefaultPathRebuildFailure::test_failed_rebuild_removes_entry_created_by_this_run
-FAILED scripts/tests/test_rollout_default_path_rebuild_failure.py::DefaultPathRebuildFailure::test_failed_rebuild_restores_every_repointed_entry
-============================== 4 failed in 0.95s ==============================="""
-
-[[task]]
 id = "68b1a9dc"
 title = '''blastguard fail-open: echo-feeder variants of rm -rf /etc piped to a shell are only Ask in main (Deny in subagent): env bash, backslash-escaped words, $X var, >/dev/stdout, \; , /bin/echo, and each nested in echo '…' | bash'''
 project = "/Users/yuki/src/harness"

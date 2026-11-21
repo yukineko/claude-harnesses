@@ -91673,3 +91673,57 @@ rev = "53b3e0c63a47da45eaaa403222149637bfc3e6e5"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "bb8e22e5"
+title = "rollout: test_rollout_default_path_rebuild_failure.py fails 4/4 - fixture repo lacks scripts/rollout_source_guard.py (can't open file)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "test-fixture",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-20 by the coordinator (session 62e92d16) during run-20261120-171414-35880 / d4a135ba: python3 -m pytest scripts/tests/test_rollout_default_path_rebuild_failure.py -> '4 failed in 0.86s' at base 039500893 in a detached worktree, each with "can't open file .../repo/scripts/rollout_source_guard.py". The fixture copies rollout-plugins.sh into a temp repo but not rollout_source_guard.py, which rollout-plugins.sh now invokes. Pre-existing, not a d4a135ba regression. Reading: fixture drift (fix = copy the guard, or the whole helper set, into the temp repo) vs. rollout should not depend on a sibling script; not investigated."""
+created_at = 1795179612
+updated_at = 1795241408
+weight = 0.0
+issue_number = 1900
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1900"
+issue_closed_at = 1795241412
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/tests/test_rollout_default_path_rebuild_failure.py"
+rev = "82895f368da47d1be0ea55d88e1cc65fc6afcdff"
+observed_at = 1795179612
+detail = """
+exit 1: ero_and_restores_old_entry
+FAILED scripts/tests/test_rollout_default_path_rebuild_failure.py::DefaultPathRebuildFailure::test_failed_rebuild_removes_entry_created_by_this_run
+FAILED scripts/tests/test_rollout_default_path_rebuild_failure.py::DefaultPathRebuildFailure::test_failed_rebuild_restores_every_repointed_entry
+============================== 4 failed in 0.95s ==============================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest -q scripts/tests/test_rollout_default_path_rebuild_failure.py"
+exit = 0
+passed = 4
+rev = "a116974701d8bd5695f97aa041441bc6780a37d1"
+observed_at = 1795241404
+output_digest = "sha256:f01243c137a734a434721e104ffc622476accaf1ffcd7470fa961a1380e44fc9"
+excerpt = """
+....                                                                     [100%]
+4 passed in 2.76s
+"""
+
+[task.closure.red]
+rev = "316bb96bfb0df09ab585abe5788f1d1b758b9ecd"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

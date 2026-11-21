@@ -2543,3 +2543,63 @@ exit 101: 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.17s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
      Running tests/backlog_20261121_flow_driver_session_never_asks.rs (target/debug/deps/backlog_20261121_flow_driver_session_never_asks-71503fd10e4b9f5e)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_flow_driver_session_never_asks`"""
+
+[[task]]
+id = "3de4729f"
+title = "blastguard FP: 'rsync' inside a quoted jq filter / git commit message makes an unmodelled relinker and Asks a literal redirect target"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-21 (main 366eab917, session c1b3e891, ~/.blastguard/blocks/blocks.jsonl). Reasons verbatim: (1) "'> …/scratchpad/vh.json': `jq '.tasks[0].title=\"fix rsync\" | …' decomp.routed.json` may create or rename an entry on this path and is not modelled, so blastguard cannot tell which file the write really lands on" (2) "'> /Users/yuki/.condukt/worktrees/run-20261121-091940-12305-t1/crates/blastguard/tests/rsync_protected_destination_20261121.rs': `git commit -qm \"blastguard: RED tests for rsync protected destination\" --trailer \"Condukt-Task: $TASK_ID\"` may create or rename an entry on this path and is not modelled". Mechanism (read from src/detect/relink.rs parse/is_relink_word/mentions): the WORD rsync inside a quoted argument (jq filter string, commit message) makes the segment Parsed::Unmodelled; mentions() then fires on any glob metachar ([0]) or unresolvable expansion ($TASK_ID) anywhere in the command, regardless of the target; a later segment counts whenever any segment holds the bare word 'done' (here a comment in the heredoc body). RED at 62c62ad5e (2026-11-21): all 3 jq shapes and both commit shapes Ask with the same reason; controls pass (ditto src vh.json in a loop stays Ask; heredoc-to-/etc/hosts + commit stays Deny). Readings: (a) FP — jq <filter> <file> and git commit -m <msg> --trailer <t> (no pathspec) cannot create/rename the target; their rsync is data, not an argv word naming a path or a relinking program. (b) intended — unmodelled command naming a relink verb is undetermined → Ask. How to tell: whether the unmodelled command's argv can NAME the target path (an operand equal/resolving to it, or a glob/expansion in an OPERAND position); here the glob/expansion sits inside a jq filter string / --trailer value, so (a). Related fail-open filed separately (same relink path masks an /etc/hosts Deny).'''
+created_at = 1795221713
+updated_at = 1795221713
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_unmodelled_cmd_redirect_target_fp"
+rev = "52ab15a5ce35b4e6606bc494553d494eca382bd1"
+observed_at = 1795221713
+detail = """
+exit 101:  0 ignored; 0 measured; 0 filtered out; finished in 1.18s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
+     Running tests/backlog_20261121_unmodelled_cmd_redirect_target_fp.rs (target/debug/deps/backlog_20261121_unmodelled_cmd_redirect_target_fp-43b5b64bb56ac973)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_unmodelled_cmd_redirect_target_fp`"""
+
+[[task]]
+id = "49921963"
+title = "flow stop-gate spawns backlog/condukt by bare name; hook PATH lacks plugin bin dirs so every driver Stop is undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "stop-gate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed twice 2026-11-21, session c1b3e891, flow 0.2.42 deployed (main 366eab917). Verbatim: "flow stop-gate: could not determine whether this /flow driver session may stop. Unreadable: driver liveness (`backlog driver status --project /Users/yuki/src/.harness-worktrees/session-c1b3e891`): cannot run backlog driver status --project ...: No such file or directory (os error 2)". From the Bash tool the same command works (backlog -> ~/.claude/plugins/cache/yukineko/backlog/0.3.145/bin/backlog, exit 0, active:true). Cause read from source: crates/flow/src/probes.rs Real::run does Command::new("backlog"/"condukt") from PATH; harness_core::plugin_bin module doc records (measured 2026-08-21) that hook processes do not inherit the plugin bin dirs on PATH; autoflow/backlog.rs and condukt claim/oracle/state already use harness_core::plugin_bin::resolve (cache first, PATH second). RED at 52ab15a5c (2026-11-21): stubs only at $HOME/.claude/plugins/cache/yukineko/{backlog,condukt}/<ver>/bin, PATH=/usr/bin:/bin, live driver + pending task => block with the same 'No such file or directory (os error 2)' undetermined reason instead of the determined work-remains block; control with stubs on PATH passes. Readings: (a) defect — the hook must locate sibling plugin binaries independently of PATH (plugin cache); (b) intended — PATH is the contract and the plugin install must export the bin dirs to hooks. How to tell: whether Claude Code's hook env carries plugin bin dirs on PATH — plugin_bin's measured doc and the observed os error 2 say no, so (a)."""
+created_at = 1795221737
+updated_at = 1795221737
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p flow --test stop_gate_sibling_bin_resolution_20261121"
+rev = "52ab15a5ce35b4e6606bc494553d494eca382bd1"
+observed_at = 1795221737
+detail = """
+exit 101: sult: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/stop_gate_sibling_bin_resolution_20261121.rs (target/debug/deps/stop_gate_sibling_bin_resolution_20261121-8a62f7d0ca8c41dc)
+error: test failed, to rerun pass `-p flow --test stop_gate_sibling_bin_resolution_20261121`"""

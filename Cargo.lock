@@ -444,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.487"
+version = "0.7.488"
 dependencies = [
  "anyhow",
  "blastguard",

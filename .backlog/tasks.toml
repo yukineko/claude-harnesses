@@ -1801,6 +1801,8 @@ DOES NOT PROVE: 同じ test file の他の case の状態、S5 実装後の挙�
 created_at = 1795291716
 updated_at = 1795291716
 weight = 0.0
+issue_number = 1983
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1983"
 rev = 0
 
 [task.repro]

@@ -1677,3 +1677,35 @@ exit 101: ompiling condukt v0.7.495 (/Users/yuki/src/.harness-worktrees/filing-8
     Finished `test` profile [unoptimized + debuginfo] target(s) in 29.13s
      Running tests/testscope_main_ref_dash_operand_20261122.rs (target/debug/deps/testscope_main_ref_dash_operand_20261122-79ca77ab99b4b94e)
 error: test failed, to rerun pass `-p condukt --test testscope_main_ref_dash_operand_20261122`"""
+
+[[task]]
+id = "fe86a232"
+title = "tdd green: a refused GREEN (tests still failing) keeps no trace of which test failed — run log removed, output_tail dropped"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+観測 (2026-11-22, branch filing-84424 commit 3ee9ee41c、基点 main 5e99d94d4、worktree /Users/yuki/src/.harness-worktrees/filing-84424): RED を記録した後、まだ失敗する run で tdd green を実行すると exit 非0 になり、stdout は空、stderr には "tdd: tests still failing — keep implementing until they pass, then run `tdd green` again." の 1 行だけが出る。green run の出力にだけ含まれる失敗テスト名 zz_green_only_marker (run 時に組み立てるので script 本文には現れない) は、stdout にも stderr にも、HOME / work 配下のどのファイルにも残らない (RED テスト backlog_20261122_green_failure_output_not_kept の逐語の失敗メッセージ: "refused tdd green kept no trace of the failing test `zz_green_only_marker` (not in stdout/stderr, no file under ... holds it).")。
+原因 (コード読解): crates/tdd/src/runner.rs run_cmd は run log を parse した後に std::fs::remove_file(&log_path) で消す。crates/tdd/src/proof.rs green() は judge_green(out.passed, has_red)? で bail するが、それが write_artifact より前にあるため、Outcome.output_tail / Outcome.tests はどこにも出力されない。condukt run run-20261122-035502-88763 の t1 worker が、green 失敗の原因を観測できないと報告したもの。
+読み (a) 欠陥: 拒否された GREEN は失敗の証拠を何も残さない (CLAUDE.md §4/§6: 何が失敗したかは見えるところに残す。memory display-only-decision-relevant-output: full stderr は record file へ)。(b) 意図どおり: tdd は判定だけを行い、出力が見たい呼び出し元はコマンドを自分で再実行する想定。見分け方: tdd の README / spec に「拒否された GREEN は出力を残さない」旨の記述があるか (この rev では見つけていない)。
+DOES NOT PROVE: RED・timeout・spawn error の挙動、出力をどの形式・どこに残すべきか。"""
+created_at = 1795291486
+updated_at = 1795291486
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261122_green_failure_output_not_kept -- --ignored"
+rev = "3ee9ee41cdbe34fd78229d4ad6b41750ad2277df"
+observed_at = 1795291486
+detail = """
+exit 101: ing tdd v0.1.112 (/Users/yuki/src/.harness-worktrees/filing-84424/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.31s
+     Running tests/backlog_20261122_green_failure_output_not_kept.rs (target/debug/deps/backlog_20261122_green_failure_output_not_kept-c05f8e323e6c1617)
+error: test failed, to rerun pass `-p tdd --test backlog_20261122_green_failure_output_not_kept`"""

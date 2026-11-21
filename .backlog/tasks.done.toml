@@ -94280,3 +94280,156 @@ rev = "7806f67341a37814ce0d2acebb1619164bdabb81"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "a2d36aa2"
+title = "blastguard FP: deny reason quotes heredoc body text '> t,' as a relative redirect (unresolvable cd)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Repro: cargo test -p blastguard --test backlog_20261113_heredoc_body_fp -- --ignored a_unresolvable_cd_reason_does_not_quote_heredoc_body_as_redirect (commit 611d5c58). Does not reproduce with a resolvable cd.
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261113_heredoc_body_fp -- --ignored a_unresolvable_cd_reason_does_not_quote_heredoc_body_as_redirect; rev: 5e99d94d4a3819de7698425a56efcca2c300dd84; observed: exit 0: k
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.81s
+
+   Compiling blastguard v0.2.921 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.29s
+     Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-b5882e39277c9bd0)"""
+created_at = 1794520706
+updated_at = 1795292563
+weight = 0.0
+issue_number = 1665
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1665"
+issue_closed_at = 1795292567
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_heredoc_body_fp -- --ignored a_unresolvable_cd_reason_does_not_quote_heredoc_body_as_redirect"
+rev = "611d5c58fb18fbf61e530ef04235aa734d7f642d"
+observed_at = 1794520706
+detail = """
+exit 101: _as_redirect
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.42s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-d10a0f2b109334d2)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_heredoc_body_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261113_heredoc_body_fp -- --ignored a_unresolvable_cd_reason_does_not_quote_heredoc_body_as_redirect; rev: 5e99d94d4a3819de7698425a56efcca2c300dd84; observed: exit 0: k
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.81s
+
+   Compiling blastguard v0.2.921 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.29s
+     Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-b5882e39277c9bd0)"""
+
+[[task]]
+id = "b8344e33"
+title = "blastguard FP: python3 quoted heredoc with wildcard-rm text in a string literal denied as recursive rm"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Repro: cargo test -p blastguard --test backlog_20261113_heredoc_body_fp -- --ignored b_python_string_literal_with_rm_text_is_data_not_a_command (commit 611d5c58). Same program without the text is only an ask.
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-demonstrated; exit 0; cmd: cargo test -p blastguard --test backlog_20261113_heredoc_body_fp -- --ignored b_python_string_literal_with_rm_text_is_data_not_a_command; rev: 5e99d94d4a3819de7698425a56efcca2c300dd84; observed: exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. An `#[ignore]`d repro must be run with `-- --ignored` (e.g. `cargo test -p <crate> --test <file> -- --ignored`), and a test-name filter must match the repro: 
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-b5882e39277c9bd0)"""
+created_at = 1794520708
+updated_at = 1795292569
+weight = 0.0
+issue_number = 1666
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1666"
+issue_closed_at = 1795292572
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_heredoc_body_fp -- --ignored b_python_string_literal_with_rm_text_is_data_not_a_command"
+rev = "611d5c58fb18fbf61e530ef04235aa734d7f642d"
+observed_at = 1794520708
+detail = """
+exit 101: ot_a_command
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.52s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-d10a0f2b109334d2)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_heredoc_body_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-demonstrated; exit 0; cmd: cargo test -p blastguard --test backlog_20261113_heredoc_body_fp -- --ignored b_python_string_literal_with_rm_text_is_data_not_a_command; rev: 5e99d94d4a3819de7698425a56efcca2c300dd84; observed: exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. An `#[ignore]`d repro must be run with `-- --ignored` (e.g. `cargo test -p <crate> --test <file> -- --ignored`), and a test-name filter must match the repro: 
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-b5882e39277c9bd0)"""
+
+[[task]]
+id = "c2449da8"
+title = 'blastguard: stdin python "w" mode attributed to an unrelated read-only path literal'
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "cancelled"
+notes = '''
+RED 1e08ddff (tests/stdin_python_write_mode_misattributed_fp_20261113.rs). Shape: python3 -I - <<'PYEOF' / p = "<existing file outside git>" / open("<project file>", "w").write("y") / PYEOF. Deployed 0.2.496 with p=$HOME/.cargo/env: deny, reason '`python3 -I - <<'PYEOF'` takes its program from stdin, and it writes `/home/.../.cargo/env` (`, \"w\")`) — it exists, and it is not inside a git work tree — nothing holds a second copy of these bytes'. Any absolute path literal triggers it (print("<ro>"), q=<proj>; open(q,"w")); the open(p) read is not needed. In the test fixture the verdict is Ask naming home/notes.txt. Controls: no "w" Allow; project write alone Allow; open("/etc/hosts","w") with and without the RO literal not Allow.
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test stdin_python_write_mode_misattributed_fp_20261113 -- --ignored; rev: 5e99d94d4a3819de7698425a56efcca2c300dd84; observed: exit 0: iled; 0 ignored; 0 measured; 4 filtered out; finished in 0.70s
+
+   Compiling blastguard v0.2.921 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.60s
+     Running tests/stdin_python_write_mode_misattributed_fp_20261113.rs (target/debug/deps/stdin_python_write_mode_misattributed_fp_20261113-6d8f5547fa574beb)'''
+created_at = 1794543271
+updated_at = 1795292575
+weight = 0.0
+issue_number = 1691
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1691"
+issue_closed_at = 1795292577
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test stdin_python_write_mode_misattributed_fp_20261113 -- --ignored"
+rev = "1e08ddff64b2a9e198c3348d1e0f8134bb2fbd92"
+observed_at = 1794543271
+detail = """
+exit 101: ma/src/.harness-worktrees/session-43f28f62/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.98s
+     Running tests/stdin_python_write_mode_misattributed_fp_20261113.rs (target/debug/deps/stdin_python_write_mode_misattributed_fp_20261113-8fbfbc28440bb821)
+error: test failed, to rerun pass `-p blastguard --test stdin_python_write_mode_misattributed_fp_20261113`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test stdin_python_write_mode_misattributed_fp_20261113 -- --ignored; rev: 5e99d94d4a3819de7698425a56efcca2c300dd84; observed: exit 0: iled; 0 ignored; 0 measured; 4 filtered out; finished in 0.70s
+
+   Compiling blastguard v0.2.921 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.60s
+     Running tests/stdin_python_write_mode_misattributed_fp_20261113.rs (target/debug/deps/stdin_python_write_mode_misattributed_fp_20261113-6d8f5547fa574beb)"""

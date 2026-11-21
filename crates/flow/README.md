@@ -45,7 +45,7 @@ The full procedure is `skills/flow/SKILL.md`:
 2.5. flow-watch を Monitor で武装（停滞検知）
 3. 実行ループ — `backlog sync --apply` → budgetguard（情報。バッチ幅だけ） → ピック（`backlog next --claim`）
        → spec-gap ゲート → claim → overwatch begin → /condukt → 検証 → sink（done / fail）→ release
-       → heartbeat → `condukt circuit check --no-compaction-axis`（trip だけが停止）
+       → heartbeat → `condukt circuit check --run "flow-$CLAUDE_CODE_SESSION_ID" --session "$CLAUDE_CODE_SESSION_ID" --no-compaction-axis`（trip だけが停止）
 4. 終了 — キューが空 / 引数の課題が解決 / circuit trip で `backlog driver unregister`
      + `overwatch end` + サマリ報告 + pivot-check（`--resolve`、推奨＝継続）
 ```
@@ -66,7 +66,7 @@ skills/flow/SKILL.md           # the /flow skill (drives the source→executor l
 ### `flow stop-gate` (Stop hook)
 
 - Blocks the stop of a **live registered driver** session while `backlog next` has work or the
-  session holds `flow-<SESSION>` claims — unless `condukt circuit check --no-compaction-axis` trips.
+  session holds `flow-<SESSION>` claims — unless `condukt circuit check --run flow-<SESSION> --session <SESSION> --no-compaction-axis` trips.
 - Undeterminable (registry / backlog / claims / circuit unobservable) → blocks once, then a visible
   allow on the next consecutive undetermined stop of the same session. A panic of the gate body
   blocks (fail-closed, `harness_core::gate::run::run_guarded`).

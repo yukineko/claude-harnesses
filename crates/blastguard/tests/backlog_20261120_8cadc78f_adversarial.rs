@@ -503,7 +503,6 @@ fn n01_env_bash() {
 }
 
 #[test]
-#[ignore = "backlog 68b1a9dc RED: nested backslash-escaped feeder is Ask in main"]
 fn n02_backslash_space() {
     check(
         r####"echo 'echo rm\ -rf\ /etc | bash' | bash"####,
@@ -535,7 +534,6 @@ fn n04_redirect_stdout() {
 }
 
 #[test]
-#[ignore = "backlog 68b1a9dc RED: nested escaped-semicolon feeder is Ask in main"]
 fn n05_escaped_semicolon() {
     check(
         r####"echo 'echo rm -rf /etc \; true | bash' | bash"####,

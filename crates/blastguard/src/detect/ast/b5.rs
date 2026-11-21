@@ -44,7 +44,11 @@
 //!   effects are judged here whatever spelling delivered it (`echo rm -rf
 //!   /etc | env bash`, `echo rm\ -rf\ /etc | bash`, `X=/etc; echo rm -rf $X
 //!   | bash`), not only when the legacy reading sees a plain `echo WORDS |
-//!   bash`;
+//!   bash`. A plain `echo` feeder whose operands' backslashes are each
+//!   followed by ASCII punctuation or a space (not `\\`), which every
+//!   observed `echo` dialect prints verbatim, is read the same way but only
+//!   its Deny is taken (`inert_backslash_echo_program`, observed 2026-11-21);
+//!   otherwise it stays Undetermined as below;
 //!   a python / perl / ruby / node body gives no B.5 opinion (python: S5;
 //!   perl / ruby / node: the legacy program-text reading judges it). Except
 //!   a literal stdin piped in by a compound stage — a brace group of `echo` /
@@ -774,6 +778,16 @@ fn classify(
     if let Some(body) = determined_delivered_program(text, commands, idx, cmd, &source, k) {
         return literal_body(fam, base, &body, depth, judge);
     }
+    // A plain `echo` feeder whose backslashes no dialect decodes (`echo
+    // 'echo rm\ -rf\ /etc | bash' | bash`, backlog 68b1a9dc): only its Deny
+    // is taken; anything else falls through to the readings below unchanged.
+    if fam == Family::Shell && matches!(source, ProgramSource::Stdin(StdinSource::FromCommand)) {
+        if let Some(body) = inert_backslash_echo_program(text, commands, idx, cmd) {
+            if let d @ Decision::Deny(_) = shell_body(base, &body, depth, judge) {
+                return d;
+            }
+        }
+    }
     // A `-c` operand that is a determined word built from `$( )`
     // substitutions (`bash -c "$(echo 'rm -rf /etc')"`, backlog 28019c35):
     // see `determined_dash_c_program`. Raise-only: only its Deny is taken.
@@ -931,18 +945,7 @@ fn piped_by_compound_stage(
     idx: usize,
     cmd: &SimpleCommand,
 ) -> bool {
-    let own_stdin = cmd.redirects.iter().any(|r| {
-        matches!(r.fd, None | Some(0))
-            && matches!(
-                r.op,
-                RedirOp::In
-                    | RedirOp::InOut
-                    | RedirOp::DupIn
-                    | RedirOp::HereDoc
-                    | RedirOp::HereString
-            )
-    });
-    if own_stdin {
+    if cmd.redirects.iter().any(stdin_redirect) {
         return false;
     }
     let Context::Pipeline { pos, len } = cmd.context else {
@@ -1068,6 +1071,92 @@ fn producer_argv_output(argv: &[&str]) -> Option<String> {
     }
 }
 
+/// Whether a backslash in an `echo` operand is followed only by characters
+/// no `echo` dialect decodes: every `\` is followed by ASCII punctuation or a
+/// space, other than a second `\`. Letters and digits (`\a \b \c \e \E \f \n
+/// \r \t \v \x \u \U \0NNN`) and `\\` are excluded, as is a trailing `\`.
+///
+/// Observed by the run coordinator on macOS, 2026-11-21: `/bin/bash`,
+/// `/bin/sh`, `/bin/zsh`, `/bin/dash`, `/bin/ksh` and `/bin/bash -O
+/// xpg_echo`, each given `-c "echo 'a\\ b \\; c\\-d\\/e\\.f'"`, ALL printed
+/// `a\ b \; c\-d\/e\.f` (the backslash kept verbatim); the control `/bin/zsh
+/// -c "echo 'a\\n\\tb'"` printed `a`, a newline, a TAB, `b` (zsh decodes
+/// `\n` / `\t`), so decoding dialects exist and the probe saw them.
+fn inert_backslashes(operand: &str) -> bool {
+    let mut it = operand.chars();
+    while let Some(c) = it.next() {
+        if c == '\\' {
+            match it.next() {
+                Some(n) if n == ' ' || (n.is_ascii_punctuation() && n != '\\') => {}
+                _ => return false,
+            }
+        }
+    }
+    true
+}
+
+/// A redirection of stdin (fd 0): `<`, `<>`, `<&`, a here-document or a
+/// here-string.
+fn stdin_redirect(r: &super::Redirect) -> bool {
+    matches!(r.fd, None | Some(0))
+        && matches!(
+            r.op,
+            RedirOp::In | RedirOp::InOut | RedirOp::DupIn | RedirOp::HereDoc | RedirOp::HereString
+        )
+}
+
+/// The stage right before `cmd` (`commands[idx]`) in its pipeline, joined
+/// to it by `|` alone; `None` when it cannot be placed so.
+fn piped_from<'a>(
+    text: &str,
+    commands: &'a [SimpleCommand],
+    idx: usize,
+    cmd: &SimpleCommand,
+) -> Option<&'a SimpleCommand> {
+    let Context::Pipeline { pos, len } = cmd.context else {
+        return None;
+    };
+    let prev = commands.get(idx.checked_sub(1)?)?;
+    if pos == 0 || prev.context != (Context::Pipeline { pos: pos - 1, len }) {
+        return None;
+    }
+    (text.get(prev.span.end..cmd.span.start)?.trim() == "|").then_some(prev)
+}
+
+/// The program a shell `cmd` (`commands[idx]`, no stdin redirect of its own)
+/// reads from the previous pipe stage when that is a plain `echo` (no
+/// wrapper, redirect or assignment; a leading-dash first operand is refused,
+/// as before) whose literal operands hold backslashes, each one
+/// [`inert_backslashes`]: the operands joined by spaces, backslashes kept.
+/// [`producer_argv_output`] refuses every backslash; the caller takes only a
+/// Deny from this reading (backlog 68b1a9dc: `echo 'echo rm\ -rf\ /etc |
+/// bash' | bash`).
+fn inert_backslash_echo_program(
+    text: &str,
+    commands: &[SimpleCommand],
+    idx: usize,
+    cmd: &SimpleCommand,
+) -> Option<String> {
+    if cmd.redirects.iter().any(stdin_redirect) {
+        return None;
+    }
+    let prev = piped_from(text, commands, idx, cmd)?;
+    if !prev.redirects.is_empty() || !prev.assignments.is_empty() {
+        return None;
+    }
+    let argv = literals(&prev.argv).ok()?;
+    let ["echo", rest @ ..] = argv.as_slice() else {
+        return None;
+    };
+    if rest.first().is_some_and(|a| a.starts_with('-'))
+        || !rest.iter().any(|a| a.contains('\\'))
+        || !rest.iter().all(|a| inert_backslashes(a))
+    {
+        return None;
+    }
+    Some(format!("{}\n", rest.join(" ")))
+}
+
 /// The literal output of the process substitution whose `<( … )` spans
 /// `range`: every command inside it is a [`producer_output`] of the
 /// substitution's own list, joined by `;`, `&&` or newlines only.
@@ -1139,21 +1228,7 @@ pub(super) fn literal_delivered_program(
         }
         ProgramSource::Stdin(StdinSource::Literal(_)) => None,
         ProgramSource::Stdin(_) => {
-            let ins: Vec<_> = cmd
-                .redirects
-                .iter()
-                .filter(|r| {
-                    matches!(r.fd, None | Some(0))
-                        && matches!(
-                            r.op,
-                            RedirOp::In
-                                | RedirOp::InOut
-                                | RedirOp::DupIn
-                                | RedirOp::HereDoc
-                                | RedirOp::HereString
-                        )
-                })
-                .collect();
+            let ins: Vec<_> = cmd.redirects.iter().filter(|r| stdin_redirect(r)).collect();
             if let [r] = ins.as_slice() {
                 // `< <(…)` as the only stdin redirect.
                 if r.op != RedirOp::In || r.target != RedirTarget::ProcessSubstitution {
@@ -1171,17 +1246,7 @@ pub(super) fn literal_delivered_program(
                 return None;
             }
             // `producer | cmd`: the previous stage is one literal producer.
-            let Context::Pipeline { pos, len } = cmd.context else {
-                return None;
-            };
-            let prev = commands.get(idx.checked_sub(1)?)?;
-            if pos == 0 || prev.context != (Context::Pipeline { pos: pos - 1, len }) {
-                return None;
-            }
-            if text.get(prev.span.end..cmd.span.start)?.trim() != "|" {
-                return None;
-            }
-            producer_output(prev, wrappers_ok)
+            producer_output(piped_from(text, commands, idx, cmd)?, wrappers_ok)
         }
         _ => None,
     }

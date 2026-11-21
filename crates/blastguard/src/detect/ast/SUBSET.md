@@ -117,7 +117,15 @@ S4 rulings (user ruling 2026-11-18):
     judged recursively AND by the full detector as `<shell> -c '<body>'`,
     raise-only (backlog 68b1a9dc, `b5.rs::literal_body` /
     `b5.rs::shell_body`: its effects are judged here, not left to the legacy
-    layer, whose reading sees only a plain `echo WORDS | bash`); a perl /
+    layer, whose reading sees only a plain `echo WORDS | bash`). A plain
+    `echo` feeder of a shell whose operands hold backslashes each followed by
+    ASCII punctuation or a space (not `\\`, not a letter / digit) is read
+    with the backslashes kept and ONLY its Deny is taken (otherwise
+    Undetermined, as before; `b5.rs::inert_backslash_echo_program`).
+    Observed 2026-11-21 on macOS: `/bin/bash`, `/bin/sh`, `/bin/zsh`,
+    `/bin/dash`, `/bin/ksh` and `/bin/bash -O xpg_echo` all print `echo
+    'a\ b \; c\-d\/e\.f'` verbatim, while zsh decodes `\n` / `\t`; a
+    leading-dash operand is read as before; a perl /
     ruby / node / python body gives no B.5 opinion (python: S5; perl / ruby
     / node: legacy decides). A bare shell reading the inherited stdin gives
     no B.5 opinion (the Bash tool's stdin is empty) — at the top level only:

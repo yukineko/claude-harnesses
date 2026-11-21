@@ -32,7 +32,9 @@
 //!   output of a process substitution (`bash <(echo hi)`, `bash < <(echo
 //!   hi)`) or of the previous pipe stage (`printf '%s' x | node`) whose
 //!   commands are all `echo` / `printf` literal producers (user ruling
-//!   2026-11-18 (a)): a shell body is analysed by this layer recursively;
+//!   2026-11-18 (a)); a BARE `env CMD` / `command CMD` (no option, no
+//!   `NAME=V`) is read as `CMD`, so `env echo "ls" | sh` is the program `ls`
+//!   too. A shell body is analysed by this layer recursively;
 //!   a python / perl / ruby / node body gives no B.5 opinion (the legacy
 //!   program-text reading judges it). Except a literal stdin piped in by a
 //!   compound stage — a brace group of `echo` / `printf` members, wherever
@@ -923,8 +925,11 @@ fn privileged_literal_body(
 /// The text a simple command prints when it is a literal producer: `echo`
 /// with literal operands (no option, no backslash), `printf` with a literal
 /// format without `%` (`\n` the only escape), or `printf '%s' X` /
-/// `printf '%s\n' X` with a backslash-free `X`. `None` for anything else,
-/// or with a redirect or an assignment.
+/// `printf '%s\n' X` with a backslash-free `X`. A BARE `env` or `command`
+/// in front of one of those (see [`bare_wrapped_command`]) produces the same
+/// text: `env echo "ls"` and `command printf "ls"` print what `echo "ls"` and
+/// `printf "ls"` print. `None` for anything else, or with a redirect or an
+/// assignment.
 fn producer_output(c: &SimpleCommand) -> Option<String> {
     if !c.redirects.is_empty() || !c.assignments.is_empty() {
         return None;
@@ -932,8 +937,30 @@ fn producer_output(c: &SimpleCommand) -> Option<String> {
     let Ok(argv) = literals(&c.argv) else {
         return None; // not a literal producer: the caller stays Undetermined
     };
+    producer_argv_output(bare_wrapped_command(&argv)?)
+}
+
+/// The command a bare exec wrapper runs, read from the parsed argv words.
+/// `env CMD …` is bare when the word after `env` is neither an option (`-i`,
+/// `-S`, `--`, …) nor a `NAME=V` operand; `command CMD …` is bare when the
+/// word after `command` is not an option (`-p`, `-v`, `-V`). For any other
+/// argv the argv itself is returned. `None` when a wrapper has no word after
+/// it or is not bare, so the caller stays Undetermined. A wrapper is not
+/// unwrapped twice: `env command echo` is not a producer.
+fn bare_wrapped_command<'a, 'b>(argv: &'b [&'a str]) -> Option<&'b [&'a str]> {
+    match argv.split_first() {
+        Some((&("env" | "command"), rest)) => {
+            let first = rest.first()?;
+            (!first.starts_with('-') && !first.contains('=')).then_some(rest)
+        }
+        _ => Some(argv),
+    }
+}
+
+/// [`producer_output`] of an argv whose wrappers (if any) are already removed.
+fn producer_argv_output(argv: &[&str]) -> Option<String> {
     let only_newline_escapes = |f: &str| !f.replace("\\n", "").contains('\\');
-    match argv.as_slice() {
+    match argv {
         ["echo", rest @ ..] => {
             if rest.first().is_some_and(|a| a.starts_with('-'))
                 || rest.iter().any(|a| a.contains('\\'))

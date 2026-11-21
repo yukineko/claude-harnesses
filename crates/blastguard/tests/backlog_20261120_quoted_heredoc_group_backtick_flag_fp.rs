@@ -104,7 +104,6 @@ fn observed(home: &Home) -> String {
 }
 
 #[test]
-#[ignore = "backlog RED: quoted heredoc body backtick `--lib`/`--doc` judged as a command word expansion"]
 fn observed_quoted_heredoc_group_command_is_allowed() {
     let home = unique_home("red");
     let cmd = observed(&home);

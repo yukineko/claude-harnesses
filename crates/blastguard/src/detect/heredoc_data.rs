@@ -89,7 +89,10 @@
 //!   wrapper) is refused by the previous condition and keeps every body;
 //! * the text outside the removed bodies is printable ASCII, space, tab and
 //!   newline only (a CR, NBSP, zero-width or look-alike character is where
-//!   the parser and the executing shell may disagree).
+//!   the parser and the executing shell may disagree), except inside an argv
+//!   word the parser read as one single-quoted string `'…'` (backlog
+//!   9236d343: `sed -n '/── x/p'`), where every byte is literal up to the
+//!   next `'` and no character can move a word or quote boundary.
 //!
 //! A line that defines shell functions (`f() { echo hi; }; cat <<'EOF' …`) is
 //! parsed with `ast::analyze_with_function_definitions` (backlog e79485cb):
@@ -189,7 +192,7 @@ fn removed_bodies(cmd: &str) -> Option<(String, bool)> {
     spans.dedup();
     let mut out = String::with_capacity(cmd.len());
     let mut at = 0;
-    for r in spans {
+    for r in &spans {
         // Overlapping spans would mean the parse is not what it seems.
         if r.start < at {
             return None;
@@ -198,17 +201,61 @@ fn removed_bodies(cmd: &str) -> Option<(String, bool)> {
         at = r.end;
     }
     out.push_str(cmd.get(at..)?);
-    plain_text(&out).then_some((out, unsure))
+    let literal = single_quoted_interiors(&script, cmd);
+    plain_outside(cmd, &spans, &literal).then_some((out, unsure))
 }
 
-/// True when `text` (the command outside the removed bodies) holds only
-/// printable ASCII, space, tab and newline. Anything else (a carriage return,
-/// NBSP, zero-width or look-alike character) is where brush-parser's bash
-/// reading and the executing shell may disagree, so it is undetermined and
-/// every body stays in the text.
+/// True when the text of `cmd` outside the removed body spans `removed` and
+/// outside the single-quoted word interiors `literal` holds only printable
+/// ASCII, space, tab and newline. Anything else (a carriage return, NBSP,
+/// zero-width or look-alike character) is where brush-parser's bash reading
+/// and the executing shell may disagree, so it is undetermined and every body
+/// stays in the text.
+///
+/// Backlog 9236d343: the check used to cover every char outside the bodies,
+/// single-quoted text included, so a `sed -n '/^\/\/ ── shared fixture/,…/p'`
+/// pattern (U+2500) on the same line made the whole step refuse; every
+/// quoted body then fell back to the string rules, which split its lines as
+/// code (`` …); `--lib`/`--doc` selectors `` became a segment whose command
+/// word is a backtick expansion, an Ask). Inside a single-quoted word the
+/// shell reads every byte literally up to the next `'` byte, and a UTF-8
+/// multi-byte character never contains that byte, so a non-ASCII char there
+/// cannot change where the word, the command or any quote ends — the only
+/// thing this check guards. Which text is such an interior is taken from the
+/// parser ([`single_quoted_interiors`]), never from a scan of the text.
+fn plain_outside(cmd: &str, removed: &[Range<usize>], literal: &[Range<usize>]) -> bool {
+    cmd.char_indices().all(|(at, c)| {
+        c.is_ascii_graphic()
+            || matches!(c, ' ' | '\t' | '\n')
+            || removed.iter().chain(literal).any(|r| r.contains(&at))
+    })
+}
+
+/// The interiors (between the quotes, byte ranges of `cmd`) of the argv words
+/// of `script` that the parser read as ONE single-quoted string: quoting
+/// [`ast::Quoting::Single`], the word's span in `cmd` holding exactly its raw
+/// text, and that raw text `'…'` with no other `'` (so no second quoted piece
+/// whose join the parser and the shell might read differently). A word the
+/// parser placed inexactly, a mixed / double-quoted / ANSI-C word, an
+/// assignment value or a redirect target is not an interior: its non-ASCII
+/// characters stay checked by [`plain_outside`].
+fn single_quoted_interiors(script: &Script, cmd: &str) -> Vec<Range<usize>> {
+    script
+        .commands
+        .iter()
+        .flat_map(|c| &c.argv)
+        .filter(|w| w.quoting == ast::Quoting::Single)
+        .filter(|w| cmd.get(w.span.clone()) == Some(w.raw.as_str()))
+        .filter_map(|w| {
+            let inner = w.raw.strip_prefix('\'')?.strip_suffix('\'')?;
+            (!inner.contains('\'')).then(|| w.span.start + 1..w.span.end - 1)
+        })
+        .collect()
+}
+
+/// [`plain_outside`] for a text with nothing removed and no parsed word.
 fn plain_text(text: &str) -> bool {
-    text.chars()
-        .all(|c| c.is_ascii_graphic() || matches!(c, ' ' | '\t' | '\n'))
+    plain_outside(text, &[], &[])
 }
 
 /// The over-cap path (see the module doc).

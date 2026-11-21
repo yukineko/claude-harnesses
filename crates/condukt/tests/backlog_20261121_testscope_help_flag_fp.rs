@@ -138,7 +138,6 @@ fn assert_allow(res: &(Option<i32>, String), what: &str) {
 }
 
 #[test]
-#[ignore = "backlog RED: testscope denies `cargo test --help` / `-h` as a full-suite run"]
 fn cargo_test_help_is_not_denied() {
     for cmd in ["cargo test --help", "cargo test -h"] {
         let env = Env::new();
@@ -149,7 +148,6 @@ fn cargo_test_help_is_not_denied() {
 }
 
 #[test]
-#[ignore = "backlog RED: control for the `cargo test --help` testscope false positive"]
 fn control_bare_cargo_test_is_still_denied() {
     let env = Env::new();
     let r = repo();

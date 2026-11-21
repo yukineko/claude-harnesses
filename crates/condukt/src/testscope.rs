@@ -760,6 +760,12 @@ fn judge_cargo(args: &[String], dir: &Dir) -> Judged {
         opts.iter()
             .any(|a| a.as_str() == name || a.starts_with(&format!("{name}=")))
     };
+    // cargo parses `--help`/`-h` among its own options (before any `--`) and
+    // prints usage without building or running anything. After `--` the flag
+    // goes to the test binaries, which are built first, so only `opts` counts.
+    if opts.iter().any(|a| matches!(a.as_str(), "--help" | "-h")) {
+        return Judged::Other;
+    }
     if flag("--workspace") || flag("--all") || flag("--tests") {
         return Judged::Deny(format!(
             "`cargo {}` runs every test target: {FULL_SUITE_REASON}",

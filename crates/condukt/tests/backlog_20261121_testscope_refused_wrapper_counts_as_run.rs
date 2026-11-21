@@ -112,7 +112,7 @@ fn denied(res: &(Option<i32>, String)) -> bool {
 }
 
 // test-weakening-justified: new RED for an unfixed defect (2026-11-21).
-#[ignore = "RED: testscope confirms a PostToolUseFailure of a wrapper that refused before the test ran"]
+#[ignore = "RED(a330c1a3): testscope confirms a PostToolUseFailure of a wrapper that refused before the test ran"]
 #[test]
 fn wrapper_refused_before_test_ran_is_not_a_confirmed_run() {
     let home = tempfile::tempdir().unwrap();

@@ -2016,3 +2016,30 @@ exit 101:  passed; 4 failed; 0 ignored; 0 measured; 3 filtered out; finished in 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
      Running tests/backlog_20261121_determined_subst_shape_gaps.rs (target/debug/deps/backlog_20261121_determined_subst_shape_gaps-d7955e60fa7f6135)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_determined_subst_shape_gaps`"""
+
+[[task]]
+id = "a330c1a3"
+title = "condukt testscope: refused wrapper (tdd red exit 1 before cargo ran) is recorded as a confirmed run; identical rerun denied as already ran"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """Observation (2026-11-21, main 484608e14): in scratch checkout .../scratchpad/base (detached 53b3e0c63, not yet tdd trusted), Bash command 'cd <literal path> && . "$HOME/.cargo/env" && git log --oneline -1 && tdd red --task t1 --author X --cmd "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes alias_echo_then_procsub_is_not_allow -- --include-ignored" ...' was allowed; tdd red refused before running anything (Remedy: run tdd trust in this root ..., exit 1, no .tdd/ written). Next command 'tdd trust && ... tdd red ... --cmd <same cargo test>' was refused by PreToolUse testscope: 'rerun refused: cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes alias_echo_then_procsub_is_not_allow -- --include-ignored already ran on this exact tree (53b3e0c63...:194b51fbe979a9ae at .../scratchpad/base); running the same test twice is forbidden (user ruling 2026-11-07). Change the code first, or move on'. The test never executed. Readings: (a) defect: a refused wrapper is not a run; (b) intended: Post cannot observe whether the inner command ran. How to tell: crates/condukt/src/testscope/rerun.rs confirm_post (called from testscope_hook.rs run_testscope_confirm) confirms the pending row on any Post event incl. PostToolUseFailure, ignoring exit status/error text, once parse_tests finds a test command in the string; the RED drives Pre -> PostToolUseFailure(error 'Exit code 1 Remedy: run tdd trust') -> identical Pre and observes deny. Fix must decide how to detect a refused wrapper (reading a is suggested by code; b not ruled out). Separate observed FP: blastguard blocked a python3 write into a freshly git-worktree-added tree: 'the Python program calls open on tests/backlog_20261121_testscope_refused_wrapper_counts_as_run.rs (judged as : > ...): > .../red-testscope-refused-run-20261121/crates/condukt/... destroys the file current contents and it is inside a git work tree, but not one of this session trees (neither inside its safe roots nor a recognised worktree checkout), so git being able to restore it does not make the overwrite this session to make'"""
+created_at = 1795240898
+updated_at = 1795240898
+weight = 0.0
+issue_number = 1946
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1946"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261121_testscope_refused_wrapper_counts_as_run -- --ignored"
+rev = "747888cc1f3f5a989f8c071b68e2c9a4fb01a3fe"
+observed_at = 1795240898
+detail = """
+exit 101: tscope-refused-run-20261121/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.21s
+     Running tests/backlog_20261121_testscope_refused_wrapper_counts_as_run.rs (target/debug/deps/backlog_20261121_testscope_refused_wrapper_counts_as_run-edcd3f3d9c7ac4dc)
+error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_refused_wrapper_counts_as_run`"""

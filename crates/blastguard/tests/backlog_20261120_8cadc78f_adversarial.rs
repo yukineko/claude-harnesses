@@ -145,7 +145,6 @@ fn p06_echo_n() {
 }
 
 #[test]
-#[ignore = "backlog 68b1a9dc RED: env bash sink is Ask in main (Deny only in subagent)"]
 fn p07_env_bash() {
     check(
         r####"echo rm -rf /etc | env bash"####,
@@ -231,7 +230,6 @@ fn p14_home() {
 }
 
 #[test]
-#[ignore = "backlog 68b1a9dc RED: backslash-escaped feeder is Ask in main"]
 fn p15_backslash_space() {
     check(
         r####"echo rm\ -rf\ /etc | bash"####,
@@ -252,7 +250,6 @@ fn p16_empty_quotes() {
 }
 
 #[test]
-#[ignore = "backlog 68b1a9dc RED: var-expanded feeder is Ask in main"]
 fn p17_var() {
     check(
         r####"X=/etc; echo rm -rf $X | bash"####,
@@ -414,7 +411,6 @@ fn p32_tee_hop() {
 }
 
 #[test]
-#[ignore = "backlog 68b1a9dc RED: escaped-semicolon feeder is Ask in main"]
 fn p33_escaped_semicolon() {
     check(
         r####"echo rm -rf /etc \; true | bash"####,
@@ -497,7 +493,6 @@ fn p40_sudo_rm() {
 
 // Nested forms of the variants that were Ask in main when un-nested.
 #[test]
-#[ignore = "backlog 68b1a9dc RED: nested env bash sink is Ask in main"]
 fn n01_env_bash() {
     check(
         r####"echo 'echo rm -rf /etc | env bash' | bash"####,
@@ -508,7 +503,6 @@ fn n01_env_bash() {
 }
 
 #[test]
-#[ignore = "backlog 68b1a9dc RED: nested backslash-escaped feeder is Ask in main"]
 fn n02_backslash_space() {
     check(
         r####"echo 'echo rm\ -rf\ /etc | bash' | bash"####,
@@ -519,7 +513,6 @@ fn n02_backslash_space() {
 }
 
 #[test]
-#[ignore = "backlog 68b1a9dc RED: nested var-expanded feeder is Ask in main"]
 fn n03_var() {
     check(
         r####"echo 'X=/etc; echo rm -rf $X | bash' | bash"####,
@@ -541,7 +534,6 @@ fn n04_redirect_stdout() {
 }
 
 #[test]
-#[ignore = "backlog 68b1a9dc RED: nested escaped-semicolon feeder is Ask in main"]
 fn n05_escaped_semicolon() {
     check(
         r####"echo 'echo rm -rf /etc \; true | bash' | bash"####,

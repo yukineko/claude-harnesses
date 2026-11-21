@@ -182,14 +182,12 @@ fn unparseable_env_is_not_silent(var: &str) {
 
 /// F3b (cap): an unparseable `CONDUKT_MAX_PARALLEL` must not be silent.
 #[test]
-#[ignore = "scout 2026-11-12 F3: RED, open defect. Remove the ignore when fixed"]
 fn unparseable_max_parallel_env_is_not_silently_ignored() {
     unparseable_env_is_not_silent("CONDUKT_MAX_PARALLEL");
 }
 
 /// F3b (TTL): an unparseable `CONDUKT_STUCK_TTL_SECS` must not be silent.
 #[test]
-#[ignore = "scout 2026-11-12 F3: RED, open defect. Remove the ignore when fixed"]
 fn unparseable_stuck_ttl_env_is_not_silently_ignored() {
     unparseable_env_is_not_silent("CONDUKT_STUCK_TTL_SECS");
 }

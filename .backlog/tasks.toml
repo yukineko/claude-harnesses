@@ -1832,6 +1832,35 @@ exit 101: backlog_20261121_abandon_recreate_stale_archive") generated 5 warnings
 error: test failed, to rerun pass `-p condukt --test backlog_20261121_abandon_recreate_stale_archive`"""
 
 [[task]]
+id = "e33849bd"
+title = "blastguard: ag --pager / ack --pager CMD with a protected operand is Allow (readonly.rs doc says pager can execute an argument)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Reading (a) defect: pager is a caller-chosen program run by a read-only-looking verb; unknown_verb_protected_ask exempts it, only rg --pre got a rule (1f037eb5). Reading (b) intended: pager receives match OUTPUT not the protected file, so no protected-file effect. Tell apart: run real ag/ack (not installed on the observing host) with a pager that records its stdin/argv and check whether the file or only formatted output reaches it. RED pins (a). Observed 2026-11-21 main a44f2ce07: ag/ack => allow in main and subagent mode."
+created_at = 1795268927
+updated_at = 1795268927
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_ag_ack_pager_protected -- --ignored"
+rev = "303c2f10315f383edfb28b20649f8aa4922f3f05"
+observed_at = 1795268927
+detail = """
+exit 101: lastguard v0.2.895 (/Users/yuki/src/.harness-worktrees/sidefind-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.41s
+     Running tests/backlog_20261121_ag_ack_pager_protected.rs (target/debug/deps/backlog_20261121_ag_ack_pager_protected-3bbbf17d44371ea0)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_ag_ack_pager_protected`"""
+
+[[task]]
 id = "7b30a4ed"
 title = "backlog: no_deferral_auto_close g fixtures fail at add setup (id write-back refused for repro without --test), so the 0-ignored zero-tests auto-cancel pin is not exercised"
 project = "/Users/yuki/src/harness"

@@ -1931,3 +1931,32 @@ exit 1:
     禁忌: a touched plugin must never keep the same version.
 RED B: the commit stages a foo source change WITHOUT a bump (the bump is unstaged), yet the gate passed; rc=0
     OK: no changed plugin left un-bumped vs HEAD (1 plugins scanned, plus the shared crate(s) harness-core, riskgrade, progeffect)"""
+
+[[task]]
+id = "69f396c2"
+title = "askrelay mark-relayed/mark-executed with operator args read stdin (hang on open pipe) and exit 0 marking nothing"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["askrelay"]
+touched_files = []
+status = "pending"
+notes = "crates/askrelay/src/main.rs:40-41 dispatch mark-* straight to hook::run_hook ignoring args[1..]; main.rs:83/119 hook::read_stdin() reads to EOF unconditionally -> blocks forever on a never-closed stdin pipe; with /dev/null it returns, run_hook exits 0, id ignored = silent false success. Observed 2026-11-21 (deployed 0.1.5, >120s hang)."
+created_at = 1795263266
+updated_at = 1795263266
+weight = 0.0
+issue_number = 1952
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1952"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p askrelay --test mark_cli_args_stdin_20261121"
+rev = "bde4ae63384f801bd74a4afd811e7fae3d106597"
+observed_at = 1795263266
+detail = """
+exit 101: d out; finished in 5.03s
+
+   Compiling askrelay v0.1.6 (/Users/yuki/src/.harness-worktrees/fix-askrelay-stdin/crates/askrelay)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/mark_cli_args_stdin_20261121.rs (target/debug/deps/mark_cli_args_stdin_20261121-394a39493e630f82)
+error: test failed, to rerun pass `-p askrelay --test mark_cli_args_stdin_20261121`"""

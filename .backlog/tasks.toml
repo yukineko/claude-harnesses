@@ -1976,6 +1976,8 @@ notes = "Observed 2026-11-21: 'condukt circuit check --no-compaction-axis' error
 created_at = 1795263336
 updated_at = 1795263336
 weight = 0.0
+issue_number = 1953
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1953"
 rev = 0
 
 [task.repro]

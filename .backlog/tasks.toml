@@ -1665,6 +1665,8 @@ notes = """Observed 2026-11-22 at main 0a3c2df02 in condukt run run-20261122-025
 created_at = 1795289436
 updated_at = 1795289436
 weight = 0.0
+issue_number = 1978
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1978"
 rev = 0
 
 [task.repro]
@@ -1693,6 +1695,8 @@ notes = """観測 (2026-11-22, branch filing-84424 commit 3ee9ee41c on main 5e99
 created_at = 1795289719
 updated_at = 1795289719
 weight = 0.0
+issue_number = 1979
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1979"
 rev = 0
 
 [task.repro]

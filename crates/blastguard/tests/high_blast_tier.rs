@@ -253,11 +253,50 @@ fn outside_tree_rm_with_a_resolving_cd_stays_allowed() {
     // Non-regression twin of `cwd_prefix_bypass_closure.rs`'s
     // `relative_operand_that_escapes_the_tracked_dir_stays_allowed`: a `cd`
     // that lexically explains where the `..` lands must not be treated as an
-    // unexplained escape.
+    // unexplained escape. Re-anchored per user ruling 2026-11-19: the payload
+    // cwd is a known value and `..` resolves on the real path, so the fixture
+    // is a real tree with a canonical cwd.
+    let dir = tempfile::Builder::new()
+        .prefix("bg-hbt-relcd-")
+        .tempdir()
+        .unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    std::fs::create_dir(root.join(".githooks")).unwrap();
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("src").join("build.o"), b"").unwrap();
+    let cwd = root.to_string_lossy().into_owned();
+    let scope = blastguard::scope::SafeRoots::new(
+        Some(&cwd),
+        Some(&cwd),
+        None,
+        None,
+        Some(canonical_real_path),
+    );
     assert_eq!(
-        bash("cd .githooks && rm ../src/build.o"),
+        blastguard::detect::detect_scoped(
+            "Bash",
+            Some(&serde_json::json!({ "command": "cd .githooks && rm ../src/build.o" })),
+            &scope
+        ),
         Decision::Allow,
         "a cd that resolves the .. back to an ordinary place must stay Allow"
+    );
+}
+
+fn canonical_real_path(p: &str) -> Option<String> {
+    std::fs::canonicalize(p)
+        .ok()
+        .map(|c| c.to_string_lossy().into_owned())
+}
+
+#[test]
+fn outside_tree_rm_with_a_relative_cd_and_no_payload_cwd_is_not_allow() {
+    // Fail-closed control: scope-less `detect()` has no payload cwd, so the
+    // relative `cd` is unresolvable and the verdict must not be Allow.
+    let d = bash("cd .githooks && rm ../src/build.o");
+    assert!(
+        matches!(d, Decision::Ask(_)),
+        "no payload cwd: expected Ask, got {d:?}"
     );
 }
 

@@ -452,16 +452,17 @@ fn control_bare_variable_targets_keep_resolving() {
 /// $ bash -c 'echo "[$$/x]"'                   -> [<pid>/x] (RELATIVE)
 /// ```
 ///
-/// Four rows are deliberately STRICTER than bash, and are listed because the
-/// error direction is the safe one — each costs a resolution and invents none,
-/// the direction CLAUDE.md §3 requires:
+/// The following shapes were once deliberately STRICTER than bash (the error
+/// direction is the safe one — each costs a resolution and invents none, the
+/// direction CLAUDE.md §3 requires). Only the first is still refused; the rest
+/// are SUPERSEDED (see below) and no longer in the refusal table:
 ///
 ///   * `true && P=…` — bash binds it; blastguard refuses because the text does
-///     not say the guard succeeded.
-///   * `export P=…` and `declare P=…` — bash binds them; the scan does not
-///     read declaration builtins.
+///     not say the guard succeeded. STILL refused.
+///   * `export P=…` and `declare P=…` — bash binds them; formerly the scan did
+///     not read declaration builtins. Now resolved (pair-equality).
 ///   * `{ P=…; }` — a brace group runs in the current shell, so bash really
-///     would use the value.
+///     would use the value. Now resolved (pair-equality).
 ///
 /// The `$$`/`$1` rows are stricter in a different and sharper sense: bash's
 /// answers there (`<pid>/x`, `/x`) are not merely unknown, they are a RELATIVE
@@ -473,8 +474,14 @@ fn control_bare_variable_targets_keep_resolving() {
 /// 判定」する。`X=lit` と同じく解決し、literal と同じに判定する。」 and 「`pre$P` の
 /// ように、前に文字列をつなげた形は「連結を解決」する。裁定の「その連結」に含め、展開した
 /// 後の literal と同じに判定する。」 Those two shapes are no longer refused; they are
-/// pinned after the table as "judged like the literal spelling". The other
-/// STRICTER rows above (`true && P=…`, `declare P=…`, `{ P=…; }`) are unchanged.
+/// pinned after the table as "judged like the literal spelling".
+///
+/// SUPERSEDED (2026-11-21) for `declare P=…`, `local P=…`, `{ P=…; }` and the
+/// empty value `P=;` as well: text-determined values are resolved statically
+/// (rulings 2026-11-14/15; S5 AST evaluator DECL_BUILTINS) and measured with
+/// zsh 5.9 to be bound by the shell, so these four are also pinned after the
+/// table as "judged like the literal spelling" (`P=;` -> literal `/x.log`).
+/// Of the STRICTER rows above only `true && P=…` is unchanged (still refused).
 #[test]
 fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
     let mut violations: Vec<String> = Vec::new();

@@ -1931,3 +1931,33 @@ exit 1:
     禁忌: a touched plugin must never keep the same version.
 RED B: the commit stages a foo source change WITHOUT a bump (the bump is unstaged), yet the gate passed; rc=0
     OK: no changed plugin left un-bumped vs HEAD (1 plugins scanned, plus the shared crate(s) harness-core, riskgrade, progeffect)"""
+
+[[task]]
+id = "bdc30aa7"
+title = "condukt testscope: a tdd red run on a tree the same Bash call mutated is keyed on the pre-call tree, so tdd green on that tree is refused (F->P oracle unrecordable)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "tdd",
+    "testscope",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed run-20261121-114321-94421 t3: Bash call 'git checkout 9ef69638f -- <impl files> && ... tdd red --task t3 --cmd "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes"' ran RED on the reverted tree, but PreToolUse keyed it on the pre-call tree 4406711018eb...:1dcbe1ce95dcba8e (crates/condukt/src/testscope/rerun.rs check_rerun: tree_identity(dir) is measured before the call runs) and testscope-confirm promoted it unchanged (rerun.rs confirm). After restoring, tdd green on that tree was denied: 'rerun refused: `tdd red --cmd cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes` already ran on this exact tree (4406711018eb...:1dcbe1ce95dcba8e ...)'. A gate refusing a proof test is a gate bug."""
+created_at = 1795263695
+updated_at = 1795263695
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261121_testscope_red_on_mutated_tree_blocks_green"
+rev = "64c82d351a6532c91820d092710bacda611d4e80"
+observed_at = 1795263695
+detail = """
+exit 101: x-testscope-oracle/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.16s
+     Running tests/backlog_20261121_testscope_red_on_mutated_tree_blocks_green.rs (target/debug/deps/backlog_20261121_testscope_red_on_mutated_tree_blocks_green-205eaa7393defd47)
+error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_red_on_mutated_tree_blocks_green`"""

@@ -150,6 +150,37 @@ fn has_exec_flag(cmd: &str, rest: &[&str]) -> bool {
     }
 }
 
+/// `ACK_PAGER=CMD ack …` / `ACK_PAGER_COLOR=CMD ack …` (ba09708a): ack
+/// documents both variables as "a pager program ... to which ack will send its
+/// output" and `--pager` as "This can also be specified via the ACK_PAGER and
+/// ACK_PAGER_COLOR environment variables" — the same caller-chosen program fed
+/// the matched lines that [`has_exec_flag`] refuses for `--pager` (e33849bd).
+///
+/// `prefix` is the segment's words before the command word. Any of them whose
+/// name part (before `=`, a trailing `+` of `NAME+=` dropped, one level of
+/// quoting removed) is one of the two variables counts, WHATEVER the value:
+/// `ACK_PAGER=less`, `ACK_PAGER=` and an unresolvable `ACK_PAGER="$X"` all
+/// lose the exemption, as every `--pager=…` value does. A quoted prefix word
+/// (`'ACK_PAGER=sh' ack`) is a command name to bash, not an assignment;
+/// matching it anyway only over-asks (the restrictive side).
+///
+/// NOT covered here (the variable reaches ack from outside this segment):
+/// `export ACK_PAGER=sh; ack …`, an inherited environment, `ACKRC` / `.ackrc`
+/// carrying `--pager`. `ag` reads no pager variable (its only `getenv` calls
+/// are `TERM`, `HOME` and `XDG_CONFIG_HOME`), so only `ack` is keyed here.
+fn env_selects_pager(cmd: &str, prefix: &[&str]) -> bool {
+    cmd == "ack"
+        && prefix.iter().any(|t| {
+            let w = first_shell_word(t).unwrap_or_else(|| (*t).to_string());
+            w.split_once('=').is_some_and(|(name, _)| {
+                matches!(
+                    name.strip_suffix('+').unwrap_or(name),
+                    "ACK_PAGER" | "ACK_PAGER_COLOR"
+                )
+            })
+        })
+}
+
 /// True when `cmd` is a read-only command whose words after the head are DATA
 /// (a pattern, paths, text), never a command line the program runs. The
 /// unknown-head tail rule (`unknown_wrapper_ask`) must not re-read them: with
@@ -218,7 +249,20 @@ pub(super) fn argv_is_data_only(cmd: &str) -> bool {
 /// asks here (the program could be anything, including a writer), worded as
 /// that refusal so the two classes stay separable in `rule_id`.
 pub(super) fn unknown_verb_protected_ask(cmd: &str, rest: &[&str]) -> Decision {
-    if (is_read_only_command(cmd) && !has_exec_flag(cmd, rest))
+    unknown_verb_protected_ask_after(cmd, &[], rest)
+}
+
+/// [`unknown_verb_protected_ask`] for a command word that stands behind the
+/// words `prefix` (the segment's tokens before it: leading `NAME=value`
+/// assignments and any wrapper words). An `ack` whose environment selects a
+/// pager through such an assignment loses the read-only exemption exactly as
+/// `ack --pager` does ([`env_selects_pager`], ba09708a).
+pub(super) fn unknown_verb_protected_ask_after(
+    cmd: &str,
+    prefix: &[&str],
+    rest: &[&str],
+) -> Decision {
+    if (is_read_only_command(cmd) && !has_exec_flag(cmd, rest) && !env_selects_pager(cmd, prefix))
         || is_shell(cmd)
         || is_code_interpreter(cmd)
         || matches!(cmd, "eval" | "exec" | "source" | ".")

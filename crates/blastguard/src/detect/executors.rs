@@ -654,7 +654,8 @@ blastguard cannot see what would execute"
 /// pager / editors / ssh / askpass / proxy / external diff, the generic
 /// `PAGER`/`MANPAGER`/`EDITOR`/`VISUAL` that man, crontab, less and friends
 /// honour, and the same mechanism in sudo, the shell's `fc`, gh, kubectl,
-/// systemd, git web--browse and less's input preprocessor. `GIT_SSH`,
+/// systemd, git web--browse, less's input preprocessor and ack's pager
+/// (`ACK_PAGER`/`ACK_PAGER_COLOR`). `GIT_SSH`,
 /// `*_ASKPASS` and `BROWSER` name a program rather than a shell line; judging
 /// the value as a shell line is a superset of that.
 const EXEC_ENV_VARS: &[&str] = &[
@@ -681,6 +682,10 @@ const EXEC_ENV_VARS: &[&str] = &[
     "BROWSER",
     "LESSOPEN",
     "LESSCLOSE",
+    // ack's pager (ba09708a): "a pager program ... to which ack will send its
+    // output". The protected-operand side is `readonly::env_selects_pager`.
+    "ACK_PAGER",
+    "ACK_PAGER_COLOR",
 ];
 
 /// Environment variables that make a program LOAD code or configuration from a

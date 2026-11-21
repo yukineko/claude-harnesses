@@ -144,7 +144,10 @@ use fileops::{
     home_asset_deny, mode_removes_exec, mode_removes_read, positional_operands,
 };
 
-use readonly::{argv_is_data_only, is_recognized_command, unknown_verb_protected_ask};
+use readonly::{
+    argv_is_data_only, is_recognized_command, unknown_verb_protected_ask,
+    unknown_verb_protected_ask_after,
+};
 
 use protected::{
     glob_literal_prefix, protected_disarm_deny, protected_glob_deny, protected_landing_block,
@@ -2193,8 +2196,9 @@ analyse — it cannot tell what this would do, so it refuses to guess"
             } else {
                 // Round 2: this arm WAS `Decision::Allow`, i.e. every verb
                 // without a rule reached every protected path unclassified.
-                // See `unknown_verb_protected_ask`.
-                unknown_verb_protected_ask(other, rest)
+                // See `unknown_verb_protected_ask`. `tokens[..idx]` carries
+                // the env-assignment prefix (`ACK_PAGER=sh ack …`, ba09708a).
+                unknown_verb_protected_ask_after(other, &tokens[..idx], rest)
             }
         }
     };

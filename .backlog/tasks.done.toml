@@ -90688,3 +90688,102 @@ rev = "62c62ad5ed4f785a223a6a2beb41acc8e3467412"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "3c680841"
+title = "blastguard: python3 stdin heredoc that read_text/write_text a tracked file in the session's own linked worktree is Deny as not this session's tree (false positive)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-20 at main c09b34cd7 (0.2.784): with cwd = the session's own linked worktree under .harness-worktrees (also CLAUDE_PROJECT_DIR), a python3 stdin heredoc that reads a tracked test file with pathlib read_text and writes it back with write_text is Deny with the reason that the file is inside a git work tree but not one of this session's trees. A shell redirect writing the same file is Allow. The word truncate is not needed. RED: crates/blastguard/tests/py_stdin_heredoc_verb_word_fp_20261120.rs, 4 ignored, commit 5fd803ef2. Related, not proven same cause: 94b93e95 (open for write in a condukt worktree).
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test py_stdin_heredoc_verb_word_fp_20261120 -- --ignored; rev: ec8e882f7be695dbb3b560015dbc1bc75b062838; observed: exit 0: lt: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 1.76s
+
+   Compiling blastguard v0.2.860 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
+     Running tests/py_stdin_heredoc_verb_word_fp_20261120.rs (target/debug/deps/py_stdin_heredoc_verb_word_fp_20261120-48c2ae98790861e3)"""
+created_at = 1795139962
+updated_at = 1795225026
+weight = 0.0
+issue_number = 1887
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1887"
+issue_closed_at = 1795225029
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test py_stdin_heredoc_verb_word_fp_20261120 -- --ignored"
+rev = "5fd803ef204323499efc6d77ec3c7150cb84badf"
+observed_at = 1795139962
+detail = """
+exit 101: mpiling blastguard v0.2.785 (/Users/yuki/src/.harness-worktrees/bg-py-trunc/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.93s
+     Running tests/py_stdin_heredoc_verb_word_fp_20261120.rs (target/debug/deps/py_stdin_heredoc_verb_word_fp_20261120-5b2f36794779c62e)
+error: test failed, to rerun pass `-p blastguard --test py_stdin_heredoc_verb_word_fp_20261120`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test py_stdin_heredoc_verb_word_fp_20261120 -- --ignored; rev: ec8e882f7be695dbb3b560015dbc1bc75b062838; observed: exit 0: lt: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 1.76s
+
+   Compiling blastguard v0.2.860 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
+     Running tests/py_stdin_heredoc_verb_word_fp_20261120.rs (target/debug/deps/py_stdin_heredoc_verb_word_fp_20261120-48c2ae98790861e3)"""
+
+[[task]]
+id = "7460a307"
+title = "blastguard: control b_control_same_program_without_rm_text_is_not_denied is red on main (python open on src/foo.rs outside a git work tree -> deny)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-20 on main 8d6b3403d (0.2.790, before B2 merge) by the run-20261120-071122-49691 driver and verifier via donegate test-changed: crates/blastguard/tests/backlog_20261113_heredoc_body_fp.rs:214 left: "deny"; reason: the Python program calls open on src/foo.rs ... it is not inside a git work tree — nothing holds a second copy of these bytes. Non-ignored control; not caused by B2. Not bisected. Readings: (a) FP regression from a peer S6 merge; (b) intended by a newer ruling, then the assert is frozen and needs a ruling.
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261113_heredoc_body_fp b_control_same_program_without_rm_text_is_not_denied; rev: ec8e882f7be695dbb3b560015dbc1bc75b062838; observed: exit 0: k
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.97s
+
+   Compiling blastguard v0.2.860 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
+     Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-1bd464d0da9d25f7)"""
+created_at = 1795147632
+updated_at = 1795225032
+weight = 0.0
+issue_number = 1888
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1888"
+issue_closed_at = 1795225034
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_heredoc_body_fp b_control_same_program_without_rm_text_is_not_denied"
+rev = "16aa6417ab05171bd24f1c8d141e21ff85254134"
+observed_at = 1795147632
+detail = """
+exit 101: )
+   Compiling blastguard v0.2.791 (/Users/yuki/src/.harness-worktrees/file-heredoc-body-ctl/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 38.70s
+     Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-51fa4ea0dfc65b12)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_heredoc_body_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261113_heredoc_body_fp b_control_same_program_without_rm_text_is_not_denied; rev: ec8e882f7be695dbb3b560015dbc1bc75b062838; observed: exit 0: k
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.97s
+
+   Compiling blastguard v0.2.860 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
+     Running tests/backlog_20261113_heredoc_body_fp.rs (target/debug/deps/backlog_20261113_heredoc_body_fp-1bd464d0da9d25f7)"""

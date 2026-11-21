@@ -111,7 +111,6 @@ fn unallowed(cmd: &str, tag: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED(8ff44387): verbatim relay bgr-05b37d8cbc85 python3 heredoc write to a literal .rs path is refused with an empty target"]
 fn relay_05b37d8cbc85_exact_command_is_allow() {
     assert!(EXACT.contains(ORIG_CD), "fixture: cd target present");
     let bad = unallowed(EXACT.trim_end_matches('\n'), "exact");

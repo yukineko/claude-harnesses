@@ -262,8 +262,9 @@ fn stdin_exec_verdict(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // layer 0 — the permissive effect. It is true when the body tokenises,
     // the audited program texts are exactly the body, and
     // `python_stdin_body_reading` finds either that the body only prints or
-    // that it has no shell-string or dynamic-execution marker and no string
-    // of it reaches a shell or a process.
+    // that its code (literal text blanked) has no shell-string or
+    // dynamic-execution marker and no string of it reaches a shell or a
+    // process.
     // A body that does not tokenise gets neither effect: no Python judge
     // verdict and `strings_are_data` false.
     let shell_text = super::heredoc::python_stdin_here_document(cmd)

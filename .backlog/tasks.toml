@@ -1725,6 +1725,8 @@ notes = """Observed 2026-11-22 at rev 2a83942c0 (test committed at 80f2430ce, wo
 created_at = 1795278208
 updated_at = 1795278208
 weight = 0.0
+issue_number = 1965
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1965"
 rev = 0
 
 [task.repro]

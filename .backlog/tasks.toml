@@ -1931,35 +1931,3 @@ exit 1:
     禁忌: a touched plugin must never keep the same version.
 RED B: the commit stages a foo source change WITHOUT a bump (the bump is unstaged), yet the gate passed; rc=0
     OK: no changed plugin left un-bumped vs HEAD (1 plugins scanned, plus the shared crate(s) harness-core, riskgrade, progeffect)"""
-
-[[task]]
-id = "83c9d1ee"
-title = "tdd: green proof tree_identity.tree is null when .gitignore ignores .tdd/ (blocks every condukt merge)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "tdd",
-    "condukt",
-    "merge-blocker",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-21 at main 0c93ee98d, git 2.50.1 (Apple Git-155), tdd 0.1.101, condukt run run-20261121-190152-69747 t1 (dd5c4fe9 fix). tdd green wrote tree_identity.tree null with undetermined.tree 'git exited Some(1): The following paths are ignored by one of your .gitignore files: .tdd'; condukt worktree merge then refused: 'merge-proof-contract(undetermined-proof): t1.green.json: tree_identity.tree is missing or null'. Cause: crates/tdd/src/evidence.rs content_tree runs git add -A -- . ':(exclude).tdd' into a throwaway index; git exits 1 when an excluded pathspec names an existing ignored path (minimal repo reproduces: .tdd/ in .gitignore + mkdir .tdd). This repo's .gitignore:27 is .tdd/, and .tdd always exists at GREEN (RED proof is there), so every GREEN in this repo is undetermined. RED test committed in 24bc0b545; control (not ignored) passes."
-created_at = 1795255996
-updated_at = 1795255996
-weight = 0.0
-issue_number = 1951
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1951"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p tdd --test backlog_20261121_green_tree_undetermined_when_tdd_gitignored -- --ignored green_tree_determined_when_tdd_dir_is_gitignored"
-rev = "24bc0b54560f85657745bc36922d43356ca5110f"
-observed_at = 1795255996
-detail = """
-exit 101: ktrees/session-c1b3e891/crates/tdd)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.93s
-     Running tests/backlog_20261121_green_tree_undetermined_when_tdd_gitignored.rs (target/debug/deps/backlog_20261121_green_tree_undetermined_when_tdd_gitignored-1b0f98c1cfb1fe28)
-error: test failed, to rerun pass `-p tdd --test backlog_20261121_green_tree_undetermined_when_tdd_gitignored`"""

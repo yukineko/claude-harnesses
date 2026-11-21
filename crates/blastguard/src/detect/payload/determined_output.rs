@@ -18,8 +18,8 @@
 //!   * `echo` whose operands are determined words, none starting with `-` and
 //!     none holding a backslash (zsh's and sh's `echo` decode escapes): the
 //!     operands joined by spaces, then a newline. With a lone first operand
-//!     `-e`, `\xHH` escapes (two hex digits, printable ASCII) are decoded;
-//!     any other backslash stays undetermined;
+//!     `-e`, `\xHH` escapes (two hex digits, printable ASCII) and `\n` (a
+//!     newline) are decoded; any other backslash stays undetermined;
 //!   * `seq LAST`, `seq FIRST LAST` or `seq FIRST INCR LAST` with unsigned
 //!     decimal literals (no leading zero, at most 9 digits, `INCR` > 0, at
 //!     most [`MAX_SEQ_LINES`] lines): one number per line;
@@ -275,11 +275,23 @@ fn double_quoted(inner: &[WordPieceWithSource], depth: usize, out: &mut String) 
 }
 
 /// `echo` output, and whether `-e` escapes were decoded to get it. A first
-/// operand `-e` (alone, not a cluster) decodes ONLY `\xHH` with exactly two hex
-/// digits naming a printable ASCII byte or a space (every echo that decodes at
-/// all, bash `-e` and zsh, reads that the same way); any other backslash,
-/// any other option, or a control/non-ASCII result is not determined (`None`,
-/// the caller keeps its restrictive reading).
+/// operand `-e` (alone, not a cluster) decodes ONLY two escapes:
+///
+/// * `\xHH` with exactly two hex digits naming a printable ASCII byte or a
+///   space (bash `-e` and zsh read it that way; dash's `echo` does not decode
+///   `\x`, a reading this model does not compute);
+/// * `\n`, a newline (backlog 11b0b4da). Every `echo` that decodes escapes at
+///   all — bash `echo -e`, bash with `xpg_echo`, zsh `echo`, dash / POSIX
+///   `sh` `echo` — turns `\n` into a newline, so the program's line breaks
+///   are the same in each. The dialects differ only in whether `-e` itself is
+///   printed (dash, and bash in POSIX mode with `xpg_echo`, take no option and
+///   print `-e ` before the first operand), which changes only the FIRST
+///   line, into a command named `-e`; the computed text is the bash / zsh
+///   reading. (Documented dialect behaviour, not executed by any test here.)
+///
+/// Any other backslash (`\t`, `\c`, `\0NNN`, `\\`, …), any other option, or a
+/// `\xHH` naming a control (`\x0a` included) or non-ASCII byte is not
+/// determined (`None`, the caller keeps its restrictive reading).
 fn echo_output(operands: &[String]) -> Option<(String, bool)> {
     let (decode, operands) = match operands.split_first() {
         Some((first, rest)) if first == "-e" => (true, rest),
@@ -298,13 +310,15 @@ fn echo_output(operands: &[String]) -> Option<(String, bool)> {
         if !decode {
             return None;
         }
-        words.push(decode_hex_escapes(a)?);
+        words.push(decode_echo_escapes(a)?);
         decoded = true;
     }
     Some((format!("{}\n", words.join(" ")), decoded))
 }
 
-fn decode_hex_escapes(a: &str) -> Option<String> {
+/// The value of one `echo -e` operand: `\xHH` (printable ASCII or space) and
+/// `\n` decoded, `None` for any other backslash (see [`echo_output`]).
+fn decode_echo_escapes(a: &str) -> Option<String> {
     let b = a.as_bytes();
     let mut out = String::new();
     let mut i = 0;
@@ -313,6 +327,11 @@ fn decode_hex_escapes(a: &str) -> Option<String> {
             let ch = a[i..].chars().next()?;
             out.push(ch);
             i += ch.len_utf8();
+            continue;
+        }
+        if b.get(i + 1) == Some(&b'n') {
+            out.push('\n');
+            i += 2;
             continue;
         }
         if b.get(i + 1) != Some(&b'x') {

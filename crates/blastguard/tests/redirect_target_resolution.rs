@@ -503,7 +503,7 @@ fn top_level_local_is_not_judged_like_the_literal() {
 /// bash [w], zsh [w]), so it resolves like the literal spelling. Separate FP,
 /// outside backlog 0aa37c22.
 #[test]
-#[ignore = "RED(pending): in-function local is Deny while the literal function is Allow (both shells bind, measured 2026-11-21) — remove when fixed"]
+#[ignore = "RED(c512596e): in-function local is Deny while the literal function is Allow (both shells bind, measured 2026-11-21) — remove when fixed"]
 fn local_inside_a_function_body_resolves_like_the_literal() {
     assert_eq!(
         scoped("f(){ local P=/home/yuki/proj/ok.log; echo hi > \"$P\"; }; f"),

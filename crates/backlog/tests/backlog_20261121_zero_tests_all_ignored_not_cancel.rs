@@ -44,12 +44,20 @@ case "$m" in
 esac
 "#;
 
+/// Same shape as the live 1f037eb5 repro: `--test <file>`, no `-- --ignored`.
 const CMD: &str = "cargo test -p x --test t";
+
+/// `add` writes the minted id back into the one id-less `#[ignore = "RED..."]`
+/// of the tracked tests/t.rs (and exits 1 if it cannot), so the fixture
+/// carries that file, and the write-back is committed after `add` (as the
+/// caller is told to) so the tree is clean for the re-run.
+const RED_FILE: &str = "#[ignore = \"RED: parked\"]\n#[test]\nfn a() {}\n";
 
 fn parked_row(f: &common::Fixture) -> String {
     f.write_exec_shim("cargo", CARGO_PARKED);
     f.write("marker", "broken\n");
-    f.commit_paths(&["marker"], "marker broken");
+    f.write("tests/t.rs", RED_FILE);
+    f.commit_paths(&["marker", "tests/t.rs"], "marker broken + RED test");
     let p = f.project();
     let o = f.run(&[
         "add",
@@ -67,8 +75,17 @@ fn parked_row(f: &common::Fixture) -> String {
         o.both()
     );
     let id = common::parse_added(&o.stdout);
+    let body = std::fs::read_to_string(f.repo.join("tests/t.rs")).unwrap();
+    assert!(
+        body.contains(&format!("RED({id})")),
+        "control: add must write the id back: {body}\n{}",
+        o.both()
+    );
     f.write("marker", "parked\n");
-    f.commit_paths(&["marker"], "marker parked (RED test #[ignore]d)");
+    f.commit_paths(
+        &["marker", "tests/t.rs"],
+        "marker parked (RED test #[ignore]d) + id write-back",
+    );
     id
 }
 
@@ -83,7 +100,7 @@ fn assert_not_closed(f: &common::Fixture, id: &str, out: &str) {
 }
 
 // test-weakening-justified: new RED for an unfixed defect (backlog pending, 2026-11-21); the ignore is removed in the fixing commit.
-#[ignore = "RED(zero-tests-all-ignored): next --claim auto-cancels a row whose repro ran 0 tests because all are #[ignore]d"]
+#[ignore = "RED: next --claim auto-cancels a row whose repro ran 0 tests because all are #[ignore]d"]
 #[test]
 fn claim_does_not_cancel_row_whose_repro_tests_are_all_ignored() {
     let f = common::Fixture::new("zt-ignored-claim");
@@ -98,7 +115,7 @@ fn claim_does_not_cancel_row_whose_repro_tests_are_all_ignored() {
 }
 
 // test-weakening-justified: new RED for an unfixed defect (backlog pending, 2026-11-21); the ignore is removed in the fixing commit.
-#[ignore = "RED(zero-tests-all-ignored): recheck auto-cancels a row whose repro ran 0 tests because all are #[ignore]d"]
+#[ignore = "RED: recheck auto-cancels a row whose repro ran 0 tests because all are #[ignore]d"]
 #[test]
 fn recheck_does_not_cancel_row_whose_repro_tests_are_all_ignored() {
     let f = common::Fixture::new("zt-ignored-recheck");

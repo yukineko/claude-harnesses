@@ -85,17 +85,29 @@ fn expect(cmd: &str, tag: &str, want_allow: bool) {
 
 #[test]
 fn ack_pager_color_env_prefix_protected_operand_is_not_allow() {
-    expect("ACK_PAGER_COLOR=sh ack pat .githooks/pre-commit", "color", false);
+    expect(
+        "ACK_PAGER_COLOR=sh ack pat .githooks/pre-commit",
+        "color",
+        false,
+    );
 }
 
 #[test]
 fn ack_pager_undeterminable_value_protected_operand_is_not_allow() {
-    expect("ACK_PAGER=\"$X\" ack pat .githooks/pre-commit", "undet", false);
+    expect(
+        "ACK_PAGER=\"$X\" ack pat .githooks/pre-commit",
+        "undet",
+        false,
+    );
 }
 
 #[test]
 fn ack_pager_quoted_env_prefix_protected_operand_is_not_allow() {
-    expect("ACK_PAGER='sh' ack pat .githooks/pre-commit", "quoted", false);
+    expect(
+        "ACK_PAGER='sh' ack pat .githooks/pre-commit",
+        "quoted",
+        false,
+    );
 }
 
 #[test]

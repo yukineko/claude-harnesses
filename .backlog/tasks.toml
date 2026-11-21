@@ -1781,3 +1781,37 @@ exit 101: filing-84424/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.66s
      Running tests/backlog_20261122_relay_6f62367777e8_python_stdin_no_text_fp.rs (target/debug/deps/backlog_20261122_relay_6f62367777e8_python_stdin_no_text_fp-c75e67f2d058da97)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261122_relay_6f62367777e8_python_stdin_no_text_fp`"""
+
+[[task]]
+id = "e2ec043d"
+title = "blastguard test RED: subagent_heredoc_fp_20261108 target_cat_py_shebang_dot_git_fixture_path_then_pytest expects Allow, gets Ask (python -m Table B.5 Undetermined) — regression or stale assert"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """
+観測 (2026-11-22, branch filing-84424 commit 3ee9ee41c、基点 main 5e99d94d4、worktree /Users/yuki/src/.harness-worktrees/filing-84424。main でも FAILED と run 中に報告されていた): crates/blastguard/tests/subagent_heredoc_fp_20261108.rs の target_cat_py_shebang_dot_git_fixture_path_then_pytest (#[ignore] なし) が FAILED。逐語: "... (subagent=false) has its hazard text only inside a QUOTED heredoc body judged by its target language (a Python string literal, or data written to a .py file) and must be Allow, got "ask": `python3`: python -m runs a module — blastguard cannot judge what it would do (Table B.5: Undetermined)"。対象コマンド: cd {WT}; cat > scripts/test_precommit_timing.py <<'EOF' (.git のパスを読むだけの Python) EOF に続けて python3 -m pytest scripts/test_precommit_timing.py 2>&1 | tail -2。この文言は 1c6ef97ad (blastguard ast static evaluator, 0.2.630) で入った。テストは 61908ad92 / 972fc6cd6 (0.2.432/0.2.436) のもの。
+読み (a) 実装の回帰: heredoc 本文を Python として判定し、書き込まれた .py を pytest で走らせる形を Allow にした 0.2.436 の挙動が、B.5 層で失われた。(b) 裁定後の stale assert: memory の script-quarantine (script ファイルの実行は当面 Ask) と zsh S4 rulings (python file は S5 まで Undetermined) に従えば、python3 -m pytest <file> は Ask が正しく、Allow を期待する assert のほうが古い。assert メッセージは "must be Allow" と hedge なし。テストのコメントは "judged as Python it is Allow" (memory frozen-assert: hedge なし → Ask)。見分け方: B.5 / S5 の裁定が python -m pytest <同じコマンドで書いた .py> を Undetermined に含めているか (人間の裁定が要る)。
+DOES NOT PROVE: 同じ test file の他の case の状態、S5 実装後の挙動。"""
+created_at = 1795291716
+updated_at = 1795291716
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test subagent_heredoc_fp_20261108 target_cat_py_shebang_dot_git_fixture_path_then_pytest"
+rev = "003f113a0b77c00b82af884658c54a1568dccd25"
+observed_at = 1795291716
+detail = """
+exit 101: out; finished in 1.00s
+
+   Compiling blastguard v0.2.927 (/Users/yuki/src/.harness-worktrees/filing-84424/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.81s
+     Running tests/subagent_heredoc_fp_20261108.rs (target/debug/deps/subagent_heredoc_fp_20261108-d8fe7fa4b6090c55)
+error: test failed, to rerun pass `-p blastguard --test subagent_heredoc_fp_20261108`"""

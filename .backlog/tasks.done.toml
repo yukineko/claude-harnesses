@@ -90500,3 +90500,191 @@ rev = "9f6b8428897045941bef816cacf994f6a9af7d41"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "49921963"
+title = "flow stop-gate spawns backlog/condukt by bare name; hook PATH lacks plugin bin dirs so every driver Stop is undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "stop-gate",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed twice 2026-11-21, session c1b3e891, flow 0.2.42 deployed (main 366eab917). Verbatim: "flow stop-gate: could not determine whether this /flow driver session may stop. Unreadable: driver liveness (`backlog driver status --project /Users/yuki/src/.harness-worktrees/session-c1b3e891`): cannot run backlog driver status --project ...: No such file or directory (os error 2)". From the Bash tool the same command works (backlog -> ~/.claude/plugins/cache/yukineko/backlog/0.3.145/bin/backlog, exit 0, active:true). Cause read from source: crates/flow/src/probes.rs Real::run does Command::new("backlog"/"condukt") from PATH; harness_core::plugin_bin module doc records (measured 2026-08-21) that hook processes do not inherit the plugin bin dirs on PATH; autoflow/backlog.rs and condukt claim/oracle/state already use harness_core::plugin_bin::resolve (cache first, PATH second). RED at 52ab15a5c (2026-11-21): stubs only at $HOME/.claude/plugins/cache/yukineko/{backlog,condukt}/<ver>/bin, PATH=/usr/bin:/bin, live driver + pending task => block with the same 'No such file or directory (os error 2)' undetermined reason instead of the determined work-remains block; control with stubs on PATH passes. Readings: (a) defect — the hook must locate sibling plugin binaries independently of PATH (plugin cache); (b) intended — PATH is the contract and the plugin install must export the bin dirs to hooks. How to tell: whether Claude Code's hook env carries plugin bin dirs on PATH — plugin_bin's measured doc and the observed os error 2 say no, so (a)."""
+created_at = 1795221737
+updated_at = 1795224284
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p flow --test stop_gate_sibling_bin_resolution_20261121"
+rev = "52ab15a5ce35b4e6606bc494553d494eca382bd1"
+observed_at = 1795221737
+detail = """
+exit 101: sult: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/stop_gate_sibling_bin_resolution_20261121.rs (target/debug/deps/stop_gate_sibling_bin_resolution_20261121-8a62f7d0ca8c41dc)
+error: test failed, to rerun pass `-p flow --test stop_gate_sibling_bin_resolution_20261121`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p flow --test stop_gate_sibling_bin_resolution_20261121"
+exit = 0
+passed = 2
+rev = "75c123224ebedc1e297d0ce553b341a92d49e778"
+observed_at = 1795224277
+output_digest = "sha256:d71df7cf0ed67fbeee2564266b68f2d3c3ff6c6869cd3622d3fe669c0bca6aa3"
+excerpt = """
+
+running 2 tests
+test control_stubs_on_path_give_determined_block ... ok
+test stop_gate_finds_backlog_in_plugin_cache_without_path ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.26s
+
+   Compiling flow v0.2.44 (/Users/yuki/src/.harness-worktrees/session-c1b3e891/crates/flow)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.22s
+     Running tests/stop_gate_sibling_bin_resolution_20261121.rs (target/debug/deps/stop_gate_sibling_bin_resolution_20261121-caee2273543fe51b)
+"""
+
+[task.closure.red]
+rev = "52ab15a5ce35b4e6606bc494553d494eca382bd1"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "4ef3a9e2"
+title = "blastguard: registered /flow driver session must never emit ask (statically-safe → allow, other undetermined → deny+log)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "flow",
+    "false-positive",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """Classified false-positive (an ask that, per ruling, must not be emitted in a driver session; the deny side is the fail-closed resolution). User ruling 2026-11-21 (verbatim choice 「非破壊はAllow、他はDeny」; refined 「またaskされてたけど、これもallowに」; later 「またpermissionがきている、これらはすべてAllowし、ださない」 then 「あるいはさきほどの裁定にしたがう」 — coordinator chose the fail-closed reading). Contract: in a session registered as a /flow driver (~/.backlog/drivers/<project_slug(canonical main tree)>/<fnv1a64(session_id) %016x>.driver, live while now-heartbeat_at<=1800; layout per crates/backlog/src/driver.rs at 366eab917), blastguard never emits permissionDecision ask. Allow: write target statically resolving into own worktree or session scratchpad (/private/tmp/claude-<uid>/<cwd slug>/<session>/scratchpad), known read-only commands, direct run of a script in the session scratchpad, a binary built under own worktree target/. Every other currently-Ask case → deny, recorded in the block log. System harm stays deny. Controls: no driver / driver for another session → unchanged (ask). Observed RED at c5220bc15 (base 366eab917 + condukt t1 integration), 2026-11-21: driver session got ask for 'python3 <elsewhere>/tool.py' (expected deny, reason 'Table B.5: Undetermined'), 'python3 <scratchpad>/probe.py <scratchpad>/a1.json' (expected allow) and 'env -i HOME=<scratchpad>/h PATH=/usr/bin:/bin ... target/debug/blastguard < <scratchpad>/p/01.json' (expected allow, reason 'direct execution of the program file target/debug/blastguard ... Table B.5: Undetermined'); both controls passed. Note: brief's 'B=/bin/ls; "$B" x' measured Allow (resolves statically) so not used; the heredoc+git commit(rsync msg, $TASK_ID trailer) shape measured Allow in this fixture (guard row only)."""
+created_at = 1795221327
+updated_at = 1795224317
+weight = 0.0
+issue_number = 1933
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1933"
+issue_closed_at = 1795224320
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_flow_driver_session_never_asks"
+rev = "c5220bc15290b54f608d243813341a2ac4952e4b"
+observed_at = 1795221327
+detail = """
+exit 101: 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.17s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running tests/backlog_20261121_flow_driver_session_never_asks.rs (target/debug/deps/backlog_20261121_flow_driver_session_never_asks-71503fd10e4b9f5e)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_flow_driver_session_never_asks`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261121_flow_driver_session_never_asks"
+exit = 0
+passed = 3
+rev = "75c123224ebedc1e297d0ce553b341a92d49e778"
+observed_at = 1795224285
+output_digest = "sha256:d91e618517c5b98f07f2ef5a923479070113b79704c40c6085e323d57a2b41a6"
+excerpt = """
+
+running 3 tests
+test control_driver_for_other_session_stays_ask ... ok
+test control_no_driver_registered_stays_ask ... ok
+test registered_driver_session_never_gets_ask ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.04s
+
+   Compiling blastguard v0.2.858 (/Users/yuki/src/.harness-worktrees/session-c1b3e891/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 28.32s
+     Running tests/backlog_20261121_flow_driver_session_never_asks.rs (target/debug/deps/backlog_20261121_flow_driver_session_never_asks-3e9d819dc78aa34d)
+"""
+
+[task.closure.red]
+rev = "c5220bc15290b54f608d243813341a2ac4952e4b"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "c634c2b0"
+title = "blastguard: unmodelled-relinker Ask masks system hosts-file write Deny when a quoted rsync word precedes it (fail-open, system harm)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-21 at main 2f1c2f06c (session-c1b3e891, test committed in 62c62ad5e). A jq call whose quoted filter contains the word rsync, followed by a separate segment that writes into the system hosts file under etc, gets ask instead of deny; the write segment alone is deny. The relink.rs unmodelled-relinker Ask is returned in place of the stronger system-path Deny (verdicts are not combined by strength). System harm must be Deny through any wrapper. Related FP: 3de4729f (rsync word inside quoted args marks the command as a relinker). Filing note: the first backlog add was itself blocked by blastguard because the notes string quoted the redirect text literally (a quoted --notes argument read as a real redirect, FP); this row describes the path in words."
+created_at = 1795222249
+updated_at = 1795224324
+weight = 0.0
+issue_number = 1934
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1934"
+issue_closed_at = 1795224328
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_relink_unmodelled_ask_masks_system_write"
+rev = "0b130d7a805d233b8ec067368cc58cd0d04ff2c2"
+observed_at = 1795222249
+detail = """
+exit 101: d; 0 filtered out; finished in 0.78s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/backlog_20261121_relink_unmodelled_ask_masks_system_write.rs (target/debug/deps/backlog_20261121_relink_unmodelled_ask_masks_system_write-36191178c1302f24)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_relink_unmodelled_ask_masks_system_write`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261121_relink_unmodelled_ask_masks_system_write"
+exit = 0
+passed = 2
+rev = "75c123224ebedc1e297d0ce553b341a92d49e778"
+observed_at = 1795224321
+output_digest = "sha256:c2d67f6d26f9b85574c4091ce253fbbde6612f3fd1a0fd1b664de1c26162862f"
+excerpt = """
+
+running 2 tests
+test unmodelled_relinker_does_not_weaken_system_write_deny ... ok
+test control_spelled_system_write_alone_is_deny ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s
+
+   Compiling blastguard v0.2.858 (/Users/yuki/src/.harness-worktrees/session-c1b3e891/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.98s
+     Running tests/backlog_20261121_relink_unmodelled_ask_masks_system_write.rs (target/debug/deps/backlog_20261121_relink_unmodelled_ask_masks_system_write-91837c49d248fb5d)
+"""
+
+[task.closure.red]
+rev = "62c62ad5ed4f785a223a6a2beb41acc8e3467412"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

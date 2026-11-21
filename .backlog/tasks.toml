@@ -1017,38 +1017,6 @@ exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finish
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
 
 [[task]]
-id = "11b0b4da"
-title = "blastguard: echo -e newline-split harmful program in a procsub is Ask, not Deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn echo_e_newline_split_in_procsub_is_deny"
-created_at = 1795155305
-updated_at = 1795155305
-weight = 0.0
-issue_number = 1894
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1894"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored echo_e_newline_split_in_procsub_is_deny --exact"
-rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
-observed_at = 1795155305
-detail = """
-exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.60s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
-     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
-
-[[task]]
 id = "dd5c4fe9"
 title = "blastguard: harmful program built from three determined substs in a procsub is Ask, not Deny"
 project = "/Users/yuki/src/harness"
@@ -1075,70 +1043,6 @@ rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
 observed_at = 1795155345
 detail = """
 exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.60s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
-     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
-
-[[task]]
-id = "28019c35"
-title = "blastguard: bash -c of a determined harmful command substitution is Ask, not Deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn bash_c_of_determined_harmful_subst_is_deny"
-created_at = 1795155365
-updated_at = 1795155365
-weight = 0.0
-issue_number = 1897
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1897"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored bash_c_of_determined_harmful_subst_is_deny --exact"
-rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
-observed_at = 1795155365
-detail = """
-exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.61s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
-     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
-
-[[task]]
-id = "d766b5fe"
-title = "blastguard: eval of a determined harmful command substitution through cat is Ask, not Deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn eval_of_determined_harmful_subst_through_cat_is_deny"
-created_at = 1795155385
-updated_at = 1795155385
-weight = 0.0
-issue_number = 1898
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1898"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored eval_of_determined_harmful_subst_through_cat_is_deny --exact"
-rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
-observed_at = 1795155385
-detail = """
-exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.61s
 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)

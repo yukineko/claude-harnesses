@@ -1913,6 +1913,8 @@ notes = '''Observed 2026-11-21 in flow batch #10 (run run-20261121-220650-69750 
 created_at = 1795267159
 updated_at = 1795267159
 weight = 0.0
+issue_number = 1958
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1958"
 rev = 0
 
 [task.repro]

@@ -91,13 +91,13 @@ fn expect_not_allow(cmd: &str, tag: &str) {
 }
 
 #[test]
-#[ignore = "RED(ag-pager-protected): ag --pager CMD pat <protected> is Allow; doc says pager can execute an argument"]
+#[ignore = "RED(e33849bd): ag --pager CMD pat <protected> is Allow; doc says pager can execute an argument"]
 fn ag_pager_space_form_protected_operand_is_not_allow() {
     expect_not_allow("ag --pager sh pat .githooks/pre-commit", "ag");
 }
 
 #[test]
-#[ignore = "RED(ack-pager-protected): ack --pager=CMD pat <protected> is Allow; doc says pager can execute an argument"]
+#[ignore = "RED(e33849bd): ack --pager=CMD pat <protected> is Allow; doc says pager can execute an argument"]
 fn ack_pager_equals_form_protected_operand_is_not_allow() {
     expect_not_allow("ack --pager=sh pat .githooks/pre-commit", "ack");
 }

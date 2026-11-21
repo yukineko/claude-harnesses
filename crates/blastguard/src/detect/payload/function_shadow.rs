@@ -29,7 +29,9 @@
 //! A text whose definitions cannot be read — it may define a function (it
 //! holds a `(` … `)` pair with only blanks between, or the word `function`)
 //! and the AST layer cannot evaluate it, or a function name is not a literal,
-//! or it may assign zsh's `functions` parameter — is
+//! or it may name zsh's `functions` parameter (an occurrence of `functions`
+//! not followed by an identifier character, `/`, `.` or `-`; see
+//! [`may_name_zsh_functions_parameter`]) — is
 //! [`Functions::Undetermined`]: every emitter name may be shadowed. A text
 //! that holds neither shape defines no function (`NAME ( )` and the
 //! `function` keyword are the only definition syntaxes of bash and zsh).
@@ -147,9 +149,7 @@ pub(in crate::detect) fn defined_functions(text: &str) -> Functions {
     if !may_define_function(text) {
         return Functions::none();
     }
-    // zsh's `functions` parameter (`functions[echo]='…'`, `functions+=(…)`)
-    // defines a function by assignment; it is not read here.
-    if text.contains("functions") {
+    if may_name_zsh_functions_parameter(text) {
         return Functions::Undetermined;
     }
     match ast::analyze_with_function_definitions(text) {
@@ -158,8 +158,34 @@ pub(in crate::detect) fn defined_functions(text: &str) -> Functions {
     }
 }
 
+/// True when `text` may name zsh's `functions` parameter (or `dis_functions`)
+/// as a whole parameter name. zsh's `zsh/parameter` module makes
+/// `functions` an associative array whose assignment DEFINES a function
+/// (`functions[echo]='…'`, `functions+=(echo '…')`, `functions=(…)`,
+/// `set -A functions …`, `typeset -A functions …`, `: ${functions[echo]::=…}`);
+/// those spellings are not read here, so any of them is Undetermined.
+///
+/// An occurrence counts unless the character right after `functions` makes
+/// it part of a different word that cannot be that parameter: an identifier
+/// character (`functions_source`, read-only; `functionsx`, another name),
+/// `/`, `.` or `-` (`functions/`, `functions.py`, `functions-x`: a path or
+/// file name, not a parameter name — a parameter name holds none of them).
+/// Every other following character (`[`, `=`, `+`, `:`, `}`, a blank, a
+/// quote, an operator, the end of the text) counts, so a bare word
+/// `functions` (`grep functions f`) is Undetermined too: the restrictive side.
+fn may_name_zsh_functions_parameter(text: &str) -> bool {
+    text.match_indices("functions").any(|(i, m)| {
+        !text[i + m.len()..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '/' | '.' | '-'))
+    })
+}
+
 /// True when `text` holds a function-definition shape: the word `function`,
-/// or a `(` followed by only blanks (spaces, tabs, newlines) and a `)`.
+/// or a `(` followed by only spaces, tabs, newlines or carriage returns and a
+/// `)`. A carriage return is not a blank to bash; counting it only widens
+/// this gate (more texts go on to [`ast::analyze_with_function_definitions`]).
 fn may_define_function(text: &str) -> bool {
     if text.contains("function") {
         return true;

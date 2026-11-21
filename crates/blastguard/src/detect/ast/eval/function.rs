@@ -43,7 +43,10 @@ impl Ev {
         let mut body = Env::initial();
         body.make_opaque("function body: runs when the function is called");
         let first = self.out.len();
-        self.compound(text, &f.body.0, body, ctx)?;
+        self.function_depth += 1;
+        let body_result = self.compound(text, &f.body.0, body, ctx);
+        self.function_depth -= 1;
+        body_result?;
         if self.emit {
             self.function_body_ranges.push(first..self.out.len());
             self.has_function_definition = true;

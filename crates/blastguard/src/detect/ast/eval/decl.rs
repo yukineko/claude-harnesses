@@ -1,7 +1,12 @@
 //! The declaration builtins of `detect::ast::eval` (`export` / `declare` /
 //! `typeset` / `local` / `readonly`): which names get the integer attribute
 //! (for `_` also the check of its current value, `give_int`), the arithmetic checks of their assignments and compound keys, and the
-//! bindings they make. A child module of `eval.rs`, so it reads the
+//! bindings they make. A top-level `local` (outside every function body)
+//! binds nothing: bash refuses it ("local: can only be used in a function")
+//! and keeps the previous value while zsh binds (measured 2026-11-21, bash
+//! 3.2.57 / zsh 5.9); the stricter of both shells is kept (user ruling
+//! 2026-11-21), so each name it assigns becomes `Undetermined`. `declare` /
+//! `typeset` / `export` / `readonly` bind at top level in both shells. A child module of `eval.rs`, so it reads the
 //! evaluator's state (`Env`, `DeclArg`) directly.
 
 use super::super::{arith, Cause, Value, Word};
@@ -106,6 +111,10 @@ impl Ev {
                     } else if decl.is_some_and(|d| d.compound) {
                         // `a=(x y)` sets an array; `$a` is not the text `(x y)`.
                         env.forget_operand(lhs, "compound assignment")?;
+                    } else if builtin == "local" && self.function_depth == 0 {
+                        // Top level: bash keeps the previous value, zsh binds
+                        // `rhs`; neither is known to be the value, so forget.
+                        env.forget_operand(lhs, "top-level local: bash does not assign it")?;
                     } else if is_ident(lhs) {
                         env.bind(lhs, Value::Literal(rhs.to_string()));
                     } else {

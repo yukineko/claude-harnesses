@@ -36,6 +36,15 @@
 //! that holds neither shape defines no function (`NAME ( )` and the
 //! `function` keyword are the only definition syntaxes of bash and zsh).
 //!
+//! Aliases (backlog cffe54c4) are the same class: `alias echo='echo chmod 777
+//! /etc/hosts #'; bash <(echo hi)` runs the alias. [`defined_functions`] also
+//! adds the `NAME` of every `NAME=VALUE` operand of a parsed simple command
+//! whose command name (after quote removal, so `ali\as` and `a""lias` count)
+//! is `alias` (`defined_aliases`), whether or not `expand_aliases` is enabled
+//! there. `alias` as an argument or inside quotes adds nothing; a non-literal
+//! command name or operand, or a text the AST cannot read, is Undetermined,
+//! for texts whose letters can spell `alias` only.
+//!
 //! NOT modelled (no definition is seen, so nothing is added): a function
 //! defined by a sourced FILE or by a startup file, inherited from the hook's
 //! own environment, or defined by `eval` of a text that spells neither shape
@@ -117,7 +126,7 @@ pub(super) fn shadowed_emitter_ask(
 ) -> Option<crate::model::Decision> {
     let name = shadowed_emitter_head(stage, group_feeder, &ctx.functions)?;
     Some(crate::model::Decision::ask(format!(
-        "{shape}, and `{name}` in the stage piping into it may be a shell function defined on \
+        "{shape}, and `{name}` in the stage piping into it may be a shell function or alias defined on \
 this command line (or on a line enclosing it) — the function's output, not the stage's \
 arguments, is the program, so blastguard cannot read it"
     )))
@@ -144,8 +153,106 @@ fn shadowed_emitter_head(
         .find(|name| functions.may_shadow(name))
 }
 
-/// The function names `text` defines. See the module docs.
+/// The names `text` defines as shell functions or as aliases (backlog
+/// cffe54c4: `alias echo='…'` rebinds the emitter like a function does). See
+/// the module docs.
 pub(in crate::detect) fn defined_functions(text: &str) -> Functions {
+    defined_function_names(text).union(&defined_aliases(text))
+}
+
+/// True when the letters of `alias` occur in `text` in order (not
+/// necessarily adjacent): the only texts whose command name can, after quote
+/// removal or expansion, spell `alias` (`ali\as`, `a""lias`, `a=al; ${a}ias`).
+/// A text failing this cannot run the alias builtin and is not parsed.
+fn may_spell_alias(text: &str) -> bool {
+    let mut want = "alias".chars();
+    let mut next = want.next();
+    for c in text.chars() {
+        if Some(c) == next {
+            next = want.next();
+        }
+    }
+    next.is_none()
+}
+
+enum Peeled<'a> {
+    /// The words peeled down to the `alias` builtin; its operands.
+    Alias(&'a [ast::Word]),
+    /// Runs another literal command, or nothing (`command -v`).
+    OtherCommand,
+    /// An unrecognised shape: it may run `alias`.
+    Undetermined,
+}
+
+/// The words after a `builtin` / `command` head, peeled structurally:
+/// nested `builtin` / `command` words, `-p` and `--` are skipped; `-v` / `-V`
+/// run nothing; any other option, or a non-literal word, is `Undetermined`.
+fn peel_builtin_command(words: &[ast::Word]) -> Peeled<'_> {
+    for (i, w) in words.iter().enumerate() {
+        let ast::Value::Literal(s) = &w.value else {
+            return Peeled::Undetermined;
+        };
+        match s.as_str() {
+            "builtin" | "command" | "-p" | "--" => {}
+            "-v" | "-V" => return Peeled::OtherCommand,
+            "alias" => return Peeled::Alias(&words[i + 1..]),
+            s if s.starts_with('-') => return Peeled::Undetermined,
+            _ => return Peeled::OtherCommand,
+        }
+    }
+    Peeled::OtherCommand
+}
+
+/// The alias names `text` may define, read from the parsed script (not from
+/// the text): the `NAME=VALUE` operands of every simple command whose command
+/// name, after quote removal, is `alias` (also `builtin alias` /
+/// `command alias`). `alias` as an argument (`grep alias f`, `echo alias`) or
+/// inside quotes adds nothing. A command name that is not a literal (it may
+/// spell `alias`), an operand that is not a literal, or a text the AST cannot
+/// read is [`Functions::Undetermined`] — but only for a text that
+/// [`may_spell_alias`]. Whether `expand_aliases` is on is not asked (the
+/// restrictive reading). An indirect spelling is covered only through that
+/// non-literal-command-name rule (`a=al; ${a}ias echo=x` is Undetermined).
+fn defined_aliases(text: &str) -> Functions {
+    if !may_spell_alias(text) {
+        return Functions::none();
+    }
+    let script = match ast::analyze_with_function_definitions(text) {
+        Analysis::Known(script) => script,
+        Analysis::Undetermined(_) => return Functions::Undetermined,
+    };
+    let mut names = Vec::new();
+    for cmd in &script.commands {
+        let Some(head) = cmd.argv.first() else {
+            continue;
+        };
+        let operands = match &head.value {
+            ast::Value::Literal(h) if h == "alias" => &cmd.argv[1..],
+            ast::Value::Literal(h) if h == "builtin" || h == "command" => {
+                match peel_builtin_command(&cmd.argv[1..]) {
+                    Peeled::Alias(rest) => rest,
+                    Peeled::OtherCommand => continue,
+                    Peeled::Undetermined => return Functions::Undetermined,
+                }
+            }
+            ast::Value::Literal(_) => continue,
+            ast::Value::Undetermined(_) => return Functions::Undetermined,
+        };
+        for w in operands {
+            let ast::Value::Literal(op) = &w.value else {
+                return Functions::Undetermined;
+            };
+            if let Some((name, _)) = op.split_once('=') {
+                if !names.iter().any(|n| n == name) {
+                    names.push(name.to_string());
+                }
+            }
+        }
+    }
+    Functions::Known(names)
+}
+
+fn defined_function_names(text: &str) -> Functions {
     if !may_define_function(text) {
         return Functions::none();
     }

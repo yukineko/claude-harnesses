@@ -1758,6 +1758,18 @@ chain 値）、`detect/ast/b5.rs`。
   利用者の行・途中の派生 text すべて・判定対象の text の全部に要求し、chain 値は狭める方向にしか変わらない
   （`readings::chain_names_fixed`、`Ctx::names_fixed_narrowed_by`）。false なら何も計算しない。
 - 判定不能は制限側: parse 不能・panic（`catch_unwind`）・上限超過はすべて `None` で、従来の Ask に戻る。
+- `echo -e`（先頭 operand が単独の `-e`）の escape は `\xHH`（印字可能 ASCII か空白）と `\n`（改行、
+  backlog 11b0b4da）だけを復号する。`bash <(echo -e 'echo hi\nrm -rf /etc')` は 2 行の program として
+  行ごとに判定され、有害な行が Deny になる。それ以外の backslash・制御文字は決定済みではない。
+- `-c` の operand と `eval` の operand（backlog 28019c35 / d766b5fe、`detect/ast/b5/determined.rs`）:
+  shell の `-c W`（先頭 flag がちょうど `-c`）と、bare な `eval W`（operand がちょうど 1 個）で、`W` が
+  `$( )` を 1 個以上含み値が決まる word のとき（`substituted_word_value`。各置換の末尾改行は除く）、その値を
+  full detector で program として判定する（`judge_body`）。採用するのは Deny のときだけで、Ask / Allow なら
+  従来の Undetermined（Ask）を保つ（raise-only。何も緩めない）。前提条件は上と同じ chain 値と
+  `resolution_fixed`。`eval` は判定対象の text 自身にだけ、その 1 個の bare `eval` を許す
+  （`resolution_fixed_but_one_eval` / `readings::chain_names_fixed_but_one_eval`。外側の chain は厳格なまま）。
+  `bash -ec`・`bash -x -c`・`bash -c --`・`eval W x`・`eval --`・`builtin eval`・`command eval` の形は
+  計算しない（従来の Ask。RED は `tests/backlog_20261121_determined_subst_shape_gaps.rs`）。
 
 ## stdin / process substitution の program 読みで `echo` / `printf` が shell 関数でありうるときは Ask（backlog 1e9da081 / f06ecb05）
 
@@ -1792,6 +1804,17 @@ chain 値）、`detect/ast/b5.rs`。
   名前があれば Ask。brace group の `echo` / `printf` member から program を読んだ場合（group feeder）は
   `echo` と `printf` を調べる。Ask 理由は「`{name}` in the stage piping into it may be a shell function defined on
   this command line (or on a line enclosing it)」。literal の判定の後に記録するので、literal 内の Deny が優先する。
+- alias（backlog cffe54c4）: alias も同じ類で、`alias echo='echo chmod 777 /etc/hosts #'; bash <(echo hi)` は
+  alias の出力が program になる。`defined_functions` は関数名に加えて、parse した script の simple command のうち
+  command name が（quote 除去後に）`alias`（`builtin` / `command` の前置は構造的に剥がす: 入れ子の `builtin`/`command`・`-p`・`--` は飛ばし、`-v`/`-V` は何も
+実行しない、それ以外の option や literal でない word は `Undetermined`。`ali\as`・`a""lias` も該当）の
+  ものの `NAME=VALUE` operand の NAME を chain 値へ足す（`defined_aliases`。text 検索ではなく AST を読む。
+  `expand_aliases` の有無は問わない制限側の過大近似）。`alias` が引数（`grep alias f`・`echo alias $HOME`）や
+  quote 内にあるだけなら何も足さない。command name が literal でない（`alias` を綴りうる。`a=al; ${a}ias echo=x`
+  もここで `Undetermined`）、operand が literal でない、AST が読めない場合は `Undetermined`。ただし `a` `l` `i` `a` `s`
+  がこの順に現れない text は `alias` を綴れないので parse せず定義なし。`alias ll='ls -l'` のように
+  emitter 名でない alias は判定を変えない。
+  テスト: `crates/blastguard/tests/verify_cffe54c4_alias_emitter_controls.rs`。
 - 対象外（定義が見えないので何も足さない）: source されたファイルや startup file で定義される関数、hook 自身の
   環境から継承される関数、どちらの形も literal に綴らない text の `eval`（`eval $'echo\x28\x29 …'`）。
 - テスト: `crates/blastguard/tests/verify_1e9da081_function_shadow_controls_20261121.rs`、

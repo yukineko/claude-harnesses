@@ -830,8 +830,9 @@ forge・condukt のスケジューラが再利用）。
   ただし展開の command word は、行全体の AST 評価（`ast::targets::resolve`）が値を証明していればその値を
   literal として読む（`P=/x/p.sh; …; $P a` は `p.sh` の直接実行で、この行に escape 本文は無い。
   `B=bash && $B -c '…'` は本文を読む）。証明されない展開だけが判定不能。literal な通常 file を operand に取る
-  `.`/`source`（`bash x.sh` と同じく本文は行の文面ではない）はここでは読まない。operand が `/dev/stdin`・
-  `/dev/fd/N`・`/proc/…`・`-`・`<(…)`・展開・無しのときは行の文面を走らせうるので判定不能のまま
+  `.`/`source`（`bash x.sh` と同じく本文は行の文面ではない）はここでは読まない。operand を絶対化して字句正規化
+  （`//`・`.` を畳む）した結果が `/dev`・`/proc` 配下（`//dev/stdin`・`/./dev/stdin`・`cd /` 後の `dev/stdin` 等）、
+  `..` を含む、`/` を含まない（`$PATH` を探索する）、cwd が既知の絶対 dir でない相対 path、`-`・`<(…)`・展開・無し — のときは行の文面を走らせうるので判定不能のまま
   （625d16af8 の回帰: `. "$HOME/.cargo/env" && sed -i … f` と loop 内の `$P` 実行が relink の Ask になっていた。
   tests/ast_eval_fp_targets_20261115.rs の sanity_line_172 / fp_line_195）。
   **RESIDUAL**: relink 語も target も文面に現れない

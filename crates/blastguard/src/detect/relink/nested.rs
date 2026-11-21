@@ -31,7 +31,9 @@
 //! escape on this line; `B=bash && $B -c '…'` reads the body). `.` /
 //! `source` of a plain literal file run that file's text, which is not on
 //! the line: like `bash x.sh`, nothing is read; any other operand
-//! (`/dev/stdin <<< '…'`, `<(…)`, an expansion) stays undetermined.
+//! (`/dev/stdin <<< '…'` in any spelling — `//dev/stdin`, `dev/stdin`
+//! after `cd /` —, a path with `..`, a relative path in an unknown cwd,
+//! `<(…)`, an expansion) stays undetermined ([`sources_plain_file`]).
 //! Regression 625d16af8: both were read as undetermined, so
 //! `. "$HOME/.cargo/env" && sed -i … f` and a `$P` exec in a loop became
 //! relink Asks.
@@ -453,7 +455,7 @@ fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, out: &mut Nested) {
     // text, which is not on the line: nothing to read, like `bash x.sh`
     // above. Any other operand (`/dev/stdin <<< '…'`, `<(…)`, an
     // expansion, none) may run text from the line: undetermined below.
-    if matches!(base, "." | "source") && sources_plain_file(c) {
+    if matches!(base, "." | "source") && sources_plain_file(c, &cwd) {
         return;
     }
     // A wrapper that may run an interpreter (`sudo bash -c …`), `eval`, a
@@ -465,23 +467,41 @@ fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, out: &mut Nested) {
 }
 
 /// `c` (a `.` / `source`) reads a plain file named literally: its first
-/// operand is a literal, non-empty path that holds no substitution and is
-/// not a device / process-fd path (`/dev/stdin`, `/dev/fd/N`, `/proc/…`)
-/// or `-`.
-fn sources_plain_file(c: &SimpleCommand) -> bool {
+/// operand is a literal, non-empty path that holds no substitution and,
+/// placed absolutely and normalised lexically, is not under `/dev` or
+/// `/proc` (`/dev/stdin`, `/dev/fd/N`, `//dev/stdin`, `/./dev/stdin`,
+/// `dev/stdin` after `cd /`). Undetermined — not a plain file — when the
+/// path has a `..` component (`/etc/../dev/stdin`: lexical placement is not
+/// the real one), is `-`, has no `/` (searched in `$PATH`), or is relative
+/// while the cwd it runs in is not a
+/// known absolute directory (the hook's cwd may be `/dev`). A symlink to a
+/// device is not seen, as for `bash x.sh`.
+fn sources_plain_file(c: &SimpleCommand, cwd: &CwdState) -> bool {
     let Some(w) = c.argv.get(1) else {
         return false;
     };
-    match &w.value {
-        Value::Literal(p) => {
-            !p.is_empty()
-                && p != "-"
-                && !has_subst(&w.raw)
-                && !p.starts_with("/dev/")
-                && !p.starts_with("/proc/")
-        }
-        Value::Undetermined(_) => false,
+    let Value::Literal(p) = &w.value else {
+        return false;
+    };
+    // A name without `/` is looked up in `$PATH` first (`PATH=/dev . stdin`).
+    if p.is_empty() || p == "-" || !p.contains('/') || has_subst(&w.raw) {
+        return false;
     }
+    let abs = if p.starts_with('/') {
+        p.clone()
+    } else {
+        match cwd {
+            CwdState::Known(d) if d.starts_with('/') => format!("{d}/{p}"),
+            _ => return false,
+        }
+    };
+    let parts: Vec<&str> = abs
+        .split('/')
+        .filter(|s| !s.is_empty() && *s != ".")
+        .collect();
+    !parts.is_empty()
+        && !parts.contains(&"..")
+        && !matches!(parts.first(), Some(&"dev") | Some(&"proc"))
 }
 
 /// Every command of the shell program `body`, run in `cwd`.

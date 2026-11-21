@@ -2442,3 +2442,33 @@ exit 101: sult: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered ou
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
      Running tests/stop_gate_sibling_bin_resolution_20261121.rs (target/debug/deps/stop_gate_sibling_bin_resolution_20261121-8a62f7d0ca8c41dc)
 error: test failed, to rerun pass `-p flow --test stop_gate_sibling_bin_resolution_20261121`"""
+
+[[task]]
+id = "c634c2b0"
+title = "blastguard: unmodelled-relinker Ask masks system hosts-file write Deny when a quoted rsync word precedes it (fail-open, system harm)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-21 at main 2f1c2f06c (session-c1b3e891, test committed in 62c62ad5e). A jq call whose quoted filter contains the word rsync, followed by a separate segment that writes into the system hosts file under etc, gets ask instead of deny; the write segment alone is deny. The relink.rs unmodelled-relinker Ask is returned in place of the stronger system-path Deny (verdicts are not combined by strength). System harm must be Deny through any wrapper. Related FP: 3de4729f (rsync word inside quoted args marks the command as a relinker). Filing note: the first backlog add was itself blocked by blastguard because the notes string quoted the redirect text literally (a quoted --notes argument read as a real redirect, FP); this row describes the path in words."
+created_at = 1795222249
+updated_at = 1795222249
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_relink_unmodelled_ask_masks_system_write"
+rev = "0b130d7a805d233b8ec067368cc58cd0d04ff2c2"
+observed_at = 1795222249
+detail = """
+exit 101: d; 0 filtered out; finished in 0.78s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/backlog_20261121_relink_unmodelled_ask_masks_system_write.rs (target/debug/deps/backlog_20261121_relink_unmodelled_ask_masks_system_write-36191178c1302f24)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_relink_unmodelled_ask_masks_system_write`"""

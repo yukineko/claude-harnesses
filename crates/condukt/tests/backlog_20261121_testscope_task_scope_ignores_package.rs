@@ -265,7 +265,6 @@ fn fixture(repro: &str, change_a: bool) -> (Env, TempDir, PathBuf) {
 // ── changed-file route ──────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "backlog RED: testscope task scope ignores -p on the changed-tests route"]
 fn changed_route_other_crate_same_stem_is_denied() {
     let (env, _r, wt) = fixture("cargo test -p a --lib nothing", true);
     assert_deny(
@@ -275,7 +274,6 @@ fn changed_route_other_crate_same_stem_is_denied() {
 }
 
 #[test]
-#[ignore = "backlog RED: control, changed-tests route same crate is allowed"]
 fn control_changed_route_same_crate_is_allowed() {
     let (env, _r, wt) = fixture("cargo test -p a --lib nothing", true);
     assert_allow(
@@ -287,7 +285,6 @@ fn control_changed_route_same_crate_is_allowed() {
 // ── reproduction_tests route ────────────────────────────────────────────────
 
 #[test]
-#[ignore = "backlog RED: testscope task scope ignores -p on the reproduction_tests route"]
 fn repro_route_other_crate_same_name_is_denied() {
     let (env, _r, wt) = fixture("cargo test -p a --test shared", false);
     assert_deny(
@@ -297,7 +294,6 @@ fn repro_route_other_crate_same_name_is_denied() {
 }
 
 #[test]
-#[ignore = "backlog RED: control, reproduction_tests route same crate is allowed"]
 fn control_repro_route_same_crate_is_allowed() {
     let (env, _r, wt) = fixture("cargo test -p a --test shared", false);
     assert_allow(

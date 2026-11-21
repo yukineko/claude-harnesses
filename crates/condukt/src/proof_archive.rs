@@ -42,6 +42,11 @@
 //!   worktree still holds the task's proofs, and otherwise in the archive dir
 //!   when THAT holds them. The copies are written into every proof dir `tdd`
 //!   could resolve for the archive dir as its cwd, so `tdd` itself judges them.
+//! * [`retire_previous_attempt`] (backlog 20c08a70): when `worktree create
+//!   --run` cuts a new attempt of a task, an existing archive of that task is an
+//!   earlier attempt's; it is moved (never deleted) to
+//!   [`previous_generations_dir`], which no reader consults. A failed move is
+//!   an `Err` and the create is refused.
 
 use crate::config::Config;
 use anyhow::{bail, Context, Result};
@@ -131,6 +136,151 @@ pub fn archive_dir(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> Res
     Ok(crate::state::run_dir(cfg, cwd, run_id)?
         .join(format!("{}.tdd-proofs", safe(run_id)))
         .join(safe(task_id)))
+}
+
+/// Where earlier attempts' archives of `run_id`/`task_id` are kept once a new
+/// attempt replaces them (backlog 20c08a70):
+/// `<run dir>/<run>.tdd-proofs-previous/<task>/gen-<n>`. Outside
+/// `<run>.tdd-proofs/`, so neither the merge proof contract nor the F→P oracle
+/// ever reads them; nothing deletes them.
+pub fn previous_generations_dir(
+    cfg: &Config,
+    cwd: &Path,
+    run_id: &str,
+    task_id: &str,
+) -> Result<PathBuf> {
+    let safe = harness_core::store::safe_session;
+    Ok(crate::state::run_dir(cfg, cwd, run_id)?
+        .join(format!("{}.tdd-proofs-previous", safe(run_id)))
+        .join(safe(task_id)))
+}
+
+/// Retire the proof archive of `run_id`/`task_id` left by an EARLIER attempt
+/// when `condukt worktree create --run` cuts a new attempt of the task
+/// (backlog 20c08a70). `create` always cuts a pristine branch off HEAD
+/// (force-deleting a stale ref of the same name), and the archive is written
+/// only by tearing a worktree down, so an archive that exists when a new
+/// attempt's worktree has just been created can only hold an earlier attempt's
+/// proofs. Left in place it would make every merge of the new attempt
+/// `undetermined-proof` (worktree and archive copies differ).
+///
+/// The archive is MOVED (one `rename`) to the next free
+/// [`previous_generations_dir`]`/gen-<n>`, never deleted. Proofs archived
+/// after this call (the current attempt's teardown) land in a fresh
+/// `<run>.tdd-proofs/<task>` and a disagreement with the live worktree stays
+/// `undetermined-proof`.
+///
+/// `Ok(None)` = no archive (observed absent). `Ok(Some(dest))` = moved, and
+/// observed: the archive path no longer exists and `dest` does. Any failure
+/// (unresolvable dir, failed probe, failed rename, unobserved move) is `Err`;
+/// the caller refuses the create, so the stale archive can never be silently
+/// half-moved into a state the merge check reads as "no disagreement".
+pub fn retire_previous_attempt(
+    cfg: &Config,
+    cwd: &Path,
+    run_id: &str,
+    task_id: &str,
+) -> Result<Option<PathBuf>> {
+    let arch = archive_dir(cfg, cwd, run_id, task_id)?;
+    let prev = previous_generations_dir(cfg, cwd, run_id, task_id)?;
+    retire_dir(&arch, &prev)
+}
+
+/// The `worktree create --run` step (backlog 20c08a70): run
+/// [`retire_previous_attempt`] for the worktree `path` just created on the
+/// run-scoped form of `branch`, and report a move on stderr. On `Err` the new
+/// worktree and its branch are discarded and the create is refused: the stale
+/// archive stays where the merge check reads it, so no merge passes on a
+/// half-move.
+pub fn retire_for_new_attempt(
+    cfg: &Config,
+    cwd: &Path,
+    repo: &Path,
+    run: &str,
+    task: &str,
+    branch: &str,
+    path: &Path,
+) -> Result<()> {
+    match retire_previous_attempt(cfg, cwd, run, task) {
+        Ok(Some(dest)) => {
+            eprintln!(
+                "condukt worktree: moved the previous attempt's tdd proof archive of \
+                 '{run}/{task}' to {} (kept, not deleted; it no longer takes part in the merge \
+                 proof check)",
+                dest.display()
+            );
+            Ok(())
+        }
+        Ok(None) => Ok(()),
+        Err(e) => {
+            let rollback = crate::worktree::run_scoped_branch(Some(run), branch)
+                .and_then(|b| crate::worktree::discard(repo, path, Some(&b)));
+            bail!(
+                "could not move the previous attempt's tdd proof archive of '{run}/{task}' \
+                 aside: {e:#}; refusing the create (rollback of the new worktree {}: {})",
+                path.display(),
+                match rollback {
+                    Ok(()) => "ok".to_string(),
+                    Err(re) => format!("FAILED: {re:#}"),
+                }
+            );
+        }
+    }
+}
+
+/// [`retire_previous_attempt`] on explicit paths: move `arch` to the first
+/// `prev_root/gen-<n>` (n = 1, 2, …) that does not exist.
+fn retire_dir(arch: &Path, prev_root: &Path) -> Result<Option<PathBuf>> {
+    match std::fs::symlink_metadata(arch) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(e).with_context(|| {
+                format!(
+                    "cannot tell whether a previous attempt's proof archive {} exists",
+                    arch.display()
+                )
+            })
+        }
+    }
+    std::fs::create_dir_all(prev_root)
+        .with_context(|| format!("creating {}", prev_root.display()))?;
+    let mut n: u64 = 1;
+    let dest = loop {
+        let cand = prev_root.join(format!("gen-{n}"));
+        let exists = cand
+            .try_exists()
+            .with_context(|| format!("cannot tell whether {} exists", cand.display()))?;
+        if !exists {
+            break cand;
+        }
+        n = n
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("no free generation slot in {}", prev_root.display()))?;
+    };
+    std::fs::rename(arch, &dest).with_context(|| {
+        format!(
+            "moving the previous attempt's proof archive {} -> {}",
+            arch.display(),
+            dest.display()
+        )
+    })?;
+    let gone = !arch
+        .try_exists()
+        .with_context(|| format!("cannot tell whether {} still exists", arch.display()))?;
+    let there = dest
+        .try_exists()
+        .with_context(|| format!("cannot tell whether {} exists", dest.display()))?;
+    if !(gone && there) {
+        bail!(
+            "moving the previous attempt's proof archive {} -> {} reported success but was not \
+             observed (source still present: {}, destination present: {there})",
+            arch.display(),
+            dest.display(),
+            !gone
+        );
+    }
+    Ok(Some(dest))
 }
 
 /// Archive for a worktree whose proofs could not be attributed to a run/task.
@@ -564,6 +714,54 @@ mod tests {
     fn write(p: &Path, s: &str) {
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, s).unwrap();
+    }
+
+    #[test]
+    fn retire_dir_moves_to_next_generation_and_never_deletes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let arch = tmp.path().join("run.tdd-proofs/t1");
+        let prev = tmp.path().join("run.tdd-proofs-previous/t1");
+        assert_eq!(retire_dir(&arch, &prev).unwrap(), None);
+
+        write(&arch.join(".tdd/t1.green.json"), "first");
+        let g1 = retire_dir(&arch, &prev).unwrap().unwrap();
+        assert_eq!(g1, prev.join("gen-1"));
+        assert!(!arch.exists());
+        assert_eq!(
+            std::fs::read_to_string(g1.join(".tdd/t1.green.json")).unwrap(),
+            "first"
+        );
+
+        write(&arch.join(".tdd/t1.green.json"), "second");
+        let g2 = retire_dir(&arch, &prev).unwrap().unwrap();
+        assert_eq!(g2, prev.join("gen-2"));
+        assert_eq!(
+            std::fs::read_to_string(g1.join(".tdd/t1.green.json")).unwrap(),
+            "first",
+            "an earlier generation is never overwritten"
+        );
+        assert_eq!(
+            std::fs::read_to_string(g2.join(".tdd/t1.green.json")).unwrap(),
+            "second"
+        );
+    }
+
+    #[test]
+    fn retire_dir_failure_is_err_and_leaves_the_archive_in_place() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let arch = tmp.path().join("run.tdd-proofs/t1");
+        write(&arch.join(".tdd/t1.green.json"), "x");
+        let locked = tmp.path().join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let r = retire_dir(&arch, &locked.join("prev/t1"));
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(r.is_err(), "an unmovable archive must be an Err: {r:?}");
+        assert!(
+            arch.join(".tdd/t1.green.json").exists(),
+            "a failed retire leaves the archive where the merge check reads it"
+        );
     }
 
     #[test]

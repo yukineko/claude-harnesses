@@ -199,6 +199,15 @@ its token:
   out; when none of them holds a proof of the task, the proof archive
   (`<run dir>/<run>.tdd-proofs/<task>/.tdd`, written before a worktree
   teardown). A `.tdd/` committed at the branch tip is **never** a proof source.
+- **Attempt generations** (backlog 20c08a70): `worktree create --run <run>`
+  always cuts a fresh branch, so an archive of the task that exists at that
+  moment belongs to an earlier (e.g. abandoned) attempt. `create` moves it to
+  `<run dir>/<run>.tdd-proofs-previous/<task>/gen-<n>` (kept, never deleted),
+  which the contract does not read. If that move fails, the create is refused
+  and rolled back, and the archive stays where the merge check reads it.
+  Proofs archived after the create (the new attempt's teardown) are the
+  current attempt's: a disagreement between them and the live worktree is
+  still `undetermined-proof`.
 - **(h) exclusion**: the tip tree is the tip commit's tree with `.tdd` and tdd's
   effective proof dir (relative to the worktree, or the repo when the worktree
   is gone) removed — the same paths tdd leaves out of `tree_identity.tree` — so

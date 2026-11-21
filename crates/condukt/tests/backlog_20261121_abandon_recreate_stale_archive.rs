@@ -158,6 +158,7 @@ impl Fx {
         );
     }
 
+    #[allow(dead_code)]
     fn main_sha(&self) -> String {
         git(&self.repo, &["rev-parse", "main"])
     }
@@ -442,10 +443,12 @@ fn merge_with(f: &Fx, extra: &[&str]) -> Output {
     out
 }
 
+#[allow(dead_code)]
 fn token(item: &str) -> String {
     format!("merge-proof-contract({item})")
 }
 
+#[allow(dead_code)]
 fn assert_refused(f: &Fx, extra: &[&str], item: &str, why: &str) {
     let before = f.main_sha();
     let out = merge_with(f, extra);
@@ -461,6 +464,7 @@ fn assert_refused(f: &Fx, extra: &[&str], item: &str, why: &str) {
     );
 }
 
+#[allow(dead_code)]
 fn assert_task_merge_refused(f: &Fx, item: &str, why: &str) {
     let task = f.task.clone();
     assert_refused(f, &["--run", RUN, "--task", &task], item, why);
@@ -525,6 +529,7 @@ fn archive_proof_dir(f: &Fx) -> PathBuf {
         .join(".tdd")
 }
 
+#[allow(dead_code)]
 fn merge_conflict_records(f: &Fx) -> Vec<PathBuf> {
     let mut found = Vec::new();
     find_named(
@@ -540,7 +545,6 @@ fn merge_conflict_records(f: &Fx) -> Vec<PathBuf> {
     found
 }
 
-
 // ── RED: abandon + re-create leaves the discarded attempt's archive ────────
 
 /// Attempt 1 records real proofs, is abandoned (`state abandon --force`) and
@@ -554,7 +558,6 @@ fn merge_conflict_records(f: &Fx) -> Vec<PathBuf> {
 /// `r5_worktree_and_archive_disagree_is_undetermined_proof` pins disagreement
 /// as a refusal). This test pins (a) for the abandon/re-create lifecycle only.
 #[test]
-#[ignore = "RED(20c08a70): merge refused undetermined-proof because the archive holds the abandoned attempt's proofs"]
 fn abandon_then_recreate_task_merges_with_new_proofs() {
     let f = setup(FIX);
     record(&f, &single("none", "good"));

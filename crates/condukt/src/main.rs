@@ -3718,6 +3718,11 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
                 &branch,
                 &task,
             )?;
+            // A new attempt retires an earlier attempt's proof archive
+            // (backlog 20c08a70); a failed move rolls the create back.
+            if let Some(r) = run.as_deref() {
+                proof_archive::retire_for_new_attempt(cfg, cwd, &repo, r, &task, &branch, &path)?;
+            }
             println!("{}", path.display());
         }
         WtAction::Merge { branch, run, task } => {

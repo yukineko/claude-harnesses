@@ -1758,3 +1758,24 @@ chain 値）、`detect/ast/b5.rs`。
   利用者の行・途中の派生 text すべて・判定対象の text の全部に要求し、chain 値は狭める方向にしか変わらない
   （`readings::chain_names_fixed`、`Ctx::names_fixed_narrowed_by`）。false なら何も計算しない。
 - 判定不能は制限側: parse 不能・panic（`catch_unwind`）・上限超過はすべて `None` で、従来の Ask に戻る。
+
+## 登録済み `/flow` driver セッションでは `ask` を出さない — ユーザー裁定 2026-11-21（backlog 4ef3a9e2）
+
+裁定（逐語）: 「非破壊はAllow、他はDeny」、同日の補足「またaskされてたけど、これもallowに」。
+/flow は自律ループであり、hook の `ask` は Bypass mode でも dialog として出て loop を止めるため、
+driver セッションでは `ask` を出さない機構を blastguard 自身に置く（LLM の記憶に依存しない）。
+
+- driver 判定（`src/flow_driver.rs`）: payload の `session_id` と `cwd` から、backlog の driver registry
+  `~/.backlog/drivers/<fnv1a64(canonical main tree) %016x>/<fnv1a64(session_id) %016x>.driver` を読み、
+  `now - heartbeat_at <= 1800` のときだけ `Known(true)`。layout と project 正規化は
+  `crates/backlog/src/driver.rs`・`store::canonical_project_id` の read 側の写し。ファイル無し・stale・
+  別セッションは `Known(false)`、読めない・壊れている・session id が空は `Undetermined`。
+  `Known(true)` 以外は driver として扱わない（判定不能を Allow にしない）。
+- Table B.5 層（`scope.rs::driver_trusts_program`、`b5.rs`）: driver セッションでは、session scratchpad
+  （`/private/tmp/claude-<uid>/<slug>/<session id>/scratchpad/`、`claude-<uid>` は uid 所有の実ディレクトリ）
+  内、または自 worktree の `target/` 配下の通常ファイルをトップレベルで直接実行するものに意見を出さない。
+  同じ行にそのファイルへ書き得るものがあるとき、system bin だけの `PATH` 以外の注入変数があるときは除く。
+- 出力（`main.rs::emit`）: driver セッションで残る `Ask` は元の理由付きで `deny` として出し、block log に
+  `ask-hardened-to-deny` として payload ごと記録する。2 度目 deny の ask 化は行わない。`Deny` は不変。
+- 登録が無い・stale・別セッション・registry 読み取り不能・payload パース不能では判定を変えない。
+- RED: `crates/blastguard/tests/backlog_20261121_flow_driver_session_never_asks.rs`。

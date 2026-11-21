@@ -943,3 +943,8 @@ reason = "Section '決定済みの producer pipeline の出力を program とし
 path = "crates/blastguard/src/detect/kill.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'pid -1 への kill は Deny (detect/kill.rs, rule id kill-all)': literal pid operand -1 with a non-0 signal is Deny in main and subagent; bash kill option grammar decides signal vs pid (backlog e93d3701, spec 596ef57d Q5)."
+
+[[spec]]
+path = "crates/blastguard/src/flow_driver.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Section '登録済み /flow driver セッションでは ask を出さない — ユーザー裁定 2026-11-21（backlog 4ef3a9e2）': driver registry read (fnv1a64 slugs, 1800s liveness, Known(true) only), B.5 scratchpad/target trust, Ask hardened to Deny with block-log record."

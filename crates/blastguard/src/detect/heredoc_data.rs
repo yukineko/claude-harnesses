@@ -50,7 +50,14 @@
 //!   extension-less or `.py`, which keep their own steps), the
 //!   terminal, `/dev/null`, stderr, or a `$( )` word. Never a non-final pipe
 //!   stage or a process substitution. `git commit` stores it in
-//!   `COMMIT_EDITMSG`;
+//!   `COMMIT_EDITMSG`. A RELATIVE literal data / code file target after an
+//!   undetermined `cd` (`cd "$WT" && cat >> docs/a.md <<'EOF'`, backlog
+//!   1f705907) is such a file too: its name is known, only its directory is
+//!   not (`unplaced_data_landing`). Then every literal argument of a command
+//!   not exempted in the next condition may name a directory above it, so an
+//!   Allow on the rest is floored at Ask as for an undetermined argument. The
+//!   opener's own target is still judged where it may land by the redirect
+//!   rules (an unresolvable placement is refused there);
 //! * no command of the line can run it as a program: every command whose
 //!   `program_source` is `Some` must be an interpreter of a literal FILE, or
 //!   an interpreter reading inherited / literal stdin, and that file's name
@@ -72,7 +79,12 @@
 //!   (`rustc x.rs`, `chmod +x x.rs`, `rg --pre sh . src`, an unknown word keep
 //!   every body). Bare
 //!   `cargo test` / `cargo build` (no `--config` / `-Z`) is not running the
-//!   written file whatever it names (user ruling 2026-11-18, B-4). An
+//!   written file whatever it names (user ruling 2026-11-18, B-4). Nor is
+//!   `git add` / `git commit` spelled with the subcommand directly after
+//!   `git` and every word literal (backlog 1f705907): they copy what they
+//!   name into the index / a commit and run none of it (`git_records_only`;
+//!   hooks and filters git runs from existing configuration are the
+//!   repository's, a residual as for a `git commit -F -` reader). An
 //!   undetermined argument (`git add $X`) may or may not name one: the body
 //!   is still removed (it is not shell code either way), but a verdict of
 //!   Allow on the rest becomes Ask (refusal to guess) unless the line judged
@@ -331,13 +343,22 @@ fn data_bodies(script: &Script, text: &str) -> Option<(Vec<Range<usize>>, bool)>
     if script.has_function_definition && !functions_harmless(script, &readers) {
         return None;
     }
+    // A landing file placed nowhere (`unplaced_data_landing`): which
+    // directories are above it is unknown. Over-approximated from every
+    // command of the line (an unplaced target that is not a landing only
+    // makes this stricter).
+    let landing_unplaced = script.commands.iter().any(|c| {
+        c.redirects
+            .iter()
+            .any(|r| unplaced_data_landing(r).is_some())
+    });
     let mut unsure = false;
     for (i, c) in script.commands.iter().enumerate() {
         if !runs_no_landing_file(script, i, c, &landing) {
             return None;
         }
         if !readers.contains(&i) {
-            match names_landing_path(c, &landing, &script.function_names) {
+            match names_landing_path(c, &landing, landing_unplaced, &script.function_names) {
                 Naming::Clear => {}
                 Naming::Undetermined => unsure = true,
                 // An interpreter running an unseen literal program file
@@ -448,15 +469,42 @@ fn cargo_test_or_build(c: &SimpleCommand) -> bool {
             .any(|a| a.starts_with("--config") || a.starts_with("-Z"))
 }
 
+/// `git add` / `git commit`, the subcommand directly after `git` (no global
+/// option such as `-c` / `-C` / `--exec-path`), every word literal (backlog
+/// 1f705907: `cat >> docs/a.md <<'EOF' … EOF` then `git add docs/a.md &&
+/// git commit -m …`). They copy what they name into the index / a commit
+/// object and run none of it: neither has an option that runs a program or
+/// executes a named path. They may therefore name a landing file like a
+/// [`reads_only`] tool. RESIDUAL, as for a `git commit -F -` reader: programs
+/// git itself runs from existing configuration (hooks, `core.fsmonitor`,
+/// clean filters, the editor) are the repository's, not the body's. An
+/// undetermined word (`git add "$X"`) is not this shape and is judged by the
+/// word rules of [`names_landing_path`].
+fn git_records_only(c: &SimpleCommand) -> bool {
+    matches!(
+        literal_argv(c).as_deref(),
+        Ok(["git", "add" | "commit", ..])
+    )
+}
+
 /// Whether `c` names a landing path (the file, an ancestor directory of it,
 /// `.` / `..`) with a literal word ([`Naming::Names`]: the body is kept), may
 /// name one with an undetermined word ([`Naming::Undetermined`]: the body is
 /// removed and an Allow floored by [`DataView::floor`]), or names none
-/// or only reads it ([`reads_only`]). A command not known to only read what it
-/// names may run it (`rustc x.rs`, `chmod +x x.rs`, `rg --pre sh . src`). An
-/// undetermined or empty command word is [`Naming::Names`]. An empty
-/// ARGUMENT word (`sed -i ''`) names no path (backlog 6f299fb5); `/` does.
-fn names_landing_path(c: &SimpleCommand, landing: &[String], functions: &[String]) -> Naming {
+/// or only reads it ([`reads_only`], [`git_records_only`]). A command not
+/// known to only read what it names may run it (`rustc x.rs`, `chmod +x x.rs`,
+/// `rg --pre sh . src`). An undetermined or empty command word is
+/// [`Naming::Names`]. An empty ARGUMENT word (`sed -i ''`) names no path
+/// (backlog 6f299fb5); `/` does. When `landing_unplaced` (some landing file's
+/// directory is unknown, [`unplaced_data_landing`]), every other non-empty
+/// literal argument may name a directory above it and is
+/// [`Naming::Undetermined`] unless it already [`Naming::Names`] one.
+fn names_landing_path(
+    c: &SimpleCommand,
+    landing: &[String],
+    landing_unplaced: bool,
+    functions: &[String],
+) -> Naming {
     let Some(Value::Literal(head)) = c.argv.first().map(|w| &w.value) else {
         return if c.argv.is_empty() {
             Naming::Clear
@@ -472,7 +520,7 @@ fn names_landing_path(c: &SimpleCommand, landing: &[String], functions: &[String
     // A defined function is not the inert tool of the same name: its body
     // decides what it does with its arguments (`ls() { xargs "$@"; }`).
     let shadowed = functions.iter().any(|f| f == head);
-    if !shadowed && (reads_only(head) || cargo_test_or_build(c)) {
+    if !shadowed && (reads_only(head) || cargo_test_or_build(c) || git_records_only(c)) {
         return Naming::Clear;
     }
     let lower: Vec<String> = landing.iter().map(|l| l.to_ascii_lowercase()).collect();
@@ -503,6 +551,9 @@ fn names_landing_path(c: &SimpleCommand, landing: &[String], functions: &[String
                     })
                 {
                     return Naming::Names;
+                }
+                if landing_unplaced {
+                    naming = Naming::Undetermined;
                 }
             }
         }
@@ -999,10 +1050,32 @@ fn stdout_landing(c: &SimpleCommand) -> Option<Vec<String>> {
             RedirTarget::Path(Value::Literal(p)) if data_or_code_file(p) => {
                 names.push(p.clone());
             }
-            _ => return None,
+            _ => names.push(unplaced_data_landing(r)?.to_string()),
         }
     }
     Some(names)
+}
+
+/// A RELATIVE literal data / code file target (`>> docs/a.md`) that the
+/// parser could not place because an undetermined `cd` runs before it
+/// (`cd "$WT" && cat >> docs/a.md <<'EOF'`, backlog 1f705907): the target is
+/// `Path(Undetermined)`, but its text ([`ast::Redirect::written`]) — and so
+/// what KIND of file the body lands in — is known. Only WHERE it is is not:
+/// [`data_bodies`] then counts every literal word of a command that is not
+/// known to only read or record what it names as possibly naming a directory
+/// above it ([`Naming::Undetermined`], an Allow floored at Ask), since which
+/// directories are above it cannot be compared. An absolute target, an
+/// undetermined word, or a target that is not a data / code file is `None`
+/// (the body is kept).
+fn unplaced_data_landing(r: &ast::Redirect) -> Option<&str> {
+    match (&r.target, &r.written) {
+        (RedirTarget::Path(Value::Undetermined(_)), Some(Value::Literal(p)))
+            if !p.is_empty() && !p.starts_with(['/', '~']) && data_or_code_file(p) =>
+        {
+            Some(p)
+        }
+        _ => None,
+    }
 }
 
 /// Commands that change what a later command word runs.

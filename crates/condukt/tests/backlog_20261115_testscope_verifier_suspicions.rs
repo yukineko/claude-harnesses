@@ -161,37 +161,21 @@ fn assert_a(form_of: impl Fn(&str) -> String) {
 }
 
 #[test]
-// test-weakening-justified: RED for an unfixed, separately filed defect
-// (testscope does not model this cd form; backlog row filed 2026-11-15 with
-// this file as repro); the ignore is removed in the fixing commit.
-#[ignore = "RED: 2026-11-15 testscope does not recognise this cd form, so the test is keyed on the payload cwd (ledger dodge) - remove when fixed"]
 fn a1_brace_group_cd_is_denied() {
     assert_a(|x| format!("{{ cd {x}; }} && {PLAIN}"));
 }
 
 #[test]
-// test-weakening-justified: RED for an unfixed, separately filed defect
-// (testscope does not model this cd form; backlog row filed 2026-11-15 with
-// this file as repro); the ignore is removed in the fixing commit.
-#[ignore = "RED: 2026-11-15 testscope does not recognise this cd form, so the test is keyed on the payload cwd (ledger dodge) - remove when fixed"]
 fn a2_if_cd_then_cargo_is_denied() {
     assert_a(|x| format!("if cd {x}; then {PLAIN}; fi"));
 }
 
 #[test]
-// test-weakening-justified: RED for an unfixed, separately filed defect
-// (testscope does not model this cd form; backlog row filed 2026-11-15 with
-// this file as repro); the ignore is removed in the fixing commit.
-#[ignore = "RED: 2026-11-15 testscope does not recognise this cd form, so the test is keyed on the payload cwd (ledger dodge) - remove when fixed"]
 fn a3_time_cd_is_denied() {
     assert_a(|x| format!("time cd {x} && {PLAIN}"));
 }
 
 #[test]
-// test-weakening-justified: RED for an unfixed, separately filed defect
-// (testscope does not model this cd form; backlog row filed 2026-11-15 with
-// this file as repro); the ignore is removed in the fixing commit.
-#[ignore = "RED: 2026-11-15 testscope does not recognise this cd form, so the test is keyed on the payload cwd (ledger dodge) - remove when fixed"]
 fn a4_builtin_cd_is_denied() {
     assert_a(|x| format!("builtin cd {x} && {PLAIN}"));
 }

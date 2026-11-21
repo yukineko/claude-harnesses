@@ -136,8 +136,9 @@
 //! by an `&` redirection (`cd x &>f | …`; its effect is not modelled) leaves the
 //! directory undetermined, and a test there is denied. `env cd` / `nice cd` /
 //! `timeout N cd` run an external `cd` and move nothing, so they leave the
-//! directory unchanged; a `cd` behind assignments or `command` leaves it
-//! undetermined. See [`judge_pieces`].
+//! directory unchanged; a `cd` behind assignments, `command`, `builtin`,
+//! `time`, `!`, `{` or a reserved word (`if` / `then` / `elif` / `else` /
+//! `while` / `until` / `do`) leaves it undetermined. See [`judge_pieces`].
 //! The rerun key is that run tree's identity plus the command only (user
 //! ruling 2026-11-15): the payload cwd's tree never contributes, so editing
 //! only the payload cwd does not permit a rerun, and a test run directly in a
@@ -408,9 +409,11 @@ enum Judged {
 ///   the `cd` may not have run).
 ///
 /// Any other `cd` (after `||` / `|` / `&`, or followed by them or by any
-/// redirection with `&` such as `&>f` / `>&2`, `pushd`, `popd`) makes the
-/// directory undetermined. `( … )` and `` ` … ` `` restore
-/// the directory they started with.
+/// redirection with `&` such as `&>f` / `>&2`, `pushd`, `popd`, or a `cd`
+/// whose segment starts with assignments, `command`, `builtin`, `time`
+/// [`-p`], `!`, `{` or one of the reserved words `if` / `then` / `elif` /
+/// `else` / `while` / `until` / `do`) makes the directory undetermined.
+/// `( … )` and `` ` … ` `` restore the directory they started with.
 fn judge_pieces(pieces: &[Piece], start: &Dir, ctx: &Ctx, depth: usize, what: &str) -> Judged {
     let mut dir = start.clone();
     // (dir, provisional) saved at each `(` / opening backtick.
@@ -498,14 +501,26 @@ fn judge_pieces(pieces: &[Piece], start: &Dir, ctx: &Ctx, depth: usize, what: &s
         // `timeout` run an external `cd` (e.g. /usr/bin/cd) that cannot
         // change the directory of later commands, so [`strip_prefixes`] is
         // NOT used here; such a `cd` falls through to `judge_words` and leaves
-        // `dir` unchanged. A `cd` behind assignments or `command` is
-        // recognised but its target is undetermined (see below).
+        // `dir` unchanged. A `cd` behind assignments, `command`, `builtin`,
+        // `time` (with its `-p` / `--` options), `!`, `{` or a compound
+        // command reserved word (`if`, `then`, `elif`, `else`, `while`,
+        // `until`, `do`) is recognised but its target is undetermined (see
+        // below): the shell's builtin `cd` does run in the current shell
+        // there, so leaving `dir` unchanged would key later tests on a
+        // guessed tree.
         let stripped_words = {
             let mut i = 0;
-            while words
-                .get(i)
-                .is_some_and(|w| is_assignment(w) || w == "command")
-            {
+            let mut after_time = false;
+            while let Some(w) = words.get(i) {
+                let skip = if after_time && (w == "-p" || w == "--") {
+                    true
+                } else {
+                    after_time = w == "time";
+                    is_assignment(w) || is_cd_hiding_prefix(w)
+                };
+                if !skip {
+                    break;
+                }
                 i += 1;
             }
             &words[i..]
@@ -523,12 +538,15 @@ fn judge_pieces(pieces: &[Piece], start: &Dir, ctx: &Ctx, depth: usize, what: &s
                     Some(Piece::Seg(_)) => Some(Op::Redirect),
                 };
                 let target = if stripped_words.len() != words.len() {
-                    // `VAR=1 cd`, `command cd`, `command VAR=1 cd`, `'A=1' cd`:
-                    // whether the builtin runs depends on word order and on
-                    // quoting that shlex has already removed, so the move is
-                    // not modelled (fail closed).
+                    // `VAR=1 cd`, `command cd`, `command VAR=1 cd`, `'A=1' cd`,
+                    // `builtin cd`, `time cd`, `! cd`, `{ cd`, `if cd`,
+                    // `then cd`, …: whether (and when) the builtin moves the
+                    // shell depends on word order, on quoting that shlex has
+                    // already removed and on the compound command around it,
+                    // so the move is not modelled (fail closed).
                     Dir::undetermined(format!(
-                        "`{}`: a `cd` behind assignments or `command` is not resolved",
+                        "`{}`: a `cd` behind assignments, `command`, `builtin`, `time`, \
+                         `!`, `{{` or a reserved word is not resolved",
                         words.join(" ")
                     ))
                 } else {
@@ -726,8 +744,12 @@ fn cmd_flag(w: &[String]) -> Option<String> {
     })
 }
 
-/// Drop leading `VAR=val` assignments and the `env` / `timeout N` / `nice`
-/// wrappers so the real command word comes first.
+/// Drop leading `VAR=val` assignments, the `env` / `timeout N` / `nice` /
+/// `command` / `exec` wrappers, and the shell words that precede a simple
+/// command without changing what it runs (`builtin`, `time` [`-p`], `!`, `{`,
+/// `if` / `then` / `elif` / `else` / `while` / `until` / `do`) so the real
+/// command word comes first: `if cd x; then cargo test …; fi` must judge the
+/// `cargo test` behind `then`, not skip it as an unknown program.
 fn strip_prefixes(words: &[String]) -> &[String] {
     let mut i = 0;
     loop {
@@ -735,6 +757,13 @@ fn strip_prefixes(words: &[String]) -> &[String] {
             return &words[i..];
         };
         if is_assignment(w) {
+            i += 1;
+        } else if w == "time" {
+            i += 1;
+            while words.get(i).is_some_and(|a| a == "-p" || a == "--") {
+                i += 1;
+            }
+        } else if is_cd_hiding_prefix(w) && w != "command" {
             i += 1;
         } else if w == "env" || w == "nice" || w == "command" || w == "exec" {
             i += 1;
@@ -762,6 +791,29 @@ fn is_assignment(w: &str) -> bool {
         }
         None => false,
     }
+}
+
+/// A leading word behind which the shell's builtin `cd` still runs in the
+/// current shell, so a `cd` after it moves the shell: `command`, `builtin`,
+/// `time`, `!`, `{` and the compound-command reserved words that may directly
+/// precede a simple command. [`judge_pieces`] treats a `cd` behind any of them
+/// as undetermined (fail closed) instead of ignoring it.
+fn is_cd_hiding_prefix(w: &str) -> bool {
+    matches!(
+        w,
+        "command"
+            | "builtin"
+            | "time"
+            | "!"
+            | "{"
+            | "if"
+            | "then"
+            | "elif"
+            | "else"
+            | "while"
+            | "until"
+            | "do"
+    )
 }
 
 /// What a token before the cargo subcommand turned out to be.

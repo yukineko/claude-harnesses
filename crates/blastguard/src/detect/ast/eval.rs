@@ -8,8 +8,12 @@
 //! # What is tracked (and what is deliberately not)
 //!
 //! * Variables: only values assigned on the line from literal text
-//!   (`S=/a`, `export S=/a`, `for v in a b`). Every variable the line does not
-//!   assign (environment, positional / special parameters, shell dynamic
+//!   (`S=/a`, `export S=/a`, `for v in a b`). A top-level `local S=/a`
+//!   (outside every function body) binds nothing: bash refuses it ("local:
+//!   can only be used in a function") and keeps the previous value while zsh
+//!   binds, and the stricter of both shells is kept (user ruling 2026-11-21),
+//!   so `S` is `Undetermined` after it (`eval/decl.rs`). Every variable the
+//!   line does not assign (environment, positional / special parameters, shell dynamic
 //!   variables such as `$RANDOM` / `$PWD`) is `Undetermined` — except
 //!   `$HOME`, which starts as the hook environment's `HOME` when that is an
 //!   absolute path (user ruling 2026-11-17, SUBSET.md ruling 12).
@@ -186,6 +190,7 @@ fn run(command: &str, program: &ast::Program, function_defs: bool) -> Result<Scr
         function_names: Vec::new(),
         has_function_definition: false,
         function_body_ranges: Vec::new(),
+        function_depth: 0,
     };
     ev.program(&text, program, Env::initial(), &Context::TopLevel)?;
     Ok(Script {
@@ -686,6 +691,9 @@ struct Ev {
     /// Index ranges into `out` of the commands of each function body
     /// (emit mode only).
     function_body_ranges: Vec<std::ops::Range<usize>>,
+    /// Number of enclosing function bodies being evaluated (`function.rs`):
+    /// 0 at top level, where `local` binds nothing (`eval/decl.rs`).
+    function_depth: usize,
 }
 
 impl Ev {

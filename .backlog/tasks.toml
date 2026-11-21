@@ -1946,6 +1946,8 @@ notes = "Observed 2026-11-21 at main 0c93ee98d, git 2.50.1 (Apple Git-155), tdd 
 created_at = 1795255996
 updated_at = 1795255996
 weight = 0.0
+issue_number = 1951
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1951"
 rev = 0
 
 [task.repro]

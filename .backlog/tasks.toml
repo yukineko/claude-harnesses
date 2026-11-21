@@ -1207,68 +1207,6 @@ exit 101:  Compiling trybuild v1.0.118
 error: test failed, to rerun pass `-p blastguard --test heredoc_data_body_verify`"""
 
 [[task]]
-id = "6f653d96"
-title = "testscope: refuses regression tests of the task's own crate inside a condukt task worktree (cannot prove a fix leaves pinned asserts unchanged)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "testscope",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "RED crates/condukt/tests/backlog_20261120_testscope_task_crate_regression.rs (branch red-testscope-task-regression-20261120, b679bfe2a). Refusal at crates/condukt/src/testscope.rs check_task_scope (TASK_SCOPE_REASON :1218, deny :1412). User ruling 2026-11-20: 証明ができないというのであれば、それを証明するためのテストを実施できないのはtestscopeの不具合. The pinned assert testscope_enforcement_20261114.rs c_unrelated_existing_test_in_task_worktree_is_denied contradicts the ruling; the fix owner re-anchors it per the ruling (left untouched by the RED author). Controls keep full suite denied and untouched-crate tests denied."
-created_at = 1795171422
-updated_at = 1795171422
-weight = 0.0
-issue_number = 1927
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1927"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261120_testscope_task_crate_regression -- --ignored"
-rev = "b679bfe2a4088400f7e7079294ac60c5de953dfc"
-observed_at = 1795171422
-detail = """
-exit 101: ss-worktrees/red-testscope-task-regression-20261120/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.76s
-     Running tests/backlog_20261120_testscope_task_crate_regression.rs (target/debug/deps/backlog_20261120_testscope_task_crate_regression-945a00b1985801be)
-error: test failed, to rerun pass `-p condukt --test backlog_20261120_testscope_task_crate_regression`"""
-
-[[task]]
-id = "9236d343"
-title = "blastguard: quoted heredoc body backtick text (`--lib`/`--doc` in a doc comment) judged as a run-time command word expansion when sed lines with backticked patterns follow"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "RED crates/blastguard/tests/backlog_20261120_quoted_heredoc_group_backtick_flag_fp.rs + fixture tests/fixtures/backlog_20261120_quoted_heredoc_group_backtick_flag_fp.cmd (branch red-testscope-task-regression-20261120, 690fe8e01). Observed 2026-11-20 subagent deny, relay bgr-a866a4fd1397. At HEAD main=ask, subagent=deny. Without the 3 sed lines: allow. Minimal trigger not isolated (small shapes all allow)."
-created_at = 1795171754
-updated_at = 1795171754
-weight = 0.0
-issue_number = 1928
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1928"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_quoted_heredoc_group_backtick_flag_fp -- --ignored"
-rev = "690fe8e015d4d075aab6e762dfc97ab710c5368b"
-observed_at = 1795171754
-detail = """
-exit 101: pe-task-regression-20261120/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.56s
-     Running tests/backlog_20261120_quoted_heredoc_group_backtick_flag_fp.rs (target/debug/deps/backlog_20261120_quoted_heredoc_group_backtick_flag_fp-6e839261438dfc74)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_quoted_heredoc_group_backtick_flag_fp`"""
-
-[[task]]
 id = "2bcfd471"
 title = "deny-no-verify.py FP: quoted heredoc body with an apostrophe plus a 'git' substring and '-n' is refused as unparseable gate-bypass (shlex does not model heredocs)"
 project = "/Users/yuki/src/harness"

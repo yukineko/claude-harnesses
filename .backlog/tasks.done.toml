@@ -91436,3 +91436,131 @@ rev = "617c6facb75036bad447741a9d05ab094b21898b"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "6f653d96"
+title = "testscope: refuses regression tests of the task's own crate inside a condukt task worktree (cannot prove a fix leaves pinned asserts unchanged)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "testscope",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "RED crates/condukt/tests/backlog_20261120_testscope_task_crate_regression.rs (branch red-testscope-task-regression-20261120, b679bfe2a). Refusal at crates/condukt/src/testscope.rs check_task_scope (TASK_SCOPE_REASON :1218, deny :1412). User ruling 2026-11-20: 証明ができないというのであれば、それを証明するためのテストを実施できないのはtestscopeの不具合. The pinned assert testscope_enforcement_20261114.rs c_unrelated_existing_test_in_task_worktree_is_denied contradicts the ruling; the fix owner re-anchors it per the ruling (left untouched by the RED author). Controls keep full suite denied and untouched-crate tests denied."
+created_at = 1795171422
+updated_at = 1795238582
+weight = 0.0
+issue_number = 1927
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1927"
+issue_closed_at = 1795238584
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261120_testscope_task_crate_regression -- --ignored"
+rev = "b679bfe2a4088400f7e7079294ac60c5de953dfc"
+observed_at = 1795171422
+detail = """
+exit 101: ss-worktrees/red-testscope-task-regression-20261120/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.76s
+     Running tests/backlog_20261120_testscope_task_crate_regression.rs (target/debug/deps/backlog_20261120_testscope_task_crate_regression-945a00b1985801be)
+error: test failed, to rerun pass `-p condukt --test backlog_20261120_testscope_task_crate_regression`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261120_testscope_task_crate_regression"
+exit = 0
+passed = 3
+rev = "2364795ae52453b021a2c141d71954c67f65b970"
+observed_at = 1795238567
+output_digest = "sha256:396a5d9bd490bd49456d60263ac51d8fb5aff65dd2c891807068cc4e09005ec0"
+excerpt = """
+
+running 3 tests
+test control_full_suite_of_task_crate_in_task_worktree_is_denied ... ok
+test control_existing_test_of_untouched_crate_in_task_worktree_is_denied ... ok
+test existing_test_of_task_crate_runs_as_regression_check_in_task_worktree ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.95s
+
+   Compiling blastguard v0.2.878 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+   Compiling riskgrade v0.1.2 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/riskgrade)
+   Compiling condukt v0.7.470 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.43s
+     Running tests/backlog_20261120_testscope_task_crate_regression.rs (target/debug/deps/backlog_20261120_testscope_task_crate_regression-466845ed26fed703)
+"""
+
+[task.closure.red]
+rev = "b679bfe2a4088400f7e7079294ac60c5de953dfc"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "9236d343"
+title = "blastguard: quoted heredoc body backtick text (`--lib`/`--doc` in a doc comment) judged as a run-time command word expansion when sed lines with backticked patterns follow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "RED crates/blastguard/tests/backlog_20261120_quoted_heredoc_group_backtick_flag_fp.rs + fixture tests/fixtures/backlog_20261120_quoted_heredoc_group_backtick_flag_fp.cmd (branch red-testscope-task-regression-20261120, 690fe8e01). Observed 2026-11-20 subagent deny, relay bgr-a866a4fd1397. At HEAD main=ask, subagent=deny. Without the 3 sed lines: allow. Minimal trigger not isolated (small shapes all allow)."
+created_at = 1795171754
+updated_at = 1795238597
+weight = 0.0
+issue_number = 1928
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1928"
+issue_closed_at = 1795238599
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_quoted_heredoc_group_backtick_flag_fp -- --ignored"
+rev = "690fe8e015d4d075aab6e762dfc97ab710c5368b"
+observed_at = 1795171754
+detail = """
+exit 101: pe-task-regression-20261120/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.56s
+     Running tests/backlog_20261120_quoted_heredoc_group_backtick_flag_fp.rs (target/debug/deps/backlog_20261120_quoted_heredoc_group_backtick_flag_fp-6e839261438dfc74)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_quoted_heredoc_group_backtick_flag_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261120_quoted_heredoc_group_backtick_flag_fp"
+exit = 0
+passed = 3
+rev = "2364795ae52453b021a2c141d71954c67f65b970"
+observed_at = 1795238589
+output_digest = "sha256:bc18e35351b2a28cfacbd029bd83fef35d84dd9c8e687b1decdcf39435181223"
+excerpt = """
+
+running 3 tests
+test control_base_without_sed_lines_is_allowed ... ok
+test control_unquoted_delimiter_backticks_really_run_is_not_allowed ... ok
+test observed_quoted_heredoc_group_command_is_allowed ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s
+
+   Compiling blastguard v0.2.878 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.54s
+     Running tests/backlog_20261120_quoted_heredoc_group_backtick_flag_fp.rs (target/debug/deps/backlog_20261120_quoted_heredoc_group_backtick_flag_fp-135551a4e6a8ea20)
+"""
+
+[task.closure.red]
+rev = "690fe8e015d4d075aab6e762dfc97ab710c5368b"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

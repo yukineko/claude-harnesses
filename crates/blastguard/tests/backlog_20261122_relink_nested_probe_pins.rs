@@ -143,10 +143,7 @@ fn c_dollar_paren_backslash_escaped_ln_then_write_is_deny() {
 
 #[test]
 fn d_subst_in_write_segment_runs_before_redirect_is_deny() {
-    assert_deny(
-        "d",
-        r#"echo "$(ln -s /etc/bg-sentinel d)" > d/hosts"#,
-    );
+    assert_deny("d", r#"echo "$(ln -s /etc/bg-sentinel d)" > d/hosts"#);
 }
 
 #[test]
@@ -161,10 +158,7 @@ fn f_process_subst_then_write_is_deny() {
 
 #[test]
 fn g_sh_c_double_quoted_then_write_is_deny() {
-    assert_deny(
-        "g",
-        r#"sh -c "ln -s /etc/bg-sentinel d"; echo x > d/hosts"#,
-    );
+    assert_deny("g", r#"sh -c "ln -s /etc/bg-sentinel d"; echo x > d/hosts"#);
 }
 
 #[test]
@@ -177,10 +171,7 @@ fn h_vim_plus_silent_bang_then_write_is_deny() {
 
 #[test]
 fn i_subst_then_rm_through_link_is_deny() {
-    assert_deny(
-        "i",
-        r#"echo "$(ln -s /etc/bg-sentinel d)"; rm -rf d/hosts"#,
-    );
+    assert_deny("i", r#"echo "$(ln -s /etc/bg-sentinel d)"; rm -rf d/hosts"#);
 }
 
 #[test]

@@ -747,17 +747,24 @@ pub(super) fn python_file_here_document(cmd: &str) -> Option<HereDocumentParts> 
 /// lexer shows the whole program only prints to its stdout
 /// ([`super::interpreter::python_program_only_prints`]: no import, `open`,
 /// `file=`, runner or f-string), which this shape leaves unredirected — no
-/// string of it can reach a shell or a file. A `$` text is always kept. The
-/// literals' quote delimiters are
+/// string of it can reach a shell or a file. A second narrowing (backlog
+/// 8ff44387): the same backtick-but-no-`$` text is blanked when the parser
+/// shows no string of the program can reach a shell or a process
+/// ([`super::interpreter::python_literal_text_never_runs`]: no runner,
+/// executor or code-building name in the code, only data-only imports); the
+/// program's file writes (`open(p,'w')`) are judged on their resolved targets
+/// by the Python judge, which reads the full body, not by this view. A `$`
+/// text is always kept. The literals' quote delimiters are
 /// blanked too. Code outside
 /// literals is kept as is. A body that does not tokenise answers `None`, and
 /// the view keeps the body. Only the line-level redirect scans read this view;
 /// every other rule (the interpreter scans included) still reads the full body.
 pub(super) fn python_stdin_redirect_view(cmd: &str) -> Option<String> {
     let parts = python_stdin_here_document(cmd)?;
-    let prints_only = super::interpreter::python_program_only_prints(&parts.body);
+    let literals_are_data = super::interpreter::python_program_only_prints(&parts.body)
+        || super::interpreter::python_literal_text_never_runs(&parts.body);
     let keep = |text: &str| {
-        text.contains('>') && (text.contains('$') || (text.contains('`') && !prints_only))
+        text.contains('>') && (text.contains('$') || (text.contains('`') && !literals_are_data))
     };
     let body = super::interpreter::python_redirect_view(&parts.body, keep)?;
     let (head, tail) = parts.without_body.split_at(parts.head_len);

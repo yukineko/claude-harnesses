@@ -92451,3 +92451,63 @@ rev = "599a3a68fee877c5a2cdce2da87d9a76cc50d30d"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "bfbb50ac"
+title = '''blastguard: sed -i with >& inside a double-quoted arg (after \") is refused as a '> overwrites' redirect (FP)'''
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = '''Observed 2026-11-21 (blastguard 0.2.864 installed): a worker's command cd <wt>/crates/blastguard && sed -i "s|if matches!(op, \"<&\" \| \">&\") && target.contains('\$') {|...|" src/detect/payload/exec_fds.rs && sed -n 1009p ... was refused with reason '> overwrites <wt>/crates/blastguard/", which names command-running configuration ...'. The >& is inside the double-quoted sed program (inner quotes are \"), not a redirect. Reduced repro at c8f566bce returns ask with '> overwrites crates/x/"'. The minimal sed -n "s|\">&\"|x|" f.rs is Allow, so the misparse needs the full shape (\| \& '\$' escapes plus cd && ... && sed -n). Readings: (a) parser/tokenizer misreads quote state after backslash-escaped quotes; (b) intended if quote state is undetermined — distinguish by comparing to bash's own tokenization (bash -n accepts it, the sed program is one word).'''
+created_at = 1795227944
+updated_at = 1795267598
+weight = 0.0
+issue_number = 1942
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1942"
+issue_closed_at = 1795267602
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_dq_redirect_in_sed -- --ignored"
+rev = "c8f566bce4f0d05d24e810de070207b5a7a380ac"
+observed_at = 1795227944
+detail = """
+exit 101:   Compiling blastguard v0.2.867 (/Users/yuki/src/.harness-worktrees/session-c1b3e891/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.52s
+     Running tests/backlog_20261121_dq_redirect_in_sed.rs (target/debug/deps/backlog_20261121_dq_redirect_in_sed-135311d0fc77f019)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_dq_redirect_in_sed`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261121_dq_redirect_in_sed"
+exit = 0
+passed = 1
+rev = "45677b0ba036ebc36ed33a7f09ff800b5bcf81be"
+observed_at = 1795267596
+output_digest = "sha256:f662cb8a93f5f0ad1b1dca579c6261ae02fdfe2957bc28214d7c4a48a88999d9"
+excerpt = """
+
+running 1 test
+test sed_i_with_gt_amp_in_double_quotes_is_not_a_redirect_refusal ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_20261121_dq_redirect_in_sed.rs (target/debug/deps/backlog_20261121_dq_redirect_in_sed-bdc42810f238e6bf)
+"""
+
+[task.closure.red]
+rev = "6e0112ef1c6f00bc9383cad6eef0099266a932fd"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -1,15 +1,14 @@
 """Repro for scout 2026-11-12 F3: cap-target-dir.sh writes .cap-cleaned-at even when `cargo clean` failed.
 
-cap-target-dir.sh runs `cargo clean || true` and then unconditionally writes
-<target>/.cap-cleaned-at. The marker is documented as evidence that a clean
+The defect: cap-target-dir.sh ran `cargo clean || true` and then unconditionally
+wrote <target>/.cap-cleaned-at. The marker is documented as evidence that a clean
 HAPPENED (test-changed-crates.sh reads it to tell "binary deleted under my run"
-from a genuine failure), so a failed clean must not leave it.
+from a genuine failure), so a failed clean must not leave it. The script now keeps
+the clean's exit status, writes the marker only when the clean succeeded, and
+states a failed clean on stderr (still exiting 0).
 
 Run: python3 -m pytest --runxfail scripts/test_scout_20261112_f3_cap_clean_failed_repro.py
-(the backlog repro). Without --runxfail the RED reports as xfailed; strict=True
-turns it into a failure (XPASS) once the defect is fixed, so remove the xfail
-mark in the commit that fixes it. `cargo` is a PATH stub, nothing touches a
-real target dir.
+(the backlog repro). `cargo` is a PATH stub, nothing touches a real target dir.
 """
 
 from __future__ import annotations
@@ -21,15 +20,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import pytest
-
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE / "cap-target-dir.sh"
-
-OPEN = pytest.mark.xfail(
-    strict=True,
-    reason="scout 2026-11-12 F3: open defect; remove this mark when fixed",
-)
 
 
 class CapCleanMarker(unittest.TestCase):
@@ -72,7 +64,6 @@ class CapCleanMarker(unittest.TestCase):
             "control: clean succeeded, marker should be written",
         )
 
-    @OPEN
     def test_failed_clean_must_not_write_marker(self):
         r = self._run(1)
         self.assertEqual(r.returncode, 0, r.stderr)

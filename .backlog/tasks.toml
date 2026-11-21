@@ -1219,14 +1219,17 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
-notes = "Found by the independent test author of 8cadc78f (tests ddd587ad4). Ignored RED c06_rm_build in crates/blastguard/tests/backlog_20261120_8cadc78f_adversarial.rs asserts not-Deny. Compare with the verdict of plain rm -rf ./build when fixing."
+status = "failed"
+notes = """
+Found by the independent test author of 8cadc78f (tests ddd587ad4). Ignored RED c06_rm_build in crates/blastguard/tests/backlog_20261120_8cadc78f_adversarial.rs asserts not-Deny. Compare with the verdict of plain rm -rf ./build when fixing.
+needs user ruling: worker (run-20261121-151141-59675) found no blastguard defect. On macOS c06's cwd is under std::env::temp_dir()=/private/var/... which is in SYSTEM_PREFIXES, so plain 'rm -rf ./build' is already Deny there and the piped form matches it verbatim. With cwd under /tmp: plain and piped both main=Ask, subagent=Deny (designed Ask->Deny rewrite), so c06's unhedged 'not Deny in both modes' contradicts the subagent policy. Options: (a) re-anchor c06 to 'piped not stricter than plain'; (b) close as false alarm; (c) policy change so confined relative rm is Allow. Controls written at f46f6c2fb (discarded with the task branch)."""
 created_at = 1795179825
-updated_at = 1795179825
+updated_at = 1795241732
+defer_until = 1795414532
 weight = 0.0
 issue_number = 1902
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1902"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

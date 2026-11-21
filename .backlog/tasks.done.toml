@@ -93287,3 +93287,128 @@ rev = "cc4c2e9573677261292e1c5d70d66c30cbe831e1"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "669b28ea"
+title = "condukt testscope: a cargo global option with a separate value (cargo --color always test / --config k=v test) skips the full-suite deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "testscope",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-21 on main 0209adc6d (sidefind2-eaa077f4 worktree); named by the independent t1 verifier of condukt run run-20261121-225214-62742 (static reading of crates/condukt/src/testscope.rs judge_cargo global-flag skip: while args.get(i).is_some_and(|a| a.starts_with('+') || a.starts_with('-')) { i += 1; } skips the flag token only, so the value of --color always / --config k=v becomes the subcommand and the command is judged Other). RED: 'cargo --color always test: expected a deny, stdout not JSON (EOF while parsing a value at line 1 column 0): ""' (allowed); control cargo --color=always test is denied. cargo 1.97.1 accepts both spellings (cargo --color always --version prints the version). Readings: (a) fail-open: full-suite deny bypassed; (b) intended: none found. Not covered: -C dir / -Z flag / --manifest-path."""
+created_at = 1795273189
+updated_at = 1795280292
+weight = 0.0
+issue_number = 1961
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1961"
+issue_closed_at = 1795280295
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261121_testscope_global_flag_value_bypass -- --ignored"
+rev = "92ed6ee05a4f3fad0c8ce888163869a06fea1f02"
+observed_at = 1795273189
+detail = """
+exit 101: yuki/.condukt/worktrees/sidefind2-eaa077f4/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.37s
+     Running tests/backlog_20261121_testscope_global_flag_value_bypass.rs (target/debug/deps/backlog_20261121_testscope_global_flag_value_bypass-82579559e9e0dd48)
+error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_global_flag_value_bypass`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261121_testscope_global_flag_value_bypass"
+exit = 0
+passed = 2
+rev = "2c03743d58820da7934ffa50010d23d4348a018d"
+observed_at = 1795280291
+output_digest = "sha256:74e582eec67a35915b0fc6b904f9c2890b334700a243769d221147a1880d9690"
+excerpt = """
+
+running 2 tests
+test control_equals_spelling_is_denied ... ok
+test global_option_value_before_test_is_still_denied ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.06s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/backlog_20261121_testscope_global_flag_value_bypass.rs (target/debug/deps/backlog_20261121_testscope_global_flag_value_bypass-020a94b1bcb8a8ec)
+"""
+
+[task.closure.red]
+rev = "56c4f16973db5621a381e632cdd046e51155e832"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "d039872d"
+title = "不正な CONDUKT_MAX_PARALLEL / CONDUKT_STUCK_TTL_SECS を黙って無視しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "scout",
+    "L5",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "scout 2026-11-12, RED observed at 656b1c38, verified (independent verifier, no re-run). F3b: crates/condukt/src/config.rs:446-455 drops parse errors. CAVEAT (verifier): observed only on 'condukt state list' (non-zero exit or var name on stderr); a fix that reports only in the consumer command would stay RED — that observation point is a proxy, the fixer may re-anchor."
+created_at = 1794434301
+updated_at = 1795280297
+weight = 0.0
+issue_number = 1647
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1647"
+issue_closed_at = 1795280299
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_scout_20261112_f3_max_parallel -- --ignored is_not_silently_ignored"
+rev = "9c71a19fed28cf0f1a46f8909076f5bcb60e67ed"
+observed_at = 1794434301
+detail = """
+exit 101: est result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.78s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_scout_20261112_f3_max_parallel.rs (target/debug/deps/backlog_scout_20261112_f3_max_parallel-6196e7ac86e86462)
+error: test failed, to rerun pass `-p condukt --test backlog_scout_20261112_f3_max_parallel`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_scout_20261112_f3_max_parallel"
+exit = 0
+passed = 3
+rev = "2c03743d58820da7934ffa50010d23d4348a018d"
+observed_at = 1795280295
+output_digest = "sha256:b08054ac91331ef09dd56f33eace484a6f60e211b803e8fa579ee8fe23e86a68"
+excerpt = """
+
+running 3 tests
+test unparseable_stuck_ttl_env_is_not_silently_ignored ... ok
+test unparseable_max_parallel_env_is_not_silently_ignored ... ok
+test max_parallel_one_refuses_a_second_live_worktree_in_the_same_run ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.35s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_scout_20261112_f3_max_parallel.rs (target/debug/deps/backlog_scout_20261112_f3_max_parallel-47af74b4b60526fe)
+"""
+
+[task.closure.red]
+rev = "56c4f16973db5621a381e632cdd046e51155e832"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

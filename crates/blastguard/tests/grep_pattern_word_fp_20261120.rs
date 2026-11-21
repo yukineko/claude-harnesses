@@ -275,3 +275,19 @@ fn minimal_grep_plain_word_twin_is_allow() {
         ],
     );
 }
+
+/// Control (verifier finding 2026-11-21, run-20261121-102650-23366): a
+/// read-only-looking head whose option runs its argument as a program must
+/// keep a non-Allow verdict. Observed: `bat --pager rm -rf /etc` was ask at
+/// base 3e4c4359a and Allow at 1ee756c2a (the data-only exclusion covered
+/// `bat`). Independent test author (orchestrator), not the implementer.
+#[test]
+fn control_exec_capable_option_heads_not_allow() {
+    not_allow_all(
+        "execopt",
+        &[
+            "bat --pager rm -rf /etc",
+            "rg --pre rm -rf /etc x",
+        ],
+    );
+}

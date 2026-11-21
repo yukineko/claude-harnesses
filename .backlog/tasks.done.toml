@@ -90930,3 +90930,57 @@ rev = "9c04641792e782f19d232ab496f83871f2ae00c5"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "c7f288b7"
+title = "blastguard: quote-split harmful echo argument in a procsub is Ask, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn echo_quote_split_argument_in_procsub_is_deny
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored echo_quote_split_argument_in_procsub_is_deny --exact; rev: 44f72dec4ebab7a1ea7b95e710b709dbf00b214c; observed: exit 0: 
+running 1 test
+test echo_quote_split_argument_in_procsub_is_deny ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.61s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-80fcc8751a9101d2)"""
+created_at = 1795155325
+updated_at = 1795227549
+weight = 0.0
+issue_number = 1895
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1895"
+issue_closed_at = 1795227552
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored echo_quote_split_argument_in_procsub_is_deny --exact"
+rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
+observed_at = 1795155325
+detail = """
+exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.61s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored echo_quote_split_argument_in_procsub_is_deny --exact; rev: 44f72dec4ebab7a1ea7b95e710b709dbf00b214c; observed: exit 0: 
+running 1 test
+test echo_quote_split_argument_in_procsub_is_deny ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.61s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-80fcc8751a9101d2)"""

@@ -26,6 +26,7 @@ fn b5_gives_no_opinion_for_a_dash_c_without_a_program() {
     let probes = ast::b5::Probes {
         judge: &judge,
         scope: &scope,
+        wrappers_bare: false,
     };
     let raise = |c: &str| ast::b5::raise(Decision::Allow, c, &probes);
     assert_eq!(raise("bash -c"), Decision::Allow);

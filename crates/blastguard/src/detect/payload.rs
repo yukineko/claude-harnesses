@@ -20,6 +20,7 @@ mod procsub_split;
 mod program_source;
 mod program_word;
 mod stdin_operand;
+mod upstream_stage;
 #[cfg(test)]
 mod word_boundary_tests;
 
@@ -657,6 +658,16 @@ the command line, so blastguard cannot read the program",
                 let upstream = (statement[i - 1].as_str(), feeder.is_some());
                 let shadow = function_shadow::shadowed_emitter_ask(&shape, upstream, ctx);
                 if let Some(deny) = shadow.and_then(|ask| acc.record(ask)) {
+                    return deny;
+                }
+                // An exec wrapper in front of the upstream emitter (`env echo`):
+                // an Ask unless the line resolves it as written (`upstream_stage`).
+                if let Some(deny) = acc.record(upstream_stage::unresolved_wrapper_ask(
+                    &shape,
+                    &statement[i - 1],
+                    cmd,
+                    feeder.is_none() && depth == 0,
+                )) {
                     return deny;
                 }
             }

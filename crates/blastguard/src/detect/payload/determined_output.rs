@@ -206,6 +206,24 @@ fn output_at(text: &str, depth: usize) -> Option<Output> {
     })
 }
 
+/// The value of the word `raw` (as written, quotes included) when it is a
+/// determined word (see the module docs) whose value needed at least one
+/// `$( )` substitution computed: `"$(echo 'rm -rf /etc')"` is `rm -rf /etc`
+/// (each substitution's trailing newlines removed, as the shell does). That
+/// is the program a shell runs when the word is its `-c` operand (backlog
+/// 28019c35), and the code `eval` runs when it is `eval`'s only operand.
+///
+/// `None` for every other word — one without a substitution (the existing
+/// readings already read it), and one any part of which is not determined.
+/// The caller must also hold [`resolution_fixed`] of the text it judges and
+/// `chain_names_fixed` of the chain; this function does not check them.
+pub(in crate::detect) fn substituted_word_value(raw: &str) -> Option<String> {
+    match determined_word(raw, 0)? {
+        (value, true) => Some(value),
+        (_, false) => None,
+    }
+}
+
 /// The value of one word, and whether a command substitution was computed.
 fn determined_word(raw: &str, depth: usize) -> Option<(String, bool)> {
     let options = brush_parser::ParserOptions::default();

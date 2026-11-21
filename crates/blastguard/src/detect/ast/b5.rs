@@ -703,6 +703,12 @@ fn classify(
     if let Some(body) = determined_delivered_program(text, commands, idx, cmd, &source, k) {
         return literal_body(fam, &body, depth, judge);
     }
+    // A `-c` operand that is a determined word built from `$( )`
+    // substitutions (`bash -c "$(echo 'rm -rf /etc')"`, backlog 28019c35):
+    // see `determined_dash_c_program`. Raise-only: only its Deny is taken.
+    if let Some(deny) = determined_dash_c_program(text, fam, base, args, &source, judge) {
+        return deny;
+    }
     match (fam, source) {
         (_, ProgramSource::Undetermined(r)) => undetermined(format_args!("`{base}`: {r}")),
         (Family::Shell, ProgramSource::InlineLiteral(prog)) => {
@@ -1137,6 +1143,45 @@ fn determined_delivered_program(
     pipeline_output(&delivering)
         .filter(|o| o.beyond_plain_echo)
         .map(|o| o.text)
+}
+
+/// The Deny of the program a shell runs as `-c W` (`args` = `-c W …`, exactly
+/// the flag `-c` first) when its source is Undetermined only because `W` is
+/// a word whose value `determined_output::substituted_word_value` computes
+/// from its `$( )` substitutions (backlog 28019c35): that value is judged by
+/// the full detector as the `-c` program ([`judge_body`], depth-bounded).
+///
+/// `None` — the caller keeps today's verdict — when the shape differs, when
+/// the user's line, an enclosing derived text, or `text` may rebind the
+/// modelled names (`chain_names_fixed` / `resolution_fixed`, as for
+/// [`determined_delivered_program`]; a function named `echo` on the chain
+/// fails them), or when the judged program is not a Deny: an Ask or Allow on
+/// the computed text never replaces today's Undetermined, so nothing is
+/// loosened. `eval W` can reuse `substituted_word_value` the same way.
+fn determined_dash_c_program(
+    text: &str,
+    fam: Family,
+    base: &str,
+    args: &[Word],
+    source: &ProgramSource,
+    judge: &Probes<'_>,
+) -> Option<Decision> {
+    use crate::detect::payload::determined_output::{resolution_fixed, substituted_word_value};
+    if fam != Family::Shell || !matches!(source, ProgramSource::Undetermined(_)) {
+        return None;
+    }
+    let [flag, word, ..] = args else {
+        return None;
+    };
+    if !literal(flag).is_ok_and(|f| f == "-c") || !matches!(word.value, Value::Undetermined(_)) {
+        return None;
+    }
+    if !crate::detect::readings::chain_names_fixed() || !resolution_fixed(text) {
+        return None;
+    }
+    let program = substituted_word_value(&word.raw)?;
+    let verdict = judge_body(&program, Runner::Shell(base), judge);
+    verdict.is_deny().then_some(verdict)
 }
 
 /// The text of the pipeline stages before `cmd` (`commands[idx]`, a later

@@ -1806,7 +1806,8 @@ chain 値）、`detect/ast/b5.rs`。
   this command line (or on a line enclosing it)」。literal の判定の後に記録するので、literal 内の Deny が優先する。
 - alias（backlog cffe54c4）: alias も同じ類で、`alias echo='echo chmod 777 /etc/hosts #'; bash <(echo hi)` は
   alias の出力が program になる。`defined_functions` は関数名に加えて、parse した script の simple command のうち
-  command name が（quote 除去後に）`alias`（`builtin alias` / `command alias` を含む。`ali\as`・`a""lias` も該当）の
+  command name が（quote 除去後に）`alias`（`builtin` / `command` の前置は構造的に剥がす: 入れ子の `builtin`/`command`・`-p`・`--` は飛ばし、`-v`/`-V` は何も
+実行しない、それ以外の option や literal でない word は `Undetermined`。`ali\as`・`a""lias` も該当）の
   ものの `NAME=VALUE` operand の NAME を chain 値へ足す（`defined_aliases`。text 検索ではなく AST を読む。
   `expand_aliases` の有無は問わない制限側の過大近似）。`alias` が引数（`grep alias f`・`echo alias $HOME`）や
   quote 内にあるだけなら何も足さない。command name が literal でない（`alias` を綴りうる。`a=al; ${a}ias echo=x`

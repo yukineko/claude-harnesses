@@ -175,6 +175,34 @@ fn may_spell_alias(text: &str) -> bool {
     next.is_none()
 }
 
+enum Peeled<'a> {
+    /// The words peeled down to the `alias` builtin; its operands.
+    Alias(&'a [ast::Word]),
+    /// Runs another literal command, or nothing (`command -v`).
+    OtherCommand,
+    /// An unrecognised shape: it may run `alias`.
+    Undetermined,
+}
+
+/// The words after a `builtin` / `command` head, peeled structurally:
+/// nested `builtin` / `command` words, `-p` and `--` are skipped; `-v` / `-V`
+/// run nothing; any other option, or a non-literal word, is `Undetermined`.
+fn peel_builtin_command(words: &[ast::Word]) -> Peeled<'_> {
+    for (i, w) in words.iter().enumerate() {
+        let ast::Value::Literal(s) = &w.value else {
+            return Peeled::Undetermined;
+        };
+        match s.as_str() {
+            "builtin" | "command" | "-p" | "--" => {}
+            "-v" | "-V" => return Peeled::OtherCommand,
+            "alias" => return Peeled::Alias(&words[i + 1..]),
+            s if s.starts_with('-') => return Peeled::Undetermined,
+            _ => return Peeled::OtherCommand,
+        }
+    }
+    Peeled::OtherCommand
+}
+
 /// The alias names `text` may define, read from the parsed script (not from
 /// the text): the `NAME=VALUE` operands of every simple command whose command
 /// name, after quote removal, is `alias` (also `builtin alias` /
@@ -201,10 +229,10 @@ fn defined_aliases(text: &str) -> Functions {
         let operands = match &head.value {
             ast::Value::Literal(h) if h == "alias" => &cmd.argv[1..],
             ast::Value::Literal(h) if h == "builtin" || h == "command" => {
-                match cmd.argv.get(1).map(|w| &w.value) {
-                    Some(ast::Value::Literal(a)) if a == "alias" => &cmd.argv[2..],
-                    Some(ast::Value::Undetermined(_)) => return Functions::Undetermined,
-                    _ => continue,
+                match peel_builtin_command(&cmd.argv[1..]) {
+                    Peeled::Alias(rest) => rest,
+                    Peeled::OtherCommand => continue,
+                    Peeled::Undetermined => return Functions::Undetermined,
                 }
             }
             ast::Value::Literal(_) => continue,

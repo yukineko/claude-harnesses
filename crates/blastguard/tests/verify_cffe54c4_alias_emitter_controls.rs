@@ -155,3 +155,26 @@ fn b_alias_empty_quotes_spelled_is_not_allow() {
         "b-emptyquote",
     );
 }
+
+#[test]
+fn a_command_v_is_allow() {
+    expect_allow("command -v ls; bash <(echo hi)", "a-command-v");
+}
+
+#[test]
+fn b_command_p_alias_is_not_allow() {
+    expect_not_allow(
+        "command -p alias echo='echo chmod 777 /etc/hosts #'; bash <(echo hi)",
+        "b-command-p",
+    );
+}
+
+#[test]
+fn b_command_command_alias_is_not_allow() {
+    expect_not_allow("command command alias echo='x'; bash <(echo hi)", "b-cc");
+}
+
+#[test]
+fn b_builtin_command_alias_is_not_allow() {
+    expect_not_allow("builtin command alias echo='x'; bash <(echo hi)", "b-bc");
+}

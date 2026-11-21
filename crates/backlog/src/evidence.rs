@@ -550,7 +550,8 @@ fn count_of(output: &str, word: &str) -> Option<u64> {
 /// Output is "recognisably libtest" when it contains a `test result:` line.
 /// Such a run executed zero tests iff the sum of `passed + failed` over ALL
 /// its `test result:` lines (one per test binary) is 0, e.g. `0 passed; 0
-/// failed; 1 ignored` (an `#[ignore]`d repro run without `-- --ignored`) or
+/// failed; 1 ignored` (an `#[ignore]`d repro run without `-- --ignored`; the
+/// caller classifies that as undeterminable, see `ignored_in_results`) or
 /// `... 1 filtered out` (a filter matching nothing). A `cargo test` run with
 /// no `test result:` line at all shows no test ran either. Non-cargo output
 /// that is not libtest is left alone (`None`): pytest / scripts keep their
@@ -588,6 +589,16 @@ fn zero_tests_ran(cmd: &TestCmd, output: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Sum of `N ignored` over every `test result:` line of `output`: how many
+/// tests exist but were skipped as `#[ignore]`d. 0 when none is reported.
+fn ignored_in_results(output: &str) -> u64 {
+    output
+        .lines()
+        .filter(|l| l.contains("test result:"))
+        .map(|l| count_of(l, "ignored").unwrap_or(0))
+        .fold(0u64, u64::saturating_add)
 }
 
 /// Markers of a BUILD failure (the test never ran), as opposed to a test that
@@ -880,11 +891,14 @@ pub fn run_repro(cwd: &Path, text: &str, now: i64) -> Repro {
 ///
 /// The boundary between the last two is: NOT DEMONSTRATED = the repro itself
 /// ran (or could not even be started) and its own answer is "the defect is
-/// not shown" — exit 0 with zero tests run, a stored script that exits 2
+/// not shown" — exit 0 with zero tests run (and none `#[ignore]`d: ignored
+/// tests that were skipped are UNDETERMINABLE below), a stored script that exits 2
 /// (its environment is unavailable: e.g. "no v9fs dir"), 126/127 (cannot be
 /// started), pytest 4/5, a stored command that no longer parses / is not on
 /// the allowlist, a script no longer tracked at HEAD. UNDETERMINABLE = the
-/// harness or host failed to carry the run to an answer — a timeout (e.g. a
+/// harness or host failed to carry the run to an answer — an exit-0 run whose
+/// tests were all skipped as `#[ignore]`d (`N ignored`, N >= 1; the repro
+/// lacks `-- --ignored`), a timeout (e.g. a
 /// cargo lock wait), a signal, a spawn failure, a git query failure, a dirty
 /// checkout, a bad `BACKLOG_TEST_TIMEOUT_SECS`, a build/compile failure (a
 /// broken HEAD must never mass-close tickets), or a non-zero cargo/pytest run
@@ -997,6 +1011,23 @@ pub fn run_repro_classified(cwd: &Path, text: &str, now: i64) -> ClassifiedRepro
     let tail = excerpt_short(&r.output);
     if r.exit == 0 {
         if let Some(why) = zero_tests_ran(&cmd, &r.output) {
+            // Tests exist but were all skipped as `#[ignore]`d: the run
+            // observed nothing about the defect, and the row's repro is
+            // simply mis-specified (missing `-- --ignored`). That is
+            // undetermined, never a close (CLAUDE.md §3).
+            let ignored = ignored_in_results(&r.output);
+            if ignored >= 1 {
+                return undet(
+                    RecheckVerdict::Undeterminable,
+                    format!(
+                        "exit 0 but ZERO tests ran: {ignored} test(s) exist but were skipped as \
+                         `#[ignore]`d, so nothing was observed; run the repro with `-- --ignored` \
+                         (e.g. `cargo test -p <crate> --test <file> -- --ignored`): {tail}"
+                    ),
+                    Some(head),
+                    Some(0),
+                );
+            }
             return undet(
                 RecheckVerdict::NotDemonstrated,
                 format!("exit 0: {why}: {tail}"),

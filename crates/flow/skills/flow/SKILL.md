@@ -186,6 +186,7 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
 flow plugin は Stop hook `${CLAUDE_PLUGIN_ROOT}/bin/flow stop-gate` を同梱する。この hook は次のとおり判定する:
 
 - このセッションが live な driver として登録されていて、`backlog next` が仕事を返す、またはこのセッションが `flow-<SESSION>` run の claim を保持している間は、stop を block する（ターンを続けさせる）。
+- ただし `backlog next` が返した task の hashkey を `condukt state is-claimed --hashkey <hashkey>` で引き、`flow-<SESSION>` 以外の run が保持していると確定した（exit 0 かつ `holder_run` がその run）ときだけ、その task はこのセッションの仕事に数えない（Step 3 (a) の claim-skip ゲートと同じ扱い。backlog e1e8c632）。hashkey が無い・claim なし・自分の run が保持・判定不能（exit 3 等）のときは仕事として数え、block する。`backlog next` は先頭の 1 件しか返さないため、その後ろに並ぶ task はこの hook では見ていない（allow のメッセージにその旨が出る）。
 - ただし `condukt circuit check`（`--no-compaction-axis` 付き）が trip していれば stop を許す（循環ブレーカーは唯一の停止理由であり、hook も同じ判定に従う）。
 - 判定不能（registry・backlog・claims・circuit を観測できない）は、まず 1 回 block し、同じセッションで連続した次の判定不能の stop だけを、理由を表示したうえで allow にする（黙って通さない）。
 - driver 登録の無いセッションは一切 block しない（`/flow` を起動していないセッションには作用しない）。

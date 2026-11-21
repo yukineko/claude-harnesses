@@ -609,6 +609,8 @@ notes = "Observed 2026-11-17 at cd09054b1. bl() runs the binary with env_clear a
 created_at = 1794887649
 updated_at = 1795111321
 weight = 0.0
+issue_number = 1911
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1911"
 rev = 1
 
 [task.repro]
@@ -672,6 +674,8 @@ notes = "Observed 2026-11-17 at 1331e475d (backlog 0.3.138), t3 re-verifier low 
 created_at = 1794892431
 updated_at = 1794892431
 weight = 0.0
+issue_number = 1912
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1912"
 rev = 0
 
 [task.repro]
@@ -700,6 +704,8 @@ notes = "Observed 2026-11-17 at 1331e475d (backlog 0.3.138), t3 re-verifier low 
 created_at = 1794892457
 updated_at = 1794892457
 weight = 0.0
+issue_number = 1913
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1913"
 rev = 0
 
 [task.repro]
@@ -900,6 +906,8 @@ notes = "high_blast_tier.rs:257: a cd that resolves the .. back to an ordinary p
 created_at = 1795110533
 updated_at = 1795110533
 weight = 0.0
+issue_number = 1914
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1914"
 rev = 0
 
 [task.repro]
@@ -932,6 +940,8 @@ notes = "home_asset_unlink_rmdir_and_opt_root: control rm ~/.ssh/id_rsa must be 
 created_at = 1795110546
 updated_at = 1795110546
 weight = 0.0
+issue_number = 1915
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1915"
 rev = 0
 
 [task.repro]
@@ -962,6 +972,8 @@ notes = "p0_unknown_verb_false_positives.rs:31: control must be Deny or Ask, got
 created_at = 1795110557
 updated_at = 1795110557
 weight = 0.0
+issue_number = 1916
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1916"
 rev = 0
 
 [task.repro]
@@ -994,6 +1006,8 @@ notes = "quoted_heredoc_python_gt_fp_20261107.rs:152: a quoted gt outside the he
 created_at = 1795110570
 updated_at = 1795110570
 weight = 0.0
+issue_number = 1917
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1917"
 rev = 0
 
 [task.repro]
@@ -1024,6 +1038,8 @@ notes = "redirect_target_resolution.rs:440: 3 shapes resolved, e.g. { P=/home/yu
 created_at = 1795110589
 updated_at = 1795110589
 weight = 0.0
+issue_number = 1918
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1918"
 rev = 0
 
 [task.repro]
@@ -1056,6 +1072,8 @@ notes = "redirect_target_suffix_resolution.rs:665: 4 shapes, e.g. declare P=/hom
 created_at = 1795110602
 updated_at = 1795110602
 weight = 0.0
+issue_number = 1919
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1919"
 rev = 0
 
 [task.repro]
@@ -1088,6 +1106,8 @@ notes = "worktree_protected_paths.rs:685 panics; also fails on 5d0983532 (verifi
 created_at = 1795110614
 updated_at = 1795110614
 weight = 0.0
+issue_number = 1920
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1920"
 rev = 0
 
 [task.repro]
@@ -1281,6 +1301,8 @@ notes = "Observed 2026-11-20 (run-20261120-071122-49691 task A worker; reproduce
 created_at = 1795133883
 updated_at = 1795133883
 weight = 0.0
+issue_number = 1921
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1921"
 rev = 0
 
 [task.repro]
@@ -1788,6 +1810,8 @@ notes = "Observed 2026-11-20 at main 5b2b3a6b8 (detached checkout, run-20261120-
 created_at = 1795162227
 updated_at = 1795162227
 weight = 0.0
+issue_number = 1922
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1922"
 rev = 0
 
 [task.repro]
@@ -1819,6 +1843,8 @@ notes = "Observed 2026-11-20 (rev c434e41e5 area, deployed ~0.2.8xx). Command ru
 created_at = 1795163111
 updated_at = 1795163111
 weight = 0.0
+issue_number = 1923
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1923"
 rev = 0
 
 [task.repro]
@@ -1847,6 +1873,8 @@ notes = "Observed 2026-11-20 (subagent, blastguard 0.2.809): cd <dir> && backlog
 created_at = 1795163770
 updated_at = 1795163770
 weight = 0.0
+issue_number = 1924
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1924"
 rev = 0
 
 [task.repro]
@@ -1876,6 +1904,8 @@ notes = "Observed 2026-11-20 (flow session, blastguard deployed 0.2.798; re-meas
 created_at = 1795163808
 updated_at = 1795163808
 weight = 0.0
+issue_number = 1925
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1925"
 rev = 0
 
 [task.repro]
@@ -1906,6 +1936,8 @@ notes = '''Observed 2026-11-20 during run-20261120-171414-35880 (condukt driver,
 created_at = 1795166100
 updated_at = 1795166100
 weight = 0.0
+issue_number = 1926
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1926"
 rev = 0
 
 [task.repro]
@@ -1936,6 +1968,8 @@ notes = "RED crates/condukt/tests/backlog_20261120_testscope_task_crate_regressi
 created_at = 1795171422
 updated_at = 1795171422
 weight = 0.0
+issue_number = 1927
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1927"
 rev = 0
 
 [task.repro]
@@ -1965,6 +1999,8 @@ notes = "RED crates/blastguard/tests/backlog_20261120_quoted_heredoc_group_backt
 created_at = 1795171754
 updated_at = 1795171754
 weight = 0.0
+issue_number = 1928
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1928"
 rev = 0
 
 [task.repro]
@@ -1994,6 +2030,8 @@ notes = "Observed 2026-11-20: main-session byte-for-byte re-run of relay bgr-a86
 created_at = 1795172228
 updated_at = 1795172228
 weight = 0.0
+issue_number = 1929
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1929"
 rev = 0
 
 [task.repro]
@@ -2148,6 +2186,8 @@ notes = "Observed 2026-11-20/21 by the coordinator (session 62e92d16) during run
 created_at = 1795193216
 updated_at = 1795193216
 weight = 0.0
+issue_number = 1930
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1930"
 rev = 0
 
 [task.repro]
@@ -2179,6 +2219,8 @@ notes = """Observed 2026-11-21 in main session (project dir = primary checkout).
 created_at = 1795193342
 updated_at = 1795193342
 weight = 0.0
+issue_number = 1931
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1931"
 rev = 0
 
 [task.repro]
@@ -2454,6 +2496,8 @@ notes = """Observed 2026-11-21 in condukt run run-20261121-042409-20321 task t1 
 created_at = 1795204326
 updated_at = 1795204326
 weight = 0.0
+issue_number = 1932
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1932"
 rev = 0
 
 [task.repro]

@@ -1610,23 +1610,24 @@ touched_files = []
 status = "pending"
 notes = "Observed 2026-11-21 at main 81a91a05f (session worktree, blastguard 0.2.864): 'rg --pre sh pat .githooks/pre-commit' and 'rg --pre=sh pat .githooks/pre-commit' both return allow in main and subagent mode (expected not Allow). Cause: rg/ag/ack are in READ_ONLY_COMMANDS so unknown_verb_protected_ask (crates/blastguard/src/detect/readonly.rs:184) allows them; rg --pre CMD runs CMD FILE per searched file. Readings: (a) defect: --pre is an exec flag, rg is not data-only with it, Allow is a fail-open; (b) intended if the protected-operand rule guards writes only. rg --help documents --pre as running a command, so (a) unless policy permits executing protected files. Related: 375d7394 control rg --pre rm -rf /etc already not Allow."
 created_at = 1795227480
-updated_at = 1795227480
+updated_at = 1795266166
 weight = 0.0
 issue_number = 1941
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1941"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261121_rg_pre_protected"
-rev = "cf2a9e86903484b4286fd7a7b98f05144799e63b"
-observed_at = 1795227480
+cmd = "cargo test -p blastguard --test backlog_20261121_rg_pre_protected -- --ignored"
+rev = "382b10028dcea03f8dbc2a4834172d7dc49eb8ca"
+observed_at = 1795266165
 detail = """
-exit 101: 76s
+exit 101: not_allow
 
-   Compiling blastguard v0.2.865 (/Users/yuki/src/.harness-worktrees/session-c1b3e891/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.73s
-     Running tests/backlog_20261121_rg_pre_protected.rs (target/debug/deps/backlog_20261121_rg_pre_protected-00e2bb410307acaa)
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261121_rg_pre_protected.rs (target/debug/deps/backlog_20261121_rg_pre_protected-946d7ba050f4d0bc)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_rg_pre_protected`"""
 
 [[task]]
@@ -1921,6 +1922,8 @@ notes = """Observed 2026-11-21 (main 11c04144d, session eff985d3, a live registe
 created_at = 1795265054
 updated_at = 1795265054
 weight = 0.0
+issue_number = 1956
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1956"
 rev = 0
 
 [task.repro]

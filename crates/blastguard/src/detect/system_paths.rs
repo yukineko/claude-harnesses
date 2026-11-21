@@ -226,37 +226,311 @@ fn mutated_files<'a>(cmd: &str, words: &[&'a str]) -> Option<(&'static str, Vec<
 }
 
 const SED_VALUE_FLAGS: &[&str] = &["-e", "--expression", "-f", "--file", "-l", "--line-length"];
-const RSYNC_VALUE_FLAGS: &[&str] = &[
-    "-e",
-    "--rsh",
-    "-f",
-    "--filter",
-    "--exclude",
-    "--include",
-    "--exclude-from",
-    "--include-from",
-    "--files-from",
-    "--password-file",
-    "-T",
-    "--temp-dir",
-    "--backup-dir",
-    "--compare-dest",
-    "--copy-dest",
-    "--link-dest",
-    "--partial-dir",
-    "--log-file",
-    "--chmod",
-    "--chown",
-    "-B",
-    "--block-size",
-    "--max-size",
-    "--min-size",
-    "--timeout",
-    "--port",
-    "--suffix",
-    "--rsync-path",
-    "--out-format",
+/// `rsync` long options that take a value, which may be given as the NEXT
+/// word (`--bwlimit 100`) as well as attached (`--bwlimit=100`). From the
+/// GNU rsync 3.2/3.3 option table (client and daemon options) plus the
+/// macOS openrsync manual. Without the name here, the value word would be
+/// read as an operand — and, after the operands, as the destination.
+const RSYNC_VALUE_LONG: &[&str] = &[
+    "address",
+    "backup-dir",
+    "block-size",
+    "bwlimit",
+    "cc",
+    "checksum-choice",
+    "checksum-seed",
+    "chmod",
+    "chown",
+    "compare-dest",
+    "compress-choice",
+    "compress-level",
+    "config",
+    "contimeout",
+    "copy-as",
+    "copy-dest",
+    "debug",
+    "dparam",
+    "early-input",
+    "exclude",
+    "exclude-from",
+    "files-from",
+    "filter",
+    "groupmap",
+    "iconv",
+    "include",
+    "include-from",
+    "info",
+    "link-dest",
+    "log-file",
+    "log-file-format",
+    "log-format",
+    "max-alloc",
+    "max-delete",
+    "max-size",
+    "min-size",
+    "modify-window",
+    "only-write-batch",
+    "out-format",
+    "outbuf",
+    "partial-dir",
+    "password-file",
+    "port",
+    "protocol",
+    "read-batch",
+    "remote-option",
+    "rsh",
+    "rsync-path",
+    "skip-compress",
+    "sockopts",
+    "stderr",
+    "stop-after",
+    "stop-at",
+    "suffix",
+    "temp-dir",
+    "time-limit",
+    "timeout",
+    "usermap",
+    "write-batch",
+    "zc",
+    "zl",
 ];
+
+/// `rsync` long options that take no value (every `--no-*` negation is one
+/// too). A long option in neither list is unknown: it may take the next word
+/// as its value, so that word may or may not be an operand.
+const RSYNC_BOOL_LONG: &[&str] = &[
+    "8-bit-output",
+    "acls",
+    "append",
+    "append-verify",
+    "archive",
+    "atimes",
+    "blocking-io",
+    "cache",
+    "checksum",
+    "compress",
+    "copy-devices",
+    "copy-dirlinks",
+    "copy-links",
+    "copy-unsafe-links",
+    "crtimes",
+    "cvs-exclude",
+    "daemon",
+    "del",
+    "delay-updates",
+    "delete",
+    "delete-after",
+    "delete-before",
+    "delete-delay",
+    "delete-during",
+    "delete-excluded",
+    "delete-missing-args",
+    "devices",
+    "dirs",
+    "dry-run",
+    "executability",
+    "existing",
+    "fake-super",
+    "force",
+    "force-change",
+    "force-delete",
+    "from0",
+    "fuzzy",
+    "group",
+    "hard-links",
+    "help",
+    "human-readable",
+    "ignore-errors",
+    "ignore-existing",
+    "ignore-missing-args",
+    "ignore-non-existing",
+    "ignore-times",
+    "inplace",
+    "ipv4",
+    "ipv6",
+    "itemize-changes",
+    "keep-dirlinks",
+    "links",
+    "list-only",
+    "mkpath",
+    "munge-links",
+    "new-compress",
+    "numeric-ids",
+    "old-args",
+    "old-compress",
+    "old-dirs",
+    "omit-dir-times",
+    "omit-link-times",
+    "one-file-system",
+    "open-noatime",
+    "owner",
+    "partial",
+    "perms",
+    "preallocate",
+    "progress",
+    "protect-args",
+    "prune-empty-dirs",
+    "quiet",
+    "recursive",
+    "relative",
+    "remove-source-files",
+    "safe-links",
+    "secluded-args",
+    "size-only",
+    "sparse",
+    "specials",
+    "stats",
+    "super",
+    "times",
+    "trust-sender",
+    "update",
+    "verbose",
+    "version",
+    "whole-file",
+    "write-devices",
+    "xattrs",
+];
+
+/// `rsync` short options that take a value: the rest of the cluster when
+/// non-empty (`-essh`), else the next word (`-e ssh`, `-ae ssh`).
+const RSYNC_VALUE_SHORT: &str = "efTBM@";
+/// `rsync` short options that take no value. A short letter in neither set is
+/// unknown (same treatment as an unknown long option).
+const RSYNC_BOOL_SHORT: &str = "vqcarRbulLkKHpEAXogDtUNOJWxCynzPShi8FmdsI046V";
+
+/// Separate-form value options of `rsync` (`-e`, `--bwlimit`, …), for
+/// callers that still go through [`positional_operands`].
+fn rsync_takes_value(word: &str) -> bool {
+    match word.strip_prefix("--") {
+        Some(name) => RSYNC_VALUE_LONG.contains(&name),
+        None => {
+            let mut chars = word.strip_prefix('-').unwrap_or("").chars();
+            matches!((chars.next(), chars.next()), (Some(c), None) if RSYNC_VALUE_SHORT.contains(c))
+        }
+    }
+}
+
+/// How one rsync option word treats the word after it.
+enum RsyncNext {
+    /// The next word is an operand (or another option).
+    Free,
+    /// The next word is this option's value.
+    Consumed,
+    /// Unknown option: the next word may be its value.
+    Maybe,
+}
+
+fn rsync_option_next(word: &str) -> RsyncNext {
+    if let Some(long) = word.strip_prefix("--") {
+        if long.contains('=') {
+            return RsyncNext::Free;
+        }
+        if rsync_takes_value(word) {
+            return RsyncNext::Consumed;
+        }
+        if RSYNC_BOOL_LONG.contains(&long) || long.starts_with("no-") {
+            return RsyncNext::Free;
+        }
+        return RsyncNext::Maybe;
+    }
+    let cluster: Vec<char> = word.chars().skip(1).collect();
+    for (k, c) in cluster.iter().enumerate() {
+        if RSYNC_VALUE_SHORT.contains(*c) {
+            return if k + 1 == cluster.len() {
+                RsyncNext::Consumed
+            } else {
+                RsyncNext::Free
+            };
+        }
+        if !RSYNC_BOOL_SHORT.contains(*c) {
+            return RsyncNext::Maybe;
+        }
+    }
+    RsyncNext::Free
+}
+
+/// The operands of an `rsync` command in order, each with whether it might
+/// instead be the value of an unknown option directly before it. Values of
+/// known value-taking options are skipped wherever they stand (before or
+/// after the operands); everything after `--` is an operand.
+fn rsync_operands<'a>(words: &[&'a str]) -> Vec<(&'a str, bool)> {
+    let mut out = Vec::new();
+    let mut maybe_value = false;
+    let mut i = 0;
+    while i < words.len() {
+        let t = words[i];
+        i += 1;
+        if t == "--" {
+            out.extend(words[i..].iter().map(|w| (*w, false)));
+            break;
+        }
+        if t.is_empty() {
+            continue;
+        }
+        if super::is_bare_redirect_op(t) {
+            i += 1;
+            maybe_value = false;
+            continue;
+        }
+        if super::is_redirect_token(t) {
+            maybe_value = false;
+            continue;
+        }
+        if t.starts_with('-') && t.len() > 1 {
+            maybe_value = false;
+            match rsync_option_next(t) {
+                RsyncNext::Free => {}
+                RsyncNext::Consumed => i += 1,
+                RsyncNext::Maybe => maybe_value = true,
+            }
+            continue;
+        }
+        out.push((t, maybe_value));
+        maybe_value = false;
+    }
+    out
+}
+
+fn rsync_remote(operand: &str) -> bool {
+    operand.starts_with("rsync://") || operand.split('/').next().is_some_and(|h| h.contains(':'))
+}
+
+/// Every operand that may be `rsync`'s destination, last first: the last
+/// operand, and — while the candidate might be an unknown option's value —
+/// the operand before it too. A candidate needs a source before it (one
+/// operand alone is list mode). `determined` is false when more than one
+/// operand may be the destination.
+pub(super) struct RsyncDestinations<'a> {
+    /// Local candidates only; remote ones (`host:path`, `rsync://…`) are
+    /// dropped.
+    pub(super) local: Vec<&'a str>,
+    pub(super) determined: bool,
+}
+
+pub(super) fn rsync_destinations<'a>(words: &[&'a str]) -> RsyncDestinations<'a> {
+    let ops = rsync_operands(words);
+    let mut candidates = Vec::new();
+    for k in (1..ops.len()).rev() {
+        candidates.push(ops[k].0);
+        if !ops[k].1 {
+            break;
+        }
+    }
+    RsyncDestinations {
+        determined: candidates.len() <= 1,
+        local: candidates
+            .into_iter()
+            .filter(|d| !rsync_remote(d))
+            .collect(),
+    }
+}
+
+fn rsync_deletes(words: &[&str]) -> bool {
+    words.iter().any(|w| {
+        let flag = w.split('=').next().unwrap_or(w);
+        flag == "--del" || flag == "--delete" || flag.starts_with("--delete-")
+    })
+}
 
 /// `sed -i` input files. The first positional is the SCRIPT unless a script
 /// was given with `-e`/`-f`; an empty operand (BSD `-i ''`'s suffix) names no
@@ -340,17 +614,21 @@ fn perl_in_place_files<'a>(words: &[&'a str]) -> Option<Vec<&'a str>> {
 
 /// `rsync` with a delete flag empties the destination of whatever the source
 /// lacks; `--remove-source-files` removes the sources.
+/// Every destination candidate ([`rsync_destinations`]) is judged, and with
+/// `--remove-source-files` every other operand (an operand that may be an
+/// unknown option's value is judged too — judging one word too many can
+/// only refuse, never allow).
 fn rsync_mutated<'a>(words: &[&'a str]) -> Option<(&'static str, Vec<&'a str>)> {
-    let ops = positional_operands(words, RSYNC_VALUE_FLAGS);
+    let ops = rsync_operands(words);
     let deletes = words.iter().any(|w| w.starts_with("--del"));
     let removes_sources = words.contains(&"--remove-source-files");
     let mut out = Vec::new();
-    if let Some((dest, sources)) = ops.split_last() {
-        if deletes {
-            out.push(*dest);
-        }
-        if removes_sources {
-            out.extend_from_slice(sources);
+    if deletes {
+        out.extend(rsync_destinations(words).local);
+    }
+    if removes_sources {
+        if let Some((_, sources)) = ops.split_last() {
+            out.extend(sources.iter().map(|(w, _)| *w));
         }
     }
     if out.is_empty() {
@@ -359,19 +637,12 @@ fn rsync_mutated<'a>(words: &[&'a str]) -> Option<(&'static str, Vec<&'a str>)> 
     Some(("deletes files from", out))
 }
 
-/// The local destination of an `rsync` with `--delete` / `--del` /
+/// The local destination candidates of an `rsync` with `--delete` / `--del` /
 /// `--delete-*` (SUBSET.md Table B, user ruling 2026-11-18): `None` without
-/// such a flag, with fewer than two operands (list mode) or for a remote
-/// destination (`host:path`, `rsync://…`).
-pub(super) fn rsync_delete_destination<'a>(words: &[&'a str]) -> Option<&'a str> {
-    let deletes = words.iter().any(|w| {
-        let flag = w.split('=').next().unwrap_or(w);
-        flag == "--del" || flag == "--delete" || flag.starts_with("--delete-")
-    });
-    let ops = positional_operands(words, RSYNC_VALUE_FLAGS);
-    let dest = *ops.last()?;
-    let remote = dest.split('/').next().is_some_and(|h| h.contains(':'));
-    (deletes && ops.len() >= 2 && !remote).then_some(dest)
+/// such a flag; otherwise [`rsync_destinations`] (empty for list mode or a
+/// remote destination).
+pub(super) fn rsync_delete_destinations<'a>(words: &[&'a str]) -> Option<RsyncDestinations<'a>> {
+    rsync_deletes(words).then(|| rsync_destinations(words))
 }
 
 enum Judged {

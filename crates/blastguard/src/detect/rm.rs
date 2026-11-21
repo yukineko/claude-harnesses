@@ -404,9 +404,64 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
 /// verdict, its reason prefixed with the rsync shape. No delete flag, a
 /// remote destination or list mode: Allow here (the other rsync rules stand).
 pub(super) fn analyze_rsync_delete(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
-    let Some(dest) = super::system_paths::rsync_delete_destination(rest) else {
+    // Both judgments always run; the stronger (Deny > Ask > Allow) wins, so a
+    // delete-flag Ask can never mask a protected-destination Deny or the
+    // reverse.
+    super::git_apply_patch::stronger(
+        analyze_rsync_delete_flag(rest, ctx),
+        rsync_protected_destination(rest, ctx),
+    )
+}
+
+/// `verdict` for one destination candidate; when the destination could not
+/// be determined (an unknown option may have taken the last operand as its
+/// value), a refusal says so.
+fn rsync_candidate_verdict(verdict: Decision, dest: &str, determined: bool) -> Decision {
+    if determined {
+        return verdict;
+    }
+    let why = |r: String| {
+        format!(
+            "the `rsync` destination cannot be determined (an option blastguard does not \
+know may take an operand as its value), and `{dest}` may be it: {r}"
+        )
+    };
+    match verdict {
+        Decision::Allow => Decision::Allow,
+        Decision::Ask(r) => Decision::Ask(why(r)),
+        Decision::Deny(r) => Decision::Deny(why(r)),
+    }
+}
+
+/// The destination operand of `rsync` is a write target like `cp`'s: a
+/// protected path there (or a directory holding protected paths, landed in
+/// as a tree) is refused the way `copy_move_verdict` refuses it. Remote
+/// destinations are not local files and are skipped; every candidate of an
+/// undetermined destination is judged.
+fn rsync_protected_destination(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+    let dests = super::system_paths::rsync_destinations(rest);
+    let action = "rsync destination";
+    dests.local.iter().fold(Decision::Allow, |acc, dest| {
+        let v = super::protected_path_block(ctx, action, dest)
+            .or_else(|| super::protected_landing_block(ctx, action, dest))
+            .unwrap_or(Decision::Allow);
+        super::git_apply_patch::stronger(acc, rsync_candidate_verdict(v, dest, dests.determined))
+    })
+}
+
+fn analyze_rsync_delete_flag(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+    let Some(dests) = super::system_paths::rsync_delete_destinations(rest) else {
         return Decision::Allow;
     };
+    dests.local.iter().fold(Decision::Allow, |acc, dest| {
+        super::git_apply_patch::stronger(
+            acc,
+            rsync_candidate_verdict(rsync_delete_one(dest, ctx), dest, dests.determined),
+        )
+    })
+}
+
+fn rsync_delete_one(dest: &str, ctx: &Ctx<'_>) -> Decision {
     if new_layer::rsync_dest_allows(dest, ctx) {
         return Decision::Allow;
     }

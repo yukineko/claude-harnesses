@@ -144,6 +144,15 @@ S4 rulings (user ruling 2026-11-18):
     Ask. Any other
     producer or filter, option, file operand or undetermined word (an
     unquoted `$( )`, a backquote, `$N`) keeps the Undetermined.
+    Backlog d766b5fe: `eval W` with exactly one operand `W` whose value is
+    computed so (`eval "$(echo 'rm -rf /etc' | cat)"`) has that value
+    judged as `bash -c '<value>'`, and ONLY its Deny is taken (an Ask or
+    Allow keeps the `eval` Undetermined). The precondition is the one above,
+    except that the text being judged may hold one bare `eval` — this one,
+    whose operand's substitutions run before it
+    (`resolution_fixed_but_one_eval`, `chain_names_fixed_but_one_eval`;
+    enclosing texts are still read strictly); a second `eval` keeps the
+    Undetermined (`b5.rs::determined_eval_program`).
 22. (T1) A program file that is git-tracked AND unmodified gets no B.5
     opinion (legacy decides), for interpreter file runs and direct exec.
     Unmodified = clean in the work tree and index (`git ls-files

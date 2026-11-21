@@ -1810,11 +1810,11 @@ fn line_may_write(
 /// live registered `/flow` driver, the program file `path` run by
 /// `commands[run]` gets no B.5 opinion when it is a regular file whose real
 /// path [`crate::scope::SafeRoots::driver_trusts_program`] accepts (the
-/// session scratchpad, the own worktree's `target/`), no other part of the
-/// line may write it ([`line_may_write`]) and no injecting variable is set
-/// on the line except a system-only `PATH` ([`injects_beyond_system_path`]).
-/// Anything undecidable is `false` (the Ask stands, and the driver session
-/// turns it into a Deny).
+/// session scratchpad, the own worktree's `target/`, a rolled-out yukineko
+/// plugin cache `bin/` file), no other part of the line may write it
+/// ([`line_may_write`]) and no injecting variable is set on the line except a
+/// system-only `PATH` ([`injects_beyond_system_path`]). Anything undecidable
+/// is `false` (the Ask stands, and the driver session turns it into a Deny).
 fn driver_trusted(
     text: &str,
     commands: &[SimpleCommand],

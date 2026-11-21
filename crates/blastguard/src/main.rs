@@ -917,6 +917,10 @@ fn analyse(input: &HookInput, driver: bool) -> Decision {
     // A live `/flow` driver session (user ruling 2026-11-21) trusts the
     // program files in its own scratchpad and under its own worktree's
     // `target/` (Table B.5); the worktree is the repo root of the payload cwd.
+    // It also trusts the rolled-out plugin bins directly in
+    // `$HOME/.claude/plugins/cache/yukineko/<plugin>/<version>/bin/` (user
+    // ruling 2026-11-21, 「cache bin を信頼」), derived from the canonical HOME
+    // `safe_roots` already holds.
     let scope = if driver {
         let root = real_path(input.cwd.trim())
             .and_then(|c| blastguard::flow_driver::repo_root(std::path::Path::new(&c)))

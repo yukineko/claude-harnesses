@@ -650,14 +650,25 @@ pub struct SafeRoots {
 /// The program files a live `/flow` driver session may run without a B.5
 /// objection (user ruling 2026-11-21, 「またaskされてたけど、これもallowに」):
 /// files in this session's scratchpad and binaries under its own worktree's
-/// `target/`.
+/// `target/`; and (user ruling 2026-11-21, 「cache bin を信頼」, backlog
+/// a50833d7) the rolled-out plugin binaries directly in
+/// `$HOME/.claude/plugins/cache/yukineko/<plugin>/<version>/bin/`.
 #[derive(Debug, Clone)]
 struct DriverPrograms {
     /// The payload session id; names the scratchpad directory.
     session_id: String,
     /// `<own worktree>/target`, canonical, when it exists as a real directory.
     worktree_target: Option<String>,
+    /// `<canonical HOME>/.claude/plugins/cache/yukineko`, only when it
+    /// resolves to ITSELF (no symlink anywhere below the canonical home) and
+    /// is a real directory. `None` (HOME unset/relative/unresolvable, the
+    /// directory missing or reached through a symlink) trusts no cache bin.
+    plugin_cache: Option<String>,
 }
+
+/// The only marketplace owner whose rolled-out plugin cache a driver session
+/// trusts (user ruling 2026-11-21, 「cache bin を信頼」).
+const TRUSTED_PLUGIN_CACHE_OWNER: &str = "yukineko";
 
 impl SafeRoots {
     /// No location model: every [`SafeRoots::classify`] call answers
@@ -837,7 +848,10 @@ impl SafeRoots {
     /// live registered `/flow` driver ([`crate::flow_driver`]). `worktree_root`
     /// is the session's own working tree (the repo root of the payload cwd);
     /// its `target/` is trusted only when it resolves (with this model's
-    /// resolver) to an existing real directory. Only the binary calls this;
+    /// resolver) to an existing real directory. The plugin cache root
+    /// `<canonical HOME>/.claude/plugins/cache/yukineko` is derived from the
+    /// same canonical home as [`SafeRoots::home_real`] and kept only when it
+    /// resolves to itself and is a real directory. Only the binary calls this;
     /// without it [`SafeRoots::driver_trusts_program`] is always `false`.
     #[must_use]
     pub fn with_driver_programs(mut self, session_id: &str, worktree_root: Option<&str>) -> Self {
@@ -849,9 +863,22 @@ impl SafeRoots {
             .map(|r| format!("{}/target", r.trim_end_matches('/')))
             .and_then(|t| resolve_with(&t, self.resolver))
             .filter(|t| is_real_dir(t) && t != "/");
+        let plugin_cache = self
+            .home_real
+            .as_deref()
+            .filter(|h| h.starts_with('/') && *h != "/")
+            .map(|h| {
+                format!(
+                    "{}/.claude/plugins/cache/{TRUSTED_PLUGIN_CACHE_OWNER}",
+                    h.trim_end_matches('/')
+                )
+            })
+            .filter(|lex| resolve_with(lex, self.resolver).as_deref() == Some(lex.as_str()))
+            .filter(|c| is_real_dir(c));
         self.driver_programs = Some(DriverPrograms {
             session_id: session_id.to_string(),
             worktree_target,
+            plugin_cache,
         });
         self
     }
@@ -867,13 +894,34 @@ impl SafeRoots {
     ///   where `claude-<uid>` is a real directory OWNED by `<uid>` — the
     ///   `<cwd slug>` component is not recomputed (its spelling is Claude
     ///   Code's, not observable here), the session id is the payload's; or
-    /// * `<own worktree>/target/`.
+    /// * `<own worktree>/target/`; or
+    /// * the rolled-out plugin cache: `real` is exactly
+    ///   `<canonical HOME>/.claude/plugins/cache/yukineko/<plugin>/<version>/bin/<file>`
+    ///   — exactly that depth, every component non-empty and not `.`/`..`,
+    ///   owner `yukineko` only. `real` is canonical, so a symlink in the
+    ///   cache pointing elsewhere is judged by its target (and not trusted).
     ///
     /// Anything else, including any IO failure, is `false`.
     pub(crate) fn driver_trusts_program(&self, real: &str) -> bool {
         let Some(d) = &self.driver_programs else {
             return false;
         };
+        if let Some(rest) = d
+            .plugin_cache
+            .as_deref()
+            .and_then(|c| real.strip_prefix(c))
+            .and_then(|r| r.strip_prefix('/'))
+        {
+            let comps: Vec<&str> = rest.split('/').collect();
+            if let [plugin, version, "bin", file] = comps.as_slice() {
+                if [plugin, version, file]
+                    .iter()
+                    .all(|c| !c.is_empty() && !matches!(**c, "." | ".."))
+                {
+                    return true;
+                }
+            }
+        }
         if let Some(t) = &d.worktree_target {
             if real
                 .strip_prefix(t.as_str())

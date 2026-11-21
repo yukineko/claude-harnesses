@@ -9,7 +9,10 @@
 //! every verdict that would be `Ask` becomes `Allow` when it is statically safe
 //! and `Deny` otherwise (the hook binary does the mapping; see `main.rs`
 //! `emit`). The statically-safe program runs — a script in the session
-//! scratchpad, a binary under the session's own worktree `target/` — are
+//! scratchpad, a binary under the session's own worktree `target/`, a
+//! rolled-out plugin bin directly in
+//! `$HOME/.claude/plugins/cache/yukineko/<plugin>/<version>/bin/` (「cache bin
+//! を信頼」) — are
 //! judged in the Table B.5 layer through
 //! [`crate::scope::SafeRoots::with_driver_programs`].
 //!

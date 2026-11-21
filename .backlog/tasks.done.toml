@@ -93091,3 +93091,199 @@ rev = "f9bb4b9aac5bbfbd5f8f36bd8761e0a87a19f20a"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "a50833d7"
+title = "blastguard: flow driver session denies the flow skill's own flow-watch (installed plugin bin not trusted)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-21 at b411f6f9e (worktree session-c1b3e891): in a registered /flow driver session, running the installed plugin bin path HOME/.claude/plugins/cache/yukineko/flow/0.2.42/bin/flow-watch --session S --project P gives deny (Table B.5 Undetermined Ask hardened to Deny by 4ef3a9e2; driver_trusts_program trusts only scratchpad and own worktree target). The flow skill Step 2.5 mandates this command, so it can never run. Control (HOME/random/bin/x in same driver session) is not allow, passes. Reading (a) defect: plugin cache bins are our own rolled-out code and are Allow by bare name via PATH, so denying the full path is a false positive. Reading (b) intended: a path under HOME cannot be told apart statically from attacker-planted files, so trust stays narrow and the skill should call flow-watch by bare name. Tell apart: ask the user whether the plugin cache dir is a trusted root; if yes (a), fix driver_trusts_program; if no (b), change the flow skill to use bare name and close this test as won't-do."
+created_at = 1795228837
+updated_at = 1795277692
+weight = 0.0
+issue_number = 1944
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1944"
+issue_closed_at = 1795277695
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_driver_plugin_bin_flow_watch -- --ignored"
+rev = "b411f6f9e90511259d4d7652a9196fe27c639d69"
+observed_at = 1795228837
+detail = """
+exit 101: 9 (/Users/yuki/src/.harness-worktrees/session-c1b3e891/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.11s
+     Running tests/backlog_20261121_driver_plugin_bin_flow_watch.rs (target/debug/deps/backlog_20261121_driver_plugin_bin_flow_watch-34cc3d6192895bf6)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_driver_plugin_bin_flow_watch`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261121_driver_plugin_bin_flow_watch"
+exit = 0
+passed = 10
+rev = "1914ffa47e76204d345000abf335034e37898160"
+observed_at = 1795277690
+output_digest = "sha256:4b03e027e60a6a1d5b38537f3b9bb894d6feb19dfb20c21501bdac2a76b5dfa4"
+excerpt = """
+
+running 10 tests
+test control_driver_session_cache_bin_then_rm_home_is_deny ... ok
+test control_driver_session_dotdot_traversal_out_of_cache_not_allow ... ok
+test control_driver_session_symlinked_cache_owner_dir_not_allow ... ok
+test control_driver_session_random_dir_bin_not_allow ... ok
+test control_driver_session_symlink_escape_from_cache_bin_not_allow ... ok
+test control_driver_session_deeper_cache_path_not_allow ... ok
+test control_driver_session_shallower_cache_path_not_allow ... ok
+test control_driver_session_other_owner_cache_bin_not_allow ... ok
+test control_non_driver_session_does_not_trust_cache_bin ... ok
+test driver_session_allows_installed_plugin_bin_flow_watch ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.23s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261121_driver_plugin_bin_flow_watch.rs (target/debug/deps/backlog_20261121_driver_plugin_bin_flow_watch-c0d482f82980197b)
+"""
+
+[task.closure.red]
+rev = "cc4c2e9573677261292e1c5d70d66c30cbe831e1"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "20c08a70"
+title = "condukt: abandon + re-create of a task leaves the abandoned attempt's archived tdd proofs; worktree merge refuses undetermined-proof on every retry"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Reading (a) defect: abandon/worktree remove archive should be invalidated or versioned on re-create, else a retry is unmergeable. Reading (b) intended: fail-closed on any proof disagreement (R5 test r5_worktree_and_archive_disagree_is_undetermined_proof), operator clears stale archive. Tell apart: ruling on whether an abandoned attempt's archive belongs to the task id's future. Observed 2026-11-21 in run-20261121-223122-81816 t1; reproduced in fixture."
+created_at = 1795268830
+updated_at = 1795277704
+weight = 0.0
+issue_number = 1959
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1959"
+issue_closed_at = 1795277706
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261121_abandon_recreate_stale_archive -- --ignored"
+rev = "9353c3841c12defb495029d5a406d40e3ff6fd67"
+observed_at = 1795268830
+detail = """
+exit 101: backlog_20261121_abandon_recreate_stale_archive") generated 5 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.94s
+     Running tests/backlog_20261121_abandon_recreate_stale_archive.rs (target/debug/deps/backlog_20261121_abandon_recreate_stale_archive-94300ba669b462a4)
+error: test failed, to rerun pass `-p condukt --test backlog_20261121_abandon_recreate_stale_archive`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261121_abandon_recreate_stale_archive"
+exit = 0
+passed = 1
+rev = "1914ffa47e76204d345000abf335034e37898160"
+observed_at = 1795277695
+output_digest = "sha256:647c9741af9013fbb1b3b11c2ece6db3163caeef22db0f4f61f65f7746bebe2a"
+excerpt = """
+
+running 1 test
+test abandon_then_recreate_task_merges_with_new_proofs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.76s
+
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/backlog_20261121_abandon_recreate_stale_archive.rs (target/debug/deps/backlog_20261121_abandon_recreate_stale_archive-689a91a38e933b23)
+"""
+
+[task.closure.red]
+rev = "cc4c2e9573677261292e1c5d70d66c30cbe831e1"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "e33849bd"
+title = "blastguard: ag --pager / ack --pager CMD with a protected operand is Allow (readonly.rs doc says pager can execute an argument)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Reading (a) defect: pager is a caller-chosen program run by a read-only-looking verb; unknown_verb_protected_ask exempts it, only rg --pre got a rule (1f037eb5). Reading (b) intended: pager receives match OUTPUT not the protected file, so no protected-file effect. Tell apart: run real ag/ack (not installed on the observing host) with a pager that records its stdin/argv and check whether the file or only formatted output reaches it. RED pins (a). Observed 2026-11-21 main a44f2ce07: ag/ack => allow in main and subagent mode."
+created_at = 1795268927
+updated_at = 1795277709
+weight = 0.0
+issue_number = 1963
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1963"
+issue_closed_at = 1795277712
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_ag_ack_pager_protected -- --ignored"
+rev = "303c2f10315f383edfb28b20649f8aa4922f3f05"
+observed_at = 1795268927
+detail = """
+exit 101: lastguard v0.2.895 (/Users/yuki/src/.harness-worktrees/sidefind-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.41s
+     Running tests/backlog_20261121_ag_ack_pager_protected.rs (target/debug/deps/backlog_20261121_ag_ack_pager_protected-3bbbf17d44371ea0)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_ag_ack_pager_protected`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261121_ag_ack_pager_protected"
+exit = 0
+passed = 7
+rev = "1914ffa47e76204d345000abf335034e37898160"
+observed_at = 1795277707
+output_digest = "sha256:647e2dc10bff83f15f2581f2a7535af54ffbeb70b5b28cc2b2110d4c429057ed"
+excerpt = """
+
+running 7 tests
+test control_ack_without_pager_protected_operand_is_allow ... ok
+test control_ag_pager_glob_like_flag_is_not_the_pager ... ok
+test ack_pager_abbreviation_equals_form_protected_operand_is_not_allow ... ok
+test control_ag_without_pager_protected_operand_is_allow ... ok
+test ag_pager_space_form_protected_operand_is_not_allow ... ok
+test ack_pager_equals_form_protected_operand_is_not_allow ... ok
+test ag_pager_abbreviation_protected_operand_is_not_allow ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/backlog_20261121_ag_ack_pager_protected.rs (target/debug/deps/backlog_20261121_ag_ack_pager_protected-b1e9fd484da35b12)
+"""
+
+[task.closure.red]
+rev = "cc4c2e9573677261292e1c5d70d66c30cbe831e1"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

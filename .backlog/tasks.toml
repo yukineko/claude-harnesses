@@ -1460,37 +1460,6 @@ exit 101: LED. 0 passed; 3 failed; 0 ignored; 0 measured; 1 filtered out; finish
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_quoted_heredoc_body_gt_fp`"""
 
 [[task]]
-id = "a50833d7"
-title = "blastguard: flow driver session denies the flow skill's own flow-watch (installed plugin bin not trusted)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-21 at b411f6f9e (worktree session-c1b3e891): in a registered /flow driver session, running the installed plugin bin path HOME/.claude/plugins/cache/yukineko/flow/0.2.42/bin/flow-watch --session S --project P gives deny (Table B.5 Undetermined Ask hardened to Deny by 4ef3a9e2; driver_trusts_program trusts only scratchpad and own worktree target). The flow skill Step 2.5 mandates this command, so it can never run. Control (HOME/random/bin/x in same driver session) is not allow, passes. Reading (a) defect: plugin cache bins are our own rolled-out code and are Allow by bare name via PATH, so denying the full path is a false positive. Reading (b) intended: a path under HOME cannot be told apart statically from attacker-planted files, so trust stays narrow and the skill should call flow-watch by bare name. Tell apart: ask the user whether the plugin cache dir is a trusted root; if yes (a), fix driver_trusts_program; if no (b), change the flow skill to use bare name and close this test as won't-do."
-created_at = 1795228837
-updated_at = 1795228837
-weight = 0.0
-issue_number = 1944
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1944"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261121_driver_plugin_bin_flow_watch -- --ignored"
-rev = "b411f6f9e90511259d4d7652a9196fe27c639d69"
-observed_at = 1795228837
-detail = """
-exit 101: 9 (/Users/yuki/src/.harness-worktrees/session-c1b3e891/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.11s
-     Running tests/backlog_20261121_driver_plugin_bin_flow_watch.rs (target/debug/deps/backlog_20261121_driver_plugin_bin_flow_watch-34cc3d6192895bf6)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261121_driver_plugin_bin_flow_watch`"""
-
-[[task]]
 id = "2679fb11"
 title = 'blastguard: inline_eval_mirror_closure has 3 failing tests on main (python3 -ic "print(1)" is Ask, expected Allow)'
 project = "/Users/yuki/src/harness"
@@ -1615,67 +1584,6 @@ exit 101: d out; finished in 0.23s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.53s
      Running tests/redirect_target_resolution.rs (target/debug/deps/redirect_target_resolution-d7bf0f3a7d56677d)
 error: test failed, to rerun pass `-p blastguard --test redirect_target_resolution`"""
-
-[[task]]
-id = "20c08a70"
-title = "condukt: abandon + re-create of a task leaves the abandoned attempt's archived tdd proofs; worktree merge refuses undetermined-proof on every retry"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Reading (a) defect: abandon/worktree remove archive should be invalidated or versioned on re-create, else a retry is unmergeable. Reading (b) intended: fail-closed on any proof disagreement (R5 test r5_worktree_and_archive_disagree_is_undetermined_proof), operator clears stale archive. Tell apart: ruling on whether an abandoned attempt's archive belongs to the task id's future. Observed 2026-11-21 in run-20261121-223122-81816 t1; reproduced in fixture."
-created_at = 1795268830
-updated_at = 1795268830
-weight = 0.0
-issue_number = 1959
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1959"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261121_abandon_recreate_stale_archive -- --ignored"
-rev = "9353c3841c12defb495029d5a406d40e3ff6fd67"
-observed_at = 1795268830
-detail = """
-exit 101: backlog_20261121_abandon_recreate_stale_archive") generated 5 warnings
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.94s
-     Running tests/backlog_20261121_abandon_recreate_stale_archive.rs (target/debug/deps/backlog_20261121_abandon_recreate_stale_archive-94300ba669b462a4)
-error: test failed, to rerun pass `-p condukt --test backlog_20261121_abandon_recreate_stale_archive`"""
-
-[[task]]
-id = "e33849bd"
-title = "blastguard: ag --pager / ack --pager CMD with a protected operand is Allow (readonly.rs doc says pager can execute an argument)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Reading (a) defect: pager is a caller-chosen program run by a read-only-looking verb; unknown_verb_protected_ask exempts it, only rg --pre got a rule (1f037eb5). Reading (b) intended: pager receives match OUTPUT not the protected file, so no protected-file effect. Tell apart: run real ag/ack (not installed on the observing host) with a pager that records its stdin/argv and check whether the file or only formatted output reaches it. RED pins (a). Observed 2026-11-21 main a44f2ce07: ag/ack => allow in main and subagent mode."
-created_at = 1795268927
-updated_at = 1795268927
-weight = 0.0
-issue_number = 1963
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1963"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261121_ag_ack_pager_protected -- --ignored"
-rev = "303c2f10315f383edfb28b20649f8aa4922f3f05"
-observed_at = 1795268927
-detail = """
-exit 101: lastguard v0.2.895 (/Users/yuki/src/.harness-worktrees/sidefind-eaa077f4/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.41s
-     Running tests/backlog_20261121_ag_ack_pager_protected.rs (target/debug/deps/backlog_20261121_ag_ack_pager_protected-3bbbf17d44371ea0)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261121_ag_ack_pager_protected`"""
 
 [[task]]
 id = "7b30a4ed"

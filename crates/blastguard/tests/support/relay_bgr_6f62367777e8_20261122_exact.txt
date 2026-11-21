@@ -1,0 +1,47 @@
+cd /Users/yuki/.condukt/worktrees/run-20261122-035502-88763-t1/crates/blastguard/src && python3 - <<'EOF'
+import re
+p='detect/interpreter/python_file.rs'
+s=open(p).read()
+old="""        strings_are_data: (!super::runs_shell_strings(body)
+            && !super::has_dynamic_code_execution(body)
+            && python_strings_never_reach_a_shell(body))
+            || python_program_only_prints(body),"""
+new="""        strings_are_data: python_literal_text_never_runs(body) || python_program_only_prints(body),"""
+assert s.count(old)==1
+s=s.replace(old,new)
+old2="""    /// True ONLY when the parser shows no string of the program can reach a
+    /// shell or a process: the body holds no [`super::SHELL_STRING_EXEC_MARKERS`]
+    /// entry or dynamic-execution marker anywhere (strings included), and
+    /// passes [`python_strings_never_reach_a_shell`] — or the lexer shows it"""
+new2="""    /// True ONLY when the parser shows no string of the program can reach a
+    /// shell or a process: the CODE of the body (literal text blanked)
+    /// holds no [`super::SHELL_STRING_EXEC_MARKERS`] entry or
+    /// dynamic-execution marker, and the body passes
+    /// [`python_strings_never_reach_a_shell`]
+    /// ([`python_literal_text_never_runs`]; a backtick or `compile fail` only
+    /// inside a literal is that literal's text, backlog 8ff44387) — or the lexer shows it"""
+assert s.count(old2)==1
+s=s.replace(old2,new2)
+s=s.replace("""/// Unlike [`PythonStdinReading::strings_are_data`], a marker spelled only
+/// inside a literal (a backtick, `compile fail`) does not refuse this
+/// reading: with no runner, executor or code-building name in the code, the
+/// literal's text is a value.""","""/// A marker spelled only inside a literal (a backtick, `compile fail`) does
+/// not refuse this reading: with no runner, executor or code-building name in
+/// the code, the literal's text is a value. Read by
+/// [`PythonStdinReading::strings_are_data`] and the `python3 - <<'EOF'`
+/// redirect view (`heredoc::python_stdin_redirect_view`).""")
+open(p,'w').write(s)
+p='detect/payload.rs'
+s=open(p).read()
+old3="""    // `python_stdin_body_reading` finds either that the body only prints or
+    // that it has no shell-string or dynamic-execution marker and no string
+    // of it reaches a shell or a process."""
+new3="""    // `python_stdin_body_reading` finds either that the body only prints or
+    // that its code (literal text blanked) has no shell-string or
+    // dynamic-execution marker and no string of it reaches a shell or a
+    // process."""
+assert s.count(old3)==1
+s=s.replace(old3,new3)
+open(p,'w').write(s)
+EOF
+grep -n "Unlike \[\`PythonStdinReading\|Read by" detect/interpreter/python_file.rs | head

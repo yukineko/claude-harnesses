@@ -1,0 +1,198 @@
+cd /Users/yuki/.condukt/worktrees/run-20261122-035251-84424-t2 && python3 -I - <<'EOF'
+p='crates/condukt/src/testscope.rs'
+s=open(p).read()
+def rep(a,b,n=1):
+    global s
+    assert s.count(a)==n,(a,s.count(a))
+    s=s.replace(a,b)
+rep("""/// string, is an `Err` (undetermined; the caller denies).
+fn worktree_changed_packages(wt: &Path, base: &str) -> Result<Vec<String>, String> {""",
+"""/// string, is an `Err` (undetermined; the caller denies). Each package comes
+/// with the directory of its manifest (where its targets are looked up, see
+/// [`package_unit_targets`]).
+fn worktree_changed_packages(wt: &Path, base: &str) -> Result<Vec<(String, PathBuf)>, String> {""")
+rep("""    let mut out: Vec<String> = Vec::new();
+    for rel in raw.split('\\0').filter(|s| !s.is_empty()) {
+        let mut dir = match top.join(rel).parent() {""","""    let mut out: Vec<(String, PathBuf)> = Vec::new();
+    for rel in raw.split('\\0').filter(|s| !s.is_empty()) {
+        let mut dir = match top.join(rel).parent() {""")
+rep("""            if let Some(name) = pkg {
+                if !out.contains(&name) {
+                    out.push(name);
+                }
+                break;
+            }""","""            if let Some(name) = pkg {
+                if !out.iter().any(|(n, _)| *n == name) {
+                    out.push((name, dir.clone()));
+                }
+                break;
+            }""")
+# insert package_unit_targets after manifest_package_name
+anchor="""/// The package specs of `--package <spec>`"""
+new='''/// The unit-test targets of the package whose manifest is `dir/Cargo.toml`:
+/// whether it has a lib target, and the names of its bin targets. A lib is a
+/// `[lib]` table or, unless `autolib = false`, an existing `src/lib.rs`. A bin
+/// is a `[[bin]]` entry's `name` or, unless `autobins = false`, `src/main.rs`
+/// (named after the package), `src/bin/<n>.rs` or `src/bin/<n>/main.rs`.
+/// Discovery quirks this does not model (a `[[bin]]` without `name`, a
+/// non-default `path`) only ever leave a target out, which refuses it. A
+/// manifest that cannot be read or parsed, a `[lib]`/`[[bin]]` of the wrong
+/// shape, or a `src/bin` that exists but cannot be listed is an `Err`
+/// (undetermined; the caller denies).
+fn package_unit_targets(dir: &Path) -> Result<(bool, Vec<String>), String> {
+    let path = dir.join("Cargo.toml");
+    let txt = std::fs::read_to_string(&path)
+        .map_err(|e| format!("cannot read manifest {}: {e}", path.display()))?;
+    let v: toml::Value = toml::from_str(&txt)
+        .map_err(|e| format!("unparseable manifest {}: {e}", path.display()))?;
+    let pkg = v
+        .get("package")
+        .ok_or_else(|| format!("manifest {} has no [package] table", path.display()))?;
+    let name = pkg
+        .get("name")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| format!("manifest {} has no string package name", path.display()))?;
+    let auto = |key: &str| -> Result<bool, String> {
+        match pkg.get(key) {
+            None => Ok(true),
+            Some(toml::Value::Boolean(b)) => Ok(*b),
+            Some(_) => Err(format!(
+                "manifest {}: `{key}` is not a boolean",
+                path.display()
+            )),
+        }
+    };
+    let has_lib = match v.get("lib") {
+        Some(toml::Value::Table(_)) => true,
+        Some(_) => return Err(format!("manifest {}: `lib` is not a table", path.display())),
+        None => auto("autolib")? && dir.join("src/lib.rs").is_file(),
+    };
+    let mut bins: Vec<String> = Vec::new();
+    match v.get("bin") {
+        None => {}
+        Some(toml::Value::Array(entries)) => {
+            for e in entries {
+                match e {
+                    toml::Value::Table(t) => {
+                        if let Some(n) = t.get("name").and_then(toml::Value::as_str) {
+                            bins.push(n.to_string());
+                        }
+                    }
+                    _ => {
+                        return Err(format!(
+                            "manifest {}: a `[[bin]]` entry is not a table",
+                            path.display()
+                        ))
+                    }
+                }
+            }
+        }
+        Some(_) => {
+            return Err(format!(
+                "manifest {}: `bin` is not an array of tables",
+                path.display()
+            ))
+        }
+    }
+    if auto("autobins")? {
+        if dir.join("src/main.rs").is_file() {
+            bins.push(name.to_string());
+        }
+        let bin_dir = dir.join("src/bin");
+        match std::fs::read_dir(&bin_dir) {
+            Ok(rd) => {
+                for entry in rd {
+                    let entry = entry
+                        .map_err(|e| format!("unreadable entry in {}: {e}", bin_dir.display()))?;
+                    let p = entry.path();
+                    let stem = if p.is_dir() && p.join("main.rs").is_file() {
+                        p.file_name().and_then(|n| n.to_str()).map(str::to_string)
+                    } else if p.extension().and_then(|e| e.to_str()) == Some("rs") {
+                        p.file_stem().and_then(|n| n.to_str()).map(str::to_string)
+                    } else {
+                        None
+                    };
+                    if let Some(s) = stem {
+                        bins.push(s);
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("cannot list {}: {e}", bin_dir.display())),
+        }
+    }
+    Ok((has_lib, bins))
+}
+
+'''
+rep(anchor, new+anchor)
+# adapt --test branch usage
+rep("""                                    .all(|p| is_plain_name(p) && c.iter().any(|n| n == p))""",
+"""                                    .all(|p| is_plain_name(p) && c.iter().any(|(n, _)| n == p))""")
+rep("""                Selector::Kind(..) => false,
+            };
+            if !allowed {""","""                // backlog f7d0e13b (user ruling 2026-11-20): the unit tests of a
+                // crate the worktree changed, `--lib` or `--bin <name>`, so a
+                // fix can prove the crate's pinned unit asserts unchanged.
+                // Every `-p` must be a plain name of a changed package that
+                // has that target (`--lib`: a lib; `--bin <name>`: a bin of
+                // that name). No `-p`, an unparseable `-p`, a `--bin` without
+                // a plain name, `--doc`/`--example`/`--bench`, or an
+                // unreadable diff / manifest / `src/bin` admits nothing.
+                Selector::Kind(kind, bin)
+                    if (kind == "--lib" && bin.is_none())
+                        || (kind == "--bin" && bin.as_deref().is_some_and(is_plain_name)) =>
+                {
+                    let specs: &[String] = match &pkgs {
+                        Ok(p) => p,
+                        Err(e) => return undetermined(format!("`{}`: {e}", words.join(" "))),
+                    };
+                    if specs.is_empty() || !specs.iter().all(|p| is_plain_name(p)) {
+                        false
+                    } else {
+                        if changed_pkgs.is_none() {
+                            match worktree_changed_packages(&wt, &cfg.default_branch) {
+                                Ok(c) => changed_pkgs = Some(c),
+                                Err(e) => {
+                                    return undetermined(format!(
+                                        "which crates worktree {} changed is unknown: {e}",
+                                        wt.display()
+                                    ))
+                                }
+                            }
+                        }
+                        let mut all = true;
+                        for spec in specs {
+                            let dir = changed_pkgs
+                                .as_ref()
+                                .and_then(|c| c.iter().find(|(n, _)| n == spec))
+                                .map(|(_, d)| d.clone());
+                            let Some(dir) = dir else {
+                                all = false;
+                                break;
+                            };
+                            let (has_lib, bins) = match package_unit_targets(&dir) {
+                                Ok(t) => t,
+                                Err(e) => {
+                                    return undetermined(format!(
+                                        "which targets package `{spec}` has is unknown: {e}"
+                                    ))
+                                }
+                            };
+                            let has = match bin {
+                                None => has_lib,
+                                Some(b) => bins.iter().any(|n| n == b),
+                            };
+                            if !has {
+                                all = false;
+                                break;
+                            }
+                        }
+                        all
+                    }
+                }
+                Selector::Kind(..) => false,
+            };
+            if !allowed {""")
+open(p,'w').write(s)
+EOF

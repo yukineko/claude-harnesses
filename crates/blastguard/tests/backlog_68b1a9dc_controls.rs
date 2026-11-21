@@ -182,7 +182,11 @@ fn c08_benign_escaped_space_not_deny() {
 /// Does NOT prove Deny.
 #[test]
 fn c09_tmp_echo_not_allow() {
-    check_not_allow_both("/tmp/echo rm -rf /etc | bash", "c09", "/tmp/echo not system");
+    check_not_allow_both(
+        "/tmp/echo rm -rf /etc | bash",
+        "c09",
+        "/tmp/echo not system",
+    );
 }
 
 /// Property: `./echo` is not treated as safe; never Allow.

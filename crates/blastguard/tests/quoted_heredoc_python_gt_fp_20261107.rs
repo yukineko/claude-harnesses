@@ -82,6 +82,9 @@ fn verdict(cwd: &Path, command: &str) -> (String, String) {
         .env("CLAUDECODE", "1")
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
         .env("CLAUDE_PROJECT_DIR", cwd)
+        // 2026-11-21: keep the per-call relay store inside the caller's fresh
+        // temp dir so this test never pollutes the real relay store.
+        .env("BLASTGUARD_RELAY_DIR", cwd.join("relay-store"))
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("BLASTGUARD_ASK")
         .stdin(Stdio::piped())
@@ -130,12 +133,39 @@ grep -c 'ignore = \"backlog fb338793' $F; diff $S/committed.rs $F | grep '^>' | 
 
 /// Assert `cmd` is judged exactly like `neutral` (the same command with the
 /// non-redirect `>` replaced by `X`) and not on the program-text `>` reason.
+///
+/// 2026-11-21 re-anchor: blastguard appends a per-call relay note
+/// (`relay id bgr-<hex>`, added in 8c1a3fdf8 on 2026-11-14, after this test
+/// was written in 66c5846a4 on 2026-11-07) to the reason, so two calls never
+/// have byte-identical reasons. Only the hex part of the id is normalized;
+/// every other reason difference still fails. The asserted property is
+/// unchanged: a quoted `>` outside the heredoc body must not be judged as
+/// heredoc program text.
+fn normalize_relay_id(reason: &str) -> String {
+    const MARK: &str = "relay id bgr-";
+    let mut out = String::new();
+    let mut rest = reason;
+    while let Some(i) = rest.find(MARK) {
+        let after = i + MARK.len();
+        out.push_str(&rest[..after]);
+        let hex_len = rest[after..]
+            .bytes()
+            .take_while(|b| b.is_ascii_hexdigit())
+            .count();
+        out.push_str("<RELAY_HEX>");
+        rest = &rest[after + hex_len..];
+    }
+    out.push_str(rest);
+    out
+}
+
 #[track_caller]
 fn assert_judged_like_neutral(tag: &str, cmd: &str, neutral: &str) {
     assert_ne!(cmd, neutral, "[{tag}] neutral variant must differ");
     let base = fresh_dir(tag);
     let (d, r) = verdict(&base, cmd);
     let (nd, nr) = verdict(&base, neutral);
+    let (r, nr) = (normalize_relay_id(&r), normalize_relay_id(&nr));
     assert!(
         !r.contains(GT_REASON) && d == nd && r == nr,
         "[{tag}] a quoted `>` outside the heredoc body was judged as heredoc program text:\n\

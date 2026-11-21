@@ -202,6 +202,22 @@ produces an `Allow`. The ledger is `harness_core::repeat`
 (`~/.claude/harness-state/repeat/<CLAUDE_CODE_SESSION_ID>/`); an unset session
 id or a ledger IO failure keeps the deny.
 
+**A registered `/flow` driver session never gets an `ask`** (user ruling
+2026-11-21,「非破壊はAllow、他はDeny」, refined「またaskされてたけど、これもallowに」).
+When the payload's `session_id` has a live registration in the backlog driver
+registry (`~/.backlog/drivers/<project slug>/<fnv1a64(session)>.driver`,
+heartbeat within 1800 s; read by `src/flow_driver.rs`, project = the canonical
+main tree of the payload `cwd`), the Table B.5 layer gives no objection to a
+top-level run of a regular file in the session scratchpad
+(`/private/tmp/claude-<uid>/<slug>/<session id>/scratchpad/`) or under the own
+worktree's `target/` (no same-line writer of it; no injecting variable except a
+system-only `PATH`), and every `Ask` still left is printed as `deny` with its
+original reason (block log kind `ask-hardened-to-deny`, exact payload
+recorded). The repeat-deny downgrade above is skipped there, so a `deny` stays a
+`deny`. No registration, a stale one, another session's, or a registry that
+cannot be read leaves every verdict unchanged. An unparseable payload carries
+no readable session id and is not affected.
+
 What an intervention actually prevented is reviewable after the fact with
 `blastguard retro` (see [Retrospective](#retrospective)).
 

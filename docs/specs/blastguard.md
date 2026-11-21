@@ -1764,15 +1764,22 @@ chain 値）、`detect/ast/b5.rs`。
 - `echo -e`（先頭 operand が単独の `-e`）の escape は `\xHH`（印字可能 ASCII か空白）と `\n`（改行、
   backlog 11b0b4da）だけを復号する。`bash <(echo -e 'echo hi\nrm -rf /etc')` は 2 行の program として
   行ごとに判定され、有害な行が Deny になる。それ以外の backslash・制御文字は決定済みではない。
-- `-c` の operand と `eval` の operand（backlog 28019c35 / d766b5fe、`detect/ast/b5/determined.rs`）:
-  shell の `-c W`（先頭 flag がちょうど `-c`）と、bare な `eval W`（operand がちょうど 1 個）で、`W` が
-  `$( )` を 1 個以上含み値が決まる word のとき（`substituted_word_value`。各置換の末尾改行は除く）、その値を
-  full detector で program として判定する（`judge_body`）。採用するのは Deny のときだけで、Ask / Allow なら
-  従来の Undetermined（Ask）を保つ（raise-only。何も緩めない）。前提条件は上と同じ chain 値と
-  `resolution_fixed`。`eval` は判定対象の text 自身にだけ、その 1 個の bare `eval` を許す
-  （`resolution_fixed_but_one_eval` / `readings::chain_names_fixed_but_one_eval`。外側の chain は厳格なまま）。
-  `bash -ec`・`bash -x -c`・`bash -c --`・`eval W x`・`eval --`・`builtin eval`・`command eval` の形は
-  計算しない（従来の Ask。RED は `tests/backlog_20261121_determined_subst_shape_gaps.rs`）。
+- `-c` の operand と `eval` の operand（backlog 28019c35 / d766b5fe / c602d32e / bf40851f、
+  `detect/ast/b5/determined.rs`）: shell の `-c W` と `eval W…` で、`$( )` を 1 個以上含み値が決まる word
+  （`substituted_word_value`。各置換の末尾改行は除く）の値を full detector で program として判定する
+  （`judge_body`）。採用するのは Deny のときだけで、Ask / Allow なら従来の Undetermined（Ask）を保つ
+  （raise-only。何も緩めない）。前提条件は上と同じ chain 値と `resolution_fixed`。
+  - `-c` の flag 配置（`dash_c_operand`）: `shell_source` がモデル化する文字の cluster のどこかに `c`
+    （`-c`・`-ec`・`-xc`）、`-c` の前の option（`-x -c`）、cluster 末尾の `-o` / `-O` が次の word を取る形、
+    `--` / `-` による option 終端（`-c -- W`）を読む。long option・`+` option・`-s`・未モデルの文字・`-c` 無しは
+    計算しない（従来の Ask）。値が `-` で始まるときも計算しない。
+  - `eval`: 先頭の `--` を 1 個捨て、全 operand の値（literal はそのまま、`$( )` を含む word は計算値）を
+    空白 1 個で連結して判定する。値の決まらない operand が 1 個でもあれば計算しない。`command [-p] [--] eval`
+    と `builtin [--] eval` も同じ（`runs_eval` / `determined_builtin_eval`）。`command -v` / `-V`・未知の option は
+    `eval` ではない。判定対象の text 自身にだけ、その 1 個の `eval` を許す
+    （`resolution_fixed_but_one_eval` / `readings::chain_names_fixed_but_one_eval`。外側の chain は厳格なまま）。
+    2 個目の `eval` があれば計算しない。
+  （RED は `tests/backlog_20261121_determined_subst_shape_gaps.rs`。）
 
 ## stdin / process substitution の program 読みで `echo` / `printf` が shell 関数でありうるときは Ask（backlog 1e9da081 / f06ecb05）
 

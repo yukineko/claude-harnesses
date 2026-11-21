@@ -161,7 +161,8 @@ use crate::model::Decision;
 
 mod determined;
 use determined::{
-    determined_dash_c_program, determined_delivered_program, determined_eval_program,
+    determined_builtin_eval, determined_dash_c_program, determined_delivered_program,
+    determined_eval_program,
 };
 
 /// Directories whose binaries are judged by basename like the bare command
@@ -736,6 +737,7 @@ fn classify(
         return match base {
             "eval" if !args.is_empty() => determined_eval_program(text, args, judge)
                 .unwrap_or_else(|| undetermined("`eval` runs shell code built at run time")),
+            "builtin" => determined_builtin_eval(text, args, judge).unwrap_or(Decision::Allow),
             _ => Decision::Allow,
         };
     };

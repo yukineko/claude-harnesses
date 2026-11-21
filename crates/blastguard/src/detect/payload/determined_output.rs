@@ -90,8 +90,9 @@ pub(in crate::detect) fn resolution_fixed(cmd: &str) -> bool {
     resolution_fixed_allowing_evals(cmd, 0)
 }
 
-/// [`resolution_fixed`], except that AT MOST ONE command on `cmd` may be a
-/// bare `eval` (backlog d766b5fe). Only the Table B.5 `eval W` reading uses
+/// [`resolution_fixed`], except that AT MOST ONE command on `cmd` may be an
+/// `eval` — bare, or `command [-p] [--] eval` / `builtin [--] eval`
+/// ([`runs_eval`], backlogs d766b5fe / bf40851f). Only the Table B.5 `eval W` reading uses
 /// it, for the `eval` it judges: the `$( )` substitutions of `W` run before
 /// that `eval` does, so its code cannot rebind what they run, while a SECOND
 /// `eval` on the line could (`eval 'cat(){ …; }'; eval "$(… | cat)"`), so two
@@ -101,6 +102,33 @@ pub(in crate::detect) fn resolution_fixed_but_one_eval(cmd: &str) -> bool {
     resolution_fixed_allowing_evals(cmd, 1)
 }
 
+/// Whether `argv` runs the `eval` builtin: `eval …`, `builtin [--] eval …`
+/// or `command [-p…] [--] eval …` (backlog bf40851f). `command -v` / `-V`,
+/// an unknown `command` option and any undetermined word before `eval` are
+/// not an `eval` (false), so such a line keeps failing the name check (its
+/// head is `command` / `builtin`, neither listed) exactly as before: this
+/// only ever lets the listed `eval` spellings through, never anything else.
+fn runs_eval(argv: &[ast::Word]) -> bool {
+    let lit = |i: usize| match argv.get(i).map(|w| &w.value) {
+        Some(Value::Literal(s)) => Some(s.as_str()),
+        _ => None,
+    };
+    let mut i = match lit(0) {
+        Some("eval") => return true,
+        Some("builtin" | "command") => 1,
+        _ => return false,
+    };
+    if lit(0) == Some("command") {
+        while lit(i) == Some("-p") {
+            i += 1;
+        }
+    }
+    if lit(i) == Some("--") {
+        i += 1;
+    }
+    lit(i) == Some("eval")
+}
+
 fn resolution_fixed_allowing_evals(cmd: &str, evals_allowed: usize) -> bool {
     let Analysis::Known(script) = ast::analyze(cmd) else {
         return false;
@@ -108,11 +136,7 @@ fn resolution_fixed_allowing_evals(cmd: &str, evals_allowed: usize) -> bool {
     if script.has_function_definition {
         return false;
     }
-    let is_eval = |c: &ast::SimpleCommand| {
-        c.argv
-            .first()
-            .is_some_and(|h| matches!(&h.value, Value::Literal(n) if n == "eval"))
-    };
+    let is_eval = |c: &ast::SimpleCommand| runs_eval(&c.argv);
     if script.commands.iter().filter(|c| is_eval(c)).count() > evals_allowed {
         return false;
     }
@@ -237,7 +261,8 @@ fn output_at(text: &str, depth: usize) -> Option<Output> {
 /// `$( )` substitution computed: `"$(echo 'rm -rf /etc')"` is `rm -rf /etc`
 /// (each substitution's trailing newlines removed, as the shell does). That
 /// is the program a shell runs when the word is its `-c` operand (backlog
-/// 28019c35), and the code `eval` runs when it is `eval`'s only operand.
+/// 28019c35), and part of the code `eval` runs when it is one of `eval`'s
+/// operands (backlogs d766b5fe / bf40851f).
 ///
 /// `None` for every other word — one without a substitution (the existing
 /// readings already read it), and one any part of which is not determined.

@@ -103,25 +103,21 @@ fn dash_c_shape_double_dash_is_deny() {
 // ------------------------------------------- eval operand shapes / prefixes
 
 #[test]
-#[ignore = "RED: eval with a second operand after a determined harmful subst is Ask, not Deny"]
 fn eval_shape_second_operand_is_deny() {
     expect_deny(r#"eval "$(echo 'rm -rf /etc' | cat)" x"#, "e-two");
 }
 
 #[test]
-#[ignore = "RED: eval -- of a determined harmful subst is Ask, not Deny"]
 fn eval_shape_double_dash_is_deny() {
     expect_deny(r#"eval -- "$(echo 'rm -rf /etc' | cat)""#, "e-dd");
 }
 
 #[test]
-#[ignore = "RED: builtin eval of a determined harmful subst is Ask, not Deny"]
 fn eval_shape_builtin_prefix_is_deny() {
     expect_deny(r#"builtin eval "$(echo 'rm -rf /etc' | cat)""#, "e-builtin");
 }
 
 #[test]
-#[ignore = "RED: command eval of a determined harmful subst is Ask, not Deny"]
 fn eval_shape_command_prefix_is_deny() {
     expect_deny(r#"command eval "$(echo 'rm -rf /etc' | cat)""#, "e-command");
 }

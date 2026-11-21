@@ -1251,14 +1251,17 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
-notes = "Observed 2026-11-20 by the run-20261120-071122-49691 driver via donegate after merging 8f2fe8c18 (which touched no src: version files + an all-ignored test file). main now cc0f372ac (peer merge 0.2.805). Not bisected; not run on the commit before 8f2fe8c18. Readings: (a) FP regression from a peer blastguard merge between 0.2.79x and 0.2.805; (b) intended by a newer ruling, then the asserts are frozen and need a ruling. Distinguish by bisecting the test over the blastguard merges since the test last passed."
+status = "failed"
+notes = """
+Observed 2026-11-20 by the run-20261120-071122-49691 driver via donegate after merging 8f2fe8c18 (which touched no src: version files + an all-ignored test file). main now cc0f372ac (peer merge 0.2.805). Not bisected; not run on the commit before 8f2fe8c18. Readings: (a) FP regression from a peer blastguard merge between 0.2.79x and 0.2.805; (b) intended by a newer ruling, then the asserts are frozen and need a ruling. Distinguish by bisecting the test over the blastguard merges since the test last passed.
+Needs a user ruling: ruling 2026-11-18 T2 (crates/blastguard/src/detect/ast/SUBSET.md item 23) names bash <&'$fd' as Undetermined, while this item's 2026-11-14 test asserts Allow. Fix implemented on branch condukt/run-20261121-112252-65499/run-20261121-112252-65499/t1 commit 13e75a641 (FdTarget::Invalid for a literal non-fd dup target -> Allow; also makes bash <&abc Allow) and amends T2's wording; not merged because amending a user ruling is the user's call (policy answer auto-chose keep T2). If the user rules Allow, merge that branch; else re-anchor the test to T2."""
 created_at = 1795155655
-updated_at = 1795155655
+updated_at = 1795228121
+defer_until = 1795400921
 weight = 0.0
 issue_number = 1899
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1899"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -2150,3 +2153,34 @@ exit 101: 76s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 8.73s
      Running tests/backlog_20261121_rg_pre_protected.rs (target/debug/deps/backlog_20261121_rg_pre_protected-00e2bb410307acaa)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_rg_pre_protected`"""
+
+[[task]]
+id = "bfbb50ac"
+title = '''blastguard: sed -i with >& inside a double-quoted arg (after \") is refused as a '> overwrites' redirect (FP)'''
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-21 (blastguard 0.2.864 installed): a worker's command cd <wt>/crates/blastguard && sed -i "s|if matches!(op, \"<&\" \| \">&\") && target.contains('\$') {|...|" src/detect/payload/exec_fds.rs && sed -n 1009p ... was refused with reason '> overwrites <wt>/crates/blastguard/", which names command-running configuration ...'. The >& is inside the double-quoted sed program (inner quotes are \"), not a redirect. Reduced repro at c8f566bce returns ask with '> overwrites crates/x/"'. The minimal sed -n "s|\">&\"|x|" f.rs is Allow, so the misparse needs the full shape (\| \& '\$' escapes plus cd && ... && sed -n). Readings: (a) parser/tokenizer misreads quote state after backslash-escaped quotes; (b) intended if quote state is undetermined — distinguish by comparing to bash's own tokenization (bash -n accepts it, the sed program is one word).'''
+created_at = 1795227944
+updated_at = 1795227944
+weight = 0.0
+issue_number = 1942
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1942"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_dq_redirect_in_sed -- --ignored"
+rev = "c8f566bce4f0d05d24e810de070207b5a7a380ac"
+observed_at = 1795227944
+detail = """
+exit 101:   Compiling blastguard v0.2.867 (/Users/yuki/src/.harness-worktrees/session-c1b3e891/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.52s
+     Running tests/backlog_20261121_dq_redirect_in_sed.rs (target/debug/deps/backlog_20261121_dq_redirect_in_sed-135311d0fc77f019)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_dq_redirect_in_sed`"""

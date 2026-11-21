@@ -1595,6 +1595,8 @@ notes = """Measured 2026-11-22 main 950c8cdce. text_value_opts("merge") = [-m,--
 created_at = 1795293450
 updated_at = 1795293450
 weight = 0.0
+issue_number = 1984
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1984"
 rev = 0
 
 [task.repro]
@@ -1620,6 +1622,8 @@ notes = "Observed run-20261122-052625-87637 task 0afbb200: merge-proof-contract(
 created_at = 1795293570
 updated_at = 1795293570
 weight = 0.0
+issue_number = 1985
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1985"
 rev = 0
 
 [task.repro]
@@ -1643,12 +1647,17 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
-notes = """観測 2026-11-22: donegate test-changed (scripts/test-changed-crates.sh) on main after 5598a48db: 'thread testscope::git::tests::ordinary_branches_are_not_main panicked at crates/condukt/src/testscope/git.rs:350:13: assertion left == right failed: tags/main / left: Main / right: NotMain' / 'test result: FAILED. 964 passed; 1 failed; 5 ignored'. 原因 (静的読解): crates/condukt/src/testscope/git.rs main_ref の match で '[_remote, m] | ["remotes", _remote, m] | ...=> main_or_head(m)' が '["refs","tags",..] | ["tags",..] => false' より前にあり、'tags/main' が remote 'tags' の main として Main になる。test ケース 'tags/main' と実装はともに e7524f54a (backlog 643e641f, 2026-11-22 04:11) で入った → その commit 時点から red の可能性 (未検証: e7524f54a での実行は未観測)。a1d04297 fix (66f8268b) は main_ref を触っていない (diff に該当行なし)。読み (a) 実装の arm 順の欠陥: test が仕様。(b) git の ref 解決では 'tags/main' は refs/tags/main (存在時) → 無ければ refs/remotes/tags/main (remote 'tags' があれば) と曖昧で、Main(deny) は fail-closed 側 = test の NotMain 期待が過剰。見分け方: git rev-parse の解決順 (refs/<n>, refs/tags/<n>, refs/heads/<n>, refs/remotes/<n>, refs/remotes/<n>/HEAD) で 'tags/main' が main ブランチを指しうるかを判定し、ユーザー裁定を仰ぐ (frozen assert)。"""
+status = "failed"
+notes = """
+観測 2026-11-22: donegate test-changed (scripts/test-changed-crates.sh) on main after 5598a48db: 'thread testscope::git::tests::ordinary_branches_are_not_main panicked at crates/condukt/src/testscope/git.rs:350:13: assertion left == right failed: tags/main / left: Main / right: NotMain' / 'test result: FAILED. 964 passed; 1 failed; 5 ignored'. 原因 (静的読解): crates/condukt/src/testscope/git.rs main_ref の match で '[_remote, m] | ["remotes", _remote, m] | ...=> main_or_head(m)' が '["refs","tags",..] | ["tags",..] => false' より前にあり、'tags/main' が remote 'tags' の main として Main になる。test ケース 'tags/main' と実装はともに e7524f54a (backlog 643e641f, 2026-11-22 04:11) で入った → その commit 時点から red の可能性 (未検証: e7524f54a での実行は未観測)。a1d04297 fix (66f8268b) は main_ref を触っていない (diff に該当行なし)。読み (a) 実装の arm 順の欠陥: test が仕様。(b) git の ref 解決では 'tags/main' は refs/tags/main (存在時) → 無ければ refs/remotes/tags/main (remote 'tags' があれば) と曖昧で、Main(deny) は fail-closed 側 = test の NotMain 期待が過剰。見分け方: git rev-parse の解決順 (refs/<n>, refs/tags/<n>, refs/heads/<n>, refs/remotes/<n>, refs/remotes/<n>/HEAD) で 'tags/main' が main ブランチを指しうるかを判定し、ユーザー裁定を仰ぐ (frozen assert)。
+needs user ruling (frozen unhedged assert): ordinary_branches_are_not_main asserts main_ref("tags/main")==NotMain, but git resolves tags/main via refs/remotes/tags/main when a remote named 'tags' exists, so fail-closed reading is Main/Undetermined. Options: (a) keep assert, reorder arms so ["tags",..] wins; (b) re-anchor assert to Undetermined/Main. flow skips judgment Asks."""
 created_at = 1795293840
-updated_at = 1795293840
+updated_at = 1795294478
+defer_until = 1795467278
 weight = 0.0
-rev = 0
+issue_number = 1986
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1986"
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

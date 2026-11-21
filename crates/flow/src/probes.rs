@@ -13,10 +13,12 @@ use harness_core::boundary;
 use harness_core::verdict::Determination;
 use serde_json::Value;
 
-use crate::decide::{Circuit, Liveness, Obs, Probes, Task};
+use crate::decide::{Circuit, Holder, Liveness, Obs, Probes, Task};
 
-/// Per-subprocess bound. Four probes at most per project; the hook timeout is 60s.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(12);
+/// Per-subprocess bound. Five probes at most per project (driver status, next,
+/// claims, is-claimed, circuit); the hook timeout is 60s, so 5 x 10s stays
+/// under it.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn det<T>(d: Determination<T>) -> Obs<T> {
     match d {
@@ -183,6 +185,13 @@ pub fn parse_next(stdout: &str) -> Obs<Option<Task>> {
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
+            // Absent / non-string / empty → None: the claim cannot be looked
+            // up, so the task stays remaining work (decide::filter_pending).
+            hashkey: v
+                .get("hashkey")
+                .and_then(Value::as_str)
+                .filter(|h| !h.trim().is_empty())
+                .map(str::to_string),
         })),
         _ => Obs::Unknown("JSON output is not a task object with an \"id\"".into()),
     }
@@ -208,6 +217,34 @@ pub fn parse_claims(stdout: &str, session: &str) -> Obs<Vec<String>> {
         }
     }
     Obs::Known(held)
+}
+
+/// `condukt state is-claimed --hashkey H` exit code + stdout.
+///
+/// The exit code is condukt's contract (0 = claimed, 1 = not claimed,
+/// 3 = registry unreadable, 2 = invalid input); the JSON must agree with it.
+/// Exit 0 needs `"claimed": true` and a non-empty `holder_run` string (the
+/// holder decides whether the task is another session's); exit 1 needs
+/// `"claimed": false`. Anything else is `Unknown`.
+pub fn parse_holder(code: i32, stdout: &str) -> Obs<Holder> {
+    let v: Option<Value> = serde_json::from_str(stdout.trim()).ok();
+    let claimed = v
+        .as_ref()
+        .and_then(|v| v.get("claimed"))
+        .and_then(Value::as_bool);
+    let holder = v
+        .as_ref()
+        .and_then(|v| v.get("holder_run"))
+        .and_then(Value::as_str)
+        .filter(|r| !r.trim().is_empty());
+    match (code, claimed, holder) {
+        (0, Some(true), Some(run)) => Obs::Known(Holder::Run(run.to_string())),
+        (1, Some(false), _) => Obs::Known(Holder::Unclaimed),
+        (c, claimed, holder) => Obs::Unknown(format!(
+            "exit {c} with claimed {claimed:?} and holder_run {holder:?} (expected exit 0 + \
+             \"claimed\": true + a holder_run string, or exit 1 + \"claimed\": false)"
+        )),
+    }
 }
 
 /// `condukt circuit check` exit code + stdout.
@@ -314,6 +351,24 @@ impl Probes for Real {
         }
     }
 
+    fn holder(&mut self, project: &str, hashkey: &str) -> Obs<Holder> {
+        let o = run(
+            "condukt",
+            &["state", "is-claimed", "--hashkey", hashkey],
+            &project_dir(project),
+        );
+        match o {
+            Obs::Known(out) => {
+                let code = out.code();
+                match det(out.stdout_allowing(&[0, 1])) {
+                    Obs::Known(s) => parse_holder(code, &s),
+                    Obs::Unknown(w) => Obs::Unknown(w),
+                }
+            }
+            Obs::Unknown(w) => Obs::Unknown(w),
+        }
+    }
+
     fn circuit(&mut self, project: &str) -> Obs<Circuit> {
         let run_id = format!("flow-{}", self.session);
         let o = run(
@@ -401,7 +456,8 @@ mod tests {
             parse_next(r#"{"id":"a","title":"b"}"#),
             Obs::Known(Some(Task {
                 id: "a".into(),
-                title: "b".into()
+                title: "b".into(),
+                hashkey: None,
             }))
         );
         assert!(matches!(parse_next(""), Obs::Unknown(_)));

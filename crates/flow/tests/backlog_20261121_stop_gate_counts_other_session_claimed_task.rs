@@ -230,7 +230,6 @@ fn blocked(stdout: &str) -> bool {
 /// skill forbids this session to take it, so it is not this session's
 /// remaining work: the stop must not be blocked.
 #[test]
-#[ignore = "RED: stop-gate counts a task claimed by another session's condukt run as remaining work"]
 fn stop_is_allowed_when_only_pending_task_is_claimed_by_another_session() {
     let f = Fixture::new();
     f.live_driver_with_pending_task();

@@ -1,9 +1,10 @@
 //! The pure decision core of `flow stop-gate`.
 //!
 //! Every observation the gate makes of the world (driver registry, `backlog
-//! driver status`, `backlog next`, `condukt state claims`, `condukt circuit
-//! check`) is reached through the [`Probes`] trait, so the decision below is a
-//! function of those observations alone and is unit-tested with a fake.
+//! driver status`, `backlog next`, `condukt state claims`, `condukt state
+//! is-claimed`, `condukt circuit check`) is reached through the [`Probes`]
+//! trait, so the decision below is a function of those observations alone and
+//! is unit-tested with a fake.
 //!
 //! Each observation is an [`Obs`]: `Known(T)` or `Unknown(why)`. `Unknown` is
 //! never folded into an empty/clean value here — it reaches [`Outcome::Undetermined`]
@@ -13,6 +14,16 @@
 //! User ruling 2026-11-21: a /flow driver never stops until the problem is
 //! solved; the only stop reason with work remaining is the condukt circuit
 //! breaker; a session that is not a flow driver is never blocked.
+//!
+//! Backlog e1e8c632: the pending task `backlog next` returns is NOT this
+//! driver's work when `condukt state is-claimed` positively reports its
+//! hashkey held by a run other than `flow-<SESSION>` — the skill's claim-skip
+//! gate forbids this session to take it, so blocking on it could never be
+//! satisfied. Only that positive answer removes the task: no hashkey, an
+//! unclaimed answer, a claim held by `flow-<SESSION>`, or an undetermined
+//! lookup all keep it as remaining work (block). `backlog next` names only the
+//! first pending task; tasks queued behind a task claimed elsewhere are not
+//! examined, and the allow message says so.
 
 /// One observation: seen, or could not be seen (with why).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +48,19 @@ pub enum Liveness {
 pub struct Task {
     pub id: String,
     pub title: String,
+    /// The task's condukt claim key (`hashkey` in `backlog next` output), when
+    /// present. Without it the claim cannot be looked up, so the task stays
+    /// remaining work.
+    pub hashkey: Option<String>,
+}
+
+/// Who holds a task hashkey's condukt claim (`condukt state is-claimed`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Holder {
+    /// Exit 1 with `"claimed": false`.
+    Unclaimed,
+    /// Exit 0, held by this run id (`holder_run`).
+    Run(String),
 }
 
 /// `condukt circuit check` result.
@@ -66,7 +90,47 @@ pub trait Probes {
     fn next(&mut self, project: &str) -> Obs<Option<Task>>;
     /// Keys of claims held by this session's flow run (`run_id == flow-<S>`).
     fn claims(&mut self, project: &str) -> Obs<Vec<String>>;
+    /// Holder of `hashkey`'s condukt task claim.
+    fn holder(&mut self, project: &str, hashkey: &str) -> Obs<Holder>;
     fn circuit(&mut self, project: &str) -> Obs<Circuit>;
+}
+
+/// The pending task after the claim-skip filter.
+enum Pending {
+    None,
+    /// Remaining work; `note` says why a claim lookup did not exclude it.
+    Work(Task, Option<String>),
+    /// Positively held by another run: not this driver's work.
+    Elsewhere(Task, String),
+}
+
+fn filter_pending<P: Probes>(
+    session: &str,
+    project: &str,
+    task: Option<Task>,
+    probes: &mut P,
+) -> Pending {
+    let Some(t) = task else {
+        return Pending::None;
+    };
+    let Some(hk) = t.hashkey.clone() else {
+        return Pending::Work(
+            t,
+            Some("it carries no hashkey, so its condukt claim could not be looked up".into()),
+        );
+    };
+    let own = format!("flow-{session}");
+    match probes.holder(project, &hk) {
+        Obs::Known(Holder::Run(r)) if r != own => Pending::Elsewhere(t, r),
+        Obs::Known(_) => Pending::Work(t, None),
+        Obs::Unknown(why) => Pending::Work(
+            t,
+            Some(format!(
+                "its condukt claim could not be determined (`condukt state is-claimed \
+                 --hashkey {hk}`: {why}), so it is not excluded as another session's task"
+            )),
+        ),
+    }
 }
 
 /// Decide one registered project for `session`.
@@ -108,8 +172,25 @@ pub fn decide_project<P: Probes>(session: &str, project: &str, probes: &mut P) -
             Vec::new()
         }
     };
+    let (pending, note, elsewhere) = match filter_pending(session, project, pending, probes) {
+        Pending::None => (None, None, None),
+        Pending::Work(t, note) => (Some(t), note, None),
+        Pending::Elsewhere(t, run) => (None, None, Some((t, run))),
+    };
     let work_known = pending.is_some() || !held.is_empty();
     if unknown.is_empty() && !work_known {
+        if let Some((t, run)) = elsewhere {
+            return Outcome::Allow(format!(
+                "flow stop-gate: the pending backlog task `backlog next` returns for {project}, \
+                 {} \"{}\", is claimed by condukt run {run} (not this session's run \
+                 flow-{session}), so per the /flow claim-skip gate it is not this driver's work, \
+                 and this session holds no flow claims: this stop is allowed. `backlog next` \
+                 names only the first pending task, so tasks queued behind it were NOT examined \
+                 by this gate. If none remain, run /flow Step 4 (`backlog driver unregister`) \
+                 so the driver registration does not linger.",
+                t.id, t.title
+            ));
+        }
         return Outcome::Allow(format!(
             "flow stop-gate: the backlog queue for {project} is empty and this session holds no \
              flow claims, so this stop is allowed. Run /flow Step 4 now \
@@ -129,17 +210,33 @@ pub fn decide_project<P: Probes>(session: &str, project: &str, probes: &mut P) -
             ));
             Outcome::Undetermined(unknown)
         }
-        Obs::Known(Circuit::Continue) if work_known => {
-            Outcome::Block(work_reason(session, project, pending.as_ref(), &held))
-        }
+        Obs::Known(Circuit::Continue) if work_known => Outcome::Block(work_reason(
+            session,
+            project,
+            pending.as_ref(),
+            note.as_deref(),
+            &held,
+        )),
         Obs::Known(Circuit::Continue) => Outcome::Undetermined(unknown),
     }
 }
 
-fn work_reason(session: &str, project: &str, pending: Option<&Task>, held: &[String]) -> String {
+fn work_reason(
+    session: &str,
+    project: &str,
+    pending: Option<&Task>,
+    note: Option<&str>,
+    held: &[String],
+) -> String {
     let mut why = Vec::new();
     if let Some(t) = pending {
-        why.push(format!("pending backlog task {} \"{}\"", t.id, t.title));
+        match note {
+            Some(n) => why.push(format!(
+                "pending backlog task {} \"{}\" ({n})",
+                t.id, t.title
+            )),
+            None => why.push(format!("pending backlog task {} \"{}\"", t.id, t.title)),
+        }
     }
     if !held.is_empty() {
         why.push(format!(
@@ -289,6 +386,7 @@ mod tests {
         live: Option<Obs<Liveness>>,
         next: Option<Obs<Option<Task>>>,
         claims: Option<Obs<Vec<String>>>,
+        holder: Option<Obs<Holder>>,
         circuit: Option<Obs<Circuit>>,
         calls: Vec<&'static str>,
     }
@@ -306,6 +404,10 @@ mod tests {
             self.calls.push("claims");
             self.claims.clone().unwrap_or(Obs::Unknown("unset".into()))
         }
+        fn holder(&mut self, _: &str, _: &str) -> Obs<Holder> {
+            self.calls.push("holder");
+            self.holder.clone().unwrap_or(Obs::Unknown("unset".into()))
+        }
         fn circuit(&mut self, _: &str) -> Obs<Circuit> {
             self.calls.push("circuit");
             self.circuit.clone().unwrap_or(Obs::Unknown("unset".into()))
@@ -316,6 +418,7 @@ mod tests {
         Some(Task {
             id: "t1".into(),
             title: "do it".into(),
+            hashkey: Some("hk1".into()),
         })
     }
 
@@ -324,6 +427,7 @@ mod tests {
             live: Some(Obs::Known(Liveness::Live)),
             next: Some(next),
             claims: Some(claims),
+            holder: Some(Obs::Known(Holder::Unclaimed)),
             circuit: Some(circuit),
             ..Fake::default()
         }

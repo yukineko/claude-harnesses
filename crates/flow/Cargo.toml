@@ -1,6 +1,6 @@
 [package]
 name = "flow"
-version = "0.2.47"
+version = "0.2.49"
 edition = "2021"
 description = "flow plugin: Stop hook (`flow stop-gate`) that keeps a registered /flow driver session running while backlog work remains."
 license = "MIT"

@@ -132,6 +132,12 @@
 //! one heredoc, empty, quoted, at the split point, that passes every condition
 //! above.
 //!
+//! This module also answers, for the Python-file split of step 0b
+//! (`heredoc::python_file_here_document`, which removes nothing and judges a
+//! quoted `.py` body as Python), which command reads the one quoted
+//! here-document when inert commands precede it on its opener line
+//! ([`python_file_reader_start`], backlog 87661417).
+//!
 //! RESIDUAL, as for the string steps: a data file written here can be run by a
 //! LATER, separate tool call, which is judged on its own text.
 
@@ -1168,6 +1174,212 @@ fn file_not_reachable(script: &Script, i: usize, p: &str, landing: &[String]) ->
                     _ => false,
                 })
         })
+}
+
+/// Backlog 87661417 (user ruling 2026-11-17: a quoted here-document body is
+/// not shell lines whatever commands come before it): for
+/// `heredoc::python_file_here_document` only, where the reader of the ONE
+/// quoted here-document starts on its opener line when commands that the
+/// string shape rule does not peel come before it (`true && cat >> x.py
+/// <<'X'`, `cd /w && sed -e 's/a/b/' f > x.py && cat >> x.py <<'X'`). `heads`
+/// is the byte range of the opener line not already peeled (from the first
+/// unpeeled byte to the end of the line, newline excluded). Answers the byte
+/// offset in `cmd` where the reader starts and the byte offset where the
+/// parser ends the body (the start of the terminator line), or `None` — the
+/// caller then keeps the body judged as shell lines, exactly as before.
+///
+/// The body is NOT removed here: the caller judges it as Python and the rest
+/// of the command, the peeled commands included, with every shell rule. This
+/// only decides which command reads the body, and that no command before the
+/// reader can run it. Every condition is read from the parser
+/// ([`ast::analyze`]; a line that defines functions is not `Known` there):
+///
+/// * `cmd` fits [`ast::MAX_PARSE_BYTES`]; exactly one here-document exists in
+///   the whole command, QUOTED, not `<<-`, its body span equal to the parsed
+///   body byte for byte, with a plain delimiter word, and its body starts on
+///   the line after `heads`; the text outside that body passes
+///   [`plain_outside`];
+/// * its reader is a literal `cat` / `tee` at the top level (not a pipe stage,
+///   a background job, a subshell or a substitution) that starts inside
+///   `heads`;
+/// * every other command that starts at or after `heads.start` and before the
+///   body's end lies wholly in `heads` before the reader, and is
+///   [`inert_opener_head`] (at least one such command); the text of `heads`
+///   before the reader that is not inside one of those commands is only
+///   spaces, tabs, `;` and `&` (so `&&` and `;` lists only: no `while` / `do`
+///   / `{` / `(` / `!` / `|` / `||` — a loop around the reader could run what
+///   an earlier iteration wrote).
+///
+/// Commands before the reader run once and finish before it starts, and an
+/// inert head runs no program, so none of them can run the file the body
+/// lands in. Lines after the close are judged as for the unwidened split
+/// (`interpreter::python_file_body_verdict` reads them).
+pub(super) fn python_file_reader_start(cmd: &str, heads: Range<usize>) -> Option<(usize, usize)> {
+    if cmd.len() > ast::MAX_PARSE_BYTES {
+        return None;
+    }
+    let Analysis::Known(script) = ast::analyze(cmd) else {
+        return None;
+    };
+    let docs: Vec<(usize, &ast::HereDoc, &ast::Redirect)> = script
+        .commands
+        .iter()
+        .enumerate()
+        .flat_map(|(i, c)| {
+            c.redirects.iter().filter_map(move |r| match &r.target {
+                RedirTarget::HereDoc(h) => Some((i, h, r)),
+                _ => None,
+            })
+        })
+        .collect();
+    let [(reader_ix, h, opener)] = docs.as_slice() else {
+        return None;
+    };
+    let exact =
+        matches!(&h.body, Value::Literal(v) if cmd.get(h.body_span.clone()) == Some(v.as_str()));
+    if !h.quoted
+        || h.strip_tabs
+        || !exact
+        || !plain_delimiter(cmd, &opener.span)
+        || h.body_span.start != heads.end + 1
+        || !plain_outside(
+            cmd,
+            std::slice::from_ref(&h.body_span),
+            &single_quoted_interiors(&script, cmd),
+        )
+    {
+        return None;
+    }
+    let reader = script.commands.get(*reader_ix)?;
+    let reader_word = literal_argv(reader).ok()?.first().copied();
+    if reader.context != Context::TopLevel
+        || !matches!(reader_word, Some("cat" | "tee"))
+        || !(heads.start < reader.span.start && reader.span.start < heads.end)
+    {
+        return None;
+    }
+    let mut covered: Vec<Range<usize>> = Vec::new();
+    for (i, c) in script.commands.iter().enumerate() {
+        if i == *reader_ix || c.span.end <= heads.start || c.span.start >= h.body_span.end {
+            continue;
+        }
+        let before_reader = heads.start <= c.span.start && c.span.end <= reader.span.start;
+        if !(before_reader && inert_opener_head(c)) {
+            return None;
+        }
+        covered.push(c.span.clone());
+    }
+    if covered.is_empty() {
+        return None;
+    }
+    let gap_ok = cmd
+        .get(heads.start..reader.span.start)?
+        .char_indices()
+        .all(|(k, ch)| {
+            matches!(ch, ' ' | '\t' | ';' | '&')
+                || covered.iter().any(|s| s.contains(&(heads.start + k)))
+        });
+    gap_ok.then_some((reader.span.start, h.body_span.end))
+}
+
+/// A command before a quoted `.py` here-document reader on its opener line
+/// that cannot run a program ([`python_file_reader_start`]): at the top level,
+/// no assignment, no `program_source`, every word literal, the command word
+/// spelled bare, and either on `heredoc::INERT_LATER_COMMANDS` (read-only
+/// tools with no option that runs a program) or a `sed` that only substitutes
+/// ([`sed_substitutes_only`]). Its redirects are only output redirects to a
+/// literal path (`> f`, `>> f`, `&> f`; the target is still judged by every
+/// redirect rule, the command staying in the text) or an fd duplication onto
+/// a numbered fd (`2>&1`). An allowlist: `cd` (it would move where the body's
+/// relative paths are placed), `find -exec`, `xargs`, `awk`, `make`, an
+/// unknown word — anything else is not inert.
+fn inert_opener_head(c: &SimpleCommand) -> bool {
+    if c.context != Context::TopLevel || !c.assignments.is_empty() || program_source(c).is_some() {
+        return false;
+    }
+    let Ok(argv) = literal_argv(c) else {
+        return false;
+    };
+    let Some((&name, args)) = argv.split_first() else {
+        return false;
+    };
+    let redirects_ok = c.redirects.iter().all(|r| match r.op {
+        RedirOp::Out
+        | RedirOp::Append
+        | RedirOp::Clobber
+        | RedirOp::OutErr
+        | RedirOp::AppendOutErr => matches!(r.target, RedirTarget::Path(Value::Literal(_))),
+        RedirOp::DupOut => matches!(r.target, RedirTarget::Fd(FdTarget::Number(_))),
+        _ => false,
+    });
+    redirects_ok
+        && (INERT_LATER_COMMANDS.contains(&name) || (name == "sed" && sed_substitutes_only(args)))
+}
+
+/// True when the `sed` operands `args` give it only `s` commands with no flag
+/// that runs or writes anything: options only `-n`, `-E`, `-r` and `-e
+/// <script>`; with no `-e`, the first operand is the script; every other
+/// operand is a file (not starting with `-`). Each script is ONE `s` command
+/// ([`single_plain_substitution`]). GNU sed's `e` command / `s///e` flag runs
+/// a shell command and `w` writes a file, so any other script is not this
+/// shape.
+fn sed_substitutes_only(args: &[&str]) -> bool {
+    let mut scripts: Vec<&str> = Vec::new();
+    let mut operands: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while let Some(&a) = args.get(i) {
+        match a {
+            "-n" | "-E" | "-r" => {}
+            "-e" => match args.get(i + 1) {
+                Some(s) => {
+                    scripts.push(s);
+                    i += 1;
+                }
+                None => return false,
+            },
+            a if a.starts_with('-') => return false,
+            a => operands.push(a),
+        }
+        i += 1;
+    }
+    if scripts.is_empty() {
+        if operands.is_empty() {
+            return false;
+        }
+        scripts.push(operands.remove(0));
+    }
+    scripts.iter().all(|s| single_plain_substitution(s))
+}
+
+/// True when `script` is exactly one sed `s<d>regex<d>replacement<d>flags`
+/// command: `<d>` an ASCII punctuation character other than `\`, a `\`
+/// escaping the next character, no newline anywhere, and the flags only `g`,
+/// `p`, `I` and digits (never `e`, `w`, `m`, `M`, nor a second command).
+fn single_plain_substitution(script: &str) -> bool {
+    let mut chars = script.chars();
+    if chars.next() != Some('s') {
+        return false;
+    }
+    let Some(delim) = chars.next() else {
+        return false;
+    };
+    if !delim.is_ascii_punctuation() || delim == '\\' {
+        return false;
+    }
+    let mut seen = 0;
+    while seen < 2 {
+        match chars.next() {
+            None | Some('\n') => return false,
+            Some('\\') => {
+                if matches!(chars.next(), None | Some('\n')) {
+                    return false;
+                }
+            }
+            Some(c) if c == delim => seen += 1,
+            Some(_) => {}
+        }
+    }
+    chars.all(|c| matches!(c, 'g' | 'p' | 'I') || c.is_ascii_digit())
 }
 
 #[cfg(test)]

@@ -622,15 +622,23 @@ pub(super) fn program_body_segments_fed_to(cmd: &str, reader: impl Fn(&str) -> b
 /// delimiter line, plus the permitted lines around them. So the opener's
 /// redirect targets are still judged, with the `cd` in force.
 ///
-/// OVER-BLOCKS, accepted: anything after the close (`…EOF` then
-/// `git add notes.md`) or before the opener (`X=1`) makes the body judged as
-/// code, so a body that merely mentions a destructive command is denied or
-/// asked there. That is the restrictive direction. A line that DEFINES shell
-/// functions (`f() { echo hi; }; cat <<'EOF' …`) is not covered by this
-/// function at all: `heredoc_data` (backlog e79485cb) removes its quoted body
-/// when the reader is outside every function body, is the real `cat` / `tee`
-/// / `git` and nothing on the line later runs the landing file, and keeps it
-/// otherwise (a quoted heredoc inside a function body is never data).
+/// This function removes nothing when anything else comes after the close
+/// (`…EOF` then `git add notes.md`) or before the opener (`X=1`, `true &&
+/// cat > notes.md <<'EOF'`). A QUOTED body is not shell lines whatever
+/// commands surround it (user ruling 2026-11-17), so other steps take those
+/// shapes: `heredoc_data` (step 0a) removes a quoted body the shell parser
+/// shows lands in a data / code / config file, the terminal or
+/// `.git/COMMIT_EDITMSG` when no command of the line, before or after it, can
+/// run or names the landing file (function-defining lines included, backlog
+/// e79485cb; a heredoc inside a function body is never data), and
+/// [`python_file_here_document`] (step 0b) judges a quoted `.py` body as
+/// Python, also after inert commands on its opener line (backlog 87661417).
+/// OVER-BLOCKS, still accepted: a body no step takes (a `.sh` or
+/// extension-less landing; a `.py` body after `X=1`, `cd`, `find …` or any
+/// other non-inert command on the opener line, or after an earlier line not
+/// permitted above; a line the parser does not read) stays judged as shell
+/// lines, so a body that merely mentions a destructive command is denied or
+/// asked there. That is the restrictive direction.
 ///
 /// RESIDUALS, not covered:
 ///   * a data file written here can be executed by a LATER, separate tool
@@ -658,7 +666,8 @@ pub(super) enum OutputTargets {
     /// At least one literal `.py` file ([`is_python_file_target`]) and only
     /// literal targets, by `cat` or `tee`, with a QUOTED delimiter. Used ONLY
     /// by [`python_file_here_document`], whose body is then judged as Python;
-    /// lines after the close are allowed and stay judged as shell.
+    /// lines after the close are allowed and stay judged as shell, and so are
+    /// inert commands before the reader on its opener line (see there).
     PythonFiles,
     /// Only literal non-shell code files ([`is_non_shell_code_file_target`]:
     /// `.rs`, `.go`, `.c`, …), by `cat` or `tee`, with a QUOTED delimiter.
@@ -721,6 +730,12 @@ pub(super) struct HereDocumentParts {
 /// (`cd <wt>; cat > scripts/x.py <<'EOF'`, tests/subagent_heredoc_fp_20261108.rs;
 /// [`python_reader_consumer`]). `cds_before` lists every `cd` operand that
 /// runs before the reader, so the judge places the body's relative paths there.
+/// After those heads, inert commands joined by `&&` / `;` may precede the
+/// reader (backlog 87661417: `true && cat >> x.py <<'X'`, `sed -e 's/a/b/' f
+/// > x.py && cat >> x.py <<'X'`): the parser must show the reader and that
+/// they run no program (`heredoc_data::python_file_reader_start`). They stay
+/// in `without_body`, judged by every shell rule; any other head after the
+/// `cd` heads (a later `cd` included) keeps the body judged as shell lines.
 pub(super) fn python_file_here_document(cmd: &str) -> Option<HereDocumentParts> {
     here_document_body_parts(cmd, OutputTargets::PythonFiles).filter(|p| !p.body.is_empty())
 }
@@ -888,7 +903,8 @@ fn python_stdin_reader(words: &[&str]) -> bool {
 ///
 /// The shape rule is [`python_file_here_document`]'s (permitted lines before
 /// the opener, one opener line with no `$`/backtick, a quoted delimiter, a
-/// CLOSED non-empty body, no odd whitespace), plus:
+/// CLOSED non-empty body, no odd whitespace; but NOT its inert opener-line
+/// heads of backlog 87661417, which only the Python split peels), plus:
 ///   * EVERY target is a non-shell code file (a `.sh`, extension-less or other
 ///     target keeps the body; so does a `.py` one, which is step 0b's);
 ///   * the body's first line is not a `#!` interpreter line (`#![…]`, a Rust
@@ -1104,6 +1120,21 @@ fn here_document_body_parts(cmd: &str, targets: OutputTargets) -> Option<HereDoc
     } else {
         opener_consumer(&opener_line)
     };
+    // Backlog 87661417, Python-file split only: inert heads before the reader
+    // ([`super::heredoc_data::python_file_reader_start`]); the string split
+    // below must end the body where the parser does (`ast_body_end`).
+    let line_start: usize = lines[..idx].iter().map(|l| l.len()).sum();
+    let widened = (targets == OutputTargets::PythonFiles
+        && !here_document_consumer_is_data(consumer, targets))
+    .then(|| {
+        let from = line_start + opener_line.len() - consumer.len();
+        super::heredoc_data::python_file_reader_start(cmd, from..line_start + opener_line.len())
+    })
+    .flatten();
+    let (consumer, ast_body_end) = match widened {
+        Some((at, end)) => (opener_line.get(at - line_start..)?, Some(end)),
+        None => (consumer, None),
+    };
     let mut cds_before: Vec<String> = lines[..idx]
         .iter()
         .flat_map(|l| cd_operands(&text(l)))
@@ -1135,6 +1166,10 @@ fn here_document_body_parts(cmd: &str, targets: OutputTargets) -> Option<HereDoc
     // The body, up to the first exact delimiter line.
     let close = (idx + 1..lines.len())
         .find(|&j| segment_closes_here_document(&text(lines[j]), &openers[0]))?;
+    if ast_body_end.is_some_and(|end| end != lines[..close].iter().map(|l| l.len()).sum::<usize>())
+    {
+        return None;
+    }
     let body: String = lines[idx + 1..close].concat();
     if !here_document_delimiter_is_quoted(&opener_line) && body.contains(['$', '`', '\\']) {
         return None;

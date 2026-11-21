@@ -611,6 +611,18 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   しうるものが無い）なら、後続コマンドがあっても本文は shell 行として走査しない
 >   （`non_shell_code_file_here_document`。`cat > x.rs <<'EOF'` / `` ` `` / `EOF` / `ls` は allow）。
 >   `cargo test`・`sh x.rs` 等が後続にあれば従来通り本文も走査する。
+>   例外（user ruling 2026-11-08 / 2026-11-17、backlog 87661417）: 引用付き区切りの本文を `cat`/`tee` が
+>   `.py` ファイルへ書くとき、本文は shell 行ではなく Python として判定する（`python_file_here_document`。
+>   後続行は shell として判定し、書いたファイルを `python3 x.py`・`python3 -m pytest x.py` 以外で参照すれば本文も shell として判定する）。
+>   引用付き本文は前後にどんなコマンドがあっても data であるため、opener 行で読み手の前に `&&`・`;` で
+>   つながるコマンドがあっても、shell パーサ（`heredoc_data::python_file_reader_start`）が「heredoc は
+>   1 つだけ・読み手はトップレベルの `cat`/`tee`・その前のコマンドは全て inert（`true`・`echo`・`cat`・
+>   `grep` 等の閉じた一覧か、`s` 置換だけの `sed`。リダイレクトはリテラルパスへの出力だけ）・ループや
+>   `|`・`||`・`&`・サブシェル無し」を示せば同じく Python として判定する（`true && cat >> x.py <<'X'`・
+>   `sed -e 's/a/b/' f > x.py && cat >> x.py <<'X'` の本文行 `"cp notes.txt /etc/hosts",` は allow）。
+>   前のコマンド自体は従来通り全 shell 規則で判定する。行頭の `cd <リテラル>` は従来通り外すが、
+>   それ以降の `cd`・`X=1`・`find`・`awk`・未知の語など inert でない前置コマンド、前の行の許可外の
+>   コマンド、またはパーサが読めない行では従来通り本文を shell 行として走査する。
 >   例外（backlog ffce9c59）: 読み手が `git commit -F -` で区切りが引用付きのとき、opener 行の
 >   `|`・`;`・`&&`・`||` 以降（`2>&1 | grep …; git log -1` 等）は git の stdout を受けるか本文を
 >   見ない別コマンドなので、本文は data として全ルールから外す。後続部分は本文から独立した

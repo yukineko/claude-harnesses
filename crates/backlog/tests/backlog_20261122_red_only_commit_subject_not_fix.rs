@@ -23,7 +23,6 @@
 mod common;
 
 #[test]
-#[ignore = "RED(363ad7da): RED-only commit with a plain (backlog <id>) subject hides the task from next --claim"]
 fn red_only_commit_with_plain_marker_does_not_hide_task_from_claim() {
     let fx = common::Fixture::new("red-only-subject");
     let (ox, x) = fx.add_extra(

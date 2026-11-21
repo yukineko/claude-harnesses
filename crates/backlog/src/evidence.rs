@@ -287,8 +287,17 @@ pub fn is_ancestor(root: &Path, ancestor: &str, descendant: &str) -> Result<bool
 /// subject means "all fixed" is undecided, and counting an id as fixed drops
 /// it from `next`, so an unrecognised marker resolves to "not fixed".
 ///
+/// A recognised marker counts only when its commit is OBSERVED to change
+/// product code ([`commit_changes_product`], backlog 363ad7da): a commit that
+/// only files a RED test (test paths, `.backlog/`, version-line bumps) is not
+/// a fix even with a plain `(backlog <id>)` subject, and a commit whose
+/// changes cannot be determined is not counted as a fix (the task stays in
+/// the queue; rationale there).
+///
 /// HEAD is first checked with `git rev-parse --verify -q HEAD`: exit 0 proceeds
-/// to `git log --format=%s HEAD --`. An UNBORN HEAD (a valid repo with no
+/// to one `git log -z --grep='(backlog ' --name-only
+/// --diff-merges=first-parent HEAD --` query (a git too old for
+/// `--diff-merges`, < 2.31, fails it and so refuses). An UNBORN HEAD (a valid repo with no
 /// commits yet) is `Ok(empty)` -- a known-empty history -- but only when it is
 /// positively observed as unborn ([`head_is_unborn`]): `rev-parse` exited 1,
 /// HEAD is a symbolic ref, and its target ref is absent (no loose ref file,
@@ -314,18 +323,211 @@ pub fn fixed_task_ids(root: &Path) -> Result<std::collections::HashSet<String>, 
             return Err(format!("git rev-parse --verify -q HEAD failed: {why}"));
         }
     }
-    let subjects = git_ok(root, &["log", "--format=%s", "HEAD", "--"])?;
+    // One bounded query: every commit reachable from HEAD whose message
+    // contains `(backlog ` (subject markers are re-checked below), with the
+    // paths it changed vs its FIRST parent (`--diff-merges=first-parent`: a
+    // merge is judged by what it brought into the line it was merged into;
+    // the merged branch's own commits are reachable too and are judged on
+    // their own). `-z` keeps paths unquoted; `--no-renames` lists both sides
+    // of a rename, so a product file moved under tests/ still shows its
+    // product-side path.
+    let log = git_ok(
+        root,
+        &[
+            "log",
+            "-z",
+            "--no-color",
+            "--no-renames",
+            "-F",
+            "--grep=(backlog ",
+            "--format=%x01%H%x02%P%x02%s",
+            "--name-only",
+            "--diff-merges=first-parent",
+            "HEAD",
+            "--",
+        ],
+    )?;
     let mut ids = std::collections::HashSet::new();
-    for line in subjects.lines() {
-        let mut rest = line;
-        while let Some(i) = rest.find("(backlog ") {
-            rest = &rest[i + "(backlog ".len()..];
-            if let Some(id) = rest.find(')').and_then(|j| fix_marker_id(&rest[..j])) {
-                ids.insert(id.to_string());
-            }
+    for commit in parse_marker_log(&log) {
+        let marked = subject_marker_ids(&commit.subject);
+        if marked.is_empty() {
+            continue;
+        }
+        if commit_changes_product(root, &commit) {
+            ids.extend(marked);
         }
     }
     Ok(ids)
+}
+
+/// The ids the `(backlog <inner>)` markers in `subject` name as fixed.
+fn subject_marker_ids(subject: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut rest = subject;
+    while let Some(i) = rest.find("(backlog ") {
+        rest = &rest[i + "(backlog ".len()..];
+        if let Some(id) = rest.find(')').and_then(|j| fix_marker_id(&rest[..j])) {
+            ids.push(id.to_string());
+        }
+    }
+    ids
+}
+
+/// One commit of the [`fixed_task_ids`] log query.
+#[derive(Debug)]
+struct MarkerCommit {
+    sha: String,
+    /// The first parent; `None` for a root commit.
+    first_parent: Option<String>,
+    subject: String,
+    /// Paths changed vs the first parent. `None` = the record could not be
+    /// parsed, so what the commit changed is undetermined.
+    paths: Option<Vec<String>>,
+}
+
+/// Parse `git log -z --format=%x01%H%x02%P%x02%s --name-only` output: each
+/// record is `\x01<sha>\x02<parents>\x02<subject>\0`, followed (when the
+/// commit changed paths) by `\n<path>\0<path>\0...`.
+fn parse_marker_log(log: &str) -> Vec<MarkerCommit> {
+    let mut out: Vec<MarkerCommit> = Vec::new();
+    for token in log.split('\0') {
+        if let Some(header) = token.strip_prefix('\x01') {
+            let mut parts = header.splitn(3, '\x02');
+            let sha = parts.next().unwrap_or("").to_string();
+            let parents = parts.next();
+            let subject = parts.next();
+            let commit = match (parents, subject) {
+                (Some(p), Some(s)) if !sha.is_empty() => MarkerCommit {
+                    sha,
+                    first_parent: p.split_whitespace().next().map(str::to_string),
+                    subject: s.to_string(),
+                    paths: Some(Vec::new()),
+                },
+                // Malformed header: what the commit changed is undetermined.
+                _ => MarkerCommit {
+                    sha,
+                    first_parent: None,
+                    subject: header.to_string(),
+                    paths: None,
+                },
+            };
+            out.push(commit);
+            continue;
+        }
+        let path = token.strip_prefix('\n').unwrap_or(token);
+        if path.is_empty() {
+            continue;
+        }
+        // A path before any header has no commit to attach to; it cannot make
+        // any commit a fix.
+        if let Some(p) = out.last_mut().and_then(|c| c.paths.as_mut()) {
+            p.push(path.to_string());
+        }
+    }
+    out
+}
+
+/// Whether `path` is a test path: a directory component `tests` or `test`
+/// (the same rule [`parse_test_cmd`] uses for committed test scripts).
+fn is_test_path(path: &str) -> bool {
+    Path::new(path)
+        .parent()
+        .map(|d| {
+            d.components().any(|c| {
+                let s = c.as_os_str().to_string_lossy();
+                s == "tests" || s == "test"
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Version metadata a RED-filing commit bumps alongside its test
+/// (bump-on-change). Counted as non-product only when every changed line in it
+/// is a `version` line ([`version_lines_only`]).
+fn is_version_metadata_path(path: &str) -> bool {
+    matches!(
+        Path::new(path).file_name().and_then(|n| n.to_str()),
+        Some("Cargo.toml" | "Cargo.lock" | "plugin.json" | "marketplace.json")
+    )
+}
+
+/// Whether `commit` (which carries a `(backlog <id>)` subject marker) is
+/// OBSERVED to change product code, i.e. counts as the landed fix of `<id>`
+/// (backlog 363ad7da).
+///
+/// A commit whose diff vs its first parent touches ONLY test paths
+/// ([`is_test_path`]), the backlog store (`.backlog/`), and version metadata
+/// whose changed lines are all `version` lines is a RED-filing / test-only
+/// commit -- e.g. `test: tag RED(<id>) (backlog <id>)` -- and is NOT a fix.
+/// An empty diff is likewise not a fix: no change was observed. A MERGE
+/// commit is judged by its diff vs its first parent (what it brought into the
+/// mainline): a merge that only brought a RED test is not a fix, while the
+/// merged branch's own fix commits are reachable from HEAD and count on their
+/// own.
+///
+/// Restrictive side when what a single commit changed cannot be determined
+/// (a malformed log record, a failed `git diff-tree` of its metadata files):
+/// it is NOT counted as a fix, so the task stays in the queue. Counting a task
+/// as fixed silently drops it from `next` / `next --claim` -- an unanswered
+/// question read as "done", the fail-open CLAUDE.md section 3 forbids --
+/// while a wrong "not fixed" only hands the task out again, and
+/// `next --claim` then re-runs its stored repro, which cancels the task when
+/// the bug no longer reproduces. (A failure of the whole log query is
+/// different: [`fixed_task_ids`] returns `Err` and every caller refuses.)
+fn commit_changes_product(root: &Path, commit: &MarkerCommit) -> bool {
+    let Some(paths) = commit.paths.as_ref() else {
+        return false;
+    };
+    let mut metadata: Vec<&str> = Vec::new();
+    for p in paths {
+        if is_test_path(p) || p.starts_with(".backlog/") {
+            continue;
+        }
+        if is_version_metadata_path(p) {
+            metadata.push(p);
+            continue;
+        }
+        return true;
+    }
+    if metadata.is_empty() {
+        return false;
+    }
+    // Undetermined (`None`) resolves to "not a fix", per the rationale above.
+    matches!(version_lines_only(root, commit, &metadata), Some(false))
+}
+
+/// Whether every added/removed line of `paths` in `commit` (vs its first
+/// parent; vs the empty tree for a root commit) is a `version` line
+/// (`version = "..."` or `"version": "..."`). `None` when git's answer could
+/// not be obtained.
+fn version_lines_only(root: &Path, commit: &MarkerCommit, paths: &[&str]) -> Option<bool> {
+    let mut args: Vec<&str> = vec![
+        "diff-tree",
+        "-p",
+        "-U0",
+        "--no-color",
+        "--no-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--root",
+    ];
+    if let Some(p) = commit.first_parent.as_deref() {
+        args.push(p);
+    }
+    args.push(&commit.sha);
+    args.push("--");
+    args.extend_from_slice(paths);
+    let diff = git_ok(root, &args).ok()?;
+    Some(diff.lines().all(|l| {
+        if l.starts_with("+++ ") || l.starts_with("--- ") {
+            return true;
+        }
+        let Some(body) = l.strip_prefix('+').or_else(|| l.strip_prefix('-')) else {
+            return true;
+        };
+        let b = body.trim();
+        b.starts_with("version = \"") || b.starts_with("\"version\": \"")
+    }))
 }
 
 /// The id a `(backlog <inner>)` marker names as fixed, per the grammar on

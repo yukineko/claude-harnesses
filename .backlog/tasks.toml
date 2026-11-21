@@ -1809,3 +1809,158 @@ exit 101: ktrees/session-eaa077f4/crates/condukt)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 10.41s
      Running tests/backlog_20261122_testscope_git_global_option_value_bypass.rs (target/debug/deps/backlog_20261122_testscope_git_global_option_value_bypass-ac63d2dde2ebe4e3)
 error: test failed, to rerun pass `-p condukt --test backlog_20261122_testscope_git_global_option_value_bypass`"""
+
+[[task]]
+id = "45ea34e7"
+title = "backlog evidence: a (backlog <id>) commit that adds only a filename-identified test file (scripts/test_*.py, *_test.rs) counts as the landed fix, so next --claim never hands <id> out"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-22 at main rev 6ae161ee7 during/after condukt run run-20261122-020202-63344, after fix 363ad7da (merged accf04160). Verbatim (crates/backlog/src/evidence.rs is_test_path): 'd.components().any(|c| { let s = c.as_os_str().to_string_lossy(); s == "tests" || s == "test" })' -- only a tests/test DIRECTORY component marks a test path; a filename-identified test file is product code. Real instance: merge f088e7acb (backlog d1d85c66) first-parent diff = scripts/tests/...sh + scripts/test_check_plugin_rollout.py; the .py has no tests/ dir component, so the merge counts as a landed fix of d1d85c66 although it only brought a RED. RED: fixture repo, commit adds ONLY scripts/test_alpha.py (resp. src/alpha_test.rs) with subject '... (backlog <X>)'; asserts next --claim hands out X. Readings: (a) defect -- a test-only commit read as a fix silently drops a pending task from next/next --claim (the docstring of the detector names this direction the fail-open one); (b) intended -- only directory-convention tests count, filename conventions deliberately treated as product to avoid false non-fix. Tell apart: whether the detector's docstring 'touches ONLY test paths' is meant to include filename conventions; no ruling found for (b). DOES NOT PROVE: which filename conventions should count (test_*.py, *_test.py, *_test.rs, *.test.ts), whether the fix belongs in the classifier or the commit-subject convention, plain next, merge commits (f088e7acb shape not exercised)."""
+created_at = 1795281971
+updated_at = 1795281971
+weight = 0.0
+issue_number = 1970
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1970"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261122_filename_test_path_counts_as_fix -- --ignored"
+rev = "b96a2422167116e6a35b4160b2d2c00f78ca84e8"
+observed_at = 1795281971
+detail = """
+exit 101: i/src/.harness-worktrees/session-eaa077f4-filing/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.42s
+     Running tests/backlog_20261122_filename_test_path_counts_as_fix.rs (target/debug/deps/backlog_20261122_filename_test_path_counts_as_fix-247398ae84c09495)
+error: test failed, to rerun pass `-p backlog --test backlog_20261122_filename_test_path_counts_as_fix`"""
+
+[[task]]
+id = "a700901f"
+title = "blastguard: ACK_PAGER exported in an earlier segment (export ACK_PAGER=sh; ack … / && ack …) keeps ack's read-only exemption for a protected operand"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-22 at main rev 6ae161ee7 after condukt run run-20261122-020202-63344 (fix ba09708a merged in accf04160/6ae161ee7). Verbatim (crates/blastguard/src/detect/readonly.rs env_selects_pager docstring): 'NOT covered here (the variable reaches ack from outside this segment): `export ACK_PAGER=sh; ack …`, an inherited environment, `ACKRC` / `.ackrc` carrying `--pager`.' RED: 'export ACK_PAGER=sh; ack pat .githooks/pre-commit' and 'export ACK_PAGER=sh && ack pat .githooks/pre-commit' expected not Allow for subagent=false and true; control 'ack pat .githooks/pre-commit' stays Allow. Readings: (a) defect -- the export on the same command line is statically visible and selects the same caller-chosen pager program that the prefix form now refuses (fail-open on a protected operand); (b) intended -- documented scope limit of ba09708a, exported forms deferred. Tell apart: the docstring lists it as 'NOT covered', not as 'allowed on purpose'; no user ruling for (b) found. DOES NOT PROVE: real ack behaviour (nothing executed; ack not installed); inherited env; .ackrc/ACKRC; declare -x / typeset -x / set -a spellings; which layer should own the fix."
+created_at = 1795282239
+updated_at = 1795282239
+weight = 0.0
+issue_number = 1971
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1971"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261122_ack_pager_exported_earlier_segment -- --ignored"
+rev = "db9b637e1f0fcb22b5b9c1933ed61a5ed2728b10"
+observed_at = 1795282239
+detail = """
+exit 101: s-worktrees/session-eaa077f4-filing/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.86s
+     Running tests/backlog_20261122_ack_pager_exported_earlier_segment.rs (target/debug/deps/backlog_20261122_ack_pager_exported_earlier_segment-02291b4313862996)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261122_ack_pager_exported_earlier_segment`"""
+
+[[task]]
+id = "dd9d3e31"
+title = "blastguard FP: empty ACK_PAGER= prefix (ACK_PAGER= ack pat <protected>) drops ack's read-only exemption although an empty value names no pager"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-22 at main rev 6ae161ee7 after condukt run run-20261122-020202-63344 (fix ba09708a). Verbatim (crates/blastguard/src/detect/readonly.rs env_selects_pager docstring): 'Any of them whose name part ... is one of the two variables counts, WHATEVER the value: `ACK_PAGER=less`, `ACK_PAGER=` and an unresolvable `ACK_PAGER="$X"` all lose the exemption, as every `--pager=…` value does.' Sibling rule crates/blastguard/src/detect/executors.rs env_exec_var_verdict: 'Some(v) if v.trim().is_empty() => Decision::Allow'. RED: 'ACK_PAGER= ack pat .githooks/pre-commit' expected Allow for subagent=false and true; controls: plain ack Allow, ACK_PAGER=sh not Allow. Readings: (a) defect -- an empty value runs no program, so refusing it is a gate FP (memory false-positives-not-tolerated), inconsistent with env_exec_var_verdict; (b) intended -- uniform restrictive over-ask chosen deliberately by ba09708a's docstring. Tell apart: whether ack treats an empty ACK_PAGER as 'no pager' (ack's source / a run of real ack); if ack runs an empty pager command or falls through to another source, (b) holds. DOES NOT PROVE: real ack behaviour (ack not installed on the filing machine, NOT observed); ACK_PAGER='' / "" spellings; ACK_PAGER_COLOR=."""
+created_at = 1795282302
+updated_at = 1795282302
+weight = 0.0
+issue_number = 1972
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1972"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261122_ack_pager_empty_value_fp -- --ignored"
+rev = "936d1624f6fbab532042b8f7b7496a547c15b281"
+observed_at = 1795282302
+detail = """
+exit 101: .2.912 (/Users/yuki/src/.harness-worktrees/session-eaa077f4-filing/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.93s
+     Running tests/backlog_20261122_ack_pager_empty_value_fp.rs (target/debug/deps/backlog_20261122_ack_pager_empty_value_fp-f6bb19787fc27476)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261122_ack_pager_empty_value_fp`"""
+
+[[task]]
+id = "3a90dee4"
+title = "tdd evidence: an unframed run log (no 'running N tests') sums every 'test result:' line and records the inflated counts as determined: true"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-22 at main rev 6ae161ee7 (static reading) after condukt run run-20261122-020202-63344 changed crates/tdd/src/evidence.rs. Verbatim (parse_test_log): 'let (tests, counts) = if !framed { let (tests, counts) = scan_conservative(&lines); (tests, counts.ok_or(NO_RESULT_LINE)) }' and Ok(...) => json!({"determined": true, ...}); the framed fallback instead reports determined:false because 'a nested `test result:` could have inflated the sum, so the pass count is unknown'. Pinned by unit test unframed_log_keeps_the_conservative_scan (asserts counts.failed == 2 from a duplicated result line, determined == true). RED: integration test drives the tdd binary (tdd red) on a command printing an unframed libtest-shaped log with one real failure and a nested 'test result: FAILED. 0 passed; 1 failed; 0 ignored' inside the captured output; asserts the RED proof's counts is determined:false or failed == 1. Readings: (a) defect -- an inflated sum is reported as determined (an unobserved count claimed as fact, CLAUDE.md s3/s4); (b) intended -- an unframed log is not libtest pretty format, the docstring says it 'is read by the conservative scan for both', and inflation is the restrictive direction. Tell apart: whether determined:true promises exact counts; whether any consumer reads counts.passed/failed as exact. DOES NOT PROVE: that real cargo output ever lacks the running line; that any consumer acts on the inflated number; nextest/pytest; which side should change."""
+created_at = 1795282413
+updated_at = 1795282413
+weight = 0.0
+issue_number = 1973
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1973"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261122_unframed_log_inflated_counts_determined -- --ignored"
+rev = "3f2cc38f88b52489f82dbead3e644ec01a6064fc"
+observed_at = 1795282413
+detail = """
+exit 101: s-worktrees/session-eaa077f4-filing/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.76s
+     Running tests/backlog_20261122_unframed_log_inflated_counts_determined.rs (target/debug/deps/backlog_20261122_unframed_log_inflated_counts_determined-a095f4304078615a)
+error: test failed, to rerun pass `-p tdd --test backlog_20261122_unframed_log_inflated_counts_determined`"""
+
+[[task]]
+id = "8ff44387"
+title = "blastguard FP: python3 - heredoc writing a literal .rs path (p='crates/tdd/src/evidence.rs'; open(p,'w')) refused with an EMPTY target named as command-running configuration (relay bgr-05b37d8cbc85)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-22 in condukt run run-20261122-020202-63344 (main 6ae161ee7 era), relay bgr-05b37d8cbc85 (~/.blastguard/relay/eaa077f4-02a7-458b-9e0e-c7fc2c5d694b.jsonl), actor subagent -> deny, cwd /Users/yuki/src/harness. Command shape: cd <task worktree a867> && python3 - <<'EOF' p='crates/tdd/src/evidence.rs'; s=open(p).read(); string splicing with '''...''' and r'''...''' literals holding Rust source with backticks; open(p,'w').write(s) EOF; . "$HOME/.cargo/env"; cargo check -p tdd. Verbatim reason: '> overwrites , which names command-running configuration (a hook wiring file, a plugin hook, a gate script) or cannot be placed and so may name it — one written line adds a hook entry or a gate command, so blastguard cannot tell from the tool call whether this strengthens or disarms it, and refuses to guess (user ruling 2026-11-20)'. RED replays the exact command (fixture tests/support/relay_bgr_05b37d8cbc85_20261122_exact.txt; only the cd target rewritten to the test cwd), expects Allow main+subagent. Control (observed PASS at 356049cbb): same cd/p binding/open(p,'w') without the splicing body is Allow. Readings: (a) FP -- target text-determined (memory blastguard-must-resolve-statically; 2026-11-20 round-2: allowlisted fs-write sink judged on its path), an ordinary .rs; (b) intended -- body beyond the supported Python subset -> unresolvable -> Ask (round-2 'Unresolvable arguments -> Ask'); even then the reason misstates the class (empty path 'which names command-running configuration', CLAUDE.md s4). Not covered by python-c-expansion-in-literal-deny (no shell expansion; heredoc quoted). Related: 30136835 (python3 heredoc '''...''' splicing, different reason), the 2026-11-14 backtick-string write-target FP (tests/backlog_20261114_python_heredoc_backtick_string_write_target_fp.rs). DOES NOT PROVE: which body construct triggers it (not minimised); the original cd-into-another-worktree classification; real Python execution."""
+created_at = 1795282794
+updated_at = 1795282794
+weight = 0.0
+issue_number = 1974
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1974"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261122_relay_05b37d8cbc85_python_heredoc_empty_target_fp -- --ignored"
+rev = "356049cbb6e6367fb496696f21c5fce49f830309"
+observed_at = 1795282794
+detail = """
+exit 101:  in 6.25s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261122_relay_05b37d8cbc85_python_heredoc_empty_target_fp.rs (target/debug/deps/backlog_20261122_relay_05b37d8cbc85_python_heredoc_empty_target_fp-dcb200f55ff797ff)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261122_relay_05b37d8cbc85_python_heredoc_empty_target_fp`"""

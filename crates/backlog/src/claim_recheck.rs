@@ -216,7 +216,8 @@ fn checkout_root(path: &Path, what: &str) -> std::result::Result<PathBuf, String
 }
 
 /// Whether the fix commit of `cand` (a commit reachable from HEAD whose subject
-/// contains `(backlog <id>)`) has already landed (backlog a04b2b87). HEAD is
+/// contains `(backlog <id>)` and that is observed to change product code, per
+/// `evidence::fixed_task_ids`) has already landed (backlog a04b2b87). HEAD is
 /// the one of the location [`rerun_dir`] picks (with the same `store_root`),
 /// NOT the process cwd, so a `next` run from a non-git cwd still looks at the
 /// ticket's project root. `Err` when that location or git's answer cannot be

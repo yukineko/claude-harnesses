@@ -8,7 +8,12 @@
 //! origin/master | @{u} | @{upstream}` were denied, so `refs/heads/main` or
 //! `refs/remotes/origin/main` slipped through.
 //!
-//! What is judged (operands of `merge` / `rebase`, see [`main_ref`]):
+//! What is judged (operands of `merge` / `rebase`, see [`main_ref`]). An
+//! operand is a token not starting with `-`, every token after `--`, the
+//! bare `-` (git's shorthand for `@{-1}`, judged as `@{-1}`, i.e.
+//! undetermined), and the attached value of a ref-valued long option
+//! (`rebase --onto=<v>`, also any unambiguous abbreviation such as
+//! `--ont=<v>`; the separated `--onto <v>` value is an ordinary operand):
 //! - main (`main`/`master`, compared ASCII-case-insensitively, since a loose
 //!   ref on a case-insensitive filesystem resolves `MAIN` to `main`) spelled
 //!   as a short name, `heads/<m>`, `refs/heads/<m>`, `<remote>/<m>`,
@@ -36,8 +41,11 @@
 //! NOT judged (allowed; the rule works on the text only, nothing is
 //! resolved through git): a commit sha of main, a tag or another branch that
 //! points at main's commit, a branch whose configured upstream is main merged
-//! by its plain name, and history-moving subcommands other than `pull` /
-//! `merge` / `rebase` (`reset`, `cherry-pick`, `checkout`, ...).
+//! by its plain name, the attached values of `--opt=<v>` options that do not
+//! take a ref (`--strategy-option=`, `--message=`, `--exec=`, ...), short
+//! options with an attached value (`-X<opt>`, `-m<msg>`), and history-moving
+//! subcommands other than `pull` / `merge` / `rebase` (`reset`,
+//! `cherry-pick`, `checkout`, ...).
 
 use super::{Judged, MAIN_MERGE_REASON};
 
@@ -87,6 +95,28 @@ fn text_value_opts(sub: &str) -> &'static [&'static str] {
         "rebase" => &["-x", "--exec"],
         _ => &[],
     }
+}
+
+/// Long subcommand options whose value is a ref (`rebase --onto <newbase>`).
+/// The separated form needs no special case: its value token is collected
+/// as an ordinary operand.
+fn ref_value_opts(sub: &str) -> &'static [&'static str] {
+    match sub {
+        "rebase" => &["onto"],
+        _ => &[],
+    }
+}
+
+/// The attached value of a ref-valued long option (`--onto=<v>`), if `a` is
+/// one. git's parse-options accepts any unambiguous prefix of a long option
+/// name (`--ont=<v>`), so every non-empty prefix of a ref-valued option name
+/// is treated as that option (fail closed: the value is only judged, so a
+/// value that is not main stays allowed). Values of other `--opt=<v>`
+/// options (`--strategy-option=`, `--message=`, ...) are not refs and are
+/// not judged.
+fn ref_valued_attached<'a>(sub: &str, a: &'a str) -> Option<&'a str> {
+    let (name, value) = a.strip_prefix("--")?.split_once('=')?;
+    (!name.is_empty() && ref_value_opts(sub).iter().any(|o| o.starts_with(name))).then_some(value)
 }
 
 /// How a ref spelling relates to the default branch.
@@ -214,9 +244,21 @@ pub(super) fn judge_git(args: &[String]) -> Judged {
     let skip = text_value_opts(sub);
     let mut operands: Vec<&str> = Vec::new();
     let mut rest = args[i + 1..].iter();
+    let mut end_of_opts = false;
     while let Some(a) = rest.next() {
-        if skip.contains(&a.as_str()) {
+        if end_of_opts {
+            operands.push(a);
+        } else if a == "--" {
+            // Everything after `--` is an operand, even if it starts with `-`.
+            end_of_opts = true;
+        } else if a == "-" {
+            // git's shorthand for `@{-1}` (the previous branch); judged as
+            // that spelling, i.e. undetermined.
+            operands.push("@{-1}");
+        } else if skip.contains(&a.as_str()) {
             rest.next();
+        } else if let Some(v) = ref_valued_attached(sub, a) {
+            operands.push(v);
         } else if !a.starts_with('-') {
             operands.push(a);
         }
@@ -327,5 +369,29 @@ mod tests {
             judge_git(&words("rebase --onto refs/heads/main a b")),
             Judged::Deny(_)
         ));
+    }
+
+    #[test]
+    fn dash_operands_are_judged() {
+        for cmd in [
+            "rebase --onto=main x",
+            "rebase --ont=origin/main x",
+            "rebase --onto=$B x",
+            "merge -",
+            "rebase -",
+            "merge -- main",
+        ] {
+            assert!(matches!(judge_git(&words(cmd)), Judged::Deny(_)), "{cmd}");
+        }
+        for cmd in [
+            "rebase --onto=feature x",
+            "merge --strategy-option=theirs feature-x",
+            "merge --strategy-option=$X feature-x",
+            "merge --message=main feature-x",
+            "merge --into-name=main feature-x",
+            "merge -- feature-x",
+        ] {
+            assert!(matches!(judge_git(&words(cmd)), Judged::Other), "{cmd}");
+        }
     }
 }

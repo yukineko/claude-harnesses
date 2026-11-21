@@ -115,13 +115,11 @@ fn controls_separated_onto_and_at_minus_one_are_denied() {
 }
 
 #[test]
-#[ignore = "RED(a1d04297): `git rebase --onto=main x` is allowed — attached --onto=<main> value is never judged"]
 fn deny_rebase_onto_attached_main() {
     assert_eq!(decision("git rebase --onto=main x"), "deny");
 }
 
 #[test]
-#[ignore = "RED(a1d04297): `git merge -` (= @{-1}) is allowed while `git merge @{-1}` is denied"]
 fn deny_merge_dash_previous_branch() {
     assert_eq!(decision("git merge -"), "deny");
 }

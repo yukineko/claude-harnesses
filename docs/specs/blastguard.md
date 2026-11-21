@@ -1805,11 +1805,14 @@ chain 値）、`detect/ast/b5.rs`。
   `echo` と `printf` を調べる。Ask 理由は「`{name}` in the stage piping into it may be a shell function defined on
   this command line (or on a line enclosing it)」。literal の判定の後に記録するので、literal 内の Deny が優先する。
 - alias（backlog cffe54c4）: alias も同じ類で、`alias echo='echo chmod 777 /etc/hosts #'; bash <(echo hi)` は
-  alias の出力が program になる。`defined_functions` は関数名に加えて、`alias` という文字列より後ろの
-  `NAME=` word の NAME（quote 除去後）を chain 値へ足す（`defined_aliases`。`expand_aliases` の有無は問わない
-  制限側の過大近似）。名前が literal でない（`$` `` ` `` `\` 等）か、`=` を含まず展開されうる引数があれば
-  `Undetermined`。`alias` が文字列として現れない text は alias 定義なし。`alias ll='ls -l'` のように
-  emitter 名でない alias は判定を変えない。未対応: 連結・間接で `alias` を綴る形（`a=al; ${a}ias echo=x`）。
+  alias の出力が program になる。`defined_functions` は関数名に加えて、parse した script の simple command のうち
+  command name が（quote 除去後に）`alias`（`builtin alias` / `command alias` を含む。`ali\as`・`a""lias` も該当）の
+  ものの `NAME=VALUE` operand の NAME を chain 値へ足す（`defined_aliases`。text 検索ではなく AST を読む。
+  `expand_aliases` の有無は問わない制限側の過大近似）。`alias` が引数（`grep alias f`・`echo alias $HOME`）や
+  quote 内にあるだけなら何も足さない。command name が literal でない（`alias` を綴りうる。`a=al; ${a}ias echo=x`
+  もここで `Undetermined`）、operand が literal でない、AST が読めない場合は `Undetermined`。ただし `a` `l` `i` `a` `s`
+  がこの順に現れない text は `alias` を綴れないので parse せず定義なし。`alias ll='ls -l'` のように
+  emitter 名でない alias は判定を変えない。
   テスト: `crates/blastguard/tests/verify_cffe54c4_alias_emitter_controls.rs`。
 - 対象外（定義が見えないので何も足さない）: source されたファイルや startup file で定義される関数、hook 自身の
   環境から継承される関数、どちらの形も literal に綴らない text の `eval`（`eval $'echo\x28\x29 …'`）。

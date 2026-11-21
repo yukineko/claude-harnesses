@@ -124,3 +124,34 @@ fn b_alias_printf_pipe_is_not_allow() {
 fn b_alias_nonliteral_name_is_not_allow() {
     expect_not_allow("alias $n='x'; bash <(echo hi)", "b-nonlit");
 }
+
+#[test]
+fn a_alias_inside_quotes_is_allow() {
+    expect_allow(r#"echo "alias echo=x"; bash <(echo hi)"#, "a-quoted");
+}
+
+#[test]
+fn a_alias_as_grep_argument_is_allow() {
+    expect_allow(r#"grep -c alias "$f"; bash <(echo hi)"#, "a-grep");
+}
+
+#[test]
+fn a_alias_as_echo_argument_with_expansion_is_allow() {
+    expect_allow("echo alias $HOME; bash <(echo hi)", "a-echo-home");
+}
+
+#[test]
+fn b_alias_backslash_spelled_is_not_allow() {
+    expect_not_allow(
+        r"ali\as echo='echo chmod 777 /etc/hosts #'; bash <(echo hi)",
+        "b-backslash",
+    );
+}
+
+#[test]
+fn b_alias_empty_quotes_spelled_is_not_allow() {
+    expect_not_allow(
+        r#"a""lias echo='echo chmod 777 /etc/hosts #'; bash <(echo hi)"#,
+        "b-emptyquote",
+    );
+}

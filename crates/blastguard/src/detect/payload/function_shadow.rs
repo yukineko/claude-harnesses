@@ -38,8 +38,12 @@
 //!
 //! Aliases (backlog cffe54c4) are the same class: `alias echo='echo chmod 777
 //! /etc/hosts #'; bash <(echo hi)` runs the alias. [`defined_functions`] also
-//! adds every `NAME=` word following an `alias` word on the chain
-//! (`defined_aliases`), whether or not `expand_aliases` is enabled there.
+//! adds the `NAME` of every `NAME=VALUE` operand of a parsed simple command
+//! whose command name (after quote removal, so `ali\as` and `a""lias` count)
+//! is `alias` (`defined_aliases`), whether or not `expand_aliases` is enabled
+//! there. `alias` as an argument or inside quotes adds nothing; a non-literal
+//! command name or operand, or a text the AST cannot read, is Undetermined,
+//! for texts whose letters can spell `alias` only.
 //!
 //! NOT modelled (no definition is seen, so nothing is added): a function
 //! defined by a sourced FILE or by a startup file, inherited from the hook's
@@ -156,38 +160,66 @@ pub(in crate::detect) fn defined_functions(text: &str) -> Functions {
     defined_function_names(text).union(&defined_aliases(text))
 }
 
-/// The alias names `text` may define: every `NAME=` word after an `alias`
-/// word (an over-approximation: `alias` need not be a command head, and
-/// whether `expand_aliases` is on is not asked — the restrictive reading).
-/// A text with no `alias` substring defines none. An argument whose name is
-/// not a plain literal (an expansion, a backslash, a substitution), or that
-/// holds no `=` but may expand to one, is [`Functions::Undetermined`]. NOT
-/// modelled: the word spelled by concatenation or indirection
-/// (`a=al; ${a}ias echo=x`).
+/// True when the letters of `alias` occur in `text` in order (not
+/// necessarily adjacent): the only texts whose command name can, after quote
+/// removal or expansion, spell `alias` (`ali\as`, `a""lias`, `a=al; ${a}ias`).
+/// A text failing this cannot run the alias builtin and is not parsed.
+fn may_spell_alias(text: &str) -> bool {
+    let mut want = "alias".chars();
+    let mut next = want.next();
+    for c in text.chars() {
+        if Some(c) == next {
+            next = want.next();
+        }
+    }
+    next.is_none()
+}
+
+/// The alias names `text` may define, read from the parsed script (not from
+/// the text): the `NAME=VALUE` operands of every simple command whose command
+/// name, after quote removal, is `alias` (also `builtin alias` /
+/// `command alias`). `alias` as an argument (`grep alias f`, `echo alias`) or
+/// inside quotes adds nothing. A command name that is not a literal (it may
+/// spell `alias`), an operand that is not a literal, or a text the AST cannot
+/// read is [`Functions::Undetermined`] — but only for a text that
+/// [`may_spell_alias`]. Whether `expand_aliases` is on is not asked (the
+/// restrictive reading). An indirect spelling is covered only through that
+/// non-literal-command-name rule (`a=al; ${a}ias echo=x` is Undetermined).
 fn defined_aliases(text: &str) -> Functions {
-    let Some(first) = text.find("alias") else {
+    if !may_spell_alias(text) {
         return Functions::none();
+    }
+    let script = match ast::analyze_with_function_definitions(text) {
+        Analysis::Known(script) => script,
+        Analysis::Undetermined(_) => return Functions::Undetermined,
     };
     let mut names = Vec::new();
-    for tok in text[first..].split_whitespace() {
-        let tok = tok.trim_start_matches(['\'', '"', '(', '{']);
-        if tok.contains(['$', '`', '\\']) && !tok.contains('=') {
-            return Functions::Undetermined;
-        }
-        let Some((name, _)) = tok.split_once('=') else {
+    for cmd in &script.commands {
+        let Some(head) = cmd.argv.first() else {
             continue;
         };
-        let name = name.trim_matches(['\'', '"']);
-        if name.is_empty() {
-            continue;
+        let operands = match &head.value {
+            ast::Value::Literal(h) if h == "alias" => &cmd.argv[1..],
+            ast::Value::Literal(h) if h == "builtin" || h == "command" => {
+                match cmd.argv.get(1).map(|w| &w.value) {
+                    Some(ast::Value::Literal(a)) if a == "alias" => &cmd.argv[2..],
+                    Some(ast::Value::Undetermined(_)) => return Functions::Undetermined,
+                    _ => continue,
+                }
+            }
+            ast::Value::Literal(_) => continue,
+            ast::Value::Undetermined(_) => return Functions::Undetermined,
+        };
+        for w in operands {
+            let ast::Value::Literal(op) = &w.value else {
+                return Functions::Undetermined;
+            };
+            if let Some((name, _)) = op.split_once('=') {
+                if !names.iter().any(|n| n == name) {
+                    names.push(name.to_string());
+                }
+            }
         }
-        let literal = name.chars().all(|c| {
-            c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-' | ':' | '+' | '@' | '%' | ',')
-        });
-        if !literal {
-            return Functions::Undetermined;
-        }
-        names.push(name.to_string());
     }
     Functions::Known(names)
 }

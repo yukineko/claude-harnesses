@@ -831,8 +831,9 @@ forge・condukt のスケジューラが再利用）。
   literal として読む（`P=/x/p.sh; …; $P a` は `p.sh` の直接実行で、この行に escape 本文は無い。
   `B=bash && $B -c '…'` は本文を読む）。証明されない展開だけが判定不能。`.`/`source` で行の文面を走らせない
   と読むのは user 裁定 r21（2026-11-18、SUBSET.md）の rustup PATH setup `. "$HOME/.cargo/env"` だけ
-  （`.` builtin・prefix 代入無し・operand 1 つ・値が hook の `HOME` の `/.cargo/env` で、行全体の index でも
-  同じ値に解決すること。`ast::is_rustup_env_source`）。それ以外の `.`/`source` は従来どおり判定不能
+  （`.` builtin・prefix 代入無し・redirect 無し・operand 1 つ・値が hook の `HOME` の `/.cargo/env` で、行全体の
+  index でも同じ値に解決すること。segment 自身の command に限り、`$( )`・`` ` ` ``・escape 本文の中では外さない。
+  `ast::is_rustup_env_source`）。それ以外の `.`/`source` は従来どおり判定不能
   （path の字句判定は `/DEV/stdin`〈大文字小文字を区別しない FS〉・`/{dev}/stdin`・`CDPATH` で漏れたため採らない）
   （625d16af8 の回帰: `. "$HOME/.cargo/env" && sed -i … f` と loop 内の `$P` 実行が relink の Ask になっていた。
   tests/ast_eval_fp_targets_20261115.rs の sanity_line_172 / fp_line_195）。

@@ -145,11 +145,11 @@ pub(super) fn collect(command: &str, cwd: &CwdState, with_escapes: bool) -> Nest
                 reduced: reduced(c, false),
                 cwd: cwd_of(c, cwd),
             });
-            escapes(c, cwd, 0, &mut out);
+            escapes(c, cwd, 0, Place::Substitution, &mut out);
         } else {
             top.push(c);
             if with_escapes {
-                escapes(c, cwd, 0, &mut out);
+                escapes(c, cwd, 0, Place::Top, &mut out);
             }
         }
     }
@@ -406,8 +406,20 @@ fn proven_heads(c: &SimpleCommand, depth: usize) -> Option<Vec<String>> {
     (!values.is_empty()).then_some(values)
 }
 
-/// Add the commands of `c`'s escape body (run in `seg`'s cwd at `depth`).
-fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, out: &mut Nested) {
+/// Where the command [`escapes`] reads stands.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// The segment's own (outermost) simple command.
+    Top,
+    /// A command of a `$( )` / backquote / `<( )` in the segment.
+    Substitution,
+    /// A command of an escape body (`bash -c '…'`).
+    Body,
+}
+
+/// Add the commands of `c`'s escape body (run in `seg`'s cwd at `depth`;
+/// `c` stands at `place`).
+fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, place: Place, out: &mut Nested) {
     let base = match literal_head(c) {
         Ok(b) => b,
         Err(HeadUndetermined) => {
@@ -417,7 +429,7 @@ fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, out: &mut Nested) {
                 for v in values {
                     let mut lit = c.clone();
                     lit.argv[0].value = Value::Literal(v);
-                    escapes(&lit, seg, depth, out);
+                    escapes(&lit, seg, depth, place, out);
                 }
                 return;
             }
@@ -451,8 +463,11 @@ fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, out: &mut Nested) {
     }
     // The rustup PATH setup `. "$HOME/.cargo/env"` (user ruling r21,
     // 2026-11-18) runs that file's text, which is not on the line: nothing
-    // to read, like `bash x.sh` above.
-    if is_rustup_env(c, depth) {
+    // to read, like `bash x.sh` above. Only as the segment's own command:
+    // inside a `$( )` (`x=$(. "$HOME/.cargo/env")`) it stays undetermined,
+    // as at 5e99d94d4 (with `exec 0<<< '…'` and a link of the file to
+    // /dev/stdin earlier on the line it would source line text).
+    if place == Place::Top && is_rustup_env(c, depth) {
         return;
     }
     // A wrapper that may run an interpreter (`sudo bash -c …`), `eval`,
@@ -507,6 +522,6 @@ fn body_commands(body: &str, cwd: &CwdState, depth: usize, out: &mut Nested) {
             reduced: reduced(c, true),
             cwd: cwd_of(c, cwd),
         });
-        escapes(c, cwd, depth + 1, out);
+        escapes(c, cwd, depth + 1, Place::Body, out);
     }
 }

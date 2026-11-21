@@ -1054,7 +1054,11 @@ const PREFIX_INERT_VERBS: &[&str] = &["cp", "echo", "printf", "true", "pwd", "ls
 /// must not be followed by `|` or `&` (a later stage would run concurrently).
 /// No segment of `0..=idx` contains `` ` ``, `(`, `)`, `{`, `}`, `<`, `\`,
 /// `&` or a line break (no substitution, subshell, group, here-doc or fd
-/// trick). Each segment before `idx` is one of:
+/// trick), with ONE exception: segment `idx` itself (the write) may end in a
+/// quoted here-document opener (`<<'TAG'`, `<<-'TAG'`, `<<"TAG"`; TAG
+/// alphanumeric/`_`), stripped by `prefix_inert::strip_quoted_heredoc_opener`
+/// before the check; any other `<` in it, and any `<` in a segment before
+/// `idx`, still refuses. Each segment before `idx` is one of:
 ///   * segment 0 only: `cd D` or S5's `cd 'D'` ([`single_quoted_cd_dir`]), `D`
 ///     absolute, alphanumerics and `/ . _ - + , @ %` only, no `.`/`..` part;
 ///   * only `NAME=value` words, no quote, `$`, glob, and no `NAME` that can

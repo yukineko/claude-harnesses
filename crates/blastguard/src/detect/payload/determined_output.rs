@@ -17,7 +17,9 @@
 //! * its first stage is an emitter and every later stage a filter:
 //!   * `echo` whose operands are determined words, none starting with `-` and
 //!     none holding a backslash (zsh's and sh's `echo` decode escapes): the
-//!     operands joined by spaces, then a newline;
+//!     operands joined by spaces, then a newline. With a lone first operand
+//!     `-e`, `\xHH` escapes (two hex digits, printable ASCII) are decoded;
+//!     any other backslash stays undetermined;
 //!   * `seq LAST`, `seq FIRST LAST` or `seq FIRST INCR LAST` with unsigned
 //!     decimal literals (no leading zero, at most 9 digits, `INCR` > 0, at
 //!     most [`MAX_SEQ_LINES`] lines): one number per line;
@@ -184,7 +186,11 @@ fn output_at(text: &str, depth: usize) -> Option<Output> {
         }
         let (name, operands) = argv.split_first()?;
         stdout = Some(match (pos, name.as_str()) {
-            (0, "echo") => echo_output(operands)?,
+            (0, "echo") => {
+                let (text, decoded) = echo_output(operands)?;
+                beyond_plain_echo |= decoded;
+                text
+            }
             (0, "seq") => {
                 beyond_plain_echo = true;
                 seq_output(operands)?
@@ -250,13 +256,62 @@ fn double_quoted(inner: &[WordPieceWithSource], depth: usize, out: &mut String) 
     Some(substituted)
 }
 
-fn echo_output(operands: &[String]) -> Option<String> {
-    if operands.first().is_some_and(|a| a.starts_with('-'))
-        || operands.iter().any(|a| a.contains('\\'))
-    {
+/// `echo` output, and whether `-e` escapes were decoded to get it. A first
+/// operand `-e` (alone, not a cluster) decodes ONLY `\xHH` with exactly two hex
+/// digits naming a printable ASCII byte or a space (every echo that decodes at
+/// all, bash `-e` and zsh, reads that the same way); any other backslash,
+/// any other option, or a control/non-ASCII result is not determined (`None`,
+/// the caller keeps its restrictive reading).
+fn echo_output(operands: &[String]) -> Option<(String, bool)> {
+    let (decode, operands) = match operands.split_first() {
+        Some((first, rest)) if first == "-e" => (true, rest),
+        _ => (false, operands),
+    };
+    if operands.first().is_some_and(|a| a.starts_with('-')) {
         return None;
     }
-    Some(format!("{}\n", operands.join(" ")))
+    let mut words = Vec::new();
+    let mut decoded = false;
+    for a in operands {
+        if !a.contains('\\') {
+            words.push(a.clone());
+            continue;
+        }
+        if !decode {
+            return None;
+        }
+        words.push(decode_hex_escapes(a)?);
+        decoded = true;
+    }
+    Some((format!("{}\n", words.join(" ")), decoded))
+}
+
+fn decode_hex_escapes(a: &str) -> Option<String> {
+    let b = a.as_bytes();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] != b'\\' {
+            let ch = a[i..].chars().next()?;
+            out.push(ch);
+            i += ch.len_utf8();
+            continue;
+        }
+        if b.get(i + 1) != Some(&b'x') {
+            return None;
+        }
+        let h = a.get(i + 2..i + 4)?;
+        if !h.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        let v = u8::from_str_radix(h, 16).ok()?;
+        if !(v == b' ' || v.is_ascii_graphic()) || v == b'\\' {
+            return None;
+        }
+        out.push(v as char);
+        i += 4;
+    }
+    Some(out)
 }
 
 /// An unsigned decimal literal without a leading zero, at most 9 digits.

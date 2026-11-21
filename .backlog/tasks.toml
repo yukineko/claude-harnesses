@@ -1770,3 +1770,32 @@ exit 101: uki/src/.harness-worktrees/file-tddnested-eaa077f4/crates/tdd)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.00s
      Running tests/backlog_20261122_nested_test_line_in_failure_output.rs (target/debug/deps/backlog_20261122_nested_test_line_in_failure_output-4b92d34135ed0c03)
 error: test failed, to rerun pass `-p tdd --test backlog_20261122_nested_test_line_in_failure_output`"""
+
+[[task]]
+id = "2e03e8c3"
+title = "condukt testscope: rerun key ignores CARGO_TARGET_DIR, so a run contaminated by a shared target dir blocks an isolated rerun on the same tree"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "testscope",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-22 (measured at main 6297db165), flow batch #10, run run-20261121-220650-69750 task t2. (1) In a condukt task worktree at tree 66dd15dc8, tdd green --task t2 --cmd "cargo test -p blastguard --test backlog_20261121_quoted_heredoc_body_gt_fp -- --include-ignored" ran with the SHARED CARGO_TARGET_DIR=/Users/yuki/src/harness/target; another worktree was building blastguard into the same dir, likely overwriting the binary the test runs via CARGO_BIN_EXE_blastguard; the run failed with the pre-fix verdict. (2) Same tree in a scratch checkout with isolated CARGO_TARGET_DIR passed 4/4. (3) Rerun in the task worktree with isolated CARGO_TARGET_DIR (user-authorised once) was refused by the PreToolUse testscope hook, verbatim: rerun refused: tdd green --cmd cargo test -p blastguard --test backlog_20261121_quoted_heredoc_body_gt_fp -- --include-ignored already ran on this exact tree (66dd15dc8bfb64e8a54eba54ec8a77bb1e7f73ad:1dcbe1ce95dcba8e at /Users/yuki/.condukt/worktrees/run-20261121-220650-69750-t2); running the same test twice is forbidden (user ruling 2026-11-07). Change the code first, or move on. Key in crates/condukt/src/testscope/rerun.rs is tree+command, no execution environment. UNDETERMINED between: (a) defect: key should include build-output location (CARGO_TARGET_DIR); (b) intended: 2026-11-07 ruling forbids any rerun on same tree. Tell apart: ask the user whether the ruling covers a rerun differing only by CARGO_TARGET_DIR; yes -> close won't-do, no -> fix key."""
+created_at = 1795278689
+updated_at = 1795278689
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261122_testscope_rerun_key_ignores_target_dir -- --ignored"
+rev = "f005ab26ba4f78f3e8d837a5386f072637200767"
+observed_at = 1795278689
+detail = """
+exit 101: ss-worktrees/session-62e92d16/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.24s
+     Running tests/backlog_20261122_testscope_rerun_key_ignores_target_dir.rs (target/debug/deps/backlog_20261122_testscope_rerun_key_ignores_target_dir-171570d11706b89c)
+error: test failed, to rerun pass `-p condukt --test backlog_20261122_testscope_rerun_key_ignores_target_dir`"""

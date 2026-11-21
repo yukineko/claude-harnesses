@@ -985,38 +985,6 @@ exit 101: bg-wt-pyopen-3510aa71/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_quoted_commit_message_redirect_prose_fp`"""
 
 [[task]]
-id = "6f299fb5"
-title = "blastguard FP: .rs heredoc body is read as shell when a sed -i line follows (doc comment with destructive text → Ask)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-20 at main 2f39a1620 (0.2.784), git project cwd: cat > tests/a.rs <<'EOF' / //! deny :: sudo bash -c 'rm -rf /etc' / fn main() {} / EOF / sed -i '' 's/a/b/' Cargo.toml → ask, reason '`//!` is not a command blastguard recognises …'. Same heredoc alone or followed by grep → allow; plain doc + sed -i → allow. Contradicts ruling 2026-11-08/11-18 (.rs body is data; benign surrounding shapes must not make it code). Hit by a subagent writing a RED test (relay bgr-001cb063f9f7). RED eb4519e0a (independent author): --ignored 'test result: FAILED. 0 passed; 2 failed'."
-created_at = 1795139565
-updated_at = 1795139565
-weight = 0.0
-issue_number = 1886
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1886"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_rs_heredoc_doc_then_sed_fp -- --ignored"
-rev = "82fb53ddf31ec58cc8c5b7994d5df7c708b2bd4b"
-observed_at = 1795139565
-detail = """
-exit 101: . 0 passed; 2 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.69s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
-     Running tests/backlog_20261120_rs_heredoc_doc_then_sed_fp.rs (target/debug/deps/backlog_20261120_rs_heredoc_doc_then_sed_fp-d03500483a2bdf22)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_rs_heredoc_doc_then_sed_fp`"""
-
-[[task]]
 id = "cffe54c4"
 title = "blastguard: shopt -s expand_aliases + alias echo on the same line is Allow in bash <(echo hi)"
 project = "/Users/yuki/src/harness"
@@ -1045,70 +1013,6 @@ detail = """
 exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.70s
 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
-     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
-
-[[task]]
-id = "1e9da081"
-title = "blastguard: echo shadowed by an exported function then bash -c 'bash <(echo hi)' is Allow"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802). RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn export_f_echo_then_bash_c_procsub_is_not_allow; Allow main+sub."
-created_at = 1795155178
-updated_at = 1795155178
-weight = 0.0
-issue_number = 1891
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1891"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored export_f_echo_then_bash_c_procsub_is_not_allow --exact"
-rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
-observed_at = 1795155178
-detail = """
-exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.64s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
-     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
-
-[[task]]
-id = "f06ecb05"
-title = "blastguard: printf shadowed by a function on the same line is Allow in bash <(printf hi)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802). RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn printf_shadowed_by_function_then_procsub_is_not_allow; Allow main+sub."
-created_at = 1795155199
-updated_at = 1795155199
-weight = 0.0
-issue_number = 1892
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1892"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored printf_shadowed_by_function_then_procsub_is_not_allow --exact"
-rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
-observed_at = 1795155199
-detail = """
-exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.59s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
 

@@ -94526,3 +94526,166 @@ auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はあり
    Compiling blastguard v0.2.925 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
      Running tests/backlog_20261115_python_stdin_plain_string_names_rmtree_fp.rs (target/debug/deps/backlog_20261115_python_stdin_plain_string_names_rmtree_fp-41118c5a5d66d562)"""
+
+[[task]]
+id = "e5f8e5b7"
+title = "blastguard block log omits CLAUDE_PROJECT_DIR and TMPDIR, which the verdict depends on, so a logged block cannot be replayed faithfully"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = 'Observed 2026-11-15 at main a8e92b562 (blastguard 0.2.619). Verdict inputs: src/main.rs safe_roots reads std::env::var("CLAUDE_PROJECT_DIR") and std::env::var("TMPDIR") (lines ~813-815); src/detect/scratch_place.rs process_place_model likewise (~110-112); they decide which places are managed. src/blocklog.rs record (~172-215) writes neither. scripts/blastguard_fp_replay.py must approximate CLAUDE_PROJECT_DIR from cwd and inherit its own TMPDIR (its docstring, WHAT STILL DIFFERS). Verbatim RED: "the record does not carry CLAUDE_PROJECT_DIR (/var/folders/.../project-dir-marker-7f3a), an input of the verdict: {...actor:interactive,...cwd:.../cwd-dir,...v:2}". Readings: (a) defect - blocklog module doc says the record holds exactly what was blocked for reproduction (user ruling 2026-11-14 記録をとること / 切り分け), a missing verdict input makes it non-reproducible; (b) intended - the log deliberately minimises fields to payload + verdict, env out of scope (then the replay docstring is the only statement of the gap). Test asserts (a). DOES NOT PROVE which other env inputs (HOME, PATH, CDPATH) a faithful replay needs. RED: crates/blastguard/tests/backlog_20261115_block_record_verdict_env.rs (#[ignore], commit 4e3c2b396, branch filings/offtopic-20261115).'
+created_at = 1794746259
+updated_at = 1795293553
+weight = 0.0
+issue_number = 1825
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1825"
+issue_closed_at = 1795293556
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_block_record_verdict_env -- --ignored block_record_carries_project_dir_and_tmpdir"
+rev = "4e3c2b39620a9a02f017e343bddf08609510eaf5"
+observed_at = 1794746259
+detail = """
+exit 101: v0.2.620 (/Users/yuki/.condukt/worktrees/offtopic-filings-20261115/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.40s
+     Running tests/backlog_20261115_block_record_verdict_env.rs (target/debug/deps/backlog_20261115_block_record_verdict_env-bf1dff4f406ff803)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_block_record_verdict_env`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261115_block_record_verdict_env"
+exit = 0
+passed = 1
+rev = "41f8650fb06325f01532db0a40588899a10ca901"
+observed_at = 1795293473
+output_digest = "sha256:3c488957657d513d63ff80024e0585ec50c5ad24d14d4114b7f93764d81b3e4e"
+excerpt = """
+um-integer v0.1.47
+   Compiling errno v0.3.14
+   Compiling rustpython-parser-vendored v0.4.0
+   Compiling ahash v0.8.12
+   Compiling core-foundation-sys v0.8.7
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling thiserror v2.0.21
+   Compiling scopeguard v1.2.0
+   Compiling smallvec v1.16.5
+   Compiling anstyle-query v1.1.5
+   Compiling colorchoice v1.0.5
+   Compiling anstyle v1.0.14
+   Compiling winnow v0.7.15
+   Compiling option-ext v0.2.0
+   Compiling itoa v1.0.18
+   Compiling bitflags v2.13.0
+   Compiling toml_write v0.1.2
+   Compiling anstream v1.0.0
+   Compiling dirs-sys v0.4.1
+   Compiling regex-automata v0.4.14
+   Compiling ar_archive_writer v0.5.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand_chacha v0.3.1
+   Compiling rand v0.8.8
+   Compiling iana-time-zone v0.1.65
+   Compiling lock_api v0.4.14
+   Compiling psm v0.1.31
+   Compiling darling_core v0.21.3
+   Compiling darling_core v0.20.11
+   Compiling pest v2.9.5
+   Compiling phf_generator v0.11.3
+   Compiling phf_codegen v0.11.3
+   Compiling unicode_names2_generator v1.3.0
+   Compiling rustpython-parser v0.4.0
+   Compiling serde_derive v1.0.228
+   Compiling is-macro v0.3.8
+   Compiling unicode_names2 v1.3.0
+   Compiling num-bigint v0.4.8
+   Compiling rustpython-parser-core v0.4.0
+   Compiling phf v0.11.3
+   Compiling digest v0.10.7
+   Compiling thiserror-impl v2.0.21
+   Compiling pest_meta v2.9.5
+   Compiling darling_macro v0.20.11
+   Compiling darling_macro v0.21.3
+   Compiling darling v0.20.11
+   Compiling darling v0.21.3
+   Compiling cpufeatures v0.2.17
+   Compiling fastrand v2.4.1
+   Compiling either v1.19.0
+   Compiling foldhash v0.2.0
+   Compiling allocator-api2 v0.2.21
+   Compiling peg-runtime v0.8.6
+   Compiling clap_lex v1.1.0
+   Compiling static_assertions v1.1.0
+   Compiling peg-macros v0.8.6
+   Compiling rustpython-ast v0.4.0
+   Compiling itertools v0.11.0
+   Compiling clap_builder v4.6.0
+   Compiling hashbrown v0.16.1
+   Compiling pest_generator v2.9.5
+   Compiling bon-macros v3.9.3
+   Compiling tempfile v3.27.0
+   Compiling sha2 v0.10.9
+   Compiling pest_derive v2.9.5
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling cached_proc_macro v0.27.0
+   Compiling regex v1.12.4
+   Compiling clap_derive v4.6.1
+   Compiling toml_edit v0.22.27
+   Compiling tracing-attributes v0.1.31
+   Compiling parking_lot v0.12.5
+   Compiling chrono v0.4.45
+   Compiling dirs v5.0.1
+   Compiling unic-emoji-char v0.9.0
+   Compiling unic-ucd-ident v0.9.0
+   Compiling console v0.16.6
+   Compiling wait-timeout v0.2.1
+   Compiling tracing-core v0.1.36
+   Compiling arrayvec v0.7.8
+   Compiling pin-project-lite v0.2.17
+   Compiling rustc-hash v1.1.0
+   Compiling web-time v1.1.0
+   Compiling similar v2.7.0
+   Compiling cached_proc_macro_types v0.1.1
+   Compiling lalrpop-util v0.20.2
+   Compiling cached v0.59.0
+   Compiling utf8-chars v3.0.7
+   Compiling tracing v0.1.44
+   Compiling peg v0.8.6
+   Compiling clap v4.6.1
+   Compiling bstr v1.12.2
+   Compiling target-triple v1.0.1
+   Compiling insta v1.49.0
+   Compiling winnow v1.0.4
+   Compiling indenter v0.3.4
+   Compiling globset v0.4.18
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling toml v0.8.23
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling harness-core v0.2.113 (/Users/yuki/.condukt/worktrees/sink-e5f8e5b7/crates/harness-core)
+   Compiling toml v1.1.3+spec-1.1.0
+   Compiling termcolor v1.4.1
+   Compiling glob v0.3.3
+   Compiling bon v3.9.3
+   Compiling brush-parser v0.4.0
+   Compiling trybuild v1.0.118
+   Compiling progeffect v0.1.7 (/Users/yuki/.condukt/worktrees/sink-e5f8e5b7/crates/progeffect)
+   Compiling overwatch v0.2.127 (/Users/yuki/.condukt/worktrees/sink-e5f8e5b7/crates/overwatch)
+   Compiling blastguard v0.2.926 (/Users/yuki/.condukt/worktrees/sink-e5f8e5b7/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 18s
+     Running tests/backlog_20261115_block_record_verdict_env.rs (target/debug/deps/backlog_20261115_block_record_verdict_env-335040b8c3267cbe)
+"""
+
+[task.closure.red]
+rev = "419a2e3d139e171375cdcd245a52738a8d2dd0f9"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

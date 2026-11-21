@@ -1871,3 +1871,32 @@ exit 101: s-worktrees/session-eaa077f4-filing/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 17.86s
      Running tests/backlog_20261122_ack_pager_exported_earlier_segment.rs (target/debug/deps/backlog_20261122_ack_pager_exported_earlier_segment-02291b4313862996)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261122_ack_pager_exported_earlier_segment`"""
+
+[[task]]
+id = "dd9d3e31"
+title = "blastguard FP: empty ACK_PAGER= prefix (ACK_PAGER= ack pat <protected>) drops ack's read-only exemption although an empty value names no pager"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-22 at main rev 6ae161ee7 after condukt run run-20261122-020202-63344 (fix ba09708a). Verbatim (crates/blastguard/src/detect/readonly.rs env_selects_pager docstring): 'Any of them whose name part ... is one of the two variables counts, WHATEVER the value: `ACK_PAGER=less`, `ACK_PAGER=` and an unresolvable `ACK_PAGER="$X"` all lose the exemption, as every `--pager=…` value does.' Sibling rule crates/blastguard/src/detect/executors.rs env_exec_var_verdict: 'Some(v) if v.trim().is_empty() => Decision::Allow'. RED: 'ACK_PAGER= ack pat .githooks/pre-commit' expected Allow for subagent=false and true; controls: plain ack Allow, ACK_PAGER=sh not Allow. Readings: (a) defect -- an empty value runs no program, so refusing it is a gate FP (memory false-positives-not-tolerated), inconsistent with env_exec_var_verdict; (b) intended -- uniform restrictive over-ask chosen deliberately by ba09708a's docstring. Tell apart: whether ack treats an empty ACK_PAGER as 'no pager' (ack's source / a run of real ack); if ack runs an empty pager command or falls through to another source, (b) holds. DOES NOT PROVE: real ack behaviour (ack not installed on the filing machine, NOT observed); ACK_PAGER='' / "" spellings; ACK_PAGER_COLOR=."""
+created_at = 1795282302
+updated_at = 1795282302
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261122_ack_pager_empty_value_fp -- --ignored"
+rev = "936d1624f6fbab532042b8f7b7496a547c15b281"
+observed_at = 1795282302
+detail = """
+exit 101: .2.912 (/Users/yuki/src/.harness-worktrees/session-eaa077f4-filing/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.93s
+     Running tests/backlog_20261122_ack_pager_empty_value_fp.rs (target/debug/deps/backlog_20261122_ack_pager_empty_value_fp-f6bb19787fc27476)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261122_ack_pager_empty_value_fp`"""

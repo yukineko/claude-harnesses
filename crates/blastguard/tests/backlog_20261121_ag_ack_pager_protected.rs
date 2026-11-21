@@ -90,14 +90,67 @@ fn expect_not_allow(cmd: &str, tag: &str) {
     );
 }
 
+fn expect_allow(cmd: &str, tag: &str) {
+    let home = unique_home(tag);
+    let mut bad = Vec::new();
+    for subagent in [false, true] {
+        let d = decide(cmd, &home, subagent);
+        if d != "allow" {
+            bad.push(format!("subagent={subagent} => {d}"));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "expected Allow for {cmd:?}:\n{}",
+        bad.join("\n")
+    );
+}
+
+// Controls written by the orchestrator (not the implementer) of run
+// run-20261122-004934-13005 t3, 2026-11-22.
+//
+// (1) Without a pager option, ag/ack stay read-only and Allow.
+// (2) A different long option that merely starts with `--pager` is not the
+//     pager option (the 1f037eb5 gzip precedent: matching a neighbouring flag
+//     created a new fail-open), so it does not by itself make ag/ack Ask.
+// (3) ag (getopt_long) and ack (Getopt::Long) accept unambiguous abbreviations
+//     of long options, so `--pag CMD` / `--page=CMD` reach the same pager.
+//     Over-asking an abbreviation is the restrictive side.
+//
+// DOES NOT PROVE: real ag/ack behaviour (nothing is executed); that every
+// abbreviation spelling is covered (only `--pag` and `--page=` are driven).
+
 #[test]
-#[ignore = "RED(e33849bd): ag --pager CMD pat <protected> is Allow; doc says pager can execute an argument"]
+fn control_ag_without_pager_protected_operand_is_allow() {
+    expect_allow("ag pat .githooks/pre-commit", "ag-nopager");
+}
+
+#[test]
+fn control_ack_without_pager_protected_operand_is_allow() {
+    expect_allow("ack pat .githooks/pre-commit", "ack-nopager");
+}
+
+#[test]
+fn control_ag_pager_glob_like_flag_is_not_the_pager() {
+    expect_allow("ag --pager-glob x pat .githooks/pre-commit", "ag-pagerglob");
+}
+
+#[test]
+fn ag_pager_abbreviation_protected_operand_is_not_allow() {
+    expect_not_allow("ag --pag sh pat .githooks/pre-commit", "ag-abbrev");
+}
+
+#[test]
+fn ack_pager_abbreviation_equals_form_protected_operand_is_not_allow() {
+    expect_not_allow("ack --page=sh pat .githooks/pre-commit", "ack-abbrev");
+}
+
+#[test]
 fn ag_pager_space_form_protected_operand_is_not_allow() {
     expect_not_allow("ag --pager sh pat .githooks/pre-commit", "ag");
 }
 
 #[test]
-#[ignore = "RED(e33849bd): ack --pager=CMD pat <protected> is Allow; doc says pager can execute an argument"]
 fn ack_pager_equals_form_protected_operand_is_not_allow() {
     expect_not_allow("ack --pager=sh pat .githooks/pre-commit", "ack");
 }

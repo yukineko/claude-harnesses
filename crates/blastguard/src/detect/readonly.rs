@@ -124,12 +124,30 @@ fn is_read_only_command(cmd: &str) -> bool {
 /// `--pre-glob` is deliberately NOT skipped as a flag value below: that skip
 /// applied to every head and let `gzip -- --pre-glob <protected>` through;
 /// leaving it an operand only over-asks for `rg` (the restrictive side).
+///
+/// `ag --pager CMD` / `ack --pager=CMD` is the same hazard (e33849bd): the
+/// pager is a caller-chosen program that is fed the matched lines (protected
+/// file content), so `--pager sh` runs it. The option name (the part before
+/// `=`) counts when it is `--pager` or an unambiguous long-option abbreviation
+/// of it at least `--pag` long (getopt_long / Getopt::Long accept `--pag`,
+/// `--page`). `--pager-glob`, `--pagerx`, `--nopager` and `--no-pager` are NOT
+/// matched. As for `rg`, any such token counts even after `--`, and no
+/// flag-value skip is added.
 fn has_exec_flag(cmd: &str, rest: &[&str]) -> bool {
-    cmd == "rg"
-        && rest.iter().any(|t| {
+    let any_word = |f: &dyn Fn(&str) -> bool| {
+        rest.iter().any(|t| {
             let w = first_shell_word(t).unwrap_or_else(|| (*t).to_string());
-            w == "--pre" || w.starts_with("--pre=")
+            f(&w)
         })
+    };
+    match cmd {
+        "rg" => any_word(&|w| w == "--pre" || w.starts_with("--pre=")),
+        "ag" | "ack" => any_word(&|w| {
+            let name = w.split('=').next().unwrap_or(w);
+            name.len() >= 5 && "--pager".starts_with(name)
+        }),
+        _ => false,
+    }
 }
 
 /// True when `cmd` is a read-only command whose words after the head are DATA
@@ -144,7 +162,9 @@ fn has_exec_flag(cmd: &str, rest: &[&str]) -> bool {
 /// Every other read-only head keeps the tail rule because some option can run
 /// its argument: `bat --pager <cmd>`, `less`/`more` (`+cmd`, LESSOPEN),
 /// `rg --pre <prog>`, `ag`/`ack --pager`. So `bat --pager rm -rf /etc` and
-/// `rg --pre rm …` still ask.
+/// `rg --pre rm …` still ask, and `ag`/`ack` carrying a `--pager` option (or an
+/// abbreviation of it) are not read-only-exempt for a protected operand
+/// ([`has_exec_flag`], e33849bd).
 pub(super) fn argv_is_data_only(cmd: &str) -> bool {
     is_read_only_command(cmd)
         && matches!(

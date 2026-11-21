@@ -21,8 +21,9 @@
 //! wrapper's redirects (ruling Q3); `-l -v -K -V` (and their long names)
 //! alone run nothing, with a command word after them → Undetermined; `-e`
 //! and any other option → Undetermined. A literal stdin program of a shell
-//! reached through `sudo` / `doas` is also judged by the full detector as
-//! `<shell> -c '<body>'` (`privileged_literal_body`)):
+//! reached through `sudo` / `doas` is judged by the full detector as
+//! `<shell> -c '<body>'` like every literal shell body; a perl / ruby / node
+//! one there is Undetermined (`privileged_literal_body`)):
 //!
 //! * an interpreter (bash / sh / zsh / dash / ksh / python* / perl / ruby /
 //!   node) running a program FILE → Undetermined (rulings 10, 2026-11-18 #2);
@@ -38,14 +39,19 @@
 //!   ([`bare_wrapper_pipeline`]: no other statement, separator, background
 //!   `&`, compound command or substitution, and not inside a body). Any other
 //!   line keeps the producer Undetermined. A shell body is analysed by this
-//!   layer recursively;
-//!   a python / perl / ruby / node body gives no B.5 opinion (the legacy
-//!   program-text reading judges it). Except a literal stdin piped in by a
-//!   compound stage — a brace group of `echo` / `printf` members, wherever
-//!   the pipeline sits (`( … )`, `if`, a loop body) — which the legacy layer
-//!   may not read: a shell body there is ALSO judged by the full detector as
-//!   `<shell> -c '<body>'`, python is left to S5, and perl / ruby / node are
-//!   Undetermined (`piped_by_compound_stage`, `compound_fed_body`);
+//!   layer recursively AND judged by the full detector as `<shell> -c
+//!   '<body>'` (`literal_body` / `shell_body`, backlog 68b1a9dc), so its
+//!   effects are judged here whatever spelling delivered it (`echo rm -rf
+//!   /etc | env bash`, `echo rm\ -rf\ /etc | bash`, `X=/etc; echo rm -rf $X
+//!   | bash`), not only when the legacy reading sees a plain `echo WORDS |
+//!   bash`;
+//!   a python / perl / ruby / node body gives no B.5 opinion (python: S5;
+//!   perl / ruby / node: the legacy program-text reading judges it). Except
+//!   a literal stdin piped in by a compound stage — a brace group of `echo` /
+//!   `printf` members, wherever the pipeline sits (`( … )`, `if`, a loop
+//!   body) — which the legacy layer may not read: a shell body is judged as
+//!   above, python is left to S5, and perl / ruby / node are Undetermined
+//!   (`piped_by_compound_stage`, `compound_fed_body`);
 //! * any other program from stdin or a process substitution (`bash < x.sh`,
 //!   a pipe from a non-literal producer, an fd, `<(cat f)`) → Undetermined,
 //!   except a bare shell reading the inherited stdin at the top level, which
@@ -174,8 +180,8 @@ pub(crate) const SYSTEM_BIN_DIRS: &[&str] = &[
 ];
 
 /// Nesting cap of `-c` / stdin recursion inside this layer and of the
-/// full-detector body judgements (written-then-run bodies and bodies piped in
-/// by a compound stage); deeper → Undetermined.
+/// full-detector body judgements (written-then-run bodies and literal shell
+/// program bodies, [`shell_body`]); deeper → Undetermined.
 const MAX_DEPTH: usize = 8;
 
 thread_local! {
@@ -186,8 +192,7 @@ thread_local! {
 /// What the layer needs from its caller.
 pub(crate) struct Probes<'a> {
     /// The full detector for a command text (used only for written-then-run
-    /// bodies and for literal bodies piped in by a compound stage,
-    /// [`compound_fed_body`]).
+    /// bodies and for literal shell program bodies, [`shell_body`]).
     pub judge: &'a dyn Fn(&str) -> Decision,
     /// The session's location model: the hook's cwd and the path resolver
     /// the tracked-and-unmodified probe ([`git_tracked_clean`]) needs.
@@ -761,13 +766,13 @@ fn classify(
     let wrappers_ok = judge.wrappers_bare && depth == 0;
     if let Some(body) = literal_delivered_program(text, commands, idx, cmd, &source, k, wrappers_ok)
     {
-        return literal_body(fam, &body, depth, judge);
+        return literal_body(fam, base, &body, depth, judge);
     }
     // A program a determined producer PIPELINE delivers (`bash <(echo hi |
     // cat)`, `seq 10 | sort | bash`, `bash <(echo "$(echo hi)")`, backlog
     // 40dc52c0) is read the same way; see `determined_delivered_program`.
     if let Some(body) = determined_delivered_program(text, commands, idx, cmd, &source, k) {
-        return literal_body(fam, &body, depth, judge);
+        return literal_body(fam, base, &body, depth, judge);
     }
     // A `-c` operand that is a determined word built from `$( )`
     // substitutions (`bash -c "$(echo 'rm -rf /etc')"`, backlog 28019c35):
@@ -787,7 +792,7 @@ fn classify(
             if privileged {
                 return privileged_literal_body(fam, base, &body, depth, judge);
             }
-            literal_body(fam, &body, depth, judge)
+            literal_body(fam, base, &body, depth, judge)
         }
         // A shell reading the stdin it inherits reads `inherited`. At the top
         // level that is the Bash tool's stdin, which is empty: no B.5 opinion
@@ -858,9 +863,15 @@ fn inherited_stdin<'a>(cmd: &'a SimpleCommand, inherited: &'a StdinSource) -> &'
     }
 }
 
-/// A literal program body: a shell body is read by this layer recursively;
-/// any other interpreter's body gives no B.5 opinion (python: stage S5,
-/// `s5.rs`, judges it; perl /
+/// A literal program body (a `StdinSource::Literal` stdin, or the text
+/// [`literal_delivered_program`] / [`determined_delivered_program`] read): a
+/// shell body is judged by [`shell_body`] — this layer's recursive reading
+/// AND the full detector as `<shell> -c '<body>'`, raise-only — so its
+/// EFFECTS (`rm -rf /etc`) are judged here, not left to the legacy layer
+/// (backlog 68b1a9dc: the legacy reading sees only a plain `echo WORDS |
+/// bash`, so `echo rm -rf /etc | env bash`, `echo rm\ -rf\ /etc | bash`,
+/// `X=/etc; echo rm -rf $X | bash` were only Ask). Any other interpreter's
+/// body gives no B.5 opinion (python: stage S5, `s5.rs`, judges it; perl /
 /// ruby / node: the legacy program-text reading decides, user ruling
 /// 2026-11-18 (a)).
 ///
@@ -869,11 +880,27 @@ fn inherited_stdin<'a>(cmd: &'a SimpleCommand, inherited: &'a StdinSource) -> &'
 /// remainder of that same literal (`printf 'bash\necho x' | bash`: the inner
 /// `bash` reads `echo x`); this layer does not split the literal, but every
 /// line of it is already a command of `body` and is judged as one here.
-fn literal_body(fam: Family, body: &str, depth: usize, judge: &Probes<'_>) -> Decision {
+fn literal_body(fam: Family, base: &str, body: &str, depth: usize, judge: &Probes<'_>) -> Decision {
     match fam {
-        Family::Shell => layer(body, depth + 1, judge, &StdinSource::Inherited),
+        Family::Shell => shell_body(base, body, depth, judge),
         Family::Python | Family::PerlLike | Family::Node => Decision::Allow,
     }
+}
+
+/// A literal shell program body run by `base`: this layer's recursive
+/// reading of it, then (unless that already denies) the full detector's
+/// verdict on `<base> -c '<body>'` ([`judge_body`], bounded by
+/// [`MAX_DEPTH`] nested judgements). The worse of the two (`Deny > Ask >
+/// Allow`) is returned; the caller combines it raise-only ([`raise`]).
+fn shell_body(base: &str, body: &str, depth: usize, judge: &Probes<'_>) -> Decision {
+    let mut acc = VerdictAcc::default();
+    if let Some(deny) = acc.record(layer(body, depth + 1, judge, &StdinSource::Inherited)) {
+        return deny;
+    }
+    if let Some(deny) = acc.record(judge_body(body, Runner::Shell(base), judge)) {
+        return deny;
+    }
+    acc.finish()
 }
 
 /// Whether the literal stdin of `commands[idx]` (`cmd`) was piped in by a
@@ -882,17 +909,16 @@ fn literal_body(fam: Family, body: &str, depth: usize, judge: &Probes<'_>) -> De
 /// the evaluator concatenated (`support::brace_group_stdin`).
 ///
 /// Why it matters (backlog 7eb86bb3 follow-up, finding 1 of
-/// `tests/brace_group_feeder_adversarial_20261120.rs`): [`literal_body`]
-/// gives a literal shell body only this layer's B.5 reading and leaves its
-/// EFFECTS (`rm -rf /etc`) to the legacy layer, which is sound only when the
-/// legacy layer reads the same text. It reads a plain `echo X | bash`
-/// anywhere, but it recognises a brace-group feeder only in the shapes
+/// `tests/brace_group_feeder_adversarial_20261120.rs`): the legacy layer
+/// recognises a brace-group feeder only in the shapes
 /// `payload/brace_feeder.rs` models — not inside `( … )`, `if` or a loop
 /// body — and there it read the last member alone (`( { printf 'rm -rf /e';
-/// printf 'tc'; } | bash )` was Allow). So whenever the producer is not that
-/// plain shape, the body is judged by the full detector here
-/// ([`compound_fed_body`]); this is raise-only, so over-matching only
-/// re-judges a text the legacy layer may already have judged.
+/// printf 'tc'; } | bash )` was Allow). A SHELL body is judged by the full
+/// detector in either case ([`literal_body`] and [`compound_fed_body`] both
+/// use [`shell_body`], backlog 68b1a9dc), so for a shell this only matters
+/// historically; what still differs is a perl / ruby / node body, which is
+/// Undetermined here ([`compound_fed_body`]) but gives no B.5 opinion from a
+/// plain producer ([`literal_body`]). Over-matching is restrictive only.
 ///
 /// `false` when `cmd` has a stdin redirection of its own (that redirection,
 /// not the pipe, delivered the literal) or is not a later pipeline stage.
@@ -935,9 +961,9 @@ fn piped_by_compound_stage(
 }
 
 /// A literal program piped in by a compound stage
-/// ([`piped_by_compound_stage`]): a shell body is judged by the full
-/// detector as `<shell> -c '<body>'` (which includes this layer's reading of
-/// it), so its effects are judged wherever the pipeline sits. A python body
+/// ([`piped_by_compound_stage`]): a shell body is judged by [`shell_body`]
+/// (this layer's reading and the full detector as `<shell> -c '<body>'`), as
+/// in [`literal_body`], so its effects are judged wherever the pipeline sits. A python body
 /// is read by stage S5 from the same AST literal (no B.5 opinion, as in
 /// [`literal_body`]). A perl / ruby / node body is Undetermined: this layer
 /// does not read those programs and the legacy reading may not see this text.
@@ -949,16 +975,7 @@ fn compound_fed_body(
     judge: &Probes<'_>,
 ) -> Decision {
     match fam {
-        Family::Shell => {
-            let mut acc = VerdictAcc::default();
-            if let Some(deny) = acc.record(layer(body, depth + 1, judge, &StdinSource::Inherited)) {
-                return deny;
-            }
-            if let Some(deny) = acc.record(judge_body(body, Runner::Shell(base), judge)) {
-                return deny;
-            }
-            acc.finish()
-        }
+        Family::Shell => shell_body(base, body, depth, judge),
         Family::Python => Decision::Allow,
         Family::PerlLike | Family::Node => undetermined(format_args!(
             "`{base}` reads its program from a compound pipeline stage (a brace group's \
@@ -969,11 +986,11 @@ fn compound_fed_body(
 
 /// A literal stdin program (here-string, here-document) of an interpreter
 /// reached through `sudo` / `doas`, including their implicit shell (`sudo -i
-/// <<< 'rm -rf /etc'`, backlog e1bb5f7e adversarial finding). [`literal_body`]
-/// leaves a shell body's EFFECTS to the legacy layer, which reads `bash <<<
-/// X` but not the same body behind the wrapper (observed: `sudo -i <<< 'rm -rf
-/// /etc'` was Allow), so a shell body is also judged by the full detector as
-/// `<shell> -c '<body>'`, exactly like the unwrapped shell's `-c`. Python is
+/// <<< 'rm -rf /etc'`, backlog e1bb5f7e adversarial finding: the legacy
+/// layer reads `bash <<< X` but not the same body behind the wrapper, and
+/// `sudo -i <<< 'rm -rf /etc'` was Allow). A shell body is judged by
+/// [`shell_body`] — the full detector as `<shell> -c '<body>'`, exactly like
+/// the unwrapped shell's `-c` — as every literal shell body is. Python is
 /// left to S5 (which unwraps the same wrappers through [`unwrap_at`]);
 /// perl / ruby / node are Undetermined.
 fn privileged_literal_body(

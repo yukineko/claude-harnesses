@@ -1710,3 +1710,31 @@ exit 101: rs/yuki/src/.harness-worktrees/filing-99560b/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 21.49s
      Running tests/backlog_20261122_stdin_redirect_from_loop_var_fp.rs (target/debug/deps/backlog_20261122_stdin_redirect_from_loop_var_fp-ca53b4fc3297e397)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261122_stdin_redirect_from_loop_var_fp`"""
+
+[[task]]
+id = "a1d04297"
+title = "condukt testscope: operands starting with '-' skip the main-merge deny (git rebase --onto=main x / git merge - are allowed)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """観測 (2026-11-22, branch filing-84424 commit 3ee9ee41c on main 5e99d94d4, worktree /Users/yuki/src/.harness-worktrees/filing-84424): condukt task worktree 内で condukt testscope に Bash payload を渡すと 'git rebase --onto=main x' と 'git merge -' がどちらも allow (stdout 空)。RED 出力逐語: 'assertion left == right failed / left: "allow" / right: "deny"' (deny_rebase_onto_attached_main, deny_merge_dash_previous_branch)。同 fixture の対照 'git rebase --onto main x' と 'git merge @{-1}' は deny、'git merge feature-x' は allow (controls_separated_onto_and_at_minus_one_are_denied ok)。原因 (静的読解): crates/condukt/src/testscope/git.rs judge_git の operand 収集 '} else if !a.starts_with('-') { operands.push(a); }' が '--onto=<v>' の付属値も '-' (git の @{-1} 略記) も判定対象から外す。t3 verifier と worker が静的に指摘したもの。読み (a) 欠陥: '--onto main' 分離形と @{-1} を deny する規則と不整合な fail-open (CLAUDE.md §3)。(b) 意図どおり: git.rs の doc は '--opt=value' や '-' について何も宣言しておらず、NOT judged リストにも無い → (b) を支える記述は見つからない。見分け方: git.rs 冒頭 doc の judged/NOT judged 列挙。DOES NOT PROVE: git が実際に main を merge すること (何も実行しない)、merge/rebase の他の '--opt=<value>' 形 (--strategy-option= 等)。"""
+created_at = 1795289719
+updated_at = 1795289719
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test testscope_main_ref_dash_operand_20261122 -- --ignored"
+rev = "3ee9ee41cdbe34fd78229d4ad6b41750ad2277df"
+observed_at = 1795289719
+detail = """
+exit 101: ompiling condukt v0.7.495 (/Users/yuki/src/.harness-worktrees/filing-84424/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 29.13s
+     Running tests/testscope_main_ref_dash_operand_20261122.rs (target/debug/deps/testscope_main_ref_dash_operand_20261122-79ca77ab99b4b94e)
+error: test failed, to rerun pass `-p condukt --test testscope_main_ref_dash_operand_20261122`"""

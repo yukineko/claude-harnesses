@@ -124,7 +124,6 @@ fn export_f_echo_then_bash_c_procsub_is_not_allow() {
 }
 
 #[test]
-#[ignore = "backlog f06ecb05: RED: printf shadowed by a function on the same line is Allow in bash <(printf hi)"]
 fn printf_shadowed_by_function_then_procsub_is_not_allow() {
     expect_not_allow(
         "printf(){ echo 'chmod 777 /etc/hosts'; }; bash <(printf hi)",

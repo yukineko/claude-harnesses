@@ -2044,6 +2044,8 @@ notes = "Pre-commit mode (no --head): _range() makes the diff 'git diff --name-o
 created_at = 1795242395
 updated_at = 1795242395
 weight = 0.0
+issue_number = 1950
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1950"
 rev = 0
 
 [task.repro]

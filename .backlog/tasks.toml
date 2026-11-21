@@ -1560,37 +1560,6 @@ test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; 
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_rg_pre_protected`"""
 
 [[task]]
-id = "bfbb50ac"
-title = '''blastguard: sed -i with >& inside a double-quoted arg (after \") is refused as a '> overwrites' redirect (FP)'''
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = '''Observed 2026-11-21 (blastguard 0.2.864 installed): a worker's command cd <wt>/crates/blastguard && sed -i "s|if matches!(op, \"<&\" \| \">&\") && target.contains('\$') {|...|" src/detect/payload/exec_fds.rs && sed -n 1009p ... was refused with reason '> overwrites <wt>/crates/blastguard/", which names command-running configuration ...'. The >& is inside the double-quoted sed program (inner quotes are \"), not a redirect. Reduced repro at c8f566bce returns ask with '> overwrites crates/x/"'. The minimal sed -n "s|\">&\"|x|" f.rs is Allow, so the misparse needs the full shape (\| \& '\$' escapes plus cd && ... && sed -n). Readings: (a) parser/tokenizer misreads quote state after backslash-escaped quotes; (b) intended if quote state is undetermined — distinguish by comparing to bash's own tokenization (bash -n accepts it, the sed program is one word).'''
-created_at = 1795227944
-updated_at = 1795227944
-weight = 0.0
-issue_number = 1942
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1942"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261121_dq_redirect_in_sed -- --ignored"
-rev = "c8f566bce4f0d05d24e810de070207b5a7a380ac"
-observed_at = 1795227944
-detail = """
-exit 101:   Compiling blastguard v0.2.867 (/Users/yuki/src/.harness-worktrees/session-c1b3e891/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.52s
-     Running tests/backlog_20261121_dq_redirect_in_sed.rs (target/debug/deps/backlog_20261121_dq_redirect_in_sed-135311d0fc77f019)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261121_dq_redirect_in_sed`"""
-
-[[task]]
 id = "a50833d7"
 title = "blastguard: flow driver session denies the flow skill's own flow-watch (installed plugin bin not trusted)"
 project = "/Users/yuki/src/harness"

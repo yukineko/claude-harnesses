@@ -90272,3 +90272,231 @@ rev = "9f6b8428897045941bef816cacf994f6a9af7d41"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "74810d3e"
+title = "check-test-weakening cannot acknowledge an intended macro template re-anchor in a file that exists at the base"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "test-weakening",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "User-ruled false positive 2026-11-20. A Rust integration test file that exists at the base and holds a macro_rules test template: three invocations of a template asserting a restrictive decision are replaced by invocations of a new template asserting Allow (shape of the blastguard scope redirect relaxation boundaries test, backlog 266b5ded). The gate raises Undetermined (exit 2) because the change is not one of the proven-safe shapes and reports no finding, so a test-weakening-justified line naming the path and a kind acknowledges nothing; the only exit is a bypass. Expected: such a change is still never silently clean (non-zero without a justified line), but it is reported as a finding with a kind for that path, and a matching justified line makes it exit 0 with an ack finding. A justified line for another path must not acknowledge it. Verbatim RED (--runxfail): AssertionError no finding (kind) reported for the path, so no justified line can name it; rc=2 out verdict undetermined, findings empty. DOES NOT PROVE which kind the gate should report; the test reads it from the gate's own json output. RED: scripts/test_check_test_weakening_macro_reanchor_20261120.py (xfail strict, commit c8a79e56a, branch red/test-weakening-macro-reanchor-20261120)."
+created_at = 1795118253
+updated_at = 1795223856
+weight = 0.0
+issue_number = 1876
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1876"
+issue_closed_at = 1795223858
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_check_test_weakening_macro_reanchor_20261120.py"
+rev = "c8a79e56ac814d90f0727d0edcb9cd32f9ab041d"
+observed_at = 1795118253
+detail = '''
+exit 1: cannot be ruled out\n'
+
+scripts/test_check_test_weakening_macro_reanchor_20261120.py:207: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_test_weakening_macro_reanchor_20261120.py::MacroReanchor::test_red_justified_line_acknowledges_the_reanchor
+========================= 1 failed, 2 passed in 1.52s =========================='''
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "pytest scripts/test_check_test_weakening_macro_reanchor_20261120.py"
+exit = 0
+passed = 3
+rev = "02cb691877eeba7a19a79cfde3a517157a5699ce"
+observed_at = 1795223853
+output_digest = "sha256:3a1f7683ac2d98f25be99e3e58a86f721cc4060dc7bb14b754f1695307fec1d4"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/integ-run-13017
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 3 items
+
+scripts/test_check_test_weakening_macro_reanchor_20261120.py ...         [100%]
+
+============================== 3 passed in 2.07s ===============================
+"""
+
+[task.closure.red]
+rev = "9f6b8428897045941bef816cacf994f6a9af7d41"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "a130a99c"
+title = "blastguard tests: egress_exec_closure controls eval <(curl) and 'curl -o f; bash f' are Ask, expected Allow (stale vs B.5 rulings?)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-20 at main f041db0c1 (detached base worktree of session 3510aa71, run for items 7eb86bb3/e79485cb/40dc52c0/3ab6109f). Not covered by 40dc52c0 (which names only the two recursion controls). Verbatim: eval_process_substitution_stays_allow_inert_not_remote_exec left Ask('`eval` runs shell code built at run time — blastguard cannot judge what it would do (Table B.5: Undetermined)'); sequential_fetch_then_shell_not_piped_stays_allow left Ask('`bash` runs the program file `/tmp/x.sh`, whose text is not in the command — blastguard cannot judge what it would do (Table B.5: Undetermined)'). Readings: (a) controls stale after S1/S4 rulings 2026-11-17 (bash script.sh with body not in command = Undetermined -> Ask; eval B.5) -> re-anchor (messages say 'inert, not remote-exec' / 'sequential, not piped', naming the egress property, but fn names say stays_allow); (b) real FP. Tell apart by frozen-assert rule + user ruling."
+created_at = 1795118604
+updated_at = 1795223860
+weight = 0.0
+issue_number = 1877
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1877"
+issue_closed_at = 1795223864
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test egress_exec_closure -- eval_process_substitution_stays_allow_inert_not_remote_exec sequential_fetch_then_shell_not_piped_stays_allow"
+rev = "4cdd780dc7e0f841597029a7501b30844c4ae275"
+observed_at = 1795118604
+detail = """
+exit 101:  sequential_fetch_then_shell_not_piped_stays_allow
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.04s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running tests/egress_exec_closure.rs (target/debug/deps/egress_exec_closure-ed08ca99f388ce70)
+error: test failed, to rerun pass `-p blastguard --test egress_exec_closure`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test egress_exec_closure"
+exit = 0
+passed = 41
+rev = "02cb691877eeba7a19a79cfde3a517157a5699ce"
+observed_at = 1795223859
+output_digest = "sha256:05efd3b71986d036a92d0f54818664967793ce5f33412a1d90302a04be2b7ecb"
+excerpt = """
+
+running 41 tests
+test dev_tcp_udp_pseudo_paths_are_denied_in_any_position ... ok
+test curl_data_file_upload_to_url_is_denied ... ok
+test command_wrapper_prefix_hiding_the_fetch_is_denied ... ok
+test command_wrapper_prefix_anti_vacuity_control_stays_allow ... ok
+test command_substitution_recursion_anti_vacuity_controls_stay_allow ... ok
+test fetch_piped_to_non_interpreter_stays_allow ... ok
+test fetch_piped_into_unresolvable_downstream_asks ... ok
+test fetch_to_local_file_stays_allow ... ok
+test bash_c_with_unresolvable_command_substitution_stays_ask_not_regressed ... ok
+test eval_process_substitution_is_inert_not_remote_exec ... ok
+test apostrophe_anti_vacuity_controls_stay_allow ... ok
+test git_push_is_untouched_out_of_scope ... ok
+test here_string_body_pipe_to_shell_is_denied_regardless_of_outer_reader ... ok
+test nc_stdin_file_to_network_target_is_blocking ... ok
+test apostrophe_inside_double_quoted_here_string_then_fetch_is_denied ... ok
+test here_string_feeding_an_interpreter_is_denied ... ok
+test genuine_single_quote_regions_still_treated_as_literal ... ok
+test nested_command_substitution_inside_process_substitution_is_denied ... ok
+test here_string_embedded_quoted_paren_then_fetch_is_denied ... ok
+test nested_here_string_feeding_an_interpreter_is_denied ... ok
+test nested_process_substitution_is_denied ... ok
+test ordinary_build_command_stays_allow ... ok
+test plain_wget_download_stays_allow ... ok
+test openssl_non_decode_use_stays_allow ... ok
+test process_substitution_body_pipe_to_shell_is_denied_regardless_of_outer_reader ... ok
+test process_substitution_body_with_a_trailing_pipe_stage_is_denied ... ok
+test process_substitution_anti_vacuity_controls_stay_allow ... ok
+test process_substitution_embedded_quoted_paren_then_fetch_is_denied ... ok
+test remote_exec_via_base64_decode_chain_is_denied ... ok
+test remote_exec_via_pipe_to_shell_is_denied ... ok
+test process_substitution_feeding_a_shell_is_denied ... ok
+test here_string_anti_vacuity_controls_stay_allow ... ok
+test sequential_fetch_then_shell_not_piped_is_not_remote_exec ... ok
+test openssl_base64_decode_chain_is_denied ... ok
+test xargs_bridge_anti_vacuity_controls_stay_allow ... ok
+test unresolvable_upstream_feeding_a_known_shell_asks ... ok
+test xargs_bridge_to_a_shell_is_denied ... ok
+test triple_nested_here_string_feeding_an_interpreter_is_denied ... ok
+test process_substitution_recursion_anti_vacuity_controls_stay_allow ... ok
+test nested_here_string_egress_rule_does_not_falsely_deny_and_other_controls_stay_allow ... ok
+test embedded_quoted_paren_egress_rule_does_not_falsely_deny_and_other_controls_stay_allow ... ok
+
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running tests/egress_exec_closure.rs (target/debug/deps/egress_exec_closure-0eca61c81d25e0b5)
+"""
+
+[task.closure.red]
+rev = "9f6b8428897045941bef816cacf994f6a9af7d41"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "94b93e95"
+title = "blastguard FP: python3 - heredoc open(rel,'w') after cd into a linked worktree under ~/.condukt/worktrees is Deny (whose-tree refusal)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-20 (run-20261120-071122-49691 task A worker; reproduced at HEAD cb1d2654e). Verbatim refusal is quoted in the RED file doc comment: crates/blastguard/tests/backlog_20261120_python_heredoc_open_in_condukt_worktree_fp.rs. The shell twin (cd into the worktree, then a plain echo redirect onto the same tracked file) is not refused; another project's tracked file stays not Allow (controls pass). Readings: (a) FP, worktree recognition (in_worktree_checkout_for_redirect) is not applied to interpreter program-text writes re-expressed against the cd, and the shown target keeps literal quotes; (b) intended, program-text writes need a plain absolute target. User ruling 2026-10-03 (refusing edits inside a worktree is the defect) supports (a)."
+created_at = 1795133883
+updated_at = 1795223868
+weight = 0.0
+issue_number = 1921
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1921"
+issue_closed_at = 1795223873
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_python_heredoc_open_in_condukt_worktree_fp -- --include-ignored python_heredoc_relative_open_write_in_condukt_worktree_is_not_whose_tree_refusal"
+rev = "cb1d2654e73121b654f6a822f4614934bb61191a"
+observed_at = 1795133883
+detail = """
+exit 101: en-3510aa71/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.50s
+     Running tests/backlog_20261120_python_heredoc_open_in_condukt_worktree_fp.rs (target/debug/deps/backlog_20261120_python_heredoc_open_in_condukt_worktree_fp-672e179ce186b633)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_python_heredoc_open_in_condukt_worktree_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261120_python_heredoc_open_in_condukt_worktree_fp"
+exit = 0
+passed = 3
+rev = "02cb691877eeba7a19a79cfde3a517157a5699ce"
+observed_at = 1795223866
+output_digest = "sha256:8c47fa5a5959cd7fb18220782bbc4af7f639b3a037d85276de1ce00804fa666e"
+excerpt = """
+
+running 3 tests
+test control_shell_redirect_in_condukt_worktree_is_not_whose_tree_refusal ... ok
+test control_python_heredoc_open_write_in_other_project_stays_not_allow ... ok
+test python_heredoc_relative_open_write_in_condukt_worktree_is_not_whose_tree_refusal ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.34s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running tests/backlog_20261120_python_heredoc_open_in_condukt_worktree_fp.rs (target/debug/deps/backlog_20261120_python_heredoc_open_in_condukt_worktree_fp-b35af7d7b74571a5)
+"""
+
+[task.closure.red]
+rev = "9f6b8428897045941bef816cacf994f6a9af7d41"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

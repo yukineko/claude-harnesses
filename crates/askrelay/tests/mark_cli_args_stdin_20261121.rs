@@ -1,5 +1,4 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Regression (2026-11-21): `askrelay mark-relayed <id>` run by an operator in
 //! a shell whose stdin was a pipe that never reached EOF hung >120s. The
 //! mark-* subcommands are hook entries (no args, JSON on stdin); a call that

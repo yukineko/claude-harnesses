@@ -1853,6 +1853,8 @@ notes = """Observed 2026-11-22 on main e3baca954 (session-eaa077f4 worktree); na
 created_at = 1795279817
 updated_at = 1795279817
 weight = 0.0
+issue_number = 1969
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1969"
 rev = 0
 
 [task.repro]

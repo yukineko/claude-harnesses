@@ -93907,3 +93907,68 @@ rev = "62e6f74eab4ad2263a4380c4ca9d94cda1be1faa"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "1f705907"
+title = "blastguard: quoted-heredoc body with angle bracket + backticked .driver path is judged as a truncating redirect when the line has a cd prefix or trailing git commit"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-21 (main 79efa2c7c era, blastguard 0.2.857 source / 0.2.840 deployed; re-measured on 0.2.858). A Bash command from the main session of the shape: cd WORKTREE and-and cat append-redirect docs/specs/blastguard.md with a QUOTED heredoc 'EOF' whose markdown body contained a backticked path like ~/.backlog/drivers/<fnv1a64(canonical main tree) %016x>/<fnv1a64(session_id) %016x>.driver, followed by git add and git commit, was blocked by PreToolUse. Verbatim reason: '> .driver`' destroys the file's current contents and `.driver`' contains a shell expansion, so blastguard cannot tell which file this names, let alone whether its contents are recoverable. Measured: the heredoc append alone is allow; adding a cd prefix (reason: relative path) or a trailing git add/commit line makes it deny. Readings: (a) FP - quoted delimiter means the body is inert data, the angle bracket in the body is not a redirect; (b) intended - body lines judged as shell even when quoted. Tell apart: the append-alone form with the identical body is allow, so the verdict depends on the surrounding command, not on the body or on what executes; cat never interprets the body, so (a). Control row: a real echo with a truncating redirect to a quoted dollar-expansion path stays not-allow. [2026-11-21 flow batch #10 (run run-20261121-220650-69750 task t2): root cause = heredoc_data.rs data_bodies refused to strip the quoted body when (1) a later git add names the landing file and (2) the relative landing follows an unresolvable cd; the string redirect / substitution scans then re-read the body as shell. Partial fix on branch condukt/run-20261121-220650-69750/t2 commit 639e5e59d (NOT merged): heredoc_append_then_git_commit_is_allowed passes, control passes. original_shape_is_allowed and cd_prefix_then_heredoc_append_is_allowed now fail with ask instead of deny: "'>> docs/specs/blastguard.md' is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve" because the tests spell cd "$PWD" and $PWD is deliberately undetermined. OPEN QUESTION (escalated via condukt escalate): $PWD ruling / re-anchor tests to a literal cd / loosen rule / accept Ask.]"""
+created_at = 1795224761
+updated_at = 1795288175
+weight = 0.0
+issue_number = 1939
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1939"
+issue_closed_at = 1795288179
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_quoted_heredoc_body_gt_fp -- --ignored"
+rev = "390839ad274990eef6be6a94a070513b9808e0e0"
+observed_at = 1795224761
+detail = """
+exit 101: LED. 0 passed; 3 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.60s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/backlog_20261121_quoted_heredoc_body_gt_fp.rs (target/debug/deps/backlog_20261121_quoted_heredoc_body_gt_fp-45bf214babb824b4)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_quoted_heredoc_body_gt_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261121_quoted_heredoc_body_gt_fp"
+exit = 0
+passed = 4
+rev = "6b41cac0dcd960fd0a64c491fe7330c058bd8d07"
+observed_at = 1795288164
+output_digest = "sha256:b0b686cedf772b0ecaf8fee4ec8352da20cac5ec16d069e40b36f7000fea195d"
+excerpt = """
+
+running 4 tests
+test original_shape_is_allowed ... ok
+test control_real_truncation_with_expansion_target_is_not_allow ... ok
+test cd_prefix_then_heredoc_append_is_allowed ... ok
+test heredoc_append_then_git_commit_is_allowed ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s
+
+   Compiling blastguard v0.2.919 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.43s
+     Running tests/backlog_20261121_quoted_heredoc_body_gt_fp.rs (target/debug/deps/backlog_20261121_quoted_heredoc_body_gt_fp-17a782860fb96de9)
+"""
+
+[task.closure.red]
+rev = "6f85e2f4b69586daded63bf595d9d8c260afa6e3"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -882,108 +882,6 @@ fn judge_cargo(args: &[String], dir: &Dir) -> Judged {
     Judged::Test(vec![(norm, dir.clone())])
 }
 
-/// Git global options (from `git --help` / git(1) "OPTIONS") that take a value.
-/// With `=` the value is attached; otherwise the next token is the value.
-const GIT_VALUE_OPTS: &[&str] = &[
-    "--git-dir",
-    "--work-tree",
-    "--namespace",
-    "--super-prefix",
-    "--config-env",
-    "--attr-source",
-];
-/// Git global options that never take a separate value token.
-const GIT_FLAG_OPTS: &[&str] = &[
-    "-p",
-    "-P",
-    "--paginate",
-    "--no-pager",
-    "--bare",
-    "--no-replace-objects",
-    "--literal-pathspecs",
-    "--glob-pathspecs",
-    "--noglob-pathspecs",
-    "--icase-pathspecs",
-    "--no-optional-locks",
-    "--no-lazy-fetch",
-    "--no-advice",
-    "--exec-path",
-    "--html-path",
-    "--man-path",
-    "--info-path",
-    "--list-cmds",
-    "-v",
-    "--version",
-    "-h",
-    "--help",
-];
-
-fn judge_git(args: &[String]) -> Judged {
-    let mut i = 0;
-    // Global options before the subcommand. Value-taking ones consume their
-    // value so it is not mistaken for the subcommand; an option not in the
-    // known lists leaves the subcommand position undetermined -> deny.
-    while let Some(a) = args.get(i) {
-        if a == "-C" || a == "-c" {
-            i += 2;
-        } else if let Some(long) = a.strip_prefix("--") {
-            let (name, inline) = match long.split_once('=') {
-                Some((n, _)) => (n, true),
-                None => (long, false),
-            };
-            let flag = format!("--{name}");
-            if GIT_VALUE_OPTS.contains(&flag.as_str()) {
-                i += if inline { 1 } else { 2 };
-            } else if GIT_FLAG_OPTS.contains(&flag.as_str())
-                || (inline && flag == "--exec-path")
-                || (inline && flag == "--list-cmds")
-            {
-                i += 1;
-            } else {
-                return Judged::Deny(format!(
-                    "`git {}`: unknown git global option `{a}`; the subcommand cannot be determined, so the main-merge check fails closed ({MAIN_MERGE_REASON})",
-                    args.join(" ")
-                ));
-            }
-        } else if a.starts_with('-') {
-            if GIT_FLAG_OPTS.contains(&a.as_str()) {
-                i += 1;
-            } else {
-                return Judged::Deny(format!(
-                    "`git {}`: unknown git global option `{a}`; the subcommand cannot be determined, so the main-merge check fails closed ({MAIN_MERGE_REASON})",
-                    args.join(" ")
-                ));
-            }
-        } else {
-            break;
-        }
-    }
-    let Some(sub) = args.get(i) else {
-        return Judged::Other;
-    };
-    let operands: Vec<&str> = args[i + 1..]
-        .iter()
-        .filter(|a| !a.starts_with('-'))
-        .map(String::as_str)
-        .collect();
-    let is_main = |s: &str| {
-        matches!(
-            s,
-            "main" | "master" | "origin/main" | "origin/master" | "@{u}" | "@{upstream}"
-        )
-    };
-    let deny = match sub.as_str() {
-        "pull" => true,
-        "merge" | "rebase" => operands.iter().any(|o| is_main(o)),
-        _ => false,
-    };
-    if deny {
-        Judged::Deny(format!("`git {}`: {MAIN_MERGE_REASON}", args.join(" ")))
-    } else {
-        Judged::Other
-    }
-}
-
 fn mentions_test_or_merge(s: &str) -> bool {
     (s.contains("cargo") && s.contains("test"))
         || (s.contains("git")
@@ -1283,6 +1181,11 @@ mod packages;
 use packages::{
     manifest_package_name, package_specs, package_unit_targets, worktree_changed_packages,
 };
+
+// The main-merge rule (`git merge|rebase <main>` / `git pull` in a task
+// worktree is denied) lives in `testscope/git.rs`; see that module's doc.
+mod git;
+use git::judge_git;
 
 // ── session marker (rule A) ─────────────────────────────────────────────────
 

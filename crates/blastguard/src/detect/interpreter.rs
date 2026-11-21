@@ -27,8 +27,9 @@ pub(super) use invocation::analyze_code_interpreter;
 use osascript::osascript_app_delete;
 pub(super) use osascript::osascript_program_delete;
 pub(super) use python_file::{
-    python_file_body_verdict, python_program_enters_stdin_console, python_program_only_prints,
-    python_redirect_view, python_stdin_body_reading, python_written_program_verdict,
+    python_file_body_verdict, python_literal_text_never_runs, python_program_enters_stdin_console,
+    python_program_only_prints, python_redirect_view, python_stdin_body_reading,
+    python_written_program_verdict,
 };
 pub(super) use python_written_files::python_program_writes;
 pub(super) use shell_calls::python_body_segment_verdict;
@@ -1296,6 +1297,30 @@ files or directories outright if that string is run as code; blastguard cannot s
             if depth_of_layer > 0 && !shell_strings {
                 if let (Some(sink), Some(rows)) = (program_ctx.program_text_redirects, sink_rows) {
                     sink.rows.borrow_mut().truncate(rows);
+                }
+            }
+            // Backlog 8ff44387: the layer-0 text of a `python3 - <<'EOF'`
+            // program whose strings the parser showed are data
+            // (`strings_are_data`): a `>` inside one of its literals
+            // (`'''… T::Pass => (p + 1, …'''`, read as `> ` with an empty
+            // target) is that literal's text, not a redirect. Its R2 rows are
+            // replaced by those of the same shell pass over the program with
+            // the literal text blanked ([`python_redirect_view`]); a literal
+            // whose own text holds `>` and `$` stays visible (R2). A program
+            // that does not tokenise keeps every row. A Deny from the view
+            // pass still returns; the raw pass above already ran every other
+            // check on the text as written.
+            if depth_of_layer == 0 && strings_are_data && python_reader {
+                if let (Some(sink), Some(rows)) = (program_ctx.program_text_redirects, sink_rows) {
+                    let keep = |text: &str| text.contains('>') && text.contains('$');
+                    if let Some(view) = python_redirect_view(payload, keep) {
+                        sink.rows.borrow_mut().truncate(rows);
+                        if let d @ Decision::Deny(_) =
+                            super::detect_bash(&view, depth + 1, program_ctx)
+                        {
+                            return d;
+                        }
+                    }
                 }
             }
             match verdict {

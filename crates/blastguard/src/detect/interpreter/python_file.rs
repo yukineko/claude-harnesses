@@ -151,9 +151,12 @@ pub(in crate::detect) struct PythonStdinReading {
     /// in `/etc`).
     pub(in crate::detect) verdict: Decision,
     /// True ONLY when the parser shows no string of the program can reach a
-    /// shell or a process: the body holds no [`super::SHELL_STRING_EXEC_MARKERS`]
-    /// entry or dynamic-execution marker anywhere (strings included), and
-    /// passes [`python_strings_never_reach_a_shell`] — or the lexer shows it
+    /// shell or a process: the CODE of the body (literal text blanked) holds
+    /// no [`super::SHELL_STRING_EXEC_MARKERS`] entry or dynamic-execution
+    /// marker, and the body passes [`python_strings_never_reach_a_shell`]
+    /// ([`python_literal_text_never_runs`]; a backtick or `compile fail` only
+    /// inside a literal is that literal's text, backlog 8ff44387) — or the
+    /// lexer shows it
     /// only prints to its stdout ([`python_program_only_prints`]), when a
     /// marker such as a bare backtick inside a literal is that literal's text,
     /// not a call (backlog b2330a21). The contents of its
@@ -187,10 +190,7 @@ pub(in crate::detect) fn python_stdin_body_reading(
     );
     Some(PythonStdinReading {
         verdict,
-        strings_are_data: (!super::runs_shell_strings(body)
-            && !super::has_dynamic_code_execution(body)
-            && python_strings_never_reach_a_shell(body))
-            || python_program_only_prints(body),
+        strings_are_data: python_literal_text_never_runs(body) || python_program_only_prints(body),
     })
 }
 
@@ -557,6 +557,36 @@ const PRINT_ONLY_ATTRIBUTES: &[&str] = &[
 /// ([`super::super::heredoc::python_stdin_here_document`]'s shape).
 pub(in crate::detect) fn python_program_only_prints(program: &str) -> bool {
     only_prints_admitting(program, &[])
+}
+
+/// True ONLY when the parser shows that no string literal of the Python
+/// `program` can reach a shell or a process, whatever text the literals hold
+/// (backlog 8ff44387: a `python3 - <<'EOF'` body splicing Rust source with
+/// backticks and `=> (` into a file through `open(p,'w')` had its literals
+/// read as the shell redirect `> (` with an empty target). All of:
+///   * the program tokenises ([`code_view`]), so literal boundaries are known;
+///   * the CODE view (literal and comment text blanked; f-string replacement
+///     fields kept as code) holds no [`super::SHELL_STRING_EXEC_MARKERS`]
+///     entry and no dynamic-execution marker
+///     ([`super::has_dynamic_code_execution`]);
+///   * [`python_strings_never_reach_a_shell`] holds (code-building markers
+///     checked in the raw text too, only data-only imports, no runner name).
+///
+/// A marker spelled only inside a literal (a backtick, `compile fail`) does
+/// not refuse this reading: with no runner, executor or code-building name in
+/// the code, the literal's text is a value. Read by
+/// [`PythonStdinReading::strings_are_data`] and by the `python3 - <<'EOF'`
+/// redirect view (`heredoc::python_stdin_redirect_view`). What the program does with it (`open(p,'w')`
+/// and its resolved target) is judged by the Python judge, which reads the
+/// full body; a later line that runs a written file is judged as shell.
+pub(in crate::detect) fn python_literal_text_never_runs(program: &str) -> bool {
+    let program = &*python_newlines(program);
+    let Some(code) = code_view(program) else {
+        return false;
+    };
+    !super::runs_shell_strings(&code)
+        && !super::has_dynamic_code_execution(&code)
+        && python_strings_never_reach_a_shell(program)
 }
 
 /// [`python_program_only_prints`], with the exact bare names `admitted` (a

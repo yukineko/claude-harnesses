@@ -2203,3 +2203,33 @@ exit 101: .877 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blast
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
      Running tests/backlog_20261121_determined_subst_shape_gaps.rs (target/debug/deps/backlog_20261121_determined_subst_shape_gaps-d7955e60fa7f6135)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_determined_subst_shape_gaps`"""
+
+[[task]]
+id = "bf40851f"
+title = "blastguard: eval W x / eval -- / builtin eval / command eval of a determined harmful command substitution is Ask, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """System harm reaches Ask; rule requires Deny (memory system-harm-always-deny). Named by the independent t3 verifier of run-20261121-114321-94421 (2026-11-21); observed RED on main 617c6facb and on the integration tip d400dfde3 (main 9ddad1fc8): eval "$(echo 'rm -rf /etc' | cat)" x / eval -- ... / builtin eval ... / command eval ... => subagent=false => ask. Cause (verifier): b5 determined_eval_program (ast/b5/determined.rs) takes only args == [W] with a bare eval head; resolution_fixed_but_one_eval allowlists only bare eval. RED: crates/blastguard/tests/backlog_20261121_determined_subst_shape_gaps.rs eval_shape_* (#[ignore])."""
+created_at = 1795238116
+updated_at = 1795238116
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_determined_subst_shape_gaps -- --ignored eval_shape_"
+rev = "fc1c63b606c5cee0701fefb1162007f74ae70f97"
+observed_at = 1795238116
+detail = """
+exit 101:  passed; 4 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running tests/backlog_20261121_determined_subst_shape_gaps.rs (target/debug/deps/backlog_20261121_determined_subst_shape_gaps-d7955e60fa7f6135)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_determined_subst_shape_gaps`"""

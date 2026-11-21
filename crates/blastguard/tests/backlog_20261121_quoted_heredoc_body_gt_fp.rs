@@ -111,7 +111,7 @@ const MINIMAL: &str = "cd \"$PWD\" && cat >> docs/specs/blastguard.md <<'EOF'\n`
 const MINIMAL_GT: &str = "cat >> docs/specs/blastguard.md <<'EOF'\n`~/.backlog/drivers/<fnv1a64(canonical main tree) %016x>/<fnv1a64(session_id) %016x>.driver`\nEOF\ngit add docs/specs/blastguard.md && git commit -qm \"specs: driver\"";
 
 #[test]
-#[ignore = "RED: 2026-11-21 quoted-heredoc body text with `> .driver`` is judged as a truncating redirect with expansion target (blocked) — remove when fixed"]
+#[ignore = "RED(1f705907): 2026-11-21 quoted-heredoc body text with `> .driver`` is judged as a truncating redirect with expansion target (blocked) — remove when fixed"]
 fn original_shape_is_allowed() {
     let home = unique_home("orig");
     let (d, r) = run_main(ORIGINAL, &home);
@@ -119,7 +119,7 @@ fn original_shape_is_allowed() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-21 quoted-heredoc body text with `> .driver`` is judged as a truncating redirect with expansion target (blocked) — remove when fixed"]
+#[ignore = "RED(1f705907): 2026-11-21 quoted-heredoc body text with `> .driver`` is judged as a truncating redirect with expansion target (blocked) — remove when fixed"]
 fn cd_prefix_then_heredoc_append_is_allowed() {
     let home = unique_home("min");
     let (d, r) = run_main(MINIMAL, &home);
@@ -127,7 +127,7 @@ fn cd_prefix_then_heredoc_append_is_allowed() {
 }
 
 #[test]
-#[ignore = "RED: 2026-11-21 quoted-heredoc body text with `> .driver`` is judged as a truncating redirect with expansion target (blocked) — remove when fixed"]
+#[ignore = "RED(1f705907): 2026-11-21 quoted-heredoc body text with `> .driver`` is judged as a truncating redirect with expansion target (blocked) — remove when fixed"]
 fn heredoc_append_then_git_commit_is_allowed() {
     let home = unique_home("mingt");
     let (d, r) = run_main(MINIMAL_GT, &home);

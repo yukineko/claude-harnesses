@@ -125,7 +125,21 @@ S4 rulings (user ruling 2026-11-18):
     Observed 2026-11-21 on macOS: `/bin/bash`, `/bin/sh`, `/bin/zsh`,
     `/bin/dash`, `/bin/ksh` and `/bin/bash -O xpg_echo` all print `echo
     'a\ b \; c\-d\/e\.f'` verbatim, while zsh decodes `\n` / `\t`; a
-    leading-dash operand is read as before; a perl /
+    leading-dash operand is read as before. The same Deny-only reading
+    covers a plain `echo` whose only redirections send fd 1 (`>`, `>|`,
+    `>>`, fd omitted or `1`) to `/dev/stdout` / `/dev/fd/1`
+    (`support::stdout_to_itself`); no `Literal` is delivered for it, since
+    zsh MULTIOS delivers the output twice (observed 2026-11-21: `/bin/zsh -c
+    'echo hi > /dev/stdout | od -c'` → `h i \n h i \n`, `/bin/bash` → `h i
+    \n`); the single body runs first in both. Any other redirect
+    (`2>…`, `>file`, `>/dev/stderr`, `>&…`) stays Undetermined.
+    `/bin/echo` / `/usr/bin/echo` with literal operands, no leading-`-`
+    first operand (any, not only `-n`/`-e`/`-E`: GNU `echo` takes
+    `--help`) and no backslash are a literal producer like `echo`
+    (`support::piped_stdin`); a function named `/bin/echo` is possible in
+    bash and zsh (observed 2026-11-21), and a function definition keeps the
+    line `Unsupported` here, as for `echo`; `/tmp/echo`, `./echo` stay
+    `FromCommand`; a perl /
     ruby / node / python body gives no B.5 opinion (python: S5; perl / ruby
     / node: legacy decides). A bare shell reading the inherited stdin gives
     no B.5 opinion (the Bash tool's stdin is empty) — at the top level only:
@@ -398,7 +412,7 @@ else the command's cwd).
 | Command | Program source | Judgement |
 |---|---|---|
 | `bash` / `sh` / `zsh` / `dash` / `ksh` `-c PROG` | `InlineLiteral` | PROG analysed and judged recursively (S4); Undetermined PROG → Undetermined |
-| same, stdin (`bash`, `-s`, `-`, `/dev/stdin`) | `Stdin(StdinSource)` | `Literal` body — and the literal output of a process substitution / previous pipe stage / a brace group `{ echo a; printf b; } |` whose members are all literal `echo` / `printf` joined by `;`, a newline or `&&` (their outputs concatenated; any other member, `||`, `&`, a redirect, a nested pipe or group stays `FromCommand`; `ast/support.rs::brace_group_stdin`), or the computed output of a determined producer pipeline (`echo` / `seq` into `cat` / `sort`, a double-quoted `$( )` of one; ruling 21, backlog 40dc52c0, `b5.rs::determined_delivered_program`) — judged recursively AND by the full detector as `<shell> -c '<body>'`, raise-only (S4, ruling 21; backlog 68b1a9dc, `b5.rs::shell_body`); for a literal piped in by a stage that is not one simple command right before the `|` (a brace group, wherever the pipeline sits: `( … )`, `if`, a loop body) a perl / ruby / node body is Undetermined (python: S5; `b5.rs::piped_by_compound_stage`); `FromCommand` / `File` / `Fd` / `Undetermined` → Undetermined; `Inherited` → no B.5 opinion at the top level (ruling 21), inside a `-c PROG` body the enclosing shell's stdin, judged as above (`b5.rs::inherited_stdin`, backlog b838630f) |
+| same, stdin (`bash`, `-s`, `-`, `/dev/stdin`) | `Stdin(StdinSource)` | `Literal` body — and the literal output of a process substitution / previous pipe stage / a brace group `{ echo a; printf b; } |` whose members are all literal `echo` / `/bin/echo` / `/usr/bin/echo` / `printf` joined by `;`, a newline or `&&` (their outputs concatenated; any other member, `||`, `&`, a redirect, a nested pipe or group stays `FromCommand`; `ast/support.rs::brace_group_stdin`), or the computed output of a determined producer pipeline (`echo` / `seq` into `cat` / `sort`, a double-quoted `$( )` of one; ruling 21, backlog 40dc52c0, `b5.rs::determined_delivered_program`) — judged recursively AND by the full detector as `<shell> -c '<body>'`, raise-only (S4, ruling 21; backlog 68b1a9dc, `b5.rs::shell_body`); for a literal piped in by a stage that is not one simple command right before the `|` (a brace group, wherever the pipeline sits: `( … )`, `if`, a loop body) a perl / ruby / node body is Undetermined (python: S5; `b5.rs::piped_by_compound_stage`); `FromCommand` / `File` / `Fd` / `Undetermined` → Undetermined; `Inherited` → no B.5 opinion at the top level (ruling 21), inside a `-c PROG` body the enclosing shell's stdin, judged as above (`b5.rs::inherited_stdin`, backlog b838630f) |
 | same, script file (`bash x.sh`); likewise any interpreter running a program file (`python3 x.py`, `perl x.pl`, …) | `File(Value)` | **Undetermined** → Ask / Deny (ruling 10). Exception (shells and direct exec only): when an earlier command of the same script writes that file (matched by resolved path) with a determined body (`cat > x.sh <<'EOF' … EOF`) and the write and the run are joined by `&&` only, that body is judged as the program (S4, ruling 20). A git-tracked, unmodified file → no B.5 opinion (ruling 22). `-n` noexec → no B.5 opinion (ruling 24) |
 | `eval` | `Undetermined` | Undetermined (S4) |
 | direct execution of a program file (`./run.sh`, `scripts/foo.sh`, `/abs/run.sh`) | `File(Value)` | **Undetermined** → Ask / Deny (ruling 17, S4), same exceptions as the script-file row (ruling 20, ruling 22) |

@@ -260,7 +260,6 @@ fn p17_var() {
 }
 
 #[test]
-#[ignore = "backlog 68b1a9dc RED: feeder redirected to /dev/stdout is Ask in main"]
 fn p18_redirect_stdout() {
     check(
         r####"echo rm -rf /etc > /dev/stdout | bash"####,
@@ -451,7 +450,6 @@ fn p36_env_echo() {
 }
 
 #[test]
-#[ignore = "backlog 68b1a9dc RED: /bin/echo feeder is Ask in main"]
 fn p37_abs_echo() {
     check(
         r####"/bin/echo rm -rf /etc | bash"####,
@@ -523,7 +521,6 @@ fn n03_var() {
 }
 
 #[test]
-#[ignore = "backlog 68b1a9dc RED: nested /dev/stdout-redirected feeder is Ask in main"]
 fn n04_redirect_stdout() {
     check(
         r####"echo 'echo rm -rf /etc > /dev/stdout | bash' | bash"####,
@@ -544,7 +541,6 @@ fn n05_escaped_semicolon() {
 }
 
 #[test]
-#[ignore = "backlog 68b1a9dc RED: nested /bin/echo feeder is Ask in main"]
 fn n06_abs_echo() {
     check(
         r####"echo '/bin/echo rm -rf /etc | bash' | bash"####,

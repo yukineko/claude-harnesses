@@ -46,8 +46,9 @@
 //!   | bash`), not only when the legacy reading sees a plain `echo WORDS |
 //!   bash`. A plain `echo` feeder whose operands' backslashes are each
 //!   followed by ASCII punctuation or a space (not `\\`), which every
-//!   observed `echo` dialect prints verbatim, is read the same way but only
-//!   its Deny is taken (`inert_backslash_echo_program`, observed 2026-11-21);
+//!   observed `echo` dialect prints verbatim, or whose stdout is redirected
+//!   to itself (`> /dev/stdout`; zsh delivers it twice), is read the same way
+//!   but only its Deny is taken (`inert_backslash_echo_program`, 2026-11-21);
 //!   otherwise it stays Undetermined as below;
 //!   a python / perl / ruby / node body gives no B.5 opinion (python: S5;
 //!   perl / ruby / node: the legacy program-text reading judges it). Except
@@ -778,9 +779,9 @@ fn classify(
     if let Some(body) = determined_delivered_program(text, commands, idx, cmd, &source, k) {
         return literal_body(fam, base, &body, depth, judge);
     }
-    // A plain `echo` feeder whose backslashes no dialect decodes (`echo
-    // 'echo rm\ -rf\ /etc | bash' | bash`, backlog 68b1a9dc): only its Deny
-    // is taken; anything else falls through to the readings below unchanged.
+    // A plain `echo` feeder whose backslashes no dialect decodes or whose
+    // stdout goes to `/dev/stdout` (backlog 68b1a9dc): only its Deny is
+    // taken; anything else falls through to the readings below unchanged.
     if fam == Family::Shell && matches!(source, ProgramSource::Stdin(StdinSource::FromCommand)) {
         if let Some(body) = inert_backslash_echo_program(text, commands, idx, cmd) {
             if let d @ Decision::Deny(_) = shell_body(base, &body, depth, judge) {
@@ -1125,12 +1126,15 @@ fn piped_from<'a>(
 
 /// The program a shell `cmd` (`commands[idx]`, no stdin redirect of its own)
 /// reads from the previous pipe stage when that is a plain `echo` (no
-/// wrapper, redirect or assignment; a leading-dash first operand is refused,
-/// as before) whose literal operands hold backslashes, each one
-/// [`inert_backslashes`]: the operands joined by spaces, backslashes kept.
-/// [`producer_argv_output`] refuses every backslash; the caller takes only a
-/// Deny from this reading (backlog 68b1a9dc: `echo 'echo rm\ -rf\ /etc |
-/// bash' | bash`).
+/// wrapper or assignment; a leading-dash first operand is refused, as
+/// before) whose literal operands' backslashes are each [`inert_backslashes`]
+/// and which either holds one or redirects stdout only to itself
+/// (`support::stdout_to_itself`: `> /dev/stdout`, `>> /dev/fd/1`; zsh MULTIOS
+/// then delivers the output twice, bash once — the body's effects run first
+/// in both): the operands joined by spaces, backslashes kept.
+/// [`producer_argv_output`] refuses both; the caller takes only a Deny from
+/// this reading (backlog 68b1a9dc: `echo 'echo rm\ -rf\ /etc | bash' |
+/// bash`, `echo rm -rf /etc > /dev/stdout | bash`).
 fn inert_backslash_echo_program(
     text: &str,
     commands: &[SimpleCommand],
@@ -1141,7 +1145,8 @@ fn inert_backslash_echo_program(
         return None;
     }
     let prev = piped_from(text, commands, idx, cmd)?;
-    if !prev.redirects.is_empty() || !prev.assignments.is_empty() {
+    if !prev.redirects.iter().all(super::support::stdout_to_itself) || !prev.assignments.is_empty()
+    {
         return None;
     }
     let argv = literals(&prev.argv).ok()?;
@@ -1149,7 +1154,7 @@ fn inert_backslash_echo_program(
         return None;
     };
     if rest.first().is_some_and(|a| a.starts_with('-'))
-        || !rest.iter().any(|a| a.contains('\\'))
+        || (prev.redirects.is_empty() && !rest.iter().any(|a| a.contains('\\')))
         || !rest.iter().all(|a| inert_backslashes(a))
     {
         return None;

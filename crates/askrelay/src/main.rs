@@ -36,6 +36,23 @@ const STOP_NAME: &str = "askrelay-stop";
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.first().map(String::as_str) {
+        // The mark-* hooks are invoked by hooks/hooks.json with NO further
+        // argument and their payload on stdin. Extra arguments mean an operator
+        // typed e.g. `askrelay mark-relayed <id>`: that marks nothing (the id is
+        // not an input of these hooks), so it is a usage error, decided BEFORE
+        // stdin is touched — reading stdin there blocked forever on a pipe that
+        // never reached EOF (backlog 69f396c2), and on /dev/null it exited 0
+        // having ignored the id (a silent false success).
+        Some(sub @ ("mark-executed" | "mark-relayed")) if args.len() > 1 => {
+            eprintln!(
+                "askrelay {sub}: this is a PostToolUse hook entry and takes no arguments \
+                 (got {:?}); nothing was marked. An entry is marked relayed by the main \
+                 session's SendMessage naming its relay id; to record that it will not be \
+                 re-run use `askrelay dismiss <id> --reason <text>`.",
+                &args[1..]
+            );
+            2
+        }
         // `run_hook` never returns — it exits 0 itself.
         Some("mark-executed") => hook::run_hook(mark_executed),
         Some("mark-relayed") => hook::run_hook(mark_relayed),

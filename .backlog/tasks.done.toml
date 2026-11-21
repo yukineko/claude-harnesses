@@ -92017,6 +92017,66 @@ executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
 
 [[task]]
+id = "69f396c2"
+title = "askrelay mark-relayed/mark-executed with operator args read stdin (hang on open pipe) and exit 0 marking nothing"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["askrelay"]
+touched_files = []
+status = "done"
+notes = "crates/askrelay/src/main.rs:40-41 dispatch mark-* straight to hook::run_hook ignoring args[1..]; main.rs:83/119 hook::read_stdin() reads to EOF unconditionally -> blocks forever on a never-closed stdin pipe; with /dev/null it returns, run_hook exits 0, id ignored = silent false success. Observed 2026-11-21 (deployed 0.1.5, >120s hang)."
+created_at = 1795263266
+updated_at = 1795263495
+weight = 0.0
+issue_number = 1952
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1952"
+issue_closed_at = 1795263497
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p askrelay --test mark_cli_args_stdin_20261121"
+rev = "bde4ae63384f801bd74a4afd811e7fae3d106597"
+observed_at = 1795263266
+detail = """
+exit 101: d out; finished in 5.03s
+
+   Compiling askrelay v0.1.6 (/Users/yuki/src/.harness-worktrees/fix-askrelay-stdin/crates/askrelay)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/mark_cli_args_stdin_20261121.rs (target/debug/deps/mark_cli_args_stdin_20261121-394a39493e630f82)
+error: test failed, to rerun pass `-p askrelay --test mark_cli_args_stdin_20261121`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p askrelay --test mark_cli_args_stdin_20261121"
+exit = 0
+passed = 3
+rev = "9d672a8c53ac39686f6f3c7a6fecc16759588792"
+observed_at = 1795263494
+output_digest = "sha256:f110f6a3b8306cead7751bf2143bf70377d64c13260f2df6e1ccd4477b97d5fc"
+excerpt = """
+
+running 3 tests
+test mark_relayed_with_arg_and_open_stdin_pipe_exits_nonzero_bounded ... ok
+test mark_executed_with_arg_and_open_stdin_pipe_exits_nonzero_bounded ... ok
+test mark_relayed_with_arg_and_null_stdin_exits_nonzero ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/mark_cli_args_stdin_20261121.rs (target/debug/deps/mark_cli_args_stdin_20261121-43eb9a19cd79f2cf)
+"""
+
+[task.closure.red]
+rev = "bde4ae63384f801bd74a4afd811e7fae3d106597"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
 id = "e195255a"
 title = "flow docs: condukt circuit check invocations lack --run/--session (observed run trips idle_unmeasured / errors on missing --run)"
 project = "/Users/yuki/src/harness"

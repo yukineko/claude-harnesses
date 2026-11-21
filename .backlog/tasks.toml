@@ -1428,39 +1428,6 @@ exit 101:  0 ignored; 0 measured; 0 filtered out; finished in 1.18s
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_unmodelled_cmd_redirect_target_fp`"""
 
 [[task]]
-id = "96cd90bb"
-title = "blastguard test RED: suffixed redirect via local/declare assignment resolved to Allow (re-filed: d44c49876 done reverted by 765a57454)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "2026-11-21 user ruling: re-anchor reverted pending ruling on declare/typeset/{ }/local semantics (bash vs zsh). Unhedged STRICTER rows; `local` outside a function binds nothing in bash (evaluator is bash mode) so Allow may be a fail-open. Task branches condukt/run-20261121-094507-93872/f1b5acd3 (b23ef959b) and /b07f2020 (c1238d4ba) hold the reverted attempt. Refiled 2026-11-21: f1b5acd3/b07f2020 were closed done by d44c49876 but their re-anchor merge 0258dfe2f was reverted (b86b44076) pending a human ruling. RED at main 765a57454. Readings: (a) frozen assert — S5 resolves local/declare/{ }/P= values (zsh measured: local sets value), re-anchor to literal pair-equality (commits 91e0d6d91 b23ef959b a7d42da05 c1238d4ba); (b) bash reading: top-level local fails so resolving is a fail-open. Ruling needed: shell model bash vs zsh for local/declare/{ }, and whether literal '> /x.log' Allow is right. [2026-11-21 cleanup: RED re-observed at main 75c123224 (exit 101). The two task branch refs no longer exist locally; b23ef959b/c1238d4ba remain reachable from main via the reverted merge 0258dfe2f.] [2026-11-21 flow batch #10 (run run-20261121-220650-69750): user ruling 'judge under BOTH bash and zsh, take the stricter' applied in df07f4011 (merged 6f85e2f4b): top-level local now forgets the binding, so this file's local row is no longer Allow. Still RED at 6f85e2f4b: declare / { } rows (both shells bind, measured; under the ruling these would be re-anchored to pair-equality as done in redirect_target_resolution.rs 312f9a4e9) and the P=; row. OPEN QUESTION not covered by the ruling: both shells give P='' so the target is /x.log (measured bash [/x.log] zsh [/x.log]); the literal 'echo hi > /x.log' is Allow. Should a root-level write like /x.log be Allow (then re-anchor the P=; row to pair-equality), or should the literal /x.log itself be refused (then fix the literal and keep the row)? Item held, not implemented.]"
-created_at = 1795223289
-updated_at = 1795268073
-weight = 0.0
-issue_number = 1936
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1936"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test redirect_target_suffix_resolution unresolvable_suffixed_shapes_keep_the_unresolved_verdict"
-rev = "d7b772888da2ef104a1aab3f5ec83b441bc0efa5"
-observed_at = 1795223289
-detail = """
-exit 101: 48s
-
-   Compiling blastguard v0.2.855 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.47s
-     Running tests/redirect_target_suffix_resolution.rs (target/debug/deps/redirect_target_suffix_resolution-9da935c861442de2)
-error: test failed, to rerun pass `-p blastguard --test redirect_target_suffix_resolution`"""
-
-[[task]]
 id = "1f705907"
 title = "blastguard: quoted-heredoc body with angle bracket + backticked .driver path is judged as a truncating redirect when the line has a cd prefix or trailing git commit"
 project = "/Users/yuki/src/harness"
@@ -1847,6 +1814,8 @@ notes = "Reading (a) defect: pager is a caller-chosen program run by a read-only
 created_at = 1795268927
 updated_at = 1795268927
 weight = 0.0
+issue_number = 1963
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1963"
 rev = 0
 
 [task.repro]

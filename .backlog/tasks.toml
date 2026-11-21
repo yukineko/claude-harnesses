@@ -1590,37 +1590,6 @@ exit 101: ss-worktrees/session-62e92d16/crates/condukt)
 error: test failed, to rerun pass `-p condukt --test backlog_20261122_testscope_rerun_key_ignores_target_dir`"""
 
 [[task]]
-id = "a700901f"
-title = "blastguard: ACK_PAGER exported in an earlier segment (export ACK_PAGER=sh; ack … / && ack …) keeps ack's read-only exemption for a protected operand"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-22 at main rev 6ae161ee7 after condukt run run-20261122-020202-63344 (fix ba09708a merged in accf04160/6ae161ee7). Verbatim (crates/blastguard/src/detect/readonly.rs env_selects_pager docstring): 'NOT covered here (the variable reaches ack from outside this segment): `export ACK_PAGER=sh; ack …`, an inherited environment, `ACKRC` / `.ackrc` carrying `--pager`.' RED: 'export ACK_PAGER=sh; ack pat .githooks/pre-commit' and 'export ACK_PAGER=sh && ack pat .githooks/pre-commit' expected not Allow for subagent=false and true; control 'ack pat .githooks/pre-commit' stays Allow. Readings: (a) defect -- the export on the same command line is statically visible and selects the same caller-chosen pager program that the prefix form now refuses (fail-open on a protected operand); (b) intended -- documented scope limit of ba09708a, exported forms deferred. Tell apart: the docstring lists it as 'NOT covered', not as 'allowed on purpose'; no user ruling for (b) found. DOES NOT PROVE: real ack behaviour (nothing executed; ack not installed); inherited env; .ackrc/ACKRC; declare -x / typeset -x / set -a spellings; which layer should own the fix."
-created_at = 1795282239
-updated_at = 1795282239
-weight = 0.0
-issue_number = 1971
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1971"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261122_ack_pager_exported_earlier_segment -- --ignored"
-rev = "db9b637e1f0fcb22b5b9c1933ed61a5ed2728b10"
-observed_at = 1795282239
-detail = """
-exit 101: s-worktrees/session-eaa077f4-filing/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.86s
-     Running tests/backlog_20261122_ack_pager_exported_earlier_segment.rs (target/debug/deps/backlog_20261122_ack_pager_exported_earlier_segment-02291b4313862996)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261122_ack_pager_exported_earlier_segment`"""
-
-[[task]]
 id = "dd9d3e31"
 title = "blastguard FP: empty ACK_PAGER= prefix (ACK_PAGER= ack pat <protected>) drops ack's read-only exemption although an empty value names no pager"
 project = "/Users/yuki/src/harness"

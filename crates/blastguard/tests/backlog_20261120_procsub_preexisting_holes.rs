@@ -115,7 +115,6 @@ fn alias_echo_then_procsub_is_not_allow() {
 }
 
 #[test]
-#[ignore = "backlog 1e9da081: RED: echo shadowed by an exported function, then bash -c 'bash <(echo hi)', is Allow"]
 fn export_f_echo_then_bash_c_procsub_is_not_allow() {
     expect_not_allow(
         "echo(){ echo 'chmod 777 /etc/hosts'; }; export -f echo; bash -c 'bash <(echo hi)'",

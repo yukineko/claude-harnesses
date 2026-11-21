@@ -958,3 +958,8 @@ reason = "Section 'stdin / process substitution の program 読みで echo / pri
 path = "crates/blastguard/src/detect/payload/upstream_stage.rs"
 doc = "docs/specs/blastguard.md"
 reason = "Section 'shell / interpreter へ pipe する前段の exec wrapper（`env echo` / `command printf`）は 1 本の pipeline のときだけ外して読む（backlog 879c5424）': unresolved_wrapper_ask is the raise-only Ask when bare_wrappers_as_written does not hold."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/b5/determined.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Section '決定済みの producer pipeline の出力を program として読む（backlog 40dc52c0）': determined_delivered_program (procsub / stdin producer program), determined_dash_c_program (shell -c W, 28019c35) and determined_eval_program (eval W, d766b5fe), raise-only (Deny adopted, else Undetermined) under chain_names_fixed / resolution_fixed(_but_one_eval)."

@@ -535,21 +535,6 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
              (measured: [aa] for P=(aa bb))",
         ),
         (
-            "declare P=/home/yuki/proj; echo hi > $P/x.log",
-            OK_LEAF,
-            "`declare` is a builtin, not an assignment list",
-        ),
-        (
-            "local P=/home/yuki/proj; echo hi > $P/x.log",
-            OK_LEAF,
-            "`local` is a builtin, not an assignment list",
-        ),
-        (
-            "{ P=/home/yuki/proj; }; echo hi > $P/x.log",
-            OK_LEAF,
-            "a brace group DOES reach the parent shell; refusing it is the safe error",
-        ),
-        (
             "( P=/home/yuki/proj ); echo hi > $P/x.log",
             OK_LEAF,
             "an explicit subshell's assignment does not reach the parent shell",
@@ -626,12 +611,6 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
              nothing on the line determines (measured: [<pid>/x])",
         ),
         (
-            "P=; echo hi > $P/x.log",
-            OK_LEAF,
-            "an empty value makes the target `/x.log`, a write at the filesystem \
-             ROOT (measured) — the opposite of confined",
-        ),
-        (
             "P=\"/home/yuki/proj\\x\"; echo hi > $P/x.log",
             OK_LEAF,
             "a backslash in the value means three different things depending on \
@@ -682,6 +661,33 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
             "P=/home/yuki/proj; echo hi > pre$P/x.log",
             "echo hi > pre/home/yuki/proj/x.log",
         ),
+        // RE-ANCHORED (2026-11-21): these four rows used to sit in the
+        // "unresolvable" table above, frozen as "must stop the call". They
+        // are text-determined values, so per the user rulings 2026-11-14/15
+        // (resolve statically, judge like the literal) and the S5 AST
+        // evaluator (1c6ef97ad, crates/blastguard/src/detect/ast/eval.rs
+        // DECL_BUILTINS) they are judged like their literal spelling.
+        // Measured 2026-11-21 with zsh 5.9 (the Bash tool's own layer, user
+        // ruling 2026-11-18): `zsh -c 'local P=x; echo "zsh[$P]"'` ->
+        // zsh[x]; `{ P=y; }; declare Q=z` -> zsh[y][z]. bash also binds
+        // `{ }` and `declare` (only a top-level `local` differs in bash).
+        (
+            "declare P=/home/yuki/proj; echo hi > $P/x.log",
+            "echo hi > /home/yuki/proj/x.log",
+        ),
+        (
+            "local P=/home/yuki/proj; echo hi > $P/x.log",
+            "echo hi > /home/yuki/proj/x.log",
+        ),
+        (
+            "{ P=/home/yuki/proj; }; echo hi > $P/x.log",
+            "echo hi > /home/yuki/proj/x.log",
+        ),
+        // An empty value is used by the shell as empty, so the target is
+        // `/x.log` (measured). Whether the literal `/x.log` verdict is right is a
+        // separate question; this row pins only that the spelling (`P=;` +
+        // `$P`) does not decide the verdict — it equals the literal's.
+        ("P=; echo hi > $P/x.log", "echo hi > /x.log"),
     ] {
         assert_eq!(
             scoped(cmd),

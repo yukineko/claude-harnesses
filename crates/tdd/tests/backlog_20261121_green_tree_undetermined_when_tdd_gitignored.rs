@@ -90,10 +90,20 @@ fn red_then_green(tag: &str, ignore_tdd: bool) -> (Dir, serde_json::Value, serde
 
     let cmd = "test -f impl.txt";
     let red = tdd(&home, &work, &["red", "--task", "t1", "--cmd", cmd]);
-    assert_eq!(red.status.code(), Some(0), "control: RED recorded: {}", s(&red));
+    assert_eq!(
+        red.status.code(),
+        Some(0),
+        "control: RED recorded: {}",
+        s(&red)
+    );
     std::fs::write(work.join("impl.txt"), "impl\n").unwrap();
     let green = tdd(&home, &work, &["green", "--task", "t1", "--cmd", cmd]);
-    assert_eq!(green.status.code(), Some(0), "control: GREEN recorded: {}", s(&green));
+    assert_eq!(
+        green.status.code(),
+        Some(0),
+        "control: GREEN recorded: {}",
+        s(&green)
+    );
     let read = |kind: &str| -> serde_json::Value {
         let p = work.join(".tdd").join(format!("t1.{kind}.json"));
         serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap()
@@ -160,7 +170,12 @@ fn green_tree_excludes_untracked_non_ignored_tdd_dir() {
     git(&work, &["commit", "-q", "--no-verify", "-m", "init"]);
     let cmd = "test -f impl.txt";
     let red = tdd(&home, &work, &["red", "--task", "t1", "--cmd", cmd]);
-    assert_eq!(red.status.code(), Some(0), "control: RED recorded: {}", s(&red));
+    assert_eq!(
+        red.status.code(),
+        Some(0),
+        "control: RED recorded: {}",
+        s(&red)
+    );
     std::fs::write(work.join("impl.txt"), "impl\n").unwrap();
     git(&work, &["add", "impl.txt"]);
     git(&work, &["commit", "-q", "--no-verify", "-m", "impl"]);
@@ -169,7 +184,12 @@ fn green_tree_excludes_untracked_non_ignored_tdd_dir() {
         "control: the RED proof sits in the untracked, non-ignored .tdd/"
     );
     let green = tdd(&home, &work, &["green", "--task", "t1", "--cmd", cmd]);
-    assert_eq!(green.status.code(), Some(0), "control: GREEN recorded: {}", s(&green));
+    assert_eq!(
+        green.status.code(),
+        Some(0),
+        "control: GREEN recorded: {}",
+        s(&green)
+    );
     let g: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(work.join(".tdd").join("t1.green.json")).unwrap(),
     )

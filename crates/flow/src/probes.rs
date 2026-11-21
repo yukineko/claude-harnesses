@@ -234,13 +234,38 @@ pub fn parse_circuit(code: i32, stdout: &str) -> Obs<Circuit> {
     }
 }
 
-/// Real probes: spawn `backlog` / `condukt` from `PATH`.
+/// Real probes: spawn `backlog` / `condukt`, each located by
+/// [`harness_core::plugin_bin::resolve`] (plugin cache first, `$PATH` second).
+///
+/// A bare-name spawn is not used: hook processes do not carry the plugin `bin/`
+/// dirs on `$PATH`, so `Command::new("backlog")` failed with
+/// "No such file or directory" while the same binary ran from the Bash tool.
 pub struct Real {
     pub session: String,
 }
 
+/// Turn a sibling plugin's [`harness_core::plugin_bin::resolve`] answer into the
+/// path to spawn. Only `Known(Some)` yields a path. `Known(None)` (not installed
+/// here) and `Undetermined` both become `Unknown`: a probe whose program could
+/// not be located never ran, so it has not observed "no work" (CLAUDE.md §3).
+fn locate(name: &str, found: Determination<Option<PathBuf>>) -> Obs<PathBuf> {
+    match found {
+        Determination::Known(Some(path)) => Obs::Known(path),
+        Determination::Known(None) => Obs::Unknown(format!(
+            "cannot locate {name}: not in the plugin cache and not on $PATH"
+        )),
+        Determination::Undetermined(why) => {
+            Obs::Unknown(format!("cannot locate {name}: {}", why.as_str()))
+        }
+    }
+}
+
 fn run(program: &str, args: &[&str], cwd: &Path) -> Obs<boundary::CommandOutput> {
-    let mut cmd = Command::new(program);
+    let exe = match locate(program, harness_core::plugin_bin::resolve(program)) {
+        Obs::Known(exe) => exe,
+        Obs::Unknown(why) => return Obs::Unknown(why),
+    };
+    let mut cmd = Command::new(exe);
     cmd.args(args).current_dir(cwd);
     det(boundary::run_with_timeout(&mut cmd, PROBE_TIMEOUT))
 }
@@ -320,6 +345,27 @@ impl Probes for Real {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unlocatable_sibling_is_unknown_never_a_spawn() {
+        // Not installed and cannot-look are both unknown: neither ran, so
+        // neither may read as an observed "no work".
+        assert!(matches!(
+            locate("backlog", Determination::Known(None)),
+            Obs::Unknown(_)
+        ));
+        assert!(matches!(
+            locate("backlog", Determination::undetermined("cache unreadable")),
+            Obs::Unknown(_)
+        ));
+        match locate(
+            "backlog",
+            Determination::Known(Some(PathBuf::from("/x/backlog"))),
+        ) {
+            Obs::Known(p) => assert_eq!(p, PathBuf::from("/x/backlog")),
+            Obs::Unknown(w) => panic!("a located binary must be spawned, got unknown: {w}"),
+        }
+    }
 
     #[test]
     fn slug_matches_backlog_format() {

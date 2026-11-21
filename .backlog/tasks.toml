@@ -1678,3 +1678,34 @@ exit 101:  v0.2.897 (/Users/yuki/.condukt/worktrees/sidefind3-eaa077f4/crates/bl
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.77s
      Running tests/backlog_20261122_python_heredoc_arrow_gt_fp.rs (target/debug/deps/backlog_20261122_python_heredoc_arrow_gt_fp-ce1ae958ba2e036d)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261122_python_heredoc_arrow_gt_fp`"""
+
+[[task]]
+id = "ba09708a"
+title = "blastguard: ACK_PAGER=sh ack pat <protected> is Allow (env-selected pager not modelled, sibling of e33849bd)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-22 at main 56c4f1697/8c4d6baca by the t3 verifier of run-20261122-004934-13005 (e33849bd): after 1914ffa47 made ack --pager=sh not Allow, the env-prefix spelling ACK_PAGER=sh ack pat .githooks/pre-commit is still allow (subagent=false and true); env ACK_PAGER=sh ack ... is already not Allow (control). ack documents ACK_PAGER/ACK_PAGER_COLOR as the pager program its output is sent to. Reading (a) defect: env-selected pager is the same exec as --pager. Reading (b) intended: blastguard does not model program-specific env variables. Tell apart: ruling on whether ACK_PAGER/ACK_PAGER_COLOR (and ACK_OPTIONS/ACKRC carrying --pager) are in scope. Unverified related lead: ack --PAGER=sh if ack's Getopt::Long is case-insensitive (not checked)."
+created_at = 1795278015
+updated_at = 1795278015
+weight = 0.0
+issue_number = 1964
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1964"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261122_ack_pager_env_protected -- --ignored"
+rev = "8c4d6baca8c4762c253ed506f4d1af2f94d40002"
+observed_at = 1795278015
+detail = """
+exit 101: stguard v0.2.905 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.17s
+     Running tests/backlog_20261122_ack_pager_env_protected.rs (target/debug/deps/backlog_20261122_ack_pager_env_protected-3a690e50206dc9d0)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261122_ack_pager_env_protected`"""

@@ -65,7 +65,8 @@
 //!   `alias` / `hash` / `enable` / `shopt` / `setopt`, a `PATH` assignment or
 //!   a `PATH` word (`export PATH`) keeps every body;
 //! * no other command names a landing path with a literal word — the file
-//!   (by name, case-insensitively), a directory above it, `.` / `..` — unless
+//!   (by name, case-insensitively), a directory above it (`/` included),
+//!   `.` / `..`; an empty word such as `sed -i ''` names no path — unless
 //!   it is a bare `cd`, a bare `mkdir` (it only creates directories; backlog
 //!   648a6641) or a read-only tool on `heredoc::INERT_LATER_COMMANDS`
 //!   (`rustc x.rs`, `chmod +x x.rs`, `rg --pre sh . src`, an unknown word keep
@@ -406,7 +407,8 @@ fn cargo_test_or_build(c: &SimpleCommand) -> bool {
 /// removed and an Allow floored by [`DataView::floor`]), or names none
 /// or only reads it ([`reads_only`]). A command not known to only read what it
 /// names may run it (`rustc x.rs`, `chmod +x x.rs`, `rg --pre sh . src`). An
-/// undetermined or empty command word is [`Naming::Names`].
+/// undetermined or empty command word is [`Naming::Names`]. An empty
+/// ARGUMENT word (`sed -i ''`) names no path (backlog 6f299fb5); `/` does.
 fn names_landing_path(c: &SimpleCommand, landing: &[String], functions: &[String]) -> Naming {
     let Some(Value::Literal(head)) = c.argv.first().map(|w| &w.value) else {
         return if c.argv.is_empty() {
@@ -431,6 +433,15 @@ fn names_landing_path(c: &SimpleCommand, landing: &[String], functions: &[String
     for w in &c.argv[1..] {
         match &w.value {
             Value::Undetermined(_) => naming = Naming::Undetermined,
+            // The EMPTY word (`sed -i '' …`, BSD sed's no-backup suffix;
+            // backlog 6f299fb5) names no path: POSIX path resolution of ""
+            // fails (ENOENT) for open / stat / chdir / execve, so it reaches
+            // no file. A program that itself maps "" to its cwd (`git -C ''`)
+            // operates on what it would reach with the word absent, and a
+            // command naming nothing is `Clear` here already. Only a
+            // non-empty word that trims to "" (`/`, `//`: the root, above
+            // every landing file) names a landing path.
+            Value::Literal(s) if s.is_empty() => {}
             Value::Literal(s) => {
                 let s = s.to_ascii_lowercase();
                 let t = s.trim_end_matches('/');

@@ -114,8 +114,11 @@ pub(super) fn collect(command: &str, cwd: &CwdState, with_escapes: bool) -> Nest
     };
     let cmds = &script.commands;
     let nested_in_other = |c: &SimpleCommand| {
+        // The container is a command of its own (`echo "$(…)"`) or an
+        // assignment-only command (`X=$(…)`); a compound command's
+        // redirection carrier (no argv, no assignment) is not.
         cmds.iter().any(|o| {
-            !o.argv.is_empty()
+            (!o.argv.is_empty() || !o.assignments.is_empty())
                 && o.span != c.span
                 && o.span.start <= c.span.start
                 && c.span.end <= o.span.end
@@ -240,22 +243,25 @@ fn is_vi(base: &str) -> bool {
     )
 }
 
-/// The argv indices of `c` whose words are ex commands, with their values.
-fn ex_args(c: &SimpleCommand) -> Vec<(usize, &Value)> {
+/// The argv indices of `c` whose words are ex commands, with their ex
+/// command (a `+{cmd}` word without its `+`).
+fn ex_args(c: &SimpleCommand) -> Vec<(usize, Value)> {
     let mut out = Vec::new();
     let mut i = 1;
     while let Some(w) = c.argv.get(i) {
         match &w.value {
             Value::Literal(s) if s == "-c" || s == "--cmd" => {
                 if let Some(v) = c.argv.get(i + 1) {
-                    out.push((i + 1, &v.value));
+                    out.push((i + 1, v.value.clone()));
                 }
                 i += 2;
                 continue;
             }
-            Value::Literal(s) if s.len() > 1 && s.starts_with('+') => out.push((i, &w.value)),
+            Value::Literal(s) if s.len() > 1 && s.starts_with('+') => {
+                out.push((i, Value::Literal(s[1..].to_string())))
+            }
             // An option word we cannot read may be `-c`.
-            Value::Undetermined(_) => out.push((i, &w.value)),
+            Value::Undetermined(_) => out.push((i, w.value.clone())),
             Value::Literal(_) => {}
         }
         i += 1;
@@ -395,7 +401,7 @@ fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, out: &mut Nested) {
     if is_vi(base) {
         for (_, v) in ex_args(c) {
             match v {
-                Value::Literal(arg) => match ex_command(arg) {
+                Value::Literal(arg) => match ex_command(&arg) {
                     Ex::Inert => {}
                     Ex::Shell(body) => body_commands(&body, &cwd, depth, out),
                     Ex::Undetermined => out.undetermined = true,

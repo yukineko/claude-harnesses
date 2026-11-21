@@ -1,36 +1,4 @@
 [[task]]
-id = "d039872d"
-title = "不正な CONDUKT_MAX_PARALLEL / CONDUKT_STUCK_TTL_SECS を黙って無視しない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "scout",
-    "L5",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "scout 2026-11-12, RED observed at 656b1c38, verified (independent verifier, no re-run). F3b: crates/condukt/src/config.rs:446-455 drops parse errors. CAVEAT (verifier): observed only on 'condukt state list' (non-zero exit or var name on stderr); a fix that reports only in the consumer command would stay RED — that observation point is a proxy, the fixer may re-anchor."
-created_at = 1794434301
-updated_at = 1794434301
-weight = 0.0
-issue_number = 1647
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1647"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_scout_20261112_f3_max_parallel -- --ignored is_not_silently_ignored"
-rev = "9c71a19fed28cf0f1a46f8909076f5bcb60e67ed"
-observed_at = 1794434301
-detail = """
-exit 101: est result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.78s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
-     Running tests/backlog_scout_20261112_f3_max_parallel.rs (target/debug/deps/backlog_scout_20261112_f3_max_parallel-6196e7ac86e86462)
-error: test failed, to rerun pass `-p condukt --test backlog_scout_20261112_f3_max_parallel`"""
-
-[[task]]
 id = "27393d5c"
 title = "condukt: owner のいない古い open run を live と同列に一覧しない"
 project = "/Users/yuki/src/harness"
@@ -1534,14 +1502,17 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
-notes = "Pre-commit mode (no --head): _range() makes the diff 'git diff --name-only HEAD' (working tree vs HEAD, includes unstaged edits) and the current version is read from the working-tree plugin.json. Two readings recorded in the script header: (1) defect - a pre-commit gate should judge the commit (the index) like the --staged scanners (user ruling 2026-11-08 'the scanner checks only this commit's range'); (2) intended - the gate header documents 'pre-commit: working tree vs last commit'. Script asserts reading (1). Case A (false positive): only an UNSTAGED edit touches plugin foo, commit stages an unrelated file -> gate blocks (should pass). Case B (fail-open): STAGED src change to foo with the bump left UNSTAGED -> gate passes (should block). Controls C (staged change+staged bump -> 0) and D (staged change, no bump -> 1) hold. Observed in main session 2026-11-21: controls C/D ok, RED A and RED B, exit=1. Origin: condukt run run-20261121-114054-75519 (unstaged rustfmt edits listed as changed files)."
+status = "failed"
+notes = """
+Pre-commit mode (no --head): _range() makes the diff 'git diff --name-only HEAD' (working tree vs HEAD, includes unstaged edits) and the current version is read from the working-tree plugin.json. Two readings recorded in the script header: (1) defect - a pre-commit gate should judge the commit (the index) like the --staged scanners (user ruling 2026-11-08 'the scanner checks only this commit's range'); (2) intended - the gate header documents 'pre-commit: working tree vs last commit'. Script asserts reading (1). Case A (false positive): only an UNSTAGED edit touches plugin foo, commit stages an unrelated file -> gate blocks (should pass). Case B (fail-open): STAGED src change to foo with the bump left UNSTAGED -> gate passes (should block). Controls C (staged change+staged bump -> 0) and D (staged change, no bump -> 1) hold. Observed in main session 2026-11-21: controls C/D ok, RED A and RED B, exit=1. Origin: condukt run run-20261121-114054-75519 (unstaged rustfmt edits listed as changed files).
+reject (unmeasured, 2026-11-22): repro 'bash scripts/tests/backlog-20261121-version-bumped-judges-unstaged.sh' cannot be executed from a /flow driver or its subagents: blastguard Deny 'bash runs the program file ... whose text is not in the command (Table B.5: Undetermined)' (relay bgr-410e6586367b). Static: scripts/check-version-bumped.py unchanged since RED rev bcc9a0b64, so likely unfixed. Needs a non-driver session (script-quarantine Ask) or a cargo/pytest-form repro."""
 created_at = 1795242395
-updated_at = 1795242395
+updated_at = 1795280310
+defer_until = 1795453110
 weight = 0.0
 issue_number = 1950
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1950"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -1599,14 +1570,17 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
-notes = """Observed 2026-11-21 on main a44f2ce07 (main tree, cargo test -p backlog --test backlog_20261113_no_deferral_auto_close) by condukt run run-20261121-223122-81816 (t2 base check): 'g_cargo_zero_tests_at_head_is_auto_cancelled ... FAILED' and 'g_control_cargo_compile_failure_at_head_refuses_claim ... FAILED', both panicking at crates/backlog/tests/backlog_20261113_no_deferral_auto_close.rs:61:5 in the fixture add setup; worker-observed message: 'error: backlog add: b223fba7 IS filed, but the id was NOT written back into the RED test: the repro "cargo test -p x" names no --test <file>...' (add exit 1, fixture expects 0). Other 12 tests pass. Effect: no executed test pins the '0 passed; 0 failed; 0 ignored' NotDemonstrated auto-cancel path (f20d620c fix relied on code reading). Readings: (a) regression - add's id write-back now refuses repros without --test and the fixture (or add) must be fixed so g reaches next --claim; (b) intended - stricter add, fixture stale; re-anchor fixture to a --test repro. Tell apart: git log -S 'names no' crates/backlog/src for when the write-back refusal landed and whether g was green before it. DOES NOT PROVE: which side is correct."""
+status = "failed"
+notes = """
+Observed 2026-11-21 on main a44f2ce07 (main tree, cargo test -p backlog --test backlog_20261113_no_deferral_auto_close) by condukt run run-20261121-223122-81816 (t2 base check): 'g_cargo_zero_tests_at_head_is_auto_cancelled ... FAILED' and 'g_control_cargo_compile_failure_at_head_refuses_claim ... FAILED', both panicking at crates/backlog/tests/backlog_20261113_no_deferral_auto_close.rs:61:5 in the fixture add setup; worker-observed message: 'error: backlog add: b223fba7 IS filed, but the id was NOT written back into the RED test: the repro "cargo test -p x" names no --test <file>...' (add exit 1, fixture expects 0). Other 12 tests pass. Effect: no executed test pins the '0 passed; 0 failed; 0 ignored' NotDemonstrated auto-cancel path (f20d620c fix relied on code reading). Readings: (a) regression - add's id write-back now refuses repros without --test and the fixture (or add) must be fixed so g reaches next --claim; (b) intended - stricter add, fixture stale; re-anchor fixture to a --test repro. Tell apart: git log -S 'names no' crates/backlog/src for when the write-back refusal landed and whether g was green before it. DOES NOT PROVE: which side is correct.
+blocked by tdd FP 867cd678 (2026-11-22, run-20261122-012059-29884 t1): fix verified (14 passed; 0 failed, oracle fail_to_pass, commit f0e7c8812, fixture-only, asserts unchanged) but condukt merge refused 'merge-proof-contract(f): t1.green.json: failed at RED but not "pass" at GREEN: t' — tdd parses a nested 'test t ... FAILED' inside the g-test panic text. Worktree /Users/yuki/.condukt/worktrees/run-20261122-012059-29884-t1 (branch condukt/run-20261122-012059-29884/t1) kept for merge after 867cd678; escalation esc-a9994b5a."""
 created_at = 1795268999
-updated_at = 1795268999
+updated_at = 1795280310
+defer_until = 1795453110
 weight = 0.0
 issue_number = 1960
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1960"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -1618,38 +1592,6 @@ exit 101: mpiling backlog v0.3.153 (/Users/yuki/src/.harness-worktrees/sidefind-
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.21s
      Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-48f55df2b4fe919f)
 error: test failed, to rerun pass `-p backlog --test backlog_20261113_no_deferral_auto_close`"""
-
-[[task]]
-id = "669b28ea"
-title = "condukt testscope: a cargo global option with a separate value (cargo --color always test / --config k=v test) skips the full-suite deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "fail-open",
-    "testscope",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-21 on main 0209adc6d (sidefind2-eaa077f4 worktree); named by the independent t1 verifier of condukt run run-20261121-225214-62742 (static reading of crates/condukt/src/testscope.rs judge_cargo global-flag skip: while args.get(i).is_some_and(|a| a.starts_with('+') || a.starts_with('-')) { i += 1; } skips the flag token only, so the value of --color always / --config k=v becomes the subcommand and the command is judged Other). RED: 'cargo --color always test: expected a deny, stdout not JSON (EOF while parsing a value at line 1 column 0): ""' (allowed); control cargo --color=always test is denied. cargo 1.97.1 accepts both spellings (cargo --color always --version prints the version). Readings: (a) fail-open: full-suite deny bypassed; (b) intended: none found. Not covered: -C dir / -Z flag / --manifest-path."""
-created_at = 1795273189
-updated_at = 1795273189
-weight = 0.0
-issue_number = 1961
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1961"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261121_testscope_global_flag_value_bypass -- --ignored"
-rev = "92ed6ee05a4f3fad0c8ce888163869a06fea1f02"
-observed_at = 1795273189
-detail = """
-exit 101: yuki/.condukt/worktrees/sidefind2-eaa077f4/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.37s
-     Running tests/backlog_20261121_testscope_global_flag_value_bypass.rs (target/debug/deps/backlog_20261121_testscope_global_flag_value_bypass-82579559e9e0dd48)
-error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_global_flag_value_bypass`"""
 
 [[task]]
 id = "30136835"

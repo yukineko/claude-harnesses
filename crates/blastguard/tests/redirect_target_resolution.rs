@@ -295,16 +295,31 @@ fn resolved_system_directory_target_is_still_denied_by_name() {
 /// $ bash -c 'false && P=/tmp/x; echo "[$P]"'     -> []        (guarded)
 /// ```
 ///
-/// Two rows are deliberately STRICTER than bash, and are listed because the
-/// error direction is the safe one: `{ P=…; }` (a brace group does run in the
-/// current shell, so bash really would use the value) and `export P=…` (bash
-/// sets it too). blastguard refuses both, which costs a resolution and invents
-/// none — the direction CLAUDE.md §3 requires.
+/// SHELL SCOPING (user ruling 2026-11-21): a command is judged under BOTH bash
+/// and zsh scoping and the STRICTER verdict (Deny > Ask > Allow) is taken.
+/// Measured 2026-11-21 (GNU bash 3.2.57, zsh 5.9), with `P=ENV` exported:
+///
+/// ```text
+/// local P=x; echo "[$P]"            bash: "local: can only be used in a function", [ENV] | zsh: [x]
+/// { P=y; }; echo "[$P]"             bash [y] | zsh [y]
+/// declare P=z; echo "[$P]"          bash [z] | zsh [z]
+/// f(){ local P=w; echo "[$P]"; }; f bash [w] | zsh [w]
+/// ```
+///
+/// Consequences: top-level `local` stays in the refusal table (bash keeps an
+/// inherited unknown value, so the stricter verdict is the unresolved one).
+/// `{ P=…; }` and `declare P=…` bind the same value in both shells, so they are
+/// NOT refused; they are pinned below the loop as "judged like the literal
+/// spelling". `local` inside a function body binds in both shells and is pinned
+/// by `local_inside_a_function_body_resolves_like_the_literal`.
+///
+/// HISTORY: commit 0258dfe2f re-anchored all three rows on zsh-only evidence
+/// (wrongly including `local`) and was reverted by b86b44076 / 765a57454.
 ///
 /// SUPERSEDED for `export` (user ruling 2026-11-15: 「`export X=lit` は「解決して
 /// 判定」する。`X=lit` と同じく解決し、literal と同じに判定する。」): the export row
 /// is no longer refused; it is pinned below the loop as "judged like the literal
-/// spelling". The brace-group row above is unchanged.
+/// spelling".
 #[test]
 fn unresolvable_shapes_keep_the_unresolved_verdict() {
     let mut violations: Vec<String> = Vec::new();
@@ -334,16 +349,11 @@ fn unresolvable_shapes_keep_the_unresolved_verdict() {
             "an explicit subshell's assignment does not reach the parent shell",
         ),
         (
-            "{ P=/home/yuki/proj/ok.log; }; echo hi > \"$P\"",
-            "a brace group DOES reach the parent shell; refusing it is the safe error",
-        ),
-        (
             "local P=/home/yuki/proj/ok.log; echo hi > \"$P\"",
-            "`local` is a builtin, not an assignment list",
-        ),
-        (
-            "declare P=/home/yuki/proj/ok.log; echo hi > \"$P\"",
-            "`declare` is a builtin, not an assignment list",
+            "top-level `local` is judged under bash AND zsh and the stricter verdict \
+             wins (user ruling 2026-11-21): bash refuses it (\"local: can only be \
+             used in a function\") and KEEPS the inherited, unknown value of P \
+             (measured, GNU bash 3.2.57: prints [ENV]), while zsh binds it",
         ),
         (
             "P=(/home/yuki/proj/ok.log); echo hi > \"$P\"",
@@ -450,6 +460,55 @@ fn unresolvable_shapes_keep_the_unresolved_verdict() {
         scoped("export P=/home/yuki/proj/ok.log; echo hi > \"$P\""),
         scoped("echo hi > /home/yuki/proj/ok.log"),
         "`export P=…; echo hi > \"$P\"` must be judged like its literal spelling (user ruling 2026-11-15)"
+    );
+}
+
+/// User ruling 2026-11-21 (judge under bash and zsh, take the stricter):
+/// `{ P=…; }` and `declare P=…` bind the same value in both shells (measured
+/// 2026-11-21, GNU bash 3.2.57 / zsh 5.9: bash [y]/[z], zsh [y]/[z]), so they
+/// are judged exactly like the literal spelling.
+#[test]
+fn brace_group_and_declare_are_judged_like_the_literal() {
+    assert_eq!(
+        scoped("{ P=/home/yuki/proj/ok.log; }; echo hi > \"$P\""),
+        scoped("echo hi > /home/yuki/proj/ok.log"),
+        "`{{ P=…; }}; echo hi > \"$P\"` must be judged like its literal spelling (user ruling 2026-11-21; bash [y] and zsh [y])"
+    );
+    assert_eq!(
+        scoped("declare P=/home/yuki/proj/ok.log; echo hi > \"$P\""),
+        scoped("echo hi > /home/yuki/proj/ok.log"),
+        "`declare P=…; echo hi > \"$P\"` must be judged like its literal spelling (user ruling 2026-11-21; bash [z] and zsh [z])"
+    );
+}
+
+/// Top-level `local`: bash refuses it ("local: can only be used in a function")
+/// and keeps the inherited value (measured 2026-11-21: [ENV]), so under the
+/// stricter-of-both-shells ruling it must stay unresolved.
+#[test]
+fn top_level_local_is_not_judged_like_the_literal() {
+    let top = scoped("local P=/home/yuki/proj/ok.log; echo hi > \"$P\"");
+    assert_ne!(
+        top,
+        Decision::Allow,
+        "top-level `local` must not be Allow: bash keeps the inherited unknown P (measured [ENV])"
+    );
+    assert_ne!(
+        top,
+        scoped("echo hi > /home/yuki/proj/ok.log"),
+        "top-level `local` must not be judged like the literal spelling"
+    );
+}
+
+/// `local` inside a function body binds in BOTH shells (measured 2026-11-21:
+/// bash [w], zsh [w]), so it resolves like the literal spelling. Separate FP,
+/// outside backlog 0aa37c22.
+#[test]
+#[ignore = "RED(pending): in-function local is Deny while the literal function is Allow (both shells bind, measured 2026-11-21) — remove when fixed"]
+fn local_inside_a_function_body_resolves_like_the_literal() {
+    assert_eq!(
+        scoped("f(){ local P=/home/yuki/proj/ok.log; echo hi > \"$P\"; }; f"),
+        scoped("f(){ echo hi > /home/yuki/proj/ok.log; }; f"),
+        "`local` inside a function body binds in bash and zsh alike (measured 2026-11-21) and must be judged like the literal"
     );
 }
 

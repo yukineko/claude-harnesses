@@ -2088,3 +2088,32 @@ exit 101:   Compiling blastguard v0.2.867 (/Users/yuki/src/.harness-worktrees/se
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.52s
      Running tests/backlog_20261121_dq_redirect_in_sed.rs (target/debug/deps/backlog_20261121_dq_redirect_in_sed-135311d0fc77f019)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_dq_redirect_in_sed`"""
+
+[[task]]
+id = "a50833d7"
+title = "blastguard: flow driver session denies the flow skill's own flow-watch (installed plugin bin not trusted)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-21 at b411f6f9e (worktree session-c1b3e891): in a registered /flow driver session, running the installed plugin bin path HOME/.claude/plugins/cache/yukineko/flow/0.2.42/bin/flow-watch --session S --project P gives deny (Table B.5 Undetermined Ask hardened to Deny by 4ef3a9e2; driver_trusts_program trusts only scratchpad and own worktree target). The flow skill Step 2.5 mandates this command, so it can never run. Control (HOME/random/bin/x in same driver session) is not allow, passes. Reading (a) defect: plugin cache bins are our own rolled-out code and are Allow by bare name via PATH, so denying the full path is a false positive. Reading (b) intended: a path under HOME cannot be told apart statically from attacker-planted files, so trust stays narrow and the skill should call flow-watch by bare name. Tell apart: ask the user whether the plugin cache dir is a trusted root; if yes (a), fix driver_trusts_program; if no (b), change the flow skill to use bare name and close this test as won't-do."
+created_at = 1795228837
+updated_at = 1795228837
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_driver_plugin_bin_flow_watch -- --ignored"
+rev = "b411f6f9e90511259d4d7652a9196fe27c639d69"
+observed_at = 1795228837
+detail = """
+exit 101: 9 (/Users/yuki/src/.harness-worktrees/session-c1b3e891/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.11s
+     Running tests/backlog_20261121_driver_plugin_bin_flow_watch.rs (target/debug/deps/backlog_20261121_driver_plugin_bin_flow_watch-34cc3d6192895bf6)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_driver_plugin_bin_flow_watch`"""

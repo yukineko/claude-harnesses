@@ -338,14 +338,17 @@ tags = [
     "p2",
 ]
 touched_files = []
-status = "pending"
-notes = """Observed live 2026-11-16: next --claim AUTO-CANCELLED 214b39b5 (closed:discard) although its fix 795b6699b landed (subject uses '(214b39b5, b4a2780b)', not '(backlog 214b39b5)', so fixed_task_ids did not see it). Stored repro 'cargo test -p condukt --test backlog_20261114_testscope_cd_tree_identity -- --ignored rerun_after_editing_the_cd_target_tree_is_allowed' at main bbe7b7bac prints verbatim: 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s'. Code: crates/backlog/src/evidence.rs zero_tests_ran -> RecheckVerdict::NotDemonstrated -> closes() -> claim_recheck::auto_cancel -> store::mark_cancelled (discard). RED (commit 6717c33e6, branch backlog/sidereds-20261116, base 9a989926b, 2026-11-16) fails verbatim: 'AUTO-CANCELLED dac175a7 (user ruling 2026-11-13: not demonstrated -> close): its stored repro is not-demonstrated (...): exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. ...' then 'left: String("discard") right: "discard"'. Readings: (a) defect - a run that executed no test observed nothing; recording discard (= defect not real) is a judgment without observation; at least the 'N filtered out' shape (named test exists but was not selected) must not be discarded: refuse/leave pending or close non-discard. (b) intended - user ruling 2026-11-13 「実証されないならclose」, pinned for the no-'filtered out' shape by backlog_20261113_no_deferral_auto_close.rs::g_cargo_zero_tests_at_head_is_auto_cancelled; under (b) this RED is wrong. Telling them apart needs a human ruling on whether 'filtered out' differs from 'no such test' (the RED does not conflict with test g, whose fake output has no 'filtered out'). DOES NOT PROVE: that the row's fix landed (fake cargo), the '(backlog <id>)' subject-grammar gap, real libtest beyond the measured shape."""
+status = "failed"
+notes = """
+Observed live 2026-11-16: next --claim AUTO-CANCELLED 214b39b5 (closed:discard) although its fix 795b6699b landed (subject uses '(214b39b5, b4a2780b)', not '(backlog 214b39b5)', so fixed_task_ids did not see it). Stored repro 'cargo test -p condukt --test backlog_20261114_testscope_cd_tree_identity -- --ignored rerun_after_editing_the_cd_target_tree_is_allowed' at main bbe7b7bac prints verbatim: 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s'. Code: crates/backlog/src/evidence.rs zero_tests_ran -> RecheckVerdict::NotDemonstrated -> closes() -> claim_recheck::auto_cancel -> store::mark_cancelled (discard). RED (commit 6717c33e6, branch backlog/sidereds-20261116, base 9a989926b, 2026-11-16) fails verbatim: 'AUTO-CANCELLED dac175a7 (user ruling 2026-11-13: not demonstrated -> close): its stored repro is not-demonstrated (...): exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. ...' then 'left: String("discard") right: "discard"'. Readings: (a) defect - a run that executed no test observed nothing; recording discard (= defect not real) is a judgment without observation; at least the 'N filtered out' shape (named test exists but was not selected) must not be discarded: refuse/leave pending or close non-discard. (b) intended - user ruling 2026-11-13 「実証されないならclose」, pinned for the no-'filtered out' shape by backlog_20261113_no_deferral_auto_close.rs::g_cargo_zero_tests_at_head_is_auto_cancelled; under (b) this RED is wrong. Telling them apart needs a human ruling on whether 'filtered out' differs from 'no such test' (the RED does not conflict with test g, whose fake output has no 'filtered out'). DOES NOT PROVE: that the row's fix landed (fake cargo), the '(backlog <id>)' subject-grammar gap, real libtest beyond the measured shape.
+needs user ruling (notes say so): does a libtest run with 'N filtered out' and 0 executed differ from 'no such test' under the 2026-11-13 not-demonstrated->close ruling? (a) defect vs (b) intended pinned by g_cargo_zero_tests_at_head_is_auto_cancelled; flow skips judgment Asks"""
 created_at = 1794764254
-updated_at = 1794764254
+updated_at = 1795294505
+defer_until = 1795467305
 weight = 0.0
 issue_number = 1809
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1809"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -357,39 +360,6 @@ exit 101: rc/.harness-worktrees/sidereds-20261116/crates/backlog)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.52s
      Running tests/backlog_20261116_zero_tests_filtered_out_not_discard.rs (target/debug/deps/backlog_20261116_zero_tests_filtered_out_not_discard-e511e6be63ab2a45)
 error: test failed, to rerun pass `-p backlog --test backlog_20261116_zero_tests_filtered_out_not_discard`"""
-
-[[task]]
-id = "410e9514"
-title = "backlog test done_closes_issue_inline.rs fails with Author identity unknown since add lands the row via git commit-tree"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "test-fixture",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-17 at cd09054b1. bl() runs the binary with env_clear and HOME set to an empty tempdir and passes no GIT_AUTHOR_* or GIT_COMMITTER_*; since 18f91ae7b add runs git commit-tree in land_row_on_main, which exits 128 (Author identity unknown), so both tests die at the add assertion before the inline-close path they pin. Fixture defect, not a binary defect: add GIT_AUTHOR_NAME/EMAIL, GIT_COMMITTER_NAME/EMAIL and GIT_CONFIG_GLOBAL/SYSTEM=/dev/null like github_mirror_disabled_close_20261117.rs. While red, mirror_close_for inline close has no working end-to-end test here. Update 2026-11-20 (macOS host): the original test passes here only because git auto-detects an identity from the login name and the .local hostname. Host-independent RED: crates/backlog/tests/backlog_20261120_done_inline_close_no_git_identity.rs, function no_detectable_identity_add_then_done_closes_inline (ignored). It runs the same add then done scenario in the bl() env shape plus an empty XDG_CONFIG_HOME, GIT_CONFIG_NOSYSTEM=1 and useConfigOnly in the isolated global config; a probe confirms git var GIT_AUTHOR_IDENT fails there. Observed: add exits 1, commit-tree exited 128 with Author identity unknown, auto-detection is disabled. The sibling auto_detected_identity variant passes on this host. Repro: cargo test -p backlog --test backlog_20261120_done_inline_close_no_git_identity -- --ignored. Open question for the fix: fixture identity env (as the notes propose) versus the binary supplying an identity for its own bookkeeping commits; the new test pins the binary behaviour, so a fixture-only fix leaves it RED."
-created_at = 1794887649
-updated_at = 1795111321
-weight = 0.0
-issue_number = 1911
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1911"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test done_closes_issue_inline"
-rev = "8358077eb972490b4979ba3ecab651d33c0786f4"
-observed_at = 1794887649
-detail = """
-exit 101: ered out; finished in 0.20s
-
-   Compiling backlog v0.3.134 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.95s
-     Running tests/done_closes_issue_inline.rs (target/debug/deps/done_closes_issue_inline-e1737e45ff03d3d8)
-error: test failed, to rerun pass `-p backlog --test done_closes_issue_inline`"""
 
 [[task]]
 id = "39772e9f"
@@ -1595,6 +1565,8 @@ notes = """Measured 2026-11-22 main 950c8cdce. text_value_opts("merge") = [-m,--
 created_at = 1795293450
 updated_at = 1795293450
 weight = 0.0
+issue_number = 1984
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1984"
 rev = 0
 
 [task.repro]
@@ -1620,6 +1592,8 @@ notes = "Observed run-20261122-052625-87637 task 0afbb200: merge-proof-contract(
 created_at = 1795293570
 updated_at = 1795293570
 weight = 0.0
+issue_number = 1985
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1985"
 rev = 0
 
 [task.repro]
@@ -1643,12 +1617,17 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
-notes = """観測 2026-11-22: donegate test-changed (scripts/test-changed-crates.sh) on main after 5598a48db: 'thread testscope::git::tests::ordinary_branches_are_not_main panicked at crates/condukt/src/testscope/git.rs:350:13: assertion left == right failed: tags/main / left: Main / right: NotMain' / 'test result: FAILED. 964 passed; 1 failed; 5 ignored'. 原因 (静的読解): crates/condukt/src/testscope/git.rs main_ref の match で '[_remote, m] | ["remotes", _remote, m] | ...=> main_or_head(m)' が '["refs","tags",..] | ["tags",..] => false' より前にあり、'tags/main' が remote 'tags' の main として Main になる。test ケース 'tags/main' と実装はともに e7524f54a (backlog 643e641f, 2026-11-22 04:11) で入った → その commit 時点から red の可能性 (未検証: e7524f54a での実行は未観測)。a1d04297 fix (66f8268b) は main_ref を触っていない (diff に該当行なし)。読み (a) 実装の arm 順の欠陥: test が仕様。(b) git の ref 解決では 'tags/main' は refs/tags/main (存在時) → 無ければ refs/remotes/tags/main (remote 'tags' があれば) と曖昧で、Main(deny) は fail-closed 側 = test の NotMain 期待が過剰。見分け方: git rev-parse の解決順 (refs/<n>, refs/tags/<n>, refs/heads/<n>, refs/remotes/<n>, refs/remotes/<n>/HEAD) で 'tags/main' が main ブランチを指しうるかを判定し、ユーザー裁定を仰ぐ (frozen assert)。"""
+status = "failed"
+notes = """
+観測 2026-11-22: donegate test-changed (scripts/test-changed-crates.sh) on main after 5598a48db: 'thread testscope::git::tests::ordinary_branches_are_not_main panicked at crates/condukt/src/testscope/git.rs:350:13: assertion left == right failed: tags/main / left: Main / right: NotMain' / 'test result: FAILED. 964 passed; 1 failed; 5 ignored'. 原因 (静的読解): crates/condukt/src/testscope/git.rs main_ref の match で '[_remote, m] | ["remotes", _remote, m] | ...=> main_or_head(m)' が '["refs","tags",..] | ["tags",..] => false' より前にあり、'tags/main' が remote 'tags' の main として Main になる。test ケース 'tags/main' と実装はともに e7524f54a (backlog 643e641f, 2026-11-22 04:11) で入った → その commit 時点から red の可能性 (未検証: e7524f54a での実行は未観測)。a1d04297 fix (66f8268b) は main_ref を触っていない (diff に該当行なし)。読み (a) 実装の arm 順の欠陥: test が仕様。(b) git の ref 解決では 'tags/main' は refs/tags/main (存在時) → 無ければ refs/remotes/tags/main (remote 'tags' があれば) と曖昧で、Main(deny) は fail-closed 側 = test の NotMain 期待が過剰。見分け方: git rev-parse の解決順 (refs/<n>, refs/tags/<n>, refs/heads/<n>, refs/remotes/<n>, refs/remotes/<n>/HEAD) で 'tags/main' が main ブランチを指しうるかを判定し、ユーザー裁定を仰ぐ (frozen assert)。
+needs user ruling (frozen unhedged assert): ordinary_branches_are_not_main asserts main_ref("tags/main")==NotMain, but git resolves tags/main via refs/remotes/tags/main when a remote named 'tags' exists, so fail-closed reading is Main/Undetermined. Options: (a) keep assert, reorder arms so ["tags",..] wins; (b) re-anchor assert to Undetermined/Main. flow skips judgment Asks."""
 created_at = 1795293840
-updated_at = 1795293840
+updated_at = 1795294478
+defer_until = 1795467278
 weight = 0.0
-rev = 0
+issue_number = 1986
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1986"
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

@@ -86,19 +86,16 @@ fn expect_deny(cmd: &str, tag: &str) {
 // ------------------------------------------- shell -c flag layouts
 
 #[test]
-#[ignore = "RED: bash -ec of a determined harmful subst is Ask, not Deny"]
 fn dash_c_shape_bundled_ec_is_deny() {
     expect_deny(r#"bash -ec "$(echo 'rm -rf /etc')""#, "c-ec");
 }
 
 #[test]
-#[ignore = "RED: bash -x -c of a determined harmful subst is Ask, not Deny"]
 fn dash_c_shape_flag_before_c_is_deny() {
     expect_deny(r#"bash -x -c "$(echo 'rm -rf /etc')""#, "c-x");
 }
 
 #[test]
-#[ignore = "RED: bash -c -- of a determined harmful subst is Ask, not Deny"]
 fn dash_c_shape_double_dash_is_deny() {
     expect_deny(r#"bash -c -- "$(echo 'rm -rf /etc')""#, "c-dd");
 }

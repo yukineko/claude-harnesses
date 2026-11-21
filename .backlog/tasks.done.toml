@@ -94218,3 +94218,65 @@ rev = "4be91a3b7bd70f7fa3c1375a9cf57d26901b44ee"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "8ff44387"
+title = "blastguard FP: python3 - heredoc writing a literal .rs path (p='crates/tdd/src/evidence.rs'; open(p,'w')) refused with an EMPTY target named as command-running configuration (relay bgr-05b37d8cbc85)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-22 in condukt run run-20261122-020202-63344 (main 6ae161ee7 era), relay bgr-05b37d8cbc85 (~/.blastguard/relay/eaa077f4-02a7-458b-9e0e-c7fc2c5d694b.jsonl), actor subagent -> deny, cwd /Users/yuki/src/harness. Command shape: cd <task worktree a867> && python3 - <<'EOF' p='crates/tdd/src/evidence.rs'; s=open(p).read(); string splicing with '''...''' and r'''...''' literals holding Rust source with backticks; open(p,'w').write(s) EOF; . "$HOME/.cargo/env"; cargo check -p tdd. Verbatim reason: '> overwrites , which names command-running configuration (a hook wiring file, a plugin hook, a gate script) or cannot be placed and so may name it — one written line adds a hook entry or a gate command, so blastguard cannot tell from the tool call whether this strengthens or disarms it, and refuses to guess (user ruling 2026-11-20)'. RED replays the exact command (fixture tests/support/relay_bgr_05b37d8cbc85_20261122_exact.txt; only the cd target rewritten to the test cwd), expects Allow main+subagent. Control (observed PASS at 356049cbb): same cd/p binding/open(p,'w') without the splicing body is Allow. Readings: (a) FP -- target text-determined (memory blastguard-must-resolve-statically; 2026-11-20 round-2: allowlisted fs-write sink judged on its path), an ordinary .rs; (b) intended -- body beyond the supported Python subset -> unresolvable -> Ask (round-2 'Unresolvable arguments -> Ask'); even then the reason misstates the class (empty path 'which names command-running configuration', CLAUDE.md s4). Not covered by python-c-expansion-in-literal-deny (no shell expansion; heredoc quoted). Related: 30136835 (python3 heredoc '''...''' splicing, different reason), the 2026-11-14 backtick-string write-target FP (tests/backlog_20261114_python_heredoc_backtick_string_write_target_fp.rs). DOES NOT PROVE: which body construct triggers it (not minimised); the original cd-into-another-worktree classification; real Python execution."""
+created_at = 1795282794
+updated_at = 1795291374
+weight = 0.0
+issue_number = 1974
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1974"
+issue_closed_at = 1795291376
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261122_relay_05b37d8cbc85_python_heredoc_empty_target_fp -- --ignored"
+rev = "356049cbb6e6367fb496696f21c5fce49f830309"
+observed_at = 1795282794
+detail = """
+exit 101:  in 6.25s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261122_relay_05b37d8cbc85_python_heredoc_empty_target_fp.rs (target/debug/deps/backlog_20261122_relay_05b37d8cbc85_python_heredoc_empty_target_fp-dcb200f55ff797ff)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261122_relay_05b37d8cbc85_python_heredoc_empty_target_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261122_relay_05b37d8cbc85_python_heredoc_empty_target_fp"
+exit = 0
+passed = 2
+rev = "fb6f1a81beca805a624258054cc3c78ad028931a"
+observed_at = 1795291367
+output_digest = "sha256:38a1f08a0718b0806107fd38a0573154fe36e98f474cee47d012e541c3032d4d"
+excerpt = """
+
+running 2 tests
+test control_same_p_binding_without_splicing_body_is_allow ... ok
+test relay_05b37d8cbc85_exact_command_is_allow ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.65s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running tests/backlog_20261122_relay_05b37d8cbc85_python_heredoc_empty_target_fp.rs (target/debug/deps/backlog_20261122_relay_05b37d8cbc85_python_heredoc_empty_target_fp-d9fe755a1e665fdc)
+"""
+
+[task.closure.red]
+rev = "7806f67341a37814ce0d2acebb1619164bdabb81"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

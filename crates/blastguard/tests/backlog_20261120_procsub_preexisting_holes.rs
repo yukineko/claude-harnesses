@@ -138,7 +138,6 @@ fn echo_e_hex_escape_through_cat_to_bash_is_deny() {
 }
 
 #[test]
-#[ignore = "backlog 11b0b4da: RED: echo -e newline-split harmful program in a procsub is Ask, not Deny"]
 fn echo_e_newline_split_in_procsub_is_deny() {
     expect_deny(r#"bash <(echo -e 'echo hi\nrm -rf /etc')"#, "b-nl");
 }

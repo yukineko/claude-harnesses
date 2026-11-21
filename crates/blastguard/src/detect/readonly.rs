@@ -122,12 +122,19 @@ fn is_read_only_command(cmd: &str) -> bool {
 /// `grep -rn truncate <glob>` the pattern word `truncate` was taken for the
 /// start of a `truncate` command line and the whole command was refused.
 ///
-/// The three search tools with an EXECUTION flag are excluded, because for them
-/// the words after the head can be a program: `rg --pre <prog>` runs its
-/// argument as a preprocessor, `ag --pager` and `ack --pager` run theirs as a
-/// pager. Those keep the tail rule, so `rg --pre rm …` still asks.
+/// This is an explicit ALLOWLIST, not "READ_ONLY_COMMANDS minus a denylist":
+/// only heads that cannot execute any argument under any option qualify
+/// (`grep`/`egrep`/`fgrep`, `cat`, `head`, `tail`, `wc`, `ls`, `stat`, `du`).
+/// Every other read-only head keeps the tail rule because some option can run
+/// its argument: `bat --pager <cmd>`, `less`/`more` (`+cmd`, LESSOPEN),
+/// `rg --pre <prog>`, `ag`/`ack --pager`. So `bat --pager rm -rf /etc` and
+/// `rg --pre rm …` still ask.
 pub(super) fn argv_is_data_only(cmd: &str) -> bool {
-    is_read_only_command(cmd) && !matches!(cmd, "rg" | "ag" | "ack")
+    is_read_only_command(cmd)
+        && matches!(
+            cmd,
+            "grep" | "egrep" | "fgrep" | "cat" | "head" | "tail" | "wc" | "ls" | "stat" | "du"
+        )
 }
 
 /// Verdict for a command this module has NO rule for, when one of its operands

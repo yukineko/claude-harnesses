@@ -139,7 +139,7 @@ fn compute(root: &Path, proof_dir: &str) -> Identity {
         .chain(excludes.iter().map(|e| format!(":(exclude){e}")))
         .collect();
 
-    let tree = content_tree(&top, &specs);
+    let tree = content_tree(&top, &excludes);
     let diff_hash = match (&head, &tree) {
         (Ok(h), Ok(t)) => git_stdout({
             let mut c = git(&top);
@@ -167,11 +167,16 @@ fn compute(root: &Path, proof_dir: &str) -> Identity {
     }
 }
 
-/// `git add -A` of the work tree (untracked included, `.gitignore` honoured,
-/// `specs` as pathspecs) into a throwaway index, then `git write-tree`. The
-/// real index is never written. A gitlink (submodule / nested repo) records
+/// `git add -A -- .` of the work tree (untracked included, `.gitignore`
+/// honoured) into a throwaway index, then `excludes` are dropped from that
+/// index with `git rm --cached --ignore-unmatch`, then `git write-tree`. The
+/// excludes are NOT passed to `git add` as `:(exclude)` pathspecs: git exits 1
+/// ("paths are ignored by one of your .gitignore files") when an exclude names
+/// an existing ignored path such as `.tdd`, which left `tree` undetermined.
+/// Any genuine git failure still propagates as `Err`. The real index is never
+/// written. A gitlink (submodule / nested repo) records
 /// only its HEAD commit, so the id would not see edits inside it: undetermined.
-fn content_tree(top: &Path, specs: &[String]) -> Result<String, String> {
+fn content_tree(top: &Path, excludes: &[String]) -> Result<String, String> {
     let tmp = tempfile::Builder::new()
         .prefix("tdd-tree-index-")
         .tempdir()
@@ -185,7 +190,11 @@ fn content_tree(top: &Path, specs: &[String]) -> Result<String, String> {
         }
         git_stdout(c)
     };
-    run(&["add", "-A"], specs)?;
+    run(&["add", "-A"], &[".".to_string()])?;
+    run(
+        &["rm", "-r", "--cached", "-q", "--ignore-unmatch"],
+        excludes,
+    )?;
     let staged = run(&["ls-files", "-s"], &[])?;
     if String::from_utf8_lossy(&staged)
         .lines()

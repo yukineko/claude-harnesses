@@ -116,7 +116,6 @@ fn control_tree_determined_when_tdd_dir_not_ignored() {
 }
 
 #[test]
-#[ignore = "RED(83c9d1ee): tdd green tree_identity.tree is null when .gitignore ignores .tdd/"]
 fn green_tree_determined_when_tdd_dir_is_gitignored() {
     let (_d, r, g) = red_then_green("ign", true);
     assert!(

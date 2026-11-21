@@ -93,7 +93,7 @@ fn expect_not_allow(cmd: &str, tag: &str) {
 }
 
 #[test]
-#[ignore = "RED: ACK_PAGER=sh ack pat <protected> is Allow (env-selected pager not modelled)"]
+#[ignore = "RED(ba09708a): ACK_PAGER=sh ack pat <protected> is Allow (env-selected pager not modelled)"]
 fn ack_pager_env_prefix_protected_operand_is_not_allow() {
     expect_not_allow("ACK_PAGER=sh ack pat .githooks/pre-commit", "prefix");
 }

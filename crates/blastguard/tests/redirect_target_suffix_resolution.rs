@@ -452,17 +452,16 @@ fn control_bare_variable_targets_keep_resolving() {
 /// $ bash -c 'echo "[$$/x]"'                   -> [<pid>/x] (RELATIVE)
 /// ```
 ///
-/// The following shapes were once deliberately STRICTER than bash (the error
-/// direction is the safe one — each costs a resolution and invents none, the
-/// direction CLAUDE.md §3 requires). Only the first is still refused; the rest
-/// are SUPERSEDED (see below) and no longer in the refusal table:
+/// Four rows are deliberately STRICTER than bash, and are listed because the
+/// error direction is the safe one — each costs a resolution and invents none,
+/// the direction CLAUDE.md §3 requires:
 ///
 ///   * `true && P=…` — bash binds it; blastguard refuses because the text does
-///     not say the guard succeeded. STILL refused.
-///   * `export P=…` and `declare P=…` — bash binds them; formerly the scan did
-///     not read declaration builtins. Now resolved (pair-equality).
+///     not say the guard succeeded.
+///   * `export P=…` and `declare P=…` — bash binds them; the scan does not
+///     read declaration builtins.
 ///   * `{ P=…; }` — a brace group runs in the current shell, so bash really
-///     would use the value. Now resolved (pair-equality).
+///     would use the value.
 ///
 /// The `$$`/`$1` rows are stricter in a different and sharper sense: bash's
 /// answers there (`<pid>/x`, `/x`) are not merely unknown, they are a RELATIVE
@@ -474,14 +473,8 @@ fn control_bare_variable_targets_keep_resolving() {
 /// 判定」する。`X=lit` と同じく解決し、literal と同じに判定する。」 and 「`pre$P` の
 /// ように、前に文字列をつなげた形は「連結を解決」する。裁定の「その連結」に含め、展開した
 /// 後の literal と同じに判定する。」 Those two shapes are no longer refused; they are
-/// pinned after the table as "judged like the literal spelling".
-///
-/// SUPERSEDED (2026-11-21) for `declare P=…`, `local P=…`, `{ P=…; }` and the
-/// empty value `P=;` as well: text-determined values are resolved statically
-/// (rulings 2026-11-14/15; S5 AST evaluator DECL_BUILTINS) and measured with
-/// zsh 5.9 to be bound by the shell, so these four are also pinned after the
-/// table as "judged like the literal spelling" (`P=;` -> literal `/x.log`).
-/// Of the STRICTER rows above only `true && P=…` is unchanged (still refused).
+/// pinned after the table as "judged like the literal spelling". The other
+/// STRICTER rows above (`true && P=…`, `declare P=…`, `{ P=…; }`) are unchanged.
 #[test]
 fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
     let mut violations: Vec<String> = Vec::new();
@@ -540,6 +533,21 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
             OK_LEAF,
             "an array's first element depends on IFS / [0]-vs-[@] / quoting \
              (measured: [aa] for P=(aa bb))",
+        ),
+        (
+            "declare P=/home/yuki/proj; echo hi > $P/x.log",
+            OK_LEAF,
+            "`declare` is a builtin, not an assignment list",
+        ),
+        (
+            "local P=/home/yuki/proj; echo hi > $P/x.log",
+            OK_LEAF,
+            "`local` is a builtin, not an assignment list",
+        ),
+        (
+            "{ P=/home/yuki/proj; }; echo hi > $P/x.log",
+            OK_LEAF,
+            "a brace group DOES reach the parent shell; refusing it is the safe error",
         ),
         (
             "( P=/home/yuki/proj ); echo hi > $P/x.log",
@@ -618,6 +626,12 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
              nothing on the line determines (measured: [<pid>/x])",
         ),
         (
+            "P=; echo hi > $P/x.log",
+            OK_LEAF,
+            "an empty value makes the target `/x.log`, a write at the filesystem \
+             ROOT (measured) — the opposite of confined",
+        ),
+        (
             "P=\"/home/yuki/proj\\x\"; echo hi > $P/x.log",
             OK_LEAF,
             "a backslash in the value means three different things depending on \
@@ -668,33 +682,6 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
             "P=/home/yuki/proj; echo hi > pre$P/x.log",
             "echo hi > pre/home/yuki/proj/x.log",
         ),
-        // RE-ANCHORED (2026-11-21): these four rows used to sit in the
-        // "unresolvable" table above, frozen as "must stop the call". They
-        // are text-determined values, so per the user rulings 2026-11-14/15
-        // (resolve statically, judge like the literal) and the S5 AST
-        // evaluator (1c6ef97ad, crates/blastguard/src/detect/ast/eval.rs
-        // DECL_BUILTINS) they are judged like their literal spelling.
-        // Measured 2026-11-21 with zsh 5.9 (the Bash tool's own layer, user
-        // ruling 2026-11-18): `zsh -c 'local P=x; echo "zsh[$P]"'` ->
-        // zsh[x]; `{ P=y; }; declare Q=z` -> zsh[y][z]. bash also binds
-        // `{ }` and `declare` (only a top-level `local` differs in bash).
-        (
-            "declare P=/home/yuki/proj; echo hi > $P/x.log",
-            "echo hi > /home/yuki/proj/x.log",
-        ),
-        (
-            "local P=/home/yuki/proj; echo hi > $P/x.log",
-            "echo hi > /home/yuki/proj/x.log",
-        ),
-        (
-            "{ P=/home/yuki/proj; }; echo hi > $P/x.log",
-            "echo hi > /home/yuki/proj/x.log",
-        ),
-        // An empty value is used by the shell as empty, so the target is
-        // `/x.log` (measured). Whether the literal `/x.log` verdict is right is a
-        // separate question; this row pins only that the spelling (`P=;` +
-        // `$P`) does not decide the verdict — it equals the literal's.
-        ("P=; echo hi > $P/x.log", "echo hi > /x.log"),
     ] {
         assert_eq!(
             scoped(cmd),

@@ -27,6 +27,16 @@
   ブランチを指すときだけ。`condukt worktree merge` / `gh pr merge` は常に merge 扱い。
   `git send-pack` / `git http-push` は push 扱い、`ssh host <command>` のリモートコマンドも再帰で読む。
   git の subcommand 位置が非 literal（`git $X`・`git "$@"`）なら、文字列に push 等が無くても判定不能。
+  0.1.4 から、判定不能は**本文に push 等の文字列があるかどうかに依存しない**。command 名・
+  `eval` / `sh -c` / `ssh` リモート / `find -exec` / `source` / shell の script 引数が非 literal
+  （変数・置換・glob）なら判定不能。git の未知の subcommand（alias の可能性）・`-c alias.*` も
+  判定不能。shell は sh/bash/zsh/dash/ksh/mksh/fish/csh/tcsh/ash を扱い、`sh < file` の
+  stdin script も名前で判定する。`--git-dir` / `GIT_DIR=` を伴う HEAD を動かす git 操作は
+  その git dir の `HEAD` で判定する。main を動かす操作として merge/pull/reset/cherry-pick/
+  revert/rebase/am（HEAD が main のとき）、`fetch <src>:main`、`update-ref refs/heads/main`、
+  `branch -f/-m/-d main` を merge 扱いにする。
+  未知のプログラムは、引数に git/gh/condukt/ssh/eval/shell/`session-master`/`rollout-plugins`
+  が現れたら wrapper の可能性があるので判定不能（`setsid git push`・`xcrun git push` 等）。
   member の `session-master` 呼び出しのうち、master 専用 subcommand・他人の `--session`・
   `CLAUDE_CODE_SESSION_ID` の代入を伴うものは Deny（queue には積まない。暫定の扱い 6 を参照）。
 - **SendMessage**（`src/relay.rs`）: master からは allow。`main` 宛て（subagent → 自 session）は allow。
@@ -44,7 +54,7 @@
 | repo が見つからない・`.git` が読めない・canonicalize 失敗 | master 専用操作なら Deny（「判定不能」と原因を reason に書く） |
 | state.json の読み書き失敗・lock 取得失敗 | 同上 |
 | `SESSION_MASTER_NOW` が不正 | 同上（CLI は exit 2） |
-| 構文解析に失敗・command 名や `-c`/`eval` 引数が非 literal・深さ上限超過 | 本文に push/merge/pull/rollout-plugins を含めば master 専用扱い（kind `other` で queue へ） |
+| 構文解析に失敗・command 名や `-c`/`eval` 引数が非 literal・深さ上限超過・git の未知 subcommand・未知プログラムの引数に git 等 | 本文の文字列に関係なく master 専用扱い（kind `other` で queue へ） |
 | merge 対象の HEAD が読めない・同じ program に cd/pushd/popd/checkout/switch | master 専用扱い |
 | 分類器の panic | 判定不能 → master 専用扱い |
 | gate 本体の panic | `run_pretooluse_guarded` が exit 2（block） |
@@ -95,7 +105,7 @@ exit: 0 = ok（role は master）、1 = 拒否（member / in_progress でない�
 
 ## 暫定の扱い（coordinator 裁定 2026-11-22）
 
-次の 5 点は **暫定** であり、運用を見て見直す:
+次の各点は **暫定** であり、運用を見て見直す:
 
 1. PreToolUse gate は `harness_core::hook::run_pretooluse_guarded`、Stop は
    `harness_core::gate::run::run_guarded` で panic barrier を張る。`run_hook` は使わない。
@@ -114,3 +124,24 @@ exit: 0 = ok（role は master）、1 = 拒否（member / in_progress でない�
    自分以外の `--session`、`CLAUDE_CODE_SESSION_ID` の代入を含む `session-master` 呼び出し
    （絶対パス・wrapper・`bash -c` 経由を含む）を Deny する（queue には積まない）が、
    CLI 単体での id 詐称そのものは防げない。
+7. **Bash 検出の残る限界（0.1.4）**:
+   - script ファイルの**中身は読まない**。`bash x.sh` / `source x` / `python3 x.py` /
+     `make` / `npm test` / cargo alias・build.rs などが内部で push しても検出しない
+     （名前が `rollout-plugins.sh` の script だけは rollout 扱い）。
+   - 未知のプログラムは、引数に git 等の名前が**現れない**限り allow する（全面 Deny にすると
+     通常の member 作業が止まるため）。引数に名前を出さずにコマンドを実行するプログラム
+     （設定ファイルから読むもの等）は検出しない。`sed` の `e` コマンドも読まない。
+   - 既知の安全リスト（echo/cat/ls/grep/rg/sed/jq/cargo/rustc/rustfmt 等）は引数を見ない。
+     `tdd --cmd`・`trap`・`alias`・`rustup run`・`tar`・`zip`・`fd`・`rg --pre` は安全リストから外し、
+     未知プログラムとして引数を見る。
+   - **過剰検出**: 非 literal の command 名（`$EDITOR a.rs`）、非 literal 引数の `rg`、
+     `bash "$f"` のように最後の path 要素が展開される script 指定は Deny になる
+     （`. "$HOME/.cargo/env"` のように最後の要素が literal なら名前で判定して allow）。
+     引数のトークン（basename）が git 等と一致する未知プログラム（例: `docker exec c git status`）も
+     Deny になる（`git-notes.md` のような部分一致は対象外）。
+     上記はコードからの予測で、通常作業コマンド群に対する gate の観測による測定は未実施
+     （計測用 script の実行が blastguard に止められたため）。
+   - **`git commit` on main は allow のまま**: verifier の P7 は main 上の `git commit -m m` の
+     Deny を求めるが、SPEC §5.1 と既存テスト（`gate_bash::member_non_push_commands_allowed`・
+     `gate_bypass::control_member_benign_allowed`）は同じ cwd（main 上の repo）での
+     `git commit -m ...` の allow を求めており、両立しない。裁定待ち。

@@ -145,7 +145,13 @@ pub fn key_of(common_dir: &str) -> String {
 /// `Ok(Some(branch))`, `Ok(None)` for a detached HEAD, `Err` when unreadable.
 pub fn head_branch(dir: &Path) -> Result<Option<String>, String> {
     let loc = locate(dir)?;
-    let head = loc.git_dir.join("HEAD");
+    head_branch_of_gitdir(&loc.git_dir)
+}
+
+/// The branch `HEAD` of an explicit git dir (`--git-dir` / `GIT_DIR`) names.
+/// Same three outcomes as [`head_branch`].
+pub fn head_branch_of_gitdir(git_dir: &Path) -> Result<Option<String>, String> {
+    let head = git_dir.join("HEAD");
     let text = match read_opt(&head)? {
         Some(t) => t,
         None => return Err(format!("{} が無い", head.display())),

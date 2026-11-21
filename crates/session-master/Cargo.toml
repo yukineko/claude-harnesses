@@ -2,7 +2,7 @@
 # brush-parser 0.4.0 declares rust-version = "1.88.0" (precedent: crates/blastguard).
 rust-version = "1.88"
 name = "session-master"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "Session group orchestration for Claude Code: one master per git common dir, a master-only serial queue, and a fail-closed PreToolUse gate that keeps push / rollout / main merge and cross-session relays on the master."
 license = "MIT"

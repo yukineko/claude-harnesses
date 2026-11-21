@@ -1,5 +1,6 @@
 //! Bash classification (SPEC §5.1): does a command run a master-only
-//! operation (push / rollout / merge into main)?
+//! operation (push / rollout / an operation that moves main) or a
+//! master-only `session-master` CLI call?
 //!
 //! Decided on the brush-parser AST, so strings, comments and heredoc *data*
 //! are not mistaken for executed code. The answer is three-valued
@@ -7,11 +8,25 @@
 //! master-only, `Undetermined` = could not tell, which the gate treats as
 //! master-only (the restrictive side).
 //!
-//! "Could not tell" is raised (never swallowed) when the parser fails, a
-//! command name / `-c` / `eval` argument is not a literal, the nesting cap is
-//! hit, or the classifier itself panics — in each case only if the text
-//! involved carries one of [`SUSPICIOUS`]; text that cannot spell a
-//! master-only operation at all has nothing to be undetermined about.
+//! # What "could not tell" covers (0.1.4)
+//!
+//! Undetermined is raised **without looking at whether the text spells
+//! `push`** (verifier round 2, P1): a word that only expansion can reveal may
+//! be anything. Concretely:
+//!
+//! * a command word that is not a literal (`$G $S`, `"$@"`, a glob);
+//! * a non-literal argument where code is expected: `eval`, `sh -c`, `ssh`'s
+//!   remote command, a shell's script operand, `source`, `find -exec`;
+//! * a git subcommand that is not literal, unknown, or an alias (P3);
+//! * a program that is not known to be inert and whose arguments name git,
+//!   a shell, `ssh`, `gh`, `condukt`, `session-master` or `rollout-plugins`
+//!   — it may be a wrapper that runs them (P2: `setsid`, `xcrun`, `flock`…);
+//! * a parse failure, the nesting / recursion caps, a classifier panic.
+//!
+//! Known limits (also in README.ja.md): the contents of script files and of
+//! programs run by build tools (`make`, `npm`, `cargo` aliases, a python
+//! script…) are not read, and an unknown program whose arguments do not name
+//! a sensitive program is allowed.
 
 use crate::config;
 use crate::group;
@@ -31,13 +46,11 @@ const MAX_NESTING: usize = 64;
 const MAX_BYTES: usize = 1 << 20;
 const STACK_BYTES: usize = 64 << 20;
 
-/// Substrings without which no master-only operation can be spelled.
-pub const SUSPICIOUS: [&str; 4] = ["push", "merge", "pull", "rollout-plugins"];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Op {
     Push,
     Rollout,
+    /// A merge into main, or any other operation that moves a main branch.
     Merge,
     /// A `session-master` CLI call that acts as the master or as another
     /// session (`next` / `complete` / `gate` / `hook`, a `--session` naming
@@ -64,16 +77,266 @@ pub const CONTROL_SUBCOMMANDS: [&str; 4] = ["next", "complete", "gate", "hook"];
 /// The env var the `session-master` CLI reads its identity from.
 const SESSION_ENV: &str = "CLAUDE_CODE_SESSION_ID";
 
-/// One `session-master` invocation seen in the program.
-struct SmCall {
-    /// `None`: the subcommand is not a literal.
-    sub: Option<String>,
-    /// `--session` values (`None` entry: not a literal).
-    sessions: Vec<Option<String>>,
-}
+/// Env vars that redirect git to another repository / worktree.
+const GIT_ENV: [&str; 3] = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"];
 
-pub fn suspicious(text: &str) -> bool {
-    SUSPICIOUS.iter().any(|s| text.contains(s))
+/// Shell interpreters (`-c STRING`, script operand, or a program on stdin).
+const SHELLS: [&str; 10] = [
+    "sh", "bash", "zsh", "dash", "ksh", "mksh", "fish", "csh", "tcsh", "ash",
+];
+
+/// Programs whose mention as an argument makes an unknown program a
+/// possible wrapper (P2).
+const SENSITIVE: [&str; 5] = ["git", "gh", "condukt", "ssh", "eval"];
+
+/// Programs known not to execute their arguments as commands. Anything not
+/// here and not handled explicitly is "unknown" (see the module doc).
+/// Deliberately absent because they can run a command given as an argument:
+/// `tdd --cmd`, `trap`, `alias`, `rustup run`, `tar --to-command`,
+/// `zip -TT`, `fd -x`, `watch`. `rg` is here but `rg --pre CMD` is judged
+/// like an unknown program.
+const INERT: &[&str] = &[
+    "echo",
+    "printf",
+    "cat",
+    "ls",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "ag",
+    "head",
+    "tail",
+    "wc",
+    "sort",
+    "uniq",
+    "cut",
+    "tr",
+    "diff",
+    "cmp",
+    "comm",
+    "file",
+    "stat",
+    "du",
+    "df",
+    "pwd",
+    "true",
+    "false",
+    "test",
+    "[",
+    "basename",
+    "dirname",
+    "realpath",
+    "readlink",
+    "which",
+    "type",
+    "date",
+    "mkdir",
+    "rmdir",
+    "touch",
+    "cp",
+    "mv",
+    "rm",
+    "ln",
+    "chmod",
+    "chown",
+    "tee",
+    "less",
+    "more",
+    "jq",
+    "yq",
+    "sed",
+    "tree",
+    "bat",
+    "cargo",
+    "rustc",
+    "rustfmt",
+    "export",
+    "unset",
+    "set",
+    "read",
+    "wait",
+    "sleep",
+    "kill",
+    "ps",
+    "pgrep",
+    "pkill",
+    "curl",
+    "wget",
+    "unzip",
+    "gzip",
+    "gunzip",
+    "open",
+    "mktemp",
+    "seq",
+    "yes",
+    "xxd",
+    "od",
+    "hexdump",
+    "shasum",
+    "sha256sum",
+    "md5",
+    "md5sum",
+    "base64",
+    "column",
+    "paste",
+    "join",
+    "fold",
+    "nl",
+    "rev",
+    "tac",
+    "expr",
+    "bc",
+    "uname",
+    "hostname",
+    "id",
+    "whoami",
+    "printenv",
+    "locale",
+    "tput",
+    "clear",
+    "local",
+    "declare",
+    "typeset",
+    "return",
+    "exit",
+    "shift",
+    "break",
+    "continue",
+    ":",
+    "umask",
+    "ulimit",
+    "hash",
+    "history",
+    "jobs",
+    "fg",
+    "bg",
+    "disown",
+    "getopts",
+    "backlog",
+    "lsof",
+    "top",
+    "nproc",
+    "cal",
+];
+
+/// Script interpreters: inline code / stdin is checked for sensitive
+/// programs; a script *file* operand is not read (limit).
+const INTERPRETERS: &[&str] = &[
+    "python",
+    "python3",
+    "node",
+    "perl",
+    "ruby",
+    "deno",
+    "bun",
+    "osascript",
+    "awk",
+    "gawk",
+    "php",
+    "lua",
+    "Rscript",
+];
+
+/// git subcommands that neither push nor move a main branch by themselves.
+const GIT_SAFE: &[&str] = &[
+    "status",
+    "log",
+    "diff",
+    "show",
+    "add",
+    "rm",
+    "mv",
+    "restore",
+    "stash",
+    "tag",
+    "rev-parse",
+    "rev-list",
+    "ls-files",
+    "ls-tree",
+    "ls-remote",
+    "cat-file",
+    "config",
+    "blame",
+    "grep",
+    "describe",
+    "shortlog",
+    "worktree",
+    "remote",
+    "clone",
+    "init",
+    "notes",
+    "reflog",
+    "apply",
+    "format-patch",
+    "archive",
+    "check-ignore",
+    "check-attr",
+    "show-ref",
+    "symbolic-ref",
+    "for-each-ref",
+    "merge-base",
+    "name-rev",
+    "var",
+    "help",
+    "version",
+    "clean",
+    "gc",
+    "fsck",
+    "count-objects",
+    "hash-object",
+    "diff-tree",
+    "diff-files",
+    "diff-index",
+    "range-diff",
+    "sparse-checkout",
+    "maintenance",
+    "rerere",
+    "whatchanged",
+    "cherry",
+    "show-branch",
+    "annotate",
+    "bundle",
+    "prune",
+    "repack",
+    "verify-commit",
+    "verify-tag",
+    "interpret-trailers",
+    "stripspace",
+    "column",
+    "credential",
+    "mergetool",
+    "difftool",
+    "request-pull",
+    "write-tree",
+    "mktree",
+    "commit",
+    "checkout",
+    "switch",
+    "branch",
+    "fetch",
+    "update-ref",
+    "submodule",
+    "bisect",
+];
+
+/// git subcommands that move HEAD's branch: master-only when HEAD is main.
+/// (`commit` is not here: SPEC §5.1 lists `git commit -m ...` as allowed.)
+const GIT_MOVES_HEAD: &[&str] = &[
+    "merge",
+    "pull",
+    "reset",
+    "cherry-pick",
+    "revert",
+    "rebase",
+    "am",
+];
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Outcome {
+    Clean,
+    Found(Op),
+    Undetermined(String),
 }
 
 /// Classify `command`, run from `cwd` by session `caller` (`None`: unknown,
@@ -105,12 +368,20 @@ pub fn classify(command: &str, cwd: &Path, caller: Option<&str>) -> Determinatio
     }
 }
 
-/// Thread-crossing result (`Determination` is minted on the caller thread).
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Outcome {
-    Clean,
-    Found(Op),
-    Undetermined(String),
+/// One `session-master` invocation seen in the program.
+struct SmCall {
+    /// `None`: the subcommand is not a literal.
+    sub: Option<String>,
+    /// `--session` values (`None` entry: not a literal).
+    sessions: Vec<Option<String>>,
+}
+
+/// Where a HEAD-moving git command acts.
+struct Target {
+    /// The worktree directory (cwd + `-C`).
+    dir: Result<PathBuf, String>,
+    /// An explicit git dir (`--git-dir` / `GIT_DIR=`), if given.
+    git_dir: Option<Result<PathBuf, String>>,
 }
 
 pub(crate) fn analyze(
@@ -121,10 +392,12 @@ pub(crate) fn analyze(
 ) -> Outcome {
     let mut w = Walker {
         cwd: cwd.to_path_buf(),
+        mains: mains.to_vec(),
         found: None,
         undet: None,
         has_cd: false,
-        merges: Vec::new(),
+        sets_git_env: false,
+        moves: Vec::new(),
         sm_calls: Vec::new(),
         sets_session_env: false,
     };
@@ -148,24 +421,32 @@ pub(crate) fn analyze(
             return Outcome::Found(Op::Control);
         }
     }
-    for m in std::mem::take(&mut w.merges) {
+    for t in std::mem::take(&mut w.moves) {
         if w.has_cd {
             w.set_undet(
-                "merge/pull と同じ program 内に cd/pushd/popd/checkout/switch がある".to_string(),
+                "HEAD を動かす git 操作と同じ program 内に cd/pushd/popd/checkout/switch がある"
+                    .to_string(),
             );
             continue;
         }
-        let dir = match m {
-            Ok(d) => d,
-            Err(why) => {
-                w.set_undet(why);
-                continue;
-            }
+        if w.sets_git_env {
+            w.set_undet(
+                "HEAD を動かす git 操作と同じ program 内で GIT_DIR 等を設定している".to_string(),
+            );
+            continue;
+        }
+        let head = match t.git_dir {
+            Some(Ok(g)) => group::head_branch_of_gitdir(&g),
+            Some(Err(why)) => Err(why),
+            None => match t.dir {
+                Ok(d) => group::head_branch(&d),
+                Err(why) => Err(why),
+            },
         };
-        match group::head_branch(&dir) {
+        match head {
             Ok(Some(b)) if mains.contains(&b) => return Outcome::Found(Op::Merge),
             Ok(_) => {}
-            Err(e) => w.set_undet(format!("merge 対象 worktree の HEAD を読めない: {e}")),
+            Err(e) => w.set_undet(format!("対象 worktree の HEAD を読めない: {e}")),
         }
     }
     match w.undet {
@@ -180,21 +461,38 @@ struct Arg {
     lit: Option<String>,
 }
 
+impl Arg {
+    fn new(raw: &str) -> Arg {
+        Arg {
+            raw: raw.to_string(),
+            lit: literal(raw),
+        }
+    }
+}
+
 #[derive(Default)]
 struct Stdin {
     /// Literal program texts fed on stdin (heredoc bodies / here-strings).
     bodies: Vec<String>,
+    /// Files redirected to stdin (`< f`; `None`: not a literal).
+    files: Vec<Option<String>>,
     /// stdin comes from an earlier pipeline stage (contents unknown).
     piped: bool,
 }
 
+/// Prefix assignments of one simple command (`NAME=value cmd`).
+type Assigns = Vec<(String, Option<String>)>;
+
 struct Walker {
     cwd: PathBuf,
+    mains: Vec<String>,
     found: Option<Op>,
     undet: Option<String>,
     has_cd: bool,
-    /// Pending `git merge/pull` targets (`Err` = a `-C` that is not literal).
-    merges: Vec<Result<PathBuf, String>>,
+    /// `GIT_DIR` & co. are set somewhere other than a command prefix.
+    sets_git_env: bool,
+    /// HEAD-moving git commands, judged against HEAD after the walk.
+    moves: Vec<Target>,
     /// `session-master` CLI calls (judged after the whole program is read).
     sm_calls: Vec<SmCall>,
     /// Somewhere in the program `CLAUDE_CODE_SESSION_ID` is assigned (prefix
@@ -308,6 +606,31 @@ fn unescape_backquote(s: &str) -> String {
     out
 }
 
+/// Does `text` name a sensitive program (as a token)?
+fn mentions_sensitive(text: &str) -> Option<String> {
+    for tok in text.split(|c: char| !(c.is_ascii_alphanumeric() || "_.-/+".contains(c))) {
+        if tok.is_empty() {
+            continue;
+        }
+        let b = basename(tok);
+        if SENSITIVE.contains(&b)
+            || SHELLS.contains(&b)
+            || b.starts_with("session-master")
+            || tok.contains("rollout-plugins")
+        {
+            return Some(tok.to_string());
+        }
+    }
+    None
+}
+
+fn joined(args: &[Arg]) -> String {
+    args.iter()
+        .map(|a| a.raw.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 impl Walker {
     fn set_undet(&mut self, why: String) {
         if self.undet.is_none() {
@@ -315,13 +638,10 @@ impl Walker {
         }
     }
 
-    /// Raise undetermined for `text` when it could spell a master-only op.
-    fn suspect(&mut self, text: &str, why: &str) {
-        if suspicious(text) {
-            self.set_undet(format!(
-                "{why}（本文に push/merge/pull/rollout-plugins を含む）"
-            ));
-        }
+    /// Undetermined, unconditionally (P1: never gated on the text).
+    fn undet(&mut self, text: &str, why: &str) {
+        let shown: String = text.chars().take(120).collect();
+        self.set_undet(format!("{why}: {shown}"));
     }
 
     fn found(&mut self, op: Op) {
@@ -330,13 +650,19 @@ impl Walker {
         }
     }
 
+    fn is_main_ref(&self, r: &str) -> bool {
+        let r = r.trim_start_matches('+');
+        let r = r.strip_prefix("refs/heads/").unwrap_or(r);
+        self.mains.iter().any(|m| m == r)
+    }
+
     fn program(&mut self, src: &str, depth: usize) {
         if depth > MAX_DEPTH {
-            self.suspect(src, "再帰深さ上限を超えた");
+            self.undet(src, "再帰深さ上限を超えた");
             return;
         }
         if src.len() > MAX_BYTES || nesting(src) > MAX_NESTING {
-            self.suspect(src, "構文が大きすぎる/深すぎるので解析しない");
+            self.undet(src, "構文が大きすぎる/深すぎるので解析しない");
             return;
         }
         let parsed = catch_unwind(AssertUnwindSafe(|| {
@@ -345,7 +671,7 @@ impl Walker {
         let prog = match parsed {
             Ok(Ok(p)) => p,
             Ok(Err(_)) | Err(_) => {
-                self.suspect(src, "構文解析に失敗した");
+                self.undet(src, "構文解析に失敗した");
                 return;
             }
         };
@@ -466,9 +792,19 @@ impl Walker {
 
     fn redirect(&mut self, io: &ast::IoRedirect, depth: usize, stdin: &mut Stdin) {
         match io {
-            ast::IoRedirect::File(_, _, target) => match target {
-                ast::IoFileRedirectTarget::Filename(w)
-                | ast::IoFileRedirectTarget::Duplicate(w) => self.scan_word(&w.value, depth),
+            ast::IoRedirect::File(fd, kind, target) => match target {
+                ast::IoFileRedirectTarget::Filename(w) => {
+                    self.scan_word(&w.value, depth);
+                    let to_stdin = matches!(fd, None | Some(0))
+                        && matches!(
+                            kind,
+                            ast::IoFileRedirectKind::Read | ast::IoFileRedirectKind::ReadAndWrite
+                        );
+                    if to_stdin {
+                        stdin.files.push(literal(&w.value));
+                    }
+                }
+                ast::IoFileRedirectTarget::Duplicate(w) => self.scan_word(&w.value, depth),
                 ast::IoFileRedirectTarget::ProcessSubstitution(_, sub) => {
                     self.list(&sub.list, "", depth)
                 }
@@ -498,7 +834,7 @@ impl Walker {
         }
         match parse_word(raw) {
             Some(pieces) => self.walk_pieces(&pieces, raw, depth),
-            None => self.suspect(raw, "word を解析できない"),
+            None => self.undet(raw, "word を解析できない"),
         }
     }
 
@@ -511,7 +847,7 @@ impl Walker {
         }));
         match parsed {
             Ok(Ok(pieces)) => self.walk_pieces(&pieces, body, depth),
-            _ => self.suspect(body, "heredoc 本文を解析できない"),
+            _ => self.undet(body, "heredoc 本文を解析できない"),
         }
     }
 
@@ -527,7 +863,7 @@ impl Walker {
                 WordPiece::ParameterExpansion(_) => {
                     let slice = raw.get(p.start_index..p.end_index).unwrap_or(raw);
                     if slice.contains("$(") || slice.contains('`') {
-                        self.suspect(slice, "パラメータ展開の中のコマンド置換は解析しない");
+                        self.undet(slice, "パラメータ展開の中のコマンド置換は解析しない");
                     }
                 }
                 WordPiece::ArithmeticExpression(e) => {
@@ -546,9 +882,10 @@ impl Walker {
 
     fn simple(&mut self, sc: &ast::SimpleCommand, src: &str, depth: usize, piped: bool) {
         let mut words: Vec<&ast::Word> = Vec::new();
+        let mut assigns: Assigns = Vec::new();
         let mut stdin = Stdin {
-            bodies: Vec::new(),
             piped,
+            ..Stdin::default()
         };
         let items = sc
             .prefix
@@ -576,10 +913,14 @@ impl Walker {
                 ast::CommandPrefixOrSuffixItem::Word(w) => words.push(w),
                 ast::CommandPrefixOrSuffixItem::AssignmentWord(_, w) => {
                     if is_prefix {
-                        if w.value.starts_with(SESSION_ENV) {
+                        self.scan_word(&w.value, depth);
+                        let name = w.value.split('=').next().unwrap_or("").to_string();
+                        if name == SESSION_ENV {
                             self.sets_session_env = true;
                         }
-                        self.scan_word(&w.value, depth);
+                        let value = literal(&w.value)
+                            .and_then(|s| s.split_once('=').map(|(_, v)| v.to_string()));
+                        assigns.push((name, value));
                     } else {
                         words.push(w);
                     }
@@ -596,29 +937,22 @@ impl Walker {
         }
         for w in &words {
             // `env X=..`, `export X=..`, `declare X=..`: restrictive textual
-            // check, it only matters when a `session-master` call exists.
+            // checks; they only matter when a session-master / HEAD-moving
+            // git call exists in the same program.
             if w.value.contains(&format!("{SESSION_ENV}=")) {
                 self.sets_session_env = true;
             }
+            if GIT_ENV.iter().any(|g| w.value.contains(&format!("{g}="))) {
+                self.sets_git_env = true;
+            }
             self.scan_word(&w.value, depth);
         }
-        let argv: Vec<Arg> = words
-            .iter()
-            .map(|w| Arg {
-                raw: w.value.clone(),
-                lit: literal(&w.value),
-            })
-            .collect();
-        self.exec(&argv, &stdin, src, depth);
-    }
-
-    fn suspect_args(&mut self, argv: &[Arg], why: &str) {
-        let joined: Vec<&str> = argv.iter().map(|a| a.raw.as_str()).collect();
-        self.suspect(&joined.join(" "), why);
+        let argv: Vec<Arg> = words.iter().map(|w| Arg::new(&w.value)).collect();
+        self.exec(&argv, &stdin, &assigns, src, depth);
     }
 
     /// Strip wrappers, then judge the command that actually runs.
-    fn exec(&mut self, argv: &[Arg], stdin: &Stdin, src: &str, depth: usize) {
+    fn exec(&mut self, argv: &[Arg], stdin: &Stdin, assigns: &Assigns, src: &str, depth: usize) {
         let mut i = 0usize;
         let mut via_xargs = false;
         loop {
@@ -626,7 +960,7 @@ impl Walker {
                 return;
             };
             let Some(name) = a.lit.as_deref() else {
-                self.suspect_args(&argv[i..], "command 名が literal でない");
+                self.undet(&joined(&argv[i..]), "command 名が literal でない");
                 return;
             };
             let next = match basename(name) {
@@ -650,7 +984,7 @@ impl Walker {
                     j
                 }
                 "exec" => skip_opts(argv, i + 1, &["-a"]),
-                "builtin" | "nohup" => i + 1,
+                "builtin" | "nohup" | "busybox" => i + 1,
                 "time" => skip_opts(argv, i + 1, &["-f", "-o"]),
                 "nice" => {
                     let mut j = i + 1;
@@ -692,7 +1026,7 @@ impl Walker {
                 .iter()
                 .any(|x| x.lit.is_none())
             {
-                self.suspect_args(&argv[i..], "wrapper の option が literal でない");
+                self.undet(&joined(&argv[i..]), "wrapper の option が literal でない");
             }
             i = next;
         }
@@ -701,44 +1035,55 @@ impl Walker {
             return;
         };
         let args = &rest[1..];
-        match basename(name) {
-            "git" => self.git(args, via_xargs, src),
+        let base = basename(name);
+        match base {
+            "git" => self.git(args, via_xargs, assigns, src, depth),
             "cd" | "pushd" | "popd" => self.has_cd = true,
             "rollout-plugins.sh" => self.found(Op::Rollout),
-            "sh" | "bash" | "zsh" | "dash" => self.shell(args, stdin, src, depth),
-            "source" | "." => {
-                if let Some(a) = args.first() {
-                    match a.lit.as_deref() {
-                        Some(s) if basename(s) == "rollout-plugins.sh" => self.found(Op::Rollout),
-                        Some(_) => {}
-                        None => self.suspect(&a.raw, "source の引数が literal でない"),
-                    }
+            b if SHELLS.contains(&b) => self.shell(args, stdin, depth),
+            "source" | "." => self.script_operand(args.first()),
+            "eval" => match literal_all(args) {
+                Some(text) => self.program(&text, depth + 1),
+                None => self.undet(&joined(rest), "eval の引数が literal でない"),
+            },
+            "condukt" => {
+                if positionals(args, &[]).starts_with(&["worktree", "merge"]) {
+                    self.found(Op::Merge)
                 }
             }
-            "eval" => {
-                let mut parts = Vec::new();
-                for a in args {
-                    match &a.lit {
-                        Some(s) => parts.push(s.clone()),
-                        None => {
-                            self.suspect_args(rest, "eval の引数が literal でない");
-                            return;
-                        }
-                    }
+            "gh" => {
+                if positionals(args, &["-R", "--repo"]).starts_with(&["pr", "merge"]) {
+                    self.found(Op::Merge)
                 }
-                self.program(&parts.join(" "), depth + 1);
-            }
-            "condukt" if positionals(args, &[]).starts_with(&["worktree", "merge"]) => {
-                self.found(Op::Merge)
-            }
-            "gh" if positionals(args, &["-R", "--repo"]).starts_with(&["pr", "merge"]) => {
-                self.found(Op::Merge)
             }
             "ssh" => self.ssh(args, depth),
-            n if n.starts_with("session-master") => self.sm_call(args),
-            // A literal program that is none of the above cannot itself be
-            // push / rollout / merge, whatever its (possibly non-literal) args.
-            _ => {}
+            "find" => self.find(args, src, depth),
+            b if b.starts_with("session-master") => self.sm_call(args),
+            "rg" if args
+                .iter()
+                .any(|a| a.lit.as_deref().is_none_or(|s| s.starts_with("--pre"))) =>
+            {
+                self.undet(
+                    &joined(rest),
+                    "rg --pre はコマンドを実行する（または引数が literal でない）",
+                )
+            }
+            b if INERT.contains(&b) => {}
+            b if INTERPRETERS.contains(&b) => self.interpreter(args, stdin),
+            _ => {
+                // Unknown program: it may be a wrapper (`setsid git push`).
+                for a in args {
+                    if let Some(tok) = mentions_sensitive(&a.raw) {
+                        self.undet(
+                            &joined(rest),
+                            &format!(
+                                "未知のプログラム {base} が {tok} を引数に取る（wrapper の可能性）"
+                            ),
+                        );
+                        return;
+                    }
+                }
+            }
         }
     }
 
@@ -762,7 +1107,7 @@ impl Walker {
                             }
                             self.program(&text, depth + 1);
                         }
-                        None => self.suspect_args(&argv[j..], "env -S の引数が literal でない"),
+                        None => self.undet(&joined(&argv[j..]), "env -S の引数が literal でない"),
                     }
                 }
                 return None;
@@ -790,6 +1135,26 @@ impl Walker {
         Some(j)
     }
 
+    /// A script file operand (`source f`, `bash f`, `sh < f`). Only its name
+    /// is judged; its contents are not read (limit).
+    fn script_operand(&mut self, a: Option<&Arg>) {
+        let Some(a) = a else {
+            return;
+        };
+        let name = match a.lit.as_deref() {
+            Some(s) => Some(basename(s).to_string()),
+            None => literal_tail(&a.raw),
+        };
+        match name.as_deref() {
+            Some("rollout-plugins.sh") => self.found(Op::Rollout),
+            Some(_) => {}
+            None => self.undet(
+                &a.raw,
+                "script の指定が literal でない（展開・glob を含む）",
+            ),
+        }
+    }
+
     /// `ssh [opts] host [command...]`: the remote command is a nested program
     /// (`ssh host git push` pushes from the remote side).
     fn ssh(&mut self, args: &[Arg], depth: usize) {
@@ -806,17 +1171,71 @@ impl Walker {
         if remote.is_empty() {
             return;
         }
-        let mut parts = Vec::new();
-        for a in remote {
-            match &a.lit {
-                Some(s) => parts.push(s.clone()),
+        match literal_all(remote) {
+            Some(text) => self.program(&text, depth + 1),
+            None => self.undet(&joined(remote), "ssh のリモートコマンドが literal でない"),
+        }
+    }
+
+    /// `find ... -exec CMD ... ;` runs CMD.
+    fn find(&mut self, args: &[Arg], src: &str, depth: usize) {
+        let mut j = 0usize;
+        while j < args.len() {
+            let is_exec = matches!(
+                args[j].lit.as_deref(),
+                Some("-exec" | "-execdir" | "-ok" | "-okdir")
+            );
+            if !is_exec {
+                j += 1;
+                continue;
+            }
+            let start = j + 1;
+            let mut end = start;
+            while end < args.len() && !matches!(args[end].lit.as_deref(), Some(";" | "+")) {
+                end += 1;
+            }
+            if depth + 1 > MAX_DEPTH {
+                self.undet(&joined(&args[start..end]), "再帰深さ上限を超えた");
+                return;
+            }
+            self.exec(
+                &args[start..end],
+                &Stdin::default(),
+                &Vec::new(),
+                src,
+                depth + 1,
+            );
+            j = end + 1;
+        }
+    }
+
+    /// Inline code (`-c` / `-e`, stdin bodies) of a script interpreter is
+    /// checked for sensitive programs; script files are not read (limit).
+    fn interpreter(&mut self, args: &[Arg], stdin: &Stdin) {
+        let mut code_next = false;
+        for a in args {
+            match a.lit.as_deref() {
+                Some(s) => {
+                    if let Some(tok) = mentions_sensitive(s) {
+                        self.undet(s, &format!("インタプリタのコードが {tok} を呼ぶ可能性"));
+                        return;
+                    }
+                    code_next = matches!(s, "-c" | "-e" | "-E" | "--eval" | "-p");
+                }
                 None => {
-                    self.suspect_args(remote, "ssh のリモートコマンドが literal でない");
-                    return;
+                    if code_next {
+                        self.undet(&a.raw, "インタプリタに渡すコードが literal でない");
+                        return;
+                    }
                 }
             }
         }
-        self.program(&parts.join(" "), depth + 1);
+        for b in &stdin.bodies {
+            if let Some(tok) = mentions_sensitive(b) {
+                self.undet(b, &format!("インタプリタの stdin が {tok} を呼ぶ可能性"));
+                return;
+            }
+        }
     }
 
     /// Record a `session-master` CLI call (judged in [`analyze`]).
@@ -834,20 +1253,32 @@ impl Walker {
         self.sm_calls.push(SmCall { sub, sessions });
     }
 
-    fn git(&mut self, args: &[Arg], via_xargs: bool, src: &str) {
+    fn git(&mut self, args: &[Arg], via_xargs: bool, assigns: &Assigns, src: &str, depth: usize) {
         let mut j = 0usize;
         let mut dir: Result<PathBuf, String> = Ok(self.cwd.clone());
+        let mut git_dir: Option<Result<String, String>> = None;
+        for (name, value) in assigns {
+            if name == "GIT_DIR" {
+                git_dir = Some(match value {
+                    Some(v) => Ok(v.clone()),
+                    None => Err("GIT_DIR が literal でない".to_string()),
+                });
+            } else if GIT_ENV.contains(&name.as_str()) {
+                self.sets_git_env = true;
+            }
+        }
         while let Some(a) = args.get(j) {
             let Some(s) = a.lit.as_deref() else {
                 // The program is git, so a non-literal word here may expand
-                // to `push` / `merge` (`X=push; git $X`, `git "$@"`) even
-                // when no such text is visible: undetermined, unconditionally.
-                self.set_undet(format!(
-                    "git の subcommand / option {:?} が literal でない",
-                    a.raw
-                ));
+                // to anything (`X=push; git $X`, `git "$@"`).
+                self.undet(&a.raw, "git の subcommand / option が literal でない");
                 return;
             };
+            if let Some(v) = s.strip_prefix("--git-dir=") {
+                git_dir = Some(Ok(v.to_string()));
+                j += 1;
+                continue;
+            }
             match s {
                 "-C" => {
                     match args.get(j + 1).map(|x| x.lit.clone()) {
@@ -862,14 +1293,24 @@ impl Walker {
                     j += 2;
                 }
                 "-c" => {
-                    if let Some(v) = args.get(j + 1) {
-                        if v.raw.contains("alias.") || v.lit.is_none() {
-                            self.suspect(&v.raw, "git -c の alias / 非 literal 設定");
+                    match args.get(j + 1).and_then(|v| v.lit.as_deref()) {
+                        Some(v) if !v.starts_with("alias.") => {}
+                        _ => {
+                            let raw = args.get(j + 1).map_or("", |v| v.raw.as_str());
+                            self.undet(raw, "git -c の alias / 非 literal 設定");
+                            return;
                         }
                     }
                     j += 2;
                 }
-                "--git-dir" | "--work-tree" | "--namespace" | "--config-env" | "--super-prefix"
+                "--git-dir" => {
+                    git_dir = Some(match args.get(j + 1).and_then(|x| x.lit.clone()) {
+                        Some(v) => Ok(v),
+                        None => Err("--git-dir の引数が literal でない".to_string()),
+                    });
+                    j += 2;
+                }
+                "--work-tree" | "--namespace" | "--config-env" | "--super-prefix"
                 | "--list-cmds" => j += 2,
                 _ if s.starts_with('-') => j += 1,
                 _ => break,
@@ -877,19 +1318,134 @@ impl Walker {
         }
         let Some(sub) = args.get(j).and_then(|a| a.lit.as_deref()) else {
             if via_xargs {
-                self.set_undet(format!("xargs から git の subcommand が渡る: {src}"));
+                self.undet(src, "xargs から git の subcommand が渡る");
             }
             return;
         };
+        let rest = &args[j + 1..];
         match sub {
             "push" | "send-pack" | "http-push" => self.found(Op::Push),
-            "merge" | "pull" => self.merges.push(dir),
+            s if GIT_MOVES_HEAD.contains(&s) => {
+                let gd = git_dir.map(|g| {
+                    g.map(|p| match &dir {
+                        Ok(d) => d.join(p),
+                        Err(_) => PathBuf::from(p),
+                    })
+                });
+                self.moves.push(Target { dir, git_dir: gd });
+            }
             "checkout" | "switch" => self.has_cd = true,
-            _ => {}
+            "update-ref" => self.git_update_ref(rest),
+            "branch" => self.git_branch(rest),
+            "fetch" => self.git_fetch(rest),
+            "submodule" | "bisect" => self.git_runs_command(sub, rest, depth),
+            s if GIT_SAFE.contains(&s) => {}
+            other => self.undet(other, "git の未知の subcommand（alias の可能性）"),
         }
     }
 
-    fn shell(&mut self, args: &[Arg], stdin: &Stdin, src: &str, depth: usize) {
+    fn git_update_ref(&mut self, rest: &[Arg]) {
+        for a in rest {
+            match a.lit.as_deref() {
+                Some("--stdin") => {
+                    self.undet("--stdin", "git update-ref --stdin の対象 ref は読めない");
+                    return;
+                }
+                Some("-m") => {}
+                Some(s) if s.starts_with('-') => {}
+                Some(s) => {
+                    if self.is_main_ref(s) {
+                        self.found(Op::Merge);
+                    }
+                    return;
+                }
+                None => {
+                    self.undet(&a.raw, "git update-ref の ref が literal でない");
+                    return;
+                }
+            }
+        }
+    }
+
+    fn git_branch(&mut self, rest: &[Arg]) {
+        let moves = rest.iter().any(|a| {
+            matches!(
+                a.lit.as_deref(),
+                Some(
+                    "-f" | "--force"
+                        | "-m"
+                        | "-M"
+                        | "--move"
+                        | "-d"
+                        | "-D"
+                        | "--delete"
+                        | "-c"
+                        | "-C"
+                        | "--copy"
+                )
+            )
+        });
+        if !moves {
+            return;
+        }
+        for a in rest {
+            match a.lit.as_deref() {
+                Some(s) if !s.starts_with('-') && self.is_main_ref(s) => {
+                    self.found(Op::Merge);
+                    return;
+                }
+                Some(_) => {}
+                None => {
+                    self.undet(&a.raw, "git branch -f/-m/-d の対象が literal でない");
+                    return;
+                }
+            }
+        }
+    }
+
+    fn git_fetch(&mut self, rest: &[Arg]) {
+        for a in rest {
+            match a.lit.as_deref() {
+                Some(s) => {
+                    if let Some((_, dst)) = s.split_once(':') {
+                        if self.is_main_ref(dst) {
+                            self.found(Op::Merge);
+                            return;
+                        }
+                    }
+                }
+                None => {
+                    self.undet(
+                        &a.raw,
+                        "git fetch の引数が literal でない（refspec が main を指す可能性）",
+                    );
+                    return;
+                }
+            }
+        }
+    }
+
+    /// `git submodule foreach CMD` / `git bisect run CMD` run CMD.
+    fn git_runs_command(&mut self, sub: &str, rest: &[Arg], depth: usize) {
+        let marker = if sub == "submodule" { "foreach" } else { "run" };
+        let Some(k) = rest.iter().position(|a| a.lit.as_deref() == Some(marker)) else {
+            return;
+        };
+        let cmd = &rest[k + 1..];
+        let start = cmd
+            .iter()
+            .position(|a| !matches!(a.lit.as_deref(), Some(s) if s.starts_with('-')))
+            .unwrap_or(cmd.len());
+        match literal_all(&cmd[start..]) {
+            Some(text) => self.program(&text, depth + 1),
+            None => self.undet(
+                &joined(cmd),
+                "git submodule foreach / bisect run の引数が literal でない",
+            ),
+        }
+    }
+
+    fn shell(&mut self, args: &[Arg], stdin: &Stdin, depth: usize) {
         let mut j = 0usize;
         let mut has_c = false;
         let mut reads_stdin = false;
@@ -901,7 +1457,16 @@ impl Walker {
                 j += 1;
                 break;
             }
-            if matches!(s, "-o" | "+o" | "-O" | "+O" | "--rcfile" | "--init-file") {
+            if matches!(
+                s,
+                "-o" | "+o" | "-O" | "+O" | "--rcfile" | "--init-file" | "-C" | "--command"
+            ) {
+                if s == "-C" || s == "--command" {
+                    // fish: -C / --command take the code.
+                    has_c = true;
+                    j += 1;
+                    break;
+                }
                 j += 2;
                 continue;
             }
@@ -925,31 +1490,58 @@ impl Walker {
             if let Some(a) = args.get(j) {
                 match &a.lit {
                     Some(body) => self.program(body, depth + 1),
-                    None => self.suspect_args(args, "-c の引数が literal でない"),
+                    None => self.undet(&a.raw, "shell -c の引数が literal でない"),
                 }
             }
             return;
         }
         if !reads_stdin {
             if let Some(a) = args.get(j) {
-                match a.lit.as_deref() {
-                    Some(s) if basename(s) == "rollout-plugins.sh" => self.found(Op::Rollout),
-                    Some(_) => {}
-                    None => self.suspect(&a.raw, "shell の script 引数が literal でない"),
-                }
+                self.script_operand(Some(a));
                 return;
             }
         }
-        if stdin.bodies.is_empty() {
-            if stdin.piped {
-                self.suspect(src, "pipeline から shell に渡る stdin の中身は読めない");
+        // The program comes from stdin.
+        for f in &stdin.files {
+            match f {
+                Some(name) => self.script_operand(Some(&Arg {
+                    raw: name.clone(),
+                    lit: Some(name.clone()),
+                })),
+                None => self.undet("<", "shell の stdin のファイル名が literal でない"),
             }
-            return;
         }
         for b in &stdin.bodies {
             self.program(b, depth + 1);
         }
+        if stdin.bodies.is_empty() && stdin.files.is_empty() && stdin.piped {
+            self.undet("|", "pipeline から shell に渡る stdin の中身は読めない");
+        }
     }
+}
+
+/// The file name of a path word whose *last component* is literal even
+/// though an earlier part expands (`"$HOME/.cargo/env"` -> `env`). `None`
+/// when the last component itself may expand (`scripts/roll*`, `$f`).
+fn literal_tail(raw: &str) -> Option<String> {
+    let (_, tail) = raw.rsplit_once('/')?;
+    let tail: String = tail.chars().filter(|c| !matches!(c, '"' | '\'')).collect();
+    let expands = tail.is_empty()
+        || tail.contains(['$', '`', '\\', '*', '?', '[', ']', '{', '}', '(', ')', '~']);
+    if expands {
+        None
+    } else {
+        Some(tail)
+    }
+}
+
+/// All args joined with spaces, when every one is a literal.
+fn literal_all(args: &[Arg]) -> Option<String> {
+    let mut parts = Vec::with_capacity(args.len());
+    for a in args {
+        parts.push(a.lit.clone()?);
+    }
+    Some(parts.join(" "))
 }
 
 /// Skip `-x` options (those in `with_arg` consume the next word) and a
@@ -1022,6 +1614,7 @@ mod tests {
             "eval git push",
             "cat <(git push)",
             "env -S 'git push'",
+            "find . -exec git push \\;",
         ] {
             assert_eq!(run(c), Outcome::Found(Op::Push), "{c}");
         }
@@ -1036,57 +1629,23 @@ mod tests {
             "git log --grep push",
             "git status",
             "# git push",
+            "cargo test -p x",
+            "grep -rn push .",
         ] {
             assert_eq!(run(c), Outcome::Clean, "{c}");
         }
     }
 
     #[test]
-    fn rollout_forms() {
+    fn undetermined_regardless_of_text() {
         for c in [
-            "scripts/rollout-plugins.sh",
-            "bash scripts/rollout-plugins.sh",
-            ". scripts/rollout-plugins.sh",
+            "$G status",
+            "git $x",
+            "eval \"$c\"",
+            "git p",
+            "setsid git status",
         ] {
-            assert_eq!(run(c), Outcome::Found(Op::Rollout), "{c}");
+            assert!(matches!(run(c), Outcome::Undetermined(_)), "{c}");
         }
-    }
-
-    #[test]
-    fn nonliteral_name_with_push_is_undetermined() {
-        assert!(matches!(run("$G push"), Outcome::Undetermined(_)));
-        assert!(matches!(
-            run("bash -c \"$X\" push"),
-            Outcome::Undetermined(_)
-        ));
-        assert!(matches!(run("echo push | bash"), Outcome::Undetermined(_)));
-        assert_eq!(run("$G status"), Outcome::Clean);
-    }
-
-    #[test]
-    fn merge_with_unreadable_head_is_undetermined() {
-        assert!(matches!(run("git merge x"), Outcome::Undetermined(_)));
-        assert!(matches!(
-            run("cd /x && git merge y"),
-            Outcome::Undetermined(_)
-        ));
-        assert_eq!(run("gh pr merge 3"), Outcome::Found(Op::Merge));
-        assert_eq!(
-            run("condukt worktree merge --run r"),
-            Outcome::Found(Op::Merge)
-        );
-    }
-
-    #[test]
-    fn depth_cap() {
-        let mut c = "git push".to_string();
-        for _ in 0..12 {
-            c = format!("eval {}", shell_quote(&c));
-        }
-        assert!(matches!(run(&c), Outcome::Undetermined(_)));
-    }
-
-    fn shell_quote(s: &str) -> String {
-        format!("'{}'", s.replace('\'', "'\\''"))
     }
 }

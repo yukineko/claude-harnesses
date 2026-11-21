@@ -1697,6 +1697,8 @@ DOES NOT PROVE: RED・timeout・spawn error の挙動、出力をどの形式・
 created_at = 1795291486
 updated_at = 1795291486
 weight = 0.0
+issue_number = 1980
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1980"
 rev = 0
 
 [task.repro]

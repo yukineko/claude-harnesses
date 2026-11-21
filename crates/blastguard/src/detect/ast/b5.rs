@@ -34,11 +34,11 @@
 //!   commands are all `echo` / `printf` literal producers (user ruling
 //!   2026-11-18 (a)); a BARE `env CMD` / `command CMD` (no option, no
 //!   `NAME=V`) is read as `CMD`, so `env echo "ls" | sh` is the program `ls`
-//!   too, but only when the top-level line resolves the wrapper as written
-//!   ([`bare_wrappers_resolve_as_written`]: no function named `env` /
-//!   `command` / `echo` / `printf`, no `PATH` set anywhere on the line,
-//!   bodies included through [`Probes::wrappers_bare`]). A shell body is
-//!   analysed by this layer recursively;
+//!   too, but only when the whole top-level line is that one pipeline
+//!   ([`bare_wrapper_pipeline`]: no other statement, separator, background
+//!   `&`, compound command or substitution, and not inside a body). Any other
+//!   line keeps the producer Undetermined. A shell body is analysed by this
+//!   layer recursively;
 //!   a python / perl / ruby / node body gives no B.5 opinion (the legacy
 //!   program-text reading judges it). Except a literal stdin piped in by a
 //!   compound stage — a brace group of `echo` / `printf` members, wherever
@@ -140,8 +140,8 @@
 use std::cell::Cell;
 
 use super::{
-    analyze, analyze_with_function_definitions, program_source, Analysis, Context, ProgramSource,
-    RedirOp, RedirTarget, SimpleCommand, StdinSource, Value, Word,
+    analyze, program_source, Analysis, Context, ProgramSource, RedirOp, RedirTarget, SimpleCommand,
+    StdinSource, Value, Word,
 };
 use crate::detect::VerdictAcc;
 use crate::model::Decision;
@@ -185,30 +185,52 @@ pub(crate) struct Probes<'a> {
     /// The session's location model: the hook's cwd and the path resolver
     /// the tracked-and-unmodified probe ([`git_tracked_clean`]) needs.
     pub scope: &'a crate::scope::SafeRoots,
-    /// [`bare_wrappers_resolve_as_written`] of the TOP-LEVEL line this layer
-    /// judges. Carried into every `-c` / stdin body so an outer `export PATH=…`
-    /// or a shadowing function reaches a body's producer too. `false` (the
-    /// restrictive reading) unless the caller computed it.
+    /// Whether the caller judges the user's top-level line AND that line is one
+    /// bare-wrapper pipeline ([`bare_wrapper_pipeline`]); see
+    /// `readings::bare_wrappers_as_written`. Read only at depth 0 (the line
+    /// itself, not a `-c` / stdin body). `false` unless the caller computed it.
     pub wrappers_bare: bool,
 }
 
-/// Whether a bare exec wrapper in front of a literal producer may be read as
-/// the producer it runs (see [`producer_output`]), judged on the line's AST
-/// with function definitions evaluated. `false` when the line does not
-/// evaluate (no answer, so the restrictive reading); when a function named
-/// `env`, `command`, `echo` or `printf` is defined (the wrapper, or the
-/// command it runs, is not the one the text names); or when any command on the
-/// line sets `PATH` (a prefix or assignment-only `PATH=…`, or an `export` /
-/// `declare` / `env` operand), since `env` resolves its command through `PATH`.
-pub(in crate::detect) fn bare_wrappers_resolve_as_written(text: &str) -> bool {
-    let Analysis::Known(script) = analyze_with_function_definitions(text) else {
+/// Whether `text` is exactly one pipeline and nothing else, judged on its AST
+/// (`analyze`): every command is a stage of one pipeline, in order
+/// (`Context::Pipeline { pos, len }`), the stages are joined by `|` alone, and
+/// the pipeline spans the whole text. A leading or trailing statement, a
+/// separator (`;`, `&&`, `||`, newline), a background `&`, a compound command
+/// or a substitution puts a command outside the stages, so it is `false`. Also
+/// `false` when the text does not evaluate (no answer, so the restrictive
+/// reading). Only a top-level line is read through this (see [`Probes`]).
+pub(in crate::detect) fn bare_wrapper_pipeline(text: &str) -> bool {
+    let Analysis::Known(script) = analyze(text) else {
         return false;
     };
-    let shadowed = script
-        .function_names
-        .iter()
-        .any(|n| matches!(n.as_str(), "env" | "command" | "echo" | "printf"));
-    !shadowed && !sets_var_where(&script.commands, |n, _| n == "PATH")
+    let stages = &script.commands;
+    let Some(first) = stages.first() else {
+        return false;
+    };
+    let Context::Pipeline { len, .. } = first.context else {
+        return false;
+    };
+    if len < 2 || stages.len() != len {
+        return false;
+    }
+    let lead = text.len() - text.trim_start().len();
+    if stages[0].span.start != lead {
+        return false;
+    }
+    let mut prev_end = None;
+    for (pos, c) in stages.iter().enumerate() {
+        if c.context != (Context::Pipeline { pos, len }) {
+            return false;
+        }
+        if let Some(end) = prev_end {
+            if text.get(end..c.span.start).map(str::trim) != Some("|") {
+                return false;
+            }
+        }
+        prev_end = Some(c.span.end);
+    }
+    prev_end == Some(lead + text.trim().len())
 }
 
 /// `max(B.5, legacy)` (`Deny > Ask > Allow`). A legacy Deny is returned
@@ -725,8 +747,10 @@ fn classify(
     // A program delivered as literal text by a process substitution or a
     // pipe (user ruling 2026-11-18 (a)) is read like a literal stdin body.
     // A bare wrapper reads as its producer only when the top-level line and
-    // this text resolve it as written (see `bare_wrappers_resolve_as_written`).
-    let wrappers_ok = judge.wrappers_bare && bare_wrappers_resolve_as_written(text);
+    // the top-level line is one bare-wrapper pipeline (`Probes::wrappers_bare`,
+    // set by the caller from `readings::bare_wrappers_as_written`), and this is
+    // that line, not a body (depth 0).
+    let wrappers_ok = judge.wrappers_bare && depth == 0;
     if let Some(body) = literal_delivered_program(text, commands, idx, cmd, &source, k, wrappers_ok)
     {
         return literal_body(fam, &body, depth, judge);
@@ -959,8 +983,8 @@ fn privileged_literal_body(
 /// format without `%` (`\n` the only escape), or `printf '%s' X` /
 /// `printf '%s\n' X` with a backslash-free `X`. A BARE `env` or `command`
 /// in front of one of those (see [`bare_wrapped_command`]) produces the same
-/// text when `wrappers_ok` (the line resolves the wrapper as written, see
-/// [`bare_wrappers_resolve_as_written`]): `env echo "ls"` and
+/// text when `wrappers_ok` (the top-level line is one bare-wrapper pipeline,
+/// see [`bare_wrapper_pipeline`]): `env echo "ls"` and
 /// `command printf "ls"` print what `echo "ls"` and `printf "ls"` print.
 /// `None` for anything else, or with a redirect or an assignment.
 fn producer_output(c: &SimpleCommand, wrappers_ok: bool) -> Option<String> {
@@ -979,8 +1003,8 @@ fn producer_output(c: &SimpleCommand, wrappers_ok: bool) -> Option<String> {
 /// word after `command` is not an option (`-p`, `-v`, `-V`). For any other
 /// argv the argv itself is returned. `None` when a wrapper has no word after
 /// it or is not bare, so the caller stays Undetermined, and always when
-/// `allowed` is false (the line does not resolve the wrapper as written, see
-/// [`bare_wrappers_resolve_as_written`]). A wrapper is not unwrapped twice:
+/// `allowed` is false (the top-level line is not one bare-wrapper pipeline,
+/// see [`bare_wrapper_pipeline`]). A wrapper is not unwrapped twice:
 /// `env command echo` is not a producer.
 fn bare_wrapped_command<'a, 'b>(argv: &'b [&'a str], allowed: bool) -> Option<&'b [&'a str]> {
     match argv.split_first() {

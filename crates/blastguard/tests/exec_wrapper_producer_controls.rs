@@ -188,3 +188,39 @@ fn env_double_dash_echo_into_sh_not_allow() {
 fn env_echo_unquoted_var_into_sh_not_allow() {
     assert_deny_or_ask("env_echo_var", r#"env echo $X | sh"#);
 }
+
+// Round-2 probes (integrator): PATH or the wrapper's lookup changed by
+// something other than an assignment word.
+#[test]
+fn read_path_then_env_echo_into_sh_not_allow() {
+    assert_deny_or_ask(
+        "read_path",
+        r#"read PATH <<< /tmp/evil; env echo "ls" | sh"#,
+    );
+}
+
+#[test]
+fn for_path_then_env_echo_into_sh_not_allow() {
+    assert_deny_or_ask(
+        "for_path",
+        r#"for PATH in /tmp/evil; do env echo "ls" | sh; done"#,
+    );
+}
+
+#[test]
+fn hash_p_then_env_echo_into_sh_not_allow() {
+    assert_deny_or_ask("hash_p", r#"hash -p /tmp/evil/x env; env echo "ls" | sh"#);
+}
+
+#[test]
+fn printf_v_path_then_env_echo_into_sh_not_allow() {
+    assert_deny_or_ask(
+        "printf_v_path",
+        r#"printf -v PATH /tmp/evil; env echo "ls" | sh"#,
+    );
+}
+
+#[test]
+fn source_then_env_echo_into_sh_not_allow() {
+    assert_deny_or_ask("source_x", r#"source ./x; env echo "ls" | sh"#);
+}

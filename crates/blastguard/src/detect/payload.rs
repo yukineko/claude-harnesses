@@ -659,7 +659,7 @@ the command line, so blastguard cannot read the program",
                     &shape,
                     &statement[i - 1],
                     cmd,
-                    feeder.is_none(),
+                    feeder.is_none() && depth == 0,
                 )) {
                     return deny;
                 }

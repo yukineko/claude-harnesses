@@ -1732,6 +1732,8 @@ DOES NOT PROVE: 本文のどの部分が引き金か (最小化していない)�
 created_at = 1795291614
 updated_at = 1795291614
 weight = 0.0
+issue_number = 1981
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1981"
 rev = 0
 
 [task.repro]

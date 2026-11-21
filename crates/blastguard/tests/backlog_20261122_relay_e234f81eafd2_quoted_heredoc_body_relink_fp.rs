@@ -19,8 +19,12 @@
 //! landing file).
 //!
 //! The fixture `support/relay_bgr_e234f81eafd2_20261122_exact.txt` is the exact
-//! relayed command; the only rewrites are the task-worktree path and the
-//! scratchpad directory -> this test's cwd.
+//! relayed command; the RED replays its first part verbatim (`cd <wt> && cat >
+//! <scratchpad>/new_body.rs <<'EOF' ... EOF`, the part the reason quotes); the
+//! only rewrites are the task-worktree path and the scratchpad directory ->
+//! this test's cwd. The trailing python3/grep lines are NOT replayed: with
+//! them, even a plain body Asks ("the Python program has effects and the
+//! directory it runs in is not determined"), a separate question.
 //!
 //! Readings: (a) FP -- quoted .rs heredoc data and a Python string are judged as
 //! shell; (b) intended -- relink.rs deliberately treats any segment holding a
@@ -112,26 +116,36 @@ fn unallowed(cmd: &str, tag: &str) -> Vec<String> {
     bad
 }
 
+/// The relayed command up to and including the cat heredoc's closing `EOF`
+/// (the part the relayed reason quotes); the python3 / grep lines that follow
+/// are dropped because `cd X && cat ...` followed by a python3 line Asks for
+/// an unrelated reason ("the directory it runs in is not determined",
+/// observed 2026-11-22 on the full-shape control at e84c666da).
+fn cat_part() -> &'static str {
+    let end = EXACT
+        .find("\nEOF\npython3 - <<'EOF'")
+        .expect("fixture: cat heredoc terminator present");
+    &EXACT[..end + "\nEOF".len()]
+}
+
 #[test]
 #[ignore = "RED: verbatim relay bgr-e234f81eafd2 quoted .rs heredoc body text judged as an unmodelled relink redirect"]
-fn relay_e234f81eafd2_exact_command_is_allow() {
+fn relay_e234f81eafd2_exact_cat_heredoc_is_allow() {
     assert!(
         EXACT.contains(ORIG_WT) && EXACT.contains(ORIG_SCRATCH),
         "fixture: paths present"
     );
-    let bad = unallowed(EXACT.trim_end_matches('\n'), "exact");
+    let bad = unallowed(cat_part(), "exact");
     assert!(
         bad.is_empty(),
-        "expected Allow for the verbatim relayed command:\n{}",
+        "expected Allow for the verbatim relayed cat heredoc:\n{}",
         bad.join("\n")
     );
 }
 
 #[test]
-fn control_same_shape_with_plain_body_is_allow() {
-    let cmd = format!(
-        "cd {ORIG_WT} && cat > {ORIG_SCRATCH}/new_body.rs <<'EOF'\nfn x() {{}}\nEOF\npython3 - <<'EOF'\np='{ORIG_WT}/crates/backlog/src/evidence.rs'\ns=open(p).read()\nnew=open('{ORIG_SCRATCH}/new_body.rs').read()\ns=s+new\nopen(p,'w').write(s)\nEOF\ngrep -n \"fn fixed_task_ids\" -B3 crates/backlog/src/evidence.rs"
-    );
+fn control_same_cat_heredoc_with_plain_body_is_allow() {
+    let cmd = format!("cd {ORIG_WT} && cat > {ORIG_SCRATCH}/new_body.rs <<'EOF'\nfn x() {{}}\nEOF");
     let bad = unallowed(&cmd, "ctl");
     assert!(
         bad.is_empty(),

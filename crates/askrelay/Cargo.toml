@@ -1,6 +1,6 @@
 [package]
 name = "askrelay"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 rust-version.workspace = true
 description = "Subagent Ask relay: a gate's Ask that was hardened to Deny inside a subagent is queued, and a main-session Stop hook blocks until the main session has re-run it under its own permission prompt and relayed the result (or dismissed it with a reason)."

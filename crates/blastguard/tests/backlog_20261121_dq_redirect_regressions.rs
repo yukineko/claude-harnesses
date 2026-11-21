@@ -83,13 +83,11 @@ fn assert_no_redirect_reason(cmd: &str, tag: &str) {
 }
 
 #[test]
-#[ignore = "RED(bfbb50ac): > after backslash-quote inside double quotes read as redirect"]
 fn echo_gt_after_escaped_quote_is_one_word() {
     assert_no_redirect_reason(r#"echo "x \\\" y > z""#, "echo");
 }
 
 #[test]
-#[ignore = "RED(bfbb50ac): > after backslash-quote inside double quotes read as redirect"]
 fn cd_then_backlog_title_gt_after_escaped_quote() {
     assert_no_redirect_reason(
         r#"cd crates/x && backlog add --title "after \\\" refused > FP" --scope "crates/blastguard""#,
@@ -98,7 +96,6 @@ fn cd_then_backlog_title_gt_after_escaped_quote() {
 }
 
 #[test]
-#[ignore = "RED(bfbb50ac): >& after backslash-quote inside double quotes read as redirect"]
 fn cd_then_echo_gt_amp_after_escaped_quote() {
     assert_no_redirect_reason(r#"cd crates/x && echo "x \\\" y >& z""#, "cdgtamp");
 }

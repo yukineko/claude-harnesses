@@ -23,9 +23,16 @@
 //! redirect with an expansion target is still not allow.
 //!
 //! Measured 2026-11-21 on 0.2.858: the heredoc append alone (body = the path
-//! line) is allow; adding EITHER a `cd "$PWD" &&` prefix OR a trailing
+//! line) is allow; adding EITHER a `cd` prefix OR a trailing
 //! `git add && git commit` line makes it Deny, so the body text is judged as
 //! shell once a second command exists in the line.
+//!
+//! RE-ANCHORED 2026-11-22 (user ruling, frozen-assert re-anchor): the cd prefix
+//! in the two cd tests was `cd "$PWD"`. The reported shape is
+//! `cd <worktree> && cat >> docs/specs/blastguard.md <<'EOF' ...` with a LITERAL
+//! path, so the prefix is now `cd <absolute literal wt dir> && `, built at run
+//! time. `$PWD` remains statically undetermined (a relative redirect after it
+//! is Ask) and the rule is NOT loosened.
 //!
 //! Asserted: the original shape, cd-prefix + append, and append + trailing git
 //! commit are all "allow" in main. Control: a real
@@ -95,8 +102,9 @@ fn run_main(command: &str, home: &Home) -> (String, String) {
 }
 
 /// Original shape: cd && cat >> md <<'EOF' with the backticked driver path, then
-/// git add && git commit.
-const ORIGINAL: &str = "cd \"$PWD\" && cat >> docs/specs/blastguard.md <<'EOF'\n\
+/// git add && git commit. The command is prefixed at run time with
+/// `cd <literal wt dir> && ` (see `with_literal_cd`).
+const ORIGINAL: &str = "cat >> docs/specs/blastguard.md <<'EOF'\n\
 ## Driver file\n\
 \n\
 The marker lives at `~/.backlog/drivers/<fnv1a64(canonical main tree) %016x>/<fnv1a64(session_id) %016x>.driver` per session.\n\
@@ -105,32 +113,42 @@ git add docs/specs/blastguard.md && git commit -qm \"specs: driver file\"";
 
 /// cd prefix + quoted-heredoc append, body = the path line only (no git).
 /// and is preceded by an angle bracket + space.
-const MINIMAL: &str = "cd \"$PWD\" && cat >> docs/specs/blastguard.md <<'EOF'\n`~/.backlog/drivers/<fnv1a64(canonical main tree) %016x>/<fnv1a64(session_id) %016x>.driver`\nEOF";
+const MINIMAL: &str = "cat >> docs/specs/blastguard.md <<'EOF'\n`~/.backlog/drivers/<fnv1a64(canonical main tree) %016x>/<fnv1a64(session_id) %016x>.driver`\nEOF";
 
 /// No cd prefix, but a trailing git add/commit line after the heredoc.
 const MINIMAL_GT: &str = "cat >> docs/specs/blastguard.md <<'EOF'\n`~/.backlog/drivers/<fnv1a64(canonical main tree) %016x>/<fnv1a64(session_id) %016x>.driver`\nEOF\ngit add docs/specs/blastguard.md && git commit -qm \"specs: driver\"";
 
+/// Prefix `body` with `cd <absolute literal path of the test's own wt dir> && `.
+/// The path is literal text in the command (the reported shape), never `$PWD`.
+fn with_literal_cd(body: &str, home: &Home) -> String {
+    format!("cd {} && {}", home.0.join("wt").display(), body)
+}
+
 #[test]
-#[ignore = "RED(1f705907): 2026-11-21 quoted-heredoc body text with `> .driver`` is judged as a truncating redirect with expansion target (blocked) — remove when fixed"]
 fn original_shape_is_allowed() {
     let home = unique_home("orig");
-    let (d, r) = run_main(ORIGINAL, &home);
+    let (d, r) = run_main(&with_literal_cd(ORIGINAL, &home), &home);
     assert_eq!(d, "allow", "original shape must be allow; reason={r}");
 }
 
 #[test]
-#[ignore = "RED(1f705907): 2026-11-21 quoted-heredoc body text with `> .driver`` is judged as a truncating redirect with expansion target (blocked) — remove when fixed"]
 fn cd_prefix_then_heredoc_append_is_allowed() {
     let home = unique_home("min");
-    let (d, r) = run_main(MINIMAL, &home);
-    assert_eq!(d, "allow", "cd-prefix + heredoc append must be allow; reason={r}");
+    let (d, r) = run_main(&with_literal_cd(MINIMAL, &home), &home);
+    assert_eq!(
+        d, "allow",
+        "cd-prefix + heredoc append must be allow; reason={r}"
+    );
 }
 
 #[test]
 fn heredoc_append_then_git_commit_is_allowed() {
     let home = unique_home("mingt");
     let (d, r) = run_main(MINIMAL_GT, &home);
-    assert_eq!(d, "allow", "heredoc append + trailing git commit must be allow; reason={r}");
+    assert_eq!(
+        d, "allow",
+        "heredoc append + trailing git commit must be allow; reason={r}"
+    );
 }
 
 /// Control: a real truncating redirect whose target has an expansion is still
@@ -139,5 +157,8 @@ fn heredoc_append_then_git_commit_is_allowed() {
 fn control_real_truncation_with_expansion_target_is_not_allow() {
     let home = unique_home("ctl");
     let (d, r) = run_main("echo x > \"$d/.driver\"", &home);
-    assert_ne!(d, "allow", "real truncation w/ expansion must not be allow; reason={r}");
+    assert_ne!(
+        d, "allow",
+        "real truncation w/ expansion must not be allow; reason={r}"
+    );
 }

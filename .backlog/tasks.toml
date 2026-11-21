@@ -1122,14 +1122,17 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
-notes = '''Observed 2026-11-20 during run-20261120-171414-35880 (condukt driver, session 62e92d16): cargo test -p blastguard --test heredoc_data_body_verify -> 'test result: FAILED. 5 passed; 1 failed' at both c434e41e5 (pre-run base) and the merged tree 14ba909b0; failing test contract_executing_bodies_and_real_lines_stay_judged, row python3 <<'EOF'\nrm -rf /usr/lib\nEOF -> allow. Not caused by this run (red at base). Tagged fail-open provisionally. Readings: (a) fail-open: a python stdin body naming system-harm text must not be Allow; (b) the row's premise is stale (body is not valid Python, S5 judges it inert) and the assert needs re-anchoring by an independent agent. Tell apart: does a later ruling make python stdin bodies judged by progeffect S5 rather than as shell? Not investigated.'''
+status = "failed"
+notes = '''
+Observed 2026-11-20 during run-20261120-171414-35880 (condukt driver, session 62e92d16): cargo test -p blastguard --test heredoc_data_body_verify -> 'test result: FAILED. 5 passed; 1 failed' at both c434e41e5 (pre-run base) and the merged tree 14ba909b0; failing test contract_executing_bodies_and_real_lines_stay_judged, row python3 <<'EOF'\nrm -rf /usr/lib\nEOF -> allow. Not caused by this run (red at base). Tagged fail-open provisionally. Readings: (a) fail-open: a python stdin body naming system-harm text must not be Allow; (b) the row's premise is stale (body is not valid Python, S5 judges it inert) and the assert needs re-anchoring by an independent agent. Tell apart: does a later ruling make python stdin bodies judged by progeffect S5 rather than as shell? Not investigated.
+needs user ruling (frozen assert, unhedged): row python3 <<'EOF' rm -rf /usr/lib EOF expects not-Allow, but the body is not valid Python (syntax error, nothing executes; S5/progeffect reads python bodies as Python, not shell, per ruling heredoc-body-by-target-language). Options: (a) keep the contract: an unparsable python stdin body is Undetermined -> Ask/Deny; (b) re-anchor the row to an executing Python body (e.g. import os; os.system('rm -rf /usr/lib')) and accept Allow for a syntax-error body. Observed RED at c434e41e5/14ba909b0 (2026-11-20).'''
 created_at = 1795166100
-updated_at = 1795166100
+updated_at = 1795240806
+defer_until = 1795413606
 weight = 0.0
 issue_number = 1926
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1926"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

@@ -324,7 +324,6 @@ fn fixture() -> Fx {
 
 // test-weakening-justified: new RED for an unfixed defect (2026-11-20).
 #[test]
-#[ignore = "backlog RED: testscope refuses regression tests in a condukt task worktree"]
 fn existing_test_of_task_crate_runs_as_regression_check_in_task_worktree() {
     let fx = fixture();
     assert_allow(

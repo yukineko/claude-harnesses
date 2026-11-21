@@ -800,3 +800,227 @@ fn c_control_outside_task_worktree_c_does_not_apply() {
         "--test old_t in the main checkout (not a task worktree)",
     );
 }
+
+// ── C': the 2026-11-20 ruling, in a fixture where "the task's crate" is determinate ──
+//
+// Backlog 6f653d96. User ruling 2026-11-20 (verbatim):
+// 「証明ができないというのであれば、それを証明するためのテストを実施できないのはtestscopeの不具合」
+//
+// The four `c_unrelated_*` / `c_mixed_*` pins above are left as they are: their
+// fixture (`wt_fixture`) has no Cargo manifest, so `-p x` names no package, and
+// its worktree changes only tests/*.rs files, no crate source. Whether `x` is
+// "a crate the task worktree changed" is therefore undetermined there, and the
+// ruling does not say which way that falls (CLAUDE.md §3 would refuse it).
+// Instead each of those four rows is re-anchored here in a workspace fixture
+// where it is determinate, twice: once for the crate the task changed (`x`,
+// allowed by the ruling — RED until 6f653d96 is fixed) and once for a crate the
+// task did not change (`y`, still denied — keeps the original "unrelated test
+// is denied" intent alive; GREEN now).
+//
+// DOES NOT PROVE: how a fix resolves `-p <name>` to a package (manifest read vs
+// cargo metadata); the manifest-less case above; `--lib`/`--bin`/`--doc`; that
+// the same-tree rerun refusal is unaffected (rule 3; not exercised here).
+
+/// Workspace repo on main with crates/x (src/lib.rs, tests/old_t.rs,
+/// tests/repro_t.rs) and crates/y (src/lib.rs, tests/y_t.rs). Run `runK`, task
+/// `t1` touching crates/x/src/lib.rs with reproduction_tests `cargo test -p x
+/// --test repro_t`. The task worktree commits a change to crates/x/src/lib.rs
+/// and leaves crates/x/tests/new_untracked.rs untracked; crates/y is untouched.
+fn crates_fixture() -> WtFx {
+    let env = Env::new();
+    let r = repo_with(&[
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"crates/x\", \"crates/y\"]\n",
+        ),
+        (
+            "crates/x/Cargo.toml",
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        ),
+        ("crates/x/src/lib.rs", "pub fn f() {}\n"),
+        ("crates/x/tests/old_t.rs", "#[test] fn o() {}\n"),
+        ("crates/x/tests/repro_t.rs", "#[test] fn r() {}\n"),
+        (
+            "crates/y/Cargo.toml",
+            "[package]\nname = \"y\"\nversion = \"0.1.0\"\n",
+        ),
+        ("crates/y/src/lib.rs", "pub fn g() {}\n"),
+        ("crates/y/tests/y_t.rs", "#[test] fn y() {}\n"),
+    ]);
+    init_run(
+        &env,
+        r.path(),
+        "runK",
+        &[(
+            "t1",
+            "crates/x/src/lib.rs",
+            "cargo test -p x --test repro_t",
+        )],
+    );
+    let out = condukt(
+        &env,
+        r.path(),
+        Some(SESSION_C),
+        None,
+        &[
+            "worktree", "create", "--run", "runK", "--topic", "t1", "--branch", "b1",
+        ],
+    );
+    assert!(out.status.success(), "fixture: worktree create: {out:?}");
+    let wt = PathBuf::from(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap(),
+    );
+    assert!(wt.is_dir(), "fixture: worktree path {wt:?}");
+    let branch = git(&wt, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    prime_marker(&env, SESSION_C, r.path());
+    let out = condukt(
+        &env,
+        r.path(),
+        Some(SESSION_C),
+        None,
+        &[
+            "state",
+            "set",
+            "--run",
+            "runK",
+            "--task",
+            "t1",
+            "--status",
+            "running",
+            "--worktree",
+            wt.to_str().unwrap(),
+            "--branch",
+            &branch,
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "fixture: state set t1 running: {out:?}"
+    );
+    std::fs::write(
+        wt.join("crates/x/src/lib.rs"),
+        "pub fn f() { let _ = 1; }\n",
+    )
+    .unwrap();
+    git(&wt, &["add", "crates/x/src/lib.rs"]);
+    git(&wt, &["commit", "-q", "-m", "fix x"]);
+    std::fs::write(
+        wt.join("crates/x/tests/new_untracked.rs"),
+        "#[test] fn u() {}\n",
+    )
+    .unwrap();
+    WtFx { env, repo: r, wt }
+}
+
+// Re-anchor of `c_unrelated_existing_test_in_task_worktree_is_denied` (6f653d96,
+// ruling 2026-11-20 quoted above): an existing test of the changed crate runs.
+#[test]
+fn c_existing_test_of_changed_crate_in_task_worktree_is_allowed() {
+    let fx = crates_fixture();
+    assert_allow(
+        &hook(&fx.env, "s", "cargo test -p x --test old_t", &fx.wt),
+        "--test old_t, an existing test of crate x which the task worktree changed",
+    );
+}
+
+// Intent of `c_unrelated_existing_test_in_task_worktree_is_denied`, kept.
+#[test]
+fn c_existing_test_of_untouched_crate_in_task_worktree_is_denied() {
+    let fx = crates_fixture();
+    assert_deny(
+        &hook(&fx.env, "s", "cargo test -p y --test y_t", &fx.wt),
+        "--test y_t of crate y, which the task worktree did not change",
+    );
+}
+
+// Re-anchor of `c_unrelated_test_via_tdd_in_task_worktree_is_denied` (6f653d96,
+// ruling 2026-11-20 quoted above): the tdd --cmd route follows the bare route.
+#[test]
+fn c_existing_test_of_changed_crate_via_tdd_in_task_worktree_is_allowed() {
+    let fx = crates_fixture();
+    assert_allow(
+        &hook(
+            &fx.env,
+            "s",
+            "tdd red --cmd \"cargo test -p x --test old_t\"",
+            &fx.wt,
+        ),
+        "tdd --cmd --test old_t of changed crate x in task worktree",
+    );
+}
+
+// Intent of `c_unrelated_test_via_tdd_in_task_worktree_is_denied`, kept.
+#[test]
+fn c_existing_test_of_untouched_crate_via_tdd_in_task_worktree_is_denied() {
+    let fx = crates_fixture();
+    assert_deny(
+        &hook(
+            &fx.env,
+            "s",
+            "tdd red --cmd \"cargo test -p y --test y_t\"",
+            &fx.wt,
+        ),
+        "tdd --cmd --test y_t of untouched crate y in task worktree",
+    );
+}
+
+// Re-anchor of `c_unrelated_test_from_worktree_subdir_is_denied` (6f653d96,
+// ruling 2026-11-20 quoted above): same answer from a subdir of the worktree.
+#[test]
+fn c_existing_test_of_changed_crate_from_worktree_subdir_is_allowed() {
+    let fx = crates_fixture();
+    let sub = fx.wt.join("crates/x/src");
+    assert_allow(
+        &hook(&fx.env, "s", "cargo test -p x --test old_t", &sub),
+        "--test old_t of changed crate x from a subdir of the task worktree",
+    );
+}
+
+// Intent of `c_unrelated_test_from_worktree_subdir_is_denied`, kept.
+#[test]
+fn c_existing_test_of_untouched_crate_from_worktree_subdir_is_denied() {
+    let fx = crates_fixture();
+    let sub = fx.wt.join("crates/x/src");
+    assert_deny(
+        &hook(&fx.env, "s", "cargo test -p y --test y_t", &sub),
+        "--test y_t of untouched crate y from a subdir of the task worktree",
+    );
+}
+
+// Re-anchor of `c_mixed_allowed_and_unrelated_tests_is_denied` (6f653d96,
+// ruling 2026-11-20 quoted above): a worktree-added test plus an existing test
+// of the same changed crate runs.
+#[test]
+fn c_mixed_added_and_existing_test_of_changed_crate_is_allowed() {
+    let fx = crates_fixture();
+    assert_allow(
+        &hook(
+            &fx.env,
+            "s",
+            "cargo test -p x --test new_untracked --test old_t",
+            &fx.wt,
+        ),
+        "worktree-added --test new_untracked plus existing --test old_t, both of changed crate x",
+    );
+}
+
+// Intent of `c_mixed_allowed_and_unrelated_tests_is_denied`, kept: one allowed
+// selector does not admit a test of an untouched crate in the same command.
+#[test]
+fn c_mixed_allowed_and_untouched_crate_tests_is_denied() {
+    let fx = crates_fixture();
+    assert_deny(
+        &hook(
+            &fx.env,
+            "s",
+            "cargo test -p x --test new_untracked -p y --test y_t",
+            &fx.wt,
+        ),
+        "allowed --test new_untracked of x plus --test y_t of untouched crate y",
+    );
+}

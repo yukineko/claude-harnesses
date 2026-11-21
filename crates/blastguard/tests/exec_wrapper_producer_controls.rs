@@ -224,3 +224,33 @@ fn printf_v_path_then_env_echo_into_sh_not_allow() {
 fn source_then_env_echo_into_sh_not_allow() {
     assert_deny_or_ask("source_x", r#"source ./x; env echo "ls" | sh"#);
 }
+
+// Round-3 negative controls (integrator): shapes the structural rule must
+// not unwrap.
+#[test]
+fn brace_group_env_echo_into_sh_not_allow() {
+    assert_deny_or_ask("brace_env", r#"{ PATH=/tmp/evil; env echo "ls"; } | sh"#);
+}
+
+#[test]
+fn prefix_path_env_echo_into_sh_not_allow() {
+    assert_deny_or_ask("prefix_path_env", r#"PATH=/tmp/evil env echo "ls" | sh"#);
+}
+
+#[test]
+fn bash_c_body_path_then_env_echo_not_allow() {
+    assert_deny_or_ask(
+        "bash_c_body",
+        r#"bash -c 'PATH=/tmp/evil; env echo "ls" | sh'"#,
+    );
+}
+
+#[test]
+fn env_echo_into_sh_into_sh_not_allow() {
+    assert_deny_or_ask("double_sh", r#"env echo "ls" | sh | sh"#);
+}
+
+#[test]
+fn env_echo_pipe_amp_sh_rm_denied() {
+    assert_deny("pipe_amp_rm", r#"env echo "rm -rf /etc" |& sh"#);
+}

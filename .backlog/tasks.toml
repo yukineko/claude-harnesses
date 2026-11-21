@@ -2145,3 +2145,32 @@ exit 101:    Compiling condukt v0.7.465 (/Users/yuki/src/.harness-worktrees/bekk
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.19s
      Running tests/backlog_20261121_testscope_help_flag_fp.rs (target/debug/deps/backlog_20261121_testscope_help_flag_fp-ecc3f8a6004a9d6c)
 error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_help_flag_fp`"""
+
+[[task]]
+id = "32956a19"
+title = "condukt: testscope task scope ignores -p, so cargo test -p <other crate> --test <name> is allowed"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-11-21 on main cc8738957 (predates run run-20261121-114054-75519; relayed by the run's operator agent). Inside a condukt task worktree, testscope rule 4 (crates/condukt/src/testscope.rs) allows a --test <name> when <name> is in the task's reproduction_tests or is the stem of a tests/<name>.rs the worktree changed; neither route looks at -p (Selector::Test holds only the name; worktree_changed_tests keeps only the file stem). So cargo test -p <crate the task did not touch> --test <name> is allowed. Two readings: (a) scope hole: the selected test may belong to a crate other than the one whose tests/<name>.rs changed / that reproduction_tests names; (b) intended: the test name alone identifies the task's test. RED crates/condukt/tests/backlog_20261121_testscope_task_scope_ignores_package.rs separates them: crates a and b both have tests/shared.rs at base, only crates/a/tests/shared.rs changes, so the name does not identify one test ((b)'s premise fails) and cargo test -p b --test shared runs an untouched file; asserts (a) deny on both routes; controls (-p a) allowed and pass. Tagged fail-open rather than false-positive: this is a missed deny."
+created_at = 1795237923
+updated_at = 1795237923
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261121_testscope_task_scope_ignores_package -- --ignored"
+rev = "806ebad3f3efe54a33bbccaa5152cfd4758cf1ae"
+observed_at = 1795237923
+detail = """
+exit 101: src/.harness-worktrees/bekken-75519/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.21s
+     Running tests/backlog_20261121_testscope_task_scope_ignores_package.rs (target/debug/deps/backlog_20261121_testscope_task_scope_ignores_package-daacb59af5149afd)
+error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_task_scope_ignores_package`"""

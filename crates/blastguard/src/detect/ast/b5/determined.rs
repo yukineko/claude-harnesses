@@ -79,8 +79,62 @@ pub(super) fn determined_delivered_program(
         .map(|o| o.text)
 }
 
-/// The Deny of the program a shell runs as `-c W` (`args` = `-c W …`, exactly
-/// the flag `-c` first) when its source is Undetermined only because `W` is
+/// The index in `args` (the words after the shell word) of the `-c` command
+/// string, when the options before it are a shape read with certainty
+/// (backlog c602d32e). Bash reads options up to the first operand, and after
+/// a `-c` the first operand is the command string. Accepted: clusters of the
+/// letters `shell_source` (ast/mod.rs) models, with `c` anywhere in one of them (`-c`,
+/// `-ec`, `-xc`, `-ce`), options before `-c` (`-x -c`), an `-o` / `-O` taking
+/// the next word (only as the last letter of its cluster), and `--` / `-`
+/// ending the options (`-c -- W`). Long options, `+` options, `-s` and any
+/// letter not modelled give `None`, as does a line without `-c`; the caller
+/// then keeps today's verdict.
+fn dash_c_operand(args: &[Word]) -> Option<usize> {
+    let mut c_flag = false;
+    let mut i = 0;
+    while let Some(w) = args.get(i) {
+        // An undetermined word ends the options only after `-c`: it is then
+        // the command string (the caller checks its value does not begin
+        // with `-`). Before `-c` it could be an option, so it keeps `None`.
+        let Ok(v) = literal(w) else {
+            break;
+        };
+        if v == "--" || v == "-" {
+            i += 1;
+            break;
+        }
+        let Some(flags) = v.strip_prefix('-').filter(|f| !f.is_empty()) else {
+            break;
+        };
+        if flags.starts_with('-') {
+            return None;
+        }
+        let mut takes_arg = false;
+        for (k, ch) in flags.char_indices() {
+            match ch {
+                'c' => c_flag = true,
+                'o' | 'O' if k + 1 == flags.len() => takes_arg = true,
+                c if "abefhkmnptuvxBCEHPTilr".contains(c) => {}
+                _ => return None,
+            }
+        }
+        i += 1;
+        if takes_arg {
+            if literal(args.get(i)?).is_err() {
+                return None;
+            }
+            i += 1;
+        }
+    }
+    if !c_flag {
+        return None;
+    }
+    Some(i)
+}
+
+/// The Deny of the program a shell runs as `-c W` (`args` = the options of
+/// [`dash_c_operand`] — `-c`, `-ec`, `-x -c`, `-c -- …` — then `W`) when its
+/// source is Undetermined only because `W` is
 /// a word whose value `determined_output::substituted_word_value` computes
 /// from its `$( )` substitutions (backlog 28019c35): that value is judged by
 /// the full detector as the `-c` program ([`judge_body`], depth-bounded).
@@ -105,16 +159,19 @@ pub(super) fn determined_dash_c_program(
     if fam != Family::Shell || !matches!(source, ProgramSource::Undetermined(_)) {
         return None;
     }
-    let [flag, word, ..] = args else {
-        return None;
-    };
-    if !literal(flag).is_ok_and(|f| f == "-c") || !matches!(word.value, Value::Undetermined(_)) {
+    let word = args.get(dash_c_operand(args)?)?;
+    if !matches!(word.value, Value::Undetermined(_)) {
         return None;
     }
     if !crate::detect::readings::chain_names_fixed() || !resolution_fixed(text) {
         return None;
     }
     let program = substituted_word_value(&word.raw)?;
+    // Bash reads a command string that begins with `-` as an option (`--`
+    // ends them): such a value is not the program, so it is not judged here.
+    if program.starts_with('-') {
+        return None;
+    }
     let verdict = judge_body(&program, Runner::Shell(base), judge);
     verdict.is_deny().then_some(verdict)
 }

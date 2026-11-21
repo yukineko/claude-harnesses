@@ -69,17 +69,19 @@ fn expect_not_allow(cmd: &str, tag: &str) {
             bad.push(format!("subagent={subagent} => {d}"));
         }
     }
-    assert!(bad.is_empty(), "expected not Allow for {cmd:?}:\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "expected not Allow for {cmd:?}:\n{}",
+        bad.join("\n")
+    );
 }
 
 #[test]
-#[ignore = "RED(1f037eb5): rg --pre with a protected operand is Allow"]
 fn rg_pre_space_form_protected_operand_is_not_allow() {
     expect_not_allow("rg --pre sh pat .githooks/pre-commit", "space");
 }
 
 #[test]
-#[ignore = "RED(1f037eb5): rg --pre with a protected operand is Allow"]
 fn rg_pre_equals_form_protected_operand_is_not_allow() {
     expect_not_allow("rg --pre=sh pat .githooks/pre-commit", "eq");
 }

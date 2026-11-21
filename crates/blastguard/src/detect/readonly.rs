@@ -116,6 +116,22 @@ fn is_read_only_command(cmd: &str) -> bool {
     READ_ONLY_COMMANDS.contains(&cmd)
 }
 
+/// `rg --pre CMD` / `rg --pre=CMD` runs `CMD FILE` for every searched file, so
+/// an `rg` carrying it is NOT data-only even though plain `rg` is read-only
+/// (1f037eb5). Matched on the exact flag token (`--pre-glob` only selects which
+/// files get preprocessed and executes nothing). Any `--pre` token counts,
+/// including one after `--`: over-asking is the restrictive side. The value of
+/// `--pre-glob` is deliberately NOT skipped as a flag value below: that skip
+/// applied to every head and let `gzip -- --pre-glob <protected>` through;
+/// leaving it an operand only over-asks for `rg` (the restrictive side).
+fn has_exec_flag(cmd: &str, rest: &[&str]) -> bool {
+    cmd == "rg"
+        && rest.iter().any(|t| {
+            let w = first_shell_word(t).unwrap_or_else(|| (*t).to_string());
+            w == "--pre" || w.starts_with("--pre=")
+        })
+}
+
 /// True when `cmd` is a read-only command whose words after the head are DATA
 /// (a pattern, paths, text), never a command line the program runs. The
 /// unknown-head tail rule (`unknown_wrapper_ask`) must not re-read them: with
@@ -182,7 +198,7 @@ pub(super) fn argv_is_data_only(cmd: &str) -> bool {
 /// asks here (the program could be anything, including a writer), worded as
 /// that refusal so the two classes stay separable in `rule_id`.
 pub(super) fn unknown_verb_protected_ask(cmd: &str, rest: &[&str]) -> Decision {
-    if is_read_only_command(cmd)
+    if (is_read_only_command(cmd) && !has_exec_flag(cmd, rest))
         || is_shell(cmd)
         || is_code_interpreter(cmd)
         || matches!(cmd, "eval" | "exec" | "source" | ".")

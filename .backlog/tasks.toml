@@ -1024,40 +1024,6 @@ exit 101: 16s
 error: test failed, to rerun pass `-p blastguard --test redirect_target_suffix_resolution`"""
 
 [[task]]
-id = "aeceaf2c"
-title = "blastguard test RED: worktree_protected_paths undetermined_operands_are_not_asserted_allow fails"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "test-red",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "worktree_protected_paths.rs:685 panics; also fails on 5d0983532 (verifier a4f620fb). Observed 2026-11-20 on main a0ba7bad0 (detached worktree verify-main-q3q4), found while integrating Q3/Q4 deny-target table (7275b9d9); same failure on the integration tree. Readings: (a) real regression on main; (b) stale assert vs a later ruling or the S5 AST evaluator; distinguish by git log -S on the asserted case."
-created_at = 1795110614
-updated_at = 1795110614
-weight = 0.0
-issue_number = 1920
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1920"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test worktree_protected_paths undetermined_operands_are_not_asserted_allow"
-rev = "4c286f7b61e70f4a56ccb658a200c3c4085bdf1a"
-observed_at = 1795110614
-detail = """
-exit 101: iltered out; finished in 0.86s
-
-   Compiling blastguard v0.2.761 (/Users/yuki/src/.harness-worktrees/session-179495ba/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.56s
-     Running tests/worktree_protected_paths.rs (target/debug/deps/worktree_protected_paths-a0f12cfdce3529ca)
-error: test failed, to rerun pass `-p blastguard --test worktree_protected_paths`"""
-
-[[task]]
 id = "266b5ded"
 title = "blastguard: three python -c hostile-boundary tests in scope_redirect_relaxation_boundaries_20261108 get Allow on macOS at main (fail-open)"
 project = "/Users/yuki/src/harness"
@@ -1156,37 +1122,6 @@ test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 39 filtered out;
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
      Running tests/egress_exec_closure.rs (target/debug/deps/egress_exec_closure-ed08ca99f388ce70)
 error: test failed, to rerun pass `-p blastguard --test egress_exec_closure`"""
-
-[[task]]
-id = "e0288820"
-title = "blastguard fail-open: Ask-class program (git push --force) fed to bash by an echo/printf feeder is Allow"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-20 by an independent test author in run-20261120-071122-49691 task a-brace-group-feeder-piped-to-shell; pre-existing at 5cfe8e73e. 'git push --force' alone is Ask, but "echo 'git push --force' | bash" is allow () in main and subagent mode, before and after the 7eb86bb3 fix. The fix extends the same reading to "{ echo 'git push --force'; } | bash" and "{ printf 'git push '; echo --force; } | bash" (Allow at 0b906f524; not Allow at 5cfe8e73e). Readings: (a) fail-open — the stdin program should get the same verdict as the same text on the command line; (b) intended if the stdin-program judge only lifts Deny-class. Tell apart: compare against inline_eval mirror rules / the user ruling on stdin programs (S4)."""
-created_at = 1795127895
-updated_at = 1795127895
-weight = 0.0
-issue_number = 1879
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1879"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test brace_group_feeder_adversarial_20261120 -- --ignored finding3_preexisting_ask_class_program_through_feeder_is_not_allow"
-rev = "9ab9d7a5e9ba9787b4ac2bfddd3352edb480e922"
-observed_at = 1795127895
-detail = """
-exit 101: /worktrees/run-20261120-071122-49691-a-brace-group-feeder-piped-to-shell/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.68s
-     Running tests/brace_group_feeder_adversarial_20261120.rs (target/debug/deps/brace_group_feeder_adversarial_20261120-32fc257fff118929)
-error: test failed, to rerun pass `-p blastguard --test brace_group_feeder_adversarial_20261120`"""
 
 [[task]]
 id = "7d85ed1e"

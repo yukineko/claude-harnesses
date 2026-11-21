@@ -19,11 +19,24 @@
 //! segment that holds a substitution or an escape-capable word, an escape's
 //! body cannot be determined (`bash -c "$X"`, an undetermined command word, a
 //! vim ex command that is neither a plain `:!` escape nor a known inert
-//! command, a wrapper that may run an interpreter), or the depth cap is hit,
-//! the segment
+//! command, a wrapper or `eval` that may run an interpreter), or the depth
+//! cap is hit, the segment
 //! is reported [`Nested::undetermined`]; the caller treats it as an
 //! unmodelled relinker (an `Ask`), never as relinking nothing.
+//!
+//! A command word is undetermined only when the line's evaluator proved no
+//! value for it: the segment is parsed alone, so `P=/x/p.sh; …; $P a` reads
+//! `$P` through the top-level index ([`targets::resolve`]) and judges each
+//! proven value as if it were spelled (a direct exec of `p.sh` runs no
+//! escape on this line; `B=bash && $B -c '…'` reads the body). The one
+//! `.` read as running no line text is the user-ruled rustup setup
+//! `. "$HOME/.cargo/env"` (r21, [`is_rustup_env`]); every other `.` /
+//! `source` stays undetermined.
+//! Regression 625d16af8: both were read as undetermined, so
+//! `. "$HOME/.cargo/env" && sed -i … f` and a `$P` exec in a loop became
+//! relink Asks.
 
+use super::super::ast::targets::{self, Role};
 use super::super::ast::{self, Analysis, CwdCandidates, ProgramSource, SimpleCommand, Value};
 use super::super::{normalized_command, CwdState};
 use super::{is_relink_word, plain_words};
@@ -132,11 +145,11 @@ pub(super) fn collect(command: &str, cwd: &CwdState, with_escapes: bool) -> Nest
                 reduced: reduced(c, false),
                 cwd: cwd_of(c, cwd),
             });
-            escapes(c, cwd, 0, &mut out);
+            escapes(c, cwd, 0, Place::Substitution, &mut out);
         } else {
             top.push(c);
             if with_escapes {
-                escapes(c, cwd, 0, &mut out);
+                escapes(c, cwd, 0, Place::Top, &mut out);
             }
         }
     }
@@ -378,12 +391,49 @@ fn ex_known_inert(s: &str) -> bool {
         || (with_arg.contains(&word) && !rest.contains(['=', '&', '$']))
 }
 
-/// Add the commands of `c`'s escape body (run in `seg`'s cwd at `depth`).
-fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, out: &mut Nested) {
+/// The values the line-level AST evaluator proved for the undetermined
+/// command word of `c` (`P=/x/p.sh; …; $P a`): `targets::resolve` reads the
+/// top-level text's index, where the segment's own isolated parse cannot see
+/// the assignment. Only for a command of the top-level text (`depth` 0): a
+/// body's words are a different program whose variables the index does not
+/// describe. `None` when nothing is proven (the word stays undetermined).
+fn proven_heads(c: &SimpleCommand, depth: usize) -> Option<Vec<String>> {
+    if depth != 0 {
+        return None;
+    }
+    let head = c.argv.first()?;
+    let values = targets::resolve(&head.raw, Role::Argv)?;
+    (!values.is_empty()).then_some(values)
+}
+
+/// Where the command [`escapes`] reads stands.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// The segment's own (outermost) simple command.
+    Top,
+    /// A command of a `$( )` / backquote / `<( )` in the segment.
+    Substitution,
+    /// A command of an escape body (`bash -c '…'`).
+    Body,
+}
+
+/// Add the commands of `c`'s escape body (run in `seg`'s cwd at `depth`;
+/// `c` stands at `place`).
+fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, place: Place, out: &mut Nested) {
     let base = match literal_head(c) {
         Ok(b) => b,
-        // `$X -c 'ln …'` may be an escape whose body cannot be read.
         Err(HeadUndetermined) => {
+            // A command word the line's evaluator proved is read as each
+            // of its values, exactly as if it were spelled literally.
+            if let Some(values) = proven_heads(c, depth) {
+                for v in values {
+                    let mut lit = c.clone();
+                    lit.argv[0].value = Value::Literal(v);
+                    escapes(&lit, seg, depth, place, out);
+                }
+                return;
+            }
+            // `$X -c 'ln …'` may be an escape whose body cannot be read.
             out.undetermined = true;
             return;
         }
@@ -411,9 +461,48 @@ fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, out: &mut Nested) {
         }
         return;
     }
-    // A wrapper that may run an interpreter (`sudo bash -c …`).
+    // The rustup PATH setup `. "$HOME/.cargo/env"` (user ruling r21,
+    // 2026-11-18) runs that file's text, which is not on the line: nothing
+    // to read, like `bash x.sh` above. Only as the segment's own command:
+    // inside a `$( )` (`x=$(. "$HOME/.cargo/env")`) it stays undetermined,
+    // as at 5e99d94d4 (with `exec 0<<< '…'` and a link of the file to
+    // /dev/stdin earlier on the line it would source line text).
+    if place == Place::Top && is_rustup_env(c, depth) {
+        return;
+    }
+    // A wrapper that may run an interpreter (`sudo bash -c …`), `eval`,
+    // every other `.` / `source`, an interpreter whose program is not
+    // determined.
     if matches!(ast::program_source(c), Some(ProgramSource::Undetermined(_))) {
         out.undetermined = true;
+    }
+}
+
+/// `c` is the r21 rustup setup ([`ast::is_rustup_env_source`]) with no
+/// redirection, and, for the
+/// whole line, its operand still names `<hook HOME>/.cargo/env`: the segment
+/// is parsed alone, so a `HOME=…` earlier on the line is invisible to
+/// [`ast::is_rustup_env_source`]; the line's index ([`targets::resolve`])
+/// must prove that same single value. Only at depth 0 (a body's words are
+/// not in the index). Nothing else is exempt: a path heuristic was tried
+/// and leaked (`/DEV/stdin` on a case-insensitive FS, `/{dev}/stdin`,
+/// `CDPATH=/ cd dev && . ./stdin`), so every other `.` / `source` stays
+/// undetermined, as at 5e99d94d4.
+fn is_rustup_env(c: &SimpleCommand, depth: usize) -> bool {
+    // No redirection either (`. "$HOME/.cargo/env" <<< '…'` is not the
+    // ruled form: keep it undetermined rather than argue stdin is unused).
+    if depth != 0 || !c.redirects.is_empty() || !ast::is_rustup_env_source(c) {
+        return false;
+    }
+    let Some(w) = c.argv.get(1) else {
+        return false;
+    };
+    let Value::Literal(p) = &w.value else {
+        return false;
+    };
+    match targets::resolve(&w.raw, Role::Argv) {
+        Some(values) => values.iter().all(|v| v == p),
+        None => false,
     }
 }
 
@@ -433,6 +522,6 @@ fn body_commands(body: &str, cwd: &CwdState, depth: usize, out: &mut Nested) {
             reduced: reduced(c, true),
             cwd: cwd_of(c, cwd),
         });
-        escapes(c, cwd, depth + 1, out);
+        escapes(c, cwd, depth + 1, Place::Body, out);
     }
 }

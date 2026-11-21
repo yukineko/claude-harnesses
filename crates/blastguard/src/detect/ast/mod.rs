@@ -555,6 +555,17 @@ pub(crate) fn program_source(cmd: &SimpleCommand) -> Option<ProgramSource> {
     prog::program_source(cmd)
 }
 
+/// `cmd` is exactly the user-ruled rustup PATH setup `. "$HOME/.cargo/env"`
+/// (r21, 2026-11-18; SUBSET.md): the `.` builtin, no prefix assignment, one
+/// operand whose value is `<hook HOME>/.cargo/env`. The same predicate the
+/// evaluator uses to keep its state ([`eval::is_cargo_env`]); `source` and
+/// every other `.` are not it.
+pub(crate) fn is_rustup_env_source(cmd: &SimpleCommand) -> bool {
+    cmd.assignments.is_empty()
+        && matches!(cmd.argv.as_slice(),
+            [dot, f] if dot.value == Value::Literal(".".into()) && eval::is_cargo_env(&f.value))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ProgramSource {
     /// `-c prog` / `-e prog` with a determined value.

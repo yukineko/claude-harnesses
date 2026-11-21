@@ -87,7 +87,7 @@ exit 101
 "#;
 
 #[test]
-#[ignore = "RED: a test line inside a failure's captured output is recorded as a per-test result"]
+#[ignore = "RED(867cd678): a test line inside a failure's captured output is recorded as a per-test result"]
 fn nested_test_line_in_failure_capture_is_not_a_result() {
     let d = Dir(std::env::temp_dir().join(format!("tdd-nested-line-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&d.0);

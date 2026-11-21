@@ -1739,3 +1739,34 @@ exit 101: ki/src/.harness-worktrees/file-likelyfixed-eaa077f4/crates/backlog)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.43s
      Running tests/backlog_20261122_red_only_commit_subject_not_fix.rs (target/debug/deps/backlog_20261122_red_only_commit_subject_not_fix-643df670c6cffd52)
 error: test failed, to rerun pass `-p backlog --test backlog_20261122_red_only_commit_subject_not_fix`"""
+
+[[task]]
+id = "867cd678"
+title = "tdd red records a 'test <name> ... FAILED' line inside a failure's captured output as a per-test result; the phantom name then blocks condukt worktree merge"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-22 in condukt run run-20261122-012059-29884 task t1 (backlog 7b30a4ed; worktree base 3e395b717, tip f0e7c8812). condukt worktree merge refused verbatim: 'merge-proof-contract(f): t1.green.json: failed at RED but not "pass" at GREEN: t (proofs read from .../run-20261122-012059-29884-t1/.tdd)'. .tdd/t1.green.json red_failed_tests = [g_cargo_zero_tests_at_head_is_auto_cancelled, g_control_cargo_compile_failure_at_head_refuses_claim, t]; the 't' comes from 'test t ... FAILED' printed inside the g tests' panic message (nested backlog-add fixture cargo output). RED test (rev bc362a3da): tests = {"real":"fail","t":"fail"}. Parser: crates/tdd/src/evidence.rs parse_test_line (every line starting 'test ' with ' ... FAILED' counts, including lines in libtest's failures: / '---- <name> stdout ----' capture). Readings: (a) defect: captured test output is not a result line; libtest prints all result lines before 'failures:'; (b) intended: conservative line scan (least favourable wins) and the condukt merge-proof contract (crates/condukt/src/worktree/merge_proof.rs ~567) should tolerate a RED-only name that GREEN never reports. Tell apart: decide whether the per-test map is a libtest parse or a conservative scan. Effect: a task whose RED output embeds nested libtest text cannot be merged by condukt; the honest RED proof cannot be re-recorded to avoid it. DOES NOT PROVE: nextest/pytest formats; which side should change."""
+created_at = 1795278501
+updated_at = 1795278501
+weight = 0.0
+issue_number = 1966
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1966"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261122_nested_test_line_in_failure_output -- --ignored"
+rev = "bc362a3da52447f1c32b7e45e6720dbbe1ebb47f"
+observed_at = 1795278501
+detail = """
+exit 101: uki/src/.harness-worktrees/file-tddnested-eaa077f4/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.00s
+     Running tests/backlog_20261122_nested_test_line_in_failure_output.rs (target/debug/deps/backlog_20261122_nested_test_line_in_failure_output-4b92d34135ed0c03)
+error: test failed, to rerun pass `-p tdd --test backlog_20261122_nested_test_line_in_failure_output`"""

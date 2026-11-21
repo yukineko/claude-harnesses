@@ -444,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.496"
+version = "0.7.498"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -2171,7 +2171,7 @@ checksum = "c3a6bfce3d99adfa72d24750a61f782f3036a81e7f86d8841ee1326deaebd171"
 
 [[package]]
 name = "tdd"
-version = "0.1.112"
+version = "0.1.114"
 dependencies = [
  "anyhow",
  "chrono",

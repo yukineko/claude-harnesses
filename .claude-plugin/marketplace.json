@@ -180,7 +180,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: schedules parallel and serial task batches by file-conflict analysis, manages git worktrees, tracks run state and gates completion.",
-      "version": "0.7.496",
+      "version": "0.7.498",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -727,7 +727,7 @@
     {
       "name": "tdd",
       "description": "Test-first gate for Claude Code: on Stop it blocks when implementation lines were added with no test visible in the uncommitted changes, and red/green/verify subcommands record RED before GREEN.",
-      "version": "0.1.112",
+      "version": "0.1.114",
       "category": "quality",
       "keywords": [
         "tdd",

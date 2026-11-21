@@ -964,14 +964,17 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
-notes = "system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn three_determined_substs_in_procsub_is_deny"
+status = "failed"
+notes = """
+system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn three_determined_substs_in_procsub_is_deny
+needs human ruling (batch #6, 2026-11-21): which leading-dash echo operands may be treated as literal output (proposal: contains a char outside n/e/E; -n/-e/-E/-ne/-/-- stay undetermined)"""
 created_at = 1795155345
-updated_at = 1795155345
+updated_at = 1795240962
+defer_until = 1795413762
 weight = 0.0
 issue_number = 1896
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1896"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -1122,14 +1125,17 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
-notes = '''Observed 2026-11-20 during run-20261120-171414-35880 (condukt driver, session 62e92d16): cargo test -p blastguard --test heredoc_data_body_verify -> 'test result: FAILED. 5 passed; 1 failed' at both c434e41e5 (pre-run base) and the merged tree 14ba909b0; failing test contract_executing_bodies_and_real_lines_stay_judged, row python3 <<'EOF'\nrm -rf /usr/lib\nEOF -> allow. Not caused by this run (red at base). Tagged fail-open provisionally. Readings: (a) fail-open: a python stdin body naming system-harm text must not be Allow; (b) the row's premise is stale (body is not valid Python, S5 judges it inert) and the assert needs re-anchoring by an independent agent. Tell apart: does a later ruling make python stdin bodies judged by progeffect S5 rather than as shell? Not investigated.'''
+status = "failed"
+notes = '''
+Observed 2026-11-20 during run-20261120-171414-35880 (condukt driver, session 62e92d16): cargo test -p blastguard --test heredoc_data_body_verify -> 'test result: FAILED. 5 passed; 1 failed' at both c434e41e5 (pre-run base) and the merged tree 14ba909b0; failing test contract_executing_bodies_and_real_lines_stay_judged, row python3 <<'EOF'\nrm -rf /usr/lib\nEOF -> allow. Not caused by this run (red at base). Tagged fail-open provisionally. Readings: (a) fail-open: a python stdin body naming system-harm text must not be Allow; (b) the row's premise is stale (body is not valid Python, S5 judges it inert) and the assert needs re-anchoring by an independent agent. Tell apart: does a later ruling make python stdin bodies judged by progeffect S5 rather than as shell? Not investigated.
+needs human ruling (batch #5): python3 heredoc body 'rm -rf /usr/lib' is valid inert Python (BinOp, no call); deny anyway per system-harm rule, or re-anchor the contract row to allow'''
 created_at = 1795166100
-updated_at = 1795166100
+updated_at = 1795240963
+defer_until = 1795413763
 weight = 0.0
 issue_number = 1926
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1926"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -1154,14 +1160,17 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
-notes = "Observed 2026-11-20: main-session byte-for-byte re-run of relay bgr-a866a4fd1397 (writing a condukt test file via cat <<'EOF' ... task's ... EOF) refused verbatim: 'Refused: this command could not be parsed, and it carries a gate-bypass marker. The shell quoting does not close, so whether this is git commit --no-verify cannot be determined.' Mechanism (independent author, source reading + RED): shlex has no heredoc model so the apostrophe in a quoted heredoc body never closes; looks_like_bypass fires on substring git (git_env / git( helper) plus -n of sed/grep. RED 51aa53acb scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py (strict xfail; --runxfail: 2 failed, 2 passed). Distinct from pinned test_gate_bypass.py::test_DEFECT_looks_like_bypass_is_noisy_on_untokenizable_input: here a real shell lexes the input fine."
+status = "failed"
+notes = """
+Observed 2026-11-20: main-session byte-for-byte re-run of relay bgr-a866a4fd1397 (writing a condukt test file via cat <<'EOF' ... task's ... EOF) refused verbatim: 'Refused: this command could not be parsed, and it carries a gate-bypass marker. The shell quoting does not close, so whether this is git commit --no-verify cannot be determined.' Mechanism (independent author, source reading + RED): shlex has no heredoc model so the apostrophe in a quoted heredoc body never closes; looks_like_bypass fires on substring git (git_env / git( helper) plus -n of sed/grep. RED 51aa53acb scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py (strict xfail; --runxfail: 2 failed, 2 passed). Distinct from pinned test_gate_bypass.py::test_DEFECT_looks_like_bypass_is_noisy_on_untokenizable_input: here a real shell lexes the input fine.
+needs human ruling (batch #6): A (quoted heredoc body = data; flips pinned test_DEFECT_a_heredoc_body_quoting_the_command_is_refused) vs B (per-line lexing); if A, A1 allowlist vs A2; parser = hand POSIX lexer vs delegate to blastguard brush-parser"""
 created_at = 1795172228
-updated_at = 1795172228
+updated_at = 1795240962
+defer_until = 1795413762
 weight = 0.0
 issue_number = 1929
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1929"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

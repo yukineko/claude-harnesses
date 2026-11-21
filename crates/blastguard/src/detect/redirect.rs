@@ -38,6 +38,12 @@ use harness_core::verdict::Determination;
 /// "w")'`). A quoted word that cannot be dequoted after a `cd` is not
 /// placed (`Err`): it may be absolute or relative, and joining it would judge
 /// the wrong file.
+///
+/// A relative quoted word is joined from its dequoted name when that name is
+/// plain ([`joinable_redirect_name`]): `cd D && : > 'src/x'` is judged as
+/// `D/src/x`, the same text `cd D && : > src/x` gets, not `D/'src/x'`
+/// (backlog 94b93e95). The two rules above are untouched: an absolute quoted
+/// word is still returned unchanged, and an undequotable one is still `Err`.
 pub(super) fn place_redirect_target(
     cmd: &str,
     seg_idx: Option<usize>,
@@ -66,10 +72,65 @@ pub(super) fn place_redirect_target(
         CwdState::Known(dir) if relative => Ok(exclude::normalize(&format!(
             "{}/{}",
             dir.trim_end_matches('/'),
-            target
+            joinable_redirect_name(&target)
         ))),
         CwdState::Known(_) | CwdState::Unknown => Err(target),
     }
+}
+
+/// The text a RELATIVE redirect word contributes when it is joined onto a
+/// `cd` directory: its dequoted name ([`dequoted_redirect_word`]) when that
+/// name is spelled with plain characters only (Unicode alphanumerics and
+/// `/ . _ - + , @ % :`), so the joined word carries no quotes in the
+/// middle (`<dir>/src/x.rs`, not `<dir>/'src/x.rs'`, backlog 94b93e95) and
+/// reads exactly as the unquoted shell spelling `cd <dir> && : > src/x.rs`
+/// does. Removing the quotes cannot change the file such a name denotes:
+/// none of those characters is special to the shell.
+///
+/// Any other word is returned unchanged (the spelling as before): a name
+/// with a space, glob character, `$`, `~`, quote, backslash or separator
+/// keeps the quoting that makes it ONE literal word, so every later
+/// re-parse of the joined text (`dequoted_target_recovery`,
+/// `has_unquoted_glob`) still sees the same single file name rather than a
+/// split word or an unquoted glob. Only called for a word
+/// [`redirect_word_relativity`] already found `Known(true)`.
+fn joinable_redirect_name(target: &str) -> std::borrow::Cow<'_, str> {
+    match dequoted_redirect_word(target) {
+        Determination::Known(name)
+            if !name.is_empty()
+                && name.chars().all(|c| {
+                    c.is_alphanumeric()
+                        || matches!(c, '/' | '.' | '_' | '-' | '+' | ',' | '@' | '%' | ':')
+                }) =>
+        {
+            std::borrow::Cow::Owned(name)
+        }
+        _ => std::borrow::Cow::Borrowed(target),
+    }
+}
+
+/// `D` for a `cd` segment that is exactly the two words `cd 'D'` (one
+/// single-quoted operand, no `'`, `"` or `>` inside it), else `None`: the
+/// spelling S5 gives the `cd` prefix of every program effect
+/// (`progeffect::shell_quote`), so `write_prefix_cannot_relink` (rm.rs) can
+/// read it as the unquoted `cd D` (backlog 94b93e95). Only the quoting is
+/// removed; the caller still holds `D` to its absolute, plain-character
+/// `dir_ok` rule, so a `D` whose quotes change its meaning (a space, `$`,
+/// glob, `;`, …) is refused there.
+pub(super) fn single_quoted_cd_dir(text: &str) -> Option<String> {
+    let mut words = text.split_whitespace();
+    if words.next() != Some("cd") {
+        return None;
+    }
+    let operand = words.next()?;
+    if words.next().is_some() {
+        return None;
+    }
+    let inner = operand.strip_prefix('\'')?.strip_suffix('\'')?;
+    if inner.contains(['\'', '"', '>']) {
+        return None;
+    }
+    Some(inner.to_string())
 }
 
 /// Whether a redirect WORD names a path relative to the cwd: decided on the
@@ -124,9 +185,13 @@ pub(super) fn physical_redirect_spelling(
         // line's own base, so the target is already relative to it. The
         // empty guard stays as defence in depth: `""` must never become
         // `/<target>`.
-        Some(CwdState::Known(dir)) if !dir.is_empty() && dir != "." => {
-            format!("{}/{}", dir.trim_end_matches('/'), target)
-        }
+        // Joined from the same text `place_redirect_target` joins
+        // (`joinable_redirect_name`), so the two spellings name one file.
+        Some(CwdState::Known(dir)) if !dir.is_empty() && dir != "." => format!(
+            "{}/{}",
+            dir.trim_end_matches('/'),
+            joinable_redirect_name(target)
+        ),
         _ => target.to_string(),
     }
 }

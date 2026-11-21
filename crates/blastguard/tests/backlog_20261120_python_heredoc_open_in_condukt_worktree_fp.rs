@@ -175,7 +175,6 @@ open(p,'w').write(s.replace('a','b'))\nEOF\n{trailer}"
 /// RED: the observed shape (trailing `grep` line included) inside a linked
 /// worktree under `$HOME/.condukt/worktrees`, judged from the session's tree.
 #[test]
-#[ignore = "backlog 94b93e95: python3 - heredoc open(rel,'w') after cd into a condukt worktree gets the whose-tree refusal (FP)"]
 fn python_heredoc_relative_open_write_in_condukt_worktree_is_not_whose_tree_refusal() {
     let fx = Fx::new("pyheredoc");
     let dir = fx.wt.join("crates/condukt");

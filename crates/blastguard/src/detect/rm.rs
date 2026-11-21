@@ -1,4 +1,5 @@
 use super::ast::targets::Role;
+use super::redirect::single_quoted_cd_dir;
 use super::{
     confined_ask, dotgit_link_deny, exclude, glob_literal_prefix, has_glob_meta,
     has_unresolvable_expansion, home_asset_deny, is_assignment, is_short_flag,
@@ -1053,8 +1054,8 @@ const PREFIX_INERT_VERBS: &[&str] = &["cp", "echo", "printf", "true", "pwd", "ls
 /// No segment of `0..=idx` contains `` ` ``, `(`, `)`, `{`, `}`, `<`, `\`,
 /// `&` or a line break (no substitution, subshell, group, here-doc or fd
 /// trick). Each segment before `idx` is one of:
-///   * segment 0 only: `cd D`, `D` absolute and spelled with alphanumerics and
-///     `/ . _ - + , @ %` only, no `.`/`..` component;
+///   * segment 0 only: `cd D` or S5's `cd 'D'` ([`single_quoted_cd_dir`]), `D`
+///     absolute, alphanumerics and `/ . _ - + , @ %` only, no `.`/`..` part;
 ///   * only `NAME=value` words, no quote, `$`, glob, and no `NAME` that can
 ///     change how a later command runs ([`shell_behaviour_variable`]: `PATH`,
 ///     `IFS`, `LD_*`, any name already in the environment, …);
@@ -1082,10 +1083,16 @@ pub(super) fn write_prefix_cannot_relink(line: &str, idx: usize) -> bool {
         if k == idx {
             break;
         }
-        if text.contains(['\'', '"', '>']) {
+        // Segment 0 may be S5's `cd 'D'` (backlog 94b93e95); `D` is still held
+        // to `dir_ok`, so the quotes change nothing. See `single_quoted_cd_dir`.
+        let unquoted_cd = (k == 0).then(|| single_quoted_cd_dir(text)).flatten();
+        if unquoted_cd.is_none() && text.contains(['\'', '"', '>']) {
             return false;
         }
-        let words: Vec<&str> = text.split_whitespace().collect();
+        let words: Vec<&str> = match &unquoted_cd {
+            Some(dir) => vec!["cd", dir.as_str()],
+            None => text.split_whitespace().collect(),
+        };
         let Some(&head) = words.first() else {
             return false;
         };

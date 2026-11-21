@@ -404,6 +404,28 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
 /// verdict, its reason prefixed with the rsync shape. No delete flag, a
 /// remote destination or list mode: Allow here (the other rsync rules stand).
 pub(super) fn analyze_rsync_delete(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+    let delete = analyze_rsync_delete_flag(rest, ctx);
+    if !matches!(delete, Decision::Allow) {
+        return delete;
+    }
+    rsync_protected_destination(rest, ctx)
+}
+
+/// The destination operand of `rsync` is a write target like `cp`'s: a
+/// protected path there (or a directory holding protected paths, landed in
+/// as a tree) is refused the way `copy_move_verdict` refuses it. Remote
+/// destinations are not local files and are skipped.
+fn rsync_protected_destination(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+    let Some(dest) = super::system_paths::rsync_local_destination(rest) else {
+        return Decision::Allow;
+    };
+    let action = "rsync destination";
+    super::protected_path_block(ctx, action, dest)
+        .or_else(|| super::protected_landing_block(ctx, action, dest))
+        .unwrap_or(Decision::Allow)
+}
+
+fn analyze_rsync_delete_flag(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     let Some(dest) = super::system_paths::rsync_delete_destination(rest) else {
         return Decision::Allow;
     };

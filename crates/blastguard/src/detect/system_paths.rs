@@ -374,6 +374,17 @@ pub(super) fn rsync_delete_destination<'a>(words: &[&'a str]) -> Option<&'a str>
     (deletes && ops.len() >= 2 && !remote).then_some(dest)
 }
 
+/// The LOCAL destination operand of an `rsync` (the last positional operand
+/// when at least one source precedes it); `None` for list mode (one operand)
+/// and for a remote destination (`host:path`, `user@host:path`, `rsync://…`).
+pub(super) fn rsync_local_destination<'a>(words: &[&'a str]) -> Option<&'a str> {
+    let ops = positional_operands(words, RSYNC_VALUE_FLAGS);
+    let dest = *ops.last()?;
+    let remote =
+        dest.starts_with("rsync://") || dest.split('/').next().is_some_and(|h| h.contains(':'));
+    (ops.len() >= 2 && !remote).then_some(dest)
+}
+
 enum Judged {
     /// Lies inside a system directory: the system path hit.
     System(String),

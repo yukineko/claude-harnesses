@@ -444,7 +444,8 @@ fn hook_home() -> Option<String> {
 }
 
 /// True when `v` is the literal `<hook HOME>/.cargo/env` (r21 exemption).
-fn is_cargo_env(v: &Value) -> bool {
+/// Also read by [`super::is_rustup_env_source`].
+pub(super) fn is_cargo_env(v: &Value) -> bool {
     matches!((v, hook_home()), (Value::Literal(p), Some(h))
         if *p == format!("{}/.cargo/env", h.trim_end_matches('/')))
 }

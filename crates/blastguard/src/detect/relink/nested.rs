@@ -28,12 +28,10 @@
 //! value for it: the segment is parsed alone, so `P=/x/p.sh; …; $P a` reads
 //! `$P` through the top-level index ([`targets::resolve`]) and judges each
 //! proven value as if it were spelled (a direct exec of `p.sh` runs no
-//! escape on this line; `B=bash && $B -c '…'` reads the body). `.` /
-//! `source` of a plain literal file run that file's text, which is not on
-//! the line: like `bash x.sh`, nothing is read; any other operand
-//! (`/dev/stdin <<< '…'` in any spelling — `//dev/stdin`, `dev/stdin`
-//! after `cd /` —, a path with `..`, a relative path in an unknown cwd,
-//! `<(…)`, an expansion) stays undetermined ([`sources_plain_file`]).
+//! escape on this line; `B=bash && $B -c '…'` reads the body). The one
+//! `.` read as running no line text is the user-ruled rustup setup
+//! `. "$HOME/.cargo/env"` (r21, [`is_rustup_env`]); every other `.` /
+//! `source` stays undetermined.
 //! Regression 625d16af8: both were read as undetermined, so
 //! `. "$HOME/.cargo/env" && sed -i … f` and a `$P` exec in a loop became
 //! relink Asks.
@@ -451,57 +449,46 @@ fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, out: &mut Nested) {
         }
         return;
     }
-    // `. FILE` / `source FILE` with a plain literal file runs that file's
-    // text, which is not on the line: nothing to read, like `bash x.sh`
-    // above. Any other operand (`/dev/stdin <<< '…'`, `<(…)`, an
-    // expansion, none) may run text from the line: undetermined below.
-    if matches!(base, "." | "source") && sources_plain_file(c, &cwd) {
+    // The rustup PATH setup `. "$HOME/.cargo/env"` (user ruling r21,
+    // 2026-11-18) runs that file's text, which is not on the line: nothing
+    // to read, like `bash x.sh` above.
+    if is_rustup_env(c, depth) {
         return;
     }
-    // A wrapper that may run an interpreter (`sudo bash -c …`), `eval`, a
-    // `.` / `source` not of a plain file, an interpreter whose program is
-    // not determined.
+    // A wrapper that may run an interpreter (`sudo bash -c …`), `eval`,
+    // every other `.` / `source`, an interpreter whose program is not
+    // determined.
     if matches!(ast::program_source(c), Some(ProgramSource::Undetermined(_))) {
         out.undetermined = true;
     }
 }
 
-/// `c` (a `.` / `source`) reads a plain file named literally: its first
-/// operand is a literal, non-empty path that holds no substitution and,
-/// placed absolutely and normalised lexically, is not under `/dev` or
-/// `/proc` (`/dev/stdin`, `/dev/fd/N`, `//dev/stdin`, `/./dev/stdin`,
-/// `dev/stdin` after `cd /`). Undetermined — not a plain file — when the
-/// path has a `..` component (`/etc/../dev/stdin`: lexical placement is not
-/// the real one), is `-`, has no `/` (searched in `$PATH`), or is relative
-/// while the cwd it runs in is not a
-/// known absolute directory (the hook's cwd may be `/dev`). A symlink to a
-/// device is not seen, as for `bash x.sh`.
-fn sources_plain_file(c: &SimpleCommand, cwd: &CwdState) -> bool {
+/// `c` is the r21 rustup setup ([`ast::is_rustup_env_source`]) with no
+/// redirection, and, for the
+/// whole line, its operand still names `<hook HOME>/.cargo/env`: the segment
+/// is parsed alone, so a `HOME=…` earlier on the line is invisible to
+/// [`ast::is_rustup_env_source`]; the line's index ([`targets::resolve`])
+/// must prove that same single value. Only at depth 0 (a body's words are
+/// not in the index). Nothing else is exempt: a path heuristic was tried
+/// and leaked (`/DEV/stdin` on a case-insensitive FS, `/{dev}/stdin`,
+/// `CDPATH=/ cd dev && . ./stdin`), so every other `.` / `source` stays
+/// undetermined, as at 5e99d94d4.
+fn is_rustup_env(c: &SimpleCommand, depth: usize) -> bool {
+    // No redirection either (`. "$HOME/.cargo/env" <<< '…'` is not the
+    // ruled form: keep it undetermined rather than argue stdin is unused).
+    if depth != 0 || !c.redirects.is_empty() || !ast::is_rustup_env_source(c) {
+        return false;
+    }
     let Some(w) = c.argv.get(1) else {
         return false;
     };
     let Value::Literal(p) = &w.value else {
         return false;
     };
-    // A name without `/` is looked up in `$PATH` first (`PATH=/dev . stdin`).
-    if p.is_empty() || p == "-" || !p.contains('/') || has_subst(&w.raw) {
-        return false;
+    match targets::resolve(&w.raw, Role::Argv) {
+        Some(values) => values.iter().all(|v| v == p),
+        None => false,
     }
-    let abs = if p.starts_with('/') {
-        p.clone()
-    } else {
-        match cwd {
-            CwdState::Known(d) if d.starts_with('/') => format!("{d}/{p}"),
-            _ => return false,
-        }
-    };
-    let parts: Vec<&str> = abs
-        .split('/')
-        .filter(|s| !s.is_empty() && *s != ".")
-        .collect();
-    !parts.is_empty()
-        && !parts.contains(&"..")
-        && !matches!(parts.first(), Some(&"dev") | Some(&"proc"))
 }
 
 /// Every command of the shell program `body`, run in `cwd`.

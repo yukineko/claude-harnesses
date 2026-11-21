@@ -32,8 +32,10 @@
 //! `grep -rn "truncate" crates/blastguard/src/detect*`. Without the glob
 //! (plain file operand) the same pattern word is Allow
 //! (minimal_grep_truncate_word_is_allow), so the trigger needs the glob
-//! operand. The failing cases are
-//! `#[ignore = "RED FP: ..."]`; the passing twin and controls are not.
+//! operand. The five failing cases were RED (`#[ignore]`d while the defect
+//! stood) and are un-ignored now that `unknown_wrapper_ask` skips read-only
+//! heads (`readonly::argv_is_data_only`); the passing twin and controls were
+//! never ignored.
 //!
 //! DOES NOT PROVE: which rule produces a decision (only decisions are
 //! asserted); that other destructive verb names used as grep patterns behave
@@ -167,7 +169,6 @@ const CD: &str = "cd /Users/yuki/src/.harness-worktrees/bg-s6-4-red";
 
 /// The reported command, verbatim.
 #[test]
-#[ignore = "RED FP: destructive verb name as grep pattern word -> unknown-verb Ask (main) / Deny (subagent)"]
 fn full_reported_command_is_allow() {
     allow_all(
         "full",
@@ -179,7 +180,6 @@ fn full_reported_command_is_allow() {
 
 /// Bare grep with the `truncate` pattern word (quoted and unquoted).
 #[test]
-#[ignore = "RED FP: destructive verb name as grep pattern word -> unknown-verb Ask (main) / Deny (subagent)"]
 fn bare_grep_truncate_is_allow() {
     allow_all(
         "bare",
@@ -192,7 +192,6 @@ fn bare_grep_truncate_is_allow() {
 
 /// Bare grep piped into `grep -v "^.*//"` (and `| head -50`).
 #[test]
-#[ignore = "RED FP: destructive verb name as grep pattern word -> unknown-verb Ask (main) / Deny (subagent)"]
 fn grep_truncate_piped_grep_v_is_allow() {
     allow_all(
         "pipe",
@@ -214,7 +213,6 @@ fn grep_v_slashes_pattern_alone_is_allow() {
 
 /// With the cd prefix, no worktree add.
 #[test]
-#[ignore = "RED FP: destructive verb name as grep pattern word -> unknown-verb Ask (main) / Deny (subagent)"]
 fn cd_prefix_is_allow() {
     allow_all(
         "cd",
@@ -229,7 +227,6 @@ fn cd_prefix_is_allow() {
 
 /// With the worktree add prefix, no cd.
 #[test]
-#[ignore = "RED FP: destructive verb name as grep pattern word -> unknown-verb Ask (main) / Deny (subagent)"]
 fn worktree_add_prefix_is_allow() {
     allow_all(
         "wt",
@@ -276,5 +273,18 @@ fn minimal_grep_plain_word_twin_is_allow() {
             "grep -rn foo crates/blastguard/src/detect*",
             "grep foo crates/blastguard/src/detect.rs",
         ],
+    );
+}
+
+/// Control (verifier finding 2026-11-21, run-20261121-102650-23366): a
+/// read-only-looking head whose option runs its argument as a program must
+/// keep a non-Allow verdict. Observed: `bat --pager rm -rf /etc` was ask at
+/// base 3e4c4359a and Allow at 1ee756c2a (the data-only exclusion covered
+/// `bat`). Independent test author (orchestrator), not the implementer.
+#[test]
+fn control_exec_capable_option_heads_not_allow() {
+    not_allow_all(
+        "execopt",
+        &["bat --pager rm -rf /etc", "rg --pre rm -rf /etc x"],
     );
 }

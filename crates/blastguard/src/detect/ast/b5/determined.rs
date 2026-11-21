@@ -79,8 +79,62 @@ pub(super) fn determined_delivered_program(
         .map(|o| o.text)
 }
 
-/// The Deny of the program a shell runs as `-c W` (`args` = `-c W …`, exactly
-/// the flag `-c` first) when its source is Undetermined only because `W` is
+/// The index in `args` (the words after the shell word) of the `-c` command
+/// string, when the options before it are a shape read with certainty
+/// (backlog c602d32e). Bash reads options up to the first operand, and after
+/// a `-c` the first operand is the command string. Accepted: clusters of the
+/// letters `shell_source` (ast/mod.rs) models, with `c` anywhere in one of them (`-c`,
+/// `-ec`, `-xc`, `-ce`), options before `-c` (`-x -c`), an `-o` / `-O` taking
+/// the next word (only as the last letter of its cluster), and `--` / `-`
+/// ending the options (`-c -- W`). Long options, `+` options, `-s` and any
+/// letter not modelled give `None`, as does a line without `-c`; the caller
+/// then keeps today's verdict.
+fn dash_c_operand(args: &[Word]) -> Option<usize> {
+    let mut c_flag = false;
+    let mut i = 0;
+    while let Some(w) = args.get(i) {
+        // An undetermined word ends the options only after `-c`: it is then
+        // the command string (the caller checks its value does not begin
+        // with `-`). Before `-c` it could be an option, so it keeps `None`.
+        let Ok(v) = literal(w) else {
+            break;
+        };
+        if v == "--" || v == "-" {
+            i += 1;
+            break;
+        }
+        let Some(flags) = v.strip_prefix('-').filter(|f| !f.is_empty()) else {
+            break;
+        };
+        if flags.starts_with('-') {
+            return None;
+        }
+        let mut takes_arg = false;
+        for (k, ch) in flags.char_indices() {
+            match ch {
+                'c' => c_flag = true,
+                'o' | 'O' if k + 1 == flags.len() => takes_arg = true,
+                c if "abefhkmnptuvxBCEHPTilr".contains(c) => {}
+                _ => return None,
+            }
+        }
+        i += 1;
+        if takes_arg {
+            if literal(args.get(i)?).is_err() {
+                return None;
+            }
+            i += 1;
+        }
+    }
+    if !c_flag {
+        return None;
+    }
+    Some(i)
+}
+
+/// The Deny of the program a shell runs as `-c W` (`args` = the options of
+/// [`dash_c_operand`] — `-c`, `-ec`, `-x -c`, `-c -- …` — then `W`) when its
+/// source is Undetermined only because `W` is
 /// a word whose value `determined_output::substituted_word_value` computes
 /// from its `$( )` substitutions (backlog 28019c35): that value is judged by
 /// the full detector as the `-c` program ([`judge_body`], depth-bounded).
@@ -105,29 +159,37 @@ pub(super) fn determined_dash_c_program(
     if fam != Family::Shell || !matches!(source, ProgramSource::Undetermined(_)) {
         return None;
     }
-    let [flag, word, ..] = args else {
-        return None;
-    };
-    if !literal(flag).is_ok_and(|f| f == "-c") || !matches!(word.value, Value::Undetermined(_)) {
+    let word = args.get(dash_c_operand(args)?)?;
+    if !matches!(word.value, Value::Undetermined(_)) {
         return None;
     }
     if !crate::detect::readings::chain_names_fixed() || !resolution_fixed(text) {
         return None;
     }
     let program = substituted_word_value(&word.raw)?;
+    // Bash reads a command string that begins with `-` as an option (`--`
+    // ends them): such a value is not the program, so it is not judged here.
+    if program.starts_with('-') {
+        return None;
+    }
     let verdict = judge_body(&program, Runner::Shell(base), judge);
     verdict.is_deny().then_some(verdict)
 }
 
-/// The Deny of the code `eval W` runs (`args` = exactly `[W]`) when `W` is a
-/// word whose value `substituted_word_value` computes from its `$( )`
-/// substitutions (`eval "$(echo 'rm -rf /etc' | cat)"`, backlog d766b5fe):
-/// that value is judged by the full detector as `bash -c '<value>'`
-/// ([`judge_body`]).
+/// The Deny of the code `eval W…` runs (`args` = the operands after `eval`;
+/// one leading `--` is dropped, as bash's `eval` does) when at least one
+/// operand is a word whose value `substituted_word_value` computes from its
+/// `$( )` substitutions (`eval "$(echo 'rm -rf /etc' | cat)"`, backlog
+/// d766b5fe; `eval "$(…)" x` / `eval -- "$(…)"`, backlog bf40851f): the
+/// operands' values — literal ones as they are, computed ones as computed —
+/// joined by single spaces, as `eval` joins them, are judged by the full
+/// detector as `bash -c '<value>'` ([`judge_body`]). One operand whose value
+/// is not computed keeps today's Undetermined.
 ///
 /// The precondition is [`determined_dash_c_program`]'s with one widening:
 /// `text` — and only `text`, the enclosing chain is read strictly — may hold
-/// ONE bare `eval`, this one (`chain_names_fixed_but_one_eval` /
+/// ONE `eval` (bare, or as `command [-p] [--] eval` / `builtin [--] eval`),
+/// this one (`chain_names_fixed_but_one_eval` /
 /// `resolution_fixed_but_one_eval`), since `W`'s substitutions run before it.
 /// A function, alias, assignment, any other unlisted command or a second
 /// `eval` on the line keeps today's Undetermined. Raise-only: an Ask or Allow
@@ -140,16 +202,48 @@ pub(super) fn determined_eval_program(
     use crate::detect::payload::determined_output::{
         resolution_fixed_but_one_eval, substituted_word_value,
     };
-    let [word] = args else {
-        return None;
+    let operands = match args.split_first() {
+        Some((first, rest)) if literal(first).is_ok_and(|f| f == "--") => rest,
+        _ => args,
     };
-    if !matches!(word.value, Value::Undetermined(_))
+    if operands.is_empty()
+        || !operands
+            .iter()
+            .any(|w| matches!(w.value, Value::Undetermined(_)))
         || !crate::detect::readings::chain_names_fixed_but_one_eval()
         || !resolution_fixed_but_one_eval(text)
     {
         return None;
     }
-    let program = substituted_word_value(&word.raw)?;
+    let values = operands
+        .iter()
+        .map(|w| match &w.value {
+            Value::Literal(s) => Some(s.clone()),
+            Value::Undetermined(_) => substituted_word_value(&w.raw),
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let program = values.join(" ");
     let verdict = judge_body(&program, Runner::Shell("bash"), judge);
     verdict.is_deny().then_some(verdict)
+}
+
+/// The Deny of `builtin [--] eval W…`, which runs `eval W…` (backlog
+/// bf40851f): [`determined_eval_program`] on the operands after `eval`.
+/// `None` for every other `builtin` shape and whenever that reading is
+/// `None`; the caller then keeps the no-opinion Allow `builtin` had before
+/// (the legacy verdict stands), so nothing is loosened.
+pub(super) fn determined_builtin_eval(
+    text: &str,
+    args: &[Word],
+    judge: &Probes<'_>,
+) -> Option<Decision> {
+    let rest = match args.split_first() {
+        Some((dd, rest)) if literal(dd).is_ok_and(|w| w == "--") => rest,
+        _ => args,
+    };
+    let (head, operands) = rest.split_first()?;
+    if !literal(head).is_ok_and(|w| w == "eval") || operands.is_empty() {
+        return None;
+    }
+    determined_eval_program(text, operands, judge)
 }

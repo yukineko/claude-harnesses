@@ -116,7 +116,6 @@ fn verdict(out: &str) -> &'static str {
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: quoted here-doc body line parsed as a command when a command precedes the here-doc"]
 fn r1_minimal_and_list_then_quoted_heredoc_append_is_allowed() {
     let f = Fx::new("r1");
     let cmd = "true && cat >> scratch/x.py <<'X'\n\"cp notes.txt /etc/hosts\",\nX";
@@ -124,7 +123,6 @@ fn r1_minimal_and_list_then_quoted_heredoc_append_is_allowed() {
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: quoted here-doc body line parsed as a command when a command precedes the here-doc"]
 fn r2_observed_probe_append_shape_is_allowed() {
     let f = Fx::new("r2");
     let cmd = format!(
@@ -136,7 +134,6 @@ for cmd in [\"a\",\n            \"L=/etc; cp README.md $L/hosts\", \"L=/etc/host
 }
 
 #[test]
-#[ignore = "RED 2026-11-13: quoted here-doc body line parsed as a command when a command follows the terminator"]
 fn r3_git_commit_body_string_line_with_trailing_command_is_allowed() {
     let f = Fx::new("r3");
     let cmd = "git commit -q -F - <<'X'\n\"cp notes.txt /etc/hosts\",\nX\necho rc=$?";

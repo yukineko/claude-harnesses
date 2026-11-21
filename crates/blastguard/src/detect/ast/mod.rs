@@ -169,9 +169,10 @@ pub(crate) fn redirect_glob_deny_target(
 /// [`analyze`], except that a function definition is evaluated instead of
 /// being `Undetermined(Unsupported)`: its body is evaluated once with every
 /// variable, the cwd and the stdin late-bound, its commands are emitted, and
-/// the state is opaque after it. Nothing outside `ast/` calls this yet, so
-/// every consumer still sees a function-definition line as `Unsupported`
-/// through [`analyze`].
+/// the state is opaque after it. Its callers outside `ast/` are
+/// `heredoc_data` and `payload::function_shadow` (which reads only
+/// `Script::function_names`); every other consumer still sees a
+/// function-definition line as `Unsupported` through [`analyze`].
 pub(crate) fn analyze_with_function_definitions(command: &str) -> Analysis {
     match parse::parse(command) {
         Ok(program) => eval::evaluate_with_function_definitions(command, &program),

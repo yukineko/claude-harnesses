@@ -1,0 +1,334 @@
+cd /Users/yuki/.condukt/worktrees/run-20261122-020202-63344-a867 && python3 - <<'EOF'
+p='crates/tdd/src/evidence.rs'
+s=open(p).read()
+start=s.index('/// libtest\'s `running 1 test`')
+end=s.index('fn parse_test_line(')
+s=s[:start]+'''/// libtest's `running 1 test` / `running 5 tests` header (line start):
+/// the number of per-test lines the block will print.
+fn parse_running_line(line: &str) -> Option<u64> {
+    let rest = line.strip_prefix("running ")?;
+    let (n, word) = rest.split_once(' ')?;
+    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if !matches!(word.trim(), "test" | "tests") {
+        return None;
+    }
+    n.parse().ok()
+}
+
+'''+s[end:]
+start=s.index('/// Per-test results and counts of one run, from its full log.')
+end=s.index('#[cfg(test)]\nmod tests {')
+new=r'''/// Merge one per-test result into the map: least favourable wins.
+fn record(tests: &mut BTreeMap<String, T>, name: String, t: T) {
+    tests
+        .entry(name)
+        .and_modify(|old| {
+            if t.rank() > old.rank() {
+                *old = t;
+            }
+        })
+        .or_insert(t);
+}
+
+/// What a log yields: per-test map and summed counts (`None` = no result
+/// line could be counted).
+type Parsed = (BTreeMap<String, T>, Option<(u64, u64, u64, u64)>);
+
+/// The conservative line scan: EVERY line-start `test <name> ... <status>`
+/// line is a result and every `test result:` line is summed. A nested line
+/// printed inside a failing test's captured output becomes a phantom name;
+/// that direction is restrictive (a phantom RED failure blocks a merge), so
+/// this is the fallback whenever the libtest framing cannot be reconciled.
+fn scan_conservative(lines: &[String]) -> Parsed {
+    let mut tests = BTreeMap::new();
+    let (mut p, mut f, mut i, mut results) = (0u64, 0u64, 0u64, 0u64);
+    for line in lines {
+        if let Some((name, t)) = parse_test_line(line) {
+            record(&mut tests, name, t);
+        } else if let Some((a, b, c)) = parse_result_line(line) {
+            p = p.saturating_add(a);
+            f = f.saturating_add(b);
+            i = i.saturating_add(c);
+            results += 1;
+        }
+    }
+    let counts = (results > 0).then_some((p, f, i, results));
+    (tests, counts)
+}
+
+/// Does the `failures:` name list printed just before a result line name
+/// exactly the block's failing tests? libtest lists the bare name, while the
+/// per-test line may carry a mode suffix (`x - should panic`,
+/// `src/lib.rs - f (line 3) - compile fail`).
+fn failure_list_matches(list: &[String], failed: &[&str]) -> bool {
+    if list.len() != failed.len() {
+        return false;
+    }
+    let mut used = vec![false; list.len()];
+    failed.iter().all(|m| {
+        let hit = list.iter().enumerate().position(|(k, n)| {
+            !used[k] && (*m == n || m.strip_prefix(n.as_str()).is_some_and(|r| r.starts_with(" - ")))
+        });
+        match hit {
+            Some(k) => {
+                used[k] = true;
+                true
+            }
+            None => false,
+        }
+    })
+}
+
+/// Parse the log by libtest's structure. Each binary prints
+/// `running N tests`, then exactly N per-test lines, then optional
+/// `failures:` / `successes:` sections (captured output, which may itself
+/// contain libtest-shaped lines from nested runs), then ONE
+/// `test result: ...` whose passed/failed/ignored equal the N lines' tallies
+/// and, when anything failed, is preceded by a `failures:` list naming
+/// exactly the failed tests. Only those N lines are results and only that
+/// terminator is counted; everything between the N-th line and the
+/// terminator is captured output and ignored.
+///
+/// `None` = the framing does not reconcile (a per-test or result line
+/// outside a block or before any section header, a `running` header inside
+/// the per-test lines, a block never closed): the caller falls back to
+/// [`scan_conservative`]. A real failing line is always one of the N lines,
+/// and a mis-taken line can only make the terminator fail to reconcile, so a
+/// failing name is never dropped by a structure that is accepted.
+fn scan_framed(lines: &[String]) -> Option<Parsed> {
+    enum S {
+        Outside,
+        Tests {
+            n: u64,
+            got: Vec<(String, T)>,
+        },
+        Trailer {
+            got: Vec<(String, T)>,
+            in_section: bool,
+            /// The name list after the latest `failures:` header, while
+            /// every line since then has been a list entry or blank.
+            list: Option<(bool, Vec<String>)>,
+        },
+    }
+    fn tally(got: &[(String, T)]) -> (u64, u64, u64) {
+        got.iter().fold((0, 0, 0), |(p, f, i), (_, t)| match t {
+            T::Pass => (p + 1, f, i),
+            T::Fail => (p, f + 1, i),
+            T::Ignored => (p, f, i + 1),
+        })
+    }
+    let mut tests = BTreeMap::new();
+    let (mut p, mut f, mut i, mut results) = (0u64, 0u64, 0u64, 0u64);
+    let mut s = S::Outside;
+    for line in lines {
+        let line = line.as_str();
+        s = match s {
+            S::Outside => {
+                if let Some(n) = parse_running_line(line) {
+                    if n == 0 {
+                        S::Trailer {
+                            got: Vec::new(),
+                            in_section: false,
+                            list: None,
+                        }
+                    } else {
+                        S::Tests {
+                            n,
+                            got: Vec::new(),
+                        }
+                    }
+                } else if parse_test_line(line).is_some() || parse_result_line(line).is_some() {
+                    return None;
+                } else {
+                    S::Outside
+                }
+            }
+            S::Tests { n, mut got } => {
+                if parse_running_line(line).is_some() {
+                    return None;
+                }
+                // A `test result:` here is a nested run's (inherited stdout);
+                // the real terminator cannot precede the N-th line.
+                if let Some(r) = parse_test_line(line) {
+                    got.push(r);
+                }
+                if got.len() as u64 == n {
+                    S::Trailer {
+                        got,
+                        in_section: false,
+                        list: None,
+                    }
+                } else {
+                    S::Tests { n, got }
+                }
+            }
+            S::Trailer {
+                got,
+                mut in_section,
+                mut list,
+            } => {
+                if let Some((a, b, c)) = parse_result_line(line) {
+                    let failed: Vec<&str> = got
+                        .iter()
+                        .filter(|(_, t)| *t == T::Fail)
+                        .map(|(k, _)| k.as_str())
+                        .collect();
+                    let listed = match &list {
+                        Some((true, names)) => failure_list_matches(names, &failed),
+                        _ => false,
+                    };
+                    if (a, b, c) == tally(&got) && (b == 0 || listed) {
+                        for (name, t) in got {
+                            record(&mut tests, name, t);
+                        }
+                        p = p.saturating_add(a);
+                        f = f.saturating_add(b);
+                        i = i.saturating_add(c);
+                        results += 1;
+                        S::Outside
+                    } else if !in_section {
+                        return None;
+                    } else {
+                        S::Trailer {
+                            got,
+                            in_section,
+                            list: None,
+                        }
+                    }
+                } else if line == "failures:" || line == "successes:" {
+                    in_section = true;
+                    S::Trailer {
+                        got,
+                        in_section,
+                        list: Some((line == "failures:", Vec::new())),
+                    }
+                } else if !in_section
+                    && (parse_test_line(line).is_some() || parse_running_line(line).is_some())
+                {
+                    return None;
+                } else if line.trim().is_empty() {
+                    S::Trailer {
+                        got,
+                        in_section,
+                        list,
+                    }
+                } else {
+                    let entry = line
+                        .strip_prefix("    ")
+                        .filter(|n| !n.is_empty() && !n.starts_with(' '));
+                    list = match (list, entry) {
+                        (Some((kind, mut names)), Some(n)) => {
+                            names.push(n.to_string());
+                            Some((kind, names))
+                        }
+                        _ => None,
+                    };
+                    S::Trailer {
+                        got,
+                        in_section,
+                        list,
+                    }
+                }
+            }
+        };
+    }
+    if !matches!(s, S::Outside) {
+        return None;
+    }
+    let counts = (results > 0).then_some((p, f, i, results));
+    Some((tests, counts))
+}
+
+fn tests_json(tests: &BTreeMap<String, T>) -> Value {
+    Value::Object(
+        tests
+            .iter()
+            .map(|(k, v)| (k.clone(), json!(v.as_str())))
+            .collect(),
+    )
+}
+
+/// Per-test results and counts of one run, from its full log.
+///
+/// * `tests`: name -> `"pass"` / `"fail"` / `"ignored"` from libtest
+///   `test <name> ... ok|FAILED|ignored` lines.
+/// * `counts`: the sum of the libtest `test result:` lines (one per test
+///   binary). `determined: false` with a reason when no such line could be
+///   parsed or the log could not be read: "could not count" is not `0 passed`.
+///
+/// A log with `running N tests` headers is read by libtest's structure
+/// ([`scan_framed`]): lines inside a failing test's captured output are not
+/// results. When that structure does not reconcile, `tests` comes from the
+/// conservative scan (every matching line, phantoms included — restrictive)
+/// and `counts` is `determined: false`: a nested `test result:` line could
+/// have inflated the sum, so the pass count is unknown. A log with no
+/// `running` header at all (not libtest's pretty format) is read by the
+/// conservative scan for both.
+pub fn parse_test_log(log: &Path) -> (Value, Value) {
+    let file = match std::fs::File::open(log) {
+        Ok(f) => f,
+        Err(e) => {
+            return (
+                json!({}),
+                json!({"determined": false, "reason": format!("run log could not be read: {e}")}),
+            )
+        }
+    };
+    let mut reader = std::io::BufReader::new(file);
+    let mut lines: Vec<String> = Vec::new();
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(e) => {
+                let (tests, _) = scan_conservative(&lines);
+                return (
+                    tests_json(&tests),
+                    json!({"determined": false, "reason": format!("run log read failed midway: {e}")}),
+                );
+            }
+        }
+        let line = String::from_utf8_lossy(&buf);
+        lines.push(line.trim_end_matches(['\n', '\r']).to_string());
+    }
+    let framed = lines.iter().any(|l| parse_running_line(l).is_some());
+    let (tests, counts) = if !framed {
+        let (tests, counts) = scan_conservative(&lines);
+        (tests, counts.ok_or(NO_RESULT_LINE))
+    } else {
+        match scan_framed(&lines) {
+            Some((tests, counts)) => (tests, counts.ok_or(NO_RESULT_LINE)),
+            None => (
+                scan_conservative(&lines).0,
+                Err("the libtest framing of the run log did not reconcile (a result line \
+                     outside a `running N tests` block, a block whose per-test lines or \
+                     `test result:` counts do not match, or a block never closed); every \
+                     matching line was taken as a result and the pass count is unknown"),
+            ),
+        }
+    };
+    let counts = match counts {
+        Err(reason) => json!({"determined": false, "reason": reason}),
+        Ok((p, f, i, results)) => json!({
+            "determined": true,
+            "passed": p,
+            "failed": f,
+            "ignored": i,
+            "result_lines": results,
+        }),
+    };
+    (tests_json(&tests), counts)
+}
+
+const NO_RESULT_LINE: &str = "no libtest `test result:` line in the run log (not a cargo test \
+                              run, or it died before printing one); this is NOT 0 passed";
+
+'''
+s=s[:start]+new+s[end:]
+open(p,'w').write(s)
+EOF
+. "$HOME/.cargo/env"; cargo check -p tdd 2>&1 | tail -20

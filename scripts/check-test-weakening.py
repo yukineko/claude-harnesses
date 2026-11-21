@@ -208,6 +208,7 @@ from weakening_vcs import (  # noqa: E402
     index_or_none,
 )
 from weakening_macro import template_invocation_edit_is_safe  # noqa: E402
+import weakening_macro as _wm  # noqa: E402  (tokenisers for the re-anchor shape)
 from weakening_macro_fnbody import fn_body_edit_is_safe  # noqa: E402
 
 
@@ -1612,6 +1613,120 @@ def head_marker_findings(rep: str, new: str, head_side: Side, after_side: Side) 
     ]
 
 
+def template_reanchor_detail(before_src: str, after_src: str, path: str):
+    """Finding detail for a RE-ANCHOR of generated tests, or None when the
+    change is not exactly that shape (the caller then stays Undetermined).
+
+    Shape (backlog 74810d3e, user-ruled false positive 2026-11-20): in an
+    integration test file that is all test surface, invocations of a
+    `macro_rules!` test template switch, arguments byte-identical, to ANOTHER
+    template (e.g. a new one asserting a different expected value). What the
+    moved tests assert changed and no scanner can judge it, so it is never
+    clean: `scan` reports `assertion-removed`, acknowledged only by a
+    `test-weakening-justified: <path>:assertion-removed - <reason>` line. It
+    is a finding, not Undetermined, because the rest IS computed (with
+    weakening_macro.py's tokenisers). All must hold:
+    * both sides balance; every `macro_rules!` is top-level; a template (a def
+      whose body holds a `#[test]`) is defined once and invoked only as a
+      top-level item at an item boundary;
+    * base templates are unchanged byte for byte (templates may only be
+      ADDED); every other non-invocation item is unchanged and in order;
+    * invocation argument texts are unique per side and equal as sets: none
+      removed, added or edited; only template (and order) may change, and at
+      least one changes template;
+    * a template a moved invocation leaves or enters has one arm with exactly
+      one `#[test]` and one `fn $x`, neither inside a `$(...)` repetition (one
+      invocation = one test); one moved INTO is a single plain arm
+      (`_single_plain_arm`) whose name argument is a bare identifier.
+    NOT proven: that a moved test still checks anything meaningful -- that is
+    what the human acknowledgment states."""
+    sides = []
+    for src in (before_src, after_src):
+        try:
+            masked = _mask_noncode(src, path)
+        except Undetermined:
+            return None
+        items = _wm._top_level_items(masked) if len(masked) == len(src) else None
+        if items is None or len(_wm._MACRO_RULES_RE.findall(masked)) != sum(
+                it[0] == "def" for it in items):
+            return None
+        defs = {}
+        for kind, name, s, e, _b in items:
+            if kind == "def" and TEST_ATTR_RE.search(masked[s:e]):
+                if name in defs:
+                    return None
+                defs[name] = (src[s:e].strip(), masked[s:e])
+        tinv = [it for it in items if it[0] == "inv" and it[1] in defs]
+        for name in defs:
+            own = [it for it in tinv if it[1] == name]
+            hits = re.findall(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"\s*!", masked)
+            if len(hits) != len(own) or not all(it[4] for it in own):
+                return None
+        invs, other, pos = {}, [], 0
+        for _k, name, s, e, _b in tinv + [(None, None, len(src), len(src), True)]:
+            chunk = _wm._items_in(src, masked, pos, s)
+            if chunk is None:
+                return None
+            other.extend(t for t, _m in chunk)
+            if name is not None:
+                m = _wm._INVOKE_RE.match(masked, s)
+                close = _wm._close(masked, m.end() - 1) if m else None
+                if close is None or src[m.end():close].strip() in invs:
+                    return None
+                invs[src[m.end():close].strip()] = (
+                    name, masked[m.end():close], src[m.end():close])
+            pos = e
+        sides.append((defs, invs, other))
+    (bd, bi, bo), (ad, ai, ao) = sides
+    if any(ad.get(n) != v for n, v in bd.items()) or set(bi) != set(ai):
+        return None
+    added = {ad[n][0] for n in ad if n not in bd}
+    if [t for t in ao if t not in added] != bo or len(ao) != len(bo) + len(added):
+        return None
+    moved = sorted(k for k in bi if bi[k][0] != ai[k][0])
+    if not moved:
+        return None
+
+    def one_test(masked_def: str) -> bool:
+        m = _wm._MACRO_DEF_RE.match(masked_def)
+        oc = _wm._close(masked_def, m.end() - 1) if m else None
+        inner = masked_def[m.end():oc] if oc is not None else ""
+        arm = _wm._ARM_RE.match(inner)
+        mc = _wm._close(inner, arm.end() - 1) if arm else None
+        arrow = _wm._ARROW_RE.match(inner, mc + 1) if mc is not None else None
+        bc = _wm._close(inner, arrow.end() - 1) if arrow else None
+        if bc is None or not _wm._ARM_END_RE.match(inner, bc + 1):
+            return False
+        body = inner[arrow.end():bc]
+        if len(TEST_ATTR_RE.findall(body)) != 1 or len(_wm._FN_META_RE.findall(body)) != 1:
+            return False
+        for rep in re.finditer(r"\$\s*\(", body):
+            rc = _wm._close(body, rep.end() - 1)
+            group = body[rep.end():rc] if rc is not None else None
+            if group is None or TEST_ATTR_RE.search(group) or re.search(r"\bfn\b", group):
+                return False
+        return True
+
+    names = []
+    for k in moved:
+        src_t, dst_t = bi[k][0], ai[k][0]
+        ok, npos = _wm._single_plain_arm(ad[dst_t][1])
+        if not (ok and npos is not None and one_test(bd[src_t][1]) and one_test(ad[dst_t][1])):
+            return None
+        args, depth, start, (_n, margs, raw) = [], 0, 0, ai[k]
+        for j, c in enumerate(margs):  # masked and raw share offsets
+            depth += (c in "([{") - (c in ")]}")
+            if c == "," and depth == 0:
+                args.append(raw[start:j].strip())
+                start = j + 1
+        args.append(raw[start:].strip())
+        if npos >= len(args) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args[npos]):
+            return None
+        names.append("{}() {}! -> {}!".format(args[npos], src_t, dst_t))
+    return ("{} generated test(s) re-anchored to a different macro_rules! template, so "
+            "what they assert changed: {}".format(len(names), ", ".join(names)))
+
+
 # Removed invocations of a test-generating `macro_rules!` defined in ANY file
 # (not only the scanned one): scripts/weakening_macro_resolve.py.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1702,29 +1817,23 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
             after = py_counts(after_src if is_py_test_file(new) else "", new or "")
             found = py_findings_for(rep, before, after)
         else:
-            before = (
-                counts(test_surface(before_src, old, base_side), old)
-                if before_src else counts("")
-            )
+            before_surface = test_surface(before_src, old, base_side) if before_src else ""
+            before = counts(before_surface, old) if before_src else counts("")
             after_surface = test_surface(after_src, new, after_side) if after_src else ""
             after = counts(after_surface, new) if after_src else counts("")
+            # Same path, integration test file, test surface = the whole file.
+            whole = (old == new and is_integration_tests_file(rep)
+                     and before_surface == before_src and after_surface == after_src)
             if (
                 before_src
                 and (before["template_tests"] or after["template_tests"])
                 and not (
                     old == new
                     and _only_proven_safe_line_changes(before_src, after_src, rep)
-                    and _only_proven_safe_line_changes(
-                        test_surface(before_src, old, base_side),
-                        test_surface(after_src, new, after_side),
-                        rep,
-                    )
+                    and _only_proven_safe_line_changes(before_surface, after_surface, rep)
                 )
                 and not (
-                    old == new
-                    and is_integration_tests_file(rep)
-                    and test_surface(before_src, old, base_side) == before_src
-                    and test_surface(after_src, new, after_side) == after_src
+                    whole
                     and template_invocation_edit_is_safe(
                         before_src, after_src,
                         _mask_noncode(before_src, rep), _mask_noncode(after_src, rep),
@@ -1732,10 +1841,7 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
                     )
                 )
                 and not (
-                    old == new
-                    and is_integration_tests_file(rep)
-                    and test_surface(before_src, old, base_side) == before_src
-                    and test_surface(after_src, new, after_side) == after_src
+                    whole
                     and fn_body_edit_is_safe(
                         before_src, after_src,
                         _mask_noncode(before_src, rep), _mask_noncode(after_src, rep),
@@ -1778,14 +1884,23 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
                 # attribute added/removed, no line moved between items and no
                 # assert-family macro lost from an edited fn
                 # (`fn_body_edit_is_safe`, weakening_macro_fnbody.py).
-                # Everything that module cannot prove stays Undetermined.
-                raise Undetermined(
-                    f"{rep}: #[test] inside a macro_rules! template in a file "
-                    "that exists at the base -- the change is not one of the "
-                    "proven-safe shapes (invocation counting included), so "
-                    "removed generated tests cannot be ruled out"
-                )
-            found = findings_for(rep, before, after)
+                # One unsafe shape IS computed (backlog 74810d3e): invocations
+                # re-anchored to another template (`template_reanchor_detail`)
+                # -> an `assertion-removed` finding, blocking unless acknowledged.
+                # Everything else stays Undetermined.
+                reanchor = (template_reanchor_detail(before_src, after_src, rep)
+                            if whole else None)
+                if reanchor is None:
+                    raise Undetermined(
+                        f"{rep}: #[test] inside a macro_rules! template in a file "
+                        "that exists at the base -- the change is not one of the "
+                        "proven-safe shapes (invocation counting included), so "
+                        "removed generated tests cannot be ruled out"
+                    )
+                found = findings_for(rep, before, after)
+                found.append((rep, KIND_ASSERTION_REMOVED, reanchor))
+            else:
+                found = findings_for(rep, before, after)
         # A file that did not exist at the base cannot have had existing
         # coverage weakened, so the ignore-added finding is lifted for it
         # (old_is_new, captured before the body-file remap above). For a Rust

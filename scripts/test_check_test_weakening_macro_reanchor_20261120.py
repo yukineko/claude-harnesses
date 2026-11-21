@@ -196,7 +196,6 @@ class MacroReanchor(unittest.TestCase):
                            text=True, timeout=60)
         return r.returncode, r.stdout, r.stderr
 
-    @pytest.mark.xfail(strict=True, reason=RED_REASON)
     def test_red_justified_line_acknowledges_the_reanchor(self) -> None:
         # The gate must report this change as a finding (with a kind) for the
         # path; it must not be silently clean.

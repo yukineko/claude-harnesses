@@ -1902,3 +1902,33 @@ exit 101: .2.912 (/Users/yuki/src/.harness-worktrees/session-eaa077f4-filing/cra
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.93s
      Running tests/backlog_20261122_ack_pager_empty_value_fp.rs (target/debug/deps/backlog_20261122_ack_pager_empty_value_fp-f6bb19787fc27476)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261122_ack_pager_empty_value_fp`"""
+
+[[task]]
+id = "3a90dee4"
+title = "tdd evidence: an unframed run log (no 'running N tests') sums every 'test result:' line and records the inflated counts as determined: true"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-22 at main rev 6ae161ee7 (static reading) after condukt run run-20261122-020202-63344 changed crates/tdd/src/evidence.rs. Verbatim (parse_test_log): 'let (tests, counts) = if !framed { let (tests, counts) = scan_conservative(&lines); (tests, counts.ok_or(NO_RESULT_LINE)) }' and Ok(...) => json!({"determined": true, ...}); the framed fallback instead reports determined:false because 'a nested `test result:` could have inflated the sum, so the pass count is unknown'. Pinned by unit test unframed_log_keeps_the_conservative_scan (asserts counts.failed == 2 from a duplicated result line, determined == true). RED: integration test drives the tdd binary (tdd red) on a command printing an unframed libtest-shaped log with one real failure and a nested 'test result: FAILED. 0 passed; 1 failed; 0 ignored' inside the captured output; asserts the RED proof's counts is determined:false or failed == 1. Readings: (a) defect -- an inflated sum is reported as determined (an unobserved count claimed as fact, CLAUDE.md s3/s4); (b) intended -- an unframed log is not libtest pretty format, the docstring says it 'is read by the conservative scan for both', and inflation is the restrictive direction. Tell apart: whether determined:true promises exact counts; whether any consumer reads counts.passed/failed as exact. DOES NOT PROVE: that real cargo output ever lacks the running line; that any consumer acts on the inflated number; nextest/pytest; which side should change."""
+created_at = 1795282413
+updated_at = 1795282413
+weight = 0.0
+issue_number = 1973
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1973"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261122_unframed_log_inflated_counts_determined -- --ignored"
+rev = "3f2cc38f88b52489f82dbead3e644ec01a6064fc"
+observed_at = 1795282413
+detail = """
+exit 101: s-worktrees/session-eaa077f4-filing/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.76s
+     Running tests/backlog_20261122_unframed_log_inflated_counts_determined.rs (target/debug/deps/backlog_20261122_unframed_log_inflated_counts_determined-a095f4304078615a)
+error: test failed, to rerun pass `-p tdd --test backlog_20261122_unframed_log_inflated_counts_determined`"""

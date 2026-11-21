@@ -82,7 +82,7 @@ exit 101
 "#;
 
 #[test]
-#[ignore = "RED: unframed log sums a nested test result line and reports it as determined"]
+#[ignore = "RED(3a90dee4): unframed log sums a nested test result line and reports it as determined"]
 fn unframed_log_nested_result_line_is_not_a_determined_inflated_count() {
     let d = Dir(std::env::temp_dir().join(format!("tdd-unframed-counts-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&d.0);

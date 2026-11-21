@@ -89566,3 +89566,241 @@ rev = "8def619efbb9cf532665288e5a1dc04e35fbf0ad"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "bf9a13f6"
+title = "blastguard test RED: high_blast_tier outside_tree_rm_with_a_resolving_cd_stays_allowed fails"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "test-red",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "high_blast_tier.rs:257: a cd that resolves the .. back to an ordinary place must stay Allow. Observed 2026-11-20 on main a0ba7bad0 (detached worktree verify-main-q3q4), found while integrating Q3/Q4 deny-target table (7275b9d9); same failure on the integration tree. Readings: (a) real regression on main; (b) stale assert vs a later ruling or the S5 AST evaluator; distinguish by git log -S on the asserted case."
+created_at = 1795110533
+updated_at = 1795220996
+weight = 0.0
+issue_number = 1914
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1914"
+issue_closed_at = 1795220998
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test high_blast_tier outside_tree_rm_with_a_resolving_cd_stays_allowed"
+rev = "4c286f7b61e70f4a56ccb658a200c3c4085bdf1a"
+observed_at = 1795110533
+detail = """
+exit 101: 0 ignored; 0 measured; 12 filtered out; finished in 0.02s
+
+   Compiling blastguard v0.2.761 (/Users/yuki/src/.harness-worktrees/session-179495ba/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.69s
+     Running tests/high_blast_tier.rs (target/debug/deps/high_blast_tier-14ff33106b5e56ea)
+error: test failed, to rerun pass `-p blastguard --test high_blast_tier`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test high_blast_tier outside_tree_rm_with_a_resolving_cd_stays_allowed"
+exit = 0
+passed = 1
+rev = "0c7761fbe4d01c06fdb9fd80262d77d390344e07"
+observed_at = 1795220970
+output_digest = "sha256:7a851d3e7720f39a4a0790d7db28e6bd7203e9c9cbd702464610aa6c17a60992"
+excerpt = """
+nge v0.9.0
+   Compiling prettyplease v0.2.37
+   Compiling parking_lot_core v0.9.12
+   Compiling serde_json v1.0.150
+   Compiling unic-char-property v0.9.0
+   Compiling pest v2.9.5
+   Compiling regex-automata v0.4.14
+   Compiling serde_derive v1.0.228
+   Compiling is-macro v0.3.8
+   Compiling unic-ucd-version v0.9.0
+   Compiling indexmap v2.14.0
+   Compiling darling_macro v0.21.3
+   Compiling darling_macro v0.20.11
+   Compiling pest_meta v2.9.5
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling anstyle-parse v1.0.0
+   Compiling unicode_names2 v1.3.0
+   Compiling num-integer v0.1.47
+   Compiling errno v0.3.14
+   Compiling rustpython-parser-vendored v0.4.0
+   Compiling ahash v0.8.12
+   Compiling option-ext v0.2.0
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling colorchoice v1.0.5
+   Compiling smallvec v1.16.5
+   Compiling anstyle-query v1.1.5
+   Compiling core-foundation-sys v0.8.7
+   Compiling scopeguard v1.2.0
+   Compiling anstyle v1.0.14
+   Compiling toml_write v0.1.2
+   Compiling itoa v1.0.18
+   Compiling winnow v0.7.15
+   Compiling thiserror v2.0.21
+   Compiling bitflags v2.13.0
+   Compiling pest_generator v2.9.5
+   Compiling anstream v1.0.0
+   Compiling iana-time-zone v0.1.65
+   Compiling lock_api v0.4.14
+   Compiling phf v0.11.3
+   Compiling dirs-sys v0.4.1
+   Compiling rustpython-parser-core v0.4.0
+   Compiling num-bigint v0.4.8
+   Compiling digest v0.10.7
+   Compiling rustpython-parser v0.4.0
+   Compiling darling v0.20.11
+   Compiling darling v0.21.3
+   Compiling thiserror-impl v2.0.21
+   Compiling cpufeatures v0.2.17
+   Compiling clap_lex v1.1.0
+   Compiling peg-runtime v0.8.6
+   Compiling static_assertions v1.1.0
+   Compiling toml_datetime v0.6.11
+   Compiling serde_spanned v0.6.9
+   Compiling either v1.19.0
+   Compiling foldhash v0.2.0
+   Compiling toml_edit v0.22.27
+   Compiling fastrand v2.4.1
+   Compiling allocator-api2 v0.2.21
+   Compiling itertools v0.11.0
+   Compiling tempfile v3.27.0
+   Compiling hashbrown v0.16.1
+   Compiling rustpython-ast v0.4.0
+   Compiling peg-macros v0.8.6
+   Compiling cached_proc_macro v0.27.0
+   Compiling clap_builder v4.6.0
+   Compiling sha2 v0.10.9
+   Compiling bon-macros v3.9.3
+   Compiling toml v0.8.23
+   Compiling dirs v5.0.1
+   Compiling pest_derive v2.9.5
+   Compiling parking_lot v0.12.5
+   Compiling chrono v0.4.45
+   Compiling regex v1.12.4
+   Compiling unic-emoji-char v0.9.0
+   Compiling unic-ucd-ident v0.9.0
+   Compiling tracing-attributes v0.1.31
+   Compiling clap_derive v4.6.1
+   Compiling wait-timeout v0.2.1
+   Compiling console v0.16.6
+   Compiling tracing-core v0.1.36
+   Compiling lalrpop-util v0.20.2
+   Compiling web-time v1.1.0
+   Compiling arrayvec v0.7.8
+   Compiling similar v2.7.0
+   Compiling rustc-hash v1.1.0
+   Compiling cached_proc_macro_types v0.1.1
+   Compiling pin-project-lite v0.2.17
+   Compiling cached v0.59.0
+   Compiling utf8-chars v3.0.7
+   Compiling tracing v0.1.44
+   Compiling peg v0.8.6
+   Compiling clap v4.6.1
+   Compiling insta v1.49.0
+   Compiling harness-core v0.2.112 (/Users/yuki/src/.harness-worktrees/backlog-done-62e92d16/crates/harness-core)
+   Compiling bstr v1.12.2
+   Compiling winnow v1.0.4
+   Compiling target-triple v1.0.1
+   Compiling indenter v0.3.4
+   Compiling globset v0.4.18
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling serde_spanned v1.1.1
+   Compiling progeffect v0.1.7 (/Users/yuki/src/.harness-worktrees/backlog-done-62e92d16/crates/progeffect)
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling toml v1.1.3+spec-1.1.0
+   Compiling glob v0.3.3
+   Compiling bon v3.9.3
+   Compiling termcolor v1.4.1
+   Compiling brush-parser v0.4.0
+   Compiling trybuild v1.0.118
+   Compiling overwatch v0.2.127 (/Users/yuki/src/.harness-worktrees/backlog-done-62e92d16/crates/overwatch)
+   Compiling blastguard v0.2.841 (/Users/yuki/src/.harness-worktrees/backlog-done-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.32s
+     Running tests/high_blast_tier.rs (target/debug/deps/high_blast_tier-fec0a20e216d7a4c)
+"""
+
+[task.closure.red]
+rev = "8a0c452a3d404faba88e2d8c1a53ea89999c51f6"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "975d8c8d"
+title = "blastguard test RED: rm/unlink/rmdir of ~/.ssh/id_rsa, ~/.gnupg judged Allow in home_asset tests"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "test-red",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "home_asset_unlink_rmdir_and_opt_root: control rm ~/.ssh/id_rsa must be Deny, got Allow (main; Deny on the Q3/Q4 tree); unlink ~/.ssh/id_rsa got Allow; rmdir ~/.gnupg got Allow; on the Q3/Q4 tree unlink HOME/.gnupg/pubring.kbx still Allow. Observed 2026-11-20 on main a0ba7bad0 (detached worktree verify-main-q3q4), found while integrating Q3/Q4 deny-target table (7275b9d9); same failure on the integration tree. Readings: (a) real regression on main; (b) stale assert vs a later ruling or the S5 AST evaluator; distinguish by git log -S on the asserted case."
+created_at = 1795110546
+updated_at = 1795221004
+weight = 0.0
+issue_number = 1915
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1915"
+issue_closed_at = 1795221007
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test home_asset_unlink_rmdir_and_opt_root"
+rev = "4c286f7b61e70f4a56ccb658a200c3c4085bdf1a"
+observed_at = 1795110546
+detail = """
+exit 101: ompiling blastguard v0.2.761 (/Users/yuki/src/.harness-worktrees/session-179495ba/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/home_asset_unlink_rmdir_and_opt_root.rs (target/debug/deps/home_asset_unlink_rmdir_and_opt_root-3e77f852adefa4b8)
+error: test failed, to rerun pass `-p blastguard --test home_asset_unlink_rmdir_and_opt_root`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test home_asset_unlink_rmdir_and_opt_root"
+exit = 0
+passed = 7
+rev = "0c7761fbe4d01c06fdb9fd80262d77d390344e07"
+observed_at = 1795221002
+output_digest = "sha256:066e3acf75b24432b5a19137c303e998d12f20e007127ac878b79d8d74f727b0"
+excerpt = """
+
+running 7 tests
+test control_rm_home_assets_are_deny ... ok
+test rmdir_home_asset_dir_is_deny ... ok
+test unlink_home_asset_is_deny ... ok
+test opt_write_without_session_root_is_deny ... ok
+test opt_sibling_write_is_still_system_dir_deny ... ok
+test opt_project_write_inside_session_root_is_exempt ... ok
+test control_unlink_rmdir_ordinary_targets_are_allow ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Compiling blastguard v0.2.841 (/Users/yuki/src/.harness-worktrees/backlog-done-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running tests/home_asset_unlink_rmdir_and_opt_root.rs (target/debug/deps/home_asset_unlink_rmdir_and_opt_root-cfd0f55f14af5c94)
+"""
+
+[task.closure.red]
+rev = "8a0c452a3d404faba88e2d8c1a53ea89999c51f6"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

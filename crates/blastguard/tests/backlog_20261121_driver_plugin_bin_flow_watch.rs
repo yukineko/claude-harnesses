@@ -13,13 +13,21 @@
 //! are Allow by bare name via PATH).
 //!
 //! Control: a binary in an arbitrary dir (`$HOME/random/bin/x`) in the same
-//! driver session must NOT be Allow.
+//! driver session must NOT be Allow. Further controls (added with the fix,
+//! backlog a50833d7), all NOT Allow: the same cache bin in a non-driver
+//! session; a cache bin of another owner (`cache/otherorg/...`); a deeper
+//! (`bin/sub/x`) or shallower (`<plugin>/bin/x`) cache path; a `..` traversal
+//! out of the cache bin dir; a cache-bin symlink to `$HOME/random/bin/x`; a
+//! symlinked `cache/yukineko` owner dir. The cache bin followed by
+//! `rm -rf ~` stays Deny.
 //!
 //! Driver registration layout copied from
 //! `backlog_20261121_flow_driver_session_never_asks.rs`.
 //!
-//! DOES NOT PROVE: other plugin names, a stale driver, subagent mode, the
-//! exact reason text.
+//! DOES NOT PROVE: other yukineko plugin names, a stale driver, subagent mode,
+//! the exact reason text, that the non-Allow controls are Deny rather than Ask
+//! (they pass on the pre-fix tree too, so they guard against a fail-open of
+//! the fix, not the fix itself).
 
 #[path = "support/bounded.rs"]
 mod bounded;
@@ -186,7 +194,6 @@ fn run_main(fx: &Fx, command: &str) -> (String, String) {
 }
 
 #[test]
-#[ignore = "RED: driver session denies installed plugin bin flow-watch"]
 fn driver_session_allows_installed_plugin_bin_flow_watch() {
     let fx = fixture("main");
     fx.register_driver(SESSION);
@@ -216,4 +223,119 @@ fn control_driver_session_random_dir_bin_not_allow() {
     );
     let (d, r) = run_main(&fx, &cmd);
     assert_ne!(d, "allow", "{cmd:?} must not be allow ({r})");
+}
+
+/// Asserts the command is NOT allow in the fixture (driver registered iff
+/// `driver`).
+fn assert_not_allow(tag: &str, driver: bool, bin_rel: &str, make: Option<&str>) {
+    let fx = fixture(tag);
+    if driver {
+        fx.register_driver(SESSION);
+    }
+    if let Some(m) = make {
+        fx.make_exe(&fx.home().join(m));
+    }
+    let bin = format!("{}/{bin_rel}", fx.home().display());
+    let cmd = format!(
+        "{bin} --session {SESSION} --project {}",
+        fx.repo().display()
+    );
+    let (d, r) = run_main(&fx, &cmd);
+    assert_ne!(d, "allow", "{cmd:?} must not be allow ({r})");
+}
+
+#[test]
+fn control_non_driver_session_does_not_trust_cache_bin() {
+    let p = ".claude/plugins/cache/yukineko/flow/0.2.42/bin/flow-watch";
+    assert_not_allow("nodrv", false, p, Some(p));
+}
+
+#[test]
+fn control_driver_session_other_owner_cache_bin_not_allow() {
+    let p = ".claude/plugins/cache/otherorg/flow/0.2.42/bin/flow-watch";
+    assert_not_allow("other", true, p, Some(p));
+}
+
+#[test]
+fn control_driver_session_deeper_cache_path_not_allow() {
+    let p = ".claude/plugins/cache/yukineko/flow/0.2.42/bin/sub/flow-watch";
+    assert_not_allow("deep", true, p, Some(p));
+}
+
+#[test]
+fn control_driver_session_shallower_cache_path_not_allow() {
+    let p = ".claude/plugins/cache/yukineko/flow/bin/flow-watch";
+    assert_not_allow("shallow", true, p, Some(p));
+}
+
+#[test]
+fn control_driver_session_dotdot_traversal_out_of_cache_not_allow() {
+    // Creates the cache bin dir so the `..` hops resolve, then escapes it.
+    let fx_dir = ".claude/plugins/cache/yukineko/flow/0.2.42/bin/flow-watch";
+    let p = ".claude/plugins/cache/yukineko/flow/0.2.42/bin/../../../../../../random/bin/x";
+    let fx = fixture("dotdot");
+    fx.register_driver(SESSION);
+    fx.make_exe(&fx.home().join(fx_dir));
+    fx.make_exe(&fx.home().join("random/bin/x"));
+    let cmd = format!(
+        "{}/{p} --session {SESSION} --project {}",
+        fx.home().display(),
+        fx.repo().display()
+    );
+    let (d, r) = run_main(&fx, &cmd);
+    assert_ne!(d, "allow", "{cmd:?} must not be allow ({r})");
+}
+
+#[test]
+fn control_driver_session_symlink_escape_from_cache_bin_not_allow() {
+    let fx = fixture("symlink");
+    fx.register_driver(SESSION);
+    let target = fx.home().join("random/bin/x");
+    fx.make_exe(&target);
+    let link = fx
+        .home()
+        .join(".claude/plugins/cache/yukineko/flow/0.2.42/bin/flow-watch");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let cmd = format!(
+        "{} --session {SESSION} --project {}",
+        link.display(),
+        fx.repo().display()
+    );
+    let (d, r) = run_main(&fx, &cmd);
+    assert_ne!(d, "allow", "{cmd:?} must not be allow ({r})");
+}
+
+#[test]
+fn control_driver_session_symlinked_cache_owner_dir_not_allow() {
+    // `cache/yukineko` itself is a symlink to an arbitrary directory: the
+    // cache root does not resolve to itself, so nothing under it is trusted.
+    let fx = fixture("symowner");
+    fx.register_driver(SESSION);
+    let elsewhere = fx.home().join("random/cache");
+    fx.make_exe(&elsewhere.join("flow/0.2.42/bin/flow-watch"));
+    let cache = fx.home().join(".claude/plugins/cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, cache.join("yukineko")).unwrap();
+    let bin = cache.join("yukineko/flow/0.2.42/bin/flow-watch");
+    let cmd = format!(
+        "{} --session {SESSION} --project {}",
+        bin.display(),
+        fx.repo().display()
+    );
+    let (d, r) = run_main(&fx, &cmd);
+    assert_ne!(d, "allow", "{cmd:?} must not be allow ({r})");
+}
+
+#[test]
+fn control_driver_session_cache_bin_then_rm_home_is_deny() {
+    let fx = fixture("harm");
+    fx.register_driver(SESSION);
+    let bin = fx
+        .home()
+        .join(".claude/plugins/cache/yukineko/flow/0.2.42/bin/flow-watch");
+    fx.make_exe(&bin);
+    let cmd = format!("{} --session {SESSION} && rm -rf ~", bin.display());
+    let (d, r) = run_main(&fx, &cmd);
+    assert_eq!(d, "deny", "{cmd:?} must be deny ({r})");
 }

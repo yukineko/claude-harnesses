@@ -260,82 +260,23 @@ FAILED scripts/test_fail_open_mutation_leaves_no_artifacts_stub_invoked_20261114
 ============================== 1 failed in 0.24s ==============================="""
 
 [[task]]
-id = "3109dbf3"
-title = "blastguard: python3 - heredoc program with rmtree only inside a plain (single-line) string literal asked/denied (no exec/eval sink)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-15 at main 8c135610e (installed blastguard 0.2.613), actor=subagent, Bash tool call: python3 - <<'PY' heredoc whose program only built a dict of strings and wrote JSON via json.dump; one plain double-quoted string contained backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp; rmtree only inside an ordinary literal, never executed, no exec/eval/os.system sink. Verbatim hook reason: "PreToolUse:Bash hook error: `python3 - <<'PY'` takes its program from stdin, and a quoted string in its program spells `rmtree`, which deletes files or directories outright if that string is run as code; blastguard cannot show it is not". Minimised repro at worktree rev (c82d97250 + test): main session gets ask with reason 'spells rmtree only inside plain quoted string literals ... cannot show that string is never run as code'. Readings: (a) real FP - literal never run as code; per 2026-11-08 ruling use the Python lexer (detect/interpreter/python_semantics.rs) to show no sink reaches the literal -> allow. (b) intended Ask from 27795e6e - tell apart: if the program has an exec/eval/compile/os.system/subprocess/importlib/getattr sink the literal can reach, or one cannot be excluded, Ask is correct and the test must be narrowed with a stated reason; the minimised repro has none, so (a). Related: row on triple-quoted literal case (tests/backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp.rs)."""
-created_at = 1794743490
-updated_at = 1794743490
-weight = 0.0
-issue_number = 1805
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1805"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261115_python_stdin_plain_string_names_rmtree_fp -- --include-ignored"
-rev = "fa1d871cfefb8dcf500171af98ba6018933ada63"
-observed_at = 1794743490
-detail = """
-exit 101: iteral-20261115/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.98s
-     Running tests/backlog_20261115_python_stdin_plain_string_names_rmtree_fp.rs (target/debug/deps/backlog_20261115_python_stdin_plain_string_names_rmtree_fp-d7b066629f23631d)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_stdin_plain_string_names_rmtree_fp`"""
-
-[[task]]
-id = "8ce33823"
-title = "blastguard FP: python3 -c print(vars()) refused as 'builds or decodes the code it runs (vars()' while print(locals()) is allowed"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1794743432
-updated_at = 1794743432
-weight = 0.0
-issue_number = 1802
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1802"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261115_python_c_vars_call_inline_eval_ask_fp -- --include-ignored"
-rev = "c82d9725085e6bd5c378274f0ebad8fb810665ab"
-observed_at = 1794743432
-detail = """
-exit 101: -worktrees/session-6dcca0ad/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.04s
-     Running tests/backlog_20261115_python_c_vars_call_inline_eval_ask_fp.rs (target/debug/deps/backlog_20261115_python_c_vars_call_inline_eval_ask_fp-8afe83282daea963)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_c_vars_call_inline_eval_ask_fp`"""
-
-[[task]]
 id = "c7cc67c1"
 title = "blastguard_fp_replay.py: --binary accepts any executable; a silent exit-0 non-blastguard binary (/bin/true) is counted as allow"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p2"]
 touched_files = []
-status = "pending"
-notes = 'Observed 2026-11-15 at main a8e92b562 (script from 4d1d74f6c). main() checks --binary only with os.access(X_OK); parse_output reads exit 0 + empty stdout as allow (the hookio Allow shape). Replaying a log through /usr/bin/true therefore turns every replayable record into allow, silently zeroing the FP measurement instead of reporting undetermined (CLAUDE.md s3). Verbatim RED (--runxfail): AssertionError "/usr/bin/true (not blastguard) was accepted as --binary and its silent exit 0 was counted as allow: rc=0 decisions=[allow]". Readings: (a) defect - the measuring stick cannot tell a wrong binary from one that allows everything; (b) operator responsibility to pass the right binary - even then a wrong path silently yields a plausible all-allow result, which is the fail-open shape. DOES NOT PROVE how to identify blastguard (e.g. a --version probe). RED: scripts/test_blastguard_fp_replay_non_blastguard_binary_20261115.py (xfail strict, commit 4e3c2b396, branch filings/offtopic-20261115).'
+status = "failed"
+notes = """
+Observed 2026-11-15 at main a8e92b562 (script from 4d1d74f6c). main() checks --binary only with os.access(X_OK); parse_output reads exit 0 + empty stdout as allow (the hookio Allow shape). Replaying a log through /usr/bin/true therefore turns every replayable record into allow, silently zeroing the FP measurement instead of reporting undetermined (CLAUDE.md s3). Verbatim RED (--runxfail): AssertionError "/usr/bin/true (not blastguard) was accepted as --binary and its silent exit 0 was counted as allow: rc=0 decisions=[allow]". Readings: (a) defect - the measuring stick cannot tell a wrong binary from one that allows everything; (b) operator responsibility to pass the right binary - even then a wrong path silently yields a plausible all-allow result, which is the fail-open shape. DOES NOT PROVE how to identify blastguard (e.g. a --version probe). RED: scripts/test_blastguard_fp_replay_non_blastguard_binary_20261115.py (xfail strict, commit 4e3c2b396, branch filings/offtopic-20261115).
+flow driver 62e92d16 cannot observe RED: repro 'python3 -m pytest --runxfail ...' is denied in driver sessions and subagents (python -m: Table B.5 Undetermined, script-quarantine ruling). Needs a non-driver session."""
 created_at = 1794746224
-updated_at = 1794746224
+updated_at = 1795292837
+defer_until = 1795465637
 weight = 0.0
 issue_number = 1824
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1824"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

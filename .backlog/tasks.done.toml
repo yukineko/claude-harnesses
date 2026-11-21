@@ -94433,3 +94433,96 @@ auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はあり
    Compiling blastguard v0.2.921 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.60s
      Running tests/stdin_python_write_mode_misattributed_fp_20261113.rs (target/debug/deps/stdin_python_write_mode_misattributed_fp_20261113-6d8f5547fa574beb)"""
+
+[[task]]
+id = "8ce33823"
+title = "blastguard FP: python3 -c print(vars()) refused as 'builds or decodes the code it runs (vars()' while print(locals()) is allowed"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261115_python_c_vars_call_inline_eval_ask_fp -- --include-ignored; rev: 81e0a06074b9f9165ca7d707b2b5e3e50a30ff39; observed: exit 0: ored; 0 measured; 0 filtered out; finished in 1.46s
+
+   Compiling blastguard v0.2.925 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.04s
+     Running tests/backlog_20261115_python_c_vars_call_inline_eval_ask_fp.rs (target/debug/deps/backlog_20261115_python_c_vars_call_inline_eval_ask_fp-b75573ac289bb9cb)"""
+created_at = 1794743432
+updated_at = 1795292819
+weight = 0.0
+issue_number = 1802
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1802"
+issue_closed_at = 1795292822
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_c_vars_call_inline_eval_ask_fp -- --include-ignored"
+rev = "c82d9725085e6bd5c378274f0ebad8fb810665ab"
+observed_at = 1794743432
+detail = """
+exit 101: -worktrees/session-6dcca0ad/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.04s
+     Running tests/backlog_20261115_python_c_vars_call_inline_eval_ask_fp.rs (target/debug/deps/backlog_20261115_python_c_vars_call_inline_eval_ask_fp-8afe83282daea963)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_c_vars_call_inline_eval_ask_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261115_python_c_vars_call_inline_eval_ask_fp -- --include-ignored; rev: 81e0a06074b9f9165ca7d707b2b5e3e50a30ff39; observed: exit 0: ored; 0 measured; 0 filtered out; finished in 1.46s
+
+   Compiling blastguard v0.2.925 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.04s
+     Running tests/backlog_20261115_python_c_vars_call_inline_eval_ask_fp.rs (target/debug/deps/backlog_20261115_python_c_vars_call_inline_eval_ask_fp-b75573ac289bb9cb)"""
+
+[[task]]
+id = "3109dbf3"
+title = "blastguard: python3 - heredoc program with rmtree only inside a plain (single-line) string literal asked/denied (no exec/eval sink)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-15 at main 8c135610e (installed blastguard 0.2.613), actor=subagent, Bash tool call: python3 - <<'PY' heredoc whose program only built a dict of strings and wrote JSON via json.dump; one plain double-quoted string contained backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp; rmtree only inside an ordinary literal, never executed, no exec/eval/os.system sink. Verbatim hook reason: "PreToolUse:Bash hook error: `python3 - <<'PY'` takes its program from stdin, and a quoted string in its program spells `rmtree`, which deletes files or directories outright if that string is run as code; blastguard cannot show it is not". Minimised repro at worktree rev (c82d97250 + test): main session gets ask with reason 'spells rmtree only inside plain quoted string literals ... cannot show that string is never run as code'. Readings: (a) real FP - literal never run as code; per 2026-11-08 ruling use the Python lexer (detect/interpreter/python_semantics.rs) to show no sink reaches the literal -> allow. (b) intended Ask from 27795e6e - tell apart: if the program has an exec/eval/compile/os.system/subprocess/importlib/getattr sink the literal can reach, or one cannot be excluded, Ask is correct and the test must be narrowed with a stated reason; the minimised repro has none, so (a). Related: row on triple-quoted literal case (tests/backlog_20261114_python_stdin_triple_quoted_rmtree_literal_fp.rs).
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261115_python_stdin_plain_string_names_rmtree_fp -- --include-ignored; rev: 81e0a06074b9f9165ca7d707b2b5e3e50a30ff39; observed: exit 0:  measured; 0 filtered out; finished in 0.71s
+
+   Compiling blastguard v0.2.925 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
+     Running tests/backlog_20261115_python_stdin_plain_string_names_rmtree_fp.rs (target/debug/deps/backlog_20261115_python_stdin_plain_string_names_rmtree_fp-41118c5a5d66d562)"""
+created_at = 1794743490
+updated_at = 1795292824
+weight = 0.0
+issue_number = 1805
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1805"
+issue_closed_at = 1795292827
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261115_python_stdin_plain_string_names_rmtree_fp -- --include-ignored"
+rev = "fa1d871cfefb8dcf500171af98ba6018933ada63"
+observed_at = 1794743490
+detail = """
+exit 101: iteral-20261115/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.98s
+     Running tests/backlog_20261115_python_stdin_plain_string_names_rmtree_fp.rs (target/debug/deps/backlog_20261115_python_stdin_plain_string_names_rmtree_fp-d7b066629f23631d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261115_python_stdin_plain_string_names_rmtree_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261115_python_stdin_plain_string_names_rmtree_fp -- --include-ignored; rev: 81e0a06074b9f9165ca7d707b2b5e3e50a30ff39; observed: exit 0:  measured; 0 filtered out; finished in 0.71s
+
+   Compiling blastguard v0.2.925 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
+     Running tests/backlog_20261115_python_stdin_plain_string_names_rmtree_fp.rs (target/debug/deps/backlog_20261115_python_stdin_plain_string_names_rmtree_fp-41118c5a5d66d562)"""

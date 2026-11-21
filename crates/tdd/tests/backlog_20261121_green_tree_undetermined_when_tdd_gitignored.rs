@@ -136,3 +136,56 @@ fn green_tree_determined_when_tdd_dir_is_gitignored() {
         g["tree_identity"]
     );
 }
+
+/// Control for the exclusion half of the fix (verifier finding on 23ea6dddc):
+/// when `.tdd/` is NOT ignored it is an untracked dir holding the RED proof,
+/// and `content_tree` must still leave it out. After impl.txt is committed the
+/// working content equals HEAD's tree plus `.tdd/`, so the GREEN proof's tree
+/// must equal `HEAD^{tree}` exactly. If `.tdd/` leaked in, the ids differ.
+/// DOES NOT PROVE: a custom in-repo proof dir (only the default `.tdd`).
+#[test]
+fn green_tree_excludes_untracked_non_ignored_tdd_dir() {
+    let d = Dir(std::env::temp_dir().join(format!("tdd-gi-excl-{}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&d.0);
+    let home = d.0.join("home");
+    let work = d.0.join("work");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    git(&work, &["init", "-q", "-b", "main"]);
+    git(&work, &["config", "user.email", "t@example.invalid"]);
+    git(&work, &["config", "user.name", "t"]);
+    std::fs::write(work.join("a.txt"), "a\n").unwrap();
+    std::fs::write(work.join(".gitignore"), "target/\n").unwrap();
+    git(&work, &["add", "a.txt", ".gitignore"]);
+    git(&work, &["commit", "-q", "--no-verify", "-m", "init"]);
+    let cmd = "test -f impl.txt";
+    let red = tdd(&home, &work, &["red", "--task", "t1", "--cmd", cmd]);
+    assert_eq!(red.status.code(), Some(0), "control: RED recorded: {}", s(&red));
+    std::fs::write(work.join("impl.txt"), "impl\n").unwrap();
+    git(&work, &["add", "impl.txt"]);
+    git(&work, &["commit", "-q", "--no-verify", "-m", "impl"]);
+    assert!(
+        work.join(".tdd").join("t1.red.json").is_file(),
+        "control: the RED proof sits in the untracked, non-ignored .tdd/"
+    );
+    let green = tdd(&home, &work, &["green", "--task", "t1", "--cmd", cmd]);
+    assert_eq!(green.status.code(), Some(0), "control: GREEN recorded: {}", s(&green));
+    let g: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(work.join(".tdd").join("t1.green.json")).unwrap(),
+    )
+    .unwrap();
+    let head_tree = {
+        let o = harness_core::git_env::scrub(&mut Command::new("git"))
+            .args(["rev-parse", "HEAD^{tree}"])
+            .current_dir(&work)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    assert_eq!(
+        g["tree_identity"]["tree"].as_str(),
+        Some(head_tree.as_str()),
+        "GREEN tree must equal HEAD^{{tree}} (.tdd/ excluded): {}",
+        g["tree_identity"]
+    );
+}

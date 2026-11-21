@@ -64,7 +64,9 @@
 //!   programs only); `-c` and a literal stdin program give no B.5 opinion —
 //!   stage S5 (`s5.rs`) parses and judges them; any other stdin →
 //!   Undetermined;
-//! * `eval` with operands → Undetermined;
+//! * `eval` with operands → Undetermined, except that the Deny of the code a
+//!   lone determined-substitution operand computes is taken
+//!   (`determined_eval_program`, backlog d766b5fe);
 //! * an undetermined command word (after unwrapping) → Undetermined (Table B
 //!   common rules: it may be an interpreter);
 //! * direct execution of a path (`./x`, `rel/dir/x`, `target/debug/x`,
@@ -145,6 +147,11 @@ use super::{
 };
 use crate::detect::VerdictAcc;
 use crate::model::Decision;
+
+mod determined;
+use determined::{
+    determined_dash_c_program, determined_delivered_program, determined_eval_program,
+};
 
 /// Directories whose binaries are judged by basename like the bare command
 /// (ruling 2026-11-18 #3). Only the exact directory counts, not a
@@ -717,7 +724,8 @@ fn classify(
     let args = cmd.argv.get(k + 1..).unwrap_or(&[]);
     let Some(fam) = family(base) else {
         return match base {
-            "eval" if !args.is_empty() => undetermined("`eval` runs shell code built at run time"),
+            "eval" if !args.is_empty() => determined_eval_program(text, args, judge)
+                .unwrap_or_else(|| undetermined("`eval` runs shell code built at run time")),
             _ => Decision::Allow,
         };
     };
@@ -760,6 +768,12 @@ fn classify(
     // 40dc52c0) is read the same way; see `determined_delivered_program`.
     if let Some(body) = determined_delivered_program(text, commands, idx, cmd, &source, k) {
         return literal_body(fam, &body, depth, judge);
+    }
+    // A `-c` operand that is a determined word built from `$( )`
+    // substitutions (`bash -c "$(echo 'rm -rf /etc')"`, backlog 28019c35):
+    // see `determined_dash_c_program`. Raise-only: only its Deny is taken.
+    if let Some(deny) = determined_dash_c_program(text, fam, base, args, &source, judge) {
+        return deny;
     }
     match (fam, source) {
         (_, ProgramSource::Undetermined(r)) => undetermined(format_args!("`{base}`: {r}")),
@@ -1154,82 +1168,6 @@ pub(super) fn literal_delivered_program(
         }
         _ => None,
     }
-}
-
-/// The program `cmd` (argv from `k`) reads when [`literal_delivered_program`]
-/// found no literal producer but the delivering text is a producer pipeline
-/// whose output `payload/determined_output.rs` computes beyond a single plain
-/// `echo` (backlog 40dc52c0): the process substitution operand `<(…)`, the
-/// only stdin redirect `< <(…)`, or the pipeline stages before `cmd`
-/// (`echo hi | cat | bash`). That computed output is the program, read by
-/// the caller as a literal body.
-///
-/// `None` unless BOTH the user's top-level line and every enclosing derived
-/// text ([`crate::detect::readings::chain_names_fixed`], only ever narrowed
-/// by a `b5` / S5 re-entry on derived text, never widened) AND `text` itself
-/// leave the modelled names unrebound
-/// (`determined_output::resolution_fixed`), and unless the delivering text
-/// is exactly such a pipeline. Every other shape keeps its Undetermined.
-fn determined_delivered_program(
-    text: &str,
-    commands: &[SimpleCommand],
-    idx: usize,
-    cmd: &SimpleCommand,
-    source: &ProgramSource,
-    k: usize,
-) -> Option<String> {
-    use crate::detect::payload::determined_output::{pipeline_output, resolution_fixed};
-    if !crate::detect::readings::chain_names_fixed() || !resolution_fixed(text) {
-        return None;
-    }
-    let procsub_inner = |range: &std::ops::Range<usize>| -> Option<String> {
-        let open = range.start.checked_add(2)?;
-        let close = range.end.checked_sub(1)?;
-        if text.get(range.start..open)? != "<(" || text.get(close..range.end)? != ")" {
-            return None;
-        }
-        Some(text.get(open..close)?.to_string())
-    };
-    let delivering = match source {
-        ProgramSource::Undetermined(_) | ProgramSource::File(Value::Undetermined(_)) => {
-            let w = cmd
-                .argv
-                .get(k + 1..)?
-                .iter()
-                .find(|w| !literal(w).is_ok_and(|s| s.starts_with('-')))?;
-            procsub_inner(&w.span)?
-        }
-        ProgramSource::Stdin(StdinSource::Literal(_)) => return None,
-        ProgramSource::Stdin(_) => {
-            let ins: Vec<_> = cmd
-                .redirects
-                .iter()
-                .filter(|r| {
-                    matches!(r.fd, None | Some(0))
-                        && matches!(
-                            r.op,
-                            RedirOp::In
-                                | RedirOp::InOut
-                                | RedirOp::DupIn
-                                | RedirOp::HereDoc
-                                | RedirOp::HereString
-                        )
-                })
-                .collect();
-            match ins.as_slice() {
-                [r] if r.op == RedirOp::In && r.target == RedirTarget::ProcessSubstitution => {
-                    let at = text.get(r.span.clone())?.find("<(")?;
-                    procsub_inner(&(r.span.start + at..r.span.end))?
-                }
-                [] => upstream_stages(text, commands, idx, cmd)?,
-                _ => return None,
-            }
-        }
-        _ => return None,
-    };
-    pipeline_output(&delivering)
-        .filter(|o| o.beyond_plain_echo)
-        .map(|o| o.text)
 }
 
 /// The text of the pipeline stages before `cmd` (`commands[idx]`, a later

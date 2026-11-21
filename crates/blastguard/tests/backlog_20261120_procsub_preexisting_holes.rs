@@ -138,7 +138,6 @@ fn echo_e_hex_escape_through_cat_to_bash_is_deny() {
 }
 
 #[test]
-#[ignore = "backlog 11b0b4da: RED: echo -e newline-split harmful program in a procsub is Ask, not Deny"]
 fn echo_e_newline_split_in_procsub_is_deny() {
     expect_deny(r#"bash <(echo -e 'echo hi\nrm -rf /etc')"#, "b-nl");
 }
@@ -159,13 +158,11 @@ fn three_determined_substs_in_procsub_is_deny() {
 }
 
 #[test]
-#[ignore = "backlog 28019c35: RED: bash -c of a determined harmful subst is Ask, not Deny"]
 fn bash_c_of_determined_harmful_subst_is_deny() {
     expect_deny(r#"bash -c "$(echo 'rm -rf /etc')""#, "b-bashc");
 }
 
 #[test]
-#[ignore = "backlog d766b5fe: RED: eval of a determined harmful subst through cat is Ask, not Deny"]
 fn eval_of_determined_harmful_subst_through_cat_is_deny() {
     expect_deny(r#"eval "$(echo 'rm -rf /etc' | cat)""#, "b-eval");
 }

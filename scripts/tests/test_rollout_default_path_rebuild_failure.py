@@ -71,6 +71,10 @@ class Sandbox:
         self.registry = self.root / "installed_plugins.json"
         shutil.copyfile(REAL_SCRIPT, self.repo / "scripts" / "rollout-plugins.sh")
         (self.repo / "scripts" / "rollout-plugins.sh").chmod(0o755)
+        # rollout-plugins.sh invokes this sibling helper (the real one, not a stub:
+        # the source guard is part of the default path under test).
+        shutil.copyfile(REAL_SCRIPT.parent / "rollout_source_guard.py",
+                        self.repo / "scripts" / "rollout_source_guard.py")
         self._write("scripts/prune-plugin-cache.py", "import sys\nsys.exit(0)\n")
         self._write("scripts/check-plugin-rollout.py", "import sys\nsys.exit(0)\n")
 

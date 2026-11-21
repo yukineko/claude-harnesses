@@ -121,3 +121,45 @@ fn eval_shape_builtin_prefix_is_deny() {
 fn eval_shape_command_prefix_is_deny() {
     expect_deny(r#"command eval "$(echo 'rm -rf /etc' | cat)""#, "e-command");
 }
+
+// ------------------------------------------- harmless same-shape controls
+// (added at integration of run-20261121-225214-62742): the raise-only
+// readings must not turn a harmless computed program into a Deny.
+
+/// Main mode only: a subagent turns every Ask into a Deny, so only the main
+/// session tells a raised Deny apart from a kept Ask.
+fn expect_not_deny(cmd: &str, tag: &str) {
+    let home = unique_home(tag);
+    let d = decide(cmd, &home, false);
+    assert_ne!(d, "deny", "harmless {cmd:?} (main session) => {d}");
+}
+
+#[test]
+fn control_harmless_dash_c_shapes_are_not_deny() {
+    for (i, cmd) in [
+        r#"bash -ec "$(echo ls)""#,
+        r#"bash -x -c "$(echo ls)""#,
+        r#"bash -c -- "$(echo ls)""#,
+        r#"bash -o pipefail -c "$(echo ls)""#,
+    ]
+    .iter()
+    .enumerate()
+    {
+        expect_not_deny(cmd, &format!("hc{i}"));
+    }
+}
+
+#[test]
+fn control_harmless_eval_shapes_are_not_deny() {
+    for (i, cmd) in [
+        r#"eval "$(echo ls | cat)" x"#,
+        r#"eval -- "$(echo ls | cat)""#,
+        r#"builtin eval "$(echo echo hi | cat)""#,
+        r#"command eval "$(echo ls | cat)""#,
+    ]
+    .iter()
+    .enumerate()
+    {
+        expect_not_deny(cmd, &format!("he{i}"));
+    }
+}

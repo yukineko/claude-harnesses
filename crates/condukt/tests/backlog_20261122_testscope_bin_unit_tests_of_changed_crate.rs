@@ -322,7 +322,7 @@ fn fixture() -> Fx {
 }
 
 #[test]
-#[ignore = "RED: --bin unit tests of a bin crate the task worktree changed are refused (cannot prove pinned unit asserts)"]
+#[ignore = "RED(f7d0e13b): --bin unit tests of a bin crate the task worktree changed are refused (cannot prove pinned unit asserts)"]
 fn bin_unit_tests_of_changed_bin_crate_run_in_task_worktree() {
     let fx = fixture();
     assert_allow(

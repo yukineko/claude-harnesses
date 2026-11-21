@@ -1964,3 +1964,35 @@ exit 101:  in 6.25s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running tests/backlog_20261122_relay_05b37d8cbc85_python_heredoc_empty_target_fp.rs (target/debug/deps/backlog_20261122_relay_05b37d8cbc85_python_heredoc_empty_target_fp-dcb200f55ff797ff)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261122_relay_05b37d8cbc85_python_heredoc_empty_target_fp`"""
+
+[[task]]
+id = "f7d0e13b"
+title = "condukt testscope: --bin/--lib unit tests of a crate the task worktree changed are refused, so a fix cannot prove its pinned unit asserts unchanged (6f653d96 admitted only --test)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "testscope",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-22 in condukt run run-20261122-020202-63344 (main 6ae161ee7 era): in the task worktree that changed crates/tdd/src/evidence.rs, 'cargo test -p tdd --lib evidence::' was refused with TASK_SCOPE_REASON, verbatim tail: '`--lib`/`--bin`/`--doc` only when reproduction_tests names that selector (user rulings 2026-11-14 and 2026-11-20)'. tdd is bin-only (no lib target); the real selector for its pinned unit tests (e.g. evidence::tests::unframed_log_keeps_the_conservative_scan) is 'cargo test -p tdd --bin tdd evidence::', refused by the same rule (crates/condukt/src/testscope.rs module doc rule 4: '--lib/--doc/--bin/--example/--bench only when reproduction_tests names the same selector'). Ruling 2026-11-20 (memory proof-tests-must-run, 6f653d96): refusing the test needed to prove a fix is a testscope bug; 6f653d96 widened only '--test <name>'. RED: fixture workspace, task worktree changes bin-only crates/foo/src/main.rs (reproduction_tests names only --test repro_t); asserts 'cargo test -p foo --bin foo m::' is allowed. Controls (observed PASS at 283505865): full suite 'cargo test -p foo' denied; '--bin bar' of an untouched crate denied. Readings: (a) defect -- under the 2026-11-20 ruling unit tests of the changed crate are proof tests; (b) intended -- 2026-11-14 rule keeps kind selectors to reproduction_tests, and the 11-20 ruling was implemented for integration tests only. Tell apart: whether the 11-20 ruling covers unit tests (memory text: 'found a lib unit test that the driver's selection could never reach' points to (a)). DOES NOT PROVE: --lib/--doc routes for a lib crate; whether the message should name the crate's real selector; rerun ledger; tdd/bash -c routes."
+created_at = 1795283013
+updated_at = 1795283013
+weight = 0.0
+issue_number = 1975
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1975"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261122_testscope_bin_unit_tests_of_changed_crate -- --ignored"
+rev = "283505865d66d67f6a595d1bf7b0a7675fcbef33"
+observed_at = 1795283013
+detail = """
+exit 101: d; 2 filtered out; finished in 1.37s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261122_testscope_bin_unit_tests_of_changed_crate.rs (target/debug/deps/backlog_20261122_testscope_bin_unit_tests_of_changed_crate-d76452bd242af39e)
+error: test failed, to rerun pass `-p condukt --test backlog_20261122_testscope_bin_unit_tests_of_changed_crate`"""

@@ -90,7 +90,6 @@ fn expect(cmd: &str, tag: &str, want_allow: bool) {
 }
 
 #[test]
-#[ignore = "RED(a700901f): ACK_PAGER exported in an earlier segment keeps ack's read-only exemption"]
 fn exported_ack_pager_then_semicolon_ack_protected_operand_is_not_allow() {
     let mut failures = Vec::new();
     for (cmd, tag) in [

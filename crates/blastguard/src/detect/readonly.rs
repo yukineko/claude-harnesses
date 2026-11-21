@@ -164,21 +164,115 @@ fn has_exec_flag(cmd: &str, rest: &[&str]) -> bool {
 /// (`'ACK_PAGER=sh' ack`) is a command name to bash, not an assignment;
 /// matching it anyway only over-asks (the restrictive side).
 ///
-/// NOT covered here (the variable reaches ack from outside this segment):
-/// `export ACK_PAGER=sh; ack …`, an inherited environment, `ACKRC` / `.ackrc`
-/// carrying `--pager`. `ag` reads no pager variable (its only `getenv` calls
-/// are `TERM`, `HOME` and `XDG_CONFIG_HOME`), so only `ack` is keyed here.
+/// This function sees only the ack segment's own prefix. An EARLIER segment of
+/// the same command line that sets the variable (`export ACK_PAGER=sh; ack …`,
+/// `declare -x ACK_PAGER=sh; ack …`) is judged by [`line_sets_ack_pager_before`]
+/// (a700901f) instead. NOT covered by either (the variable reaches ack from
+/// outside the command line, or through a word neither parses as an
+/// assignment): an inherited environment, `ACKRC` / `.ackrc` carrying
+/// `--pager`, `eval 'export ACK_PAGER=sh'`, `read ACK_PAGER`, `printf -v
+/// ACK_PAGER …`. `ag` reads no pager variable (its only `getenv` calls are
+/// `TERM`, `HOME` and `XDG_CONFIG_HOME`), so only `ack` is keyed here.
 fn env_selects_pager(cmd: &str, prefix: &[&str]) -> bool {
-    cmd == "ack"
-        && prefix.iter().any(|t| {
-            let w = first_shell_word(t).unwrap_or_else(|| (*t).to_string());
-            w.split_once('=').is_some_and(|(name, _)| {
-                matches!(
-                    name.strip_suffix('+').unwrap_or(name),
-                    "ACK_PAGER" | "ACK_PAGER_COLOR"
-                )
-            })
-        })
+    cmd == "ack" && prefix.iter().any(|t| names_ack_pager(t, false))
+}
+
+/// True when the shell word `raw` (one level of quoting removed) is an
+/// assignment `NAME=…` / `NAME+=…` to `ACK_PAGER` or `ACK_PAGER_COLOR`, or,
+/// when `bare_ok`, the bare name itself (`export ACK_PAGER`). The value is
+/// never inspected.
+fn names_ack_pager(raw: &str, bare_ok: bool) -> bool {
+    let w = first_shell_word(raw).unwrap_or_else(|| raw.to_string());
+    let name = match w.split_once('=') {
+        Some((name, _)) => name.strip_suffix('+').unwrap_or(name),
+        None if bare_ok => w.as_str(),
+        None => return false,
+    };
+    matches!(name, "ACK_PAGER" | "ACK_PAGER_COLOR")
+}
+
+/// True when `word` (unquoted) is a shell assignment word `NAME=…` /
+/// `NAME+=…` with a valid identifier `NAME` — the words bash takes as
+/// assignments at the head of a simple command.
+fn is_assignment_word(raw: &str) -> bool {
+    let w = first_shell_word(raw).unwrap_or_else(|| raw.to_string());
+    w.split_once('=').is_some_and(|(name, _)| {
+        let name = name.strip_suffix('+').unwrap_or(name);
+        let mut cs = name.chars();
+        cs.next()
+            .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
+            && cs.all(|c| c == '_' || c.is_ascii_alphanumeric())
+    })
+}
+
+/// True when a segment STRICTLY BEFORE `seg_idx` of `line` sets `ACK_PAGER` /
+/// `ACK_PAGER_COLOR` by a SHELL ASSIGNMENT (a700901f). Only two word positions
+/// count, so a word that merely contains the text (`grep ACK_PAGER= README`,
+/// `printf ACK_PAGER=x`) does not:
+///
+/// * the segment's leading assignment words, before its command word
+///   (`ACK_PAGER=sh;` updates an inherited exported variable). This also
+///   counts a prefix on another command (`ACK_PAGER=sh other_cmd; ack …`),
+///   which bash does NOT persist — counted anyway, on the restrictive side;
+/// * the operands of a declaration builtin `export` / `declare` / `typeset` /
+///   `readonly` / `local` (optionally behind `builtin` / `command`), where a
+///   bare name also counts (`export ACK_PAGER`, `declare -x ACK_PAGER`), and
+///   options are skipped (`export -- ACK_PAGER=sh`, `export X=1
+///   ACK_PAGER=sh`). Without `-x` a declaration still updates an inherited
+///   exported variable, so the option is not required.
+///
+/// The value is ignored, as in [`env_selects_pager`]: an undeterminable
+/// `export ACK_PAGER="$X"` counts. Leading `(` / `{` and the reserved words
+/// `!`, `then`, `do`, `else`, `time`, … are skipped before the command word.
+/// When `seg_idx` is past the end of the line's segments the earlier text
+/// cannot be located, which resolves to the restrictive `true`.
+pub(super) fn line_sets_ack_pager_before(line: &str, seg_idx: usize) -> bool {
+    let segs = super::split_segments(line);
+    if seg_idx > segs.len() {
+        return true;
+    }
+    segs.iter().take(seg_idx).any(|seg| {
+        let seg = seg.trim_start_matches(|c: char| c == '(' || c == '{' || c.is_whitespace());
+        let words = quote_aware_words(seg);
+        let mut it = words.iter().map(String::as_str).peekable();
+        const SKIP: &[&str] = &[
+            "!", "{", "(", "if", "then", "elif", "else", "while", "until", "do", "time",
+        ];
+        while it.next_if(|w| SKIP.contains(w)).is_some() {}
+        while let Some(w) = it.next_if(|w| is_assignment_word(w)) {
+            if names_ack_pager(w, false) {
+                return true;
+            }
+        }
+        let wrapper = |w: &&str| matches!(*w, "builtin" | "command");
+        while it.next_if(wrapper).is_some() {}
+        let declares = it.next().is_some_and(|head| {
+            let head = first_shell_word(head).unwrap_or_else(|| head.to_string());
+            matches!(
+                head.as_str(),
+                "export" | "declare" | "typeset" | "readonly" | "local"
+            )
+        });
+        declares && it.any(|w| !w.starts_with('-') && names_ack_pager(w, true))
+    })
+}
+
+/// a700901f: the verdict for `ack` at `tokens[idx]` when an earlier segment of
+/// `line` sets its pager variable ([`line_sets_ack_pager_before`]) — the
+/// variable reaches ack exactly as an assignment prefix does, so it is judged
+/// as one: a protected operand asks, anything else is `Allow`. `Allow` for any
+/// other command word or when no earlier segment sets it.
+pub(super) fn ack_exported_ask(
+    tokens: &[&str],
+    idx: usize,
+    line: &str,
+    seg_idx: usize,
+) -> Decision {
+    if super::normalized_command(tokens[idx]) != "ack" || !line_sets_ack_pager_before(line, seg_idx)
+    {
+        return Decision::Allow;
+    }
+    unknown_verb_protected_ask_after("ack", &["ACK_PAGER=set-earlier"], &tokens[idx + 1..])
 }
 
 /// True when `cmd` is a read-only command whose words after the head are DATA

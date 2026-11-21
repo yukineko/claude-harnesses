@@ -94095,3 +94095,126 @@ rev = "5e99d94d4a3819de7698425a56efcca2c300dd84"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "643e641f"
+title = "condukt testscope: a full-ref spelling of main (git merge refs/heads/main / git rebase refs/remotes/origin/main) skips the main-merge deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "testscope",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-22 on main e528afafb (filing worktree filing-99560); named as out-of-scope by the independent t1 verifier of condukt run run-20261122-025656-99560 (static reading of crates/condukt/src/testscope.rs judge_git is_main: matches exactly main | master | origin/main | origin/master | @{u} | @{upstream}). RED verbatim: 'git merge refs/heads/main: expected a deny, stdout not JSON (EOF while parsing a value at line 1 column 0): ""' (allowed inside a condukt worktree); control 'git merge main' is denied. Readings: (a) fail-open: main-merge deny bypassed by the full-ref spelling; (b) intended: rule only means the short names; no ruling found. Tell apart: MAIN_MERGE_REASON concerns integrating the default branch, not its spelling. Not covered: main~0, main^0, origin/HEAD, a sha of main, heads/main."""
+created_at = 1795284219
+updated_at = 1795289210
+weight = 0.0
+issue_number = 1976
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1976"
+issue_closed_at = 1795289214
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261122_testscope_git_merge_main_ref_spelling -- --ignored"
+rev = "2d51481f50f0cb2d24e7b884fd45cccd4eadadb1"
+observed_at = 1795284219
+detail = """
+exit 101: c/.harness-worktrees/filing-99560/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.45s
+     Running tests/backlog_20261122_testscope_git_merge_main_ref_spelling.rs (target/debug/deps/backlog_20261122_testscope_git_merge_main_ref_spelling-c8c8bd5526a6501c)
+error: test failed, to rerun pass `-p condukt --test backlog_20261122_testscope_git_merge_main_ref_spelling`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261122_testscope_git_merge_main_ref_spelling"
+exit = 0
+passed = 2
+rev = "5e99d94d4a3819de7698425a56efcca2c300dd84"
+observed_at = 1795289207
+output_digest = "sha256:07e4927d363d73868e84f586e49b797f3f5c6e7be7c17d47309cece111e9e563"
+excerpt = """
+
+running 2 tests
+test control_short_main_is_denied ... ok
+test full_ref_spelling_of_main_is_still_denied ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.88s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running tests/backlog_20261122_testscope_git_merge_main_ref_spelling.rs (target/debug/deps/backlog_20261122_testscope_git_merge_main_ref_spelling-7ddaacd44f635722)
+"""
+
+[task.closure.red]
+rev = "14aa2fe14566ea440e244ff7e34e0bc64e17b482"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "a700901f"
+title = "blastguard: ACK_PAGER exported in an earlier segment (export ACK_PAGER=sh; ack … / && ack …) keeps ack's read-only exemption for a protected operand"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-22 at main rev 6ae161ee7 after condukt run run-20261122-020202-63344 (fix ba09708a merged in accf04160/6ae161ee7). Verbatim (crates/blastguard/src/detect/readonly.rs env_selects_pager docstring): 'NOT covered here (the variable reaches ack from outside this segment): `export ACK_PAGER=sh; ack …`, an inherited environment, `ACKRC` / `.ackrc` carrying `--pager`.' RED: 'export ACK_PAGER=sh; ack pat .githooks/pre-commit' and 'export ACK_PAGER=sh && ack pat .githooks/pre-commit' expected not Allow for subagent=false and true; control 'ack pat .githooks/pre-commit' stays Allow. Readings: (a) defect -- the export on the same command line is statically visible and selects the same caller-chosen pager program that the prefix form now refuses (fail-open on a protected operand); (b) intended -- documented scope limit of ba09708a, exported forms deferred. Tell apart: the docstring lists it as 'NOT covered', not as 'allowed on purpose'; no user ruling for (b) found. DOES NOT PROVE: real ack behaviour (nothing executed; ack not installed); inherited env; .ackrc/ACKRC; declare -x / typeset -x / set -a spellings; which layer should own the fix."
+created_at = 1795282239
+updated_at = 1795289452
+weight = 0.0
+issue_number = 1971
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1971"
+issue_closed_at = 1795289456
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261122_ack_pager_exported_earlier_segment -- --ignored"
+rev = "db9b637e1f0fcb22b5b9c1933ed61a5ed2728b10"
+observed_at = 1795282239
+detail = """
+exit 101: s-worktrees/session-eaa077f4-filing/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.86s
+     Running tests/backlog_20261122_ack_pager_exported_earlier_segment.rs (target/debug/deps/backlog_20261122_ack_pager_exported_earlier_segment-02291b4313862996)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261122_ack_pager_exported_earlier_segment`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261122_ack_pager_exported_earlier_segment"
+exit = 0
+passed = 2
+rev = "a3ebcf7d9f775fcdf3f59409288750509f67be13"
+observed_at = 1795289450
+output_digest = "sha256:c47a46034da039d0637cf4c2862be83acf9f16470b315168a99f6ba066370902"
+excerpt = """
+
+running 2 tests
+test control_plain_ack_protected_operand_stays_allow ... ok
+test exported_ack_pager_then_semicolon_ack_protected_operand_is_not_allow ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running tests/backlog_20261122_ack_pager_exported_earlier_segment.rs (target/debug/deps/backlog_20261122_ack_pager_exported_earlier_segment-0856fe623aeea988)
+"""
+
+[task.closure.red]
+rev = "4be91a3b7bd70f7fa3c1375a9cf57d26901b44ee"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

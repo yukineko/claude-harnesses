@@ -12,10 +12,12 @@
 //! Statically safe here = a write target that resolves statically into the
 //! session's own worktree or scratchpad, a known read-only command, a direct
 //! run of a script in the session scratchpad, a binary built under the
-//! session's own worktree `target/`. Rows: `B=/bin/ls; "$B" x` → deny (logged);
-//! the scratchpad script, the own-target binary and a heredoc write into the
-//! own worktree followed by an unmodelled `git commit` → allow; `rm -rf /etc`
-//! → deny.
+//! session's own worktree `target/`. Rows: `python3 <elsewhere>/tool.py` (a
+//! program file outside scratchpad and worktree) → deny (logged); the
+//! scratchpad script and the own-target binary → allow; a heredoc write into
+//! the own worktree followed by an unmodelled `git commit` → allow (guard: it
+//! is already Allow without a driver); `rm -rf /etc` → deny. (`B=/bin/ls;
+//! "$B" x` from the brief was measured Allow at 3c792ee32, so it is not used.)
 //!
 //! The refinement names two shapes that raised a prompt in main on
 //! 2026-11-21 (session c1b3e891, main 366eab917) and must be ALLOW (not deny,
@@ -93,9 +95,12 @@ impl Fx {
     }
     /// The session scratchpad, spelled the way Claude Code lays it out:
     /// `/private/tmp/claude-<uid>/<cwd with / → ->/<session id>/scratchpad`.
+    /// A directory that is neither the scratchpad nor the own worktree.
+    fn elsewhere(&self) -> PathBuf {
+        self.base.join("elsewhere")
+    }
     fn scratch(&self) -> PathBuf {
-        let slug = self.wt().to_string_lossy().replace('/', "-");
-        self.tmp_root.join(slug).join(SESSION).join("scratchpad")
+        self.tmp_root.join(SESSION).join("scratchpad")
     }
     fn git(&self, dir: &Path, args: &[&str]) {
         let mut cmd = git_env::pinned(dir);
@@ -166,12 +171,19 @@ fn fixture(tag: &str) -> Fx {
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(base.join("home")).unwrap();
     let uid = std::fs::metadata(base.join("home")).unwrap().uid();
-    // A per-run claude-<uid> stand-in would not be the real layout; the real
-    // `claude-<uid>` dir is shared, so the fixture nests a unique child of it
-    // ONLY below the slug level (removed in Drop).
+    // The real layout is `/private/tmp/claude-<uid>/<cwd slug>/<session>/
+    // scratchpad`. `claude-<uid>` is shared with live sessions, so only the
+    // `<cwd slug>` dir is the fixture's own (unique: the slug spells this
+    // run's base path) and only it is removed in Drop.
+    let wt_spelling = base
+        .join("src")
+        .join(".harness-worktrees")
+        .join("wt-own")
+        .to_string_lossy()
+        .replace('/', "-");
     let tmp_root = fixed_tmp::canonical_fixed_temp_root()
         .join(format!("claude-{uid}"))
-        .join(format!("bg-flow-driver-{tag}-{}-{n}", std::process::id()));
+        .join(wt_spelling);
     let _ = std::fs::remove_dir_all(&tmp_root);
     for d in [
         base.join("src").join("proj"),
@@ -197,6 +209,8 @@ fn fixture(tag: &str) -> Fx {
     std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
     std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
     std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    std::fs::create_dir_all(fx.elsewhere()).unwrap();
+    std::fs::write(fx.elsewhere().join("tool.py"), "print(1)\n").unwrap();
     let s = fx.scratch();
     std::fs::create_dir_all(s.join("p")).unwrap();
     std::fs::create_dir_all(s.join("h")).unwrap();
@@ -254,15 +268,21 @@ fn run_main(fx: &Fx, command: &str) -> (String, String) {
     )
 }
 
-/// A generic undetermined command word (a runtime expansion).
-const UNDETERMINED: &str = "B=/bin/ls; \"$B\" x";
+/// A generic undetermined, NOT statically safe case: a program file outside
+/// both the session scratchpad and the own worktree (Table B.5). The brief's
+/// `B=/bin/ls; "$B" x` was measured Allow at 3c792ee32 (the value resolves
+/// statically), so it cannot stand for "currently Ask".
+fn undetermined_cmd(fx: &Fx) -> String {
+    format!("python3 {}/tool.py", fx.elsewhere().display())
+}
 
 /// A heredoc write into the session's own worktree (relative to cwd = the
 /// worktree, so it resolves statically there) followed by a `git commit`
-/// whose message names `rsync` and whose trailer holds `$TASK_ID` — the
-/// "may create or rename an entry on this path and is not modelled" Ask of
-/// 2026-11-21. The body holds a shell `done` (a Rust test string), as the
-/// observed body did.
+/// whose message names `rsync` and whose trailer holds `$TASK_ID` — the shape
+/// of the "may create or rename an entry on this path and is not modelled"
+/// Ask of 2026-11-21. Measured Allow in this fixture at 3c792ee32 (no driver),
+/// so it is a guard row only (must stay allow in a driver session), not part
+/// of the ask control. The body holds a shell `done` (a Rust test string).
 const UNMODELLED_CREATOR_REDIRECT: &str = "cat > t.rs <<'EOF'\n#[test]\nfn t() {\n    let _c = \"for f in a b; do echo $f; done\";\n}\nEOF\ngit add t.rs\ngit commit -qm \"blastguard: RED tests for rsync protected destination\" --trailer \"Condukt-Task: $TASK_ID\"";
 
 fn scratch_script_cmd(fx: &Fx) -> String {
@@ -285,12 +305,13 @@ fn registered_driver_session_never_gets_ask() {
 
     // Generic undetermined (not statically safe): deny, and the deny is
     // recorded in the block log.
-    let (d, r) = run_main(&fx, UNDETERMINED);
+    let und = undetermined_cmd(&fx);
+    let (d, r) = run_main(&fx, &und);
     if d != "deny" {
-        bad.push(format!("{UNDETERMINED:?} => {d} ({r}) — expected deny"));
-    } else if !fx.block_log_text().contains("B=/bin/ls") {
+        bad.push(format!("{und:?} => {d} ({r}) — expected deny"));
+    } else if !fx.block_log_text().contains("tool.py") {
         bad.push(format!(
-            "{UNDETERMINED:?} => deny but the command is not in the block log"
+            "{und:?} => deny but the command is not in the block log"
         ));
     }
 
@@ -323,10 +344,9 @@ fn registered_driver_session_never_gets_ask() {
 fn control_no_driver_registered_stays_ask() {
     let fx = fixture("none");
     let cmds = [
-        UNDETERMINED.to_string(),
+        undetermined_cmd(&fx),
         scratch_script_cmd(&fx),
         own_target_bin_cmd(&fx),
-        UNMODELLED_CREATOR_REDIRECT.to_string(),
     ];
     let bad: Vec<String> = cmds
         .iter()
@@ -346,7 +366,7 @@ fn control_no_driver_registered_stays_ask() {
 fn control_driver_for_other_session_stays_ask() {
     let fx = fixture("other");
     fx.register_driver("some-other-session");
-    let (d, r) = run_main(&fx, UNDETERMINED);
+    let (d, r) = run_main(&fx, &undetermined_cmd(&fx));
     assert_eq!(
         d, "ask",
         "another session's driver must not change this session: {r}"

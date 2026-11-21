@@ -2275,7 +2275,7 @@ error: test failed, to rerun pass `-p blastguard --test backlog_20261121_unmodel
 
 [[task]]
 id = "0aa37c22"
-title = "blastguard RED: redirect_target_resolution unresolvable_shapes_keep_the_unresolved_verdict (refile after revert b86b44076)"
+title = "blastguard test RED: redirect target via brace-group/local/declare assignment resolved to Allow (re-filed: d44c49876 done reverted by 765a57454)"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = [
@@ -2285,13 +2285,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "Refiled 2026-11-21: f1b5acd3/b07f2020 were closed done by d44c49876 but their re-anchor merge 0258dfe2f was reverted (b86b44076) pending a human ruling. RED at main 765a57454. Readings: (a) frozen assert — S5 resolves local/declare/{ }/P= values (zsh measured: local sets value), re-anchor to literal pair-equality (commits 91e0d6d91 b23ef959b a7d42da05 c1238d4ba); (b) bash reading: top-level local fails so resolving is a fail-open. Ruling needed: shell model bash vs zsh for local/declare/{ }, and whether literal '> /x.log' Allow is right."
+notes = "2026-11-21 user ruling: re-anchor reverted pending ruling on declare/typeset/{ }/local semantics (bash vs zsh). Unhedged STRICTER rows; `local` outside a function binds nothing in bash (evaluator is bash mode) so Allow may be a fail-open. Task branches condukt/run-20261121-094507-93872/f1b5acd3 (b23ef959b) and /b07f2020 (c1238d4ba) hold the reverted attempt. Refiled 2026-11-21: f1b5acd3/b07f2020 were closed done by d44c49876 but their re-anchor merge 0258dfe2f was reverted (b86b44076) pending a human ruling. RED at main 765a57454. Readings: (a) frozen assert — S5 resolves local/declare/{ }/P= values (zsh measured: local sets value), re-anchor to literal pair-equality (commits 91e0d6d91 b23ef959b a7d42da05 c1238d4ba); (b) bash reading: top-level local fails so resolving is a fail-open. Ruling needed: shell model bash vs zsh for local/declare/{ }, and whether literal '> /x.log' Allow is right. [2026-11-21 cleanup: RED re-observed at main 75c123224 (exit 101). The two task branch refs no longer exist locally; b23ef959b/c1238d4ba remain reachable from main via the reverted merge 0258dfe2f.]"
 created_at = 1795223225
-updated_at = 1795223225
+updated_at = 1795224274
 weight = 0.0
 issue_number = 1935
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1935"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -2308,7 +2308,7 @@ error: test failed, to rerun pass `-p blastguard --test redirect_target_resoluti
 
 [[task]]
 id = "96cd90bb"
-title = "blastguard RED: redirect_target_suffix_resolution unresolvable_suffixed_shapes_keep_the_unresolved_verdict (refile after revert b86b44076)"
+title = "blastguard test RED: suffixed redirect via local/declare assignment resolved to Allow (re-filed: d44c49876 done reverted by 765a57454)"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = [
@@ -2318,13 +2318,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "Refiled 2026-11-21: f1b5acd3/b07f2020 were closed done by d44c49876 but their re-anchor merge 0258dfe2f was reverted (b86b44076) pending a human ruling. RED at main 765a57454. Readings: (a) frozen assert — S5 resolves local/declare/{ }/P= values (zsh measured: local sets value), re-anchor to literal pair-equality (commits 91e0d6d91 b23ef959b a7d42da05 c1238d4ba); (b) bash reading: top-level local fails so resolving is a fail-open. Ruling needed: shell model bash vs zsh for local/declare/{ }, and whether literal '> /x.log' Allow is right."
+notes = "2026-11-21 user ruling: re-anchor reverted pending ruling on declare/typeset/{ }/local semantics (bash vs zsh). Unhedged STRICTER rows; `local` outside a function binds nothing in bash (evaluator is bash mode) so Allow may be a fail-open. Task branches condukt/run-20261121-094507-93872/f1b5acd3 (b23ef959b) and /b07f2020 (c1238d4ba) hold the reverted attempt. Refiled 2026-11-21: f1b5acd3/b07f2020 were closed done by d44c49876 but their re-anchor merge 0258dfe2f was reverted (b86b44076) pending a human ruling. RED at main 765a57454. Readings: (a) frozen assert — S5 resolves local/declare/{ }/P= values (zsh measured: local sets value), re-anchor to literal pair-equality (commits 91e0d6d91 b23ef959b a7d42da05 c1238d4ba); (b) bash reading: top-level local fails so resolving is a fail-open. Ruling needed: shell model bash vs zsh for local/declare/{ }, and whether literal '> /x.log' Allow is right. [2026-11-21 cleanup: RED re-observed at main 75c123224 (exit 101). The two task branch refs no longer exist locally; b23ef959b/c1238d4ba remain reachable from main via the reverted merge 0258dfe2f.]"
 created_at = 1795223289
-updated_at = 1795223289
+updated_at = 1795224274
 weight = 0.0
 issue_number = 1936
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1936"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

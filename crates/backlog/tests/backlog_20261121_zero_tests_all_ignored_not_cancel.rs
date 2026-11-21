@@ -99,8 +99,6 @@ fn assert_not_closed(f: &common::Fixture, id: &str, out: &str) {
     );
 }
 
-// test-weakening-justified: new RED for an unfixed defect (backlog pending, 2026-11-21); the ignore is removed in the fixing commit.
-#[ignore = "RED(f20d620c): next --claim auto-cancels a row whose repro ran 0 tests because all are #[ignore]d"]
 #[test]
 fn claim_does_not_cancel_row_whose_repro_tests_are_all_ignored() {
     let f = common::Fixture::new("zt-ignored-claim");
@@ -114,8 +112,6 @@ fn claim_does_not_cancel_row_whose_repro_tests_are_all_ignored() {
     assert_not_closed(&f, &id, &c.both());
 }
 
-// test-weakening-justified: new RED for an unfixed defect (backlog pending, 2026-11-21); the ignore is removed in the fixing commit.
-#[ignore = "RED(f20d620c): recheck auto-cancels a row whose repro ran 0 tests because all are #[ignore]d"]
 #[test]
 fn recheck_does_not_cancel_row_whose_repro_tests_are_all_ignored() {
     let f = common::Fixture::new("zt-ignored-recheck");

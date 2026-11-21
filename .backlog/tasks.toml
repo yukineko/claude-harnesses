@@ -1625,6 +1625,8 @@ notes = """Observed at c33bde6fd (blastguard 0.2.927), test merged in 622d4a072.
 created_at = 1795295253
 updated_at = 1795295253
 weight = 0.0
+issue_number = 1987
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1987"
 rev = 0
 
 [task.repro]

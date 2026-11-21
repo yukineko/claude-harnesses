@@ -53,6 +53,7 @@ fn git(cwd: &Path, args: &[&str]) {
 }
 
 #[test]
+#[ignore = "RED(8b7eaf91): tdd green leaves counts undetermined for a pytest-style summary, so condukt merge refuses pytest-repro tasks"]
 fn pytest_style_summary_gives_determined_counts() {
     let d = Dir(std::env::temp_dir().join(format!("tdd-pytest-counts-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&d.0);

@@ -65,8 +65,20 @@
 //!    a plain name (`[A-Za-z0-9_-]`; cargo reads `*`, `?`, `[]` as a glob that
 //!    can select every integration test) is denied by every branch, including
 //!    reproduction_tests.
-//!    `--lib`/`--doc`/`--bin`/`--example`/`--bench` only when
-//!    `reproduction_tests` names the same selector. Outside every recorded
+//!    `--doc`/`--example`/`--bench` only when `reproduction_tests` names the
+//!    same selector. `--lib` and `--bin <name>` (the crate's own unit tests)
+//!    also when (backlog f7d0e13b, the same 2026-11-20 ruling: a bin-only
+//!    crate's pinned unit asserts are reachable only through `--bin`) every
+//!    `-p`/`--package` of the command is a plain name of a package owning a
+//!    path in the same three-source diff and that package has the target —
+//!    `--lib`: a `[lib]` table or (unless `autolib = false`) `src/lib.rs`;
+//!    `--bin <name>`: a `[[bin]]` named `<name>` or (unless `autobins =
+//!    false`) `src/main.rs` with `<name>` the package name, `src/bin/<name>.rs`
+//!    or `src/bin/<name>/main.rs`. No `-p`, a `-p` of a crate the worktree did
+//!    not change, a `--bin` with no name or a non-plain one, or a name that is
+//!    no bin target of every named package admits nothing through this
+//!    branch; an unparseable `-p`, a failing git, or a manifest / `src/bin`
+//!    that cannot be read or parsed denies. Outside every recorded
 //!    task worktree this rule does not apply. A cwd owned by several tasks,
 //!    any run-state file that cannot be read or parsed, an unreadable
 //!    decomposition or a failing git is denied. Rules 1 and 3 still apply to
@@ -1264,6 +1276,14 @@ mod rerun;
 use rerun::{check_rerun, Attempt};
 pub use rerun::{confirm_post, ledger_path, self_attempt_id, settle_self_run};
 
+// Rule 4's package / target lookups (worktree_changed_packages,
+// manifest_package_name, package_unit_targets, package_specs) live in
+// `testscope/packages.rs`; see that module's doc.
+mod packages;
+use packages::{
+    manifest_package_name, package_specs, package_unit_targets, worktree_changed_packages,
+};
+
 // ── session marker (rule A) ─────────────────────────────────────────────────
 
 // Lives in `testscope_hook.rs` (the hook is its only writer); re-exported so
@@ -1478,152 +1498,6 @@ fn worktree_changed_test_owners(
     Ok(out)
 }
 
-/// The packages owning the paths the worktree at `wt` added, changed or
-/// deleted against `base` (the same three sources as
-/// [`worktree_changed_tests`], read with `-z`). A path is owned by the package
-/// of the nearest `Cargo.toml` with a `[package]` table at or above the path's
-/// directory, within the worktree's top level; a path with no such manifest
-/// (a root `Cargo.lock`, `docs/…`, a virtual-workspace-only path) adds no
-/// package — it never widens the set. A failing git, or a manifest that
-/// exists but cannot be read or parsed, or whose `[package].name` is not a
-/// string, is an `Err` (undetermined; the caller denies).
-fn worktree_changed_packages(wt: &Path, base: &str) -> Result<Vec<String>, String> {
-    let top = PathBuf::from(
-        git_stdout(wt, &["rev-parse", "--show-toplevel"])?
-            .trim()
-            .to_string(),
-    );
-    let range = format!("{base}...HEAD");
-    let mut raw = String::new();
-    for args in [
-        &["diff", "--name-only", "-z", &range][..],
-        &["diff", "--name-only", "-z", "HEAD"][..],
-        &["ls-files", "--others", "--exclude-standard", "-z"][..],
-    ] {
-        raw.push_str(&git_stdout(&top, args)?);
-        raw.push('\0');
-    }
-    // dir -> package named by `dir/Cargo.toml` (None: no manifest there, or a
-    // manifest without `[package]`).
-    let mut seen: std::collections::HashMap<PathBuf, Option<String>> =
-        std::collections::HashMap::new();
-    let mut out: Vec<String> = Vec::new();
-    for rel in raw.split('\0').filter(|s| !s.is_empty()) {
-        let mut dir = match top.join(rel).parent() {
-            Some(d) => d.to_path_buf(),
-            None => continue,
-        };
-        while dir.starts_with(&top) {
-            let pkg = match seen.get(&dir) {
-                Some(p) => p.clone(),
-                None => {
-                    let p = manifest_package_name(&dir.join("Cargo.toml"))?;
-                    seen.insert(dir.clone(), p.clone());
-                    p
-                }
-            };
-            if let Some(name) = pkg {
-                if !out.contains(&name) {
-                    out.push(name);
-                }
-                break;
-            }
-            if dir == top || !dir.pop() {
-                break;
-            }
-        }
-    }
-    Ok(out)
-}
-
-/// The `[package].name` of the manifest at `path`. `Ok(None)` when no file
-/// exists there (an observed absence) or the manifest has no `[package]`
-/// table (a virtual workspace root); `Err` when it exists but cannot be read
-/// or parsed, or its name is not a string.
-fn manifest_package_name(path: &Path) -> Result<Option<String>, String> {
-    let txt = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("cannot read manifest {}: {e}", path.display())),
-    };
-    let v: toml::Value = toml::from_str(&txt)
-        .map_err(|e| format!("unparseable manifest {}: {e}", path.display()))?;
-    match v.get("package") {
-        None => Ok(None),
-        Some(p) => match p.get("name").and_then(toml::Value::as_str) {
-            Some(n) => Ok(Some(n.to_string())),
-            None => Err(format!(
-                "manifest {} has a [package] table without a string name",
-                path.display()
-            )),
-        },
-    }
-}
-
-/// The package specs of `--package <spec>` / `--package=<spec>` and of every
-/// short-flag cluster among `words` (options before `--` only). A cluster is
-/// a word with a single leading `-` (`-p x`, `-px`, `-p=x`, `-qp x`, `-qpx`,
-/// `-vp x`): cargo parses it letter by letter, so it is parsed the same way
-/// here. Value-less letters `q`, `v`, `h`, `r` are skipped; `p` takes the
-/// rest of the cluster (a leading `=` dropped) or else the next word as a
-/// spec; `j`, `F`, `Z` take the rest or the next word as a value that is not a
-/// spec. Any other letter, or a value-taking letter with no value, is `Err`:
-/// whether the cluster carries a `p` is undetermined.
-fn package_specs(words: &[String]) -> Result<Vec<String>, String> {
-    let opts: Vec<&String> = words.iter().take_while(|a| a.as_str() != "--").collect();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while let Some(a) = opts.get(i) {
-        let a = a.as_str();
-        if a == "--package" {
-            match opts.get(i + 1).filter(|v| !v.starts_with('-')) {
-                Some(v) => {
-                    out.push(v.to_string());
-                    i += 1;
-                }
-                None => return Err(format!("`{a}` names no package")),
-            }
-        } else if let Some(v) = a.strip_prefix("--package=") {
-            out.push(v.to_string());
-        } else if let Some(cluster) = a.strip_prefix('-').filter(|c| !c.starts_with('-')) {
-            for (pos, c) in cluster.char_indices() {
-                match c {
-                    'q' | 'v' | 'h' | 'r' => {}
-                    'p' | 'j' | 'F' | 'Z' => {
-                        let rest = &cluster[pos + c.len_utf8()..];
-                        let value = if rest.is_empty() {
-                            let next = opts.get(i + 1).map(|s| s.as_str());
-                            match next.filter(|v| c != 'p' || !v.starts_with('-')) {
-                                Some(v) => {
-                                    i += 1;
-                                    v.to_string()
-                                }
-                                None => {
-                                    return Err(format!("`-{c}` in `{a}` has no value"));
-                                }
-                            }
-                        } else {
-                            rest.strip_prefix('=').unwrap_or(rest).to_string()
-                        };
-                        if c == 'p' {
-                            out.push(value);
-                        }
-                        break;
-                    }
-                    other => {
-                        return Err(format!(
-                            "short-flag cluster `{a}` has `-{other}`, which is not modelled, so \
-                             whether it selects a package is undetermined"
-                        ));
-                    }
-                }
-            }
-        }
-        i += 1;
-    }
-    Ok(out)
-}
-
 /// Whether `name` is a plain target / package name (`[A-Za-z0-9_-]+`). cargo
 /// treats `*`, `?` and `[]` in `--test` as a Unix glob, so a name with any
 /// other character may select several targets.
@@ -1641,8 +1515,11 @@ const TASK_SCOPE_REASON: &str = "inside a condukt task worktree only the task's 
      inside short-flag clusters such as `-qp`), only packages that own a path this worktree \
      changed against its base (no `-p`, a package spec that is not a plain name, a short-flag \
      cluster that is not modelled, or an unreadable diff or manifest is refused); `<name>` \
-     must be a plain name, never a glob (`*`, `?`, `[]`); `--lib`/`--bin`/`--doc` only when \
-     reproduction_tests names that selector (user rulings 2026-11-14 and 2026-11-20)";
+     must be a plain name, never a glob (`*`, `?`, `[]`); `--lib` / `--bin <name>` either when \
+     reproduction_tests names that selector or when every `-p` names a package this worktree \
+     changed that has that lib / bin target (no `-p`, or a `--bin` with no plain name, is \
+     refused); `--doc`/`--example`/`--bench` only when reproduction_tests names that \
+     selector (user rulings 2026-11-14 and 2026-11-20)";
 
 /// `state::all_runs` for a GATE: the same dirs and the same canonical-first
 /// precedence, but any run-state file that cannot be read or parsed (and any
@@ -1688,8 +1565,10 @@ fn all_runs_strict(
 
 /// Rule C: when `cwd` is inside a run task's recorded worktree, every selector
 /// of every test command must be in that task's scope (reproduction_tests, a
-/// test file the worktree changed, or a `--test` whose `-p` packages are all
-/// crates the worktree changed — see [`worktree_changed_packages`]). Outside
+/// test file the worktree changed, or a `--test` / `--lib` / `--bin <name>`
+/// whose `-p` packages are all crates the worktree changed — see
+/// [`worktree_changed_packages`]; for `--lib` / `--bin` each package must also
+/// have that target, see [`package_unit_targets`]). Outside
 /// every recorded task worktree this allows. Undetermined (config / run state
 /// / decomposition / git / manifest unreadable, cwd owned by several tasks)
 /// denies.
@@ -1805,7 +1684,7 @@ fn check_task_scope(tests: &[Words], cwd: &Path) -> Decision {
     let wt = PathBuf::from(task.worktree.clone().unwrap_or_default());
     let mut changed: Option<Vec<String>> = None;
     let mut changed_owners: Option<Vec<(String, Option<String>)>> = None;
-    let mut changed_pkgs: Option<Vec<String>> = None;
+    let mut changed_pkgs: Option<Vec<(String, PathBuf)>> = None;
     for words in tests {
         let sels = match selectors(words) {
             Ok(s) => s,
@@ -1917,8 +1796,69 @@ fn check_task_scope(tests: &[Words], cwd: &Path) -> Decision {
                             && changed_pkgs.as_ref().is_some_and(|c| {
                                 specs
                                     .iter()
-                                    .all(|p| is_plain_name(p) && c.iter().any(|n| n == p))
+                                    .all(|p| is_plain_name(p) && c.iter().any(|(n, _)| n == p))
                             })
+                    }
+                }
+                // backlog f7d0e13b (user ruling 2026-11-20): the unit tests of a
+                // crate the worktree changed, `--lib` or `--bin <name>`, so a
+                // fix can prove the crate's pinned unit asserts unchanged.
+                // Every `-p` must be a plain name of a changed package that
+                // has that target (`--lib`: a lib; `--bin <name>`: a bin of
+                // that name). No `-p`, a spec that is not a plain name, a
+                // `--bin` without a plain name, or `--doc`/`--example`/
+                // `--bench` admits nothing; an unparseable `-p` or an
+                // unreadable diff / manifest / `src/bin` denies as undetermined.
+                Selector::Kind(kind, bin)
+                    if (kind == "--lib" && bin.is_none())
+                        || (kind == "--bin" && bin.as_deref().is_some_and(is_plain_name)) =>
+                {
+                    let specs: &[String] = match &pkgs {
+                        Ok(p) => p,
+                        Err(e) => return undetermined(format!("`{}`: {e}", words.join(" "))),
+                    };
+                    if specs.is_empty() || !specs.iter().all(|p| is_plain_name(p)) {
+                        false
+                    } else {
+                        if changed_pkgs.is_none() {
+                            match worktree_changed_packages(&wt, &cfg.default_branch) {
+                                Ok(c) => changed_pkgs = Some(c),
+                                Err(e) => {
+                                    return undetermined(format!(
+                                        "which crates worktree {} changed is unknown: {e}",
+                                        wt.display()
+                                    ))
+                                }
+                            }
+                        }
+                        let mut all = true;
+                        for spec in specs {
+                            let dir = changed_pkgs
+                                .as_ref()
+                                .and_then(|c| c.iter().find(|(n, _)| n == spec))
+                                .map(|(_, d)| d.clone());
+                            let Some(dir) = dir else {
+                                all = false;
+                                break;
+                            };
+                            let (has_lib, bins) = match package_unit_targets(&dir) {
+                                Ok(t) => t,
+                                Err(e) => {
+                                    return undetermined(format!(
+                                        "which targets package `{spec}` has is unknown: {e}"
+                                    ))
+                                }
+                            };
+                            let has = match bin {
+                                None => has_lib,
+                                Some(b) => bins.iter().any(|n| n == b),
+                            };
+                            if !has {
+                                all = false;
+                                break;
+                            }
+                        }
+                        all
                     }
                 }
                 Selector::Kind(..) => false,

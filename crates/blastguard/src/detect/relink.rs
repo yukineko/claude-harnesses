@@ -22,6 +22,15 @@
 //! A link that points inside the tree lands inside the tree and is judged
 //! there, so ordinary in-tree links keep their verdict.
 //!
+//! A segment's commands are not only its own command word: the commands of
+//! a `$( )` / backquote / `<( )` in its words (also in the write's own
+//! segment: they run before its redirections are opened) and the body of an
+//! escape it runs (`bash -c 'ln …'`, `vim -c '!ln …'`) are read by the same
+//! model, each as a command of its own ([`nested`], backlog 00c6c2b8). When
+//! the segment's own word scan reads it as an unmodelled relinker only
+//! because of such words, that reading is dropped: the relinkers in them are
+//! modelled. What [`nested`] cannot list or read is an unmodelled relinker.
+//!
 //! A non-literal word whose values the AST evaluator proved (a `for` variable
 //! over a literal list, `ast::eval` unrolls it) is not a reason to give up:
 //! each relinking command is judged once per value ([`expand`]), and an
@@ -50,6 +59,8 @@
 //! Not modelled (residual, recorded in docs/specs/blastguard.md): a relink by
 //! a command whose text names neither a relinking verb nor the target (an
 //! archive extraction, a build script, `git checkout` of a tracked symlink).
+
+mod nested;
 
 use super::ast::targets::{self, Role};
 use super::{
@@ -306,7 +317,9 @@ command really reaches"
 /// whole line per segment made long `;`-chains quadratic (backlog 3c1a3f35:
 /// the 300-unit budget input spent ~80% of its time here).
 pub(super) fn line_names_relink_verb(line: &str) -> bool {
-    plain_words(line).into_iter().any(is_relink_word)
+    // Also a line whose substitutions / escapes may run a relinker:
+    // nested.rs reads those commands (backlog 00c6c2b8).
+    plain_words(line).into_iter().any(is_relink_word) || nested::may_run_nested(line)
 }
 
 /// The physical path `word` (an operand of segment `seg_idx`, run in `cwd`)
@@ -422,6 +435,10 @@ fn relinked(
     let mut ops: Vec<LinkOp> = Vec::new();
     let mut unmodelled: Vec<String> = Vec::new();
     for (k, seg) in segs.iter().enumerate() {
+        // The write's own segment: its own command runs after its
+        // redirections are opened, but the substitutions in its words run
+        // before (backlog 00c6c2b8).
+        let own = seg_idx == Some(k);
         if let Some(i) = seg_idx {
             // A later segment runs after the write unless a pipe or `&` makes
             // it concurrent, or a loop runs it before the next write.
@@ -430,7 +447,7 @@ fn relinked(
                     .iter()
                     .any(|s| matches!(s.sep_after, SegmentSep::Pipe | SegmentSep::Background))
             });
-            if k == i || (k > i && !has_loop && !concurrent) {
+            if k > i && !has_loop && !concurrent {
                 continue;
             }
         }
@@ -438,10 +455,33 @@ fn relinked(
             .get(k)
             .map_or(seg.text.as_str(), |v| v.command.as_str());
         let cwd = seg_cwds.get(k).cloned().unwrap_or(CwdState::Unknown);
-        match parse(command, cwd) {
-            Parsed::Inert => {}
-            Parsed::Op(op) => ops.push(op),
-            Parsed::Unmodelled => unmodelled.push(command.trim().to_string()),
+        // Relinkers in substitutions and escape bodies (nested.rs).
+        let found = nested::collect(command, &cwd, !own);
+        let inert = |text: &str, cwd: &CwdState| matches!(parse(text, cwd.clone()), Parsed::Inert);
+        if !own {
+            match parse(command, cwd.clone()) {
+                Parsed::Inert => {}
+                Parsed::Op(op) => ops.push(op),
+                // Read as a relinker only for words whose commands `found`
+                // lists: those are modelled there instead.
+                Parsed::Unmodelled
+                    if found
+                        .outer_reduced
+                        .as_deref()
+                        .is_some_and(|r| inert(r, &cwd)) => {}
+                Parsed::Unmodelled => unmodelled.push(command.trim().to_string()),
+            }
+        }
+        for c in &found.commands {
+            match parse(&c.text, c.cwd.clone()) {
+                Parsed::Inert => {}
+                Parsed::Op(op) => ops.push(op),
+                Parsed::Unmodelled if inert(&c.reduced, &c.cwd) => {}
+                Parsed::Unmodelled => unmodelled.push(c.text.clone()),
+            }
+        }
+        if found.undetermined {
+            unmodelled.push(command.trim().to_string());
         }
     }
     if ops.is_empty() && unmodelled.is_empty() {

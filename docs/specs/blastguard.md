@@ -809,9 +809,25 @@ forge・condukt のスケジューラが再利用）。
   は whose-tree の Deny、`ln -sf /etc/hosts F && echo x > F` は system directory の Deny）。tree 内を指す
   link は tree 内で判定されるので従来の Allow のまま。判定不能 — 非 literal な source/destination・Unknown cwd・
   `rsync`/`install -l`・source 自体が同じ行で relink される連鎖・2 つ以上の command が同じ target を relink・
-  model しない command（`sh -c`・`python3 -c`・`git -C D mv` 等）が relink 語（`ln`/`mv`/`cp`/`rsync`/`install`/
+  model しない command（`python3 -c`・`git -C D mv`・本文が決まらない `sh -c "$X"` 等）が relink 語（`ln`/`mv`/`cp`/`rsync`/`install`/
   `ditto`/`symlink`/`rename` 等）と、target の path 成分または非 literal な語を両方含む — は Ask（Allow しない）。
-  `/dev/null`・`/dev/stdout`・`/dev/stderr` は対象外。**RESIDUAL**: relink 語も target も文面に現れない
+  `/dev/null`・`/dev/stdout`・`/dev/stderr` は対象外。
+  segment 自身の command word 以外が走らせる command も同じ model で読む（backlog 00c6c2b8、
+  tests/backlog_20261122_relink_symlink_via_subst_failopen.rs、`detect/relink/nested.rs`）: AST
+  （`ast::analyze`）が列挙する `$( )`・`` ` ` ``・`<( )` の中の command（write 自身の segment の
+  substitution も含む。redirect より先に展開されるため）と、escape の本文 — 本文が literal な
+  `bash`/`sh`/`zsh`/`dash`/`ksh -c`、vi 系 editor（`vim`/`vi`/`nvim`/`ex` 等）の `-c`/`--cmd`/`+` の
+  `:!cmd`（`silent` 等の修飾は外す）— を、それぞれ独立した command として relink model に掛ける
+  （escape 本文の中の escape も深さ 4 まで）。`echo "$(ln -s /etc/x d)"; echo y > d/hosts` は
+  `/private/etc/x/hosts` の system directory Deny。segment 自身の word scan がこれらの語だけを見て
+  model しない relink 語扱いしていた場合（`` echo `ln …` ``・`bash -c 'ln …'`）はその扱いを外す。
+  どの verb を走らせるかは AST の値だけで読む（`l\n` は `ln`）。文面での前段判定は「substitution 開始記号も
+  escape を起こしうる語（shell・vi 系・wrapper・展開を含む語）も無い segment は AST を作らない」だけ。
+  判定不能 — substitution か escape を起こしうる語を含む segment を AST が列挙できない・escape 本文が
+  決まらない（`bash -c "$X"`、command word が展開、wrapper 越しの interpreter）・`:!` でも既知の無害な
+  ex command（`q`/`wq`/`set …`/行番号/検索 等）でもない ex command・本文に `%`/`#`/`!` を含む `:!`・
+  深さ超過 — は model しない relinker として扱う（上の Ask 条件）。
+  **RESIDUAL**: relink 語も target も文面に現れない
   command による relink（archive 展開・build script・tracked symlink の `git checkout`）は model しない。
 - **同じ行で relink された command operand も実際の着地点で判定する（tests/relink_shapes_20261111.rs の
   r4/r5/r8）** — `detect_bash` の per-segment loop で、segment をそのまま判定する前に

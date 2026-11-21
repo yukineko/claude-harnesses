@@ -299,12 +299,28 @@ fn f_add_with_exit_2_repro_writes_nothing() {
 
 // ---------------------------------------------------------------- (g)
 
-const CARGO_CMD: &str = "cargo test -p x";
+/// Names `--test red_g` so `add`'s id write-back (b6f2b4ec8) can locate the RED
+/// test file; the fake cargo ignores its argv and answers from `marker` alone.
+const CARGO_CMD: &str = "cargo test -p x --test red_g";
 
 fn cargo_row(f: &Fixture) -> String {
+    f.write(
+        "tests/red_g.rs",
+        "#[test]\n#[ignore = \"RED: cargo row\"]\nfn red_g() {}\n",
+    );
+    f.commit_paths(&["tests/red_g.rs"], "red_g test");
     f.write("marker", "broken");
     f.commit_paths(&["marker"], "marker broken");
-    add_cmd(f, "cargo row", CARGO_CMD)
+    let id = add_cmd(f, "cargo row", CARGO_CMD);
+    // `add` wrote the id back into tests/red_g.rs (working tree only); commit
+    // it as the caller is told to, so the tree is clean for the re-run.
+    let body = std::fs::read_to_string(f.repo.join("tests/red_g.rs")).unwrap();
+    assert!(
+        body.contains(&format!("RED({id})")),
+        "control: add must write the id back: {body}"
+    );
+    f.commit_paths(&["tests/red_g.rs"], "red_g id written back");
+    id
 }
 
 #[test]

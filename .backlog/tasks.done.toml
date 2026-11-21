@@ -93592,3 +93592,318 @@ rev = "2f1b1e30880ef2815edb533ac4cf2dee2bbd9fcd"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "d3f5d7a8"
+title = "condukt testscope: a git global option with a separate value (git --work-tree . pull / --git-dir .git pull) skips the main-merge deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "testscope",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-22 on main e3baca954 (session-eaa077f4 worktree); named by the independent t2 verifier of condukt run run-20261122-012059-29884 (static reading of crates/condukt/src/testscope.rs judge_git: '-C'/'-c' skip 2 tokens, every other '-...' token skips 1, so the value of --work-tree <path> / --git-dir <path> / --namespace <name> becomes the subcommand and the command is judged Other). RED verbatim: 'git --work-tree . pull: expected a deny, stdout not JSON (EOF while parsing a value at line 1 column 0): ""' (allowed inside a condukt worktree); control 'git --work-tree=. pull' is denied. git 2.50.1 accepts the separate-value spelling (git --work-tree . status exits 0). Same shape as the cargo bug fixed for 669b28ea (merged 2026-11-22, condukt 0.7.484). Readings: (a) fail-open: main-merge deny bypassed; (b) intended: none found. Not covered: --exec-path, --super-prefix, --config-env, git merge main / git rebase origin/main spellings."""
+created_at = 1795279817
+updated_at = 1795286713
+weight = 0.0
+issue_number = 1969
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1969"
+issue_closed_at = 1795286716
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261122_testscope_git_global_option_value_bypass -- --ignored"
+rev = "8b1556fa42384610827ddc4888eca62bc45eb630"
+observed_at = 1795279817
+detail = """
+exit 101: ktrees/session-eaa077f4/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.41s
+     Running tests/backlog_20261122_testscope_git_global_option_value_bypass.rs (target/debug/deps/backlog_20261122_testscope_git_global_option_value_bypass-ac63d2dde2ebe4e3)
+error: test failed, to rerun pass `-p condukt --test backlog_20261122_testscope_git_global_option_value_bypass`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261122_testscope_git_global_option_value_bypass"
+exit = 0
+passed = 2
+rev = "4be91a3b7bd70f7fa3c1375a9cf57d26901b44ee"
+observed_at = 1795286711
+output_digest = "sha256:9177b38075b40c2c707fa5f03261234d0436737122b52a17869ed5b5cd35f3c6"
+excerpt = """
+
+running 2 tests
+test control_equals_spelling_is_denied ... ok
+test git_global_option_value_before_pull_is_still_denied ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.95s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running tests/backlog_20261122_testscope_git_global_option_value_bypass.rs (target/debug/deps/backlog_20261122_testscope_git_global_option_value_bypass-db54bcbd544b7992)
+"""
+
+[task.closure.red]
+rev = "117a785fa4f384f4acba8ba63ac96e48efa3a5f3"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "45ea34e7"
+title = "backlog evidence: a (backlog <id>) commit that adds only a filename-identified test file (scripts/test_*.py, *_test.rs) counts as the landed fix, so next --claim never hands <id> out"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-22 at main rev 6ae161ee7 during/after condukt run run-20261122-020202-63344, after fix 363ad7da (merged accf04160). Verbatim (crates/backlog/src/evidence.rs is_test_path): 'd.components().any(|c| { let s = c.as_os_str().to_string_lossy(); s == "tests" || s == "test" })' -- only a tests/test DIRECTORY component marks a test path; a filename-identified test file is product code. Real instance: merge f088e7acb (backlog d1d85c66) first-parent diff = scripts/tests/...sh + scripts/test_check_plugin_rollout.py; the .py has no tests/ dir component, so the merge counts as a landed fix of d1d85c66 although it only brought a RED. RED: fixture repo, commit adds ONLY scripts/test_alpha.py (resp. src/alpha_test.rs) with subject '... (backlog <X>)'; asserts next --claim hands out X. Readings: (a) defect -- a test-only commit read as a fix silently drops a pending task from next/next --claim (the docstring of the detector names this direction the fail-open one); (b) intended -- only directory-convention tests count, filename conventions deliberately treated as product to avoid false non-fix. Tell apart: whether the detector's docstring 'touches ONLY test paths' is meant to include filename conventions; no ruling found for (b). DOES NOT PROVE: which filename conventions should count (test_*.py, *_test.py, *_test.rs, *.test.ts), whether the fix belongs in the classifier or the commit-subject convention, plain next, merge commits (f088e7acb shape not exercised)."""
+created_at = 1795281971
+updated_at = 1795286718
+weight = 0.0
+issue_number = 1970
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1970"
+issue_closed_at = 1795286721
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261122_filename_test_path_counts_as_fix -- --ignored"
+rev = "b96a2422167116e6a35b4160b2d2c00f78ca84e8"
+observed_at = 1795281971
+detail = """
+exit 101: i/src/.harness-worktrees/session-eaa077f4-filing/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.42s
+     Running tests/backlog_20261122_filename_test_path_counts_as_fix.rs (target/debug/deps/backlog_20261122_filename_test_path_counts_as_fix-247398ae84c09495)
+error: test failed, to rerun pass `-p backlog --test backlog_20261122_filename_test_path_counts_as_fix`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261122_filename_test_path_counts_as_fix"
+exit = 0
+passed = 2
+rev = "4be91a3b7bd70f7fa3c1375a9cf57d26901b44ee"
+observed_at = 1795286716
+output_digest = "sha256:c55943062cb5d3662dc20c9e7448d69ce67fac03ead173cb46809c00140d521f"
+excerpt = """
+
+running 2 tests
+test python_test_file_by_filename_is_not_a_fix ... ok
+test rust_test_file_by_filename_is_not_a_fix ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/backlog_20261122_filename_test_path_counts_as_fix.rs (target/debug/deps/backlog_20261122_filename_test_path_counts_as_fix-31cb7b27bcf8d5e5)
+"""
+
+[task.closure.red]
+rev = "117a785fa4f384f4acba8ba63ac96e48efa3a5f3"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "7b30a4ed"
+title = "backlog: no_deferral_auto_close g fixtures fail at add setup (id write-back refused for repro without --test), so the 0-ignored zero-tests auto-cancel pin is not exercised"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+Observed 2026-11-21 on main a44f2ce07 (main tree, cargo test -p backlog --test backlog_20261113_no_deferral_auto_close) by condukt run run-20261121-223122-81816 (t2 base check): 'g_cargo_zero_tests_at_head_is_auto_cancelled ... FAILED' and 'g_control_cargo_compile_failure_at_head_refuses_claim ... FAILED', both panicking at crates/backlog/tests/backlog_20261113_no_deferral_auto_close.rs:61:5 in the fixture add setup; worker-observed message: 'error: backlog add: b223fba7 IS filed, but the id was NOT written back into the RED test: the repro "cargo test -p x" names no --test <file>...' (add exit 1, fixture expects 0). Other 12 tests pass. Effect: no executed test pins the '0 passed; 0 failed; 0 ignored' NotDemonstrated auto-cancel path (f20d620c fix relied on code reading). Readings: (a) regression - add's id write-back now refuses repros without --test and the fixture (or add) must be fixed so g reaches next --claim; (b) intended - stricter add, fixture stale; re-anchor fixture to a --test repro. Tell apart: git log -S 'names no' crates/backlog/src for when the write-back refusal landed and whether g was green before it. DOES NOT PROVE: which side is correct.
+blocked by tdd FP 867cd678 (2026-11-22, run-20261122-012059-29884 t1): fix verified (14 passed; 0 failed, oracle fail_to_pass, commit f0e7c8812, fixture-only, asserts unchanged) but condukt merge refused 'merge-proof-contract(f): t1.green.json: failed at RED but not "pass" at GREEN: t' — tdd parses a nested 'test t ... FAILED' inside the g-test panic text. Worktree /Users/yuki/.condukt/worktrees/run-20261122-012059-29884-t1 (branch condukt/run-20261122-012059-29884/t1) kept for merge after 867cd678; escalation esc-a9994b5a."""
+created_at = 1795268999
+updated_at = 1795286948
+weight = 0.0
+issue_number = 1960
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1960"
+issue_closed_at = 1795286950
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close g_cargo_zero_tests_at_head_is_auto_cancelled"
+rev = "712b08cbaa6cd6db67a3ee79d2fb261742ee15ca"
+observed_at = 1795268999
+detail = """
+exit 101: mpiling backlog v0.3.153 (/Users/yuki/src/.harness-worktrees/sidefind-eaa077f4/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.21s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-48f55df2b4fe919f)
+error: test failed, to rerun pass `-p backlog --test backlog_20261113_no_deferral_auto_close`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_20261113_no_deferral_auto_close g_cargo_zero_tests_at_head_is_auto_cancelled"
+exit = 0
+passed = 1
+rev = "0940cbdd75d03a8eca4fff888347b43e7cff07a4"
+observed_at = 1795286946
+output_digest = "sha256:1615ab9262c26aac852ea8d554fe36f9e845cd94993619f309062ba0a23136dd"
+excerpt = """
+
+running 1 test
+test g_cargo_zero_tests_at_head_is_auto_cancelled ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.23s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/backlog_20261113_no_deferral_auto_close.rs (target/debug/deps/backlog_20261113_no_deferral_auto_close-a01c2f8776e861fd)
+"""
+
+[task.closure.red]
+rev = "117a785fa4f384f4acba8ba63ac96e48efa3a5f3"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "f7d0e13b"
+title = "condukt testscope: --bin/--lib unit tests of a crate the task worktree changed are refused, so a fix cannot prove its pinned unit asserts unchanged (6f653d96 admitted only --test)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "testscope",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-22 in condukt run run-20261122-020202-63344 (main 6ae161ee7 era): in the task worktree that changed crates/tdd/src/evidence.rs, 'cargo test -p tdd --lib evidence::' was refused with TASK_SCOPE_REASON, verbatim tail: '`--lib`/`--bin`/`--doc` only when reproduction_tests names that selector (user rulings 2026-11-14 and 2026-11-20)'. tdd is bin-only (no lib target); the real selector for its pinned unit tests (e.g. evidence::tests::unframed_log_keeps_the_conservative_scan) is 'cargo test -p tdd --bin tdd evidence::', refused by the same rule (crates/condukt/src/testscope.rs module doc rule 4: '--lib/--doc/--bin/--example/--bench only when reproduction_tests names the same selector'). Ruling 2026-11-20 (memory proof-tests-must-run, 6f653d96): refusing the test needed to prove a fix is a testscope bug; 6f653d96 widened only '--test <name>'. RED: fixture workspace, task worktree changes bin-only crates/foo/src/main.rs (reproduction_tests names only --test repro_t); asserts 'cargo test -p foo --bin foo m::' is allowed. Controls (observed PASS at 283505865): full suite 'cargo test -p foo' denied; '--bin bar' of an untouched crate denied. Readings: (a) defect -- under the 2026-11-20 ruling unit tests of the changed crate are proof tests; (b) intended -- 2026-11-14 rule keeps kind selectors to reproduction_tests, and the 11-20 ruling was implemented for integration tests only. Tell apart: whether the 11-20 ruling covers unit tests (memory text: 'found a lib unit test that the driver's selection could never reach' points to (a)). DOES NOT PROVE: --lib/--doc routes for a lib crate; whether the message should name the crate's real selector; rerun ledger; tdd/bash -c routes."
+created_at = 1795283013
+updated_at = 1795287729
+weight = 0.0
+issue_number = 1975
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1975"
+issue_closed_at = 1795287733
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261122_testscope_bin_unit_tests_of_changed_crate -- --ignored"
+rev = "283505865d66d67f6a595d1bf7b0a7675fcbef33"
+observed_at = 1795283013
+detail = """
+exit 101: d; 2 filtered out; finished in 1.37s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261122_testscope_bin_unit_tests_of_changed_crate.rs (target/debug/deps/backlog_20261122_testscope_bin_unit_tests_of_changed_crate-d76452bd242af39e)
+error: test failed, to rerun pass `-p condukt --test backlog_20261122_testscope_bin_unit_tests_of_changed_crate`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261122_testscope_bin_unit_tests_of_changed_crate"
+exit = 0
+passed = 3
+rev = "14aa2fe14566ea440e244ff7e34e0bc64e17b482"
+observed_at = 1795287725
+output_digest = "sha256:a8122a8066e0077e61d8e33d582a7ba65652c40cc684e05b6037a2763420ab82"
+excerpt = """
+
+running 3 tests
+test control_full_suite_of_task_crate_in_task_worktree_is_denied ... ok
+test control_bin_of_untouched_crate_in_task_worktree_is_denied ... ok
+test bin_unit_tests_of_changed_bin_crate_run_in_task_worktree ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.11s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/backlog_20261122_testscope_bin_unit_tests_of_changed_crate.rs (target/debug/deps/backlog_20261122_testscope_bin_unit_tests_of_changed_crate-e530c21ed3036285)
+"""
+
+[task.closure.red]
+rev = "7806f67341a37814ce0d2acebb1619164bdabb81"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "00c6c2b8"
+title = "blastguard relink: symlink created by ln inside $(...)/backticks/bash -c/vim -c '!' escape is not a relink, so a later write through it into /etc is Allow/Ask, not Deny (system-harm fail-open)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """Reported by the verifier of backlog 3de4729f (present at base f9bb4b9aa); RED observed 2026-11-22 at main e3baca954 tree, RED commit 64d3d0ecf: 6 failed / 2 passed. vim -c 'silent !ln -s /etc/bg-sentinel d' -c q; echo x > d/hosts -> allow; echo "$(ln -s /etc/bg-sentinel d)"; echo x > d/hosts -> allow; jq . "$(ln ...)" -> allow; true $(ln ...) && echo x > d/hosts -> allow; echo `ln ...` and bash -c 'ln ...' -> ask (unmodelled relinker). Fix: relink.rs must read commands the AST shows run inside substitutions / interpreter escapes as relinkers."""
+created_at = 1795279570
+updated_at = 1795288018
+weight = 0.0
+issue_number = 1968
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1968"
+issue_closed_at = 1795288023
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261122_relink_symlink_via_subst_failopen"
+rev = "64d3d0ecf63ca8cc2ef9b644b37d1b0a36530678"
+observed_at = 1795279570
+detail = """
+exit 101: /worktrees/run-20261122-014030-65651-t1/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.33s
+     Running tests/backlog_20261122_relink_symlink_via_subst_failopen.rs (target/debug/deps/backlog_20261122_relink_symlink_via_subst_failopen-8fef54456ae738fa)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261122_relink_symlink_via_subst_failopen`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261122_relink_symlink_via_subst_failopen"
+exit = 0
+passed = 8
+rev = "6d879c0a3091aea6da6a0438af5e3a9bb8a39865"
+observed_at = 1795288016
+output_digest = "sha256:ab0870f0b3bc9752985d3bb3db504055a205275ee34105b4b250d140550f51ba"
+excerpt = """
+
+running 8 tests
+test control_spelled_system_write_is_deny ... ok
+test bash_c_symlink_then_write_is_deny ... ok
+test jq_arg_dollar_paren_symlink_then_write_is_deny ... ok
+test echo_dollar_paren_symlink_then_write_is_deny ... ok
+test control_relative_write_without_relink_is_not_deny ... ok
+test vim_shell_escape_symlink_then_write_is_deny ... ok
+test echo_backtick_symlink_then_write_is_deny ... ok
+test unquoted_dollar_paren_symlink_and_write_joined_by_and_is_deny ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/backlog_20261122_relink_symlink_via_subst_failopen.rs (target/debug/deps/backlog_20261122_relink_symlink_via_subst_failopen-bec974bd3c10cfb0)
+"""
+
+[task.closure.red]
+rev = "62e6f74eab4ad2263a4380c4ca9d94cda1be1faa"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

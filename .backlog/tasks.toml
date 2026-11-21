@@ -2444,3 +2444,34 @@ exit 101: ompiling tdd v0.1.101 (/Users/yuki/.condukt/worktrees/backlog-tdd-gree
     Finished `test` profile [unoptimized + debuginfo] target(s) in 35.96s
      Running tests/backlog_20261121_green_zero_tests_recorded.rs (target/debug/deps/backlog_20261121_green_zero_tests_recorded-c882c87cddc337d2)
 error: test failed, to rerun pass `-p tdd --test backlog_20261121_green_zero_tests_recorded`"""
+
+[[task]]
+id = "4ef3a9e2"
+title = "blastguard: registered /flow driver session must never emit ask (statically-safe → allow, other undetermined → deny+log)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "flow",
+    "false-positive",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = """Classified false-positive (an ask that, per ruling, must not be emitted in a driver session; the deny side is the fail-closed resolution). User ruling 2026-11-21 (verbatim choice 「非破壊はAllow、他はDeny」; refined 「またaskされてたけど、これもallowに」; later 「またpermissionがきている、これらはすべてAllowし、ださない」 then 「あるいはさきほどの裁定にしたがう」 — coordinator chose the fail-closed reading). Contract: in a session registered as a /flow driver (~/.backlog/drivers/<project_slug(canonical main tree)>/<fnv1a64(session_id) %016x>.driver, live while now-heartbeat_at<=1800; layout per crates/backlog/src/driver.rs at 366eab917), blastguard never emits permissionDecision ask. Allow: write target statically resolving into own worktree or session scratchpad (/private/tmp/claude-<uid>/<cwd slug>/<session>/scratchpad), known read-only commands, direct run of a script in the session scratchpad, a binary built under own worktree target/. Every other currently-Ask case → deny, recorded in the block log. System harm stays deny. Controls: no driver / driver for another session → unchanged (ask). Observed RED at c5220bc15 (base 366eab917 + condukt t1 integration), 2026-11-21: driver session got ask for 'python3 <elsewhere>/tool.py' (expected deny, reason 'Table B.5: Undetermined'), 'python3 <scratchpad>/probe.py <scratchpad>/a1.json' (expected allow) and 'env -i HOME=<scratchpad>/h PATH=/usr/bin:/bin ... target/debug/blastguard < <scratchpad>/p/01.json' (expected allow, reason 'direct execution of the program file target/debug/blastguard ... Table B.5: Undetermined'); both controls passed. Note: brief's 'B=/bin/ls; "$B" x' measured Allow (resolves statically) so not used; the heredoc+git commit(rsync msg, $TASK_ID trailer) shape measured Allow in this fixture (guard row only)."""
+created_at = 1795221327
+updated_at = 1795221327
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_flow_driver_session_never_asks"
+rev = "c5220bc15290b54f608d243813341a2ac4952e4b"
+observed_at = 1795221327
+detail = """
+exit 101: 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.17s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running tests/backlog_20261121_flow_driver_session_never_asks.rs (target/debug/deps/backlog_20261121_flow_driver_session_never_asks-71503fd10e4b9f5e)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_flow_driver_session_never_asks`"""

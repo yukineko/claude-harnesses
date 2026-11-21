@@ -788,10 +788,13 @@ forge・condukt のスケジューラが再利用）。
   それより前の segment が `cd <literal 絶対 dir>`（先頭のみ）・literal 代入（`PATH`/`IFS`/`CDPATH`/
   `BASH*`/`LD_*`/`DYLD_*` 等の shell 挙動変数と、hook の環境に既にある名前は不可）・
   `cp`（option 無し、`$NAME` は同じ prefix で代入済みの値に置換して `-` 始まりや glob が無いこと）/
-  `echo`/`printf`/`true`/`pwd`/`ls`/`cat`/`test`（quote・`>` 無し）だけで、どの segment にも
-  `` ` ``・`(`・`)`・`{`・`}`・`<`・`\`・`&`・改行が無く、write segment の後が `|`/`&` でないときも、
-  target が worktree storage root 下の linked worktree checkout 内（symlink 無し）なら session の tree と
-  みなす（`detect/rm.rs` の `write_prefix_cannot_relink`）。それ以外は従来どおり拒否。
+  `echo`/`printf`/`true`/`pwd`/`ls`/`cat`/`test`（quote・`>` 無し）・`mkdir [-p] DIR...`（`-p` 以外の
+  option・`$`・glob 無し、operand 1 個以上。entry を足すだけで既存 target の解決先を変えない）だけで、
+  どの segment にも `` ` ``・`(`・`)`・`{`・`}`・`<`・`\`・`&`・改行が無く（例外: write segment 自身の末尾の
+  quoted here-doc opener 1 個 `<<'TAG'`/`<<-'TAG'`/`<<"TAG"`、TAG は英数字/`_` のみ。それ以外の `<` は拒否）、
+  write segment の後が `|`/`&` でないときも、target が worktree storage root 下の linked worktree checkout 内
+  （symlink 無し）なら session の tree とみなす（`detect/rm.rs` の `write_prefix_cannot_relink`、
+  `detect/rm/prefix_inert.rs`、backlog 1b23e133）。それ以外は従来どおり拒否。
 - **同じ行で relink された redirect target は実際の着地点で判定する（tests/scope_redirect_relaxation_boundaries_20261108.rs
   の `wt_relink_prefix_from_linked_worktree_cwd_pre_existing`）** — `>`/`>>` の target（`place_redirect_target`
   で配置済み）について、保護パス判定の直後に `detect/relink.rs` の `redirect_landing` が行の他 segment を見る。

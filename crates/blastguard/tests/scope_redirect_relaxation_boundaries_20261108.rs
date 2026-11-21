@@ -410,6 +410,21 @@ macro_rules! py_hostile {
     };
 }
 
+// Re-anchored to Allow per user ruling 2026-11-20 (backlog 266b5ded): Python
+// string literals are data; a bare import and a pure call are not sinks, so a
+// program whose only "hostile" content is a redirect-shaped literal (also with
+// `$(...)` / backtick text inside it) is Allow.
+macro_rules! py_data_allow {
+    ($name:ident, $prog:expr) => {
+        #[test]
+        fn $name() {
+            let fx = Fx::new(stringify!($name));
+            let r = py(&fx, $prog);
+            assert_eq!(r.0, "allow", "intended allow: {:?}", r.1.trim());
+        }
+    };
+}
+
 py_hostile!(
     py_os_execl,
     "import os; os.execl(\"/bin/sh\",\"sh\",\"-c\",\"echo x > TARGET\")"
@@ -496,17 +511,17 @@ py_hostile!(
     py_unterminated_triple_quote,
     "import sys; s=\"\"\"> TARGET; print(s)"
 );
-py_hostile!(
+py_data_allow!(
     py_non_allowlisted_import_multiprocessing,
     "import multiprocessing; s=\"> TARGET\"; print(s)"
 );
 py_hostile!(py_exec_call, "exec(\"print(1)\"); s=\"> TARGET\"");
 py_hostile!(py_eval_call, "s=\"> TARGET\"; eval(\"1\")");
-py_hostile!(
+py_data_allow!(
     py_payload_with_command_substitution,
     "import sys; s=\"> TARGET $(id)\"; print(s)"
 );
-py_hostile!(
+py_data_allow!(
     py_payload_with_backtick,
     "import sys; s=\"> TARGET `id`\"; print(s)"
 );

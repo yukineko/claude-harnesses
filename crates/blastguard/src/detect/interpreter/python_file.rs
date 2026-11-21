@@ -341,9 +341,17 @@ passed around or stored) — blastguard cannot follow what it will run"
 /// [`python_strings_never_reach_a_shell`]: none of them runs a process or
 /// loads code from a string (`os` is the exception that is admitted only
 /// because every process-starting name of it is refused by
-/// [`sem::references_runner`]). An allowlist: any other import — `ctypes`,
-/// `importlib`, `multiprocessing`, a third-party module — keeps the program
-/// out of that reading.
+/// [`sem::references_runner`]). An allowlist with one effect, in
+/// [`python_strings_never_reach_a_shell`] only: a program that imports any
+/// other module (`ctypes`, `importlib`, `multiprocessing`, a third-party
+/// module) makes that function answer `false`, i.e. this function does not
+/// grant the "string literals are data" reading to it. That is NOT a verdict
+/// on the program: a bare import is not a sink, and a closed set of sinks
+/// decides the outcome elsewhere (user ruling 2026-11-20, 266b5ded) — e.g.
+/// `python3 -c 'import multiprocessing; s="> T"; print(s)'` is Allow, as
+/// observed in `scope_redirect_relaxation_boundaries_20261108`. A module that
+/// is not in the standard library is separately an Ask from
+/// `sem::import_verdict`.
 const DATA_ONLY_MODULES: &[&str] = &[
     "sys",
     "os",

@@ -149,7 +149,7 @@ fn control_same_target_dir_rerun_is_denied() {
 
 /// RED: a different CARGO_TARGET_DIR is not (per reading (a)) the same run.
 #[test]
-#[ignore = "RED(pending): rerun key ignores CARGO_TARGET_DIR (execution environment) — remove when fixed"]
+#[ignore = "RED(2e03e8c3): rerun key ignores CARGO_TARGET_DIR (execution environment) — remove when fixed"]
 fn different_target_dir_is_not_a_rerun() {
     let e = env();
     ran(&e, CMD_A, "tu-1");

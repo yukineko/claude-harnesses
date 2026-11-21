@@ -1767,6 +1767,8 @@ DOES NOT PROVE: 本文のどの部分が引き金か、Python の実行結果、
 created_at = 1795291669
 updated_at = 1795291669
 weight = 0.0
+issue_number = 1982
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1982"
 rev = 0
 
 [task.repro]

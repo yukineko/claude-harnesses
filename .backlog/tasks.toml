@@ -954,37 +954,6 @@ exit 101: group-feeder-piped-to-shell/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp`"""
 
 [[task]]
-id = "454f80ef"
-title = "blastguard FP: quoted git commit -F - heredoc whose operator line pipes to grep has its message prose judged as code (Deny/Ask)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-20 by the run-20261120-071122-49691 driver (deployed hook 0.2.753); reproduced at HEAD cb1d2654e. Shape: a chain ending in git commit -q -F - with a single-quoted EOF heredoc, the operator line continuing with 2>&1 and a pipe to grep, body, EOF, then git log. A message whose prose quotes a shell redirect in a backtick span is Deny (relative redirect, unknown directory); with that span removed the open(p,'w') prose still gets Ask (program calls open on an unresolvable path). The same message without the pipe, with a trailing command only, and the chain with a plain message are all Allow (controls). Related, not identical: 9d88d739 (FP-B, quoted heredoc then trailing command), closed e0085090/9f90b96f. Readings: (a) FP, the heredoc body is attributed to the piped stage or read as program text once the operator line carries a pipe; (b) intended, none found (git commit -F - reads data). RED: crates/blastguard/tests/backlog_20261120_quoted_commit_message_redirect_prose_fp.rs"
-created_at = 1795134090
-updated_at = 1795134090
-weight = 0.0
-issue_number = 1882
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1882"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_quoted_commit_message_redirect_prose_fp -- --include-ignored observed_chain_commit_message_quoting_shell_prose_is_allow"
-rev = "cb1d2654e73121b654f6a822f4614934bb61191a"
-observed_at = 1795134090
-detail = """
-exit 101: bg-wt-pyopen-3510aa71/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.80s
-     Running tests/backlog_20261120_quoted_commit_message_redirect_prose_fp.rs (target/debug/deps/backlog_20261120_quoted_commit_message_redirect_prose_fp-12318142e41ad174)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_quoted_commit_message_redirect_prose_fp`"""
-
-[[task]]
 id = "cffe54c4"
 title = "blastguard: shopt -s expand_aliases + alias echo on the same line is Allow in bash <(echo hi)"
 project = "/Users/yuki/src/harness"

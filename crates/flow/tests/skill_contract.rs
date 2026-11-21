@@ -375,6 +375,56 @@ fn d_every_fenced_circuit_check_disables_compaction_axis() {
     }
 }
 
+/// Every spelled-out `condukt circuit check --<flag>` invocation in the /flow
+/// docs an LLM driver reads must carry `--run` and `--session` (the CLI
+/// requires --run; a /flow run without --session trips `idle_unmeasured`
+/// after each batch). Bare mentions not followed by a flag are references.
+#[test]
+fn d_every_documented_circuit_check_invocation_carries_run_and_session() {
+    const NEEDLE: &str = "condukt circuit check --";
+    let files = ["skills/flow/SKILL.md", "README.md", "README.ja.md"];
+    let mut found = 0usize;
+    let mut bad = Vec::new();
+    for f in files {
+        let text = read(&crate_dir().join(f));
+        let fenced: std::collections::HashSet<usize> = fences(&text)
+            .iter()
+            .flat_map(|fe| fe.start_line..=fe.start_line + fe.body.len() + 1)
+            .collect();
+        for (i, line) in text.lines().enumerate() {
+            let mut from = 0;
+            while let Some(off) = line[from..].find(NEEDLE) {
+                let at = from + off;
+                from = at + NEEDLE.len();
+                found += 1;
+                let cmd: &str = if fenced.contains(&i) {
+                    &line[at..]
+                } else if line[..at].matches('`').count() % 2 == 1 {
+                    // inside an inline span: up to the closing backtick
+                    let rest = &line[at..];
+                    &rest[..rest.find('`').unwrap_or(rest.len())]
+                } else {
+                    &line[at..]
+                };
+                for flag in ["--run", "--session"] {
+                    if !cmd.contains(flag) {
+                        bad.push(format!("{f}:{}: lacks {flag}: `{cmd}`", i + 1));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        found >= 3,
+        "expected circuit check invocations across the docs, found {found} (vacuous?)"
+    );
+    assert!(
+        bad.is_empty(),
+        "documented invocations missing flags:\n{}",
+        bad.join("\n")
+    );
+}
+
 // ------------------------------------------------------ E. only stop reason
 
 #[test]

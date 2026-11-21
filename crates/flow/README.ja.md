@@ -38,7 +38,7 @@ SOURCE（課題の供給）                          EXECUTOR（解決手段の�
 2.5. flow-watch を Monitor で武装（停滞検知）
 3. 実行ループ — backlog sync --apply → budgetguard（情報。バッチ幅だけ）→ ピック（backlog next --claim）
        → spec-gap ゲート → claim → overwatch begin → /condukt → 検証 → sink（done / fail）→ release
-       → heartbeat → condukt circuit check --no-compaction-axis（trip だけが停止）
+       → heartbeat → condukt circuit check --run "flow-$CLAUDE_CODE_SESSION_ID" --session "$CLAUDE_CODE_SESSION_ID" --no-compaction-axis（trip だけが停止）
 4. 終了 — キューが空 / 引数の課題が解決 / circuit trip で backlog driver unregister
      + overwatch end + サマリ報告 + pivot-check（--resolve、推奨＝継続）
 ```
@@ -59,7 +59,7 @@ skills/flow/SKILL.md           # /flow skill（source→executor ループを駆
 ### `flow stop-gate`（Stop hook）
 
 - **live な登録済み driver** のセッションは、`backlog next` が仕事を返す、または `flow-<SESSION>` の claim を保持している間、
-  stop を block する。ただし `condukt circuit check --no-compaction-axis` が trip していれば許す。
+  stop を block する。ただし `condukt circuit check --run flow-<SESSION> --session <SESSION> --no-compaction-axis` が trip していれば許す。
 - 判定不能（registry・backlog・claims・circuit を観測できない）はまず 1 回 block し、同じセッションで連続した次の
   判定不能の stop だけを、理由を表示したうえで allow にする。gate 本体の panic は block（fail-closed、`harness_core::gate::run::run_guarded`）。
 - driver 登録していないセッションは**一切** block しない（`/flow` を提案する hook ではない）。

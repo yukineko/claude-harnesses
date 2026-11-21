@@ -92141,3 +92141,124 @@ rev = "743bd0ac269fecce7cfd5fb7392ce70d2a0abb7b"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "69f396c2"
+title = "askrelay mark-relayed/mark-executed with operator args read stdin (hang on open pipe) and exit 0 marking nothing"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["askrelay"]
+touched_files = []
+status = "done"
+notes = "crates/askrelay/src/main.rs:40-41 dispatch mark-* straight to hook::run_hook ignoring args[1..]; main.rs:83/119 hook::read_stdin() reads to EOF unconditionally -> blocks forever on a never-closed stdin pipe; with /dev/null it returns, run_hook exits 0, id ignored = silent false success. Observed 2026-11-21 (deployed 0.1.5, >120s hang)."
+created_at = 1795263266
+updated_at = 1795263495
+weight = 0.0
+issue_number = 1952
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1952"
+issue_closed_at = 1795263497
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p askrelay --test mark_cli_args_stdin_20261121"
+rev = "bde4ae63384f801bd74a4afd811e7fae3d106597"
+observed_at = 1795263266
+detail = """
+exit 101: d out; finished in 5.03s
+
+   Compiling askrelay v0.1.6 (/Users/yuki/src/.harness-worktrees/fix-askrelay-stdin/crates/askrelay)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/mark_cli_args_stdin_20261121.rs (target/debug/deps/mark_cli_args_stdin_20261121-394a39493e630f82)
+error: test failed, to rerun pass `-p askrelay --test mark_cli_args_stdin_20261121`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p askrelay --test mark_cli_args_stdin_20261121"
+exit = 0
+passed = 3
+rev = "9d672a8c53ac39686f6f3c7a6fecc16759588792"
+observed_at = 1795263494
+output_digest = "sha256:f110f6a3b8306cead7751bf2143bf70377d64c13260f2df6e1ccd4477b97d5fc"
+excerpt = """
+
+running 3 tests
+test mark_relayed_with_arg_and_open_stdin_pipe_exits_nonzero_bounded ... ok
+test mark_executed_with_arg_and_open_stdin_pipe_exits_nonzero_bounded ... ok
+test mark_relayed_with_arg_and_null_stdin_exits_nonzero ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/mark_cli_args_stdin_20261121.rs (target/debug/deps/mark_cli_args_stdin_20261121-43eb9a19cd79f2cf)
+"""
+
+[task.closure.red]
+rev = "bde4ae63384f801bd74a4afd811e7fae3d106597"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "e195255a"
+title = "flow docs: condukt circuit check invocations lack --run/--session (observed run trips idle_unmeasured / errors on missing --run)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "flow",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-21: 'condukt circuit check --no-compaction-axis' errored 'the following required arguments were not provided: --run <RUN>'; with --run but no --session after claims released it tripped reason=idle_unmeasured idle_source=claim_registry ('run state could not be loaded'). Reproduced: same run with --session S measures idle_source=session_flag. README.md:48/69, README.ja.md:41/62 spell the invocation without --run/--session. condukt contract (circuit.rs run_circuit_check doc, backlog 04c3ca6f) intends --session; whether condukt should also measure from release_log released_at without --session is an open ruling (not part of this item)."
+created_at = 1795263336
+updated_at = 1795263460
+weight = 0.0
+issue_number = 1953
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1953"
+issue_closed_at = 1795263462
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p flow --test skill_contract d_every_documented_circuit_check_invocation_carries_run_and_session"
+rev = "591a30b0fbaee3fedb5b831b03fce6f1e78e74a2"
+observed_at = 1795263336
+detail = """
+exit 101: . 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+   Compiling flow v0.2.45 (/Users/yuki/src/.harness-worktrees/fix-circuit-idle/crates/flow)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.85s
+     Running tests/skill_contract.rs (target/debug/deps/skill_contract-aace31140c998fec)
+error: test failed, to rerun pass `-p flow --test skill_contract`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p flow --test skill_contract d_every_documented_circuit_check_invocation_carries_run_and_session"
+exit = 0
+passed = 1
+rev = "675164be06c8635c18db5edc043ec1bced52cb6a"
+observed_at = 1795263459
+output_digest = "sha256:b9779807336a5d2a9feacbd759023d94646575653987a17066a1fd34c80827a3"
+excerpt = """
+
+running 1 test
+test d_every_documented_circuit_check_invocation_carries_run_and_session ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/skill_contract.rs (target/debug/deps/skill_contract-72c6c2b442c73701)
+"""
+
+[task.closure.red]
+rev = "a69aa0612d321e919bd498e93e0fe2089c3aac1b"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

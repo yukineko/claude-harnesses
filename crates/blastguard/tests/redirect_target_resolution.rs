@@ -295,18 +295,15 @@ fn resolved_system_directory_target_is_still_denied_by_name() {
 /// $ bash -c 'false && P=/tmp/x; echo "[$P]"'     -> []        (guarded)
 /// ```
 ///
-/// Two rows are deliberately STRICTER than bash, and are listed because the
-/// error direction is the safe one: `{ P=…; }` (a brace group does run in the
-/// current shell, so bash really would use the value) and `export P=…` (bash
-/// sets it too). blastguard refuses both, which costs a resolution and invents
-/// none — the direction CLAUDE.md §3 requires.
-///
-/// SUPERSEDED for `export` (user ruling 2026-11-15: 「`export X=lit` は「解決して
-/// 判定」する。`X=lit` と同じく解決し、literal と同じに判定する。」): the export row
-/// is no longer refused; it is pinned below the loop as "judged like the literal
-/// spelling". The brace-group row is likewise superseded (2026-11-21), as are
-/// the `local`/`declare` rows: all three now sit in pair-equality asserts below
-/// the loop, not in the table.
+/// HISTORY: this table once carried two rows that were deliberately STRICTER
+/// than bash — `{ P=…; }` (a brace group runs in the current shell, so bash
+/// really uses the value) and `export P=…` (bash sets it too) — which
+/// blastguard used to refuse. Neither is refused any more: both are now
+/// resolved and judged exactly like the literal spelling. `export` since user
+/// ruling 2026-11-15 (「`export X=lit` は「解決して判定」する。`X=lit` と同じく
+/// 解決し、literal と同じに判定する。」), the brace group since 2026-11-21, along
+/// with the `local`/`declare` rows (2026-11-21). All of them are pinned as
+/// pair-equality asserts below the loop, not as rows of the table.
 #[test]
 fn unresolvable_shapes_keep_the_unresolved_verdict() {
     let mut violations: Vec<String> = Vec::new();

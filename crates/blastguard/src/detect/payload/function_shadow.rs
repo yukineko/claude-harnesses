@@ -36,6 +36,11 @@
 //! that holds neither shape defines no function (`NAME ( )` and the
 //! `function` keyword are the only definition syntaxes of bash and zsh).
 //!
+//! Aliases (backlog cffe54c4) are the same class: `alias echo='echo chmod 777
+//! /etc/hosts #'; bash <(echo hi)` runs the alias. [`defined_functions`] also
+//! adds every `NAME=` word following an `alias` word on the chain
+//! (`defined_aliases`), whether or not `expand_aliases` is enabled there.
+//!
 //! NOT modelled (no definition is seen, so nothing is added): a function
 //! defined by a sourced FILE or by a startup file, inherited from the hook's
 //! own environment, or defined by `eval` of a text that spells neither shape
@@ -117,7 +122,7 @@ pub(super) fn shadowed_emitter_ask(
 ) -> Option<crate::model::Decision> {
     let name = shadowed_emitter_head(stage, group_feeder, &ctx.functions)?;
     Some(crate::model::Decision::ask(format!(
-        "{shape}, and `{name}` in the stage piping into it may be a shell function defined on \
+        "{shape}, and `{name}` in the stage piping into it may be a shell function or alias defined on \
 this command line (or on a line enclosing it) — the function's output, not the stage's \
 arguments, is the program, so blastguard cannot read it"
     )))
@@ -144,8 +149,50 @@ fn shadowed_emitter_head(
         .find(|name| functions.may_shadow(name))
 }
 
-/// The function names `text` defines. See the module docs.
+/// The names `text` defines as shell functions or as aliases (backlog
+/// cffe54c4: `alias echo='…'` rebinds the emitter like a function does). See
+/// the module docs.
 pub(in crate::detect) fn defined_functions(text: &str) -> Functions {
+    defined_function_names(text).union(&defined_aliases(text))
+}
+
+/// The alias names `text` may define: every `NAME=` word after an `alias`
+/// word (an over-approximation: `alias` need not be a command head, and
+/// whether `expand_aliases` is on is not asked — the restrictive reading).
+/// A text with no `alias` substring defines none. An argument whose name is
+/// not a plain literal (an expansion, a backslash, a substitution), or that
+/// holds no `=` but may expand to one, is [`Functions::Undetermined`]. NOT
+/// modelled: the word spelled by concatenation or indirection
+/// (`a=al; ${a}ias echo=x`).
+fn defined_aliases(text: &str) -> Functions {
+    let Some(first) = text.find("alias") else {
+        return Functions::none();
+    };
+    let mut names = Vec::new();
+    for tok in text[first..].split_whitespace() {
+        let tok = tok.trim_start_matches(['\'', '"', '(', '{']);
+        if tok.contains(['$', '`', '\\']) && !tok.contains('=') {
+            return Functions::Undetermined;
+        }
+        let Some((name, _)) = tok.split_once('=') else {
+            continue;
+        };
+        let name = name.trim_matches(['\'', '"']);
+        if name.is_empty() {
+            continue;
+        }
+        let literal = name.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-' | ':' | '+' | '@' | '%' | ',')
+        });
+        if !literal {
+            return Functions::Undetermined;
+        }
+        names.push(name.to_string());
+    }
+    Functions::Known(names)
+}
+
+fn defined_function_names(text: &str) -> Functions {
     if !may_define_function(text) {
         return Functions::none();
     }

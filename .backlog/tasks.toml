@@ -1913,6 +1913,8 @@ notes = "Observed 2026-11-21 at b411f6f9e (worktree session-c1b3e891): in a regi
 created_at = 1795228837
 updated_at = 1795228837
 weight = 0.0
+issue_number = 1944
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1944"
 rev = 0
 
 [task.repro]
@@ -1942,6 +1944,8 @@ notes = """Observed 2026-11-21 on main 5885347f4 (run-20261121-114321-94421 base
 created_at = 1795229073
 updated_at = 1795229073
 weight = 0.0
+issue_number = 1945
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1945"
 rev = 0
 
 [task.repro]

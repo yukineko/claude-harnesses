@@ -824,9 +824,16 @@ forge・condukt のスケジューラが再利用）。
   どの verb を走らせるかは AST の値だけで読む（`l\n` は `ln`）。文面での前段判定は「substitution 開始記号も
   escape を起こしうる語（shell・vi 系・wrapper・展開を含む語）も無い segment は AST を作らない」だけ。
   判定不能 — substitution か escape を起こしうる語を含む segment を AST が列挙できない・escape 本文が
-  決まらない（`bash -c "$X"`、command word が展開、wrapper 越しの interpreter）・`:!` でも既知の無害な
+  決まらない（`bash -c "$X"`、command word が展開、wrapper・`eval` 越しの interpreter）・`:!` でも既知の無害な
   ex command（`q`/`wq`/`set …`/行番号/検索 等）でもない ex command・本文に `%`/`#`/`!` を含む `:!`・
   深さ超過 — は model しない relinker として扱う（上の Ask 条件）。
+  ただし展開の command word は、行全体の AST 評価（`ast::targets::resolve`）が値を証明していればその値を
+  literal として読む（`P=/x/p.sh; …; $P a` は `p.sh` の直接実行で、この行に escape 本文は無い。
+  `B=bash && $B -c '…'` は本文を読む）。証明されない展開だけが判定不能。`.`/`source`（file の本文を読む。
+  `bash x.sh` と同じく行の文面ではない）と shell 以外の interpreter（`python3 -c` 等。shell escape ではなく、
+  relink 語を含めば従来どおり word scan が model しない relinker と読む）はここでは読まない
+  （625d16af8 の回帰: `. "$HOME/.cargo/env" && sed -i … f` と loop 内の `$P` 実行が relink の Ask になっていた。
+  tests/ast_eval_fp_targets_20261115.rs の sanity_line_172 / fp_line_195）。
   **RESIDUAL**: relink 語も target も文面に現れない
   command による relink（archive 展開・build script・tracked symlink の `git checkout`）は model しない。
 - **同じ行で relink された command operand も実際の着地点で判定する（tests/relink_shapes_20261111.rs の

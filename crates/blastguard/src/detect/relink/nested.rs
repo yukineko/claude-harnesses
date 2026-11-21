@@ -19,11 +19,24 @@
 //! segment that holds a substitution or an escape-capable word, an escape's
 //! body cannot be determined (`bash -c "$X"`, an undetermined command word, a
 //! vim ex command that is neither a plain `:!` escape nor a known inert
-//! command, a wrapper that may run an interpreter), or the depth cap is hit,
-//! the segment
+//! command, a wrapper or `eval` that may run an interpreter), or the depth
+//! cap is hit, the segment
 //! is reported [`Nested::undetermined`]; the caller treats it as an
 //! unmodelled relinker (an `Ask`), never as relinking nothing.
+//!
+//! A command word is undetermined only when the line's evaluator proved no
+//! value for it: the segment is parsed alone, so `P=/x/p.sh; …; $P a` reads
+//! `$P` through the top-level index ([`targets::resolve`]) and judges each
+//! proven value as if it were spelled (a direct exec of `p.sh` runs no
+//! escape on this line; `B=bash && $B -c '…'` reads the body). `.` /
+//! `source` run a file's text, and a non-shell interpreter (`python3 -c`)
+//! runs no shell escape: like `bash x.sh`, nothing of theirs is read here
+//! (the word scan still reads them as unmodelled relinkers when they name a
+//! relinking verb). Regression 625d16af8: both were read as undetermined, so
+//! `. "$HOME/.cargo/env" && sed -i … f` and a `$P` exec in a loop became
+//! relink Asks.
 
+use super::super::ast::targets::{self, Role};
 use super::super::ast::{self, Analysis, CwdCandidates, ProgramSource, SimpleCommand, Value};
 use super::super::{normalized_command, CwdState};
 use super::{is_relink_word, plain_words};
@@ -378,12 +391,37 @@ fn ex_known_inert(s: &str) -> bool {
         || (with_arg.contains(&word) && !rest.contains(['=', '&', '$']))
 }
 
+/// The values the line-level AST evaluator proved for the undetermined
+/// command word of `c` (`P=/x/p.sh; …; $P a`): `targets::resolve` reads the
+/// top-level text's index, where the segment's own isolated parse cannot see
+/// the assignment. Only for a command of the top-level text (`depth` 0): a
+/// body's words are a different program whose variables the index does not
+/// describe. `None` when nothing is proven (the word stays undetermined).
+fn proven_heads(c: &SimpleCommand, depth: usize) -> Option<Vec<String>> {
+    if depth != 0 {
+        return None;
+    }
+    let head = c.argv.first()?;
+    let values = targets::resolve(&head.raw, Role::Argv)?;
+    (!values.is_empty()).then_some(values)
+}
+
 /// Add the commands of `c`'s escape body (run in `seg`'s cwd at `depth`).
 fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, out: &mut Nested) {
     let base = match literal_head(c) {
         Ok(b) => b,
-        // `$X -c 'ln …'` may be an escape whose body cannot be read.
         Err(HeadUndetermined) => {
+            // A command word the line's evaluator proved is read as each
+            // of its values, exactly as if it were spelled literally.
+            if let Some(values) = proven_heads(c, depth) {
+                for v in values {
+                    let mut lit = c.clone();
+                    lit.argv[0].value = Value::Literal(v);
+                    escapes(&lit, seg, depth, out);
+                }
+                return;
+            }
+            // `$X -c 'ln …'` may be an escape whose body cannot be read.
             out.undetermined = true;
             return;
         }
@@ -411,8 +449,15 @@ fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, out: &mut Nested) {
         }
         return;
     }
-    // A wrapper that may run an interpreter (`sudo bash -c …`).
-    if matches!(ast::program_source(c), Some(ProgramSource::Undetermined(_))) {
+    // A wrapper that may run an interpreter (`sudo bash -c …`), or `eval`,
+    // whose operands are shell text on the line this does not read. Not
+    // `.` / `source`: they run a FILE's text, which is not on the line (like
+    // `bash x.sh` above), and not a non-shell interpreter (`python3 -c`,
+    // `perl -e`): its program is not a shell escape; the word scan
+    // (`super::parse`) reads those as unmodelled relinkers when they name a
+    // relinking verb, as before.
+    let may_wrap = base == "eval" || WRAPPERS.split_whitespace().any(|w| w == base);
+    if may_wrap && matches!(ast::program_source(c), Some(ProgramSource::Undetermined(_))) {
         out.undetermined = true;
     }
 }

@@ -1746,3 +1746,36 @@ exit 101: ates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.45s
      Running tests/backlog_20261122_relay_87ab2f2de988_python_heredoc_rust_arrow_fp.rs (target/debug/deps/backlog_20261122_relay_87ab2f2de988_python_heredoc_rust_arrow_fp-348eb1c90ea43b93)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261122_relay_87ab2f2de988_python_heredoc_rust_arrow_fp`"""
+
+[[task]]
+id = "c5202092"
+title = "blastguard FP: quoted python3 - heredoc refused as 'program is not on the command line — no text to read' (relay bgr-6f62367777e8)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = '''
+観測: condukt run run-20261122-035502-88763 の t1 worker (subagent) が relay bgr-6f62367777e8 で Deny された (cwd /Users/yuki/.condukt/worktrees/run-20261122-035502-88763-t1/crates/blastguard/src、当時の旧 blastguard)。逐語理由: "`python3 - <<'EOF'` takes its program from stdin, and that program is not on the command line — blastguard has no text to read, so it cannot tell whether anything here is irreversible"。コマンドは cd <worktree>/crates/blastguard/src && python3 - <<'EOF' (import re; s=open(p).read(); assert s.count(old)==1; s.replace(...); open(p,'w').write(s) を 2 ファイル分) EOF に続けて grep -n ... | head。逐語コマンドは ~/.blastguard/relay/eaa077f4-02a7-458b-9e0e-c7fc2c5d694b.jsonl 145 行目から取り、fixture crates/blastguard/tests/support/relay_bgr_6f62367777e8_20261122_exact.txt に置いた (書き換えは worktree prefix だけ)。
+現 HEAD での再現 (2026-11-22, branch filing-84424 commit 3ee9ee41c、基点 main 5e99d94d4 = 8ff44387 の修正入り、worktree /Users/yuki/src/.harness-worktrees/filing-84424、fixture は git work tree で対象 2 ファイルを tracked にしたもの): main mode で ask、subagent mode で deny。理由は当時と逐語で同じ "`python3 - <<'EOF'` takes its program from stdin, and that program is not on the command line — blastguard has no text to read, so it cannot tell whether anything here is irreversible"。
+読み (a) FP: プログラムは quoted heredoc の本文としてコマンドライン上にある。書き込み先は session cwd 内の相対 .rs リテラル。(b) 意図どおり: 本文に subset の外の構文 (import re、複数行の """ 中に backtick / [`...`] など) があって undetermined。たとえ (b) でも "no text to read" は blastguard が見たものを誤って述べている。見分け方: 同じ本文の最小化 (どの行で reading が外れるか)、文言を出している分岐が本文を読んだうえでの fallback なのか。
+DOES NOT PROVE: 本文のどの部分が引き金か、Python の実行結果、末尾の grep 部分の影響の有無。'''
+created_at = 1795291669
+updated_at = 1795291669
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261122_relay_6f62367777e8_python_stdin_no_text_fp -- --ignored"
+rev = "37a69e8cb84454de65d4025cc08e78aeb404eeaa"
+observed_at = 1795291669
+detail = """
+exit 101: filing-84424/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.66s
+     Running tests/backlog_20261122_relay_6f62367777e8_python_stdin_no_text_fp.rs (target/debug/deps/backlog_20261122_relay_6f62367777e8_python_stdin_no_text_fp-c75e67f2d058da97)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261122_relay_6f62367777e8_python_stdin_no_text_fp`"""

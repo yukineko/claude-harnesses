@@ -91727,3 +91727,66 @@ rev = "316bb96bfb0df09ab585abe5788f1d1b758b9ecd"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "4075177c"
+title = "rollout: test_rebuild_current_version_only CheckerAcceptsFrozenSuperseded test_old_bytes_in_live_held_superseded_dir_pass fails - checker reports askrelay GATE crate has no readable plugin.json"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "test-fixture",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-20/21 by the coordinator (session 62e92d16) during run-20261120-171414-35880 / d4a135ba: fails at base 039500893 ('1 failed, 7 passed, 2 subtests passed in 5.87s') and identically at the d4a135ba tip 73c0f1578: 'AssertionError: 3 != 0 : checker demanded a superseded dir match the build', err 'UNVERIFIABLE PLUGIN (1 problem(s)) ... - askrelay: GATE crate has no readable plugin.json under crates/ (deleted, renamed, or corrupted)'. Pre-existing, not a d4a135ba regression. Readings: (a) fixture drift - the test's temp crates/ lacks askrelay, which became a GATE crate; (b) the checker wrongly requires every GATE crate in a fixture. Not investigated."
+created_at = 1795193216
+updated_at = 1795242444
+weight = 0.0
+issue_number = 1930
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1930"
+issue_closed_at = 1795242447
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_rebuild_current_version_only.py -k test_old_bytes_in_live_held_superseded_dir_pass"
+rev = "1973dc5dd9fed931d73aba8c5b0ba9a43c54a52c"
+observed_at = 1795193216
+detail = """
+exit 1: enabledPlugins edit can fix this class.
+
+scripts/test_rebuild_current_version_only.py:281: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_rebuild_current_version_only.py::CheckerAcceptsFrozenSuperseded::test_old_bytes_in_live_held_superseded_dir_pass
+======================= 1 failed, 7 deselected in 0.75s ========================"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_rebuild_current_version_only.py -k test_old_bytes_in_live_held_superseded_dir_pass"
+exit = 0
+passed = 1
+rev = "f1d1a7e238955d9cd3656c36f7d29d8215db87a8"
+observed_at = 1795242443
+output_digest = "sha256:c731e9a30edb4a32f9f7084175cead4f3ae46297b585380841c2688998d67a0a"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-c1b3e891
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 8 items / 7 deselected / 1 selected
+
+scripts/test_rebuild_current_version_only.py .                           [100%]
+
+======================= 1 passed, 7 deselected in 0.15s ========================
+"""
+
+[task.closure.red]
+rev = "53e63a4172f854d021f27df0236ba3b5da192e06"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

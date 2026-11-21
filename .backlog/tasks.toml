@@ -2412,3 +2412,33 @@ exit 101: 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.17s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
      Running tests/backlog_20261121_flow_driver_session_never_asks.rs (target/debug/deps/backlog_20261121_flow_driver_session_never_asks-71503fd10e4b9f5e)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261121_flow_driver_session_never_asks`"""
+
+[[task]]
+id = "49921963"
+title = "flow stop-gate spawns backlog/condukt by bare name; hook PATH lacks plugin bin dirs so every driver Stop is undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flow",
+    "stop-gate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed twice 2026-11-21, session c1b3e891, flow 0.2.42 deployed (main 366eab917). Verbatim: "flow stop-gate: could not determine whether this /flow driver session may stop. Unreadable: driver liveness (`backlog driver status --project /Users/yuki/src/.harness-worktrees/session-c1b3e891`): cannot run backlog driver status --project ...: No such file or directory (os error 2)". From the Bash tool the same command works (backlog -> ~/.claude/plugins/cache/yukineko/backlog/0.3.145/bin/backlog, exit 0, active:true). Cause read from source: crates/flow/src/probes.rs Real::run does Command::new("backlog"/"condukt") from PATH; harness_core::plugin_bin module doc records (measured 2026-08-21) that hook processes do not inherit the plugin bin dirs on PATH; autoflow/backlog.rs and condukt claim/oracle/state already use harness_core::plugin_bin::resolve (cache first, PATH second). RED at 52ab15a5c (2026-11-21): stubs only at $HOME/.claude/plugins/cache/yukineko/{backlog,condukt}/<ver>/bin, PATH=/usr/bin:/bin, live driver + pending task => block with the same 'No such file or directory (os error 2)' undetermined reason instead of the determined work-remains block; control with stubs on PATH passes. Readings: (a) defect — the hook must locate sibling plugin binaries independently of PATH (plugin cache); (b) intended — PATH is the contract and the plugin install must export the bin dirs to hooks. How to tell: whether Claude Code's hook env carries plugin bin dirs on PATH — plugin_bin's measured doc and the observed os error 2 say no, so (a)."""
+created_at = 1795221737
+updated_at = 1795221737
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p flow --test stop_gate_sibling_bin_resolution_20261121"
+rev = "52ab15a5ce35b4e6606bc494553d494eca382bd1"
+observed_at = 1795221737
+detail = """
+exit 101: sult: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/stop_gate_sibling_bin_resolution_20261121.rs (target/debug/deps/stop_gate_sibling_bin_resolution_20261121-8a62f7d0ca8c41dc)
+error: test failed, to rerun pass `-p flow --test stop_gate_sibling_bin_resolution_20261121`"""

@@ -2462,6 +2462,8 @@ notes = """Classified false-positive (an ask that, per ruling, must not be emitt
 created_at = 1795221327
 updated_at = 1795221327
 weight = 0.0
+issue_number = 1933
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1933"
 rev = 0
 
 [task.repro]

@@ -91926,3 +91926,92 @@ rev = "6472dffda269e5e3b636172ae5399f769ba5b1d5"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "6460fb47"
+title = "rollout: scripts/tests/canary-final-stage-gate.sh fails case C - a healthy single-stage canary exits 1"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "rollout",
+    "canary",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-20/21 by the coordinator (session 62e92d16) during run-20261120-171414-35880 / d4a135ba: bash scripts/tests/canary-final-stage-gate.sh rc=1 'FAIL: case C: a healthy single-stage canary must exit 0, got 1 (does the fix always halt?)' at base 039500893 and identically at tip 73c0f1578. Pre-existing. Readings: (a) fixture drift (e.g. missing helper/GATE crate in the temp repo); (b) real regression: the canary final-stage gate always halts. Not investigated."
+created_at = 1795193376
+updated_at = 1795255254
+weight = 0.0
+issue_number = 1904
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1904"
+issue_closed_at = 1795255256
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/canary-final-stage-gate.sh"
+rev = "d9067574348b5abc71dd6cc71e9ddd632645dacc"
+observed_at = 1795193376
+detail = """
+exit 1:   
+    rollout: FAILED — drift remains for the targeted plugin(s) after this run
+             (see above). They are NOT current, so this script will not report success.
+    RC=1
+(exit code: 1, gate invocations: 1)
+  ok: the only stage was health-gated (1 gate invocation)
+  ok: healthy gate reported PROCEED
+FAIL: case C: a healthy single-stage canary must exit 0, got 1 (does the fix always halt?)"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "script"
+cmd = "bash scripts/tests/canary-final-stage-gate.sh"
+exit = 0
+passed = 19
+rev = "606947e49e5f0b3052016227284cbcb4cbb3b14b"
+observed_at = 1795255250
+output_digest = "sha256:d8ae28293a50dee055cbf303b9d3088b6a9a9a15a447774d56d429486283d522"
+excerpt = """
+ns)
+      - webqa: not enabled (absent from enabledPlugins)
+    
+    DISABLED OR UNVERIFIABLE GATE CRATE (5 problem(s); 7 of 7 GATE plugin(s) inspected):
+      - askrelay: GATE crate is not enabled — absent from enabledPlugins in /var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T//canary-final-stage.5BZQs7/home/.claude/settings.json. Claude Code is configured not to load it, so it is expected to be inert; whether its hooks actually fire was NOT observed by this check, which reads enabledPlugins and never a hook process. Treat the gate as unverified rather than as known-dead: on 2026-09-18 a GATE crate with this exact setting was measured still firing.
+      - overwatch: GATE crate is not enabled — absent from enabledPlugins in /var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T//canary-final-stage.5BZQs7/home/.claude/settings.json. Claude Code is configured not to load it, so it is expected to be inert; whether its hooks actually fire was NOT observed by this check, which reads enabledPlugins and never a hook process. Treat the gate as unverified rather than as known-dead: on 2026-09-18 a GATE crate with this exact setting was measured still firing.
+      - propguard: GATE crate is not enabled — absent from enabledPlugins in /var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T//canary-final-stage.5BZQs7/home/.claude/settings.json. Claude Code is configured not to load it, so it is expected to be inert; whether its hooks actually fire was NOT observed by this check, which reads enabledPlugins and never a hook process. Treat the gate as unverified rather than as known-dead: on 2026-09-18 a GATE crate with this exact setting was measured still firing.
+      - specguard: GATE crate is not enabled — absent from enabledPlugins in /var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T//canary-final-stage.5BZQs7/home/.claude/settings.json. Claude Code is configured not to load it, so it is expected to be inert; whether its hooks actually fire was NOT observed by this check, which reads enabledPlugins and never a hook process. Treat the gate as unverified rather than as known-dead: on 2026-09-18 a GATE crate with this exact setting was measured still firing.
+      - stuckguard: GATE crate is not enabled — absent from enabledPlugins in /var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T//canary-final-stage.5BZQs7/home/.claude/settings.json. Claude Code is configured not to load it, so it is expected to be inert; whether its hooks actually fire was NOT observed by this check, which reads enabledPlugins and never a hook process. Treat the gate as unverified rather than as known-dead: on 2026-09-18 a GATE crate with this exact setting was measured still firing.
+    
+    Fix: add "<name>@yukineko": true to enabledPlugins in /var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T//canary-final-stage.5BZQs7/home/.claude/settings.json (rollout-plugins.sh does NOT enable plugins), then restart Claude Code.
+    OK (scoped to --only blastguard): no rollout drift for the targeted plugin(s); 51 finding(s) for other plugins were NOT enforced (see OUT OF SCOPE above) (1 parked, reported above: parallelguard)
+    OK: every @yukineko plugin key on this machine maps to a crate under crates/ (1 enabledPlugins key(s) + 3 registry entr(y/ies) inspected)
+    
+    rollout: the check exited 2 — not a rollout-class failure (enablement, an
+             unreadable plugin.json, or a version ahead of origin that must be
+             pushed), which a rollout cannot fix. Reported,
+             not fatal here.
+    
+    done (canary).
+    RC=0
+(exit code: 0, gate invocations: 1)
+  ok: the only stage was health-gated (1 gate invocation)
+  ok: healthy gate reported PROCEED
+  ok: healthy single-stage canary exited 0
+  ok: no rollback on a healthy stage
+  ok: run_rebuild_and_sync was reached (rollout completed)
+  ok: the healthy stage stayed applied
+
+PASS: the canary health gate runs for EVERY stage including the last (or
+      only) one; rc=3 rolls that stage back and halts with exit 4, while a
+      healthy single-stage canary still proceeds to run_rebuild_and_sync.
+19 passed
+"""
+
+[task.closure.red]
+rev = "82f1dcac331b71c674ec56717f5962e07054b23f"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

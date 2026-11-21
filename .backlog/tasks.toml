@@ -1246,41 +1246,6 @@ exit 101: guard v0.2.816 (/Users/yuki/src/.harness-worktrees/sink-file-20261120/
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_e1bb5f7e_adversarial_r2`"""
 
 [[task]]
-id = "6460fb47"
-title = "rollout: scripts/tests/canary-final-stage-gate.sh fails case C - a healthy single-stage canary exits 1"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "rollout",
-    "canary",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-20/21 by the coordinator (session 62e92d16) during run-20261120-171414-35880 / d4a135ba: bash scripts/tests/canary-final-stage-gate.sh rc=1 'FAIL: case C: a healthy single-stage canary must exit 0, got 1 (does the fix always halt?)' at base 039500893 and identically at tip 73c0f1578. Pre-existing. Readings: (a) fixture drift (e.g. missing helper/GATE crate in the temp repo); (b) real regression: the canary final-stage gate always halts. Not investigated."
-created_at = 1795193376
-updated_at = 1795193376
-weight = 0.0
-issue_number = 1904
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1904"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "bash scripts/tests/canary-final-stage-gate.sh"
-rev = "d9067574348b5abc71dd6cc71e9ddd632645dacc"
-observed_at = 1795193376
-detail = """
-exit 1:   
-    rollout: FAILED — drift remains for the targeted plugin(s) after this run
-             (see above). They are NOT current, so this script will not report success.
-    RC=1
-(exit code: 1, gate invocations: 1)
-  ok: the only stage was health-gated (1 gate invocation)
-  ok: healthy gate reported PROCEED
-FAIL: case C: a healthy single-stage canary must exit 0, got 1 (does the fix always halt?)"""
-
-[[task]]
 id = "1564a3fc"
 title = "rollout: scripts/tests/canary-gate-eval-failclosed.sh fails - explicit override does not proceed to completion (exit 1, expected 0)"
 project = "/Users/yuki/src/harness"

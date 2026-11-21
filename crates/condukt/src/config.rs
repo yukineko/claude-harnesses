@@ -242,6 +242,46 @@ fn parse_file_config(read: std::io::Result<String>) -> Result<Option<FileConfig>
         .map_err(|e| format!("config.toml unparseable: {e}"))
 }
 
+/// A numeric environment override, three-way like [`parse_file_config`]:
+///
+/// * unset → `Ok(None)`: the file / built-in value stands;
+/// * set and parseable as `T` → `Ok(Some(n))`;
+/// * set but not parseable (including the empty string, a negative number
+///   for an unsigned `T`, or a non-UTF-8 value) → `Err` naming the variable
+///   and its value: the override the user meant is undetermined, and keeping
+///   the file / built-in value instead would silently drop it.
+fn numeric_env<T>(var: &str) -> Result<Option<T>, String>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    parse_numeric_env(var, std::env::var(var))
+}
+
+/// [`numeric_env`] with the raw `std::env::var` result injected.
+fn parse_numeric_env<T>(
+    var: &str,
+    raw: Result<String, std::env::VarError>,
+) -> Result<Option<T>, String>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    match raw {
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(v)) => Err(format!(
+            "{var}={v:?} is not valid UTF-8, so the override cannot be read; \
+             unset it or set it to a non-negative integer"
+        )),
+        Ok(v) => v.parse::<T>().map(Some).map_err(|e| {
+            format!(
+                "{var}={v:?} is not a valid non-negative integer ({e}); \
+                 unset it or set it to a non-negative integer"
+            )
+        }),
+    }
+}
+
 /// [`resolve_loop_max_iters`] applied to `<base_dir>/config.toml`.
 pub fn loop_max_iters_strict() -> Result<usize, String> {
     resolve_loop_max_iters(std::fs::read_to_string(base_dir().join("config.toml")))
@@ -302,8 +342,12 @@ impl Config {
     /// `Err` when config.toml exists but cannot be read or parsed: the user's
     /// settings (`shared_globs`, `state_dir`, `worktree_base`, `autonomous`,
     /// ...) are then undetermined, and running on the defaults instead would
-    /// silently drop them. Only an ABSENT file resolves to the defaults. Every
-    /// caller must handle the `Err` deliberately (refuse / block / show it).
+    /// silently drop them. Only an ABSENT file resolves to the defaults. A
+    /// numeric environment override (`CONDUKT_MAX_PARALLEL`,
+    /// `CONDUKT_STUCK_TTL_SECS`) that is set but unparseable is `Err` for the
+    /// same reason, with the variable and its value in the message; only an
+    /// UNSET variable leaves the file / built-in value alone. Every caller must
+    /// handle the `Err` deliberately (refuse / block / show it).
     pub fn load() -> Result<Self, String> {
         Self::load_from(std::fs::read_to_string(base_dir().join("config.toml")))
     }
@@ -445,15 +489,17 @@ impl Config {
         if let Ok(v) = std::env::var("CONDUKT_DEFAULT_BRANCH") {
             cfg.default_branch = v;
         }
-        if let Ok(v) = std::env::var("CONDUKT_MAX_PARALLEL") {
-            if let Ok(n) = v.parse() {
-                cfg.max_parallel = n;
-            }
+        // A numeric override that is SET but cannot be parsed (a typo, the empty
+        // string, a negative number, a non-UTF-8 value) is `Err`, exactly like an
+        // unparseable config.toml: the cap / TTL the user meant is undetermined,
+        // and falling back to the file or built-in value would silently drop it
+        // (backlog d039872d). Only an UNSET variable leaves the value alone.
+        // `0` parses and is kept as before (no new range check here).
+        if let Some(n) = numeric_env::<usize>("CONDUKT_MAX_PARALLEL")? {
+            cfg.max_parallel = n;
         }
-        if let Ok(v) = std::env::var("CONDUKT_STUCK_TTL_SECS") {
-            if let Ok(n) = v.parse() {
-                cfg.stuck_ttl_secs = n;
-            }
+        if let Some(n) = numeric_env::<u64>("CONDUKT_STUCK_TTL_SECS")? {
+            cfg.stuck_ttl_secs = n;
         }
         // -- the shared autonomy switch: config.toml, then switch file, then env --
         // `harness_core::autonomy::read` owns all three layers, including the

@@ -2167,7 +2167,8 @@ fn run_subagent_stop() {
 }
 
 /// A user command refused because `Config::load` could not determine the
-/// configuration (config.toml exists but is unreadable or unparseable). Every
+/// configuration (config.toml exists but is unreadable or unparseable, or a
+/// numeric env override such as `CONDUKT_MAX_PARALLEL` is set but unparseable). Every
 /// user command reads some configured value (`shared_globs`, `state_dir`,
 /// `worktree_base`, `autonomous`, the test/loop commands, ...), and running it
 /// on the built-in defaults would silently drop what the user configured — a
@@ -2246,8 +2247,8 @@ fn refuse_undetermined_config(cmd: &Command, err: &str) -> Result<()> {
         std::process::exit(1);
     }
     bail!(
-        "{err} ({}): refusing to run on built-in defaults, which would silently drop \
-         the configured settings; fix or remove the file",
+        "{err} (config file: {}): refusing to run on built-in defaults, which would \
+         silently drop the configured settings; fix or remove the setting named above",
         cfg_path.display()
     )
 }

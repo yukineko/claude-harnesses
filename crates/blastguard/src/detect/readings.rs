@@ -97,16 +97,24 @@ mod static_bindings;
 /// a middle layer that rebinds a name (`bash -c 'PATH=…; bash -c "…"'`)
 /// disables static resolution for every layer below it.
 pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision {
-    struct Restore(Option<bool>);
+    struct Restore(Option<bool>, Option<bool>);
     impl Drop for Restore {
         fn drop(&mut self) {
             CHAIN_NAMES_FIXED.with(|t| t.set(self.0));
+            CHAIN_NAMES_FIXED_BUT_ONE_EVAL.with(|t| t.set(self.1));
         }
     }
     let outer = CHAIN_NAMES_FIXED.with(std::cell::Cell::get);
-    let _restore = Restore(outer);
-    let fixed = outer.unwrap_or(true) && super::payload::determined_output::resolution_fixed(c);
+    let outer_but_one_eval = CHAIN_NAMES_FIXED_BUT_ONE_EVAL.with(std::cell::Cell::get);
+    let _restore = Restore(outer, outer_but_one_eval);
+    let enclosing = outer.unwrap_or(true);
+    let fixed = enclosing && super::payload::determined_output::resolution_fixed(c);
     CHAIN_NAMES_FIXED.with(|t| t.set(Some(fixed)));
+    // The enclosing chain is the STRICT value: an `eval` in an enclosing text
+    // still turns this off; only `c`'s own single `eval` is let through.
+    let fixed_but_one_eval =
+        enclosing && super::payload::determined_output::resolution_fixed_but_one_eval(c);
+    CHAIN_NAMES_FIXED_BUT_ONE_EVAL.with(|t| t.set(Some(fixed_but_one_eval)));
     // The shell functions the chain may define (backlogs 1e9da081 /
     // f06ecb05): the enclosing value WIDENED by `c`'s own definitions,
     // restored on return like `CHAIN_NAMES_FIXED`.
@@ -135,6 +143,12 @@ thread_local! {
     /// top-level line AND of every derived text [`detect_bash_every_reading`]
     /// was re-entered on around the current call.
     static CHAIN_NAMES_FIXED: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+    /// Like `CHAIN_NAMES_FIXED`, but the innermost text (the current call's)
+    /// is read with
+    /// [`super::payload::determined_output::resolution_fixed_but_one_eval`]
+    /// (the enclosing texts still with `resolution_fixed`). Backlog d766b5fe.
+    static CHAIN_NAMES_FIXED_BUT_ONE_EVAL: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
     /// `Some(f)` while a Bash detection runs on this thread: `f` is the union
     /// of [`super::payload::function_shadow::defined_functions`] of the
@@ -167,6 +181,16 @@ pub(in crate::detect) fn chain_functions() -> Functions {
 /// shown to be fixed. Read by [`super::Ctx::new`] and by the Table B.5 layer.
 pub(in crate::detect) fn chain_names_fixed() -> bool {
     CHAIN_NAMES_FIXED
+        .with(std::cell::Cell::get)
+        .unwrap_or(false)
+}
+
+/// [`chain_names_fixed`], except that the current text may hold ONE bare
+/// `eval` (`determined_output::resolution_fixed_but_one_eval`); every
+/// enclosing text is still read strictly. Read only by the Table B.5 `eval W`
+/// reading (backlog d766b5fe). `false` outside a Bash detection.
+pub(in crate::detect) fn chain_names_fixed_but_one_eval() -> bool {
+    CHAIN_NAMES_FIXED_BUT_ONE_EVAL
         .with(std::cell::Cell::get)
         .unwrap_or(false)
 }

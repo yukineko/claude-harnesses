@@ -163,7 +163,6 @@ fn bash_c_of_determined_harmful_subst_is_deny() {
 }
 
 #[test]
-#[ignore = "backlog d766b5fe: RED: eval of a determined harmful subst through cat is Ask, not Deny"]
 fn eval_of_determined_harmful_subst_through_cat_is_deny() {
     expect_deny(r#"eval "$(echo 'rm -rf /etc' | cat)""#, "b-eval");
 }

@@ -58,7 +58,9 @@
 //!   programs only); `-c` and a literal stdin program give no B.5 opinion —
 //!   stage S5 (`s5.rs`) parses and judges them; any other stdin →
 //!   Undetermined;
-//! * `eval` with operands → Undetermined;
+//! * `eval` with operands → Undetermined, except that the Deny of the code a
+//!   lone determined-substitution operand computes is taken
+//!   (`determined_eval_program`, backlog d766b5fe);
 //! * an undetermined command word (after unwrapping) → Undetermined (Table B
 //!   common rules: it may be an interpreter);
 //! * direct execution of a path (`./x`, `rel/dir/x`, `target/debug/x`,
@@ -665,7 +667,8 @@ fn classify(
     let args = cmd.argv.get(k + 1..).unwrap_or(&[]);
     let Some(fam) = family(base) else {
         return match base {
-            "eval" if !args.is_empty() => undetermined("`eval` runs shell code built at run time"),
+            "eval" if !args.is_empty() => determined_eval_program(text, args, judge)
+                .unwrap_or_else(|| undetermined("`eval` runs shell code built at run time")),
             _ => Decision::Allow,
         };
     };
@@ -1157,7 +1160,8 @@ fn determined_delivered_program(
 /// [`determined_delivered_program`]; a function named `echo` on the chain
 /// fails them), or when the judged program is not a Deny: an Ask or Allow on
 /// the computed text never replaces today's Undetermined, so nothing is
-/// loosened. `eval W` can reuse `substituted_word_value` the same way.
+/// loosened. `eval W` reuses `substituted_word_value` the same way
+/// ([`determined_eval_program`]).
 fn determined_dash_c_program(
     text: &str,
     fam: Family,
@@ -1181,6 +1185,37 @@ fn determined_dash_c_program(
     }
     let program = substituted_word_value(&word.raw)?;
     let verdict = judge_body(&program, Runner::Shell(base), judge);
+    verdict.is_deny().then_some(verdict)
+}
+
+/// The Deny of the code `eval W` runs (`args` = exactly `[W]`) when `W` is a
+/// word whose value `substituted_word_value` computes from its `$( )`
+/// substitutions (`eval "$(echo 'rm -rf /etc' | cat)"`, backlog d766b5fe):
+/// that value is judged by the full detector as `bash -c '<value>'`
+/// ([`judge_body`]).
+///
+/// The precondition is [`determined_dash_c_program`]'s with one widening:
+/// `text` — and only `text`, the enclosing chain is read strictly — may hold
+/// ONE bare `eval`, this one (`chain_names_fixed_but_one_eval` /
+/// `resolution_fixed_but_one_eval`), since `W`'s substitutions run before it.
+/// A function, alias, assignment, any other unlisted command or a second
+/// `eval` on the line keeps today's Undetermined. Raise-only: an Ask or Allow
+/// on the computed code is not taken.
+fn determined_eval_program(text: &str, args: &[Word], judge: &Probes<'_>) -> Option<Decision> {
+    use crate::detect::payload::determined_output::{
+        resolution_fixed_but_one_eval, substituted_word_value,
+    };
+    let [word] = args else {
+        return None;
+    };
+    if !matches!(word.value, Value::Undetermined(_))
+        || !crate::detect::readings::chain_names_fixed_but_one_eval()
+        || !resolution_fixed_but_one_eval(text)
+    {
+        return None;
+    }
+    let program = substituted_word_value(&word.raw)?;
+    let verdict = judge_body(&program, Runner::Shell("bash"), judge);
     verdict.is_deny().then_some(verdict)
 }
 

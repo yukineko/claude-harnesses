@@ -87,13 +87,39 @@ pub(in crate::detect) struct Output {
 /// allowlist, not a list of the builtins known to rebind names, so an
 /// unlisted way to rebind one cannot slip through.
 pub(in crate::detect) fn resolution_fixed(cmd: &str) -> bool {
+    resolution_fixed_allowing_evals(cmd, 0)
+}
+
+/// [`resolution_fixed`], except that AT MOST ONE command on `cmd` may be a
+/// bare `eval` (backlog d766b5fe). Only the Table B.5 `eval W` reading uses
+/// it, for the `eval` it judges: the `$( )` substitutions of `W` run before
+/// that `eval` does, so its code cannot rebind what they run, while a SECOND
+/// `eval` on the line could (`eval 'cat(){ …; }'; eval "$(… | cat)"`), so two
+/// make it false. Every other caller keeps [`resolution_fixed`], in which any
+/// `eval` makes it false.
+pub(in crate::detect) fn resolution_fixed_but_one_eval(cmd: &str) -> bool {
+    resolution_fixed_allowing_evals(cmd, 1)
+}
+
+fn resolution_fixed_allowing_evals(cmd: &str, evals_allowed: usize) -> bool {
     let Analysis::Known(script) = ast::analyze(cmd) else {
         return false;
     };
     if script.has_function_definition {
         return false;
     }
+    let is_eval = |c: &ast::SimpleCommand| {
+        c.argv
+            .first()
+            .is_some_and(|h| matches!(&h.value, Value::Literal(n) if n == "eval"))
+    };
+    if script.commands.iter().filter(|c| is_eval(c)).count() > evals_allowed {
+        return false;
+    }
     script.commands.iter().all(|c| {
+        if is_eval(c) && c.assignments.is_empty() {
+            return true;
+        }
         if !c.assignments.is_empty() {
             return false;
         }

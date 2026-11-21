@@ -1963,3 +1963,33 @@ exit 101: x-testscope-oracle/crates/condukt)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.16s
      Running tests/backlog_20261121_testscope_red_on_mutated_tree_blocks_green.rs (target/debug/deps/backlog_20261121_testscope_red_on_mutated_tree_blocks_green-205eaa7393defd47)
 error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_red_on_mutated_tree_blocks_green`"""
+
+[[task]]
+id = "9ad3c063"
+title = "condukt worktree create from an unlisted linked worktree of a listed repo registers no workspace trust for the new worktree"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "tdd",
+    "trust",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed run-20261121-114321-94421: t3 was created with cwd in linked worktree /Users/yuki/src/.harness-worktrees/run4-integ (not in ~/.harness/trust.toml) and was not registered, while t1/t2 created from main were. crates/condukt/src/main.rs run_worktree takes repo = worktree::toplevel(cwd); crates/condukt/src/worktree.rs create gates registration on trust::is_listed(&repo_canon) = the linked worktree, silently skipping. scripts/session-worktree-init.py documents the rule as 'exactly when the main tree is itself listed — the rule condukt's worktree::create applies' (docstring vs behaviour contradiction)."
+created_at = 1795263852
+updated_at = 1795263852
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261121_worktree_create_from_linked_worktree_trust"
+rev = "64c82d351a6532c91820d092710bacda611d4e80"
+observed_at = 1795263852
+detail = """
+exit 101: x-testscope-oracle/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/backlog_20261121_worktree_create_from_linked_worktree_trust.rs (target/debug/deps/backlog_20261121_worktree_create_from_linked_worktree_trust-e10c9f140ed58c6e)
+error: test failed, to rerun pass `-p condukt --test backlog_20261121_worktree_create_from_linked_worktree_trust`"""

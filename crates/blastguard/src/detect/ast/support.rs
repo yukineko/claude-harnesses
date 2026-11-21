@@ -208,9 +208,26 @@ pub(super) fn set_is_harmless(args: &[Word]) -> bool {
 }
 
 /// What the next pipeline stage reads from a stage: `Literal` only for a
-/// simple `echo` with literal operands and no option / backslash, or a
+/// simple `echo` with literal operands and no option / backslash, the same
+/// for `/bin/echo` / `/usr/bin/echo` but refusing ANY leading-`-` first
+/// operand (GNU coreutils `echo` also takes `--help` / `--version`), or a
 /// `printf` with one literal format holding only simple escapes, without
 /// redirections; anything else is `FromCommand` (content not determined).
+///
+/// `/bin/echo` / `/usr/bin/echo` print their operands joined by spaces plus a
+/// newline in both macOS BSD and GNU coreutils for such operands. A function
+/// CAN be named `/bin/echo` (observed 2026-11-21 on macOS: `/bin/bash` and
+/// `/bin/zsh` given `-c '/bin/echo() { printf "FUNC\n"; }; /bin/echo hi'`
+/// printed `FUNC`), exactly as for a bare `echo`; a function definition on the
+/// line keeps the B.5 analysis `Unsupported` ([`super::analyze`]). Any other
+/// path (`/tmp/echo`, `./echo`) is `FromCommand`.
+///
+/// An `echo` whose stdout is redirected to `/dev/stdout` stays `FromCommand`
+/// here: zsh (MULTIOS, the Bash tool's shell on macOS) then delivers the
+/// output TWICE (observed 2026-11-21: `/bin/zsh -c 'echo hi > /dev/stdout |
+/// od -c'` printed `h i \n h i \n`, `/bin/bash` the same command `h i \n`),
+/// so no single literal is what the next stage reads. Table B.5 reads that
+/// shape for a Deny only (`b5.rs::inert_backslash_echo_program`).
 pub(super) fn piped_stdin(stage: Option<&SimpleCommand>) -> StdinSource {
     let sc = match stage {
         Some(sc) if sc.redirects.is_empty() => sc,
@@ -228,6 +245,11 @@ pub(super) fn piped_stdin(stage: Option<&SimpleCommand>) -> StdinSource {
             let opt = args.first().is_some_and(|a| {
                 a.len() > 1 && a.starts_with('-') && a.chars().skip(1).all(|c| "neE".contains(c))
             });
+            (!opt && !args.iter().any(|a| a.contains('\\')))
+                .then(|| format!("{}\n", args.join(" ")))
+        }
+        Some((&("/bin/echo" | "/usr/bin/echo"), args)) => {
+            let opt = args.first().is_some_and(|a| a.starts_with('-'));
             (!opt && !args.iter().any(|a| a.contains('\\')))
                 .then(|| format!("{}\n", args.join(" ")))
         }
@@ -276,6 +298,16 @@ pub(super) fn brace_group_stdin(
         }
     }
     StdinSource::Literal(out)
+}
+
+/// Whether redirection `r` sends fd 1 (fd omitted or `1`; `>`, `>|`, `>>`)
+/// to the literal path `/dev/stdout` or `/dev/fd/1`, i.e. back to the stdout
+/// the command already has. Any other redirection — another fd, another
+/// path, `>&`, an undetermined target — is `false`.
+pub(super) fn stdout_to_itself(r: &Redirect) -> bool {
+    matches!(r.fd, None | Some(1))
+        && matches!(r.op, RedirOp::Out | RedirOp::Clobber | RedirOp::Append)
+        && matches!(&r.target, RedirTarget::Path(Value::Literal(p)) if p == "/dev/stdout" || p == "/dev/fd/1")
 }
 
 fn printf_simple(fmt: &str) -> Option<String> {

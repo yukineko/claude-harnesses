@@ -517,8 +517,11 @@ pub(crate) struct HereDoc {
 pub(crate) enum StdinSource {
     /// Nothing on the line feeds it.
     Inherited,
-    /// `echo lit |`, `printf 'lit' |` (simple escapes only), `<<< lit`,
-    /// quoted heredoc, unquoted heredoc w/o expansions.
+    /// `echo lit |`, `/bin/echo lit |` / `/usr/bin/echo lit |` (no
+    /// leading-`-` first operand), `printf 'lit' |` (simple escapes only), a
+    /// brace group of those, `<<< lit`, quoted heredoc, unquoted heredoc w/o
+    /// expansions (`support::piped_stdin`). Not `echo lit > /dev/stdout |`:
+    /// zsh delivers that output twice (`support::piped_stdin`).
     Literal(String),
     /// Piped from a non-literal producer.
     FromCommand,

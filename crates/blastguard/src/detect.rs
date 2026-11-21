@@ -845,9 +845,11 @@ primitive, not a filesystem path",
             let (target, physical) = match landing {
                 relink::Step::Judge(t, p) => (t, p),
                 relink::Step::Decided(d) => return d,
-                relink::Step::Ask(a) => {
+                // Recorded, and the spelled target is still judged below: an
+                // unmodelled relinker must not mask a system-path Deny.
+                relink::Step::Ask(a, t, p) => {
                     line_level_asks.push(a);
-                    continue;
+                    (t, p)
                 }
             };
             if !redirect_target_is_safe(&target, ctx) {
@@ -1108,9 +1110,10 @@ does not parse that body, but blastguard cannot show the program does not use it
             let (target, physical) = match landing {
                 relink::Step::Judge(t, p) => (t, p),
                 relink::Step::Decided(d) => return d,
-                relink::Step::Ask(a) => {
+                // Recorded, and the spelled target is still judged below (see `>`).
+                relink::Step::Ask(a, t, p) => {
                     line_level_asks.push(a);
-                    continue;
+                    (t, p)
                 }
             };
             // The system-directory axis does not care about the truncate/append

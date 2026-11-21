@@ -820,7 +820,7 @@ dependencies = [
 
 [[package]]
 name = "flow"
-version = "0.2.46"
+version = "0.2.47"
 dependencies = [
  "harness-core",
  "serde_json",

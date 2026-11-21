@@ -20,6 +20,7 @@ mod merge_proof;
 mod merge_recovery;
 mod quarantine;
 mod retry_task;
+mod trust_source;
 pub use dirty_tracked::refuse_uncommitted_task_worktree;
 use merge_gate::{ensure_base_on_default_branch, ensure_commits_carry_task_trailer, TrailerGuard};
 use merge_proof::worktree_for_branch;
@@ -615,7 +616,8 @@ pub fn create(repo: &Path, worktree_base: &Path, topic: &str, branch: &str) -> R
     // worktree therefore has to carry the repo's trust across with it.
     //
     // PROPAGATION, NEVER ESCALATION. The worktree inherits trust only when the
-    // SOURCE REPO already has it. Registering unconditionally would turn
+    // SOURCE REPO has it: its main working tree, or a listed cwd toplevel
+    // (`trust_source`). Registering unconditionally would turn
     // "cut a worktree" into a trust-GRANTING operation: an untrusted project's
     // `donegate.toml` carries `cmd` strings that are executed via `sh -c`, and
     // it is untrusted precisely so that merely opening/cloning it cannot run
@@ -675,7 +677,7 @@ pub fn create(repo: &Path, worktree_base: &Path, topic: &str, branch: &str) -> R
     // delegates to `create`, and `shadow_run::exec` calls `create` directly.
     // Placing the registration in `create` closes both by construction rather
     // than leaving the second as a mirror gap (cf. backlog 167cf55e).
-    if harness_core::trust::is_listed(&repo_canon) {
+    if trust_source::source_listed(&repo_canon)? {
         harness_core::trust::add(&path_canon).with_context(|| {
             format!(
                 "could not record the new worktree {} in the workspace-trust list ({}); \

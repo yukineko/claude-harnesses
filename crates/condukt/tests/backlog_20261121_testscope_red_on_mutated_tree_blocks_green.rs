@@ -174,7 +174,11 @@ fn ran(e: &Env, cmd: &str, tuid: &str) {
 fn red_tdd_green_not_denied_after_red_that_mutated_tree_in_same_call() {
     let e = env();
     let p = e.root.path();
-    assert_eq!(git_out(p, &["status", "--porcelain"]), "", "apparatus: clean");
+    assert_eq!(
+        git_out(p, &["status", "--porcelain"]),
+        "",
+        "apparatus: clean"
+    );
 
     // 1. Pre of the mutating call is allowed.
     let r = pre(&e, MUTATING_RED, "A");

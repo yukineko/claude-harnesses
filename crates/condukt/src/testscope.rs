@@ -88,6 +88,13 @@
 //! the old 3-column row to `ledger.tsv` so an older cached binary still
 //! refuses a confirmed rerun. The ledger itself (rule 3's `check_rerun`, the
 //! confirm / invalidate records) lives in the [`rerun`] submodule.
+//! The tree is measured at PreToolUse, before the call runs. A call that
+//! itself changes that tree (`git checkout <rev> -- f && tdd red ...`) ran its
+//! test on a tree the row does not name, so at confirmation such a key is not
+//! promoted: it stays pending and its post-call tree is recorded pending too
+//! (backlog bdc30aa7: the RED of run-20261121-114321-94421 t3 ran on a reverted
+//! tree, was keyed on the fixed one, and the GREEN there was refused). Not
+//! covered: a call that changes the tree and restores it before it ends.
 //!
 //! **Test-only fault seams** (read from the environment only, never from
 //! the payload): `CONDUKT_TESTSCOPE_FAULT=confirm_panic` makes the confirm hook

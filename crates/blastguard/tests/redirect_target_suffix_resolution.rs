@@ -452,16 +452,14 @@ fn control_bare_variable_targets_keep_resolving() {
 /// $ bash -c 'echo "[$$/x]"'                   -> [<pid>/x] (RELATIVE)
 /// ```
 ///
-/// Four rows are deliberately STRICTER than bash, and are listed because the
+/// Two rows are deliberately STRICTER than bash, and are listed because the
 /// error direction is the safe one — each costs a resolution and invents none,
 /// the direction CLAUDE.md §3 requires:
 ///
 ///   * `true && P=…` — bash binds it; blastguard refuses because the text does
 ///     not say the guard succeeded.
-///   * `export P=…` and `declare P=…` — bash binds them; the scan does not
-///     read declaration builtins.
-///   * `{ P=…; }` — a brace group runs in the current shell, so bash really
-///     would use the value.
+///   * top-level `local P=…` — bash keeps the inherited value, so the text does
+///     not determine the target.
 ///
 /// The `$$`/`$1` rows are stricter in a different and sharper sense: bash's
 /// answers there (`<pid>/x`, `/x`) are not merely unknown, they are a RELATIVE
@@ -473,8 +471,10 @@ fn control_bare_variable_targets_keep_resolving() {
 /// 判定」する。`X=lit` と同じく解決し、literal と同じに判定する。」 and 「`pre$P` の
 /// ように、前に文字列をつなげた形は「連結を解決」する。裁定の「その連結」に含め、展開した
 /// 後の literal と同じに判定する。」 Those two shapes are no longer refused; they are
-/// pinned after the table as "judged like the literal spelling". The other
-/// STRICTER rows above (`true && P=…`, `declare P=…`, `{ P=…; }`) are unchanged.
+/// pinned after the table as "judged like the literal spelling". Likewise
+/// SUPERSEDED by user rulings 2026-11-21/22 (both shells bind the same value,
+/// measured): `declare P=…`, `{ P=…; }` and `P=;` are pinned there too. Only
+/// `true && P=…` and top-level `local` remain stricter.
 #[test]
 fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
     let mut violations: Vec<String> = Vec::new();
@@ -535,19 +535,9 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
              (measured: [aa] for P=(aa bb))",
         ),
         (
-            "declare P=/home/yuki/proj; echo hi > $P/x.log",
-            OK_LEAF,
-            "`declare` is a builtin, not an assignment list",
-        ),
-        (
             "local P=/home/yuki/proj; echo hi > $P/x.log",
             OK_LEAF,
             "`local` is a builtin, not an assignment list",
-        ),
-        (
-            "{ P=/home/yuki/proj; }; echo hi > $P/x.log",
-            OK_LEAF,
-            "a brace group DOES reach the parent shell; refusing it is the safe error",
         ),
         (
             "( P=/home/yuki/proj ); echo hi > $P/x.log",
@@ -626,12 +616,6 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
              nothing on the line determines (measured: [<pid>/x])",
         ),
         (
-            "P=; echo hi > $P/x.log",
-            OK_LEAF,
-            "an empty value makes the target `/x.log`, a write at the filesystem \
-             ROOT (measured) — the opposite of confined",
-        ),
-        (
             "P=\"/home/yuki/proj\\x\"; echo hi > $P/x.log",
             OK_LEAF,
             "a backslash in the value means three different things depending on \
@@ -682,6 +666,23 @@ fn unresolvable_suffixed_shapes_keep_the_unresolved_verdict() {
             "P=/home/yuki/proj; echo hi > pre$P/x.log",
             "echo hi > pre/home/yuki/proj/x.log",
         ),
+        // User rulings 2026-11-21 (judge under both bash and zsh, take the
+        // stricter) and 2026-11-22 (these three are judged exactly like their
+        // literal spelling; the literal-side rule is unchanged). Measured with
+        // bash 3.2.57 / zsh 5.9: `{ P=y; }` gives [y] in both, `declare P=z`
+        // gives [z] in both, `P=; echo "[$P/x.log]"` gives [/x.log] in both.
+        // So the shells agree and the value the resolver binds is the value
+        // either shell would use. Top-level `local` is NOT here: bash keeps the
+        // inherited value, so it stays in the refusal table above.
+        (
+            "declare P=/home/yuki/proj; echo hi > $P/x.log",
+            "echo hi > /home/yuki/proj/x.log",
+        ),
+        (
+            "{ P=/home/yuki/proj; }; echo hi > $P/x.log",
+            "echo hi > /home/yuki/proj/x.log",
+        ),
+        ("P=; echo hi > $P/x.log", "echo hi > /x.log"),
     ] {
         assert_eq!(
             scoped(cmd),

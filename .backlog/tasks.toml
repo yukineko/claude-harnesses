@@ -1709,3 +1709,31 @@ exit 101: stguard v0.2.905 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.17s
      Running tests/backlog_20261122_ack_pager_env_protected.rs (target/debug/deps/backlog_20261122_ack_pager_env_protected-3a690e50206dc9d0)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261122_ack_pager_env_protected`"""
+
+[[task]]
+id = "363ad7da"
+title = "backlog next --claim treats a RED-only commit with a plain (backlog <id>) subject as the fix and never hands out the still-unfixed task"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-22 at rev 2a83942c0 (test committed at 80f2430ce, worktree file-likelyfixed-eaa077f4, condukt run run-20261122-012059-29884 orchestrator). RED verbatim: 'a RED-only commit subject `(backlog 85318781)` was treated as a fix: `backlog next --claim` did not hand out X (85318781).' stderr: 'backlog next --claim: NOT handing out 85318781: a commit `(backlog 85318781)` is already an ancestor of HEAD, so it is likely fixed; verify and close it.' The fixture commit adds ONLY tests/alpha_red.rs with #[ignore = "RED(<X>): ..."] and subject 'test(alpha): tag zero-test RED with RED(<X>) (backlog <X>)'. Real instances on main: 4458932ac 'test(backlog): tag zero-test RED with RED(f20d620c) (backlog f20d620c)' and f088e7acb 'Merge session-62e92d16: RED for check-version-bumped working-tree judging (backlog d1d85c66)' (d1d85c66 still pending; scripts/check-version-bumped.py unchanged since its RED rev bcc9a0b64). Detector: crates/backlog/src/evidence.rs fixed_task_ids/fix_marker_id (plain marker = fixed; only '(backlog <id> RED repro)' is recognised as non-fix), used by claim_recheck.rs next_unfixed and claim_rechecked. Readings: (a) defect - the landed-fix detector counts RED-filing commits as fixes, silently dropping unfixed tasks from the queue (fail-open for the queue: a pending RED task is never dispatched); (b) intended - the subject convention is that RED-only commits must say '(backlog <id> RED repro)', and the two commits violated it, so the convention/commit side (or a commit-msg gate) should be fixed, not the detector. Tell apart: whether a written convention for RED-only commit subjects exists (grep of crates/ and docs/ *.md for 'RED repro)' and '(backlog <id>)' at 2a83942c0 found none); whether the detector should look at the commit diff (only #[ignore = "RED(<id>)..."] added) or only the subject. DOES NOT PROVE: which side should change; plain 'next' (same detector, not exercised); merge-commit subjects."""
+created_at = 1795278208
+updated_at = 1795278208
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261122_red_only_commit_subject_not_fix -- --ignored"
+rev = "80f2430ce2ec510e54807bec52df7a1f1cee4bff"
+observed_at = 1795278208
+detail = """
+exit 101: ki/src/.harness-worktrees/file-likelyfixed-eaa077f4/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.43s
+     Running tests/backlog_20261122_red_only_commit_subject_not_fix.rs (target/debug/deps/backlog_20261122_red_only_commit_subject_not_fix-643df670c6cffd52)
+error: test failed, to rerun pass `-p backlog --test backlog_20261122_red_only_commit_subject_not_fix`"""

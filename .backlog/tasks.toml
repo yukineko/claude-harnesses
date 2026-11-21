@@ -1896,3 +1896,34 @@ exit 101: ess/.claude/worktrees/agent-a917345c99dcbb27a/crates/backlog)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.93s
      Running tests/backlog_20261121_zero_tests_all_ignored_not_cancel.rs (target/debug/deps/backlog_20261121_zero_tests_all_ignored_not_cancel-3e713399ac06f0c4)
 error: test failed, to rerun pass `-p backlog --test backlog_20261121_zero_tests_all_ignored_not_cancel`"""
+
+[[task]]
+id = "c512596e"
+title = "blastguard FP: `local P=...` inside a function body is Deny while the literal function is Allow (bash and zsh both bind)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-21 in flow batch #10 (run run-20261121-220650-69750 task t1 worktree, base c5439badb and tip 1906c7700 / main 6f85e2f4b). `f(){ local P=/home/yuki/proj/ok.log; echo hi > "$P"; }; f` -> Deny("'> \"$P\"' destroys the file's current contents and the quoted / escaped redirect word `\"$P\"` could not be dequoted to one literal file name (it holds a shell expansion), so the file it names cannot be determined") while `f(){ echo hi > /home/yuki/proj/ok.log; }; f` -> Allow. Measured by main 2026-11-21 (bash 3.2.57, zsh 5.9): `f(){ local P=w; echo "[$P]"; }; f` -> bash [w] | zsh [w]. Readings: (a) FP: inside a function both shells bind, so per the 2026-11-21 ruling (stricter of bash and zsh) it should be judged like the literal; (b) intended: function-body variable tracking deliberately not resolved. Tell apart: check whether eval/function.rs propagates the env into the body for redirect resolution; t1 left the function_depth>0 path unchanged. The test's #[ignore] reason still says RED(pending); replace pending with this id when fixing.'''
+created_at = 1795267159
+updated_at = 1795267159
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test redirect_target_resolution -- --ignored local_inside_a_function_body_resolves_like_the_literal"
+rev = "6f85e2f4b69586daded63bf595d9d8c260afa6e3"
+observed_at = 1795267159
+detail = """
+exit 101: d out; finished in 0.23s
+
+   Compiling blastguard v0.2.891 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.53s
+     Running tests/redirect_target_resolution.rs (target/debug/deps/redirect_target_resolution-d7bf0f3a7d56677d)
+error: test failed, to rerun pass `-p blastguard --test redirect_target_resolution`"""

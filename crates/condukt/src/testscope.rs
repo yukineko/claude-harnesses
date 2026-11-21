@@ -43,10 +43,17 @@
 //!    unchanged) be an existing test of a crate the worktree changed: every
 //!    `-p`/`--package` of that command names a package owning a path in the
 //!    same three-source diff, the owner being the nearest `Cargo.toml` with a
-//!    `[package]` at or above the path. A command with no `-p`, a spec that is
-//!    not a plain name, a `-p` of a crate the worktree did not change, or a
-//!    changed path no manifest owns admits nothing through this branch; a
-//!    manifest that exists but cannot be read or parsed denies.
+//!    `[package]` at or above the path. `-p` is also read inside short-flag
+//!    clusters as cargo parses them (`-qp y`, `-qpy`, `-vp y`); a cluster with
+//!    a letter that is not modelled (anything but `q v h r p j F Z`) or a
+//!    value-taking letter with no value makes the package set undetermined
+//!    and denies. A command with no `-p`, a spec that is not a plain name, a
+//!    `-p` of a crate the worktree did not change, or a changed path no
+//!    manifest owns admits nothing through this branch; a manifest that
+//!    exists but cannot be read or parsed denies. A `--test` value that is not
+//!    a plain name (`[A-Za-z0-9_-]`; cargo reads `*`, `?`, `[]` as a glob that
+//!    can select every integration test) is denied by every branch, including
+//!    reproduction_tests.
 //!    `--lib`/`--doc`/`--bin`/`--example`/`--bench` only when
 //!    `reproduction_tests` names the same selector. Outside every recorded
 //!    task worktree this rule does not apply. A cwd owned by several tasks,
@@ -1307,16 +1314,22 @@ fn manifest_package_name(path: &Path) -> Result<Option<String>, String> {
     }
 }
 
-/// The package specs of `-p <spec>` / `-p<spec>` / `--package <spec>` /
-/// `--package=<spec>` among `words` (options before `--` only). `Err` for a
-/// `-p` with no value.
+/// The package specs of `--package <spec>` / `--package=<spec>` and of every
+/// short-flag cluster among `words` (options before `--` only). A cluster is
+/// a word with a single leading `-` (`-p x`, `-px`, `-p=x`, `-qp x`, `-qpx`,
+/// `-vp x`): cargo parses it letter by letter, so it is parsed the same way
+/// here. Value-less letters `q`, `v`, `h`, `r` are skipped; `p` takes the
+/// rest of the cluster (a leading `=` dropped) or else the next word as a
+/// spec; `j`, `F`, `Z` take the rest or the next word as a value that is not a
+/// spec. Any other letter, or a value-taking letter with no value, is `Err`:
+/// whether the cluster carries a `p` is undetermined.
 fn package_specs(words: &[String]) -> Result<Vec<String>, String> {
     let opts: Vec<&String> = words.iter().take_while(|a| a.as_str() != "--").collect();
     let mut out = Vec::new();
     let mut i = 0;
     while let Some(a) = opts.get(i) {
         let a = a.as_str();
-        if a == "-p" || a == "--package" {
+        if a == "--package" {
             match opts.get(i + 1).filter(|v| !v.starts_with('-')) {
                 Some(v) => {
                     out.push(v.to_string());
@@ -1326,21 +1339,63 @@ fn package_specs(words: &[String]) -> Result<Vec<String>, String> {
             }
         } else if let Some(v) = a.strip_prefix("--package=") {
             out.push(v.to_string());
-        } else if let Some(v) = a.strip_prefix("-p").filter(|v| !v.is_empty()) {
-            out.push(v.strip_prefix('=').unwrap_or(v).to_string());
+        } else if let Some(cluster) = a.strip_prefix('-').filter(|c| !c.starts_with('-')) {
+            for (pos, c) in cluster.char_indices() {
+                match c {
+                    'q' | 'v' | 'h' | 'r' => {}
+                    'p' | 'j' | 'F' | 'Z' => {
+                        let rest = &cluster[pos + c.len_utf8()..];
+                        let value = if rest.is_empty() {
+                            let next = opts.get(i + 1).map(|s| s.as_str());
+                            match next.filter(|v| c != 'p' || !v.starts_with('-')) {
+                                Some(v) => {
+                                    i += 1;
+                                    v.to_string()
+                                }
+                                None => {
+                                    return Err(format!("`-{c}` in `{a}` has no value"));
+                                }
+                            }
+                        } else {
+                            rest.strip_prefix('=').unwrap_or(rest).to_string()
+                        };
+                        if c == 'p' {
+                            out.push(value);
+                        }
+                        break;
+                    }
+                    other => {
+                        return Err(format!(
+                            "short-flag cluster `{a}` has `-{other}`, which is not modelled, so \
+                             whether it selects a package is undetermined"
+                        ));
+                    }
+                }
+            }
         }
         i += 1;
     }
     Ok(out)
 }
 
+/// Whether `name` is a plain target / package name (`[A-Za-z0-9_-]+`). cargo
+/// treats `*`, `?` and `[]` in `--test` as a Unix glob, so a name with any
+/// other character may select several targets.
+fn is_plain_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 const TASK_SCOPE_REASON: &str = "inside a condukt task worktree only the task's own tests may \
      run: a `--test <name>` named in the task's reproduction_tests, a tests/<name>.rs this \
-     worktree added or changed, or a `--test <name>` whose command names, with `-p`, only \
-     packages that own a path this worktree changed against its base (no `-p`, a package spec \
-     that is not a plain name, or an unreadable diff or manifest is refused); \
-     `--lib`/`--bin`/`--doc` only when reproduction_tests names that selector (user rulings \
-     2026-11-14 and 2026-11-20)";
+     worktree added or changed, or a `--test <name>` whose command names, with `-p` (also \
+     inside short-flag clusters such as `-qp`), only packages that own a path this worktree \
+     changed against its base (no `-p`, a package spec that is not a plain name, a short-flag \
+     cluster that is not modelled, or an unreadable diff or manifest is refused); `<name>` \
+     must be a plain name, never a glob (`*`, `?`, `[]`); `--lib`/`--bin`/`--doc` only when \
+     reproduction_tests names that selector (user rulings 2026-11-14 and 2026-11-20)";
 
 /// `state::all_runs` for a GATE: the same dirs and the same canonical-first
 /// precedence, but any run-state file that cannot be read or parsed (and any
@@ -1508,15 +1563,19 @@ fn check_task_scope(tests: &[Words], cwd: &Path) -> Decision {
             Ok(s) => s,
             Err(e) => return undetermined(format!("`{}`: {e}", words.join(" "))),
         };
-        let pkgs = match package_specs(words) {
-            Ok(p) => p,
-            Err(e) => return undetermined(format!("`{}`: {e}", words.join(" "))),
-        };
+        // Parsed only when the changed-crate branch needs it, so a cluster we
+        // do not model does not refuse a test the other branches admit.
+        let pkgs = package_specs(words);
         for sel in sels {
-            if repro.contains(&sel) {
+            // A `--test` glob (`*`, `?`, `[]`) may select every integration
+            // test of the crate; no branch admits it, reproduction_tests
+            // included.
+            let glob = matches!(&sel, Selector::Test(n) if !is_plain_name(n));
+            if !glob && repro.contains(&sel) {
                 continue;
             }
             let allowed = match &sel {
+                Selector::Test(_) if glob => false,
                 Selector::Test(name) => {
                     if changed.is_none() {
                         match worktree_changed_tests(&wt, &cfg.default_branch) {
@@ -1531,7 +1590,9 @@ fn check_task_scope(tests: &[Words], cwd: &Path) -> Decision {
                     }
                     if changed.as_ref().is_some_and(|c| c.contains(name)) {
                         true
-                    } else if pkgs.is_empty() {
+                    } else if let Err(e) = &pkgs {
+                        return undetermined(format!("`{}`: {e}", words.join(" ")));
+                    } else if pkgs.as_ref().is_ok_and(|p| p.is_empty()) {
                         // No `-p`: which package(s) cargo selects depends on
                         // the cwd and on default-members, so whether the
                         // test belongs to a changed crate is undetermined.
@@ -1552,14 +1613,13 @@ fn check_task_scope(tests: &[Words], cwd: &Path) -> Decision {
                         // `--test` applies to each `-p`); a spec that is not
                         // a plain package name (glob, `name@ver`, URL) is not
                         // resolved here and so admits nothing.
-                        let plain = |s: &str| {
-                            !s.is_empty()
-                                && s.chars()
-                                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-                        };
-                        changed_pkgs.as_ref().is_some_and(|c| {
-                            pkgs.iter().all(|p| plain(p) && c.iter().any(|n| n == p))
-                        })
+                        let specs: &[String] = pkgs.as_deref().unwrap_or(&[]);
+                        !specs.is_empty()
+                            && changed_pkgs.as_ref().is_some_and(|c| {
+                                specs
+                                    .iter()
+                                    .all(|p| is_plain_name(p) && c.iter().any(|n| n == p))
+                            })
                     }
                 }
                 Selector::Kind(..) => false,

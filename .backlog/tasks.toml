@@ -1865,3 +1865,34 @@ exit 101: /red-stopgate-claimed/crates/flow)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
      Running tests/backlog_20261121_stop_gate_counts_other_session_claimed_task.rs (target/debug/deps/backlog_20261121_stop_gate_counts_other_session_claimed_task-4b80e990b8d0e9ee)
 error: test failed, to rerun pass `-p flow --test backlog_20261121_stop_gate_counts_other_session_claimed_task`"""
+
+[[task]]
+id = "f20d620c"
+title = "backlog next --claim / recheck: a stored cargo repro whose tests are all #[ignore]d (exit 0, '0 passed; 0 failed; N ignored') is auto-cancelled as not-demonstrated (discard) although zero tests ran"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = """Observed live 2026-11-21 at main 382b10028: backlog next --claim re-ran 1f037eb5's stored repro 'cargo test -p blastguard --test backlog_20261121_rg_pre_protected' (no -- --ignored; every test in the file #[ignore]d -> libtest ran 0 tests, exit 0) and printed verbatim: 'AUTO-CANCELLED 1f037eb5 (user ruling 2026-11-13: not demonstrated -> close): its stored repro is not-demonstrated (...): exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. An `#[ignore]`d repro must be run with `-- --ignored` ...'. With -- --ignored the same file gives '0 passed; 2 failed' (defect reproduced). (1f037eb5 was restored by 139adef60.) Path: crates/backlog/src/evidence.rs zero_tests_ran -> run_repro_classified returns RecheckVerdict::NotDemonstrated for exit 0 -> RecheckVerdict::closes() true -> claim_recheck auto_cancel / recheck auto-cancel (closure reason discard). RED (this commit 42cff2347, base c5439badb, 2026-11-21): crates/backlog/tests/backlog_20261121_zero_tests_all_ignored_not_cancel.rs, fake cargo prints 'test result: ok. 0 passed; 0 failed; 2 ignored; ...' exit 0; both tests fail verbatim 'row a8d30d6a was closed (status cancelled) on a run that executed ZERO tests while libtest reported them ignored: {... "reason":"discard"}' for next --claim and for recheck ('backlog recheck: AUTO-CANCELLED a8d30d6a (not-demonstrated; ...'). Second test: same file, filter recheck_does_not_cancel_row_whose_repro_tests_are_all_ignored. Readings: (a) defect - a run that executed no test observed nothing about the defect (CLAUDE.md §3: undetermined is not clean); with 'N ignored' libtest itself says the tests EXIST and were skipped; closing as discard (= defect not real) is a verdict without observation; should be Undeterminable (claim refused / recheck non-zero, row untouched) or the cmd re-run/rewritten with -- --ignored. (b) intended - user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」 and RecheckVerdict doc in evidence.rs ('NOT DEMONSTRATED = ... exit 0 with zero tests run'), pinned for the '0 ignored' shape by backlog_20261113_no_deferral_auto_close.rs::g_cargo_zero_tests_at_head_is_auto_cancelled. Telling them apart: a human ruling on whether 'N ignored' (>=1; tests exist but parked) differs from '0 passed; 0 failed; 0 ignored' (no such test). This RED does not conflict with test g (its fake prints 0 ignored). Related: 7fc71b27 (same path, 'N filtered out' shape). DOES NOT PROVE: real libtest beyond the measured shape (fake cargo); which fix (refuse vs auto-append -- --ignored) is correct."""
+created_at = 1795266440
+updated_at = 1795266440
+weight = 0.0
+issue_number = 1957
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1957"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_20261121_zero_tests_all_ignored_not_cancel -- --ignored claim_does_not_cancel_row_whose_repro_tests_are_all_ignored"
+rev = "42cff23479be235394865308562fd64509e0a5d6"
+observed_at = 1795266440
+detail = """
+exit 101: ess/.claude/worktrees/agent-a917345c99dcbb27a/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.93s
+     Running tests/backlog_20261121_zero_tests_all_ignored_not_cancel.rs (target/debug/deps/backlog_20261121_zero_tests_all_ignored_not_cancel-3e713399ac06f0c4)
+error: test failed, to rerun pass `-p backlog --test backlog_20261121_zero_tests_all_ignored_not_cancel`"""

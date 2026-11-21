@@ -2174,3 +2174,32 @@ exit 101: src/.harness-worktrees/bekken-75519/crates/condukt)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 12.21s
      Running tests/backlog_20261121_testscope_task_scope_ignores_package.rs (target/debug/deps/backlog_20261121_testscope_task_scope_ignores_package-daacb59af5149afd)
 error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_task_scope_ignores_package`"""
+
+[[task]]
+id = "c602d32e"
+title = "blastguard: bash -ec / -x -c / -c -- of a determined harmful command substitution is Ask, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """System harm reaches Ask; rule requires Deny (memory system-harm-always-deny). Named by the independent t2 verifier of run-20261121-114321-94421 (2026-11-21); observed RED on main 617c6facb and on the integration tip d400dfde3 (main 9ddad1fc8): bash -ec / bash -x -c / bash -c -- "$(echo 'rm -rf /etc')" => subagent=false => ask. Cause (verifier): b5 determined_dash_c_program (ast/b5/determined.rs) requires args[0] == -c exactly. RED: crates/blastguard/tests/backlog_20261121_determined_subst_shape_gaps.rs dash_c_shape_* (#[ignore])."""
+created_at = 1795238025
+updated_at = 1795238025
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_determined_subst_shape_gaps -- --ignored dash_c_shape_"
+rev = "fc1c63b606c5cee0701fefb1162007f74ae70f97"
+observed_at = 1795238025
+detail = """
+exit 101: .877 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
+     Running tests/backlog_20261121_determined_subst_shape_gaps.rs (target/debug/deps/backlog_20261121_determined_subst_shape_gaps-d7955e60fa7f6135)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_determined_subst_shape_gaps`"""

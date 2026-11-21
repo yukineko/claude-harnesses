@@ -1687,69 +1687,6 @@ exit 101: /worktrees/run-20261122-014030-65651-t1/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261122_relink_symlink_via_subst_failopen`"""
 
 [[task]]
-id = "d3f5d7a8"
-title = "condukt testscope: a git global option with a separate value (git --work-tree . pull / --git-dir .git pull) skips the main-merge deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "fail-open",
-    "testscope",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-22 on main e3baca954 (session-eaa077f4 worktree); named by the independent t2 verifier of condukt run run-20261122-012059-29884 (static reading of crates/condukt/src/testscope.rs judge_git: '-C'/'-c' skip 2 tokens, every other '-...' token skips 1, so the value of --work-tree <path> / --git-dir <path> / --namespace <name> becomes the subcommand and the command is judged Other). RED verbatim: 'git --work-tree . pull: expected a deny, stdout not JSON (EOF while parsing a value at line 1 column 0): ""' (allowed inside a condukt worktree); control 'git --work-tree=. pull' is denied. git 2.50.1 accepts the separate-value spelling (git --work-tree . status exits 0). Same shape as the cargo bug fixed for 669b28ea (merged 2026-11-22, condukt 0.7.484). Readings: (a) fail-open: main-merge deny bypassed; (b) intended: none found. Not covered: --exec-path, --super-prefix, --config-env, git merge main / git rebase origin/main spellings."""
-created_at = 1795279817
-updated_at = 1795279817
-weight = 0.0
-issue_number = 1969
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1969"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_20261122_testscope_git_global_option_value_bypass -- --ignored"
-rev = "8b1556fa42384610827ddc4888eca62bc45eb630"
-observed_at = 1795279817
-detail = """
-exit 101: ktrees/session-eaa077f4/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.41s
-     Running tests/backlog_20261122_testscope_git_global_option_value_bypass.rs (target/debug/deps/backlog_20261122_testscope_git_global_option_value_bypass-ac63d2dde2ebe4e3)
-error: test failed, to rerun pass `-p condukt --test backlog_20261122_testscope_git_global_option_value_bypass`"""
-
-[[task]]
-id = "45ea34e7"
-title = "backlog evidence: a (backlog <id>) commit that adds only a filename-identified test file (scripts/test_*.py, *_test.rs) counts as the landed fix, so next --claim never hands <id> out"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-22 at main rev 6ae161ee7 during/after condukt run run-20261122-020202-63344, after fix 363ad7da (merged accf04160). Verbatim (crates/backlog/src/evidence.rs is_test_path): 'd.components().any(|c| { let s = c.as_os_str().to_string_lossy(); s == "tests" || s == "test" })' -- only a tests/test DIRECTORY component marks a test path; a filename-identified test file is product code. Real instance: merge f088e7acb (backlog d1d85c66) first-parent diff = scripts/tests/...sh + scripts/test_check_plugin_rollout.py; the .py has no tests/ dir component, so the merge counts as a landed fix of d1d85c66 although it only brought a RED. RED: fixture repo, commit adds ONLY scripts/test_alpha.py (resp. src/alpha_test.rs) with subject '... (backlog <X>)'; asserts next --claim hands out X. Readings: (a) defect -- a test-only commit read as a fix silently drops a pending task from next/next --claim (the docstring of the detector names this direction the fail-open one); (b) intended -- only directory-convention tests count, filename conventions deliberately treated as product to avoid false non-fix. Tell apart: whether the detector's docstring 'touches ONLY test paths' is meant to include filename conventions; no ruling found for (b). DOES NOT PROVE: which filename conventions should count (test_*.py, *_test.py, *_test.rs, *.test.ts), whether the fix belongs in the classifier or the commit-subject convention, plain next, merge commits (f088e7acb shape not exercised)."""
-created_at = 1795281971
-updated_at = 1795281971
-weight = 0.0
-issue_number = 1970
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1970"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test backlog_20261122_filename_test_path_counts_as_fix -- --ignored"
-rev = "b96a2422167116e6a35b4160b2d2c00f78ca84e8"
-observed_at = 1795281971
-detail = """
-exit 101: i/src/.harness-worktrees/session-eaa077f4-filing/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.42s
-     Running tests/backlog_20261122_filename_test_path_counts_as_fix.rs (target/debug/deps/backlog_20261122_filename_test_path_counts_as_fix-247398ae84c09495)
-error: test failed, to rerun pass `-p backlog --test backlog_20261122_filename_test_path_counts_as_fix`"""
-
-[[task]]
 id = "a700901f"
 title = "blastguard: ACK_PAGER exported in an earlier segment (export ACK_PAGER=sh; ack … / && ack …) keeps ack's read-only exemption for a protected operand"
 project = "/Users/yuki/src/harness"

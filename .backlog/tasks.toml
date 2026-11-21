@@ -1865,3 +1865,33 @@ exit 101: d out; finished in 0.23s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.53s
      Running tests/redirect_target_resolution.rs (target/debug/deps/redirect_target_resolution-d7bf0f3a7d56677d)
 error: test failed, to rerun pass `-p blastguard --test redirect_target_resolution`"""
+
+[[task]]
+id = "20c08a70"
+title = "condukt: abandon + re-create of a task leaves the abandoned attempt's archived tdd proofs; worktree merge refuses undetermined-proof on every retry"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Reading (a) defect: abandon/worktree remove archive should be invalidated or versioned on re-create, else a retry is unmergeable. Reading (b) intended: fail-closed on any proof disagreement (R5 test r5_worktree_and_archive_disagree_is_undetermined_proof), operator clears stale archive. Tell apart: ruling on whether an abandoned attempt's archive belongs to the task id's future. Observed 2026-11-21 in run-20261121-223122-81816 t1; reproduced in fixture."
+created_at = 1795268830
+updated_at = 1795268830
+weight = 0.0
+issue_number = 1959
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1959"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261121_abandon_recreate_stale_archive -- --ignored"
+rev = "9353c3841c12defb495029d5a406d40e3ff6fd67"
+observed_at = 1795268830
+detail = """
+exit 101: backlog_20261121_abandon_recreate_stale_archive") generated 5 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.94s
+     Running tests/backlog_20261121_abandon_recreate_stale_archive.rs (target/debug/deps/backlog_20261121_abandon_recreate_stale_archive-94300ba669b462a4)
+error: test failed, to rerun pass `-p condukt --test backlog_20261121_abandon_recreate_stale_archive`"""

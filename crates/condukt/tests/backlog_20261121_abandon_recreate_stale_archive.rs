@@ -554,7 +554,7 @@ fn merge_conflict_records(f: &Fx) -> Vec<PathBuf> {
 /// `r5_worktree_and_archive_disagree_is_undetermined_proof` pins disagreement
 /// as a refusal). This test pins (a) for the abandon/re-create lifecycle only.
 #[test]
-#[ignore = "RED(abandon-recreate-stale-archive): merge refused undetermined-proof because the archive holds the abandoned attempt's proofs"]
+#[ignore = "RED(20c08a70): merge refused undetermined-proof because the archive holds the abandoned attempt's proofs"]
 fn abandon_then_recreate_task_merges_with_new_proofs() {
     let f = setup(FIX);
     record(&f, &single("none", "good"));

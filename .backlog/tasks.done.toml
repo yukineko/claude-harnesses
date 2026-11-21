@@ -93972,3 +93972,65 @@ rev = "6f85e2f4b69586daded63bf595d9d8c260afa6e3"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "643e641f"
+title = "condukt testscope: a full-ref spelling of main (git merge refs/heads/main / git rebase refs/remotes/origin/main) skips the main-merge deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fail-open",
+    "testscope",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-22 on main e528afafb (filing worktree filing-99560); named as out-of-scope by the independent t1 verifier of condukt run run-20261122-025656-99560 (static reading of crates/condukt/src/testscope.rs judge_git is_main: matches exactly main | master | origin/main | origin/master | @{u} | @{upstream}). RED verbatim: 'git merge refs/heads/main: expected a deny, stdout not JSON (EOF while parsing a value at line 1 column 0): ""' (allowed inside a condukt worktree); control 'git merge main' is denied. Readings: (a) fail-open: main-merge deny bypassed by the full-ref spelling; (b) intended: rule only means the short names; no ruling found. Tell apart: MAIN_MERGE_REASON concerns integrating the default branch, not its spelling. Not covered: main~0, main^0, origin/HEAD, a sha of main, heads/main."""
+created_at = 1795284219
+updated_at = 1795289210
+weight = 0.0
+issue_number = 1976
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1976"
+issue_closed_at = 1795289214
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261122_testscope_git_merge_main_ref_spelling -- --ignored"
+rev = "2d51481f50f0cb2d24e7b884fd45cccd4eadadb1"
+observed_at = 1795284219
+detail = """
+exit 101: c/.harness-worktrees/filing-99560/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.45s
+     Running tests/backlog_20261122_testscope_git_merge_main_ref_spelling.rs (target/debug/deps/backlog_20261122_testscope_git_merge_main_ref_spelling-c8c8bd5526a6501c)
+error: test failed, to rerun pass `-p condukt --test backlog_20261122_testscope_git_merge_main_ref_spelling`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261122_testscope_git_merge_main_ref_spelling"
+exit = 0
+passed = 2
+rev = "5e99d94d4a3819de7698425a56efcca2c300dd84"
+observed_at = 1795289207
+output_digest = "sha256:07e4927d363d73868e84f586e49b797f3f5c6e7be7c17d47309cece111e9e563"
+excerpt = """
+
+running 2 tests
+test control_short_main_is_denied ... ok
+test full_ref_spelling_of_main_is_still_denied ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.88s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running tests/backlog_20261122_testscope_git_merge_main_ref_spelling.rs (target/debug/deps/backlog_20261122_testscope_git_merge_main_ref_spelling-7ddaacd44f635722)
+"""
+
+[task.closure.red]
+rev = "14aa2fe14566ea440e244ff7e34e0bc64e17b482"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

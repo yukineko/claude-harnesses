@@ -12,6 +12,8 @@
 //!   allowlist (a missing, empty or unknown type is an implementer) and the
 //!   model is neither "sonnet" (case-insensitive) nor starting with
 //!   "claude-sonnet-". An absent model is therefore denied for implementers.
+//! * `subagent_type` "fork" is always denied: a fork ignores `model` and
+//!   inherits the parent model, which cannot be determined from the payload.
 //!
 //! Otherwise nothing is printed (allow). The gate runs under
 //! `run_pretooluse_guarded`, so a panic is not turned into an allow.
@@ -79,6 +81,11 @@ fn judge(raw: &str) -> Result<(), String> {
         .get("subagent_type")
         .and_then(Value::as_str)
         .unwrap_or("");
+    // A fork ignores `model` and always inherits the parent model, so its real
+    // model cannot be determined from the payload: undetermined denies.
+    if ty == "fork" {
+        return Err("[modelguard] subagent_type \"fork\" always inherits the parent model and ignores `model`, which may be Fable or non-sonnet, so its model cannot be verified and it is denied (fail-closed). Spawn a typed agent with model: \"sonnet\" instead.".to_string());
+    }
     if CONTROLS.contains(&ty) {
         return Ok(());
     }

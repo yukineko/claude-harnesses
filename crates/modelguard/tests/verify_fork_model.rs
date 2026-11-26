@@ -63,7 +63,6 @@ fn fork_payload(tool: &str, model: &str) -> String {
 }
 
 #[test]
-#[ignore = "RED(modelguard-verify): fork ignores model, so model:\"sonnet\" on a fork is not a Sonnet implementer; gate allows it"]
 fn fork_with_sonnet_model_is_denied_because_fork_ignores_model() {
     for tool in ["Agent", "Task"] {
         for model in ["sonnet", "claude-sonnet-4-5"] {

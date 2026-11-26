@@ -208,7 +208,7 @@
     {
       "name": "context-governor",
       "description": "Thin control layer around Claude Code's built-in compaction: pinning, lossless recall, retrieval and tool-result hygiene, wired as a single hook-dispatch binary.",
-      "version": "0.1.30",
+      "version": "0.1.31",
       "category": "context",
       "keywords": [
         "context",
@@ -232,7 +232,7 @@
     {
       "name": "ctxrot",
       "description": "Context-rot guard for Claude Code that detects, rescues, restores and distills conversation context to fight attention decay in long sessions.",
-      "version": "0.5.40",
+      "version": "0.5.41",
       "category": "context",
       "keywords": [
         "context",

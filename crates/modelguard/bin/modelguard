@@ -1,0 +1,40 @@
+#!/bin/sh
+# modelguard plugin launcher — execs the bundled `modelguard-<os>-<arch>` build.
+#
+# With no build for the host, `gate` (PreToolUse) cannot judge the spawn, so it
+# BLOCKS (exit 2, reason on stderr) instead of exiting 0, which would be an
+# allow.
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+case "$(uname -s)" in
+  Linux)  os=linux ;;
+  Darwin) os=darwin ;;
+  MINGW*|MSYS*|CYGWIN*) os=windows ;;
+  *)      os="$(uname -s)" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64)   arch=x86_64 ;;
+  arm64|aarch64)  arch=arm64 ;;
+  *)              arch="$(uname -m)" ;;
+esac
+
+ext=""
+[ "$os" = windows ] && ext=".exe"
+
+binary="$root/modelguard-$os-$arch$ext"
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
+fi
+
+fix="Build it with scripts/build-plugin-bin.sh on that platform."
+
+case "${1:-}" in
+  gate)
+    echo "modelguard: no bundled binary for $os-$arch ($binary); the Agent/Task spawn was not judged, so it is BLOCKED. $fix" >&2
+    exit 2
+    ;;
+  *)
+    echo "modelguard: no bundled binary for $os-$arch ($binary); '$*' did NOT run. $fix" >&2
+    exit 1
+    ;;
+esac

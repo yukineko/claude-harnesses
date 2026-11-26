@@ -1101,7 +1101,7 @@
     {
       "name": "modelguard",
       "description": "PreToolUse gate on Agent and Task that denies Fable/Mythos models on every subagent spawn and requires a Sonnet model for implementer spawns, failing closed on unparseable payloads.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "quality",
       "keywords": [
         "hooks",

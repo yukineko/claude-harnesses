@@ -1,6 +1,6 @@
 [package]
 name = "modelguard"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 rust-version.workspace = true
 description = "PreToolUse gate on Agent and Task that denies Fable/Mythos models on every subagent spawn and requires a Sonnet model for implementer spawns, failing closed on unparseable payloads."

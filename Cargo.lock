@@ -1241,7 +1241,7 @@ dependencies = [
 
 [[package]]
 name = "modelguard"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "harness-core",
  "serde_json",

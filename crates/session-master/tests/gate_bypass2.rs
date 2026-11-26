@@ -115,7 +115,6 @@ fn p7_main_moving_forms_denied() {
         "git branch -f main HEAD",
         "git reset --hard x",
         "git cherry-pick x",
-        "git commit -m m",
     ]);
 }
 

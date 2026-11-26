@@ -1652,6 +1652,8 @@ notes = "Cause: crates/context-governor/src/defaults/groomer.rs:110 returns Some
 created_at = 1795734754
 updated_at = 1795734754
 weight = 0.0
+issue_number = 1988
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1988"
 rev = 0
 
 [task.repro]

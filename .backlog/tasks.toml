@@ -1666,3 +1666,30 @@ exit 101:  Compiling context-governor v0.1.31 (/Users/yuki/src/.harness-worktree
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s
      Running tests/posttool_bash_output_shape.rs (target/debug/deps/posttool_bash_output_shape-3ab21936b4176b84)
 error: test failed, to rerun pass `-p context-governor --test posttool_bash_output_shape`"""
+
+[[task]]
+id = "79a6f4be"
+title = "ctxrot: toolguard emits bare-string updatedToolOutput for object-shaped Bash tool_response (Claude Code rejects: does not match Bash's output shape)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = '''Cause: crates/ctxrot/src/main.rs:462 (Toolguard arm) inserts updatedToolOutput = serde_json::Value::String(updated) regardless of the input tool_response shape. Fires at huge_tool_output_bytes (default 50_000). Observed replacement: "[toolguard: 195KB → 49KB, 中間1行省略]\n". Claude Code then prints 'PostToolUse hook returned updatedToolOutput that does not match Bash's output shape; using original output' and the replacement is lost. Fix must keep the input's shape (object with same keys, stdout replaced). Sibling: 35d85ccc (context-governor groomer.rs:110). Existing tests only check .as_str().'''
+created_at = 1795734780
+updated_at = 1795734780
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p ctxrot --test posttool_bash_output_shape -- --ignored"
+rev = "4e4aba8c55ba094a220263975f9aae447715657e"
+observed_at = 1795734780
+detail = """
+exit 101: red out; finished in 0.39s
+
+   Compiling ctxrot v0.5.41 (/Users/yuki/src/.harness-worktrees/posttool-shape-red-eaa077f4/crates/ctxrot)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.08s
+     Running tests/posttool_bash_output_shape.rs (target/debug/deps/posttool_bash_output_shape-c91888a7d7f4d962)
+error: test failed, to rerun pass `-p ctxrot --test posttool_bash_output_shape`"""

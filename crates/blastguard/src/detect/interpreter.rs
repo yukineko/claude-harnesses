@@ -987,15 +987,20 @@ pub(super) fn interpreter_code_verdict(
     reader: PythonReader,
     strings_are_data: bool,
 ) -> Decision {
-    // b37bc26c: a layer-0 program is judged on its OWN node budget. Its text is
-    // judged piece by piece (every string literal / line is one `detect_bash`
-    // visit), so a ~3000-line body spent the whole per-command budget and the
+    // b37bc26c: a layer-0 program may not spend the WHOLE per-command budget.
+    // Its text is judged piece by piece (every string literal / line is one
+    // `detect_bash` visit), so a ~3000-line body used all of it and the
     // command's OTHER parts (a `bash <(…)` tail judged afterwards) then met an
     // exhausted budget and came back as an Ask instead of their own Deny. The
-    // program still cannot run unbounded: a body that exhausts its own budget
-    // gets the budget Ask (fail-closed), and nested layers (`depth > 0`) keep
-    // sharing the program's budget, so the D4 tree bound is unchanged. The
-    // caller's remaining budget is restored on return.
+    // program is therefore run on the caller's remaining budget MINUS
+    // [`PROGRAM_BUDGET_RESERVE`], which stays for the rest of the command; a
+    // body that exhausts its share gets the budget Ask (fail-closed). What the
+    // program spent is CHARGED BACK to the caller's budget, so the D4 bound is
+    // still one budget per command (a fresh budget per program would cost
+    // (programs + 1) x MAX_ANALYSIS_NODES, so k sequential programs could pass
+    // the hook timeout). With no more than the reserve left the program just
+    // shares the caller's budget as before. Nested layers (`depth > 0`) share
+    // the program's budget.
     if depth != 0 {
         return interpreter_code_verdict_in_budget(
             shape,
@@ -1007,7 +1012,22 @@ pub(super) fn interpreter_code_verdict(
             strings_are_data,
         );
     }
-    let outer = super::ANALYSIS_BUDGET.with(|b| b.replace(super::MAX_ANALYSIS_NODES));
+    let total_outer = super::budget::command_nodes_left();
+    let total_share = total_outer.map(|t| {
+        if t > PROGRAM_BUDGET_RESERVE_TOTAL {
+            t - PROGRAM_BUDGET_RESERVE_TOTAL
+        } else {
+            t
+        }
+    });
+    super::budget::set_command_nodes(total_share);
+    let outer = super::ANALYSIS_BUDGET.with(|b| b.get());
+    let share = if outer > PROGRAM_BUDGET_RESERVE {
+        outer - PROGRAM_BUDGET_RESERVE
+    } else {
+        outer
+    };
+    super::ANALYSIS_BUDGET.with(|b| b.set(share));
     let verdict = interpreter_code_verdict_in_budget(
         shape,
         payloads,
@@ -1017,9 +1037,22 @@ pub(super) fn interpreter_code_verdict(
         reader,
         strings_are_data,
     );
-    super::ANALYSIS_BUDGET.with(|b| b.set(outer));
+    let left = super::ANALYSIS_BUDGET.with(|b| b.get());
+    super::ANALYSIS_BUDGET.with(|b| b.set(outer - (share - left.min(share))));
+    if let (Some(t), Some(s)) = (total_outer, total_share) {
+        let left_t = super::budget::command_nodes_left().unwrap_or(0);
+        super::budget::set_command_nodes(Some(t - (s - left_t.min(s))));
+    }
     verdict
 }
+
+/// Nodes of the per-reading budget a layer-0 program never touches, kept for
+/// the rest of the command (see [`interpreter_code_verdict`], b37bc26c).
+const PROGRAM_BUDGET_RESERVE: u32 = 200;
+
+/// The same for the per-command total of nested visits
+/// ([`super::budget::MAX_COMMAND_NODES`]).
+const PROGRAM_BUDGET_RESERVE_TOTAL: u32 = 300;
 
 fn interpreter_code_verdict_in_budget(
     shape: &str,

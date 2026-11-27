@@ -666,7 +666,7 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // hardens to the pre-existing DENY whenever no human is available to answer
     // (see `crate::interactive` and `Decision::hardened`) — so the fallback is
     // exactly as safe as the deny this replaced, never weaker.
-    if !take_budget() {
+    if !take_budget() || !budget::take_command_node(depth) {
         return Decision::ask(
             "command is too complex to analyse within the safety budget — blastguard cannot vouch for it either way",
         );

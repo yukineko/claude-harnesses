@@ -109,6 +109,9 @@ pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision 
     let outer_but_one_eval = CHAIN_NAMES_FIXED_BUT_ONE_EVAL.with(std::cell::Cell::get);
     // Only the outermost detection judges the user's line; every re-entry
     // (a `-c` / stdin body, a derived text) is a body.
+    // The per-command node total (b37bc26c): installed by the outermost
+    // detection only, cleared when it ends.
+    let _command_nodes = super::budget::CommandNodesGuard::install();
     let top_before = TOP_LEVEL_LINE.with(|t| t.replace(outer.is_none()));
     let _restore = Restore(outer, outer_but_one_eval, top_before);
     let enclosing = outer.unwrap_or(true);

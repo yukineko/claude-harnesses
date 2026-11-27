@@ -43,6 +43,74 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+/// Total number of NESTED (`depth >= 1`) `detect_bash` visits one user command
+/// may cost across ALL its readings (b37bc26c).
+///
+/// [`ANALYSIS_BUDGET`] is refilled by every reading and every re-entry (each
+/// payload layer, each inline Python program the S5 pass judges), so it bounds
+/// one reading's tree, not the command: k sequential programs each carrying a
+/// D4 fan-out cost ~k x [`MAX_ANALYSIS_NODES`] nodes (measured: k=4 took 13-29 s
+/// against the 10 s hook timeout, and a timed-out hook does not block the
+/// call). This caps the command as a whole. Exhausting it is the same
+/// fail-closed answer as exhausting the per-reading budget: the nested visit
+/// is an Ask (a Deny for a subagent). Depth-0 entries are exempt: they run
+/// their rules without recursing into the nested visits this counts, so a
+/// harmful tail (`rm -rf /etc`) after an exhausted total is still judged and
+/// still a Deny.
+pub(super) const MAX_COMMAND_NODES: u32 = 3_000;
+
+thread_local! {
+    /// Nested visits left for the command being judged; `None` outside a
+    /// top-level detection (direct `detect_bash` callers, tests).
+    static COMMAND_NODES: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+pub(super) fn command_nodes_left() -> Option<u32> {
+    COMMAND_NODES.with(std::cell::Cell::get)
+}
+
+pub(super) fn set_command_nodes(n: Option<u32>) {
+    COMMAND_NODES.with(|c| c.set(n));
+}
+
+/// Install the per-command total for the outermost detection, if none is
+/// installed yet. The returned guard clears it when that detection ends.
+pub(super) struct CommandNodesGuard(bool);
+
+impl CommandNodesGuard {
+    pub(super) fn install() -> Self {
+        let fresh = command_nodes_left().is_none();
+        if fresh {
+            set_command_nodes(Some(MAX_COMMAND_NODES));
+        }
+        CommandNodesGuard(fresh)
+    }
+}
+
+impl Drop for CommandNodesGuard {
+    fn drop(&mut self) {
+        if self.0 {
+            set_command_nodes(None);
+        }
+    }
+}
+
+/// Charge one nested visit to the command total. False when it is spent.
+/// Depth 0 is never charged (see [`MAX_COMMAND_NODES`]).
+pub(super) fn take_command_node(depth: usize) -> bool {
+    if depth == 0 {
+        return true;
+    }
+    COMMAND_NODES.with(|c| match c.get() {
+        None => true,
+        Some(0) => false,
+        Some(n) => {
+            c.set(Some(n - 1));
+            true
+        }
+    })
+}
+
 /// Consume one unit of the analysis budget. Returns false when it is exhausted.
 pub(super) fn take_budget() -> bool {
     ANALYSIS_BUDGET.with(|b| {

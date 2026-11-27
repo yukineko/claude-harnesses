@@ -482,3 +482,32 @@ exit 101: rc/.harness-worktrees/session-eaa077f4/crates/blastguard)
     Finished `release` profile [optimized] target(s) in 30.92s
      Running tests/backlog_20261128_nested_system_harm_ask_after_padding.rs (target/release/deps/backlog_20261128_nested_system_harm_ask_after_padding-df6bdf356a0c6ad4)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_nested_system_harm_ask_after_padding`"""
+
+[[task]]
+id = "2b6fa81e"
+title = "blastguard fail-open: prebound rebind - alias before binding + POSIX-mode special-builtin prefix assignment (+ eval prefix unmeasured)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Pre-existing top-level rebind fail-opens: a variable is rebound between its assignment and a redirect and the redirect write lands at the rebound target. Families: aliases, POSIX-mode prefix assignment, DEBUG traps, hook functions, PS4/PS3, arithmetic recursion, array subscripts, zsh numeric args/float, precommand modifiers. Patch approach abandoned after 6 rounds (branch fp-prebound-alias). Fix must be structural: resolve a variable only while every command between binding and use is positively known not to bind or run hooks. A statically resolved command word must still be substituted, including concatenation ${X}m and E=eval; $E ..., which must keep base Deny (measured: evalran concatran quotedconcatran zevalran zconcatran all ran). FP controls must stay Allow: for ((i=0;i<3;i++)); declare -i n=0; n+=1; cleanup(){...}; trap cleanup EXIT INT TERM; alias ll='ls -l'; trap 'echo done' INT. Salvaged RED on branch red-prebound-families."
+created_at = 1795804208
+updated_at = 1795804208
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_prebound_alias_posix_prefix -- --ignored"
+rev = "e241892e849cb4e9b427be9f9c9fa9d84a85cf07"
+observed_at = 1795804208
+detail = """
+exit 101: 0.2.979 (/Users/yuki/src/.harness-worktrees/red-prebound-families/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 1m 30s
+     Running tests/backlog_20261128_prebound_alias_posix_prefix.rs (target/release/deps/backlog_20261128_prebound_alias_posix_prefix-2c4a599e19a4ae68)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_prebound_alias_posix_prefix`"""

@@ -978,3 +978,13 @@ reason = "Section 'shell / interpreter へ pipe する前段の exec wrapper（`
 path = "crates/blastguard/src/detect/ast/b5/determined.rs"
 doc = "docs/specs/blastguard.md"
 reason = "Section '決定済みの producer pipeline の出力を program として読む（backlog 40dc52c0）': determined_delivered_program (procsub / stdin producer program), determined_dash_c_program (shell -c W, 28019c35) and determined_eval_program (eval W, d766b5fe), raise-only (Deny adopted, else Undetermined) under chain_names_fixed / resolution_fixed(_but_one_eval)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/cargo_floor.rs"
+doc = "docs/specs/blastguard.md"
+reason = "module list bullet `detect/ast/cargo_floor` (backlog 596ef57d): a line that writes build.rs / .cargo/config / (for cargo run) a .rs or .toml and also runs cargo is Ask; wrappers, global options, case-insensitive names, log redirects excluded; raise-only."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/b5/closed_heredoc.rs"
+doc = "docs/specs/blastguard.md"
+reason = "module list bullet `detect/ast/b5/closed_heredoc` (backlog 596ef57d, R-fakeeof, user ruling 2026-11-21): a line unparsable AFTER a here-document closed is Ask (Table B.5 Undetermined); every other parse failure keeps no opinion."

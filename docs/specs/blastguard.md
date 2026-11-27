@@ -1646,6 +1646,21 @@ forge・condukt のスケジューラが再利用）。
 - **`detect/payload/echo_output`** — 素の `echo` の出力 helper（`plain_echo_output`: 全語が static で backslash
   を含まない `echo [-neE…] WORD…` の出力、`quote_bare_echo_words`: 同じ出力を pipe rule が literal program と
   読む quoted 形に書き直す）。`detect/payload.rs` から挙動を変えずに移した（file-growth cap）。
+- **`detect/ast/cargo_floor`** — backlog 596ef57d。同じ行が cargo の自動実行ファイル（`build.rs`・
+  `.cargo/config[.toml]`、`cargo run`/`r`/`bench`/`install` では `.rs`・`.toml`）を**書き**、かつ cargo を走らせる
+  行は Ask（subagent では Deny）。書き手は問わない（here-document・`printf >`・`tee`・`cp`/`mv`/`install`/`ln` の
+  宛先）。cargo は `cargo` / `cargo-<sub>` / exec wrapper（`env`・`command`・`rustup`・`nohup`・`time` …）越しに
+  認識し、subcommand は cargo の global option（`+toolchain`・`--offline`・`--color X`・`-Z X`・`--manifest-path X` …）
+  を読み飛ばして決める。未知の option・決まらない語は subcommand を隠すので run 扱い。ファイル名は大文字小文字を
+  区別せず比較する。cargo 自身の出力 redirect と、cargo が前段の pipeline の `tee` は log であって landing ではない。
+  決まらない書き込み先は source landing のみ（build-time には数えない。残余は `cargo_floor.rs` の `landing` に明記）。
+  素の `cargo test` / `cargo build` が通常の `.rs` を書いた後に走るのは user ruling 2026-11-18 B-4 のまま。
+  raise-only（`readings.rs` が `ast::cargo_floor_verdict` を B.5 の前に畳む）。
+- **`detect/ast/b5/closed_heredoc`** — backlog 596ef57d（user ruling 2026-11-21、R-fakeeof）。B.5 層は parse
+  不能の行に既定で意見を持たない（ruling 2026-11-18 (b)）が、here-document が**閉じた後**で行が parse 不能に
+  なる場合だけ Ask（Table B.5: Undetermined）にする。parser が行末で切った proper prefix を Known と読み、その
+  prefix が here-document を持ち、全体は parse 不能、のとき。終端子をテキストから探さない。閉じていない
+  here-document はどの prefix も parse できないので対象外（従来どおり意見なし）。
 - **`detect/ast/s5`** — stage S5。行の中の inline Python program（`python3 -c`・stdin の here-document・
   literal の pipe）を crate `progeffect` で parse し、各 effect を shell の綴りにして full detector で判定する
   （`prepare`）。parser が Known と読んだ program だけを `pass` に置き換えた neutral text を legacy readings に

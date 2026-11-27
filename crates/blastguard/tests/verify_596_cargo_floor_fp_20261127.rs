@@ -178,7 +178,6 @@ fn fp_cargo_test_redirect_var_log() {
 }
 
 #[test]
-#[ignore = "RED(596-verify): observed main=ask sub=deny at ca60c0f0a; leading cargo option hides the subcommand so the floor treats `cargo --offline test` as a run"]
 fn fp_cargo_offline_test_after_lib_rs() {
     allow(
         "cargo_offline_test_lib",

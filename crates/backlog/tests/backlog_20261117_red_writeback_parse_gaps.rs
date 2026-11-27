@@ -106,7 +106,6 @@ fn unknown_value_flag_value_does_not_pick_wrong_test() {
 }
 
 #[test]
-#[ignore = "RED(c62740af): #[ignore = \"RED..\"] on a non-fn item (struct) is bound to the next fn"]
 fn ignore_on_non_fn_item_is_not_bound_to_next_fn() {
     let body = "#[ignore = \"RED: s\"]\nstruct Helper;\n#[test]\nfn red_one() { panic!(); }\n";
     let (c, e, b, id) = run_case("f4", &format!("{REPRO} red_one"), body);

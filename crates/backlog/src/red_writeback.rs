@@ -603,12 +603,34 @@ fn ignore_attrs(body: &str) -> Vec<IgnoreAttr> {
             },
             None => Reason::NotRed,
         };
-        out.push(IgnoreAttr {
-            reason,
-            fn_name: next_fn_name(body, &mask, after_kw),
-        });
+        let fn_name = next_fn_name(body, &mask, after_kw);
+        if fn_name.is_some() && attr_on_non_fn_item(body, &mask, after_kw) {
+            // An attribute on a struct/mod/impl/const/... is not a test
+            // ignore and must not bind to a later fn.
+            continue;
+        }
+        out.push(IgnoreAttr { reason, fn_name });
     }
     out
+}
+
+/// True iff, between `at` and the next `fn`, code contains a `;`, `{` or `}`:
+/// the attribute then belongs to an item that ended (or opened a body) before
+/// that fn, i.e. a non-fn item. Attribute arguments, `pub(..)` and
+/// `extern "C"` contain none of these in code (strings are masked out).
+fn attr_on_non_fn_item(body: &str, mask: &[bool], at: usize) -> bool {
+    let b = body.as_bytes();
+    let ident = |c: u8| c == b'_' || c.is_ascii_alphanumeric();
+    for (i, _) in body[at..].match_indices("fn") {
+        let i = at + i;
+        let before_ok = i == 0 || !ident(b[i - 1]);
+        let after_ok = b.get(i + 2).is_some_and(|c| c.is_ascii_whitespace());
+        if !(mask.get(i) == Some(&true) && before_ok && after_ok) {
+            continue;
+        }
+        return (at..i).any(|j| mask.get(j) == Some(&true) && matches!(b[j], b';' | b'{' | b'}'));
+    }
+    false
 }
 
 /// The name of the first `fn` keyword in code after byte offset `at`.

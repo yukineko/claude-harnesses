@@ -875,6 +875,9 @@ fn generic_quote_literals(payload: &str) -> Vec<String> {
 /// [`generic_quote_literals`] for why the latter is not optional).
 pub(super) fn quoted_string_literals(payload: &str) -> Vec<String> {
     let mut out = generic_quote_literals(payload);
+    // Membership in a set, not a scan of `out`: the scan made a program with n
+    // literals O(n^2) (b37bc26c). `out` keeps its order and its content.
+    let mut seen: std::collections::HashSet<String> = out.iter().cloned().collect();
     let mut chars = payload.char_indices().peekable();
     while let Some((start, c)) = chars.next() {
         if !matches!(c, '"' | '\'' | '`') {
@@ -889,7 +892,8 @@ pub(super) fn quoted_string_literals(payload: &str) -> Vec<String> {
         }
         if let Some(end) = end {
             let inner = &payload[start + c.len_utf8()..end];
-            if !inner.trim().is_empty() && !out.iter().any(|p| p == inner) {
+            if !inner.trim().is_empty() && !seen.contains(inner) {
+                seen.insert(inner.to_string());
                 out.push(inner.to_string());
             }
         }
@@ -975,6 +979,49 @@ pub(super) struct ProgramTextSink {
 /// literal that is not fully decoded (`\N{…}`, a malformed escape) is judged
 /// by [`python_literal_target::unknown_literal_target_verdict`].
 pub(super) fn interpreter_code_verdict(
+    shape: &str,
+    payloads: &[String],
+    depth: usize,
+    ctx: &Ctx<'_>,
+    expansion_possible: bool,
+    reader: PythonReader,
+    strings_are_data: bool,
+) -> Decision {
+    // b37bc26c: a layer-0 program is judged on its OWN node budget. Its text is
+    // judged piece by piece (every string literal / line is one `detect_bash`
+    // visit), so a ~3000-line body spent the whole per-command budget and the
+    // command's OTHER parts (a `bash <(…)` tail judged afterwards) then met an
+    // exhausted budget and came back as an Ask instead of their own Deny. The
+    // program still cannot run unbounded: a body that exhausts its own budget
+    // gets the budget Ask (fail-closed), and nested layers (`depth > 0`) keep
+    // sharing the program's budget, so the D4 tree bound is unchanged. The
+    // caller's remaining budget is restored on return.
+    if depth != 0 {
+        return interpreter_code_verdict_in_budget(
+            shape,
+            payloads,
+            depth,
+            ctx,
+            expansion_possible,
+            reader,
+            strings_are_data,
+        );
+    }
+    let outer = super::ANALYSIS_BUDGET.with(|b| b.replace(super::MAX_ANALYSIS_NODES));
+    let verdict = interpreter_code_verdict_in_budget(
+        shape,
+        payloads,
+        depth,
+        ctx,
+        expansion_possible,
+        reader,
+        strings_are_data,
+    );
+    super::ANALYSIS_BUDGET.with(|b| b.set(outer));
+    verdict
+}
+
+fn interpreter_code_verdict_in_budget(
     shape: &str,
     payloads: &[String],
     depth: usize,
@@ -1353,10 +1400,14 @@ files or directories outright if that string is run as code; blastguard cannot s
             // `python_literal_target::unknown_literal_target_verdict`.
             let mut unknown_values = Vec::new();
             if python_reader && depth_of_layer == 0 {
+                // A set, not `literals.contains`: that scan was O(n^2) in the
+                // number of literals (b37bc26c).
+                let mut have: std::collections::HashSet<String> =
+                    literals.iter().cloned().collect();
                 for value in python_semantics::literal_values(payload) {
                     match value {
                         python_escape::Decoded::Value(text) => {
-                            if !text.trim().is_empty() && !literals.contains(&text) {
+                            if !text.trim().is_empty() && have.insert(text.clone()) {
                                 literals.push(text);
                             }
                         }

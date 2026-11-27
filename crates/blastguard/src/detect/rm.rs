@@ -197,9 +197,14 @@ fn substitution_scope_lookup<'a>(
         defines_shell_function, mentions_name_outside_reference, resolve_expanded_command_word,
         segment_may_rebind, CommandWordOrigin,
     };
-    let defines_function = defines_shell_function(line);
+    // Lazy: scanning `line` for a function definition is O(len(line)), and
+    // this lookup is built for every segment of the line. Eager evaluation was
+    // O(segments x len) (b37bc26c: a 3000-line python body judged as shell took
+    // seconds). The answer is identical; it is only computed when a name is
+    // actually looked up.
+    let defines_function = std::cell::OnceCell::new();
     move |name: &str| {
-        if defines_function
+        if *defines_function.get_or_init(|| defines_shell_function(line))
             || mentions_name_outside_reference(seg, name)
             || segment_may_rebind(seg, name)
             || commands.iter().any(|c| segment_may_rebind(c, name))

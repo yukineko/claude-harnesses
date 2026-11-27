@@ -79,7 +79,6 @@ fn big_body() -> String {
 }
 
 #[test]
-#[ignore = "RED: ~3000-line python-stdin heredoc body takes ~6s to judge (hook timeout 10s); main verdict for a bash <(...) harmful tail is Ask"]
 fn large_python_heredoc_body_harmful_tail_is_deny_fast() {
     let budget = Duration::from_secs(3);
     let mut bad = Vec::new();
@@ -88,11 +87,18 @@ fn large_python_heredoc_body_harmful_tail_is_deny_fast() {
         for sub in [false, true] {
             let (d, took) = run_as(&c, sub);
             if d != "deny" || took > budget {
-                bad.push(format!("tail={tail:?} sub={sub} -> {d} in {}ms", took.as_millis()));
+                bad.push(format!(
+                    "tail={tail:?} sub={sub} -> {d} in {}ms",
+                    took.as_millis()
+                ));
             }
         }
     }
-    assert!(bad.is_empty(), "non-deny or over budget:\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "non-deny or over budget:\n{}",
+        bad.join("\n")
+    );
 }
 
 /// Control: the same tails after a small body are Deny quickly today.
@@ -103,7 +109,10 @@ fn control_small_body_harmful_tail_is_deny_fast() {
         for sub in [false, true] {
             let (d, took) = run_as(&c, sub);
             assert_eq!(d, "deny", "tail={tail:?} sub={sub}");
-            assert!(took < Duration::from_secs(3), "tail={tail:?} sub={sub} took {took:?}");
+            assert!(
+                took < Duration::from_secs(3),
+                "tail={tail:?} sub={sub} took {took:?}"
+            );
         }
     }
 }

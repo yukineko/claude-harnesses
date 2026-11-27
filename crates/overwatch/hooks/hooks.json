@@ -22,6 +22,13 @@
         ]
       }
     ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/overwatch ask-learn --hook --budget-secs 15", "timeout": 30 }
+        ]
+      }
+    ],
     "SubagentStop": [
       {
         "hooks": [

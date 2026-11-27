@@ -5,6 +5,7 @@
 //!
 //! Re-exports the public API for use by tests and other crates.
 
+pub mod ask_learn;
 pub mod audit_round;
 pub mod blastguard_log;
 pub mod canary;

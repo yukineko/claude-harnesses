@@ -35,14 +35,21 @@ pub fn blastguard_bin() -> PathBuf {
     BIN.get_or_init(|| {
         if let Some(p) = std::env::var_os("ASK_LEARN_BLASTGUARD_BIN") {
             let p = PathBuf::from(p);
-            assert!(p.is_file(), "ASK_LEARN_BLASTGUARD_BIN={} is not a file", p.display());
+            assert!(
+                p.is_file(),
+                "ASK_LEARN_BLASTGUARD_BIN={} is not a file",
+                p.display()
+            );
             return p;
         }
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
         let root = workspace_root();
         let out = Command::new(cargo)
             .current_dir(&root)
-            .env("CARGO_TARGET_DIR", root.join("target").join("ask-learn-blastguard"))
+            .env(
+                "CARGO_TARGET_DIR",
+                root.join("target").join("ask-learn-blastguard"),
+            )
             .args([
                 "build",
                 "-p",
@@ -66,7 +73,11 @@ pub fn blastguard_bin() -> PathBuf {
             .filter_map(|v| v["executable"].as_str().map(PathBuf::from))
             .last()
             .unwrap_or_else(|| panic!("no blastguard executable in cargo output:\n{stdout}"));
-        assert!(exe.is_file(), "built blastguard missing at {}", exe.display());
+        assert!(
+            exe.is_file(),
+            "built blastguard missing at {}",
+            exe.display()
+        );
         exe
     })
     .clone()

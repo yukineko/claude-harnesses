@@ -104,7 +104,10 @@ fn bg(f: &Fx, args: &[&str], stdin: &str) -> Output {
         .env("BLASTGUARD_BLOCK_LOG_DIR", &f.blocks_dir)
         .env("BLASTGUARD_RELAY_DIR", f.root.join("relay"))
         .env("BLASTGUARD_APPROVALS_DIR", f.root.join("approvals"))
-        .env("BLASTGUARD_LEARNED_TABLE", f.root.join("hook-sees-no-table.json"))
+        .env(
+            "BLASTGUARD_LEARNED_TABLE",
+            f.root.join("hook-sees-no-table.json"),
+        )
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("BLASTGUARD_ASK")
         .env_remove("CLAUDE_PROJECT_DIR")
@@ -115,7 +118,12 @@ fn bg(f: &Fx, args: &[&str], stdin: &str) -> Output {
         .stderr(Stdio::piped());
     std::fs::create_dir_all(f.root.join("approvals")).unwrap();
     let mut child = c.spawn().expect("spawn blastguard");
-    child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
     child.wait_with_output().unwrap()
 }
 
@@ -123,8 +131,9 @@ fn bg(f: &Fx, args: &[&str], stdin: &str) -> Output {
 fn record_ask(f: &Fx, sid: &str, cmd: &str) {
     let out = bg(f, &[], &payload(sid, cmd).to_string());
     let s = String::from_utf8_lossy(&out.stdout);
-    let v: Value = serde_json::from_str(s.trim())
-        .unwrap_or_else(|e| panic!("fixture: blastguard printed no decision ({e}) for {cmd:?}: {s:?}"));
+    let v: Value = serde_json::from_str(s.trim()).unwrap_or_else(|e| {
+        panic!("fixture: blastguard printed no decision ({e}) for {cmd:?}: {s:?}")
+    });
     assert_eq!(
         v["hookSpecificOutput"]["permissionDecision"], "ask",
         "fixture drift: {cmd:?} must be an interactive Ask today: {v}"
@@ -190,7 +199,13 @@ fn approved(f: &Fx, sid: &str, cmd: &str, errored: bool) {
     record_ask(f, sid, cmd);
     let id = tool_use(f, sid, cmd);
     if errored {
-        tool_result(f, sid, &id, "Exit code 1\nrm: : No such file or directory", true);
+        tool_result(
+            f,
+            sid,
+            &id,
+            "Exit code 1\nrm: : No such file or directory",
+            true,
+        );
     } else {
         tool_result(f, sid, &id, "", false);
     }
@@ -251,7 +266,11 @@ fn table(f: &Fx) -> Value {
 }
 
 fn entry<'a>(t: &'a Value, key: &str) -> Option<&'a Value> {
-    t["entries"].as_array().unwrap().iter().find(|e| e["shape"] == key)
+    t["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["shape"] == key)
 }
 
 fn promotions(f: &Fx) -> Vec<Value> {
@@ -275,26 +294,34 @@ fn seed_allow(f: &Fx) {
 // ------------------------------------------------------------ thresholds
 
 #[test]
-#[ignore = "RED(ask-learning): 3 approvals (one errored) / 2 sessions → allow entry + summary"]
 fn three_approvals_two_sessions_learn_allow() {
     let f = Fx::new();
     seed_allow(&f);
     let key = shape_key(&f, r#"rm "$f1""#);
-    assert_eq!(key, shape_key(&f, r#"rm "$f3""#), "fixture: commands must share one shape");
+    assert_eq!(
+        key,
+        shape_key(&f, r#"rm "$f3""#),
+        "fixture: commands must share one shape"
+    );
     let out = ask_learn(&f, &[]);
     ok(&out);
     let t = table(&f);
     let e = entry(&t, &key).unwrap_or_else(|| panic!("no entry for {key}: {t}"));
     assert_eq!(e["decision"], "allow", "{e}");
-    assert_eq!(e["approvals"], 3, "an errored run is still an approval: {e}");
+    assert_eq!(
+        e["approvals"], 3,
+        "an errored run is still an approval: {e}"
+    );
     assert_eq!(e["declines"], 0, "{e}");
     assert_eq!(e["sessions"], 2, "{e}");
     let so = String::from_utf8_lossy(&out.stdout);
-    assert!(so.contains("allow: 1"), "summary must report allow count: {so}");
+    assert!(
+        so.contains("allow: 1"),
+        "summary must report allow count: {so}"
+    );
 }
 
 #[test]
-#[ignore = "RED(ask-learning): 2 approvals → no entry"]
 fn two_approvals_learn_nothing() {
     let f = Fx::new();
     approved(&f, S1, r#"rm "$f1""#, false);
@@ -305,7 +332,6 @@ fn two_approvals_learn_nothing() {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): a decline (Claude Code's rejection text) → deny entry"]
 fn decline_learns_deny() {
     let f = Fx::new();
     seed_allow(&f);
@@ -323,7 +349,6 @@ fn decline_learns_deny() {
 // ------------------------------------------------------------ exclusions
 
 #[test]
-#[ignore = "RED(ask-learning): pseudo sessions (probe, verify-*, v2) are excluded"]
 fn pseudo_sessions_are_excluded() {
     let f = Fx::new();
     approved(&f, S1, r#"rm "$f1""#, false);
@@ -342,7 +367,6 @@ fn pseudo_sessions_are_excluded() {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): Asks without a matching tool_use / tool_result are excluded"]
 fn unmatched_asks_are_excluded() {
     let f = Fx::new();
     approved(&f, S1, r#"rm "$f1""#, false);
@@ -366,11 +390,10 @@ fn unmatched_asks_are_excluded() {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): records the current analyser no longer Asks are skipped"]
 fn records_no_longer_asked_are_skipped() {
     let f = Fx::new();
     seed_allow(&f); // positive control in the same run
-    // Re-label three historical records as `ls` (Allow today), approved in 2 sessions.
+                    // Re-label three historical records as `ls` (Allow today), approved in 2 sessions.
     let lines: Vec<Value> = std::fs::read_to_string(f.blocks())
         .unwrap()
         .lines()
@@ -398,7 +421,6 @@ fn records_no_longer_asked_are_skipped() {
 // ------------------------------------------------------------ writing the table
 
 #[test]
-#[ignore = "RED(ask-learning): unchanged inputs → table not rewritten (mtime), no tmp leftovers"]
 fn unchanged_content_is_not_rewritten() {
     let f = Fx::new();
     seed_allow(&f);
@@ -415,11 +437,14 @@ fn unchanged_content_is_not_rewritten() {
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(names, ["table.json"], "atomic write must leave no tmp files: {names:?}");
+    assert_eq!(
+        names,
+        ["table.json"],
+        "atomic write must leave no tmp files: {names:?}"
+    );
 }
 
 #[test]
-#[ignore = "RED(ask-learning): incremental run picks up new records; equals a --full rebuild byte-for-byte"]
 fn incremental_equals_full_rebuild() {
     let f = Fx::new();
     approved(&f, S1, r#"rm "$f1""#, false);
@@ -438,11 +463,14 @@ fn incremental_equals_full_rebuild() {
     );
     std::fs::remove_file(&f.table).unwrap();
     ok(&ask_learn(&f, &["--full"]));
-    assert_eq!(inc, std::fs::read(&f.table).unwrap(), "incremental ≠ full rebuild");
+    assert_eq!(
+        inc,
+        std::fs::read(&f.table).unwrap(),
+        "incremental ≠ full rebuild"
+    );
 }
 
 #[test]
-#[ignore = "RED(ask-learning): failure keeps the previous table, exits non-zero, writes status.json"]
 fn failure_keeps_previous_table_and_reports() {
     let f = Fx::new();
     seed_allow(&f);
@@ -453,19 +481,32 @@ fn failure_keeps_previous_table_and_reports() {
     // (1) blastguard missing.
     let missing = f.root.join("nonexistent-blastguard");
     let out = ask_learn_with(&f, &f.blocks(), &missing, &["--full"]);
-    assert!(!out.status.success(), "missing blastguard must exit non-zero");
-    assert_eq!(before, std::fs::read(&f.table).unwrap(), "previous table must survive");
+    assert!(
+        !out.status.success(),
+        "missing blastguard must exit non-zero"
+    );
+    assert_eq!(
+        before,
+        std::fs::read(&f.table).unwrap(),
+        "previous table must survive"
+    );
     let st = std::fs::read_to_string(&status)
         .unwrap_or_else(|e| panic!("status.json not written at {}: {e}", status.display()));
     let st: Value = serde_json::from_str(&st).expect("status.json is JSON");
-    assert!(!st.as_object().map_or(true, |o| o.is_empty()), "status must carry the error: {st}");
+    assert!(
+        !st.as_object().map_or(true, |o| o.is_empty()),
+        "status must carry the error: {st}"
+    );
     std::fs::remove_file(&status).unwrap();
 
     // (2) blocks log unreadable (a directory where the file should be).
     let bad = f.root.join("blocks-is-a-dir");
     std::fs::create_dir_all(&bad).unwrap();
     let out = ask_learn_with(&f, &bad, &blastguard_bin::blastguard_bin(), &["--full"]);
-    assert!(!out.status.success(), "unreadable blocks log must exit non-zero");
+    assert!(
+        !out.status.success(),
+        "unreadable blocks log must exit non-zero"
+    );
     assert_eq!(before, std::fs::read(&f.table).unwrap());
     assert!(status.is_file(), "status.json must record the failure");
 }
@@ -473,7 +514,6 @@ fn failure_keeps_previous_table_and_reports() {
 // ------------------------------------------------------------ promotions
 
 #[test]
-#[ignore = "RED(ask-learning): a NEW allow is appended once to promotions.jsonl (filed:false)"]
 fn new_allow_is_appended_to_promotions_once() {
     let f = Fx::new();
     seed_allow(&f);
@@ -484,11 +524,14 @@ fn new_allow_is_appended_to_promotions_once() {
     assert_eq!(p[0]["shape"], key.as_str(), "{}", p[0]);
     assert_eq!(p[0]["filed"], false, "{}", p[0]);
     ok(&ask_learn(&f, &["--full"]));
-    assert_eq!(promotions(&f).len(), 1, "an existing allow is not a new promotion");
+    assert_eq!(
+        promotions(&f).len(),
+        1,
+        "an existing allow is not a new promotion"
+    );
 }
 
 #[test]
-#[ignore = "RED(ask-learning): a deny entry is not a promotion"]
 fn deny_is_not_a_promotion() {
     let f = Fx::new();
     declined(&f, S1, r#"rm "$f1""#);
@@ -508,7 +551,11 @@ fn git(dir: &Path, args: &[&str]) {
         .env_remove("GIT_INDEX_FILE")
         .output()
         .unwrap();
-    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 fn file_reds(f: &Fx, worktree: &Path) -> Output {
@@ -532,7 +579,6 @@ fn learned_shape_files(repo: &Path) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): `file-reds` refuses the main working tree; a linked worktree is accepted"]
 fn file_reds_refuses_main_working_tree() {
     // Main tree with a pending promotion: must refuse and leave it unfiled.
     let f = Fx::new();
@@ -550,7 +596,10 @@ fn file_reds_refuses_main_working_tree() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(learned_shape_files(&main).is_empty(), "nothing may be written to the main tree");
+    assert!(
+        learned_shape_files(&main).is_empty(),
+        "nothing may be written to the main tree"
+    );
     assert!(
         promotions(&f).iter().all(|p| p["filed"] == false),
         "a refused run must not mark promotions filed: {:?}",
@@ -561,7 +610,10 @@ fn file_reds_refuses_main_working_tree() {
     // accepted (exit 0). No promotion → no `backlog add` is ever invoked.
     let g = Fx::new();
     let linked = f.root.join("linked");
-    git(&main, &["worktree", "add", "-q", "-b", "l", linked.to_str().unwrap()]);
+    git(
+        &main,
+        &["worktree", "add", "-q", "-b", "l", linked.to_str().unwrap()],
+    );
     let out = file_reds(&g, &linked);
     assert!(
         out.status.success(),
@@ -574,9 +626,10 @@ fn file_reds_refuses_main_working_tree() {
 // ------------------------------------------------------------ Stop hook wiring
 
 #[test]
-#[ignore = "RED(ask-learning): overwatch's Stop hook runs `ask-learn` with a timeout"]
 fn stop_hook_runs_ask_learn() {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("hooks").join("hooks.json");
+    let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("hooks")
+        .join("hooks.json");
     let v: Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
     let stop = v["hooks"]["Stop"]
         .as_array()
@@ -584,8 +637,20 @@ fn stop_hook_runs_ask_learn() {
     let hooks: Vec<&Value> = stop
         .iter()
         .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
-        .filter(|h| h["command"].as_str().is_some_and(|c| c.contains("overwatch ask-learn")))
+        .filter(|h| {
+            h["command"]
+                .as_str()
+                .is_some_and(|c| c.contains("overwatch ask-learn"))
+        })
         .collect();
-    assert_eq!(hooks.len(), 1, "exactly one Stop hook runs `overwatch ask-learn`: {v}");
-    assert!(hooks[0]["timeout"].is_number(), "the Stop run needs a time budget: {}", hooks[0]);
+    assert_eq!(
+        hooks.len(),
+        1,
+        "exactly one Stop hook runs `overwatch ask-learn`: {v}"
+    );
+    assert!(
+        hooks[0]["timeout"].is_number(),
+        "the Stop run needs a time budget: {}",
+        hooks[0]
+    );
 }

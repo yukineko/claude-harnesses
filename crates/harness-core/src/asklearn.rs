@@ -145,7 +145,11 @@ impl Shape {
     /// True when a command word could not be resolved ([`UNRESOLVED_VERB`])
     /// or there is no verb at all.
     pub fn has_unresolved_verb(&self) -> bool {
-        self.verbs.is_empty() || self.verbs.iter().any(|v| v == UNRESOLVED_VERB)
+        self.verbs.is_empty()
+            || self
+                .verbs
+                .iter()
+                .any(|v| v == UNRESOLVED_VERB || v.is_empty())
     }
 
     /// Whether a learned Allow may ever apply to this shape, independent of

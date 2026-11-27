@@ -172,6 +172,15 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Learn blastguard's Allow/Deny decisions from the Asks a human answered
+    /// (`~/.blastguard/learned/table.json`; spec
+    /// docs/specs/blastguard-ask-learning.md). Options are parsed by the
+    /// learner itself; `file-reds --worktree <linked worktree>` files the
+    /// promotions as RED backlog items.
+    AskLearn {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Show recurrence stats for all recorded violation signatures.
     Violations {
         #[arg(long)]
@@ -703,6 +712,9 @@ fn main() -> Result<()> {
                 session.as_deref(),
                 detail.as_deref(),
             )?;
+        }
+        Command::AskLearn { args } => {
+            std::process::exit(overwatch::ask_learn::run(&args));
         }
         Command::BlastguardLog { args } => {
             std::process::exit(overwatch::blastguard_log::run_log(&args));

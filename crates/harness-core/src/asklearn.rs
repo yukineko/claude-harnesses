@@ -66,28 +66,36 @@ pub enum TargetClass {
 
 impl TargetClass {
     /// The class segment of the shape key. Distinct, separator-free.
+    ///
+    /// Every label carries the SHAPE-SCHEMA tag `s2-` (user ruling
+    /// 2026-11-28; schema 2 = verbs with subcommand / flags / body hash and
+    /// protected config raised from the verdict). A key built by the earlier
+    /// schema (`rule|home|rm`) can therefore never equal a current key, in
+    /// `lookup`, in `learn` or in `from_key`: a table that survives the
+    /// upgrade is inert, not wrongly matching. Bump the tag with any change
+    /// of what a shape means.
     pub fn as_str(&self) -> &'static str {
         match self {
-            TargetClass::Worktree => "worktree",
-            TargetClass::Scratchpad => "scratchpad",
-            TargetClass::ProtectedConfig => "protected-config",
-            TargetClass::System => "system",
-            TargetClass::Home => "home",
-            TargetClass::Undetermined => "undetermined",
-            TargetClass::None => "none",
+            TargetClass::Worktree => "s2-worktree",
+            TargetClass::Scratchpad => "s2-scratchpad",
+            TargetClass::ProtectedConfig => "s2-protected-config",
+            TargetClass::System => "s2-system",
+            TargetClass::Home => "s2-home",
+            TargetClass::Undetermined => "s2-undetermined",
+            TargetClass::None => "s2-none",
         }
     }
 
     /// Inverse of [`TargetClass::as_str`].
     pub fn parse(s: &str) -> Option<TargetClass> {
         Some(match s {
-            "worktree" => TargetClass::Worktree,
-            "scratchpad" => TargetClass::Scratchpad,
-            "protected-config" => TargetClass::ProtectedConfig,
-            "system" => TargetClass::System,
-            "home" => TargetClass::Home,
-            "undetermined" => TargetClass::Undetermined,
-            "none" => TargetClass::None,
+            "s2-worktree" => TargetClass::Worktree,
+            "s2-scratchpad" => TargetClass::Scratchpad,
+            "s2-protected-config" => TargetClass::ProtectedConfig,
+            "s2-system" => TargetClass::System,
+            "s2-home" => TargetClass::Home,
+            "s2-undetermined" => TargetClass::Undetermined,
+            "s2-none" => TargetClass::None,
             _ => return Option::None,
         })
     }
@@ -379,4 +387,35 @@ pub fn table_path() -> PathBuf {
 /// `~/.blastguard/learned` (status.json / promotions.jsonl live here too).
 pub fn learned_dir() -> PathBuf {
     crate::config::base_dir("blastguard").join("learned")
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    /// A table built by the pre-2026-11-28 schema (bare class label, basename
+    /// verb) must be inert: its key never equals a current key.
+    #[test]
+    fn an_old_schema_key_never_matches_a_current_shape() {
+        let shape = Shape {
+            rule_id: "r".into(),
+            target_class: TargetClass::Home,
+            verbs: vec!["rm".into()],
+        };
+        let old_key = "r|home|rm";
+        assert_ne!(shape.key(), old_key);
+        assert!(Shape::from_key(old_key).is_none());
+        let table = LearnedTable {
+            version: TABLE_VERSION,
+            entries: vec![Entry {
+                shape: old_key.into(),
+                decision: Verdict::Allow,
+                approvals: 50,
+                declines: 0,
+                sessions: 20,
+                samples: vec![],
+            }],
+        };
+        assert_eq!(lookup(&table, &shape), None);
+    }
 }

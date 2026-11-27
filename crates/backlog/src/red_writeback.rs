@@ -570,16 +570,40 @@ struct IgnoreAttr {
     fn_name: Option<String>,
 }
 
+/// `(start, after_kw)` of every `#` `[` `ignore` token run, allowing
+/// whitespace after `#` and after `[` (`# [ignore`, `#[ ignore` are valid
+/// Rust). `after_kw` is just past the `ignore` keyword.
+fn ignore_attr_starts(body: &str) -> Vec<(usize, usize)> {
+    let b = body.as_bytes();
+    let skip_ws = |mut i: usize| {
+        while b.get(i).is_some_and(|c| c.is_ascii_whitespace()) {
+            i += 1;
+        }
+        i
+    };
+    let mut out = Vec::new();
+    for (h, _) in body.match_indices('#') {
+        let i = skip_ws(h + 1);
+        if b.get(i) != Some(&b'[') {
+            continue;
+        }
+        let j = skip_ws(i + 1);
+        if body[j..].starts_with("ignore") {
+            out.push((h, j + "ignore".len()));
+        }
+    }
+    out
+}
+
 /// Every `#[ignore` attribute that sits in code (comments and literals are
 /// skipped), with its reason and the name of the next `fn` in code.
 fn ignore_attrs(body: &str) -> Vec<IgnoreAttr> {
     let mask = code_mask(body);
     let mut out = Vec::new();
-    for (start, _) in body.match_indices("#[ignore") {
+    for (start, after_kw) in ignore_attr_starts(body) {
         if mask.get(start) != Some(&true) {
             continue;
         }
-        let after_kw = start + "#[ignore".len();
         let rest = &body[after_kw..];
         if rest
             .chars()

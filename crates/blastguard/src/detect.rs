@@ -703,7 +703,7 @@ fn detect_bash_whole(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // written here can still be run by a LATER, separate tool call. Shape rule: `strip_data_here_document_bodies`.
     let stripped = strip_data_here_document_bodies(cmd);
     let cmd: &str = &stripped;
-    let judged = detect_bash_after_data_bodies(cmd, depth, ctx);
+    let judged = heredoc_data::judged_with_python_body_replaced(cmd, depth, ctx);
     // 0d. `git apply` / `git am` fed a patch by a here-document writes the
     // patch's added files, and a later command can run them. The body's `+`
     // (and context) prefix hides its commands from every rule above, so a

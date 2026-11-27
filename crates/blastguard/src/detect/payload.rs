@@ -85,7 +85,7 @@ pub(super) fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<
     // once more with that syntax removed (see `decompounded`), IN ADDITION to
     // the text as written — this can only add verdicts. Not recursive: the
     // decompounded text is judged by `stdin_exec_verdict` directly.
-    let flat = match decompounded(cmd) {
+    let flat = match super::heredoc_data::decompounded_around_python_body(cmd, decompounded) {
         Ok(flat) => flat,
         Err(why) => {
             if let Some(deny) = acc.record(Decision::ask(why)) {

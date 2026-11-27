@@ -82,7 +82,6 @@ fn same_keys(a: &serde_json::Value, b: &serde_json::Value) -> bool {
 
 /// Read keeps its text in nested `file.content` (~40k tokens): must be groomed.
 #[test]
-#[ignore = "RED(posttool) groom_object only looks at top-level strings; nested Read file.content is silently left ungroomed"]
 fn read_nested_file_content_is_groomed() {
     let big = "line of file text that is fairly long here\n".repeat(4000);
     let input = serde_json::json!({
@@ -109,7 +108,6 @@ fn read_nested_file_content_is_groomed() {
 /// Glob `filenames` array of 5000 short paths (~40k tokens): bulk is in an
 /// array of short strings, so `total == 0` and nothing is groomed.
 #[test]
-#[ignore = "RED(posttool) bulk held in an array of short strings (Glob filenames) is never groomed"]
 fn glob_filenames_array_is_groomed() {
     let names: Vec<String> = (0..5000)
         .map(|i| format!("/repo/src/module_{i:05}/some/deeper/path/file_{i:05}.rs"))
@@ -134,7 +132,6 @@ fn glob_filenames_array_is_groomed() {
 /// One 20k-char field plus 300 fields of 200 chars (each < 256, so never
 /// trimmed): the rewrite is emitted (strictly smaller) but stays ~8x over budget.
 #[test]
-#[ignore = "RED(posttool) many short fields (<256 chars) are never trimmed, so the emitted rewrite is far over budget"]
 fn many_short_fields_rewrite_fits_budget() {
     let mut m = serde_json::Map::new();
     m.insert(

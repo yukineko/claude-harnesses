@@ -459,27 +459,24 @@ fn main() {
                 );
                 let mut nudge = out_fields.nudge;
                 if let Some(updated) = out_fields.updated {
-                    // Shape-preserving: an object `tool_response` gets an object
-                    // back, a string gets a string; any other shape is NOT
-                    // rewritten (a wrong shape is rejected by Claude Code and the
-                    // original kept) and is reported via additionalContext.
-                    match hooks::toolguard::updated_value(
+                    // Shape-preserving: a string gets a string; an object/array
+                    // gets the same structure shrunk recursively under one
+                    // budget. When no faithful rewrite exists (a wrong shape is
+                    // rejected by Claude Code) or it still exceeds the limit,
+                    // the note is added to additionalContext.
+                    let rw = hooks::toolguard::updated_value(
                         input.tool_response.as_ref(),
                         &updated,
                         cfg.huge_tool_output_bytes as usize,
-                    ) {
-                        Some(v) => {
-                            hook_output.insert("updatedToolOutput".to_string(), v);
-                        }
-                        None => {
-                            let note = "[ctxrot] this tool output exceeded the size threshold \
-                                        but its shape cannot be rewritten faithfully, so it was \
-                                        NOT truncated; the full output is in context.";
-                            nudge = Some(match nudge {
-                                Some(n) => format!("{n}\n{note}"),
-                                None => note.to_string(),
-                            });
-                        }
+                    );
+                    if let Some(v) = rw.value {
+                        hook_output.insert("updatedToolOutput".to_string(), v);
+                    }
+                    if let Some(note) = rw.note {
+                        nudge = Some(match nudge {
+                            Some(n) => format!("{n}\n{note}"),
+                            None => note,
+                        });
                     }
                 }
                 if let Some(nudge) = nudge {

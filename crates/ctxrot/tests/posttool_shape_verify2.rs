@@ -76,7 +76,6 @@ fn str_len(v: &serde_json::Value, k: &str) -> usize {
 /// must be truncated (task requirement: works for Read content), with the
 /// nested shape kept.
 #[test]
-#[ignore = "RED(posttool) nested Read file.content is never truncated: updated_value finds no top-level TEXT_KEYS and returns None"]
 fn read_nested_file_content_is_truncated_with_shape_kept() {
     let big = lines(200_000);
     let input = serde_json::json!({
@@ -108,7 +107,6 @@ fn read_nested_file_content_is_truncated_with_shape_kept() {
 /// gives stderr a share smaller than the omission header, so it is replaced by
 /// a header that is LONGER than the original field. No field may grow.
 #[test]
-#[ignore = "RED(posttool) short field replaced by an omission header longer than the field itself"]
 fn short_field_is_never_grown_by_truncation() {
     let stderr = "error: build failed at step 3!".to_string(); // 30 chars, 1 line
     assert_eq!(stderr.chars().count(), 30);
@@ -137,7 +135,6 @@ fn short_field_is_never_grown_by_truncation() {
 /// header `[toolguard: 59KB → 49KB, ...]`, which claims ~49KB were kept while
 /// none were. The rewrite must keep some of the actual content.
 #[test]
-#[ignore = "RED(posttool) single-line result truncated to header only; header claims 49KB kept"]
 fn single_line_webfetch_result_keeps_some_content() {
     let big = "<div>x</div>".repeat(5_000); // 60k chars, one line
     let input = serde_json::json!({

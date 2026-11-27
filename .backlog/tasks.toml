@@ -598,6 +598,8 @@ notes = "RED ed0a07521 (blastguard 0.2.967): 20 cases Ask in main, Deny as subag
 created_at = 1795797276
 updated_at = 1795797276
 weight = 0.0
+issue_number = 1998
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1998"
 rev = 0
 
 [task.repro]

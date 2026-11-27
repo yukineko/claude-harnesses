@@ -97377,3 +97377,64 @@ rev = "924bcdae723b9e644eb60982d73edece86b00f0e"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "61b6ba67"
+title = "blastguard FP: subagent denied (S5 Undetermined) for mkdir -p scratchpad && cd scratchpad && python3 - <<EOF (import json,re)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-20 (rev c434e41e5 area, deployed ~0.2.8xx). Command run by a SUBAGENT with cwd /Users/yuki/src/harness: mkdir -p D && cd D && python3 - <<'EOF' (import json,re; open(<json file>); json.dump(d,open('decomposition-4items.json','w'))) EOF; condukt validate --file decomposition-4items.json; echo validate=$?  where D=/private/tmp/claude-502/-Users-yuki-src-harness/62e92d16-0aef-402b-ad58-39425ad07ded/scratchpad. Verbatim deny reason: the Python program imports json, re, and a command before it on the line writes into the directory it runs in (D, as D) an entry whose name is not read here, which may replace one of them - blastguard cannot judge what the Python program would do (S5: Undetermined). Same command byte-for-byte was ALLOWED in the main session, DENIED in the subagent. Harness measurement (worktree of c434e41e5): main = Ask with the same S5 reason, subagent = Deny (Ask hardened); the real main Allow was likely the user approving the prompt (not verified). Reading (a) FP: mkdir -p D creates D itself (entry in D's parent), not an entry inside D that could shadow json.py/re.py; D is the session scratchpad. Reading (b) intended: mkdir -p on existing D is a no-op and blastguard cannot tell whether D pre-existed with planted modules. Tell apart: a fix that allows a session-managed scratchpad D must still keep control_planted_json_py_then_python_stdin_stays_non_allow (printf x > json.py into D then python3 -) non-allow. Test: crates/blastguard/tests/backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp.rs (commit d2ba57b82 on side/run-20261120-171414-35880-reds)."
+created_at = 1795163111
+updated_at = 1795787624
+weight = 0.0
+issue_number = 1923
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1923"
+issue_closed_at = 1795787628
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp -- --include-ignored"
+rev = "d2ba57b82cb435571747e2ebe8eeec0668c6714f"
+observed_at = 1795163111
+detail = """
+exit 101: side-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.74s
+     Running tests/backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp.rs (target/debug/deps/backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp-76f31d9e9a2f73b2)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp"
+exit = 0
+passed = 2
+rev = "4b4ce01ce547e84db5c6df3e1c7bdcb9a04dc488"
+observed_at = 1795787617
+output_digest = "sha256:09c1ed97798715ad9e0b353e2adf4e0a739c8f857bef401cb8ea2661284aee46"
+excerpt = """
+
+running 2 tests
+test control_planted_json_py_then_python_stdin_stays_non_allow ... ok
+test red_subagent_mkdir_cd_scratchpad_python_stdin_heredoc_not_blocked ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+   Compiling blastguard v0.2.950 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.65s
+     Running tests/backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp.rs (target/debug/deps/backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp-82605680dc87c9b1)
+"""
+
+[task.closure.red]
+rev = "30937b7ef21c82ee07aee7f9ab6538fb82d6e33b"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

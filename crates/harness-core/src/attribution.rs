@@ -1054,8 +1054,9 @@ const DIR_CMDS: [&str; 3] = ["cd", "pushd", "popd"];
 const COMPOUND_WORDS: [&str; 8] = ["{", "if", "then", "else", "elif", "do", "while", "until"];
 /// Commands that run another command: a directory command among their
 /// arguments is not followed.
-const WRAPPERS: [&str; 11] = [
+const WRAPPERS: [&str; 16] = [
     "builtin", "command", "env", "xargs", "sudo", "nohup", "nice", "exec", "eval", "source", ".",
+    "bash", "sh", "zsh", "dash", "ksh",
 ];
 
 /// Where the shell is, as a set of candidate directories while a statement
@@ -1250,15 +1251,17 @@ fn walk_cwd(command: &str, stmts: &[Statement], init: Option<&Path>) -> Result<W
                 }
                 let p = Path::new(t);
                 let mut cands: Vec<PathBuf> = Vec::new();
+                // Targets resolve LOGICALLY (lexical `..` against the logical
+                // path, no canonicalize first), as bash and zsh do.
                 if p.is_absolute() {
-                    cands.push(p.to_path_buf());
+                    cands.push(logical_join(Path::new("/"), p));
                 } else if cur.is_empty() {
                     // No known cwd: the target stays relative; callers count
                     // a relative write path as inside every root.
                     cands.push(p.to_path_buf());
                 } else {
                     for b in &cur {
-                        cands.push(b.join(p));
+                        cands.push(logical_join(b, p));
                         if let Some(es) = &cdpath {
                             for e in es {
                                 let e = Path::new(e);
@@ -1269,9 +1272,9 @@ fn walk_cwd(command: &str, stmts: &[Statement], init: Option<&Path>) -> Result<W
                                         e.to_path_buf()
                                     }
                                 } else {
-                                    b.join(e)
+                                    logical_join(b, e)
                                 };
-                                cands.push(root.join(p));
+                                cands.push(logical_join(&root, p));
                             }
                         }
                     }
@@ -1312,6 +1315,16 @@ fn walk_cwd(command: &str, stmts: &[Statement], init: Option<&Path>) -> Result<W
 /// holding a command substitution is not parsed into words, so its raw text is
 /// split on whitespace (over-attribution).
 fn statement_path_words(command: &str, s: &Statement) -> Vec<String> {
+    // A word with spaces is a program text handed to something else
+    // (`bash -c 'sed -i s/a/b/ src/lib.rs'`): it names its paths in its parts.
+    let split = |w: &String| -> Vec<String> {
+        let parts = w.split_whitespace().map(String::from);
+        if w.contains(char::is_whitespace) {
+            std::iter::once(w.clone()).chain(parts).collect()
+        } else {
+            vec![w.clone()]
+        }
+    };
     if s.opaque {
         return command[s.start..s.end]
             .split_whitespace()
@@ -1324,7 +1337,7 @@ fn statement_path_words(command: &str, s: &Statement) -> Vec<String> {
     s.stages
         .iter()
         .flat_map(|st| st.words.iter().chain(st.redirects.iter()))
-        .cloned()
+        .flat_map(split)
         .collect()
 }
 
@@ -1346,8 +1359,9 @@ fn keep_flags(stmts: &[Statement]) -> Vec<bool> {
     keep
 }
 
+mod cargo_scope;
 mod plan;
-use plan::{fenced_paths, plan_call};
+use plan::{fenced_paths, logical_join, plan_call};
 
 /// The writing statements of one recorded Bash call and the existing paths
 /// they name. `(false, _, _)` = the call is provably read-only. A writing call
@@ -1445,13 +1459,15 @@ pub fn has_unattributable_write(transcript_path: &str) -> Determination<bool> {
 }
 
 /// [`has_unattributable_write`] for judging ONE root `root`. A path-less
-/// writer whose effect is statically bounded to the cargo workspace of its
-/// effective cwd (the closed list in [`confined_to_cwd`]: `cargo fmt`) counts
-/// only when that cwd and `root` contain one another; every other path-less
-/// writer (`python3 -`, `git checkout`, a glob, a generator) counts for every
-/// root, as does a confined one whose effective cwd cannot be determined
-/// (unknown cwd, a `cd` that is not followed, an unparsed command). The
-/// effective cwd is the line's recorded cwd moved only by a `cd` that
+/// writer that [`cargo_scope::cargo_fmt_scope`] bounds to a cargo workspace
+/// (`cargo fmt`, `cargo fmt -p NAME`, `--check`, `-q`, `-v`; never `--all`,
+/// which also formats path dependencies outside the workspace) counts only
+/// when that workspace directory and `root` contain one another. Every other
+/// path-less writer (`python3 -`, `git checkout`, a glob, a generator) counts
+/// for every root, and so does a `cargo fmt` whose effective cwd is unknown or
+/// relative, whose directory walk is not followed (a non-flat command, an
+/// unparsed one), or that a `.cargo/config*` alias named `fmt` may redirect.
+/// The effective cwd is the line's recorded cwd moved only by a `cd` that
 /// [`walk_cwd`] judges certain. User ruling 2026-11-21 (backlog ff46a113).
 pub fn has_unattributable_write_in(transcript_path: &str, root: &Path) -> Determination<bool> {
     let all = match session_bash_calls(transcript_path) {
@@ -1508,37 +1524,9 @@ enum Unattr {
     No,
     /// Some writer can reach any path (or the cwd cannot be determined).
     Global,
-    /// Every path-less writer is confined to the cargo workspace of one of
-    /// these effective directories.
+    /// Every path-less writer is confined to these directories (the cargo
+    /// workspaces its effective cwds belong to, [`cargo_scope::cargo_fmt_scope`]).
     Within(Vec<PathBuf>),
-}
-
-/// `cargo fmt` (optionally `--all`, `--check`, `-q`, `-v`, `-p <name>`), with
-/// no redirect: it rewrites only the files of the cargo workspace found from
-/// its cwd. Anything with another flag (`--manifest-path`, a file operand) or
-/// another program is NOT in this list; a program is added only when it is
-/// provably confined to the cwd's workspace.
-fn confined_to_cwd(stage: &Stage) -> bool {
-    if !stage.redirects.is_empty() {
-        return false;
-    }
-    let w: Vec<&str> = stage.words.iter().map(String::as_str).collect();
-    if w.len() < 2 || w[0] != "cargo" || w[1] != "fmt" {
-        return false;
-    }
-    let mut it = w[2..].iter().copied();
-    while let Some(a) = it.next() {
-        match a {
-            "--all" | "--check" | "-q" | "--quiet" | "-v" | "--verbose" => {}
-            "-p" | "--package" => {
-                if !it.next().is_some_and(plain_word) {
-                    return false;
-                }
-            }
-            _ => return false,
-        }
-    }
-    true
 }
 
 /// Per STAGE, not per call: a call is unattributable when any stage that may
@@ -1552,8 +1540,10 @@ fn confined_to_cwd(stage: &Stage) -> bool {
 /// cannot follow, or holding a substitution, is unattributable.
 ///
 /// The answer is [`Unattr::Within`] (not `Global`) only when EVERY
-/// unattributable stage is [`confined_to_cwd`] and the cwd it runs in is
-/// known; any other unattributable stage makes the call `Global`.
+/// unattributable stage is a `cargo fmt` form that
+/// [`cargo_scope::cargo_fmt_scope`] bounds to a workspace, for every directory
+/// the shell may be in (each an absolute, known one); any other unattributable
+/// stage, a relative or unknown cwd, makes the call `Global`.
 fn call_unattributable(call: &crate::transcript::BashCall) -> Unattr {
     let plan = plan_call(&call.command);
     // Unparsed, or a directory command in a command that is not a flat list:
@@ -1582,11 +1572,14 @@ fn call_unattributable(call: &crate::transcript::BashCall) -> Unattr {
                 bases.iter().all(|b| stage_attributable(stage, Some(b)))
             };
             if !ok {
-                // Bounded to the cwd's workspace only with a known cwd.
-                if confined_to_cwd(stage) && !bases.is_empty() {
-                    within.extend(bases.iter().cloned());
-                } else {
-                    return Unattr::Global;
+                // Bounded to a workspace only from a known, absolute cwd.
+                let scopes: Option<Vec<PathBuf>> = bases
+                    .iter()
+                    .map(|b| cargo_scope::cargo_fmt_scope(stage, b))
+                    .collect();
+                match scopes {
+                    Some(s) if !bases.is_empty() => within.extend(s),
+                    _ => return Unattr::Global,
                 }
             }
         }

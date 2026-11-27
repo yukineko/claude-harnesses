@@ -49,7 +49,11 @@ fn git_st(dir: &Path, args: &[&str]) -> bool {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    assert!(git_st(dir, args), "git {args:?} failed in {}", dir.display());
+    assert!(
+        git_st(dir, args),
+        "git {args:?} failed in {}",
+        dir.display()
+    );
 }
 
 fn jline(v: serde_json::Value) -> String {
@@ -94,20 +98,19 @@ fn dump(o: &Outcome) -> String {
 }
 
 fn run_hook(sub: &str, home: &Path, cwd: &Path, payload: serde_json::Value) -> Outcome {
-    let mut child =
-        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_donegate")))
-            .arg(sub)
-            .current_dir(cwd)
-            .env("HOME", home)
-            .env("CLAUDE_CODE_SESSION_ID", SESSION)
-            .env_remove("DONEGATE_DISABLE")
-            .env_remove("HARNESS_TRUST_ALL")
-            .env_remove("HARNESS_WORKTREE_ORIGIN_DIR")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("donegate spawns");
+    let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_donegate")))
+        .arg(sub)
+        .current_dir(cwd)
+        .env("HOME", home)
+        .env("CLAUDE_CODE_SESSION_ID", SESSION)
+        .env_remove("DONEGATE_DISABLE")
+        .env_remove("HARNESS_TRUST_ALL")
+        .env_remove("HARNESS_WORKTREE_ORIGIN_DIR")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("donegate spawns");
     child
         .stdin
         .take()
@@ -141,7 +144,10 @@ fn fresh_home(tag: &str) -> PathBuf {
 
 fn trust(home: &Path, roots: &[&Path]) {
     std::fs::create_dir_all(home.join(".harness")).unwrap();
-    let list: Vec<String> = roots.iter().map(|r| format!("\"{}\"", r.display())).collect();
+    let list: Vec<String> = roots
+        .iter()
+        .map(|r| format!("\"{}\"", r.display()))
+        .collect();
     std::fs::write(
         home.join(".harness/trust.toml"),
         format!("trusted = [{}]\n", list.join(", ")),
@@ -201,7 +207,11 @@ impl Sub {
         let agent_t = side.join(format!("agent-{AGENT_ID}.jsonl"));
         std::fs::write(
             &agent_t,
-            format!("{}{}", user_line(), bash_use("t-sub", cmd, Some(line_cwd), true)),
+            format!(
+                "{}{}",
+                user_line(),
+                bash_use("t-sub", cmd, Some(line_cwd), true)
+            ),
         )
         .unwrap();
         run_hook(
@@ -300,7 +310,14 @@ impl Top {
         let wt = home.join("wt");
         git(
             &main,
-            &["worktree", "add", "-q", "-b", "session", &wt.to_string_lossy()],
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "session",
+                &wt.to_string_lossy(),
+            ],
         );
         let main = main.canonicalize().unwrap();
         let wt = wt.canonicalize().unwrap();
@@ -378,7 +395,12 @@ fn control_quoted_cd_word_is_followed() {
 /// CONTROL: `builtin cd`, `command cd`, `eval cd`: undetermined, block.
 #[test]
 fn control_wrapped_cd_blocks() {
-    for w in ["builtin cd wt", "command cd wt", "eval cd wt", "eval 'cd wt'"] {
+    for w in [
+        "builtin cd wt",
+        "command cd wt",
+        "eval cd wt",
+        "eval 'cd wt'",
+    ] {
         let f = Sub::new();
         assert_wt_blocks_from_home(&f, &format!("{w} && sed -i s/a/b/ src/lib.rs"));
     }
@@ -405,7 +427,6 @@ fn control_subshell_cd_is_fenced() {
 /// recorded cwd (home) is used: `src/lib.rs` resolves to the nonexistent
 /// `home/src/lib.rs`, nothing is placed in wt, and wt is not judged.
 #[test]
-#[ignore = "verify3: escaped/quoted-glued cd (\\cd, c''d) is not seen by has_dir_token; cwd not followed, wt write unattributed"]
 fn hole_backslash_cd_not_seen() {
     let f = Sub::new();
     assert_wt_judged_from_home(&f, "\\cd wt && sed -i s/a/b/ src/lib.rs");
@@ -413,7 +434,6 @@ fn hole_backslash_cd_not_seen() {
 
 /// HOLE: same with `c''d wt` (quotes glued inside the word).
 #[test]
-#[ignore = "verify3: escaped/quoted-glued cd (\\cd, c''d) is not seen by has_dir_token; cwd not followed, wt write unattributed"]
 fn hole_quote_glued_cd_not_seen() {
     let f = Sub::new();
     assert_wt_judged_from_home(&f, "c''d wt && sed -i s/a/b/ src/lib.rs");
@@ -423,7 +443,6 @@ fn hole_quote_glued_cd_not_seen() {
 /// found `src/lib.rs` in the statement text; the parsed-word scan sees one
 /// word `sed -i s/a/b/ src/lib.rs` and names nothing.
 #[test]
-#[ignore = "verify3: regression, bash -c string is one parsed word; inner relative path no longer named"]
 fn hole_bash_c_inner_path_not_named() {
     let f = Sub::new();
     assert_parent_judged(&f, "bash -c 'sed -i s/a/b/ src/lib.rs'");
@@ -433,7 +452,6 @@ fn hole_bash_c_inner_path_not_named() {
 /// zsh (observed), but the walk joins `parent/lnk/..` and canonicalizes it
 /// PHYSICALLY to wt, so the write in parent/src/lib.rs is placed in wt.
 #[test]
-#[ignore = "verify3: cd through a symlink + .. resolved physically, bash cd is logical; write placed in wrong root"]
 fn hole_symlink_dotdot_resolved_physically() {
     let f = Sub::new();
     std::os::unix::fs::symlink(f.wt.join("src"), f.parent.join("lnk")).unwrap();
@@ -443,7 +461,7 @@ fn hole_symlink_dotdot_resolved_physically() {
 /// HOLE (pre-existing, not introduced here): `git -C wt checkout -- f`
 /// writes wt/f; `wt` has no `/` or `.`, so it is not a path word.
 #[test]
-#[ignore = "verify3: pre-existing, git -C <bare relative dir> writer not placed in that dir"]
+#[ignore = "RED(pending): pre-existing, git -C <bare relative dir> writer not placed in that dir (verify3)"]
 fn hole_git_dash_c_relative_dir() {
     let f = Sub::new();
     assert_wt_judged_from_home(&f, "git -C wt checkout -- src/lib.rs");
@@ -454,7 +472,6 @@ fn hole_git_dash_c_relative_dir() {
 /// candidate dir: `parent/src/lib.rs` counts as a write and the parent root
 /// is judged although nothing was written.
 #[test]
-#[ignore = "verify3: FP regression, fenced read-only cd pipeline counted as a write in every candidate root"]
 fn fp_fenced_readonly_pipeline_judged() {
     let f = Sub::new();
     let cmd = "cd ../wt && grep -n a src/lib.rs | head -3";
@@ -505,7 +522,6 @@ fn control_python_stdin_is_global() {
 /// depends on main's crate by path, it writes main, yet Within(home/x) is
 /// not related to main and main's scope is narrowed.
 #[test]
-#[ignore = "verify3: cargo fmt --all reaches path deps outside the cwd; Within(cwd) narrows main away"]
 fn hole_cargo_fmt_all_path_dep() {
     let f = Top::new();
     let x = f.home.join("x");
@@ -525,7 +541,6 @@ fn hole_cargo_fmt_all_path_dep() {
 /// the workspace at home has members x and main/crates/blastguard; run in
 /// home/x it writes main, but Within(home/x) is unrelated to main.
 #[test]
-#[ignore = "verify3: cargo fmt -p reaches workspace members outside the cwd; Within(cwd) narrows main away"]
 fn hole_cargo_fmt_p_sibling_member() {
     let f = Top::new();
     let x = f.home.join("x");
@@ -549,7 +564,6 @@ fn hole_cargo_fmt_p_sibling_member() {
 /// `related` resolves against the HOOK process cwd (main/main: absent) and
 /// finds unrelated. The docstring says an undeterminable cwd is global.
 #[test]
-#[ignore = "verify3: unknown cwd + relative cd yields Within(relative) instead of global; narrows main away"]
 fn hole_unknown_cwd_relative_cd_cargo_fmt() {
     let f = Top::new();
     assert_main_judged(&f, &[(None, "cd main && cargo fmt")]);
@@ -558,7 +572,6 @@ fn hole_unknown_cwd_relative_cd_cargo_fmt() {
 /// HOLE: `\cd <main> && cargo fmt` from a wt line: `has_cd` is false (see
 /// hole_backslash_cd_not_seen), so the effective cwd is the wt line cwd.
 #[test]
-#[ignore = "verify3: escaped cd not seen; cargo fmt credited to the line cwd (wt), main narrowed away"]
 fn hole_backslash_cd_main_cargo_fmt() {
     let f = Top::new();
     let cmd = format!("\\cd {} && cargo fmt", f.main.display());
@@ -570,7 +583,6 @@ fn hole_backslash_cd_main_cargo_fmt() {
 /// `call_unattributable` returns Global for any fenced call before looking
 /// at its stages, so main's scope widens to dirt the session never touched.
 #[test]
-#[ignore = "verify3: FP regression, fenced read-only cd pipeline is Global; Stop judges foreign dirt"]
 fn fp_fenced_readonly_pipeline_is_global() {
     let f = Top::new();
     let cmd = format!("cd {} && git log --oneline | head -3", f.wt.display());

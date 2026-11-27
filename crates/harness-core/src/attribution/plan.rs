@@ -13,11 +13,46 @@ fn is_token_sep(c: char) -> bool {
     c.is_whitespace() || "();&|`{}<>\"'".contains(c)
 }
 
-/// Whether `text` holds a `cd`/`pushd`/`popd` token ANYWHERE, including glued
-/// forms (`(cd`, `$(cd`) and quoted or heredoc text. A text-level
-/// over-approximation: it only decides whether a non-flat command is fenced.
+/// `text` with the quoting characters (`\`, `'`, `"`) removed, so a directory
+/// command spelled `\cd`, `c''d` or `"cd"` reads as `cd`, as the shell would
+/// dequote it.
+fn unquoted(text: &str) -> String {
+    text.chars()
+        .filter(|c| !matches!(c, '\\' | '\'' | '"'))
+        .collect()
+}
+
+/// Whether `text` holds a `cd`/`pushd`/`popd` token ANYWHERE, after
+/// dequoting, including glued forms (`(cd`, `$(cd`) and heredoc text. A
+/// text-level over-approximation: it only decides whether a command that is
+/// not a flat list is fenced.
 fn has_dir_token(text: &str) -> bool {
-    text.split(is_token_sep).any(|t| DIR_CMDS.contains(&t))
+    unquoted(text)
+        .split(is_token_sep)
+        .any(|t| DIR_CMDS.contains(&t))
+}
+
+/// `base` joined with `p` LOGICALLY, as bash and zsh do for `cd`: `.` is
+/// dropped and `..` removes the last component of the path AS WRITTEN (a
+/// symlink is not followed first), so `lnk/..` is the directory containing
+/// `lnk`. An absolute `p` replaces `base`.
+pub(super) fn logical_join(base: &Path, p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = if p.is_absolute() {
+        PathBuf::from("/")
+    } else {
+        base.to_path_buf()
+    };
+    for c in p.components() {
+        match c {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(s) => out.push(s),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// `text` with every comment removed: a `#` that begins a word, outside
@@ -159,26 +194,29 @@ fn strip_comments(text: &str) -> Option<String> {
     Some(out)
 }
 
-/// A command is FLAT when it is a list of simple commands joined by `&&`, `;`
-/// or newline and nothing else: no `||`, `&`, pipe, subshell paren, function
-/// definition, compound keyword (`if`/`then`/`else`/`elif`/`fi`/`while`/
-/// `until`/`for`/`do`/`done`/`case`/`esac`/`function`/`select`, `{`, `}`,
-/// `[[`), command substitution or here-string. Keywords are looked for in
-/// every parsed word, not only in command position (`echo done` is not flat:
-/// the restrictive side).
-fn is_flat(stmts: &[Statement]) -> bool {
+/// A command is FLAT when it is a list joined by `&&`, `;` or newline whose
+/// elements hold no `cd`/`pushd`/`popd` anywhere the walk cannot see: no `||`,
+/// `&`, subshell paren, function definition, compound keyword (`if`/`then`/
+/// `else`/`elif`/`fi`/`while`/`until`/`for`/`do`/`done`/`case`/`esac`/
+/// `function`/`select`, `{`, `}`, `[[`) or here-string anywhere (keywords are
+/// looked for in every parsed word, not only in command position: the
+/// restrictive side); a PIPELINE element is flat as long as no word of it is
+/// a directory command (`cd wt && grep a f | head` is flat, `x | cd y` is
+/// not); a command substitution is flat as long as its text holds no
+/// directory command; and no wrapper (`bash -c`, `eval`, `env`, ...) carries
+/// a directory command in its arguments (they are not followed).
+fn is_flat(cmd: &str, stmts: &[Statement]) -> bool {
     const KEYWORDS: [&str; 17] = [
         "if", "then", "else", "elif", "fi", "while", "until", "for", "do", "done", "case", "esac",
         "function", "select", "{", "}", "[[",
     ];
     stmts.iter().all(|s| {
+        let words = || s.stages.iter().flat_map(|st| st.words.iter());
         matches!(s.post, Sep::Seq | Sep::And | Sep::End)
-            && !s.opaque
-            && s.stages.len() == 1
-            && s.stages
-                .iter()
-                .flat_map(|st| st.words.iter())
-                .all(|w| !KEYWORDS.contains(&w.as_str()))
+            && words().all(|w| !KEYWORDS.contains(&w.as_str()))
+            && !(s.opaque && has_dir_token(&cmd[s.start..s.end]))
+            && !(s.stages.len() > 1 && words().any(|w| has_dir_token(w)))
+            && !s.stages.iter().any(|st| stage_dir_cmd(st).is_err())
     })
 }
 
@@ -200,7 +238,7 @@ pub(super) fn plan_call(command: &str) -> Plan {
     let cmd = stripped.clone().unwrap_or_else(|| command.to_string());
     let stmts = stripped.and_then(|s| statements(&s));
     let has_cd = has_dir_token(&cmd);
-    let flat = stmts.as_deref().is_some_and(is_flat);
+    let flat = stmts.as_deref().is_some_and(|s| is_flat(&cmd, s));
     let fenced = has_cd && !flat;
     Plan {
         cmd,
@@ -241,7 +279,11 @@ pub(super) fn fenced_paths(
     has_cd: bool,
 ) -> (BTreeSet<PathBuf>, Option<String>) {
     let mut out = BTreeSet::new();
-    let tokens: Vec<&str> = cmd.split(is_token_sep).filter(|t| !t.is_empty()).collect();
+    let dequoted = unquoted(cmd);
+    let tokens: Vec<&str> = dequoted
+        .split(is_token_sep)
+        .filter(|t| !t.is_empty())
+        .collect();
     let mut bases: Vec<PathBuf> = cwd.map(Path::to_path_buf).into_iter().collect();
     let mut entered: Vec<PathBuf> = Vec::new();
     if has_cd && cmd.contains("CDPATH") {
@@ -276,11 +318,12 @@ pub(super) fn fenced_paths(
         }
         let p = Path::new(target);
         let mut cands: Vec<PathBuf> = Vec::new();
-        if p.is_absolute() || bases.is_empty() {
+        if p.is_absolute() {
+            cands.push(logical_join(Path::new("/"), p));
+        } else if bases.is_empty() {
             cands.push(p.to_path_buf());
-        }
-        if !p.is_absolute() {
-            cands.extend(bases.iter().map(|b| b.join(p)));
+        } else {
+            cands.extend(bases.iter().map(|b| logical_join(b, p)));
         }
         for c in cands {
             if (c.is_relative() || c.is_dir()) && !bases.contains(&c) {

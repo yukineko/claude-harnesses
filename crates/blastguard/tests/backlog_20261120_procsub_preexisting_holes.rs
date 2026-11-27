@@ -148,7 +148,6 @@ fn echo_quote_split_argument_in_procsub_is_deny() {
 }
 
 #[test]
-#[ignore = "backlog dd5c4fe9: RED: harmful program built from three determined substs in a procsub is Ask, not Deny"]
 fn three_determined_substs_in_procsub_is_deny() {
     expect_deny(
         r#"bash <(echo "$(echo rm) $(echo -rf) $(echo /etc)")"#,

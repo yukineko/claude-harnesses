@@ -661,6 +661,8 @@ notes = "Pre-existing on base: trap 'cd /etc' DEBUG; echo hi > ok.log is Allow, 
 created_at = 1795804610
 updated_at = 1795804610
 weight = 0.0
+issue_number = 2004
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2004"
 rev = 0
 
 [task.repro]

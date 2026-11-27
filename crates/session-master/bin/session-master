@@ -1,0 +1,51 @@
+#!/bin/sh
+# session-master plugin launcher — selects the per-platform binary bundled here.
+# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/session-master <gate|hook ...>`
+# (hooks/hooks.json); this execs the matching `session-master-<os>-<arch>` build.
+#
+# WHEN NO BUILD EXISTS FOR THE HOST, the answer is NOT a blanket "exit 0": for
+# a PreToolUse gate a silent exit 0 is an allow, i.e. a member's push / rollout
+# / main merge would pass unchecked (CLAUDE.md §1/§3).
+#
+#   gate            verdict-bearing -> a deny JSON on stdout, exit 0 (the
+#                   master-only check did not run, so the call is refused).
+#   hook *          lifecycle hooks -> stderr + exit 1 (the role was not
+#                   registered / announced; never a silent success).
+#   other commands  -> exit 1.
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+case "$(uname -s)" in
+  Linux)  os=linux ;;
+  Darwin) os=darwin ;;
+  MINGW*|MSYS*|CYGWIN*) os=windows ;;
+  *)      os="$(uname -s)" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64)   arch=x86_64 ;;
+  arm64|aarch64)  arch=arm64 ;;
+  *)              arch="$(uname -m)" ;;
+esac
+
+ext=""
+[ "$os" = windows ] && ext=".exe"
+
+binary="$root/session-master-$os-$arch$ext"
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
+fi
+
+echo "session-master: no bundled binary for $os-$arch ($binary). Build it with scripts/build-plugin-bin.sh on that platform." >&2
+
+case "${1:-}" in
+  gate)
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"session-master gate did not run: no bundled binary for %s-%s, so whether this call is a master-only operation (push / rollout / main merge / cross-session relay) and whether this session is the master could NOT be determined. Denied (fail-closed). Build the binary with scripts/build-plugin-bin.sh, or remove the session-master hooks."}}\n' "$os" "$arch"
+    exit 0
+    ;;
+  hook)
+    echo "session-master hook ${2:-}: not run (no bundled binary); the session role was NOT registered or announced." >&2
+    exit 1
+    ;;
+  *)
+    exit 1
+    ;;
+esac

@@ -2006,6 +2006,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "session-master"
+version = "0.1.11"
+dependencies = [
+ "brush-parser",
+ "harness-core",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

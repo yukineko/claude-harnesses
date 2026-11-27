@@ -675,6 +675,30 @@
       }
     },
     {
+      "name": "session-master",
+      "description": "Session group orchestration for Claude Code: one master per git common dir, a master-only serial queue, and a fail-closed PreToolUse gate that keeps push / rollout / main merge and cross-session relays on the master.",
+      "version": "0.1.11",
+      "category": "orchestration",
+      "keywords": [
+        "hooks",
+        "orchestration",
+        "session",
+        "gate",
+        "rust"
+      ],
+      "license": "MIT",
+      "homepage": "https://github.com/yukineko/claude-harnesses/tree/main/crates/session-master",
+      "author": {
+        "name": "yukineko"
+      },
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/yukineko/claude-harnesses.git",
+        "path": "crates/session-master",
+        "ref": "main"
+      }
+    },
+    {
       "name": "specguard",
       "description": "Project-agnostic spec and implementation drift audit harness that drives a read-only LLM agent to check an implementation against its canonical specs and the specs against each other.",
       "version": "0.2.110",

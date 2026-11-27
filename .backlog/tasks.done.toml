@@ -95098,3 +95098,70 @@ rev = "d9a5b0fa7f560a6a15ef6cace1e865936fb8414d"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "92f4a28d"
+title = "blastguard fail-open: write after ln/cp/mv over sourced file, python os.symlink, builtin/command . herestring is Allow (dot/source relink holes)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """Observed at c33bde6fd (blastguard 0.2.927), test merged in 622d4a072. All => allow: (1) ln -sf /dev/stdin ~/.cargo/env; . "$HOME/.cargo/env"; echo x > d/out.txt (2) exec 0<<< 'ln -s /etc/bg-sentinel d/out.txt'; . "$HOME/.cargo/env"; echo x > d/out.txt [fixture env file does not read stdin] (3) cp evil.sh ~/.cargo/env; . "$HOME/.cargo/env"; echo x > d/out.txt (3b) mv evil.sh ~/.cargo/env; same (4) python3 -c 'import os; os.symlink("/etc/bg-sentinel","d")'; echo x > d/out.txt (5c) builtin . /dev/stdin <<< 'ln -s /etc/bg-sentinel d'; echo x > d/out.txt (5d) command . /dev/stdin <<< same. NOT Allow already (dropped): exec 0<<< + . /dev/stdin; . <(echo ...); . -p <(echo ...); source <(echo ...)."""
+created_at = 1795295253
+updated_at = 1795778524
+weight = 0.0
+issue_number = 1987
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1987"
+issue_closed_at = 1795778527
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261122_relink_dot_source_holes -- --ignored"
+rev = "622d4a07218eba708a796f6e5e33f79866e36cd1"
+observed_at = 1795295253
+detail = """
+exit 101: .929 (/Users/yuki/src/.harness-worktrees/backlog-relink-dot-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 25.21s
+     Running tests/backlog_20261122_relink_dot_source_holes.rs (target/debug/deps/backlog_20261122_relink_dot_source_holes-1e6b1c986e73feeb)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261122_relink_dot_source_holes`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261122_relink_dot_source_holes"
+exit = 0
+passed = 7
+rev = "3169a8effe266a765007e5444f1c700271c8f063"
+observed_at = 1795778513
+output_digest = "sha256:76a93fcf620d954532bc0cf074a45882d0c0c9fbd117eec5e7755da6e25b8b1f"
+excerpt = """
+
+running 7 tests
+test s1_ln_stdin_over_cargo_env_then_dot_then_write ... ok
+test s5c_builtin_dot_stdin_herestring_then_write ... ok
+test s2b_exec_herestring_stdin_then_dot_file_then_write ... ok
+test s3_cp_over_cargo_env_then_dot_then_write ... ok
+test s3b_mv_over_cargo_env_then_dot_then_write ... ok
+test s5d_command_dot_stdin_herestring_then_write ... ok
+test s4_python_os_symlink_then_write ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+   Compiling blastguard v0.2.935 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.37s
+     Running tests/backlog_20261122_relink_dot_source_holes.rs (target/debug/deps/backlog_20261122_relink_dot_source_holes-30dc3da51d03b6a6)
+"""
+
+[task.closure.red]
+rev = "3f98b1ac6d49bf6a8e80dd68395c17b830ebf792"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

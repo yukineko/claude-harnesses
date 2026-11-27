@@ -1073,10 +1073,12 @@ struct Walk {
 type DirCmd<'a> = (bool, &'a str, Vec<&'a str>);
 
 /// The directory command (`cd`/`pushd`/`popd`) a stage runs in command-word
-/// position, with its arguments. `Err` when one hides behind a wrapper
+/// position (after `VAR=x`, `!`, `time`, and any compound keyword, which sets
+/// the flag), with its arguments. `Err` when one hides behind a wrapper
 /// (`builtin cd`, `eval "cd x"`, `xargs cd`): not followed, so undetermined.
-/// Matches PARSED words only, so `git commit -m 'make cd work'` and heredoc
-/// bodies (skipped by [`statements`]) never match.
+/// Matches PARSED words of a flat command only, so `git commit -m 'make cd
+/// work'` and heredoc bodies (skipped by [`statements`]) never match; a
+/// non-flat command is never looked at here ([`plan_call`]).
 fn stage_dir_cmd(stage: &Stage) -> Result<Option<DirCmd<'_>>, String> {
     let words: Vec<&str> = stage.words.iter().map(String::as_str).collect();
     let mut i = 0;
@@ -1150,27 +1152,31 @@ fn plain_word_loose(v: &str) -> bool {
 /// statement runs, not with the transcript line's cwd (a sidechain line
 /// records the PARENT root).
 ///
-/// Which directory changes MOVE the cwd (replace it): a plain top-level
-/// `cd <literal>` / `pushd <literal>` that is a statement of its own (one
-/// pipeline stage, no compound keyword before it, not backgrounded, not
-/// followed by `||`), reached unconditionally (first, after `;`/newline, at
-/// the start of a subshell, or after `&&` with only `&&` after it), whose
-/// target is an existing directory. Inside `( ... )` the change lasts to the
-/// closing `)`.
+/// Only called for a FLAT command ([`plan_call`]): simple commands joined by
+/// `&&`, `;` or newline (no `||`, `&`, pipe, compound keyword, subshell,
+/// function, substitution or comment anywhere). Any other command
+/// that holds a `cd`/`pushd`/`popd` token never reaches here ([`fenced_paths`]
+/// handles it), because this walk relies on the hand tokenizer being right
+/// about structure. A `(` or `)` reaching it is `Err` (defence in depth).
 ///
-/// Every other directory change whose target IS a literal (a conditional or
-/// background `cd`, one in a pipeline or after `if`/`{`, one whose target does
-/// not exist, `CDPATH` candidates) does NOT replace the cwd: the shell may or
-/// may not be there, so the candidates are ADDED to the cwd set (the
-/// restrictive side). `popd`, `pushd +N`, `cd -` may return to any directory
-/// the command was in, so the cwd set becomes all of them. A `cd` whose
-/// target is not a literal (`cd`, `cd $X`, `cd ~`), or a directory command
-/// behind a wrapper, is `Err`: undetermined.
+/// Which directory changes MOVE the cwd (replace it): a plain
+/// `cd <literal>` / `pushd <literal>` that is a statement of its own (one
+/// pipeline stage, not backgrounded, not followed by `||`), reached
+/// unconditionally (first, after `;`/newline, or after `&&` with only `&&`
+/// after it), whose target is an existing directory.
+///
+/// Every other directory change whose target IS a literal (a background or
+/// `||`-followed `cd`, one in a pipeline, one reached only conditionally, one
+/// whose target does not exist, `CDPATH` candidates) does NOT replace the cwd:
+/// the shell may or may not be there, so the candidates are ADDED to the cwd
+/// set (the restrictive side). `popd`, `pushd +N`, `cd -` may return to any
+/// directory the command was in, so the cwd set becomes all of them. A `cd`
+/// whose target is not a literal (`cd`, `cd $X`, `cd ~`), or a directory
+/// command behind a wrapper, is `Err`: undetermined.
 fn walk_cwd(command: &str, stmts: &[Statement], init: Option<&Path>) -> Result<Walk, String> {
     let cdpath = cdpath_entries(stmts, command)?;
     let mut cur: Vec<PathBuf> = init.map(|p| vec![p.to_path_buf()]).unwrap_or_default();
     let mut history: Vec<PathBuf> = cur.clone();
-    let mut stack: Vec<Vec<PathBuf>> = Vec::new();
     let mut walk = Walk {
         bases: Vec::new(),
         entered: Vec::new(),
@@ -1205,8 +1211,7 @@ fn walk_cwd(command: &str, stmts: &[Statement], init: Option<&Path>) -> Result<W
                     continue;
                 };
                 let single = s.stages.len() == 1 && !compound;
-                let reached = matches!(pre, Sep::Seq | Sep::Open | Sep::Close)
-                    || (pre == Sep::And && rest_and[k]);
+                let reached = pre == Sep::Seq || (pre == Sep::And && rest_and[k]);
                 let certain = single && reached && !matches!(s.post, Sep::Bg | Sep::Or);
                 // Arguments: skip `--` / `-P` / `-L`; `-` and `+N`/`-N` and
                 // popd go back to a directory seen earlier.
@@ -1295,14 +1300,8 @@ fn walk_cwd(command: &str, stmts: &[Statement], init: Option<&Path>) -> Result<W
                 }
             }
         }
-        match s.post {
-            Sep::Open => stack.push(cur.clone()),
-            Sep::Close => {
-                cur = stack
-                    .pop()
-                    .ok_or_else(|| "a `)` with no matching `(`".to_string())?;
-            }
-            _ => {}
+        if matches!(s.post, Sep::Open | Sep::Close) {
+            return Err("a subshell paren reached the flat-list walk".to_string());
         }
     }
     Ok(walk)
@@ -1347,6 +1346,9 @@ fn keep_flags(stmts: &[Statement]) -> Vec<bool> {
     keep
 }
 
+mod plan;
+use plan::{fenced_paths, plan_call};
+
 /// The writing statements of one recorded Bash call and the existing paths
 /// they name. `(false, _, _)` = the call is provably read-only. A writing call
 /// whose set is empty wrote through something that names no file (`cargo fmt`,
@@ -1363,35 +1365,29 @@ fn call_named_paths(
     call: &crate::transcript::BashCall,
 ) -> (bool, BTreeSet<PathBuf>, Option<String>) {
     let mut out = BTreeSet::new();
-    let Some(stmts) = statements(&call.command) else {
-        // Not parsed: the whole command is kept, whitespace-split. A
-        // directory command anywhere in it is not followed.
-        let undetermined = call
-            .command
-            .split_whitespace()
-            .any(|t| DIR_CMDS.contains(&t))
-            .then(|| "an unparsed command holds a directory command".to_string());
-        let bases: Vec<PathBuf> = call.cwd.iter().map(PathBuf::from).collect();
-        for raw in call.command.split_whitespace() {
-            let w = raw.trim_matches(|c: char| matches!(c, '"' | '\'' | '>' | ';' | '(' | ')'));
-            insert_named(&mut out, w, &bases);
-        }
-        return (true, out, undetermined);
+    let plan = plan_call(&call.command);
+    let cwd = call.cwd.as_deref().map(Path::new);
+    let Some(stmts) = plan.stmts.as_ref().filter(|_| !plan.fenced) else {
+        // Not followable (unparsed, or it holds a directory command in a
+        // non-flat command): whole command kept, widened candidate cwds.
+        let (set, why) = fenced_paths(&plan.cmd, cwd, plan.has_cd);
+        return (true, set, why);
     };
-    let walk = match walk_cwd(&call.command, &stmts, call.cwd.as_deref().map(Path::new)) {
+    let walk = match plan.walk(stmts, cwd) {
         Ok(w) => w,
         Err(why) => return (true, out, Some(why)),
     };
+    let command = plan.cmd.as_str();
     let keep = if stmts.iter().any(|s| s.heredoc) {
         vec![true; stmts.len()]
     } else {
-        keep_flags(&stmts)
+        keep_flags(stmts)
     };
     for (k, s) in stmts.iter().enumerate() {
         if !keep[k] {
             continue;
         }
-        for w in statement_path_words(&call.command, s) {
+        for w in statement_path_words(command, s) {
             insert_named(&mut out, &w, &walk.bases[k]);
         }
     }
@@ -1476,11 +1472,14 @@ pub fn has_unattributable_write(transcript_path: &str) -> Determination<bool> {
 /// by a DIFFERENT stage does not cover another writer. A command the parser
 /// cannot follow, or holding a substitution, is unattributable.
 fn call_is_unattributable(call: &crate::transcript::BashCall) -> bool {
-    let Some(stmts) = statements(&call.command) else {
+    let plan = plan_call(&call.command);
+    // Unparsed, or a directory command in a command that is not a flat list:
+    // the cwd cannot be tracked, so the call is unattributable.
+    let Some(stmts) = plan.stmts.as_ref().filter(|_| !plan.fenced) else {
         return true;
     };
     // A directory command this cannot place makes the call unattributable.
-    let Ok(walk) = walk_cwd(&call.command, &stmts, call.cwd.as_deref().map(Path::new)) else {
+    let Ok(walk) = plan.walk(stmts, call.cwd.as_deref().map(Path::new)) else {
         return true;
     };
     for (k, s) in stmts.iter().enumerate() {

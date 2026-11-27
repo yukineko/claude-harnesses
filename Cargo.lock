@@ -706,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.107"
+version = "0.1.108"
 dependencies = [
  "anyhow",
  "chrono",
@@ -971,7 +971,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.115"
+version = "0.2.116"
 dependencies = [
  "anyhow",
  "chrono",

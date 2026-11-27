@@ -337,7 +337,6 @@ fn control_nested_subshells_restore() {
 /// `then` on its own line: the `cd` on the next line is a statement without a
 /// compound word, so it is judged certain although `if false` skips it.
 #[test]
-#[ignore = "RED(39772e9f) fail-open: cd after a then-line judged certain, SubagentStop exits 0"]
 fn hole_then_newline_cd_judged_certain() {
     let f = Fixture::new();
     assert_parent_judged(
@@ -348,7 +347,6 @@ fn hole_then_newline_cd_judged_certain() {
 
 /// `then :; cd <wt>; fi`: the `cd` is the second statement of the branch.
 #[test]
-#[ignore = "RED(39772e9f) fail-open: second statement of a then-branch judged certain"]
 fn hole_then_second_statement_cd_judged_certain() {
     let f = Fixture::new();
     assert_parent_judged(
@@ -359,7 +357,6 @@ fn hole_then_second_statement_cd_judged_certain() {
 
 /// `while false; do :; cd <wt>; done`: the loop body never runs.
 #[test]
-#[ignore = "RED(39772e9f) fail-open: cd in a loop body judged certain"]
 fn hole_loop_body_cd_judged_certain() {
     let f = Fixture::new();
     assert_parent_judged(
@@ -370,7 +367,6 @@ fn hole_loop_body_cd_judged_certain() {
 
 /// `true || { :; cd <wt>; }`: the group is skipped.
 #[test]
-#[ignore = "RED(39772e9f) fail-open: cd in a skipped brace group judged certain"]
 fn hole_skipped_brace_group_cd_judged_certain() {
     let f = Fixture::new();
     assert_parent_judged(
@@ -381,7 +377,6 @@ fn hole_skipped_brace_group_cd_judged_certain() {
 
 /// `f() {\ncd <wt>\n}`: a function body that is never called.
 #[test]
-#[ignore = "RED(39772e9f) fail-open: cd in an uncalled function body judged certain"]
 fn hole_uncalled_function_body_cd_judged_certain() {
     let f = Fixture::new();
     assert_parent_judged(
@@ -393,7 +388,6 @@ fn hole_uncalled_function_body_cd_judged_certain() {
 /// `case x in (y) cd <wt>;; esac`: the pattern does not match; the `(`/`)` of
 /// the pattern are read as a subshell and the `cd` after `)` as reached.
 #[test]
-#[ignore = "RED(39772e9f) fail-open: cd in an unmatched case arm judged certain"]
 fn hole_unmatched_case_arm_cd_judged_certain() {
     let f = Fixture::new();
     assert_parent_judged(
@@ -404,7 +398,6 @@ fn hole_unmatched_case_arm_cd_judged_certain() {
 
 /// A top-level comment holding `;` splits off a `cd` that never runs.
 #[test]
-#[ignore = "RED(39772e9f) fail-open: top-level comment is tokenized, its cd judged certain"]
 fn hole_comment_semicolon_splits_off_cd() {
     let f = Fixture::new();
     assert_parent_judged(
@@ -417,7 +410,6 @@ fn hole_comment_semicolon_splits_off_cd() {
 /// an exact `cd` token, so the call is not undetermined and the relative `cd`
 /// is not followed; the write in the wt is not attributed to it.
 #[test]
-#[ignore = "RED(39772e9f) fail-open: unparsed fallback misses a glued (cd token"]
 fn hole_unparsed_fallback_misses_glued_cd() {
     let f = Fixture::new();
     assert_wt_judged_from_home(
@@ -429,7 +421,6 @@ fn hole_unparsed_fallback_misses_glued_cd() {
 /// Substitution: `$(cd wt && sed -i ...)` writes in the wt; the `$(cd` token
 /// is not recognized (trim does not strip `$`) and the bare `wt` names nothing.
 #[test]
-#[ignore = "RED(39772e9f) fail-open: $(cd ...) inside a substitution is not recognized"]
 fn hole_substitution_cd_not_followed() {
     let f = Fixture::new();
     assert_wt_judged_from_home(&f, "x=$(cd wt && sed -i s/a/b/ src/lib.rs)");
@@ -440,7 +431,6 @@ fn hole_substitution_cd_not_followed() {
 /// A trailing comment with `)` pops an empty subshell stack: walk errs and
 /// SubagentStop blocks although the write is in the wt only.
 #[test]
-#[ignore = "RED(39772e9f) false positive: ) in a comment pops an empty subshell stack, blocks"]
 fn fp_comment_close_paren_blocks() {
     let f = Fixture::new();
     assert_parent_not_judged(

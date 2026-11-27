@@ -293,39 +293,6 @@ exit 101: rc/.harness-worktrees/sidereds-20261116/crates/backlog)
 error: test failed, to rerun pass `-p backlog --test backlog_20261116_zero_tests_filtered_out_not_discard`"""
 
 [[task]]
-id = "39772e9f"
-title = "donegate: a subagent's cd other-worktree && relative-path write is attributed to the parent session's root, so the parent's checks run and block"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "donegate",
-    "harness-core",
-    "attribution",
-    "p1",
-]
-touched_files = []
-status = "failed"
-notes = """
-Observed 2026-11-17 at cd09054b1 (RED e88bcb421/e9f1fe7b9). harness_core::attribution::own_written_paths joins relative path words in a Bash command to the transcript line cwd and ignores a leading cd in the same statement, contradicting the writing_statements doc. Sidechain lines record the parent worktree as cwd (observed via relay bgr-108f07d82bfd), so a worker doing cd /wt && edit src/lib.rs is judged as writing <parent>/src/lib.rs; donegate then runs or refuses the parent root's checks on SubagentStop and on the parent Stop. Seen live twice this session (lock tests run on the session root; a RED-writing subagent blocked on red-testscope's untrusted donegate.toml). Controls: own write in cwd still judged; hook cwd=wt judges wt. Fix likely in harness-core attribution, which other gates share (unverified).
-blocked run-20261121-040142-44869 t2 (escalation esc-c08c9834): parent-Stop RED requires donegate NOT to run checks on a Stop with checks declared and no writes in cwd, but existing control crates/donegate/tests/session_worktree_roots.rs:433-450 control_session_with_no_writes_still_allows requires it to run them (donegate main.rs:276 'if cfg.checks.is_empty() && !wrote_here {'). Human must pick the contract. Attribution fix (SubagentStop RED green) kept unmerged on branch condukt/run-20261121-040142-44869/t2 @ 6f0a0c5dd. | RULED 2026-11-21 by user: keep current contract — on parent Stop with checks declared and no writes in cwd, donegate STILL runs the checks (control_session_with_no_writes_still_allows stays). Drop the parent-Stop RED; merge only the SubagentStop attribution fix (branch condukt/run-20261121-040142-44869/t2 @6f0a0c5dd)."""
-created_at = 1794887673
-updated_at = 1795220547
-defer_until = 1795375480
-weight = 0.0
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p donegate --test backlog_20261117_subagent_cd_relative_root -- --include-ignored"
-rev = "e7cd81d0a7eb0d72c11b2d1d894a169dec9078a3"
-observed_at = 1794887673
-detail = """
-exit 101: 96 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-df7c968f/crates/donegate)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.03s
-     Running tests/backlog_20261117_subagent_cd_relative_root.rs (target/debug/deps/backlog_20261117_subagent_cd_relative_root-2b3ed9b3f3f7e4c7)
-error: test failed, to rerun pass `-p donegate --test backlog_20261117_subagent_cd_relative_root`"""
-
-[[task]]
 id = "c62740af"
 title = "backlog red_writeback: #[ignore] on a non-fn item (struct) is bound to the next fn"
 project = "/home/hiroyuki_nakayama/src/harness"
@@ -659,47 +626,6 @@ exit 1:  settings file)
     RC=1
 (exit code: 1)
 FAIL: expected exit 0 (explicit override proceeds to completion), got 1"""
-
-[[task]]
-id = "ff46a113"
-title = "donegate: a path-less writer run in another worktree (cd <wt> && cargo fmt) keeps the PRIMARY tree's full change set, so the Stop judges another session's unfinished merge"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "donegate",
-    "attribution",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "failed"
-notes = """
-Observed 2026-11-21 (session ba440926, donegate Stop hook, cwd /Users/yuki/src/harness, verbatim excerpt): "🚦 donegate: 2 required check(s) failed ... ✗ lint-changed (exit 1) $ scripts/lint-changed-crates.sh error: key with no value, expected `=` --> crates/blastguard/Cargo.toml:6:9 ... 6 | <<<<<<< HEAD ... lint-changed-crates: scope was the changed crates only (blastguard) ... ✗ test-changed ... test-changed-crates: FAILED for blastguard". Logs: ~/.donegate/state/records/ba440926-aa85-4f93-a5e1-9566434e2c12/1795195397488-a1-lint-changed.log, ...1795195397490-a1-test-changed.log. The blastguard conflict (UU crates/blastguard/Cargo.toml etc., MERGE_HEAD) was ANOTHER session's unfinished merge in the main tree. ba440926 never edited the main tree; with cwd=main it ran only read-only commands plus path-less writers, most after `cd <other dir>` (e.g. `cd /Users/yuki/src/.harness-worktrees/session-ba440926 && backlog driver register ...`, `cd ~/.claude/projects/-Users-yuki-src-harness/memory/ && python3 - <<'EOF' ...`), and some with no cd (`python3 scripts/check-prose-tests.py ...`, `askrelay dismiss ...`). CLAUDE.md §8: 帰属のバグ.
-
-Path (rev 644ff8dbc): (1) main.rs::gate_run judges root = hook cwd always; rootcheck::wrote_in_cwd only short-circuits when NO check is configured (`cfg.checks.is_empty() && !wrote_here`), so with checks configured the cwd is evaluated whether or not the session wrote there. (2) gate::attribute_scope narrows the tree's change set to the session's named writes (02ec6595, GREEN in tests/foreign_main_dirt_attribution_20261117.rs) UNLESS attribution::has_unattributable_write(transcript) is true; then the FULL change set is kept ("scope NOT narrowed to its named writes, checking all N changed file(s)"). (3) has_unattributable_write is transcript-global (parent + all sidechains) and cwd-blind: call_is_unattributable never compares the `cd` target or the line cwd with the judged root. Not 39772e9f (that one is a relative NAMED write joined with the line cwd; here no path is named at all). Not 95deaa32 (in-flight subagent root).
-
-RED: crates/donegate/tests/backlog_20261121_foreign_merge_unattributable_elsewhere.rs, committed 2eefb224e. Fixture: primary repo + linked worktree; foreign real merge conflict (UU, MERGE_HEAD) in the primary tree; Stop cwd = primary. red_cd_linked_worktree_writer_does_not_widen_primary_scope (`git status` @primary, `cd <wt> && cargo fmt` @primary, sidechain `git log` @primary) and red_writer_with_cwd_in_linked_worktree_does_not_widen_primary_scope (`cargo fmt` with line cwd = wt) both FAIL: decision="block", check marker written, stderr "scope NOT narrowed ... checking all 1 changed file(s) in .../main". Controls GREEN: read-only parent+subagent cwd in primary is NOT judged (so a read-only/subagent cwd alone is not the path); own Edit in primary IS judged; `cd <primary> && cargo fmt` keeps full scope.
-
-Both readings: (a) real attribution defect — a writer whose effective cwd is another worktree cannot have produced the primary tree's dirt; it must not widen that root's scope. (b) intended fail-closed — a path-less writer may write any path (python3 - can open absolute paths), so any such call anywhere in the session keeps the full scope (CLAUDE.md §3). How to tell apart: the REDs use `cargo fmt`, whose writes are confined to its cwd's cargo workspace; under (b) they must block, under (a) they must not — a ruling on whether the effective cwd may bound a path-less writer decides it. DOES NOT PROVE that a cwd-aware rule alone clears the observed block: ba440926 also has path-less writers with line cwd = main and no cd (python3 scripts/check-prose-tests.py, askrelay dismiss), which keep the full scope under both readings; the alternative fix shape (judge the cwd only when the session wrote there, i.e. wrote_in_cwd as a gate) is a separate design call.
-needs ruling: may path-less writer scope be bounded by effective cwd; which writers (cargo fmt only vs python3 -)"""
-created_at = 1795196054
-updated_at = 1795264296
-defer_until = 1795437096
-weight = 0.0
-issue_number = 1906
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1906"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p donegate --test backlog_20261121_foreign_merge_unattributable_elsewhere -- --include-ignored"
-rev = "2eefb224e6f60a5b71ecaeb2ccfd6e5f0517c632"
-observed_at = 1795196054
-detail = """
-exit 101: s/red-donegate-root-20261121/crates/donegate)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.28s
-     Running tests/backlog_20261121_foreign_merge_unattributable_elsewhere.rs (target/debug/deps/backlog_20261121_foreign_merge_unattributable_elsewhere-bffeb0682058697b)
-error: test failed, to rerun pass `-p donegate --test backlog_20261121_foreign_merge_unattributable_elsewhere`"""
 
 [[task]]
 id = "8eff1e81"
@@ -1266,3 +1192,36 @@ exit 101: iltered out; finished in 0.54s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
      Running tests/verify_8f8acf5e_20261127.rs (target/debug/deps/verify_8f8acf5e_20261127-330132182447c6d2)
 error: test failed, to rerun pass `-p blastguard --test verify_8f8acf5e_20261127`"""
+
+[[task]]
+id = "8533e79d"
+title = "donegate attribution: git -C <bare relative dir> (e.g. git -C wt checkout -- src/lib.rs) is not attributed to wt because a word without / or . is not treated as a path, so wt's checks are skipped"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "donegate",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1795783714
+updated_at = 1795783714
+weight = 0.0
+issue_number = 1992
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1992"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test verify3_39772e9f_20261127 -- --ignored hole_git_dash_c_relative_dir"
+rev = "c91b64a1b9b5484078585698dbbb58b750a05e79"
+observed_at = 1795783714
+detail = """
+exit 101: 8 filtered out; finished in 0.48s
+
+   Compiling donegate v0.1.111 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/donegate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running tests/verify3_39772e9f_20261127.rs (target/debug/deps/verify3_39772e9f_20261127-b0b610cbdd82aa37)
+error: test failed, to rerun pass `-p donegate --test verify3_39772e9f_20261127`"""

@@ -1424,13 +1424,13 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
                 }
             }
         }
-        // daf7611b: `env -S "<line>"` / `--split-string` splits ONE quoted
-        // operand into a command line and execs it. That operand is a
-        // multi-word quoted string, which `command_candidates` deliberately
-        // never reads as a command word, so it must be extracted here — the
-        // same position-independent scan as flock's `-c` above.
-        for (i, t) in tokens.iter().enumerate() {
-            if normalized_command(t) != "env" {
+        // daf7611b: `env -S "<line>"` splits ONE quoted operand into a command
+        // line and execs it; `command_candidates` never reads that operand as
+        // a command word, so it is extracted here. Only where `env` is a
+        // program word as parsed (`program_word_positions`): `env` inside a
+        // quoted argument (`--title "x env -S"`) is text, never run.
+        for i in words::program_word_positions(&tokens) {
+            if normalized_command(tokens[i]) != "env" {
                 continue;
             }
             let verdict = executors::env_split_string_verdict(&tokens[i + 1..], seg, depth, ctx);

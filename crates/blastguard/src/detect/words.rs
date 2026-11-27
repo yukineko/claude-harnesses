@@ -315,6 +315,34 @@ pub(super) fn outer_command_candidates(tokens: &[&str]) -> Vec<usize> {
     candidates_from(tokens, false)
 }
 
+/// Every position where a program word stands as parsed: the
+/// [`command_candidates`] AND the head word itself. Behind a wrapper
+/// (`env`, `nohup`, `sudo` …) `command_candidates` returns only the words
+/// AFTER the wrapper, so the wrapper at the head is not among them; a rule
+/// about the wrapper itself (`env -S`, daf7611b) needs both. A token spelled
+/// like a wrapper inside a quoted argument is in neither set.
+pub(super) fn program_word_positions(tokens: &[&str]) -> Vec<usize> {
+    let mut out = command_candidates(tokens);
+    let mut i = 0;
+    while i < tokens.len() {
+        let t = tokens[i];
+        if t.is_empty() {
+            i += 1;
+            continue;
+        }
+        if is_assignment(t) {
+            i += substitution_assignment_word_span(tokens, i)
+                .unwrap_or_else(|| literal_assignment_span(tokens, i));
+            continue;
+        }
+        if !out.contains(&i) {
+            out.push(i);
+        }
+        break;
+    }
+    out
+}
+
 fn candidates_from(tokens: &[&str], with_bodies: bool) -> Vec<usize> {
     let mut i = 0;
     while i < tokens.len() {

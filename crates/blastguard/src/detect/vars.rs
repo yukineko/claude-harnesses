@@ -327,6 +327,12 @@ pub(super) fn binds_name_as_operand(head: &str) -> bool {
 /// coarseness here (a `printf` mentioning `BIN` anywhere, a `local` at top
 /// level where bash would error) costs resolutions and never invents one.
 pub(super) fn segment_may_rebind(seg: &str, name: &str) -> bool {
+    segment_may_rebind_with(seg, name, false)
+}
+
+/// [`segment_may_rebind`]; `exempt_ok` lets a bare `name` operand of a
+/// non-binding command pass ([`exemption_disabled`] decides, per command).
+pub(super) fn segment_may_rebind_with(seg: &str, name: &str, exempt_ok: bool) -> bool {
     let words = quote_aware_words(seg);
     let Some(first) = words.first() else {
         return false;
@@ -363,7 +369,8 @@ pub(super) fn segment_may_rebind(seg: &str, name: &str) -> bool {
         let lead = words.iter().take_while(|w| is_assignment(w)).count();
         let partner = tied_partner(name);
         // A bare `name` operand of a non-binding command is data.
-        let exempt = command_head(&words).is_some_and(|(_, h)| NON_BINDERS.contains(&h.as_str()));
+        let exempt = exempt_ok
+            && command_head(&words).is_some_and(|(_, h)| NON_BINDERS.contains(&h.as_str()));
         let skip = |w: &str| {
             exempt && (plain_name_arg(w, name) || partner.is_some_and(|p| plain_name_arg(w, p)))
         };
@@ -494,7 +501,12 @@ pub(super) fn mentions_name_outside_reference(text: &str, name: &str) -> bool {
         if run != name {
             continue;
         }
-        let plain = before(1) == Some('$') && before(2) != Some('\\');
+        // `${#name}` (a length read) is a plain reference too.
+        let plain = before(1) == Some('$') && before(2) != Some('\\')
+            || (before(1) == Some('#')
+                && before(2) == Some('{')
+                && before(3) == Some('$')
+                && before(4) != Some('\\'));
         let braced = before(1) == Some('{') && before(2) == Some('$') && before(3) != Some('\\');
         // Backlog 54231a0a: a path component strictly between two slashes
         // (the `fd` of `/dev/fd/$fd`) is literal text, not a binding — but
@@ -558,6 +570,11 @@ fn command_head<S: AsRef<str>>(words: &[S]) -> Option<(usize, String)> {
     }
 }
 
+/// The normalized command name of one raw word.
+pub(super) fn normalized_head(word: &str) -> String {
+    normalized_command(word)
+}
+
 /// `word` is exactly `name`, quoted or not.
 fn plain_name_arg(word: &str, name: &str) -> bool {
     unquote_literal_value(word).as_deref() == Some(name)
@@ -594,9 +611,10 @@ pub(super) fn compound_source_has_indirect_binder(src: &str) -> bool {
 /// [`mentions_name_outside_reference`] for one segment, except that a bare
 /// `name` operand of a command in [`NON_BINDERS`] is not a mention (`echo P`,
 /// `grep P file`). Every other spelling of the name still counts.
-pub(super) fn segment_mentions_name(seg: &str, name: &str) -> bool {
+pub(super) fn segment_mentions_name(seg: &str, name: &str, exempt_ok: bool) -> bool {
     let words = quote_aware_words(seg);
-    let exempt = command_head(&words).is_some_and(|(_, h)| NON_BINDERS.contains(&h.as_str()));
+    let exempt =
+        exempt_ok && command_head(&words).is_some_and(|(_, h)| NON_BINDERS.contains(&h.as_str()));
     if !exempt || words.is_empty() {
         return mentions_name_outside_reference(seg, name);
     }
@@ -606,6 +624,51 @@ pub(super) fn segment_mentions_name(seg: &str, name: &str) -> bool {
         .map(String::as_str)
         .collect();
     mentions_name_outside_reference(&kept.join(" "), name)
+}
+
+/// True when `cmd` may change what a command word MEANS, so a name in
+/// [`NON_BINDERS`] cannot be trusted not to bind: an `alias` / `shopt` /
+/// `enable` / `unalias` / `functions` / `autoload` / `eval` / `source` / `.`
+/// word anywhere (`alias echo=read` makes `echo P` a `read P`), or a function
+/// definition. The exemption is off for the whole command then.
+pub(super) fn exemption_disabled(cmd: &str) -> bool {
+    defines_shell_function(cmd)
+        || quote_aware_words(cmd).iter().any(|w| {
+            let w = unquote_literal_value(w).unwrap_or_else(|| w.to_string());
+            let w = w.trim_start_matches(['(', '{']);
+            matches!(
+                w,
+                "alias"
+                    | "shopt"
+                    | "enable"
+                    | "unalias"
+                    | "functions"
+                    | "autoload"
+                    | "eval"
+                    | "source"
+                    | "."
+                    | "function"
+            ) || w.starts_with("functions[")
+        })
+}
+
+/// [`mentions_name_outside_reference`] over the simple statements of a compound
+/// command's source `src`, with the bare-operand exemption of
+/// [`segment_mentions_name`] applied per statement.
+pub(super) fn compound_mentions_name(src: &str, name: &str, exempt_ok: bool) -> bool {
+    const KEYWORDS: &[&str] = &[
+        "while", "until", "if", "elif", "then", "else", "do", "!", "{", "(", "time",
+    ];
+    src.split([';', '\n', '|', '&', '(', ')', '}'])
+        .any(|piece| {
+            let words = quote_aware_words(piece);
+            let skip = words
+                .iter()
+                .take_while(|w| KEYWORDS.contains(&w.as_str()) || w.starts_with('{'))
+                .count();
+            segment_mentions_name(&words[skip..].join(" "), name, exempt_ok)
+                || mentions_name_outside_reference(&words[..skip].join(" "), name)
+        })
 }
 
 /// True when the segment runs a command that binds a variable NAMED BY AN
@@ -647,9 +710,25 @@ pub(super) fn indirect_name_operand<S: AsRef<str>>(words: &[S]) -> bool {
             .filter(|w| !w.starts_with('-'))
             .nth(1)
             .is_some_and(|w| w.contains(['$', '`'])),
-        "printf" | "print" => cluster('v') && rest.iter().any(expands_name),
+        // Only the NAME operand (the word after the flag, or the attached
+        // `-vNAME`) matters; value arguments are data.
+        "printf" | "print" => rest.iter().enumerate().any(|(i, w)| {
+            w.starts_with('-')
+                && !w.starts_with("--")
+                && w.find('v').is_some_and(|p| {
+                    let attached = &w[p + 1..];
+                    if attached.is_empty() {
+                        rest.get(i + 1).is_some_and(|n| n.contains(['$', '`']))
+                    } else {
+                        attached.contains(['$', '`'])
+                    }
+                })
+        }),
         "zstyle" | "strftime" => cluster('s') && rest.iter().any(expands_name),
-        "set" => rest.iter().any(|w| *w == "-A" || *w == "+A") && rest.iter().any(expands_name),
+        "set" => rest
+            .iter()
+            .position(|w| *w == "-A" || *w == "+A")
+            .is_some_and(|i| rest.get(i + 1).is_some_and(|n| n.contains(['$', '`']))),
         _ => false,
     }
 }
@@ -841,6 +920,7 @@ pub(super) fn resolve_expanded_command_word(
     // replaced.
     let mut latest_rebind: Option<usize> = None;
     let mut ties: Vec<(String, String)> = Vec::new();
+    let exempt_ok = !exemption_disabled(cmd);
     // A here-document BODY is data the shell never executes, so a `NAME=value`
     // typed inside one neither assigns nor rebinds. Skipping it here is what
     // lets the closed-here-document case above be believed at all: the reason
@@ -859,14 +939,14 @@ pub(super) fn resolve_expanded_command_word(
             // a pipeline in the parent shell (`echo x | read P`) and bash
             // may too (`shopt -s lastpipe`), so a stage that may bind the
             // name makes the earlier value stale (backlog f3301770).
-            if segment_may_rebind(&segs[idx].text, &name) {
+            if segment_may_rebind_with(&segs[idx].text, &name, exempt_ok) {
                 latest_rebind = Some(idx);
             }
             continue;
         }
         let words = quote_aware_words(&segs[idx].text);
         if words.is_empty() || !words.iter().all(|w| is_assignment(w)) {
-            if segment_may_rebind(&segs[idx].text, &name) {
+            if segment_may_rebind_with(&segs[idx].text, &name, exempt_ok) {
                 latest_rebind = Some(idx);
             }
             continue;

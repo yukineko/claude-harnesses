@@ -76,8 +76,9 @@ use super::super::segment::{
     blank_subshell_bodies, is_separator_char, segment_spans, subshell_substitution_bodies,
 };
 use super::super::vars::{
-    defines_shell_function, has_unresolvable_expansion, indirect_name_operand, is_shell_identifier,
-    quote_aware_words, segment_mentions_name, tied_partner, unquote_literal_value,
+    defines_shell_function, exemption_disabled, has_unresolvable_expansion, indirect_name_operand,
+    is_shell_identifier, quote_aware_words, segment_mentions_name, tied_partner,
+    unquote_literal_value,
 };
 use super::super::{
     assignment_execution_is_guarded_only_by_and_or, assignment_execution_is_unconditional,
@@ -164,6 +165,7 @@ fn resolve_static_bindings_with_home(cmd: &str, home: Option<&str>) -> String {
     };
     let (is_body, unclosed_opener) = here_document_layout(&segs);
     let loop_start = segs.iter().position(|s| opens_loop(&s.text));
+    let exempt_ok = !exemption_disabled(cmd);
     let mut env: HashMap<String, String> = HashMap::new();
     if let Some(h) = home {
         env.insert("HOME".to_string(), h.to_string());
@@ -232,14 +234,14 @@ fn resolve_static_bindings_with_home(cmd: &str, home: Option<&str>) -> String {
         let bodies = subshell_substitution_bodies(&seg.text);
         let lookup = |name: &str| -> Option<String> {
             let value = chain.get(name).or_else(|| env.get(name))?;
-            if segment_mentions_name(&parent_view, name) {
+            if segment_mentions_name(&parent_view, name, exempt_ok) {
                 return None;
             }
             if in_loop
                 && segs
                     .iter()
                     .skip(loop_start.unwrap_or(0))
-                    .any(|s| segment_mentions_name(&s.text, name))
+                    .any(|s| segment_mentions_name(&s.text, name, exempt_ok))
             {
                 return None;
             }
@@ -248,7 +250,7 @@ fn resolve_static_bindings_with_home(cmd: &str, home: Option<&str>) -> String {
         // Inside a body, and for `~` (substituted over the whole text): the
         // raw segment must not mention the name at all.
         let strict_lookup = |name: &str| -> Option<String> {
-            if segment_mentions_name(&seg.text, name) {
+            if segment_mentions_name(&seg.text, name, exempt_ok) {
                 return None;
             }
             lookup(name)
@@ -266,7 +268,9 @@ fn resolve_static_bindings_with_home(cmd: &str, home: Option<&str>) -> String {
                 text = substitute_tilde(&text, &h);
             }
         }
-        update_env(&mut env, &mut chain, and_prefix, &segs, idx, &text);
+        update_env(
+            &mut env, &mut chain, and_prefix, &segs, idx, &text, exempt_ok,
+        );
         out.push_str(&text);
     }
     match cmd.get(cursor..) {
@@ -362,6 +366,7 @@ fn update_env(
     segs: &[SeparatedSegment],
     idx: usize,
     text: &str,
+    exempt_ok: bool,
 ) {
     let Some(orig) = segs.get(idx).map(|s| s.text.as_str()) else {
         env.clear();
@@ -434,8 +439,8 @@ fn update_env(
             // A name bound inside a subshell substitution body (`y=$(L=x; …)
             // cmd`) is not rebound here (backlog d068ef20).
             let parent_view = blank_subshell_bodies(orig);
-            env.retain(|name, _| !segment_mentions_name(&parent_view, name));
-            chain.retain(|name, _| !segment_mentions_name(&parent_view, name));
+            env.retain(|name, _| !segment_mentions_name(&parent_view, name, exempt_ok));
+            chain.retain(|name, _| !segment_mentions_name(&parent_view, name, exempt_ok));
             // A binder whose NAME operand is an expansion (`read "$Q"`) may
             // bind any variable (backlog f3301770).
             if indirect_name_operand(&quote_aware_words(orig)) {

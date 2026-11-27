@@ -243,6 +243,21 @@ impl Env {
         {
             self.havoc_vars("a name operand of a command that binds names is an expansion");
         }
+        // A command that may redefine what a command word means (zsh
+        // `autoload`, `functions -c`, `functions[f]=`) makes the state opaque,
+        // like `alias` / `shopt` / `eval` do: the non-binder exemption is
+        // then off (`forget_mentioned`).
+        let head = words
+            .first()
+            .map(|h| crate::detect::vars::normalized_head(h));
+        if matches!(head.as_deref(), Some("autoload" | "functions"))
+            || sc
+                .assignments
+                .iter()
+                .any(|(n, _)| n.starts_with("functions["))
+        {
+            self.make_opaque("a command that may redefine functions");
+        }
         self.forget_mentioned(&words);
         // zsh `typeset -T A B`: remember the tie (the key is not an
         // identifier, so it never collides with a variable).
@@ -291,7 +306,7 @@ impl Env {
         for k in names {
             if words.iter().any(|w| {
                 vars::mentions_name_outside_reference(w, &k)
-                    && !vars::exempt_plain_arg(words, w, &k)
+                    && (self.opaque || !vars::exempt_plain_arg(words, w, &k))
             }) {
                 self.forget(&k, "named by a command word that may bind it");
             }
@@ -323,7 +338,7 @@ impl Env {
                     .cloned()
                     .collect();
                 for k in names {
-                    if vars::mentions_name_outside_reference(src, &k) {
+                    if vars::compound_mentions_name(src, &k, !self.opaque) {
                         self.forget(&k, "named inside a pipeline stage that may bind it");
                     }
                 }

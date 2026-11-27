@@ -1999,7 +1999,7 @@ dependencies = [
 
 [[package]]
 name = "session-master"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "brush-parser",
  "harness-core",

@@ -815,6 +815,8 @@ notes = "Measured on main 9dc1aaf2b with the real binary. Bare git push -f/--for
 created_at = 1795807451
 updated_at = 1795807451
 weight = 0.0
+issue_number = 2008
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2008"
 rev = 0
 
 [task.repro]

@@ -764,3 +764,32 @@ exit 101: ers/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.65s
      Running tests/backlog_20261128_python_unlink_tmp_literal_parity_with_bare_rm.rs (target/debug/deps/backlog_20261128_python_unlink_tmp_literal_parity_with_bare_rm-0c023ef05bbbcff3)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_python_unlink_tmp_literal_parity_with_bare_rm`"""
+
+[[task]]
+id = "5eab530d"
+title = "blastguard fail-open: statically resolvable system harm past the memo limit stays Ask in main when its text does not spell a system dir (rm -rf /, cd / && rm -rf etc, D=etc; rm -rf /$D)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Found by the opus verifier of 687ece3c (2026-11-28). After fill3700 padding, the tails cd / && rm -rf etc, D=etc; rm -rf /$D and rm -rf / are main=Ask, sub=Deny under 5 wrappers; base 0.2.974 is the same, so this is a pre-existing gap. The 687ece3c fix attempt (branch fp-687ece3c, 1e0bef688) is NOT merged: it turned base Deny into Ask after python3 -c fan-out padding x2 for 9 shapes (guarded by python_padding_then_unspelled_system_harm_is_deny, which passes on main), d4 entries grew 10-17x, and 12 single commands took over 10s (max 33.7s). The fix must resolve system-harm tails structurally, not by the SYSTEM_PREFIXES text prefilter (may_name_system_path)."
+created_at = 1795806312
+updated_at = 1795806312
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_system_harm_past_memo_limit_without_dir_spelling -- --ignored"
+rev = "5362206ca64278668b074c0436bf019f0538b0ba"
+observed_at = 1795806312
+detail = """
+exit 101: f4/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 31.98s
+     Running tests/backlog_20261128_system_harm_past_memo_limit_without_dir_spelling.rs (target/release/deps/backlog_20261128_system_harm_past_memo_limit_without_dir_spelling-95006f08cfa2b02c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_system_harm_past_memo_limit_without_dir_spelling`"""

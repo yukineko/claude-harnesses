@@ -503,14 +503,17 @@ tags = [
     "p2",
 ]
 touched_files = []
-status = "pending"
-notes = """Observed 2026-11-22 at main rev 6ae161ee7 (static reading) after condukt run run-20261122-020202-63344 changed crates/tdd/src/evidence.rs. Verbatim (parse_test_log): 'let (tests, counts) = if !framed { let (tests, counts) = scan_conservative(&lines); (tests, counts.ok_or(NO_RESULT_LINE)) }' and Ok(...) => json!({"determined": true, ...}); the framed fallback instead reports determined:false because 'a nested `test result:` could have inflated the sum, so the pass count is unknown'. Pinned by unit test unframed_log_keeps_the_conservative_scan (asserts counts.failed == 2 from a duplicated result line, determined == true). RED: integration test drives the tdd binary (tdd red) on a command printing an unframed libtest-shaped log with one real failure and a nested 'test result: FAILED. 0 passed; 1 failed; 0 ignored' inside the captured output; asserts the RED proof's counts is determined:false or failed == 1. Readings: (a) defect -- an inflated sum is reported as determined (an unobserved count claimed as fact, CLAUDE.md s3/s4); (b) intended -- an unframed log is not libtest pretty format, the docstring says it 'is read by the conservative scan for both', and inflation is the restrictive direction. Tell apart: whether determined:true promises exact counts; whether any consumer reads counts.passed/failed as exact. DOES NOT PROVE: that real cargo output ever lacks the running line; that any consumer acts on the inflated number; nextest/pytest; which side should change."""
+status = "failed"
+notes = """
+Observed 2026-11-22 at main rev 6ae161ee7 (static reading) after condukt run run-20261122-020202-63344 changed crates/tdd/src/evidence.rs. Verbatim (parse_test_log): 'let (tests, counts) = if !framed { let (tests, counts) = scan_conservative(&lines); (tests, counts.ok_or(NO_RESULT_LINE)) }' and Ok(...) => json!({"determined": true, ...}); the framed fallback instead reports determined:false because 'a nested `test result:` could have inflated the sum, so the pass count is unknown'. Pinned by unit test unframed_log_keeps_the_conservative_scan (asserts counts.failed == 2 from a duplicated result line, determined == true). RED: integration test drives the tdd binary (tdd red) on a command printing an unframed libtest-shaped log with one real failure and a nested 'test result: FAILED. 0 passed; 1 failed; 0 ignored' inside the captured output; asserts the RED proof's counts is determined:false or failed == 1. Readings: (a) defect -- an inflated sum is reported as determined (an unobserved count claimed as fact, CLAUDE.md s3/s4); (b) intended -- an unframed log is not libtest pretty format, the docstring says it 'is read by the conservative scan for both', and inflation is the restrictive direction. Tell apart: whether determined:true promises exact counts; whether any consumer reads counts.passed/failed as exact. DOES NOT PROVE: that real cargo output ever lacks the running line; that any consumer acts on the inflated number; nextest/pytest; which side should change.
+flow eaa077f4 2026-11-27: skipped — judgment Ask: (a) defect (inflated sum claimed determined) vs (b) intended (restrictive direction, docstring); needs a ruling whether determined:true promises exact counts"""
 created_at = 1795282413
-updated_at = 1795282413
+updated_at = 1795786105
+defer_until = 1795958905
 weight = 0.0
 issue_number = 1973
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1973"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -553,40 +556,6 @@ exit 101: rs/yuki/src/.harness-worktrees/filing-99560b/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 21.49s
      Running tests/backlog_20261122_stdin_redirect_from_loop_var_fp.rs (target/debug/deps/backlog_20261122_stdin_redirect_from_loop_var_fp-ca53b4fc3297e397)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261122_stdin_redirect_from_loop_var_fp`"""
-
-[[task]]
-id = "fe86a232"
-title = "tdd green: a refused GREEN (tests still failing) keeps no trace of which test failed — run log removed, output_tail dropped"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "tdd",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """
-観測 (2026-11-22, branch filing-84424 commit 3ee9ee41c、基点 main 5e99d94d4、worktree /Users/yuki/src/.harness-worktrees/filing-84424): RED を記録した後、まだ失敗する run で tdd green を実行すると exit 非0 になり、stdout は空、stderr には "tdd: tests still failing — keep implementing until they pass, then run `tdd green` again." の 1 行だけが出る。green run の出力にだけ含まれる失敗テスト名 zz_green_only_marker (run 時に組み立てるので script 本文には現れない) は、stdout にも stderr にも、HOME / work 配下のどのファイルにも残らない (RED テスト backlog_20261122_green_failure_output_not_kept の逐語の失敗メッセージ: "refused tdd green kept no trace of the failing test `zz_green_only_marker` (not in stdout/stderr, no file under ... holds it).")。
-原因 (コード読解): crates/tdd/src/runner.rs run_cmd は run log を parse した後に std::fs::remove_file(&log_path) で消す。crates/tdd/src/proof.rs green() は judge_green(out.passed, has_red)? で bail するが、それが write_artifact より前にあるため、Outcome.output_tail / Outcome.tests はどこにも出力されない。condukt run run-20261122-035502-88763 の t1 worker が、green 失敗の原因を観測できないと報告したもの。
-読み (a) 欠陥: 拒否された GREEN は失敗の証拠を何も残さない (CLAUDE.md §4/§6: 何が失敗したかは見えるところに残す。memory display-only-decision-relevant-output: full stderr は record file へ)。(b) 意図どおり: tdd は判定だけを行い、出力が見たい呼び出し元はコマンドを自分で再実行する想定。見分け方: tdd の README / spec に「拒否された GREEN は出力を残さない」旨の記述があるか (この rev では見つけていない)。
-DOES NOT PROVE: RED・timeout・spawn error の挙動、出力をどの形式・どこに残すべきか。"""
-created_at = 1795291486
-updated_at = 1795291486
-weight = 0.0
-issue_number = 1980
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1980"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p tdd --test backlog_20261122_green_failure_output_not_kept -- --ignored"
-rev = "3ee9ee41cdbe34fd78229d4ad6b41750ad2277df"
-observed_at = 1795291486
-detail = """
-exit 101: ing tdd v0.1.112 (/Users/yuki/src/.harness-worktrees/filing-84424/crates/tdd)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.31s
-     Running tests/backlog_20261122_green_failure_output_not_kept.rs (target/debug/deps/backlog_20261122_green_failure_output_not_kept-c05f8e323e6c1617)
-error: test failed, to rerun pass `-p tdd --test backlog_20261122_green_failure_output_not_kept`"""
 
 [[task]]
 id = "1b84867e"
@@ -669,17 +638,19 @@ tags = [
     "p2",
 ]
 touched_files = []
-status = "pending"
+status = "failed"
 notes = """
 観測 (2026-11-22, branch filing-84424 commit 3ee9ee41c、基点 main 5e99d94d4、worktree /Users/yuki/src/.harness-worktrees/filing-84424。main でも FAILED と run 中に報告されていた): crates/blastguard/tests/subagent_heredoc_fp_20261108.rs の target_cat_py_shebang_dot_git_fixture_path_then_pytest (#[ignore] なし) が FAILED。逐語: "... (subagent=false) has its hazard text only inside a QUOTED heredoc body judged by its target language (a Python string literal, or data written to a .py file) and must be Allow, got "ask": `python3`: python -m runs a module — blastguard cannot judge what it would do (Table B.5: Undetermined)"。対象コマンド: cd {WT}; cat > scripts/test_precommit_timing.py <<'EOF' (.git のパスを読むだけの Python) EOF に続けて python3 -m pytest scripts/test_precommit_timing.py 2>&1 | tail -2。この文言は 1c6ef97ad (blastguard ast static evaluator, 0.2.630) で入った。テストは 61908ad92 / 972fc6cd6 (0.2.432/0.2.436) のもの。
 読み (a) 実装の回帰: heredoc 本文を Python として判定し、書き込まれた .py を pytest で走らせる形を Allow にした 0.2.436 の挙動が、B.5 層で失われた。(b) 裁定後の stale assert: memory の script-quarantine (script ファイルの実行は当面 Ask) と zsh S4 rulings (python file は S5 まで Undetermined) に従えば、python3 -m pytest <file> は Ask が正しく、Allow を期待する assert のほうが古い。assert メッセージは "must be Allow" と hedge なし。テストのコメントは "judged as Python it is Allow" (memory frozen-assert: hedge なし → Ask)。見分け方: B.5 / S5 の裁定が python -m pytest <同じコマンドで書いた .py> を Undetermined に含めているか (人間の裁定が要る)。
-DOES NOT PROVE: 同じ test file の他の case の状態、S5 実装後の挙動。"""
+DOES NOT PROVE: 同じ test file の他の case の状態、S5 実装後の挙動。
+flow eaa077f4 2026-11-27: skipped — judgment Ask: (a) regression vs (b) stale unhedged assert under the B.5/S5 rulings (python -m pytest <file written in same command>); re-anchoring needs a user ruling"""
 created_at = 1795291716
-updated_at = 1795291716
+updated_at = 1795786245
+defer_until = 1795959045
 weight = 0.0
 issue_number = 1983
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1983"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -693,60 +664,6 @@ exit 101: out; finished in 1.00s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.81s
      Running tests/subagent_heredoc_fp_20261108.rs (target/debug/deps/subagent_heredoc_fp_20261108-d8fe7fa4b6090c55)
 error: test failed, to rerun pass `-p blastguard --test subagent_heredoc_fp_20261108`"""
-
-[[task]]
-id = "11eb1a1e"
-title = "condukt testscope: 'git merge --into-name main x' denied; merge text-value skip list is exact-match"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = """Measured 2026-11-22 main 950c8cdce. text_value_opts("merge") = [-m,--message,-F,--file] exact; the separated value of --into-name is judged as a commit operand. 'git merge --mess main' deliberately NOT asserted (no commit operand; upstream may be main)."""
-created_at = 1795293450
-updated_at = 1795293450
-weight = 0.0
-issue_number = 1984
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1984"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test testscope_merge_text_value_opts_20261122 allow_merge_into_name"
-rev = "fb9f41580647d9c9969d8a94babd63969c0b33bd"
-observed_at = 1795293450
-detail = """
-exit 101: piling condukt v0.7.497 (/Users/yuki/src/.harness-worktrees/filing-run87637/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.53s
-     Running tests/testscope_merge_text_value_opts_20261122.rs (target/debug/deps/testscope_merge_text_value_opts_20261122-c282b29d8f1d3149)
-error: test failed, to rerun pass `-p condukt --test testscope_merge_text_value_opts_20261122`"""
-
-[[task]]
-id = "8b7eaf91"
-title = "tdd/condukt: pytest GREEN counts undetermined -> condukt worktree merge refuses every pytest-repro task"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Observed run-20261122-052625-87637 task 0afbb200: merge-proof-contract(undetermined-proof): 0afbb200.green.json: counts.determined is not true. tdd parses libtest only. Readings: (a) defect/false positive, (b) intended fail-closed needing another path; no pytest handling declared in tdd src/README or condukt README. backlog add allowlists pytest repros. RED asserts reading (a) with an echo stub (pytest not run)."
-created_at = 1795293570
-updated_at = 1795293570
-weight = 0.0
-issue_number = 1985
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1985"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p tdd --test backlog_20261122_pytest_summary_counts_undetermined"
-rev = "fb9f41580647d9c9969d8a94babd63969c0b33bd"
-observed_at = 1795293570
-detail = """
-exit 101: /Users/yuki/src/.harness-worktrees/filing-run87637/crates/tdd)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.30s
-     Running tests/backlog_20261122_pytest_summary_counts_undetermined.rs (target/debug/deps/backlog_20261122_pytest_summary_counts_undetermined-280bd70812618ebf)
-error: test failed, to rerun pass `-p tdd --test backlog_20261122_pytest_summary_counts_undetermined`"""
 
 [[task]]
 id = "49ec9e90"

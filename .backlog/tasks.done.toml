@@ -96943,3 +96943,153 @@ rev = "54553dc0cc0e7b52bed4f0b829ae361e45196ac9"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "11eb1a1e"
+title = "condukt testscope: 'git merge --into-name main x' denied; merge text-value skip list is exact-match"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "cancelled"
+notes = """
+Measured 2026-11-22 main 950c8cdce. text_value_opts("merge") = [-m,--message,-F,--file] exact; the separated value of --into-name is judged as a commit operand. 'git merge --mess main' deliberately NOT asserted (no commit operand; upstream may be main).
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-demonstrated; exit 0; cmd: cargo test -p condukt --test testscope_merge_text_value_opts_20261122 allow_merge_into_name; rev: a2d16046159bc238e01a7355ed82d4d90ff8b8e0; observed: exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. An `#[ignore]`d repro must be run with `-- --ignored` (e.g. `cargo test -p <crate> --test <file> -- --ignored`), and a test-name filter must match the repro: sult: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+   Compiling condukt v0.7.502 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.60s
+     Running tests/testscope_merge_text_value_opts_20261122.rs (target/debug/deps/testscope_merge_text_value_opts_20261122-4ceb126d640ba39d)"""
+created_at = 1795293450
+updated_at = 1795786248
+weight = 0.0
+issue_number = 1984
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1984"
+issue_closed_at = 1795786252
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test testscope_merge_text_value_opts_20261122 allow_merge_into_name"
+rev = "fb9f41580647d9c9969d8a94babd63969c0b33bd"
+observed_at = 1795293450
+detail = """
+exit 101: piling condukt v0.7.497 (/Users/yuki/src/.harness-worktrees/filing-run87637/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.53s
+     Running tests/testscope_merge_text_value_opts_20261122.rs (target/debug/deps/testscope_merge_text_value_opts_20261122-c282b29d8f1d3149)
+error: test failed, to rerun pass `-p condukt --test testscope_merge_text_value_opts_20261122`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-demonstrated; exit 0; cmd: cargo test -p condukt --test testscope_merge_text_value_opts_20261122 allow_merge_into_name; rev: a2d16046159bc238e01a7355ed82d4d90ff8b8e0; observed: exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. An `#[ignore]`d repro must be run with `-- --ignored` (e.g. `cargo test -p <crate> --test <file> -- --ignored`), and a test-name filter must match the repro: sult: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+   Compiling condukt v0.7.502 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.60s
+     Running tests/testscope_merge_text_value_opts_20261122.rs (target/debug/deps/testscope_merge_text_value_opts_20261122-4ceb126d640ba39d)"""
+
+[[task]]
+id = "8b7eaf91"
+title = "tdd/condukt: pytest GREEN counts undetermined -> condukt worktree merge refuses every pytest-repro task"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed run-20261122-052625-87637 task 0afbb200: merge-proof-contract(undetermined-proof): 0afbb200.green.json: counts.determined is not true. tdd parses libtest only. Readings: (a) defect/false positive, (b) intended fail-closed needing another path; no pytest handling declared in tdd src/README or condukt README. backlog add allowlists pytest repros. RED asserts reading (a) with an echo stub (pytest not run).
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-demonstrated; exit 0; cmd: cargo test -p tdd --test backlog_20261122_pytest_summary_counts_undetermined; rev: a2d16046159bc238e01a7355ed82d4d90ff8b8e0; observed: exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. An `#[ignore]`d repro must be run with `-- --ignored` (e.g. `cargo test -p <crate> --test <file> -- --ignored`), and a test-name filter must match the repro: ssed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling tdd v0.1.114 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
+     Running tests/backlog_20261122_pytest_summary_counts_undetermined.rs (target/debug/deps/backlog_20261122_pytest_summary_counts_undetermined-22109e0706bccbe9)"""
+created_at = 1795293570
+updated_at = 1795786254
+weight = 0.0
+issue_number = 1985
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1985"
+issue_closed_at = 1795786257
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261122_pytest_summary_counts_undetermined"
+rev = "fb9f41580647d9c9969d8a94babd63969c0b33bd"
+observed_at = 1795293570
+detail = """
+exit 101: /Users/yuki/src/.harness-worktrees/filing-run87637/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.30s
+     Running tests/backlog_20261122_pytest_summary_counts_undetermined.rs (target/debug/deps/backlog_20261122_pytest_summary_counts_undetermined-280bd70812618ebf)
+error: test failed, to rerun pass `-p tdd --test backlog_20261122_pytest_summary_counts_undetermined`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-demonstrated; exit 0; cmd: cargo test -p tdd --test backlog_20261122_pytest_summary_counts_undetermined; rev: a2d16046159bc238e01a7355ed82d4d90ff8b8e0; observed: exit 0: exit 0 but ZERO tests ran (passed + failed = 0 over 1 `test result:` line(s)); a run that executed no test is not a not-reproduced observation. An `#[ignore]`d repro must be run with `-- --ignored` (e.g. `cargo test -p <crate> --test <file> -- --ignored`), and a test-name filter must match the repro: ssed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling tdd v0.1.114 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
+     Running tests/backlog_20261122_pytest_summary_counts_undetermined.rs (target/debug/deps/backlog_20261122_pytest_summary_counts_undetermined-22109e0706bccbe9)"""
+
+[[task]]
+id = "fe86a232"
+title = "tdd green: a refused GREEN (tests still failing) keeps no trace of which test failed — run log removed, output_tail dropped"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """
+観測 (2026-11-22, branch filing-84424 commit 3ee9ee41c、基点 main 5e99d94d4、worktree /Users/yuki/src/.harness-worktrees/filing-84424): RED を記録した後、まだ失敗する run で tdd green を実行すると exit 非0 になり、stdout は空、stderr には "tdd: tests still failing — keep implementing until they pass, then run `tdd green` again." の 1 行だけが出る。green run の出力にだけ含まれる失敗テスト名 zz_green_only_marker (run 時に組み立てるので script 本文には現れない) は、stdout にも stderr にも、HOME / work 配下のどのファイルにも残らない (RED テスト backlog_20261122_green_failure_output_not_kept の逐語の失敗メッセージ: "refused tdd green kept no trace of the failing test `zz_green_only_marker` (not in stdout/stderr, no file under ... holds it).")。
+原因 (コード読解): crates/tdd/src/runner.rs run_cmd は run log を parse した後に std::fs::remove_file(&log_path) で消す。crates/tdd/src/proof.rs green() は judge_green(out.passed, has_red)? で bail するが、それが write_artifact より前にあるため、Outcome.output_tail / Outcome.tests はどこにも出力されない。condukt run run-20261122-035502-88763 の t1 worker が、green 失敗の原因を観測できないと報告したもの。
+読み (a) 欠陥: 拒否された GREEN は失敗の証拠を何も残さない (CLAUDE.md §4/§6: 何が失敗したかは見えるところに残す。memory display-only-decision-relevant-output: full stderr は record file へ)。(b) 意図どおり: tdd は判定だけを行い、出力が見たい呼び出し元はコマンドを自分で再実行する想定。見分け方: tdd の README / spec に「拒否された GREEN は出力を残さない」旨の記述があるか (この rev では見つけていない)。
+DOES NOT PROVE: RED・timeout・spawn error の挙動、出力をどの形式・どこに残すべきか。"""
+created_at = 1795291486
+updated_at = 1795786307
+weight = 0.0
+issue_number = 1980
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1980"
+issue_closed_at = 1795786310
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_20261122_green_failure_output_not_kept -- --ignored"
+rev = "3ee9ee41cdbe34fd78229d4ad6b41750ad2277df"
+observed_at = 1795291486
+detail = """
+exit 101: ing tdd v0.1.112 (/Users/yuki/src/.harness-worktrees/filing-84424/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.31s
+     Running tests/backlog_20261122_green_failure_output_not_kept.rs (target/debug/deps/backlog_20261122_green_failure_output_not_kept-c05f8e323e6c1617)
+error: test failed, to rerun pass `-p tdd --test backlog_20261122_green_failure_output_not_kept`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p tdd --test backlog_20261122_green_failure_output_not_kept"
+exit = 0
+passed = 1
+rev = "7da257eef0f81bbbeb7900b55222adaec1b1710b"
+observed_at = 1795786298
+output_digest = "sha256:9524610dc08fd136bcc36c66de308881e999dea066a42a38de9d12c1444c5eb3"
+excerpt = """
+
+running 1 test
+test refused_green_keeps_the_failing_test_output ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.73s
+
+   Compiling tdd v0.1.115 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.34s
+     Running tests/backlog_20261122_green_failure_output_not_kept.rs (target/debug/deps/backlog_20261122_green_failure_output_not_kept-ca47801727610c4e)
+"""
+
+[task.closure.red]
+rev = "a2d16046159bc238e01a7355ed82d4d90ff8b8e0"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -52,7 +52,6 @@ def _record(command, cwd):
 
 
 class NonBlastguardBinary(unittest.TestCase):
-    @OPEN
     def test_silent_exit_zero_non_blastguard_binary_is_not_counted_as_allow(self):
         self.assertTrue(os.access(TRUE_BIN, os.X_OK), TRUE_BIN)
         with tempfile.TemporaryDirectory(prefix="bg-fp-nonbg-") as tmp:

@@ -705,7 +705,26 @@ pub(super) fn has_unresolvable_expansion(tok: &str) -> bool {
 /// `sh -c "cd $dir && $BUILD"` is caught on its second segment.
 pub(super) fn unresolvable_command_word(cmd: &str) -> Option<String> {
     for seg in split_segments(cmd) {
-        let tokens: Vec<&str> = seg.split_whitespace().collect();
+        // Redirection words (`< "$f"`, `2>/dev/null`) are not command-word
+        // candidates: under an exec wrapper every following token is one, so
+        // `env -i /usr/bin/wc < "$f"` read the stdin operand as the program
+        // (3775027f). Dropping them leaves every real word, so `env -i "$X"`
+        // and `< f "$X"` still reach the check.
+        let mut skip_next = false;
+        let mut tokens: Vec<&str> = Vec::new();
+        for w in seg.split_whitespace() {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            let rest = w.trim_start_matches(|c: char| c.is_ascii_digit());
+            if rest.starts_with('>') || rest.starts_with('<') {
+                let target = rest.trim_start_matches(['>', '<', '&']);
+                skip_next = target.is_empty() && !rest.ends_with('&');
+                continue;
+            }
+            tokens.push(w);
+        }
         for idx in command_candidates(&tokens) {
             // Compare against the RAW token: `normalized_command` strips one
             // level of quoting, and `"$CMD"` must still read as an expansion

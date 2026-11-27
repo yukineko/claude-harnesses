@@ -86,7 +86,18 @@ fn control_literal_stdin_source_is_allow() {
 }
 
 #[test]
-#[ignore = "RED(3775027f): a runtime-valued stdin source (< \"$f\") is read as the command word"]
+fn env_runtime_command_word_stays_not_allow() {
+    let home = unique_home("fc");
+    for cmd in [
+        "for f in a b; do o=$(env -i \"$f\" < /dev/null); done",
+        "for f in a b; do o=$(env -i < /dev/null \"$f\"); done",
+        "for f in a b; do o=$(env -i HOME=/x \"$f\" -c < \"$f\"); done",
+    ] {
+        assert_ne!(decide(cmd, &home), "allow", "{cmd}");
+    }
+}
+
+#[test]
 fn loop_var_stdin_source_to_literal_program_is_allow() {
     let home = unique_home("loop");
     let d = home.0.join("d");

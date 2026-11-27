@@ -53,6 +53,10 @@
 //!   program, taken from these same parser effects, not from the legacy
 //!   token / substring-marker reading — `interpreter/python_written_files.rs`,
 //!   backlog 06c51772);
+//! * one of its effects creates a link (`os.symlink`, `os.link`,
+//!   `Path.symlink_to`, `Path.hardlink_to`; backlog 92f4a28d): a later write
+//!   of the line may land through it, and the relink layer
+//!   (`relink/nested.rs`) reads the program's original text;
 //! * the neutral text does not analyse to the same commands with `pass` as
 //!   the program.
 //!
@@ -528,8 +532,10 @@ fn judge_program(
     // the command may read that stdin (`echo 'rm -rf ~' | python3 -c
     // 'os.system("bash")'`). The effects are still judged here, but the
     // program is not retired: the legacy readings of the stdin text keep
-    // judging the line (raise-only).
-    let keep_legacy = runs && p.inline && cmd.stdin != StdinSource::Inherited;
+    // judging the line (raise-only). Also kept when an effect creates a link
+    // ([`effect_relinks`]): the relink layer reads the original text.
+    let keep_legacy = (runs && p.inline && cmd.stdin != StdinSource::Inherited)
+        || effects.iter().any(effect_relinks);
     let prefix = match (&cmd.cwd_candidates, &cmd.cwd) {
         (CwdCandidates::One, Value::Literal(d)) => match progeffect::shell_quote(d) {
             Some(q) => format!("cd {q} && "),
@@ -594,6 +600,20 @@ fn judge_program(
         }
     }
     (acc.finish(), (!keep_legacy).then_some(!effects.is_empty()))
+}
+
+/// An effect of the parsed program creates a link (`os.symlink`, `os.link`,
+/// `Path.symlink_to`, `Path.hardlink_to`; user ruling 92f4a28d, Python only).
+/// Such a program is not retired: a later write of the line may land through
+/// the link, which only the program's original text still shows.
+pub(crate) fn effect_relinks(e: &progeffect::Effect) -> bool {
+    matches!(
+        e,
+        progeffect::Effect::Fs {
+            op: progeffect::FsOp::Link { .. },
+            ..
+        }
+    )
 }
 
 /// Why the program may run a module other than the one it names (user

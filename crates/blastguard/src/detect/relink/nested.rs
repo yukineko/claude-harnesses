@@ -71,6 +71,9 @@ pub(super) struct Nested {
     pub(super) outer_reduced: Option<String>,
     /// Some command this segment runs could not be listed or read.
     pub(super) undetermined: bool,
+    /// The segment sources text this line may have replaced
+    /// ([`is_rustup_env`] no longer holds): it may relink any path.
+    pub(super) sources_unknown: bool,
 }
 
 /// Whether `text` may run a command other than its segments' own command
@@ -88,11 +91,12 @@ pub(super) fn may_run_nested(text: &str) -> bool {
 /// A word that may be the command word of an escape [`escapes`] reads, or
 /// of a wrapper that may run one.
 fn escape_capable_word(word: &str) -> bool {
-    if word.contains('$') {
+    if word.contains('$') || word.contains(".cargo/env") {
         return true;
     }
     let name = normalized_command(word);
     is_shell(&name)
+        || is_python(&name)
         || is_vi(&name)
         || WRAPPERS.split_whitespace().any(|w| w == name)
         || is_relink_word(word)
@@ -246,6 +250,36 @@ struct HeadUndetermined;
 
 fn is_shell(base: &str) -> bool {
     matches!(base, "bash" | "sh" | "zsh" | "dash" | "ksh")
+}
+
+fn is_python(base: &str) -> bool {
+    base.strip_prefix("python")
+        .is_some_and(|v| v.chars().all(|c| c.is_ascii_digit() || c == '.'))
+}
+
+/// The Python program `body`, read by the Python parser (`progeffect`, not
+/// by its text), creates a link (user ruling 92f4a28d, Python only:
+/// `os.symlink`, `os.link`, `Path.symlink_to`, `Path.hardlink_to`). A program
+/// the parser cannot read is S5's Ask, not this layer's. Perl, ruby and node
+/// are out of scope.
+fn python_relinks(body: &str) -> bool {
+    match progeffect::python::analyze(body, &[Some("-c".to_string())]) {
+        progeffect::Analysis::Known(effects) => effects.iter().any(ast::s5::effect_relinks),
+        progeffect::Analysis::Undetermined(_) => false,
+    }
+}
+
+/// `builtin` / `command` whose wrapped command (the first word that is not
+/// an option) is `.`, `source` or `eval`, or is not determined.
+fn wraps_sourcing(c: &SimpleCommand) -> bool {
+    c.argv
+        .iter()
+        .skip(1)
+        .find(|w| !matches!(&w.value, Value::Literal(s) if s.starts_with('-')))
+        .is_some_and(|w| match &w.value {
+            Value::Literal(s) => matches!(s.as_str(), "." | "source" | "eval"),
+            Value::Undetermined(_) => true,
+        })
 }
 
 /// vi-family editors whose `-c` / `--cmd` / `+` arguments are ex commands.
@@ -448,6 +482,26 @@ fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, place: Place, out: &
         }
         return;
     }
+    // `builtin . X` / `command . X` (also `source`, `eval`) run text this
+    // line may hold (`builtin . /dev/stdin <<< 'ln -s …'`): never the r21
+    // form, which is the unwrapped `.` only.
+    if matches!(base, "builtin" | "command") && wraps_sourcing(c) {
+        out.undetermined = true;
+        return;
+    }
+    if is_python(base) {
+        match ast::program_source(c) {
+            // The call's paths are Python expressions, not shell words: it
+            // may relink any path.
+            Some(ProgramSource::InlineLiteral(body)) if python_relinks(&body) => {
+                out.sources_unknown = true
+            }
+            // A body the parser cannot read is S5's Ask; nothing to add.
+            Some(ProgramSource::Undetermined(_)) => out.undetermined = true,
+            _ => {}
+        }
+        return;
+    }
     if is_vi(base) {
         for (_, v) in ex_args(c) {
             match v {
@@ -468,6 +522,18 @@ fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, place: Place, out: &
     // as at 5e99d94d4 (with `exec 0<<< '…'` and a link of the file to
     // /dev/stdin earlier on the line it would source line text).
     if place == Place::Top && is_rustup_env(c, depth) {
+        return;
+    }
+    // Backlog 92f4a28d: the same `.` after a command that may have replaced
+    // the file or its stdin sources text that may relink ANY path, so no
+    // later write of the line has a determined landing (not only a path the
+    // segment's words name).
+    if place == Place::Top
+        && depth == 0
+        && ast::is_rustup_env_source(c)
+        && targets::rustup_proven_tainted()
+    {
+        out.sources_unknown = true;
         return;
     }
     // A wrapper that may run an interpreter (`sudo bash -c …`), `eval`,
@@ -491,7 +557,13 @@ fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, place: Place, out: &
 fn is_rustup_env(c: &SimpleCommand, depth: usize) -> bool {
     // No redirection either (`. "$HOME/.cargo/env" <<< '…'` is not the
     // ruled form: keep it undetermined rather than argue stdin is unused).
-    if depth != 0 || !c.redirects.is_empty() || !ast::is_rustup_env_source(c) {
+    // And no earlier command of the line may have replaced the file or its
+    // stdin (r21 dropped, backlog 92f4a28d: [`targets::rustup_exempt_allowed`]).
+    if depth != 0
+        || !c.redirects.is_empty()
+        || !ast::is_rustup_env_source(c)
+        || !targets::rustup_exempt_allowed()
+    {
         return false;
     }
     let Some(w) = c.argv.get(1) else {

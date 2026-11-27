@@ -77,6 +77,7 @@ pub(super) mod b5;
 mod eval;
 mod judge;
 mod parse;
+pub(super) mod rustup;
 pub(super) mod s5;
 mod support;
 pub(super) mod targets;

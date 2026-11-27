@@ -632,6 +632,83 @@ pub(super) fn segment_mentions_name(seg: &str, name: &str, exempt_ok: bool) -> b
 /// word anywhere (`alias echo=read` makes `echo P` a `read P`), or a function
 /// definition. The exemption is off for the whole command then.
 pub(super) fn exemption_disabled(cmd: &str) -> bool {
+    parsed_command_may_redefine_words(cmd) || exemption_disabled_by_words(cmd)
+}
+
+/// Names whose assignment redefines what a command word means: zsh's
+/// `functions` / `aliases` / `galiases` / `saliases` / `dis_*` tables and
+/// bash's `BASH_ALIASES` (`name`, `name[k]`, `name+` all count).
+pub(super) fn is_command_table_name(name: &str) -> bool {
+    let base = name.split('[').next().unwrap_or(name).trim_end_matches('+');
+    matches!(
+        base,
+        "functions"
+            | "aliases"
+            | "galiases"
+            | "saliases"
+            | "dis_aliases"
+            | "dis_galiases"
+            | "dis_saliases"
+            | "dis_functions"
+            | "BASH_ALIASES"
+    )
+}
+
+/// The decision of [`exemption_disabled`] from the PARSED command (the same
+/// brush-parser AST + evaluator the rest of blastguard judges with), not from
+/// a whitespace split: command words are read after quote removal, backslash
+/// removal and `$'…'` decoding, so `\shopt`, `"alias"`, `sh''opt` are
+/// `shopt` / `alias`. True (exemption off) when
+/// * the parse or evaluation is undetermined (fail closed);
+/// * some simple command, anywhere (compound bodies included), has a
+///   command word that is not a literal, or any literal word in
+///   {alias, unalias, shopt, enable, functions, autoload, eval, source, `.`,
+///   trap, zle, function} (so `command` / `builtin` / `\` wrappers are
+///   covered), or `typeset` / `declare` with an `f` option cluster;
+/// * any word or assignment names one of [`is_command_table_name`].
+fn parsed_command_may_redefine_words(cmd: &str) -> bool {
+    use super::ast::{analyze, Analysis, Value};
+    let Analysis::Known(script) = analyze(cmd) else {
+        return true;
+    };
+    script.commands.iter().any(|sc| {
+        if sc.assignments.iter().any(|(n, _)| is_command_table_name(n)) {
+            return true;
+        }
+        let mut literals: Vec<&str> = Vec::new();
+        for (i, w) in sc.argv.iter().enumerate() {
+            match &w.value {
+                Value::Literal(s) => literals.push(s.as_str()),
+                Value::Undetermined(_) if i == 0 => return true,
+                Value::Undetermined(_) => {}
+            }
+        }
+        literals.iter().any(|s| {
+            matches!(
+                *s,
+                "alias"
+                    | "unalias"
+                    | "shopt"
+                    | "enable"
+                    | "functions"
+                    | "autoload"
+                    | "eval"
+                    | "source"
+                    | "."
+                    | "trap"
+                    | "zle"
+                    | "function"
+            ) || is_command_table_name(s.split('=').next().unwrap_or(s))
+        }) || (literals
+            .iter()
+            .any(|h| matches!(*h, "typeset" | "declare" | "local"))
+            && literals
+                .iter()
+                .any(|s| s.starts_with('-') && !s.starts_with("--") && s.contains('f')))
+    })
+}
+
+fn exemption_disabled_by_words(cmd: &str) -> bool {
     defines_shell_function(cmd)
         || quote_aware_words(cmd).iter().any(|w| {
             let w = unquote_literal_value(w).unwrap_or_else(|| w.to_string());

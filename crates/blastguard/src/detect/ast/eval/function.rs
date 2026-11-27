@@ -247,14 +247,26 @@ impl Env {
         // `autoload`, `functions -c`, `functions[f]=`) makes the state opaque,
         // like `alias` / `shopt` / `eval` do: the non-binder exemption is
         // then off (`forget_mentioned`).
-        let head = words
-            .first()
-            .map(|h| crate::detect::vars::normalized_head(h));
-        if matches!(head.as_deref(), Some("autoload" | "functions"))
+        let heads: Vec<String> = words
+            .iter()
+            .map(|h| crate::detect::vars::normalized_head(h))
+            .collect();
+        if heads
+            .iter()
+            .any(|h| matches!(h.as_str(), "autoload" | "functions" | "zle" | "function"))
+            || heads.iter().any(|h| {
+                crate::detect::vars::is_command_table_name(h.split('=').next().unwrap_or(h))
+            })
+            || (heads
+                .iter()
+                .any(|h| matches!(h.as_str(), "typeset" | "declare" | "local"))
+                && words
+                    .iter()
+                    .any(|w| w.starts_with('-') && !w.starts_with("--") && w.contains('f')))
             || sc
                 .assignments
                 .iter()
-                .any(|(n, _)| n.starts_with("functions["))
+                .any(|(n, _)| crate::detect::vars::is_command_table_name(n))
         {
             self.make_opaque("a command that may redefine functions");
         }

@@ -66,7 +66,7 @@ fn decision(command: &str) -> (String, String) {
 }
 
 #[test]
-#[ignore = "RED: python heredoc os.unlink('/tmp/x.tmp') is Deny while bare `rm /tmp/x.tmp` is Allow (spec: os.unlink(p) == rm p)"]
+#[ignore = "RED(2f8d2abe): python heredoc os.unlink('/tmp/x.tmp') is Deny while bare `rm /tmp/x.tmp` is Allow (spec: os.unlink(p) == rm p)"]
 fn parity_os_unlink_tmp_literal_matches_bare_rm() {
     let bare = decision("rm /tmp/x.tmp");
     let py = decision("python3 - <<'PY'\nimport os\nos.unlink('/tmp/x.tmp')\nPY");

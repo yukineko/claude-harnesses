@@ -734,3 +734,33 @@ exit 101: uki/src/.harness-worktrees/salvage-leftovers/crates/condukt)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 13.76s
      Running tests/backlog_20261121_testscope_bare_run_blocks_tdd_red.rs (target/debug/deps/backlog_20261121_testscope_bare_run_blocks_tdd_red-eda304dd26a33dc8)
 error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_bare_run_blocks_tdd_red`"""
+
+[[task]]
+id = "2f8d2abe"
+title = "blastguard: python stdin-heredoc os.unlink('/tmp/x.tmp') is Deny while bare rm /tmp/x.tmp is Allow (spec: os.unlink(p) == rm p)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Salvaged from unmerged bg-walk-clean-6bbf (2026-11-08 parity rule). Measured 2026-11-28 main a4c078f2d blastguard 0.2.976. Readings (a) FP, parity with bare rm per docs/specs/blastguard.md; (b) intended: python unlink stays stricter. See test docstring."
+created_at = 1795805156
+updated_at = 1795805156
+weight = 0.0
+issue_number = 2006
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2006"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_python_unlink_tmp_literal_parity_with_bare_rm -- --include-ignored"
+rev = "487734a061deecff62277b6c96185d013b81671f"
+observed_at = 1795805156
+detail = """
+exit 101: ers/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.65s
+     Running tests/backlog_20261128_python_unlink_tmp_literal_parity_with_bare_rm.rs (target/debug/deps/backlog_20261128_python_unlink_tmp_literal_parity_with_bare_rm-0c023ef05bbbcff3)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_python_unlink_tmp_literal_parity_with_bare_rm`"""

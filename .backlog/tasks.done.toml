@@ -95398,3 +95398,71 @@ rev = "a8aa29f49360b796d23cef16c5fdccfe5704f097"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "bd0bf1f9"
+title = 'condukt testscope: unit test ordinary_branches_are_not_main is red on main — main_ref("tags/main") returns Main (the [_remote, m] arm precedes ["tags", ..])'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+観測 2026-11-22: donegate test-changed (scripts/test-changed-crates.sh) on main after 5598a48db: 'thread testscope::git::tests::ordinary_branches_are_not_main panicked at crates/condukt/src/testscope/git.rs:350:13: assertion left == right failed: tags/main / left: Main / right: NotMain' / 'test result: FAILED. 964 passed; 1 failed; 5 ignored'. 原因 (静的読解): crates/condukt/src/testscope/git.rs main_ref の match で '[_remote, m] | ["remotes", _remote, m] | ...=> main_or_head(m)' が '["refs","tags",..] | ["tags",..] => false' より前にあり、'tags/main' が remote 'tags' の main として Main になる。test ケース 'tags/main' と実装はともに e7524f54a (backlog 643e641f, 2026-11-22 04:11) で入った → その commit 時点から red の可能性 (未検証: e7524f54a での実行は未観測)。a1d04297 fix (66f8268b) は main_ref を触っていない (diff に該当行なし)。読み (a) 実装の arm 順の欠陥: test が仕様。(b) git の ref 解決では 'tags/main' は refs/tags/main (存在時) → 無ければ refs/remotes/tags/main (remote 'tags' があれば) と曖昧で、Main(deny) は fail-closed 側 = test の NotMain 期待が過剰。見分け方: git rev-parse の解決順 (refs/<n>, refs/tags/<n>, refs/heads/<n>, refs/remotes/<n>, refs/remotes/<n>/HEAD) で 'tags/main' が main ブランチを指しうるかを判定し、ユーザー裁定を仰ぐ (frozen assert)。
+needs user ruling (frozen unhedged assert): ordinary_branches_are_not_main asserts main_ref("tags/main")==NotMain, but git resolves tags/main via refs/remotes/tags/main when a remote named 'tags' exists, so fail-closed reading is Main/Undetermined. Options: (a) keep assert, reorder arms so ["tags",..] wins; (b) re-anchor assert to Undetermined/Main. flow skips judgment Asks."""
+created_at = 1795293840
+updated_at = 1795781989
+weight = 0.0
+issue_number = 1986
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1986"
+issue_closed_at = 1795781992
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --bin condukt testscope::git::tests::ordinary_branches_are_not_main"
+rev = "e4740446d3bea8d5618892154c4714410ec31348"
+observed_at = 1795293840
+detail = """
+exit 101:  riskgrade v0.1.2 (/Users/yuki/src/.harness-worktrees/filing-tagsmain/crates/riskgrade)
+   Compiling condukt v0.7.499 (/Users/yuki/src/.harness-worktrees/filing-tagsmain/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 38.08s
+     Running unittests src/main.rs (target/debug/deps/condukt-47505c94f996ff2a)
+error: test failed, to rerun pass `-p condukt --bin condukt`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --bin condukt testscope::git"
+exit = 0
+passed = 6
+rev = "d7c3b1e794ee3fd89b1b2924d19b204a12a304d8"
+observed_at = 1795781978
+output_digest = "sha256:52341ac359b8862b0d046756110f75b9ff2dcbd93adb1454af9a8e99d3224c57"
+excerpt = """
+
+running 6 tests
+test testscope::git::tests::merge_message_text_is_not_a_ref ... ok
+test testscope::git::tests::two_segment_tags_heads_ambiguity_is_undetermined ... ok
+test testscope::git::tests::undetermined_spellings_are_undetermined ... ok
+test testscope::git::tests::main_spellings_are_main ... ok
+test testscope::git::tests::dash_operands_are_judged ... ok
+test testscope::git::tests::ordinary_branches_are_not_main ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 965 filtered out; finished in 0.00s
+
+   Compiling condukt v0.7.500 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.89s
+     Running unittests src/main.rs (target/debug/deps/condukt-386d160f541f2d45)
+"""
+
+[task.closure.red]
+rev = "ca5cd0c8bb6cd43280a24c7a6648c75af29ba837"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

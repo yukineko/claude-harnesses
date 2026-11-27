@@ -100,6 +100,9 @@ fn main() {
             "retro" => {
                 exit(run_retro(rest));
             }
+            "shape" => {
+                exit(run_shape());
+            }
             "log" => {
                 // Compatibility path: the listing lives in overwatch since
                 // 2026-11-17 (`overwatch blastguard-log`); same args, same output.
@@ -167,6 +170,7 @@ fn run_verdict_guarded<F: FnOnce()>(body: F) -> ! {
             reason: "internal error (panic) on the verdict path; blocked with exit 2",
             rule_id: "internal-error-panic",
             blastguard_version: env!("CARGO_PKG_VERSION"),
+            shape: None,
         };
         // Its failure note is already on stderr; there is no reason text to add it to.
         record_block(raw, false, &block);
@@ -357,6 +361,7 @@ fn run() {
                 subagent,
                 agent_id.as_deref(),
                 false,
+                &LearnCtx::default(),
             );
             return;
         }
@@ -371,6 +376,23 @@ fn run() {
     let decision = analyse(&input, driver);
     let decision = consult_memory(&input, decision);
 
+    // Ask learning (docs/specs/blastguard-ask-learning.md): the detector's
+    // own `Ask` may be answered by the learned table BEFORE any hardening.
+    let shape = match decision {
+        Decision::Allow => None,
+        _ => shape_of_call(&input, &decision),
+    };
+    let (decision, learned) =
+        match learned_overlay(decision, shape.as_ref(), &raw, subagent, driver) {
+            Some(x) => x,
+            // A learned Allow, recorded in the block log: nothing is printed.
+            None => return,
+        };
+    let lc = LearnCtx {
+        shape: shape.as_ref().map(|s| s.key()),
+        learned,
+    };
+
     emit(
         decision,
         Some(&input),
@@ -378,7 +400,122 @@ fn run() {
         subagent,
         agent_id.as_deref(),
         driver,
+        &lc,
     );
+}
+
+/// The learning shape of the call the detector just judged as `decision`
+/// (`None` when it could not be computed: a panic is caught, never
+/// propagated, and means "nothing is learned for this call").
+fn shape_of_call(input: &HookInput, decision: &Decision) -> Option<harness_core::asklearn::Shape> {
+    let rid = match decision {
+        Decision::Allow => "allow",
+        Decision::Deny(r) | Decision::Ask(r) => rule_id::rule_id(r),
+    };
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let scope = safe_roots(input);
+        let home = std::env::var("HOME").ok();
+        let tmpdir = std::env::var("TMPDIR").ok();
+        let cwd = input.cwd.trim();
+        let ctx = blastguard::shape::Ctx {
+            home: home.as_deref(),
+            cwd: if cwd.is_empty() { None } else { Some(cwd) },
+            tmpdir: tmpdir.as_deref(),
+            scope: &scope,
+        };
+        let facts = bash_command(input).map(|c| blastguard::shape::bash_facts(&c));
+        blastguard::shape::shape_of(
+            &input.tool_name,
+            input.tool_input.as_ref(),
+            facts,
+            rid,
+            &ctx,
+        )
+    }))
+    .ok()
+}
+
+/// Apply the learned table to an `Ask`. `Some((decision, learned))` continues
+/// to [`emit`]; `None` means a learned Allow was RECORDED and the call is
+/// allowed silently.
+///
+/// Only an `Ask` is touched ([`blastguard::learned::apply`]): a `Deny` is
+/// returned as is. A learned Allow is only honoured once its block-log record
+/// is written — if the record cannot be written the `Ask` stands with the
+/// unrecorded note (an allow nobody can audit is not granted).
+fn learned_overlay(
+    decision: Decision,
+    shape: Option<&harness_core::asklearn::Shape>,
+    raw: &str,
+    subagent: bool,
+    driver: bool,
+) -> Option<(Decision, bool)> {
+    let (Some(shape), Decision::Ask(orig_reason)) = (shape, &decision) else {
+        return Some((decision, false));
+    };
+    let orig_reason = orig_reason.clone();
+    let table = harness_core::asklearn::read_table(&harness_core::asklearn::table_path());
+    let system_harm = decision.is_system_harm();
+    match blastguard::learned::apply(decision, shape, system_harm, &table) {
+        blastguard::learned::Applied::Unchanged(d) => Some((d, false)),
+        blastguard::learned::Applied::Deny(r) => Some((Decision::Deny(r), true)),
+        blastguard::learned::Applied::Allow(reason) => {
+            let actor = if subagent {
+                "subagent"
+            } else if driver || !interactive::ask_available() {
+                "headless"
+            } else {
+                "interactive"
+            };
+            let key = shape.key();
+            let block = blocklog::Block {
+                decision: "allow",
+                kind: blocklog::DecisionKind::Learned,
+                actor,
+                system_harm: false,
+                reason: &reason,
+                rule_id: rule_id::rule_id(&orig_reason),
+                blastguard_version: env!("CARGO_PKG_VERSION"),
+                shape: Some(&key),
+            };
+            record_block(raw, true, &block)
+                .map(|note| (Decision::Ask(format!("{orig_reason}{note}")), false))
+        }
+    }
+}
+
+/// `blastguard shape`: read a PreToolUse payload on stdin and print the
+/// analyser's own verdict and learning shape, WITHOUT the learned table, the
+/// approval memory, hardening or any record. Used by the learner to recompute
+/// the shape of a historical Ask with the current analyser.
+fn run_shape() -> i32 {
+    let raw = hook::read_stdin();
+    let Some(input) = HookInput::parse(&raw) else {
+        eprintln!(
+            "blastguard shape: stdin is not a readable PreToolUse payload; nothing was done."
+        );
+        return 2;
+    };
+    let decision = analyse(&input, false);
+    let Some(shape) = shape_of_call(&input, &decision) else {
+        eprintln!("blastguard shape: the shape could not be computed (internal error).");
+        return 2;
+    };
+    let (word, rid) = match &decision {
+        Decision::Allow => ("allow", "allow"),
+        Decision::Deny(r) => ("deny", rule_id::rule_id(r)),
+        Decision::Ask(r) => ("ask", rule_id::rule_id(r)),
+    };
+    println!(
+        "{}",
+        serde_json::json!({
+            "decision": word,
+            "rule_id": rid,
+            "shape": shape.key(),
+            "system_harm": decision.is_system_harm(),
+        })
+    );
+    0
 }
 
 /// Is this call made by a session that is a LIVE registered `/flow` driver
@@ -571,6 +708,7 @@ fn emit(
     subagent: bool,
     agent_id: Option<&str>,
     driver: bool,
+    lc: &LearnCtx,
 ) {
     // How the printed decision is reached is recorded in the block log
     // (`harness_core::blocklog`): an `Ask` that is printed as a `Deny` must not
@@ -601,7 +739,7 @@ fn emit(
             input,
             "subagent",
             annotation.as_deref(),
-            BlockSource { raw, kind },
+            lc.source(raw, kind),
         );
         return;
     }
@@ -638,7 +776,7 @@ fn emit(
             input,
             actor,
             annotation.as_deref(),
-            BlockSource { raw, kind },
+            lc.source(raw, kind),
         );
         return;
     }
@@ -690,7 +828,7 @@ fn emit(
         input,
         actor,
         annotation.as_deref(),
-        BlockSource { raw, kind },
+        lc.source(raw, kind),
     );
 }
 
@@ -740,6 +878,29 @@ fn relay_denial_annotation(deny_reason: &str, input: Option<&HookInput>) -> Opti
 struct BlockSource<'a> {
     raw: &'a str,
     kind: blocklog::DecisionKind,
+    /// The call's learning shape key, recorded as the record's `shape`.
+    shape: Option<&'a str>,
+    /// The printed `Deny` came from the learned table.
+    learned: bool,
+}
+
+/// What the learning layer ([`learned_overlay`]) established about the call,
+/// carried to the block record.
+#[derive(Default)]
+struct LearnCtx {
+    shape: Option<String>,
+    learned: bool,
+}
+
+impl LearnCtx {
+    fn source<'a>(&'a self, raw: &'a str, kind: blocklog::DecisionKind) -> BlockSource<'a> {
+        BlockSource {
+            raw,
+            kind,
+            shape: self.shape.as_deref(),
+            learned: self.learned,
+        }
+    }
 }
 
 /// Record the block, print the decision, then record telemetry.
@@ -776,14 +937,22 @@ fn emit_line_annotated(
         _ => return, // Allow → record nothing, print nothing.
     };
     let rid = rule_id::rule_id(base_reason);
+    // A learned Deny keeps `original_decision: ask` and its own kind; if the
+    // repeat downgrade turned it into an Ask, the downgrade kind stands.
+    let kind = if source.learned && decision_word == "deny" {
+        blocklog::DecisionKind::Learned
+    } else {
+        source.kind
+    };
     let block = blocklog::Block {
         decision: decision_word,
-        kind: source.kind,
+        kind,
         actor,
         system_harm: decision.is_system_harm(),
         reason: printed_reason,
         rule_id: rid,
         blastguard_version: env!("CARGO_PKG_VERSION"),
+        shape: source.shape,
     };
     let unrecorded = record_block(source.raw, input.is_some(), &block);
     let printed = match (printed, unrecorded) {

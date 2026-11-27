@@ -80,6 +80,8 @@ mod cargo_floor;
 mod eval;
 mod judge;
 mod parse;
+mod shape;
+pub(crate) use shape::shape_facts;
 pub(super) mod rustup;
 pub(super) mod s5;
 mod support;

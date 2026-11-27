@@ -158,7 +158,10 @@ fn shape_of(e: &Env, table: &Path, payload: &Value) -> Value {
 
 fn key_of(e: &Env, payload: &Value) -> String {
     let none = e.root.join("no-table.json");
-    shape_of(e, &none, payload)["shape"].as_str().unwrap().to_string()
+    shape_of(e, &none, payload)["shape"]
+        .as_str()
+        .unwrap()
+        .to_string()
 }
 
 fn write_table(e: &Env, name: &str, entries: Value) -> PathBuf {
@@ -196,7 +199,6 @@ fn records(e: &Env) -> Vec<Value> {
 // ------------------------------------------------------------ `shape`
 
 #[test]
-#[ignore = "RED(ask-learning): `blastguard shape` prints decision/rule_id/shape/system_harm"]
 fn shape_subcommand_reports_ask_command() {
     let e = env("shape-ask");
     let none = e.root.join("no-table.json");
@@ -211,14 +213,17 @@ fn shape_subcommand_reports_ask_command() {
     assert!(!rule.is_empty(), "{v}");
     let key = v["shape"].as_str().unwrap();
     let parts: Vec<&str> = key.split('|').collect();
-    assert_eq!(parts.len(), 3, "key must be <rule_id>|<class>|<verbs>: {key}");
+    assert_eq!(
+        parts.len(),
+        3,
+        "key must be <rule_id>|<class>|<verbs>: {key}"
+    );
     assert_eq!(parts[0], rule, "first key segment is the rule_id: {key}");
     assert!(!parts[1].is_empty(), "class segment empty: {key}");
     assert_eq!(parts[2], "rm", "verb segment of `rm \"$f\"`: {key}");
 }
 
 #[test]
-#[ignore = "RED(ask-learning): `blastguard shape` verbs are basenames; non-Bash verb is the tool name"]
 fn shape_verbs_are_basenames_and_tool_name() {
     let e = env("shape-verbs");
     let k = key_of(&e, &bash("/tmp/x", r#"/bin/rm "$f""#, None));
@@ -231,11 +236,14 @@ fn shape_verbs_are_basenames_and_tool_name() {
         "tool_input": { "file_path": "/etc/hosts", "content": "x" },
     });
     let k = key_of(&e, &w);
-    assert_eq!(k.rsplit('|').next(), Some("Write"), "non-Bash verb is the tool name: {k}");
+    assert_eq!(
+        k.rsplit('|').next(),
+        Some("Write"),
+        "non-Bash verb is the tool name: {k}"
+    );
 }
 
 #[test]
-#[ignore = "RED(ask-learning): `blastguard shape` reports system harm as deny + system_harm"]
 fn shape_subcommand_reports_system_harm() {
     let e = env("shape-harm");
     let none = e.root.join("no-table.json");
@@ -245,14 +253,16 @@ fn shape_subcommand_reports_system_harm() {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): `blastguard shape` ignores the learned table and writes no block record"]
 fn shape_subcommand_is_not_affected_by_the_table() {
     let e = env("shape-table");
     let p = bash("/tmp/x", ASK_CMD, None);
     let key = key_of(&e, &p);
     let t = write_table(&e, "allow.json", json!([entry(&key, "allow", 9, 0, 5)]));
     let v = shape_of(&e, &t, &p);
-    assert_eq!(v["decision"], "ask", "shape must not consult the table: {v}");
+    assert_eq!(
+        v["decision"], "ask",
+        "shape must not consult the table: {v}"
+    );
     assert_eq!(v["shape"], key.as_str());
     let t = write_table(&e, "deny.json", json!([entry(&key, "deny", 0, 1, 1)]));
     assert_eq!(shape_of(&e, &t, &p)["decision"], "ask");
@@ -266,7 +276,6 @@ fn shape_subcommand_is_not_affected_by_the_table() {
 // ------------------------------------------------------------ learned allow / deny
 
 #[test]
-#[ignore = "RED(ask-learning): learned allow turns a main-session Ask into Allow"]
 fn learned_allow_turns_ask_into_allow_in_main() {
     let e = env("allow-main");
     let p = bash("/tmp/x", ASK_CMD, None);
@@ -274,11 +283,16 @@ fn learned_allow_turns_ask_into_allow_in_main() {
     let t = write_table(&e, "t.json", json!([entry(&key, "allow", 7, 0, 4)]));
     let r = hook(&e, &t, &p);
     assert_eq!(r.code, 0);
-    assert_eq!(printed(&r), "allow", "stdout={} stderr={}", r.stdout, r.stderr);
+    assert_eq!(
+        printed(&r),
+        "allow",
+        "stdout={} stderr={}",
+        r.stdout,
+        r.stderr
+    );
 }
 
 #[test]
-#[ignore = "RED(ask-learning): learned allow applies in subagent mode (hardened Deny → Allow)"]
 fn learned_allow_applies_in_subagent_mode() {
     let e = env("allow-sub");
     let none = e.root.join("no-table.json");
@@ -289,11 +303,16 @@ fn learned_allow_applies_in_subagent_mode() {
     let key = key_of(&e, &bash("/tmp/x", ASK_CMD, None));
     let t = write_table(&e, "t.json", json!([entry(&key, "allow", 7, 0, 4)]));
     let r = hook(&e, &t, &sub);
-    assert_eq!(printed(&r), "allow", "stdout={} stderr={}", r.stdout, r.stderr);
+    assert_eq!(
+        printed(&r),
+        "allow",
+        "stdout={} stderr={}",
+        r.stdout,
+        r.stderr
+    );
 }
 
 #[test]
-#[ignore = "RED(ask-learning): learned deny turns an Ask into Deny, reason names shape + counts"]
 fn learned_deny_turns_ask_into_deny() {
     let e = env("deny-main");
     let p = bash("/tmp/x", ASK_CMD, None);
@@ -302,12 +321,17 @@ fn learned_deny_turns_ask_into_deny() {
     let r = hook(&e, &t, &p);
     assert_eq!(printed(&r), "deny", "{}", r.stdout);
     let why = reason(&r);
-    assert!(why.contains("learned"), "reason must say it was learned: {why}");
-    assert!(why.contains(&key), "reason must name the shape {key}: {why}");
+    assert!(
+        why.contains("learned"),
+        "reason must say it was learned: {why}"
+    );
+    assert!(
+        why.contains(&key),
+        "reason must name the shape {key}: {why}"
+    );
 }
 
 #[test]
-#[ignore = "RED(ask-learning): learned allow decision is visible — logged as decision_kind learned"]
 fn learned_allow_is_logged_with_shape_and_kind() {
     let e = env("allow-log");
     let p = bash("/tmp/x", ASK_CMD, None);
@@ -316,7 +340,11 @@ fn learned_allow_is_logged_with_shape_and_kind() {
     let r = hook(&e, &t, &p);
     assert_eq!(printed(&r), "allow", "{}", r.stdout);
     let recs = records(&e);
-    assert_eq!(recs.len(), 1, "exactly one record for the learned decision: {recs:?}");
+    assert_eq!(
+        recs.len(),
+        1,
+        "exactly one record for the learned decision: {recs:?}"
+    );
     let rec = &recs[0];
     assert_eq!(rec["decision"], "allow", "{rec}");
     assert_eq!(rec["decision_kind"], "learned", "{rec}");
@@ -331,7 +359,6 @@ fn learned_allow_is_logged_with_shape_and_kind() {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): learned deny is logged as decision_kind learned"]
 fn learned_deny_is_logged_with_kind() {
     let e = env("deny-log");
     let p = bash("/tmp/x", ASK_CMD, None);
@@ -348,7 +375,6 @@ fn learned_deny_is_logged_with_kind() {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): no table → unchanged Ask, record gains `shape`"]
 fn no_table_keeps_ask_and_records_shape() {
     let e = env("no-table");
     let p = bash("/tmp/x", ASK_CMD, None);
@@ -359,11 +385,15 @@ fn no_table_keeps_ask_and_records_shape() {
     let recs = records(&e);
     assert_eq!(recs.len(), 1, "{recs:?}");
     assert_eq!(recs[0]["decision_kind"], "ask", "{}", recs[0]);
-    assert_eq!(recs[0]["shape"], key.as_str(), "every record gains shape: {}", recs[0]);
+    assert_eq!(
+        recs[0]["shape"],
+        key.as_str(),
+        "every record gains shape: {}",
+        recs[0]
+    );
 }
 
 #[test]
-#[ignore = "RED(ask-learning): an allow entry for ANOTHER shape does not apply"]
 fn other_shapes_entry_does_not_apply() {
     let e = env("other-shape");
     let p = bash("/tmp/x", ASK_CMD, None);
@@ -375,7 +405,6 @@ fn other_shapes_entry_does_not_apply() {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): corrupt / wrong-version table → still Ask, never Allow, reason notes it"]
 fn corrupt_table_keeps_ask_with_note() {
     let e = env("corrupt");
     let p = bash("/tmp/x", ASK_CMD, None);
@@ -411,7 +440,6 @@ fn corrupt_table_keeps_ask_with_note() {
 // ------------------------------------------------------------ hard guards
 
 #[test]
-#[ignore = "RED(ask-learning): a Deny (system harm) stays Deny even with an allow entry for its shape"]
 fn deny_is_never_overridden_by_learned_allow() {
     let e = env("harm");
     let p = bash("/tmp/x", HARM_CMD, None);
@@ -424,7 +452,6 @@ fn deny_is_never_overridden_by_learned_allow() {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): protected config (shell rc / .claude/settings) never learned-Allowed"]
 fn protected_config_never_learned_allowed() {
     let e = env("protected");
     let home = e.home.to_str().unwrap().to_string();

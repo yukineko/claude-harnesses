@@ -30,6 +30,7 @@ compile_error!(
 );
 
 pub mod append;
+pub mod asklearn;
 pub mod attribution;
 pub mod autonomy;
 pub mod blocklog;

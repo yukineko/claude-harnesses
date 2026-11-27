@@ -122,6 +122,10 @@ pub enum DecisionKind {
     /// The verdict path panicked and the call was blocked with exit 2. The
     /// record keeps the raw stdin in `raw_payload`.
     PanicBlocked,
+    /// The detector's `Ask` was answered by the learned table
+    /// (`asklearn`; spec docs/specs/blastguard-ask-learning.md): the printed
+    /// decision is `allow` or `deny` and `original_decision` stays `ask`.
+    Learned,
 }
 
 impl DecisionKind {
@@ -132,6 +136,7 @@ impl DecisionKind {
             DecisionKind::AskHardenedToDeny => "ask-hardened-to-deny",
             DecisionKind::DenyDowngradedToAsk { .. } => "deny-downgraded-to-ask",
             DecisionKind::PanicBlocked => "panic-blocked",
+            DecisionKind::Learned => "learned",
         }
     }
 
@@ -149,6 +154,7 @@ impl DecisionKind {
                 hardened_ask: false,
             } => "deny",
             DecisionKind::PanicBlocked => "undetermined",
+            DecisionKind::Learned => "ask",
         }
     }
 }
@@ -168,6 +174,10 @@ pub struct Block<'a> {
     /// Written as the record's `blastguard_version`. blastguard passes its own
     /// `env!("CARGO_PKG_VERSION")`.
     pub blastguard_version: &'a str,
+    /// The call's learning shape key (`asklearn::Shape::key`), written as the
+    /// record's `shape`; `null` when none could be computed (an unparseable
+    /// payload, a panic). Null is "not recorded", never "no shape".
+    pub shape: Option<&'a str>,
 }
 
 /// The log directory: `BLASTGUARD_BLOCK_LOG_DIR`, else `~/.blastguard/blocks`.
@@ -288,6 +298,7 @@ pub fn record_with_env(raw: &str, parsed: bool, block: &Block<'_>, ts: u64, env:
         "system_harm": block.system_harm,
         "reason": block.reason,
         "rule_id": block.rule_id,
+        "shape": block.shape,
         "env": env,
     });
     if !parsed {
@@ -331,6 +342,7 @@ mod tests {
             reason: "r",
             rule_id: "x",
             blastguard_version: env!("CARGO_PKG_VERSION"),
+            shape: None,
         }
     }
 
@@ -393,6 +405,7 @@ mod tests {
                 "deny",
             ),
             (DecisionKind::PanicBlocked, "undetermined"),
+            (DecisionKind::Learned, "ask"),
         ];
         for (kind, want) in cases {
             let r = record("{}", true, &block(kind), 0);

@@ -84,7 +84,15 @@ fn approvals(s: &Shape, sessions: &[&str]) -> Vec<OutcomeRecord> {
     sessions
         .iter()
         .enumerate()
-        .map(|(i, sid)| rec(s, sid, Outcome::Approved, 1000 + i as u64, &format!("rm \"$f{i}\"")))
+        .map(|(i, sid)| {
+            rec(
+                s,
+                sid,
+                Outcome::Approved,
+                1000 + i as u64,
+                &format!("rm \"$f{i}\""),
+            )
+        })
         .collect()
 }
 
@@ -113,9 +121,12 @@ const U3: &str = "0b8f2c3e-3333-4a4a-9c9c-000000000003";
 // ------------------------------------------------------------ shape key
 
 #[test]
-#[ignore = "RED(ask-learning): Shape::key canonical form <rule_id>|<class>|<sorted,deduped verbs>"]
 fn shape_key_is_rule_class_and_sorted_deduped_verbs() {
-    let s = shape("some-rule", TargetClass::Home, &["tee", "echo", "tee", "cat"]);
+    let s = shape(
+        "some-rule",
+        TargetClass::Home,
+        &["tee", "echo", "tee", "cat"],
+    );
     let class = TargetClass::Home.as_str().to_string();
     assert_eq!(s.key(), format!("some-rule|{class}|cat,echo,tee"));
     // Order of the input verbs must not matter.
@@ -129,7 +140,6 @@ fn shape_key_is_rule_class_and_sorted_deduped_verbs() {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): TargetClass labels are distinct and contain no key separators"]
 fn class_labels_are_distinct_and_separator_free() {
     let labels: Vec<&str> = ALL_CLASSES.iter().map(|c| c.as_str()).collect();
     for l in &labels {
@@ -154,7 +164,6 @@ fn class_labels_are_distinct_and_separator_free() {
 // ------------------------------------------------------------ thresholds
 
 #[test]
-#[ignore = "RED(ask-learning): 2 approvals → no entry"]
 fn two_approvals_give_no_entry() {
     let s = rm_shape();
     let t = learn(&approvals(&s, &[U1, U2]));
@@ -163,7 +172,6 @@ fn two_approvals_give_no_entry() {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): 3 approvals from ONE session → no entry"]
 fn three_approvals_one_session_give_no_entry() {
     let s = rm_shape();
     let t = learn(&approvals(&s, &[U1, U1, U1]));
@@ -172,7 +180,6 @@ fn three_approvals_one_session_give_no_entry() {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): 3 approvals / 2 sessions / 0 declines → allow"]
 fn three_approvals_two_sessions_give_allow() {
     let s = rm_shape();
     let t = learn(&approvals(&s, &[U1, U1, U2]));
@@ -188,7 +195,6 @@ fn three_approvals_two_sessions_give_allow() {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): any decline → deny, even with 10 approvals"]
 fn one_decline_gives_deny_even_with_ten_approvals() {
     let s = rm_shape();
     let mut rs = approvals(&s, &[U1, U2, U3, U1, U2, U3, U1, U2, U3, U1]);
@@ -202,7 +208,6 @@ fn one_decline_gives_deny_even_with_ten_approvals() {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): a single decline alone → deny"]
 fn single_decline_alone_gives_deny() {
     let s = rm_shape();
     let t = learn(&[rec(&s, U1, Outcome::Declined, 1, "rm \"$f\"")]);
@@ -210,7 +215,6 @@ fn single_decline_alone_gives_deny() {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): System / ProtectedConfig classes never allow, but can deny"]
 fn system_and_protected_config_never_allow_but_deny() {
     for class in [TargetClass::System, TargetClass::ProtectedConfig] {
         let s = shape("some-rule", class, &["tee"]);
@@ -236,7 +240,6 @@ fn system_and_protected_config_never_allow_but_deny() {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): system_harm records never allow, but can deny"]
 fn system_harm_never_allows_but_denies() {
     let s = shape("rm-system", TargetClass::Home, &["rm"]);
     let harm = |sid: &str, o: Outcome, ts: u64| OutcomeRecord {
@@ -264,7 +267,6 @@ fn system_harm_never_allows_but_denies() {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): other classes are allowable (Undetermined/Worktree/Scratchpad/Home/None)"]
 fn non_protected_classes_are_allowable() {
     for class in [
         TargetClass::Worktree,
@@ -285,10 +287,13 @@ fn non_protected_classes_are_allowable() {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): lookup is keyed by shape — another shape's entry does not apply"]
 fn lookup_does_not_leak_across_shapes() {
     let s = rm_shape();
-    let other = shape("rm-undetermined-target", TargetClass::Undetermined, &["rm", "xargs"]);
+    let other = shape(
+        "rm-undetermined-target",
+        TargetClass::Undetermined,
+        &["rm", "xargs"],
+    );
     let t = learn(&approvals(&s, &[U1, U2, U3]));
     assert!(lookup(&t, &other).is_none());
 }
@@ -296,7 +301,6 @@ fn lookup_does_not_leak_across_shapes() {
 // ------------------------------------------------------------ table form
 
 #[test]
-#[ignore = "RED(ask-learning): samples ≤3 and each truncated to 300"]
 fn samples_are_capped_and_truncated() {
     let s = rm_shape();
     let long = "x".repeat(1000);
@@ -317,12 +321,15 @@ fn samples_are_capped_and_truncated() {
     assert!(!samples.is_empty() && samples.len() <= 3, "{e}");
     for x in samples {
         let x = x.as_str().expect("sample is string");
-        assert!(x.chars().count() <= 300, "sample not truncated: {} chars", x.chars().count());
+        assert!(
+            x.chars().count() <= 300,
+            "sample not truncated: {} chars",
+            x.chars().count()
+        );
     }
 }
 
 #[test]
-#[ignore = "RED(ask-learning): table carries no timestamps; entries sorted by shape key"]
 fn table_has_no_timestamps_and_sorted_entries() {
     let a = shape("a-rule", TargetClass::Home, &["rm"]);
     let b = shape("b-rule", TargetClass::Home, &["rm"]);
@@ -330,25 +337,37 @@ fn table_has_no_timestamps_and_sorted_entries() {
     rs.extend(approvals(&a, &[U1, U2, U3]));
     let t = learn(&rs);
     let es = entries(&t);
-    let keys: Vec<String> = es.iter().map(|e| e["shape"].as_str().unwrap().to_string()).collect();
+    let keys: Vec<String> = es
+        .iter()
+        .map(|e| e["shape"].as_str().unwrap().to_string())
+        .collect();
     let mut sorted = keys.clone();
     sorted.sort();
     assert_eq!(keys, sorted);
     let text = serde_json::to_string(&t).unwrap();
-    assert!(!text.contains("\"ts\""), "table must not contain timestamps: {text}");
+    assert!(
+        !text.contains("\"ts\""),
+        "table must not contain timestamps: {text}"
+    );
     // The exact object form of one entry.
     let e = &es[0];
     let mut fields: Vec<&str> = e.as_object().unwrap().keys().map(String::as_str).collect();
     fields.sort();
     assert_eq!(
         fields,
-        ["approvals", "decision", "declines", "samples", "sessions", "shape"],
+        [
+            "approvals",
+            "decision",
+            "declines",
+            "samples",
+            "sessions",
+            "shape"
+        ],
         "{e}"
     );
 }
 
 #[test]
-#[ignore = "RED(ask-learning): learn is deterministic — shuffled input → byte-identical JSON"]
 fn learn_is_deterministic_under_shuffle() {
     let a = rm_shape();
     let b = shape("other", TargetClass::Worktree, &["git", "rm"]);
@@ -364,9 +383,17 @@ fn learn_is_deterministic_under_shuffle() {
     for k in 1..n {
         let mut p = rs.clone();
         p.rotate_left(k);
-        assert_eq!(serde_json::to_string(&learn(&p)).unwrap(), base, "rotation {k}");
+        assert_eq!(
+            serde_json::to_string(&learn(&p)).unwrap(),
+            base,
+            "rotation {k}"
+        );
         p.reverse();
-        assert_eq!(serde_json::to_string(&learn(&p)).unwrap(), base, "rotation {k} reversed");
+        assert_eq!(
+            serde_json::to_string(&learn(&p)).unwrap(),
+            base,
+            "rotation {k} reversed"
+        );
     }
     let mut rev = rs.clone();
     rev.reverse();
@@ -383,14 +410,12 @@ fn tmp(name: &str) -> PathBuf {
 }
 
 #[test]
-#[ignore = "RED(ask-learning): read_table on a missing file → Absent"]
 fn read_absent() {
     let p = tmp("absent").join("table.json");
     assert!(matches!(read_table(&p), TableRead::Absent));
 }
 
 #[test]
-#[ignore = "RED(ask-learning): read_table on corrupt / wrong-version / directory → Undetermined"]
 fn read_corrupt_or_wrong_version_is_undetermined() {
     let d = tmp("undet");
     for (name, body) in [
@@ -410,11 +435,13 @@ fn read_corrupt_or_wrong_version_is_undetermined() {
     // A directory where the file should be is unreadable, not absent.
     let dir_as_file = d.join("dir.json");
     std::fs::create_dir_all(&dir_as_file).unwrap();
-    assert!(matches!(read_table(&dir_as_file), TableRead::Undetermined(..)));
+    assert!(matches!(
+        read_table(&dir_as_file),
+        TableRead::Undetermined(..)
+    ));
 }
 
 #[test]
-#[ignore = "RED(ask-learning): read_table round-trips a learned table → Known, lookups preserved"]
 fn read_valid_table_is_known_and_round_trips() {
     let s = rm_shape();
     let d = shape("d", TargetClass::Home, &["rm"]);
@@ -425,8 +452,14 @@ fn read_valid_table_is_known_and_round_trips() {
     std::fs::write(&p, serde_json::to_string(&t).unwrap()).unwrap();
     match read_table(&p) {
         TableRead::Known(back) => {
-            assert!(matches!(lookup(&back, &s), Some(LearnedDecision::Allow { .. })));
-            assert!(matches!(lookup(&back, &d), Some(LearnedDecision::Deny { .. })));
+            assert!(matches!(
+                lookup(&back, &s),
+                Some(LearnedDecision::Allow { .. })
+            ));
+            assert!(matches!(
+                lookup(&back, &d),
+                Some(LearnedDecision::Deny { .. })
+            ));
             assert_eq!(
                 serde_json::to_string(&back).unwrap(),
                 serde_json::to_string(&t).unwrap()

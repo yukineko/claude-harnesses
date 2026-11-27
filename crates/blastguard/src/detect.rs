@@ -61,7 +61,7 @@ use crate::scope::{Placement, SafeRoots};
 use harness_core::verdict::Determination;
 mod ast;
 pub(crate) use ast::s5::S5_EFFECT_PREFIX;
-pub(crate) use ast::{DENY_TARGET, TABLE_B_UNDETERMINED, TABLE_B_UNRESOLVED};
+pub(crate) use ast::{shape_facts, DENY_TARGET, TABLE_B_UNDETERMINED, TABLE_B_UNRESOLVED};
 mod backtick_text;
 mod budget;
 mod compound;

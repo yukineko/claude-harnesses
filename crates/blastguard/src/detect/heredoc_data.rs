@@ -940,7 +940,46 @@ fn plain_echo_word(w: &Word) -> bool {
                 .and_then(|n| n.strip_suffix('}'))
                 .is_some_and(is_identifier)
     });
-    param || (!raw.contains(['$', '`']) && !raw.contains("<(") && !raw.contains(">("))
+    param
+        || (!raw.contains(['$', '`']) && !raw.contains("<(") && !raw.contains(">("))
+        || double_quoted_plain_params(raw)
+}
+
+/// True when `raw` is one double-quoted word whose interior is only literal
+/// text (no backslash, quote, backquote or other `$` form) and plain
+/// `$NAME` / `${NAME}` references (`"$a $b"`, backlog cfa4e0f2). Each such
+/// reference only prints its value; none can evaluate it (`${c@P}`, `$((c))`,
+/// `${!c}`, `$(…)` are refused because the name must be a bare identifier).
+fn double_quoted_plain_params(raw: &str) -> bool {
+    let Some(inner) = raw.strip_prefix('"').and_then(|r| r.strip_suffix('"')) else {
+        return false;
+    };
+    let mut rest = inner;
+    while let Some(c) = rest.chars().next() {
+        if c == '$' {
+            let after = &rest[1..];
+            let (name, tail) = if let Some(b) = after.strip_prefix('{') {
+                let Some(end) = b.find('}') else {
+                    return false;
+                };
+                (&b[..end], &b[end + 1..])
+            } else {
+                let end = after
+                    .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                    .unwrap_or(after.len());
+                (&after[..end], &after[end..])
+            };
+            if !is_identifier(name) {
+                return false;
+            }
+            rest = tail;
+        } else if matches!(c, '`' | '"' | '\\') {
+            return false;
+        } else {
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    true
 }
 
 /// True when `c` is `git commit` whose message is read from stdin: `-F -`,

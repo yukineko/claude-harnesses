@@ -33,36 +33,6 @@ exit 101: rc/.harness-worktrees/sidereds-20261116/crates/backlog)
 error: test failed, to rerun pass `-p backlog --test backlog_20261116_zero_tests_filtered_out_not_discard`"""
 
 [[task]]
-id = "cfa4e0f2"
-title = "blastguard FP: heredoc data fed to a while-read loop is judged as an fd-redirect shell line"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-20 (flow session, blastguard deployed 0.2.798; re-measured at rev bf046b953 which includes the eb52d2e5 fix): a while IFS='|' read -r loop whose quoted heredoc DATA lines hold the text of an fd redirect (echo hi, redirect to fd variable) is Denied in main and subagent with the redirect-destroys-file / shell-expansion reason (verbatim text is in the repro test). The same loop with harmless data is allow. Controls: eval of the data stays Deny, bash heredoc of the same text stays Deny. Readings: (a) FP, a heredoc fed to read is data, never executed (heredoc-body-by-target ruling); (b) intended, blastguard cannot see whether the loop body later executes the data. Tell apart: the loop body here only echoes the variables; eval/sh in the body must keep it judged. Not fixed in run-20261120-171414-35880 (eb52d2e5 fix does not cover this shape)."
-created_at = 1795163808
-updated_at = 1795163808
-weight = 0.0
-issue_number = 1925
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1925"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_while_read_data_heredoc_fd_redirect_fp -- --include-ignored"
-rev = "7e29f1f20588611dcaa91fa3a06b69de2d02dde2"
-observed_at = 1795163808
-detail = """
-exit 101: 0-171414-35880-whileread/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.65s
-     Running tests/backlog_20261120_while_read_data_heredoc_fd_redirect_fp.rs (target/debug/deps/backlog_20261120_while_read_data_heredoc_fd_redirect_fp-f538ec355ea14847)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_while_read_data_heredoc_fd_redirect_fp`"""
-
-[[task]]
 id = "987e3708"
 title = "blastguard FP candidate: echo rm -rf ./build | bash is Deny in main and subagent (non-system relative target)"
 project = "/Users/yuki/src/harness"
@@ -606,3 +576,34 @@ scripts/test_backlog_audit_b1_0.py:142: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_backlog_audit_b1_0.py::Backlog06a9d33fDirectInvocationRunsTests::test_a_direct_run_reports_a_nonzero_test_count
 ============================== 1 failed in 1.14s ==============================="""
+
+[[task]]
+id = "2dc3f5cf"
+title = "blastguard FP: heredoc_script_fp_cases_stay_allow fails on main (python heredoc fp_makedirs / fp_os_rename_repo / fp_shutil_move_repo now ask/deny)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-27 at main 30937b7ef by flow session eaa077f4: cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_fp_cases_stay_allow -> FAILED (panicked at heredoc_script_failopen_red_20261108.rs:713:5). Reported by the cfa4e0f2 worker: python-heredoc FP cases fp_makedirs, fp_os_rename_repo, fp_shutil_move_repo show main=ask/deny sub=deny. Readings: (a) regression in python heredoc S5/effect rules; (b) the test's expectations are stale against a later ruling. Not investigated."
+created_at = 1795787867
+updated_at = 1795787867
+weight = 0.0
+issue_number = 1994
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1994"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_fp_cases_stay_allow"
+rev = "639c18133253f0991eedcef74044f5550b778028"
+observed_at = 1795787867
+detail = """
+exit 101: ompiling blastguard v0.2.951 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
+     Running tests/heredoc_script_failopen_red_20261108.rs (target/debug/deps/heredoc_script_failopen_red_20261108-609b142a267ca92c)
+error: test failed, to rerun pass `-p blastguard --test heredoc_script_failopen_red_20261108`"""

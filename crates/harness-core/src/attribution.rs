@@ -1435,6 +1435,46 @@ fn insert_named(out: &mut BTreeSet<PathBuf>, w: &str, bases: &[PathBuf]) {
 /// this is `true` (CLAUDE.md 3). An unreadable transcript or sidechain is
 /// `Undetermined`, never `false`.
 pub fn has_unattributable_write(transcript_path: &str) -> Determination<bool> {
+    match session_bash_calls(transcript_path) {
+        Determination::Known(all) => Determination::known(
+            all.iter()
+                .any(|c| !matches!(call_unattributable(c), Unattr::No)),
+        ),
+        Determination::Undetermined(why) => Determination::undetermined(why.as_str().to_string()),
+    }
+}
+
+/// [`has_unattributable_write`] for judging ONE root `root`. A path-less
+/// writer whose effect is statically bounded to the cargo workspace of its
+/// effective cwd (the closed list in [`confined_to_cwd`]: `cargo fmt`) counts
+/// only when that cwd and `root` contain one another; every other path-less
+/// writer (`python3 -`, `git checkout`, a glob, a generator) counts for every
+/// root, as does a confined one whose effective cwd cannot be determined
+/// (unknown cwd, a `cd` that is not followed, an unparsed command). The
+/// effective cwd is the line's recorded cwd moved only by a `cd` that
+/// [`walk_cwd`] judges certain. User ruling 2026-11-21 (backlog ff46a113).
+pub fn has_unattributable_write_in(transcript_path: &str, root: &Path) -> Determination<bool> {
+    let all = match session_bash_calls(transcript_path) {
+        Determination::Known(v) => v,
+        Determination::Undetermined(why) => {
+            return Determination::undetermined(why.as_str().to_string())
+        }
+    };
+    let root = resolve(root);
+    let related = |d: &Path| {
+        let d = resolve(d);
+        d.starts_with(&root) || root.starts_with(&d)
+    };
+    Determination::known(all.iter().any(|c| match call_unattributable(c) {
+        Unattr::No => false,
+        Unattr::Global => true,
+        Unattr::Within(dirs) => dirs.iter().any(|d| related(d)),
+    }))
+}
+
+/// Every Bash call of the session: the parent transcript and each sidechain.
+/// An unreadable transcript or sidechain is `Undetermined`.
+fn session_bash_calls(transcript_path: &str) -> Determination<Vec<crate::transcript::BashCall>> {
     let mut all = match crate::transcript::bash_commands_by_session(transcript_path) {
         Determination::Known(v) => v,
         Determination::Undetermined(why) => {
@@ -1459,7 +1499,46 @@ pub fn has_unattributable_write(transcript_path: &str) -> Determination<bool> {
             return Determination::undetermined(why.as_str().to_string())
         }
     }
-    Determination::known(all.iter().any(call_is_unattributable))
+    Determination::known(all)
+}
+
+/// How far an unattributable call's possible writes reach.
+enum Unattr {
+    /// Every writing stage names exactly its files.
+    No,
+    /// Some writer can reach any path (or the cwd cannot be determined).
+    Global,
+    /// Every path-less writer is confined to the cargo workspace of one of
+    /// these effective directories.
+    Within(Vec<PathBuf>),
+}
+
+/// `cargo fmt` (optionally `--all`, `--check`, `-q`, `-v`, `-p <name>`), with
+/// no redirect: it rewrites only the files of the cargo workspace found from
+/// its cwd. Anything with another flag (`--manifest-path`, a file operand) or
+/// another program is NOT in this list; a program is added only when it is
+/// provably confined to the cwd's workspace.
+fn confined_to_cwd(stage: &Stage) -> bool {
+    if !stage.redirects.is_empty() {
+        return false;
+    }
+    let w: Vec<&str> = stage.words.iter().map(String::as_str).collect();
+    if w.len() < 2 || w[0] != "cargo" || w[1] != "fmt" {
+        return false;
+    }
+    let mut it = w[2..].iter().copied();
+    while let Some(a) = it.next() {
+        match a {
+            "--all" | "--check" | "-q" | "--quiet" | "-v" | "--verbose" => {}
+            "-p" | "--package" => {
+                if !it.next().is_some_and(plain_word) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// Per STAGE, not per call: a call is unattributable when any stage that may
@@ -1471,20 +1550,25 @@ pub fn has_unattributable_write(transcript_path: &str) -> Determination<bool> {
 /// A `cd` target or directory argument is not a written file, and a path named
 /// by a DIFFERENT stage does not cover another writer. A command the parser
 /// cannot follow, or holding a substitution, is unattributable.
-fn call_is_unattributable(call: &crate::transcript::BashCall) -> bool {
+///
+/// The answer is [`Unattr::Within`] (not `Global`) only when EVERY
+/// unattributable stage is [`confined_to_cwd`] and the cwd it runs in is
+/// known; any other unattributable stage makes the call `Global`.
+fn call_unattributable(call: &crate::transcript::BashCall) -> Unattr {
     let plan = plan_call(&call.command);
     // Unparsed, or a directory command in a command that is not a flat list:
-    // the cwd cannot be tracked, so the call is unattributable.
+    // the cwd cannot be tracked, so the call is unattributable everywhere.
     let Some(stmts) = plan.stmts.as_ref().filter(|_| !plan.fenced) else {
-        return true;
+        return Unattr::Global;
     };
     // A directory command this cannot place makes the call unattributable.
     let Ok(walk) = plan.walk(stmts, call.cwd.as_deref().map(Path::new)) else {
-        return true;
+        return Unattr::Global;
     };
+    let mut within: Vec<PathBuf> = Vec::new();
     for (k, s) in stmts.iter().enumerate() {
         if s.opaque {
-            return true;
+            return Unattr::Global;
         }
         let bases = &walk.bases[k];
         for stage in &s.stages {
@@ -1498,11 +1582,20 @@ fn call_is_unattributable(call: &crate::transcript::BashCall) -> bool {
                 bases.iter().all(|b| stage_attributable(stage, Some(b)))
             };
             if !ok {
-                return true;
+                // Bounded to the cwd's workspace only with a known cwd.
+                if confined_to_cwd(stage) && !bases.is_empty() {
+                    within.extend(bases.iter().cloned());
+                } else {
+                    return Unattr::Global;
+                }
             }
         }
     }
-    false
+    if within.is_empty() {
+        Unattr::No
+    } else {
+        Unattr::Within(within)
+    }
 }
 
 /// A word that names exactly one path: no glob, expansion, brace, tilde,

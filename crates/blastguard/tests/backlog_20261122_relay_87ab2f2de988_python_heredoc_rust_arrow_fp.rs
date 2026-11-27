@@ -139,7 +139,6 @@ fn unallowed(cmd: &str, tag: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED(1b84867e): relay bgr-87ab2f2de988 — `>` inside Python ''' literal text of a quoted python3 -I - heredoc is read as a shell redirect (Ask/Deny)"]
 fn relay_87ab2f2de988_exact_command_is_allow() {
     assert!(EXACT.contains(ORIG_CD), "fixture: cd target present");
     let bad = unallowed(EXACT.trim_end_matches('\n'), "exact");
@@ -148,6 +147,43 @@ fn relay_87ab2f2de988_exact_command_is_allow() {
         "expected Allow for the verbatim relayed command:\n{}",
         bad.join("\n")
     );
+}
+
+/// Fail-closed control for 1b84867e: only the BODY is carried through the
+/// compound flattening; a harmful compound reader AFTER the delimiter is still
+/// flattened and judged.
+#[test]
+fn control_compound_reader_after_python_body_is_still_refused() {
+    let cmd = format!(
+        "cd {ORIG_CD} && python3 -I - <<'EOF'\np='crates/condukt/src/testscope.rs'\nfor x in [1]:\n    pass\nEOF\n{{ bash <(echo 'rm -rf /etc'); }}"
+    );
+    let home = unique_home("tail");
+    let cmd = cmd.replace(ORIG_CD, home.0.join("wt").to_str().unwrap());
+    for subagent in [false, true] {
+        let (d, r) = run_as(&cmd, &home, subagent);
+        assert!(d == "deny" || d == "ask", "subagent={subagent}: {d} ({r})");
+    }
+}
+
+/// System-harm fail-open found after 75dcaa950: the EXACT 87ab body (Rust text
+/// with uneven quotes inside Python literals) followed by a harmful compound
+/// tail was Allow. The tail is shell and must be judged.
+#[test]
+fn exact_body_then_harmful_compound_tail_is_deny() {
+    let cmd = format!(
+        "{}\n{{ bash <(echo 'rm -rf /etc'); }}",
+        EXACT.trim_end_matches('\n')
+    );
+    let home = unique_home("exacttail");
+    let cmd = cmd.replace(ORIG_CD, home.0.join("wt").to_str().unwrap());
+    let mut bad = Vec::new();
+    for subagent in [false, true] {
+        let (d, r) = run_as(&cmd, &home, subagent);
+        if d != "deny" {
+            bad.push(format!("subagent={subagent}: {d} ({r})"));
+        }
+    }
+    assert!(bad.is_empty(), "expected Deny:\n{}", bad.join("\n"));
 }
 
 #[test]

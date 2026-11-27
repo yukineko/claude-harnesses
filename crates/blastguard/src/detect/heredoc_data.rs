@@ -1454,6 +1454,135 @@ pub(super) fn backslashes_inert_in_quotes(line: &str) -> bool {
     !in_s && !in_d
 }
 
+/// `cmd` with the body of its python-stdin quoted here-document replaced by the
+/// harmless program `pass`, when lines follow the closing delimiter and the body
+/// is not already that (system-harm fail-open found after 75dcaa950).
+///
+/// The shell parses nothing of the body, but several rules read the WHOLE text
+/// with quote-aware splitters that are not here-document aware: a body whose
+/// quotes nest unevenly (Rust text inside Python literals) leaves such a
+/// splitter inside a quote at the delimiter, and a command after it
+/// (`{ bash <(echo 'rm -rf /etc'); }`) is swallowed and never judged. The
+/// caller judges this text too and keeps the stronger verdict, so the lines
+/// after the delimiter are judged as shell with the head's `cd` in force and no
+/// body to confuse the splitters. It can only raise a verdict.
+pub(super) fn judged_with_python_body_replaced(
+    cmd: &str,
+    depth: usize,
+    ctx: &super::Ctx<'_>,
+) -> Decision {
+    let judged = super::detect_bash_after_data_bodies(cmd, depth, ctx);
+    match python_body_replaced_by_pass(cmd) {
+        Some(Ok(bodyless)) => super::git_apply_patch::stronger(
+            judged,
+            super::detect_bash(&bodyless, depth.saturating_add(1), ctx),
+        ),
+        // No stand-in survives as the body: the lines after the delimiter
+        // cannot be judged apart from it, so refuse (never Allow).
+        Some(Err(())) => super::git_apply_patch::stronger(
+            judged,
+            Decision::ask(
+                "the lines after a Python program fed on stdin could not be judged apart \
+                 from its text (no stand-in line stays clear of the here-document delimiter)",
+            ),
+        ),
+        None => judged,
+    }
+}
+
+/// Stand-in program lines, tried in order. Each is a complete Python program
+/// that does nothing; they differ so one is never equal to the delimiter line.
+const BODY_STAND_INS: [&str; 4] = ["pass", "pass #", "pass # .", "pass # .."];
+
+/// `Some(Ok(text))`: `cmd` with the body replaced by the first stand-in that
+/// stays the WHOLE body when `text` is read back by the same parser (a stand-in
+/// equal to the delimiter closes the here-document itself, leaves the body
+/// empty and re-grows on every round) and leaves `after` as it was.
+/// `Some(Err(()))`: none does. `None`: nothing to do (no lines after the
+/// delimiter, or the body already is a stand-in, which also stops the
+/// recursion of the caller).
+fn python_body_replaced_by_pass(cmd: &str) -> Option<Result<String, ()>> {
+    let parts = super::heredoc::python_stdin_here_document(cmd)?;
+    if parts.after.trim().is_empty()
+        || BODY_STAND_INS
+            .iter()
+            .any(|s| parts.body == format!("{s}\n"))
+    {
+        return None;
+    }
+    let (head, tail) = parts.without_body.split_at(parts.head_len);
+    for stand_in in BODY_STAND_INS {
+        let text = format!("{head}{stand_in}\n{tail}");
+        let kept = super::heredoc::python_stdin_here_document(&text)
+            .is_some_and(|p| p.body == format!("{stand_in}\n") && p.after == parts.after);
+        if kept {
+            return Some(Ok(text));
+        }
+    }
+    Some(Err(()))
+}
+
+/// Per line (backlog c5202092): of the two blanked views of a Python body
+/// (`plain`, and `seps`, which keeps the `;` / `&` / `|` of blanked literals),
+/// the line that the segment splitter cuts into as many segments as the raw
+/// line. A literal such as `"a && b"` cuts the raw line in two, which only
+/// `seps` reproduces; a line whose literal holds a quote-protected `;` cuts
+/// into one, which only `plain` reproduces. `None` when the three texts differ
+/// in line count or a line matches in neither view (the view must stay
+/// index-aligned with `split_segments`).
+pub(super) fn segment_aligned_body(raw: &str, plain: &str, seps: &str) -> Option<String> {
+    let (r, p, s): (Vec<&str>, Vec<&str>, Vec<&str>) = (
+        raw.split('\n').collect(),
+        plain.split('\n').collect(),
+        seps.split('\n').collect(),
+    );
+    if p.len() != r.len() || s.len() != r.len() {
+        return None;
+    }
+    let n = |l: &str| super::split_segments(l).len();
+    let lines: Option<Vec<&str>> = (0..r.len())
+        .map(|k| [p[k], s[k]].into_iter().find(|v| n(v) == n(r[k])))
+        .collect();
+    Some(lines?.join("\n"))
+}
+
+/// `decompound` (the compound-syntax flattening of the stdin-exec audit) of
+/// `cmd`, except that the BODY of a quoted here-document a bare Python
+/// interpreter runs as its program ([`super::heredoc::python_stdin_here_document`])
+/// is carried through verbatim (backlog 1b84867e).
+///
+/// The shell never parses such a body, but the flattening read its lines as
+/// shell segments: Python lines like `for rel in …:` / `if …:` / `}` were taken
+/// for compound syntax and rewritten, so the flattened program was no longer
+/// Python. It then failed to tokenise, the parser could not show its strings
+/// are data, and a `>` inside a Rust literal of the body (`=> {`) became an
+/// Ask as a possible redirect. Only the text before the body and the lines from
+/// the delimiter on are flattened; an `Err` from either part is returned as
+/// before (the Ask stays), and a command with no such body is flattened whole.
+pub(super) fn decompounded_around_python_body(
+    cmd: &str,
+    decompound: impl Fn(&str) -> Result<Option<String>, String>,
+) -> Result<Option<String>, String> {
+    let Some(parts) = super::heredoc::python_stdin_here_document(cmd).filter(|p| {
+        !p.body.is_empty() && p.body.ends_with('\n') && p.without_body.is_char_boundary(p.head_len)
+    }) else {
+        return decompound(cmd);
+    };
+    let (head, tail) = parts.without_body.split_at(parts.head_len);
+    let (flat_head, flat_tail) = (decompound(head)?, decompound(tail)?);
+    if flat_head.is_none() && flat_tail.is_none() {
+        return Ok(None);
+    }
+    let flat_head = flat_head.unwrap_or_else(|| head.to_string());
+    let flat_tail = flat_tail.unwrap_or_else(|| tail.to_string());
+    Ok(Some(format!(
+        "{}\n{}{}",
+        flat_head.trim_end(),
+        parts.body,
+        flat_tail.trim_start()
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::without_data_heredoc_bodies;

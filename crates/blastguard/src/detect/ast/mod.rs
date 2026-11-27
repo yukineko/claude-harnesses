@@ -77,6 +77,7 @@ pub(super) mod b5;
 mod eval;
 mod judge;
 mod parse;
+pub(super) mod rustup;
 pub(super) mod s5;
 mod support;
 pub(super) mod targets;
@@ -563,7 +564,8 @@ pub(crate) fn program_source(cmd: &SimpleCommand) -> Option<ProgramSource> {
 pub(crate) fn is_rustup_env_source(cmd: &SimpleCommand) -> bool {
     cmd.assignments.is_empty()
         && matches!(cmd.argv.as_slice(),
-            [dot, f] if dot.value == Value::Literal(".".into()) && eval::is_cargo_env(&f.value))
+            [dot, f] if matches!(&dot.value, Value::Literal(d) if d == "." || d == "source")
+                && eval::is_cargo_env(&f.value))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

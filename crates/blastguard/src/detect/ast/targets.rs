@@ -103,6 +103,9 @@ struct Index {
     /// whose evaluated value is a `Literal` equal to that spelling (stage
     /// S6-6): the source a legacy `$F` rewrite copies, see [`Index::tie`].
     assignment_values: Vec<(Range<usize>, String)>,
+    /// An earlier command of the line may have changed what
+    /// `. "$HOME/.cargo/env"` sources ([`super::rustup::line_tainted`]).
+    rustup_tainted: bool,
 }
 
 /// One evaluated top-level command of [`Index::commands`].
@@ -204,6 +207,7 @@ impl Index {
             words,
             commands,
             assignment_values,
+            rustup_tainted: super::rustup::line_tainted(text, &script.commands),
         }
     }
 
@@ -525,6 +529,19 @@ pub(crate) fn suspended<R>(f: impl FnOnce() -> R) -> R {
         prev,
     };
     f()
+}
+
+/// The r21 exemption may still apply to the top-level line: its AST is
+/// known and no earlier command may have replaced `~/.cargo/env` or its
+/// stdin. `false` when that is not proven (backlog 92f4a28d).
+pub(crate) fn rustup_exempt_allowed() -> bool {
+    with_known(|i| Some(!i.rustup_tainted)).unwrap_or(false)
+}
+
+/// The top-level line is proven to hold a command that may have replaced
+/// `~/.cargo/env` or its stdin before the `. "$HOME/.cargo/env"` that follows.
+pub(crate) fn rustup_proven_tainted() -> bool {
+    with_known(|i| Some(i.rustup_tainted)).unwrap_or(false)
 }
 
 /// The paths the top-level `spelling`, read in `role`, statically names (see

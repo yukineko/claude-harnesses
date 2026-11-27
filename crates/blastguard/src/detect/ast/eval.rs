@@ -302,6 +302,9 @@ struct Env {
     opaque: bool,
     cwd: Cwd,
     stdin: StdinSource,
+    /// An earlier command may have replaced what `. "$HOME/.cargo/env"` runs
+    /// (r21 no longer applies, [`super::rustup`]).
+    rustup_lost: bool,
 }
 
 /// Variables the shell itself sets or changes at run time (whitespace
@@ -329,6 +332,7 @@ impl Env {
             opaque: false,
             cwd: Cwd::Hook,
             stdin: StdinSource::Inherited,
+            rustup_lost: false,
         }
     }
 
@@ -492,6 +496,7 @@ fn join(a: Env, b: Env) -> Env {
         opaque: a.opaque || b.opaque,
         cwd,
         stdin,
+        rustup_lost: a.rustup_lost || b.rustup_lost,
     }
 }
 
@@ -1314,7 +1319,9 @@ impl Ev {
         // effect on `_` is not modelled).
         let underscore_int = env.integer.contains("_");
         let mut outcome = self.effects(&sc, &decl_names, env)?;
+        let lost = super::rustup::tainted_by(&sc);
         for after in [&mut outcome.ok, &mut outcome.fail] {
+            after.rustup_lost |= lost;
             match sc.argv.last() {
                 Some(last) => {
                     if underscore_int {
@@ -1460,7 +1467,10 @@ impl Ev {
             // User ruling 2026-11-18 (r21): `. "$HOME/.cargo/env"` (the
             // hook's HOME, unwrapped, no prefix assignment) is rustup's PATH
             // setup only and keeps the state; any other `.` / `source` does not.
-            "." if sc.assignments.is_empty() && matches!(args, [w] if is_cargo_env(&w.value)) => {}
+            "." | "source"
+                if !env.rustup_lost
+                    && sc.assignments.is_empty()
+                    && matches!(args, [w] if is_cargo_env(&w.value)) => {}
             n if OPAQUE_BUILTINS.contains(&n) => env.make_opaque(&format!("`{n}` ran")),
             _ => {}
         }

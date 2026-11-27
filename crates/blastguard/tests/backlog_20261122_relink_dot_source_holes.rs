@@ -108,7 +108,6 @@ fn assert_not_allow(tag: &str, c: &str) {
 }
 
 #[test]
-#[ignore = "RED: relink-dot-1 ln -sf /dev/stdin ~/.cargo/env then dot-source"]
 fn s1_ln_stdin_over_cargo_env_then_dot_then_write() {
     assert_not_allow(
         "s1",
@@ -117,7 +116,6 @@ fn s1_ln_stdin_over_cargo_env_then_dot_then_write() {
 }
 
 #[test]
-#[ignore = "RED: relink-dot-2b exec 0<<< then dot cargo env"]
 fn s2b_exec_herestring_stdin_then_dot_file_then_write() {
     assert_not_allow(
         "s2b",
@@ -126,7 +124,6 @@ fn s2b_exec_herestring_stdin_then_dot_file_then_write() {
 }
 
 #[test]
-#[ignore = "RED: relink-dot-3 cp over cargo env then dot"]
 fn s3_cp_over_cargo_env_then_dot_then_write() {
     assert_not_allow(
         "s3",
@@ -135,7 +132,6 @@ fn s3_cp_over_cargo_env_then_dot_then_write() {
 }
 
 #[test]
-#[ignore = "RED: relink-dot-3b mv over cargo env then dot"]
 fn s3b_mv_over_cargo_env_then_dot_then_write() {
     assert_not_allow(
         "s3b",
@@ -144,7 +140,6 @@ fn s3b_mv_over_cargo_env_then_dot_then_write() {
 }
 
 #[test]
-#[ignore = "RED: relink-dot-4 python3 -c os.symlink"]
 fn s4_python_os_symlink_then_write() {
     assert_not_allow(
         "s4",
@@ -153,7 +148,6 @@ fn s4_python_os_symlink_then_write() {
 }
 
 #[test]
-#[ignore = "RED: relink-dot-5c builtin dot stdin herestring"]
 fn s5c_builtin_dot_stdin_herestring_then_write() {
     assert_not_allow(
         "s5c",
@@ -162,7 +156,6 @@ fn s5c_builtin_dot_stdin_herestring_then_write() {
 }
 
 #[test]
-#[ignore = "RED: relink-dot-5d command dot stdin herestring"]
 fn s5d_command_dot_stdin_herestring_then_write() {
     assert_not_allow(
         "s5d",

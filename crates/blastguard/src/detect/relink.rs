@@ -483,6 +483,13 @@ fn relinked(
         if found.undetermined {
             unmodelled.push(command.trim().to_string());
         }
+        if found.sources_unknown {
+            return Err(format!(
+                "`{}` sources a file or stdin an earlier command of the line may have \
+                 replaced, so any path may be relinked",
+                command.trim()
+            ));
+        }
     }
     if ops.is_empty() && unmodelled.is_empty() {
         return Ok(None);

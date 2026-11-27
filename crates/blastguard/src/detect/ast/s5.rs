@@ -53,6 +53,10 @@
 //!   program, taken from these same parser effects, not from the legacy
 //!   token / substring-marker reading — `interpreter/python_written_files.rs`,
 //!   backlog 06c51772);
+//! * one of its effects creates a link (`os.symlink`, `os.link`,
+//!   `Path.symlink_to`, `Path.hardlink_to`; backlog 92f4a28d): a later write
+//!   of the line may land through it, and the relink layer
+//!   (`relink/nested.rs`) reads the program's original text;
 //! * the neutral text does not analyse to the same commands with `pass` as
 //!   the program.
 //!
@@ -528,8 +532,46 @@ fn judge_program(
     // the command may read that stdin (`echo 'rm -rf ~' | python3 -c
     // 'os.system("bash")'`). The effects are still judged here, but the
     // program is not retired: the legacy readings of the stdin text keep
-    // judging the line (raise-only).
-    let keep_legacy = runs && p.inline && cmd.stdin != StdinSource::Inherited;
+    // judging the line (raise-only). Also kept when an effect creates a link
+    // ([`effect_relinks`]): the relink layer reads the original text.
+    // A program that creates a link while another command of the line writes
+    // through a redirect: the relink layer sees the line with the program's
+    // literals blanked (a heredoc body), so the Ask is decided here, where
+    // the parsed program is (backlog 92f4a28d). Only a redirect that runs
+    // after the program and may land through the link path asks.
+    if link_paths(&effects).iter().any(|l| {
+        commands.iter().enumerate().any(|(j, o)| {
+            j != idx
+                && o.span.start > cmd.span.start
+                && o.redirects.iter().any(|r| {
+                    matches!(
+                        r.op,
+                        RedirOp::Out
+                            | RedirOp::Append
+                            | RedirOp::Clobber
+                            | RedirOp::InOut
+                            | RedirOp::OutErr
+                            | RedirOp::AppendOutErr
+                    ) && match &r.target {
+                        RedirTarget::Path(v) => {
+                            let w = r.written.as_ref().unwrap_or(v);
+                            o.cwd != cmd.cwd || may_land_through(l, w)
+                        }
+                        _ => false,
+                    }
+                })
+        })
+    }) {
+        return (
+            undetermined(
+                "the Python program creates a link and a later redirect of the line may land \
+                 through it",
+            ),
+            None,
+        );
+    }
+    let keep_legacy = (runs && p.inline && cmd.stdin != StdinSource::Inherited)
+        || effects.iter().any(effect_relinks);
     let prefix = match (&cmd.cwd_candidates, &cmd.cwd) {
         (CwdCandidates::One, Value::Literal(d)) => match progeffect::shell_quote(d) {
             Some(q) => format!("cd {q} && "),
@@ -594,6 +636,55 @@ fn judge_program(
         }
     }
     (acc.finish(), (!keep_legacy).then_some(!effects.is_empty()))
+}
+
+/// An effect of the parsed program creates a link (`os.symlink`, `os.link`,
+/// `Path.symlink_to`, `Path.hardlink_to`; user ruling 92f4a28d, Python only).
+/// Such a program is not retired: a later write of the line may land through
+/// the link, which only the program's original text still shows.
+pub(crate) fn effect_relinks(e: &progeffect::Effect) -> bool {
+    matches!(
+        e,
+        progeffect::Effect::Fs {
+            op: progeffect::FsOp::Link { .. },
+            ..
+        }
+    )
+}
+
+/// The paths of the links the program's effects create.
+fn link_paths(effects: &[progeffect::Effect]) -> Vec<String> {
+    effects
+        .iter()
+        .filter_map(|e| match e {
+            progeffect::Effect::Fs {
+                op: progeffect::FsOp::Link { link, .. },
+                ..
+            } => Some(link.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A write to `target` may go through the link at `link`: it is that path or
+/// below it, or the two cannot be compared (one absolute, one relative, or
+/// the target undetermined). The standard streams and `/dev/null` never do.
+fn may_land_through(link: &str, target: &Value) -> bool {
+    let Value::Literal(t) = target else {
+        return true;
+    };
+    if matches!(
+        t.as_str(),
+        "/dev/null" | "/dev/stdout" | "/dev/stderr" | "/dev/tty"
+    ) {
+        return false;
+    }
+    let norm = |p: &str| p.trim_start_matches("./").trim_end_matches('/').to_string();
+    let (l, t) = (norm(link), norm(t));
+    if l.starts_with('/') != t.starts_with('/') {
+        return true;
+    }
+    t == l || t.starts_with(&format!("{l}/"))
 }
 
 /// Why the program may run a module other than the one it names (user

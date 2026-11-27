@@ -33,7 +33,9 @@ const WATCHED: &[&str] = &[
 
 /// Output from the toolguard hook.
 ///
-/// - `updated`: truncated tool response text (replaces the raw output in context).
+/// - `updated`: truncated tool response TEXT. The caller turns it into the
+///   shape-preserving `updatedToolOutput` value via [`updated_value`] (it is
+///   never emitted as a bare string for an object-shaped response).
 /// - `nudge`:   advisory text injected as `additionalContext` to steer the model.
 pub struct ToolguardOutput {
     pub updated: Option<String>,
@@ -156,6 +158,57 @@ pub fn run(input: &HookInput, cfg: &Config) -> ToolguardOutput {
     ToolguardOutput {
         updated: Some(updated),
         nudge,
+    }
+}
+
+/// Text-bearing string fields of an object-shaped `tool_response` (Bash etc.).
+const TEXT_KEYS: [&str; 5] = ["stdout", "stderr", "text", "output", "result"];
+
+/// Build the `updatedToolOutput` JSON value for `updated`, preserving the SHAPE
+/// of the original `tool_response` (Claude Code rejects a replacement whose
+/// shape differs from the tool's output and keeps the original):
+///
+/// - string response -> `Value::String(updated)`;
+/// - object response -> a clone with the same key set where only the string
+///   text fields are replaced (each truncated to `limit`; for the internal-error
+///   placeholder the first text field carries it and the others are emptied);
+///   non-string fields are unchanged;
+/// - anything else (array, `content` blocks, null, ...) cannot be rebuilt
+///   faithfully -> `None` (no rewrite; the caller reports it via
+///   `additionalContext`).
+pub fn updated_value(resp: Option<&Value>, updated: &str, limit: usize) -> Option<Value> {
+    match resp? {
+        Value::String(_) => Some(Value::String(updated.to_string())),
+        Value::Object(map) => {
+            if map.contains_key("content") {
+                return None;
+            }
+            let present: Vec<&str> = TEXT_KEYS
+                .iter()
+                .copied()
+                .filter(|k| map.get(*k).is_some_and(Value::is_string))
+                .collect();
+            if present.is_empty() {
+                return None;
+            }
+            let mut out = map.clone();
+            let placeholder = updated == INTERNAL_ERROR_PLACEHOLDER;
+            for (i, k) in present.iter().enumerate() {
+                let text = map.get(*k).and_then(Value::as_str).unwrap_or_default();
+                let new = if placeholder {
+                    if i == 0 {
+                        updated.to_string()
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    truncate_response(text, limit)
+                };
+                out.insert((*k).to_string(), Value::String(new));
+            }
+            Some(Value::Object(out))
+        }
+        _ => None,
     }
 }
 

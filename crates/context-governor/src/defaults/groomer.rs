@@ -88,6 +88,46 @@ fn trim_middle(body: &str, budget: u32) -> String {
     format!("{head}\n…[context-governor: elided {elided} chars of {total}]…\n{tail}")
 }
 
+/// Text fields of an object-shaped `tool_response` (Bash) that may be trimmed.
+const TRIM_KEYS: [&str; 2] = ["stdout", "stderr"];
+
+/// Rebuild an object-shaped `tool_response` with the same key set, replacing
+/// only the string `stdout`/`stderr` fields by their trimmed versions (the
+/// budget is shared proportionally to field length). Non-string fields
+/// (`interrupted`, `isImage`, ...) are cloned unchanged. Returns `None` when
+/// there is no text to trim or the rebuilt object is not strictly smaller than
+/// the input serialization (I4).
+fn groom_object(
+    map: &serde_json::Map<String, serde_json::Value>,
+    budget: u32,
+    pre_serialized: &str,
+) -> Option<serde_json::Value> {
+    let total: u64 = TRIM_KEYS
+        .iter()
+        .filter_map(|k| map.get(*k).and_then(|v| v.as_str()))
+        .map(|s| s.chars().count() as u64)
+        .sum();
+    if total == 0 {
+        return None;
+    }
+    let mut out = map.clone();
+    for k in TRIM_KEYS {
+        if let Some(text) = map.get(k).and_then(|v| v.as_str()) {
+            let len = text.chars().count() as u64;
+            let share = u32::try_from(budget as u64 * len / total).unwrap_or(budget);
+            out.insert(
+                k.to_string(),
+                serde_json::Value::String(trim_middle(text, share.max(1))),
+            );
+        }
+    }
+    let rebuilt = serde_json::Value::Object(out);
+    if rebuilt.to_string().chars().count() >= pre_serialized.chars().count() {
+        return None;
+    }
+    Some(rebuilt)
+}
+
 pub struct DefaultGroomer;
 
 impl ToolResultGroomer for DefaultGroomer {
@@ -175,19 +215,36 @@ impl DefaultGroomer {
             id: ItemId(0),
             lane: Lane::Evictable,
             tokens: pre_tokens,
-            body: ItemBody::Inline(body),
+            body: ItemBody::Inline(body.clone()),
         };
         // Infallible by construction (the item is `Lane::Evictable`), but we
         // honor the capability constructor rather than asserting.
         let ev = Evictable::new(&item)?;
-        let groomed = self.groom(ev, budget)?;
-        // `groom` only ever constructs `Value::String` (see `DefaultGroomer::groom`
-        // above), so this is infallible by construction today — but we still fall
-        // back to `""` rather than `.unwrap()`/`.expect()` so a future groomer
-        // implementation returning a non-string `Value` degrades to "no tokens
-        // saved" instead of panicking the hook process.
-        let post_str = groomed.as_str().unwrap_or("");
-        let post_tokens = est_tokens(post_str);
+        // The replacement MUST keep the shape of `tool_response`: Claude Code
+        // rejects an `updatedToolOutput` whose shape differs from the tool's
+        // output (a bare string for Bash's `{stdout, stderr, ...}` object) and
+        // silently keeps the original. String in -> string out; object in ->
+        // same-key object out with only `stdout`/`stderr` trimmed; any other
+        // shape cannot be rebuilt faithfully, so emit no rewrite at all.
+        let (groomed, post_str) = match resp {
+            serde_json::Value::String(_) => {
+                let g = self.groom(ev, budget)?;
+                // `groom` constructs only `Value::String`; a non-string value
+                // would not be a string-shaped replacement, so decline.
+                let post = g.as_str()?.to_string();
+                (g, post)
+            }
+            serde_json::Value::Object(map) => {
+                if pre_tokens <= budget {
+                    return None;
+                }
+                let g = groom_object(map, budget, &body)?;
+                let post = g.to_string();
+                (g, post)
+            }
+            _ => return None,
+        };
+        let post_tokens = est_tokens(&post_str);
         let saved_tokens = pre_tokens.saturating_sub(post_tokens);
         let resident_tokens = post_tokens;
         Some((groomed, saved_tokens, resident_tokens))

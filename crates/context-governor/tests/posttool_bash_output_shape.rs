@@ -97,7 +97,6 @@ fn oversized_bash_output_is_groomed() {
 }
 
 #[test]
-#[ignore = "RED(35d85ccc): groomer emits updatedToolOutput as a bare string for an object-shaped Bash tool_response (groomer.rs Value::String(trimmed))"]
 fn oversized_bash_output_updated_tool_output_keeps_bash_shape() {
     let big = "line of build output that is fairly long\n".repeat(4000);
     let input = bash_response(big);

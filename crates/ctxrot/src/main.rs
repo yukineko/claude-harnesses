@@ -457,13 +457,32 @@ fn main() {
                     "hookEventName".to_string(),
                     serde_json::Value::String("PostToolUse".to_string()),
                 );
+                let mut nudge = out_fields.nudge;
                 if let Some(updated) = out_fields.updated {
-                    hook_output.insert(
-                        "updatedToolOutput".to_string(),
-                        serde_json::Value::String(updated),
-                    );
+                    // Shape-preserving: an object `tool_response` gets an object
+                    // back, a string gets a string; any other shape is NOT
+                    // rewritten (a wrong shape is rejected by Claude Code and the
+                    // original kept) and is reported via additionalContext.
+                    match hooks::toolguard::updated_value(
+                        input.tool_response.as_ref(),
+                        &updated,
+                        cfg.huge_tool_output_bytes as usize,
+                    ) {
+                        Some(v) => {
+                            hook_output.insert("updatedToolOutput".to_string(), v);
+                        }
+                        None => {
+                            let note = "[ctxrot] this tool output exceeded the size threshold \
+                                        but its shape cannot be rewritten faithfully, so it was \
+                                        NOT truncated; the full output is in context.";
+                            nudge = Some(match nudge {
+                                Some(n) => format!("{n}\n{note}"),
+                                None => note.to_string(),
+                            });
+                        }
+                    }
                 }
-                if let Some(nudge) = out_fields.nudge {
+                if let Some(nudge) = nudge {
                     hook_output.insert(
                         "additionalContext".to_string(),
                         serde_json::Value::String(nudge),

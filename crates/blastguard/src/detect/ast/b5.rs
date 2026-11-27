@@ -13,7 +13,8 @@
 //! gives NO opinion: the legacy layer decides (ruling 2026-11-18 (b)). For a
 //! `Known` script, every simple command (including those in `$( )`,
 //! pipelines and background jobs) is classified, after unwrapping `env`
-//! (also `env -i`, `NAME=V` operands), `nohup`, `timeout`, `nice`, `time`,
+//! (also `env -i`, `NAME=V` operands, `env -S STRING` split by `env.rs`; an
+//! unsettled STRING → Undetermined), `nohup`, `timeout`, `nice`, `time`,
 //! `exec`, `command`, `sudo` and `doas` (backlog e1bb5f7e, user ruling
 //! 2026-11-20 Q1: options `-u/-g/-C/-D/-h/-p/-r/-t/-U` skip their argument,
 //! `-E -H -n -S -k -A -P` are flags, then `NAME=V` operands; `-s` / `-i`
@@ -160,10 +161,12 @@ use crate::detect::VerdictAcc;
 use crate::model::Decision;
 
 mod determined;
+mod env;
 use determined::{
     determined_builtin_eval, determined_dash_c_program, determined_delivered_program,
     determined_eval_program,
 };
+use env::{env_split_step, env_walk, EnvEnd};
 
 /// Directories whose binaries are judged by basename like the bare command
 /// (ruling 2026-11-18 #3). Only the exact directory counts, not a
@@ -389,26 +392,10 @@ pub(super) fn unwrap_at(argv: &[Word], k: usize) -> Unwrapped {
     let mut i = k + 1;
     let undet = |o: &str| Unwrapped::Undetermined(format!("`{base}` option `{o}` is not modelled"));
     match base {
-        "env" => loop {
-            match word(i) {
-                None => return Unwrapped::Nothing,
-                Some(Err(_)) => {
-                    return Unwrapped::Undetermined("an `env` operand is undetermined".into())
-                }
-                Some(Ok(w)) => match w {
-                    "-i" | "-" | "--ignore-environment" | "-0" | "--null" | "-v" | "--debug" => {
-                        i += 1
-                    }
-                    "-u" | "--unset" => i += 2,
-                    "--" => return Unwrapped::At(i + 1),
-                    w if w.starts_with("--unset=") || (w.starts_with("-u") && w.len() > 2) => {
-                        i += 1
-                    }
-                    w if w.starts_with('-') => return undet(w),
-                    w if w.contains('=') => i += 1,
-                    _ => return Unwrapped::At(i),
-                },
-            }
+        // `-S` is modelled only by `classify` (`env_split_at`).
+        "env" => match env_walk(argv, k) {
+            EnvEnd::Unwrapped(u) => u,
+            EnvEnd::Split { flag, .. } => undet(flag),
         },
         "nohup" => match word(i) {
             Some(Ok("--")) => Unwrapped::At(i + 1),
@@ -676,8 +663,20 @@ fn classify(
     // Reached through `sudo` / `doas` (see `privileged_literal_body`).
     let mut privileged = false;
     let mut implicit: Option<SimpleCommand> = None;
+    let mut split_cmd: Option<SimpleCommand> = None;
+    let mut splits = 0;
     let mut cmd = cmd;
     loop {
+        // `env -S STRING`: the split words replace it (see `env_split_at`).
+        if let Some(step) = env_split_step(cmd, k, &mut splits) {
+            match step {
+                Ok(next) => {
+                    cmd = split_cmd.insert(next);
+                    continue;
+                }
+                Err(r) => return undetermined(r),
+            }
+        }
         match unwrap_at(&cmd.argv, k) {
             Unwrapped::NotWrapper => break,
             Unwrapped::Nothing => return Decision::Allow,

@@ -1198,8 +1198,9 @@ const ENV_SPACE: [char; 6] = [' ', '\t', '\n', '\u{b}', '\u{c}', '\r'];
 /// an escape outside the list above (GNU rejects it; FreeBSD keeps
 /// `\<blank>` literal), `\c` inside `"…"`, a trailing backslash, or an open
 /// quote. The caller turns it into an Ask (spec blastguard-comment-collapse-
-/// residual R2).
-fn env_split_argv(s: &str) -> Result<Vec<String>, &'static str> {
+/// residual R2). The S4 Table B.5 layer (`ast::b5::env_split_at`) splits
+/// `env -S` with this same function and resolves `Err` to Undetermined.
+pub(in crate::detect) fn env_split_argv(s: &str) -> Result<Vec<String>, &'static str> {
     let mut args = Vec::new();
     let mut cur: Option<String> = None;
     let (mut sq, mut dq) = (false, false);

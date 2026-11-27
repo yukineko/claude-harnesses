@@ -216,7 +216,10 @@ fn assert_not_allow_both(tag: &str, command: &str) {
     for subagent in [false, true] {
         let (d, r) = fx.run(command, subagent);
         println!("[{tag}] subagent={subagent} => {d} {r:?}");
-        assert_ne!(d, "allow", "control {tag} subagent={subagent} must not Allow");
+        assert_ne!(
+            d, "allow",
+            "control {tag} subagent={subagent} must not Allow"
+        );
     }
 }
 
@@ -231,10 +234,7 @@ fn fp_literal_cd_quoted_heredoc_rust_body_short() {
 
 #[test]
 fn fp_literal_cd_quoted_heredoc_rust_body_padded_past_8kib() {
-    assert_allow_both(
-        "fp_padded",
-        &command("@PROJ@", FILE, &padded_body(9000)),
-    );
+    assert_allow_both("fp_padded", &command("@PROJ@", FILE, &padded_body(9000)));
 }
 
 // ---------------------------------------------------------------------

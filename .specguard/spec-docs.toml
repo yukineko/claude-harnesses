@@ -983,3 +983,13 @@ reason = "Section '決定済みの producer pipeline の出力を program とし
 path = "crates/blastguard/src/detect/ast/b5/env.rs"
 doc = "docs/specs/blastguard.md"
 reason = "Line ~631 (env split-string operand split by env's own rules, blastguard 0.2.525+): B.5 models the env split-string option via the GNU splitter (backlog b1e6f2a7) so `env -S 'ls -la'` is judged as the program it builds rather than Undetermined; the env check runs only at parsed command-word positions (words::program_word_positions), never on text inside a quoted argument."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/cargo_floor.rs"
+doc = "docs/specs/blastguard.md"
+reason = "module list bullet `detect/ast/cargo_floor` (backlog 596ef57d): a line that writes build.rs / .cargo/config / (for cargo run) a .rs or .toml and also runs cargo is Ask; wrappers, global options, case-insensitive names, log redirects excluded; raise-only."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/b5/closed_heredoc.rs"
+doc = "docs/specs/blastguard.md"
+reason = "module list bullet `detect/ast/b5/closed_heredoc` (backlog 596ef57d, R-fakeeof, user ruling 2026-11-21): a line unparsable AFTER a here-document closed is Ask (Table B.5 Undetermined); every other parse failure keeps no opinion."

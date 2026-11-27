@@ -74,6 +74,9 @@
 
 mod arith;
 pub(super) mod b5;
+/// Backlog 596ef57d: a line that writes a file cargo runs by itself and runs
+/// cargo is Ask ([`cargo_floor_verdict`]).
+mod cargo_floor;
 mod eval;
 mod judge;
 mod parse;
@@ -293,6 +296,12 @@ pub(crate) fn deny_target_verdict(
              whether it writes a protected path and asks rather than guess",
         )
     })
+}
+
+/// Raise-only Ask when `command` writes a Rust source / `build.rs` / cargo
+/// config and runs cargo (see `cargo_floor`); `Allow` is no objection.
+pub(crate) fn cargo_floor_verdict(command: &str) -> crate::model::Decision {
+    cargo_floor::verdict(command)
 }
 
 /// The result of [`analyze`].

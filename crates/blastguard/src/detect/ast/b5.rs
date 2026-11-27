@@ -154,12 +154,13 @@
 use std::cell::Cell;
 
 use super::{
-    analyze, program_source, support::is_echo_option, Analysis, Context, ProgramSource, RedirOp,
-    RedirTarget, SimpleCommand, StdinSource, Value, Word,
+    analyze, program_source, support::is_echo_option, Analysis, Cause, Context, ProgramSource,
+    RedirOp, RedirTarget, SimpleCommand, StdinSource, Value, Word,
 };
 use crate::detect::VerdictAcc;
 use crate::model::Decision;
 
+mod closed_heredoc;
 mod determined;
 mod env;
 use determined::{
@@ -287,8 +288,7 @@ fn layer(text: &str, depth: usize, judge: &Probes<'_>, inherited: &StdinSource) 
     }
     let script = match analyze(text) {
         Analysis::Known(s) => s,
-        // A parse failure is not a B.5 shape: no opinion, legacy decides.
-        Analysis::Undetermined(_) => return Decision::Allow,
+        Analysis::Undetermined(c) => return closed_heredoc::parse_failure_opinion(text, &c),
     };
     let mut acc = VerdictAcc::default();
     for (i, cmd) in script.commands.iter().enumerate() {

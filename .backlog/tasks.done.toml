@@ -96453,3 +96453,65 @@ rev = "773cdd4244caf7991e30d5768641fc16524b4dfa"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "7a960841"
+title = "blastguard: log テキストで rule 欠落と rule=unknown が同じ表示になる曖昧さを直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "audit-20261113",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "O5. log.rs:263-267 strips 'blastguard:' so signature blastguard:unknown becomes rule unknown, and format_text_line prints unknown for None (log.rs:382-385). RED (verbatim): absent rule and a rule literally named unknown render identically (rule=unknown). log.rs:9 and --help ('Absent fields print as unknown (text) or null (JSON)') document the current behaviour; a fix must change that prose too. source: audit 2026-11-13 (main-session observation / condukt run run-20261113-044355-24760 decision log; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."
+created_at = 1794516875
+updated_at = 1795784628
+weight = 0.0
+issue_number = 1663
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1663"
+issue_closed_at = 1795784631
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261113_o5_log_rule_unknown_ambiguous -- --ignored o5_log_text_distinguishes_absent_rule_from_rule_named_unknown"
+rev = "6cf45c7fb994159111d94aeff598cd476093a22f"
+observed_at = 1794516875
+detail = """
+exit 101: /Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
+     Running tests/backlog_20261113_o5_log_rule_unknown_ambiguous.rs (target/debug/deps/backlog_20261113_o5_log_rule_unknown_ambiguous-70bc371fe619f438)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261113_o5_log_rule_unknown_ambiguous`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261113_o5_log_rule_unknown_ambiguous"
+exit = 0
+passed = 1
+rev = "ee7fe0a0de2777730fb72484a5056aa79452e4da"
+observed_at = 1795784618
+output_digest = "sha256:f5dee23c10c2a3dbb24a49a78af1010ab38e0150f3715ce499d05e5f3224ab10"
+excerpt = """
+
+running 1 test
+test o5_log_text_distinguishes_absent_rule_from_rule_named_unknown ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+
+   Compiling overwatch v0.2.128 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/overwatch)
+   Compiling blastguard v0.2.946 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.56s
+     Running tests/backlog_20261113_o5_log_rule_unknown_ambiguous.rs (target/debug/deps/backlog_20261113_o5_log_rule_unknown_ambiguous-df3fd5d1fe702135)
+"""
+
+[task.closure.red]
+rev = "5c30ab278fbb981ac65ce84ec10a3755882eb846"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

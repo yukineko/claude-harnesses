@@ -1,35 +1,4 @@
 [[task]]
-id = "7a960841"
-title = "blastguard: log テキストで rule 欠落と rule=unknown が同じ表示になる曖昧さを直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "audit-20261113",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "O5. log.rs:263-267 strips 'blastguard:' so signature blastguard:unknown becomes rule unknown, and format_text_line prints unknown for None (log.rs:382-385). RED (verbatim): absent rule and a rule literally named unknown render identically (rule=unknown). log.rs:9 and --help ('Absent fields print as unknown (text) or null (JSON)') document the current behaviour; a fix must change that prose too. source: audit 2026-11-13 (main-session observation / condukt run run-20261113-044355-24760 decision log; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."
-created_at = 1794516875
-updated_at = 1794516875
-weight = 0.0
-issue_number = 1663
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1663"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261113_o5_log_rule_unknown_ambiguous -- --ignored o5_log_text_distinguishes_absent_rule_from_rule_named_unknown"
-rev = "6cf45c7fb994159111d94aeff598cd476093a22f"
-observed_at = 1794516875
-detail = """
-exit 101: /Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
-     Running tests/backlog_20261113_o5_log_rule_unknown_ambiguous.rs (target/debug/deps/backlog_20261113_o5_log_rule_unknown_ambiguous-70bc371fe619f438)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261113_o5_log_rule_unknown_ambiguous`"""
-
-[[task]]
 id = "3764e463"
 title = "blastguard FP: python3 -c の文字列リテラル内 '>> `y`' を run-time append redirect と誤読して ask"
 project = "/Users/yuki/src/harness"

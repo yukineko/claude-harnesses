@@ -5282,17 +5282,25 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
         }
         StateAction::List => {
+            let now = state::now_secs();
             for rs in state::open_runs(cfg, cwd)? {
                 let (done, total) = rs.counts();
                 let paused_tag = if rs.paused { " [paused]" } else { "" };
+                let fresh_tag = match state::run_freshness(cfg, cwd, &rs, now) {
+                    state::RunFreshness::Live => String::new(),
+                    state::RunFreshness::Stale(age) => {
+                        format!(" [stale {}d no owner]", age / 86_400)
+                    }
+                    state::RunFreshness::Undetermined => " [age-undetermined]".to_string(),
+                };
                 let label_tag = rs
                     .terminal_label
                     .as_deref()
                     .map(|l| format!(" @{l}"))
                     .unwrap_or_default();
                 println!(
-                    "{}\t{}/{}\t{}{}{}",
-                    rs.run_id, done, total, rs.goal, paused_tag, label_tag
+                    "{}\t{}/{}\t{}{}{}{}",
+                    rs.run_id, done, total, rs.goal, paused_tag, label_tag, fresh_tag
                 );
             }
         }

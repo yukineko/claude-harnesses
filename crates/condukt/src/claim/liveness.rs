@@ -113,6 +113,34 @@ pub fn run_liveness(cfg: &Config, cwd: &Path, run_id: &str, now: i64) -> RunLive
     }
 }
 
+/// Whether `run_id` holds at least one fresh (non-stale) claim, three-valued:
+/// an unresolvable registry path or unreadable/corrupt registry is
+/// `Undetermined`, never `Known(false)`.
+pub fn run_has_fresh_claim(
+    cfg: &Config,
+    cwd: &Path,
+    run_id: &str,
+    now: i64,
+) -> Determination<bool> {
+    let path = match registry_path(cfg, cwd) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(u) => return Determination::Undetermined(u),
+    };
+    match read_registry(&path) {
+        Ok(Some(reg)) => {
+            let ttl = ttl_secs(cfg);
+            Determination::Known(
+                reg.files
+                    .values()
+                    .chain(reg.task_claims.values())
+                    .any(|c| c.run_id == run_id && !is_stale(c, now, ttl)),
+            )
+        }
+        Ok(None) => Determination::Known(false),
+        Err(e) => Determination::undetermined(format!("claim registry unreadable: {e}")),
+    }
+}
+
 /// Whether `run_id`'s run-state file exists and still has a non-terminal task,
 /// as a three-valued observation for [`run_liveness`]:
 ///

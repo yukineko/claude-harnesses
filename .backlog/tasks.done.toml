@@ -97688,3 +97688,70 @@ rev = "eece97ddb8902903b83487eae326ffded4a4f4fa"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "1b84867e"
+title = "blastguard FP: '>' inside Python literal text of a quoted python3 -I - heredoc is read as a shell redirect (relay bgr-87ab2f2de988)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """
+観測: condukt run run-20261122-035251-84424 の t2 worker (subagent) が relay bgr-87ab2f2de988 で Deny された (cwd /Users/yuki/.condukt/worktrees/run-20261122-035251-84424-t2、当時稼働中の旧 blastguard)。当時の逐語理由: "> target `/Users/yuki/.condukt/worktrees/run-20261122-035251-84424-t2/Ok(*b` is a glob the shell expands to the files it matches, and blastguard cannot place it (only a final-component glob under a literal directory is placed, by that directory), so it cannot tell which files > would truncate and refuses to guess"。コマンドは cd <worktree> && python3 -I - <<'EOF' ... p='crates/condukt/src/testscope.rs' ... rep(""\"...""\",""\"...""\") (Rust ソースを ''' / ""\" リテラルに持つ) ... open(p,'w').write(s) EOF。逐語コマンドは ~/.blastguard/relay/eaa077f4-02a7-458b-9e0e-c7fc2c5d694b.jsonl 141 行目から取り、fixture crates/blastguard/tests/support/relay_bgr_87ab2f2de988_20261122_exact.txt に置いた (書き換えは cd 先だけ)。
+現 HEAD での再現 (2026-11-22, branch filing-84424 commit 3ee9ee41c、基点 main 5e99d94d4 = 8ff44387 の修正入り、worktree /Users/yuki/src/.harness-worktrees/filing-84424、fixture は git work tree で対象ファイルを tracked にしたもの): main mode で ask、subagent mode で deny。逐語 (main mode): "'> {': `/// string, is an `Err` (undetermined` may create or rename an entry on this path and is not modelled, so blastguard cannot tell which file the write really lands on; `python3 -I - <<'EOF'` takes its program from stdin, and the program text contains a `>` that a shell would read as a redirect whose target cannot be determined ('> auto("autolib"' destroys the file's current contents and the quoted / escaped redirect word `auto("autolib"` could not be dequoted to one literal file name (Parse("syntax error at line 1 col 9")), so the file it names cannot be determined); in program text it may be an operator or part of a string, but blastguard cannot show that it is not a redirect. Recommended: do not run this."。理由の文言は当時 (Ok(*b の glob) から変わったが、Python リテラルの中の '>' を shell の redirect として読む、という同じ類型。対照 control_same_write_without_rust_literals_is_allow (同じ p への読み書きで Rust リテラルなし) は Allow (ok)。
+読み (a) FP: heredoc は quoted なので本文は shell テキストではなく、stdin Python のリテラルは data (8ff44387 の方針)。(b) 意図どおり: rep() 定義や global など、対応している Python subset の外にある構文があるため undetermined → Ask/Deny。たとえ (b) でも、理由の文言 (Python リテラル文字列の中にある shell の '>' 対象) は分類を誤っている。見分け方: 本文を最小化し、rep() 定義 + global をリテラルなしで残した場合の判定。
+DOES NOT PROVE: 本文のどの部分が引き金か (最小化していない)、Python の実行結果。"""
+created_at = 1795291614
+updated_at = 1795791374
+weight = 0.0
+issue_number = 1981
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1981"
+issue_closed_at = 1795791377
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261122_relay_87ab2f2de988_python_heredoc_rust_arrow_fp -- --ignored"
+rev = "c85b7104a818ad6fe048bb5adcd9fc920893ea33"
+observed_at = 1795291614
+detail = """
+exit 101: ates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.45s
+     Running tests/backlog_20261122_relay_87ab2f2de988_python_heredoc_rust_arrow_fp.rs (target/debug/deps/backlog_20261122_relay_87ab2f2de988_python_heredoc_rust_arrow_fp-348eb1c90ea43b93)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261122_relay_87ab2f2de988_python_heredoc_rust_arrow_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261122_relay_87ab2f2de988_python_heredoc_rust_arrow_fp"
+exit = 0
+passed = 4
+rev = "74307d154c4264194406f03dc26d67e66b9ec378"
+observed_at = 1795791370
+output_digest = "sha256:01570334c8f001b74950963c383e0f489834b1a696d7daf20200eaaea5de62f4"
+excerpt = """
+
+running 4 tests
+test control_compound_reader_after_python_body_is_still_refused ... ok
+test control_same_write_without_rust_literals_is_allow ... ok
+test exact_body_then_harmful_compound_tail_is_deny ... ok
+test relay_87ab2f2de988_exact_command_is_allow ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.11s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261122_relay_87ab2f2de988_python_heredoc_rust_arrow_fp.rs (target/debug/deps/backlog_20261122_relay_87ab2f2de988_python_heredoc_rust_arrow_fp-58299e432073568e)
+"""
+
+[task.closure.red]
+rev = "4e25f3a7c446ccf76bdb60e9507bc4fa4d44bfb0"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -345,41 +345,6 @@ exit 101: s-worktrees/session-eaa077f4-filing/crates/tdd)
 error: test failed, to rerun pass `-p tdd --test backlog_20261122_unframed_log_inflated_counts_determined`"""
 
 [[task]]
-id = "1b84867e"
-title = "blastguard FP: '>' inside Python literal text of a quoted python3 -I - heredoc is read as a shell redirect (relay bgr-87ab2f2de988)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """
-観測: condukt run run-20261122-035251-84424 の t2 worker (subagent) が relay bgr-87ab2f2de988 で Deny された (cwd /Users/yuki/.condukt/worktrees/run-20261122-035251-84424-t2、当時稼働中の旧 blastguard)。当時の逐語理由: "> target `/Users/yuki/.condukt/worktrees/run-20261122-035251-84424-t2/Ok(*b` is a glob the shell expands to the files it matches, and blastguard cannot place it (only a final-component glob under a literal directory is placed, by that directory), so it cannot tell which files > would truncate and refuses to guess"。コマンドは cd <worktree> && python3 -I - <<'EOF' ... p='crates/condukt/src/testscope.rs' ... rep(""\"...""\",""\"...""\") (Rust ソースを ''' / ""\" リテラルに持つ) ... open(p,'w').write(s) EOF。逐語コマンドは ~/.blastguard/relay/eaa077f4-02a7-458b-9e0e-c7fc2c5d694b.jsonl 141 行目から取り、fixture crates/blastguard/tests/support/relay_bgr_87ab2f2de988_20261122_exact.txt に置いた (書き換えは cd 先だけ)。
-現 HEAD での再現 (2026-11-22, branch filing-84424 commit 3ee9ee41c、基点 main 5e99d94d4 = 8ff44387 の修正入り、worktree /Users/yuki/src/.harness-worktrees/filing-84424、fixture は git work tree で対象ファイルを tracked にしたもの): main mode で ask、subagent mode で deny。逐語 (main mode): "'> {': `/// string, is an `Err` (undetermined` may create or rename an entry on this path and is not modelled, so blastguard cannot tell which file the write really lands on; `python3 -I - <<'EOF'` takes its program from stdin, and the program text contains a `>` that a shell would read as a redirect whose target cannot be determined ('> auto("autolib"' destroys the file's current contents and the quoted / escaped redirect word `auto("autolib"` could not be dequoted to one literal file name (Parse("syntax error at line 1 col 9")), so the file it names cannot be determined); in program text it may be an operator or part of a string, but blastguard cannot show that it is not a redirect. Recommended: do not run this."。理由の文言は当時 (Ok(*b の glob) から変わったが、Python リテラルの中の '>' を shell の redirect として読む、という同じ類型。対照 control_same_write_without_rust_literals_is_allow (同じ p への読み書きで Rust リテラルなし) は Allow (ok)。
-読み (a) FP: heredoc は quoted なので本文は shell テキストではなく、stdin Python のリテラルは data (8ff44387 の方針)。(b) 意図どおり: rep() 定義や global など、対応している Python subset の外にある構文があるため undetermined → Ask/Deny。たとえ (b) でも、理由の文言 (Python リテラル文字列の中にある shell の '>' 対象) は分類を誤っている。見分け方: 本文を最小化し、rep() 定義 + global をリテラルなしで残した場合の判定。
-DOES NOT PROVE: 本文のどの部分が引き金か (最小化していない)、Python の実行結果。"""
-created_at = 1795291614
-updated_at = 1795291614
-weight = 0.0
-issue_number = 1981
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1981"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261122_relay_87ab2f2de988_python_heredoc_rust_arrow_fp -- --ignored"
-rev = "c85b7104a818ad6fe048bb5adcd9fc920893ea33"
-observed_at = 1795291614
-detail = """
-exit 101: ates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.45s
-     Running tests/backlog_20261122_relay_87ab2f2de988_python_heredoc_rust_arrow_fp.rs (target/debug/deps/backlog_20261122_relay_87ab2f2de988_python_heredoc_rust_arrow_fp-348eb1c90ea43b93)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261122_relay_87ab2f2de988_python_heredoc_rust_arrow_fp`"""
-
-[[task]]
 id = "c5202092"
 title = "blastguard FP: quoted python3 - heredoc refused as 'program is not on the command line — no text to read' (relay bgr-6f62367777e8)"
 project = "/Users/yuki/src/harness"
@@ -390,18 +355,20 @@ tags = [
     "p2",
 ]
 touched_files = []
-status = "pending"
+status = "failed"
 notes = '''
 観測: condukt run run-20261122-035502-88763 の t1 worker (subagent) が relay bgr-6f62367777e8 で Deny された (cwd /Users/yuki/.condukt/worktrees/run-20261122-035502-88763-t1/crates/blastguard/src、当時の旧 blastguard)。逐語理由: "`python3 - <<'EOF'` takes its program from stdin, and that program is not on the command line — blastguard has no text to read, so it cannot tell whether anything here is irreversible"。コマンドは cd <worktree>/crates/blastguard/src && python3 - <<'EOF' (import re; s=open(p).read(); assert s.count(old)==1; s.replace(...); open(p,'w').write(s) を 2 ファイル分) EOF に続けて grep -n ... | head。逐語コマンドは ~/.blastguard/relay/eaa077f4-02a7-458b-9e0e-c7fc2c5d694b.jsonl 145 行目から取り、fixture crates/blastguard/tests/support/relay_bgr_6f62367777e8_20261122_exact.txt に置いた (書き換えは worktree prefix だけ)。
 現 HEAD での再現 (2026-11-22, branch filing-84424 commit 3ee9ee41c、基点 main 5e99d94d4 = 8ff44387 の修正入り、worktree /Users/yuki/src/.harness-worktrees/filing-84424、fixture は git work tree で対象 2 ファイルを tracked にしたもの): main mode で ask、subagent mode で deny。理由は当時と逐語で同じ "`python3 - <<'EOF'` takes its program from stdin, and that program is not on the command line — blastguard has no text to read, so it cannot tell whether anything here is irreversible"。
 読み (a) FP: プログラムは quoted heredoc の本文としてコマンドライン上にある。書き込み先は session cwd 内の相対 .rs リテラル。(b) 意図どおり: 本文に subset の外の構文 (import re、複数行の """ 中に backtick / [`...`] など) があって undetermined。たとえ (b) でも "no text to read" は blastguard が見たものを誤って述べている。見分け方: 同じ本文の最小化 (どの行で reading が外れるか)、文言を出している分岐が本文を読んだうえでの fallback なのか。
-DOES NOT PROVE: 本文のどの部分が引き金か、Python の実行結果、末尾の grep 部分の影響の有無。'''
+DOES NOT PROVE: 本文のどの部分が引き金か、Python の実行結果、末尾の grep 部分の影響の有無。
+2026-11-27 partial fix merged (b29342b73, blastguard 0.2.954): the misleading 'no text to read' reason is gone (new test relay_6f62367777e8_reason_does_not_claim_no_text_to_read passes). The exact relayed command still Asks with S5 'open is called on a path the program text does not determine' (variable p rebound across two files). Whether that should be Allow is a ruling question; RED relay_6f62367777e8_exact_command_is_allow stays ignored. judgment Ask -> skipped by flow.'''
 created_at = 1795291669
-updated_at = 1795291669
+updated_at = 1795791378
+defer_until = 1795964178
 weight = 0.0
 issue_number = 1982
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1982"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -550,3 +517,34 @@ exit 101: ompiling blastguard v0.2.951 (/Users/yuki/src/.harness-worktrees/sessi
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
      Running tests/heredoc_script_failopen_red_20261108.rs (target/debug/deps/heredoc_script_failopen_red_20261108-609b142a267ca92c)
 error: test failed, to rerun pass `-p blastguard --test heredoc_script_failopen_red_20261108`"""
+
+[[task]]
+id = "b37bc26c"
+title = "blastguard: 3000-line python-stdin heredoc body takes ~6s to judge (10s hook timeout => larger bodies lose the verdict); main Ask for bash <(...) tail"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-27 by flow session eaa077f4 (release build): identical on main 00f4f87cf (0.2.952) and fp-30136835-r b29342b73 (0.2.954), so pre-existing. 'rm -rf /etc' tail: deny in ~6.3s both modes; '{ bash <(echo rm -rf /etc); }' tail: main ask / sub deny in ~6.5s. A hook that times out does not block the call (per the opus verifier's reading of the Claude Code docs), so a body a few times larger would let a system-harm command through. Small-body control is Deny in <3s. RED c55c758e9."
+created_at = 1795791484
+updated_at = 1795791484
+weight = 0.0
+issue_number = 1996
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1996"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261127_large_python_heredoc_body_slow -- --ignored"
+rev = "c55c758e998f762151edf3761b9239838c64753e"
+observed_at = 1795791484
+detail = """
+exit 101: 955 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 27.30s
+     Running tests/backlog_20261127_large_python_heredoc_body_slow.rs (target/release/deps/backlog_20261127_large_python_heredoc_body_slow-2a9adb196edd00af)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261127_large_python_heredoc_body_slow`"""

@@ -154,7 +154,6 @@ fn observed_command(s: &Scratch) -> String {
 
 /// RED. Scratchpad exists (as in the real session).
 #[test]
-#[ignore = "RED: backlog (see filing): mkdir -p scratchpad && cd && python3 - <<EOF json/re denied for subagent (S5 Undetermined), allowed in main"]
 fn red_subagent_mkdir_cd_scratchpad_python_stdin_heredoc_not_blocked() {
     let s = scratch("red", true);
     let cmd = observed_command(&s);

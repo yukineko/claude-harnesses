@@ -82,43 +82,12 @@ def _is_pytest_main_file_call(call: ast.Call) -> bool:
     )
 
 
-def _is_exit_wrapper(call: ast.Call) -> bool:
-    f = call.func
-    if isinstance(f, ast.Name):
-        return f.id == "SystemExit"
-    return (
-        isinstance(f, ast.Attribute)
-        and f.attr == "exit"
-        and isinstance(f.value, ast.Name)
-        and f.value.id == "sys"
-    )
-
-
-def _guard_stmt_runs_tests(stmt: ast.stmt) -> bool:
-    if isinstance(stmt, ast.Raise):
-        expr = stmt.exc
-    elif isinstance(stmt, ast.Expr):
-        expr = stmt.value
-    else:
-        return False
-    if not isinstance(expr, ast.Call):
-        return False
-    if _is_unittest_main_call(expr) or _is_pytest_main_file_call(expr):
-        return True
-    if _is_exit_wrapper(expr) and len(expr.args) == 1 and not expr.keywords:
-        inner = expr.args[0]
-        return isinstance(inner, ast.Call) and (
-            _is_unittest_main_call(inner) or _is_pytest_main_file_call(inner)
-        )
-    return False
-
-
 def _has_main_guard_running_tests(src: str) -> bool:
     """True iff the module has a top-level `if __name__ == "__main__":` whose
-    body runs the suite: `unittest.main(...)` (any arguments) or exactly
-    `pytest.main([__file__])`, either optionally wrapped in `SystemExit(...)` /
-    `sys.exit(...)` (also as `raise SystemExit(...)`). `pytest.main()` with no
-    args or any other arg is rejected."""
+    body (anywhere in it: bare, assigned, or wrapped in `SystemExit(...)` /
+    `sys.exit(...)` / a conditional) calls `unittest.main(...)` (any arguments)
+    or exactly `pytest.main([__file__])`. `pytest.main()` with no args or any
+    other arg is rejected."""
     tree = ast.parse(src)
     for node in tree.body:
         if not isinstance(node, ast.If):
@@ -133,8 +102,11 @@ def _has_main_guard_running_tests(src: str) -> bool:
             and t.comparators[0].value == "__main__"
         ):
             continue
-        if any(_guard_stmt_runs_tests(s) for s in node.body):
-            return True
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call) and (
+                _is_unittest_main_call(sub) or _is_pytest_main_file_call(sub)
+            ):
+                return True
     return False
 
 

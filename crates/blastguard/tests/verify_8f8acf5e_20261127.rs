@@ -106,7 +106,7 @@ fn option_forms_reach_the_body() {
 }
 
 #[test]
-#[ignore = "verify: main mode `sudo -sE 'rm -rf /etc'` / `sudo -Es 'rm -rf /etc'` are Ask (`sudo` option `-sE` is not modelled), not Deny; unquoted `-Es rm -rf /etc` is Deny"]
+#[ignore = "RED(1e915597): main mode `sudo -sE 'rm -rf /etc'` / `sudo -Es 'rm -rf /etc'` are Ask (`sudo` option `-sE` is not modelled), not Deny; unquoted `-Es rm -rf /etc` is Deny"]
 fn clustered_short_options() {
     deny_both(&[
         "sudo -sE 'rm -rf /etc'",

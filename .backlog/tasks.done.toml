@@ -95745,3 +95745,69 @@ rev = "c434e41e56cf4e4edcbdfafcb18c04622e87cc79"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "8f8acf5e"
+title = "blastguard: sudo shell-mode (-s/-i/--shell/--login) + quoted command judged as program file => Ask, system harm not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+Side finding of a761b38f. Measured 2026-11-21 at rev 916fea015 (blastguard 0.2.828), crates/blastguard/src/detect/ast/b5.rs unwrap_at sudo/doas arm. Observation: when shell=true (-s/-i/--shell/--login) and a command word follows, the arm returns Unwrapped::At(i) (direct argv), but sudo runs $SHELL -c 'CMD' (args joined, shell-interpreted). Result: `sudo -s 'rm -rf /etc'` (also -i, --shell, --login) => ask, reason: direct execution of the program file `rm -rf /etc`, whose text is not in the command — blastguard cannot judge what it would do (Table B.5: Undetermined). Reading (a) defect Allow: REFUTED (it is Ask). Reading (b) already restrictive: partly true, but system harm is downgraded from Deny (sudo rm -rf /etc) to Ask; per 'system harm always deny' this is a defect. Test result line: test result: FAILED. 0 passed; 4 failed. Not RED (measured GREEN, dropped): sudo -u X rm -rf /etc and sudo --user with command substitution are already Deny; control sudo -s 'ls -la' not Deny. Discarded without test: doas --version treated as runs-nothing (doas would just print usage; harmless).
+needs ruling: man sudo escapes args so sudo -s 'rm -rf /etc' execs one program named 'rm -rf /etc'; (a) won't-do vs (b) max(Ask, joined-body verdict). impl 74875ad9b unmerged in run-20261121-204623-52524-t1"""
+created_at = 1795197125
+updated_at = 1795782918
+weight = 0.0
+issue_number = 1907
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1907"
+issue_closed_at = 1795782921
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_sudo_shell_cmd_and_undet_value -- --ignored shell_"
+rev = "916fea01584db859c6385ce9a86a8ed39d5f2768"
+observed_at = 1795197125
+detail = """
+exit 101: 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261121_sudo_shell_cmd_and_undet_value.rs (target/debug/deps/backlog_20261121_sudo_shell_cmd_and_undet_value-68db974a4f669647)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_sudo_shell_cmd_and_undet_value`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261127_8f8acf5e_sudo_shell_max"
+exit = 0
+passed = 3
+rev = "0bf4c479419026360a8ad0eca3600d1e40e0e871"
+observed_at = 1795782911
+output_digest = "sha256:b441f3b648810a3b6a304993e5f83ddc9f64b0013e478d2f8bfb555151b310da"
+excerpt = """
+
+running 3 tests
+test doas_harmful_body_is_deny ... ok
+test harmless_body_stays_ask_in_main_and_deny_in_subagent ... ok
+test harmful_body_is_deny_for_every_shell_flag ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.73s
+
+   Compiling blastguard v0.2.944 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.65s
+     Running tests/backlog_20261127_8f8acf5e_sudo_shell_max.rs (target/debug/deps/backlog_20261127_8f8acf5e_sudo_shell_max-a6a6018848f764d2)
+"""
+
+[task.closure.red]
+rev = "92b11643275ee650d4bca4d7e8b62b00c7a34282"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

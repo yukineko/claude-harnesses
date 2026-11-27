@@ -736,41 +736,6 @@ exit 101: s/red-donegate-root-20261121/crates/donegate)
 error: test failed, to rerun pass `-p donegate --test backlog_20261121_foreign_merge_unattributable_elsewhere`"""
 
 [[task]]
-id = "8f8acf5e"
-title = "blastguard: sudo shell-mode (-s/-i/--shell/--login) + quoted command judged as program file => Ask, system harm not Deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "failed"
-notes = """
-Side finding of a761b38f. Measured 2026-11-21 at rev 916fea015 (blastguard 0.2.828), crates/blastguard/src/detect/ast/b5.rs unwrap_at sudo/doas arm. Observation: when shell=true (-s/-i/--shell/--login) and a command word follows, the arm returns Unwrapped::At(i) (direct argv), but sudo runs $SHELL -c 'CMD' (args joined, shell-interpreted). Result: `sudo -s 'rm -rf /etc'` (also -i, --shell, --login) => ask, reason: direct execution of the program file `rm -rf /etc`, whose text is not in the command — blastguard cannot judge what it would do (Table B.5: Undetermined). Reading (a) defect Allow: REFUTED (it is Ask). Reading (b) already restrictive: partly true, but system harm is downgraded from Deny (sudo rm -rf /etc) to Ask; per 'system harm always deny' this is a defect. Test result line: test result: FAILED. 0 passed; 4 failed. Not RED (measured GREEN, dropped): sudo -u X rm -rf /etc and sudo --user with command substitution are already Deny; control sudo -s 'ls -la' not Deny. Discarded without test: doas --version treated as runs-nothing (doas would just print usage; harmless).
-needs ruling: man sudo escapes args so sudo -s 'rm -rf /etc' execs one program named 'rm -rf /etc'; (a) won't-do vs (b) max(Ask, joined-body verdict). impl 74875ad9b unmerged in run-20261121-204623-52524-t1"""
-created_at = 1795197125
-updated_at = 1795264296
-defer_until = 1795437096
-weight = 0.0
-issue_number = 1907
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1907"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261121_sudo_shell_cmd_and_undet_value -- --ignored shell_"
-rev = "916fea01584db859c6385ce9a86a8ed39d5f2768"
-observed_at = 1795197125
-detail = """
-exit 101: 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
-     Running tests/backlog_20261121_sudo_shell_cmd_and_undet_value.rs (target/debug/deps/backlog_20261121_sudo_shell_cmd_and_undet_value-68db974a4f669647)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261121_sudo_shell_cmd_and_undet_value`"""
-
-[[task]]
 id = "8eff1e81"
 title = "tdd green records GREEN for a run that executed zero tests (0 passed / 0 failed)"
 project = "/Users/yuki/src/harness"
@@ -1394,3 +1359,36 @@ exit 101: v0.1.103 (/Users/yuki/src/.harness-worktrees/attr-39772e9f-eaa077f4/cr
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.09s
      Running tests/backlog_20261117_subagent_cd_relative_root.rs (target/debug/deps/backlog_20261117_subagent_cd_relative_root-6d935cde80d05582)
 error: test failed, to rerun pass `-p donegate --test backlog_20261117_subagent_cd_relative_root`"""
+
+[[task]]
+id = "1e915597"
+title = "blastguard: sudo clustered short options with shell mode (-sE/-Es) + quoted harmful command stay Ask in main mode instead of Deny (unwrap_sudo treats the cluster as an unmodelled option)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1795782940
+updated_at = 1795782940
+weight = 0.0
+issue_number = 1991
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1991"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test verify_8f8acf5e_20261127 -- --ignored clustered_short_options"
+rev = "0bf4c479419026360a8ad0eca3600d1e40e0e871"
+observed_at = 1795782940
+detail = """
+exit 101: iltered out; finished in 0.54s
+
+   Compiling blastguard v0.2.944 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/verify_8f8acf5e_20261127.rs (target/debug/deps/verify_8f8acf5e_20261127-330132182447c6d2)
+error: test failed, to rerun pass `-p blastguard --test verify_8f8acf5e_20261127`"""

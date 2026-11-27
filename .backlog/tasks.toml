@@ -580,3 +580,33 @@ exit 101: d v0.2.959 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.23s
      Running tests/backlog_20261128_toplevel_rebind_fail_open.rs (target/debug/deps/backlog_20261128_toplevel_rebind_fail_open-c13ac450eed2f58b)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_toplevel_rebind_fail_open`"""
+
+[[task]]
+id = "687ece3c"
+title = "blastguard fail-open: nested system harm (bash -c / eval / $(...) tails) is Ask in main after fan-out padding (python -c programs, bash -c fanout, 3200 echo lines)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "RED ed0a07521 (blastguard 0.2.967): 20 cases Ask in main, Deny as subagent; repo rule system harm always Deny. Found by b37bc26c verifier on base 24263a0c8; pre-existing, not caused by b37bc26c. b37bc26c cdc77f004 shallow_visit may cover some shapes - unmeasured. Test takes ~6 min (release)."
+created_at = 1795797276
+updated_at = 1795797276
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_nested_system_harm_ask_after_padding -- --ignored"
+rev = "ed0a0752122044844527e1daaea25935ba1bcd94"
+observed_at = 1795797276
+detail = """
+exit 101: rc/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 30.92s
+     Running tests/backlog_20261128_nested_system_harm_ask_after_padding.rs (target/release/deps/backlog_20261128_nested_system_harm_ask_after_padding-df6bdf356a0c6ad4)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_nested_system_harm_ask_after_padding`"""

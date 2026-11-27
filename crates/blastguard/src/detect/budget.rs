@@ -91,6 +91,7 @@ impl Drop for CommandNodesGuard {
     fn drop(&mut self) {
         if self.0 {
             set_command_nodes(None);
+            clear_shallow();
         }
     }
 }
@@ -109,6 +110,91 @@ pub(super) fn take_command_node(depth: usize) -> bool {
             true
         }
     })
+}
+
+/// The budget gate of `detect_bash`: runs `judge` (the visit proper) when both
+/// the per-reading budget and the per-command nested-visit total admit it.
+///
+/// When the per-command total of nested visits is spent (b37bc26c), a bare Ask
+/// would WEAKEN a verdict the unbounded analysis reached (a system-harm Deny in
+/// a tail after k fan-out programs came back Ask in main mode). So that text is
+/// still judged by its own rules, SHALLOWLY (see [`shallow_visit`]): never an
+/// Allow, a Deny only if the rules found one.
+pub(super) fn admit(cmd: &str, depth: usize, judge: impl FnOnce() -> Decision) -> Decision {
+    const TOO_COMPLEX: &str = "command is too complex to analyse within the safety budget — blastguard cannot vouch for it either way";
+    // Inside a shallow visit no nested visit runs at all.
+    if (depth > 0 && in_shallow_visit()) || !take_budget() {
+        return Decision::ask(TOO_COMPLEX);
+    }
+    if !take_command_node(depth) {
+        return shallow_visit(cmd, depth, TOO_COMPLEX, judge);
+    }
+    judge()
+}
+
+/// Most distinct texts judged shallowly per command (see [`shallow_visit`]).
+const MAX_SHALLOW_VISITS: usize = 600;
+
+#[derive(Default)]
+struct Shallow {
+    active: bool,
+    memo: std::collections::HashMap<(String, usize), Decision>,
+}
+
+thread_local! {
+    static SHALLOW: std::cell::RefCell<Shallow> = std::cell::RefCell::new(Shallow::default());
+}
+
+/// True while a [`shallow_visit`] is running.
+pub(super) fn in_shallow_visit() -> bool {
+    SHALLOW.with(|s| s.borrow().active)
+}
+
+/// Judge `cmd` by its own rules when the per-command nested-visit total is
+/// spent: `judge` runs with every nested visit answering Ask, so the cost is
+/// that of the rules alone. A Deny is returned as is; anything else becomes
+/// the budget Ask `why` (never Allow: the nested part was not examined).
+/// Results are memoised per `(text, depth)` and the memo is bounded by
+/// [`MAX_SHALLOW_VISITS`]; past that the answer is the bare Ask.
+pub(super) fn shallow_visit(
+    cmd: &str,
+    depth: usize,
+    why: &str,
+    judge: impl FnOnce() -> Decision,
+) -> Decision {
+    let key = (cmd.to_string(), depth);
+    let known = SHALLOW.with(|s| {
+        let s = s.borrow();
+        if s.active {
+            return Some(Decision::ask(why));
+        }
+        match s.memo.get(&key) {
+            Some(d) => Some(d.clone()),
+            None if s.memo.len() >= MAX_SHALLOW_VISITS => Some(Decision::ask(why)),
+            None => None,
+        }
+    });
+    if let Some(d) = known {
+        return d;
+    }
+    SHALLOW.with(|s| s.borrow_mut().active = true);
+    let judged = judge();
+    let verdict = if judged.is_deny() {
+        judged
+    } else {
+        Decision::ask(why)
+    };
+    SHALLOW.with(|s| {
+        let mut s = s.borrow_mut();
+        s.active = false;
+        s.memo.insert(key, verdict.clone());
+    });
+    verdict
+}
+
+/// Forget the shallow memo (end of the outermost detection).
+fn clear_shallow() {
+    SHALLOW.with(|s| *s.borrow_mut() = Shallow::default());
 }
 
 /// Consume one unit of the analysis budget. Returns false when it is exhausted.

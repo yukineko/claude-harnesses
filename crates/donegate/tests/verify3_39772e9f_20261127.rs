@@ -461,7 +461,6 @@ fn hole_symlink_dotdot_resolved_physically() {
 /// HOLE (pre-existing, not introduced here): `git -C wt checkout -- f`
 /// writes wt/f; `wt` has no `/` or `.`, so it is not a path word.
 #[test]
-#[ignore = "RED(8533e79d): pre-existing, git -C <bare relative dir> writer not placed in that dir (verify3)"]
 fn hole_git_dash_c_relative_dir() {
     let f = Sub::new();
     assert_wt_judged_from_home(&f, "git -C wt checkout -- src/lib.rs");

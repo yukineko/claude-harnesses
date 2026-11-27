@@ -1360,7 +1360,9 @@ fn keep_flags(stmts: &[Statement]) -> Vec<bool> {
 }
 
 mod cargo_scope;
+mod git_dash_c;
 mod plan;
+use git_dash_c::{git_dash_c_operands, insert_dash_c_dirs};
 use plan::{fenced_paths, logical_join, plan_call};
 
 /// The writing statements of one recorded Bash call and the existing paths
@@ -1403,6 +1405,10 @@ fn call_named_paths(
         }
         for w in statement_path_words(command, s) {
             insert_named(&mut out, &w, &walk.bases[k]);
+        }
+        for st in &s.stages {
+            let ops = git_dash_c_operands(&st.words);
+            insert_dash_c_dirs(&mut out, &ops, &walk.bases[k]);
         }
     }
     for (k, dir) in &walk.entered {

@@ -389,7 +389,9 @@ pub(super) fn here_document_layout(segs: &[SeparatedSegment]) -> (Vec<bool>, Opt
 ///   * any whitespace other than space, tab or newline anywhere in `cmd`
 ///     (`\r` or a no-break space changes where bash ends the delimiter word);
 ///   * a non-body line with unbalanced quotes, a trailing `\`, or (on a line
-///     that opens a here-document) any of `\`, `#`, backtick, `$(`, `<(`,
+///     that opens a here-document) any of `\` (except backslashes all inert
+///     inside quotes, `heredoc_data::backslashes_inert_in_quotes`, backlog
+///     30136835), `#`, backtick, `$(`, `<(`,
 ///     `>(`, `((`, `[[` — constructs where the `<<` may be no opener at all
 ///     (a comment, an arithmetic shift, an escaped `\<<`) or where the body may
 ///     start elsewhere;
@@ -441,8 +443,13 @@ fn quoted_here_document_body_walks_checked(cmd: &str) -> Option<Vec<Option<usize
         if openers.is_empty() {
             continue;
         }
-        let doubtful = ["\\", "#", "`", "$(", "<(", ">(", "((", "[["];
-        if doubtful.iter().any(|d| line.contains(d))
+        let doubtful = ["#", "`", "$(", "<(", ">(", "((", "[["];
+        // A backslash is doubtful (`\<<` is no opener) unless every one sits
+        // inert inside quotes (backlog 30136835: `grep "a\|b" f; python3 - <<'EOF'`).
+        let backslash_doubtful =
+            line.contains('\\') && !super::heredoc_data::backslashes_inert_in_quotes(line);
+        if backslash_doubtful
+            || doubtful.iter().any(|d| line.contains(d))
             || openers.len() != 1
             || openers[0].delimiter.is_empty()
             || !here_document_delimiter_is_quoted(line)

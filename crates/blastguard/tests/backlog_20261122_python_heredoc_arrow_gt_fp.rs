@@ -225,7 +225,6 @@ fn verbatim_setup(tag: &str) -> (Home, std::path::PathBuf, std::path::PathBuf) {
 }
 
 #[test]
-#[ignore = "RED(30136835): verbatim worker command (python heredoc with => return text) refused as a relative redirect"]
 fn verbatim_worker_command_reason_does_not_quote_python_text_as_redirect() {
     let mut bad = Vec::new();
     for subagent in [false, true] {
@@ -237,4 +236,41 @@ fn verbatim_worker_command_reason_does_not_quote_python_text_as_redirect() {
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// Fail-closed controls for 30136835 (the quoted `\|` on the opener line must
+/// not change the verdict of anything it did not change before the fix).
+#[test]
+fn backslash_pipe_in_quotes_keeps_real_relative_redirect_refused() {
+    for subagent in [false, true] {
+        let (home, cwd, _proj) = setup(if subagent { "cs" } else { "cm" });
+        // Unresolvable cd + a REAL shell redirect after the heredoc.
+        for grep in ["grep -n \"a\\|b\" src/foo.rs", "grep -n \"ab\" src/foo.rs"] {
+            let c = format!(
+                "cd \"$WT_UNSET\" && {grep} | head; cat <<'EOF'\nbody\nEOF\necho y > rel.txt"
+            );
+            let (d, r) = run_as(&c, &cwd, &home, subagent);
+            assert!(
+                d != "allow" && r.contains("RELATIVE redirect"),
+                "subagent={subagent} grep={grep}: {d} | {r}"
+            );
+        }
+    }
+}
+
+#[test]
+fn backslash_pipe_in_quotes_does_not_change_python_open_verdict() {
+    for subagent in [false, true] {
+        let (home, cwd, proj) = setup(if subagent { "ps" } else { "pm" });
+        let mk = |grep: &str| {
+            format!(
+                "cd {} && {grep} | head; python3 - <<'EOF'\nopen('/etc/hosts','w').write('x')\nEOF\n",
+                proj.display()
+            )
+        };
+        let (d1, _) = run_as(&mk("grep -n \"a\\|b\" src/foo.rs"), &cwd, &home, subagent);
+        let (d2, _) = run_as(&mk("grep -n \"ab\" src/foo.rs"), &cwd, &home, subagent);
+        assert_eq!(d1, d2, "subagent={subagent}");
+        assert_ne!(d1, "allow", "subagent={subagent}");
+    }
 }

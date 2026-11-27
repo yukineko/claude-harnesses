@@ -75,7 +75,7 @@ fn control_wrapped_plain_push_stays_allow() {
 }
 
 #[test]
-#[ignore = "RED: wrapper before git push -f origin main is weaker than bare form (BACKLOG_ID)"]
+#[ignore = "RED(e21d3035): wrapper before git push -f origin main is weaker than bare form (BACKLOG_ID)"]
 fn wrapped_force_push_is_never_weaker_than_bare() {
     let mut bad = Vec::new();
     for b in BARE {

@@ -798,3 +798,35 @@ exit 101: f4/crates/blastguard)
     Finished `release` profile [optimized] target(s) in 31.98s
      Running tests/backlog_20261128_system_harm_past_memo_limit_without_dir_spelling.rs (target/release/deps/backlog_20261128_system_harm_past_memo_limit_without_dir_spelling-95006f08cfa2b02c)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_system_harm_past_memo_limit_without_dir_spelling`"""
+
+[[task]]
+id = "e21d3035"
+title = "blastguard: wrapper (env/command/timeout/nice/sudo) before git push -f/--force origin main is Allow while bare form is Ask/Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Measured on main 9dc1aaf2b with the real binary. Bare git push -f/--force origin main: Ask (main mode), Deny (subagent). With env/command/timeout 5/nice/sudo prefix: Allow in both modes (20/20 combos). Ruling: force push is Ask (high_blast_tier.rs, backlog_audit_s02.rs); no ruling allows it. Force push to main is irreversible on remote. Test: crates/blastguard/tests/backlog_20261128_wrapper_force_push.rs (RED test is #[ignore]d)."
+created_at = 1795807451
+updated_at = 1795807451
+weight = 0.0
+issue_number = 2008
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2008"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_wrapper_force_push -- --ignored"
+rev = "e5449de869ccb2fb76e7df8a2e9ba6e735e2f6f4"
+observed_at = 1795807451
+detail = """
+exit 101: 
+   Compiling blastguard v0.2.983 (/Users/yuki/src/.harness-worktrees/red-wrapper-force-push/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 27.67s
+     Running tests/backlog_20261128_wrapper_force_push.rs (target/release/deps/backlog_20261128_wrapper_force_push-2d41c258c7c5a83b)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_wrapper_force_push`"""

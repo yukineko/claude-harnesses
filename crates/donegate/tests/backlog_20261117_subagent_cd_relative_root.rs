@@ -290,7 +290,6 @@ fn dump(o: &Outcome) -> String {
 /// PARENT root's checks and blocks the subagent on them.
 // test-weakening-justified: new RED for an unfixed defect (2026-11-17).
 #[test]
-#[ignore = "RED: 2026-11-17 subagent cd-into-other-worktree relative write is attributed to the parent root at SubagentStop — remove when fixed"]
 fn subagent_stop_does_not_judge_parent_root_for_a_cd_relative_write_in_its_worktree() {
     let f = Fixture::new();
     let parent_t = f.parent_transcript("");
@@ -314,7 +313,7 @@ fn subagent_stop_does_not_judge_parent_root_for_a_cd_relative_write_in_its_workt
 /// sidechain): the parent root, which nobody wrote into, is judged and blocks.
 // test-weakening-justified: new RED for an unfixed defect (2026-11-17).
 #[test]
-#[ignore = "RED: 2026-11-17 subagent cd-into-other-worktree relative write is attributed to the parent root at the parent Stop — remove when fixed"]
+#[ignore = "RED(49ec9e90): parent Stop judges hook cwd whenever checks are configured (main.rs:276); fix needs a human ruling on skipping checks when wrote_in_cwd is Known(false)"]
 fn parent_stop_does_not_judge_parent_root_for_a_subagents_cd_relative_write_elsewhere() {
     let f = Fixture::new();
     let parent_t = f.parent_transcript("");

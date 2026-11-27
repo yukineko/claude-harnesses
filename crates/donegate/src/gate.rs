@@ -157,7 +157,7 @@ pub fn attribute_scope(
             // changed any of the `excluded` files: narrowing would silently
             // skip checks for them (CLAUDE.md 3). Unreadable evidence is the
             // same: keep the full scope.
-            match harness_core::attribution::has_unattributable_write(transcript_path) {
+            match harness_core::attribution::has_unattributable_write_in(transcript_path, root) {
                 Determination::Known(false) => {}
                 Determination::Known(true) | Determination::Undetermined(_) => {
                     if !excluded.is_empty() {

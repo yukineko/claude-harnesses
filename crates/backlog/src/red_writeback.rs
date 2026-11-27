@@ -570,16 +570,40 @@ struct IgnoreAttr {
     fn_name: Option<String>,
 }
 
+/// `(start, after_kw)` of every `#` `[` `ignore` token run, allowing
+/// whitespace after `#` and after `[` (`# [ignore`, `#[ ignore` are valid
+/// Rust). `after_kw` is just past the `ignore` keyword.
+fn ignore_attr_starts(body: &str) -> Vec<(usize, usize)> {
+    let b = body.as_bytes();
+    let skip_ws = |mut i: usize| {
+        while b.get(i).is_some_and(|c| c.is_ascii_whitespace()) {
+            i += 1;
+        }
+        i
+    };
+    let mut out = Vec::new();
+    for (h, _) in body.match_indices('#') {
+        let i = skip_ws(h + 1);
+        if b.get(i) != Some(&b'[') {
+            continue;
+        }
+        let j = skip_ws(i + 1);
+        if body[j..].starts_with("ignore") {
+            out.push((h, j + "ignore".len()));
+        }
+    }
+    out
+}
+
 /// Every `#[ignore` attribute that sits in code (comments and literals are
 /// skipped), with its reason and the name of the next `fn` in code.
 fn ignore_attrs(body: &str) -> Vec<IgnoreAttr> {
     let mask = code_mask(body);
     let mut out = Vec::new();
-    for (start, _) in body.match_indices("#[ignore") {
+    for (start, after_kw) in ignore_attr_starts(body) {
         if mask.get(start) != Some(&true) {
             continue;
         }
-        let after_kw = start + "#[ignore".len();
         let rest = &body[after_kw..];
         if rest
             .chars()
@@ -603,12 +627,34 @@ fn ignore_attrs(body: &str) -> Vec<IgnoreAttr> {
             },
             None => Reason::NotRed,
         };
-        out.push(IgnoreAttr {
-            reason,
-            fn_name: next_fn_name(body, &mask, after_kw),
-        });
+        let fn_name = next_fn_name(body, &mask, after_kw);
+        if fn_name.is_some() && attr_on_non_fn_item(body, &mask, after_kw) {
+            // An attribute on a struct/mod/impl/const/... is not a test
+            // ignore and must not bind to a later fn.
+            continue;
+        }
+        out.push(IgnoreAttr { reason, fn_name });
     }
     out
+}
+
+/// True iff, between `at` and the next `fn`, code contains a `;`, `{` or `}`:
+/// the attribute then belongs to an item that ended (or opened a body) before
+/// that fn, i.e. a non-fn item. Attribute arguments, `pub(..)` and
+/// `extern "C"` contain none of these in code (strings are masked out).
+fn attr_on_non_fn_item(body: &str, mask: &[bool], at: usize) -> bool {
+    let b = body.as_bytes();
+    let ident = |c: u8| c == b'_' || c.is_ascii_alphanumeric();
+    for (i, _) in body[at..].match_indices("fn") {
+        let i = at + i;
+        let before_ok = i == 0 || !ident(b[i - 1]);
+        let after_ok = b.get(i + 2).is_some_and(|c| c.is_ascii_whitespace());
+        if !(mask.get(i) == Some(&true) && before_ok && after_ok) {
+            continue;
+        }
+        return (at..i).any(|j| mask.get(j) == Some(&true) && matches!(b[j], b';' | b'{' | b'}'));
+    }
+    false
 }
 
 /// The name of the first `fn` keyword in code after byte offset `at`.

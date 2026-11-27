@@ -97755,3 +97755,65 @@ rev = "4e25f3a7c446ccf76bdb60e9507bc4fa4d44bfb0"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "c512596e"
+title = "blastguard FP: `local P=...` inside a function body is Deny while the literal function is Allow (bash and zsh both bind)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = '''Observed 2026-11-21 in flow batch #10 (run run-20261121-220650-69750 task t1 worktree, base c5439badb and tip 1906c7700 / main 6f85e2f4b). `f(){ local P=/home/yuki/proj/ok.log; echo hi > "$P"; }; f` -> Deny("'> \"$P\"' destroys the file's current contents and the quoted / escaped redirect word `\"$P\"` could not be dequoted to one literal file name (it holds a shell expansion), so the file it names cannot be determined") while `f(){ echo hi > /home/yuki/proj/ok.log; }; f` -> Allow. Measured by main 2026-11-21 (bash 3.2.57, zsh 5.9): `f(){ local P=w; echo "[$P]"; }; f` -> bash [w] | zsh [w]. Readings: (a) FP: inside a function both shells bind, so per the 2026-11-21 ruling (stricter of bash and zsh) it should be judged like the literal; (b) intended: function-body variable tracking deliberately not resolved. Tell apart: check whether eval/function.rs propagates the env into the body for redirect resolution; t1 left the function_depth>0 path unchanged. The test's #[ignore] reason still says RED(pending); replace pending with this id when fixing.'''
+created_at = 1795267159
+updated_at = 1795797675
+weight = 0.0
+issue_number = 1958
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1958"
+issue_closed_at = 1795797678
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test redirect_target_resolution -- --ignored local_inside_a_function_body_resolves_like_the_literal"
+rev = "6f85e2f4b69586daded63bf595d9d8c260afa6e3"
+observed_at = 1795267159
+detail = """
+exit 101: d out; finished in 0.23s
+
+   Compiling blastguard v0.2.891 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.53s
+     Running tests/redirect_target_resolution.rs (target/debug/deps/redirect_target_resolution-d7bf0f3a7d56677d)
+error: test failed, to rerun pass `-p blastguard --test redirect_target_resolution`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test redirect_target_resolution local_inside_a_function_body_resolves_like_the_literal"
+exit = 0
+passed = 1
+rev = "647605eb6dc96c0b13403991434e7b884b3db7ff"
+observed_at = 1795797674
+output_digest = "sha256:4a9a41d16c833c5a8cba3c5a419e4dc568accc5284eb8182bb2d0a91b750605e"
+excerpt = """
+
+running 1 test
+test local_inside_a_function_body_resolves_like_the_literal ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.24s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/redirect_target_resolution.rs (target/debug/deps/redirect_target_resolution-57a0cdd95f37c91d)
+"""
+
+[task.closure.red]
+rev = "24263a0c84df3aa371ebc50c8bf923ccb7a83b5f"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

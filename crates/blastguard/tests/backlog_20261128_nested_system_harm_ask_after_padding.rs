@@ -121,7 +121,7 @@ fn control_tails_without_padding_are_deny() {
 }
 
 #[test]
-#[ignore = "RED: nested system harm is Ask in main after fan-out padding (command node/budget cap); must be Deny"]
+#[ignore = "RED(687ece3c): nested system harm is Ask in main after fan-out padding (command node/budget cap); must be Deny"]
 fn nested_system_harm_after_padding_is_deny() {
     let mut bad = Vec::new();
     for k in 1..=4usize {

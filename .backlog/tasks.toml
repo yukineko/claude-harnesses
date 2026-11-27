@@ -211,39 +211,6 @@ exit 101: d out; finished in 0.05s
 error: test failed, to rerun pass `-p blastguard --test inline_eval_mirror_closure`"""
 
 [[task]]
-id = "c512596e"
-title = "blastguard FP: `local P=...` inside a function body is Deny while the literal function is Allow (bash and zsh both bind)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = '''Observed 2026-11-21 in flow batch #10 (run run-20261121-220650-69750 task t1 worktree, base c5439badb and tip 1906c7700 / main 6f85e2f4b). `f(){ local P=/home/yuki/proj/ok.log; echo hi > "$P"; }; f` -> Deny("'> \"$P\"' destroys the file's current contents and the quoted / escaped redirect word `\"$P\"` could not be dequoted to one literal file name (it holds a shell expansion), so the file it names cannot be determined") while `f(){ echo hi > /home/yuki/proj/ok.log; }; f` -> Allow. Measured by main 2026-11-21 (bash 3.2.57, zsh 5.9): `f(){ local P=w; echo "[$P]"; }; f` -> bash [w] | zsh [w]. Readings: (a) FP: inside a function both shells bind, so per the 2026-11-21 ruling (stricter of bash and zsh) it should be judged like the literal; (b) intended: function-body variable tracking deliberately not resolved. Tell apart: check whether eval/function.rs propagates the env into the body for redirect resolution; t1 left the function_depth>0 path unchanged. The test's #[ignore] reason still says RED(pending); replace pending with this id when fixing.'''
-created_at = 1795267159
-updated_at = 1795267159
-weight = 0.0
-issue_number = 1958
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1958"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test redirect_target_resolution -- --ignored local_inside_a_function_body_resolves_like_the_literal"
-rev = "6f85e2f4b69586daded63bf595d9d8c260afa6e3"
-observed_at = 1795267159
-detail = """
-exit 101: d out; finished in 0.23s
-
-   Compiling blastguard v0.2.891 (/Users/yuki/src/.harness-worktrees/session-62e92d16/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.53s
-     Running tests/redirect_target_resolution.rs (target/debug/deps/redirect_target_resolution-d7bf0f3a7d56677d)
-error: test failed, to rerun pass `-p blastguard --test redirect_target_resolution`"""
-
-[[task]]
 id = "2e03e8c3"
 title = "condukt testscope: rerun key ignores CARGO_TARGET_DIR, so a run contaminated by a shared target dir blocks an isolated rerun on the same tree"
 project = "/Users/yuki/src/harness"
@@ -580,3 +547,35 @@ exit 101: d v0.2.959 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.23s
      Running tests/backlog_20261128_toplevel_rebind_fail_open.rs (target/debug/deps/backlog_20261128_toplevel_rebind_fail_open-c13ac450eed2f58b)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_toplevel_rebind_fail_open`"""
+
+[[task]]
+id = "687ece3c"
+title = "blastguard fail-open: nested system harm (bash -c / eval / $(...) tails) is Ask in main after fan-out padding (python -c programs, bash -c fanout, 3200 echo lines)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "RED ed0a07521 (blastguard 0.2.967): 20 cases Ask in main, Deny as subagent; repo rule system harm always Deny. Found by b37bc26c verifier on base 24263a0c8; pre-existing, not caused by b37bc26c. b37bc26c cdc77f004 shallow_visit may cover some shapes - unmeasured. Test takes ~6 min (release)."
+created_at = 1795797276
+updated_at = 1795797276
+weight = 0.0
+issue_number = 1998
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1998"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_nested_system_harm_ask_after_padding -- --ignored"
+rev = "ed0a0752122044844527e1daaea25935ba1bcd94"
+observed_at = 1795797276
+detail = """
+exit 101: rc/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 30.92s
+     Running tests/backlog_20261128_nested_system_harm_ask_after_padding.rs (target/release/deps/backlog_20261128_nested_system_harm_ask_after_padding-df6bdf356a0c6ad4)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_nested_system_harm_ask_after_padding`"""

@@ -575,6 +575,27 @@ pub fn invalidate(ledger: &Path, id: &str) -> Result<(), String> {
         .map_err(|e| format!("cannot append to {}: {e}", v2p.display()))
 }
 
+/// Wrapper-refusal markers emitted by `tdd` itself (`crates/tdd/src/config.rs`
+/// `untrusted_reason` / `invalid_reason`): both carry `REFUSING TO JUDGE`, and
+/// the untrusted one the ``Remedy: run `tdd trust` `` line.
+const WRAPPER_REFUSAL_MARKERS: &[&str] = &["REFUSING TO JUDGE", "Remedy: run `tdd trust`"];
+/// Output that only appears once cargo / libtest actually started.
+const RUNNER_START_MARKERS: &[&str] = &["Running ", "Compiling", "test result:", "running "];
+
+/// True only when a FAILED Bash call's output POSITIVELY shows that the test
+/// runner never started: it contains a known `tdd` wrapper-refusal marker
+/// ([`WRAPPER_REFUSAL_MARKERS`]) AND none of the cargo/libtest start markers
+/// ([`RUNNER_START_MARKERS`]). A real cargo failure (exit 101, "test result:
+/// FAILED", compile errors) stays a run; anything unclear returns false, i.e.
+/// the restrictive side (the call is confirmed). NOT detected: refusals by
+/// wrappers other than tdd, a refusal whose text lacks the markers, and a
+/// refusal in a chain where an earlier cargo step already printed start
+/// markers (all stay confirmed).
+pub fn failure_shows_runner_never_started(output: &str) -> bool {
+    WRAPPER_REFUSAL_MARKERS.iter().any(|m| output.contains(m))
+        && !RUNNER_START_MARKERS.iter().any(|m| output.contains(m))
+}
+
 /// PostToolUse / PostToolUseFailure of a Bash call. Does nothing (`Ok(None)`)
 /// unless the parser finds a test command in `command`; then [`confirm`]s the
 /// call. A panic injected by `CONDUKT_TESTSCOPE_FAULT=confirm_panic` happens

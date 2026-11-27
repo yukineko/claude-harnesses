@@ -1224,7 +1224,10 @@ fn tree_identity_at(cwd: &Path, depth: usize) -> Result<(String, String), String
 // ledger_path, ...) lives in `testscope/rerun.rs`; see that module's doc.
 mod rerun;
 use rerun::{check_rerun, Attempt};
-pub use rerun::{confirm_post, ledger_path, self_attempt_id, settle_self_run};
+pub use rerun::{
+    confirm_post, failure_shows_runner_never_started, invalidate, ledger_path, self_attempt_id,
+    settle_self_run,
+};
 
 // Rule 4's package / target lookups (worktree_changed_packages,
 // manifest_package_name, package_unit_targets, package_specs) live in

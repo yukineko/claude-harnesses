@@ -644,3 +644,32 @@ exit 101:  in 0.56s
     Finished `release` profile [optimized] target(s) in 38.23s
      Running tests/backlog_20261128_prebound_round5.rs (target/release/deps/backlog_20261128_prebound_round5-257d8b712704ef8e)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_prebound_round5`"""
+
+[[task]]
+id = "21d05411"
+title = "blastguard fail-open: DEBUG trap cd to system dir then relative write is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Pre-existing on base: trap 'cd /etc' DEBUG; echo hi > ok.log is Allow, measured to change cwd (bcwd:/usr, zcwd:/usr), so a relative write can land in a system dir. Must be non-Allow in main and Deny in subagent."
+created_at = 1795804610
+updated_at = 1795804610
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_debug_trap_cd_relative_write -- --ignored"
+rev = "e241892e849cb4e9b427be9f9c9fa9d84a85cf07"
+observed_at = 1795804610
+detail = """
+exit 101: .979 (/Users/yuki/src/.harness-worktrees/red-prebound-families/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 23.97s
+     Running tests/backlog_20261128_debug_trap_cd_relative_write.rs (target/release/deps/backlog_20261128_debug_trap_cd_relative_write-5edcc7666695def3)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_debug_trap_cd_relative_write`"""

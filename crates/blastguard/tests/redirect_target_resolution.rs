@@ -503,13 +503,30 @@ fn top_level_local_is_not_judged_like_the_literal() {
 /// bash [w], zsh [w]), so it resolves like the literal spelling. Separate FP,
 /// outside backlog 0aa37c22.
 #[test]
-#[ignore = "RED(c512596e): in-function local is Deny while the literal function is Allow (both shells bind, measured 2026-11-21) — remove when fixed"]
 fn local_inside_a_function_body_resolves_like_the_literal() {
     assert_eq!(
         scoped("f(){ local P=/home/yuki/proj/ok.log; echo hi > \"$P\"; }; f"),
         scoped("f(){ echo hi > /home/yuki/proj/ok.log; }; f"),
         "`local` inside a function body binds in bash and zsh alike (measured 2026-11-21) and must be judged like the literal"
     );
+}
+
+/// A harmful resolved `local` target stays Deny, and a `readonly` of the name
+/// anywhere on the line (bash's `local` then fails and keeps the old value,
+/// measured 2026-11-27) keeps the unresolved verdict instead of the literal's.
+#[test]
+fn local_inside_a_function_body_keeps_harm_and_readonly_restrictive() {
+    let harmful = scoped("f(){ local P=/etc/hosts; echo hi > \"$P\"; }; f");
+    assert!(matches!(harmful, Decision::Deny(_)), "{harmful:?}");
+    for line in [
+        "f(){ local P=/home/yuki/proj/ok.log; echo hi > \"$P\"; }; readonly P=/etc/hosts; f",
+        "readonly P=/etc/hosts; f(){ local P=/home/yuki/proj/ok.log; echo hi > \"$P\"; }; f",
+        // dynamic scope: `g` rewrites `f`'s local
+        "g(){ P=/etc/hosts; }; f(){ local P=/home/yuki/proj/ok.log; g; echo hi > \"$P\"; }; f",
+    ] {
+        let d = scoped(line);
+        assert!(matches!(d, Decision::Deny(_)), "{line}: {d:?}");
+    }
 }
 
 // ----------------------------------------------------------------- decoy ----

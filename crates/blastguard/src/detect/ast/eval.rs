@@ -180,25 +180,7 @@ fn evaluate_with(command: &str, program: &ast::Program, function_defs: bool) -> 
 }
 
 fn run(command: &str, program: &ast::Program, function_defs: bool) -> Result<Script, Cause> {
-    let text = Text::new(command, Origin::root(command.len()));
-    let mut ev = Ev {
-        out: Vec::new(),
-        emit: true,
-        work: 0,
-        accums: Vec::new(),
-        function_defs,
-        function_names: Vec::new(),
-        has_function_definition: false,
-        function_body_ranges: Vec::new(),
-        function_depth: 0,
-    };
-    ev.program(&text, program, Env::initial(), &Context::TopLevel)?;
-    Ok(Script {
-        commands: ev.out,
-        function_names: ev.function_names,
-        has_function_definition: ev.has_function_definition,
-        function_body_ranges: ev.function_body_ranges,
-    })
+    function::run_passes(command, program, function_defs)
 }
 
 // ---------------------------------------------------------------- spans
@@ -305,6 +287,10 @@ struct Env {
     /// An earlier command may have replaced what `. "$HOME/.cargo/env"` runs
     /// (r21 no longer applies, [`super::rustup`]).
     rustup_lost: bool,
+    /// Names a trusted function-body `local` bound: read even while opaque
+    /// (`function::LocalTrust`); any later havoc turns their values
+    /// `Undetermined`.
+    pinned: BTreeSet<String>,
 }
 
 /// Variables the shell itself sets or changes at run time (whitespace
@@ -333,11 +319,12 @@ impl Env {
             cwd: Cwd::Hook,
             stdin: StdinSource::Inherited,
             rustup_lost: false,
+            pinned: BTreeSet::new(),
         }
     }
 
     fn lookup(&self, name: &str) -> Value {
-        if self.opaque {
+        if self.opaque && !self.pinned.contains(name) {
             return undet(format!(
                 "${name}: an earlier command may have changed any variable"
             ));
@@ -497,6 +484,7 @@ fn join(a: Env, b: Env) -> Env {
         cwd,
         stdin,
         rustup_lost: a.rustup_lost || b.rustup_lost,
+        pinned: a.pinned.union(&b.pinned).cloned().collect(),
     }
 }
 
@@ -697,9 +685,11 @@ struct Ev {
     /// Index ranges into `out` of the commands of each function body
     /// (emit mode only).
     function_body_ranges: Vec<std::ops::Range<usize>>,
-    /// Number of enclosing function bodies being evaluated (`function.rs`):
-    /// 0 at top level, where `local` binds nothing (`eval/decl.rs`).
+    /// Enclosing function bodies being evaluated (0 at top level, where
+    /// `local` binds nothing, `eval/decl.rs`).
     function_depth: usize,
+    /// Whether a body's static `local` binds (`eval/function.rs`).
+    local_trust: function::LocalTrust,
 }
 
 impl Ev {
@@ -1342,6 +1332,7 @@ impl Ev {
         decl_names: &BTreeMap<usize, DeclArg>,
         mut env: Env,
     ) -> Result<Outcome, Cause> {
+        self.local_trust.note_command(sc);
         let name = match sc.argv.first().map(|w| &w.value) {
             None => return Ok(Outcome::same(env)),
             Some(Value::Undetermined(_)) => {

@@ -75,7 +75,8 @@ fn pure_head(sc: &SimpleCommand) -> bool {
         "cat" | "ls" | "head" | "tail" | "wc" => true,
         "printf" => args
             .iter()
-            .all(|w| lit(&w.value).is_some_and(|s| s != "-v")),
+            // `-v NAME` and the attached `-vNAME` both assign a variable.
+            .all(|w| lit(&w.value).is_some_and(|s| !s.starts_with("-v"))),
         "export" => args.iter().all(|w| {
             lit(&w.value).is_some_and(|s| s.split('=').next() != Some("HOME") && s != "-n")
         }),
@@ -84,13 +85,30 @@ fn pure_head(sc: &SimpleCommand) -> bool {
             args.first().and_then(|w| lit(&w.value)).is_some_and(|s| {
                 matches!(
                     s,
-                    "status" | "log" | "diff" | "show" | "stash" | "rev-parse"
+                    "status" | "log" | "diff" | "show" | "rev-parse" | "stash"
                 )
-            }) && args.iter().all(|w| {
-                !word_taints(&w.value) && !lit(&w.value).is_some_and(|s| s.starts_with("--output"))
-            })
+            }) && stash_ok(args)
+                && args.iter().all(|w| {
+                    !word_taints(&w.value)
+                        && !lit(&w.value).is_some_and(|s| s.starts_with("--output"))
+                })
         }
         _ => false,
+    }
+}
+
+/// `git stash` restores no stashed content: bare, or `list` / `show` / `push`
+/// / `save` / `drop` / `clear`. `pop`, `apply`, `branch` and any other form
+/// rewrite the tree from content the line does not show (a dotfiles repo at
+/// `HOME`), so they are not pure. Other git subcommands pass.
+fn stash_ok(args: &[super::Word]) -> bool {
+    if args.first().and_then(|w| lit(&w.value)) != Some("stash") {
+        return true;
+    }
+    match args.get(1) {
+        None => true,
+        Some(w) => lit(&w.value)
+            .is_some_and(|s| matches!(s, "list" | "show" | "push" | "save" | "drop" | "clear")),
     }
 }
 
@@ -138,14 +156,75 @@ pub(crate) fn tainted_by(sc: &SimpleCommand) -> bool {
     !is_rustup_env_source(sc) && !known_pure(sc)
 }
 
+/// A `for` / `while` / `until` clause of `text` (a node the parser built, read
+/// from its debug dump by node name and bracket depth, not from the words of
+/// the text) holds the cargo env `.` / `source`: its next iteration runs it
+/// after the commands that textually follow it. A loop elsewhere does not
+/// matter. An unparsable text, or a dump whose brackets do not balance, counts
+/// as holding one.
+fn dot_in_loop(text: &str) -> bool {
+    let Ok(program) = super::parse::parse(text) else {
+        return true;
+    };
+    let dump = format!("{program:?}");
+    let b = dump.as_bytes();
+    for name in [
+        "ForClause(",
+        "ArithmeticForClause(",
+        "WhileClause(",
+        "UntilClause(",
+    ] {
+        for (start, _) in dump.match_indices(name) {
+            let (mut depth, mut i, mut in_str) = (0usize, start + name.len() - 1, false);
+            let end = loop {
+                let Some(&ch) = b.get(i) else {
+                    return true;
+                };
+                if in_str {
+                    match ch {
+                        b'\\' => i += 1,
+                        b'"' => in_str = false,
+                        _ => {}
+                    }
+                } else {
+                    match ch {
+                        b'"' => in_str = true,
+                        b'(' | b'{' | b'[' => depth += 1,
+                        b')' | b'}' | b']' => {
+                            depth = depth.saturating_sub(1);
+                            if depth == 0 {
+                                break i;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                i += 1;
+            };
+            if dump
+                .get(start..end)
+                .is_none_or(|s| s.contains(".cargo/env"))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// The line's cargo env `.` / `source` is not the exempt form (its operand
 /// names another file, e.g. after `HOME=/tmp/x`), or some command before the
 /// last one taints it.
-pub(crate) fn line_tainted(cmds: &[SimpleCommand]) -> bool {
+pub(crate) fn line_tainted(text: &str, cmds: &[SimpleCommand]) -> bool {
     let dots: Vec<&SimpleCommand> = cmds.iter().filter(|c| is_cargo_env_dot(c)).collect();
     let Some(last) = dots.iter().map(|c| c.span.start).max() else {
         return false;
     };
-    dots.iter().any(|c| !is_rustup_env_source(c))
+    // Textual order is not run order inside a loop (the `.` of the next
+    // iteration runs after the commands below it): with a loop on the line
+    // the order is undetermined and the exemption is dropped. A function
+    // definition already makes the whole analysis Undetermined.
+    dot_in_loop(text)
+        || dots.iter().any(|c| !is_rustup_env_source(c))
         || cmds.iter().any(|c| c.span.start < last && tainted_by(c))
 }

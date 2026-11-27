@@ -207,7 +207,7 @@ impl Index {
             words,
             commands,
             assignment_values,
-            rustup_tainted: super::rustup::line_tainted(&script.commands),
+            rustup_tainted: super::rustup::line_tainted(text, &script.commands),
         }
     }
 

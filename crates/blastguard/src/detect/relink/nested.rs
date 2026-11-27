@@ -264,10 +264,22 @@ fn is_python(base: &str) -> bool {
 /// `os.symlink`, `os.link`, `Path.symlink_to`, `Path.hardlink_to`). A program
 /// the parser cannot read is S5's Ask, not this layer's. Perl, ruby and node
 /// are out of scope.
-fn python_relinks(body: &str) -> bool {
-    match progeffect::python::analyze(body, &[Some("-c".to_string())]) {
-        progeffect::Analysis::Known(effects) => effects.iter().any(ast::s5::effect_relinks),
-        progeffect::Analysis::Undetermined(_) => false,
+fn python_links(body: &str, cwd: &CwdState, out: &mut Nested) {
+    let progeffect::Analysis::Known(effects) =
+        progeffect::python::analyze(body, &[Some("-c".to_string())])
+    else {
+        return;
+    };
+    for e in effects.iter().filter(|e| ast::s5::effect_relinks(e)) {
+        match e.shell_spelling() {
+            Some(text) => out.commands.push(Cmd {
+                reduced: text.clone(),
+                text,
+                cwd: cwd.clone(),
+            }),
+            // A link whose operand cannot be spelt may land anywhere.
+            None => out.undetermined = true,
+        }
     }
 }
 
@@ -496,17 +508,15 @@ fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, place: Place, out: &
     }
     if is_python(base) {
         match ast::program_source(c) {
-            // The call's paths are Python expressions, not shell words: it
-            // may relink any path.
-            Some(ProgramSource::InlineLiteral(body)) if python_relinks(&body) => {
-                out.sources_unknown = true
-            }
-            // A program fed on stdin (`<<<`, a heredoc, a pipe) is read the
-            // same way.
-            Some(ProgramSource::Stdin(StdinSource::Literal(body))) if python_relinks(&body) => {
-                out.sources_unknown = true
-            }
-            // A body the parser cannot read is S5's Ask; nothing to add.
+            // Each link the parsed program creates is modelled as the `ln`
+            // it is spelled as (`os.symlink(A, B)` -> `ln -s -- A B`), so the
+            // landing of a later write is judged like any `ln`. A program fed
+            // on stdin (`<<<`, a heredoc, a pipe) is read the same way. A body
+            // the parser cannot read is S5's Ask; nothing to add.
+            Some(
+                ProgramSource::InlineLiteral(body)
+                | ProgramSource::Stdin(StdinSource::Literal(body)),
+            ) => python_links(&body, &cwd, out),
             Some(ProgramSource::Undetermined(_)) => out.undetermined = true,
             _ => {}
         }

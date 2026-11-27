@@ -91,7 +91,7 @@ fn run_as(command: &str, home: &Home, subagent: bool) -> (String, String) {
 }
 
 #[test]
-#[ignore = "RED(a92a82b1): subagent perl -pi in-place edit denied as option -pi not modelled"]
+#[ignore = "RED(1f968657): subagent perl -pi in-place edit denied as option -pi not modelled"]
 fn perl_in_place_literal_path_is_allowed() {
     let home = unique_home("ctl1");
     let c = "perl -pi -e 's/0\\.2\\.578/0.2.579/' m.json";
@@ -108,7 +108,7 @@ fn control_perl_var_from_cmdsub_is_not_allowed() {
 }
 
 #[test]
-#[ignore = "RED(a92a82b1): subagent perl -pi in-place edit via literal-assigned variable denied as option -pi not modelled"]
+#[ignore = "RED(1f968657): subagent perl -pi in-place edit via literal-assigned variable denied as option -pi not modelled"]
 fn perl_in_place_on_literal_assigned_variable_is_allowed() {
     let home = unique_home("red");
     let c = "f=m.json && perl -pi -e 's/0\\.2\\.578/0.2.579/' $f";

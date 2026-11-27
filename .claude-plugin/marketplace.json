@@ -208,7 +208,7 @@
     {
       "name": "context-governor",
       "description": "Thin control layer around Claude Code's built-in compaction: pinning, lossless recall, retrieval and tool-result hygiene, wired as a single hook-dispatch binary.",
-      "version": "0.1.30",
+      "version": "0.1.32",
       "category": "context",
       "keywords": [
         "context",
@@ -232,7 +232,7 @@
     {
       "name": "ctxrot",
       "description": "Context-rot guard for Claude Code that detects, rescues, restores and distills conversation context to fight attention decay in long sessions.",
-      "version": "0.5.40",
+      "version": "0.5.42",
       "category": "context",
       "keywords": [
         "context",
@@ -1095,6 +1095,29 @@
         "source": "git-subdir",
         "url": "https://github.com/yukineko/claude-harnesses.git",
         "path": "crates/onepass",
+        "ref": "main"
+      }
+    },
+    {
+      "name": "modelguard",
+      "description": "PreToolUse gate on Agent and Task that denies Fable/Mythos models on every subagent spawn and requires a Sonnet model for implementer spawns, failing closed on unparseable payloads.",
+      "version": "0.1.3",
+      "category": "quality",
+      "keywords": [
+        "hooks",
+        "subagent",
+        "model",
+        "rust"
+      ],
+      "license": "MIT",
+      "homepage": "https://github.com/yukineko/claude-harnesses/tree/main/crates/modelguard",
+      "author": {
+        "name": "yukineko"
+      },
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/yukineko/claude-harnesses.git",
+        "path": "crates/modelguard",
         "ref": "main"
       }
     },

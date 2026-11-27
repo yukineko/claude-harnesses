@@ -1,0 +1,18 @@
+[package]
+name = "modelguard"
+version = "0.1.3"
+edition = "2021"
+rust-version.workspace = true
+description = "PreToolUse gate on Agent and Task that denies Fable/Mythos models on every subagent spawn and requires a Sonnet model for implementer spawns, failing closed on unparseable payloads."
+license = "MIT"
+
+[[bin]]
+name = "modelguard"
+path = "src/main.rs"
+
+[dependencies]
+harness-core = { path = "../harness-core" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

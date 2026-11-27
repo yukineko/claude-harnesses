@@ -557,40 +557,6 @@ exit 101: 0-171414-35880-whileread/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_while_read_data_heredoc_fd_redirect_fp`"""
 
 [[task]]
-id = "2bcfd471"
-title = "deny-no-verify.py FP: quoted heredoc body with an apostrophe plus a 'git' substring and '-n' is refused as unparseable gate-bypass (shlex does not model heredocs)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "false-positive",
-    "gate",
-    "p1",
-]
-touched_files = []
-status = "failed"
-notes = """
-Observed 2026-11-20: main-session byte-for-byte re-run of relay bgr-a866a4fd1397 (writing a condukt test file via cat <<'EOF' ... task's ... EOF) refused verbatim: 'Refused: this command could not be parsed, and it carries a gate-bypass marker. The shell quoting does not close, so whether this is git commit --no-verify cannot be determined.' Mechanism (independent author, source reading + RED): shlex has no heredoc model so the apostrophe in a quoted heredoc body never closes; looks_like_bypass fires on substring git (git_env / git( helper) plus -n of sed/grep. RED 51aa53acb scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py (strict xfail; --runxfail: 2 failed, 2 passed). Distinct from pinned test_gate_bypass.py::test_DEFECT_looks_like_bypass_is_noisy_on_untokenizable_input: here a real shell lexes the input fine.
-needs human ruling (A body-as-data vs B per-line lexing; A1/A2; own lexer vs brush-parser; split unquoted <<EOF FP) — re-handed by next --claim on 2026-11-21 although failed earlier in 2048ca4eb"""
-created_at = 1795172228
-updated_at = 1795261383
-defer_until = 1795434183
-weight = 0.0
-issue_number = 1929
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1929"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py"
-rev = "51aa53acbad1cfb38b11f2fa8865f0c1bb056d8e"
-observed_at = 1795172228
-detail = """
-exit 1: nfo ============================
-FAILED scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py::QuotedHeredocApostrophe::test_minimal_quoted_heredoc_apostrophe_is_allowed
-FAILED scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py::QuotedHeredocApostrophe::test_observed_command_is_allowed
-========================= 2 failed, 2 passed in 0.21s =========================="""
-
-[[task]]
 id = "987e3708"
 title = "blastguard FP candidate: echo rm -rf ./build | bash is Deny in main and subagent (non-system relative target)"
 project = "/Users/yuki/src/harness"
@@ -859,42 +825,6 @@ exit 101: tscope-refused-run-20261121/crates/condukt)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.21s
      Running tests/backlog_20261121_testscope_refused_wrapper_counts_as_run.rs (target/debug/deps/backlog_20261121_testscope_refused_wrapper_counts_as_run-edcd3f3d9c7ac4dc)
 error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_refused_wrapper_counts_as_run`"""
-
-[[task]]
-id = "d1d85c66"
-title = "scripts/check-version-bumped.py pre-commit mode judges the working tree, not the index (FP on unstaged edits, fail-open on unstaged bump)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "gate",
-    "fail-open",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "failed"
-notes = """
-Pre-commit mode (no --head): _range() makes the diff 'git diff --name-only HEAD' (working tree vs HEAD, includes unstaged edits) and the current version is read from the working-tree plugin.json. Two readings recorded in the script header: (1) defect - a pre-commit gate should judge the commit (the index) like the --staged scanners (user ruling 2026-11-08 'the scanner checks only this commit's range'); (2) intended - the gate header documents 'pre-commit: working tree vs last commit'. Script asserts reading (1). Case A (false positive): only an UNSTAGED edit touches plugin foo, commit stages an unrelated file -> gate blocks (should pass). Case B (fail-open): STAGED src change to foo with the bump left UNSTAGED -> gate passes (should block). Controls C (staged change+staged bump -> 0) and D (staged change, no bump -> 1) hold. Observed in main session 2026-11-21: controls C/D ok, RED A and RED B, exit=1. Origin: condukt run run-20261121-114054-75519 (unstaged rustfmt edits listed as changed files).
-reject (unmeasured, 2026-11-22): repro 'bash scripts/tests/backlog-20261121-version-bumped-judges-unstaged.sh' cannot be executed from a /flow driver or its subagents: blastguard Deny 'bash runs the program file ... whose text is not in the command (Table B.5: Undetermined)' (relay bgr-410e6586367b). Static: scripts/check-version-bumped.py unchanged since RED rev bcc9a0b64, so likely unfixed. Needs a non-driver session (script-quarantine Ask) or a cargo/pytest-form repro."""
-created_at = 1795242395
-updated_at = 1795280310
-defer_until = 1795453110
-weight = 0.0
-issue_number = 1950
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1950"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "bash scripts/tests/backlog-20261121-version-bumped-judges-unstaged.sh"
-rev = "bcc9a0b64f063f99508dbde319ffb93555bb8659"
-observed_at = 1795242395
-detail = """
-exit 1:  
-    Fix: bump this plugin's version (>= micro) in Cargo.toml + plugin.json + marketplace.json.
-    禁忌: a touched plugin must never keep the same version.
-RED B: the commit stages a foo source change WITHOUT a bump (the bump is unstaged), yet the gate passed; rc=0
-    OK: no changed plugin left un-bumped vs HEAD (1 plugins scanned, plus the shared crate(s) harness-core, riskgrade, progeffect)"""
 
 [[task]]
 id = "c512596e"

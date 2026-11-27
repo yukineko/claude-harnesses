@@ -95934,3 +95934,129 @@ rev = "ca5cd0c8bb6cd43280a24c7a6648c75af29ba837"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "2bcfd471"
+title = "deny-no-verify.py FP: quoted heredoc body with an apostrophe plus a 'git' substring and '-n' is refused as unparseable gate-bypass (shlex does not model heredocs)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "false-positive",
+    "gate",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+Observed 2026-11-20: main-session byte-for-byte re-run of relay bgr-a866a4fd1397 (writing a condukt test file via cat <<'EOF' ... task's ... EOF) refused verbatim: 'Refused: this command could not be parsed, and it carries a gate-bypass marker. The shell quoting does not close, so whether this is git commit --no-verify cannot be determined.' Mechanism (independent author, source reading + RED): shlex has no heredoc model so the apostrophe in a quoted heredoc body never closes; looks_like_bypass fires on substring git (git_env / git( helper) plus -n of sed/grep. RED 51aa53acb scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py (strict xfail; --runxfail: 2 failed, 2 passed). Distinct from pinned test_gate_bypass.py::test_DEFECT_looks_like_bypass_is_noisy_on_untokenizable_input: here a real shell lexes the input fine.
+needs human ruling (A body-as-data vs B per-line lexing; A1/A2; own lexer vs brush-parser; split unquoted <<EOF FP) — re-handed by next --claim on 2026-11-21 although failed earlier in 2048ca4eb"""
+created_at = 1795172228
+updated_at = 1795783310
+weight = 0.0
+issue_number = 1929
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1929"
+issue_closed_at = 1795783313
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py"
+rev = "51aa53acbad1cfb38b11f2fa8865f0c1bb056d8e"
+observed_at = 1795172228
+detail = """
+exit 1: nfo ============================
+FAILED scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py::QuotedHeredocApostrophe::test_minimal_quoted_heredoc_apostrophe_is_allowed
+FAILED scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py::QuotedHeredocApostrophe::test_observed_command_is_allowed
+========================= 2 failed, 2 passed in 0.21s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py"
+exit = 0
+passed = 4
+rev = "381816a5b8768eb96d43429c200e468089f32a9f"
+observed_at = 1795783309
+output_digest = "sha256:430190b4691a3ac7430c9e60fabb79f1597eb38db08fefed6c5d187f5947e6d9"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-eaa077f4
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 4 items
+
+scripts/test_deny_no_verify_quoted_heredoc_apostrophe_fp_20261120.py ... [ 75%]
+.                                                                        [100%]
+
+============================== 4 passed in 0.13s ===============================
+"""
+
+[task.closure.red]
+rev = "ca5cd0c8bb6cd43280a24c7a6648c75af29ba837"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "d1d85c66"
+title = "scripts/check-version-bumped.py pre-commit mode judges the working tree, not the index (FP on unstaged edits, fail-open on unstaged bump)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "fail-open",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+Pre-commit mode (no --head): _range() makes the diff 'git diff --name-only HEAD' (working tree vs HEAD, includes unstaged edits) and the current version is read from the working-tree plugin.json. Two readings recorded in the script header: (1) defect - a pre-commit gate should judge the commit (the index) like the --staged scanners (user ruling 2026-11-08 'the scanner checks only this commit's range'); (2) intended - the gate header documents 'pre-commit: working tree vs last commit'. Script asserts reading (1). Case A (false positive): only an UNSTAGED edit touches plugin foo, commit stages an unrelated file -> gate blocks (should pass). Case B (fail-open): STAGED src change to foo with the bump left UNSTAGED -> gate passes (should block). Controls C (staged change+staged bump -> 0) and D (staged change, no bump -> 1) hold. Observed in main session 2026-11-21: controls C/D ok, RED A and RED B, exit=1. Origin: condukt run run-20261121-114054-75519 (unstaged rustfmt edits listed as changed files).
+reject (unmeasured, 2026-11-22): repro 'bash scripts/tests/backlog-20261121-version-bumped-judges-unstaged.sh' cannot be executed from a /flow driver or its subagents: blastguard Deny 'bash runs the program file ... whose text is not in the command (Table B.5: Undetermined)' (relay bgr-410e6586367b). Static: scripts/check-version-bumped.py unchanged since RED rev bcc9a0b64, so likely unfixed. Needs a non-driver session (script-quarantine Ask) or a cargo/pytest-form repro."""
+created_at = 1795242395
+updated_at = 1795783364
+weight = 0.0
+issue_number = 1950
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1950"
+issue_closed_at = 1795783367
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/backlog-20261121-version-bumped-judges-unstaged.sh"
+rev = "bcc9a0b64f063f99508dbde319ffb93555bb8659"
+observed_at = 1795242395
+detail = """
+exit 1:  
+    Fix: bump this plugin's version (>= micro) in Cargo.toml + plugin.json + marketplace.json.
+    禁忌: a touched plugin must never keep the same version.
+RED B: the commit stages a foo source change WITHOUT a bump (the bump is unstaged), yet the gate passed; rc=0
+    OK: no changed plugin left un-bumped vs HEAD (1 plugins scanned, plus the shared crate(s) harness-core, riskgrade, progeffect)"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "script"
+cmd = "bash scripts/tests/backlog-20261121-version-bumped-judges-unstaged.sh"
+exit = 0
+passed = 2
+rev = "be04bd95763555b14c118c6699da1a9899837e2c"
+observed_at = 1795783363
+output_digest = "sha256:f1c71c607074192d94dbea778146782e115377bcbbe9f95670ae3097588f505b"
+excerpt = """
+  ok C: staged change + staged bump passes
+  ok D: staged change without bump blocks
+  ok A: unstaged edit outside the commit is not judged
+  ok B: unstaged bump does not certify a staged change
+all ok
+test result: ok. 2 passed; 0 failed
+"""
+
+[task.closure.red]
+rev = "bcc9a0b64f063f99508dbde319ffb93555bb8659"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -193,6 +193,14 @@ pub fn updated_value(resp: Option<&Value>, updated: &str, limit: usize) -> Optio
             }
             let mut out = map.clone();
             let placeholder = updated == INTERNAL_ERROR_PLACEHOLDER;
+            // The trigger is the SUM of the text fields, so the budget is shared
+            // across them in proportion to length: the combined output stays
+            // within `limit` and every field shrinks (total >= limit here).
+            let total: usize = present
+                .iter()
+                .filter_map(|k| map.get(*k).and_then(Value::as_str))
+                .map(|s| s.chars().count())
+                .sum();
             for (i, k) in present.iter().enumerate() {
                 let text = map.get(*k).and_then(Value::as_str).unwrap_or_default();
                 let new = if placeholder {
@@ -202,7 +210,12 @@ pub fn updated_value(resp: Option<&Value>, updated: &str, limit: usize) -> Optio
                         String::new()
                     }
                 } else {
-                    truncate_response(text, limit)
+                    let share = if total == 0 {
+                        0
+                    } else {
+                        (limit as u128 * text.chars().count() as u128 / total as u128) as usize
+                    };
+                    truncate_response(text, share)
                 };
                 out.insert((*k).to_string(), Value::String(new));
             }

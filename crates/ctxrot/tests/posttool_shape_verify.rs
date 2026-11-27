@@ -90,7 +90,6 @@ fn bash(stdout: String, stderr: String) -> serde_json::Value {
 /// stdout 30k + stderr 30k = 60k >= 50k threshold: the hook fires, so the
 /// rewrite it emits must actually be smaller than the input.
 #[test]
-#[ignore = "RED(posttool-verify): updated_value truncates each text field to limit separately; 30k+30k fires the hook but the rewrite is identical (60000 >= 60000)"]
 fn split_fields_each_under_limit_rewrite_actually_shrinks() {
     let input = bash(lines(30_000), lines(30_000));
     let out = run_toolguard(input.clone());
@@ -107,7 +106,6 @@ fn split_fields_each_under_limit_rewrite_actually_shrinks() {
 /// stdout 200k + stderr 200k: the rewrite must be bounded by the threshold
 /// (string-shaped responses are bounded by `limit`; the object path must be too).
 #[test]
-#[ignore = "RED(posttool-verify): updated_value truncates each text field to limit separately; 200k+200k yields 99956 chars > 50000 limit"]
 fn split_fields_each_over_limit_rewrite_stays_within_limit() {
     let input = bash(lines(200_000), lines(200_000));
     let out = run_toolguard(input);

@@ -88,35 +88,41 @@ fn trim_middle(body: &str, budget: u32) -> String {
     format!("{head}\n…[context-governor: elided {elided} chars of {total}]…\n{tail}")
 }
 
-/// Text fields of an object-shaped `tool_response` (Bash) that may be trimmed.
-const TRIM_KEYS: [&str; 2] = ["stdout", "stderr"];
+/// String fields shorter than this many chars are metadata (`url`, `codeText`,
+/// ...), never bulk text: they are left untouched rather than mangled.
+const MIN_TRIMMABLE_CHARS: u64 = 256;
 
 /// Rebuild an object-shaped `tool_response` with the same key set, replacing
-/// only the string `stdout`/`stderr` fields by their trimmed versions (the
-/// budget is shared proportionally to field length). Non-string fields
-/// (`interrupted`, `isImage`, ...) are cloned unchanged. Returns `None` when
-/// there is no text to trim or the rebuilt object is not strictly smaller than
-/// the input serialization (I4).
+/// every bulk string field (any key: `stdout`, `stderr`, WebFetch `result`,
+/// Read `content`, ...) by its trimmed version. The budget is shared across the
+/// trimmed fields in proportion to length, so the combined text fits the
+/// budget. Short strings and non-string fields (`interrupted`, `isImage`, ...)
+/// are cloned unchanged. Returns `None` when there is no bulk text or the
+/// rebuilt object is not strictly smaller than the input serialization (I4).
 fn groom_object(
     map: &serde_json::Map<String, serde_json::Value>,
     budget: u32,
     pre_serialized: &str,
 ) -> Option<serde_json::Value> {
-    let total: u64 = TRIM_KEYS
-        .iter()
-        .filter_map(|k| map.get(*k).and_then(|v| v.as_str()))
+    fn bulk(v: &serde_json::Value) -> Option<&str> {
+        v.as_str()
+            .filter(|s| s.chars().count() as u64 >= MIN_TRIMMABLE_CHARS)
+    }
+    let total: u64 = map
+        .values()
+        .filter_map(bulk)
         .map(|s| s.chars().count() as u64)
         .sum();
     if total == 0 {
         return None;
     }
     let mut out = map.clone();
-    for k in TRIM_KEYS {
-        if let Some(text) = map.get(k).and_then(|v| v.as_str()) {
+    for (k, v) in map {
+        if let Some(text) = bulk(v) {
             let len = text.chars().count() as u64;
             let share = u32::try_from(budget as u64 * len / total).unwrap_or(budget);
             out.insert(
-                k.to_string(),
+                k.clone(),
                 serde_json::Value::String(trim_middle(text, share.max(1))),
             );
         }

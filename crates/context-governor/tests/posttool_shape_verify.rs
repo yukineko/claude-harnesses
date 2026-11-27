@@ -61,7 +61,6 @@ fn updated_tool_output(stdout: &str) -> Option<serde_json::Value> {
 /// An oversized WebFetch `result` (~40k tokens, far above the 2048 default
 /// budget) must be groomed with the WebFetch object shape kept.
 #[test]
-#[ignore = "RED(posttool-verify): groom_object trims only stdout/stderr; oversized WebFetch result emits {} (silently ungroomed)"]
 fn oversized_webfetch_result_is_groomed_with_shape_kept() {
     let big = "line of fetched page text that is fairly long\n".repeat(4000);
     let input = serde_json::json!({

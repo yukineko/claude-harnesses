@@ -528,14 +528,17 @@ tags = [
     "p2",
 ]
 touched_files = []
-status = "pending"
-notes = "Observed 2026-11-27 at main 30937b7ef by flow session eaa077f4: cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_fp_cases_stay_allow -> FAILED (panicked at heredoc_script_failopen_red_20261108.rs:713:5). Reported by the cfa4e0f2 worker: python-heredoc FP cases fp_makedirs, fp_os_rename_repo, fp_shutil_move_repo show main=ask/deny sub=deny. Readings: (a) regression in python heredoc S5/effect rules; (b) the test's expectations are stale against a later ruling. Not investigated."
+status = "failed"
+notes = """
+Observed 2026-11-27 at main 30937b7ef by flow session eaa077f4: cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_fp_cases_stay_allow -> FAILED (panicked at heredoc_script_failopen_red_20261108.rs:713:5). Reported by the cfa4e0f2 worker: python-heredoc FP cases fp_makedirs, fp_os_rename_repo, fp_shutil_move_repo show main=ask/deny sub=deny. Readings: (a) regression in python heredoc S5/effect rules; (b) the test's expectations are stale against a later ruling. Not investigated.
+needs user ruling. Regression commit 90bebb79e (S4 standalone Table B.5 layer, rulings 20/22-24, blastguard 0.2.716): test wrap() joins heredoc write and python3 x.py with a newline, which ruling 20 ('a body written by the same line and run joined by && only is judged as the program') and 'B.5 wins' make Undetermined (main Ask/sub Deny). 29 cases main=ask (reason verified for fp_makedirs: Table B.5 Undetermined); 4 cases main=deny (fp_pathlib, fp_shutil_copy_repo, fp_os_rename_repo, fp_shutil_move_repo) reason NOT verified. Options: (a) re-anchor the FP list to 'not Deny in main' / Ask; (b) new ruling to Allow newline-joined same-command repo scripts; (c) keep failing until the quarantine plugin / S5 returns them to Allow. Unhedged assert vs ruling -> judgment Ask, skipped by flow."""
 created_at = 1795787867
-updated_at = 1795787867
+updated_at = 1795788367
+defer_until = 1795961167
 weight = 0.0
 issue_number = 1994
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1994"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

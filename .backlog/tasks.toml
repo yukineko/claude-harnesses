@@ -750,6 +750,8 @@ notes = "Salvaged from unmerged bg-walk-clean-6bbf (2026-11-08 parity rule). Mea
 created_at = 1795805156
 updated_at = 1795805156
 weight = 0.0
+issue_number = 2006
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2006"
 rev = 0
 
 [task.repro]

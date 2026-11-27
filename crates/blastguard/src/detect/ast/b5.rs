@@ -163,6 +163,7 @@ use crate::model::Decision;
 mod closed_heredoc;
 mod determined;
 mod env;
+mod sudo;
 use determined::{
     determined_builtin_eval, determined_dash_c_program, determined_delivered_program,
     determined_eval_program,
@@ -384,6 +385,14 @@ pub(super) enum Unwrapped {
 
 /// `argv[k]` as an unwrapped wrapper (see the module doc for the set).
 pub(super) fn unwrap_at(argv: &[Word], k: usize) -> Unwrapped {
+    unwrap_at_shell(argv, k, &mut false)
+}
+
+/// [`unwrap_at`], also setting `*shell_cmd` when the result is `At(i)` of a
+/// sudo / doas in shell mode (`-s`, `-i`, `--shell`, `--login`) whose command
+/// words `argv[i..]` the wrapper's shell runs as ONE `-c` body (backlog
+/// 8f8acf5e). The returned `Unwrapped` is the same as `unwrap_at`'s.
+fn unwrap_at_shell(argv: &[Word], k: usize, shell_cmd: &mut bool) -> Unwrapped {
     let Some(Ok(name)) = argv.get(k).map(literal) else {
         return Unwrapped::NotWrapper;
     };
@@ -474,163 +483,8 @@ pub(super) fn unwrap_at(argv: &[Word], k: usize) -> Unwrapped {
         },
         // SUBSET.md Table B.3 `sudo`, `doas` row (user ruling 2026-11-20 Q1, Q3).
         // sudo(8) long options are modelled by `sudo_long` (sudo only).
-        "sudo" | "doas" => {
-            let mut shell = false;
-            // A mode that runs no command (`sudo -l`, `-v`, `-K`, `-V`).
-            let mut no_exec = false;
-            loop {
-                match word(i) {
-                    Some(Err(_)) => {
-                        return Unwrapped::Undetermined(format!(
-                            "a `{base}` operand is undetermined"
-                        ))
-                    }
-                    Some(Ok("--")) => {
-                        i += 1;
-                        break;
-                    }
-                    Some(Ok("-u" | "-g" | "-C" | "-D" | "-h" | "-p" | "-r" | "-t" | "-U")) => {
-                        i += 2
-                    }
-                    Some(Ok(w))
-                        if w.len() > 2
-                            && ["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U"]
-                                .iter()
-                                .any(|o| w.starts_with(o)) =>
-                    {
-                        i += 1
-                    }
-                    Some(Ok("-s" | "-i")) => {
-                        shell = true;
-                        i += 1
-                    }
-                    Some(Ok("-E" | "-H" | "-n" | "-S" | "-k" | "-A" | "-P")) => i += 1,
-                    Some(Ok(
-                        "-l" | "--list" | "-v" | "--validate" | "-K" | "--remove-timestamp" | "-V"
-                        | "--version",
-                    )) => {
-                        no_exec = true;
-                        i += 1
-                    }
-                    Some(Ok("-e")) => {
-                        return Unwrapped::Undetermined(format!(
-                            "`{base} -e` (sudoedit) is not modelled"
-                        ))
-                    }
-                    // sudo(8) long options (backlog a761b38f). `doas` has none:
-                    // its long options fall through to `undet` below.
-                    Some(Ok(w)) if base == "sudo" && w.starts_with("--") => match sudo_long(w) {
-                        SudoLong::Value => i += 2,
-                        SudoLong::InlineValue | SudoLong::Flag => i += 1,
-                        SudoLong::Shell => {
-                            shell = true;
-                            i += 1
-                        }
-                        SudoLong::NoExec => {
-                            no_exec = true;
-                            i += 1
-                        }
-                        SudoLong::Edit => {
-                            return Unwrapped::Undetermined(format!(
-                                "`{base} --edit` (sudoedit) is not modelled"
-                            ))
-                        }
-                        SudoLong::Unknown => return undet(w),
-                    },
-                    Some(Ok(w)) if w.starts_with('-') => return undet(w),
-                    _ => break,
-                }
-            }
-            if no_exec {
-                // Alone it runs nothing. A word after it (`sudo -l rm`) is not
-                // modelled: Undetermined rather than assuming it is not run.
-                return match word(i) {
-                    None => Unwrapped::Nothing,
-                    Some(_) => Unwrapped::Undetermined(format!(
-                        "`{base}` with a list / validate / version option and a command is \
-                         not modelled"
-                    )),
-                };
-            }
-            // `NAME=VALUE` operands before the command set its environment.
-            loop {
-                match word(i) {
-                    Some(Err(_)) => {
-                        return Unwrapped::Undetermined(format!(
-                            "a `{base}` operand is undetermined"
-                        ))
-                    }
-                    Some(Ok(w)) if w.contains('=') => i += 1,
-                    Some(Ok(_)) => return Unwrapped::At(i),
-                    None if shell => return Unwrapped::ImplicitShell,
-                    // `sudo` / `doas` without a command prints its usage.
-                    None => return Unwrapped::Nothing,
-                }
-            }
-        }
+        "sudo" | "doas" => sudo::unwrap_sudo(argv, base, i, shell_cmd),
         _ => Unwrapped::NotWrapper,
-    }
-}
-
-/// How `unwrap_at` treats one sudo(8) long option (backlog a761b38f).
-enum SudoLong {
-    /// `--opt VALUE`: the next word is the option's argument.
-    Value,
-    /// `--opt=VALUE` (or `--preserve-env=list`): the argument is inline.
-    InlineValue,
-    /// A flag with no argument.
-    Flag,
-    /// `--login` / `--shell`: as `-i` / `-s`.
-    Shell,
-    /// A mode that runs no command (`--list`, `--validate`, ...).
-    NoExec,
-    /// `--edit` (sudoedit): not modelled, like `-e`.
-    Edit,
-    /// Any other long option: not modelled (Undetermined).
-    Unknown,
-}
-
-/// Classify a sudo(8) long option `w` (starting with `--`, not `--` itself).
-/// Only the options listed here are modelled; anything else is
-/// [`SudoLong::Unknown`], which the caller resolves to Undetermined.
-fn sudo_long(w: &str) -> SudoLong {
-    // Long options taking a value: `-u -g -C -D -h(host) -p -r -t -U`.
-    const VALUE: [&str; 9] = [
-        "--user",
-        "--group",
-        "--close-from",
-        "--chdir",
-        "--host",
-        "--prompt",
-        "--role",
-        "--type",
-        "--other-user",
-    ];
-    // `-E -H -n -S -k -A -P -b`.
-    const FLAG: [&str; 8] = [
-        "--preserve-env",
-        "--set-home",
-        "--non-interactive",
-        "--stdin",
-        "--reset-timestamp",
-        "--askpass",
-        "--preserve-groups",
-        "--background",
-    ];
-    if let Some((name, _)) = w.split_once('=') {
-        return if VALUE.contains(&name) || name == "--preserve-env" {
-            SudoLong::InlineValue
-        } else {
-            SudoLong::Unknown
-        };
-    }
-    match w {
-        _ if VALUE.contains(&w) => SudoLong::Value,
-        _ if FLAG.contains(&w) => SudoLong::Flag,
-        "--login" | "--shell" => SudoLong::Shell,
-        "--list" | "--validate" | "--remove-timestamp" | "--version" | "--help" => SudoLong::NoExec,
-        "--edit" => SudoLong::Edit,
-        _ => SudoLong::Unknown,
     }
 }
 
@@ -649,7 +503,11 @@ pub(super) fn implicit_shell(cmd: &SimpleCommand) -> SimpleCommand {
     }
 }
 
-/// The B.5 opinion of one simple command (`commands[idx]`).
+/// The B.5 opinion of one simple command (`commands[idx]`). A sudo / doas in
+/// shell mode followed by a command word (`sudo -s 'rm -rf /etc'`, backlog
+/// 8f8acf5e, user ruling 2026-11-21) takes the stricter of the direct-argv
+/// reading ([`classify_walk`]), a floor of Ask, and the verdict of the words
+/// judged as a shell body ([`sudo::wrapper_shell_command`]).
 fn classify(
     text: &str,
     commands: &[SimpleCommand],
@@ -658,6 +516,46 @@ fn classify(
     depth: usize,
     judge: &Probes<'_>,
     inherited: &StdinSource,
+) -> Decision {
+    let mut wrapper_body: Option<Decision> = None;
+    let direct = classify_walk(
+        text,
+        commands,
+        idx,
+        cmd,
+        depth,
+        judge,
+        inherited,
+        &mut wrapper_body,
+    );
+    let Some(body) = wrapper_body else {
+        return direct;
+    };
+    let mut acc = VerdictAcc::default();
+    for d in [
+        undetermined("a wrapper's shell runs the command words as one shell body"),
+        direct,
+        body,
+    ] {
+        if let Some(deny) = acc.record(d) {
+            return deny;
+        }
+    }
+    acc.finish()
+}
+
+/// The direct-argv reading of [`classify`]; `wrapper_body` receives the
+/// shell-body verdict of a shell-mode sudo / doas command.
+#[allow(clippy::too_many_arguments)]
+fn classify_walk(
+    text: &str,
+    commands: &[SimpleCommand],
+    idx: usize,
+    cmd: &SimpleCommand,
+    depth: usize,
+    judge: &Probes<'_>,
+    inherited: &StdinSource,
+    wrapper_body: &mut Option<Decision>,
 ) -> Decision {
     let mut k = 0;
     // Reached through `sudo` / `doas` (see `privileged_literal_body`).
@@ -677,7 +575,8 @@ fn classify(
                 Err(r) => return undetermined(r),
             }
         }
-        match unwrap_at(&cmd.argv, k) {
+        let mut shell_cmd = false;
+        match unwrap_at_shell(&cmd.argv, k, &mut shell_cmd) {
             Unwrapped::NotWrapper => break,
             Unwrapped::Nothing => return Decision::Allow,
             Unwrapped::Undetermined(r) => return undetermined(r),
@@ -688,6 +587,11 @@ fn classify(
                 break;
             }
             Unwrapped::At(next) => {
+                if shell_cmd && wrapper_body.is_none() {
+                    *wrapper_body = Some(sudo::wrapper_shell_command(
+                        cmd, next, depth, judge, inherited,
+                    ));
+                }
                 privileged |= cmd
                     .argv
                     .get(k)

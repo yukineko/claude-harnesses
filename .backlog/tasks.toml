@@ -1266,3 +1266,34 @@ exit 101: iltered out; finished in 0.54s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
      Running tests/verify_8f8acf5e_20261127.rs (target/debug/deps/verify_8f8acf5e_20261127-330132182447c6d2)
 error: test failed, to rerun pass `-p blastguard --test verify_8f8acf5e_20261127`"""
+
+[[task]]
+id = "8533e79d"
+title = "donegate attribution: git -C <bare relative dir> (e.g. git -C wt checkout -- src/lib.rs) is not attributed to wt because a word without / or . is not treated as a path, so wt's checks are skipped"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "donegate",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1795783714
+updated_at = 1795783714
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test verify3_39772e9f_20261127 -- --ignored hole_git_dash_c_relative_dir"
+rev = "c91b64a1b9b5484078585698dbbb58b750a05e79"
+observed_at = 1795783714
+detail = """
+exit 101: 8 filtered out; finished in 0.48s
+
+   Compiling donegate v0.1.111 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/donegate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running tests/verify3_39772e9f_20261127.rs (target/debug/deps/verify3_39772e9f_20261127-b0b610cbdd82aa37)
+error: test failed, to rerun pass `-p donegate --test verify3_39772e9f_20261127`"""

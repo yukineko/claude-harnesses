@@ -64,7 +64,6 @@ fn files_containing(root: &Path, needle: &str, skip: &Path, hits: &mut Vec<PathB
 }
 
 #[test]
-#[ignore = "RED(fe86a232): a refused tdd green keeps no trace of which test failed"]
 fn refused_green_keeps_the_failing_test_output() {
     let d = Dir(std::env::temp_dir().join(format!("tdd-green-fail-out-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&d.0);

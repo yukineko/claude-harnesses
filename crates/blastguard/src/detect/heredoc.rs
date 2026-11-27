@@ -389,7 +389,9 @@ pub(super) fn here_document_layout(segs: &[SeparatedSegment]) -> (Vec<bool>, Opt
 ///   * any whitespace other than space, tab or newline anywhere in `cmd`
 ///     (`\r` or a no-break space changes where bash ends the delimiter word);
 ///   * a non-body line with unbalanced quotes, a trailing `\`, or (on a line
-///     that opens a here-document) any of `\`, `#`, backtick, `$(`, `<(`,
+///     that opens a here-document) any of `\` (except backslashes all inert
+///     inside quotes, `heredoc_data::backslashes_inert_in_quotes`, backlog
+///     30136835), `#`, backtick, `$(`, `<(`,
 ///     `>(`, `((`, `[[` — constructs where the `<<` may be no opener at all
 ///     (a comment, an arithmetic shift, an escaped `\<<`) or where the body may
 ///     start elsewhere;
@@ -441,8 +443,13 @@ fn quoted_here_document_body_walks_checked(cmd: &str) -> Option<Vec<Option<usize
         if openers.is_empty() {
             continue;
         }
-        let doubtful = ["\\", "#", "`", "$(", "<(", ">(", "((", "[["];
-        if doubtful.iter().any(|d| line.contains(d))
+        let doubtful = ["#", "`", "$(", "<(", ">(", "((", "[["];
+        // A backslash is doubtful (`\<<` is no opener) unless every one sits
+        // inert inside quotes (backlog 30136835: `grep "a\|b" f; python3 - <<'EOF'`).
+        let backslash_doubtful =
+            line.contains('\\') && !super::heredoc_data::backslashes_inert_in_quotes(line);
+        if backslash_doubtful
+            || doubtful.iter().any(|d| line.contains(d))
             || openers.len() != 1
             || openers[0].delimiter.is_empty()
             || !here_document_delimiter_is_quoted(line)
@@ -821,17 +828,9 @@ pub(super) fn python_stdin_here_document(cmd: &str) -> Option<HereDocumentParts>
 pub(super) fn python_stdin_segment_view(cmd: &str) -> Option<String> {
     let parts = python_stdin_here_document(cmd)?;
     let keep = |text: &str| !text.chars().any(char::is_whitespace);
-    let body = super::interpreter::python_redirect_view(&parts.body, keep)?;
-    let (raw_lines, view_lines): (Vec<&str>, Vec<&str>) =
-        (parts.body.split('\n').collect(), body.split('\n').collect());
-    if raw_lines.len() != view_lines.len()
-        || raw_lines
-            .iter()
-            .zip(&view_lines)
-            .any(|(r, v)| super::split_segments(r).len() != super::split_segments(v).len())
-    {
-        return None;
-    }
+    let view_of = |seps| super::interpreter::python_redirect_view_with(&parts.body, keep, seps);
+    let body =
+        super::heredoc_data::segment_aligned_body(&parts.body, &view_of(false)?, &view_of(true)?)?;
     let (head, tail) = parts.without_body.split_at(parts.head_len);
     let view = format!("{head}{body}{tail}");
     (super::split_segments(&view).len() == super::split_segments(cmd).len()).then_some(view)

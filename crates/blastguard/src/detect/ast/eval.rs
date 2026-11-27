@@ -891,6 +891,9 @@ impl Ev {
                         env.havoc_vars("arithmetic in [[ ]] may assign variables");
                     }
                 }
+                if matches!(op, ast::BinaryPredicate::StringMatchesRegex) {
+                    env.forget_zsh_match();
+                }
                 Ok(())
             }
         }
@@ -1332,7 +1335,7 @@ impl Ev {
         decl_names: &BTreeMap<usize, DeclArg>,
         mut env: Env,
     ) -> Result<Outcome, Cause> {
-        self.local_trust.note_command(sc);
+        self.local_trust.note_command(sc, &self.function_names);
         let name = match sc.argv.first().map(|w| &w.value) {
             None => return Ok(Outcome::same(env)),
             Some(Value::Undetermined(_)) => {
@@ -1410,6 +1413,10 @@ impl Ev {
                 let mut it = args.iter();
                 while let Some(a) = it.next() {
                     match &a.value {
+                        // `-vNAME` (attached): every name suffix is assigned.
+                        Value::Literal(s) if s.starts_with("-v") && s.len() > 2 => {
+                            env.forget_attached(s, "set by printf -v")?;
+                        }
                         Value::Literal(s) if s == "-v" => match it.next().map(|w| &w.value) {
                             Some(Value::Literal(n)) => {
                                 env.int_assign(n, &undet("output of printf -v"))?;
@@ -1448,6 +1455,7 @@ impl Ev {
                                 env.int_assign(s, &undet(format!("a value read by {n}")))?;
                             }
                             env.forget_operand(s, &format!("assigned by {n}"))?;
+                            env.forget_attached(s, &format!("assigned by {n}"))?;
                         }
                         Value::Undetermined(_) => {
                             env.make_opaque(&format!("{n} with an undetermined operand"));

@@ -1605,23 +1605,11 @@ fn run(cli: Cli) -> Result<()> {
 
         Command::Fail { id, reason } => {
             let tasks_path = write_store_path("backlog fail")?;
-            store::mark_failed(&tasks_path, &id, reason.as_deref())?;
-            // mark_failed は defer_until を now + 172800 (2日後) に設定する。
-            // 設定した defer_until を読み取って表示する。
-            let tasks = store::load(&tasks_path)?;
-            if let Some(task) = tasks.iter().find(|t| t.id == id) {
-                if let Some(defer_until) = task.defer_until {
-                    // defer_until を人が読める日時文字列に変換する
-                    let secs = defer_until as u64;
-                    let dt = format_unix_datetime(secs);
-                    println!("failed: {id}");
-                    println!("deferred until {dt} (2 日後に再実行されます)");
-                } else {
-                    println!("failed: {id}");
-                }
-            } else {
-                println!("failed: {id}");
-            }
+            // 表示は実際に保存された値に従う (no-op と更新を区別する)。
+            print!(
+                "{}",
+                store::fail_and_report(&tasks_path, &id, reason.as_deref())?
+            );
         }
 
         Command::Edit {

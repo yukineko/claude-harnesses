@@ -85,7 +85,7 @@ pub(super) fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<
     // once more with that syntax removed (see `decompounded`), IN ADDITION to
     // the text as written — this can only add verdicts. Not recursive: the
     // decompounded text is judged by `stdin_exec_verdict` directly.
-    let flat = match decompounded(cmd) {
+    let flat = match super::heredoc_data::decompounded_around_python_body(cmd, decompounded) {
         Ok(flat) => flat,
         Err(why) => {
             if let Some(deny) = acc.record(Decision::ask(why)) {
@@ -502,6 +502,14 @@ tell whether the interpreter runs that stdin or a script file",
                 Some(out) => with_nul_readings(vec![out.text.clone()]),
                 None => stdin_program_texts(cmd, stage, &statement, i, heredoc_open, feeder),
             };
+            // Backlog 7d85ed1e: an unquoted static echo has no quoted literal;
+            // its known output (`plain_echo_output`) is the program, as quoted.
+            if determined.is_none() && i > 0 && !heredoc_open && feeder.is_none() {
+                let text = plain_echo_output(&statement[i - 1]).filter(|t| !t.trim().is_empty());
+                if let Some(t) = text.filter(|t| !program_texts.contains(t) && resolution_fixed()) {
+                    program_texts.push(t);
+                }
+            }
             let shape = format!("`{}` takes its program from stdin", stage.trim());
             // A shell removes its program's line continuations before it
             // splits words: judge that reading too (backlog 040b959b).

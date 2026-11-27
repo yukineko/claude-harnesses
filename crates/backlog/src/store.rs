@@ -2362,15 +2362,43 @@ pub fn record_sync_outcomes(path: &Path, outcomes: &[SyncOutcome], now: i64) -> 
     })
 }
 
+/// `mark_failed` and render what was actually stored: a no-op (defer window
+/// still live, `updated_at` unchanged) is reported as "already failed", a real
+/// (re-)fail as the "deferred until" line.
+pub fn fail_and_report(path: &Path, id: &str, reason: Option<&str>) -> Result<String> {
+    let find = |ts: Vec<Task>| ts.into_iter().find(|t| t.id == id);
+    let before = find(load(path)?).map(|t| t.updated_at);
+    mark_failed(path, id, reason)?;
+    let task = find(load(path)?);
+    let dt = |d: i64| crate::format_unix_datetime(d.max(0) as u64);
+    Ok(
+        match task.as_ref().and_then(|t| Some((t, t.defer_until?))) {
+            Some((t, d)) if before == Some(t.updated_at) => format!(
+                "already failed: {id}\nalready failed; deferral still active until {}\n",
+                dt(d)
+            ),
+            Some((_, d)) => format!(
+                "failed: {id}\ndeferred until {} (2 日後に再実行されます)\n",
+                dt(d)
+            ),
+            None => format!("failed: {id}\n"),
+        },
+    )
+}
+
 /// id で特定のタスクを failed に更新。reason を notes に追記。
 /// defer_until を now + 172800 (2日) に設定してタスクを一時保留にする。
 ///
-/// CA-backlog-003: idempotent — if the task is ALREADY `failed`, this is a
-/// no-op that returns `Ok(())` without re-appending `reason` to `notes` or
+/// CA-backlog-003: idempotent WHILE THE DEFER WINDOW IS STILL LIVE — if the
+/// task is ALREADY `failed` and its `defer_until` is still in the future
+/// (>= now), this is a no-op that returns `Ok(())` without re-appending `reason` to `notes` or
 /// pushing `defer_until` further into the future again, rather than letting a
 /// duplicate/retried call accumulate repeated notes or keep re-deferring the
 /// task. This makes at-least-once callers safe to call twice for the same id
-/// without side effects.
+/// without side effects. If the task is already `failed` but `defer_until`
+/// has elapsed (< now) or is absent, the call is a NEW failure (a re-attempt
+/// after requeue): `defer_until` is refreshed to now + 172800, `reason` is
+/// appended to `notes` and `updated_at` is touched.
 pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
     with_tasks_lock_required(path, "fail", || {
         let mut tasks = load(path)?;
@@ -2378,8 +2406,9 @@ pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
             .iter_mut()
             .find(|t| t.id == id)
             .ok_or_else(|| anyhow!("task not found: {}", id))?;
-        if task.status == STATUS_FAILED {
-            // Already failed — idempotent no-op, nothing to persist.
+        if task.status == STATUS_FAILED && task.defer_until.is_some_and(|d| d >= now_unix()) {
+            // Already failed and the defer window is still live —
+            // idempotent no-op, nothing to persist (CA-backlog-003).
             return Ok(());
         }
         // backlog 45c3a699: terminal is monotonic — `fail` must not reopen a

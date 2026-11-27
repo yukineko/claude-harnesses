@@ -246,6 +246,18 @@ pub(super) fn word_binds_name(word: &str, name: &str) -> bool {
     }
 }
 
+/// An option word with the variable name attached (`-vP`, `-aP`, `-vP[1]`):
+/// any suffix of the cluster that is the name may be what the builtin assigns
+/// (superset: only costs a resolution).
+fn option_attaches_name(word: &str, name: &str) -> bool {
+    word.starts_with('-')
+        && !word.starts_with("--")
+        && word.char_indices().skip(1).any(|(i, _)| {
+            let rest = &word[i..];
+            rest == name || word_binds_name(rest, name) || rest.starts_with(&format!("{name}["))
+        })
+}
+
 /// Builtins that bind a variable whose NAME is given as a bare operand rather
 /// than through an `=`, so [`word_binds_name`] alone cannot see them.
 ///
@@ -270,6 +282,13 @@ pub(super) fn binds_name_as_operand(head: &str) -> bool {
             | "local"
             | "export"
             | "readonly"
+            // zsh builtins that assign a variable named by an operand.
+            | "print"
+            | "zformat"
+            | "vared"
+            | "zparseopts"
+            | "zstat"
+            | "sysread"
     )
 }
 
@@ -326,8 +345,16 @@ pub(super) fn segment_may_rebind(seg: &str, name: &str) -> bool {
             // command word, and bash reports `BIN=x: No such file or directory`
             // while `BIN` keeps its old value.
             let plain = unquote_literal_value(w).unwrap_or_else(|| w.to_string());
-            plain == name || word_binds_name(&plain, name)
+            plain == name || word_binds_name(&plain, name) || option_attaches_name(&plain, name)
         })
+    {
+        return true;
+    }
+    // zsh's `[[ x =~ re ]]` sets MATCH / MBEGIN / MEND / match / mbegin / mend.
+    if matches!(
+        name,
+        "MATCH" | "MBEGIN" | "MEND" | "match" | "mbegin" | "mend"
+    ) && words.iter().any(|w| w == "=~")
     {
         return true;
     }
@@ -406,10 +433,15 @@ pub(super) fn mentions_name_outside_reference(text: &str, name: &str) -> bool {
             i += 1;
         }
         let run: String = chars[start..i].iter().collect();
+        let before = |back: usize| start.checked_sub(back).map(|k| chars[k]);
+        // An option cluster with the name attached (`printf -vP`, `read -aP`):
+        // the builtin may assign it. Superset: only costs a resolution.
+        if run != name && run.ends_with(name) && before(1) == Some('-') {
+            return true;
+        }
         if run != name {
             continue;
         }
-        let before = |back: usize| start.checked_sub(back).map(|k| chars[k]);
         let plain = before(1) == Some('$') && before(2) != Some('\\');
         let braced = before(1) == Some('{') && before(2) == Some('$') && before(3) != Some('\\');
         // Backlog 54231a0a: a path component strictly between two slashes
@@ -705,7 +737,26 @@ pub(super) fn has_unresolvable_expansion(tok: &str) -> bool {
 /// `sh -c "cd $dir && $BUILD"` is caught on its second segment.
 pub(super) fn unresolvable_command_word(cmd: &str) -> Option<String> {
     for seg in split_segments(cmd) {
-        let tokens: Vec<&str> = seg.split_whitespace().collect();
+        // Redirection words (`< "$f"`, `2>/dev/null`) are not command-word
+        // candidates: under an exec wrapper every following token is one, so
+        // `env -i /usr/bin/wc < "$f"` read the stdin operand as the program
+        // (3775027f). Dropping them leaves every real word, so `env -i "$X"`
+        // and `< f "$X"` still reach the check.
+        let mut skip_next = false;
+        let mut tokens: Vec<&str> = Vec::new();
+        for w in seg.split_whitespace() {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            let rest = w.trim_start_matches(|c: char| c.is_ascii_digit());
+            if rest.starts_with('>') || rest.starts_with('<') {
+                let target = rest.trim_start_matches(['>', '<', '&']);
+                skip_next = target.is_empty() && !rest.ends_with('&');
+                continue;
+            }
+            tokens.push(w);
+        }
         for idx in command_candidates(&tokens) {
             // Compare against the RAW token: `normalized_command` strips one
             // level of quoting, and `"$CMD"` must still read as an expansion

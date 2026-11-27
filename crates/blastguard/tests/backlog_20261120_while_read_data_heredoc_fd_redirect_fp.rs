@@ -112,13 +112,11 @@ fn check(tag: &str, subagent: bool) {
 }
 
 #[test]
-#[ignore = "RED: while-read data heredoc FP, see backlog"]
 fn while_read_data_heredoc_fd_redirect_no_stricter_subagent() {
     check("s", true);
 }
 
 #[test]
-#[ignore = "RED: while-read data heredoc FP, see backlog"]
 fn while_read_data_heredoc_fd_redirect_no_stricter_main() {
     check("m", false);
 }

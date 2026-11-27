@@ -81,7 +81,6 @@ fn not_allowed(cmds: &[&str], tag: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "backlog 7d85ed1e: unquoted echo feeder piped to bash is Ask"]
 fn unquoted_echo_feeder_piped_to_bash_is_allow() {
     let bad = not_allowed(&["echo a | bash", "echo hi | bash"], "red");
     assert!(bad.is_empty(), "expected Allow:\n{}", bad.join("\n"));

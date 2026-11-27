@@ -309,6 +309,33 @@ fn judge_ran(out: &runner::Outcome, phase: Phase) -> Result<()> {
     Ok(())
 }
 
+/// Refuse a GREEN whose run provably executed zero tests (CLAUDE.md §3: an
+/// empty set is not clean). Applies only when the libtest `test result:` lines
+/// were parsed (`counts.determined == true`) and sum to 0 passed + 0 failed
+/// (e.g. every test filtered out, or `#[ignore]`d). When the counts are
+/// undetermined (non-libtest runner or unparseable log) the existing,
+/// documented behaviour is kept: GREEN is recorded with `determined:false`,
+/// which consumers read as "unknown", never as `0 passed`.
+fn judge_executed_tests(out: &runner::Outcome) -> Result<()> {
+    let c = &out.counts;
+    if c.get("determined").and_then(|v| v.as_bool()) != Some(true) {
+        return Ok(());
+    }
+    let n = |k: &str| c.get(k).and_then(|v| v.as_u64());
+    match (n("passed"), n("failed")) {
+        (Some(0), Some(0)) => bail!(
+            "the test command executed 0 tests (0 passed; 0 failed) — a GREEN that ran no test \
+             proves nothing, so no GREEN recorded. Check the test filter / #[ignore] and run \
+             `tdd green` again."
+        ),
+        (Some(_), Some(_)) => Ok(()),
+        _ => bail!(
+            "test counts were marked determined but could not be read as numbers — cannot tell \
+             whether any test ran, so no GREEN recorded."
+        ),
+    }
+}
+
 /// Refuse to treat a run as evidence when it produced no exit code: the
 /// command timed out (`timed_out`), or it ended without an exit code —
 /// `exit_code` is `None` with no `spawn_error` and `timed_out` false, which
@@ -566,7 +593,60 @@ fn read_author_at(path: &Path) -> Determination<Option<String>> {
     })
 }
 
-/// `tdd green`: require a RED proof, run the tests, require success, record GREEN.
+/// Keep the evidence of a refused GREEN (run still failing) and build the
+/// stderr message: only the decision-relevant part (failing test names when
+/// parsed, the record path) is shown; the run output (the log, capped at
+/// `runner::FULL_OUTPUT_CAP` bytes) goes to a record file under
+/// `<state_dir>/refused-green/`. If the record cannot be written the message
+/// says so; the GREEN is refused either way (the caller always bails).
+fn refused_green_report(cfg: &Config, task: &str, cmdline: &str, out: &runner::Outcome) -> String {
+    let mut failing: Vec<String> = out
+        .tests
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .filter(|(_, v)| v.as_str() == Some("fail"))
+                .map(|(k, _)| k.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    failing.sort();
+    let mut msg = String::from(
+        "tests still failing — keep implementing until they pass, then run `tdd green` again.",
+    );
+    if failing.is_empty() {
+        msg.push_str("\n   failing tests: none parsed from the output");
+    } else {
+        msg.push_str("\n   failing tests:");
+        for t in failing.iter().take(20) {
+            msg.push_str(&format!("\n     {t}"));
+        }
+        if failing.len() > 20 {
+            msg.push_str(&format!("\n     … and {} more", failing.len() - 20));
+        }
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = cfg.state_dir.join("refused-green");
+    let path = dir.join(format!("{}-{}-{nanos}.log", safe(task), std::process::id()));
+    let body = format!(
+        "task: {task}\ncmd: {cmdline}\nexit_code: {:?}\n\n--- output ---\n{}\n--- output tail ---\n{}\n",
+        out.exit_code, out.full_output, out.output_tail
+    );
+    let written = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, body));
+    match written {
+        Ok(()) => msg.push_str(&format!("\n   full output: {}", path.display())),
+        Err(e) => msg.push_str(&format!(
+            "\n   could not write the failure record {} ({e}); the output is not kept",
+            path.display()
+        )),
+    }
+    msg
+}
+
+/// `tdd green`:require a RED proof, run the tests, require success, record GREEN.
 ///
 /// GREEN is recorded only for a command that ran and exited zero. A run that
 /// timed out, or produced no exit code (killed by a signal, or the wait on
@@ -654,7 +734,11 @@ pub fn green(
     );
     judge_ran(&out, Phase::Green)?;
     judge_exited(&out, Phase::Green, cfg.default_timeout_secs)?;
+    if has_red && !out.passed {
+        bail!("{}", refused_green_report(cfg, task, cmdline, &out));
+    }
     judge_green(out.passed, has_red)?;
+    judge_executed_tests(&out)?;
     let red_path = red_slot.unwrap_or_default();
     let path = write_slot(root, cfg, task, "green", cmdline)?;
     let mut proof = json!({

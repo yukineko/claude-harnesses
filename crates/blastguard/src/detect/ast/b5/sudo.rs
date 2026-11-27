@@ -76,6 +76,28 @@ pub(super) fn unwrap_sudo(
                 }
                 SudoLong::Unknown => return undet(w),
             },
+            // A cluster of short flags (`-sE`, `-nEs`, backlog 1e915597) is
+            // read letter by letter; one unknown letter keeps it Undetermined.
+            Some(Ok(w))
+                if base == "sudo" && w.len() > 2 && !w.starts_with("--") && w.starts_with('-') =>
+            {
+                let mut takes_next = false;
+                for (n, c) in w[1..].char_indices() {
+                    match c {
+                        'E' | 'H' | 'n' | 'S' | 'k' | 'A' | 'P' => {}
+                        's' | 'i' => shell = true,
+                        'l' | 'v' | 'K' | 'V' => no_exec = true,
+                        // An argument-taking letter consumes the rest of the
+                        // cluster, or the next word when it ends the cluster.
+                        'u' | 'g' | 'C' | 'D' | 'h' | 'p' | 'r' | 't' | 'U' => {
+                            takes_next = n + 2 == w.len();
+                            break;
+                        }
+                        _ => return undet(w),
+                    }
+                }
+                i += if takes_next { 2 } else { 1 };
+            }
             Some(Ok(w)) if w.starts_with('-') => return undet(w),
             _ => break,
         }

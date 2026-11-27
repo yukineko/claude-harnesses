@@ -99,6 +99,13 @@ const SHELL_MAINTAINED: &[&str] = &[
     "BASH_COMMAND",
     "BASH_SUBSHELL",
     "BASH_REMATCH",
+    // zsh's `[[ x =~ re ]]` sets these.
+    "MATCH",
+    "MBEGIN",
+    "MEND",
+    "match",
+    "mbegin",
+    "mend",
     "EPOCHSECONDS",
     "EPOCHREALTIME",
     "REPLY",

@@ -24,7 +24,7 @@ use brush_parser::ast;
 /// (`local: P: readonly variable`, the old value stays). A body is evaluated
 /// once, when it is defined, so a readonly set earlier or later on the line is
 /// invisible to it. The trust is therefore only kept for a script in which no
-/// command anywhere could make a name readonly ([`LocalTrust::note_command`]);
+/// command anywhere is outside the allowlist of [`LocalTrust::note_command`];
 /// otherwise [`run_passes`] evaluates again with the trust off, which is the
 /// old (restrictive) behaviour. A readonly inherited from the surrounding
 /// session is not seen (the top level trusts its own assignments alike).
@@ -33,7 +33,8 @@ pub(super) struct LocalTrust {
     pub(super) enabled: bool,
     /// A trusted `local` bound a value in this pass.
     pub(super) used: bool,
-    /// Some command may make a variable readonly or change variables unseen.
+    /// Some command is not on the allowlist (it may make a name readonly or
+    /// write a variable the evaluator does not model).
     risk: bool,
     /// Function definitions evaluated (any pass, nested ones too). With two
     /// or more, a call from a body may run another function that rewrites the
@@ -51,21 +52,39 @@ impl LocalTrust {
         }
     }
 
-    /// Record `sc` when it could make a variable readonly (superset: any
-    /// command word not known, any builtin that evals / declares).
-    pub(super) fn note_command(&mut self, sc: &SimpleCommand) {
+    /// Record `sc` as a risk unless it is on the ALLOWLIST: an assignment-only
+    /// command, or a command word that is known not to write a variable the
+    /// evaluator does not model. Everything else (an undetermined word, a user
+    /// function, `readonly` / `declare` / `eval` / `read` / `print` /
+    /// `zformat` / `vared` / …, any unlisted word) drops the trust.
+    pub(super) fn note_command(&mut self, sc: &SimpleCommand, functions: &[String]) {
+        /// Builtins whose variable effects `builtin_effects` models exactly
+        /// (they write no unmodelled name), and external programs, which
+        /// cannot write a shell variable.
+        const ALLOWED: &[&str] = &[
+            ":", "true", "false", "echo", "test", "[", "pwd", "cd", "return", "exit", "break",
+            "continue", "unset", "printf", "local", "export", "cat", "ls", "rm", "mkdir", "rmdir",
+            "touch", "cp", "mv", "ln", "chmod", "grep", "sed", "awk", "tee", "head", "tail", "wc",
+            "sort", "uniq", "cut", "tr", "find", "xargs", "git", "cargo", "make", "date", "sleep",
+            "curl", "diff", "basename", "dirname",
+        ];
         let risky = match sc.argv.first().map(|w| &w.value) {
             None => false,
             Some(Value::Undetermined(_)) => true,
-            Some(Value::Literal(n)) => match n.as_str() {
-                "readonly" | "declare" | "typeset" | "eval" | "source" | "." | "builtin"
-                | "command" | "trap" | "alias" | "unalias" | "enable" | "shopt" | "exec" => true,
-                "local" | "export" => sc.argv.iter().skip(1).any(|w| match &w.value {
-                    Value::Undetermined(_) => true,
-                    Value::Literal(a) => a.starts_with(['-', '+']),
-                }),
-                _ => false,
-            },
+            // A call of a function defined on this line: its body was
+            // evaluated (and its commands noted) at the definition, and
+            // `defs > 1` covers another function rewriting a `local`.
+            Some(Value::Literal(n)) if functions.contains(n) => false,
+            Some(Value::Literal(n)) if !ALLOWED.contains(&n.as_str()) => true,
+            // Listed, but an option may name a variable (`printf -v`) or
+            // change an attribute (`local -r`, `export -n`).
+            Some(Value::Literal(n)) => {
+                matches!(n.as_str(), "printf" | "local" | "export" | "unset")
+                    && sc.argv.iter().skip(1).any(|w| match &w.value {
+                        Value::Undetermined(_) => n != "printf",
+                        Value::Literal(a) => a.starts_with(['-', '+']),
+                    })
+            }
         };
         self.risk |= risky;
     }
@@ -157,5 +176,30 @@ impl Ev {
         // A later call may change any variable, the cwd or the stdin.
         env.make_opaque("a function definition: a later call may change any variable");
         Ok(env)
+    }
+}
+
+impl Env {
+    /// An option word with an attached value (`-aP`, `-vP`): every suffix of
+    /// it that is a name may be what the builtin assigns (superset).
+    pub(super) fn forget_attached(&mut self, word: &str, why: &str) -> Result<(), Cause> {
+        if word.starts_with('-') {
+            for (i, _) in word.char_indices().skip(1) {
+                if super::is_ident(&word[i..]) {
+                    self.int_assign(&word[i..], &super::undet(why.to_string()))?;
+                    self.forget_operand(&word[i..], why)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Env {
+    /// zsh's `[[ x =~ re ]]` sets these (bash sets BASH_REMATCH only).
+    pub(super) fn forget_zsh_match(&mut self) {
+        for n in ["MATCH", "match", "MBEGIN", "MEND", "mbegin", "mend"] {
+            self.forget(n, "set by `=~` in zsh");
+        }
     }
 }

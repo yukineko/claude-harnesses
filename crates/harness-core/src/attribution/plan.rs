@@ -335,6 +335,17 @@ pub(super) fn fenced_paths(
     for t in &tokens {
         insert_named(&mut out, t, &bases);
     }
+    // `git -C <dir>` anywhere in the untracked text: over-approximate with the
+    // chain of every `-C` operand and with each operand alone.
+    let dash_c: Vec<String> = tokens
+        .windows(2)
+        .filter(|w| w[0] == "-C")
+        .map(|w| w[1].to_string())
+        .collect();
+    super::insert_dash_c_dirs(&mut out, &dash_c, &bases);
+    for one in &dash_c {
+        super::insert_dash_c_dirs(&mut out, std::slice::from_ref(one), &bases);
+    }
     for d in entered {
         out.insert(if d.is_relative() { d } else { resolve(&d) });
     }

@@ -62,7 +62,6 @@ fn same_shape(a: &Value, b: &Value, path: &str) -> Result<(), String> {
 /// an array of objects, so the element type changes ("value type" kept is the
 /// docstring claim; an MCP `content` array of blocks would not validate).
 #[test]
-#[ignore = "verify4: elision marker is a string inserted into an array of objects (element kind changes)"]
 fn object_array_elision_keeps_element_kind() {
     let items: Vec<Value> = (0..3000)
         .map(|i| json!({"type": "text", "text": format!("match line {i:05} in some file")}))
@@ -74,7 +73,6 @@ fn object_array_elision_keeps_element_kind() {
 
 /// Same for an array of numbers.
 #[test]
-#[ignore = "verify4: elision marker is a string inserted into an array of numbers"]
 fn number_array_elision_keeps_element_kind() {
     let v = json!({ "ids": (0..20_000).collect::<Vec<u32>>() });
     let r = shrink_value(&v, 8192);
@@ -86,7 +84,6 @@ fn number_array_elision_keeps_element_kind() {
 /// dropped, but numbers cannot shrink, so the result stays over budget even
 /// though dropping ~10% of items would fit.
 #[test]
-#[ignore = "verify4: array of unshrinkable items with share >= 64 stays over budget (never drops)"]
 fn unshrinkable_items_fit_by_dropping() {
     let items: Vec<Value> = (0..500)
         .map(|i| {
@@ -118,7 +115,11 @@ fn mixed_escape_string_fits_and_keeps_marker() {
     assert!(r.fits && after <= 8192, "after={after}");
     same_shape(&v, &r.value, "$").unwrap();
     let out = r.value["stdout"].as_str().unwrap();
-    assert!(out.contains("elided"), "no marker: {}", &out[..80.min(out.len())]);
+    assert!(
+        out.contains("elided"),
+        "no marker: {}",
+        &out[..80.min(out.len())]
+    );
     assert!(out.starts_with('a') && out.ends_with('\u{1}'));
 }
 
@@ -168,7 +169,6 @@ fn tiny_budgets_never_panic_or_grow() {
 /// marker corrupts the image while keeping the shape — the value must be kept
 /// verbatim (or not rewritten at all), not mangled.
 #[test]
-#[ignore = "verify4: image payload (isImage:true / Read image base64) is mangled with a text marker"]
 fn image_payload_not_mangled() {
     let b64 = "iVBORw0KGgoAAAANSUhEUgAA".repeat(4_000);
     let v = json!({"stdout": format!("data:image/png;base64,{b64}"), "stderr": "",

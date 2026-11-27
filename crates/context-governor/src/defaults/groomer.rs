@@ -163,7 +163,11 @@ impl DefaultGroomer {
     /// context untrimmed. Returns `None` for small or non-PostToolUse payloads.
     pub fn unparsed_note(&self, raw: &str) -> Option<HookOutput> {
         let approx_tokens = raw.chars().count().div_ceil(4);
-        if !raw.contains("PostToolUse") || approx_tokens <= groom_budget() as usize {
+        // The payload did not parse, so the window pressure that scales the
+        // budget is undetermined: resolve to the most restrictive side (the
+        // pressure floor), not the unscaled default (CLAUDE.md §3).
+        let floor = budget_for(u64::MAX, groom_budget()) as usize;
+        if !raw.contains("PostToolUse") || approx_tokens <= floor {
             return None;
         }
         Some(HookOutput::inject(
@@ -208,9 +212,13 @@ impl DefaultGroomer {
     /// `tool_response`. The replacement keeps the shape of `tool_response`:
     /// string in -> string out; object/array in -> the same structure, walked
     /// recursively with ONE shared budget (`harness_core::shrink`): every
-    /// bulk string at any depth is trimmed, long string arrays lose middle
-    /// items, short fields and non-string values stay whole. When no strictly
-    /// smaller rewrite exists, or it still exceeds the budget, `note` says so.
+    /// bulk string at any depth is trimmed; long arrays (9+ items) trim each
+    /// item and, if that still does not fit, lose middle items (an all-string
+    /// array gets one marker string, any other array NO inserted element: the
+    /// drop is reported in `note`); short fields, image payloads and non-string
+    /// values stay whole (image data is binary, never trimmed, and yields `None`).
+    /// When no strictly smaller rewrite exists, or it still exceeds the budget,
+    /// `note` says so.
     ///
     /// * `saved_tokens`   = est_tokens(pre_body) − est_tokens(post_str) (saturating)
     /// * `resident_tokens`= est_tokens(post_str)  — post-groom window occupancy
@@ -244,7 +252,8 @@ impl DefaultGroomer {
                 (g, post, None)
             }
             serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
-                if pre_tokens <= budget {
+                // Image data is binary: never trimmed, not a text overrun.
+                if pre_tokens <= budget || harness_core::shrink::is_image_payload(resp) {
                     return None;
                 }
                 let r =
@@ -262,14 +271,23 @@ impl DefaultGroomer {
                         )),
                     });
                 }
-                let note = (!r.fits).then(|| {
-                    format!(
+                let mut notes: Vec<String> = Vec::new();
+                if r.elided_items > 0 {
+                    notes.push(format!(
+                        "[context-governor] {} middle array item(s) were dropped from this tool \
+                         output (no marker element is inserted, to keep the element type).",
+                        r.elided_items
+                    ));
+                }
+                if !r.fits {
+                    notes.push(format!(
                         "[context-governor] this tool output was trimmed to ~{} tokens, still \
                          over the {budget}-token groom budget (its shape cannot be shrunk \
                          further).",
                         est_tokens(&post)
-                    )
-                });
+                    ));
+                }
+                let note = (!notes.is_empty()).then(|| notes.join("\n"));
                 (r.value, post, note)
             }
             _ => return None,

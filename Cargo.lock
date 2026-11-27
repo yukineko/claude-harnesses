@@ -479,7 +479,7 @@ dependencies = [
 
 [[package]]
 name = "context-governor"
-version = "0.1.40"
+version = "0.1.41"
 dependencies = [
  "anyhow",
  "harness-core",
@@ -531,7 +531,7 @@ dependencies = [
 
 [[package]]
 name = "ctxrot"
-version = "0.5.50"
+version = "0.5.51"
 dependencies = [
  "anyhow",
  "chrono",
@@ -971,7 +971,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.115"
+version = "0.2.116"
 dependencies = [
  "anyhow",
  "chrono",

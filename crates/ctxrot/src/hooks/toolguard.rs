@@ -202,8 +202,11 @@ fn replace_leaf(v: &mut Value, target: usize, text: &str) -> bool {
 ///   (objects and arrays, any depth) by `harness_core::shrink` with ONE shared
 ///   budget of `limit` chars on the compact serialization: short fields stay
 ///   whole (a field never grows), big strings keep head and tail with a
-///   truthful elision marker, long string arrays lose middle items, non-string
-///   values are unchanged. For the internal-error placeholder the shrunk
+///   truthful elision marker, long arrays (9+ items) trim each item and, if
+///   that still does not fit, lose middle items (an all-string array gets one
+///   marker string; any other array gets NO inserted element and the drop is
+///   reported in `note`), image payloads and non-string values are unchanged.
+///   For the internal-error placeholder the shrunk
 ///   structure's longest string leaf carries the placeholder text;
 /// - anything else, or a response that cannot be shrunk below its own size ->
 ///   no rewrite, with a `note` (the placeholder note makes no size claim: after
@@ -249,13 +252,22 @@ pub fn updated_value(resp: Option<&Value>, updated: &str, limit: usize) -> Rewri
                     )),
                 };
             }
-            let note = (!shrunk.fits).then(|| {
-                format!(
+            let mut notes: Vec<String> = Vec::new();
+            if shrunk.elided_items > 0 {
+                notes.push(format!(
+                    "[ctxrot] {} middle array item(s) were dropped from this tool output (no \
+                     marker element is inserted, to keep the element type).",
+                    shrunk.elided_items
+                ));
+            }
+            if !shrunk.fits {
+                notes.push(format!(
                     "[ctxrot] this tool output was truncated to ~{} chars, still over the \
                      {limit}-char threshold (its shape cannot be shrunk further).",
                     value.to_string().chars().count()
-                )
-            });
+                ));
+            }
+            let note = (!notes.is_empty()).then(|| notes.join("\n"));
             Rewrite {
                 value: Some(value),
                 note,
@@ -396,6 +408,11 @@ fn response_text(v: &Value) -> String {
 /// Best-effort character length of a tool_response, whether it's a bare string,
 /// an object with text-ish fields, or an array of content blocks.
 fn response_text_len(v: &Value) -> usize {
+    // Image data (Read image base64, Bash `isImage`) is binary, not text: it is
+    // never counted as huge text and never truncated.
+    if harness_core::shrink::is_image_payload(v) {
+        return 0;
+    }
     match v {
         Value::String(s) => s.chars().count(),
         Value::Array(items) => items.iter().map(response_text_len).sum(),

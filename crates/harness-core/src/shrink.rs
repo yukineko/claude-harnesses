@@ -15,11 +15,17 @@
 //! - a string's budget is measured on its JSON-ESCAPED length (control chars
 //!   and `\r` expand 2-6x), found by search, so an escape-heavy string still
 //!   keeps head, tail and the marker rather than collapsing to `""`;
-//! - an array of 9+ items (any element type: file lists, content blocks, many
-//!   small objects) first trims every item to its fair share; only when that
-//!   share would fall below a useful minimum (64 chars) does it keep a head and
-//!   a tail of items and put ONE truthful marker string
-//!   (`elided K of N items`) in place of the dropped middle;
+//! - an array of 9+ items (any element type) first trims every item to a fair
+//!   share (at least 64 chars); if the trimmed items still do not fit (the
+//!   share was below the minimum, or the items cannot shrink, e.g. numeric
+//!   objects), it keeps a head and a tail of items and drops the middle. An
+//!   array whose items are ALL strings gets ONE truthful marker string
+//!   (`elided K of N items`) in the gap, so it stays an array of strings. Any
+//!   other array gets NO inserted element (that would change an element's value
+//!   type): the drop is only counted in [`Shrunk::elided_items`] and the caller
+//!   MUST report it (e.g. in `additionalContext`);
+//! - image payloads (see [`is_image_payload`]) are never touched: a text marker
+//!   spliced into base64 corrupts the image;
 //! - numbers, booleans and nulls are never changed.
 //!
 //! The result reports `fits`: whether the rewrite is within the budget. A
@@ -33,34 +39,62 @@ pub struct Shrunk {
     pub value: Value,
     /// `true` iff `value`'s compact serialization is within the budget.
     pub fits: bool,
+    /// Items dropped from non-string arrays WITHOUT a marker element (the
+    /// element type must not change). `> 0` means the caller has to say so.
+    pub elided_items: usize,
 }
 
 /// Arrays at least this long may drop middle items (see module docs).
 const ITEM_ELISION_MIN_LEN: usize = 9;
 
 /// Smallest per-item budget (serialized chars) worth keeping an item for;
-/// below it, items are dropped (with a marker) instead of mangled.
+/// below it, items are dropped instead of mangled.
 const MIN_ITEM_BUDGET: usize = 64;
 
 fn ser_len(v: &Value) -> usize {
     v.to_string().chars().count()
 }
 
+/// `true` for an object that carries image data: a Read result
+/// `{type:"image", ...}`, any object with a string `base64` field, or a Bash
+/// result with `isImage: true` whose payload LOOKS like image data (a long
+/// string field whose first 256 chars hold no whitespace, as base64 / a
+/// `data:` URI does; plain multi-line text under a stray `isImage` flag is
+/// still text). Such a payload is binary, not text: never shrunk or counted
+/// as text.
+pub fn is_image_payload(v: &Value) -> bool {
+    let Value::Object(m) = v else {
+        return false;
+    };
+    if m.get("type").and_then(Value::as_str) == Some("image")
+        || m.get("base64").is_some_and(Value::is_string)
+    {
+        return true;
+    }
+    m.get("isImage") == Some(&Value::Bool(true))
+        && m.values()
+            .filter_map(Value::as_str)
+            .any(|s| s.chars().count() > 256 && !s.chars().take(256).any(char::is_whitespace))
+}
+
 /// Shrink `v` so its compact serialization is at most `budget_chars`, keeping
 /// the shape. Never returns something larger than the input.
 pub fn shrink_value(v: &Value, budget_chars: usize) -> Shrunk {
     let before = ser_len(v);
-    let out = shrink_node(v, budget_chars);
+    let mut elided_items = 0usize;
+    let out = shrink_node(v, budget_chars, &mut elided_items);
     let after = ser_len(&out);
     if after > before {
         return Shrunk {
             value: v.clone(),
             fits: before <= budget_chars,
+            elided_items: 0,
         };
     }
     Shrunk {
         fits: after <= budget_chars,
         value: out,
+        elided_items,
     }
 }
 
@@ -117,25 +151,28 @@ fn shrink_string_value(s: &str, budget: usize) -> Value {
     Value::String(shrink_str(s, lo))
 }
 
-fn shrink_node(v: &Value, budget: usize) -> Value {
+fn shrink_node(v: &Value, budget: usize, dropped: &mut usize) -> Value {
     let size = ser_len(v);
-    if size <= budget {
+    if size <= budget || is_image_payload(v) {
         return v.clone();
     }
-    let out = shrink_node_inner(v, budget);
-    // A field never grows.
+    let mut local = 0usize;
+    let out = shrink_node_inner(v, budget, &mut local);
+    // A field never grows. (If the node is returned unchanged, none of its
+    // drops happened.)
     if ser_len(&out) > size {
         v.clone()
     } else {
+        *dropped += local;
         out
     }
 }
 
-fn shrink_node_inner(v: &Value, budget: usize) -> Value {
+fn shrink_node_inner(v: &Value, budget: usize, dropped: &mut usize) -> Value {
     match v {
         Value::String(s) => shrink_string_value(s, budget),
         Value::Array(items) if items.len() >= ITEM_ELISION_MIN_LEN => {
-            shrink_long_array(items, budget)
+            shrink_long_array(items, budget, dropped)
         }
         Value::Array(items) => {
             let sizes: Vec<usize> = items.iter().map(ser_len).collect();
@@ -149,7 +186,7 @@ fn shrink_node_inner(v: &Value, budget: usize) -> Value {
                         if s <= level {
                             c.clone()
                         } else {
-                            shrink_node(c, level)
+                            shrink_node(c, level, dropped)
                         }
                     })
                     .collect(),
@@ -166,7 +203,7 @@ fn shrink_node_inner(v: &Value, budget: usize) -> Value {
                         let nc = if s <= level {
                             c.clone()
                         } else {
-                            shrink_node(c, level)
+                            shrink_node(c, level, dropped)
                         };
                         (k.clone(), nc)
                     })
@@ -197,51 +234,68 @@ fn fair_level(sizes: &[usize], avail: usize) -> usize {
     usize::MAX
 }
 
-/// Shrink an array of [`ITEM_ELISION_MIN_LEN`]+ items of any type: trim every
-/// item to its fair share first; if that share is below [`MIN_ITEM_BUDGET`],
-/// keep a head and a tail of items (each trimmed to its fair share) and replace
-/// the dropped middle by one truthful marker string.
-fn shrink_long_array(items: &[Value], budget: usize) -> Value {
+/// Shrink an array of [`ITEM_ELISION_MIN_LEN`]+ items of any type. Every item
+/// is first trimmed to the fair level (never below [`MIN_ITEM_BUDGET`]); if the
+/// trimmed items fit, all are kept. Otherwise a head and a tail of the trimmed
+/// items are kept, chosen greedily by their ACTUAL sizes, and the middle is
+/// dropped: an all-string array gets one marker string in the gap, any other
+/// array gets nothing inserted and the drop is added to `dropped`.
+fn shrink_long_array(items: &[Value], budget: usize, dropped: &mut usize) -> Value {
     let n = items.len();
+    let all_strings = items.iter().all(Value::is_string);
     let sizes: Vec<usize> = items.iter().map(ser_len).collect();
     // `[` + `]` and n-1 commas.
-    let avail = budget.saturating_sub(n + 1);
-    let level = fair_level(&sizes, avail);
-    if level >= MIN_ITEM_BUDGET {
-        return Value::Array(
-            items
-                .iter()
-                .zip(&sizes)
-                .map(|(c, &s)| {
-                    if s <= level {
-                        c.clone()
-                    } else {
-                        shrink_node(c, level)
-                    }
-                })
-                .collect(),
-        );
+    let level = fair_level(&sizes, budget.saturating_sub(n + 1)).max(MIN_ITEM_BUDGET);
+    let mut local = 0usize;
+    let trimmed: Vec<Value> = items
+        .iter()
+        .zip(&sizes)
+        .map(|(c, &s)| {
+            if s <= level {
+                c.clone()
+            } else {
+                shrink_node(c, level, &mut local)
+            }
+        })
+        .collect();
+    let tsizes: Vec<usize> = trimmed.iter().map(ser_len).collect();
+    if tsizes.iter().sum::<usize>() + n < budget {
+        *dropped += local;
+        return Value::Array(trimmed);
     }
     let marker = |k: usize| Value::String(format!("…[elided {k} of {n} items]…"));
-    // Marker string plus its comma, and the brackets.
-    let marker_cost = ser_len(&marker(n)) + 1;
-    let avail2 = budget.saturating_sub(2 + marker_cost);
-    let m = (avail2 / (MIN_ITEM_BUDGET + 1)).clamp(1, n - 1);
-    let head = m.div_ceil(2);
-    let tail = m - head;
-    let kept: Vec<usize> = (0..head).chain(n - tail..n).collect();
-    let kept_sizes: Vec<usize> = kept.iter().map(|&i| sizes[i]).collect();
-    let level2 = fair_level(&kept_sizes, avail2.saturating_sub(m));
-    let shrink_item = |i: usize| {
-        if sizes[i] <= level2 {
-            items[i].clone()
-        } else {
-            shrink_node(&items[i], level2)
-        }
+    // Brackets, plus (for string arrays) the marker string and its comma.
+    let reserved = 2 + if all_strings {
+        ser_len(&marker(n)) + 1
+    } else {
+        0
     };
-    let mut out: Vec<Value> = (0..head).map(shrink_item).collect();
-    out.push(marker(n - m));
-    out.extend((n - tail..n).map(shrink_item));
+    let mut avail = budget.saturating_sub(reserved);
+    let (mut head, mut tail) = (0usize, 0usize);
+    let mut from_head = true;
+    while head + tail < n {
+        let idx = if from_head { head } else { n - 1 - tail };
+        let cost = tsizes[idx] + 1;
+        if cost > avail {
+            break;
+        }
+        avail -= cost;
+        if from_head {
+            head += 1;
+        } else {
+            tail += 1;
+        }
+        from_head = !from_head;
+    }
+    let gap = n - head - tail;
+    let mut out: Vec<Value> = trimmed[..head].to_vec();
+    if all_strings {
+        out.push(marker(gap));
+    } else {
+        *dropped += gap;
+    }
+    out.extend_from_slice(&trimmed[n - tail..]);
+    *dropped += local;
     Value::Array(out)
 }
 
@@ -283,5 +337,22 @@ mod tests {
         let s = "short";
         assert_eq!(shrink_str(s, 1), "…");
         assert_eq!(shrink_str(s, 100), s);
+    }
+
+    #[test]
+    fn non_string_array_drops_items_without_inserting_an_element() {
+        let v = json!({"ids": (0..20_000).collect::<Vec<u32>>()});
+        let r = shrink_value(&v, 8192);
+        assert!(r.fits);
+        assert!(r.elided_items > 0);
+        assert!(r.value["ids"].as_array().unwrap().iter().all(Value::is_u64));
+    }
+
+    #[test]
+    fn image_payload_is_untouched() {
+        let v = json!({"type": "image", "file": {"base64": "A".repeat(50_000)}});
+        let r = shrink_value(&v, 1_000);
+        assert_eq!(r.value, v);
+        assert!(!r.fits);
     }
 }

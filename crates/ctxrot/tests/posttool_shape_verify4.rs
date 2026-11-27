@@ -55,7 +55,6 @@ fn updated(out: &str) -> Option<serde_json::Value> {
 /// shrink splices `…[elided N chars of M]…` into the base64 — a corrupt image
 /// with a valid shape.
 #[test]
-#[ignore = "verify4: Read image base64 spliced with a text elision marker (corrupt image)"]
 fn read_image_base64_not_mangled() {
     let b64 = "iVBORw0KGgoAAAANSUhEUgAA".repeat(4_000);
     let resp = serde_json::json!({
@@ -78,17 +77,22 @@ fn read_image_base64_not_mangled() {
 
 /// Bash `isImage: true`: same corruption on stdout.
 #[test]
-#[ignore = "verify4: Bash isImage:true stdout spliced with a text elision marker"]
 fn bash_is_image_not_mangled() {
     let data = format!(
         "data:image/png;base64,{}",
         "iVBORw0KGgoAAAANSUhEUgAA".repeat(4_000)
     );
-    let resp = serde_json::json!({"stdout": data, "stderr": "", "interrupted": false, "isImage": true});
+    let resp =
+        serde_json::json!({"stdout": data, "stderr": "", "interrupted": false, "isImage": true});
     let out = run_raw(&payload("Bash", resp));
     if let Some(u) = updated(&out) {
         let got = u["stdout"].as_str().unwrap_or("");
-        assert_eq!(got.len(), data.len(), "image stdout rewritten: marker={}", got.contains("elided"));
+        assert_eq!(
+            got.len(),
+            data.len(),
+            "image stdout rewritten: marker={}",
+            got.contains("elided")
+        );
     }
 }
 
@@ -117,7 +121,6 @@ fn lone_surrogate_payload_is_noted() {
 /// rewrite is declined and the note claims the shape cannot be shrunk, though
 /// dropping items (which this module does for other arrays) would fit.
 #[test]
-#[ignore = "verify4: unshrinkable item array (share >= 64) never drops items; output passes untrimmed"]
 fn unshrinkable_item_array_is_trimmed() {
     let items: Vec<serde_json::Value> = (0..500)
         .map(|i| {

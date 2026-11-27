@@ -72,7 +72,10 @@ fn control_parsed_high_pressure_grooms() {
     let d = tempfile::tempdir().unwrap();
     let t = high_pressure_transcript(d.path());
     let out = run_raw(&payload(&t, "Bash", bash(6_000)));
-    assert!(out.contains("updatedToolOutput"), "control did not groom: {out}");
+    assert!(
+        out.contains("updatedToolOutput"),
+        "control did not groom: {out}"
+    );
 }
 
 /// The same payload made unparseable (one stray trailing byte) at the same
@@ -81,7 +84,6 @@ fn control_parsed_high_pressure_grooms() {
 /// restrictive side (the floor) — so a payload the parsed path would groom
 /// passes with no note at all.
 #[test]
-#[ignore = "verify4: unparseable payload is noted only above the unscaled default budget; under pressure a groomable size passes silently"]
 fn unparsed_note_uses_restrictive_budget() {
     let d = tempfile::tempdir().unwrap();
     let t = high_pressure_transcript(d.path());
@@ -97,7 +99,6 @@ fn unparsed_note_uses_restrictive_budget() {
 /// A Read of an image (`{type:"image", file:{base64,...}}`): grooming must not
 /// splice a text marker into the base64 (corrupt image, shape still "ok").
 #[test]
-#[ignore = "verify4: Read image base64 is spliced with a text elision marker"]
 fn read_image_base64_not_mangled() {
     let b64 = "iVBORw0KGgoAAAANSUhEUgAA".repeat(4_000);
     let resp = serde_json::json!({

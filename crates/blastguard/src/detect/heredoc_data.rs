@@ -1421,6 +1421,39 @@ fn single_plain_substitution(script: &str) -> bool {
     chars.all(|c| matches!(c, 'g' | 'p' | 'I') || c.is_ascii_digit())
 }
 
+/// True when `line` holds a backslash and EVERY backslash of it sits inside a
+/// quoted span where it is inert (backlog 30136835), so the walk shape rule
+/// ([`super::heredoc::quoted_here_document_body_walks`]) need not treat a
+/// backslash on a here-document opener line as a possible escaped `<<`.
+///
+/// Inert means: inside `'…'` (bash: nothing is special there), or inside
+/// `"…"` and followed by a character other than `"`, `\`, `$`, a backtick or
+/// the end of the line (bash: those are the only characters a `\` escapes in
+/// double quotes, so `\|` is two literal characters, as in
+/// `grep -n "a\|b" f; python3 - <<'EOF'`). A backslash outside quotes, or one
+/// that escapes in double quotes, answers false, and so does a quote left
+/// open. The quote tracking is the naive one of `quotes_balance`; it agrees
+/// with the shell exactly because every backslash that could make the two
+/// disagree (`\'`, `\"` outside or escaping) is refused here.
+pub(super) fn backslashes_inert_in_quotes(line: &str) -> bool {
+    let (mut in_s, mut in_d) = (false, false);
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' if !in_d => in_s = !in_s,
+            '"' if !in_s => in_d = !in_d,
+            '\\' if in_s => {}
+            '\\' if in_d => match chars.peek() {
+                Some('"' | '\\' | '$' | '`') | None => return false,
+                Some(_) => {}
+            },
+            '\\' => return false,
+            _ => {}
+        }
+    }
+    !in_s && !in_d
+}
+
 #[cfg(test)]
 mod tests {
     use super::without_data_heredoc_bodies;

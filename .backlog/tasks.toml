@@ -705,3 +705,32 @@ exit 101: rd v0.2.975 (/Users/yuki/src/.harness-worktrees/salvage-leftovers/crat
     Finished `test` profile [unoptimized + debuginfo] target(s) in 14.01s
      Running tests/backlog_20261122_perl_literal_var_path_fp.rs (target/debug/deps/backlog_20261122_perl_literal_var_path_fp-f8cebfb3a5de70f0)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261122_perl_literal_var_path_fp`"""
+
+[[task]]
+id = "fb4f650d"
+title = "condukt testscope: a confirmed bare run of the task test makes tdd red --cmd a refused rerun, so no RED proof / F->P oracle is reachable (mirror of 8f82f09d, RED side)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "testscope",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Re-filed from unmerged worktree red-oracle-ledger. Observed 2026-11-21 main 11c04144d run-20261121-213949-96292 t1; re-measured RED 2026-11-28 main a4c078f2d. See test docstring for readings (a) defect / (b) SKILL Phase 6 pre-run consumes the single run."
+created_at = 1795804950
+updated_at = 1795804950
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261121_testscope_bare_run_blocks_tdd_red -- --include-ignored"
+rev = "3aa26181a1e23738d5e69387a4bad62d2bbeb488"
+observed_at = 1795804950
+detail = """
+exit 101: uki/src/.harness-worktrees/salvage-leftovers/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.76s
+     Running tests/backlog_20261121_testscope_bare_run_blocks_tdd_red.rs (target/debug/deps/backlog_20261121_testscope_bare_run_blocks_tdd_red-eda304dd26a33dc8)
+error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_bare_run_blocks_tdd_red`"""

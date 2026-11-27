@@ -95043,3 +95043,58 @@ rev = "57ddf003c72378d1a80e8813883442581642e923"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "68ae9b06"
+title = "flow stop-gate: condukt state claims の task_claims 入れ子を読めず、毎回『判定できない』で停止を止める"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = '実測（2026-11-27, rev d9a5b0fa7）: condukt 0.7.499 の condukt state claims は空台帳で {"task_claims":{}} を出す。flow 0.2.49 の crates/flow/src/probes.rs parse_claims は top level を claim の平たい map と読み、外側のキー task_claims を claim 1 件とみなして Unknown(claim "task_claims" has no "run_id" string) を返す。根拠: crates/condukt/src/claim.rs の Registry は files を serde(flatten)、task_claims（claim-task --hashkey の claim）を入れ子で持ち、main.rs の StateAction::Claims は Registry をそのまま出力する。影響: stop-gate が毎回 fail-closed で block する。加えて、flow 自身の claim（task_claims 側）を一度も数えられない。読み: (a) 実在の欠陥。condukt 6e525d234 で task_claims を足したあと、flow 186d6da57 の parse_claims が追随していない。(b) 意図的な仕様の読みは無い（試験 claims_parsing は平たい map しか想定していない）。見分け方: 再現試験。直し方の案: top level の task_claims 以外を files、task_claims の中を task claim として両方を走査し、run_id=flow-<session> の hashkey を返す。'
+created_at = 1795769174
+updated_at = 1795769860
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p flow --bin flow claims_parsing_reads_condukt_registry_shape"
+rev = "d9a5b0fa7f560a6a15ef6cace1e865936fb8414d"
+observed_at = 1795769174
+detail = """
+exit 101: t result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 27 filtered out; finished in 0.00s
+
+   Compiling flow v0.2.50 (/home/hiroyuki_nakayama/src/.harness-worktrees/flow-claims/crates/flow)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.88s
+     Running unittests src/main.rs (target/debug/deps/flow-c8fbda17d8a75df9)
+error: test failed, to rerun pass `-p flow --bin flow`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p flow --bin flow claims_parsing_reads_condukt_registry_shape"
+exit = 0
+passed = 1
+rev = "e7e7974dba038ce0ed8dadd64ffbdf3de1ff84e0"
+observed_at = 1795769859
+output_digest = "sha256:c0350d1ab421fe6d76382201e2bc356890e30d9b3f40bfebd1c0e4dfaa1e319a"
+excerpt = """
+
+running 1 test
+test probes::tests::claims_parsing_reads_condukt_registry_shape ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running unittests src/main.rs (target/debug/deps/flow-0b65eb5959e3b5cd)
+"""
+
+[task.closure.red]
+rev = "d9a5b0fa7f560a6a15ef6cace1e865936fb8414d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -18,9 +18,9 @@
 //! though no human approved anything. The independent verifier (2026-11-28)
 //! flagged this as UNVERIFIED fail-open.
 //!
-//! The test is `#[ignore]`d as RED(needs ruling): the spec's text currently
-//! mandates the opposite, so the implementer cannot make it GREEN without a
-//! ruling that amends "any other tool_result → Approved".
+//! RULED 2026-11-28 (ruling 6): a hook denial is NOT an approval (the call
+//! never ran and the user saw no prompt); the spec text was amended and this
+//! test is no longer `#[ignore]`d.
 //!
 //! What this does NOT prove: the exact strings Claude Code writes for every
 //! hook-denial variant (the two used here are the ones observed in this
@@ -205,7 +205,6 @@ const HOOK_BLOCKING: &str = "PreToolUse:Bash [${CLAUDE_PLUGIN_ROOT}/bin/othergat
 non-blocking status code: hook blocking error from command: denied by othergate";
 
 #[test]
-#[ignore = "RED(needs ruling): hook-denied results counted as approval"]
 fn hook_denied_tool_results_are_not_approvals() {
     for (label, content) in [
         ("hook error", HOOK_ERROR),

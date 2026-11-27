@@ -101,6 +101,16 @@ const PROTECTED_GLOBS: &[&str] = &[
     "**/.githooks/**",
     ".git/hooks/**",
     "**/.git/hooks/**",
+    // ---- the Ask-learning table (user ruling 2026-11-28, R5) ----
+    // `~/.blastguard/learned/` holds the table that turns an Ask into an
+    // Allow. A write or delete there by the agent is a self-grant, so the
+    // whole tree is protected config: never Allow, and a learned Allow can
+    // never unlock it. The learner (overwatch) writes there as its own
+    // process, not through this hook.
+    ".blastguard/learned",
+    ".blastguard/learned/**",
+    "**/.blastguard/learned",
+    "**/.blastguard/learned/**",
     // `.git/config` decides `core.hooksPath` (and other hook-adjacent keys
     // such as `core.fsmonitor`): one appended `[core] hooksPath = /dev/null`
     // disables every git hook, `.githooks/` included, without touching either

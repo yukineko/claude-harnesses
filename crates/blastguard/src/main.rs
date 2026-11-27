@@ -412,6 +412,10 @@ fn shape_of_call(input: &HookInput, decision: &Decision) -> Option<harness_core:
         Decision::Allow => "allow",
         Decision::Deny(r) | Decision::Ask(r) => rule_id::rule_id(r),
     };
+    let protected = match decision {
+        Decision::Allow => false,
+        Decision::Deny(r) | Decision::Ask(r) => rule_id::reason_is_protected_config(r),
+    };
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let scope = safe_roots(input);
         let home = std::env::var("HOME").ok();
@@ -424,13 +428,20 @@ fn shape_of_call(input: &HookInput, decision: &Decision) -> Option<harness_core:
             scope: &scope,
         };
         let facts = bash_command(input).map(|c| blastguard::shape::bash_facts(&c));
-        blastguard::shape::shape_of(
+        let mut shape = blastguard::shape::shape_of(
             &input.tool_name,
             input.tool_input.as_ref(),
             facts,
             rid,
             &ctx,
-        )
+        );
+        // The detector's own verdict names protected config (user ruling
+        // 2026-11-28, R3): the class is raised whatever the target model
+        // resolved, so no learned Allow can ever apply.
+        if protected && shape.target_class != harness_core::asklearn::TargetClass::System {
+            shape.target_class = harness_core::asklearn::TargetClass::ProtectedConfig;
+        }
+        shape
     }))
     .ok()
 }
@@ -513,6 +524,8 @@ fn run_shape() -> i32 {
             "rule_id": rid,
             "shape": shape.key(),
             "system_harm": decision.is_system_harm(),
+            "protected_config": shape.target_class
+                == harness_core::asklearn::TargetClass::ProtectedConfig,
         })
     );
     0

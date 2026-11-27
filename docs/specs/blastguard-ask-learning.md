@@ -4,6 +4,13 @@ User request (verbatim): 「これをもとにして、AskではなくAllow/Deny
 
 Rulings (binding, AskUserQuestion 2026-11-28):
 - Learning unit = **shape**: `rule_id` + statically resolved **target class** + the command's **verbs**.
+- Rulings of 2026-11-28 (second round, binding):
+  - **R1** a verb is not just the basename: `basename [subcommand..] [option..]`, space separated. The subcommand (first non-option operand; two levels for gh/docker/kubectl/npm/…, and for git groups such as `stash`/`remote`/`worktree`) is included for multi-command tools. EVERY option is included, normalised (short cluster split `-rf` → `-f -r`, long option without `=value`, sorted). `git push --force` / `git branch -D` / `git add -A` / `rm -rf` therefore never share a key with `git push` / `git branch -d` / `git status` / `rm`. Operands that are not a subcommand (paths, refs) and operands the evaluator could not resolve (`rm "$f"`) add nothing, so `rm a` and `rm b` share a shape. Option VALUES are not in the key.
+  - **R2** an inline interpreter program (`-c`/`-e` body, literal heredoc / here-string on stdin of python/perl/ruby/node/bash/sh/zsh …) adds `#<fnv1a64 hex of the body>` to the verb; same body → same key, changed body → different key. A program the evaluator cannot pin (wrapper such as `env python3 …`, `eval`, piped from a command) adds the unresolved token `?`: such a shape can learn a Deny but never an Allow.
+  - **R3** protected config is judged from the detector's verdict, not only the target class: when the verdict's reason names a protected gate/config path (`blastguard::rule_id::reason_is_protected_config`: every rule id containing `protected`, or the text "protected gate/config path"), the shape's target class is raised to `protected-config` (unless it is already `system`). That is the single source of truth; `blastguard shape` prints it as `protected_config`.
+  - **R4** `lookup`: when a table holds both an allow and a deny entry for one shape, **deny wins**.
+  - **R5** everything under `~/.blastguard/learned/**` is protected config (PROTECTED_GLOBS): writes, removals and Write/Edit tool calls are never Allow, and a learned Allow can never unlock it. The learner (overwatch) writes there as its own process, not through the hook.
+  - **R6** a hook-denied tool_result is not an approval (see Learner). Learner state version 2: a state cache of another version, or another blastguard version, is discarded and the table rebuilt, so tables built with the old (basename-only) keys are replaced.
 - **Allow** when the same shape was approved ≥3 times, by ≥2 distinct sessions, with 0 declines.
   **Deny** as soon as the shape has ≥1 decline.
   **System harm** and **protected config** (`~/.claude/settings*.json`, `~/.zshrc` / shell rc files, `.githooks/`, plugin cache bins/hooks) are **never auto-Allowed** (Deny learning still applies).
@@ -16,7 +23,7 @@ Measured basis: ~/.blastguard/blocks/blocks.jsonl — 676 real interactive Asks 
 
 ### 1. harness-core `asklearn` (pure, shared)
 - `TargetClass`: `Worktree` (inside a git linked worktree or the session worktree / `~/.condukt/worktrees/...`), `Scratchpad` (under `/private/tmp/claude-*/…/scratchpad` or `$TMPDIR` session scratch), `ProtectedConfig`, `System` (SYSTEM_PREFIXES), `Home` (other paths under $HOME), `Undetermined` (target not statically resolvable), `None` (command has no write target).
-- `Shape { rule_id: String, target_class: TargetClass, verbs: Vec<String> }` with canonical key string `"<rule_id>|<class>|<verb,verb,...>"` (verbs = sorted, deduped basenames of command words of every simple command; for non-Bash tools the verb is the tool name).
+- `Shape { rule_id: String, target_class: TargetClass, verbs: Vec<String> }` with canonical key string `"<rule_id>|<class>|<verb,verb,...>"` (verbs = sorted, deduped verb tokens (see R1/R2 below; formerly bare basenames) of every simple command; for non-Bash tools the verb is the tool name).
 - Outcome record: `{ shape, session_id, outcome: Approved|Declined, ts, sample_command }`.
 - `learn(records) -> LearnedTable` — deterministic (sorted keys; same input → byte-identical JSON):
   - declines ≥1 → `deny`
@@ -41,7 +48,7 @@ Measured basis: ~/.blastguard/blocks/blocks.jsonl — 676 real interactive Asks 
 ### 3. Learner (non-verdict; lives in overwatch per the 2026-11-17 scope ruling)
 - `overwatch ask-learn [--blocks PATH] [--projects DIR] [--table PATH] [--blastguard BIN]`:
   - Reads interactive Ask records with UUID session ids.
-  - Outcome by joining the session transcript `~/.claude/projects/*/<sid>.jsonl`: the tool_use with equal tool_name + tool_input; its tool_result containing "The user doesn't want to proceed with this tool use" → Declined; any other tool_result → Approved; no match / no result → excluded (not counted).
+  - Outcome by joining the session transcript `~/.claude/projects/*/<sid>.jsonl`: the tool_use with equal tool_name + tool_input; its tool_result containing "The user doesn't want to proceed with this tool use" → Declined; a tool_result that is a **hook denial** (text containing `hook error` / `hook blocking error` / `PreToolUse:`, or an `is_error` result carrying a `blastguard:` deny reason) → **excluded** (neither approval nor decline; user ruling 2026-11-28 R6: the call never ran and the user saw no prompt, so it is not an approval, CLAUDE.md §3); any other tool_result → Approved; no match / no result → excluded (not counted).
   - Shape: recomputed by `blastguard shape` on the stored tool_input+cwd; if the current analyser no longer Asks (allow/deny) the record is skipped.
   - Writes the table atomically (tmp + rename); unchanged content → no rewrite.
   - Incremental: a cursor (byte offset + outcome cache) so a Stop run stays fast; full rebuild with `--full`.

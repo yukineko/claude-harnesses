@@ -13,7 +13,9 @@
 //! Ask the analyser no longer asks is skipped) -> the outcome joined from the
 //! session transcript (`tool_use` with equal tool name + input; its
 //! `tool_result` containing Claude Code's rejection text is a decline, any
-//! other result an approval, no match yet = pending) -> `asklearn::learn`.
+//! other result an approval EXCEPT a hook denial, which is excluded (user
+//! ruling 2026-11-28: the call never ran, no prompt was shown), no match yet
+//! = pending) -> `asklearn::learn`.
 //!
 //! Incremental: `state.json` keeps the byte offset into the block log, the
 //! unresolved (pending) records, the resolved outcomes and the claimed
@@ -34,7 +36,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const DECLINE_TEXT: &str = "The user doesn't want to proceed with this tool use";
 /// An Ask with no matching transcript result for this long is dropped.
 const PENDING_MAX_AGE_SECS: u64 = 30 * 24 * 3600;
-const STATE_VERSION: u32 = 1;
+/// Bumped to 2 with the shape-schema change of 2026-11-28 (shape verbs carry
+/// the subcommand, option flags and an inline-program body hash; protected
+/// config is raised from the detector's verdict). A state cache of another
+/// version is discarded, so every outcome is re-shaped with the current
+/// analyser and the table is rebuilt from scratch.
+const STATE_VERSION: u32 = 2;
 const SHAPE_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -378,8 +385,39 @@ fn recompute_shape(bin: &Path, rec: &Value) -> Result<Option<(String, bool)>, St
     )))
 }
 
-/// `(tool_use id, name, input, result outcome)` in transcript order.
-type ToolUse = (String, String, Value, Option<bool>);
+/// How a `tool_result` answers an Ask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Answer {
+    Approved,
+    Declined,
+    /// A hook denied the call (user ruling 2026-11-28, R6): the tool never
+    /// ran and the user saw no prompt, so it is not an approval. Excluded.
+    HookDenied,
+}
+
+/// `(tool_use id, name, input, result answer)` in transcript order.
+type ToolUse = (String, String, Value, Option<Answer>);
+
+/// True when the `tool_result` text is a hook's denial of the call
+/// (`PreToolUse:<tool> hook error: ...`, `hook blocking error ...`, a
+/// `PreToolUse:` deny, or an error result carrying a blastguard deny).
+/// Over-matching only excludes a record from learning, the safe direction.
+fn is_hook_denial(text: &str, is_error: bool) -> bool {
+    text.contains("hook error")
+        || text.contains("hook blocking error")
+        || text.contains("PreToolUse:")
+        || (is_error && text.contains("blastguard:"))
+}
+
+fn classify(text: &str, is_error: bool) -> Answer {
+    if text.contains(DECLINE_TEXT) {
+        Answer::Declined
+    } else if is_hook_denial(text, is_error) {
+        Answer::HookDenied
+    } else {
+        Answer::Approved
+    }
+}
 
 fn result_text(c: &Value) -> String {
     match c {
@@ -396,7 +434,7 @@ fn result_text(c: &Value) -> String {
 fn read_transcript(path: &Path) -> Result<Vec<ToolUse>, String> {
     let text = read_opt(path)?.unwrap_or_default();
     let mut uses: Vec<ToolUse> = Vec::new();
-    let mut results: BTreeMap<String, bool> = BTreeMap::new();
+    let mut results: BTreeMap<String, Answer> = BTreeMap::new();
     for line in text.lines() {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -417,8 +455,11 @@ fn read_transcript(path: &Path) -> Result<Vec<ToolUse>, String> {
                 }
                 Some("tool_result") => {
                     if let Some(id) = it.get("tool_use_id").and_then(Value::as_str) {
-                        let declined = result_text(&it["content"]).contains(DECLINE_TEXT);
-                        results.insert(id.to_string(), !declined);
+                        let is_error = it.get("is_error").and_then(Value::as_bool) == Some(true);
+                        results.insert(
+                            id.to_string(),
+                            classify(&result_text(&it["content"]), is_error),
+                        );
                     }
                 }
                 _ => {}
@@ -563,7 +604,12 @@ fn learn_run(o: &Opts) -> Result<Run, String> {
                 && !state.claimed.contains(id)
         });
         match hit {
-            Some((id, _, _, Some(approved))) => {
+            // Claimed and dropped: a hook-denied call is no answer at all.
+            Some((id, _, _, Some(Answer::HookDenied))) => {
+                state.claimed.insert(id.clone());
+            }
+            Some((id, _, _, Some(answer))) => {
+                let approved = &(*answer == Answer::Approved);
                 state.claimed.insert(id.clone());
                 state.resolved.push(Resolved {
                     session_id: p.session_id,

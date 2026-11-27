@@ -448,9 +448,47 @@ pub fn rule_id(reason: &str) -> &'static str {
     "unknown"
 }
 
+/// Whether the detector's verdict `reason` names PROTECTED CONFIG (a gate /
+/// hook / policy / shell-rc path, or a tree holding them). This is the single
+/// source of truth for "protected config" in Ask learning (user ruling
+/// 2026-11-28, R3): the shape's target class is raised to `ProtectedConfig`
+/// from it, so neither the learner nor the verdict side ever Allows the call
+/// from a table, whatever verb or target model produced the shape.
+///
+/// True when the reason's rule id names a protected path (every id containing
+/// `protected`: `protected-path`, `unknown-verb-protected-path`,
+/// `interpreter-operand-protected-path`, `interpreter-program-protected-path`,
+/// `protected-path-untested`, `protected-path-disarm`, `protected-path-wildcard`,
+/// `protected-tree-destroy`, `protected-landing-unenumerable`) or when the
+/// reason text itself says "protected gate/config path(s)" (which also covers
+/// `unresolvable-command-word` raised for a protected operand).
+pub fn reason_is_protected_config(reason: &str) -> bool {
+    rule_id(reason).contains("protected") || reason.contains("protected gate/config path")
+}
+
 #[cfg(test)]
 #[allow(clippy::panic)]
 mod tests {
+    #[test]
+    fn protected_config_reasons_are_recognised_and_others_are_not() {
+        for (reason, id) in [
+            ("`x` is a command blastguard has no rule for, and y is a protected gate/config path", "unknown-verb-protected-path"),
+            ("a program with no irreversible operation in it, but z is a protected gate/config path", "interpreter-operand-protected-path"),
+            ("that program names .githooks, a protected gate/config path", "interpreter-program-protected-path"),
+            ("rm destroys a directory tree holding protected gate/config paths", "protected-tree-destroy"),
+            ("writing x, a protected gate/config path", "protected-path"),
+        ] {
+            assert_eq!(rule_id(reason), id, "{reason}");
+            assert!(super::reason_is_protected_config(reason), "{reason}");
+        }
+        assert!(!super::reason_is_protected_config(
+            "fork bomb pattern detected"
+        ));
+        assert!(!super::reason_is_protected_config(
+            "some brand new denial wording"
+        ));
+    }
+
     use super::*;
     use crate::detect;
     use crate::model::Decision;

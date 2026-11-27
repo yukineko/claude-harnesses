@@ -144,12 +144,17 @@ impl Shape {
 
     /// True when a command word could not be resolved ([`UNRESOLVED_VERB`])
     /// or there is no verb at all.
+    ///
+    /// A verb is `basename [subcommand..] [flag..] [#body-hash]` (see
+    /// `blastguard::detect::ast::shape`); a `?` TOKEN inside it marks a
+    /// program body or operand the evaluator could not pin, so such a verb is
+    /// unresolved just like a bare `?`.
     pub fn has_unresolved_verb(&self) -> bool {
         self.verbs.is_empty()
             || self
                 .verbs
                 .iter()
-                .any(|v| v == UNRESOLVED_VERB || v.is_empty())
+                .any(|v| v.is_empty() || v.split(' ').any(|t| t == UNRESOLVED_VERB))
     }
 
     /// Whether a learned Allow may ever apply to this shape, independent of
@@ -295,9 +300,20 @@ pub fn learn(records: &[OutcomeRecord]) -> LearnedTable {
 
 /// Look `shape` up. An `allow` entry for a shape that may never be Allowed
 /// ([`Shape::allow_permitted`]) is ignored: the table is untrusted input.
+///
+/// DENY WINS (user ruling 2026-11-28): when the table holds several entries
+/// for one shape key, a `deny` entry is chosen over any `allow` entry,
+/// whatever their order ("deny as soon as the shape has >= 1 decline").
 pub fn lookup(table: &LearnedTable, shape: &Shape) -> Option<LearnedDecision> {
     let key = shape.key();
-    let e = table.entries.iter().find(|e| e.shape == key)?;
+    let e = table
+        .entries
+        .iter()
+        .filter(|e| e.shape == key)
+        .min_by_key(|e| match e.decision {
+            Verdict::Deny => 0,
+            Verdict::Allow => 1,
+        })?;
     match e.decision {
         Verdict::Allow if !shape.allow_permitted() => Option::None,
         Verdict::Allow => Some(LearnedDecision::Allow {

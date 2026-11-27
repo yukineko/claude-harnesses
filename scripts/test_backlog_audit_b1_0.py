@@ -49,9 +49,76 @@ def _git(cwd, *args, check=True):
     return r
 
 
-def _has_main_guard_calling_unittest_main(src: str) -> bool:
-    """True iff the module has `if __name__ == "__main__":` whose body calls
-    `unittest.main(...)` (any arguments)."""
+def _is_unittest_main_call(call: ast.Call) -> bool:
+    f = call.func
+    return (
+        isinstance(f, ast.Attribute)
+        and f.attr == "main"
+        and isinstance(f.value, ast.Name)
+        and f.value.id == "unittest"
+    )
+
+
+def _is_pytest_main_file_call(call: ast.Call) -> bool:
+    """Exactly `pytest.main([__file__])`: one positional list holding only
+    `__file__`, no keywords. Without `[__file__]` a direct run would collect
+    from the cwd instead of this file."""
+    f = call.func
+    if not (
+        isinstance(f, ast.Attribute)
+        and f.attr == "main"
+        and isinstance(f.value, ast.Name)
+        and f.value.id == "pytest"
+    ):
+        return False
+    if call.keywords or len(call.args) != 1:
+        return False
+    a = call.args[0]
+    return (
+        isinstance(a, ast.List)
+        and len(a.elts) == 1
+        and isinstance(a.elts[0], ast.Name)
+        and a.elts[0].id == "__file__"
+    )
+
+
+def _is_exit_wrapper(call: ast.Call) -> bool:
+    f = call.func
+    if isinstance(f, ast.Name):
+        return f.id == "SystemExit"
+    return (
+        isinstance(f, ast.Attribute)
+        and f.attr == "exit"
+        and isinstance(f.value, ast.Name)
+        and f.value.id == "sys"
+    )
+
+
+def _guard_stmt_runs_tests(stmt: ast.stmt) -> bool:
+    if isinstance(stmt, ast.Raise):
+        expr = stmt.exc
+    elif isinstance(stmt, ast.Expr):
+        expr = stmt.value
+    else:
+        return False
+    if not isinstance(expr, ast.Call):
+        return False
+    if _is_unittest_main_call(expr) or _is_pytest_main_file_call(expr):
+        return True
+    if _is_exit_wrapper(expr) and len(expr.args) == 1 and not expr.keywords:
+        inner = expr.args[0]
+        return isinstance(inner, ast.Call) and (
+            _is_unittest_main_call(inner) or _is_pytest_main_file_call(inner)
+        )
+    return False
+
+
+def _has_main_guard_running_tests(src: str) -> bool:
+    """True iff the module has a top-level `if __name__ == "__main__":` whose
+    body runs the suite: `unittest.main(...)` (any arguments) or exactly
+    `pytest.main([__file__])`, either optionally wrapped in `SystemExit(...)` /
+    `sys.exit(...)` (also as `raise SystemExit(...)`). `pytest.main()` with no
+    args or any other arg is rejected."""
     tree = ast.parse(src)
     for node in tree.body:
         if not isinstance(node, ast.If):
@@ -66,15 +133,8 @@ def _has_main_guard_calling_unittest_main(src: str) -> bool:
             and t.comparators[0].value == "__main__"
         ):
             continue
-        for sub in ast.walk(node):
-            if (
-                isinstance(sub, ast.Call)
-                and isinstance(sub.func, ast.Attribute)
-                and sub.func.attr == "main"
-                and isinstance(sub.func.value, ast.Name)
-                and sub.func.value.id == "unittest"
-            ):
-                return True
+        if any(_guard_stmt_runs_tests(s) for s in node.body):
+            return True
     return False
 
 
@@ -83,7 +143,7 @@ class Backlog06a9d33fDirectInvocationRunsTests(unittest.TestCase):
     as `python3 scripts/test_X.py` (no __main__ guard). The premise was a grep
     artifact (`grep -L "unittest.main()"` misses `unittest.main(verbosity=2)`).
     This pins the property the item cared about for EVERY suite: a direct run
-    reaches unittest.main."""
+    reaches unittest.main or pytest.main([__file__])."""
 
     def test_every_scripts_suite_has_a_main_guard_calling_unittest_main(self):
         suites = sorted(SCRIPTS.glob("test_*.py"))
@@ -91,7 +151,7 @@ class Backlog06a9d33fDirectInvocationRunsTests(unittest.TestCase):
         missing = [
             p.name
             for p in suites
-            if not _has_main_guard_calling_unittest_main(p.read_text(encoding="utf-8"))
+            if not _has_main_guard_running_tests(p.read_text(encoding="utf-8"))
         ]
         self.assertEqual(
             missing,

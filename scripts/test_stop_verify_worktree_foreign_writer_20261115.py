@@ -136,3 +136,7 @@ def test_control_dirt_at_or_before_my_record_epoch_still_blocks(env):
     _record(repo, e, p, t + 0.5)
     r = _stop(repo, e)
     assert r.returncode == 2, f"own uncommitted write did not block: {r.stdout!r} {r.stderr!r}"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

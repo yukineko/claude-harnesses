@@ -71,7 +71,7 @@ class MutationRunArtifacts(unittest.TestCase):
             old="    true\n", new="    false\n",
         )
 
-        def stub(crate, timeout=600):
+        def stub(crate, timeout=600, test_args=None, cwd=None):
             art = repo / ARTIFACT_REL
             art.parent.mkdir(parents=True, exist_ok=True)
             art.write_text("cc deadbeef # shrinks to input = []\n", encoding="utf-8")

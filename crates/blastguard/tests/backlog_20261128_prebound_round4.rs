@@ -47,11 +47,14 @@ fn assert_never_allow(cases: &[String]) {
             bad.push(format!("main={d:?} sub={h:?} :: {c:?}"));
         }
     }
-    assert!(bad.is_empty(), "rebind resolved as the confined literal:\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "rebind resolved as the confined literal:\n{}",
+        bad.join("\n")
+    );
 }
 
 #[test]
-#[ignore = "RED: round4 prebound rebinds"]
 fn measured_prompt_and_arithmetic_rebinds_are_never_allow() {
     assert_never_allow(&[
         format!("cd /etc; PS4='\\044((P=1))'; set -x; P={OK}; true; {W}"),
@@ -64,7 +67,6 @@ fn measured_prompt_and_arithmetic_rebinds_are_never_allow() {
 }
 
 #[test]
-#[ignore = "RED: round4 prebound rebinds"]
 fn measured_precommand_modifier_hooks_are_never_allow() {
     assert_never_allow(&[
         format!("noglob trap 'P=/etc/hosts' DEBUG; P={OK}; true; {W}"),
@@ -74,7 +76,6 @@ fn measured_precommand_modifier_hooks_are_never_allow() {
 }
 
 #[test]
-#[ignore = "RED: round4 prebound rebinds"]
 fn unmeasured_same_family_rows_are_never_allow() {
     assert_never_allow(&[
         format!("cd /etc; PS4='\\44((P=1))'; set -x; P={OK}; true; {W}"),
@@ -85,7 +86,6 @@ fn unmeasured_same_family_rows_are_never_allow() {
 }
 
 #[test]
-#[ignore = "RED: round4 prebound rebinds"]
 fn pending_fp_non_exit_traps_with_inert_bodies_stay_allow() {
     // Allow on base ace252997, Deny on 922f960f6. The trap bodies bind no
     // name and no signal is sent.

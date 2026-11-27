@@ -675,3 +675,31 @@ exit 101: .979 (/Users/yuki/src/.harness-worktrees/red-prebound-families/crates/
     Finished `release` profile [optimized] target(s) in 23.97s
      Running tests/backlog_20261128_debug_trap_cd_relative_write.rs (target/release/deps/backlog_20261128_debug_trap_cd_relative_write-5edcc7666695def3)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_debug_trap_cd_relative_write`"""
+
+[[task]]
+id = "1f968657"
+title = "blastguard: subagent perl -pi -e in-place edit on cwd file denied as option -pi not modelled"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Re-filed from unmerged filing-run87637b (orig a92a82b1). Measured 2026-11-28 main a4c078f2d; see test docstring. Readings (a) FP (b) intended B.5; older control in backlog_20261114_perl_single_quoted_dollar_dot_fp fails the same way."
+created_at = 1795804774
+updated_at = 1795804774
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261122_perl_literal_var_path_fp -- --include-ignored"
+rev = "bc8f7aacf57f8c970f10d24735066dce90db346a"
+observed_at = 1795804774
+detail = """
+exit 101: rd v0.2.975 (/Users/yuki/src/.harness-worktrees/salvage-leftovers/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.01s
+     Running tests/backlog_20261122_perl_literal_var_path_fp.rs (target/debug/deps/backlog_20261122_perl_literal_var_path_fp-f8cebfb3a5de70f0)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261122_perl_literal_var_path_fp`"""

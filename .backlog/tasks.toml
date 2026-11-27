@@ -1394,3 +1394,34 @@ exit 101: v0.1.103 (/Users/yuki/src/.harness-worktrees/attr-39772e9f-eaa077f4/cr
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.09s
      Running tests/backlog_20261117_subagent_cd_relative_root.rs (target/debug/deps/backlog_20261117_subagent_cd_relative_root-6d935cde80d05582)
 error: test failed, to rerun pass `-p donegate --test backlog_20261117_subagent_cd_relative_root`"""
+
+[[task]]
+id = "1e915597"
+title = "blastguard: sudo clustered short options with shell mode (-sE/-Es) + quoted harmful command stay Ask in main mode instead of Deny (unwrap_sudo treats the cluster as an unmodelled option)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1795782940
+updated_at = 1795782940
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test verify_8f8acf5e_20261127 -- --ignored clustered_short_options"
+rev = "0bf4c479419026360a8ad0eca3600d1e40e0e871"
+observed_at = 1795782940
+detail = """
+exit 101: iltered out; finished in 0.54s
+
+   Compiling blastguard v0.2.944 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/verify_8f8acf5e_20261127.rs (target/debug/deps/verify_8f8acf5e_20261127-330132182447c6d2)
+error: test failed, to rerun pass `-p blastguard --test verify_8f8acf5e_20261127`"""

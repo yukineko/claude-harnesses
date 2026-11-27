@@ -307,6 +307,30 @@ pub fn is_ancestor(root: &Path, ancestor: &str, descendant: &str) -> Result<bool
 /// `Err`: an unanswered question is not "nothing is fixed", and the caller
 /// refuses (CLAUDE.md section 3).
 pub fn fixed_task_ids(root: &Path) -> Result<std::collections::HashSet<String>, String> {
+    // A shallow clone hides history: a fix commit absent from `git log` is not
+    // evidence that no fix landed (backlog 2072023d). Undetermined => refuse.
+    match git_out(root, &["rev-parse", "--is-shallow-repository"], &[0]) {
+        Determination::Known((_, s)) if s.trim() == "false" => {}
+        Determination::Known((_, s)) if s.trim() == "true" => {
+            return Err(format!(
+                "{} is a shallow repository (truncated history): whether a task's fix commit \
+                 landed cannot be determined; run `git fetch --unshallow` first",
+                root.display()
+            ));
+        }
+        Determination::Known((_, s)) => {
+            return Err(format!(
+                "git rev-parse --is-shallow-repository printed {:?}, expected true/false: \
+                 shallow-ness is undetermined",
+                s.trim()
+            ));
+        }
+        Determination::Undetermined(why) => {
+            return Err(format!(
+                "git rev-parse --is-shallow-repository failed (shallow-ness undetermined): {why}"
+            ));
+        }
+    }
     match git_out(root, &["rev-parse", "--verify", "-q", "HEAD"], &[0, 1]) {
         Determination::Known((0, _)) => {}
         Determination::Known((_, _)) => {

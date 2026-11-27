@@ -126,7 +126,6 @@ fn control_full_clone_with_copied_store_skips_fixed_task() {
 }
 
 #[test]
-#[ignore = "RED: K4 — remove the ignore when fixed"]
 fn next_in_shallow_clone_does_not_dispatch_fixed_task() {
     let (fx, x, y) = setup();
     let (code, stdout, both) = next_in_clone(&fx, Some("1"));

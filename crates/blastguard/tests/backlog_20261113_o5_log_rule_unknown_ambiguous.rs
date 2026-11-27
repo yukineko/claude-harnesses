@@ -54,7 +54,6 @@ fn base_cmd(home: &Path) -> Command {
 }
 
 #[test]
-#[ignore = "RED: O5 — remove the ignore when fixed"]
 fn o5_log_text_distinguishes_absent_rule_from_rule_named_unknown() {
     let home = tempfile::Builder::new()
         .prefix("bg-o5-home-")

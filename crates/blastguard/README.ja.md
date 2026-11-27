@@ -1119,7 +1119,7 @@ blastguard log [--decision deny|ask] [--rule <id>] [--since <RFC3339|Ns|Nm|Nh|Nd
 - テキスト: 1 行 1 件、`decision=<v> actor=<v> system_harm=<v> rule=<id> tool=<v> cwd=<v>` の後に
   `command=<v>`（Bash）または `target=<v>`（ファイルツール）が続く。tool が不明な行は
   `command=unknown target=unknown` を両方出す。記録されていないフィールドは `unknown`
-  （`false` / `interactive` / `deny` に推測しない）。
+  （ただし rule が無い行は `rule=<absent>`。`unknown` という名前の rule と区別するため。`false` / `interactive` / `deny` に推測しない）。
   値はエスケープされる: `\n` `\r` `\t` は 2 文字のエスケープ、その他の 0x20 未満と 0x7f は
   `\xHH`（小文字 16 進）、バックスラッシュは `\\`、C1 制御文字（U+0080〜U+009F）・U+2028/U+2029・
   bidi 制御文字（U+061C、U+200E、U+200F、U+202A〜U+202E、U+2066〜U+2069）は `\u{XXXX}`（大文字 16 進）。

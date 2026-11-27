@@ -14,7 +14,8 @@
 //! sources are skipped (not errors).
 //!
 //! A field that is absent from a ledger line (old-format lines predate the
-//! context fields) is UNKNOWN. It is printed as `unknown` (text) / `null`
+//! context fields) is UNKNOWN. It is printed as `unknown` (text; an absent
+//! rule prints `<absent>`, so it differs from a rule named `unknown`) / `null`
 //! (JSON), and a filter on that field never matches it: the entry is dropped
 //! and the number of such drops is reported on stderr ("excluded").
 //!
@@ -404,7 +405,9 @@ fn is_unicode_line_or_bidi_control(c: char) -> bool {
 /// `decision=<v> actor=<v> system_harm=<v> rule=<id> tool=<v> cwd=<v>` then
 /// `command=<v>` (Bash, or whenever a command is recorded) and/or `target=<v>`
 /// (a file tool, or whenever a target is recorded). When the tool is unknown
-/// both `command=` and `target=` are printed. Absent values print `unknown`.
+/// both `command=` and `target=` are printed. Absent values print `unknown`,
+/// except an absent rule, which prints `<absent>` so it is distinguishable
+/// from a recorded rule id that is literally `unknown`.
 /// All free-text values are escaped by [`escape_text`].
 fn format_text_line(entry: &LogEntry) -> String {
     let unk = |o: &Option<String>| match o {
@@ -421,7 +424,10 @@ fn format_text_line(entry: &LogEntry) -> String {
         unk(&entry.decision),
         unk(&entry.actor),
         system_harm,
-        unk(&entry.rule),
+        entry
+            .rule
+            .as_deref()
+            .map_or_else(|| "<absent>".to_string(), escape_text),
         unk(&entry.tool),
         unk(&entry.cwd)
     );

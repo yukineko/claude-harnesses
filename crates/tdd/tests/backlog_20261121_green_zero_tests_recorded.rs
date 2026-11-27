@@ -51,7 +51,6 @@ fn green_proofs(work: &Path) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED(<to be filled>): tdd green records GREEN for a run that executed zero tests"]
 fn green_refuses_a_run_that_executed_zero_tests() {
     let d = Dir(std::env::temp_dir().join(format!("tdd-green-zero-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&d.0);

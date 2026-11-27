@@ -309,6 +309,33 @@ fn judge_ran(out: &runner::Outcome, phase: Phase) -> Result<()> {
     Ok(())
 }
 
+/// Refuse a GREEN whose run provably executed zero tests (CLAUDE.md §3: an
+/// empty set is not clean). Applies only when the libtest `test result:` lines
+/// were parsed (`counts.determined == true`) and sum to 0 passed + 0 failed
+/// (e.g. every test filtered out, or `#[ignore]`d). When the counts are
+/// undetermined (non-libtest runner or unparseable log) the existing,
+/// documented behaviour is kept: GREEN is recorded with `determined:false`,
+/// which consumers read as "unknown", never as `0 passed`.
+fn judge_executed_tests(out: &runner::Outcome) -> Result<()> {
+    let c = &out.counts;
+    if c.get("determined").and_then(|v| v.as_bool()) != Some(true) {
+        return Ok(());
+    }
+    let n = |k: &str| c.get(k).and_then(|v| v.as_u64());
+    match (n("passed"), n("failed")) {
+        (Some(0), Some(0)) => bail!(
+            "the test command executed 0 tests (0 passed; 0 failed) — a GREEN that ran no test \
+             proves nothing, so no GREEN recorded. Check the test filter / #[ignore] and run \
+             `tdd green` again."
+        ),
+        (Some(_), Some(_)) => Ok(()),
+        _ => bail!(
+            "test counts were marked determined but could not be read as numbers — cannot tell \
+             whether any test ran, so no GREEN recorded."
+        ),
+    }
+}
+
 /// Refuse to treat a run as evidence when it produced no exit code: the
 /// command timed out (`timed_out`), or it ended without an exit code —
 /// `exit_code` is `None` with no `spawn_error` and `timed_out` false, which
@@ -711,6 +738,7 @@ pub fn green(
         bail!("{}", refused_green_report(cfg, task, cmdline, &out));
     }
     judge_green(out.passed, has_red)?;
+    judge_executed_tests(&out)?;
     let red_path = red_slot.unwrap_or_default();
     let path = write_slot(root, cfg, task, "green", cmdline)?;
     let mut proof = json!({

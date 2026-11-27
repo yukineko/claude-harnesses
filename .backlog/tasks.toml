@@ -1,34 +1,4 @@
 [[task]]
-id = "3764e463"
-title = "blastguard FP: python3 -c の文字列リテラル内 '>> `y`' を run-time append redirect と誤読して ask"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-14 at main a67c5d23f: python3 -c 'print("x >> BACKTICKy BACKTICK")' => ask "'>> BACKTICKyBACKTICK' appends to a path that only exists at run time". Python never executes backticks. Suspected (unverified): detect/interpreter.rs redirects_are_data ~968. RED: crates/blastguard/tests/backlog_20261114_python_c_append_backtick_fp.rs (commit b58fa9a63 on side/run-20261114-163341-69351). Control: os.system('echo x >> $v') still not Allow (green)."""
-created_at = 1794647064
-updated_at = 1794647064
-weight = 0.0
-issue_number = 1771
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1771"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261114_python_c_append_backtick_fp -- --ignored python_c_string_literal_append_backtick_text_is_not_a_redirect"
-rev = "b58fa9a63a03827b24c6f6d6de6d5ea10a003092"
-observed_at = 1794647064
-detail = """
-exit 101: uki/src/.harness-worktrees/side-run-20261114-163341-69351/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.11s
-     Running tests/backlog_20261114_python_c_append_backtick_fp.rs (target/debug/deps/backlog_20261114_python_c_append_backtick_fp-4b2a0245b29c3102)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_c_append_backtick_fp`"""
-
-[[task]]
 id = "7fc71b27"
 title = "backlog next --claim: a repro run that executed ZERO tests because the named test is now filtered out (fix removed #[ignore]) is auto-cancelled with closure reason discard"
 project = "/Users/yuki/src/harness"
@@ -91,37 +61,6 @@ exit 101: side-reds/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.74s
      Running tests/backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp.rs (target/debug/deps/backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp-76f31d9e9a2f73b2)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_mkdir_cd_scratchpad_python_stdin_heredoc_fp`"""
-
-[[task]]
-id = "3c96b536"
-title = "blastguard FP: quoted-argument redirect text after unresolvable cd refused as relative redirect"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-20 (subagent, blastguard 0.2.809): cd <dir> && backlog add --title ... --notes ... 2>&1 | tail -30; git ... was refused: redirect-after-unresolvable-cd reason naming the quoted text. The exact command is the OBSERVED const in the repro test. Measured at rev 0b4348ae4 on 2026-11-20: same command with the quoted redirect text removed = allow; with it = deny (subagent) / ask (main). The one-line reduction does not reproduce. Readings: (a) FP, text inside a quoted argument is not a redirect; (b) intended, blastguard cannot tell whether the callee reparses the argument. Tell apart: control without the text is allow."
-created_at = 1795163770
-updated_at = 1795163770
-weight = 0.0
-issue_number = 1924
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1924"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_quoted_arg_redirect_text_after_cd_fp -- --include-ignored"
-rev = "7e29f1f20588611dcaa91fa3a06b69de2d02dde2"
-observed_at = 1795163770
-detail = """
-exit 101: d; 0 measured; 0 filtered out; finished in 0.73s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
-     Running tests/backlog_20261120_quoted_arg_redirect_text_after_cd_fp.rs (target/debug/deps/backlog_20261120_quoted_arg_redirect_text_after_cd_fp-e8a7fb1d39e9f567)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_quoted_arg_redirect_text_after_cd_fp`"""
 
 [[task]]
 id = "cfa4e0f2"
@@ -662,39 +601,6 @@ exit 101: v0.1.103 (/Users/yuki/src/.harness-worktrees/attr-39772e9f-eaa077f4/cr
 error: test failed, to rerun pass `-p donegate --test backlog_20261117_subagent_cd_relative_root`"""
 
 [[task]]
-id = "8533e79d"
-title = "donegate attribution: git -C <bare relative dir> (e.g. git -C wt checkout -- src/lib.rs) is not attributed to wt because a word without / or . is not treated as a path, so wt's checks are skipped"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "donegate",
-    "fail-open",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1795783714
-updated_at = 1795783714
-weight = 0.0
-issue_number = 1992
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1992"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p donegate --test verify3_39772e9f_20261127 -- --ignored hole_git_dash_c_relative_dir"
-rev = "c91b64a1b9b5484078585698dbbb58b750a05e79"
-observed_at = 1795783714
-detail = """
-exit 101: 8 filtered out; finished in 0.48s
-
-   Compiling donegate v0.1.111 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/donegate)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
-     Running tests/verify3_39772e9f_20261127.rs (target/debug/deps/verify3_39772e9f_20261127-b0b610cbdd82aa37)
-error: test failed, to rerun pass `-p donegate --test verify3_39772e9f_20261127`"""
-
-[[task]]
 id = "a0ca3bd7"
 title = "scripts/test_backlog_audit_b1_0.py test_a_direct_run_reports_a_nonzero_test_count fails on main: direct run of scripts/test_check_launcher_exec_bit.py"
 project = "/Users/yuki/src/harness"
@@ -704,14 +610,17 @@ tags = [
     "p2",
 ]
 touched_files = []
-status = "pending"
-notes = "Observed 2026-11-27 by flow eaa077f4 at c02bbba2e+68bd7d93 merge: backlog done's pytest run of scripts/test_backlog_audit_b1_0.py reported 'FAILED ...::Backlog06a9d33fDirectInvocationRunsTests::test_a_direct_run_reports_a_nonzero_test_count' (2 failed, 6 passed, 3 skipped; the other failure was fixed by 68bd7d93). The test runs 'python3 scripts/test_check_launcher_exec_bit.py' and asserts rc 0 and 'Ran N tests' N>0. Cause not yet observed (flow driver session cannot run python directly)."
+status = "failed"
+notes = """
+Observed 2026-11-27 by flow eaa077f4 at c02bbba2e+68bd7d93 merge: backlog done's pytest run of scripts/test_backlog_audit_b1_0.py reported 'FAILED ...::Backlog06a9d33fDirectInvocationRunsTests::test_a_direct_run_reports_a_nonzero_test_count' (2 failed, 6 passed, 3 skipped; the other failure was fixed by 68bd7d93). The test runs 'python3 scripts/test_check_launcher_exec_bit.py' and asserts rc 0 and 'Ran N tests' N>0. Cause not yet observed (flow driver session cannot run python directly).
+flow eaa077f4 2026-11-27: diagnosed, skipped for ruling. Root: scripts/test_check_launcher_exec_bit.py::RealRepoState::test_the_scope_finds_every_plugin_that_ships_a_binary (1 failed, 22 passed) — checker finds crates/flow/bin/flow-watch (a python3 script launcher, 9b804c4a4) but _declared_launchers derives expected only from Cargo [[bin]] targets. Checker including it is correct (exec bit matters for scripts too). Fix = re-anchor the test's independent source to also declare non-cargo launchers (e.g. a plugin.json/hooks reference or an explicit list) — re-anchoring an unhedged assertEqual needs a user ruling."""
 created_at = 1795785226
-updated_at = 1795785226
+updated_at = 1795787002
+defer_until = 1795959802
 weight = 0.0
 issue_number = 1993
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1993"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

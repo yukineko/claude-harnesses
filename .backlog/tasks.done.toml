@@ -97219,3 +97219,161 @@ rev = "faad12c1d2a138320edabb0e3ee6e8589ea538cd"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "3764e463"
+title = "blastguard FP: python3 -c の文字列リテラル内 '>> `y`' を run-time append redirect と誤読して ask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-14 at main a67c5d23f: python3 -c 'print("x >> BACKTICKy BACKTICK")' => ask "'>> BACKTICKyBACKTICK' appends to a path that only exists at run time". Python never executes backticks. Suspected (unverified): detect/interpreter.rs redirects_are_data ~968. RED: crates/blastguard/tests/backlog_20261114_python_c_append_backtick_fp.rs (commit b58fa9a63 on side/run-20261114-163341-69351). Control: os.system('echo x >> $v') still not Allow (green).
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_python_c_append_backtick_fp -- --ignored python_c_string_literal_append_backtick_text_is_not_a_redirect; rev: 924bcdae723b9e644eb60982d73edece86b00f0e; observed: exit 0: ssed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.38s
+
+   Compiling blastguard v0.2.949 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running tests/backlog_20261114_python_c_append_backtick_fp.rs (target/debug/deps/backlog_20261114_python_c_append_backtick_fp-1e2c2b6e8ad1b527)"""
+created_at = 1794647064
+updated_at = 1795787004
+weight = 0.0
+issue_number = 1771
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1771"
+issue_closed_at = 1795787007
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_python_c_append_backtick_fp -- --ignored python_c_string_literal_append_backtick_text_is_not_a_redirect"
+rev = "b58fa9a63a03827b24c6f6d6de6d5ea10a003092"
+observed_at = 1794647064
+detail = """
+exit 101: uki/src/.harness-worktrees/side-run-20261114-163341-69351/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.11s
+     Running tests/backlog_20261114_python_c_append_backtick_fp.rs (target/debug/deps/backlog_20261114_python_c_append_backtick_fp-4b2a0245b29c3102)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_python_c_append_backtick_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261114_python_c_append_backtick_fp -- --ignored python_c_string_literal_append_backtick_text_is_not_a_redirect; rev: 924bcdae723b9e644eb60982d73edece86b00f0e; observed: exit 0: ssed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.38s
+
+   Compiling blastguard v0.2.949 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running tests/backlog_20261114_python_c_append_backtick_fp.rs (target/debug/deps/backlog_20261114_python_c_append_backtick_fp-1e2c2b6e8ad1b527)"""
+
+[[task]]
+id = "3c96b536"
+title = "blastguard FP: quoted-argument redirect text after unresolvable cd refused as relative redirect"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-20 (subagent, blastguard 0.2.809): cd <dir> && backlog add --title ... --notes ... 2>&1 | tail -30; git ... was refused: redirect-after-unresolvable-cd reason naming the quoted text. The exact command is the OBSERVED const in the repro test. Measured at rev 0b4348ae4 on 2026-11-20: same command with the quoted redirect text removed = allow; with it = deny (subagent) / ask (main). The one-line reduction does not reproduce. Readings: (a) FP, text inside a quoted argument is not a redirect; (b) intended, blastguard cannot tell whether the callee reparses the argument. Tell apart: control without the text is allow.
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261120_quoted_arg_redirect_text_after_cd_fp -- --include-ignored; rev: 924bcdae723b9e644eb60982d73edece86b00f0e; observed: exit 0: ignored; 0 measured; 0 filtered out; finished in 0.73s
+
+   Compiling blastguard v0.2.949 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.07s
+     Running tests/backlog_20261120_quoted_arg_redirect_text_after_cd_fp.rs (target/debug/deps/backlog_20261120_quoted_arg_redirect_text_after_cd_fp-ce316dfda8cc028e)"""
+created_at = 1795163770
+updated_at = 1795787074
+weight = 0.0
+issue_number = 1924
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1924"
+issue_closed_at = 1795787079
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_quoted_arg_redirect_text_after_cd_fp -- --include-ignored"
+rev = "7e29f1f20588611dcaa91fa3a06b69de2d02dde2"
+observed_at = 1795163770
+detail = """
+exit 101: d; 0 measured; 0 filtered out; finished in 0.73s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/backlog_20261120_quoted_arg_redirect_text_after_cd_fp.rs (target/debug/deps/backlog_20261120_quoted_arg_redirect_text_after_cd_fp-e8a7fb1d39e9f567)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_quoted_arg_redirect_text_after_cd_fp`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test backlog_20261120_quoted_arg_redirect_text_after_cd_fp -- --include-ignored; rev: 924bcdae723b9e644eb60982d73edece86b00f0e; observed: exit 0: ignored; 0 measured; 0 filtered out; finished in 0.73s
+
+   Compiling blastguard v0.2.949 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.07s
+     Running tests/backlog_20261120_quoted_arg_redirect_text_after_cd_fp.rs (target/debug/deps/backlog_20261120_quoted_arg_redirect_text_after_cd_fp-ce316dfda8cc028e)"""
+
+[[task]]
+id = "8533e79d"
+title = "donegate attribution: git -C <bare relative dir> (e.g. git -C wt checkout -- src/lib.rs) is not attributed to wt because a word without / or . is not treated as a path, so wt's checks are skipped"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "donegate",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795783714
+updated_at = 1795787192
+weight = 0.0
+issue_number = 1992
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1992"
+issue_closed_at = 1795787196
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test verify3_39772e9f_20261127 -- --ignored hole_git_dash_c_relative_dir"
+rev = "c91b64a1b9b5484078585698dbbb58b750a05e79"
+observed_at = 1795783714
+detail = """
+exit 101: 8 filtered out; finished in 0.48s
+
+   Compiling donegate v0.1.111 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/donegate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running tests/verify3_39772e9f_20261127.rs (target/debug/deps/verify3_39772e9f_20261127-b0b610cbdd82aa37)
+error: test failed, to rerun pass `-p donegate --test verify3_39772e9f_20261127`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p donegate --test verify3_39772e9f_20261127 hole_git_dash_c_relative_dir"
+exit = 0
+passed = 1
+rev = "ec5f9053631578027a48bbd6980a50ffeadf59ba"
+observed_at = 1795787174
+output_digest = "sha256:7fc789751cd604ea35a4a81ad04bd777a10cf70a2b825dd9bea6ccf90b742962"
+excerpt = """
+
+running 1 test
+test hole_git_dash_c_relative_dir ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 1.02s
+
+   Compiling harness-core v0.2.120 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/harness-core)
+   Compiling overwatch v0.2.128 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/overwatch)
+   Compiling donegate v0.1.113 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/donegate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.22s
+     Running tests/verify3_39772e9f_20261127.rs (target/debug/deps/verify3_39772e9f_20261127-21205c573ece82de)
+"""
+
+[task.closure.red]
+rev = "924bcdae723b9e644eb60982d73edece86b00f0e"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

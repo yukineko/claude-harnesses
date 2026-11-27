@@ -29,6 +29,10 @@
 //!   `?`, `[`, `\`, or `{`/`}` before the first revision suffix, i.e.
 //!   outside an `@{…}` / `^{…}` suffix): its value is not known from the
 //!   text, so it is undetermined and denied;
+//! - `tags/main`, `tags/master`, `tags/HEAD`, `heads/HEAD`: ambiguous (a
+//!   remote may be named `tags` / `heads`), so undetermined and denied
+//!   (user ruling 2026-11-27, bd0bf1f9). `heads/main` stays main: both
+//!   readings are main;
 //! - any other ref under `refs/` whose last component is a main name or
 //!   `HEAD` (`refs/foo/main`): denied (fail closed).
 //!
@@ -177,6 +181,18 @@ pub(super) fn main_ref(spelling: &str) -> MainRef {
     }
     let comps: Vec<&str> = base.split('/').collect();
     let main_or_head = |s: &str| is_main_name(s) || s == "HEAD";
+    // `tags/<main|HEAD>` and `heads/HEAD` are ambiguous: a remote may be named
+    // `tags` / `heads`, so they read as either a tag/branch or a remote-tracking
+    // main. The text cannot tell which (user ruling 2026-11-27, bd0bf1f9), so
+    // fail closed. `heads/main` is not ambiguous: both readings are main.
+    if let ["tags", m] = comps.as_slice() {
+        if main_or_head(m) {
+            return MainRef::Undetermined;
+        }
+    }
+    if comps.as_slice() == ["heads", "HEAD"] {
+        return MainRef::Undetermined;
+    }
     let verdict = match comps.as_slice() {
         [m] => is_main_name(m),
         ["heads", m] | ["refs", "heads", m] => is_main_name(m),
@@ -270,7 +286,7 @@ pub(super) fn judge_git(args: &[String]) -> Judged {
             }
             MainRef::Undetermined => {
                 return Judged::Deny(format!(
-                    "`git {}`: the ref `{o}` cannot be resolved from its text (shell expansion, glob, or an upstream / previous-branch selector), so the main-merge check fails closed ({MAIN_MERGE_REASON})",
+                    "`git {}`: the ref `{o}` cannot be resolved from its text (shell expansion, glob, an ambiguous `tags/` / `heads/` spelling, or an upstream / previous-branch selector), so the main-merge check fails closed ({MAIN_MERGE_REASON})",
                     args.join(" ")
                 ));
             }
@@ -341,7 +357,6 @@ mod tests {
             "mainline",
             "refs/heads/feature",
             "refs/tags/main",
-            "tags/main",
             "HEAD",
             "@",
             "@{1}",
@@ -349,6 +364,26 @@ mod tests {
         ] {
             assert_eq!(main_ref(s), MainRef::NotMain, "{s}");
         }
+        // Re-anchored per user ruling 2026-11-27 (bd0bf1f9): `tags/main` is
+        // ambiguous (refs/tags/main vs refs/remotes/tags/main when a remote
+        // named `tags` exists), so it is Undetermined (fail closed), not NotMain.
+        assert_eq!(main_ref("tags/main"), MainRef::Undetermined, "tags/main");
+    }
+
+    #[test]
+    fn two_segment_tags_heads_ambiguity_is_undetermined() {
+        // `tags/<m>` / `heads/HEAD` could be a remote named `tags` / `heads`.
+        for s in ["tags/main", "tags/master", "tags/HEAD", "heads/HEAD"] {
+            assert_eq!(main_ref(s), MainRef::Undetermined, "{s}");
+        }
+        // Both readings are main, so no ambiguity in the verdict.
+        assert_eq!(main_ref("heads/main"), MainRef::Main);
+        // A non-main name under `tags/` is not a main spelling under any reading.
+        assert_eq!(main_ref("tags/v1"), MainRef::NotMain);
+        assert!(matches!(
+            judge_git(&words("merge tags/main")),
+            Judged::Deny(_)
+        ));
     }
 
     fn words(cmd: &str) -> Vec<String> {

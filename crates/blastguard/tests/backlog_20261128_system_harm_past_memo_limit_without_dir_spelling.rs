@@ -97,7 +97,7 @@ fn control_tails_without_padding_are_deny() {
 }
 
 #[test]
-#[ignore = "RED(687ece3c-followup): statically resolvable system harm past the memo limit stays Ask in main when its text does not spell a system dir"]
+#[ignore = "RED(5eab530d): statically resolvable system harm past the memo limit stays Ask in main when its text does not spell a system dir"]
 fn harm_not_spelling_a_system_dir_after_memo_limit_is_deny() {
     let mut bad = Vec::new();
     let lines: String = (0..3700).map(|i| format!("bash -c 'echo {i}'\n")).collect();

@@ -1,24 +1,20 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! RED (fail-open, FP in quote-aware check, observed 2026-11-15 by verifier on base 091f4ab87):
-//! `bash <&'$fd'` and `bash <&\$fd` (single-quoted / backslash-escaped $, so target is the
-//! LITERAL string `$fd`, not an expansion) are now ask (main) / deny (subagent), but should be
-//! allow in both modes.
+//! History: written 2026-11-14/15 (base 091f4ab87) as a RED expecting allow for `bash <&'$fd'`
+//! and `bash <&\$fd` (single-quoted / backslash-escaped `$`, so the dup target is the LITERAL
+//! string `$fd`), on the reading that the detector was not quote-aware (exec_fds.rs).
 //!
-//! Two readings: (1) real FP: real bash rejects both with "bash: $fd: ambiguous redirect" rc=1
-//! because there is no fd named `$fd`. The shell never expands; the literal string is not a
-//! valid fd number. Since expansion is prevented by the quote, no actual FD lookup or redirection
-//! happens. (2) intended: the detector was overly strict. Cause: exec_fds.rs:629
-//! `(target.contains('$') || target.contains('`'))` is not quote-aware; single-quoted and
-//! backslash-escaped $ should be ignored.
+//! RE-ANCHORED (backlog 796d27b6): the later user ruling T2 (2026-11-18, SUBSET.md item 23)
+//! says "A program read from a file descriptor (`bash <&'$fd'`) is Undetermined." Undetermined
+//! resolves to ask in main and deny in a subagent. The original allow expectation is
+//! superseded; the gate was not changed.
 //!
-//! Asserted: main == "allow", subagent == "allow", for both command shapes.
-//! Controls (unquoted double-quoted, which DO expand): both return not allow (main) / deny (subagent).
+//! Asserted now: for both command shapes, main == "ask" and subagent == "deny".
+//! Controls (unquoted / double-quoted, which DO expand): main != allow, subagent == deny.
 //!
-//! DOES NOT PROVE: why the detector treats unquoted and double-quoted differently, behaviour
-//! with $$ or other expansions inside quotes, exact ast structure of bash's parse tree.
-//! Controls show the distinction exists (single/backslash vs double/unquoted differ in verdict).
+//! DOES NOT PROVE: behaviour with $$ or other expansions inside quotes, exact ast structure of
+//! bash's parse tree, or that quote-awareness is irrelevant for non-program fd redirections.
 //!
-//! RED written by an independent verifier, not the implementer.
+//! Original RED written by an independent verifier, not the implementer.
 
 #[path = "support/bounded.rs"]
 mod bounded;
@@ -114,13 +110,13 @@ fn check_not_allow(cmd: &str, tag: &str) {
 }
 
 #[test]
-fn bash_dup_single_quoted_dollar_fd_should_allow() {
+fn bash_dup_single_quoted_dollar_fd_is_undetermined_per_t2() {
     // T2 (2026-11-18, SUBSET.md item 23): Undetermined, not allow.
     check_undetermined("bash <&'$fd'", "single-quoted");
 }
 
 #[test]
-fn bash_dup_backslash_escaped_dollar_fd_should_allow() {
+fn bash_dup_backslash_escaped_dollar_fd_is_undetermined_per_t2() {
     // T2 (2026-11-18, SUBSET.md item 23): Undetermined, not allow.
     check_undetermined("bash <&\\$fd", "backslash-escaped");
 }

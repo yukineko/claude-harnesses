@@ -97817,3 +97817,66 @@ rev = "24263a0c84df3aa371ebc50c8bf923ccb7a83b5f"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "f3301770"
+title = 'blastguard fail-open: top-level "$P" rebinding (read/printf -v/P[0]=/{P}>/zsh print -v etc.) resolves to the stale static value and Allows a write to /etc/hosts'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Found 2026-11-28 by the opus verifier of c512596e (flow eaa077f4); RED written by an independent sonnet agent, committed 1a99a2dcb (blastguard 0.2.959): 18 of 18 shapes Allow on 24263a0c8, control passes. Shell behaviour measured (bash 3.2.57 / zsh 5.9) per test file header. Pre-existing on base, not introduced by c512596e."
+created_at = 1795794341
+updated_at = 1795797719
+weight = 0.0
+issue_number = 1997
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1997"
+issue_closed_at = 1795797722
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_toplevel_rebind_fail_open -- --ignored"
+rev = "1a99a2dcba93e2c5057c35b2b531202fff4b3be6"
+observed_at = 1795794341
+detail = """
+exit 101: d v0.2.959 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.23s
+     Running tests/backlog_20261128_toplevel_rebind_fail_open.rs (target/debug/deps/backlog_20261128_toplevel_rebind_fail_open-c13ac450eed2f58b)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_toplevel_rebind_fail_open`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_toplevel_rebind_fail_open"
+exit = 0
+passed = 2
+rev = "55a3acce82756ca8ea5aed9cc2b23f49cffbd12a"
+observed_at = 1795797712
+output_digest = "sha256:1d044638631e05024f6761605b27042f3252e4799b43a0a4773c6ef566632504"
+excerpt = """
+
+running 2 tests
+test control_resolution_still_allows_confined_and_denies_system ... ok
+test toplevel_rebind_between_assignment_and_redirect_is_never_allow ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.77s
+
+   Compiling blastguard v0.2.970 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.84s
+     Running tests/backlog_20261128_toplevel_rebind_fail_open.rs (target/debug/deps/backlog_20261128_toplevel_rebind_fail_open-0f9a119313d8a228)
+"""
+
+[task.closure.red]
+rev = "1a99a2dcba93e2c5057c35b2b531202fff4b3be6"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

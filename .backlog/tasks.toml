@@ -274,37 +274,6 @@ exit 101: d out; finished in 0.23s
 error: test failed, to rerun pass `-p blastguard --test redirect_target_resolution`"""
 
 [[task]]
-id = "30136835"
-title = "blastguard FP: python3 heredoc program text '=> return' (Rust match arm inside a python string) refused as a RELATIVE redirect after a literal cd"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-22 (main 81fbc18a5; t4 worker of condukt run run-20261121-225214-62742, relay bgr-ca5962ec07a4). Command shape: cd <literal existing dir> && grep -n \"pub struct Word\\|pub use.*Word\" ast/*.rs ast.rs 2>/dev/null | head; python3 - <<'EOF' ... s.replace('''...''','''...Some(\"eval\") => return true,...''') ... open(p,'w').write(s) EOF. Reason (main ask / subagent deny): \"'> return' is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve\". The cd target is a literal existing dir and '>' is inside a python string in a quoted heredoc fed to python3 - (memory heredoc-body-by-target-language). The RED replays the verbatim command; a reduced form (one replace, literal cd, no glob/escaped grep pattern) does NOT reproduce and is kept as a passing control, so the trigger is not isolated. Readings: (a) FP; (b) intended: none found. Related: a2d36aa2 (same reason text, needs unresolvable cd)."
-created_at = 1795273990
-updated_at = 1795273990
-weight = 0.0
-issue_number = 1962
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1962"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261122_python_heredoc_arrow_gt_fp -- --ignored verbatim"
-rev = "e8655401e066aea97b711dc658ab0954c4dacda3"
-observed_at = 1795273990
-detail = """
-exit 101:  v0.2.897 (/Users/yuki/.condukt/worktrees/sidefind3-eaa077f4/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.77s
-     Running tests/backlog_20261122_python_heredoc_arrow_gt_fp.rs (target/debug/deps/backlog_20261122_python_heredoc_arrow_gt_fp-ce1ae958ba2e036d)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261122_python_heredoc_arrow_gt_fp`"""
-
-[[task]]
 id = "2e03e8c3"
 title = "condukt testscope: rerun key ignores CARGO_TARGET_DIR, so a run contaminated by a shared target dir blocks an isolated rerun on the same tree"
 project = "/Users/yuki/src/harness"

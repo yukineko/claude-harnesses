@@ -146,8 +146,14 @@ fn w(path: &str, later: &str) -> String {
 fn v596_cargo_run_spellings_not_allow() {
     let cases = [
         ("cargo_r", w("src/main.rs", "cargo r")),
-        ("cargo_plus_nightly_run", w("src/main.rs", "cargo +nightly run")),
-        ("cargo_manifest_path_run", w("src/main.rs", "cargo --manifest-path {DIR}/Cargo.toml run")),
+        (
+            "cargo_plus_nightly_run",
+            w("src/main.rs", "cargo +nightly run"),
+        ),
+        (
+            "cargo_manifest_path_run",
+            w("src/main.rs", "cargo --manifest-path {DIR}/Cargo.toml run"),
+        ),
         ("cargo_q_run", w("src/main.rs", "cargo -q run")),
         ("cargo_bench", w("benches/b.rs", "cargo bench")),
         ("cargo_build_rs_upper", w("BUILD.RS", "cargo build")),
@@ -162,8 +168,14 @@ fn v596_cargo_run_spellings_not_allow() {
 fn v596_cargo_via_wrapper_not_allow() {
     let cases = [
         ("env_cargo_run", w("src/main.rs", "env cargo run")),
-        ("abs_cargo_run", w("src/main.rs", "{DIR}/../../home/.cargo/bin/cargo run")),
-        ("rustup_run_cargo_run", w("src/main.rs", "rustup run stable cargo run")),
+        (
+            "abs_cargo_run",
+            w("src/main.rs", "{DIR}/../../home/.cargo/bin/cargo run"),
+        ),
+        (
+            "rustup_run_cargo_run",
+            w("src/main.rs", "rustup run stable cargo run"),
+        ),
         ("command_cargo_run", w("src/main.rs", "command cargo run")),
         ("cargo_dash_run", w("src/main.rs", "cargo-run")),
         ("env_cargo_build_rs", w("build.rs", "env cargo build")),
@@ -214,16 +226,24 @@ fn v596_fp_controls_allow() {
         ("lib_cargo_test_p", mk("src/lib.rs", "cargo test -p foo")),
         ("lib_cargo_fmt", mk("src/lib.rs", "cargo fmt")),
         ("lib_cargo_check", mk("src/lib.rs", "cargo check")),
-        ("lib_cargo_clippy", mk("src/lib.rs", "cargo clippy --all-targets")),
+        (
+            "lib_cargo_clippy",
+            mk("src/lib.rs", "cargo clippy --all-targets"),
+        ),
         ("cargo_toml_cargo_test", mk("Cargo.toml", "cargo test")),
-        ("notes_config_dir_cargo_test", mk("notes/config", "cargo test")),
+        (
+            "notes_config_dir_cargo_test",
+            mk("notes/config", "cargo test"),
+        ),
         (
             "heredoc_then_for_loop",
             format!("cat > {{DIR}}/a.md <<'EOF'\n{lib}\nEOF\nfor f in a b; do echo $f; done"),
         ),
         (
             "heredoc_then_if",
-            format!("cat > {{DIR}}/a.md <<'EOF'\n{lib}\nEOF\nif [ -f {{DIR}}/a.md ]; then echo ok; fi"),
+            format!(
+                "cat > {{DIR}}/a.md <<'EOF'\n{lib}\nEOF\nif [ -f {{DIR}}/a.md ]; then echo ok; fi"
+            ),
         ),
         (
             "heredoc_then_dbl_bracket",

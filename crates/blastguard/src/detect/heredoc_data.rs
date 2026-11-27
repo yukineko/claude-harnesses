@@ -507,24 +507,26 @@ fn cargo_test_or_build(c: &SimpleCommand) -> bool {
 ///   their aliases) executes a Rust source the line just wrote (`src/main.rs`,
 ///   `src/bin/x.rs`, `examples/x.rs`); the B-4 ruling covers only the bare
 ///   `test` / `build` spelling, not these;
-/// * ANY cargo invocation runs a build script (`build.rs`) and reads the
-///   cargo configuration (`config` / `config.toml`, which can name a
-///   `rustc-wrapper` or runner) that lies on its path, so a landing file of
-///   that name is executed by `cargo build` too.
+/// * ANY cargo invocation runs a build script (`build.rs`), so a landing file
+///   of that name is executed by `cargo build` too. The cargo configuration
+///   (`.cargo/config.toml`) is NOT judged here: this view holds basenames
+///   only, which cannot tell it from `notes/config`; `ast::cargo_floor` reads
+///   the directory.
 ///
 /// An undetermined cargo word (or subcommand) cannot exclude either, so it is
-/// treated as a possible run. The result is [`Naming::Undetermined`]: the body
-/// (not shell code) is removed and an Allow is floored at Ask, the same
-/// refusal to guess as for an unseen program file.
+/// treated as a possible run. The caller maps `true` to [`Naming::Runs`]: the
+/// body (not shell code) is removed and an Allow is Ask even when the body
+/// read as shell would be Allow ([`Unsure::Runs`]; the weaker
+/// [`Naming::Undetermined`] floor would let that Allow stand). This is the
+/// data-view half; `ast::cargo_floor` applies the same rule to the whole line
+/// whatever wrote the file and however cargo is reached.
 fn cargo_may_run_landing(c: &SimpleCommand, landing: &[String]) -> bool {
     if !matches!(c.argv.first().map(|w| &w.value), Some(Value::Literal(h)) if h == "cargo") {
         return false;
     }
     let lower: Vec<String> = landing.iter().map(|l| l.to_ascii_lowercase()).collect();
     let ends = |l: &str, ext: &str| l.ends_with(ext);
-    let build_time = lower
-        .iter()
-        .any(|l| matches!(basename(l), "build.rs" | "config" | "config.toml"));
+    let build_time = lower.iter().any(|l| basename(l) == "build.rs");
     let source = lower.iter().any(|l| ends(l, ".rs") || ends(l, ".toml"));
     if !build_time && !source {
         return false;
@@ -1498,7 +1500,7 @@ mod tests {
     }
 
     /// Backlog 596ef57d: cargo executes a landing `.rs` (`cargo run`) or a
-    /// `build.rs` / cargo config (any subcommand) without naming it, so an
+    /// `build.rs` (any subcommand) without naming it, so an
     /// Allow becomes Ask; bare `cargo build` / `cargo test` over an ordinary
     /// `.rs` stays the B-4 ruling (no floor).
     #[test]
@@ -1510,7 +1512,6 @@ mod tests {
             ("/w/x.rs", "cargo run --manifest-path /w/Cargo.toml", true),
             ("/w/build.rs", "cargo build", true),
             ("/w/build.rs", "cargo test", true),
-            ("/w/.cargo/config.toml", "cargo check", true),
             ("/w/x.rs", "cargo build", false),
             ("/w/x.rs", "cargo test", false),
             ("/w/x.rs", "cargo fmt", false),

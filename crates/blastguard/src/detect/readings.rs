@@ -256,6 +256,10 @@ fn every_reading_on_line(c: &str, scope: &SafeRoots) -> Decision {
     if let Some(deny) = acc.record(super::ast::deny_target_verdict(c, scope)) {
         return deny;
     }
+    // Backlog 596ef57d: cargo runs a written source / build.rs / config.
+    if let Some(deny) = acc.record(super::ast::cargo_floor_verdict(c)) {
+        return deny;
+    }
     let before_b5 = acc.finish();
     // S4: the standalone Table B.5 layer; it only raises (`max(B.5, …)`).
     super::ast::b5::raise(

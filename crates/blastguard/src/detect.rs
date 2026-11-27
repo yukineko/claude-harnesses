@@ -113,7 +113,7 @@ use verdict_acc::VerdictAcc;
 
 #[cfg(test)]
 use budget::VISIT_PROBE;
-use budget::{depth_exhausted, take_budget, ANALYSIS_BUDGET, MAX_ANALYSIS_NODES, MAX_SHELL_DEPTH};
+use budget::{depth_exhausted, ANALYSIS_BUDGET, MAX_ANALYSIS_NODES, MAX_SHELL_DEPTH};
 
 pub(crate) use condukt::AUTONOMY_SELF_GRANT;
 use denoise::denoised_eval_rescan;
@@ -666,11 +666,11 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // hardens to the pre-existing DENY whenever no human is available to answer
     // (see `crate::interactive` and `Decision::hardened`) — so the fallback is
     // exactly as safe as the deny this replaced, never weaker.
-    if !take_budget() {
-        return Decision::ask(
-            "command is too complex to analyse within the safety budget — blastguard cannot vouch for it either way",
-        );
-    }
+    budget::admit(cmd, depth, || detect_bash_admitted(cmd, depth, ctx))
+}
+
+/// [`detect_bash`] after its budget checks.
+fn detect_bash_admitted(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let _ast_depth = ast::targets::enter_depth(depth); // AST values are depth 0's only.
     let narrowed = ctx.names_fixed_narrowed_by(cmd); // backlog 40dc52c0 (`names_fixed`)
     let ctx = narrowed.as_ref().unwrap_or(ctx);

@@ -63,86 +63,6 @@ exit 101: rc/.harness-worktrees/sidereds-20261116/crates/backlog)
 error: test failed, to rerun pass `-p backlog --test backlog_20261116_zero_tests_filtered_out_not_discard`"""
 
 [[task]]
-id = "ad6db3d8"
-title = "[bg-heredoc-script-failopen-596ef57d:R-aggregate-and-controls] 上の各 requirement を実装した後は、集約 attack テストが pass し、既存の FP control がすべて green のままになる（新たな false positive を出さない）。"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "spec",
-    "spec:bg-heredoc-script-failopen-596ef57d",
-    "req:bg-heredoc-script-failopen-596ef57d:R-aggregate-and-controls",
-    "p1",
-]
-touched_files = []
-status = "failed"
-notes = """
-specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-aggregate-and-controls から自動起票 (ratify 時).
-spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
-statement: 上の各 requirement を実装した後は、集約 attack テストが pass し、既存の FP control がすべて green のままになる（新たな false positive を出さない）。
-
-done_criteria (spec の acceptance を逐語で。言い換えないこと):
-  - `cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_attacks_are_not_allow` が pass する（HEAD 7415d8b29 では "22 of 653 attack cases are Allow" で FAILED と観測済み）
-  - `cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_fp_cases_stay_allow` が pass する
-  - `cargo test -p blastguard --test python_stdin_re_compile_fp_20261103` が pass する（fb_python_stdin_program_with_re_compile_is_allowed）
-  - `cargo test -p blastguard --test backlog_20261120_596ef57d_requirements` の ignore されていない 4 件（r_q2_reanchor, control_pure_call_re_compile_allow, control_subprocess_git_status_stdin_allow, control_ordinary_rs_then_cargo_test_allow）が pass する
-
-canon:
-  - 要望原文: "Controls: heredoc_script_fp_cases_stay_allow must stay green (no new false positive)."
-  - 要望原文: "Controls that must stay green: r_q2_reanchor, control_pure_call_re_compile_allow, control_subprocess_git_status_stdin_allow, control_ordinary_rs_then_cargo_test_allow, heredoc_script_fp_cases_stay_allow, python_stdin_re_compile_fp_20261103."
-  - crates/blastguard/tests/heredoc_script_failopen_red_20261108.rs:680-701
-
-cannot pass this run: depends on all 596ef57d requirements. @49f68b14f '7 of 653 attack cases are Allow': stdin_x_loop_subprocess_shell, c_kill_all (peer run-20261121-042409-20321), v_nested_fake_eof, h_rs_cargo_script, h_rs_build_rs (stopped for rulings), h_heredoc_bs_quoted_cmdsub, h_heredoc_dq_delim_cmdsub (R-q2-reanchor; who re-anchors the aggregate test is unresolved) | RULED 2026-11-21 by user: aggregate re-anchor by an independent verifier-type agent (see 596ef57d rulings); unblocked once R-fakeeof/R-cargo/Q3/Q5 land."""
-created_at = 1795109428
-updated_at = 1795220548
-defer_until = 1795377313
-weight = 0.0
-issue_number = 1875
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1875"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_attacks_are_not_allow"
-rev = "5be205c1791a3cad8e8669323dd8b56ccae60a3b"
-observed_at = 1795109428
-detail = """
-exit 101: mpiling blastguard v0.2.757 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.60s
-     Running tests/heredoc_script_failopen_red_20261108.rs (target/debug/deps/heredoc_script_failopen_red_20261108-822eb2aee4979ab1)
-error: test failed, to rerun pass `-p blastguard --test heredoc_script_failopen_red_20261108`"""
-
-[[task]]
-id = "7d85ed1e"
-title = "blastguard FP: unquoted echo feeder piped to bash (echo a | bash) is Ask"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-20 in run-20261120-071122-49691 task a-brace-group-feeder-piped-to-shell at 0b906f524 (and on main 5cfe8e73e): 'echo a | bash' and 'echo hi | bash' are ask: '`bash` takes its program from stdin, and that program is not on the command line — blastguard has no text to read, so it cannot tell whether anything here is irreversible'. Unquoted echo words are not read as literals, while quoted "echo 'echo hi' | bash" and (after the 7eb86bb3 fix) '{ echo a; echo b; } | bash' are Allow. Unknown programs default Allow (ruling 2026-11-17)."""
-created_at = 1795127934
-updated_at = 1795127934
-weight = 0.0
-issue_number = 1880
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1880"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp -- --include-ignored"
-rev = "dfd2fa9e67f85ea5ab6c579f94b017065ec8aad1"
-observed_at = 1795127934
-detail = """
-exit 101: group-feeder-piped-to-shell/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.93s
-     Running tests/backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp.rs (target/debug/deps/backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp-71b6ff5cfd040988)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp`"""
-
-[[task]]
 id = "61b6ba67"
 title = "blastguard FP: subagent denied (S5 Undetermined) for mkdir -p scratchpad && cd scratchpad && python3 - <<EOF (import json,re)"
 project = "/Users/yuki/src/harness"
@@ -279,14 +199,17 @@ tags = [
     "p2",
 ]
 touched_files = []
-status = "pending"
-notes = "Found by the independent test author of e1bb5f7e round 2 (e6143fe87). Ignored RED sudo_perl_herestring_not_deny in crates/blastguard/tests/backlog_20261120_e1bb5f7e_adversarial_r2.rs. Driver noted Ask(main)/Deny(subagent) is the standard parity for an Undetermined perl stdin program, so the fix may be to re-anchor the test rather than change blastguard; decide with the perl ruling."
+status = "failed"
+notes = """
+Found by the independent test author of e1bb5f7e round 2 (e6143fe87). Ignored RED sudo_perl_herestring_not_deny in crates/blastguard/tests/backlog_20261120_e1bb5f7e_adversarial_r2.rs. Driver noted Ask(main)/Deny(subagent) is the standard parity for an Undetermined perl stdin program, so the fix may be to re-anchor the test rather than change blastguard; decide with the perl ruling.
+flow eaa077f4 2026-11-27: skipped — judgment Ask: sudo floor is Ask in main and Ask->Deny in subagent is the designed parity, so the RED's not-Deny expectation may need re-anchoring; re-anchoring an unhedged assert needs a user ruling (perl stdin Undetermined parity)"""
 created_at = 1795179845
-updated_at = 1795179845
+updated_at = 1795785399
+defer_until = 1795958199
 weight = 0.0
 issue_number = 1903
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1903"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -413,14 +336,17 @@ tags = [
     "p2",
 ]
 touched_files = []
-status = "pending"
-notes = """Observed 2026-11-21 on main 5885347f4 (run-20261121-114321-94421 base measurement, run4-integ worktree): cargo test -p blastguard --test inline_eval_mirror_closure => 'test result: FAILED. 14 passed; 3 failed'. Failing: bundled_short_eval_flag_matches_unbundled (inline_eval_mirror_closure.rs:236: expected Allow for `python3 -ic "print(1)"`, left: Ask("`python -i` keeps reading code from stdin after the program — blastguard cannot judge what the Python program would do (S5: Undetermined)")), stdin_mirror_verdict_must_come_from_the_program_not_from_elsewhere_on_the_line (:465), benign_inline_payload_is_allowed_and_the_allow_is_earned_by_reading (:219). Readings: (a) real FP regression from the S5 python layer; (b) intended per the S5 ruling (python -i reads stdin) and the asserts are stale -> needs a ruling to re-anchor. Distinguish by git log -S 'keeps reading code from stdin' and the S5 ruling memory."""
+status = "failed"
+notes = """
+Observed 2026-11-21 on main 5885347f4 (run-20261121-114321-94421 base measurement, run4-integ worktree): cargo test -p blastguard --test inline_eval_mirror_closure => 'test result: FAILED. 14 passed; 3 failed'. Failing: bundled_short_eval_flag_matches_unbundled (inline_eval_mirror_closure.rs:236: expected Allow for `python3 -ic "print(1)"`, left: Ask("`python -i` keeps reading code from stdin after the program — blastguard cannot judge what the Python program would do (S5: Undetermined)")), stdin_mirror_verdict_must_come_from_the_program_not_from_elsewhere_on_the_line (:465), benign_inline_payload_is_allowed_and_the_allow_is_earned_by_reading (:219). Readings: (a) real FP regression from the S5 python layer; (b) intended per the S5 ruling (python -i reads stdin) and the asserts are stale -> needs a ruling to re-anchor. Distinguish by git log -S 'keeps reading code from stdin' and the S5 ruling memory.
+flow eaa077f4 2026-11-27: skipped — judgment Ask: reading (a) S5 FP regression vs (b) intended (python -i keeps reading stdin) with stale asserts needs a user ruling before re-anchoring; the :465 and :219 failures were not separately classified"""
 created_at = 1795229073
-updated_at = 1795229073
+updated_at = 1795785411
+defer_until = 1795958211
 weight = 0.0
 issue_number = 1945
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1945"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -537,14 +463,17 @@ tags = [
     "p2",
 ]
 touched_files = []
-status = "pending"
-notes = """Observed 2026-11-22 (measured at main 6297db165), flow batch #10, run run-20261121-220650-69750 task t2. (1) In a condukt task worktree at tree 66dd15dc8, tdd green --task t2 --cmd "cargo test -p blastguard --test backlog_20261121_quoted_heredoc_body_gt_fp -- --include-ignored" ran with the SHARED CARGO_TARGET_DIR=/Users/yuki/src/harness/target; another worktree was building blastguard into the same dir, likely overwriting the binary the test runs via CARGO_BIN_EXE_blastguard; the run failed with the pre-fix verdict. (2) Same tree in a scratch checkout with isolated CARGO_TARGET_DIR passed 4/4. (3) Rerun in the task worktree with isolated CARGO_TARGET_DIR (user-authorised once) was refused by the PreToolUse testscope hook, verbatim: rerun refused: tdd green --cmd cargo test -p blastguard --test backlog_20261121_quoted_heredoc_body_gt_fp -- --include-ignored already ran on this exact tree (66dd15dc8bfb64e8a54eba54ec8a77bb1e7f73ad:1dcbe1ce95dcba8e at /Users/yuki/.condukt/worktrees/run-20261121-220650-69750-t2); running the same test twice is forbidden (user ruling 2026-11-07). Change the code first, or move on. Key in crates/condukt/src/testscope/rerun.rs is tree+command, no execution environment. UNDETERMINED between: (a) defect: key should include build-output location (CARGO_TARGET_DIR); (b) intended: 2026-11-07 ruling forbids any rerun on same tree. Tell apart: ask the user whether the ruling covers a rerun differing only by CARGO_TARGET_DIR; yes -> close won't-do, no -> fix key. 2026-11-22 この手動 invalidate を 1 回行った（ユーザー裁定）: main appended `invalidate\ttoolu_01XTMV7gX3caghPoao8Z9Q4Y` to ~/.condukt/testscope/ledger.v2.tsv (line 2849). The isolated rerun was STILL refused with the identical deny text above (not ask); the legacy ~/.condukt/testscope/ledger.tsv still holds the same tree+command row (line 3013), which the invalidate does not cover."""
+status = "failed"
+notes = """
+Observed 2026-11-22 (measured at main 6297db165), flow batch #10, run run-20261121-220650-69750 task t2. (1) In a condukt task worktree at tree 66dd15dc8, tdd green --task t2 --cmd "cargo test -p blastguard --test backlog_20261121_quoted_heredoc_body_gt_fp -- --include-ignored" ran with the SHARED CARGO_TARGET_DIR=/Users/yuki/src/harness/target; another worktree was building blastguard into the same dir, likely overwriting the binary the test runs via CARGO_BIN_EXE_blastguard; the run failed with the pre-fix verdict. (2) Same tree in a scratch checkout with isolated CARGO_TARGET_DIR passed 4/4. (3) Rerun in the task worktree with isolated CARGO_TARGET_DIR (user-authorised once) was refused by the PreToolUse testscope hook, verbatim: rerun refused: tdd green --cmd cargo test -p blastguard --test backlog_20261121_quoted_heredoc_body_gt_fp -- --include-ignored already ran on this exact tree (66dd15dc8bfb64e8a54eba54ec8a77bb1e7f73ad:1dcbe1ce95dcba8e at /Users/yuki/.condukt/worktrees/run-20261121-220650-69750-t2); running the same test twice is forbidden (user ruling 2026-11-07). Change the code first, or move on. Key in crates/condukt/src/testscope/rerun.rs is tree+command, no execution environment. UNDETERMINED between: (a) defect: key should include build-output location (CARGO_TARGET_DIR); (b) intended: 2026-11-07 ruling forbids any rerun on same tree. Tell apart: ask the user whether the ruling covers a rerun differing only by CARGO_TARGET_DIR; yes -> close won't-do, no -> fix key. 2026-11-22 この手動 invalidate を 1 回行った（ユーザー裁定）: main appended `invalidate\ttoolu_01XTMV7gX3caghPoao8Z9Q4Y` to ~/.condukt/testscope/ledger.v2.tsv (line 2849). The isolated rerun was STILL refused with the identical deny text above (not ask); the legacy ~/.condukt/testscope/ledger.tsv still holds the same tree+command row (line 3013), which the invalidate does not cover.
+flow eaa077f4 2026-11-27: skipped — judgment Ask: needs user ruling whether the 2026-11-07 no-rerun ruling covers a rerun differing only by CARGO_TARGET_DIR (yes → won't-do, no → fix key)"""
 created_at = 1795278689
-updated_at = 1795278689
+updated_at = 1795785688
+defer_until = 1795958488
 weight = 0.0
 issue_number = 1967
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1967"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -568,14 +497,17 @@ tags = [
     "p2",
 ]
 touched_files = []
-status = "pending"
-notes = """Observed 2026-11-22 at main rev 6ae161ee7 after condukt run run-20261122-020202-63344 (fix ba09708a). Verbatim (crates/blastguard/src/detect/readonly.rs env_selects_pager docstring): 'Any of them whose name part ... is one of the two variables counts, WHATEVER the value: `ACK_PAGER=less`, `ACK_PAGER=` and an unresolvable `ACK_PAGER="$X"` all lose the exemption, as every `--pager=…` value does.' Sibling rule crates/blastguard/src/detect/executors.rs env_exec_var_verdict: 'Some(v) if v.trim().is_empty() => Decision::Allow'. RED: 'ACK_PAGER= ack pat .githooks/pre-commit' expected Allow for subagent=false and true; controls: plain ack Allow, ACK_PAGER=sh not Allow. Readings: (a) defect -- an empty value runs no program, so refusing it is a gate FP (memory false-positives-not-tolerated), inconsistent with env_exec_var_verdict; (b) intended -- uniform restrictive over-ask chosen deliberately by ba09708a's docstring. Tell apart: whether ack treats an empty ACK_PAGER as 'no pager' (ack's source / a run of real ack); if ack runs an empty pager command or falls through to another source, (b) holds. DOES NOT PROVE: real ack behaviour (ack not installed on the filing machine, NOT observed); ACK_PAGER='' / "" spellings; ACK_PAGER_COLOR=."""
+status = "failed"
+notes = """
+Observed 2026-11-22 at main rev 6ae161ee7 after condukt run run-20261122-020202-63344 (fix ba09708a). Verbatim (crates/blastguard/src/detect/readonly.rs env_selects_pager docstring): 'Any of them whose name part ... is one of the two variables counts, WHATEVER the value: `ACK_PAGER=less`, `ACK_PAGER=` and an unresolvable `ACK_PAGER="$X"` all lose the exemption, as every `--pager=…` value does.' Sibling rule crates/blastguard/src/detect/executors.rs env_exec_var_verdict: 'Some(v) if v.trim().is_empty() => Decision::Allow'. RED: 'ACK_PAGER= ack pat .githooks/pre-commit' expected Allow for subagent=false and true; controls: plain ack Allow, ACK_PAGER=sh not Allow. Readings: (a) defect -- an empty value runs no program, so refusing it is a gate FP (memory false-positives-not-tolerated), inconsistent with env_exec_var_verdict; (b) intended -- uniform restrictive over-ask chosen deliberately by ba09708a's docstring. Tell apart: whether ack treats an empty ACK_PAGER as 'no pager' (ack's source / a run of real ack); if ack runs an empty pager command or falls through to another source, (b) holds. DOES NOT PROVE: real ack behaviour (ack not installed on the filing machine, NOT observed); ACK_PAGER='' / "" spellings; ACK_PAGER_COLOR=.
+flow eaa077f4 2026-11-27: reject (unmeasured) — ack3 source: pager = ACK_PAGER_COLOR || ACK_PAGER gives '' which is defined, so set_up_pager('') runs open(|-, ''); what Perl does with an empty pipe command was not observed (perl probe denied in driver+subagent). Current Ask is the restrictive side."""
 created_at = 1795282302
-updated_at = 1795282302
+updated_at = 1795785761
+defer_until = 1795958561
 weight = 0.0
 issue_number = 1972
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1972"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

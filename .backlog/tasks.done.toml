@@ -96759,3 +96759,128 @@ rev = "fb8f298fc248406074e1715268f980d7e8380e9f"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "ad6db3d8"
+title = "[bg-heredoc-script-failopen-596ef57d:R-aggregate-and-controls] 上の各 requirement を実装した後は、集約 attack テストが pass し、既存の FP control がすべて green のままになる（新たな false positive を出さない）。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:bg-heredoc-script-failopen-596ef57d",
+    "req:bg-heredoc-script-failopen-596ef57d:R-aggregate-and-controls",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+specforge が spec bg-heredoc-script-failopen-596ef57d の requirement R-aggregate-and-controls から自動起票 (ratify 時).
+spec title: blastguard: heredoc/stdin script attacks judged Allow (596ef57d)
+statement: 上の各 requirement を実装した後は、集約 attack テストが pass し、既存の FP control がすべて green のままになる（新たな false positive を出さない）。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - `cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_attacks_are_not_allow` が pass する（HEAD 7415d8b29 では "22 of 653 attack cases are Allow" で FAILED と観測済み）
+  - `cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_fp_cases_stay_allow` が pass する
+  - `cargo test -p blastguard --test python_stdin_re_compile_fp_20261103` が pass する（fb_python_stdin_program_with_re_compile_is_allowed）
+  - `cargo test -p blastguard --test backlog_20261120_596ef57d_requirements` の ignore されていない 4 件（r_q2_reanchor, control_pure_call_re_compile_allow, control_subprocess_git_status_stdin_allow, control_ordinary_rs_then_cargo_test_allow）が pass する
+
+canon:
+  - 要望原文: "Controls: heredoc_script_fp_cases_stay_allow must stay green (no new false positive)."
+  - 要望原文: "Controls that must stay green: r_q2_reanchor, control_pure_call_re_compile_allow, control_subprocess_git_status_stdin_allow, control_ordinary_rs_then_cargo_test_allow, heredoc_script_fp_cases_stay_allow, python_stdin_re_compile_fp_20261103."
+  - crates/blastguard/tests/heredoc_script_failopen_red_20261108.rs:680-701
+
+cannot pass this run: depends on all 596ef57d requirements. @49f68b14f '7 of 653 attack cases are Allow': stdin_x_loop_subprocess_shell, c_kill_all (peer run-20261121-042409-20321), v_nested_fake_eof, h_rs_cargo_script, h_rs_build_rs (stopped for rulings), h_heredoc_bs_quoted_cmdsub, h_heredoc_dq_delim_cmdsub (R-q2-reanchor; who re-anchors the aggregate test is unresolved) | RULED 2026-11-21 by user: aggregate re-anchor by an independent verifier-type agent (see 596ef57d rulings); unblocked once R-fakeeof/R-cargo/Q3/Q5 land.
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_attacks_are_not_allow; rev: 68380f7991bdb8e4163b5f6d5cfd3a64faddc971; observed: exit 0: esult: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 77.25s
+
+   Compiling blastguard v0.2.946 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.60s
+     Running tests/heredoc_script_failopen_red_20261108.rs (target/debug/deps/heredoc_script_failopen_red_20261108-de94c481747848e2)"""
+created_at = 1795109428
+updated_at = 1795785507
+weight = 0.0
+issue_number = 1875
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1875"
+issue_closed_at = 1795785511
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_attacks_are_not_allow"
+rev = "5be205c1791a3cad8e8669323dd8b56ccae60a3b"
+observed_at = 1795109428
+detail = """
+exit 101: mpiling blastguard v0.2.757 (/Users/yuki/src/.harness-worktrees/session-8abb4dc6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.60s
+     Running tests/heredoc_script_failopen_red_20261108.rs (target/debug/deps/heredoc_script_failopen_red_20261108-822eb2aee4979ab1)
+error: test failed, to rerun pass `-p blastguard --test heredoc_script_failopen_red_20261108`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = """
+auto-cancel by `backlog next --claim` (user ruling 2026-11-13 「保留はありえない実証されないならclose,実証されたらopen」): the stored repro was re-run and did NOT demonstrate the defect. verdict: not-reproduced; exit 0; cmd: cargo test -p blastguard --test heredoc_script_failopen_red_20261108 heredoc_script_attacks_are_not_allow; rev: 68380f7991bdb8e4163b5f6d5cfd3a64faddc971; observed: exit 0: esult: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 77.25s
+
+   Compiling blastguard v0.2.946 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.60s
+     Running tests/heredoc_script_failopen_red_20261108.rs (target/debug/deps/heredoc_script_failopen_red_20261108-de94c481747848e2)"""
+
+[[task]]
+id = "7d85ed1e"
+title = "blastguard FP: unquoted echo feeder piped to bash (echo a | bash) is Ask"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-20 in run-20261120-071122-49691 task a-brace-group-feeder-piped-to-shell at 0b906f524 (and on main 5cfe8e73e): 'echo a | bash' and 'echo hi | bash' are ask: '`bash` takes its program from stdin, and that program is not on the command line — blastguard has no text to read, so it cannot tell whether anything here is irreversible'. Unquoted echo words are not read as literals, while quoted "echo 'echo hi' | bash" and (after the 7eb86bb3 fix) '{ echo a; echo b; } | bash' are Allow. Unknown programs default Allow (ruling 2026-11-17)."""
+created_at = 1795127934
+updated_at = 1795785777
+weight = 0.0
+issue_number = 1880
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1880"
+issue_closed_at = 1795785780
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp -- --include-ignored"
+rev = "dfd2fa9e67f85ea5ab6c579f94b017065ec8aad1"
+observed_at = 1795127934
+detail = """
+exit 101: group-feeder-piped-to-shell/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.93s
+     Running tests/backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp.rs (target/debug/deps/backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp-71b6ff5cfd040988)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp"
+exit = 0
+passed = 2
+rev = "85f75c47ed88d4fe4037ec36daf56fdea42ecc54"
+observed_at = 1795785770
+output_digest = "sha256:ce6d15e0451421e567f8e123a4a75f75a8321115c00f70095a632723af387506"
+excerpt = """
+
+running 2 tests
+test unquoted_echo_feeder_piped_to_bash_is_allow ... ok
+test control_group_and_quoted_feeders_are_allow ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+
+   Compiling blastguard v0.2.947 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.13s
+     Running tests/backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp.rs (target/debug/deps/backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp-6d8f06a886b6d215)
+"""
+
+[task.closure.red]
+rev = "68380f7991bdb8e4163b5f6d5cfd3a64faddc971"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

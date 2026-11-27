@@ -103,12 +103,21 @@ mb="${du_out%%[!0-9]*}"
 if [ "$mb" -gt "$cap" ]; then
   echo "cap-target-dir: $target_dir is ${mb}MB, over the ${cap}MB cap (CARGO_TARGET_CAP_MB) — running cargo clean before this build" >&2
   # Even a failed clean is not a build failure; the build below can still run
-  # against whatever survived.
-  cargo clean || true
-  # Leave observable evidence that a clean happened, for callers that need to
-  # tell "binary deleted under my run" from a genuine failure (see
-  # test-changed-crates.sh). Kept INSIDE the target dir (ignored by git; the dir was just
-  # emptied, so it is recreated). Content = epoch seconds. Best effort: failure to write it only
-  # means the caller reports the ordinary failure.
-  mkdir -p "$target_dir" && date +%s > "$target_dir/.cap-cleaned-at" || true
+  # against whatever survived. So the script carries on and exits 0 — but the
+  # clean's exit status is KEPT, because the marker below must not claim a
+  # clean that did not happen.
+  clean_rc=0
+  cargo clean || clean_rc=$?
+  if [ "$clean_rc" -ne 0 ]; then
+    # No marker: .cap-cleaned-at is evidence that a clean HAPPENED, and a failed
+    # clean is not one. State the failure instead of hiding it.
+    echo "cap-target-dir: cargo clean FAILED (exit $clean_rc) — $target_dir was not cleaned; .cap-cleaned-at not written" >&2
+  else
+    # Leave observable evidence that a clean happened, for callers that need to
+    # tell "binary deleted under my run" from a genuine failure (see
+    # test-changed-crates.sh). Kept INSIDE the target dir (ignored by git; the dir was just
+    # emptied, so it is recreated). Content = epoch seconds. Best effort: failure to write it only
+    # means the caller reports the ordinary failure.
+    mkdir -p "$target_dir" && date +%s > "$target_dir/.cap-cleaned-at" || true
+  fi
 fi

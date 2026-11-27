@@ -36,11 +36,23 @@ fn rebound_variables_are_never_allow() {
         "f(){ local MATCH=/home/yuki/proj/ok.log; [[ /etc/hosts =~ .* ]]; echo hi > \"$MATCH\"; }; f"
             .to_string(),
         "MATCH=/home/yuki/proj/ok.log; [[ /etc/hosts =~ .* ]]; echo hi > \"$MATCH\"".to_string(),
+        // `{P}>file` assigns an fd number to P (zsh 5.9: `[11]`), so the real
+        // write is /etc/11 after the `cd`.
+        format!("{l}cd /etc; echo x {{P}}>/dev/null; {w}; }}; f"),
+        format!("{l}echo x {{P}}>/dev/null; cd /etc; {w}; }}; f"),
+        format!("{l}cd /etc; : {{P}}</dev/null; {w}; }}; f"),
+        format!("{l}cd /etc; true {{P}}>&-; {w}; }}; f"),
+        format!("{l}cd /etc; cat /dev/null {{P}}<>/dev/null; {w}; }}; f"),
     ];
     for c in &cases {
+        let d = scoped(c);
         assert!(
-            !matches!(scoped(c), Decision::Allow),
+            !matches!(d, Decision::Allow),
             "rebound variable resolved to Allow: {c}"
+        );
+        assert!(
+            d.clone().hardened().is_deny(),
+            "no human to answer must harden to Deny: {c} -> {d:?}"
         );
     }
 }

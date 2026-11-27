@@ -86,7 +86,22 @@ impl LocalTrust {
                     })
             }
         };
-        self.risk |= risky;
+        // `{NAME}>file` / `{NAME}<f` / `{NAME}>&-` (zsh, bash) assigns an fd
+        // number to NAME; the parser leaves `{NAME}` as an ordinary word, so
+        // any such word on ANY command (listed or not) drops the trust.
+        let fd_var = sc.argv.iter().any(|w| match &w.value {
+            Value::Literal(s) => {
+                s.len() > 2
+                    && s.starts_with('{')
+                    && s.ends_with('}')
+                    && s[1..]
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            }
+            Value::Undetermined(_) => false,
+        });
+        self.risk |= risky || fd_var;
     }
 }
 

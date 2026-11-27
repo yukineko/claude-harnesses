@@ -183,6 +183,22 @@ fn run_testscope_confirm() {
         .get("tool_use_id")
         .and_then(|t| t.as_str())
         .filter(|t| !t.is_empty());
+    // PostToolUseFailure only (`error` field): a wrapper (tdd) that refused
+    // before the test ran is not a run; invalidate the pending row instead of
+    // confirming it. Any real failure (e.g. cargo exit 101) falls through to
+    // confirmation. Only for a call that actually carries a test command.
+    let failure_text = v.get("error").and_then(|e| e.as_str());
+    if let (Some(text), Some(id)) = (failure_text, tool_use_id) {
+        if testscope::failure_shows_runner_never_started(text) {
+            if let Err(e) = testscope::invalidate(&ledger, id) {
+                testscope_confirm_message(&format!(
+                    "condukt testscope-confirm: the refused wrapper call could not be \
+                     invalidated ({e}); its row stays pending, so a rerun will ask"
+                ));
+            }
+            return;
+        }
+    }
     if let Err(e) = testscope::confirm_post(command, &cwd, home.as_deref(), &ledger, tool_use_id) {
         testscope_confirm_message(&format!(
             "condukt testscope-confirm: the confirmation of this test run was NOT recorded \

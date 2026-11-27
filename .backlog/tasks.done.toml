@@ -96390,3 +96390,66 @@ rev = "773cdd4244caf7991e30d5768641fc16524b4dfa"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "d5c404c0"
+title = "test_fail_open_mutation_leaves_no_artifacts.py passes vacuously: stub lacks test_args so it never runs"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "scripts",
+    "test-vacuous",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """
+Observed 2026-11-14 at main 670f82987 (side finding of run-20261114-163341-69351 task b793fddc, worker + main loop). scripts/test_fail_open_mutation_leaves_no_artifacts.py:74 defines stub(crate, timeout=600); check-fail-open-mutation.py:580 calls run_crate_tests(scenario.crate, timeout=timeout, test_args=scenario.test_args()). Verbatim output: unexpected exception: TypeError("MutationRunArtifacts._drive.<locals>.stub() got an unexpected keyword argument 'test_args'"); status error, so the artifact-writing stub never runs and test_run_created_untracked_file_is_not_silently_left_behind sees no leak. Also fails the same at 202d33f25 (pre-b793fddc). After b793fddc the run happens in a scratch copy, so a fixed stub must write its artifact relative to the cwd/scratch it is given, not cfom.REPO. RED: scripts/test_fail_open_mutation_leaves_no_artifacts_stub_invoked_20261114.py (commit 9fe913745, xfail strict).
+flow driver 62e92d16 cannot observe RED: 'python3 -m pytest --runxfail scripts/test_fail_open_mutation_leaves_no_artifacts_stub_invoked_20261114.py' is denied in driver sessions and subagents ('python -m runs a module — blastguard cannot judge what it would do (Table B.5: Undetermined)'), consistent with the script-quarantine ruling (script-file runs Ask). Needs a non-driver session where the Ask can be answered. Planned fix (unverified): stub(crate, timeout=600, test_args=None, cwd=None) writing under cwd or cfom._ACTIVE_SCRATCH."""
+created_at = 1794653933
+updated_at = 1795784581
+weight = 0.0
+issue_number = 1775
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1775"
+issue_closed_at = 1795784584
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_fail_open_mutation_leaves_no_artifacts_stub_invoked_20261114.py"
+rev = "9fe913745a6a0634dc83723658f0c131086eacc3"
+observed_at = 1794653933
+detail = """
+exit 1: _leaves_no_artifacts_stub_invoked_20261114.py:44: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_fail_open_mutation_leaves_no_artifacts_stub_invoked_20261114.py::LeavesNoArtifactsStubIsInvoked::test_drive_reaches_the_stub_instead_of_raising_typeerror
+============================== 1 failed in 0.24s ==============================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_fail_open_mutation_leaves_no_artifacts_stub_invoked_20261114.py"
+exit = 0
+passed = 1
+rev = "62291b37f5937de23c85e0e5f5ee1868e6abb176"
+observed_at = 1795784580
+output_digest = "sha256:ff00ffda54532a24742f9af983de74d397e0d47ee111ed0aa67706f32b962e0a"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-eaa077f4
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_fail_open_mutation_leaves_no_artifacts_stub_invoked_20261114.py . [100%]
+
+============================== 1 passed in 0.18s ===============================
+"""
+
+[task.closure.red]
+rev = "773cdd4244caf7991e30d5768641fc16524b4dfa"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

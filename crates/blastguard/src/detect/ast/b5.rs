@@ -153,8 +153,8 @@
 use std::cell::Cell;
 
 use super::{
-    analyze, program_source, Analysis, Context, ProgramSource, RedirOp, RedirTarget, SimpleCommand,
-    StdinSource, Value, Word,
+    analyze, program_source, support::is_echo_option, Analysis, Context, ProgramSource, RedirOp,
+    RedirTarget, SimpleCommand, StdinSource, Value, Word,
 };
 use crate::detect::VerdictAcc;
 use crate::model::Decision;
@@ -1058,7 +1058,7 @@ fn producer_argv_output(argv: &[&str]) -> Option<String> {
     let only_newline_escapes = |f: &str| !f.replace("\\n", "").contains('\\');
     match argv {
         ["echo", rest @ ..] => {
-            if rest.first().is_some_and(|a| a.starts_with('-'))
+            if rest.first().is_some_and(|a| is_echo_option(a))
                 || rest.iter().any(|a| a.contains('\\'))
             {
                 return None;
@@ -1155,7 +1155,7 @@ fn inert_backslash_echo_program(
     let ["echo", rest @ ..] = argv.as_slice() else {
         return None;
     };
-    if rest.first().is_some_and(|a| a.starts_with('-'))
+    if rest.first().is_some_and(|a| is_echo_option(a))
         || (prev.redirects.is_empty() && !rest.iter().any(|a| a.contains('\\')))
         || !rest.iter().all(|a| inert_backslashes(a))
     {
@@ -1399,7 +1399,7 @@ fn written_body(w: &SimpleCommand) -> Option<(String, String)> {
             _ => return None,
         },
         ["echo", rest @ ..] if !heredoc_or_string => {
-            if rest.first().is_some_and(|a| a.starts_with('-'))
+            if rest.first().is_some_and(|a| is_echo_option(a))
                 || rest.iter().any(|a| a.contains('\\'))
             {
                 return None;

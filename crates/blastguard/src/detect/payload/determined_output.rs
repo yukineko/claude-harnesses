@@ -15,7 +15,7 @@
 //!   subshell, group, function, redirection, assignment or process
 //!   substitution;
 //! * its first stage is an emitter and every later stage a filter:
-//!   * `echo` whose operands are determined words, none starting with `-` and
+//!   * `echo` whose operands are determined words, none a `-n`/`-e`/`-E` option cluster (other leading-dash operands are literal text, backlog dd5c4fe9) and
 //!     none holding a backslash (zsh's and sh's `echo` decode escapes): the
 //!     operands joined by spaces, then a newline. With a lone first operand
 //!     `-e`, `\xHH` escapes (two hex digits, printable ASCII) and `\n` (a
@@ -348,7 +348,13 @@ fn echo_output(operands: &[String]) -> Option<(String, bool)> {
         Some((first, rest)) if first == "-e" => (true, rest),
         _ => (false, operands),
     };
-    if operands.first().is_some_and(|a| a.starts_with('-')) {
+    // User ruling 2026-11-21 (backlog dd5c4fe9): only `-` + letters from
+    // `n` / `e` / `E` is an echo option (`-n`, `-ne`, ...); any other
+    // leading-dash operand (`-rf`, `-x`, `--`, `-`) is literal text.
+    let is_option = |a: &String| {
+        a.len() > 1 && a.starts_with('-') && a.chars().skip(1).all(|c| "neE".contains(c))
+    };
+    if operands.first().is_some_and(is_option) {
         return None;
     }
     let mut words = Vec::new();

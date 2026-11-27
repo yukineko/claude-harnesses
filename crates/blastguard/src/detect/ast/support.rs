@@ -207,6 +207,14 @@ pub(super) fn set_is_harmless(args: &[Word]) -> bool {
     true
 }
 
+/// Whether an operand of the shell builtin `echo` is an OPTION: `-` then only
+/// the letters `n`, `e`, `E` (`-n`, `-e`, `-E`, `-ne`, `-nEe` ...). User
+/// ruling 2026-11-21 (backlog dd5c4fe9): any other leading-dash operand (`-x`,
+/// `-rf`, `--`, a lone `-`) is literal text that `echo` prints.
+pub(super) fn is_echo_option(a: &str) -> bool {
+    a.len() > 1 && a.starts_with('-') && a.chars().skip(1).all(|c| "neE".contains(c))
+}
+
 /// What the next pipeline stage reads from a stage: `Literal` only for a
 /// simple `echo` with literal operands and no option / backslash, the same
 /// for `/bin/echo` / `/usr/bin/echo` but refusing ANY leading-`-` first
@@ -242,9 +250,7 @@ pub(super) fn piped_stdin(stage: Option<&SimpleCommand>) -> StdinSource {
     }
     let out = match lits.split_first() {
         Some((&"echo", args)) => {
-            let opt = args.first().is_some_and(|a| {
-                a.len() > 1 && a.starts_with('-') && a.chars().skip(1).all(|c| "neE".contains(c))
-            });
+            let opt = args.first().is_some_and(|a| is_echo_option(a));
             (!opt && !args.iter().any(|a| a.contains('\\')))
                 .then(|| format!("{}\n", args.join(" ")))
         }

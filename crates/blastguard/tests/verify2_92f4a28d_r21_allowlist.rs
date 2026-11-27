@@ -201,10 +201,7 @@ fn v_export_git_config_fsmonitor_then_git_status() {
 
 #[test]
 fn v_export_git_external_diff_then_git_diff() {
-    assert_before_dot_not_allow(
-        "extdiff",
-        "export GIT_EXTERNAL_DIFF=./evil.sh; git diff",
-    );
+    assert_before_dot_not_allow("extdiff", "export GIT_EXTERNAL_DIFF=./evil.sh; git diff");
 }
 
 #[test]
@@ -272,22 +269,34 @@ fn ctl_echo_then_dot_cargo_build() {
 
 #[test]
 fn ctl_cd_rel_then_dot_cargo_test() {
-    assert_allow("c2", "cd crates && . \"$HOME/.cargo/env\" && cargo test -p x");
+    assert_allow(
+        "c2",
+        "cd crates && . \"$HOME/.cargo/env\" && cargo test -p x",
+    );
 }
 
 #[test]
 fn ctl_export_rustflags_then_dot() {
-    assert_allow("c3", "export RUST_BACKTRACE=1 && . \"$HOME/.cargo/env\" && cargo test");
+    assert_allow(
+        "c3",
+        "export RUST_BACKTRACE=1 && . \"$HOME/.cargo/env\" && cargo test",
+    );
 }
 
 #[test]
 fn ctl_git_status_then_dot() {
-    assert_allow("c4", "git status --short && . \"$HOME/.cargo/env\" && cargo fmt");
+    assert_allow(
+        "c4",
+        "git status --short && . \"$HOME/.cargo/env\" && cargo fmt",
+    );
 }
 
 #[test]
 fn ctl_source_spelling_cargo_test() {
-    assert_allow("c5", "source \"$HOME/.cargo/env\" && cargo test 2>&1 | tail -20");
+    assert_allow(
+        "c5",
+        "source \"$HOME/.cargo/env\" && cargo test 2>&1 | tail -20",
+    );
 }
 
 #[test]

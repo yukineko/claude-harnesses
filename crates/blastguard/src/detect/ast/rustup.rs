@@ -156,60 +156,100 @@ pub(crate) fn tainted_by(sc: &SimpleCommand) -> bool {
     !is_rustup_env_source(sc) && !known_pure(sc)
 }
 
-/// A `for` / `while` / `until` clause of `text` (a node the parser built, read
-/// from its debug dump by node name and bracket depth, not from the words of
-/// the text) holds the cargo env `.` / `source`: its next iteration runs it
-/// after the commands that textually follow it. A loop elsewhere does not
-/// matter. An unparsable text, or a dump whose brackets do not balance, counts
-/// as holding one.
+/// The program of `text` holds the cargo env `.` / `source` inside a `for` /
+/// `while` / `until` clause (the condition of a `while` / `until` included) or
+/// a function body: there the next iteration / call runs it after the commands
+/// that textually follow it. A loop elsewhere does not matter. Walked over the
+/// parser's node types (`brush_parser::ast`); an unparsable text counts as
+/// holding one.
 fn dot_in_loop(text: &str) -> bool {
-    let Ok(program) = super::parse::parse(text) else {
-        return true;
-    };
-    let dump = format!("{program:?}");
-    let b = dump.as_bytes();
-    for name in [
-        "ForClause(",
-        "ArithmeticForClause(",
-        "WhileClause(",
-        "UntilClause(",
-    ] {
-        for (start, _) in dump.match_indices(name) {
-            let (mut depth, mut i, mut in_str) = (0usize, start + name.len() - 1, false);
-            let end = loop {
-                let Some(&ch) = b.get(i) else {
-                    return true;
-                };
-                if in_str {
-                    match ch {
-                        b'\\' => i += 1,
-                        b'"' => in_str = false,
-                        _ => {}
-                    }
-                } else {
-                    match ch {
-                        b'"' => in_str = true,
-                        b'(' | b'{' | b'[' => depth += 1,
-                        b')' | b'}' | b']' => {
-                            depth = depth.saturating_sub(1);
-                            if depth == 0 {
-                                break i;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                i += 1;
-            };
-            if dump
-                .get(start..end)
-                .is_none_or(|s| s.contains(".cargo/env"))
-            {
-                return true;
-            }
-        }
+    match super::parse::parse(text) {
+        Ok(program) => program
+            .complete_commands
+            .iter()
+            .any(|l| list_has_dot(l, false)),
+        Err(_) => true,
     }
-    false
+}
+
+use brush_parser::ast as bp;
+
+/// `w` is the cargo env file named by a command word (inside a loop every
+/// word is read, so a `$( . ~/.cargo/env )` of a loop body counts).
+fn word_names_cargo_env(w: &bp::Word) -> bool {
+    w.value.contains(".cargo/env")
+}
+
+fn list_has_dot(l: &bp::CompoundList, in_loop: bool) -> bool {
+    l.0.iter().any(|item| {
+        let and_or = &item.0;
+        std::iter::once(&and_or.first)
+            .chain(and_or.additional.iter().map(|a| match a {
+                bp::AndOr::And(p) | bp::AndOr::Or(p) => p,
+            }))
+            .any(|p| p.seq.iter().any(|c| command_has_dot(c, in_loop)))
+    })
+}
+
+fn command_has_dot(c: &bp::Command, in_loop: bool) -> bool {
+    match c {
+        bp::Command::Simple(s) => simple_has_dot(s, in_loop),
+        bp::Command::Compound(cc, _) => compound_has_dot(cc, in_loop),
+        // A function body runs when it is called, not where it is written.
+        bp::Command::Function(f) => compound_has_dot(&f.body.0, true),
+        // `[[ … ]]` runs no command (a `$( )` in it is not read: it is a word
+        // of the test, outside every loop-order question this answers).
+        bp::Command::ExtendedTest(..) => false,
+    }
+}
+
+fn simple_has_dot(s: &bp::SimpleCommand, in_loop: bool) -> bool {
+    let items = s
+        .prefix
+        .iter()
+        .flat_map(|p| p.0.iter())
+        .chain(s.suffix.iter().flat_map(|p| p.0.iter()));
+    let words_hit = in_loop
+        && (s.word_or_name.as_ref().is_some_and(word_names_cargo_env)
+            || items.clone().any(|i| match i {
+                bp::CommandPrefixOrSuffixItem::Word(w)
+                | bp::CommandPrefixOrSuffixItem::AssignmentWord(_, w) => word_names_cargo_env(w),
+                _ => false,
+            }));
+    words_hit
+        || items.into_iter().any(|i| match i {
+            bp::CommandPrefixOrSuffixItem::ProcessSubstitution(_, sub) => {
+                list_has_dot(&sub.list, in_loop)
+            }
+            _ => false,
+        })
+}
+
+fn compound_has_dot(c: &bp::CompoundCommand, in_loop: bool) -> bool {
+    use bp::CompoundCommand as C;
+    match c {
+        C::Arithmetic(_) => false,
+        C::BraceGroup(b) => list_has_dot(&b.list, in_loop),
+        C::Subshell(s) => list_has_dot(&s.list, in_loop),
+        C::ForClause(f) => list_has_dot(&f.body.list, true),
+        C::ArithmeticForClause(f) => list_has_dot(&f.body.list, true),
+        C::WhileClause(w) | C::UntilClause(w) => {
+            list_has_dot(&w.0, true) || list_has_dot(&w.1.list, true)
+        }
+        C::IfClause(i) => {
+            list_has_dot(&i.condition, in_loop)
+                || list_has_dot(&i.then, in_loop)
+                || i.elses.iter().flatten().any(|e| {
+                    e.condition.iter().any(|c| list_has_dot(c, in_loop))
+                        || list_has_dot(&e.body, in_loop)
+                })
+        }
+        C::CaseClause(c) => c
+            .cases
+            .iter()
+            .any(|i| i.cmd.iter().any(|l| list_has_dot(l, in_loop))),
+        C::Coprocess(p) => command_has_dot(&p.body, true),
+    }
 }
 
 /// The line's cargo env `.` / `source` is not the exempt form (its operand

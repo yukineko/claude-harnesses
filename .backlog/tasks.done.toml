@@ -96329,3 +96329,64 @@ rev = "773cdd4244caf7991e30d5768641fc16524b4dfa"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "27393d5c"
+title = "condukt: owner のいない古い open run を live と同列に一覧しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "scout",
+    "L5",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "scout 2026-11-12, RED observed at 656b1c38, verified (independent verifier, no re-run). F4: crates/condukt/src/state.rs:603-628 — a run whose newest task update is 60 days old with no claim is listed exactly like a live run. Aging uses tasks[].updated_at + file mtime; the 'stale' substring is a format proxy."
+created_at = 1794434303
+updated_at = 1795784556
+weight = 0.0
+issue_number = 1648
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1648"
+issue_closed_at = 1795784559
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_scout_20261112_f4_stale_open_runs -- --ignored"
+rev = "9c71a19fed28cf0f1a46f8909076f5bcb60e67ed"
+observed_at = 1794434303
+detail = """
+exit 101: ng condukt v0.7.382 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/backlog_scout_20261112_f4_stale_open_runs.rs (target/debug/deps/backlog_scout_20261112_f4_stale_open_runs-e357785216da5058)
+error: test failed, to rerun pass `-p condukt --test backlog_scout_20261112_f4_stale_open_runs`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_scout_20261112_f4_stale_open_runs"
+exit = 0
+passed = 1
+rev = "88fc280a48e1ecae8a7aa9e7ceeef13947af3e8f"
+observed_at = 1795784539
+output_digest = "sha256:8b5c655a3ae40851cda8a45ed44cc0408183554c144e9f1c31e4ccbe14262a33"
+excerpt = """
+
+running 1 test
+test sixty_day_old_open_run_without_owner_is_not_listed_as_live ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s
+
+   Compiling condukt v0.7.501 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.30s
+     Running tests/backlog_scout_20261112_f4_stale_open_runs.rs (target/debug/deps/backlog_scout_20261112_f4_stale_open_runs-367d54365417310e)
+"""
+
+[task.closure.red]
+rev = "773cdd4244caf7991e30d5768641fc16524b4dfa"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

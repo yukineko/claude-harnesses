@@ -1,35 +1,4 @@
 [[task]]
-id = "27393d5c"
-title = "condukt: owner のいない古い open run を live と同列に一覧しない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "scout",
-    "L5",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "scout 2026-11-12, RED observed at 656b1c38, verified (independent verifier, no re-run). F4: crates/condukt/src/state.rs:603-628 — a run whose newest task update is 60 days old with no claim is listed exactly like a live run. Aging uses tasks[].updated_at + file mtime; the 'stale' substring is a format proxy."
-created_at = 1794434303
-updated_at = 1794434303
-weight = 0.0
-issue_number = 1648
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1648"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_scout_20261112_f4_stale_open_runs -- --ignored"
-rev = "9c71a19fed28cf0f1a46f8909076f5bcb60e67ed"
-observed_at = 1794434303
-detail = """
-exit 101: ng condukt v0.7.382 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
-     Running tests/backlog_scout_20261112_f4_stale_open_runs.rs (target/debug/deps/backlog_scout_20261112_f4_stale_open_runs-e357785216da5058)
-error: test failed, to rerun pass `-p condukt --test backlog_scout_20261112_f4_stale_open_runs`"""
-
-[[task]]
 id = "7a960841"
 title = "blastguard: log テキストで rule 欠落と rule=unknown が同じ表示になる曖昧さを直す"
 project = "/Users/yuki/src/harness"

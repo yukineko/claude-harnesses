@@ -691,6 +691,8 @@ notes = "Re-filed from unmerged filing-run87637b (orig a92a82b1). Measured 2026-
 created_at = 1795804774
 updated_at = 1795804774
 weight = 0.0
+issue_number = 2005
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2005"
 rev = 0
 
 [task.repro]

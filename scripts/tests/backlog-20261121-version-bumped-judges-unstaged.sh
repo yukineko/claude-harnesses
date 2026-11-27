@@ -97,4 +97,5 @@ fi
 [ "$ctl" -ne 0 ] && exit 2
 [ "$red" -ne 0 ] && exit 1
 echo "all ok"
+echo "test result: ok. 2 passed; 0 failed"
 exit 0

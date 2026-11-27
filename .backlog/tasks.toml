@@ -486,37 +486,6 @@ exit 101: ompiling blastguard v0.2.951 (/Users/yuki/src/.harness-worktrees/sessi
 error: test failed, to rerun pass `-p blastguard --test heredoc_script_failopen_red_20261108`"""
 
 [[task]]
-id = "b37bc26c"
-title = "blastguard: 3000-line python-stdin heredoc body takes ~6s to judge (10s hook timeout => larger bodies lose the verdict); main Ask for bash <(...) tail"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-27 by flow session eaa077f4 (release build): identical on main 00f4f87cf (0.2.952) and fp-30136835-r b29342b73 (0.2.954), so pre-existing. 'rm -rf /etc' tail: deny in ~6.3s both modes; '{ bash <(echo rm -rf /etc); }' tail: main ask / sub deny in ~6.5s. A hook that times out does not block the call (per the opus verifier's reading of the Claude Code docs), so a body a few times larger would let a system-harm command through. Small-body control is Deny in <3s. RED c55c758e9."
-created_at = 1795791484
-updated_at = 1795791484
-weight = 0.0
-issue_number = 1996
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1996"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test --release -p blastguard --test backlog_20261127_large_python_heredoc_body_slow -- --ignored"
-rev = "c55c758e998f762151edf3761b9239838c64753e"
-observed_at = 1795791484
-detail = """
-exit 101: 955 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
-    Finished `release` profile [optimized] target(s) in 27.30s
-     Running tests/backlog_20261127_large_python_heredoc_body_slow.rs (target/release/deps/backlog_20261127_large_python_heredoc_body_slow-2a9adb196edd00af)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261127_large_python_heredoc_body_slow`"""
-
-[[task]]
 id = "687ece3c"
 title = "blastguard fail-open: nested system harm (bash -c / eval / $(...) tails) is Ask in main after fan-out padding (python -c programs, bash -c fanout, 3200 echo lines)"
 project = "/Users/yuki/src/harness"

@@ -781,6 +781,8 @@ notes = "Found by the opus verifier of 687ece3c (2026-11-28). After fill3700 pad
 created_at = 1795806312
 updated_at = 1795806312
 weight = 0.0
+issue_number = 2007
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2007"
 rev = 0
 
 [task.repro]

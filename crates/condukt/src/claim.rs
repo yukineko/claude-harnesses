@@ -1368,7 +1368,7 @@ pub fn active_claims(cfg: &Config, cwd: &Path, now: i64) -> Result<Registry> {
 // keep this file under its line cap); re-exported so callers keep the
 // `crate::claim::run_liveness` path.
 mod liveness;
-pub use liveness::{run_liveness, RunLiveness};
+pub use liveness::{run_has_fresh_claim, run_liveness, RunLiveness};
 
 /// What the claim registry can say about the idleness of a run that has NO
 /// run-state file — see [`stateless_idle_secs`].

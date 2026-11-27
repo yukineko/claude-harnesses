@@ -155,7 +155,6 @@ impl Fixture {
 }
 
 #[test]
-#[ignore = "scout 2026-11-12 F4: RED, open defect. Remove the ignore when fixed"]
 fn sixty_day_old_open_run_without_owner_is_not_listed_as_live() {
     let fx = Fixture::new();
     let old = "run-scout-f4-old";

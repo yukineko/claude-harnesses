@@ -637,6 +637,9 @@ pub fn open_runs(cfg: &Config, cwd: &Path) -> Result<Vec<RunState>> {
         .collect())
 }
 
+mod freshness;
+pub use freshness::{run_freshness, RunFreshness};
+
 /// Serialized load → mutate → save for a run. The per-run state lock is held
 /// across all three steps so two concurrent sessions/worktrees cannot lose an
 /// update (the load→mutate→save windows can no longer interleave; it is a

@@ -845,7 +845,10 @@ fn same_line_shadow(
         cmd,
     } = *line;
     let every = cmd.context != Context::TopLevel || b5::has_loop_or_function(text);
-    let mut targets: Vec<Value> = Vec::new();
+    // (target, is_mkdir_operand): a `mkdir` operand that IS a program
+    // directory creates that directory (an entry in its parent), nothing
+    // inside it, so it cannot shadow a module there (FP 61b6ba67).
+    let mut targets: Vec<(Value, bool)> = Vec::new();
     for (j, c) in commands.iter().enumerate() {
         if !(j == idx || every || c.span.start < cmd.span.end) {
             continue;
@@ -862,7 +865,7 @@ fn same_line_shadow(
                     | RedirOp::AppendOutErr
             );
             match &r.target {
-                RedirTarget::Path(v) if writes => Some(v.clone()),
+                RedirTarget::Path(v) if writes => Some((v.clone(), false)),
                 // Not a file this redirect opens (a process substitution's
                 // commands are commands of the line, read in this loop).
                 RedirTarget::Path(_)
@@ -899,7 +902,7 @@ fn same_line_shadow(
             ))
         }
     };
-    for t in targets {
+    for (t, is_mkdir) in targets {
         let placed = match place(t) {
             Ok(p) => p,
             Err(why) => {
@@ -925,6 +928,7 @@ fn same_line_shadow(
                 for t in &target_spellings {
                     match entry_under(t, d) {
                         EntryUnder::Outside => {}
+                        EntryUnder::TheDir if is_mkdir => {}
                         EntryUnder::TheDir => {
                             return Some(format!(
                                 "the Python program imports {shown}, and a command before it on \
@@ -954,7 +958,7 @@ fn same_line_shadow(
 /// The creating targets of `c`'s argv (`judge::entry_writes`, after the
 /// `b5` wrappers), resolved against its cwd; `Err` when they are not
 /// determined. A command without a model has none (S3b's contract).
-fn command_entry_writes(c: &SimpleCommand) -> Result<Vec<Value>, String> {
+fn command_entry_writes(c: &SimpleCommand) -> Result<Vec<(Value, bool)>, String> {
     let mut k = 0;
     loop {
         match b5::unwrap_at(&c.argv, k) {
@@ -976,10 +980,15 @@ fn command_entry_writes(c: &SimpleCommand) -> Result<Vec<Value>, String> {
     match super::judge::entry_writes(&inner) {
         super::judge::EntryWrites::NoModel => Ok(Vec::new()),
         super::judge::EntryWrites::Undetermined(why) => Err(why),
-        super::judge::EntryWrites::Targets(t) => Ok(t
-            .into_iter()
-            .map(|(_, v)| super::eval::resolve_at(&c.cwd, v))
-            .collect()),
+        super::judge::EntryWrites::Targets(t) => {
+            let is_mkdir = matches!(
+                inner.argv.first().map(|w| &w.value),
+                Some(Value::Literal(n)) if n.rsplit('/').next() == Some("mkdir")
+            );
+            Ok(t.into_iter()
+                .map(|(_, v)| (super::eval::resolve_at(&c.cwd, v), is_mkdir))
+                .collect())
+        }
     }
 }
 

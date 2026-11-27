@@ -97093,3 +97093,66 @@ rev = "a2d16046159bc238e01a7355ed82d4d90ff8b8e0"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "3775027f"
+title = 'blastguard FP: a runtime-valued stdin source (< "$f") on an env -i wrapped literal program inside $(…) in a for loop is read as the executed command'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-22 at main 0a3c2df02 in condukt run run-20261122-025656-99560 (orchestrator probe loop for t3; relay bgr-3b84de93184d, re-run in main and then executed with exit 0). Verbatim refusal: 'the command executed here comes from `"$f"`, whose value only exists at run time — blastguard cannot see what would actually run'. RED (filing worktree): 'for f in <d>/l_*; do o=$(env -i HOME=<d> PATH=/usr/bin:/bin /usr/bin/wc -c < "$f" 2>/dev/null | grep -o x); echo "${o:-allow}"; done | paste - - | nl' => ask for a main session; the loop without env -i ('for f in <d>/l_*; do /usr/bin/wc -c < "$f"; done') is Allow; control '/usr/bin/wc -c < <d>/a' Allow. Readings: (a) FP: the redirect operand is read as the command word under env -i; (b) intended: runtime-valued stdin source undetermined. Tell apart: the executed program is the literal /usr/bin/wc. Not covered: subagent Deny path, which part (env -i, $(…), loop) triggers it."""
+created_at = 1795289436
+updated_at = 1795786410
+weight = 0.0
+issue_number = 1978
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1978"
+issue_closed_at = 1795786414
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261122_stdin_redirect_from_loop_var_fp -- --ignored"
+rev = "3e9ebd1555221f48fd36336c1089109ef4a3312c"
+observed_at = 1795289436
+detail = """
+exit 101: rs/yuki/src/.harness-worktrees/filing-99560b/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.49s
+     Running tests/backlog_20261122_stdin_redirect_from_loop_var_fp.rs (target/debug/deps/backlog_20261122_stdin_redirect_from_loop_var_fp-ca53b4fc3297e397)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261122_stdin_redirect_from_loop_var_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261122_stdin_redirect_from_loop_var_fp"
+exit = 0
+passed = 3
+rev = "f903119d079638bee80b3c5bffc453dbb0fcb822"
+observed_at = 1795786393
+output_digest = "sha256:58d588c5b48fdbfa42c778fbc07b7615cf78063739183cf508dba55a6f5ff0f6"
+excerpt = """
+
+running 3 tests
+test control_literal_stdin_source_is_allow ... ok
+test loop_var_stdin_source_to_literal_program_is_allow ... ok
+test env_runtime_command_word_stays_not_allow ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.81s
+
+   Compiling blastguard v0.2.948 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.46s
+     Running tests/backlog_20261122_stdin_redirect_from_loop_var_fp.rs (target/debug/deps/backlog_20261122_stdin_redirect_from_loop_var_fp-1c176a53bf8779ee)
+"""
+
+[task.closure.red]
+rev = "a2d16046159bc238e01a7355ed82d4d90ff8b8e0"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

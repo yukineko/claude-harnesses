@@ -80,17 +80,22 @@ fn run_as(command: &str, home: &Home, subagent: bool) -> (String, String) {
     )
 }
 
-fn check_allow(cmd: &str, tag: &str) {
+// T2 (2026-11-18, SUBSET.md item 23): "A program read from a file descriptor
+// (`bash <&'$fd'`) is Undetermined." This supersedes the 2026-11-14 expectation of allow.
+// Undetermined resolves to ask in main and deny in a subagent.
+fn check_undetermined(cmd: &str, tag: &str) {
     let home = unique_home(tag);
     let (m, mr) = run_as(cmd, &home, false);
     let (s, sr) = run_as(cmd, &home, true);
+    // T2 (2026-11-18, SUBSET.md item 23): main = ask (was allow).
     assert_eq!(
-        m, "allow",
-        "main must allow quoted target; cmd={cmd:?} got={m} reason={mr}"
+        m, "ask",
+        "T2: main must ask (Undetermined) for program read from fd; cmd={cmd:?} got={m} reason={mr}"
     );
+    // T2 (2026-11-18, SUBSET.md item 23): subagent = deny (was allow).
     assert_eq!(
-        s, "allow",
-        "subagent must allow quoted target; cmd={cmd:?} reason={sr}"
+        s, "deny",
+        "T2: subagent must deny (Undetermined) for program read from fd; cmd={cmd:?} reason={sr}"
     );
 }
 
@@ -110,12 +115,14 @@ fn check_not_allow(cmd: &str, tag: &str) {
 
 #[test]
 fn bash_dup_single_quoted_dollar_fd_should_allow() {
-    check_allow("bash <&'$fd'", "single-quoted");
+    // T2 (2026-11-18, SUBSET.md item 23): Undetermined, not allow.
+    check_undetermined("bash <&'$fd'", "single-quoted");
 }
 
 #[test]
 fn bash_dup_backslash_escaped_dollar_fd_should_allow() {
-    check_allow("bash <&\\$fd", "backslash-escaped");
+    // T2 (2026-11-18, SUBSET.md item 23): Undetermined, not allow.
+    check_undetermined("bash <&\\$fd", "backslash-escaped");
 }
 
 #[test]

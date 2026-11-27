@@ -445,7 +445,9 @@ fn with_known<R>(f: impl FnOnce(&Index) -> Option<R>) -> Option<R> {
     }
     INDEX.with(|i| match &*i.borrow() {
         Active::Known(index) => f(index),
-        Active::Inactive | Active::Undetermined => None,
+        // The function-definition index serves only `resolve`: the rustup
+        // and tie readers keep the `Undetermined` answer they had.
+        Active::Inactive | Active::Undetermined | Active::Defs(_) => None,
     })
 }
 
@@ -490,6 +492,10 @@ enum Active {
     Undetermined,
     /// [`analyze`] of the text was `Known`.
     Known(Rc<Index>),
+    /// [`analyze`] was `Undetermined` but the analysis that evaluates
+    /// function definitions was `Known` (a body's static `local` has a proven
+    /// value). Read by [`resolve`] only.
+    Defs(Rc<Index>),
 }
 
 struct RestoreIndex(Active);
@@ -507,7 +513,12 @@ impl Drop for RestoreIndex {
 pub(crate) fn with_index<R>(text: &str, f: impl FnOnce() -> R) -> R {
     let index = match analyze(text) {
         Analysis::Known(script) => Active::Known(Rc::new(Index::build(text, &script))),
-        Analysis::Undetermined(_) => Active::Undetermined,
+        Analysis::Undetermined(_) => match super::analyze_with_function_definitions(text) {
+            Analysis::Known(script) if script.has_function_definition => {
+                Active::Defs(Rc::new(Index::build(text, &script)))
+            }
+            _ => Active::Undetermined,
+        },
     };
     let prev = INDEX.with(|i| std::mem::replace(&mut *i.borrow_mut(), index));
     let _restore = RestoreIndex(prev);
@@ -552,7 +563,7 @@ pub(crate) fn resolve(spelling: &str, role: Role) -> Option<Vec<String>> {
         return None;
     }
     INDEX.with(|i| match &*i.borrow() {
-        Active::Known(index) => index.lookup(spelling, role),
+        Active::Known(index) | Active::Defs(index) => index.lookup(spelling, role),
         // No proof of any value: the caller keeps its old verdict (the
         // restrictive side — `None` here never clears a target).
         Active::Inactive | Active::Undetermined => None,

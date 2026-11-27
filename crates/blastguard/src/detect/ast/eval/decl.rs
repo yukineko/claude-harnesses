@@ -105,7 +105,18 @@ impl Ev {
                         None => rhs.to_string(),
                     };
                     let target = lhs.strip_suffix('+').unwrap_or(lhs);
-                    env.int_assign_if(start.opaque, target, &Value::Literal(expr))?;
+                    // A static `local` in a function body binds even in an
+                    // opaque state and takes no integer attribute from a
+                    // global one (see `function::LocalTrust`).
+                    let trusted_local = builtin == "local"
+                        && self.function_depth > 0
+                        && self.local_trust.enabled
+                        && lhs == target
+                        && is_ident(lhs)
+                        && !decl.is_some_and(|d| d.compound)
+                        && !env.readonly.contains(lhs);
+                    let any_integer = start.opaque && !trusted_local;
+                    env.int_assign_if(any_integer, target, &Value::Literal(expr))?;
                     if let Some(n) = lhs.strip_suffix('+') {
                         env.forget_operand(n, "+= appends to a value")?;
                     } else if decl.is_some_and(|d| d.compound) {
@@ -115,6 +126,11 @@ impl Ev {
                         // Top level: bash keeps the previous value, zsh binds
                         // `rhs`; neither is known to be the value, so forget.
                         env.forget_operand(lhs, "top-level local: bash does not assign it")?;
+                    } else if trusted_local {
+                        self.local_trust.used = true;
+                        env.vars
+                            .insert(lhs.to_string(), Value::Literal(rhs.to_string()));
+                        env.pinned.insert(lhs.to_string());
                     } else if is_ident(lhs) {
                         env.bind(lhs, Value::Literal(rhs.to_string()));
                     } else {

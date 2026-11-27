@@ -180,25 +180,7 @@ fn evaluate_with(command: &str, program: &ast::Program, function_defs: bool) -> 
 }
 
 fn run(command: &str, program: &ast::Program, function_defs: bool) -> Result<Script, Cause> {
-    let text = Text::new(command, Origin::root(command.len()));
-    let mut ev = Ev {
-        out: Vec::new(),
-        emit: true,
-        work: 0,
-        accums: Vec::new(),
-        function_defs,
-        function_names: Vec::new(),
-        has_function_definition: false,
-        function_body_ranges: Vec::new(),
-        function_depth: 0,
-    };
-    ev.program(&text, program, Env::initial(), &Context::TopLevel)?;
-    Ok(Script {
-        commands: ev.out,
-        function_names: ev.function_names,
-        has_function_definition: ev.has_function_definition,
-        function_body_ranges: ev.function_body_ranges,
-    })
+    function::run_passes(command, program, function_defs)
 }
 
 // ---------------------------------------------------------------- spans
@@ -305,6 +287,10 @@ struct Env {
     /// An earlier command may have replaced what `. "$HOME/.cargo/env"` runs
     /// (r21 no longer applies, [`super::rustup`]).
     rustup_lost: bool,
+    /// Names a trusted function-body `local` bound: read even while opaque
+    /// (`function::LocalTrust`); any later havoc turns their values
+    /// `Undetermined`.
+    pinned: BTreeSet<String>,
 }
 
 /// Variables the shell itself sets or changes at run time (whitespace
@@ -333,11 +319,12 @@ impl Env {
             cwd: Cwd::Hook,
             stdin: StdinSource::Inherited,
             rustup_lost: false,
+            pinned: BTreeSet::new(),
         }
     }
 
     fn lookup(&self, name: &str) -> Value {
-        if self.opaque {
+        if self.opaque && !self.pinned.contains(name) {
             return undet(format!(
                 "${name}: an earlier command may have changed any variable"
             ));
@@ -497,6 +484,7 @@ fn join(a: Env, b: Env) -> Env {
         cwd,
         stdin,
         rustup_lost: a.rustup_lost || b.rustup_lost,
+        pinned: a.pinned.union(&b.pinned).cloned().collect(),
     }
 }
 
@@ -697,9 +685,11 @@ struct Ev {
     /// Index ranges into `out` of the commands of each function body
     /// (emit mode only).
     function_body_ranges: Vec<std::ops::Range<usize>>,
-    /// Number of enclosing function bodies being evaluated (`function.rs`):
-    /// 0 at top level, where `local` binds nothing (`eval/decl.rs`).
+    /// Enclosing function bodies being evaluated (0 at top level, where
+    /// `local` binds nothing, `eval/decl.rs`).
     function_depth: usize,
+    /// Whether a body's static `local` binds (`eval/function.rs`).
+    local_trust: function::LocalTrust,
 }
 
 impl Ev {
@@ -799,6 +789,7 @@ impl Ev {
                     let before = self.out.len();
                     let (_, produced) =
                         self.command(text, c, st, &Context::Pipeline { pos, len })?;
+                    env = env.forgetting_stage(text, c, produced.as_ref());
                     stdin = match c {
                         // A brace group feeds what its members print, in order.
                         ast::Command::Compound(ast::CompoundCommand::BraceGroup(b), None) => {
@@ -900,6 +891,9 @@ impl Ev {
                     if ![va, vb].iter().all(arith::plain_int) {
                         env.havoc_vars("arithmetic in [[ ]] may assign variables");
                     }
+                }
+                if matches!(op, ast::BinaryPredicate::StringMatchesRegex) {
+                    env.forget_zsh_match();
                 }
                 Ok(())
             }
@@ -1318,7 +1312,7 @@ impl Ev {
         // The new value of `_` is remembered (an assignment-only command's
         // effect on `_` is not modelled).
         let underscore_int = env.integer.contains("_");
-        let mut outcome = self.effects(&sc, &decl_names, env)?;
+        let mut outcome = self.effects(&sc, &decl_names, env.forgetting_in(Some(&sc)))?;
         let lost = super::rustup::tainted_by(&sc);
         for after in [&mut outcome.ok, &mut outcome.fail] {
             after.rustup_lost |= lost;
@@ -1342,6 +1336,7 @@ impl Ev {
         decl_names: &BTreeMap<usize, DeclArg>,
         mut env: Env,
     ) -> Result<Outcome, Cause> {
+        self.local_trust.note_command(sc, &self.function_names);
         let name = match sc.argv.first().map(|w| &w.value) {
             None => return Ok(Outcome::same(env)),
             Some(Value::Undetermined(_)) => {
@@ -1419,6 +1414,10 @@ impl Ev {
                 let mut it = args.iter();
                 while let Some(a) = it.next() {
                     match &a.value {
+                        // `-vNAME` (attached): every name suffix is assigned.
+                        Value::Literal(s) if s.starts_with("-v") && s.len() > 2 => {
+                            env.forget_attached(s, "set by printf -v")?;
+                        }
                         Value::Literal(s) if s == "-v" => match it.next().map(|w| &w.value) {
                             Some(Value::Literal(n)) => {
                                 env.int_assign(n, &undet("output of printf -v"))?;
@@ -1457,6 +1456,7 @@ impl Ev {
                                 env.int_assign(s, &undet(format!("a value read by {n}")))?;
                             }
                             env.forget_operand(s, &format!("assigned by {n}"))?;
+                            env.forget_attached(s, &format!("assigned by {n}"))?;
                         }
                         Value::Undetermined(_) => {
                             env.make_opaque(&format!("{n} with an undetermined operand"));

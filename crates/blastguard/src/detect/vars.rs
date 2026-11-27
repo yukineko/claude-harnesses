@@ -246,6 +246,18 @@ pub(super) fn word_binds_name(word: &str, name: &str) -> bool {
     }
 }
 
+/// An option word with the variable name attached (`-vP`, `-aP`, `-vP[1]`):
+/// any suffix of the cluster that is the name may be what the builtin assigns
+/// (superset: only costs a resolution).
+fn option_attaches_name(word: &str, name: &str) -> bool {
+    word.starts_with('-')
+        && !word.starts_with("--")
+        && word.char_indices().skip(1).any(|(i, _)| {
+            let rest = &word[i..];
+            rest == name || word_binds_name(rest, name) || rest.starts_with(&format!("{name}["))
+        })
+}
+
 /// Builtins that bind a variable whose NAME is given as a bare operand rather
 /// than through an `=`, so [`word_binds_name`] alone cannot see them.
 ///
@@ -270,6 +282,13 @@ pub(super) fn binds_name_as_operand(head: &str) -> bool {
             | "local"
             | "export"
             | "readonly"
+            // zsh builtins that assign a variable named by an operand.
+            | "print"
+            | "zformat"
+            | "vared"
+            | "zparseopts"
+            | "zstat"
+            | "sysread"
     )
 }
 
@@ -308,6 +327,12 @@ pub(super) fn binds_name_as_operand(head: &str) -> bool {
 /// coarseness here (a `printf` mentioning `BIN` anywhere, a `local` at top
 /// level where bash would error) costs resolutions and never invents one.
 pub(super) fn segment_may_rebind(seg: &str, name: &str) -> bool {
+    segment_may_rebind_with(seg, name, false)
+}
+
+/// [`segment_may_rebind`]; `exempt_ok` lets a bare `name` operand of a
+/// non-binding command pass ([`exemption_disabled`] decides, per command).
+pub(super) fn segment_may_rebind_with(seg: &str, name: &str, exempt_ok: bool) -> bool {
     let words = quote_aware_words(seg);
     let Some(first) = words.first() else {
         return false;
@@ -326,8 +351,45 @@ pub(super) fn segment_may_rebind(seg: &str, name: &str) -> bool {
             // command word, and bash reports `BIN=x: No such file or directory`
             // while `BIN` keeps its old value.
             let plain = unquote_literal_value(w).unwrap_or_else(|| w.to_string());
-            plain == name || word_binds_name(&plain, name)
+            plain == name || word_binds_name(&plain, name) || option_attaches_name(&plain, name)
         })
+    {
+        return true;
+    }
+    // Structural catch-all (backlog f3301770): ANY command word after the
+    // transient assignment prefix that spells the name — or the name it is
+    // tied to in zsh — other than as a plain `$name` / `${name…` reference
+    // may bind it: `read P`, `printf -v P`, `print -vP P`, `zformat -f P`,
+    // `zstat -A P`, `sysread P`, `vared P`, `zparseopts -A P`, `P[0]=`,
+    // `{P}>` redirect words, `trap 'P=…'`, behind `command` / `builtin` /
+    // `X=1 cmd`. A word list of known binders cannot be complete (zsh adds
+    // more), so an unrecognised command naming the variable counts too.
+    // Over-reporting only costs a resolution; it never invents one.
+    {
+        let lead = words.iter().take_while(|w| is_assignment(w)).count();
+        let partner = tied_partner(name);
+        // A bare `name` operand of a non-binding command is data.
+        let exempt = exempt_ok
+            && command_head(&words).is_some_and(|(_, h)| NON_BINDERS.contains(&h.as_str()));
+        let skip = |w: &str| {
+            exempt && (plain_name_arg(w, name) || partner.is_some_and(|p| plain_name_arg(w, p)))
+        };
+        if words[lead..].iter().any(|w| {
+            !skip(w)
+                && (mentions_name_outside_reference(w, name)
+                    || partner.is_some_and(|p| mentions_name_outside_reference(w, p)))
+        }) {
+            return true;
+        }
+    }
+    if indirect_name_operand(&words) {
+        return true;
+    }
+    // zsh's `[[ x =~ re ]]` sets MATCH / MBEGIN / MEND / match / mbegin / mend.
+    if matches!(
+        name,
+        "MATCH" | "MBEGIN" | "MEND" | "match" | "mbegin" | "mend"
+    ) && words.iter().any(|w| w == "=~")
     {
         return true;
     }
@@ -363,6 +425,30 @@ pub(super) fn segment_may_rebind(seg: &str, name: &str) -> bool {
         return true;
     }
     false
+}
+
+/// The name zsh ties to `name` (assigning one assigns the other): the
+/// lowercase array and the uppercase colon-separated scalar of
+/// `path`/`PATH`, `cdpath`/`CDPATH`, `fpath`/`FPATH`, `manpath`/`MANPATH`,
+/// `mailpath`/`MAILPATH`, `module_path`/`MODULE_PATH`.
+pub(super) fn tied_partner(name: &str) -> Option<&'static str> {
+    const TIES: [(&str, &str); 6] = [
+        ("path", "PATH"),
+        ("cdpath", "CDPATH"),
+        ("fpath", "FPATH"),
+        ("manpath", "MANPATH"),
+        ("mailpath", "MAILPATH"),
+        ("module_path", "MODULE_PATH"),
+    ];
+    TIES.iter().find_map(|&(lo, up)| {
+        if name == lo {
+            Some(up)
+        } else if name == up {
+            Some(lo)
+        } else {
+            None
+        }
+    })
 }
 
 /// True for a name a shell would accept on the left of `=`.
@@ -406,11 +492,21 @@ pub(super) fn mentions_name_outside_reference(text: &str, name: &str) -> bool {
             i += 1;
         }
         let run: String = chars[start..i].iter().collect();
+        let before = |back: usize| start.checked_sub(back).map(|k| chars[k]);
+        // An option cluster with the name attached (`printf -vP`, `read -aP`):
+        // the builtin may assign it. Superset: only costs a resolution.
+        if run != name && run.ends_with(name) && before(1) == Some('-') {
+            return true;
+        }
         if run != name {
             continue;
         }
-        let before = |back: usize| start.checked_sub(back).map(|k| chars[k]);
-        let plain = before(1) == Some('$') && before(2) != Some('\\');
+        // `${#name}` (a length read) is a plain reference too.
+        let plain = before(1) == Some('$') && before(2) != Some('\\')
+            || (before(1) == Some('#')
+                && before(2) == Some('{')
+                && before(3) == Some('$')
+                && before(4) != Some('\\'));
         let braced = before(1) == Some('{') && before(2) == Some('$') && before(3) != Some('\\');
         // Backlog 54231a0a: a path component strictly between two slashes
         // (the `fd` of `/dev/fd/$fd`) is literal text, not a binding — but
@@ -421,8 +517,321 @@ pub(super) fn mentions_name_outside_reference(text: &str, name: &str) -> bool {
         if !plain && !braced && !path_component {
             return true;
         }
+        // `${NAME:=v}` / `${NAME::=v}` / `${NAME=v}` (optionally after a
+        // subscript) ASSIGN the name: a braced reference is a plain read
+        // only when no assignment operator follows (backlog f3301770).
+        if braced && expansion_assigns_after(&chars, i) {
+            return true;
+        }
     }
     false
+}
+
+/// True when the text at `chars[i..]` (just after the name inside `${…`) is an
+/// assignment operator of a parameter expansion: `=`, `:=`, `::=`, possibly
+/// after a `[subscript]`.
+fn expansion_assigns_after(chars: &[char], mut i: usize) -> bool {
+    if chars.get(i) == Some(&'[') {
+        match chars[i..].iter().position(|&c| c == ']') {
+            Some(p) => i += p + 1,
+            None => return true,
+        }
+    }
+    let rest: String = chars[i..].iter().take(3).collect();
+    rest.starts_with('=') || rest.starts_with(":=") || rest.starts_with("::=")
+}
+
+/// Commands that cannot bind a shell variable named by one of their plain
+/// operands: external programs and non-binding builtins. A bare `P` operand
+/// to one of these (`echo P`, `grep P file`) is data, not a binding.
+const NON_BINDERS: &[&str] = &[
+    "echo", "cat", "grep", "egrep", "fgrep", "ls", "wc", "head", "tail", "sort", "uniq", "test",
+    "[", "true", "false", "pwd", "diff", "cut", "tr", "touch", "mkdir", "rm", "cp", "mv", "date",
+];
+
+/// Index and normalized name of the command word of `words`: leading
+/// assignments and `command` / `builtin` wrappers (with their options) are
+/// skipped.
+fn command_head<S: AsRef<str>>(words: &[S]) -> Option<(usize, String)> {
+    let mut i = 0;
+    while words.get(i).is_some_and(|w| is_assignment(w.as_ref())) {
+        i += 1;
+    }
+    loop {
+        let name = normalized_command(words.get(i)?.as_ref());
+        if matches!(name.as_str(), "command" | "builtin") {
+            i += 1;
+            while words.get(i).is_some_and(|w| w.as_ref().starts_with('-')) {
+                i += 1;
+            }
+            continue;
+        }
+        return Some((i, name));
+    }
+}
+
+/// The normalized command name of one raw word.
+pub(super) fn normalized_head(word: &str) -> String {
+    normalized_command(word)
+}
+
+/// `word` is exactly `name`, quoted or not.
+fn plain_name_arg(word: &str, name: &str) -> bool {
+    unquote_literal_value(word).as_deref() == Some(name)
+}
+
+/// `word` is a bare `name` operand of a command (`words`) that cannot bind a
+/// variable: data, not a binding.
+pub(super) fn exempt_plain_arg<S: AsRef<str>>(words: &[S], word: &str, name: &str) -> bool {
+    command_head(words).is_some_and(|(hi, h)| {
+        NON_BINDERS.contains(&h.as_str())
+            && words.get(hi).is_some_and(|w| w.as_ref() != word)
+            && plain_name_arg(word, name)
+    })
+}
+
+/// True when some simple statement inside the compound command `src`
+/// (`while read "$Q"; do …; done`, `{ printf -v "$Q" x; }`) is a binder whose
+/// name operand is an expansion ([`indirect_name_operand`]).
+pub(super) fn compound_source_has_indirect_binder(src: &str) -> bool {
+    const KEYWORDS: &[&str] = &[
+        "while", "until", "if", "elif", "then", "else", "do", "!", "{", "(", "time",
+    ];
+    src.split([';', '\n', '|', '&', '(', ')', '}'])
+        .any(|piece| {
+            let words = quote_aware_words(piece);
+            let skip = words
+                .iter()
+                .take_while(|w| KEYWORDS.contains(&w.as_str()) || w.starts_with('{'))
+                .count();
+            indirect_name_operand(&words[skip..])
+        })
+}
+
+/// [`mentions_name_outside_reference`] for one segment, except that a bare
+/// `name` operand of a command in [`NON_BINDERS`] is not a mention (`echo P`,
+/// `grep P file`). Every other spelling of the name still counts.
+pub(super) fn segment_mentions_name(seg: &str, name: &str, exempt_ok: bool) -> bool {
+    let words = quote_aware_words(seg);
+    let exempt =
+        exempt_ok && command_head(&words).is_some_and(|(_, h)| NON_BINDERS.contains(&h.as_str()));
+    if !exempt || words.is_empty() {
+        return mentions_name_outside_reference(seg, name);
+    }
+    let kept: Vec<&str> = words
+        .iter()
+        .filter(|w| !plain_name_arg(w, name))
+        .map(String::as_str)
+        .collect();
+    mentions_name_outside_reference(&kept.join(" "), name)
+}
+
+/// True when `cmd` may change what a command word MEANS, so a name in
+/// [`NON_BINDERS`] cannot be trusted not to bind: an `alias` / `shopt` /
+/// `enable` / `unalias` / `functions` / `autoload` / `eval` / `source` / `.`
+/// word anywhere (`alias echo=read` makes `echo P` a `read P`), or a function
+/// definition. The exemption is off for the whole command then.
+pub(super) fn exemption_disabled(cmd: &str) -> bool {
+    parsed_command_may_redefine_words(cmd) || exemption_disabled_by_words(cmd)
+}
+
+/// Names whose assignment redefines what a command word means: zsh's
+/// `functions` / `aliases` / `galiases` / `saliases` / `dis_*` tables and
+/// bash's `BASH_ALIASES` (`name`, `name[k]`, `name+` all count).
+pub(super) fn is_command_table_name(name: &str) -> bool {
+    let base = name.split('[').next().unwrap_or(name).trim_end_matches('+');
+    matches!(
+        base,
+        "functions"
+            | "aliases"
+            | "galiases"
+            | "saliases"
+            | "dis_aliases"
+            | "dis_galiases"
+            | "dis_saliases"
+            | "dis_functions"
+            | "BASH_ALIASES"
+    )
+}
+
+/// The decision of [`exemption_disabled`] from the PARSED command (the same
+/// brush-parser AST + evaluator the rest of blastguard judges with), not from
+/// a whitespace split: command words are read after quote removal, backslash
+/// removal and `$'…'` decoding, so `\shopt`, `"alias"`, `sh''opt` are
+/// `shopt` / `alias`. True (exemption off) when
+/// * the parse or evaluation is undetermined (fail closed);
+/// * some simple command, anywhere (compound bodies included), has a
+///   command word that is not a literal, or any literal word in
+///   {alias, unalias, shopt, enable, functions, autoload, eval, source, `.`,
+///   trap, zle, function} (so `command` / `builtin` / `\` wrappers are
+///   covered), or `typeset` / `declare` with an `f` option cluster;
+/// * any word or assignment names one of [`is_command_table_name`].
+fn parsed_command_may_redefine_words(cmd: &str) -> bool {
+    use super::ast::{analyze, Analysis, Value};
+    let Analysis::Known(script) = analyze(cmd) else {
+        return true;
+    };
+    script.commands.iter().any(|sc| {
+        if sc.assignments.iter().any(|(n, _)| is_command_table_name(n)) {
+            return true;
+        }
+        let mut literals: Vec<&str> = Vec::new();
+        for (i, w) in sc.argv.iter().enumerate() {
+            match &w.value {
+                Value::Literal(s) => literals.push(s.as_str()),
+                Value::Undetermined(_) if i == 0 => return true,
+                Value::Undetermined(_) => {}
+            }
+        }
+        literals.iter().any(|s| {
+            matches!(
+                *s,
+                "alias"
+                    | "unalias"
+                    | "shopt"
+                    | "enable"
+                    | "functions"
+                    | "autoload"
+                    | "eval"
+                    | "source"
+                    | "."
+                    | "trap"
+                    | "zle"
+                    | "function"
+            ) || is_command_table_name(s.split('=').next().unwrap_or(s))
+        }) || (literals
+            .iter()
+            .any(|h| matches!(*h, "typeset" | "declare" | "local"))
+            && literals
+                .iter()
+                .any(|s| s.starts_with('-') && !s.starts_with("--") && s.contains('f')))
+    })
+}
+
+fn exemption_disabled_by_words(cmd: &str) -> bool {
+    defines_shell_function(cmd)
+        || quote_aware_words(cmd).iter().any(|w| {
+            let w = unquote_literal_value(w).unwrap_or_else(|| w.to_string());
+            let w = w.trim_start_matches(['(', '{']);
+            matches!(
+                w,
+                "alias"
+                    | "shopt"
+                    | "enable"
+                    | "unalias"
+                    | "functions"
+                    | "autoload"
+                    | "eval"
+                    | "source"
+                    | "."
+                    | "function"
+            ) || w.starts_with("functions[")
+        })
+}
+
+/// [`mentions_name_outside_reference`] over the simple statements of a compound
+/// command's source `src`, with the bare-operand exemption of
+/// [`segment_mentions_name`] applied per statement.
+pub(super) fn compound_mentions_name(src: &str, name: &str, exempt_ok: bool) -> bool {
+    const KEYWORDS: &[&str] = &[
+        "while", "until", "if", "elif", "then", "else", "do", "!", "{", "(", "time",
+    ];
+    src.split([';', '\n', '|', '&', '(', ')', '}'])
+        .any(|piece| {
+            let words = quote_aware_words(piece);
+            let skip = words
+                .iter()
+                .take_while(|w| KEYWORDS.contains(&w.as_str()) || w.starts_with('{'))
+                .count();
+            segment_mentions_name(&words[skip..].join(" "), name, exempt_ok)
+                || mentions_name_outside_reference(&words[..skip].join(" "), name)
+        })
+}
+
+/// True when the segment runs a command that binds a variable NAMED BY AN
+/// EXPANSION (`printf -v "$Q"`, `read "$Q"`, `declare "$Q=x"`, `set -A $N`):
+/// the name is not in the text, so no tracked variable can be trusted
+/// afterwards (backlog f3301770). `words` are raw spellings.
+pub(super) fn indirect_name_operand<S: AsRef<str>>(words: &[S]) -> bool {
+    let Some((hi, head)) = command_head(words) else {
+        return false;
+    };
+    // Operands, with redirections (`<<< "$x"`, `2>$f`) removed.
+    let mut rest: Vec<&str> = Vec::new();
+    let mut skip = false;
+    for w in words[hi + 1..].iter().map(AsRef::as_ref) {
+        if skip {
+            skip = false;
+            continue;
+        }
+        let op = w.trim_start_matches(|c: char| c.is_ascii_digit());
+        if op.starts_with('<') || op.starts_with('>') {
+            skip = op.trim_start_matches(['<', '>', '&']).is_empty() && !op.ends_with('&');
+            continue;
+        }
+        rest.push(w);
+    }
+    let cluster = |p: char| {
+        rest.iter()
+            .any(|w| w.starts_with('-') && !w.starts_with("--") && w.contains(p))
+    };
+    let expands_name = |w: &&str| {
+        !w.starts_with('-') && w.split('=').next().is_some_and(|n| n.contains(['$', '`']))
+    };
+    match head.as_str() {
+        "read" | "readarray" | "mapfile" | "unset" | "declare" | "typeset" | "local" | "export"
+        | "readonly" | "integer" | "float" | "zformat" | "vared" | "zparseopts" | "zstat"
+        | "sysread" => rest.iter().any(expands_name),
+        "getopts" => rest
+            .iter()
+            .filter(|w| !w.starts_with('-'))
+            .nth(1)
+            .is_some_and(|w| w.contains(['$', '`'])),
+        // Only the NAME operand (the word after the flag, or the attached
+        // `-vNAME`) matters; value arguments are data.
+        "printf" | "print" => rest.iter().enumerate().any(|(i, w)| {
+            w.starts_with('-')
+                && !w.starts_with("--")
+                && w.find('v').is_some_and(|p| {
+                    let attached = &w[p + 1..];
+                    if attached.is_empty() {
+                        rest.get(i + 1).is_some_and(|n| n.contains(['$', '`']))
+                    } else {
+                        attached.contains(['$', '`'])
+                    }
+                })
+        }),
+        "zstyle" | "strftime" => cluster('s') && rest.iter().any(expands_name),
+        "set" => rest
+            .iter()
+            .position(|w| *w == "-A" || *w == "+A")
+            .is_some_and(|i| rest.get(i + 1).is_some_and(|n| n.contains(['$', '`']))),
+        _ => false,
+    }
+}
+
+/// The two names `typeset -T A B` / `declare -T A B` ties (zsh): assigning
+/// either assigns the other.
+pub(super) fn tie_pair<S: AsRef<str>>(words: &[S]) -> Option<(String, String)> {
+    let (hi, head) = command_head(words)?;
+    if !matches!(
+        head.as_str(),
+        "typeset" | "declare" | "local" | "export" | "readonly"
+    ) {
+        return None;
+    }
+    let rest = &words[hi + 1..];
+    if !rest.iter().any(|w| {
+        w.as_ref().starts_with('-') && !w.as_ref().starts_with("--") && w.as_ref().contains('T')
+    }) {
+        return None;
+    }
+    let mut names = rest
+        .iter()
+        .map(AsRef::as_ref)
+        .filter(|w| !w.starts_with('-'))
+        .map(|w| w.split('=').next().unwrap_or(w).to_string());
+    Some((names.next()?, names.next()?))
 }
 
 /// True when `line` may define a shell function: a `function` word, or a `(`
@@ -587,6 +996,8 @@ pub(super) fn resolve_expanded_command_word(
     // exists too, skipping means answering with a value the shell has since
     // replaced.
     let mut latest_rebind: Option<usize> = None;
+    let mut ties: Vec<(String, String)> = Vec::new();
+    let exempt_ok = !exemption_disabled(cmd);
     // A here-document BODY is data the shell never executes, so a `NAME=value`
     // typed inside one neither assigns nor rebinds. Skipping it here is what
     // lets the closed-here-document case above be believed at all: the reason
@@ -596,12 +1007,23 @@ pub(super) fn resolve_expanded_command_word(
         if is_here_doc_body.get(idx).copied().unwrap_or(false) {
             continue;
         }
+        // `typeset -T A B` (zsh) ties two names for the rest of the line.
+        if let Some(t) = tie_pair(&quote_aware_words(&segs[idx].text)) {
+            ties.push(t);
+        }
         if !assignments_reach_parent_shell(&segs, idx) {
+            // Not a parent-shell assignment, but zsh runs the LAST element of
+            // a pipeline in the parent shell (`echo x | read P`) and bash
+            // may too (`shopt -s lastpipe`), so a stage that may bind the
+            // name makes the earlier value stale (backlog f3301770).
+            if segment_may_rebind_with(&segs[idx].text, &name, exempt_ok) {
+                latest_rebind = Some(idx);
+            }
             continue;
         }
         let words = quote_aware_words(&segs[idx].text);
         if words.is_empty() || !words.iter().all(|w| is_assignment(w)) {
-            if segment_may_rebind(&segs[idx].text, &name) {
+            if segment_may_rebind_with(&segs[idx].text, &name, exempt_ok) {
                 latest_rebind = Some(idx);
             }
             continue;
@@ -612,6 +1034,14 @@ pub(super) fn resolve_expanded_command_word(
             };
             if w[..eq] == name {
                 latest = Some((idx, w[eq + 1..].to_string()));
+            } else if tied_partner(&name).is_some_and(|p| w[..eq] == *p)
+                || ties
+                    .iter()
+                    .any(|(a, b)| (*a == name && w[..eq] == *b) || (*b == name && w[..eq] == *a))
+            {
+                // zsh ties `path`/`PATH` (and the other pairs): assigning
+                // the partner assigns this name (backlog f3301770).
+                latest_rebind = Some(idx);
             }
         }
     }

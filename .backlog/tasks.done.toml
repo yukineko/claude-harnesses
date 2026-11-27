@@ -95675,3 +95675,73 @@ rev = "ca5cd0c8bb6cd43280a24c7a6648c75af29ba837"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "1dad1f35"
+title = "blastguard: heredoc_data_body_verify contract row python3 <<'EOF' rm -rf /usr/lib EOF expects deny, observed allow (red at c434e41e5 and 14ba909b0)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "red-at-base",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = '''
+Observed 2026-11-20 during run-20261120-171414-35880 (condukt driver, session 62e92d16): cargo test -p blastguard --test heredoc_data_body_verify -> 'test result: FAILED. 5 passed; 1 failed' at both c434e41e5 (pre-run base) and the merged tree 14ba909b0; failing test contract_executing_bodies_and_real_lines_stay_judged, row python3 <<'EOF'\nrm -rf /usr/lib\nEOF -> allow. Not caused by this run (red at base). Tagged fail-open provisionally. Readings: (a) fail-open: a python stdin body naming system-harm text must not be Allow; (b) the row's premise is stale (body is not valid Python, S5 judges it inert) and the assert needs re-anchoring by an independent agent. Tell apart: does a later ruling make python stdin bodies judged by progeffect S5 rather than as shell? Not investigated.
+needs user ruling (frozen assert, unhedged): row python3 <<'EOF' rm -rf /usr/lib EOF expects not-Allow, but the body is not valid Python (syntax error, nothing executes; S5/progeffect reads python bodies as Python, not shell, per ruling heredoc-body-by-target-language). Options: (a) keep the contract: an unparsable python stdin body is Undetermined -> Ask/Deny; (b) re-anchor the row to an executing Python body (e.g. import os; os.system('rm -rf /usr/lib')) and accept Allow for a syntax-error body. Observed RED at c434e41e5/14ba909b0 (2026-11-20).'''
+created_at = 1795166100
+updated_at = 1795782721
+weight = 0.0
+issue_number = 1926
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1926"
+issue_closed_at = 1795782724
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_data_body_verify"
+rev = "8189c4c6ca89e8c4f100ad68ce0c1f3da79bce23"
+observed_at = 1795166100
+detail = """
+exit 101:  Compiling trybuild v1.0.118
+   Compiling blastguard v0.2.813 (/Users/yuki/src/.harness-worktrees/backlog-file-35880/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.79s
+     Running tests/heredoc_data_body_verify.rs (target/debug/deps/heredoc_data_body_verify-7e4f0bdf8803f9f5)
+error: test failed, to rerun pass `-p blastguard --test heredoc_data_body_verify`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test heredoc_data_body_verify"
+exit = 0
+passed = 6
+rev = "0b03b9715b09dcbdc1a3045df98f9a39db70d347"
+observed_at = 1795782719
+output_digest = "sha256:bdf9fa876bc3306bf0b93598b39cd35cc98e8aaa395cc0192347207fc8b2a77e"
+excerpt = """
+
+running 6 tests
+test parity_two_data_heredocs_on_one_line ... ok
+test smuggle_crlf_delimiter_closes_before_the_command ... ok
+test smuggle_consumer_redefined_as_function ... ok
+test smuggle_data_file_executed_later_in_the_same_command ... ok
+test contract_data_bodies_are_allowed_on_every_rule ... ok
+test contract_executing_bodies_and_real_lines_stay_judged ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+   Compiling blastguard v0.2.943 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
+     Running tests/heredoc_data_body_verify.rs (target/debug/deps/heredoc_data_body_verify-58feb1c6bb67255d)
+"""
+
+[task.closure.red]
+rev = "c434e41e56cf4e4edcbdfafcb18c04622e87cc79"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -557,42 +557,6 @@ exit 101: 0-171414-35880-whileread/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_while_read_data_heredoc_fd_redirect_fp`"""
 
 [[task]]
-id = "1dad1f35"
-title = "blastguard: heredoc_data_body_verify contract row python3 <<'EOF' rm -rf /usr/lib EOF expects deny, observed allow (red at c434e41e5 and 14ba909b0)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "red-at-base",
-    "p1",
-]
-touched_files = []
-status = "failed"
-notes = '''
-Observed 2026-11-20 during run-20261120-171414-35880 (condukt driver, session 62e92d16): cargo test -p blastguard --test heredoc_data_body_verify -> 'test result: FAILED. 5 passed; 1 failed' at both c434e41e5 (pre-run base) and the merged tree 14ba909b0; failing test contract_executing_bodies_and_real_lines_stay_judged, row python3 <<'EOF'\nrm -rf /usr/lib\nEOF -> allow. Not caused by this run (red at base). Tagged fail-open provisionally. Readings: (a) fail-open: a python stdin body naming system-harm text must not be Allow; (b) the row's premise is stale (body is not valid Python, S5 judges it inert) and the assert needs re-anchoring by an independent agent. Tell apart: does a later ruling make python stdin bodies judged by progeffect S5 rather than as shell? Not investigated.
-needs user ruling (frozen assert, unhedged): row python3 <<'EOF' rm -rf /usr/lib EOF expects not-Allow, but the body is not valid Python (syntax error, nothing executes; S5/progeffect reads python bodies as Python, not shell, per ruling heredoc-body-by-target-language). Options: (a) keep the contract: an unparsable python stdin body is Undetermined -> Ask/Deny; (b) re-anchor the row to an executing Python body (e.g. import os; os.system('rm -rf /usr/lib')) and accept Allow for a syntax-error body. Observed RED at c434e41e5/14ba909b0 (2026-11-20).'''
-created_at = 1795166100
-updated_at = 1795240806
-defer_until = 1795413606
-weight = 0.0
-issue_number = 1926
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1926"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test heredoc_data_body_verify"
-rev = "8189c4c6ca89e8c4f100ad68ce0c1f3da79bce23"
-observed_at = 1795166100
-detail = """
-exit 101:  Compiling trybuild v1.0.118
-   Compiling blastguard v0.2.813 (/Users/yuki/src/.harness-worktrees/backlog-file-35880/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.79s
-     Running tests/heredoc_data_body_verify.rs (target/debug/deps/heredoc_data_body_verify-7e4f0bdf8803f9f5)
-error: test failed, to rerun pass `-p blastguard --test heredoc_data_body_verify`"""
-
-[[task]]
 id = "2bcfd471"
 title = "deny-no-verify.py FP: quoted heredoc body with an apostrophe plus a 'git' substring and '-n' is refused as unparseable gate-bypass (shlex does not model heredocs)"
 project = "/Users/yuki/src/harness"

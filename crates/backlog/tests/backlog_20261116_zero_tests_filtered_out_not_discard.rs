@@ -34,12 +34,15 @@ case "$m" in
 esac
 "#;
 
-// test-weakening-justified: new RED for an unfixed defect (backlog pending, 2026-11-16); the ignore is removed in the fixing commit.
-#[ignore]
 #[test]
 fn claim_does_not_discard_row_whose_ignored_repro_is_now_filtered_out() {
     let f = common::Fixture::new("zt-filtered");
     f.write_exec_shim("cargo", CARGO_FILTERED);
+    f.write(
+        "tests/t.rs",
+        "#[test]\n#[ignore = \"RED: filtered row\"]\nfn t() {}\n",
+    );
+    f.commit_paths(&["tests/t.rs"], "t test");
     f.write("marker", "broken\n");
     f.commit_paths(&["marker"], "marker broken");
     let p = f.project();
@@ -60,6 +63,9 @@ fn claim_does_not_discard_row_whose_ignored_repro_is_now_filtered_out() {
         o.both()
     );
     let id = common::parse_added(&o.stdout);
+    // `add` wrote the id back into tests/t.rs (working tree only); commit it
+    // so the tree is clean for the re-run.
+    f.commit_paths(&["tests/t.rs"], "t id written back");
     f.write("marker", "unignored\n");
     f.commit_paths(&["marker"], "marker unignored (fix removed #[ignore])");
     let c = f.run(&["next", "--claim"]);

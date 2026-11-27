@@ -868,6 +868,16 @@ fn ignored_in_results(output: &str) -> u64 {
         .fold(0u64, u64::saturating_add)
 }
 
+/// Sum of `N filtered out` over every `test result:` line of `output`: how
+/// many tests exist but were not selected by the run's filter. 0 when none.
+fn filtered_out_in_results(output: &str) -> u64 {
+    output
+        .lines()
+        .filter(|l| l.contains("test result:"))
+        .map(|l| count_of(l, "filtered").unwrap_or(0))
+        .fold(0u64, u64::saturating_add)
+}
+
 /// Markers of a BUILD failure (the test never ran), as opposed to a test that
 /// ran and failed.
 fn build_failure_marker(output: &str) -> Option<&'static str> {
@@ -1142,6 +1152,8 @@ fn excerpt_short(output: &str) -> String {
 /// exit 0 is not-reproduced only when a test is shown to have run (see
 /// [`zero_tests_ran`]: an exit-0 libtest run with `passed + failed = 0`, or a
 /// `cargo test` exit 0 with no `test result:` line, is undetermined);
+/// for a STORED-repro re-run, a zero-test run reporting `N filtered out`
+/// (N >= 1) is `Undeterminable` (never auto-discarded; ruling 2026-11-27);
 /// everything that cannot be run to a conclusion is undetermined, with the
 /// cause in `detail`. Never returns an error: the
 /// caller (`add`) files a task only on `reproduced` and writes nothing for
@@ -1290,6 +1302,26 @@ pub fn run_repro_classified(cwd: &Path, text: &str, now: i64) -> ClassifiedRepro
                         "exit 0 but ZERO tests ran: {ignored} test(s) exist but were skipped as \
                          `#[ignore]`d, so nothing was observed; run the repro with `-- --ignored` \
                          (e.g. `cargo test -p <crate> --test <file> -- --ignored`): {tail}"
+                    ),
+                    Some(head),
+                    Some(0),
+                );
+            }
+            // `N filtered out` (N >= 1): the named test EXISTS but the filter did
+            // not select it (typically its `#[ignore]` was removed by the fix, so
+            // `-- --ignored` now skips it). The run executed no test and observed
+            // nothing about the defect: undetermined, never a discard (user
+            // ruling 2026-11-27, CLAUDE.md §3). The no-`filtered out` zero-run
+            // shape stays NotDemonstrated below.
+            let filtered = filtered_out_in_results(&r.output);
+            if filtered >= 1 {
+                return undet(
+                    RecheckVerdict::Undeterminable,
+                    format!(
+                        "exit 0 but ZERO tests ran: {filtered} test(s) were `filtered out`, so \
+                         nothing was observed (the repro's test exists but was not selected; \
+                         e.g. its `#[ignore]` was removed while the repro still passes \
+                         `-- --ignored`); fix the stored repro command: {tail}"
                     ),
                     Some(head),
                     Some(0),

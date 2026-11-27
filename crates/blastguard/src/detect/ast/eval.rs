@@ -789,7 +789,7 @@ impl Ev {
                     let before = self.out.len();
                     let (_, produced) =
                         self.command(text, c, st, &Context::Pipeline { pos, len })?;
-                    env = env.forgetting_in(produced.as_ref());
+                    env = env.forgetting_stage(text, c, produced.as_ref());
                     stdin = match c {
                         // A brace group feeds what its members print, in order.
                         ast::Command::Compound(ast::CompoundCommand::BraceGroup(b), None) => {

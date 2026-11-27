@@ -221,42 +221,117 @@ impl Env {
     /// tied names (`PATH` / `path`, ...) rebinds its partner. Costs a
     /// resolution, never invents one. `None`: nothing was produced.
     pub(super) fn forgetting_in(mut self, sc: Option<&SimpleCommand>) -> Self {
+        use crate::detect::vars;
         let Some(sc) = sc else { return self };
-        let mut words: Vec<&str> = Vec::new();
-        let mut undetermined_operand = false;
-        for w in &sc.argv {
-            // The RAW spelling: an unquoted `{P[0]}` is a glob, hence
-            // Undetermined, yet it is still a redirect word naming `P`.
-            words.push(w.raw.as_str());
-            if matches!(w.value, Value::Undetermined(_)) {
-                undetermined_operand = true;
-            }
-        }
+        // The RAW spelling: an unquoted `{P[0]}` is a glob, hence
+        // Undetermined, yet it is still a redirect word naming `P`.
+        let words: Vec<&str> = sc.argv.iter().map(|w| w.raw.as_str()).collect();
+        let undetermined_operand = sc
+            .argv
+            .iter()
+            .any(|w| matches!(w.value, Value::Undetermined(_)));
         // An undetermined word may be the NAME a binder assigns
         // (`print -v $n`): for a command known to bind a name operand, no
         // tracked variable can be trusted afterwards. (An unknown command
         // with an undetermined word naming a variable is not covered: the
         // name cannot be read from the text.)
-        if undetermined_operand
+        if (undetermined_operand
             && words
                 .first()
-                .is_some_and(|h| crate::detect::vars::binds_name_as_operand(h))
+                .is_some_and(|h| vars::binds_name_as_operand(h)))
+            || vars::indirect_name_operand(&words)
         {
-            self.havoc_vars("an undetermined operand of a command that binds names");
+            self.havoc_vars("a name operand of a command that binds names is an expansion");
         }
-        let names: Vec<String> = self.vars.keys().cloned().collect();
+        self.forget_mentioned(&words);
+        // zsh `typeset -T A B`: remember the tie (the key is not an
+        // identifier, so it never collides with a variable).
+        if let Some((a, b)) = vars::tie_pair(&words) {
+            self.forget(&a, "tied by typeset -T");
+            self.forget(&b, "tied by typeset -T");
+            self.vars.insert(
+                format!("\u{1}tie\u{1}{a}\u{1}{b}"),
+                super::undet("a `typeset -T` tie"),
+            );
+        }
+        for (n, _) in &sc.assignments {
+            if let Some(p) = vars::tied_partner(n) {
+                self.forget(p, "tied to an assigned name");
+            }
+            let ties: Vec<(String, String)> = self
+                .vars
+                .keys()
+                .filter_map(|k| {
+                    let mut parts = k.strip_prefix("\u{1}tie\u{1}")?.split('\u{1}');
+                    Some((parts.next()?.to_string(), parts.next()?.to_string()))
+                })
+                .collect();
+            for (a, b) in ties {
+                if a == *n {
+                    self.forget(&b, "tied to an assigned name");
+                } else if b == *n {
+                    self.forget(&a, "tied to an assigned name");
+                }
+            }
+        }
+        self
+    }
+
+    /// Forget every tracked variable some word of `words` names other than as
+    /// a plain `$name` reference; a bare `name` operand of a command that
+    /// cannot bind (`echo P`, `grep P f`) is data and keeps it.
+    fn forget_mentioned(&mut self, words: &[&str]) {
+        use crate::detect::vars;
+        let names: Vec<String> = self
+            .vars
+            .keys()
+            .filter(|k| !k.starts_with('\u{1}'))
+            .cloned()
+            .collect();
         for k in names {
-            if words
-                .iter()
-                .any(|w| crate::detect::vars::mentions_name_outside_reference(w, &k))
-            {
+            if words.iter().any(|w| {
+                vars::mentions_name_outside_reference(w, &k)
+                    && !vars::exempt_plain_arg(words, w, &k)
+            }) {
                 self.forget(&k, "named by a command word that may bind it");
             }
         }
-        for (n, _) in &sc.assignments {
-            if let Some(p) = crate::detect::vars::tied_partner(n) {
-                self.forget(p, "tied to an assigned name");
+    }
+
+    /// [`Env::forgetting_in`] for one stage of a multi-stage pipeline: zsh
+    /// runs the last stage in the parent shell, so a compound stage
+    /// (`while read P; …`, `{ read P; }`) is walked through its source text.
+    pub(super) fn forgetting_stage(
+        mut self,
+        text: &Text,
+        c: &ast::Command,
+        produced: Option<&SimpleCommand>,
+    ) -> Self {
+        use crate::detect::vars;
+        let ast::Command::Compound(cc, _) = c else {
+            return self.forgetting_in(produced);
+        };
+        let src = super::compound_loc(cc)
+            .and_then(|l| text.local(l))
+            .and_then(|r| text.s.get(r));
+        match src {
+            Some(src) => {
+                let names: Vec<String> = self
+                    .vars
+                    .keys()
+                    .filter(|k| !k.starts_with('\u{1}'))
+                    .cloned()
+                    .collect();
+                for k in names {
+                    if vars::mentions_name_outside_reference(src, &k) {
+                        self.forget(&k, "named inside a pipeline stage that may bind it");
+                    }
+                }
+                if vars::compound_source_has_indirect_binder(src) {
+                    self.havoc_vars("a pipeline stage binds a name given by an expansion");
+                }
             }
+            None => self.havoc_vars("a compound pipeline stage with no source text"),
         }
         self
     }

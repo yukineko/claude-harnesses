@@ -14,7 +14,12 @@
 //! `push`** (verifier round 2, P1): a word that only expansion can reveal may
 //! be anything. Concretely:
 //!
-//! * a command word that is not a literal (`$G $S`, `"$@"`, a glob);
+//! * a command word that is not a literal (`$G $S`, `"$@"`, a glob), except
+//!   that `$EDITOR file.txt` (>= 1 argument, all literal, none a master-only
+//!   effect word or sensitive program) is allowed (0.1.7);
+//! * a write to a GitHub merge/push endpoint that cannot be read statically
+//!   (`gh api` / `curl`), and running a file written earlier in the same
+//!   program (`cp git /tmp/g && /tmp/g push`) (0.1.7);
 //! * a non-literal argument where code is expected: `eval`, `sh -c`, `ssh`'s
 //!   remote command, a shell's script operand, `source`, `find -exec`;
 //! * a git subcommand that is not literal, unknown, or an alias (P3);
@@ -28,6 +33,9 @@
 //! script…) are not read, and an unknown program whose arguments do not name
 //! a sensitive program is allowed.
 
+mod web;
+
+use self::web::args_are_data;
 use crate::config;
 use crate::group;
 use brush_parser::ast;
@@ -382,6 +390,9 @@ struct Target {
     dir: Result<PathBuf, String>,
     /// An explicit git dir (`--git-dir` / `GIT_DIR=`), if given.
     git_dir: Option<Result<PathBuf, String>>,
+    /// The cwd at this point depends on a `cd` whose success is not certain
+    /// (it ran in an earlier statement, or behind `||`).
+    unsure: bool,
 }
 
 pub(crate) fn analyze(
@@ -400,10 +411,21 @@ pub(crate) fn analyze(
         moves: Vec::new(),
         sm_calls: Vec::new(),
         sets_session_env: false,
+        cwd_unsure: false,
+        written: Vec::new(),
+        execs: Vec::new(),
     };
     w.program(command, 0);
     if let Some(op) = w.found {
         return Outcome::Found(op);
+    }
+    // Running a file this same program wrote or copied is running code that
+    // was never read (`cp git /tmp/g && /tmp/g push`).
+    let ran_written = w.execs.iter().find(|e| w.was_written(e)).cloned();
+    if let Some(e) = ran_written {
+        w.set_undet(format!(
+            "同じ program 内で書いた/コピーしたファイルを実行している: {e}"
+        ));
     }
     for call in std::mem::take(&mut w.sm_calls) {
         let control_sub = match &call.sub {
@@ -422,9 +444,9 @@ pub(crate) fn analyze(
         }
     }
     for t in std::mem::take(&mut w.moves) {
-        if w.has_cd {
+        if w.has_cd || t.unsure {
             w.set_undet(
-                "HEAD を動かす git 操作と同じ program 内に cd/pushd/popd/checkout/switch がある"
+                "HEAD を動かす git 操作と同じ program 内に、成否の確定しない cd/pushd/popd/checkout/switch がある"
                     .to_string(),
             );
             continue;
@@ -499,6 +521,49 @@ struct Walker {
     /// assignment, `env`, `export`, ...): a `session-master` call may then run
     /// under another session's identity.
     sets_session_env: bool,
+    /// A statement-level `cd /abs && ...` ended: later statements may run in
+    /// either directory.
+    cwd_unsure: bool,
+    /// Literal paths this program writes (cp/mv/ln/tee/dd of=/redirects/
+    /// curl -o), raw-normalised; a destination directory also covers files in it.
+    written: Vec<String>,
+    /// Files this program runs (command word with a `/`, script operand).
+    execs: Vec<String>,
+}
+
+/// `cd /literal/abs/path` as a whole pipeline stage (no options, redirects,
+/// assignments or pipe): the directory it changes to.
+fn simple_abs_cd(p: &ast::Pipeline) -> Option<String> {
+    if p.seq.len() != 1 || p.bang {
+        return None;
+    }
+    let ast::Command::Simple(sc) = &p.seq[0] else {
+        return None;
+    };
+    if sc.prefix.is_some() {
+        return None;
+    }
+    if literal(&sc.word_or_name.as_ref()?.value)? != "cd" {
+        return None;
+    }
+    let items = &sc.suffix.as_ref()?.0;
+    if items.len() != 1 {
+        return None;
+    }
+    let ast::CommandPrefixOrSuffixItem::Word(w) = &items[0] else {
+        return None;
+    };
+    let dir = literal(&w.value)?;
+    dir.starts_with('/').then_some(dir)
+}
+
+fn norm_path(s: &str) -> String {
+    let s: String = s.chars().filter(|c| !matches!(c, '"' | '\'')).collect();
+    let mut s = s.as_str();
+    while let Some(r) = s.strip_prefix("./") {
+        s = r;
+    }
+    s.trim_end_matches('/').to_string()
 }
 
 fn opts() -> brush_parser::ParserOptions {
@@ -682,13 +747,116 @@ impl Walker {
 
     fn list(&mut self, l: &ast::CompoundList, src: &str, depth: usize) {
         for item in &l.0 {
-            let aol = &item.0;
-            self.pipeline(&aol.first, src, depth);
-            for a in &aol.additional {
-                match a {
-                    ast::AndOr::And(p) | ast::AndOr::Or(p) => self.pipeline(p, src, depth),
+            self.and_or(&item.0, src, depth);
+        }
+    }
+
+    /// One `a && b || c ...` chain. A statement `cd /abs/path` that is
+    /// followed by `&&` (and reached only through `&&`) definitely changes the
+    /// directory for the `&&`-connected commands after it, so a HEAD-moving
+    /// git there is judged against that directory. Everything else about
+    /// `cd` (relative / `-` / bare / piped / after `||` / `;`) stays
+    /// `has_cd` or `cwd_unsure`, i.e. undetermined.
+    fn and_or(&mut self, aol: &ast::AndOrList, src: &str, depth: usize) {
+        let saved = self.cwd.clone();
+        let mut elems: Vec<&ast::Pipeline> = vec![&aol.first];
+        let mut ors: Vec<bool> = vec![false];
+        for a in &aol.additional {
+            match a {
+                ast::AndOr::And(p) => {
+                    elems.push(p);
+                    ors.push(false);
+                }
+                ast::AndOr::Or(p) => {
+                    elems.push(p);
+                    ors.push(true);
                 }
             }
+        }
+        let mut tracked = false;
+        let mut cd_seen = false;
+        for (k, p) in elems.iter().enumerate() {
+            // `ors[k]`: this element is reached through `||`.
+            let reached_by_and_only = !ors[..=k].iter().any(|o| *o);
+            let followed_by_and = ors.get(k + 1).is_some_and(|o| !*o);
+            if let Some(dir) = simple_abs_cd(p) {
+                if reached_by_and_only && followed_by_and {
+                    self.cwd = PathBuf::from(dir);
+                    tracked = true;
+                    cd_seen = true;
+                    continue;
+                }
+            }
+            if tracked && ors[k] {
+                // Reached through `||` after a tracked cd: either directory.
+                self.cwd = saved.clone();
+                tracked = false;
+                self.cwd_unsure = true;
+            }
+            self.pipeline(p, src, depth);
+        }
+        self.cwd = saved;
+        if cd_seen {
+            self.cwd_unsure = true;
+        }
+    }
+
+    /// Was `path` written by this program (itself, or inside a written dir)?
+    fn was_written(&self, path: &str) -> bool {
+        let p = norm_path(path);
+        let parent = p.rsplit_once('/').map(|(d, _)| d.to_string());
+        self.written
+            .iter()
+            .any(|w| *w == p || parent.as_deref() == Some(w.as_str()))
+    }
+
+    fn note_written(&mut self, a: &Arg) {
+        self.written
+            .push(norm_path(a.lit.as_deref().unwrap_or(&a.raw)));
+    }
+
+    /// Record the files a writer program (`cp`, `tee`, `dd of=`, `curl -o`
+    /// ...) creates, so running one of them later in the same program can be
+    /// recognised.
+    fn note_writer(&mut self, base: &str, args: &[Arg]) {
+        match base {
+            "cp" | "mv" | "ln" | "install" | "rsync" => {
+                let pos: Vec<&Arg> = args
+                    .iter()
+                    .filter(|a| !a.lit.as_deref().is_some_and(|s| s.starts_with('-')))
+                    .collect();
+                if let Some(dest) = pos.last() {
+                    self.note_written(dest);
+                }
+            }
+            "tee" => {
+                for a in args
+                    .iter()
+                    .filter(|a| !a.lit.as_deref().is_some_and(|s| s.starts_with('-')))
+                {
+                    self.note_written(a);
+                }
+            }
+            "dd" => {
+                for a in args {
+                    if let Some(v) = a.lit.as_deref().and_then(|s| s.strip_prefix("of=")) {
+                        self.written.push(norm_path(v));
+                    }
+                }
+            }
+            "curl" | "wget" => {
+                for (k, a) in args.iter().enumerate() {
+                    if matches!(
+                        a.lit.as_deref(),
+                        Some("-o" | "-O" | "--output" | "--output-document")
+                    ) {
+                        if let Some(v) = args.get(k + 1) {
+                            self.note_written(v);
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -802,6 +970,16 @@ impl Walker {
                         );
                     if to_stdin {
                         stdin.files.push(literal(&w.value));
+                    }
+                    if matches!(
+                        kind,
+                        ast::IoFileRedirectKind::Write
+                            | ast::IoFileRedirectKind::Append
+                            | ast::IoFileRedirectKind::Clobber
+                            | ast::IoFileRedirectKind::ReadAndWrite
+                    ) {
+                        let t = literal(&w.value).unwrap_or_else(|| w.value.clone());
+                        self.written.push(norm_path(&t));
                     }
                 }
                 ast::IoFileRedirectTarget::Duplicate(w) => self.scan_word(&w.value, depth),
@@ -960,7 +1138,7 @@ impl Walker {
                 return;
             };
             let Some(name) = a.lit.as_deref() else {
-                self.undet(&joined(&argv[i..]), "command 名が literal でない");
+                self.non_literal_command(&argv[i..]);
                 return;
             };
             let next = match basename(name) {
@@ -1036,6 +1214,10 @@ impl Walker {
         };
         let args = &rest[1..];
         let base = basename(name);
+        if name.contains('/') {
+            self.execs.push(norm_path(name));
+        }
+        self.note_writer(base, args);
         match base {
             "git" => self.git(args, via_xargs, assigns, src, depth),
             "cd" | "pushd" | "popd" => self.has_cd = true,
@@ -1052,10 +1234,14 @@ impl Walker {
                 }
             }
             "gh" => {
-                if positionals(args, &["-R", "--repo"]).starts_with(&["pr", "merge"]) {
+                let pos = positionals(args, &["-R", "--repo"]);
+                if pos.starts_with(&["pr", "merge"]) {
                     self.found(Op::Merge)
+                } else if pos.first() == Some(&"api") {
+                    self.gh_api(args, rest);
                 }
             }
+            "curl" | "wget" | "http" | "https" | "xh" | "xhs" => self.web_client(base, args, rest),
             "ssh" => self.ssh(args, depth),
             "find" => self.find(args, src, depth),
             b if b.starts_with("session-master") => self.sm_call(args),
@@ -1071,7 +1257,11 @@ impl Walker {
             b if INERT.contains(&b) => {}
             b if INTERPRETERS.contains(&b) => self.interpreter(args, stdin),
             _ => {
-                // Unknown program: it may be a wrapper (`setsid git push`).
+                // Unknown program: it may be a wrapper (`setsid git push`),
+                // unless it is known not to run its arguments.
+                if args_are_data(base, args) {
+                    return;
+                }
                 for a in args {
                     if let Some(tok) = mentions_sensitive(&a.raw) {
                         self.undet(
@@ -1083,6 +1273,39 @@ impl Walker {
                         return;
                     }
                 }
+            }
+        }
+    }
+
+    /// The command word is not a literal (`$EDITOR file.txt`). It may expand
+    /// to anything, but the deny-by-default intent (SPEC §5.1) is to stop
+    /// master-only *effects*, not every unknown word: with at least one
+    /// argument, every argument literal and none of them a master-only effect
+    /// word or a sensitive program, the line is allowed. A bare `$X`, a
+    /// non-literal argument, or any such word stays undetermined.
+    fn non_literal_command(&mut self, rest: &[Arg]) {
+        let args = rest.get(1..).unwrap_or(&[]);
+        if args.is_empty() || args.iter().any(|a| a.lit.is_none()) {
+            self.undet(&joined(rest), "command 名が literal でない");
+            return;
+        }
+        for a in args {
+            let s = a.lit.as_deref().unwrap_or("");
+            let named = s
+                .split(|c: char| !(c.is_ascii_alphanumeric() || "_.-/+".contains(c)))
+                .find(|t| {
+                    MASTER_WORDS.contains(t)
+                        || CONTROL_SUBCOMMANDS.contains(t)
+                        || *t == "--session"
+                        || t.contains(SESSION_ENV)
+                        || mentions_sensitive(t).is_some()
+                });
+            if let Some(t) = named {
+                self.undet(
+                    &joined(rest),
+                    &format!("command 名が literal でなく、引数に master 専用の語 {t} がある"),
+                );
+                return;
             }
         }
     }
@@ -1145,6 +1368,8 @@ impl Walker {
             Some(s) => Some(basename(s).to_string()),
             None => literal_tail(&a.raw),
         };
+        self.execs
+            .push(norm_path(a.lit.as_deref().unwrap_or(&a.raw)));
         match name.as_deref() {
             Some("rollout-plugins.sh") => self.found(Op::Rollout),
             Some(_) => {}
@@ -1213,6 +1438,23 @@ impl Walker {
     /// checked for sensitive programs; script files are not read (limit).
     fn interpreter(&mut self, args: &[Arg], stdin: &Stdin) {
         let mut code_next = false;
+        let mut k = 0usize;
+        while let Some(a) = args.get(k) {
+            match a.lit.as_deref() {
+                Some(s) if s.starts_with('-') => {
+                    k += if matches!(s, "-c" | "-e" | "-E" | "--eval" | "-p" | "-m") {
+                        2
+                    } else {
+                        1
+                    };
+                }
+                _ => {
+                    self.execs
+                        .push(norm_path(a.lit.as_deref().unwrap_or(&a.raw)));
+                    break;
+                }
+            }
+        }
         for a in args {
             match a.lit.as_deref() {
                 Some(s) => {
@@ -1332,7 +1574,11 @@ impl Walker {
                         Err(_) => PathBuf::from(p),
                     })
                 });
-                self.moves.push(Target { dir, git_dir: gd });
+                self.moves.push(Target {
+                    dir,
+                    git_dir: gd,
+                    unsure: self.cwd_unsure,
+                });
             }
             "checkout" | "switch" => self.has_cd = true,
             "update-ref" => self.git_update_ref(rest),
@@ -1519,6 +1765,23 @@ impl Walker {
         }
     }
 }
+
+/// Words that are master-only effects when they follow a command word that
+/// cannot be read (`$G push`).
+const MASTER_WORDS: &[&str] = &[
+    "push",
+    "send-pack",
+    "http-push",
+    "merge",
+    "pull",
+    "rebase",
+    "reset",
+    "cherry-pick",
+    "revert",
+    "am",
+    "update-ref",
+    "rollout",
+];
 
 /// The file name of a path word whose *last component* is literal even
 /// though an earlier part expands (`"$HOME/.cargo/env"` -> `env`). `None`

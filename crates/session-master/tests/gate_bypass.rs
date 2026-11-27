@@ -11,7 +11,11 @@ fn assert_member_denied(cmds: &[&str]) {
         sb.master_and_member();
         let o = sb.gate_bash("B", &sb.repo, cmd, NOW);
         assert_eq!(o.code, 0, "{cmd}: {}", o.stderr);
-        assert!(is_deny(&o), "member must be denied for {cmd:?}: stdout {:?}", o.stdout);
+        assert!(
+            is_deny(&o),
+            "member must be denied for {cmd:?}: stdout {:?}",
+            o.stdout
+        );
     }
 }
 
@@ -21,7 +25,11 @@ fn assert_member_allowed(cmds: &[&str]) {
         sb.master_and_member();
         let o = sb.gate_bash("B", &sb.repo, cmd, NOW);
         assert_eq!(o.code, 0, "{cmd}: {}", o.stderr);
-        assert!(!is_deny(&o), "member must be allowed for {cmd:?}: stdout {:?}", o.stdout);
+        assert!(
+            !is_deny(&o),
+            "member must be allowed for {cmd:?}: stdout {:?}",
+            o.stdout
+        );
     }
 }
 

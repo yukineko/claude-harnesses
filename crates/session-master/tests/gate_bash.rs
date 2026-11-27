@@ -21,7 +21,10 @@ fn member_push_denied_and_queued_once() {
     // identical request again: deduped
     let o2 = sb.gate_bash("B", &sb.repo, "git push origin HEAD", NOW + 1);
     assert!(is_deny(&o2));
-    assert_eq!(sb.status("B", NOW + 1)["queue"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        sb.status("B", NOW + 1)["queue"].as_array().unwrap().len(),
+        1
+    );
 }
 
 #[test]

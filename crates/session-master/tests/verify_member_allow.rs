@@ -52,7 +52,6 @@ macro_rules! allow_feat {
 macro_rules! red_allow_main {
     ($($name:ident => $cmd:expr;)*) => { $(
         #[test]
-        #[ignore = "RED(session-master-verify): member Denied an ordinary non-master-only command (false positive)"]
         fn $name() { allowed_in_main($cmd); }
     )* };
 }
@@ -108,7 +107,6 @@ allow_feat! {
 }
 
 #[test]
-#[ignore = "RED(session-master-verify): `cd <feature wt> && git merge main` Denied (has_cd => undetermined) though the cd target is a literal feature worktree"]
 fn fp_feat_cd_then_merge() {
     allowed_in_feature("cd WT && git merge main");
 }
@@ -116,31 +114,26 @@ fn fp_feat_cd_then_merge() {
 // ---- bypass probes: master-only effects; a member must be Denied ----
 
 #[test]
-#[ignore = "RED(session-master-verify): bypass - member Allowed a master-only effect"]
 fn probe_gh_api_pr_merge_denied() {
     denied_in_main("gh api -X PUT repos/o/r/pulls/1/merge");
 }
 
 #[test]
-#[ignore = "RED(session-master-verify): bypass - member Allowed a master-only effect"]
 fn probe_gh_api_merges_endpoint_denied() {
     denied_in_main("gh api repos/o/r/merges -f base=main -f head=feat");
 }
 
 #[test]
-#[ignore = "RED(session-master-verify): bypass - member Allowed a master-only effect"]
 fn probe_curl_github_merge_denied() {
     denied_in_main("curl -X PUT https://api.github.com/repos/o/r/pulls/1/merge");
 }
 
 #[test]
-#[ignore = "RED(session-master-verify): bypass - member Allowed a master-only effect"]
 fn probe_copied_rollout_script_denied() {
     denied_in_main("cp scripts/rollout-plugins.sh /tmp/r.sh && bash /tmp/r.sh");
 }
 
 #[test]
-#[ignore = "RED(session-master-verify): bypass - member Allowed a master-only effect"]
 fn probe_copied_git_binary_push_denied() {
     denied_in_main("cp /usr/bin/git /tmp/g && /tmp/g push");
 }

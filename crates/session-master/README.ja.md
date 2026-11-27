@@ -134,13 +134,31 @@ exit: 0 = ok（role は master）、1 = 拒否（member / in_progress でない�
    - 既知の安全リスト（echo/cat/ls/grep/rg/sed/jq/cargo/rustc/rustfmt 等）は引数を見ない。
      `tdd --cmd`・`trap`・`alias`・`rustup run`・`tar`・`zip`・`fd`・`rg --pre` は安全リストから外し、
      未知プログラムとして引数を見る。
-   - **過剰検出**: 非 literal の command 名（`$EDITOR a.rs`）、非 literal 引数の `rg`、
-     `bash "$f"` のように最後の path 要素が展開される script 指定は Deny になる
-     （`. "$HOME/.cargo/env"` のように最後の要素が literal なら名前で判定して allow）。
-     引数のトークン（basename）が git 等と一致する未知プログラム（例: `docker exec c git status`）も
-     Deny になる（`git-notes.md` のような部分一致は対象外）。
+   - **過剰検出（0.1.7 で絞った）**: 非 literal 引数の `rg`、`bash "$f"` のように最後の path
+     要素が展開される script 指定は Deny になる（`. "$HOME/.cargo/env"` のように最後の要素が
+     literal なら名前で判定して allow）。
+     - 非 literal の command 名（`$EDITOR a.rs`）は、引数が 1 つ以上あり全部 literal で、
+       master 専用の効果語（push/merge/pull/rebase/reset/rollout、`next`/`complete`/`gate`/`hook`、
+       `--session`、git 等の sensitive program 名）を含まないときだけ allow（SPEC の deny-by-default は
+       master 専用の*効果*を止める意図で、未知語全般ではない）。引数なしの `$X`・非 literal 引数・
+       効果語つき（`$G push`）は判定不能のまま。
+     - 引数を実行しないと分かっているプログラム（`man`/`info`、`brew install` 等、`fd`（`-x`/`-X` なし）、
+       `docker|podman exec|logs|ps…`、`npm|pnpm|yarn|bun test|run|install…`）は、引数が git/ssh 等の
+       名前でも data とみなして allow。それ以外の未知プログラムは従来どおり wrapper 扱い。
+     - `cd /絶対パス && …`（`&&` だけで到達し、`&&` で後続に繋がる 1 stage）は、その後ろの
+       HEAD を動かす git をその directory で判定する（feature worktree への `cd && git merge main` は allow）。
+       相対・`-`・引数なし・`;`/`||`/パイプ経由・chain 後続の statement は従来どおり判定不能。
      上記はコードからの予測で、通常作業コマンド群に対する gate の観測による測定は未実施
      （計測用 script の実行が blastguard に止められたため）。
+   - **GitHub API 経由の merge/push（0.1.7）**: `gh api` と `curl`/`wget`/`http`/`xh` が write
+     （`-X PUT/POST/PATCH/DELETE`、`-f/-F`/`-d` 等のフィールド・データ。明示 GET/HEAD は read）で
+     `repos/…/merge`・`merges`・`merge-upstream`・`git/*`・`contents/*` を叩くと master 専用。
+     write なのに endpoint/URL が静的に読めない場合は判定不能（Deny）。
+   - **書いたファイルの実行（0.1.7）**: 同じ program 内で `cp`/`mv`/`ln`/`install`/`rsync`/`tee`/`dd of=`/
+     リダイレクト/`curl -o` で書いた path（またはその配下）を、command 名・shell/インタプリタの
+     script 操作数・`source` として実行すると、中身が読めないので判定不能（Deny）。
+     `cp scripts/rollout-plugins.sh /tmp/r.sh && bash /tmp/r.sh`・`cp /usr/bin/git /tmp/g && /tmp/g push` が該当。
+     正当な「書いて実行」（heredoc で script を作って走らせる等）も止まる。
    - **`git commit` on main は allow のまま**: verifier の P7 は main 上の `git commit -m m` の
      Deny を求めるが、SPEC §5.1 と既存テスト（`gate_bash::member_non_push_commands_allowed`・
      `gate_bypass::control_member_benign_allowed`）は同じ cwd（main 上の repo）での

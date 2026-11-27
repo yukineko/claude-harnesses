@@ -1467,9 +1467,10 @@ impl Ev {
             // User ruling 2026-11-18 (r21): `. "$HOME/.cargo/env"` (the
             // hook's HOME, unwrapped, no prefix assignment) is rustup's PATH
             // setup only and keeps the state; any other `.` / `source` does not.
-            "." if !env.rustup_lost
-                && sc.assignments.is_empty()
-                && matches!(args, [w] if is_cargo_env(&w.value)) => {}
+            "." | "source"
+                if !env.rustup_lost
+                    && sc.assignments.is_empty()
+                    && matches!(args, [w] if is_cargo_env(&w.value)) => {}
             n if OPAQUE_BUILTINS.contains(&n) => env.make_opaque(&format!("`{n}` ran")),
             _ => {}
         }

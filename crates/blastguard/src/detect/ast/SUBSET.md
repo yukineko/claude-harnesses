@@ -289,8 +289,10 @@ options, non-plain `set` make the state opaque (later values Undetermined).
 `<hook HOME>/.cargo/env` (the literal `. "$HOME/.cargo/env"`, `HOME` not
 reassigned; unwrapped, no prefix assignment) is rustup's PATH setup only and
 does NOT make the state opaque (`eval.rs::builtin_effects`, `is_cargo_env`).
-Every other `.` / `source` — `source "$HOME/.cargo/env"` included — keeps the
-state opaque (reading A unchanged).
+`source` is read exactly like `.` (backlog 92f4a28d). The exception holds only
+while every earlier simple command of the line is on the known-pure allowlist
+(`rustup.rs::known_pure`); any other earlier command drops it. Every other `.` /
+`source` keeps the state opaque (reading A unchanged).
 For **judgement**, `eval` is Undetermined (it runs code not in the script) until
 S4 models it; `source` / `.` become Ask (main) / Deny (subagent) together with
 the quarantine plugin and are legacy until then (rulings 13, 16; B.5).

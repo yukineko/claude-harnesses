@@ -106,7 +106,6 @@ fn assert_allow(tag: &str, c: &str) {
 // ---- writer reached through a wrapper (head is not in WRITERS) ----
 
 #[test]
-#[ignore = "RED(92f4a28d-verify): env ln over cargo env then dot then write is allow"]
 fn v_env_ln_over_cargo_env() {
     assert_not_allow(
         "envln",
@@ -115,7 +114,6 @@ fn v_env_ln_over_cargo_env() {
 }
 
 #[test]
-#[ignore = "RED(92f4a28d-verify): command ln over cargo env then dot then write is allow"]
 fn v_command_ln_over_cargo_env() {
     assert_not_allow(
         "cmdln",
@@ -124,7 +122,6 @@ fn v_command_ln_over_cargo_env() {
 }
 
 #[test]
-#[ignore = "RED(92f4a28d-verify): nice ln over cargo env then dot then write is allow"]
 fn v_nice_ln_over_cargo_env() {
     assert_not_allow(
         "niceln",
@@ -133,7 +130,6 @@ fn v_nice_ln_over_cargo_env() {
 }
 
 #[test]
-#[ignore = "RED(92f4a28d-verify): timeout ln over cargo env then dot then write is allow"]
 fn v_timeout_ln_over_cargo_env() {
     assert_not_allow(
         "toln",
@@ -142,7 +138,6 @@ fn v_timeout_ln_over_cargo_env() {
 }
 
 #[test]
-#[ignore = "RED(92f4a28d-verify): busybox ln over cargo env then dot then write is allow"]
 fn v_busybox_ln_over_cargo_env() {
     assert_not_allow(
         "bbln",
@@ -151,7 +146,6 @@ fn v_busybox_ln_over_cargo_env() {
 }
 
 #[test]
-#[ignore = "RED(92f4a28d-verify): find -exec ln over cargo env then dot then write is allow"]
 fn v_find_exec_ln_over_cargo_env() {
     assert_not_allow(
         "findln",
@@ -160,7 +154,6 @@ fn v_find_exec_ln_over_cargo_env() {
 }
 
 #[test]
-#[ignore = "RED(92f4a28d-verify): xargs ln over cargo env then dot then write is allow"]
 fn v_xargs_ln_over_cargo_env() {
     assert_not_allow(
         "xargsln",
@@ -171,7 +164,6 @@ fn v_xargs_ln_over_cargo_env() {
 // ---- writers missing from WRITERS ----
 
 #[test]
-#[ignore = "RED(92f4a28d-verify): tar -C ~ then dot then write is allow"]
 fn v_tar_extract_into_home() {
     assert_not_allow(
         "tar",
@@ -180,7 +172,6 @@ fn v_tar_extract_into_home() {
 }
 
 #[test]
-#[ignore = "RED(92f4a28d-verify): unzip -d ~ then dot then write is allow"]
 fn v_unzip_into_home() {
     assert_not_allow(
         "unzip",
@@ -189,7 +180,6 @@ fn v_unzip_into_home() {
 }
 
 #[test]
-#[ignore = "RED(92f4a28d-verify): curl -o cargo env then dot then write is allow"]
 fn v_curl_o_cargo_env() {
     assert_not_allow(
         "curl",
@@ -198,7 +188,6 @@ fn v_curl_o_cargo_env() {
 }
 
 #[test]
-#[ignore = "RED(92f4a28d-verify): patch cargo env then dot then write is allow"]
 fn v_patch_cargo_env() {
     assert_not_allow(
         "patch",
@@ -207,7 +196,6 @@ fn v_patch_cargo_env() {
 }
 
 #[test]
-#[ignore = "RED(92f4a28d-verify): ditto over cargo env then dot then write is allow"]
 fn v_ditto_cargo_env() {
     assert_not_allow(
         "ditto",
@@ -218,7 +206,6 @@ fn v_ditto_cargo_env() {
 // ---- sourcing spelled differently / HOME rebound ----
 
 #[test]
-#[ignore = "RED(92f4a28d-verify): ln over cargo env then `source` it then write is allow"]
 fn v_ln_then_source_spelling() {
     assert_not_allow(
         "source",
@@ -227,7 +214,6 @@ fn v_ln_then_source_spelling() {
 }
 
 #[test]
-#[ignore = "RED(92f4a28d-verify): HOME=/tmp/x; dot \"$HOME/.cargo/env\" then write is allow"]
 fn v_home_rebound_then_dot() {
     assert_not_allow(
         "homere",
@@ -236,7 +222,6 @@ fn v_home_rebound_then_dot() {
 }
 
 #[test]
-#[ignore = "RED(92f4a28d-verify): command builtin . /dev/stdin <<< then write is allow"]
 fn v_command_builtin_dot_herestring() {
     assert_not_allow(
         "cmdbuiltin",
@@ -247,7 +232,6 @@ fn v_command_builtin_dot_herestring() {
 // ---- Python relink whose program is not an inline -c literal ----
 
 #[test]
-#[ignore = "RED(92f4a28d-verify): python3 <<< os.symlink then write is allow"]
 fn v_python_herestring_symlink() {
     assert_not_allow(
         "pyhs",
@@ -256,7 +240,6 @@ fn v_python_herestring_symlink() {
 }
 
 #[test]
-#[ignore = "RED(92f4a28d-verify): python3 - heredoc os.symlink then write is allow"]
 fn v_python_heredoc_symlink() {
     assert_not_allow(
         "pyhd",

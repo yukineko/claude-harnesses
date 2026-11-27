@@ -37,7 +37,9 @@
 //! relink Asks.
 
 use super::super::ast::targets::{self, Role};
-use super::super::ast::{self, Analysis, CwdCandidates, ProgramSource, SimpleCommand, Value};
+use super::super::ast::{
+    self, Analysis, CwdCandidates, ProgramSource, SimpleCommand, StdinSource, Value,
+};
 use super::super::{normalized_command, CwdState};
 use super::{is_relink_word, plain_words};
 
@@ -272,14 +274,17 @@ fn python_relinks(body: &str) -> bool {
 /// `builtin` / `command` whose wrapped command (the first word that is not
 /// an option) is `.`, `source` or `eval`, or is not determined.
 fn wraps_sourcing(c: &SimpleCommand) -> bool {
-    c.argv
-        .iter()
-        .skip(1)
-        .find(|w| !matches!(&w.value, Value::Literal(s) if s.starts_with('-')))
-        .is_some_and(|w| match &w.value {
-            Value::Literal(s) => matches!(s.as_str(), "." | "source" | "eval"),
-            Value::Undetermined(_) => true,
-        })
+    // `command builtin .`: the wrappers nest, so every non-option word is
+    // read until one is not `builtin` / `command`.
+    for w in c.argv.iter().skip(1) {
+        match &w.value {
+            Value::Literal(s) if s.starts_with('-') => {}
+            Value::Literal(s) if matches!(s.as_str(), "builtin" | "command") => {}
+            Value::Literal(s) => return matches!(s.as_str(), "." | "source" | "eval"),
+            Value::Undetermined(_) => return true,
+        }
+    }
+    false
 }
 
 /// vi-family editors whose `-c` / `--cmd` / `+` arguments are ex commands.
@@ -496,6 +501,11 @@ fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, place: Place, out: &
             Some(ProgramSource::InlineLiteral(body)) if python_relinks(&body) => {
                 out.sources_unknown = true
             }
+            // A program fed on stdin (`<<<`, a heredoc, a pipe) is read the
+            // same way.
+            Some(ProgramSource::Stdin(StdinSource::Literal(body))) if python_relinks(&body) => {
+                out.sources_unknown = true
+            }
             // A body the parser cannot read is S5's Ask; nothing to add.
             Some(ProgramSource::Undetermined(_)) => out.undetermined = true,
             _ => {}
@@ -530,7 +540,7 @@ fn escapes(c: &SimpleCommand, seg: &CwdState, depth: usize, place: Place, out: &
     // segment's words name).
     if place == Place::Top
         && depth == 0
-        && ast::is_rustup_env_source(c)
+        && ast::rustup::is_cargo_env_dot(c)
         && targets::rustup_proven_tainted()
     {
         out.sources_unknown = true;

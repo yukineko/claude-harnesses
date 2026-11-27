@@ -534,6 +534,34 @@ fn judge_program(
     // program is not retired: the legacy readings of the stdin text keep
     // judging the line (raise-only). Also kept when an effect creates a link
     // ([`effect_relinks`]): the relink layer reads the original text.
+    // A program that creates a link while another command of the line writes
+    // through a redirect: the relink layer sees the line with the program's
+    // literals blanked (a heredoc body), so the Ask is decided here, where
+    // the parsed program is (backlog 92f4a28d). Order is not modelled.
+    if effects.iter().any(effect_relinks)
+        && commands.iter().enumerate().any(|(j, o)| {
+            j != idx
+                && o.redirects.iter().any(|r| {
+                    matches!(
+                        r.op,
+                        RedirOp::Out
+                            | RedirOp::Append
+                            | RedirOp::Clobber
+                            | RedirOp::InOut
+                            | RedirOp::OutErr
+                            | RedirOp::AppendOutErr
+                    ) && matches!(r.target, RedirTarget::Path(_))
+                })
+        })
+    {
+        return (
+            undetermined(
+                "the Python program creates a link and another command of the line writes \
+                 through a redirect, which may land through it",
+            ),
+            None,
+        );
+    }
     let keep_legacy = (runs && p.inline && cmd.stdin != StdinSource::Inherited)
         || effects.iter().any(effect_relinks);
     let prefix = match (&cmd.cwd_candidates, &cmd.cwd) {

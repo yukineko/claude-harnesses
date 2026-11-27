@@ -548,3 +548,33 @@ exit 101: 955 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastg
     Finished `release` profile [optimized] target(s) in 27.30s
      Running tests/backlog_20261127_large_python_heredoc_body_slow.rs (target/release/deps/backlog_20261127_large_python_heredoc_body_slow-2a9adb196edd00af)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261127_large_python_heredoc_body_slow`"""
+
+[[task]]
+id = "f3301770"
+title = 'blastguard fail-open: top-level "$P" rebinding (read/printf -v/P[0]=/{P}>/zsh print -v etc.) resolves to the stale static value and Allows a write to /etc/hosts'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Found 2026-11-28 by the opus verifier of c512596e (flow eaa077f4); RED written by an independent sonnet agent, committed 1a99a2dcb (blastguard 0.2.959): 18 of 18 shapes Allow on 24263a0c8, control passes. Shell behaviour measured (bash 3.2.57 / zsh 5.9) per test file header. Pre-existing on base, not introduced by c512596e."
+created_at = 1795794341
+updated_at = 1795794341
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_toplevel_rebind_fail_open -- --ignored"
+rev = "1a99a2dcba93e2c5057c35b2b531202fff4b3be6"
+observed_at = 1795794341
+detail = """
+exit 101: d v0.2.959 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.23s
+     Running tests/backlog_20261128_toplevel_rebind_fail_open.rs (target/debug/deps/backlog_20261128_toplevel_rebind_fail_open-c13ac450eed2f58b)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_toplevel_rebind_fail_open`"""

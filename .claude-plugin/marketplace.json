@@ -677,7 +677,7 @@
     {
       "name": "session-master",
       "description": "Session group orchestration for Claude Code: one master per git common dir, a master-only serial queue, and a fail-closed PreToolUse gate that keeps push / rollout / main merge and cross-session relays on the master.",
-      "version": "0.1.10",
+      "version": "0.1.11",
       "category": "orchestration",
       "keywords": [
         "hooks",

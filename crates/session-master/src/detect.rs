@@ -415,10 +415,35 @@ pub(crate) fn analyze(
         written: Vec::new(),
         written_dirs: Vec::new(),
         execs: Vec::new(),
+        rel_execs: Vec::new(),
+        bare_cmds: Vec::new(),
+        sets_path: false,
     };
     w.program(command, 0);
     if let Some(op) = w.found {
         return Outcome::Found(op);
+    }
+    // Writes plus a run whose target cannot be pinned down: a cwd moved by
+    // cd/pushd (relative path), a PATH lookup of a written name, or a PATH
+    // reassignment.
+    if w.wrote_files() {
+        let via_path = w
+            .bare_cmds
+            .iter()
+            .find(|b| w.written.iter().any(|p| basename(p) == b.as_str()))
+            .cloned();
+        if let Some(b) = via_path {
+            w.set_undet(format!(
+                "書いたファイルと同名のコマンドを PATH 経由で実行している: {b}"
+            ));
+        } else if w.sets_path {
+            w.set_undet("ファイルを書いた同じ program 内で PATH を変更している".to_string());
+        } else if w.has_cd && !w.rel_execs.is_empty() {
+            w.set_undet(format!(
+                "ファイルを書いた同じ program 内で cd/pushd の後に相対パスを実行している: {}",
+                w.rel_execs[0]
+            ));
+        }
     }
     // Running a file this same program wrote or copied is running code that
     // was never read (`cp git /tmp/g && /tmp/g push`).
@@ -479,6 +504,7 @@ pub(crate) fn analyze(
 }
 
 /// One shell word: its raw text and, when it is a plain literal, its value.
+#[derive(Clone)]
 struct Arg {
     raw: String,
     lit: Option<String>,
@@ -533,6 +559,13 @@ struct Walker {
     written_dirs: Vec<String>,
     /// Files this program runs (command word with a `/`, script operand).
     execs: Vec<String>,
+    /// Relative paths among `execs` (resolved against a cwd that a
+    /// cd/pushd may have moved).
+    rel_execs: Vec<String>,
+    /// Command words without a `/` (looked up through PATH).
+    bare_cmds: Vec<String>,
+    /// `PATH` is assigned somewhere in the program.
+    sets_path: bool,
 }
 
 /// `cd /literal/abs/path` as a whole pipeline stage (no options, redirects,
@@ -1087,8 +1120,11 @@ impl Walker {
             let Some(a) = argv.get(i) else {
                 return;
             };
-            let Some(name) = a.lit.as_deref() else {
-                self.non_literal_command(&argv[i..], depth);
+            // `"$HOME/.cargo/bin/cargo"`: the directory expands but the
+            // program name is literal and a known inert program.
+            let tail = literal_tail(&a.raw).filter(|t| INERT.contains(&t.as_str()));
+            let Some(name) = a.lit.as_deref().or(tail.as_deref()) else {
+                self.non_literal_command(&argv[i..], stdin, depth);
                 return;
             };
             let next = match basename(name) {
@@ -1167,10 +1203,44 @@ impl Walker {
         if name.contains('/') {
             let p = self.np(name);
             self.execs.push(p);
+            if !name.starts_with('/') {
+                self.rel_execs.push(name.to_string());
+            }
+        } else {
+            self.bare_cmds.push(base.to_string());
         }
         self.note_writer(base, args);
+        self.var_setter(base, args);
+        // Build tools that run a shell program of the caller's choosing.
+        for (k, a) in args.iter().enumerate() {
+            let v = match a.lit.as_deref() {
+                Some("--script-shell" | "--shell") => args.get(k + 1).and_then(|n| n.lit.clone()),
+                Some(s) => s
+                    .strip_prefix("--script-shell=")
+                    .or_else(|| s.strip_prefix("--shell="))
+                    .map(str::to_string),
+                None => None,
+            };
+            if let Some(v) = v {
+                let p = self.np(&v);
+                self.execs.push(p);
+            }
+        }
         match base {
             "git" => self.git(args, via_xargs, assigns, src, depth),
+            "hub" => {
+                if positionals(args, &[]).first() == Some(&"api") {
+                    self.gh_api(args, rest)
+                } else {
+                    self.git(args, via_xargs, assigns, src, depth)
+                }
+            }
+            b if b.starts_with("git-") && b.len() > 4 => {
+                // git's own subcommand binaries: `git-push` is `git push`.
+                let mut v = vec![Arg::new(&b[4..])];
+                v.extend(args.iter().cloned());
+                self.git(&v, via_xargs, assigns, src, depth)
+            }
             "cd" | "pushd" | "popd" => self.has_cd = true,
             "rollout-plugins.sh" => self.found(Op::Rollout),
             b if SHELLS.contains(&b) => self.shell(args, stdin, depth),
@@ -1432,7 +1502,13 @@ impl Walker {
                 }
                 "-c" => {
                     match args.get(j + 1).and_then(|v| v.lit.as_deref()) {
-                        Some(v) if !v.starts_with("alias.") => {}
+                        Some(v) if !v.starts_with("alias.") => {
+                            let (k, val) = match v.split_once('=') {
+                                Some((k, val)) => (k, Some(val)),
+                                None => (v, None),
+                            };
+                            self.config_entry(k, val, depth);
+                        }
                         _ => {
                             let raw = args.get(j + 1).map_or("", |v| v.raw.as_str());
                             self.undet(raw, "git -c の alias / 非 literal 設定");
@@ -1448,8 +1524,26 @@ impl Walker {
                     });
                     j += 2;
                 }
-                "--work-tree" | "--namespace" | "--config-env" | "--super-prefix"
-                | "--list-cmds" => j += 2,
+                "--config-env" => {
+                    // `KEY=ENVNAME`: the value comes from an env var we
+                    // cannot read; judge by the key.
+                    match args.get(j + 1).and_then(|v| v.lit.as_deref()) {
+                        Some(kv) => {
+                            let key = kv.split('=').next().unwrap_or(kv);
+                            self.config_entry(key, None, depth);
+                        }
+                        None => {
+                            self.undet("--config-env", "git --config-env の引数が literal でない")
+                        }
+                    }
+                    j += 2;
+                }
+                "--work-tree" | "--namespace" | "--super-prefix" | "--list-cmds" => j += 2,
+                _ if s.starts_with("--config-env=") => {
+                    let kv = &s["--config-env=".len()..];
+                    self.config_entry(kv.split('=').next().unwrap_or(kv), None, depth);
+                    j += 1;
+                }
                 _ if s.starts_with('-') => j += 1,
                 _ => break,
             }
@@ -1477,6 +1571,28 @@ impl Walker {
                 });
             }
             "checkout" | "switch" => self.has_cd = true,
+            "config" => {
+                // `git config KEY VALUE` writes a setting; a program-valued
+                // key is judged by its value.
+                let pos: Vec<&Arg> = rest
+                    .iter()
+                    .filter(|a| !a.lit.as_deref().is_some_and(|s| s.starts_with('-')))
+                    .collect();
+                if let Some(k) = pos.first() {
+                    match k.lit.as_deref() {
+                        Some(key) => {
+                            let v = pos.get(1).and_then(|a| a.lit.as_deref());
+                            let given = pos.len() > 1;
+                            if given && v.is_none() {
+                                self.config_entry(key, None, depth);
+                            } else if given {
+                                self.config_entry(key, v, depth);
+                            }
+                        }
+                        None => self.undet(&k.raw, "git config の key が literal でない"),
+                    }
+                }
+            }
             "update-ref" => self.git_update_ref(rest),
             "branch" => self.git_branch(rest),
             "fetch" => self.git_fetch(rest),

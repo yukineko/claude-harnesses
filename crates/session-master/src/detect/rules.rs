@@ -68,6 +68,30 @@ const DOCKER_GLOBAL_VALUE: &[&str] = &[
     "--tlscacert",
     "--tlscert",
     "--tlskey",
+    // podman
+    "--root",
+    "--runroot",
+    "--connection",
+    "--url",
+    "--identity",
+    "--storage-driver",
+    "--storage-opt",
+    "--cgroup-manager",
+    "--conmon",
+    "--events-backend",
+    "--hooks-dir",
+    "--namespace",
+    "--network-cmd-path",
+    "--imagestore",
+    "--tmpdir",
+    "--runtime",
+    "--runtime-flag",
+    "--module",
+    "--ssh",
+    "--cni-config-dir",
+    "--db-backend",
+    "--registries-conf",
+    "--signature-policy",
 ];
 
 const DOCKER_EXEC_VALUE: &[&str] = &[
@@ -109,12 +133,19 @@ pub(super) fn norm_path(s: &str, cwd: &Path) -> String {
     format!("/{}", out.join("/"))
 }
 
+/// Is `n` a variable whose value is run as a program (or swaps git's config)?
+fn is_exec_env(n: &str) -> bool {
+    EXEC_ENV.contains(&n) || (n.starts_with("GIT_CONFIG") && n != "GIT_CONFIG_NOSYSTEM")
+}
+
 /// A bare word like `sy` / `status` (no dot, slash or extension): at a
 /// subcommand position it may be a git alias.
 fn alias_like(s: &str) -> bool {
-    s.starts_with(|c: char| c.is_ascii_alphabetic())
+    // git lower-cases config variable names, so an alias (`alias.<name>`) can
+    // only ever be spelled in lower case: `README` / `Makefile` are file names.
+    s.starts_with(|c: char| c.is_ascii_lowercase())
         && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
 impl Walker {
@@ -130,6 +161,11 @@ impl Walker {
                 .written_dirs
                 .iter()
                 .any(|d| path.starts_with(&format!("{d}/")))
+    }
+
+    /// Did the program write any file (other than a `/dev/` sink)?
+    pub(super) fn wrote_files(&self) -> bool {
+        !self.written_dirs.is_empty() || self.written.iter().any(|p| !p.starts_with("/dev/"))
     }
 
     fn note_written(&mut self, a: &Arg) {
@@ -150,7 +186,7 @@ impl Walker {
     /// the directory).
     pub(super) fn note_writer(&mut self, base: &str, args: &[Arg]) {
         match base {
-            "cp" | "mv" | "ln" | "install" | "rsync" => {
+            "cp" | "mv" | "ln" | "install" | "rsync" | "ditto" | "cpio" => {
                 let mut target_dir: Option<&Arg> = None;
                 let mut recursive = base == "rsync";
                 let mut pos: Vec<&Arg> = Vec::new();
@@ -223,16 +259,67 @@ impl Walker {
                 }
             }
             "curl" | "wget" => {
+                // Option letter that names the output file, per tool.
+                let out_letter = if base == "curl" { 'o' } else { 'O' };
                 for (k, a) in args.iter().enumerate() {
-                    if matches!(
-                        a.lit.as_deref(),
-                        Some("-o" | "-O" | "--output" | "--output-document")
-                    ) {
+                    let Some(s) = a.lit.as_deref() else {
+                        continue;
+                    };
+                    if let Some(v) = s
+                        .strip_prefix("--output=")
+                        .or_else(|| s.strip_prefix("--output-document="))
+                    {
+                        let p = self.np(v);
+                        self.written.push(p);
+                    } else if matches!(s, "--output" | "--output-document") {
                         if let Some(v) = args.get(k + 1) {
                             self.note_written(v);
                         }
+                    } else if matches!(s, "-O" | "--remote-name" | "--remote-name-all" | "-J")
+                        && base == "curl"
+                    {
+                        // Saved under a name the server picks, in the cwd.
+                        let cwd = self.cwd.display().to_string();
+                        self.written_dirs.push(cwd);
+                    } else if s.starts_with('-') && !s.starts_with("--") {
+                        // A short cluster (`-fsSLo/tmp/g`, `-fo /tmp/g`).
+                        if let Some(at) = s[1..].find(out_letter) {
+                            let inline = &s[1 + at + 1..];
+                            if inline.is_empty() {
+                                if let Some(v) = args.get(k + 1) {
+                                    self.note_written(v);
+                                }
+                            } else {
+                                let p = self.np(inline);
+                                self.written.push(p);
+                            }
+                        }
                     }
                 }
+            }
+            "tar" | "unzip" | "bsdtar" | "7z" | "7za"
+                if base == "unzip"
+                    || args.iter().any(|a| {
+                        a.lit.as_deref().is_some_and(|s| {
+                            s == "--extract"
+                                || s == "x"
+                                || (s.starts_with('-') && !s.starts_with("--") && s.contains('x'))
+                                || (!s.starts_with('-') && s.len() < 8 && s.contains('x'))
+                        })
+                    }) =>
+            {
+                // Extraction fills a directory with files this program
+                // never names: anything under the target (or the cwd).
+                let mut dir: Option<String> = None;
+                for (k, a) in args.iter().enumerate() {
+                    if matches!(a.lit.as_deref(), Some("-C" | "-d" | "--directory")) {
+                        dir = args
+                            .get(k + 1)
+                            .map(|v| self.np(v.lit.as_deref().unwrap_or(&v.raw)));
+                    }
+                }
+                let d = dir.unwrap_or_else(|| self.cwd.display().to_string());
+                self.written_dirs.push(d);
             }
             _ => {}
         }
@@ -248,15 +335,59 @@ impl Walker {
     /// executor settings), and no bare alias-like word at the subcommand
     /// position (`$G sy origin main`). `-c CODE` without a dotted key is shell
     /// code and is parsed as a program, like a literal `bash -c`.
-    pub(super) fn non_literal_command(&mut self, rest: &[Arg], depth: usize) {
+    pub(super) fn non_literal_command(&mut self, rest: &[Arg], stdin: &Stdin, depth: usize) {
         let args = rest.get(1..).unwrap_or(&[]);
         if args.is_empty() || args.iter().any(|a| a.lit.is_none()) {
             self.undet(&joined(rest), "command 名が literal でない");
             return;
         }
+        // A program read from stdin (`-s`, `-`, any short cluster with `s`):
+        // judge the text we can see, refuse what we cannot.
+        let reads_stdin = args.iter().any(|a| {
+            a.lit.as_deref().is_some_and(|s| {
+                s == "-" || (s.starts_with('-') && !s.starts_with("--") && s[1..].contains('s'))
+            })
+        });
+        if reads_stdin {
+            for b in &stdin.bodies {
+                self.judge_code(b, depth);
+            }
+            if !stdin.files.is_empty() || (stdin.bodies.is_empty() && stdin.piped) {
+                self.undet(
+                    &joined(rest),
+                    "非 literal の command が stdin からプログラムを読む（中身は読めない）",
+                );
+            }
+        }
         let mut first_pos: Option<&str> = None;
         let mut j = 0usize;
         while let Some(s) = args.get(j).and_then(|a| a.lit.as_deref()) {
+            if s.starts_with("--config-env") {
+                self.undet(
+                    &joined(rest),
+                    "非 literal の command 名に git --config-env（設定値が env 経由で読めない）",
+                );
+                return;
+            }
+            // `-ec CODE`, `-c -- CODE`: any short cluster with `c` takes code.
+            if s != "-c"
+                && s.starts_with('-')
+                && !s.starts_with("--")
+                && s.len() > 2
+                && s[1..].contains('c')
+            {
+                let mut k = j + 1;
+                while args
+                    .get(k)
+                    .and_then(|a| a.lit.as_deref())
+                    .is_some_and(|w| w == "--" || (w.starts_with('-') && w.len() > 1))
+                {
+                    k += 1;
+                }
+                if let Some(body) = args.get(k).and_then(|a| a.lit.as_deref()) {
+                    self.judge_code(body, depth);
+                }
+            }
             let named = s
                 .split(|c: char| !(c.is_ascii_alphanumeric() || "_.-/+".contains(c)))
                 .find(|t| {
@@ -275,6 +406,14 @@ impl Walker {
                 return;
             }
             if s == "-c" {
+                let mut k = j + 1;
+                while args
+                    .get(k)
+                    .and_then(|a| a.lit.as_deref())
+                    .is_some_and(|w| w == "--" || (w.starts_with('-') && w.len() > 1))
+                {
+                    k += 1;
+                }
                 let body = args.get(j + 1).and_then(|a| a.lit.as_deref()).unwrap_or("");
                 let key = body.split('=').next().unwrap_or("");
                 if body.contains('=') && key.contains('.') {
@@ -288,8 +427,10 @@ impl Walker {
                     self.undet(&joined(rest), "再帰深さ上限を超えた");
                     return;
                 }
-                self.program(body, depth + 1);
-                j += 2;
+                if let Some(code) = args.get(k).and_then(|a| a.lit.as_deref()) {
+                    self.judge_code(code, depth);
+                }
+                j = k + 1;
                 continue;
             }
             if matches!(s, "-C" | "--git-dir" | "--work-tree" | "--namespace") {
@@ -311,9 +452,115 @@ impl Walker {
         }
     }
 
+    /// Code handed to a program we cannot identify (`$X -c CODE`, stdin):
+    /// judged as shell when it parses as shell. When it does not parse it is
+    /// not shell (`python -c 'import sys; print(1)'`), so only text that could
+    /// still hide a sensitive program (a name, an expansion, an obfuscating
+    /// quote pair) is refused.
+    fn judge_code(&mut self, body: &str, depth: usize) {
+        let parses = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            brush_parser::Parser::new(body.as_bytes(), &brush_parser::ParserOptions::default())
+                .parse_program()
+                .is_ok()
+        }))
+        .unwrap_or(false);
+        if parses {
+            self.program(body, depth + 1);
+        } else if mentions_sensitive(body).is_some()
+            || body.contains(['$', '`', '\\'])
+            || body.contains("''")
+            || body.contains("\"\"")
+        {
+            self.undet(
+                body,
+                "非 literal の command に渡されたコードが shell として読めない",
+            );
+        }
+    }
+
+    /// `git config KEY VALUE` / `git -c KEY=VALUE` / `--config-env`: a key
+    /// that names a program (pager, fsmonitor, sshCommand, a helper, an
+    /// alias, an include...) makes its value code, judged as a program.
+    pub(super) fn config_entry(&mut self, key: &str, value: Option<&str>, depth: usize) {
+        let k = key.to_ascii_lowercase();
+        let first = k.split('.').next().unwrap_or("");
+        let last = k.rsplit('.').next().unwrap_or("");
+        if first == "alias" || first == "include" || first == "includeif" || last == "hookspath" {
+            self.undet(
+                key,
+                "git config の alias / include / hooksPath は実行物を指す",
+            );
+            return;
+        }
+        let execish = first == "pager"
+            || matches!(
+                last,
+                "pager"
+                    | "fsmonitor"
+                    | "sshcommand"
+                    | "editor"
+                    | "askpass"
+                    | "program"
+                    | "helper"
+                    | "cmd"
+                    | "command"
+                    | "textconv"
+                    | "external"
+                    | "driver"
+                    | "gitproxy"
+                    | "packobjectshook"
+                    | "clean"
+                    | "smudge"
+                    | "process"
+                    | "alternaterefscommand"
+            );
+        if !execish {
+            return;
+        }
+        match value {
+            Some(v) if depth < MAX_DEPTH => self.program(v.trim_start_matches('!'), depth + 1),
+            _ => self.undet(key, "プログラムを指す git config の値が読めない"),
+        }
+    }
+
+    /// `printf -v NAME` / `read NAME` / `mapfile NAME`: sets a variable by
+    /// name, so an executor variable can be filled without an `=` word.
+    pub(super) fn var_setter(&mut self, base: &str, args: &[Arg]) {
+        let mut names: Vec<&str> = Vec::new();
+        match base {
+            "printf" => {
+                for (k, a) in args.iter().enumerate() {
+                    match a.lit.as_deref() {
+                        Some("-v") => names.extend(args.get(k + 1).and_then(|v| v.lit.as_deref())),
+                        Some(s) if s.starts_with("-v") => names.push(&s[2..]),
+                        _ => {}
+                    }
+                }
+            }
+            "read" | "mapfile" | "readarray" => {
+                names.extend(
+                    args.iter()
+                        .filter_map(|a| a.lit.as_deref())
+                        .filter(|s| !s.starts_with('-')),
+                );
+            }
+            _ => return,
+        }
+        if names.iter().any(|n| is_exec_env(n)) {
+            self.undet(base, "プログラムを保持する環境変数を builtin が設定する");
+        }
+    }
+
     /// A word that sets an env var whose value is run as a program
     /// (`MANPAGER='git push; cat' man ls`): judge the value as a program.
     pub(super) fn exec_env(&mut self, name: &str, value: Option<&str>, depth: usize) {
+        if name.starts_with("GIT_CONFIG") && name != "GIT_CONFIG_NOSYSTEM" {
+            self.undet(name, "git の設定を env で差し替える（プログラムを指せる）");
+            return;
+        }
+        if name == "PATH" {
+            self.sets_path = true;
+        }
         if !EXEC_ENV.contains(&name) {
             return;
         }
@@ -326,7 +573,7 @@ impl Walker {
     /// `export|declare|env NAME=value ...` words that set an executor env.
     pub(super) fn exec_env_word(&mut self, raw: &str, depth: usize) {
         if let Some((n, _)) = raw.split_once('=') {
-            if EXEC_ENV.contains(&n) {
+            if is_exec_env(n) || n == "PATH" {
                 let v = literal(raw).and_then(|s| s.split_once('=').map(|(_, v)| v.to_string()));
                 self.exec_env(n, v.as_deref(), depth);
             }
@@ -400,16 +647,20 @@ impl Walker {
         match args.get(j).and_then(|a| a.lit.as_deref()) {
             Some("exec") => {
                 let mut k = j + 1;
+                // podman `exec -l/--latest` takes no container argument.
+                let mut latest = false;
                 while let Some(s) = args.get(k).and_then(|a| a.lit.as_deref()) {
                     if DOCKER_EXEC_VALUE.contains(&s) {
                         k += 2;
-                    } else if s.starts_with('-') {
+                    } else if let Some(body) = s.strip_prefix('-') {
+                        latest |= base == "podman"
+                            && (s == "--latest" || (!s.starts_with("--") && body.contains('l')));
                         k += 1;
                     } else {
                         break;
                     }
                 }
-                let cmd = args.get(k + 1..).unwrap_or(&[]);
+                let cmd = args.get(if latest { k } else { k + 1 }..).unwrap_or(&[]);
                 if cmd.is_empty() {
                     return;
                 }
@@ -419,7 +670,17 @@ impl Walker {
                 }
                 self.exec(cmd, &Stdin::default(), &Vec::new(), src, depth + 1);
             }
-            Some(sub) if DOCKER_INERT.contains(&sub) => {}
+            // An inert subcommand is only trusted when no later word is a
+            // running one (an unknown global option's value may have been
+            // taken for the subcommand: `podman --x ps run ...`).
+            Some(sub)
+                if DOCKER_INERT.contains(&sub)
+                    && !args[j + 1..].iter().any(|a| {
+                        matches!(
+                            a.lit.as_deref(),
+                            Some("exec" | "run" | "create" | "compose" | "build" | "buildx")
+                        )
+                    }) => {}
             _ => self.unknown_program(base, args, rest),
         }
     }

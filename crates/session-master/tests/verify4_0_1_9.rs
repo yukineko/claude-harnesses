@@ -59,14 +59,12 @@ macro_rules! allow_feat {
 macro_rules! red_deny_main {
     ($($name:ident => $cmd:expr;)*) => { $(
         #[test]
-        #[ignore = "RED(session-master) 0.1.9 bypass: member not denied; verify4 opus 2026-11-27"]
         fn $name() { denied_in_main($cmd); }
     )* };
 }
 macro_rules! red_allow_main {
     ($($name:ident => $cmd:expr;)*) => { $(
         #[test]
-        #[ignore = "RED(session-master) 0.1.9 false positive: member denied; verify4 opus 2026-11-27"]
         fn $name() { allowed_in_main($cmd); }
     )* };
 }

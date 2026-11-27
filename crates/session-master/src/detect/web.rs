@@ -78,12 +78,35 @@ fn github_write_target(raw: &str) -> Option<Op> {
     if segs.contains(&"git-receive-pack") {
         return Some(Op::Push);
     }
-    let repos = segs.iter().position(|s| *s == "repos")?;
-    let tail = &segs[repos + 1..];
-    if tail.iter().any(|s| s.starts_with("merge")) {
+    // `repos/<owner>/<repo>/...` or `repositories/<id>/...`.
+    let (at, owner_repo) = match segs.iter().position(|s| *s == "repos") {
+        Some(p) => (p, 2),
+        None => (segs.iter().position(|s| *s == "repositories")?, 1),
+    };
+    let tail = &segs[at + 1..];
+    if tail
+        .iter()
+        .any(|s| s.starts_with("merge") || matches!(*s, "update-branch" | "rename"))
+    {
         return Some(Op::Merge);
     }
-    if tail.iter().skip(2).any(|s| *s == "git" || *s == "contents") {
+    let rest = tail.get(owner_repo..).unwrap_or(&[]);
+    match rest.first().copied() {
+        // Any non-read on a branch moves / renames / protects it.
+        Some("branches") => return Some(Op::Merge),
+        // Creating / editing a PR (its base may be main) or merging it;
+        // review / comment endpoints are not.
+        Some("pulls")
+            if !matches!(
+                rest.get(2).copied(),
+                Some("comments" | "reviews" | "requested_reviewers")
+            ) =>
+        {
+            return Some(Op::Merge)
+        }
+        _ => {}
+    }
+    if rest.iter().any(|s| *s == "git" || *s == "contents") {
         return Some(Op::Push);
     }
     None
@@ -229,7 +252,7 @@ impl Walker {
     pub(super) fn gh(&mut self, args: &[Arg], rest: &[Arg]) {
         let pos = positionals(args, &["-R", "--repo"]);
         match pos.as_slice() {
-            ["pr", "merge", ..] | ["repo", "sync", ..] => self.found(Op::Merge),
+            ["pr", "merge" | "update-branch", ..] | ["repo", "sync", ..] => self.found(Op::Merge),
             ["api", ..] => self.gh_api(args, rest),
             [first, ..] if !GH_COMMANDS.contains(first) => self.undet(
                 &joined(rest),
@@ -480,6 +503,11 @@ impl Walker {
         for a in &pos {
             match a.lit.as_deref() {
                 Some(l) => {
+                    // curl expands `{a,b}` / `[a-z]` in a URL: the text is
+                    // not the request that is sent.
+                    if l.contains(['{', '}', '[', ']']) {
+                        unresolved = true;
+                    }
                     if let Some(op) = github_write_target(l) {
                         self.found(op);
                         return;

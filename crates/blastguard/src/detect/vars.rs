@@ -350,6 +350,25 @@ pub(super) fn segment_may_rebind(seg: &str, name: &str) -> bool {
     {
         return true;
     }
+    // Structural catch-all (backlog f3301770): ANY command word after the
+    // transient assignment prefix that spells the name — or the name it is
+    // tied to in zsh — other than as a plain `$name` / `${name…` reference
+    // may bind it: `read P`, `printf -v P`, `print -vP P`, `zformat -f P`,
+    // `zstat -A P`, `sysread P`, `vared P`, `zparseopts -A P`, `P[0]=`,
+    // `{P}>` redirect words, `trap 'P=…'`, behind `command` / `builtin` /
+    // `X=1 cmd`. A word list of known binders cannot be complete (zsh adds
+    // more), so an unrecognised command naming the variable counts too.
+    // Over-reporting only costs a resolution; it never invents one.
+    {
+        let lead = words.iter().take_while(|w| is_assignment(w)).count();
+        let partner = tied_partner(name);
+        if words[lead..].iter().any(|w| {
+            mentions_name_outside_reference(w, name)
+                || partner.is_some_and(|p| mentions_name_outside_reference(w, p))
+        }) {
+            return true;
+        }
+    }
     // zsh's `[[ x =~ re ]]` sets MATCH / MBEGIN / MEND / match / mbegin / mend.
     if matches!(
         name,
@@ -390,6 +409,30 @@ pub(super) fn segment_may_rebind(seg: &str, name: &str) -> bool {
         return true;
     }
     false
+}
+
+/// The name zsh ties to `name` (assigning one assigns the other): the
+/// lowercase array and the uppercase colon-separated scalar of
+/// `path`/`PATH`, `cdpath`/`CDPATH`, `fpath`/`FPATH`, `manpath`/`MANPATH`,
+/// `mailpath`/`MAILPATH`, `module_path`/`MODULE_PATH`.
+pub(super) fn tied_partner(name: &str) -> Option<&'static str> {
+    const TIES: [(&str, &str); 6] = [
+        ("path", "PATH"),
+        ("cdpath", "CDPATH"),
+        ("fpath", "FPATH"),
+        ("manpath", "MANPATH"),
+        ("mailpath", "MAILPATH"),
+        ("module_path", "MODULE_PATH"),
+    ];
+    TIES.iter().find_map(|&(lo, up)| {
+        if name == lo {
+            Some(up)
+        } else if name == up {
+            Some(lo)
+        } else {
+            None
+        }
+    })
 }
 
 /// True for a name a shell would accept on the left of `=`.
@@ -629,6 +672,13 @@ pub(super) fn resolve_expanded_command_word(
             continue;
         }
         if !assignments_reach_parent_shell(&segs, idx) {
+            // Not a parent-shell assignment, but zsh runs the LAST element of
+            // a pipeline in the parent shell (`echo x | read P`) and bash
+            // may too (`shopt -s lastpipe`), so a stage that may bind the
+            // name makes the earlier value stale (backlog f3301770).
+            if segment_may_rebind(&segs[idx].text, &name) {
+                latest_rebind = Some(idx);
+            }
             continue;
         }
         let words = quote_aware_words(&segs[idx].text);
@@ -644,6 +694,10 @@ pub(super) fn resolve_expanded_command_word(
             };
             if w[..eq] == name {
                 latest = Some((idx, w[eq + 1..].to_string()));
+            } else if tied_partner(&name).is_some_and(|p| w[..eq] == *p) {
+                // zsh ties `path`/`PATH` (and the other pairs): assigning
+                // the partner assigns this name (backlog f3301770).
+                latest_rebind = Some(idx);
             }
         }
     }

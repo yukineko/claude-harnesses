@@ -789,6 +789,7 @@ impl Ev {
                     let before = self.out.len();
                     let (_, produced) =
                         self.command(text, c, st, &Context::Pipeline { pos, len })?;
+                    env = env.forgetting_in(produced.as_ref());
                     stdin = match c {
                         // A brace group feeds what its members print, in order.
                         ast::Command::Compound(ast::CompoundCommand::BraceGroup(b), None) => {
@@ -1311,7 +1312,7 @@ impl Ev {
         // The new value of `_` is remembered (an assignment-only command's
         // effect on `_` is not modelled).
         let underscore_int = env.integer.contains("_");
-        let mut outcome = self.effects(&sc, &decl_names, env)?;
+        let mut outcome = self.effects(&sc, &decl_names, env.forgetting_in(Some(&sc)))?;
         let lost = super::rustup::tainted_by(&sc);
         for after in [&mut outcome.ok, &mut outcome.fail] {
             after.rustup_lost |= lost;

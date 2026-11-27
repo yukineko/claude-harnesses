@@ -59,7 +59,6 @@ fn control_resolution_still_allows_confined_and_denies_system() {
 }
 
 #[test]
-#[ignore = "RED(pending): top-level rebinding of P between the static assignment and `> \"$P\"` is resolved to the stale value -> Allow while the write lands on /etc/hosts"]
 fn toplevel_rebind_between_assignment_and_redirect_is_never_allow() {
     let cases: Vec<String> = vec![
         format!("P={OK}; IFS= read -r P <<< /etc/hosts; echo hi > \"$P\""),

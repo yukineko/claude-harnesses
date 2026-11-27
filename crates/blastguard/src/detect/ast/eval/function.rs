@@ -211,6 +211,56 @@ impl Env {
 }
 
 impl Env {
+    /// Structural fail-closed rule (backlog f3301770): after a simple command,
+    /// every tracked variable whose name appears in one of its words other than
+    /// as a plain `$name` reference is `Undetermined`. A list of known
+    /// binders (`read`, `printf -v`, zsh's `print -v`, `zformat`, `zstat -A`,
+    /// `sysread`, `vared`, `zparseopts`, `{name}` words, `name[i]=`, behind
+    /// `command` / `builtin`) cannot be complete, so an unrecognised command
+    /// naming the variable counts too. A prefix assignment to one of zsh's
+    /// tied names (`PATH` / `path`, ...) rebinds its partner. Costs a
+    /// resolution, never invents one. `None`: nothing was produced.
+    pub(super) fn forgetting_in(mut self, sc: Option<&SimpleCommand>) -> Self {
+        let Some(sc) = sc else { return self };
+        let mut words: Vec<&str> = Vec::new();
+        let mut undetermined_operand = false;
+        for w in &sc.argv {
+            match &w.value {
+                Value::Literal(s) => words.push(s.as_str()),
+                Value::Undetermined(_) => undetermined_operand = true,
+            }
+        }
+        // An undetermined word may be the NAME a binder assigns
+        // (`print -v $n`): for a command known to bind a name operand, no
+        // tracked variable can be trusted afterwards. (An unknown command
+        // with an undetermined word naming a variable is not covered: the
+        // name cannot be read from the text.)
+        if undetermined_operand
+            && words
+                .first()
+                .is_some_and(|h| crate::detect::vars::binds_name_as_operand(h))
+        {
+            self.havoc_vars("an undetermined operand of a command that binds names");
+        }
+        let names: Vec<String> = self.vars.keys().cloned().collect();
+        for k in names {
+            if words
+                .iter()
+                .any(|w| crate::detect::vars::mentions_name_outside_reference(w, &k))
+            {
+                self.forget(&k, "named by a command word that may bind it");
+            }
+        }
+        for (n, _) in &sc.assignments {
+            if let Some(p) = crate::detect::vars::tied_partner(n) {
+                self.forget(p, "tied to an assigned name");
+            }
+        }
+        self
+    }
+}
+
+impl Env {
     /// zsh's `[[ x =~ re ]]` sets these (bash sets BASH_REMATCH only).
     pub(super) fn forget_zsh_match(&mut self) {
         for n in ["MATCH", "match", "MBEGIN", "MEND", "mbegin", "mend"] {

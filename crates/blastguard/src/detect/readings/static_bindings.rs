@@ -77,7 +77,7 @@ use super::super::segment::{
 };
 use super::super::vars::{
     defines_shell_function, has_unresolvable_expansion, is_shell_identifier,
-    mentions_name_outside_reference, quote_aware_words, unquote_literal_value,
+    mentions_name_outside_reference, quote_aware_words, tied_partner, unquote_literal_value,
 };
 use super::super::{
     assignment_execution_is_guarded_only_by_and_or, assignment_execution_is_unconditional,
@@ -413,6 +413,12 @@ fn update_env(
                 // is stale now.
                 chain.remove(name);
                 env.remove(name);
+                // zsh ties `path`/`PATH` (and the other pairs): assigning one
+                // assigns the other (backlog f3301770).
+                if let Some(p) = tied_partner(name) {
+                    chain.remove(p);
+                    env.remove(p);
+                }
                 let Some(v) = literal_value(raw).filter(|_| !SHELL_MAINTAINED.contains(&name))
                 else {
                     continue;

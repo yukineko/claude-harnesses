@@ -56,6 +56,10 @@ pub enum TargetClass {
     ProtectedConfig,
     /// A system directory. Never auto-Allowed.
     System,
+    /// The MAIN working tree of a git repository (git-dir == common-dir, not a
+    /// linked worktree). CLAUDE.md §8: main only receives merges, so a git
+    /// write there is never learned as Allow (deny learning still applies).
+    MainTree,
     /// Any other path under `$HOME`.
     Home,
     /// The target could not be statically resolved.
@@ -67,42 +71,50 @@ pub enum TargetClass {
 impl TargetClass {
     /// The class segment of the shape key. Distinct, separator-free.
     ///
-    /// Every label carries the SHAPE-SCHEMA tag `s2-` (user ruling
+    /// Every label carries the SHAPE-SCHEMA tag `s3-` (user ruling
     /// 2026-11-28; schema 2 = verbs with subcommand / flags / body hash and
-    /// protected config raised from the verdict). A key built by the earlier
-    /// schema (`rule|home|rm`) can therefore never equal a current key, in
+    /// protected config raised from the verdict; schema 3 = file-script
+    /// content hash, wrapper subcommands, unpinned xargs / `$(..)` operands,
+    /// git writes classed by the repository they act on, `main-tree`). A key
+    /// built by an earlier schema (`rule|home|rm`, `rule|s2-home|rm`) can
+    /// therefore never equal a current key, in
     /// `lookup`, in `learn` or in `from_key`: a table that survives the
     /// upgrade is inert, not wrongly matching. Bump the tag with any change
     /// of what a shape means.
     pub fn as_str(&self) -> &'static str {
         match self {
-            TargetClass::Worktree => "s2-worktree",
-            TargetClass::Scratchpad => "s2-scratchpad",
-            TargetClass::ProtectedConfig => "s2-protected-config",
-            TargetClass::System => "s2-system",
-            TargetClass::Home => "s2-home",
-            TargetClass::Undetermined => "s2-undetermined",
-            TargetClass::None => "s2-none",
+            TargetClass::Worktree => "s3-worktree",
+            TargetClass::Scratchpad => "s3-scratchpad",
+            TargetClass::ProtectedConfig => "s3-protected-config",
+            TargetClass::System => "s3-system",
+            TargetClass::MainTree => "s3-main-tree",
+            TargetClass::Home => "s3-home",
+            TargetClass::Undetermined => "s3-undetermined",
+            TargetClass::None => "s3-none",
         }
     }
 
     /// Inverse of [`TargetClass::as_str`].
     pub fn parse(s: &str) -> Option<TargetClass> {
         Some(match s {
-            "s2-worktree" => TargetClass::Worktree,
-            "s2-scratchpad" => TargetClass::Scratchpad,
-            "s2-protected-config" => TargetClass::ProtectedConfig,
-            "s2-system" => TargetClass::System,
-            "s2-home" => TargetClass::Home,
-            "s2-undetermined" => TargetClass::Undetermined,
-            "s2-none" => TargetClass::None,
+            "s3-worktree" => TargetClass::Worktree,
+            "s3-scratchpad" => TargetClass::Scratchpad,
+            "s3-protected-config" => TargetClass::ProtectedConfig,
+            "s3-system" => TargetClass::System,
+            "s3-main-tree" => TargetClass::MainTree,
+            "s3-home" => TargetClass::Home,
+            "s3-undetermined" => TargetClass::Undetermined,
+            "s3-none" => TargetClass::None,
             _ => return Option::None,
         })
     }
 
     /// Classes that are never learned as Allow (deny learning still applies).
     pub fn never_allowed(&self) -> bool {
-        matches!(self, TargetClass::System | TargetClass::ProtectedConfig)
+        matches!(
+            self,
+            TargetClass::System | TargetClass::ProtectedConfig | TargetClass::MainTree
+        )
     }
 }
 

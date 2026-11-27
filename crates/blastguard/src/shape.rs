@@ -10,8 +10,10 @@
 //! not resolve is [`Target::Undetermined`], and an undetermined target makes
 //! the class `Undetermined` — never `None`, never a placed class.
 //!
-//! Pure: the filesystem enters only through the injected resolver already held
-//! by [`SafeRoots`].
+//! Not pure: path classification uses the injected resolver held by
+//! [`SafeRoots`], and [`Target::GitRepo`] reads the `.git` entry of the
+//! repository (directory = main working tree, gitlink file = linked
+//! worktree); an unreadable one is `Undetermined`.
 
 use crate::scope::{Placement, SafeRoots};
 use harness_core::asklearn::{Shape, TargetClass, UNRESOLVED_VERB};
@@ -24,6 +26,12 @@ pub enum Target {
     Path(String),
     /// The evaluator could not determine the target.
     Undetermined,
+    /// A git write acts on the REPOSITORY containing this path (the effective
+    /// cwd, a `-C` directory, or the tree a `git worktree remove` deletes). A
+    /// relative path is read against the payload cwd; `.` is the payload cwd.
+    /// Its class is the kind of tree the path lies in (linked worktree /
+    /// scratchpad / MAIN working tree), not the path's own location.
+    GitRepo(String),
 }
 
 /// What the evaluator established about a Bash command line.
@@ -93,12 +101,13 @@ pub fn shape_of(
 }
 
 /// The class of a set of targets: the most dangerous one wins
-/// (System > ProtectedConfig > Undetermined > Home > Worktree > Scratchpad >
-/// None).
+/// (System > MainTree > ProtectedConfig > Undetermined > Home > Worktree >
+/// Scratchpad > None).
 pub fn class_of(targets: &[Target], ctx: &Ctx<'_>) -> TargetClass {
     fn rank(c: TargetClass) -> u8 {
         match c {
-            TargetClass::System => 6,
+            TargetClass::System => 7,
+            TargetClass::MainTree => 6,
             TargetClass::ProtectedConfig => 5,
             TargetClass::Undetermined => 4,
             TargetClass::Home => 3,
@@ -112,6 +121,7 @@ pub fn class_of(targets: &[Target], ctx: &Ctx<'_>) -> TargetClass {
         .map(|t| match t {
             Target::Undetermined => TargetClass::Undetermined,
             Target::Path(p) => class_of_path(p, ctx),
+            Target::GitRepo(p) => class_of_repo(p, ctx),
         })
         .max_by_key(|c| rank(*c))
         .unwrap_or(TargetClass::None)
@@ -210,6 +220,100 @@ pub fn class_of_path(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
         }
     }
     TargetClass::Undetermined
+}
+
+/// What kind of git working tree a directory lies in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RepoKind {
+    /// `.git` is a directory: git-dir == common-dir (a MAIN working tree).
+    Main,
+    /// `.git` is a gitlink file pointing into `<common>/worktrees/<name>`.
+    Linked,
+    /// No `.git` found, or it could not be read: not determined.
+    Unknown,
+}
+
+/// Walk up from `abs` to the nearest ancestor holding a `.git` entry. A
+/// directory is a main working tree. A file is a gitlink: `.../worktrees/..`
+/// is a linked worktree; anything else (a submodule's `.git/modules/..`) is its
+/// own main tree. Any read error other than "absent" is `Unknown`.
+fn repo_kind(abs: &str) -> RepoKind {
+    let mut cur = std::path::Path::new(abs);
+    loop {
+        let dot_git = cur.join(".git");
+        match std::fs::symlink_metadata(&dot_git) {
+            Ok(m) if m.is_dir() => return RepoKind::Main,
+            Ok(m) if m.is_file() => {
+                return match harness_core::boundary::read_to_string(&dot_git) {
+                    Determination::Known(Some(t)) => match t.trim().strip_prefix("gitdir:") {
+                        Some(g) if g.contains("/worktrees/") => RepoKind::Linked,
+                        Some(_) => RepoKind::Main,
+                        None => RepoKind::Unknown,
+                    },
+                    _ => RepoKind::Unknown,
+                };
+            }
+            Ok(_) => return RepoKind::Unknown,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return RepoKind::Unknown,
+        }
+        match cur.parent() {
+            Some(p) => cur = p,
+            None => return RepoKind::Unknown,
+        }
+    }
+}
+
+/// The absolute, normalised spelling of `raw` (as [`class_of_path`] reads it),
+/// or `None` when it cannot be determined.
+fn absolute_of(raw: &str, ctx: &Ctx<'_>) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.contains(['$', '`', '*', '?', '[', '{', '\n']) {
+        return None;
+    }
+    let expanded = match (raw.strip_prefix("~/"), raw == "~", ctx.home) {
+        (Some(rest), _, Some(h)) => format!("{}/{rest}", h.trim_end_matches('/')),
+        (_, true, Some(h)) => h.to_string(),
+        (Some(_), _, None) | (_, true, None) => return None,
+        _ => raw.to_string(),
+    };
+    let abs = if expanded.starts_with('/') {
+        expanded
+    } else if raw.starts_with('~') {
+        return None;
+    } else {
+        match ctx.cwd {
+            Some(c) if c.starts_with('/') => format!("{}/{expanded}", c.trim_end_matches('/')),
+            _ => return None,
+        }
+    };
+    let norm = crate::exclude::normalize(&abs);
+    norm.starts_with('/').then_some(norm)
+}
+
+/// Class of the REPOSITORY a git write acts on (spec rule: a git write takes
+/// its class from the tree it modifies, not from `none`). System, protected
+/// config and scratchpad locations keep their own class; a worktree storage
+/// path or a linked worktree is `Worktree`; the main working tree is
+/// `MainTree` (never Allow-learnable, CLAUDE.md §8); anything not shown to be
+/// one of those is `Undetermined`.
+pub fn class_of_repo(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
+    match class_of_path(raw, ctx) {
+        c @ (TargetClass::System | TargetClass::ProtectedConfig | TargetClass::Scratchpad) => c,
+        _ => {
+            let Some(abs) = absolute_of(raw, ctx) else {
+                return TargetClass::Undetermined;
+            };
+            if abs.contains("/.condukt/worktrees/") || abs.contains("/.harness-worktrees/") {
+                return TargetClass::Worktree;
+            }
+            match repo_kind(&abs) {
+                RepoKind::Linked => TargetClass::Worktree,
+                RepoKind::Main => TargetClass::MainTree,
+                RepoKind::Unknown => TargetClass::Undetermined,
+            }
+        }
+    }
 }
 
 /// The evaluator's facts for the Bash command `command`; an undetermined

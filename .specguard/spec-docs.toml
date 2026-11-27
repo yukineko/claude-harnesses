@@ -785,6 +785,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' interpreter bullet '`CODE_BUILDING` marker は Ask' and its follow-up: code_building_marker scans case-folded substrings and exempts only `re.compile(`/`regex.compile(` (compile_call_is_regex_method) and constant-metadata `globals()[...]` reads (globals_subscript_is_metadata_read), occurrence by occurrence from Python tokens; untokenisable programs keep the marker (backlog 80b18990 / 2e5e080c)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/ast/rustup.rs"
+doc = "docs/specs/blastguard.md"
+reason = "r21 paragraph (backlog 92f4a28d) `detect/ast/rustup`: the known-pure allowlist that decides whether the `. \"$HOME/.cargo/env\"` exemption survives; anything not provably non-writing before the dot drops it (fail-closed)."
+
+[[spec]]
 path = "crates/blastguard/src/detect/ast/mod.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'module 責務' bullet `detect/ast`: Analysis/Cause/Script/SimpleCommand contract of the parser + static-eval layer (RedirTarget / SimpleCommand.cwd relative-target representation); read by the path-resolution detectors through targets.rs only."

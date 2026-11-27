@@ -834,6 +834,13 @@ forge・condukt のスケジューラが再利用）。
   （`.` builtin・prefix 代入無し・redirect 無し・operand 1 つ・値が hook の `HOME` の `/.cargo/env` で、行全体の
   index でも同じ値に解決すること。segment 自身の command に限り、`$( )`・`` ` ` ``・escape 本文の中では外さない。
   `ast::is_rustup_env_source`）。それ以外の `.`/`source` は従来どおり判定不能
+  （backlog 92f4a28d、`detect/ast/rustup`: r21 の免除は、同じ行で最後の `. "$HOME/.cargo/env"`（`source` も同じ）より
+  前にある simple command が**すべて**書き込まないと分かっている allowlist（`known_pure`: cd・true/false/`:`・pwd・
+  test/`[`・echo・`-v*` 無しの printf・HOME 以外の export・mkdir・git status/log/diff/show/rev-parse と復元しない stash・
+  cat/ls/head/tail/wc、書き込み redirect は target が決まり cargo env でないものだけ）に入るときだけ残る。
+  未知 command・wrapper・`HOME=` 代入・redirect 付き `exec`・`.` を本体に持つ loop/関数は免除を外す（列挙漏れ＝
+  fail-open を避けるため denylist にしない）。Python の `os.symlink`/`os.link`/`symlink_to`/`hardlink_to` は relink 層で
+  `ln` と同じに読み、S5 は link より後で link パス以下になりうる書き込みだけを Ask にする）
   （path の字句判定は `/DEV/stdin`〈大文字小文字を区別しない FS〉・`/{dev}/stdin`・`CDPATH` で漏れたため採らない）
   （625d16af8 の回帰: `. "$HOME/.cargo/env" && sed -i … f` と loop 内の `$P` 実行が relink の Ask になっていた。
   tests/ast_eval_fp_targets_20261115.rs の sanity_line_172 / fp_line_195）。

@@ -327,12 +327,12 @@ pub(super) fn binds_name_as_operand(head: &str) -> bool {
 /// coarseness here (a `printf` mentioning `BIN` anywhere, a `local` at top
 /// level where bash would error) costs resolutions and never invents one.
 pub(super) fn segment_may_rebind(seg: &str, name: &str) -> bool {
-    segment_may_rebind_with(seg, name, false)
+    segment_may_rebind_with(seg, name, false, true)
 }
 
 /// [`segment_may_rebind`]; `exempt_ok` lets a bare `name` operand of a
 /// non-binding command pass ([`exemption_disabled`] decides, per command).
-pub(super) fn segment_may_rebind_with(seg: &str, name: &str, exempt_ok: bool) -> bool {
+pub(super) fn segment_may_rebind_with(seg: &str, name: &str, exempt_ok: bool, posix: bool) -> bool {
     let words = quote_aware_words(seg);
     let Some(first) = words.first() else {
         return false;
@@ -340,6 +340,19 @@ pub(super) fn segment_may_rebind_with(seg: &str, name: &str, exempt_ok: bool) ->
     let head = normalized_command(first);
     if matches!(head.as_str(), "eval" | "source" | ".") {
         return true;
+    }
+    // A prefix assignment on a SPECIAL builtin persists under POSIX mode
+    // (`set -o posix; P=/b :` leaves P=/b), and a prefix on `eval` is not
+    // known to be transient either (backlog f3301770, measured by the
+    // verifier): the name is rebound.
+    if let Some((hi, h)) = command_head(&words) {
+        let prefix_binds = words[..hi].iter().any(|w| {
+            word_binds_name(w, name) || tied_partner(name).is_some_and(|p| word_binds_name(w, p))
+        });
+        if prefix_binds && (h == "eval" || (posix && POSIX_SPECIAL_BUILTINS.contains(&h.as_str())))
+        {
+            return true;
+        }
     }
     if binds_name_as_operand(&head)
         && words[1..].iter().any(|w| {
@@ -633,6 +646,80 @@ pub(super) fn segment_mentions_name(seg: &str, name: &str, exempt_ok: bool) -> b
 /// definition. The exemption is off for the whole command then.
 pub(super) fn exemption_disabled(cmd: &str) -> bool {
     parsed_command_may_redefine_words(cmd) || exemption_disabled_by_words(cmd)
+}
+
+/// POSIX special builtins: under POSIX mode a prefix assignment on one of
+/// these persists in the shell.
+const POSIX_SPECIAL_BUILTINS: &[&str] = &[
+    ":", ".", "break", "continue", "eval", "exec", "exit", "export", "readonly", "return", "set",
+    "shift", "times", "trap", "unset", "source",
+];
+
+/// What the whole command says about how command words and prefix
+/// assignments behave, read from the parsed command (words after quote
+/// removal) and, where the parse is undetermined, from a word split.
+#[derive(Clone, Copy)]
+pub(super) struct ShellModes {
+    /// An `alias` / `unalias` / alias-table write appears anywhere: a command
+    /// word may run a body that binds any name, so nothing resolves.
+    pub alias: bool,
+    /// A POSIX-enabling command appears anywhere (`set -o posix`,
+    /// `setopt posix_builtins`, `emulate sh|ksh`, `--posix`,
+    /// `POSIXLY_CORRECT=`).
+    pub posix: bool,
+}
+
+pub(super) fn shell_modes(cmd: &str) -> ShellModes {
+    use super::ast::{analyze, Analysis, Value};
+    let words: Vec<Vec<String>> = match analyze(cmd) {
+        Analysis::Known(script) => script
+            .commands
+            .iter()
+            .map(|sc| {
+                let mut ws: Vec<String> = sc
+                    .assignments
+                    .iter()
+                    .map(|(n, _)| format!("{n}="))
+                    .collect();
+                ws.extend(sc.argv.iter().map(|w| match &w.value {
+                    Value::Literal(s) => s.clone(),
+                    Value::Undetermined(_) => w.raw.clone(),
+                }));
+                ws
+            })
+            .collect(),
+        // Parse undetermined: a word split, with the statement operators
+        // peeled off (`posix;` is the word `posix`).
+        Analysis::Undetermined(_) => vec![quote_aware_words(cmd)
+            .iter()
+            .flat_map(|w| w.split([';', '&', '|', '(', ')', '\n']).map(str::to_string))
+            .filter(|w| !w.is_empty())
+            .map(|w| unquote_literal_value(&w).unwrap_or(w))
+            .collect()],
+    };
+    let mut modes = ShellModes {
+        alias: false,
+        posix: false,
+    };
+    for ws in &words {
+        for (i, w) in ws.iter().enumerate() {
+            let base = w.split('=').next().unwrap_or(w);
+            if matches!(w.as_str(), "alias" | "unalias") || is_command_table_name(base) {
+                modes.alias = true;
+            }
+            let lower = w.to_ascii_lowercase().replace('_', "");
+            if matches!(lower.as_str(), "posix" | "posixbuiltins" | "--posix")
+                || base == "POSIXLY_CORRECT"
+                || (w == "emulate"
+                    && ws[i + 1..]
+                        .iter()
+                        .any(|n| matches!(n.as_str(), "sh" | "ksh")))
+            {
+                modes.posix = true;
+            }
+        }
+    }
+    modes
 }
 
 /// Names whose assignment redefines what a command word means: zsh's
@@ -998,10 +1085,10 @@ pub(super) fn resolve_expanded_command_word(
     let mut latest_rebind: Option<usize> = None;
     let mut ties: Vec<(String, String)> = Vec::new();
     let exempt_ok = !exemption_disabled(cmd);
-    // A here-document BODY is data the shell never executes, so a `NAME=value`
-    // typed inside one neither assigns nor rebinds. Skipping it here is what
-    // lets the closed-here-document case above be believed at all: the reason
-    // to distrust the tail was the body, and the body is now identified.
+    let modes = shell_modes(cmd); // A here-document BODY is data the shell never executes, so a `NAME=value`
+                                  // typed inside one neither assigns nor rebinds. Skipping it here is what
+                                  // lets the closed-here-document case above be believed at all: the reason
+                                  // to distrust the tail was the body, and the body is now identified.
     let (is_here_doc_body, _) = here_document_layout(&segs);
     for idx in 0..seg_idx {
         if is_here_doc_body.get(idx).copied().unwrap_or(false) {
@@ -1016,14 +1103,14 @@ pub(super) fn resolve_expanded_command_word(
             // a pipeline in the parent shell (`echo x | read P`) and bash
             // may too (`shopt -s lastpipe`), so a stage that may bind the
             // name makes the earlier value stale (backlog f3301770).
-            if segment_may_rebind_with(&segs[idx].text, &name, exempt_ok) {
+            if segment_may_rebind_with(&segs[idx].text, &name, exempt_ok, modes.posix) {
                 latest_rebind = Some(idx);
             }
             continue;
         }
         let words = quote_aware_words(&segs[idx].text);
         if words.is_empty() || !words.iter().all(|w| is_assignment(w)) {
-            if segment_may_rebind_with(&segs[idx].text, &name, exempt_ok) {
+            if segment_may_rebind_with(&segs[idx].text, &name, exempt_ok, modes.posix) {
                 latest_rebind = Some(idx);
             }
             continue;
@@ -1048,6 +1135,12 @@ pub(super) fn resolve_expanded_command_word(
     let Some((assign_idx, raw_value)) = latest else {
         return CommandWordOrigin::NoReachingAssignment;
     };
+    if modes.alias {
+        // An alias defined anywhere on the line (before the assignment
+        // too) may give any command word a body that binds this name, so
+        // no assignment is believed (backlog f3301770).
+        return CommandWordOrigin::AssignedButUnknowable;
+    }
     if latest_rebind.map(|r| r > assign_idx).unwrap_or(false) {
         // Something after the winning assignment rebinds the name in a way the
         // scan above cannot read. The assignment is not absent and its text is

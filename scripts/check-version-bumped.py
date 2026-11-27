@@ -12,7 +12,7 @@ Cargo.toml / plugin.json / marketplace.json). Run BOTH:
   - check-version-bumped.py   → a changed plugin actually got bumped vs base
 
 Usage (run from repo root):
-  python3 scripts/check-version-bumped.py                 # base = HEAD (pre-commit: working tree vs last commit)
+  python3 scripts/check-version-bumped.py                 # base = HEAD (pre-commit: the INDEX (staged) vs last commit)
   python3 scripts/check-version-bumped.py --base origin/main   # CI / pre-push: vs a pushed ref
 
 Exit 0 if every changed plugin was bumped (or nothing relevant changed); exit 1
@@ -141,12 +141,43 @@ def plugin_version_at(ref, path):
     return v
 
 
-def plugin_version_worktree(path):
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f).get("version")
-    except (FileNotFoundError, json.JSONDecodeError):
+def blob_in_index(path):
+    """Staged content of `path`, or None when it is genuinely not in the index.
+
+    Absence is settled by `git ls-files --stage`; any git failure raises
+    Undetermined (never "absent"). Pre-commit mode judges the INDEX, not the
+    working tree (backlog d1d85c66).
+    """
+    listed = git("ls-files", "--stage", "--", path)
+    if listed.returncode != 0:
+        raise Undetermined(
+            f"cannot list {path} in the index (git ls-files exited "
+            f"{listed.returncode}): {listed.stderr.strip()}"
+        )
+    if not listed.stdout.strip():
         return None
+    r = git("show", f":{path}")
+    if r.returncode != 0:
+        raise Undetermined(
+            f"{path} is staged but unreadable (git show :path exited "
+            f"{r.returncode}): {r.stderr.strip()}"
+        )
+    return r.stdout
+
+
+def plugin_version_index(path):
+    """Staged plugin.json version; None if absent/unparsable in the index
+    (callers treat None as "not shown to have moved" => fail). Git failures
+    raise Undetermined."""
+    text = blob_in_index(path)
+    if text is None:
+        return None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    v = data.get("version") if isinstance(data, dict) else None
+    return v if isinstance(v, str) and v.strip() else None
 
 
 # The one crate every plugin statically links. A change here changes every
@@ -210,12 +241,9 @@ def crate_version_at(ref, path):
     return v
 
 
-def crate_version_worktree(path):
-    try:
-        with open(path, encoding="utf-8") as f:
-            return package_version_from_toml(f.read())
-    except OSError:
-        return None
+def crate_version_index(path):
+    """Staged [package].version; None if absent/unreadable. Git failure raises."""
+    return package_version_from_toml(blob_in_index(path))
 
 
 def check_shared_crate(base, head=None, crate=SHARED_CRATE):
@@ -259,7 +287,10 @@ def check_shared_crate(base, head=None, crate=SHARED_CRATE):
         # exist at base cannot have "changed" in the sense this rule is about.
         return "ok", None
     if head is None:
-        cur_v = crate_version_worktree(manifest)
+        try:
+            cur_v = crate_version_index(manifest)
+        except Undetermined as e:
+            return "error", str(e)
     else:
         try:
             cur_v = crate_version_at(head, manifest)
@@ -283,8 +314,8 @@ def check_shared_crate(base, head=None, crate=SHARED_CRATE):
 
 
 def _range(base, head):
-    """`git diff` operands: working tree vs base, or base vs head."""
-    return (base,) if head is None else (base, head)
+    """`git diff` operands: INDEX vs base (pre-commit), or base vs head."""
+    return ("--cached", base) if head is None else (base, head)
 
 
 def plugin_names_at(head):
@@ -328,10 +359,15 @@ def main():
         if not os.path.isdir(CRATES):
             print("check-version-bumped: no crates/ dir (run from repo root)", file=sys.stderr)
             return 2
-        names = [
-            n for n in sorted(os.listdir(CRATES))
-            if os.path.isfile(f"{CRATES}/{n}/{PLUGIN_JSON_REL}")
-        ]
+        # Plugins are enumerated from the INDEX, not the working tree.
+        ls = git("ls-files", "--cached", "--", f"{CRATES}/*/{PLUGIN_JSON_REL}")
+        if ls.returncode != 0:
+            print(f"check-version-bumped: cannot list staged plugins: {ls.stderr.strip()}", file=sys.stderr)
+            return 2
+        names = sorted({
+            ln.split("/")[1] for ln in ls.stdout.splitlines()
+            if ln.startswith(f"{CRATES}/") and ln.endswith(PLUGIN_JSON_REL)
+        })
     else:
         try:
             names = sorted(plugin_names_at(head))
@@ -380,7 +416,11 @@ def main():
         if base_v is None:
             continue  # new plugin (plugin.json absent from the base tree) — no bump required
         if head is None:
-            cur_v = plugin_version_worktree(pj_rel)
+            try:
+                cur_v = plugin_version_index(pj_rel)
+            except Undetermined as e:
+                print(f"check-version-bumped: {name}: {e}", file=sys.stderr)
+                return 2
         else:
             try:
                 cur_v = plugin_version_at(head, pj_rel)

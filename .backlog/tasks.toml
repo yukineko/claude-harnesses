@@ -567,6 +567,8 @@ notes = "Observed 2026-11-27 by flow session eaa077f4 (release build): identical
 created_at = 1795791484
 updated_at = 1795791484
 weight = 0.0
+issue_number = 1996
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1996"
 rev = 0
 
 [task.repro]

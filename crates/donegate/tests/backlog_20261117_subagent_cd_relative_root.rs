@@ -313,7 +313,7 @@ fn subagent_stop_does_not_judge_parent_root_for_a_cd_relative_write_in_its_workt
 /// sidechain): the parent root, which nobody wrote into, is judged and blocks.
 // test-weakening-justified: new RED for an unfixed defect (2026-11-17).
 #[test]
-#[ignore = "RED(39772e9f-parent): parent Stop judges hook cwd whenever checks are configured (main.rs:276); fix needs a human ruling on skipping checks when wrote_in_cwd is Known(false)"]
+#[ignore = "RED(49ec9e90): parent Stop judges hook cwd whenever checks are configured (main.rs:276); fix needs a human ruling on skipping checks when wrote_in_cwd is Known(false)"]
 fn parent_stop_does_not_judge_parent_root_for_a_subagents_cd_relative_write_elsewhere() {
     let f = Fixture::new();
     let parent_t = f.parent_transcript("");

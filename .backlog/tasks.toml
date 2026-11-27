@@ -1665,3 +1665,30 @@ exit 101: red out; finished in 0.39s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.08s
      Running tests/posttool_bash_output_shape.rs (target/debug/deps/posttool_bash_output_shape-c91888a7d7f4d962)
 error: test failed, to rerun pass `-p ctxrot --test posttool_bash_output_shape`"""
+
+[[task]]
+id = "49ec9e90"
+title = "donegate: parent Stop judges the hook cwd's checks even when the session wrote nothing there (needs ruling: skip when wrote_in_cwd Known(false)?)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1795780106
+updated_at = 1795780106
+weight = 0.0
+issue_number = 1990
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1990"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test backlog_20261117_subagent_cd_relative_root -- --ignored parent_stop"
+rev = "470ef0d24f536a6299883cb66f561796bc8e5b62"
+observed_at = 1795780106
+detail = """
+exit 101: v0.1.103 (/Users/yuki/src/.harness-worktrees/attr-39772e9f-eaa077f4/crates/donegate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.09s
+     Running tests/backlog_20261117_subagent_cd_relative_root.rs (target/debug/deps/backlog_20261117_subagent_cd_relative_root-6d935cde80d05582)
+error: test failed, to rerun pass `-p donegate --test backlog_20261117_subagent_cd_relative_root`"""

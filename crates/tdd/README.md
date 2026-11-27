@@ -116,7 +116,7 @@ started with, since the hook inherits the app's environment.
 test-first), and also refuses (recording no RED) when the command timed out
 or produced no exit code (killed by a signal, or waiting on it failed), because no assertion failure was observed; RED is
 recorded only for a command that ran and exited non-zero. `tdd green` refuses
-without a prior RED proof. The test command
+without a prior RED proof, and when the tests still fail (exit non-zero): stderr then lists the failing test names and the path of a record file `<state_dir>/refused-green/<task>-<pid>-<nanos>.log` holding the run output (capped at 4 MiB); if that record cannot be written, stderr says so and GREEN is still refused. The test command
 comes from `--cmd`, else `tdd.toml`'s `test_cmd` (default `cargo test`).
 
 `tdd oracle --task <id>` classifies the task's RED→GREEN transition from its

@@ -24,12 +24,28 @@ pub struct Outcome {
     pub timed_out: bool,
     pub spawn_error: Option<String>,
     pub output_tail: String,
+    /// The run log read before it is removed, capped at [`FULL_OUTPUT_CAP`]
+    /// bytes (lossy UTF-8). Empty when the command never ran or the log could
+    /// not be read; only used for the refused-GREEN record file.
+    pub full_output: String,
     /// Per-test results by name, parsed from the full run log
     /// ([`crate::evidence::parse_test_log`]).
     pub tests: serde_json::Value,
     /// Counts from the libtest `test result:` lines; `determined: false`
     /// when none could be parsed (never `0 passed`).
     pub counts: serde_json::Value,
+}
+
+/// Upper bound on the log bytes kept in [`Outcome::full_output`].
+pub const FULL_OUTPUT_CAP: u64 = 4 * 1024 * 1024;
+
+fn read_capped(path: &Path) -> String {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    if let Ok(f) = std::fs::File::open(path) {
+        let _ = f.take(FULL_OUTPUT_CAP).read_to_end(&mut buf);
+    }
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
 fn no_parse(why: &str) -> (serde_json::Value, serde_json::Value) {
@@ -78,6 +94,7 @@ pub fn run_cmd(cmd: &str, root: &Path, timeout: u64, tail_lines: usize, tmp_dir:
             timed_out: false,
             spawn_error: Some(msg.clone()),
             output_tail: msg,
+            full_output: String::new(),
             tests,
             counts,
         };
@@ -89,8 +106,10 @@ pub fn run_cmd(cmd: &str, root: &Path, timeout: u64, tail_lines: usize, tmp_dir:
     } else {
         evidence::parse_test_log(&log_path)
     };
+    let full_output = read_capped(&log_path);
     let _ = std::fs::remove_file(&log_path);
     Outcome {
+        full_output,
         tests,
         counts,
         passed: raw.passed,

@@ -566,7 +566,60 @@ fn read_author_at(path: &Path) -> Determination<Option<String>> {
     })
 }
 
-/// `tdd green`: require a RED proof, run the tests, require success, record GREEN.
+/// Keep the evidence of a refused GREEN (run still failing) and build the
+/// stderr message: only the decision-relevant part (failing test names when
+/// parsed, the record path) is shown; the run output (the log, capped at
+/// `runner::FULL_OUTPUT_CAP` bytes) goes to a record file under
+/// `<state_dir>/refused-green/`. If the record cannot be written the message
+/// says so; the GREEN is refused either way (the caller always bails).
+fn refused_green_report(cfg: &Config, task: &str, cmdline: &str, out: &runner::Outcome) -> String {
+    let mut failing: Vec<String> = out
+        .tests
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .filter(|(_, v)| v.as_str() == Some("fail"))
+                .map(|(k, _)| k.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    failing.sort();
+    let mut msg = String::from(
+        "tests still failing — keep implementing until they pass, then run `tdd green` again.",
+    );
+    if failing.is_empty() {
+        msg.push_str("\n   failing tests: none parsed from the output");
+    } else {
+        msg.push_str("\n   failing tests:");
+        for t in failing.iter().take(20) {
+            msg.push_str(&format!("\n     {t}"));
+        }
+        if failing.len() > 20 {
+            msg.push_str(&format!("\n     … and {} more", failing.len() - 20));
+        }
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = cfg.state_dir.join("refused-green");
+    let path = dir.join(format!("{}-{}-{nanos}.log", safe(task), std::process::id()));
+    let body = format!(
+        "task: {task}\ncmd: {cmdline}\nexit_code: {:?}\n\n--- output ---\n{}\n--- output tail ---\n{}\n",
+        out.exit_code, out.full_output, out.output_tail
+    );
+    let written = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, body));
+    match written {
+        Ok(()) => msg.push_str(&format!("\n   full output: {}", path.display())),
+        Err(e) => msg.push_str(&format!(
+            "\n   could not write the failure record {} ({e}); the output is not kept",
+            path.display()
+        )),
+    }
+    msg
+}
+
+/// `tdd green`:require a RED proof, run the tests, require success, record GREEN.
 ///
 /// GREEN is recorded only for a command that ran and exited zero. A run that
 /// timed out, or produced no exit code (killed by a signal, or the wait on
@@ -654,6 +707,9 @@ pub fn green(
     );
     judge_ran(&out, Phase::Green)?;
     judge_exited(&out, Phase::Green, cfg.default_timeout_secs)?;
+    if has_red && !out.passed {
+        bail!("{}", refused_green_report(cfg, task, cmdline, &out));
+    }
     judge_green(out.passed, has_red)?;
     let red_path = red_slot.unwrap_or_default();
     let path = write_slot(root, cfg, task, "green", cmdline)?;

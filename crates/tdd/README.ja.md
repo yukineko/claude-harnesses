@@ -37,7 +37,7 @@ harness の他のゲートに対する「test-first の兄弟」にあたる。`
   Phase 6  tdd verify --task <id>  →  RED→GREEN を検証
 ```
 
-タスク ID を 1 つ決め（例: スラッグ `parse-csv`）、以降 `--task <id>` に使う。テストコマンドは `--cmd` 引数を優先し、無ければ `tdd.toml` の `test_cmd`（既定 `cargo test`）。`tdd red` がテストの失敗を確認できなければ「振る舞いをまだ試せていない」ので失敗テストを書き直す。コマンドが終了コードを返さなかった場合（signal で kill された、または子プロセスの wait に失敗した）・タイムアウトした場合も assertion の失敗が観測されていないので判定不能として拒否し、RED 証跡は書かない（RED になるのは走り切って非 0 で終了した場合だけ）。`tdd green` は RED 証跡が無いと拒否する。
+タスク ID を 1 つ決め（例: スラッグ `parse-csv`）、以降 `--task <id>` に使う。テストコマンドは `--cmd` 引数を優先し、無ければ `tdd.toml` の `test_cmd`（既定 `cargo test`）。`tdd red` がテストの失敗を確認できなければ「振る舞いをまだ試せていない」ので失敗テストを書き直す。コマンドが終了コードを返さなかった場合（signal で kill された、または子プロセスの wait に失敗した）・タイムアウトした場合も assertion の失敗が観測されていないので判定不能として拒否し、RED 証跡は書かない（RED になるのは走り切って非 0 で終了した場合だけ）。`tdd green` は RED 証跡が無い場合と、テストがまだ失敗している場合（非 0 終了）に拒否する。後者は stderr に失敗テスト名と記録ファイル `<state_dir>/refused-green/<task>-<pid>-<nanos>.log`（実行出力・上限 4 MiB）のパスを出す。記録を書けない場合もその旨を stderr に出し、GREEN は拒否のまま。
 
 `tdd oracle --task <id>` はタスクの証跡から RED→GREEN の遷移を分類し、JSON レポート
 （`{"transition":"fail_to_pass","valid_fp_oracle":true,…}`）を出力する。有効な

@@ -97156,3 +97156,66 @@ rev = "a2d16046159bc238e01a7355ed82d4d90ff8b8e0"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "1e915597"
+title = "blastguard: sudo clustered short options with shell mode (-sE/-Es) + quoted harmful command stay Ask in main mode instead of Deny (unwrap_sudo treats the cluster as an unmodelled option)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795782940
+updated_at = 1795786738
+weight = 0.0
+issue_number = 1991
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1991"
+issue_closed_at = 1795786741
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test verify_8f8acf5e_20261127 -- --ignored clustered_short_options"
+rev = "0bf4c479419026360a8ad0eca3600d1e40e0e871"
+observed_at = 1795782940
+detail = """
+exit 101: iltered out; finished in 0.54s
+
+   Compiling blastguard v0.2.944 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/verify_8f8acf5e_20261127.rs (target/debug/deps/verify_8f8acf5e_20261127-330132182447c6d2)
+error: test failed, to rerun pass `-p blastguard --test verify_8f8acf5e_20261127`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test verify_8f8acf5e_20261127 clustered_short_options"
+exit = 0
+passed = 1
+rev = "9e1c0b996c4dbf1ed8fc90f81525e114bfce5f06"
+observed_at = 1795786731
+output_digest = "sha256:896a9e15918168a2bd87c6f20719630b473889917ed53ca3be3c91814f905d5f"
+excerpt = """
+
+running 1 test
+test clustered_short_options ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.72s
+
+   Compiling blastguard v0.2.949 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.87s
+     Running tests/verify_8f8acf5e_20261127.rs (target/debug/deps/verify_8f8acf5e_20261127-b2c48b248ee93230)
+"""
+
+[task.closure.red]
+rev = "faad12c1d2a138320edabb0e3ee6e8589ea538cd"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

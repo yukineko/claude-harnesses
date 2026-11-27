@@ -95811,3 +95811,126 @@ rev = "92b11643275ee650d4bca4d7e8b62b00c7a34282"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "35d85ccc"
+title = "context-governor: PostToolUse groomer emits bare-string updatedToolOutput for object-shaped Bash tool_response (Claude Code rejects: does not match Bash's output shape)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Cause: crates/context-governor/src/defaults/groomer.rs:110 returns Some(serde_json::Value::String(trimmed)); the whole serialized {stdout,stderr,interrupted,isImage} object is middle-trimmed into one string. Fires above DEFAULT_GROOM_BUDGET_TOKENS (~2048). Claude Code then prints 'PostToolUse hook returned updatedToolOutput that does not match Bash's output shape; using original output' and the groom is lost. Fix must keep the input's shape (object with same keys, stdout trimmed). Existing tests only check .as_str()."
+created_at = 1795734754
+updated_at = 1795783259
+weight = 0.0
+issue_number = 1988
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1988"
+issue_closed_at = 1795783262
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p context-governor --test posttool_bash_output_shape -- --ignored"
+rev = "4e4aba8c55ba094a220263975f9aae447715657e"
+observed_at = 1795734754
+detail = """
+exit 101:  Compiling context-governor v0.1.31 (/Users/yuki/src/.harness-worktrees/posttool-shape-red-eaa077f4/crates/context-governor)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s
+     Running tests/posttool_bash_output_shape.rs (target/debug/deps/posttool_bash_output_shape-3ab21936b4176b84)
+error: test failed, to rerun pass `-p context-governor --test posttool_bash_output_shape`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p context-governor --test posttool_bash_output_shape"
+exit = 0
+passed = 3
+rev = "732612eda796f0e75fd6d4d16097376200715172"
+observed_at = 1795783254
+output_digest = "sha256:6b744fb3544624cec22ac2ec7124746239841e15a2e48786482951c65f2ef7fe"
+excerpt = """
+
+running 3 tests
+test small_bash_output_emits_no_updated_tool_output ... ok
+test oversized_bash_output_is_groomed ... ok
+test oversized_bash_output_updated_tool_output_keeps_bash_shape ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+   Compiling harness-core v0.2.116 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/harness-core)
+   Compiling context-governor v0.1.41 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/context-governor)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.48s
+     Running tests/posttool_bash_output_shape.rs (target/debug/deps/posttool_bash_output_shape-a37ecb7ef2ebf9ea)
+"""
+
+[task.closure.red]
+rev = "ca5cd0c8bb6cd43280a24c7a6648c75af29ba837"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "79a6f4be"
+title = "ctxrot: toolguard emits bare-string updatedToolOutput for object-shaped Bash tool_response (Claude Code rejects: does not match Bash's output shape)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = '''Cause: crates/ctxrot/src/main.rs:462 (Toolguard arm) inserts updatedToolOutput = serde_json::Value::String(updated) regardless of the input tool_response shape. Fires at huge_tool_output_bytes (default 50_000). Observed replacement: "[toolguard: 195KB → 49KB, 中間1行省略]\n". Claude Code then prints 'PostToolUse hook returned updatedToolOutput that does not match Bash's output shape; using original output' and the replacement is lost. Fix must keep the input's shape (object with same keys, stdout replaced). Sibling: 35d85ccc (context-governor groomer.rs:110). Existing tests only check .as_str().'''
+created_at = 1795734780
+updated_at = 1795783277
+weight = 0.0
+issue_number = 1989
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1989"
+issue_closed_at = 1795783280
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p ctxrot --test posttool_bash_output_shape -- --ignored"
+rev = "4e4aba8c55ba094a220263975f9aae447715657e"
+observed_at = 1795734780
+detail = """
+exit 101: red out; finished in 0.39s
+
+   Compiling ctxrot v0.5.41 (/Users/yuki/src/.harness-worktrees/posttool-shape-red-eaa077f4/crates/ctxrot)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.08s
+     Running tests/posttool_bash_output_shape.rs (target/debug/deps/posttool_bash_output_shape-c91888a7d7f4d962)
+error: test failed, to rerun pass `-p ctxrot --test posttool_bash_output_shape`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p ctxrot --test posttool_bash_output_shape"
+exit = 0
+passed = 3
+rev = "732612eda796f0e75fd6d4d16097376200715172"
+observed_at = 1795783262
+output_digest = "sha256:0be8b2ef6546e361685813d34d0538d5723afa4658ce1b5416189d8e3b62cb81"
+excerpt = """
+
+running 3 tests
+test small_bash_output_emits_no_updated_tool_output ... ok
+test huge_bash_output_updated_tool_output_keeps_bash_shape ... ok
+test huge_bash_output_is_replaced ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+   Compiling harness-core v0.2.116 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/harness-core)
+   Compiling overwatch v0.2.127 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/overwatch)
+   Compiling ctxrot v0.5.51 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/ctxrot)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.22s
+     Running tests/posttool_bash_output_shape.rs (target/debug/deps/posttool_bash_output_shape-d03b5d71afbeceac)
+"""
+
+[task.closure.red]
+rev = "ca5cd0c8bb6cd43280a24c7a6648c75af29ba837"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

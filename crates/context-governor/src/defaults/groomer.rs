@@ -88,6 +88,17 @@ fn trim_middle(body: &str, budget: u32) -> String {
     format!("{head}\n…[context-governor: elided {elided} chars of {total}]…\n{tail}")
 }
 
+/// Outcome of grooming one `tool_response`.
+struct Groomed {
+    /// The shape-preserving replacement; `None` = no rewrite (note-only).
+    value: Option<serde_json::Value>,
+    saved_tokens: u32,
+    resident_tokens: u32,
+    /// Surfaced as `additionalContext` when the result could not be brought
+    /// within budget (never a silent pass-through).
+    note: Option<String>,
+}
+
 pub struct DefaultGroomer;
 
 impl ToolResultGroomer for DefaultGroomer {
@@ -126,18 +137,62 @@ impl DefaultGroomer {
             harness_core::transcript::last_usage_tokens(&input.transcript_path).unwrap_or(0);
         let budget = budget_for(pressure, groom_budget());
         match self.groom_with_sizes(input, budget) {
-            Some((groomed, saved_tokens, resident_tokens)) => {
-                let node = LedgerNode {
-                    session: input.session_id.clone(),
-                    hook: "PostToolUse".to_string(),
-                    item: None,
-                    action: Action::Groomed { saved_tokens },
-                    reason: "oversized-tool-result",
-                };
-                Ledger::open(&input.cwd).append(&node, resident_tokens);
-                HookOutput::groomed(groomed)
+            Some(g) => {
+                if g.value.is_some() {
+                    let node = LedgerNode {
+                        session: input.session_id.clone(),
+                        hook: "PostToolUse".to_string(),
+                        item: None,
+                        action: Action::Groomed {
+                            saved_tokens: g.saved_tokens,
+                        },
+                        reason: "oversized-tool-result",
+                    };
+                    Ledger::open(&input.cwd).append(&node, g.resident_tokens);
+                }
+                Self::envelope(g)
             }
             None => HookOutput::default(),
+        }
+    }
+
+    /// A payload that does not parse as a [`HookInput`] (invalid JSON, or nested
+    /// past serde_json's 128-level recursion guard, which is deliberately NOT
+    /// lifted — see `HookInput::parse`) cannot be groomed. When it is a large
+    /// PostToolUse payload, say so instead of staying silent: the output enters
+    /// context untrimmed. Returns `None` for small or non-PostToolUse payloads.
+    pub fn unparsed_note(&self, raw: &str) -> Option<HookOutput> {
+        let approx_tokens = raw.chars().count().div_ceil(4);
+        // The payload did not parse, so the window pressure that scales the
+        // budget is undetermined: resolve to the most restrictive side (the
+        // pressure floor), not the unscaled default (CLAUDE.md §3).
+        let floor = budget_for(u64::MAX, groom_budget()) as usize;
+        if !raw.contains("PostToolUse") || approx_tokens <= floor {
+            return None;
+        }
+        Some(HookOutput::inject(
+            "PostToolUse",
+            format!(
+                "[context-governor] a PostToolUse payload of ~{approx_tokens} tokens could not \
+                 be parsed (invalid or nested too deeply), so this tool output was NOT groomed; \
+                 the full output is in context."
+            ),
+        ))
+    }
+
+    /// Turn a [`Groomed`] into the hook envelope: a rewrite (plus optional
+    /// note), or a note alone when no faithful rewrite exists.
+    fn envelope(g: Groomed) -> HookOutput {
+        match (g.value, g.note) {
+            (Some(v), note) => {
+                let mut out = HookOutput::groomed(v);
+                if let Some(spec) = out.specific.as_mut() {
+                    spec.additional_context = note;
+                }
+                out
+            }
+            (None, Some(note)) => HookOutput::inject("PostToolUse", note),
+            (None, None) => HookOutput::default(),
         }
     }
 
@@ -146,23 +201,28 @@ impl DefaultGroomer {
     #[cfg(test)]
     fn to_output_with_budget(&self, input: &HookInput, budget: u32) -> HookOutput {
         match self.groom_with_sizes(input, budget) {
-            Some((groomed, _, _)) => HookOutput::groomed(groomed),
+            Some(g) => Self::envelope(g),
             None => HookOutput::default(),
         }
     }
 
     /// Groom `input.tool_response` under `budget` and report pre/post sizes.
-    /// Returns `Some((groomed_value, saved_tokens, resident_tokens))` when the
-    /// result was actually shrunk, `None` otherwise (under-budget, Ref body,
-    /// degenerate trim, or no `tool_response`).
+    /// Returns `Some(Groomed)` when the result is over budget, `None` when it is
+    /// under budget, a Ref body, a degenerate string trim, a scalar, or has no
+    /// `tool_response`. The replacement keeps the shape of `tool_response`:
+    /// string in -> string out; object/array in -> the same structure, walked
+    /// recursively with ONE shared budget (`harness_core::shrink`): every
+    /// bulk string at any depth is trimmed; long arrays (9+ items) trim each
+    /// item and, if that still does not fit, lose middle items (an all-string
+    /// array gets one marker string, any other array NO inserted element: the
+    /// drop is reported in `note`); short fields, image payloads and non-string
+    /// values stay whole (image data is binary, never trimmed, and yields `None`).
+    /// When no strictly smaller rewrite exists, or it still exceeds the budget,
+    /// `note` says so.
     ///
     /// * `saved_tokens`   = est_tokens(pre_body) − est_tokens(post_str) (saturating)
     /// * `resident_tokens`= est_tokens(post_str)  — post-groom window occupancy
-    fn groom_with_sizes(
-        &self,
-        input: &HookInput,
-        budget: u32,
-    ) -> Option<(serde_json::Value, u32, u32)> {
+    fn groom_with_sizes(&self, input: &HookInput, budget: u32) -> Option<Groomed> {
         let resp = input.tool_response.as_ref()?;
         // The string that actually occupies the window: a JSON string result is
         // its own text; anything structured is rendered compactly.
@@ -175,22 +235,71 @@ impl DefaultGroomer {
             id: ItemId(0),
             lane: Lane::Evictable,
             tokens: pre_tokens,
-            body: ItemBody::Inline(body),
+            body: ItemBody::Inline(body.clone()),
         };
         // Infallible by construction (the item is `Lane::Evictable`), but we
         // honor the capability constructor rather than asserting.
         let ev = Evictable::new(&item)?;
-        let groomed = self.groom(ev, budget)?;
-        // `groom` only ever constructs `Value::String` (see `DefaultGroomer::groom`
-        // above), so this is infallible by construction today — but we still fall
-        // back to `""` rather than `.unwrap()`/`.expect()` so a future groomer
-        // implementation returning a non-string `Value` degrades to "no tokens
-        // saved" instead of panicking the hook process.
-        let post_str = groomed.as_str().unwrap_or("");
-        let post_tokens = est_tokens(post_str);
+        // The replacement MUST keep the shape of `tool_response`: Claude Code
+        // rejects an `updatedToolOutput` whose shape differs from the tool's
+        // output and silently keeps the original.
+        let (groomed, post_str, mut note) = match resp {
+            serde_json::Value::String(_) => {
+                let g = self.groom(ev, budget)?;
+                // `groom` constructs only `Value::String`; a non-string value
+                // would not be a string-shaped replacement, so decline.
+                let post = g.as_str()?.to_string();
+                (g, post, None)
+            }
+            serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+                // Image data is binary: never trimmed, not a text overrun.
+                if pre_tokens <= budget || harness_core::shrink::is_image_payload(resp) {
+                    return None;
+                }
+                let r =
+                    harness_core::shrink::shrink_value(resp, (budget as usize).saturating_mul(4));
+                let post = r.value.to_string();
+                if post.chars().count() >= body.chars().count() {
+                    return Some(Groomed {
+                        value: None,
+                        saved_tokens: 0,
+                        resident_tokens: pre_tokens,
+                        note: Some(format!(
+                            "[context-governor] this tool output (~{pre_tokens} tokens) exceeds \
+                             the {budget}-token groom budget but could not be shrunk while \
+                             keeping its shape; it was NOT trimmed."
+                        )),
+                    });
+                }
+                let mut notes: Vec<String> = Vec::new();
+                if r.elided_items > 0 {
+                    notes.push(format!(
+                        "[context-governor] {} middle array item(s) were dropped from this tool \
+                         output (no marker element is inserted, to keep the element type).",
+                        r.elided_items
+                    ));
+                }
+                if !r.fits {
+                    notes.push(format!(
+                        "[context-governor] this tool output was trimmed to ~{} tokens, still \
+                         over the {budget}-token groom budget (its shape cannot be shrunk \
+                         further).",
+                        est_tokens(&post)
+                    ));
+                }
+                let note = (!notes.is_empty()).then(|| notes.join("\n"));
+                (r.value, post, note)
+            }
+            _ => return None,
+        };
+        let post_tokens = est_tokens(&post_str);
         let saved_tokens = pre_tokens.saturating_sub(post_tokens);
-        let resident_tokens = post_tokens;
-        Some((groomed, saved_tokens, resident_tokens))
+        Some(Groomed {
+            value: Some(groomed),
+            saved_tokens,
+            resident_tokens: post_tokens,
+            note: note.take(),
+        })
     }
 }
 

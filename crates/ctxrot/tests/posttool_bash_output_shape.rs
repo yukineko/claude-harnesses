@@ -101,7 +101,6 @@ fn huge_bash_output_is_replaced() {
 }
 
 #[test]
-#[ignore = "RED(79a6f4be): toolguard emits updatedToolOutput as a bare string for an object-shaped Bash tool_response (main.rs Toolguard Value::String(updated))"]
 fn huge_bash_output_updated_tool_output_keeps_bash_shape() {
     let input = bash_response(huge());
     let out = run_toolguard(input.clone());

@@ -33,7 +33,9 @@ const WATCHED: &[&str] = &[
 
 /// Output from the toolguard hook.
 ///
-/// - `updated`: truncated tool response text (replaces the raw output in context).
+/// - `updated`: truncated tool response TEXT. The caller turns it into the
+///   shape-preserving `updatedToolOutput` value via [`updated_value`] (it is
+///   never emitted as a bare string for an object-shaped response).
 /// - `nudge`:   advisory text injected as `additionalContext` to steer the model.
 pub struct ToolguardOutput {
     pub updated: Option<String>,
@@ -159,6 +161,132 @@ pub fn run(input: &HookInput, cfg: &Config) -> ToolguardOutput {
     }
 }
 
+/// Result of [`updated_value`]: an optional shape-preserving replacement and an
+/// optional note for `additionalContext`.
+pub struct Rewrite {
+    /// The `updatedToolOutput` value; `None` = no rewrite is emitted.
+    pub value: Option<Value>,
+    /// Said whenever the output could not be (fully) brought within the limit,
+    /// so an un-shrunk output is never a silent pass-through.
+    pub note: Option<String>,
+}
+
+fn max_string_len(v: &Value) -> usize {
+    match v {
+        Value::String(s) => s.chars().count(),
+        Value::Array(a) => a.iter().map(max_string_len).max().unwrap_or(0),
+        Value::Object(m) => m.values().map(max_string_len).max().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// Replace the first string leaf of length `target` with `text`.
+fn replace_leaf(v: &mut Value, target: usize, text: &str) -> bool {
+    match v {
+        Value::String(s) if s.chars().count() == target => {
+            *s = text.to_string();
+            true
+        }
+        Value::Array(a) => a.iter_mut().any(|c| replace_leaf(c, target, text)),
+        Value::Object(m) => m.values_mut().any(|c| replace_leaf(c, target, text)),
+        _ => false,
+    }
+}
+
+/// Build the `updatedToolOutput` for `updated`, preserving the SHAPE of the
+/// original `tool_response` (Claude Code rejects a replacement whose shape
+/// differs from the tool's output and keeps the original):
+///
+/// - string response -> `Value::String(updated)` (already truncated);
+/// - object / array response -> the same structure, walked recursively
+///   (objects and arrays, any depth) by `harness_core::shrink` with ONE shared
+///   budget of `limit` chars on the compact serialization: short fields stay
+///   whole (a field never grows), big strings keep head and tail with a
+///   truthful elision marker, long arrays (9+ items) trim each item and, if
+///   that still does not fit, lose middle items (an all-string array gets one
+///   marker string; any other array gets NO inserted element and the drop is
+///   reported in `note`), image payloads and non-string values are unchanged.
+///   For the internal-error placeholder the shrunk
+///   structure's longest string leaf carries the placeholder text;
+/// - anything else, or a response that cannot be shrunk below its own size ->
+///   no rewrite, with a `note` (the placeholder note makes no size claim: after
+///   a panic the size is unknown). If the rewrite still exceeds `limit`, the
+///   rewrite is emitted AND the note says so.
+pub fn updated_value(resp: Option<&Value>, updated: &str, limit: usize) -> Rewrite {
+    let Some(resp) = resp else {
+        return Rewrite {
+            value: None,
+            note: None,
+        };
+    };
+    let placeholder = updated == INTERNAL_ERROR_PLACEHOLDER;
+    match resp {
+        Value::String(_) => Rewrite {
+            value: Some(Value::String(updated.to_string())),
+            note: None,
+        },
+        Value::Object(_) | Value::Array(_) => {
+            let before = resp.to_string().chars().count();
+            let shrunk = harness_core::shrink::shrink_value(resp, limit);
+            let mut value = shrunk.value;
+            if placeholder {
+                let target = max_string_len(&value);
+                if target == 0 || !replace_leaf(&mut value, target, updated) {
+                    return Rewrite {
+                        value: None,
+                        note: Some(PLACEHOLDER_NOT_REWRITABLE_NOTE.to_string()),
+                    };
+                }
+                return Rewrite {
+                    value: Some(value),
+                    note: None,
+                };
+            }
+            if value.to_string().chars().count() >= before {
+                return Rewrite {
+                    value: None,
+                    note: Some(format!(
+                        "[ctxrot] this tool output (~{before} chars) exceeded the {limit}-char \
+                         threshold but could not be shrunk while keeping its shape, so it was \
+                         NOT truncated; the full output is in context."
+                    )),
+                };
+            }
+            let mut notes: Vec<String> = Vec::new();
+            if shrunk.elided_items > 0 {
+                notes.push(format!(
+                    "[ctxrot] {} middle array item(s) were dropped from this tool output (no \
+                     marker element is inserted, to keep the element type).",
+                    shrunk.elided_items
+                ));
+            }
+            if !shrunk.fits {
+                notes.push(format!(
+                    "[ctxrot] this tool output was truncated to ~{} chars, still over the \
+                     {limit}-char threshold (its shape cannot be shrunk further).",
+                    value.to_string().chars().count()
+                ));
+            }
+            let note = (!notes.is_empty()).then(|| notes.join("\n"));
+            Rewrite {
+                value: Some(value),
+                note,
+            }
+        }
+        _ => Rewrite {
+            value: None,
+            note: placeholder.then(|| PLACEHOLDER_NOT_REWRITABLE_NOTE.to_string()),
+        },
+    }
+}
+
+/// Note for the panic path when the response has no string to carry the
+/// placeholder. Deliberately says nothing about the size: after a panic the
+/// size is unknown, not known to exceed the threshold.
+const PLACEHOLDER_NOT_REWRITABLE_NOTE: &str = "[ctxrot] toolguard's size analysis failed \
+     internally and this tool output's shape cannot carry a replacement, so it was NOT \
+     replaced; its size is unknown (it may be large).";
+
 /// Truncate `text` to at most `limit` characters using head/tail strategy.
 ///
 /// If the text fits within `limit`, it is returned unchanged (no header).
@@ -218,6 +346,12 @@ pub fn truncate_response(text: &str, limit: usize) -> String {
     if head_count + tail_count >= total_lines {
         return text.to_string();
     }
+    // No whole line fits (e.g. one minified 60k line): the line-based header
+    // would claim kept text while keeping none. Truncate by characters instead
+    // (head + tail, truthful marker).
+    if head_count + tail_count == 0 {
+        return harness_core::shrink::shrink_str(text, limit);
+    }
     let skipped = total_lines - head_count - tail_count;
 
     let header = format!("[toolguard: {orig_kb:.0}KB → {limit_kb:.0}KB, 中間{skipped}行省略]");
@@ -274,6 +408,11 @@ fn response_text(v: &Value) -> String {
 /// Best-effort character length of a tool_response, whether it's a bare string,
 /// an object with text-ish fields, or an array of content blocks.
 fn response_text_len(v: &Value) -> usize {
+    // Image data (Read image base64, Bash `isImage`) is binary, not text: it is
+    // never counted as huge text and never truncated.
+    if harness_core::shrink::is_image_payload(v) {
+        return 0;
+    }
     match v {
         Value::String(s) => s.chars().count(),
         Value::Array(items) => items.iter().map(response_text_len).sum(),

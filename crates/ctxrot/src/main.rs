@@ -445,7 +445,25 @@ fn main() {
                     return;
                 }
             };
-            if let Some(input) = HookInput::parse(&raw) {
+            let Some(input) = HookInput::parse(&raw) else {
+                // Unparseable (invalid, or nested past serde_json's deliberate
+                // 128-level guard): a payload this large enters context
+                // un-truncated — say so rather than stay silent.
+                let cfg = Config::load();
+                if raw.len() as u64 >= cfg.huge_tool_output_bytes && raw.contains("PostToolUse") {
+                    print_context_line(
+                        "PostToolUse",
+                        &format!(
+                            "[ctxrot] a PostToolUse payload of {} bytes could not be parsed \
+                             (invalid or nested too deeply), so this tool output was NOT \
+                             truncated; the full output is in context.",
+                            raw.len()
+                        ),
+                    );
+                }
+                return;
+            };
+            {
                 let cfg = Config::load();
                 // `analyse` (not `run`) wraps the detector in a panic barrier so a
                 // crash in the analysis maps to a fail-closed placeholder/nudge,
@@ -457,13 +475,29 @@ fn main() {
                     "hookEventName".to_string(),
                     serde_json::Value::String("PostToolUse".to_string()),
                 );
+                let mut nudge = out_fields.nudge;
                 if let Some(updated) = out_fields.updated {
-                    hook_output.insert(
-                        "updatedToolOutput".to_string(),
-                        serde_json::Value::String(updated),
+                    // Shape-preserving: a string gets a string; an object/array
+                    // gets the same structure shrunk recursively under one
+                    // budget. When no faithful rewrite exists (a wrong shape is
+                    // rejected by Claude Code) or it still exceeds the limit,
+                    // the note is added to additionalContext.
+                    let rw = hooks::toolguard::updated_value(
+                        input.tool_response.as_ref(),
+                        &updated,
+                        cfg.huge_tool_output_bytes as usize,
                     );
+                    if let Some(v) = rw.value {
+                        hook_output.insert("updatedToolOutput".to_string(), v);
+                    }
+                    if let Some(note) = rw.note {
+                        nudge = Some(match nudge {
+                            Some(n) => format!("{n}\n{note}"),
+                            None => note,
+                        });
+                    }
                 }
-                if let Some(nudge) = out_fields.nudge {
+                if let Some(nudge) = nudge {
                     hook_output.insert(
                         "additionalContext".to_string(),
                         serde_json::Value::String(nudge),

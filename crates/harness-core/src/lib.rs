@@ -70,6 +70,7 @@ pub mod scorer;
 pub mod session;
 pub mod session_roots;
 pub mod shell;
+pub mod shrink;
 pub mod spans;
 pub mod store;
 pub mod text_index;

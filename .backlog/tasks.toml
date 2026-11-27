@@ -489,14 +489,15 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
 touched_files = []
-status = "pending"
-notes = ""
+status = "failed"
+notes = "needs user ruling (unchanged since 2026-11-27 earlier skip): skip parent Stop checks when wrote_in_cwd is Known(false)? judgment Ask -> skipped by flow"
 created_at = 1795780106
-updated_at = 1795780106
+updated_at = 1795788136
+defer_until = 1795960936
 weight = 0.0
 issue_number = 1990
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1990"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

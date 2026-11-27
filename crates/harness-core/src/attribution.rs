@@ -1017,38 +1017,118 @@ pub fn session_written_paths(transcript_path: &str) -> Determination<SessionWrit
     Determination::known(all)
 }
 
+/// Outcome of following a statement that is (or holds) a `cd`/`pushd`.
+enum CdStep {
+    /// The statement is not a directory change.
+    NotCd,
+    /// A literal, statically resolvable target: the new base directory.
+    To(PathBuf),
+    /// A directory change whose target cannot be resolved without running the
+    /// shell (`cd`, `cd -`, `cd $X`, `cd ~`, `popd`, a relative target with no
+    /// or a `cd` that is not a plain statement of its own). A relative target
+    /// with no known cwd is NOT this: it stays relative, which callers count
+    /// as inside every root.
+    Unresolvable(String),
+}
+
+/// Follow `cd <literal>` / `pushd <literal>` in one statement against `base`.
+/// Relative paths that follow in the same command land under the result, not
+/// under the transcript line's cwd (sidechain lines record the PARENT root).
+/// Anything that is not a plain literal `cd` is `Unresolvable` (fail closed).
+fn cd_step(text: &str, base: Option<&Path>) -> CdStep {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let is_dir_cmd = |w: &str| matches!(w, "cd" | "pushd" | "popd");
+    let Some(pos) = words.iter().position(|w| {
+        is_dir_cmd(w.trim_matches(|c: char| matches!(c, '(' | ')' | '{' | '}' | ';')))
+    }) else {
+        return CdStep::NotCd;
+    };
+    let unres = |why: &str| CdStep::Unresolvable(format!("`{}`: {why}", text.trim()));
+    if pos != 0 || !matches!(words[0], "cd" | "pushd") {
+        return unres("a directory change that is not a plain statement of its own");
+    }
+    let mut args = words[1..].iter().copied();
+    let mut target = args.next();
+    if target == Some("--") {
+        target = args.next();
+    }
+    let Some(raw) = target else {
+        return unres("no target (the shell's home directory)");
+    };
+    if args.next().is_some() {
+        return unres("more than one argument");
+    }
+    let w = raw.trim_matches(|c: char| matches!(c, '"' | '\'' | ';'));
+    if w.starts_with('-') || !plain_word(w) {
+        return unres("the target is not a literal path");
+    }
+    let p = Path::new(w);
+    if p.is_absolute() {
+        CdStep::To(p.to_path_buf())
+    } else if let Some(b) = base {
+        CdStep::To(b.join(p))
+    } else {
+        // No known cwd: the target stays relative. A relative write path
+        // cannot be placed, and callers count it as inside every root
+        // (`donegate::rootcheck::writes_in`): the restrictive side.
+        CdStep::To(p.to_path_buf())
+    }
+}
+
 /// The writing statements of one recorded Bash call and the existing paths
-/// they name. `(false, _)` = the call is provably read-only. A writing call
+/// they name. `(false, _, _)` = the call is provably read-only. A writing call
 /// whose set is empty wrote through something that names no file (`cargo fmt`,
 /// a glob, a generator, `git checkout`): it is unattributable.
-fn call_named_paths(call: &crate::transcript::BashCall) -> (bool, BTreeSet<PathBuf>) {
-    let cwd = call.cwd.as_deref().map(Path::new);
+///
+/// A relative word is joined with the directory the command is IN at that
+/// point: the transcript line's cwd, replaced by each preceding literal
+/// `cd <dir>` of the same command. A `cd` that cannot be resolved statically
+/// makes the call's targets undetermined: the third field carries the reason
+/// and the caller must not read the set as complete.
+fn call_named_paths(
+    call: &crate::transcript::BashCall,
+) -> (bool, BTreeSet<PathBuf>, Option<String>) {
+    let mut base: Option<PathBuf> = call.cwd.as_deref().map(PathBuf::from);
     let stmts = writing_statements(&call.command);
     let mut out = BTreeSet::new();
     for text in &stmts {
-        let mut after_cd = false;
+        match cd_step(text, base.as_deref()) {
+            CdStep::NotCd => {}
+            CdStep::Unresolvable(why) => return (true, out, Some(why)),
+            CdStep::To(dir) => {
+                if dir.is_relative() {
+                    out.insert(dir.clone());
+                } else if dir.exists() {
+                    out.insert(resolve(&dir));
+                }
+                base = Some(dir);
+                continue;
+            }
+        }
         for raw in text.split_whitespace() {
             let w = raw.trim_matches(|c: char| matches!(c, '"' | '\'' | '>' | ';' | '(' | ')'));
-            // A `cd` target is a directory even without `/` or `.`.
-            let cd_target = std::mem::replace(&mut after_cd, matches!(w, "cd" | "pushd"));
             if w.is_empty() || w.starts_with('-') {
                 continue;
             }
             let p = Path::new(w);
             let abs = if p.is_absolute() {
                 p.to_path_buf()
-            } else if let Some(c) = cwd.filter(|_| cd_target || w.contains('/') || w.contains('.'))
+            } else if let Some(c) = base
+                .as_deref()
+                .filter(|_| w.contains('/') || w.contains('.'))
             {
                 c.join(p)
             } else {
                 continue;
             };
-            if abs.exists() {
+            if abs.is_relative() {
+                out.insert(abs);
+            } else if abs.exists() {
                 out.insert(resolve(&abs));
             }
         }
     }
-    (!stmts.is_empty(), out)
+    (!stmts.is_empty(), out, None)
 }
 
 /// Whether this session (parent transcript and every subagent sidechain)
@@ -1099,16 +1179,26 @@ fn call_is_unattributable(call: &crate::transcript::BashCall) -> bool {
     let Some(stmts) = statements(&call.command) else {
         return true;
     };
-    let cwd = call.cwd.as_deref().map(Path::new);
+    let mut base: Option<PathBuf> = call.cwd.as_deref().map(PathBuf::from);
     for s in &stmts {
         if s.opaque {
             return true;
+        }
+        let text = &call.command[s.start..s.end];
+        match cd_step(text, base.as_deref()) {
+            CdStep::NotCd => {}
+            // A write after a directory this cannot place is unattributable.
+            CdStep::Unresolvable(_) => return true,
+            CdStep::To(dir) => {
+                base = Some(dir);
+                continue;
+            }
         }
         for stage in &s.stages {
             if read_only_stage(stage) || matches!(program(stage), Some("cd" | "pushd")) {
                 continue;
             }
-            if !stage_attributable(stage, cwd) {
+            if !stage_attributable(stage, base.as_deref()) {
                 return true;
             }
         }
@@ -1308,7 +1398,15 @@ pub fn own_written_paths(transcript_path: &str) -> Determination<SessionWrites> 
     };
     let mut bash_paths = BTreeSet::new();
     for call in &bash {
-        bash_paths.extend(call_named_paths(call).1);
+        let (_, named, undetermined) = call_named_paths(call);
+        if let Some(why) = undetermined {
+            // Not an empty or partial set: callers read a set as "everything
+            // this session wrote", so an unresolvable `cd` makes it unknown.
+            return Determination::undetermined(format!(
+                "a Bash write follows a `cd` that cannot be resolved statically ({why})"
+            ));
+        }
+        bash_paths.extend(named);
     }
     Determination::known(SessionWrites {
         edited: resolved(&edited),

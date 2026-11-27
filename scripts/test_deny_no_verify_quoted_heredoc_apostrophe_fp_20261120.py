@@ -56,8 +56,6 @@ import sys
 import unittest
 from pathlib import Path
 
-import pytest
-
 HERE = Path(__file__).resolve().parent
 HOOK = HERE / "deny-no-verify.py"
 OBSERVED = (
@@ -109,12 +107,10 @@ def run(command: str) -> subprocess.CompletedProcess:
 
 
 class QuotedHeredocApostrophe(unittest.TestCase):
-    @pytest.mark.xfail(strict=True, reason=RED_REASON)
     def test_minimal_quoted_heredoc_apostrophe_is_allowed(self):
         proc = run(MINIMAL)
         self.assertEqual(proc.returncode, 0, "must ALLOW: %r\n%s" % (MINIMAL, proc.stderr))
 
-    @pytest.mark.xfail(strict=True, reason=RED_REASON)
     def test_observed_command_is_allowed(self):
         command = observed_command()
         proc = run(command)

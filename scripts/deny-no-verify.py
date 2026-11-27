@@ -102,6 +102,14 @@ reader to rediscover:
     prefix program not in PREFIX_COMMANDS. These are known holes, not clean
     paths.
 
+QUOTED HEREDOC BODIES ARE DATA (backlog 2bcfd471). shlex has no heredoc model,
+so before lexing `_scan_heredocs` removes the body and terminator of every
+`<<'X'` / `<<"X"` / `<<\X` heredoc (POSIX: a quoted delimiter means no
+expansion). Unquoted `<<X` bodies stay judged. If a body carries a bypass marker
+and the command names a shell/eval/prefix wrapper, the original text is lexed
+unchanged (the body may be fed to a shell). Anything structurally undetermined
+(no terminator line) also keeps the original lexing and its refusal.
+
 This hook is therefore a REDUCTION in the ways the gate can be stepped around,
 not a proof that it cannot be. The claim that the marker screen was "a necessary
 condition" appeared here and was false; `-nm`, `--no-verif`, and
@@ -187,6 +195,154 @@ NEWLINE_TOKEN = re.compile(r"^[\r\n]+$")
 HOOKSPATH_OVERRIDE = "core.hookspath="
 
 
+# Words that make a heredoc body something other than data: a shell reads it
+# as commands, or a prefix/eval wrapper may forward it to one.
+_EXECUTOR_WORD = re.compile(
+    r"(?<![\w./-])(?:sh|bash|zsh|dash|ksh|mksh|ash|eval|source|xargs|env|nohup|time|"
+    r"command|builtin|exec|nice|timeout|gtimeout|sudo|doas|stdbuf|caffeinate|"
+    r"unbuffer|setsid|chronic|ionice|noglob|nocorrect)(?![\w-])|(?<![\w.])\.(?=\s)"
+)
+
+
+def _scan_heredocs(command: str):
+    """POSIX lexer step: locate quoted-delimiter heredocs.
+
+    Returns (kept_text, bodies) with the body lines and the terminator line of
+    every QUOTED heredoc (`<<'X'`, `<<"X"`, `<<\\X`, also `<<-`) removed, or
+    None when the structure cannot be determined (a quoted heredoc without its
+    terminator line). Quote state is tracked per POSIX: single quotes are
+    literal, double quotes honour backslash, a backslash outside quotes escapes
+    the next character, `#` at a word start opens a comment. `<<<` is a here
+    string, not a heredoc. An UNQUOTED delimiter is left alone: its body
+    expands, so it is not data.
+    """
+    out: list[str] = []
+    bodies: list[str] = []
+    pending: list[tuple[str, bool]] = []  # (delimiter, strip_tabs)
+    n = len(command)
+    i = 0
+    quote = ""
+    while i < n:
+        ch = command[i]
+        if quote == "'":
+            out.append(ch)
+            if ch == "'":
+                quote = ""
+            i += 1
+            continue
+        if quote == '"':
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(command[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                quote = ""
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            out.append(command[i : i + 2])
+            i += 2
+            continue
+        if ch in "'\"":
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "#" and (i == 0 or command[i - 1] in " \t\n;&|(){}"):
+            j = command.find("\n", i)
+            j = n if j < 0 else j
+            out.append(command[i:j])
+            i = j
+            continue
+        if command.startswith("<<", i) and not command.startswith("<<<", i):
+            j = i + 2
+            strip_tabs = j < n and command[j] == "-"
+            if strip_tabs:
+                j += 1
+            while j < n and command[j] in " \t":
+                j += 1
+            # Read the delimiter word, noting whether any part of it is quoted.
+            word: list[str] = []
+            quoted = False
+            while j < n and command[j] not in " \t\n;&|()<>":
+                c = command[j]
+                if c == "'":
+                    k = command.find("'", j + 1)
+                    if k < 0:
+                        return None
+                    word.append(command[j + 1 : k])
+                    quoted = True
+                    j = k + 1
+                elif c == '"':
+                    k = j + 1
+                    while k < n and command[k] != '"':
+                        k += 2 if command[k] == "\\" else 1
+                    if k >= n:
+                        return None
+                    word.append(command[j + 1 : k])
+                    quoted = True
+                    j = k + 1
+                elif c == "\\" and j + 1 < n:
+                    word.append(command[j + 1])
+                    quoted = True
+                    j += 2
+                else:
+                    word.append(c)
+                    j += 1
+            if not word:
+                return None
+            if quoted:
+                pending.append(("".join(word), strip_tabs))
+            out.append(command[i:j])
+            i = j
+            continue
+        if ch == "\n" and pending:
+            out.append("\n")
+            i += 1
+            for delim, strip_tabs in pending:
+                body: list[str] = []
+                while True:
+                    if i >= n:
+                        return None  # no terminator line: cannot determine
+                    j = command.find("\n", i)
+                    line = command[i:] if j < 0 else command[i:j]
+                    i = n if j < 0 else j + 1
+                    if (line.lstrip("\t") if strip_tabs else line) == delim:
+                        break
+                    body.append(line)
+                bodies.append("\n".join(body))
+            pending = []
+            continue
+        out.append(ch)
+        i += 1
+    if pending:
+        return None
+    return "".join(out), bodies
+
+
+def _drop_quoted_heredoc_bodies(command: str) -> str | None:
+    """Remove quoted-heredoc bodies (DATA) before shlex, which has no heredoc model.
+
+    Returns the text to lex; None when a quoted heredoc is structurally
+    undetermined (caller treats that as untokenizable, the existing fail-closed
+    path). Fail closed on the one way data can become code: if a body carries a
+    bypass marker and the command also names a shell/eval/prefix wrapper, the
+    body may be fed to a shell, so the ORIGINAL text is lexed as before.
+    """
+    if "<<" not in command:
+        return command
+    scanned = _scan_heredocs(command)
+    if scanned is None:
+        return command  # keep the pre-existing behaviour for what we cannot model
+    kept, bodies = scanned
+    if not bodies:
+        return command
+    if any(looks_like_bypass(b) for b in bodies) and _EXECUTOR_WORD.search(kept):
+        return command
+    return kept
+
+
 def split_commands(command: str) -> list[list[str]] | None:
     """Tokenize once, then split on separator TOKENS. None if it will not lex.
 
@@ -213,6 +369,9 @@ def split_commands(command: str) -> list[list[str]] | None:
     quote). That is a cannot-determine and the caller must not read it as
     "no bypass here".
     """
+    command = _drop_quoted_heredoc_bodies(command)
+    if command is None:
+        return None
     # punctuation_chars has no setter, so the newline additions go here.
     lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n\r")
     lexer.whitespace_split = True

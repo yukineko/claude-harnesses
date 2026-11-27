@@ -1977,13 +1977,13 @@ class KnownDefectsDenyNoVerify(DenyNoVerify):
             "git commit -F - <<'EOF'\nObserved:\n  git commit -nm ok\nEOF",
         ):
             with self.subTest(command=command):
-                proc = self.bash(command)
-                self.assertEqual(
-                    proc.returncode,
-                    2,
-                    "DEFECT PINNED (false positive): %r. When fixed this must "
-                    "become assertAllowed." % command,
-                )
+                # FIXED (backlog 2bcfd471): a quoted-delimiter heredoc body is
+                # data and is dropped before lexing, as this docstring asked.
+                self.assertAllowed(command)
+        # Controls: an UNQUOTED delimiter expands, and a body fed to a shell
+        # may run, so neither is treated as data.
+        self.assertDenied("cat <<EOF\ngit commit --no-verify -m x\nEOF")
+        self.assertDenied("bash <<'EOF'\ngit commit --no-verify -m x\nEOF")
         # Prose that does not START a line with the command is already fine —
         # the boundary, so a fix cannot be claimed by widening this test.
         self.assertAllowed(

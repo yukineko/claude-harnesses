@@ -567,6 +567,8 @@ notes = "Observed 2026-11-27 (main 3dc21b1b9, flow session eaa077f4): 987e3708 s
 created_at = 1795789802
 updated_at = 1795789802
 weight = 0.0
+issue_number = 1995
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1995"
 rev = 0
 
 [task.repro]

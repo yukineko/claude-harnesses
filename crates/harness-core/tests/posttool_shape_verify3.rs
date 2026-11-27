@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Third adversarial verification (d0e467ee5): direct probes of
 //! `harness_core::shrink` against its module docstring.
 
@@ -28,7 +29,6 @@ fn field_never_grows_with_nine_empty_strings() {
 /// `\r`, `\n`) collapses to "" in `shrink_string_value`: no head, no tail, no
 /// marker. Docstring promises "head and tail, with a truthful elision marker".
 #[test]
-#[ignore = "RED(posttool) escape-heavy string shrinks to an empty string with no elision marker"]
 fn escape_heavy_string_is_not_emptied() {
     let s = "\u{1b}[K\r".repeat(20_000);
     let v = json!({ "stdout": s });
@@ -42,7 +42,6 @@ fn escape_heavy_string_is_not_emptied() {
 /// path keeps zero items and the array becomes only the marker; no content
 /// survives although a per-string trim would fit.
 #[test]
-#[ignore = "RED(posttool) array of 9+ huge strings collapses to a lone marker; all content dropped"]
 fn nine_huge_strings_keep_some_content() {
     let items: Vec<String> = (0..9)
         .map(|i| format!("item{i} ") + &"y".repeat(20_000))

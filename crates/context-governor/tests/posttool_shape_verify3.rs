@@ -68,7 +68,6 @@ fn within_budget(v: &serde_json::Value) -> bool {
 /// Escape-heavy stdout (progress-bar `ESC[K` + `\r`) groomed to "" with no
 /// marker.
 #[test]
-#[ignore = "RED(posttool) escape-heavy stdout groomed to an empty string with no elision marker"]
 fn escape_heavy_stdout_not_emptied() {
     let input = serde_json::json!({
         "stdout": "\u{1b}[K\r".repeat(20_000),
@@ -85,7 +84,6 @@ fn escape_heavy_stdout_not_emptied() {
 /// Payload nested deeper than serde_json's default recursion limit (128): the
 /// hook must not stay silent about a ~50k-token output.
 #[test]
-#[ignore = "RED(posttool) payload nested >128 deep: no groom and no note (silent pass-through)"]
 fn deeply_nested_response_is_not_silent() {
     let depth = 140;
     let inner = serde_json::Value::String("fetched text line\n".repeat(11_000)).to_string();
@@ -109,7 +107,6 @@ fn deeply_nested_response_is_not_silent() {
 /// Array of 3000 small `{type,text}` objects: items are never elided, so the
 /// groomed output stays far over budget.
 #[test]
-#[ignore = "RED(posttool) array of many small objects cannot be brought within budget (items never elided)"]
 fn array_of_objects_within_budget() {
     let items: Vec<serde_json::Value> = (0..3000)
         .map(|i| serde_json::json!({"type": "text", "text": format!("match line {i:05} in some file")}))

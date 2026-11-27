@@ -65,7 +65,12 @@ fn main() -> ! {
             }
         };
         let Some(input) = HookInput::parse(&raw) else {
-            return; // empty/invalid payload → silent no-op (exit 0)
+            // Empty/invalid payload → no-op (exit 0), EXCEPT a large PostToolUse
+            // payload that could not be groomed: that is announced, not silent.
+            if let Some(out) = groomer().unparsed_note(&raw) {
+                let _ = writeln!(std::io::stdout(), "{}", out.to_json());
+            }
+            return;
         };
 
         match dispatch(&input) {

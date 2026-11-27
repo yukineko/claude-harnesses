@@ -83,7 +83,6 @@ fn string_shaped_single_line_keeps_content() {
 /// A Bash stdout dominated by escape-heavy chars (progress-bar `ESC[K` + `\r`
 /// spam; JSON escaping > 2x) is rewritten to an EMPTY stdout with no marker.
 #[test]
-#[ignore = "RED(posttool) escape-heavy stdout rewritten to an empty string with no elision marker"]
 fn escape_heavy_stdout_not_emptied() {
     let input = serde_json::json!({
         "stdout": "\u{1b}[K\r".repeat(20_000),
@@ -101,7 +100,6 @@ fn escape_heavy_stdout_not_emptied() {
 /// makes `HookInput::parse` return None: the hook prints nothing at all, so a
 /// 200k-char output passes through with no rewrite and no note.
 #[test]
-#[ignore = "RED(posttool) payload nested >128 deep fails to parse; 200k output passes silently (no rewrite, no note)"]
 fn deeply_nested_response_is_not_silent() {
     let depth = 140;
     let inner = serde_json::Value::String(lines(200_000)).to_string();
@@ -137,7 +135,6 @@ fn control_nested_depth_100_is_bounded() {
 /// An array of 5000 small objects (content-block-like `{type,text}`): items are
 /// never dropped, every leaf is mangled, and the rewrite stays over the limit.
 #[test]
-#[ignore = "RED(posttool) array of many small objects cannot be brought within the limit (items never elided)"]
 fn array_of_objects_within_limit() {
     let items: Vec<serde_json::Value> = (0..5000)
         .map(|i| serde_json::json!({"type": "text", "text": format!("match line {i:05} in some file")}))

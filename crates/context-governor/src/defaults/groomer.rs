@@ -156,6 +156,26 @@ impl DefaultGroomer {
         }
     }
 
+    /// A payload that does not parse as a [`HookInput`] (invalid JSON, or nested
+    /// past serde_json's 128-level recursion guard, which is deliberately NOT
+    /// lifted — see `HookInput::parse`) cannot be groomed. When it is a large
+    /// PostToolUse payload, say so instead of staying silent: the output enters
+    /// context untrimmed. Returns `None` for small or non-PostToolUse payloads.
+    pub fn unparsed_note(&self, raw: &str) -> Option<HookOutput> {
+        let approx_tokens = raw.chars().count().div_ceil(4);
+        if !raw.contains("PostToolUse") || approx_tokens <= groom_budget() as usize {
+            return None;
+        }
+        Some(HookOutput::inject(
+            "PostToolUse",
+            format!(
+                "[context-governor] a PostToolUse payload of ~{approx_tokens} tokens could not \
+                 be parsed (invalid or nested too deeply), so this tool output was NOT groomed; \
+                 the full output is in context."
+            ),
+        ))
+    }
+
     /// Turn a [`Groomed`] into the hook envelope: a rewrite (plus optional
     /// note), or a note alone when no faithful rewrite exists.
     fn envelope(g: Groomed) -> HookOutput {

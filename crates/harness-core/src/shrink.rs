@@ -12,8 +12,14 @@
 //! - a string is shrunk by characters, keeping head and tail, with a truthful
 //!   elision marker (`elided E chars of N`); under a tiny budget it degrades to
 //!   a plain head prefix;
-//! - an array of 9+ strings (file lists) drops middle items and puts ONE marker
-//!   string in their place (still an array of strings);
+//! - a string's budget is measured on its JSON-ESCAPED length (control chars
+//!   and `\r` expand 2-6x), found by search, so an escape-heavy string still
+//!   keeps head, tail and the marker rather than collapsing to `""`;
+//! - an array of 9+ items (any element type: file lists, content blocks, many
+//!   small objects) first trims every item to its fair share; only when that
+//!   share would fall below a useful minimum (64 chars) does it keep a head and
+//!   a tail of items and put ONE truthful marker string
+//!   (`elided K of N items`) in place of the dropped middle;
 //! - numbers, booleans and nulls are never changed.
 //!
 //! The result reports `fits`: whether the rewrite is within the budget. A
@@ -29,8 +35,12 @@ pub struct Shrunk {
     pub fits: bool,
 }
 
-/// Arrays of strings at least this long are shrunk by dropping middle items.
+/// Arrays at least this long may drop middle items (see module docs).
 const ITEM_ELISION_MIN_LEN: usize = 9;
+
+/// Smallest per-item budget (serialized chars) worth keeping an item for;
+/// below it, items are dropped (with a marker) instead of mangled.
+const MIN_ITEM_BUDGET: usize = 64;
 
 fn ser_len(v: &Value) -> usize {
     v.to_string().chars().count()
@@ -91,30 +101,41 @@ pub fn shrink_str(s: &str, budget_chars: usize) -> String {
 }
 
 /// Shrink a string VALUE so its JSON serialization (quotes and escapes
-/// included) fits `budget`.
+/// included) fits `budget`: binary-search the largest raw-char budget whose
+/// escaped result fits, so escape-heavy text keeps head, tail and marker.
 fn shrink_string_value(s: &str, budget: usize) -> Value {
-    let mut b = budget.saturating_sub(2);
-    for _ in 0..8 {
-        let t = shrink_str(s, b);
-        let ser = Value::String(t.clone()).to_string().chars().count();
-        if ser <= budget || b == 0 {
-            return Value::String(t);
+    let ser = |t: &str| Value::String(t.to_string()).to_string().chars().count();
+    let (mut lo, mut hi) = (0usize, budget.saturating_sub(2));
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if ser(&shrink_str(s, mid)) <= budget {
+            lo = mid;
+        } else {
+            hi = mid - 1;
         }
-        b = b.saturating_sub(ser - budget);
     }
-    Value::String(shrink_str(s, 0))
+    Value::String(shrink_str(s, lo))
 }
 
 fn shrink_node(v: &Value, budget: usize) -> Value {
-    if ser_len(v) <= budget {
+    let size = ser_len(v);
+    if size <= budget {
         return v.clone();
     }
+    let out = shrink_node_inner(v, budget);
+    // A field never grows.
+    if ser_len(&out) > size {
+        v.clone()
+    } else {
+        out
+    }
+}
+
+fn shrink_node_inner(v: &Value, budget: usize) -> Value {
     match v {
         Value::String(s) => shrink_string_value(s, budget),
-        Value::Array(items)
-            if items.len() >= ITEM_ELISION_MIN_LEN && items.iter().all(Value::is_string) =>
-        {
-            shrink_string_items(items, budget)
+        Value::Array(items) if items.len() >= ITEM_ELISION_MIN_LEN => {
+            shrink_long_array(items, budget)
         }
         Value::Array(items) => {
             let sizes: Vec<usize> = items.iter().map(ser_len).collect();
@@ -176,36 +197,51 @@ fn fair_level(sizes: &[usize], avail: usize) -> usize {
     usize::MAX
 }
 
-/// Keep head and tail items of an all-string array within `budget`, replacing
+/// Shrink an array of [`ITEM_ELISION_MIN_LEN`]+ items of any type: trim every
+/// item to its fair share first; if that share is below [`MIN_ITEM_BUDGET`],
+/// keep a head and a tail of items (each trimmed to its fair share) and replace
 /// the dropped middle by one truthful marker string.
-fn shrink_string_items(items: &[Value], budget: usize) -> Value {
+fn shrink_long_array(items: &[Value], budget: usize) -> Value {
     let n = items.len();
-    let marker = |k: usize| Value::String(format!("…[elided {k} of {n} items]…"));
-    let marker_cost = ser_len(&marker(n)) + 1;
-    // `[` + `]`, plus the marker and its comma.
-    let mut avail = budget.saturating_sub(2 + marker_cost);
-    let (mut head, mut tail) = (0usize, 0usize);
-    let mut from_head = true;
-    loop {
-        if head + tail >= n {
-            break;
-        }
-        let idx = if from_head { head } else { n - 1 - tail };
-        let cost = ser_len(&items[idx]) + 1;
-        if cost > avail {
-            break;
-        }
-        avail -= cost;
-        if from_head {
-            head += 1;
-        } else {
-            tail += 1;
-        }
-        from_head = !from_head;
+    let sizes: Vec<usize> = items.iter().map(ser_len).collect();
+    // `[` + `]` and n-1 commas.
+    let avail = budget.saturating_sub(n + 1);
+    let level = fair_level(&sizes, avail);
+    if level >= MIN_ITEM_BUDGET {
+        return Value::Array(
+            items
+                .iter()
+                .zip(&sizes)
+                .map(|(c, &s)| {
+                    if s <= level {
+                        c.clone()
+                    } else {
+                        shrink_node(c, level)
+                    }
+                })
+                .collect(),
+        );
     }
-    let mut out: Vec<Value> = items[..head].to_vec();
-    out.push(marker(n - head - tail));
-    out.extend_from_slice(&items[n - tail..]);
+    let marker = |k: usize| Value::String(format!("…[elided {k} of {n} items]…"));
+    // Marker string plus its comma, and the brackets.
+    let marker_cost = ser_len(&marker(n)) + 1;
+    let avail2 = budget.saturating_sub(2 + marker_cost);
+    let m = (avail2 / (MIN_ITEM_BUDGET + 1)).clamp(1, n - 1);
+    let head = m.div_ceil(2);
+    let tail = m - head;
+    let kept: Vec<usize> = (0..head).chain(n - tail..n).collect();
+    let kept_sizes: Vec<usize> = kept.iter().map(|&i| sizes[i]).collect();
+    let level2 = fair_level(&kept_sizes, avail2.saturating_sub(m));
+    let shrink_item = |i: usize| {
+        if sizes[i] <= level2 {
+            items[i].clone()
+        } else {
+            shrink_node(&items[i], level2)
+        }
+    };
+    let mut out: Vec<Value> = (0..head).map(shrink_item).collect();
+    out.push(marker(n - m));
+    out.extend((n - tail..n).map(shrink_item));
     Value::Array(out)
 }
 

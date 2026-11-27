@@ -445,7 +445,25 @@ fn main() {
                     return;
                 }
             };
-            if let Some(input) = HookInput::parse(&raw) {
+            let Some(input) = HookInput::parse(&raw) else {
+                // Unparseable (invalid, or nested past serde_json's deliberate
+                // 128-level guard): a payload this large enters context
+                // un-truncated — say so rather than stay silent.
+                let cfg = Config::load();
+                if raw.len() as u64 >= cfg.huge_tool_output_bytes && raw.contains("PostToolUse") {
+                    print_context_line(
+                        "PostToolUse",
+                        &format!(
+                            "[ctxrot] a PostToolUse payload of {} bytes could not be parsed \
+                             (invalid or nested too deeply), so this tool output was NOT \
+                             truncated; the full output is in context.",
+                            raw.len()
+                        ),
+                    );
+                }
+                return;
+            };
+            {
                 let cfg = Config::load();
                 // `analyse` (not `run`) wraps the detector in a panic barrier so a
                 // crash in the analysis maps to a fail-closed placeholder/nudge,

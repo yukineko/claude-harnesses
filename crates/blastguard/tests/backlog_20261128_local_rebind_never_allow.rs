@@ -43,6 +43,11 @@ fn rebound_variables_are_never_allow() {
         format!("{l}cd /etc; : {{P}}</dev/null; {w}; }}; f"),
         format!("{l}cd /etc; true {{P}}>&-; {w}; }}; f"),
         format!("{l}cd /etc; cat /dev/null {{P}}<>/dev/null; {w}; }}; f"),
+        // bash parse.y accepts `{name}` when `legal_identifier(name) ||
+        // valid_array_reference(name)`: `{P[0]}` may assign the fd to P.
+        format!("{l}cd /etc; echo x {{P[0]}}>/dev/null; {w}; }}; f"),
+        format!("{l}cd /etc; echo x {{P[1]}}<&-; {w}; }}; f"),
+        format!("{l}cd /etc; exec {{P[0]}}>/dev/null; {w}; }}; f"),
     ];
     for c in &cases {
         let d = scoped(c);

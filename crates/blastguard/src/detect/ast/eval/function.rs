@@ -225,9 +225,11 @@ impl Env {
         let mut words: Vec<&str> = Vec::new();
         let mut undetermined_operand = false;
         for w in &sc.argv {
-            match &w.value {
-                Value::Literal(s) => words.push(s.as_str()),
-                Value::Undetermined(_) => undetermined_operand = true,
+            // The RAW spelling: an unquoted `{P[0]}` is a glob, hence
+            // Undetermined, yet it is still a redirect word naming `P`.
+            words.push(w.raw.as_str());
+            if matches!(w.value, Value::Undetermined(_)) {
+                undetermined_operand = true;
             }
         }
         // An undetermined word may be the NAME a binder assigns

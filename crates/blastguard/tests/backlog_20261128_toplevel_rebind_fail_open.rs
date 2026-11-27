@@ -79,6 +79,10 @@ fn toplevel_rebind_between_assignment_and_redirect_is_never_allow() {
         format!("P={OK}; sysread P < /etc/hosts; echo hi > \"$P\""),
         format!("P={OK}; vared P; echo hi > \"$P\""),
         format!("P={OK}; zparseopts -A P; echo hi > \"$P\""),
+        // `{name[sub]}` redirect words: bash accepts valid_array_reference.
+        format!("P={OK}; cd /etc; echo x {{P[0]}}>/dev/null; echo hi > \"$P\""),
+        format!("P={OK}; cd /etc; echo x {{P[1]}}<&-; echo hi > \"$P\""),
+        format!("P={OK}; cd /etc; exec {{P[0]}}>/dev/null; echo hi > \"$P\""),
     ];
     let mut allowed = Vec::new();
     for c in &cases {

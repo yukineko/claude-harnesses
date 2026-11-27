@@ -216,6 +216,18 @@ fn opens(piece: &str) -> usize {
     n
 }
 
+/// The one function name `eval` is given as its whole argument text
+/// (`eval f`, `eval "f"`, `eval 'f'`), which it then runs as a call of `f`.
+fn eval_called_name(args: &str) -> Option<&str> {
+    let t = args.trim().trim_end_matches(')');
+    let t = t
+        .strip_prefix('"')
+        .and_then(|r| r.strip_suffix('"'))
+        .or_else(|| t.strip_prefix('\'').and_then(|r| r.strip_suffix('\'')))
+        .unwrap_or(t);
+    (!t.is_empty() && t.chars().all(name_char)).then_some(t)
+}
+
 /// The command word of a segment, as `(byte offset within seg, word)`, after
 /// compound keywords, assignment prefixes and opening `(`.
 fn call_word(seg: &str) -> Option<(usize, &str)> {
@@ -338,7 +350,13 @@ fn inline_calls(
             changed = true;
         }
         if let Some((woff, word)) = call_word(&segs[i].text) {
-            if let Some(def) = defs.get(word).cloned() {
+            // 687ece3c: `eval f` runs the function `f` as `f` does.
+            let target = if word == "eval" {
+                eval_called_name(&segs[i].text[woff + word.len()..]).unwrap_or(word)
+            } else {
+                word
+            };
+            if let Some(def) = defs.get(target).cloned() {
                 let Def::Brace(body) = def else {
                     return Err(());
                 };

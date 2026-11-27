@@ -122,11 +122,14 @@ pub(super) fn take_command_node(depth: usize) -> bool {
 /// Allow, a Deny only if the rules found one.
 pub(super) fn admit(cmd: &str, depth: usize, judge: impl FnOnce() -> Decision) -> Decision {
     const TOO_COMPLEX: &str = "command is too complex to analyse within the safety budget — blastguard cannot vouch for it either way";
-    // Inside a shallow visit no nested visit runs at all.
-    if (depth > 0 && in_shallow_visit()) || !take_budget() {
-        return Decision::ask(TOO_COMPLEX);
+    // 687ece3c: an exhausted per-reading budget, a spent command total and a
+    // visit nested inside a shallow visit all get the same shallow judgement,
+    // not a bare Ask: a nested system-harm target must stay a Deny. Only the
+    // shallow depth/size bounds below fall back to the bare Ask.
+    if depth > 0 && in_shallow_visit() {
+        return shallow_visit(cmd, depth, TOO_COMPLEX, judge);
     }
-    if !take_command_node(depth) {
+    if !take_budget() || !take_command_node(depth) {
         return shallow_visit(cmd, depth, TOO_COMPLEX, judge);
     }
     judge()
@@ -135,9 +138,18 @@ pub(super) fn admit(cmd: &str, depth: usize, judge: impl FnOnce() -> Decision) -
 /// Most distinct texts judged shallowly per command (see [`shallow_visit`]).
 const MAX_SHALLOW_VISITS: usize = 600;
 
+/// Extra distinct texts that may still be judged once the memo is full, if
+/// they spell a system directory ([`may_name_system_path`]).
+const MAX_PRIORITY_SHALLOW_VISITS: usize = 400;
+
+/// Deepest nesting of shallow visits (a shallow visit's own nested payloads are
+/// shallow visits too).
+const MAX_SHALLOW_DEPTH: usize = 8;
+
 #[derive(Default)]
 struct Shallow {
-    active: bool,
+    depth: usize,
+    priority: usize,
     memo: std::collections::HashMap<(String, usize), Decision>,
 }
 
@@ -147,7 +159,16 @@ thread_local! {
 
 /// True while a [`shallow_visit`] is running.
 pub(super) fn in_shallow_visit() -> bool {
-    SHALLOW.with(|s| s.borrow().active)
+    SHALLOW.with(|s| s.borrow().depth > 0)
+}
+
+/// Does `cmd` contain the spelling of a system directory? A cheap literal
+/// filter, never a verdict: it only decides whether a text may still be judged
+/// shallowly after the memo is full, where the judge itself says Deny or not.
+fn may_name_system_path(cmd: &str) -> bool {
+    crate::deletion::SYSTEM_PREFIXES
+        .iter()
+        .any(|p| cmd.contains(p))
 }
 
 /// Judge `cmd` by its own rules when the per-command nested-visit total is
@@ -155,7 +176,12 @@ pub(super) fn in_shallow_visit() -> bool {
 /// that of the rules alone. A Deny is returned as is; anything else becomes
 /// the budget Ask `why` (never Allow: the nested part was not examined).
 /// Results are memoised per `(text, depth)` and the memo is bounded by
-/// [`MAX_SHALLOW_VISITS`]; past that the answer is the bare Ask.
+/// [`MAX_SHALLOW_VISITS`]; past that only a text spelling a system directory
+/// ([`may_name_system_path`], at most [`MAX_PRIORITY_SHALLOW_VISITS`] of them)
+/// is still judged, and the rest get the bare Ask. Nested shallow visits go
+/// down to [`MAX_SHALLOW_DEPTH`]. Entries into `detect_bash` for the D4 find
+/// fan-out input: 5073 with this (2199 when rejected entries were bare leaves);
+/// `d4_exponential_find_exec_is_bounded_and_denies` bounds it at 8250.
 pub(super) fn shallow_visit(
     cmd: &str,
     depth: usize,
@@ -164,20 +190,25 @@ pub(super) fn shallow_visit(
 ) -> Decision {
     let key = (cmd.to_string(), depth);
     let known = SHALLOW.with(|s| {
-        let s = s.borrow();
-        if s.active {
+        let mut s = s.borrow_mut();
+        if s.depth >= MAX_SHALLOW_DEPTH {
             return Some(Decision::ask(why));
         }
-        match s.memo.get(&key) {
-            Some(d) => Some(d.clone()),
-            None if s.memo.len() >= MAX_SHALLOW_VISITS => Some(Decision::ask(why)),
-            None => None,
+        if let Some(d) = s.memo.get(&key) {
+            return Some(d.clone());
         }
+        if s.memo.len() >= MAX_SHALLOW_VISITS {
+            if s.priority >= MAX_PRIORITY_SHALLOW_VISITS || !may_name_system_path(cmd) {
+                return Some(Decision::ask(why));
+            }
+            s.priority += 1;
+        }
+        s.depth += 1;
+        None
     });
     if let Some(d) = known {
         return d;
     }
-    SHALLOW.with(|s| s.borrow_mut().active = true);
     let judged = judge();
     let verdict = if judged.is_deny() {
         judged
@@ -186,7 +217,7 @@ pub(super) fn shallow_visit(
     };
     SHALLOW.with(|s| {
         let mut s = s.borrow_mut();
-        s.active = false;
+        s.depth -= 1;
         s.memo.insert(key, verdict.clone());
     });
     verdict

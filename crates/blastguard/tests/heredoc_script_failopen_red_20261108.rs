@@ -631,8 +631,10 @@ fn variants_d3() -> Vec<(String, String)> {
         mk("h_heredoc_unquoted_cmdsub", "cat > {DIR}/x.py <<EOF\nprint(\"$(rm -rf /usr/lib)\")\nEOF\npython3 {DIR}/x.py".to_string()),
         mk("h_heredoc_unquoted_backtick", "cat > {DIR}/x.py <<EOF\nprint(\"`rm -rf /usr/lib`\")\nEOF".to_string()),
         mk("h_heredoc_unquoted_cmdsub_no_run", "cat > {DIR}/x.py <<EOF\nx = \"$(rm -rf /usr/lib)\"\nEOF".to_string()),
-        mk("h_heredoc_bs_quoted_cmdsub", "cat > {DIR}/x.py <<\\EOF\nx = \"$(rm -rf /usr/lib)\"\nEOF".to_string()),
-        mk("h_heredoc_dq_delim_cmdsub", "cat > {DIR}/x.py <<\"EOF\"\nx = \"$(rm -rf /usr/lib)\"\nEOF".to_string()),
+        // User ruling 2026-11-14 Q2 (backlog 596ef57d): `h_heredoc_bs_quoted_cmdsub`
+        // (`<<\EOF`) and `h_heredoc_dq_delim_cmdsub` (`<<"EOF"`) were test defects.
+        // The delimiter is quoted, so the shell never expands `$(...)`, and a `.py`
+        // body written and not run is data: Allow is correct. Dropped, not loosened.
         mk("h_python_stdin_heredoc_sink", format!("python3 - <<'PY'\n{b}\nPY")),
         mk("h_python_stdin_heredoc_other_delim", format!("python3 <<'PY'\n{b}\nPY")),
         mk("h_python_dashc_multi_sink", "python3 -c 'import os\nx = 1\nos.system(\"rm -rf /usr/lib\")'".to_string()),

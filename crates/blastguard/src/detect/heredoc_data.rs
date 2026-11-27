@@ -157,7 +157,23 @@ use crate::model::Decision;
 /// command has an undetermined word that may name a landing file.
 pub(super) struct DataView {
     pub(super) text: String,
-    unsure: bool,
+    unsure: Unsure,
+}
+
+/// How far an Allow on the data-removed text may be trusted. Ordered: a later
+/// variant never relaxes an earlier one.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum Unsure {
+    /// No command can use a landing file.
+    No,
+    /// An undetermined word may name a landing file: an Allow stands only if
+    /// the line with every body kept is Allow too.
+    Whole,
+    /// A command provably executes project files it does not name (`cargo
+    /// run`, a `build.rs` under any cargo command), so a landing file may be
+    /// run whatever the body says: an Allow is Ask even if the body read as
+    /// shell is Allow (backlog 596ef57d).
+    Runs,
 }
 
 impl DataView {
@@ -169,7 +185,10 @@ impl DataView {
     /// code (which `whole` is).
     pub(super) fn floor(&self, verdict: Decision, whole: impl FnOnce() -> Decision) -> Decision {
         match verdict {
-            Decision::Allow if self.unsure => match whole() {
+            Decision::Allow if self.unsure == Unsure::Runs => Decision::ask(
+                "a here-document body is written to a Rust source or cargo file and the same command runs cargo, which executes such files (`cargo run`, a `build.rs`, the cargo config) without naming them — blastguard cannot judge the program the body holds",
+            ),
+            Decision::Allow if self.unsure == Unsure::Whole => match whole() {
                 Decision::Allow => Decision::Allow,
                 _ => Decision::ask(
                     "a here-document body is written to a file that an undetermined word of another command may name — blastguard cannot tell whether that command uses it",
@@ -187,7 +206,7 @@ pub(super) fn without_data_heredoc_bodies(cmd: &str) -> Option<DataView> {
     Some(DataView { text, unsure })
 }
 
-fn removed_bodies(cmd: &str) -> Option<(String, bool)> {
+fn removed_bodies(cmd: &str) -> Option<(String, Unsure)> {
     if !cmd.contains("<<") {
         return None;
     }
@@ -277,7 +296,7 @@ fn plain_text(text: &str) -> bool {
 }
 
 /// The over-cap path (see the module doc).
-fn over_cap_view(cmd: &str) -> Option<(String, bool)> {
+fn over_cap_view(cmd: &str) -> Option<(String, Unsure)> {
     let parts = quoted_code_file_here_document_parts(cmd)?;
     if parts.body.is_empty() || parts.without_body.len() > ast::MAX_PARSE_BYTES {
         return None;
@@ -305,7 +324,7 @@ fn over_cap_view(cmd: &str) -> Option<(String, bool)> {
 /// with whether another command has an undetermined word that may name a
 /// landing path, or `None` when some command of the line may run one of them
 /// or literally names a landing path.
-fn data_bodies(script: &Script, text: &str) -> Option<(Vec<Range<usize>>, bool)> {
+fn data_bodies(script: &Script, text: &str) -> Option<(Vec<Range<usize>>, Unsure)> {
     let mut spans = Vec::new();
     let mut landing: Vec<String> = Vec::new();
     let mut readers: Vec<usize> = Vec::new();
@@ -358,7 +377,7 @@ fn data_bodies(script: &Script, text: &str) -> Option<(Vec<Range<usize>>, bool)>
             .iter()
             .any(|r| unplaced_data_landing(r).is_some())
     });
-    let mut unsure = false;
+    let mut unsure = Unsure::No;
     for (i, c) in script.commands.iter().enumerate() {
         if !runs_no_landing_file(script, i, c, &landing) {
             return None;
@@ -366,7 +385,8 @@ fn data_bodies(script: &Script, text: &str) -> Option<(Vec<Range<usize>>, bool)>
         if !readers.contains(&i) {
             match names_landing_path(c, &landing, landing_unplaced, &script.function_names) {
                 Naming::Clear => {}
-                Naming::Undetermined => unsure = true,
+                Naming::Undetermined => unsure = unsure.max(Unsure::Whole),
+                Naming::Runs => unsure = unsure.max(Unsure::Runs),
                 // An interpreter running an unseen literal program file
                 // (`python3 probe.py <dir>`) may do anything with a path it is
                 // handed, but `runs_no_landing_file` above has already shown it
@@ -374,7 +394,9 @@ fn data_bodies(script: &Script, text: &str) -> Option<(Vec<Range<usize>>, bool)>
                 // uses the body is exactly as unknown as what the command
                 // alone does, so the body (not shell code either way) is
                 // removed and an Allow floored at Ask — not read as shell.
-                Naming::Names if runs_unseen_program_file(c) => unsure = true,
+                Naming::Names if runs_unseen_program_file(c) => {
+                    unsure = unsure.max(Unsure::Whole);
+                }
                 Naming::Names => return None,
             }
         }
@@ -445,6 +467,9 @@ enum Naming {
     Clear,
     /// Some word is undetermined (`git add $X`): it may or may not name one.
     Undetermined,
+    /// The command executes a landing file without naming it
+    /// ([`cargo_may_run_landing`]): the body is removed and an Allow is Ask.
+    Runs,
     Names,
 }
 
@@ -473,6 +498,53 @@ fn cargo_test_or_build(c: &SimpleCommand) -> bool {
         && !argv
             .iter()
             .any(|a| a.starts_with("--config") || a.starts_with("-Z"))
+}
+
+/// Backlog 596ef57d: `cargo` executes project files without naming them. Two
+/// classes, decided by what cargo does and not by the file's content:
+///
+/// * a subcommand that RUNS the built program (`run`, `bench`, `install`, and
+///   their aliases) executes a Rust source the line just wrote (`src/main.rs`,
+///   `src/bin/x.rs`, `examples/x.rs`); the B-4 ruling covers only the bare
+///   `test` / `build` spelling, not these;
+/// * ANY cargo invocation runs a build script (`build.rs`) and reads the
+///   cargo configuration (`config` / `config.toml`, which can name a
+///   `rustc-wrapper` or runner) that lies on its path, so a landing file of
+///   that name is executed by `cargo build` too.
+///
+/// An undetermined cargo word (or subcommand) cannot exclude either, so it is
+/// treated as a possible run. The result is [`Naming::Undetermined`]: the body
+/// (not shell code) is removed and an Allow is floored at Ask, the same
+/// refusal to guess as for an unseen program file.
+fn cargo_may_run_landing(c: &SimpleCommand, landing: &[String]) -> bool {
+    if !matches!(c.argv.first().map(|w| &w.value), Some(Value::Literal(h)) if h == "cargo") {
+        return false;
+    }
+    let lower: Vec<String> = landing.iter().map(|l| l.to_ascii_lowercase()).collect();
+    let ends = |l: &str, ext: &str| l.ends_with(ext);
+    let build_time = lower
+        .iter()
+        .any(|l| matches!(basename(l), "build.rs" | "config" | "config.toml"));
+    let source = lower.iter().any(|l| ends(l, ".rs") || ends(l, ".toml"));
+    if !build_time && !source {
+        return false;
+    }
+    let Ok(argv) = literal_argv(c) else {
+        return true;
+    };
+    // The subcommand is the first word that is neither a `+toolchain` nor an
+    // option; a global option that takes a value (`--manifest-path X run`)
+    // makes the position ambiguous, so an unknown shape counts as a run.
+    let sub = argv
+        .iter()
+        .skip(1)
+        .find(|a| !a.starts_with('+') && !a.starts_with('-'));
+    let leading_option = argv.get(1).is_some_and(|a| a.starts_with('-'));
+    match sub {
+        Some(&("run" | "r" | "bench" | "install")) => source,
+        _ if leading_option => source,
+        _ => build_time,
+    }
 }
 
 /// `git add` / `git commit`, the subcommand directly after `git` (no global
@@ -526,6 +598,9 @@ fn names_landing_path(
     // A defined function is not the inert tool of the same name: its body
     // decides what it does with its arguments (`ls() { xargs "$@"; }`).
     let shadowed = functions.iter().any(|f| f == head);
+    if !shadowed && cargo_may_run_landing(c, landing) {
+        return Naming::Runs;
+    }
     if !shadowed && (reads_only(head) || cargo_test_or_build(c) || git_records_only(c)) {
         return Naming::Clear;
     }
@@ -1384,7 +1459,7 @@ fn single_plain_substitution(script: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::without_data_heredoc_bodies;
+    use super::{without_data_heredoc_bodies, Unsure};
     use crate::detect::detect;
     use crate::model::Decision;
 
@@ -1416,9 +1491,42 @@ mod tests {
             assert!(view.is_some(), "body kept for `{later}`");
             let Some(view) = view else { continue };
             assert!(!view.text.contains("hi >&"), "{later}: {}", view.text);
-            assert!(view.unsure, "{later}: not floored");
+            assert!(view.unsure == Unsure::Whole, "{later}: not floored");
             let floored = view.floor(Decision::Allow, || Decision::ask("whole"));
             assert!(matches!(floored, Decision::Ask(_)), "{later}: {floored:?}");
+        }
+    }
+
+    /// Backlog 596ef57d: cargo executes a landing `.rs` (`cargo run`) or a
+    /// `build.rs` / cargo config (any subcommand) without naming it, so an
+    /// Allow becomes Ask; bare `cargo build` / `cargo test` over an ordinary
+    /// `.rs` stays the B-4 ruling (no floor).
+    #[test]
+    fn heredoc_data_cargo_runs_landing_file_is_ask() {
+        for (landing, later, runs) in [
+            ("/w/x.rs", "cargo run", true),
+            ("/w/src/main.rs", "cargo run --release", true),
+            ("/w/x.rs", "cargo +nightly run", true),
+            ("/w/x.rs", "cargo run --manifest-path /w/Cargo.toml", true),
+            ("/w/build.rs", "cargo build", true),
+            ("/w/build.rs", "cargo test", true),
+            ("/w/.cargo/config.toml", "cargo check", true),
+            ("/w/x.rs", "cargo build", false),
+            ("/w/x.rs", "cargo test", false),
+            ("/w/x.rs", "cargo fmt", false),
+            ("/w/Cargo.toml", "cargo build", false),
+            ("/w/notes.md", "cargo run", false),
+        ] {
+            let cmd = line(landing, "fn main() {}\n", later);
+            let view = without_data_heredoc_bodies(&cmd);
+            assert!(view.is_some(), "body kept for `{later}` on {landing}");
+            let Some(view) = view else { continue };
+            let floored = view.floor(Decision::Allow, || Decision::Allow);
+            assert_eq!(
+                matches!(floored, Decision::Ask(_)),
+                runs,
+                "{later} on {landing}: {floored:?}"
+            );
         }
     }
 
